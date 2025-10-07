@@ -8,6 +8,7 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from datetime import datetime, timedelta
 
+# Testando o fluxo com GitHub Desktop
 
 class App:
     def __init__(self, root):
