@@ -2002,6 +2002,7 @@ def solicitar_resgate(funcionario_id, produto_id):
             # Insere o registro de resgate como 'Pendente'
             sql_resgate = "INSERT INTO Resgates (FuncionarioID, ProdutoID, PontosGastos) VALUES (?, ?, ?); SELECT SCOPE_IDENTITY();"
             cursor.execute(sql_resgate, funcionario_id, produto_id, custo_produto)
+            cursor.nextset()
             resgate_id = cursor.fetchone()[0]
             
             conn.commit()
@@ -2185,4 +2186,5 @@ def verificar_e_conceder_conquistas(funcionario_id):
 
     finally:
         if conn:
+
             conn.close()
