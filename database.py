@@ -4,13 +4,15 @@ import pyodbc
 from datetime import datetime, date, timedelta # <<< MODIFIQUE ESTA LINHA
 import calendar # <<< ADICIONE ESTA LINHA
 
-SERVER = 'localhost\\SQLEXPRESS'
+SERVER = '192.168.2.23'
 DATABASE = 'gamificacao_db'
 CONNECTION_STRING = (
-    f"DRIVER={{ODBC Driver 17 for SQL Server}};"
+    f"DRIVER={{ODBC Driver 17 for SQL Server}};"  
     f"SERVER={SERVER};"
     f"DATABASE={DATABASE};"
-    f"Trusted_Connection=yes;"
+    f"UID=sa;"  # Informamos o usuário correto
+    f"PWD=Gamificacao#2025;" # << COLOQUE A SENHA AQUI
+    f"TrustServerCertificate=yes;"  # Necessário para aceitar o certificado do servidor
 )
 
 def get_db_connection():
@@ -2188,3 +2190,4 @@ def verificar_e_conceder_conquistas(funcionario_id):
         if conn:
 
             conn.close()
+
