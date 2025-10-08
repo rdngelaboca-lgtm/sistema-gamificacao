@@ -4,10 +4,10 @@ import pyodbc
 from datetime import datetime, date, timedelta # <<< MODIFIQUE ESTA LINHA
 import calendar # <<< ADICIONE ESTA LINHA
 
-SERVER = '192.168.2.23'
+SERVER = 'localhost'
 DATABASE = 'gamificacao_db'
 CONNECTION_STRING = (
-    f"DRIVER={{ODBC Driver 17 for SQL Server}};"  
+    f"DRIVER={{ODBC Driver 18 for SQL Server}};"  
     f"SERVER={SERVER};"
     f"DATABASE={DATABASE};"
     f"UID=sa;"  # Informamos o usuário correto
@@ -2190,4 +2190,5 @@ def verificar_e_conceder_conquistas(funcionario_id):
         if conn:
 
             conn.close()
+
 
