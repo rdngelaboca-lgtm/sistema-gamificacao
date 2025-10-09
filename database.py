@@ -13,6 +13,7 @@ CONNECTION_STRING = (
     f"TrustServerCertificate=yes;"  
 )
 
+
 def get_db_connection():
     try:
         conn = pyodbc.connect(CONNECTION_STRING)
@@ -2462,4 +2463,73 @@ def listar_documentos_por_funcionario(funcionario_id):
             conn.close()
     return []
 
+# Adicione estas duas funções no final do seu arquivo database.py
 
+def buscar_agendamentos_para_o_dia(data_alvo):
+    """
+    Busca no banco todos os agendamentos confirmados para uma data específica.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # A mágica está em CONVERT(date, DataEvento), que ignora a parte da hora
+            sql = """
+                SELECT NomeCliente, TipoEvento, CONVERT(VARCHAR(5), DataEvento, 108) AS Hora
+                FROM Agendamentos
+                WHERE CONVERT(date, DataEvento) = ? AND StatusAgendamento = 'Confirmado'
+                ORDER BY DataEvento ASC
+            """
+            cursor.execute(sql, data_alvo)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+# A função buscar_funcionario_por_id já existe, então não precisa adicionar de novo.
+# Vamos garantir que ela está no seu código (ela já está, na verdade).
+# Apenas para confirmar, a função é esta:
+def buscar_funcionario_por_id(funcionario_id):
+    """Busca um funcionário pelo seu ID (chave primária)."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT * FROM Funcionarios WHERE FuncionarioID = ?"
+            cursor.execute(sql, funcionario_id)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
+
+# Adicione esta nova função ao final do seu arquivo database.py
+
+def buscar_agendamentos_para_periodo(data_inicio, data_fim, tipo_evento_filtro=None):
+    """
+    Busca no banco todos os agendamentos confirmados para um período de datas.
+    Opcionalmente, filtra por um tipo de evento específico (ex: 'Carrinho de Sorvete').
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT NomeCliente, TipoEvento, DataEvento
+                FROM Agendamentos
+                WHERE CONVERT(date, DataEvento) BETWEEN ? AND ?
+                  AND StatusAgendamento = 'Confirmado'
+            """
+            params = [data_inicio, data_fim]
+
+            # Adiciona o filtro de tipo de evento dinamicamente se ele for fornecido
+            if tipo_evento_filtro:
+                sql += " AND TipoEvento = ?"
+                params.append(tipo_evento_filtro)
+
+            sql += " ORDER BY DataEvento ASC"
+
+            cursor.execute(sql, params)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
