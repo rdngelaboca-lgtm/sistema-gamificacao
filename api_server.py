@@ -54,14 +54,15 @@ def rota_criar_agendamento():
 
     campos_obrigatorios = ['nome_cliente', 'tipo_evento', 'data_evento', 'funcionario_id']
     if not all(campo in dados for campo in campos_obrigatorios):
-        return jsonify({"status": "erro", "mensagem": "Campos obrigatórios ausentes"}), 400 # 400 = Bad Request
+        return jsonify({"status": "erro", "mensagem": "Campos obrigatórios ausentes"}), 400
 
-    sucesso = database.criar_agendamento(dados)
+    sucesso, erro_db = database.criar_agendamento(dados) # Agora a função retorna duas coisas
 
     if sucesso:
-        return jsonify({"status": "sucesso", "mensagem": "Agendamento criado com sucesso!"}), 201 # 201 = Created
+        return jsonify({"status": "sucesso", "mensagem": "Agendamento criado com sucesso!"}), 201
     else:
-        return jsonify({"status": "erro", "mensagem": "Falha ao salvar o agendamento no banco de dados."}), 500
+        # AQUI ESTÁ A MÁGICA: Retornamos o erro exato do banco de dados
+        return jsonify({"status": "erro", "mensagem": f"Erro no banco de dados: {erro_db}"}), 500
     
 
 @app.route('/documentos/upload', methods=['POST'])
