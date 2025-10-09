@@ -22,6 +22,135 @@ def get_db_connection():
         print(f"ERRO de conexão com o banco de dados: {ex}")
         return None
 
+def criar_agendamento(dados_agendamento):
+    """Insere um novo agendamento na tabela Agendamentos."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                INSERT INTO Agendamentos (
+                    NomeCliente, CPFCliente, TelefoneCliente, TipoEvento, DataEvento,
+                    StatusAgendamento, StatusPagamento, FuncionarioID, Observacoes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """
+            cursor.execute(sql,
+                         dados_agendamento['nome_cliente'],
+                         dados_agendamento.get('cpf_cliente'),
+                         dados_agendamento.get('telefone_cliente'),
+                         dados_agendamento['tipo_evento'],
+                         dados_agendamento['data_evento'],
+                         'Confirmado',
+                         'Pendente',
+                         dados_agendamento['funcionario_id'],
+                         dados_agendamento.get('observacoes')
+                         )
+            conn.commit()
+            return True, None
+        except Exception as e:
+            print(f"ERRO ao criar agendamento: {e}")
+            conn.rollback()
+            return False, str(e)
+        finally:
+            conn.close()
+    return False, "Não foi possível conectar ao banco de dados."
+
+def listar_agendamentos():
+    """Retorna uma lista de todos os agendamentos."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT A.*, F.NomeCompleto AS NomeFuncionario
+                FROM Agendamentos A JOIN Funcionarios F ON A.FuncionarioID = F.FuncionarioID
+                ORDER BY A.DataEvento DESC
+            """
+            cursor.execute(sql)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def buscar_agendamento_por_id(agendamento_id):
+    """Busca todos os detalhes de um único agendamento pelo seu ID."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT A.*, F.NomeCompleto AS NomeFuncionario
+                FROM Agendamentos A JOIN Funcionarios F ON A.FuncionarioID = F.FuncionarioID
+                WHERE A.AgendamentoID = ?
+            """
+            cursor.execute(sql, agendamento_id)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
+
+def atualizar_agendamento(agendamento_id, dados_agendamento):
+    """Atualiza um agendamento existente com novos dados."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                UPDATE Agendamentos SET
+                    NomeCliente = ?, CPFCliente = ?, TelefoneCliente = ?, TipoEvento = ?,
+                    DataEvento = ?, StatusAgendamento = ?, StatusPagamento = ?,
+                    FuncionarioID = ?, Observacoes = ?
+                WHERE AgendamentoID = ?
+            """
+            cursor.execute(sql,
+                         dados_agendamento['nome_cliente'], dados_agendamento.get('cpf_cliente'),
+                         dados_agendamento.get('telefone_cliente'), dados_agendamento['tipo_evento'],
+                         dados_agendamento['data_evento'], dados_agendamento.get('status_agendamento', 'Confirmado'),
+                         dados_agendamento.get('status_pagamento', 'Pendente'), dados_agendamento['funcionario_id'],
+                         dados_agendamento.get('observacoes'), agendamento_id)
+            conn.commit()
+            return True
+        except Exception as e:
+            print(f"ERRO ao atualizar agendamento: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
+
+def excluir_agendamento(agendamento_id):
+    """Exclui um agendamento do banco de dados."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "DELETE FROM Agendamentos WHERE AgendamentoID = ?"
+            cursor.execute(sql, agendamento_id)
+            conn.commit()
+            return True
+        except Exception as e:
+            print(f"ERRO ao excluir agendamento: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
+
+def atualizar_status_pagamento(agendamento_id, novo_status):
+    """Atualiza apenas o status de pagamento de um agendamento."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE Agendamentos SET StatusPagamento = ? WHERE AgendamentoID = ?"
+            cursor.execute(sql, novo_status, agendamento_id)
+            conn.commit()
+            return True
+        except Exception as e:
+            print(f"ERRO ao atualizar status de pagamento: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
+
 # --- Nova Função para a Opção "Não Aplicável" ---
 def registrar_tarefa_nao_aplicavel(atribuicao_id, justificativa):
     conn = get_db_connection()
@@ -1634,65 +1763,6 @@ def buscar_dados_para_notificacao_feedback(solicitacao_id):
             conn.close()
     return None
 
-# Em database.py, adicione estas duas novas funções
-
-def criar_agendamento(dados_agendamento):
-    """Insere um novo agendamento e retorna (True, None) em sucesso, ou (False, 'mensagem de erro') em falha."""
-    conn = get_db_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            sql = """
-                INSERT INTO Agendamentos (
-                    NomeCliente, CPFCliente, TelefoneCliente, TipoEvento, DataEvento,
-                    StatusAgendamento, StatusPagamento, FuncionarioID, Observacoes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """
-            cursor.execute(sql,
-                         dados_agendamento['nome_cliente'],
-                         dados_agendamento.get('cpf_cliente'),
-                         dados_agendamento.get('telefone_cliente'),
-                         dados_agendamento['tipo_evento'],
-                         dados_agendamento['data_evento'],
-                         'Confirmado', # StatusAgendamento
-                         'Pendente',   # StatusPagamento
-                         dados_agendamento['funcionario_id'],
-                         dados_agendamento.get('observacoes')
-                         )
-            conn.commit()
-            return True, None
-        except Exception as e:
-            print(f"ERRO ao criar agendamento: {e}")
-            conn.rollback()
-            return False, str(e)
-        finally:
-            conn.close()
-    return False, "Não foi possível conectar ao banco de dados."
-
-def listar_agendamentos():
-    """Retorna uma lista de todos os agendamentos, juntando o nome do funcionário."""
-    conn = get_db_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            sql = """
-                SELECT
-                    A.AgendamentoID, A.NomeCliente, A.CPFCliente, A.TelefoneCliente, A.TipoEvento,
-                    A.DataEvento, A.StatusAgendamento, A.StatusPagamento, F.NomeCompleto AS NomeFuncionario
-                FROM Agendamentos A
-                JOIN Funcionarios F ON A.FuncionarioID = F.FuncionarioID
-                ORDER BY A.DataEvento DESC
-            """
-            cursor.execute(sql)
-            return cursor.fetchall()
-        finally:
-            conn.close()
-    return []
-
-# Em database.py, adicione estas três funções
-
-# Em database.py, SUBSTITUA a função registrar_entrega_preliminar por esta:
-
 def registrar_entrega_preliminar(tarefa_id, funcionario_id, atribuicao_id, file_id):
     """Cria um registro inicial na tabela Entregas, apenas com a file_id."""
     conn = get_db_connection()
@@ -2386,90 +2456,4 @@ def listar_documentos_por_funcionario(funcionario_id):
             conn.close()
     return []
 
-# Em database.py, adicione estas três novas funções
-
-def atualizar_agendamento(agendamento_id, dados_agendamento):
-    """Atualiza um agendamento existente com novos dados."""
-    conn = get_db_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            sql = """
-                UPDATE Agendamentos SET
-                    NomeCliente = ?, CPFCliente = ?, TelefoneCliente = ?, TipoEvento = ?,
-                    DataEvento = ?, StatusAgendamento = ?, StatusPagamento = ?,
-                    FuncionarioID = ?, Observacoes = ?
-                WHERE AgendamentoID = ?
-            """
-            cursor.execute(sql,
-                         dados_agendamento['nome_cliente'],
-                         dados_agendamento.get('cpf_cliente'),
-                         dados_agendamento.get('telefone_cliente'),
-                         dados_agendamento['tipo_evento'],
-                         dados_agendamento['data_evento'],
-                         dados_agendamento.get('status_agendamento', 'Confirmado'),
-                         dados_agendamento.get('status_pagamento', 'Pendente'),
-                         dados_agendamento['funcionario_id'],
-                         dados_agendamento.get('observacoes'),
-                         agendamento_id)
-            conn.commit()
-            return True
-        except Exception as e:
-            print(f"ERRO ao atualizar agendamento: {e}")
-            return False
-        finally:
-            conn.close()
-    return False
-
-def excluir_agendamento(agendamento_id):
-    """Exclui um agendamento do banco de dados."""
-    conn = get_db_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            sql = "DELETE FROM Agendamentos WHERE AgendamentoID = ?"
-            cursor.execute(sql, agendamento_id)
-            conn.commit()
-            return True
-        except Exception as e:
-            print(f"ERRO ao excluir agendamento: {e}")
-            return False
-        finally:
-            conn.close()
-    return False
-
-def atualizar_status_pagamento(agendamento_id, novo_status):
-    """Atualiza apenas o status de pagamento de um agendamento."""
-    conn = get_db_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            sql = "UPDATE Agendamentos SET StatusPagamento = ? WHERE AgendamentoID = ?"
-            cursor.execute(sql, novo_status, agendamento_id)
-            conn.commit()
-            return True
-        except Exception as e:
-            print(f"ERRO ao atualizar status de pagamento: {e}")
-            return False
-        finally:
-            conn.close()
-    return False
-
-def buscar_agendamento_por_id(agendamento_id):
-    """Busca todos os detalhes de um único agendamento pelo seu ID."""
-    conn = get_db_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            # Esta query busca um agendamento específico e junta o nome do funcionário
-            sql = """
-                SELECT A.*, F.NomeCompleto AS NomeFuncionario
-                FROM Agendamentos A JOIN Funcionarios F ON A.FuncionarioID = F.FuncionarioID
-                WHERE A.AgendamentoID = ?
-            """
-            cursor.execute(sql, agendamento_id)
-            return cursor.fetchone()
-        finally:
-            conn.close()
-    return None
 
