@@ -2284,6 +2284,20 @@ def buscar_verificador_cpf(funcionario_id):
             conn.close()
     return None
 
+def buscar_caminho_documento(documento_id):
+    """Busca o caminho completo de um arquivo no servidor a partir do seu ID."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT CaminhoArquivo FROM DocumentosPessoais WHERE DocumentoID = ?"
+            cursor.execute(sql, documento_id)
+            resultado = cursor.fetchone()
+            return resultado[0] if resultado else None
+        finally:
+            conn.close()
+    return None
+
 def buscar_holerites_disponiveis(funcionario_id):
     """
     Busca os holerites que um funcionário ainda não deu ciência
@@ -2365,7 +2379,3 @@ def listar_documentos_por_funcionario(funcionario_id):
         finally:
             conn.close()
     return []
-
-
-
-
