@@ -44,17 +44,17 @@ def registrar_tarefa_nao_aplicavel(atribuicao_id, justificativa):
         finally:
             conn.close()
 
-def atualizar_funcionario(funcionario_id, nome, chat_id, cargo, horario_notificacao, dia_folga):
+def atualizar_funcionario(funcionario_id, nome, chat_id, cargo, horario_notificacao, dia_folga, verificador_cpf): # 1. Novo parâmetro
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
             sql = """
                 UPDATE Funcionarios 
-                SET NomeCompleto = ?, ChatIDTelegram = ?, Cargo = ?, HorarioNotificacao = ?, DiaDeFolga = ?
+                SET NomeCompleto = ?, ChatIDTelegram = ?, Cargo = ?, HorarioNotificacao = ?, DiaDeFolga = ?, VerificadorCPF = ? -- 2. Nova coluna
                 WHERE FuncionarioID = ?
             """
-            cursor.execute(sql, nome, chat_id, cargo, horario_notificacao, dia_folga, funcionario_id)
+            cursor.execute(sql, nome, chat_id, cargo, horario_notificacao, dia_folga, verificador_cpf, funcionario_id) # 3. Novo valor
             conn.commit()
         finally:
             conn.close()
@@ -2363,16 +2363,20 @@ def marcar_holerite_como_ciente(ciencia_id):
     return False
 
 def listar_documentos_por_funcionario(funcionario_id):
-    """Busca no banco todos os documentos pessoais de um funcionário específico."""
+    """Busca os documentos de um funcionário, incluindo o status de ciência."""
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
+            # AGORA FAZEMOS UM JOIN PARA BUSCAR OS DADOS DA TABELA DE CIÊNCIA
             sql = """
-                SELECT DocumentoID, TipoDocumento, MesAno, DataUpload
-                FROM DocumentosPessoais
-                WHERE FuncionarioID = ?
-                ORDER BY MesAno DESC
+                SELECT 
+                    DP.DocumentoID, DP.TipoDocumento, DP.MesAno, DP.DataUpload,
+                    DPC.Status, DPC.DataCiencia
+                FROM DocumentosPessoais DP
+                LEFT JOIN DocumentosPessoaisCiencia DPC ON DP.DocumentoID = DPC.DocumentoID
+                WHERE DP.FuncionarioID = ?
+                ORDER BY DP.MesAno DESC
             """
             cursor.execute(sql, funcionario_id)
             return cursor.fetchall()
