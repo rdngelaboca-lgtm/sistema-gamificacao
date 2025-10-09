@@ -56,12 +56,22 @@ def rota_criar_agendamento():
     if not all(campo in dados for campo in campos_obrigatorios):
         return jsonify({"status": "erro", "mensagem": "Campos obrigatórios ausentes"}), 400
 
-    sucesso, erro_db = database.criar_agendamento(dados) # Agora a função retorna duas coisas
+    # --- A MÁGICA DA CORREÇÃO ACONTECE AQUI ---
+    try:
+        # 1. Pegamos a string que veio do cliente (Ex: '2025-11-29 14:00')
+        data_evento_str = dados['data_evento']
+        # 2. Convertemos ela de volta para um objeto datetime do Python
+        dados['data_evento'] = datetime.strptime(data_evento_str, '%Y-%m-%d %H:%M')
+    except (ValueError, TypeError):
+        # Se o formato for inválido ou o campo não existir, retornamos um erro claro.
+        return jsonify({"status": "erro", "mensagem": "Formato de data_evento inválido. Use 'AAAA-MM-DD HH:MM'."}), 400
+    # ---------------------------------------------
+
+    sucesso, erro_db = database.criar_agendamento(dados) # <-- AGORA passamos o objeto datetime!
 
     if sucesso:
         return jsonify({"status": "sucesso", "mensagem": "Agendamento criado com sucesso!"}), 201
     else:
-        # AQUI ESTÁ A MÁGICA: Retornamos o erro exato do banco de dados
         return jsonify({"status": "erro", "mensagem": f"Erro no banco de dados: {erro_db}"}), 500
     
 
@@ -140,6 +150,15 @@ def rota_atualizar_agendamento(agendamento_id):
     dados = request.get_json()
     if not dados:
         return jsonify({"status": "erro", "mensagem": "Dados não enviados."}), 400
+
+    # --- ADICIONANDO A MESMA CORREÇÃO AQUI ---
+    if 'data_evento' in dados:
+        try:
+            data_evento_str = dados['data_evento']
+            dados['data_evento'] = datetime.strptime(data_evento_str, '%Y-%m-%d %H:%M')
+        except (ValueError, TypeError):
+            return jsonify({"status": "erro", "mensagem": "Formato de data_evento inválido para atualização."}), 400
+    # ---------------------------------------
 
     sucesso = database.atualizar_agendamento(agendamento_id, dados)
     if sucesso:
