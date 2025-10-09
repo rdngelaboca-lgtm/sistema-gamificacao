@@ -9,7 +9,7 @@ from datetime import datetime
 
 # --- CONFIGURAÇÃO ---
 # Endereço da nossa API. Lembre-se de usar o IP do servidor!
-API_BASE_URL = "http://192.168.2.62:5000"
+API_BASE_URL = "http://192.168.2.23:5000"
 
 
 class AppAgendamentos:
@@ -30,12 +30,31 @@ class AppAgendamentos:
         frame_lista.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
         frame_lista.rowconfigure(0, weight=1)
         frame_lista.columnconfigure(0, weight=1)
+
         
         cols = ('ID', 'Cliente', 'Tipo', 'Data/Hora', 'Status Pagamento')
         self.tree_agendamentos = ttk.Treeview(frame_lista, columns=cols, show='headings')
         for col in cols:
             self.tree_agendamentos.heading(col, text=col)
+        self.tree_agendamentos.column('ID', width=40, anchor='center')
+        self.tree_agendamentos.column('Cliente', width=200)
+        self.tree_agendamentos.column('Tipo', width=150)
+        self.tree_agendamentos.column('Data/Hora', width=120, anchor='center')
+        self.tree_agendamentos.column('Status Pagamento', width=100, anchor='center')
         self.tree_agendamentos.pack(fill=tk.BOTH, expand=True)
+
+        frame_botoes_acao = ttk.Frame(frame_lista)
+        frame_botoes_acao.pack(fill=tk.X, pady=(10,0))
+
+        ttk.Button(frame_botoes_acao, text="Editar Selecionado", command=self.abrir_janela_edicao).pack(side=tk.LEFT, padx=(0,5))
+        ttk.Button(frame_botoes_acao, text="Excluir Selecionado", command=self.excluir_agendamento_selecionado).pack(side=tk.LEFT, padx=5)
+        ttk.Button(frame_botoes_acao, text="Alterar Status Pag.", command=self.alterar_status_pagamento).pack(side=tk.LEFT, padx=5)
+
+        self.tree_agendamentos.column('ID', width=40, anchor='center')
+        self.tree_agendamentos.column('Cliente', width=200)
+        self.tree_agendamentos.column('Tipo', width=150)
+        self.tree_agendamentos.column('Data/Hora', width=120, anchor='center')
+        self.tree_agendamentos.column('Status Pagamento', width=100, anchor='center')
         
         # TODO: Adicionar a função para carregar os dados da API
         self.carregar_agendamentos()
@@ -93,7 +112,55 @@ class AppAgendamentos:
         btn_salvar = ttk.Button(frame_form, text="Salvar Agendamento", command=self.salvar_agendamento)
         btn_salvar.pack(fill="x", ipady=5)
 
-    # Em agendamentos_main.py, adicione estas duas funções dentro da classe AppAgendamentos
+    def excluir_agendamento_selecionado(self):
+        """Exclui o agendamento selecionado na lista."""
+        selecionado = self.tree_agendamentos.focus()
+        if not selecionado:
+            messagebox.showwarning("Aviso", "Selecione um agendamento na lista para excluir.")
+            return
+
+        dados_ag = self.tree_agendamentos.item(selecionado, 'values')
+        agendamento_id = dados_ag[0]
+        nome_cliente = dados_ag[1]
+
+        if messagebox.askyesno("Confirmar Exclusão", f"Tem certeza que deseja excluir o agendamento de '{nome_cliente}'?"):
+            try:
+                response = requests.delete(f"{API_BASE_URL}/agendamentos/{agendamento_id}")
+                if response.status_code == 204: # No Content (sucesso)
+                    messagebox.showinfo("Sucesso", "Agendamento excluído com sucesso!")
+                    self.carregar_agendamentos()
+                else:
+                    erro = response.json().get('mensagem', 'Erro desconhecido')
+                    messagebox.showerror("Erro da API", f"Falha ao excluir: {erro}")
+            except requests.exceptions.RequestException as e:
+                messagebox.showerror("Erro de Conexão", f"Não foi possível conectar à API: {e}")
+
+    def alterar_status_pagamento(self):
+        """Altera o status de pagamento do agendamento selecionado."""
+        selecionado = self.tree_agendamentos.focus()
+        if not selecionado:
+            messagebox.showwarning("Aviso", "Selecione um agendamento na lista.")
+            return
+
+        dados_ag = self.tree_agendamentos.item(selecionado, 'values')
+        agendamento_id = dados_ag[0]
+        status_atual = dados_ag[4]
+
+        novo_status = "Pago" if status_atual == "Pendente" else "Pendente"
+        
+        payload = {"status": novo_status}
+        
+        try:
+            response = requests.patch(f"{API_BASE_URL}/agendamentos/{agendamento_id}/pagamento", json=payload)
+            if response.status_code == 200:
+                messagebox.showinfo("Sucesso", f"Status do pagamento alterado para '{novo_status}'.")
+                self.carregar_agendamentos()
+            else:
+                erro = response.json().get('mensagem', 'Erro desconhecido')
+                messagebox.showerror("Erro da API", f"Falha ao alterar status: {erro}")
+        except requests.exceptions.RequestException as e:
+            messagebox.showerror("Erro de Conexão", f"Não foi possível conectar à API: {e}")
+
 
     def carregar_agendamentos(self):
         """Busca a lista de agendamentos na API e preenche a tabela."""
@@ -118,66 +185,114 @@ class AppAgendamentos:
         except requests.exceptions.RequestException as e:
             messagebox.showerror("Erro de Conexão", f"Não foi possível conectar à API.\nVerifique se o servidor está no ar.\n\n{e}")
 
-    def salvar_agendamento(self):
-        """Coleta os dados do formulário, envia para a API e salva o agendamento."""
-        # 1. Coletar os dados da interface
-        nome = self.entry_nome.get()
-        cpf = self.entry_cpf.get()
-        telefone = self.entry_telefone.get()
-        tipo_evento = self.combo_tipo_evento.get()
-        data_selecionada = self.entry_data.get_date() # Pega a data do calendário
-        hora_digitada = self.entry_hora.get()
-        obs = self.txt_observacoes.get("1.0", tk.END).strip()
+    # Em agendamentos_main.py, adicione esta função à classe
 
-        # 2. Validar os dados
-        if not all([nome, tipo_evento, hora_digitada]):
-            messagebox.showwarning("Campos Obrigatórios", "Nome do Cliente, Tipo e Hora são obrigatórios.")
+    def abrir_janela_edicao(self):
+        """Abre um pop-up completo para editar um agendamento selecionado."""
+        selecionado = self.tree_agendamentos.focus()
+        if not selecionado:
+            messagebox.showwarning("Aviso", "Selecione um agendamento na lista para editar.")
             return
 
+        agendamento_id = self.tree_agendamentos.item(selecionado, 'values')[0]
+
+        # 1. Busca os dados completos na API
         try:
-            # Junta a data do calendário com a hora digitada
-            data_hora_evento = datetime.combine(data_selecionada, datetime.strptime(hora_digitada, "%H:%M").time())
-            # Converte para o formato que a API e o banco esperam (AAAA-MM-DD HH:MM)
-            data_evento_str = data_hora_evento.strftime('%Y-%m-%d %H:%M')
-        except ValueError:
-            messagebox.showerror("Erro de Formato", "A hora deve estar no formato HH:MM (ex: 14:30).")
-            return
-
-        # 3. Montar o "pacote" de dados (payload) em formato de dicionário
-        payload = {
-            "nome_cliente": nome,
-            "cpf_cliente": cpf,
-            "telefone_cliente": telefone,
-            "tipo_evento": tipo_evento,
-            "data_evento": data_evento_str,
-            "observacoes": obs,
-            "funcionario_id": self.id_funcionario_logado # O ID fixo que definimos
-        }
-
-        # 4. Enviar os dados para a API
-        try:
-            response = requests.post(f"{API_BASE_URL}/agendamentos/novo", json=payload)
-
-            if response.status_code == 201: # 201 = Created (Criado com Sucesso)
-                messagebox.showinfo("Sucesso", "Agendamento salvo com sucesso!")
-                self.limpar_formulario()
-                self.carregar_agendamentos() # Atualiza a lista na tela
-            else:
-                # Mostra a mensagem de erro que a API enviou
-                erro_api = response.json().get('mensagem', 'Erro desconhecido.')
-                messagebox.showerror("Erro da API", f"Não foi possível salvar.\nErro: {erro_api}")
-                
+            response = requests.get(f"{API_BASE_URL}/agendamentos/{agendamento_id}")
+            if response.status_code != 200:
+                messagebox.showerror("Erro", "Não foi possível buscar os detalhes do agendamento.")
+                return
+            dados_completos = response.json()
         except requests.exceptions.RequestException as e:
-            messagebox.showerror("Erro de Conexão", f"Não foi possível conectar à API para salvar.\n\n{e}")
+            messagebox.showerror("Erro de Conexão", f"Não foi possível conectar à API: {e}")
+            return
 
-    def limpar_formulario(self):
-        """Limpa todos os campos do formulário após o salvamento."""
-        self.entry_nome.delete(0, tk.END)
-        self.entry_cpf.delete(0, tk.END)
-        self.entry_telefone.delete(0, tk.END)
-        self.combo_tipo_evento.set('')
-        self.entry_hora.delete(0, tk.END); self.entry_hora.insert(0, "14:00")
-        self.txt_observacoes.delete("1.0", tk.END)
+        # --- Criação da Janela Pop-up ---
+        popup = Toplevel(self.root)
+        popup.title("Editar Agendamento")
+        popup.geometry("450x450")
+        popup.transient(self.root)
+        frame = ttk.Frame(popup, padding="15")
+        frame.pack(fill="both", expand=True)
+
+        # --- Widgets do Formulário (agora completos e preenchidos) ---
+        ttk.Label(frame, text="Nome do Cliente:").pack(anchor="w")
+        edit_entry_nome = ttk.Entry(frame); edit_entry_nome.pack(fill="x", pady=(0, 5))
+        edit_entry_nome.insert(0, dados_completos.get('nome_cliente', ''))
+
+        ttk.Label(frame, text="CPF:").pack(anchor="w")
+        edit_entry_cpf = ttk.Entry(frame); edit_entry_cpf.pack(fill="x", pady=(0, 5))
+        edit_entry_cpf.insert(0, dados_completos.get('cpf_cliente', ''))
+
+        ttk.Label(frame, text="Telefone:").pack(anchor="w")
+        edit_entry_telefone = ttk.Entry(frame); edit_entry_telefone.pack(fill="x", pady=(0, 5))
+        edit_entry_telefone.insert(0, dados_completos.get('telefone_cliente', ''))
+
+        ttk.Label(frame, text="Tipo de Evento:").pack(anchor="w")
+        edit_combo_tipo = ttk.Combobox(frame, values=['Carrinho de Sorvete', 'Festa de Aniversario'])
+        edit_combo_tipo.pack(fill="x", pady=(0, 5))
+        edit_combo_tipo.set(dados_completos.get('tipo_evento', ''))
+
+        # (Data/Hora - simplificado para manter data/hora originais na edição por enquanto)
+        ttk.Label(frame, text=f"Data/Hora: {dados_completos['data_evento']}").pack(anchor="w")
+
+        ttk.Label(frame, text="Observações:").pack(anchor="w")
+        edit_txt_obs = tk.Text(frame, height=3); edit_txt_obs.pack(fill="x", pady=(0, 5))
+        edit_txt_obs.insert("1.0", dados_completos.get('observacoes', ''))
+
+        ttk.Label(frame, text="Status Pagamento:").pack(anchor="w")
+        edit_combo_pagamento = ttk.Combobox(frame, values=['Pendente', 'Pago'])
+        edit_combo_pagamento.pack(fill="x", pady=(0, 5))
+        edit_combo_pagamento.set(dados_completos.get('status_pagamento', 'Pendente'))
+
+        # --- Lógica de Salvamento da Edição ---
+        def salvar_edicao():
+            # Coleta todos os dados, garantindo que não se percam
+            payload_editado = {
+                "nome_cliente": edit_entry_nome.get(),
+                "cpf_cliente": edit_entry_cpf.get(),
+                "telefone_cliente": edit_entry_telefone.get(),
+                "tipo_evento": edit_combo_tipo.get(),
+                "status_pagamento": edit_combo_pagamento.get(),
+                "observacoes": edit_txt_obs.get("1.0", tk.END).strip(),
+                # Dados que não estamos editando na tela, mas precisamos reenviar
+                "data_evento": datetime.strptime(dados_completos['data_evento'], '%d/%m/%Y %H:%M').strftime('%Y-%m-%d %H:%M'),
+                "funcionario_id": dados_completos['funcionario_id'],
+                "status_agendamento": dados_completos['status_agendamento']
+            }
+
+            try:
+                response = requests.put(f"{API_BASE_URL}/agendamentos/{agendamento_id}", json=payload_editado)
+                if response.status_code == 200:
+                    messagebox.showinfo("Sucesso", "Agendamento atualizado!", parent=popup)
+                    popup.destroy()
+                    self.carregar_agendamentos()
+                else:
+                    messagebox.showerror("Erro da API", f"Falha ao atualizar: {response.json().get('mensagem', 'Erro')}", parent=popup)
+            except requests.exceptions.RequestException as e:
+                messagebox.showerror("Erro de Conexão", f"Não foi possível conectar à API: {e}", parent=popup)
+
+        ttk.Button(frame, text="Salvar Alterações", command=salvar_edicao).pack(pady=20, fill="x")
+
+def buscar_agendamento_por_id(agendamento_id):
+    """Busca todos os detalhes de um único agendamento pelo seu ID."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Reutilizamos a query de listar, mas filtrando por ID
+            sql = """
+                SELECT A.*, F.NomeCompleto AS NomeFuncionario
+                FROM Agendamentos A JOIN Funcionarios F ON A.FuncionarioID = F.FuncionarioID
+                WHERE A.AgendamentoID = ?
+            """
+            cursor.execute(sql, agendamento_id)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
+
+
 
 
 if __name__ == "__main__":
