@@ -55,8 +55,7 @@ def enviar_mensagem_com_botao(chat_id, texto, reply_markup_obj):
 # Em notificador_telegram.py, SUBSTITUA a função antiga por esta
 def enviar_foto_com_botoes(chat_id, foto, legenda, reply_markup_obj):
     """
-    Envia uma foto com legenda e botões.
-    O parâmetro 'foto' pode ser um caminho de arquivo local (path) ou uma file_id do Telegram.
+    Envia uma foto com legenda e botões e RETORNA a resposta da API.
     """
     token = config.TELEGRAM_TOKEN
     url = f"https://api.telegram.org/bot{token}/sendPhoto"
@@ -71,25 +70,25 @@ def enviar_foto_com_botoes(chat_id, foto, legenda, reply_markup_obj):
     }
     
     try:
-        # Se 'foto' for um caminho de arquivo que existe no PC...
         if os.path.exists(str(foto)):
             with open(foto, 'rb') as f:
                 files = {'photo': f}
-                # Enviamos como um arquivo multipart
                 response = requests.post(url, data=payload, files=files)
-        # Se não, assumimos que é uma file_id...
         else:
             payload['photo'] = foto
-            # Enviamos como dados normais
             response = requests.post(url, data=payload)
         
         if not response.json().get('ok'):
             print(f"!!! ERRO DA API DO TELEGRAM: {response.json()}")
         else:
             print(f"Foto com botão enviada para {chat_id}.")
+        
+        return response.json() # <<< CORREÇÃO 1: Retorna o "recibo" em caso de sucesso ou falha da API
 
     except Exception as e:
         print(f"Erro ao enviar foto com botão para {chat_id}: {e}")
+        return None # <<< CORREÇÃO 2: Retorna "None" se houver um erro de conexão
+    
 
 def enviar_documento(chat_id, path_documento, legenda):
     """ Envia um documento (como PDF) para um chat específico. """
