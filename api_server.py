@@ -78,6 +78,13 @@ def rota_criar_agendamento():
                 f"**Evento:** {dados['tipo_evento']}\n"
                 f"**Quando:** {data_formatada}\n"
             )
+
+            # --- AQUI ESTÁ A MUDANÇA ---
+            # Adiciona a observação apenas se ela não estiver vazia
+            observacoes = dados.get('observacoes')
+            if observacoes and observacoes.strip():
+                mensagem_alerta += f"**Obs:** {observacoes.strip()}"
+        # ---------------------------
             notificador_telegram.enviar_mensagem(config.AGENDAMENTOS_GROUP_CHAT_ID, mensagem_alerta)
         except Exception as e:
             # Se a notificação falhar, o agendamento ainda foi criado.
@@ -213,13 +220,43 @@ def rota_buscar_agendamento(agendamento_id):
         ag_dict = {
             "agendamento_id": agendamento.AgendamentoID, "nome_cliente": agendamento.NomeCliente,
             "cpf_cliente": agendamento.CPFCliente, "telefone_cliente": agendamento.TelefoneCliente,
-            "tipo_evento": agendamento.TipoEvento, "data_evento": agendamento.DataEvento.strftime('%Y-%m-%d %H:%M'),
+            "tipo_evento": agendamento.TipoEvento, "data_evento": agendamento.DataEvento.strftime('%d/%m/%Y %H:%M'),
             "status_agendamento": agendamento.StatusAgendamento, "status_pagamento": agendamento.StatusPagamento,
             "observacoes": agendamento.Observacoes, "funcionario_id": agendamento.FuncionarioID
         }
         return jsonify(ag_dict), 200
     else:
         return jsonify({"status": "erro", "mensagem": "Agendamento não encontrado."}), 404
+    
+
+@app.route('/agendamentos/enviar-lembrete-geral', methods=['POST'])
+def rota_enviar_lembrete_geral():
+    """
+    Busca todos os agendamentos futuros e envia um resumo para o grupo do Telegram.
+    """
+    try:
+        agendamentos_db = database.listar_agendamentos()
+        
+        # Filtra para manter apenas agendamentos futuros
+        agendamentos_futuros = [
+            ag for ag in agendamentos_db 
+            if ag.DataEvento > datetime.now()
+        ]
+
+        if not agendamentos_futuros:
+            mensagem = "✅ Nenhum agendamento futuro encontrado no sistema."
+        else:
+            mensagem = "📋 **Resumo de Todos os Agendamentos Futuros** 📋\n\n"
+            for ag in agendamentos_futuros:
+                data_formatada = ag.DataEvento.strftime('%d/%m/%Y %H:%M')
+                mensagem += f"  - **{data_formatada}**: {ag.TipoEvento} - Cliente: {ag.NomeCliente}\n"
+
+        notificador_telegram.enviar_mensagem(config.AGENDAMENTOS_GROUP_CHAT_ID, mensagem)
+        return jsonify({"status": "sucesso", "mensagem": "Lembrete geral enviado com sucesso!"}), 200
+
+    except Exception as e:
+        print(f"!!! ERRO em /enviar-lembrete-geral: {e}")
+        return jsonify({"status": "erro", "mensagem": f"Erro interno no servidor: {e}"}), 500
 
 if __name__ == '__main__':
     print(">>> Iniciando o Servidor da API...")
