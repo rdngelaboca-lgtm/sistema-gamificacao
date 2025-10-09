@@ -9,6 +9,7 @@ import notificador_telegram
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 import time
 import os
+from tkinter import filedialog
 
 # Garanta que todos os imports necessários estejam no topo
 import comunicado_generator
@@ -117,6 +118,12 @@ class AppComunicados:
         entry_pontos = Entry(frame_pontos, width=5)
         entry_pontos.pack(side="left", padx=5)
         entry_pontos.insert(0, "10")
+        frame_imagem = Frame(self.popup_criacao)
+        frame_imagem.pack(padx=10, pady=5, fill='x')
+        btn_selecionar_img = Button(frame_imagem, text="Anexar Imagem...", command=lambda: self.selecionar_imagem(lbl_caminho_imagem))
+        btn_selecionar_img.pack(side="left")
+        lbl_caminho_imagem = Label(frame_imagem, text="Nenhuma imagem selecionada.", font=("Arial", 9, "italic"))
+        lbl_caminho_imagem.pack(side="left", padx=10)
         Label(self.popup_criacao, text="Enviar para:", font=("Arial", 10, "bold")).pack(padx=10, pady=(10,0), anchor='w')
         frame_funcionarios = Frame(self.popup_criacao)
         frame_funcionarios.pack(padx=10, pady=5, fill='both', expand=True)
@@ -139,7 +146,9 @@ class AppComunicados:
                             ))
         btn_enviar.pack(pady=10, padx=10, fill='x', ipady=5)
 
+       # Em comunicados_main.py, substitua a função inteira por esta:
     def enviar_comunicado(self, titulo, conteudo, premiar, pontos_str, indices_selecionados, listbox):
+        # ... (toda a parte de validação inicial continua a mesma) ...
         if not titulo or not conteudo.strip():
             messagebox.showerror("Erro", "Título e Conteúdo são obrigatórios.", parent=self.popup_criacao)
             return
@@ -154,39 +163,93 @@ class AppComunicados:
             except ValueError:
                 messagebox.showerror("Erro", "A pontuação deve ser um número inteiro positivo.", parent=self.popup_criacao)
                 return
-        try:
-            GESTOR_ID = 2 
-            documento_id = database.criar_documento(titulo, conteudo.strip(), GESTOR_ID, pontos)
-            if not documento_id:
-                messagebox.showerror("Erro de Banco de Dados", "Não foi possível criar o registro do documento.", parent=self.popup_criacao)
-                return
 
+        try:
             destinatarios = [listbox.get(i) for i in indices_selecionados]
             enviados_com_sucesso = 0
+            telegram_file_id = None
+            documento_id = None # Inicializa o documento_id
 
-            for display_text in destinatarios:
+            imagem_anexada = hasattr(self, 'caminho_imagem_selecionada') and self.caminho_imagem_selecionada
+
+            # Monta a legenda final UMA VEZ
+            legenda_completa = (
+                f"🚨 **NOVO COMUNICADO IMPORTANTE** 🚨\n\n"
+                f"**Título:** {titulo}\n\n"
+                f"**Conteúdo:**\n{conteudo.strip()}\n\n"
+                f"Sua confirmação de leitura é obrigatória e será registrada."
+            )
+
+            # Se tiver imagem, o primeiro envio já é o definitivo para o primeiro usuário
+            if imagem_anexada:
+                print("--> Imagem anexada. Processando envio...")
+                # Pega o primeiro funcionário para o primeiro envio
+                primeiro_destinatario_display = destinatarios[0]
+                funcionario_obj = self.dados_funcionarios[primeiro_destinatario_display]
+
+                # Cria a pendência e os botões para o PRIMEIRO envio
+                GESTOR_ID = 2
+                # Criamos o documento ANTES para já ter um ID, mas sem o file_id ainda
+                documento_id = database.criar_documento(titulo, conteudo.strip(), GESTOR_ID, pontos)
+                assinatura_id = database.registrar_pendencia_assinatura(documento_id, funcionario_obj.FuncionarioID)
+                keyboard = [[InlineKeyboardButton("✅ Li e estou ciente", callback_data=f"doc_ciente_{assinatura_id}")]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+
+                # Envia a foto com a LEGENDA COMPLETA e o BOTÃO CERTO
+                resposta_api = notificador_telegram.enviar_foto_com_botoes(
+                    chat_id=funcionario_obj.ChatIDTelegram,
+                    foto=self.caminho_imagem_selecionada,
+                    legenda=legenda_completa,
+                    reply_markup_obj=reply_markup
+                )
+
+                if resposta_api and resposta_api.get('ok'):
+                    telegram_file_id = resposta_api['result']['photo'][-1]['file_id']
+                    # AGORA ATUALIZAMOS o registro do documento com o file_id obtido
+                    # (Precisaremos de uma nova função no database.py para isso)
+                    database.atualizar_documento_com_file_id(documento_id, telegram_file_id)
+                    enviados_com_sucesso += 1
+                    print(f"--> Sucesso! File ID obtido e enviado para o primeiro: {telegram_file_id}")
+                else:
+                    messagebox.showerror("Erro Telegram", f"Não foi possível enviar a imagem. Resposta da API: {resposta_api}", parent=self.popup_criacao)
+                    database.excluir_documento(documento_id) # Limpa o documento criado se o envio falhar
+                    return
+            
+            # Se não houver imagem, cria o documento normalmente
+            if not imagem_anexada:
+                GESTOR_ID = 2
+                documento_id = database.criar_documento(titulo, conteudo.strip(), GESTOR_ID, pontos)
+
+            if not documento_id:
+                messagebox.showerror("Erro de BD", "Não foi possível criar o registro do documento.", parent=self.popup_criacao)
+                return
+
+            # Define a lista de quem ainda vai receber a mensagem
+            # Se teve imagem, pula o primeiro, que já recebeu. Se não, envia para todos.
+            lista_para_loop = destinatarios[1:] if imagem_anexada else destinatarios
+
+            for display_text in lista_para_loop:
                 funcionario = self.dados_funcionarios[display_text]
                 assinatura_id = database.registrar_pendencia_assinatura(documento_id, funcionario.FuncionarioID)
-                
+
                 if assinatura_id:
-                    texto_telegram = (
-                        f"🚨 **NOVO COMUNICADO IMPORTANTE** 🚨\n\n"
-                        f"**Título:** {titulo}\n\n"
-                        f"**Conteúdo:**\n{conteudo.strip()}\n\n"
-                        f"Sua confirmação de leitura é obrigatória e será registrada."
-                    )
                     keyboard = [[InlineKeyboardButton("✅ Li e estou ciente", callback_data=f"doc_ciente_{assinatura_id}")]]
                     reply_markup = InlineKeyboardMarkup(keyboard)
 
-                    notificador_telegram.enviar_mensagem_com_botao(
-                        funcionario.ChatIDTelegram, 
-                        texto_telegram, 
-                        reply_markup
-                    )
+                    if imagem_anexada:
+                        notificador_telegram.enviar_foto_com_botoes(
+                            funcionario.ChatIDTelegram, telegram_file_id, legenda_completa, reply_markup
+                        )
+                    else:
+                        notificador_telegram.enviar_mensagem_com_botao(
+                            funcionario.ChatIDTelegram, legenda_completa, reply_markup
+                        )
                     enviados_com_sucesso += 1
-                    time.sleep(0.1) 
-            
+                    time.sleep(0.1)
+
             messagebox.showinfo("Sucesso", f"{enviados_com_sucesso} de {len(destinatarios)} comunicados foram enviados.", parent=self.popup_criacao)
+            if imagem_anexada:
+                del self.caminho_imagem_selecionada
             self.popup_criacao.destroy()
             self.atualizar_lista_comunicados()
         except Exception as e:
@@ -348,6 +411,29 @@ class AppComunicados:
     def limpar_filtro(self):
         self.entry_filtro.delete(0, "end")
         self.atualizar_lista_comunicados()
+
+        # Cole esta nova função dentro da classe AppComunicados
+    def selecionar_imagem(self, label_caminho):
+        """Abre uma janela para o usuário selecionar uma imagem."""
+        # Abre a caixa de diálogo para selecionar arquivos
+        filepath = filedialog.askopenfilename(
+            title="Selecione uma Imagem para o Comunicado",
+            filetypes=[
+                ("Imagens", "*.jpg *.jpeg *.png *.gif"),
+                ("Todos os arquivos", "*.*")
+            ]
+        )
+        # Se o usuário selecionou um arquivo...
+        if filepath:
+            # Armazenamos o caminho do arquivo em uma variável da classe
+            self.caminho_imagem_selecionada = filepath
+            # Atualizamos o texto do label na tela para o usuário ver o que selecionou
+            label_caminho.config(text=os.path.basename(filepath))
+        else:
+            # Se ele cancelou, garantimos que a variável não existe
+            if hasattr(self, 'caminho_imagem_selecionada'):
+                del self.caminho_imagem_selecionada
+            label_caminho.config(text="Nenhuma imagem selecionada.")
         
 if __name__ == "__main__":
     root = tk.Tk()
