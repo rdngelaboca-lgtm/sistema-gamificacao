@@ -8,7 +8,6 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from datetime import datetime, timedelta
 
-# Testando o fluxo com GitHub Desktop
 
 class App:
     def __init__(self, root):
@@ -1282,6 +1281,13 @@ class App:
         edit_combo_folga = ttk.Combobox(frame_edicao, state="readonly", values=dias_semana_lista)
         edit_combo_folga.grid(row=4, column=1, pady=5)
 
+        ttk.Label(frame_edicao, text="Verificador de Segurança (3 dígitos CPF):").grid(row=5, column=0, sticky="w", pady=5)
+        edit_entry_verificador = ttk.Entry(frame_edicao, width=10)
+        edit_entry_verificador.grid(row=5, column=1, sticky="w", pady=5)
+        # Busca o valor atual no banco e preenche o campo
+        verificador_atual = getattr(funcionario_selecionado, 'VerificadorCPF', '')
+        edit_entry_verificador.insert(0, verificador_atual or "")
+
         # Encontra o nome do dia da folga a partir do número salvo no banco
         folga_atual_num = getattr(funcionario_selecionado, 'DiaDeFolga', 0)
         folga_atual_texto = next((nome for nome, num in self.dias_semana_mapa.items() if num == folga_atual_num), 'Sem Folga Definida')
@@ -1289,22 +1295,27 @@ class App:
 
         # Substitua a chamada do botão de salvar por esta:
         btn_salvar = ttk.Button(frame_edicao, text="Salvar Alterações", 
-                                command=lambda: self.salvar_edicao_funcionario(
-                                    funcionario_selecionado.FuncionarioID, 
-                                    edit_entry_nome.get(), 
-                                    edit_entry_chat_id.get(), 
-                                    edit_entry_cargo.get(), 
-                                    edit_entry_horario.get(),
-                                    edit_combo_folga.get() # Passa o novo valor
-                                ))
-        btn_salvar.grid(row=5, columnspan=2, pady=20)
+                        command=lambda: self.salvar_edicao_funcionario(
+                            funcionario_selecionado.FuncionarioID, 
+                            edit_entry_nome.get(), 
+                            edit_entry_chat_id.get(), 
+                            edit_entry_cargo.get(), 
+                            edit_entry_horario.get(),
+                            edit_combo_folga.get(),
+                            edit_entry_verificador.get() # Passa o novo valor
+                        ))
+        btn_salvar.grid(row=6, columnspan=2, pady=20)
 
-    def salvar_edicao_funcionario(self, func_id, nome, chat_id, cargo, horario, dia_folga_texto):
-        # A CORREÇÃO ESTÁ AQUI: A variável correta é 'dia_folga_valor'
+    def salvar_edicao_funcionario(self, func_id, nome, chat_id, cargo, horario, dia_folga_texto, verificador_cpf): # 1. Novo parâmetro
         dia_folga_valor = self.dias_semana_mapa.get(dia_folga_texto, 0)
         
-        # Usamos 'dia_folga_valor' (o número) para salvar no banco
-        database.atualizar_funcionario(func_id, nome, chat_id, cargo, horario, dia_folga_valor)
+        # Validação simples para garantir 3 dígitos
+        if verificador_cpf and len(verificador_cpf) != 3:
+            messagebox.showerror("Erro", "O Verificador de Segurança deve ter exatamente 3 dígitos.")
+            return
+
+        # 2. Passa o novo parâmetro para a função do banco
+        database.atualizar_funcionario(func_id, nome, chat_id, cargo, horario, dia_folga_valor, verificador_cpf)
         
         messagebox.showinfo("Sucesso", "Funcionário atualizado com sucesso.")
         self.edit_window.destroy()
@@ -1465,7 +1476,6 @@ class App:
         for tarefa in tarefas_pendentes: # <--- Linha com recuo CORRETO
             tree_pendencias.insert("", "end", values=(tarefa.AtribuicaoID, tarefa.Titulo, tarefa.Pontos))
 
-    # Em main.py, SUBSTITUA a função salvar_tarefa
     def salvar_tarefa(self):
         titulo = self.entry_tarefa_titulo.get()
         descricao = self.text_tarefa_descricao.get("1.0", tk.END).strip()
@@ -1479,11 +1489,9 @@ class App:
             pontos_int = int(pontos)
             if self.tarefa_selecionada_para_edicao:
                 tarefa_id = self.tarefa_selecionada_para_edicao.TarefaID
-                # Passamos o setor para a função de atualizar
                 database.atualizar_tarefa(tarefa_id, titulo, descricao, pontos_int, setor)
                 messagebox.showinfo("Sucesso", "Modelo de tarefa atualizado!")
             else:
-                # Passamos o setor para a função de criar
                 database.criar_tarefa(titulo, descricao, pontos_int, setor)
                 messagebox.showinfo("Sucesso", "Modelo de tarefa criado!")
             self.limpar_formulario_tarefa()
@@ -1654,11 +1662,15 @@ class App:
         texto = self.lista_entregas.get(indices[0]); entrega_id = int(texto.split(" | ")[0].split(": ")[1]); entrega_atual = self.dados_entregas[entrega_id]
         self.lbl_nome_funcionario.config(text=f"Funcionário: {entrega_atual.NomeCompleto}")
         self.lbl_titulo_tarefa.config(text=f"Tarefa: {entrega_atual.Titulo} ({entrega_atual.Pontos} pts)")
-        if os.path.exists(entrega_atual.PathFotoEvidencia):
-            img = Image.open(entrega_atual.PathFotoEvidencia); img.thumbnail((500, 400)); self.photo_img = ImageTk.PhotoImage(img); self.lbl_imagem.config(image=self.photo_img)
-        else: self.lbl_imagem.config(image='', text="Imagem não encontrada!")
-
-    # Em main.py, adicione estes três novos métodos à classe App
+        # Primeiro checamos se o caminho da foto não é Nulo (None)
+        if entrega_atual.PathFotoEvidencia and os.path.exists(entrega_atual.PathFotoEvidencia):
+            img = Image.open(entrega_atual.PathFotoEvidencia)
+            img.thumbnail((500, 400))
+            self.photo_img = ImageTk.PhotoImage(img)
+            self.lbl_imagem.config(image=self.photo_img)
+        else:
+            # A mensagem agora reflete melhor a situação real
+            self.lbl_imagem.config(image='', text="Foto ainda não processada pelo servidor ou não encontrada!")
 
     def carregar_funcionarios_feedback(self):
         """Carrega a lista de funcionários para o combobox de filtro."""
