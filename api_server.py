@@ -179,7 +179,7 @@ def rota_buscar_agendamento(agendamento_id):
         ag_dict = {
             "agendamento_id": agendamento.AgendamentoID, "nome_cliente": agendamento.NomeCliente,
             "cpf_cliente": agendamento.CPFCliente, "telefone_cliente": agendamento.TelefoneCliente,
-            "tipo_evento": agendamento.TipoEvento, "data_evento": agendamento.DataEvento.strftime('%d/%m/%Y %H:%M'),
+            "tipo_evento": agendamento.TipoEvento, "data_evento": agendamento.DataEvento.strftime('%Y-%m-%d %H:%M'),
             "status_agendamento": agendamento.StatusAgendamento, "status_pagamento": agendamento.StatusPagamento,
             "observacoes": agendamento.Observacoes, "funcionario_id": agendamento.FuncionarioID
         }
