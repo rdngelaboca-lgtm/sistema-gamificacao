@@ -110,6 +110,48 @@ class AppGestaoPessoas:
         frame_botoes_docs.grid(row=1, column=0, sticky="ew", pady=(10,0))
         btn_add = ttk.Button(frame_botoes_docs, text="Adicionar Novo Documento...", command=self.abrir_janela_add_documento)
         btn_add.pack(side="left")
+        btn_vis = ttk.Button(frame_botoes_docs, text="Visualizar/Baixar Documento", command=self.visualizar_documento_selecionado)
+        btn_vis.pack(side="left", padx=10)
+
+    def visualizar_documento_selecionado(self):
+        """Baixa o documento selecionado da API e o abre."""
+        selecionado = self.tree_rh_documentos.focus()
+        if not selecionado:
+            messagebox.showwarning("Aviso", "Por favor, selecione um documento na lista da direita.")
+            return
+
+        dados_doc = self.tree_rh_documentos.item(selecionado, 'values')
+        documento_id = dados_doc[0]
+        nome_original = f"{dados_doc[1]}_{dados_doc[2].replace('/', '-')}.pdf" # Ex: Holerite_09-2025.pdf
+
+        url_download = f"http://192.168.2.23:5000/documentos/download/{documento_id}"
+
+        try:
+            print(f"--> Solicitando download do documento ID {documento_id}...")
+            response = requests.get(url_download, stream=True)
+
+            if response.status_code == 200:
+                # Cria uma pasta 'downloads' localmente se não existir
+                pasta_downloads = "downloads"
+                if not os.path.exists(pasta_downloads):
+                    os.makedirs(pasta_downloads)
+
+                caminho_local = os.path.join(pasta_downloads, nome_original)
+
+                # Salva o arquivo recebido no disco local
+                with open(caminho_local, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        f.write(chunk)
+
+                print(f"--> Download concluído! Arquivo salvo em: {caminho_local}")
+
+                # Abre o arquivo com o programa padrão do Windows
+                file_utils.abrir_arquivo(caminho_local)
+            else:
+                messagebox.showerror("Erro da API", f"Não foi possível baixar o arquivo: {response.json().get('mensagem', response.text)}")
+
+        except requests.exceptions.RequestException as e:
+            messagebox.showerror("Erro de Conexão", f"Não foi possível conectar à API para baixar o arquivo: {e}")
 
     def carregar_rh_funcionarios(self):
         for i in self.tree_rh_funcionarios.get_children(): self.tree_rh_funcionarios.delete(i)
