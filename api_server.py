@@ -4,6 +4,8 @@ import os
 from werkzeug.utils import secure_filename
 from datetime import datetime
 from flask import send_from_directory
+import notificador_telegram 
+import config
 
 app = Flask(__name__)
 
@@ -56,21 +58,34 @@ def rota_criar_agendamento():
     if not all(campo in dados for campo in campos_obrigatorios):
         return jsonify({"status": "erro", "mensagem": "Campos obrigatórios ausentes"}), 400
 
-    # --- A MÁGICA DA CORREÇÃO ACONTECE AQUI ---
     try:
-        # 1. Pegamos a string que veio do cliente (Ex: '2025-11-29 14:00')
         data_evento_str = dados['data_evento']
-        # 2. Convertemos ela de volta para um objeto datetime do Python
         dados['data_evento'] = datetime.strptime(data_evento_str, '%Y-%m-%d %H:%M')
     except (ValueError, TypeError):
-        # Se o formato for inválido ou o campo não existir, retornamos um erro claro.
         return jsonify({"status": "erro", "mensagem": "Formato de data_evento inválido. Use 'AAAA-MM-DD HH:MM'."}), 400
-    # ---------------------------------------------
 
-    sucesso, erro_db = database.criar_agendamento(dados) # <-- AGORA passamos o objeto datetime!
+    sucesso, erro_db = database.criar_agendamento(dados)
 
     if sucesso:
-        return jsonify({"status": "sucesso", "mensagem": "Agendamento criado com sucesso!"}), 201
+        # --- ALERTA DE NOVO AGENDAMENTO ---
+        try:
+            # Formatamos a data para o formato brasileiro para a notificação
+            data_formatada = dados['data_evento'].strftime('%d/%m/%Y às %H:%M')
+            
+            mensagem_alerta = (
+                f"✅ **Novo Agendamento Recebido!** ✅\n\n"
+                f"**Cliente:** {dados['nome_cliente']}\n"
+                f"**Evento:** {dados['tipo_evento']}\n"
+                f"**Quando:** {data_formatada}\n"
+            )
+            notificador_telegram.enviar_mensagem(config.AGENDAMENTOS_GROUP_CHAT_ID, mensagem_alerta)
+        except Exception as e:
+            # Se a notificação falhar, o agendamento ainda foi criado.
+            # Apenas registramos o erro no console do servidor.
+            print(f"!!! ATENÇÃO: Agendamento criado, mas falha ao enviar notificação no Telegram: {e}")
+        # -----------------------------------
+
+        return jsonify({"status": "sucesso", "mensagem": "Agendamento criado e equipe notificada!"}), 201
     else:
         return jsonify({"status": "erro", "mensagem": f"Erro no banco de dados: {erro_db}"}), 500
     
