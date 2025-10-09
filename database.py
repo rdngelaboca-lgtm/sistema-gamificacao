@@ -1636,7 +1636,7 @@ def buscar_dados_para_notificacao_feedback(solicitacao_id):
 # Em database.py, adicione estas duas novas funções
 
 def criar_agendamento(dados_agendamento):
-    """Insere um novo agendamento na tabela Agendamentos."""
+    """Insere um novo agendamento e retorna (True, None) em sucesso, ou (False, 'mensagem de erro') em falha."""
     conn = get_db_connection()
     if conn:
         try:
@@ -1649,23 +1649,23 @@ def criar_agendamento(dados_agendamento):
             """
             cursor.execute(sql,
                          dados_agendamento['nome_cliente'],
-                         dados_agendamento.get('cpf_cliente'), # .get() para campos opcionais
+                         dados_agendamento.get('cpf_cliente'),
                          dados_agendamento.get('telefone_cliente'),
                          dados_agendamento['tipo_evento'],
                          dados_agendamento['data_evento'],
-                         dados_agendamento.get('status_agendamento', 'Confirmado'), # Valor padrão se não for enviado
+                         dados_agendamento.get('status_agendamento', 'Confirmado'),
                          dados_agendamento.get('status_pagamento', 'Pendente'),
                          dados_agendamento['funcionario_id'],
                          dados_agendamento.get('observacoes')
                          )
             conn.commit()
-            return True
+            return True, None # Retorna True e nenhum erro
         except Exception as e:
             print(f"ERRO ao criar agendamento: {e}")
-            return False
+            return False, str(e) # Retorna False e a mensagem do erro
         finally:
             conn.close()
-    return False
+    return False, "Não foi possível conectar ao banco de dados."
 
 def listar_agendamentos():
     """Retorna uma lista de todos os agendamentos, juntando o nome do funcionário."""
@@ -2452,4 +2452,3 @@ def atualizar_status_pagamento(agendamento_id, novo_status):
         finally:
             conn.close()
     return False
-
