@@ -71,7 +71,6 @@ def rota_upload_documento():
     e salvar o registro no banco de dados.
     """
     try:
-        # 1. Verifica se os dados do formulário e o arquivo foram enviados
         if 'file' not in request.files:
             return jsonify({"status": "erro", "mensagem": "Nenhum arquivo enviado."}), 400
 
@@ -81,24 +80,19 @@ def rota_upload_documento():
         if arquivo.filename == '':
             return jsonify({"status": "erro", "mensagem": "Nenhum arquivo selecionado."}), 400
 
-        # 2. Pega os dados que vieram junto com o arquivo
         funcionario_id = dados_form.get('funcionario_id')
         tipo_documento = dados_form.get('tipo_documento')
         mes_ano_str = dados_form.get('mes_ano') # Formato 'YYYY-MM-DD'
 
-        # Validação dos dados
         if not all([funcionario_id, tipo_documento, mes_ano_str]):
             return jsonify({"status": "erro", "mensagem": "Dados do formulário incompletos."}), 400
 
-        # 3. Monta um nome de arquivo seguro e o caminho para salvar
         nome_arquivo_seguro = secure_filename(f"{tipo_documento.lower()}_{funcionario_id}_{mes_ano_str}.pdf")
         caminho_para_salvar = os.path.join(PASTA_DOCUMENTOS_SEGUROS, nome_arquivo_seguro)
 
-        # 4. Salva o arquivo no servidor
         arquivo.save(caminho_para_salvar)
         print(f">>> Arquivo '{nome_arquivo_seguro}' salvo com sucesso em '{PASTA_DOCUMENTOS_SEGUROS}'")
 
-        # 5. Registra no banco de dados
         documento_id = database.salvar_documento_pessoal(
             funcionario_id=funcionario_id,
             tipo_documento=tipo_documento,
@@ -107,11 +101,9 @@ def rota_upload_documento():
         )
 
         if not documento_id:
-            # Se falhar ao salvar no BD, deleta o arquivo que foi salvo para não deixar lixo
             os.remove(caminho_para_salvar)
             return jsonify({"status": "erro", "mensagem": "Falha ao registrar o documento no banco de dados."}), 500
         
-        # 6. Cria a pendência de ciência para o funcionário
         database.criar_pendencia_ciencia_documento_pessoal(documento_id, funcionario_id)
 
         return jsonify({"status": "sucesso", "mensagem": "Documento enviado e registrado com sucesso!"}), 201
@@ -120,33 +112,79 @@ def rota_upload_documento():
         print(f"!!! ERRO CRÍTICO em /documentos/upload: {e}")
         return jsonify({"status": "erro", "mensagem": f"Erro interno no servidor: {e}"}), 500
     
-
-# Em api_server.py, adicione esta nova rota
-
 @app.route('/documentos/download/<int:documento_id>', methods=['GET'])
 def rota_download_documento(documento_id):
     """
     Endpoint seguro para baixar um documento pessoal a partir do seu ID.
     """
     try:
-        # 1. Busca o caminho completo do arquivo no banco de dados
         caminho_completo = database.buscar_caminho_documento(documento_id)
 
         if not caminho_completo or not os.path.exists(caminho_completo):
             return jsonify({"status": "erro", "mensagem": "Documento não encontrado."}), 404
 
-        # 2. Separa o diretório do nome do arquivo
         diretorio, nome_arquivo = os.path.split(caminho_completo)
 
-        # 3. Usa a função segura do Flask para enviar o arquivo
         print(f">>> Enviando o arquivo '{nome_arquivo}' do diretório '{diretorio}'")
         return send_from_directory(diretorio, nome_arquivo, as_attachment=True)
 
     except Exception as e:
         print(f"!!! ERRO CRÍTICO em /documentos/download: {e}")
         return jsonify({"status": "erro", "mensagem": f"Erro interno no servidor: {e}"}), 500
+    
 
+@app.route('/agendamentos/<int:agendamento_id>', methods=['PUT'])
+def rota_atualizar_agendamento(agendamento_id):
+    """Endpoint para atualizar um agendamento existente."""
+    dados = request.get_json()
+    if not dados:
+        return jsonify({"status": "erro", "mensagem": "Dados não enviados."}), 400
 
+    sucesso = database.atualizar_agendamento(agendamento_id, dados)
+    if sucesso:
+        return jsonify({"status": "sucesso", "mensagem": "Agendamento atualizado com sucesso!"}), 200
+    else:
+        return jsonify({"status": "erro", "mensagem": "Falha ao atualizar o agendamento."}), 500
+
+@app.route('/agendamentos/<int:agendamento_id>', methods=['DELETE'])
+def rota_excluir_agendamento(agendamento_id):
+    """Endpoint para excluir um agendamento."""
+    sucesso = database.excluir_agendamento(agendamento_id)
+    if sucesso:
+        return '', 204
+    else:
+        return jsonify({"status": "erro", "mensagem": "Falha ao excluir o agendamento."}), 500
+
+@app.route('/agendamentos/<int:agendamento_id>/pagamento', methods=['PATCH'])
+def rota_patch_pagamento(agendamento_id):
+    """Endpoint para atualizar SOMENTE o status do pagamento."""
+    dados = request.get_json()
+    novo_status = dados.get('status')
+    if not novo_status or novo_status not in ['Pago', 'Pendente']:
+        return jsonify({"status": "erro", "mensagem": "Status de pagamento inválido."}), 400
+
+    sucesso = database.atualizar_status_pagamento(agendamento_id, novo_status)
+    if sucesso:
+        return jsonify({"status": "sucesso", "mensagem": f"Status de pagamento atualizado para '{novo_status}'."}), 200
+    else:
+        return jsonify({"status": "erro", "mensagem": "Falha ao atualizar o status de pagamento."}), 500
+    
+@app.route('/agendamentos/<int:agendamento_id>', methods=['GET'])
+def rota_buscar_agendamento(agendamento_id):
+    """Endpoint para buscar os detalhes de um único agendamento."""
+    agendamento = database.buscar_agendamento_por_id(agendamento_id)
+    if agendamento:
+        # Converte o objeto do banco em um dicionário JSON amigável
+        ag_dict = {
+            "agendamento_id": agendamento.AgendamentoID, "nome_cliente": agendamento.NomeCliente,
+            "cpf_cliente": agendamento.CPFCliente, "telefone_cliente": agendamento.TelefoneCliente,
+            "tipo_evento": agendamento.TipoEvento, "data_evento": agendamento.DataEvento.strftime('%d/%m/%Y %H:%M'),
+            "status_agendamento": agendamento.StatusAgendamento, "status_pagamento": agendamento.StatusPagamento,
+            "observacoes": agendamento.Observacoes, "funcionario_id": agendamento.FuncionarioID
+        }
+        return jsonify(ag_dict), 200
+    else:
+        return jsonify({"status": "erro", "mensagem": "Agendamento não encontrado."}), 404
 
 if __name__ == '__main__':
     print(">>> Iniciando o Servidor da API...")
