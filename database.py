@@ -1,8 +1,6 @@
-# database.py (Versão com lógica de tarefas pendentes refinada)
-
 import pyodbc
-from datetime import datetime, date, timedelta # <<< MODIFIQUE ESTA LINHA
-import calendar # <<< ADICIONE ESTA LINHA
+from datetime import datetime, date, timedelta 
+import calendar 
 
 SERVER = 'localhost'
 DATABASE = 'gamificacao_db'
@@ -10,9 +8,9 @@ CONNECTION_STRING = (
     f"DRIVER={{ODBC Driver 18 for SQL Server}};"  
     f"SERVER={SERVER};"
     f"DATABASE={DATABASE};"
-    f"UID=sa;"  # Informamos o usuário correto
-    f"PWD=Gamificacao#2025;" # << COLOQUE A SENHA AQUI
-    f"TrustServerCertificate=yes;"  # Necessário para aceitar o certificado do servidor
+    f"UID=sa;"  
+    f"PWD=Gamificacao#2025;" 
+    f"TrustServerCertificate=yes;"  
 )
 
 def get_db_connection():
@@ -2204,6 +2202,170 @@ def atualizar_documento_com_file_id(documento_id, file_id):
             conn.commit()
         finally:
             conn.close()
+
+# Em database.py, adicione este bloco inteiro no final do arquivo
+
+# ===================================================================
+# == INÍCIO DO MÓDULO DE DOCUMENTOS PESSOAIS (RH) ===================
+# ===================================================================
+
+def salvar_documento_pessoal(funcionario_id, tipo_documento, mes_ano, caminho_arquivo):
+    """
+    Salva um novo documento pessoal (como um holerite) no catálogo e retorna o ID do novo documento.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                INSERT INTO DocumentosPessoais (FuncionarioID, TipoDocumento, MesAno, CaminhoArquivo)
+                VALUES (?, ?, ?, ?);
+                SELECT SCOPE_IDENTITY();
+            """
+            cursor.execute(sql, funcionario_id, tipo_documento, mes_ano, caminho_arquivo)
+            cursor.nextset()
+            novo_id = cursor.fetchone()[0]
+            conn.commit()
+            return novo_id
+        except Exception as e:
+            print(f"ERRO ao salvar documento pessoal: {e}")
+            return None
+        finally:
+            conn.close()
+
+def criar_pendencia_ciencia_documento_pessoal(documento_id, funcionario_id):
+    """
+    Cria o registro de 'Pendente' na tabela de ciência para um novo documento pessoal.
+    Retorna o ID da nova pendência (CienciaID).
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                INSERT INTO DocumentosPessoaisCiencia (DocumentoID, FuncionarioID)
+                VALUES (?, ?);
+                SELECT SCOPE_IDENTITY();
+            """
+            cursor.execute(sql, documento_id, funcionario_id)
+            cursor.nextset()
+            ciencia_id = cursor.fetchone()[0]
+            conn.commit()
+            return ciencia_id
+        except Exception as e:
+            print(f"ERRO ao criar pendência de ciência para documento pessoal: {e}")
+            return None
+        finally:
+            conn.close()
+
+def atualizar_verificador_cpf(funcionario_id, verificador):
+    """Atualiza ou insere os 3 dígitos do CPF para verificação de segurança."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE Funcionarios SET VerificadorCPF = ? WHERE FuncionarioID = ?"
+            cursor.execute(sql, verificador, funcionario_id)
+            conn.commit()
+        finally:
+            conn.close()
+
+def buscar_verificador_cpf(funcionario_id):
+    """Busca o verificador de CPF de um funcionário."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT VerificadorCPF FROM Funcionarios WHERE FuncionarioID = ?"
+            cursor.execute(sql, funcionario_id)
+            resultado = cursor.fetchone()
+            return resultado[0] if resultado else None
+        finally:
+            conn.close()
+    return None
+
+def buscar_holerites_disponiveis(funcionario_id):
+    """
+    Busca os holerites que um funcionário ainda não deu ciência
+    e retorna o MesAno para exibição nos botões do Telegram.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT DP.MesAno
+                FROM DocumentosPessoais DP
+                JOIN DocumentosPessoaisCiencia DPC ON DP.DocumentoID = DPC.DocumentoID
+                WHERE DP.FuncionarioID = ? AND DP.TipoDocumento = 'Holerite' AND DPC.Status = 'Pendente'
+                ORDER BY DP.MesAno DESC;
+            """
+            cursor.execute(sql, funcionario_id)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def buscar_dados_holerite_para_envio(funcionario_id, mes_ano):
+    """
+    Busca o caminho do arquivo do holerite e o ID da pendência de ciência
+    para um funcionário e mês específicos.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT DP.CaminhoArquivo, DPC.CienciaID
+                FROM DocumentosPessoais DP
+                JOIN DocumentosPessoaisCiencia DPC ON DP.DocumentoID = DPC.DocumentoID
+                WHERE DP.FuncionarioID = ? AND DP.MesAno = ? AND DP.TipoDocumento = 'Holerite'
+            """
+            cursor.execute(sql, funcionario_id, mes_ano)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
+
+def marcar_holerite_como_ciente(ciencia_id):
+    """
+    Atualiza uma pendência de assinatura de holerite para 'Ciente'
+    e preenche a data/hora da confirmação.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                UPDATE DocumentosPessoaisCiencia
+                SET Status = 'Ciente', DataCiencia = GETDATE()
+                WHERE CienciaID = ? AND Status = 'Pendente'
+            """
+            cursor.execute(sql, ciencia_id)
+            conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            conn.close()
+    return False
+
+def listar_documentos_por_funcionario(funcionario_id):
+    """Busca no banco todos os documentos pessoais de um funcionário específico."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT DocumentoID, TipoDocumento, MesAno, DataUpload
+                FROM DocumentosPessoais
+                WHERE FuncionarioID = ?
+                ORDER BY MesAno DESC
+            """
+            cursor.execute(sql, funcionario_id)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
 
 
 
