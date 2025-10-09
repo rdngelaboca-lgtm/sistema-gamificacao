@@ -64,7 +64,7 @@ def listar_agendamentos():
             sql = """
                 SELECT A.*, F.NomeCompleto AS NomeFuncionario
                 FROM Agendamentos A JOIN Funcionarios F ON A.FuncionarioID = F.FuncionarioID
-                ORDER BY A.DataEvento DESC
+                ORDER BY A.DataEvento ASC
             """
             cursor.execute(sql)
             return cursor.fetchall()
@@ -2547,3 +2547,4 @@ def autenticar_funcionario(funcionario_id):
         finally:
             conn.close()
     return None
+
