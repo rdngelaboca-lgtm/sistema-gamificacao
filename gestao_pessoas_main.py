@@ -1,6 +1,3 @@
-### ARQUIVO CORRIGIDO: comunicados_main.py ###
-# Arquivo: comunicados_main.py (Versão Corrigida e Funcional)
-
 import tkinter as tk
 from tkinter import ttk, messagebox, Toplevel, Listbox, Checkbutton, Text, Entry, Scrollbar, Frame, Label, Button
 from datetime import datetime
@@ -10,93 +7,231 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 import time
 import os
 from tkinter import filedialog
-
-# Garanta que todos os imports necessários estejam no topo
+from tkcalendar import DateEntry
+import requests
 import comunicado_generator
 import file_utils
 import recibo_generator
 
-class AppComunicados:
+
+class AppGestaoPessoas:
     def __init__(self, root):
         self.root = root
-        self.root.title("Módulo de Comunicados e Ciência")
+        self.root.title("Módulo de Gestão de Pessoas (RH)")
         self.root.geometry("900x600")
         self.root.minsize(700, 400)
+        
+        self.notebook = ttk.Notebook(root)
+        self.notebook.pack(pady=10, padx=10, fill="both", expand=True)
 
-        self.root.grid_rowconfigure(2, weight=1)
-        self.root.grid_columnconfigure(0, weight=1)
+        self.frame_comunicados = ttk.Frame(self.notebook, padding="10")
+        self.frame_documentos = ttk.Frame(self.notebook, padding="10")
 
+        self.notebook.add(self.frame_comunicados, text='Comunicados')
+        self.notebook.add(self.frame_documentos, text='Documentos Pessoais (RH)')
+        
         self.dados_funcionarios = {}
         self.popup_criacao = None
 
-        self.criar_widgets_principais()
+        self.criar_aba_comunicados()
+        self.criar_aba_documentos()
+        
         self.atualizar_lista_comunicados()
+        self.carregar_rh_funcionarios() # Carrega funcionários para a nova aba
 
-    def criar_widgets_principais(self):
-        """ Cria os widgets da tela principal (lista de comunicados e botões) """
-        frame_botoes = ttk.Frame(self.root, padding="10")
+    # --- ABA 1: COMUNICADOS ---
+    def criar_aba_comunicados(self):
+        self.frame_comunicados.grid_rowconfigure(2, weight=1)
+        self.frame_comunicados.grid_columnconfigure(0, weight=1)
+        # ... (código da interface da aba comunicados que já tínhamos)
+        frame_botoes = ttk.Frame(self.frame_comunicados)
         frame_botoes.grid(row=0, column=0, sticky="ew")
-
         btn_novo = ttk.Button(frame_botoes, text="Criar Novo Comunicado", command=self.abrir_janela_criacao)
         btn_novo.pack(side="left")
-
         btn_atualizar = ttk.Button(frame_botoes, text="Atualizar Lista", command=self.atualizar_lista_comunicados)
         btn_atualizar.pack(side="left", padx=10)
-
         btn_detalhes = ttk.Button(frame_botoes, text="Ver Detalhes do Selecionado", command=self.abrir_janela_detalhes)
         btn_detalhes.pack(side="left", padx=10)
-
         btn_excluir = ttk.Button(frame_botoes, text="Excluir Comunicado", command=self.excluir_comunicado_selecionado)
         btn_excluir.pack(side="left", padx=10)
-
-        frame_filtro = ttk.Frame(self.root, padding="10")
-        frame_filtro.grid(row=1, column=0, sticky="ew")
-
+        frame_filtro = ttk.Frame(self.frame_comunicados)
+        frame_filtro.grid(row=1, column=0, sticky="ew", pady=(5,0))
         lbl_filtro = ttk.Label(frame_filtro, text="Filtrar por Título:")
         lbl_filtro.pack(side="left")
-
         self.entry_filtro = ttk.Entry(frame_filtro, width=40)
         self.entry_filtro.pack(side="left", padx=5, fill="x", expand=True)
-
         btn_buscar = ttk.Button(frame_filtro, text="Buscar", command=self.filtrar_lista_comunicados)
         btn_buscar.pack(side="left", padx=(0, 5))
-
         btn_limpar = ttk.Button(frame_filtro, text="Limpar", command=self.limpar_filtro)
         btn_limpar.pack(side="left")
-
-        frame_lista = ttk.Frame(self.root, padding="10")
-        frame_lista.grid(row=2, column=0, sticky="nsew")
+        frame_lista = ttk.Frame(self.frame_comunicados)
+        frame_lista.grid(row=2, column=0, sticky="nsew", pady=(5,0))
         frame_lista.grid_rowconfigure(0, weight=1)
         frame_lista.grid_columnconfigure(0, weight=1)
-
         cols = ('ID', 'Título', 'Data de Criação', 'Status')
         self.tree_comunicados = ttk.Treeview(frame_lista, columns=cols, show='headings', selectmode='browse')
-
-        self.tree_comunicados.heading('ID', text='ID')
-        self.tree_comunicados.column('ID', width=50, anchor='center')
-        self.tree_comunicados.heading('Título', text='Título')
-        self.tree_comunicados.column('Título', width=350)
-        self.tree_comunicados.heading('Data de Criação', text='Enviado em')
-        self.tree_comunicados.column('Data de Criação', width=150, anchor='center')
-        self.tree_comunicados.heading('Status', text='Status')
-        self.tree_comunicados.column('Status', width=120, anchor='center')
-
+        self.tree_comunicados.heading('ID', text='ID'); self.tree_comunicados.column('ID', width=50, anchor='center')
+        self.tree_comunicados.heading('Título', text='Título'); self.tree_comunicados.column('Título', width=350)
+        self.tree_comunicados.heading('Data de Criação', text='Enviado em'); self.tree_comunicados.column('Data de Criação', width=150, anchor='center')
+        self.tree_comunicados.heading('Status', text='Status'); self.tree_comunicados.column('Status', width=120, anchor='center')
         scrollbar = ttk.Scrollbar(frame_lista, orient="vertical", command=self.tree_comunicados.yview)
         self.tree_comunicados.configure(yscrollcommand=scrollbar.set)
-
         self.tree_comunicados.grid(row=0, column=0, sticky="nsew")
         scrollbar.grid(row=0, column=1, sticky="ns")
 
+    # --- ABA 2: DOCUMENTOS PESSOAIS ---
+    def criar_aba_documentos(self):
+        main_frame = ttk.Frame(self.frame_documentos)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        main_frame.columnconfigure(1, weight=1)
+        main_frame.rowconfigure(0, weight=1)
+        frame_funcionarios = ttk.LabelFrame(main_frame, text="Selecionar Funcionário", padding="10")
+        frame_funcionarios.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        frame_funcionarios.rowconfigure(0, weight=1)
+        frame_funcionarios.columnconfigure(0, weight=1)
+        cols_func = ('ID', 'Nome')
+        self.tree_rh_funcionarios = ttk.Treeview(frame_funcionarios, columns=cols_func, show='headings', selectmode='browse')
+        self.tree_rh_funcionarios.heading('ID', text='ID'); self.tree_rh_funcionarios.column('ID', width=40)
+        self.tree_rh_funcionarios.heading('Nome', text='Nome')
+        self.tree_rh_funcionarios.grid(row=0, column=0, sticky="nsew")
+        self.tree_rh_funcionarios.bind('<<TreeviewSelect>>', self.on_rh_funcionario_selecionado)
+        frame_docs = ttk.LabelFrame(main_frame, text="Documentos Enviados", padding="10")
+        frame_docs.grid(row=0, column=1, sticky="nsew")
+        frame_docs.rowconfigure(0, weight=1)
+        frame_docs.columnconfigure(0, weight=1)
+        cols_docs = ('ID Doc', 'Tipo', 'Referência', 'Data Upload')
+        self.tree_rh_documentos = ttk.Treeview(frame_docs, columns=cols_docs, show='headings', selectmode='browse')
+        self.tree_rh_documentos.heading('ID Doc', text='ID'); self.tree_rh_documentos.column('ID Doc', width=40)
+        self.tree_rh_documentos.heading('Tipo', text='Tipo de Documento'); self.tree_rh_documentos.column('Tipo', width=150)
+        self.tree_rh_documentos.heading('Referência', text='Mês/Ano Ref.'); self.tree_rh_documentos.column('Referência', width=100, anchor='center')
+        self.tree_rh_documentos.heading('Data Upload', text='Data de Upload'); self.tree_rh_documentos.column('Data Upload', width=150, anchor='center')
+        self.tree_rh_documentos.grid(row=0, column=0, sticky="nsew")
+        frame_botoes_docs = ttk.Frame(frame_docs)
+        frame_botoes_docs.grid(row=1, column=0, sticky="ew", pady=(10,0))
+        btn_add = ttk.Button(frame_botoes_docs, text="Adicionar Novo Documento...", command=self.abrir_janela_add_documento)
+        btn_add.pack(side="left")
+
+    def carregar_rh_funcionarios(self):
+        for i in self.tree_rh_funcionarios.get_children(): self.tree_rh_funcionarios.delete(i)
+        funcionarios = database.listar_funcionarios()
+        for func in funcionarios: self.tree_rh_funcionarios.insert("", "end", values=(func.FuncionarioID, func.NomeCompleto))
+
+    def on_rh_funcionario_selecionado(self, event):
+        for i in self.tree_rh_documentos.get_children(): self.tree_rh_documentos.delete(i)
+        selecionado = self.tree_rh_funcionarios.focus()
+        if not selecionado: return
+        funcionario_id = self.tree_rh_funcionarios.item(selecionado, 'values')[0]
+        documentos = database.listar_documentos_por_funcionario(funcionario_id)
+        for doc in documentos:
+            mes_ano_ref = doc.MesAno.strftime("%m/%Y")
+            data_upload = doc.DataUpload.strftime("%d/%m/%Y %H:%M")
+            self.tree_rh_documentos.insert("", "end", values=(doc.DocumentoID, doc.TipoDocumento, mes_ano_ref, data_upload))
+
+    def abrir_janela_add_documento(self):
+        """Abre a janela (Toplevel) para adicionar um novo documento pessoal."""
+        selecionado = self.tree_rh_funcionarios.focus()
+        if not selecionado:
+            messagebox.showwarning("Aviso", "Por favor, selecione um funcionário na lista da esquerda primeiro.")
+            return
+        
+        dados_func = self.tree_rh_funcionarios.item(selecionado, 'values')
+        funcionario_id = dados_func[0]
+        nome_funcionario = dados_func[1]
+
+        # --- Criação da Janela Pop-up ---
+        popup = Toplevel(self.root)
+        popup.title(f"Adicionar Documento para {nome_funcionario}")
+        popup.geometry("450x300")
+        popup.transient(self.root) # Mantém o pop-up na frente da janela principal
+
+        frame = ttk.Frame(popup, padding="15")
+        frame.pack(fill="both", expand=True)
+
+        # --- Widgets do Formulário ---
+        ttk.Label(frame, text="Tipo de Documento:").grid(row=0, column=0, sticky="w", pady=5)
+        combo_tipo = ttk.Combobox(frame, values=['Holerite', 'Contrato', 'Atestado', 'Advertência', 'Outro'])
+        combo_tipo.grid(row=0, column=1, sticky="ew", pady=5)
+        combo_tipo.set('Holerite')
+
+        ttk.Label(frame, text="Mês/Ano de Referência:").grid(row=1, column=0, sticky="w", pady=5)
+        # Usaremos um DateEntry para facilitar a seleção
+        from tkcalendar import DateEntry
+        entry_data_ref = DateEntry(frame, date_pattern='dd/mm/yyyy', width=18)
+        entry_data_ref.grid(row=1, column=1, sticky="w", pady=5)
+
+        ttk.Label(frame, text="Arquivo (PDF):").grid(row=2, column=0, sticky="w", pady=5)
+        frame_arquivo = ttk.Frame(frame)
+        frame_arquivo.grid(row=2, column=1, sticky="ew", pady=5)
+        
+        lbl_caminho_pdf = ttk.Label(frame_arquivo, text="Nenhum arquivo selecionado.")
+        lbl_caminho_pdf.pack(side="right", fill="x", expand=True)
+        
+        caminho_arquivo_selecionado = {"path": ""} # Usamos um dicionário para passar por referência
+
+        def selecionar_pdf():
+            filepath = filedialog.askopenfilename(
+                title="Selecione o documento PDF",
+                filetypes=[("Arquivos PDF", "*.pdf")]
+            )
+            if filepath:
+                caminho_arquivo_selecionado["path"] = filepath
+                lbl_caminho_pdf.config(text=os.path.basename(filepath))
+
+        btn_selecionar = ttk.Button(frame_arquivo, text="Selecionar...", command=selecionar_pdf)
+        btn_selecionar.pack(side="left")
+
+        # --- Lógica de Envio ---
+        def enviar_documento():
+            # Coleta de dados
+            tipo = combo_tipo.get()
+            data_ref = entry_data_ref.get_date()
+            caminho_arquivo = caminho_arquivo_selecionado["path"]
+
+            if not all([tipo, data_ref, caminho_arquivo]):
+                messagebox.showerror("Erro", "Todos os campos são obrigatórios.", parent=popup)
+                return
+
+            # Prepara os dados para enviar à API
+            url_upload = f"http://192.168.2.23:5000/documentos/upload" # ATENÇÃO AO IP!
+            dados_payload = {
+                'funcionario_id': funcionario_id,
+                'tipo_documento': tipo,
+                'mes_ano': data_ref.strftime('%Y-%m-%d'),
+            }
+            
+            try:
+                with open(caminho_arquivo, 'rb') as f:
+                    arquivos_payload = {'file': (os.path.basename(caminho_arquivo), f, 'application/pdf')}
+                    
+                    # Faz a requisição para a API
+                    response = requests.post(url_upload, data=dados_payload, files=arquivos_payload)
+
+                if response.status_code == 201:
+                    messagebox.showinfo("Sucesso", "Documento enviado com sucesso!", parent=popup)
+                    popup.destroy()
+                    self.on_rh_funcionario_selecionado(None) # Atualiza a lista de documentos
+                else:
+                    messagebox.showerror("Erro da API", f"Falha no upload: {response.json().get('mensagem', response.text)}", parent=popup)
+            except Exception as e:
+                messagebox.showerror("Erro de Conexão", f"Não foi possível conectar à API: {e}", parent=popup)
+
+        # Botão de Envio
+        btn_salvar = ttk.Button(frame, text="Salvar e Disponibilizar", command=enviar_documento)
+        btn_salvar.grid(row=3, column=0, columnspan=2, pady=20, ipady=5)
+
+        frame.columnconfigure(1, weight=1)
+      
+
+    
     def atualizar_lista_comunicados(self, filtro=None):
-        for i in self.tree_comunicados.get_children():
-            self.tree_comunicados.delete(i)
+        for i in self.tree_comunicados.get_children(): self.tree_comunicados.delete(i)
         comunicados = database.listar_comunicados_com_status(filtro_titulo=filtro)
         for doc in comunicados:
             status = f"{doc.TotalCientes} / {doc.TotalEnviado} Cientes"
             data_formatada = doc.DataCriacao.strftime("%d/%m/%Y %H:%M")
             self.tree_comunicados.insert("", "end", values=(doc.DocumentoID, doc.Titulo, data_formatada, status))
 
-    def abrir_janela_criacao(self):
+    def abrir_janela_criacao(self): # <<< ESTA FUNÇÃO ESTAVA FALTANDO!
         if self.popup_criacao is not None and self.popup_criacao.winfo_exists():
             self.popup_criacao.focus()
             return
@@ -145,117 +280,52 @@ class AppComunicados:
                                 listbox_funcionarios.curselection(), listbox_funcionarios
                             ))
         btn_enviar.pack(pady=10, padx=10, fill='x', ipady=5)
-
-       # Em comunicados_main.py, substitua a função inteira por esta:
+    
     def enviar_comunicado(self, titulo, conteudo, premiar, pontos_str, indices_selecionados, listbox):
-        # ... (toda a parte de validação inicial continua a mesma) ...
-        if not titulo or not conteudo.strip():
-            messagebox.showerror("Erro", "Título e Conteúdo são obrigatórios.", parent=self.popup_criacao)
-            return
-        if not indices_selecionados:
-            messagebox.showerror("Erro", "Selecione pelo menos um funcionário.", parent=self.popup_criacao)
-            return
+        if not titulo or not conteudo.strip(): messagebox.showerror("Erro", "Título e Conteúdo são obrigatórios.", parent=self.popup_criacao); return
+        if not indices_selecionados: messagebox.showerror("Erro", "Selecione pelo menos um funcionário.", parent=self.popup_criacao); return
         pontos = 0
         if premiar:
             try:
                 pontos = int(pontos_str)
                 if pontos <= 0: raise ValueError
-            except ValueError:
-                messagebox.showerror("Erro", "A pontuação deve ser um número inteiro positivo.", parent=self.popup_criacao)
-                return
-
+            except ValueError: messagebox.showerror("Erro", "A pontuação deve ser um número inteiro positivo.", parent=self.popup_criacao); return
         try:
             destinatarios = [listbox.get(i) for i in indices_selecionados]
             enviados_com_sucesso = 0
-            telegram_file_id = None
-            documento_id = None # Inicializa o documento_id
-
+            legenda_completa = (f"🚨 **NOVO COMUNICADO IMPORTANTE** 🚨\n\n**Título:** {titulo}\n\n**Conteúdo:**\n{conteudo.strip()}\n\nSua confirmação de leitura é obrigatória e será registrada.")
             imagem_anexada = hasattr(self, 'caminho_imagem_selecionada') and self.caminho_imagem_selecionada
-
-            # Monta a legenda final UMA VEZ
-            legenda_completa = (
-                f"🚨 **NOVO COMUNICADO IMPORTANTE** 🚨\n\n"
-                f"**Título:** {titulo}\n\n"
-                f"**Conteúdo:**\n{conteudo.strip()}\n\n"
-                f"Sua confirmação de leitura é obrigatória e será registrada."
-            )
-
-            # Se tiver imagem, o primeiro envio já é o definitivo para o primeiro usuário
+            GESTOR_ID = 2
+            documento_id = database.criar_documento(titulo, conteudo.strip(), GESTOR_ID, pontos)
+            if not documento_id: messagebox.showerror("Erro de BD", "Não foi possível criar o registro do documento.", parent=self.popup_criacao); return
+            telegram_file_id = None
             if imagem_anexada:
-                print("--> Imagem anexada. Processando envio...")
-                # Pega o primeiro funcionário para o primeiro envio
-                primeiro_destinatario_display = destinatarios[0]
-                funcionario_obj = self.dados_funcionarios[primeiro_destinatario_display]
-
-                # Cria a pendência e os botões para o PRIMEIRO envio
-                GESTOR_ID = 2
-                # Criamos o documento ANTES para já ter um ID, mas sem o file_id ainda
-                documento_id = database.criar_documento(titulo, conteudo.strip(), GESTOR_ID, pontos)
-                assinatura_id = database.registrar_pendencia_assinatura(documento_id, funcionario_obj.FuncionarioID)
-                keyboard = [[InlineKeyboardButton("✅ Li e estou ciente", callback_data=f"doc_ciente_{assinatura_id}")]]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-
-                # Envia a foto com a LEGENDA COMPLETA e o BOTÃO CERTO
-                resposta_api = notificador_telegram.enviar_foto_com_botoes(
-                    chat_id=funcionario_obj.ChatIDTelegram,
-                    foto=self.caminho_imagem_selecionada,
-                    legenda=legenda_completa,
-                    reply_markup_obj=reply_markup
-                )
-
+                primeiro_func_obj = self.dados_funcionarios[destinatarios[0]]
+                assinatura_id_primeiro = database.registrar_pendencia_assinatura(documento_id, primeiro_func_obj.FuncionarioID)
+                keyboard_primeiro = [[InlineKeyboardButton("✅ Li e estou ciente", callback_data=f"doc_ciente_{assinatura_id_primeiro}")]]
+                resposta_api = notificador_telegram.enviar_foto_com_botoes(primeiro_func_obj.ChatIDTelegram, self.caminho_imagem_selecionada, legenda_completa, InlineKeyboardMarkup(keyboard_primeiro))
                 if resposta_api and resposta_api.get('ok'):
                     telegram_file_id = resposta_api['result']['photo'][-1]['file_id']
-                    # AGORA ATUALIZAMOS o registro do documento com o file_id obtido
-                    # (Precisaremos de uma nova função no database.py para isso)
                     database.atualizar_documento_com_file_id(documento_id, telegram_file_id)
-                    enviados_com_sucesso += 1
-                    print(f"--> Sucesso! File ID obtido e enviado para o primeiro: {telegram_file_id}")
+                    enviados_com_sucesso = 1
                 else:
-                    messagebox.showerror("Erro Telegram", f"Não foi possível enviar a imagem. Resposta da API: {resposta_api}", parent=self.popup_criacao)
-                    database.excluir_documento(documento_id) # Limpa o documento criado se o envio falhar
-                    return
-            
-            # Se não houver imagem, cria o documento normalmente
-            if not imagem_anexada:
-                GESTOR_ID = 2
-                documento_id = database.criar_documento(titulo, conteudo.strip(), GESTOR_ID, pontos)
-
-            if not documento_id:
-                messagebox.showerror("Erro de BD", "Não foi possível criar o registro do documento.", parent=self.popup_criacao)
-                return
-
-            # Define a lista de quem ainda vai receber a mensagem
-            # Se teve imagem, pula o primeiro, que já recebeu. Se não, envia para todos.
+                    messagebox.showerror("Erro Telegram", "Não foi possível enviar a imagem inicial.", parent=self.popup_criacao)
+                    database.excluir_documento(documento_id); return
             lista_para_loop = destinatarios[1:] if imagem_anexada else destinatarios
-
             for display_text in lista_para_loop:
                 funcionario = self.dados_funcionarios[display_text]
                 assinatura_id = database.registrar_pendencia_assinatura(documento_id, funcionario.FuncionarioID)
-
                 if assinatura_id:
                     keyboard = [[InlineKeyboardButton("✅ Li e estou ciente", callback_data=f"doc_ciente_{assinatura_id}")]]
-                    reply_markup = InlineKeyboardMarkup(keyboard)
-
-                    if imagem_anexada:
-                        notificador_telegram.enviar_foto_com_botoes(
-                            funcionario.ChatIDTelegram, telegram_file_id, legenda_completa, reply_markup
-                        )
-                    else:
-                        notificador_telegram.enviar_mensagem_com_botao(
-                            funcionario.ChatIDTelegram, legenda_completa, reply_markup
-                        )
+                    if imagem_anexada: notificador_telegram.enviar_foto_com_botoes(funcionario.ChatIDTelegram, telegram_file_id, legenda_completa, InlineKeyboardMarkup(keyboard))
+                    else: notificador_telegram.enviar_mensagem_com_botao(funcionario.ChatIDTelegram, legenda_completa, InlineKeyboardMarkup(keyboard))
                     enviados_com_sucesso += 1
                     time.sleep(0.1)
-
             messagebox.showinfo("Sucesso", f"{enviados_com_sucesso} de {len(destinatarios)} comunicados foram enviados.", parent=self.popup_criacao)
-            if imagem_anexada:
-                del self.caminho_imagem_selecionada
+            if imagem_anexada: del self.caminho_imagem_selecionada
             self.popup_criacao.destroy()
             self.atualizar_lista_comunicados()
-        except Exception as e:
-            messagebox.showerror("Erro Inesperado", f"Ocorreu um erro: {e}", parent=self.popup_criacao)
-        
-    # --- AQUI ESTÁ A CORREÇÃO: As funções abaixo agora estão no nível correto da classe ---
+        except Exception as e: messagebox.showerror("Erro Inesperado", f"Ocorreu um erro: {e}", parent=self.popup_criacao)
 
     def abrir_janela_detalhes(self):
         selecionado = self.tree_comunicados.focus()
@@ -412,30 +482,16 @@ class AppComunicados:
         self.entry_filtro.delete(0, "end")
         self.atualizar_lista_comunicados()
 
-        # Cole esta nova função dentro da classe AppComunicados
     def selecionar_imagem(self, label_caminho):
-        """Abre uma janela para o usuário selecionar uma imagem."""
-        # Abre a caixa de diálogo para selecionar arquivos
-        filepath = filedialog.askopenfilename(
-            title="Selecione uma Imagem para o Comunicado",
-            filetypes=[
-                ("Imagens", "*.jpg *.jpeg *.png *.gif"),
-                ("Todos os arquivos", "*.*")
-            ]
-        )
-        # Se o usuário selecionou um arquivo...
+        filepath = filedialog.askopenfilename(title="Selecione uma Imagem para o Comunicado", filetypes=[("Imagens", "*.jpg *.jpeg *.png *.gif"),("Todos os arquivos", "*.*")])
         if filepath:
-            # Armazenamos o caminho do arquivo em uma variável da classe
             self.caminho_imagem_selecionada = filepath
-            # Atualizamos o texto do label na tela para o usuário ver o que selecionou
             label_caminho.config(text=os.path.basename(filepath))
         else:
-            # Se ele cancelou, garantimos que a variável não existe
-            if hasattr(self, 'caminho_imagem_selecionada'):
-                del self.caminho_imagem_selecionada
+            if hasattr(self, 'caminho_imagem_selecionada'): del self.caminho_imagem_selecionada
             label_caminho.config(text="Nenhuma imagem selecionada.")
         
 if __name__ == "__main__":
     root = tk.Tk()
-    app = AppComunicados(root)
+    app = AppGestaoPessoas(root) 
     root.mainloop()
