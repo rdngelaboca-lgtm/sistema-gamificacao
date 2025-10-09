@@ -126,7 +126,7 @@ class AppAgendamentos:
         }
 
         print(f"\n--- DEBUG ENVIANDO ---\n{payload}\n--- FIM DEBUG ---\n")
-        
+
         try:
             response = requests.post(f"{API_BASE_URL}/agendamentos/novo", json=payload)
             if response.status_code == 201:
@@ -241,7 +241,7 @@ class AppAgendamentos:
                 "nome_cliente": edit_entry_nome.get(), "cpf_cliente": edit_entry_cpf.get(),
                 "telefone_cliente": edit_entry_telefone.get(), "tipo_evento": edit_combo_tipo.get(),
                 "status_pagamento": edit_combo_pagamento.get(), "observacoes": edit_txt_obs.get("1.0", tk.END).strip(),
-                "data_evento": datetime.strptime(dados_completos['data_evento'], '%d/%m/%Y %H:%M').strftime('%Y-%m-%d %H:%M'),
+                "data_evento": datetime.strptime(dados_completos['data_evento'], '%Y-%m-%d %H:%M').strftime('%Y-%m-%d %H:%M'),
                 "funcionario_id": dados_completos['funcionario_id'], "status_agendamento": dados_completos['status_agendamento']
             }
             try:
