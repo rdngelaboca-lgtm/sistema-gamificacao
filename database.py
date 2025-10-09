@@ -2,17 +2,16 @@ import pyodbc
 from datetime import datetime, date, timedelta 
 import calendar 
 
-SERVER = 'localhost'
+SERVER = '192.168.2.23'
 DATABASE = 'gamificacao_db'
 CONNECTION_STRING = (
-    f"DRIVER={{ODBC Driver 18 for SQL Server}};"  
+    f"DRIVER={{ODBC Driver 17 for SQL Server}};"  
     f"SERVER={SERVER};"
     f"DATABASE={DATABASE};"
-    f"UID=sa;"  
-    f"PWD=Gamificacao#2025;" 
-    f"TrustServerCertificate=yes;"  
+    f"UID=sa;"  # Informamos o usuário correto
+    f"PWD=Gamificacao#2025;" # << COLOQUE A SENHA AQUI
+    f"TrustServerCertificate=yes;"  # Necessário para aceitar o certificado do servidor
 )
-
 
 def get_db_connection():
     try:
@@ -1654,16 +1653,17 @@ def criar_agendamento(dados_agendamento):
                          dados_agendamento.get('telefone_cliente'),
                          dados_agendamento['tipo_evento'],
                          dados_agendamento['data_evento'],
-                         dados_agendamento.get('status_agendamento', 'Confirmado'),
-                         dados_agendamento.get('status_pagamento', 'Pendente'),
+                         'Confirmado', # StatusAgendamento
+                         'Pendente',   # StatusPagamento
                          dados_agendamento['funcionario_id'],
                          dados_agendamento.get('observacoes')
                          )
             conn.commit()
-            return True, None # Retorna True e nenhum erro
+            return True, None
         except Exception as e:
             print(f"ERRO ao criar agendamento: {e}")
-            return False, str(e) # Retorna False e a mensagem do erro
+            conn.rollback()
+            return False, str(e)
         finally:
             conn.close()
     return False, "Não foi possível conectar ao banco de dados."
@@ -2471,4 +2471,3 @@ def buscar_agendamento_por_id(agendamento_id):
         finally:
             conn.close()
     return None
-
