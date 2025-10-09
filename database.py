@@ -2452,3 +2452,21 @@ def atualizar_status_pagamento(agendamento_id, novo_status):
         finally:
             conn.close()
     return False
+    
+def buscar_agendamento_por_id(agendamento_id):
+    """Busca todos os detalhes de um único agendamento pelo seu ID."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Esta query busca um agendamento específico e junta o nome do funcionário
+            sql = """
+                SELECT A.*, F.NomeCompleto AS NomeFuncionario
+                FROM Agendamentos A JOIN Funcionarios F ON A.FuncionarioID = F.FuncionarioID
+                WHERE A.AgendamentoID = ?
+            """
+            cursor.execute(sql, agendamento_id)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
