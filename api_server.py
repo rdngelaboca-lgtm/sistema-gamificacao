@@ -3,6 +3,7 @@ import database
 import os
 from werkzeug.utils import secure_filename
 from datetime import datetime
+from flask import send_from_directory
 
 app = Flask(__name__)
 
@@ -117,6 +118,32 @@ def rota_upload_documento():
 
     except Exception as e:
         print(f"!!! ERRO CRÍTICO em /documentos/upload: {e}")
+        return jsonify({"status": "erro", "mensagem": f"Erro interno no servidor: {e}"}), 500
+    
+
+# Em api_server.py, adicione esta nova rota
+
+@app.route('/documentos/download/<int:documento_id>', methods=['GET'])
+def rota_download_documento(documento_id):
+    """
+    Endpoint seguro para baixar um documento pessoal a partir do seu ID.
+    """
+    try:
+        # 1. Busca o caminho completo do arquivo no banco de dados
+        caminho_completo = database.buscar_caminho_documento(documento_id)
+
+        if not caminho_completo or not os.path.exists(caminho_completo):
+            return jsonify({"status": "erro", "mensagem": "Documento não encontrado."}), 404
+
+        # 2. Separa o diretório do nome do arquivo
+        diretorio, nome_arquivo = os.path.split(caminho_completo)
+
+        # 3. Usa a função segura do Flask para enviar o arquivo
+        print(f">>> Enviando o arquivo '{nome_arquivo}' do diretório '{diretorio}'")
+        return send_from_directory(diretorio, nome_arquivo, as_attachment=True)
+
+    except Exception as e:
+        print(f"!!! ERRO CRÍTICO em /documentos/download: {e}")
         return jsonify({"status": "erro", "mensagem": f"Erro interno no servidor: {e}"}), 500
 
 
