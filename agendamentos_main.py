@@ -5,17 +5,21 @@ import tkinter as tk
 from tkinter import ttk, messagebox, Toplevel
 import requests
 from datetime import datetime
+import database
 
 # --- CONFIGURAÇÃO ---
 API_BASE_URL = "http://192.168.2.23:5000" # Mantenha o IP do seu servidor
+
+# Em agendamentos_main.py, substitua a classe LoginWindow por esta
+import hashlib # Adicione esta importação no topo do arquivo
 
 class LoginWindow:
     def __init__(self, root):
         self.root = root
         self.root.title("Gela Boca - Acesso ao Sistema")
-        self.root.geometry("350x200")
-        self.root.resizable(False, False) # Impede de redimensionar
-        self.root.eval('tk::PlaceWindow . center') # Centraliza a janela
+        self.root.geometry("350x280") # Aumentamos a altura
+        self.root.resizable(False, False)
+        self.root.eval('tk::PlaceWindow . center')
 
         frame = ttk.Frame(root, padding="20")
         frame.pack(fill="both", expand=True)
@@ -23,10 +27,15 @@ class LoginWindow:
         ttk.Label(frame, text="ID do Funcionário:", font=("Arial", 12)).pack(pady=(0, 5))
         self.entry_id = ttk.Entry(frame, font=("Arial", 12), justify="center")
         self.entry_id.pack(fill="x", ipady=5)
-        self.entry_id.focus() # Coloca o cursor piscando no campo de ID
+        self.entry_id.focus()
 
-        # Faz o botão Enter acionar o login
-        self.entry_id.bind("<Return>", self.fazer_login)
+        # NOVO CAMPO DE SENHA
+        ttk.Label(frame, text="Senha:", font=("Arial", 12)).pack(pady=(10, 5))
+        self.entry_senha = ttk.Entry(frame, font=("Arial", 12), justify="center", show="*")
+        self.entry_senha.pack(fill="x", ipady=5)
+        
+        self.entry_id.bind("<Return>", lambda e: self.entry_senha.focus())
+        self.entry_senha.bind("<Return>", self.fazer_login)
 
         btn_login = ttk.Button(frame, text="Entrar", command=self.fazer_login)
         btn_login.pack(pady=20, fill="x", ipady=8)
@@ -35,22 +44,33 @@ class LoginWindow:
 
     def fazer_login(self, event=None):
         funcionario_id = self.entry_id.get()
-        if not funcionario_id.isdigit():
-            messagebox.showerror("Erro de Formato", "Por favor, digite apenas o número do seu ID.")
+        senha = self.entry_senha.get()
+
+        if not funcionario_id.isdigit() or not senha:
+            messagebox.showerror("Erro", "ID e Senha são obrigatórios.")
             return
 
         try:
-            # Em vez de chamar a API, vamos direto ao banco para simplificar o login local
-            # Esta é uma abordagem comum para aplicações de desktop na mesma rede.
-            funcionario = database.buscar_funcionario_por_id(int(funcionario_id))
-
-            if funcionario:
-                messagebox.showinfo("Bem-vindo(a)!", f"Acesso liberado para {funcionario.NomeCompleto}!")
-                self.funcionario_logado = funcionario
-                self.root.destroy() # Fecha a janela de login
+            # Busca os dados do funcionário, incluindo o hash
+            dados_funcionario = database.autenticar_funcionario(int(funcionario_id))
+            
+            if dados_funcionario and dados_funcionario.SenhaHash:
+                senha_hash_digitada = hashlib.sha256(senha.encode('utf-8')).hexdigest()
+                
+                # Compara o hash da senha digitada com o hash salvo no banco
+                if senha_hash_digitada == dados_funcionario.SenhaHash:
+                    messagebox.showinfo("Bem-vindo(a)!", f"Acesso liberado para {dados_funcionario.NomeCompleto}!")
+                    self.funcionario_logado = dados_funcionario # Salva o objeto completo
+                    self.root.destroy()
+                else:
+                    messagebox.showerror("Acesso Negado", "Senha incorreta.")
+                    self.entry_senha.delete(0, tk.END)
+            elif dados_funcionario:
+                 messagebox.showwarning("Acesso Negado", "Este usuário não possui uma senha cadastrada. Contate o administrador.")
             else:
                 messagebox.showerror("Acesso Negado", "ID de funcionário não encontrado.")
-                self.entry_id.delete(0, tk.END) # Limpa o campo
+                self.entry_id.delete(0, tk.END)
+                self.entry_senha.delete(0, tk.END)
         except Exception as e:
             messagebox.showerror("Erro Crítico", f"Não foi possível conectar ao banco de dados.\n\n{e}")
 
@@ -92,6 +112,7 @@ class AppAgendamentos:
         ttk.Button(frame_botoes_acao, text="Editar Selecionado", command=self.abrir_janela_edicao).pack(side=tk.LEFT, padx=(0,5))
         ttk.Button(frame_botoes_acao, text="Excluir Selecionado", command=self.excluir_agendamento_selecionado).pack(side=tk.LEFT, padx=5)
         ttk.Button(frame_botoes_acao, text="Alterar Status Pag.", command=self.alterar_status_pagamento).pack(side=tk.LEFT, padx=5)
+        ttk.Button(frame_botoes_acao, text="📢 Enviar Lembrete Geral", command=self.enviar_lembrete_geral).pack(side=tk.RIGHT, padx=5)
         frame_form = ttk.LabelFrame(main_frame, text="Novo Agendamento", padding="10")
         frame_form.grid(row=0, column=1, sticky="nsew")
         ttk.Label(frame_form, text="Nome do Cliente:").pack(anchor="w")
@@ -210,12 +231,16 @@ class AppAgendamentos:
                 messagebox.showerror("Erro da API", f"Falha ao alterar status: {erro}")
         except requests.exceptions.RequestException as e:
             messagebox.showerror("Erro de Conexão", f"Não foi possível conectar à API: {e}")
+
+    # Em agendamentos_main.py, substitua a função abrir_janela_edicao inteira por esta:
+
     def abrir_janela_edicao(self):
         selecionado = self.tree_agendamentos.focus()
         if not selecionado:
             messagebox.showwarning("Aviso", "Selecione um agendamento na lista para editar.")
             return
         agendamento_id = self.tree_agendamentos.item(selecionado, 'values')[0]
+        
         try:
             response = requests.get(f"{API_BASE_URL}/agendamentos/{agendamento_id}")
             if response.status_code != 200:
@@ -225,52 +250,113 @@ class AppAgendamentos:
         except requests.exceptions.RequestException as e:
             messagebox.showerror("Erro de Conexão", f"Não foi possível conectar à API: {e}")
             return
+        
         popup = Toplevel(self.root)
         popup.title("Editar Agendamento")
-        popup.geometry("450x450")
+        popup.geometry("450x550") # Aumentei a altura para caber tudo confortavelmente
         popup.transient(self.root)
         frame = ttk.Frame(popup, padding="15")
         frame.pack(fill="both", expand=True)
+
+        # --- Campos de texto normais (sem alteração) ---
         ttk.Label(frame, text="Nome do Cliente:").pack(anchor="w")
         edit_entry_nome = ttk.Entry(frame); edit_entry_nome.pack(fill="x", pady=(0, 5))
         edit_entry_nome.insert(0, dados_completos.get('nome_cliente', ''))
+
         ttk.Label(frame, text="CPF:").pack(anchor="w")
         edit_entry_cpf = ttk.Entry(frame); edit_entry_cpf.pack(fill="x", pady=(0, 5))
         edit_entry_cpf.insert(0, dados_completos.get('cpf_cliente', '') or '')
+
         ttk.Label(frame, text="Telefone:").pack(anchor="w")
         edit_entry_telefone = ttk.Entry(frame); edit_entry_telefone.pack(fill="x", pady=(0, 5))
         edit_entry_telefone.insert(0, dados_completos.get('telefone_cliente', '') or '')
+
         ttk.Label(frame, text="Tipo de Evento:").pack(anchor="w")
         edit_combo_tipo = ttk.Combobox(frame, values=['Carrinho de Sorvete', 'Festa de Aniversario'])
         edit_combo_tipo.pack(fill="x", pady=(0, 5))
         edit_combo_tipo.set(dados_completos.get('tipo_evento', ''))
-        ttk.Label(frame, text=f"Data/Hora Atual: {dados_completos['data_evento']} (edição de data em breve)").pack(anchor="w")
+
+        # --- NOVA PARTE: Campos de Data e Hora editáveis ---
+        frame_data_hora = ttk.Frame(frame)
+        frame_data_hora.pack(fill="x", pady=(5, 5))
+
+        ttk.Label(frame_data_hora, text="Data:").pack(side="left")
+        edit_entry_data = DateEntry(frame_data_hora, width=12, date_pattern='dd/mm/yyyy')
+        edit_entry_data.pack(side="left", padx=(5, 10))
+
+        ttk.Label(frame_data_hora, text="Hora (HH:MM):").pack(side="left")
+        edit_entry_hora = ttk.Entry(frame_data_hora, width=8)
+        edit_entry_hora.pack(side="left", padx=5)
+
+        # --- LÓGICA ATUALIZADA: Preenchendo os campos com os dados existentes ---
+        # A API retorna a data no formato 'dd/mm/yyyy HH:MM', então usamos esse formato para ler.
+        data_evento_obj = datetime.strptime(dados_completos['data_evento'], '%d/%m/%Y %H:%M')
+        edit_entry_data.set_date(data_evento_obj.date())
+        edit_entry_hora.insert(0, data_evento_obj.strftime('%H:%M'))
+
+        # --- Resto dos campos (sem alteração) ---
         ttk.Label(frame, text="Observações:").pack(anchor="w")
         edit_txt_obs = tk.Text(frame, height=3); edit_txt_obs.pack(fill="x", pady=(0, 5))
         edit_txt_obs.insert("1.0", dados_completos.get('observacoes', '') or '')
+
         ttk.Label(frame, text="Status Pagamento:").pack(anchor="w")
         edit_combo_pagamento = ttk.Combobox(frame, values=['Pendente', 'Pago'])
         edit_combo_pagamento.pack(fill="x", pady=(0, 5))
         edit_combo_pagamento.set(dados_completos.get('status_pagamento', 'Pendente'))
-        def salvar_edicao():
-            payload_editado = {
-                "nome_cliente": edit_entry_nome.get(), "cpf_cliente": edit_entry_cpf.get(),
-                "telefone_cliente": edit_entry_telefone.get(), "tipo_evento": edit_combo_tipo.get(),
-                "status_pagamento": edit_combo_pagamento.get(), "observacoes": edit_txt_obs.get("1.0", tk.END).strip(),
-                "data_evento": datetime.strptime(dados_completos['data_evento'], '%d/%m/%Y %H:%M').strftime('%Y-%m-%d %H:%M'),
-                "funcionario_id": dados_completos['funcionario_id'], "status_agendamento": dados_completos['status_agendamento']
-            }
+    
+    # --- LÓGICA ATUALIZADA: Função interna de salvar ---
+    def salvar_edicao():
+        # 1. Lê os novos valores da data e da hora dos campos editáveis
+        try:
+            nova_data = edit_entry_data.get_date()
+            nova_hora_str = edit_entry_hora.get()
+            nova_data_hora_obj = datetime.combine(nova_data, datetime.strptime(nova_hora_str, "%H:%M").time())
+            # Formata para o padrão AAAA-MM-DD que a API espera
+            nova_data_hora_str_payload = nova_data_hora_obj.strftime('%Y-%m-%d %H:%M') 
+        except ValueError:
+            messagebox.showerror("Erro de Formato", "A hora deve estar no formato HH:MM (ex: 14:30).", parent=popup)
+            return
+
+        # 2. Monta o payload COMPLETO para enviar à API
+        payload_editado = {
+            "nome_cliente": edit_entry_nome.get(),
+            "cpf_cliente": edit_entry_cpf.get(),
+            "telefone_cliente": edit_entry_telefone.get(),
+            "tipo_evento": edit_combo_tipo.get(),
+            "status_pagamento": edit_combo_pagamento.get(),
+            "observacoes": edit_txt_obs.get("1.0", tk.END).strip(),
+            "data_evento": nova_data_hora_str_payload, # <-- Usa a nova data/hora lida dos campos
+            # Mantém os dados que não são editáveis na tela
+            "funcionario_id": dados_completos['funcionario_id'],
+            "status_agendamento": dados_completos['status_agendamento']
+        }
+        
+        # 3. Envia os dados para a API (sem alteração aqui)
+        try:
+            response = requests.put(f"{API_BASE_URL}/agendamentos/{agendamento_id}", json=payload_editado)
+            if response.status_code == 200:
+                messagebox.showinfo("Sucesso", "Agendamento atualizado!", parent=popup)
+                popup.destroy()
+                self.carregar_agendamentos()
+            else:
+                erro_msg = response.json().get('mensagem', 'Erro desconhecido')
+                messagebox.showerror("Erro da API", f"Falha ao atualizar: {erro_msg}", parent=popup)
+        except requests.exceptions.RequestException as e:
+            messagebox.showerror("Erro de Conexão", f"Não foi possível conectar à API: {e}", parent=popup)
+            
+    ttk.Button(frame, text="Salvar Alterações", command=salvar_edicao).pack(pady=20, fill="x")
+
+    def enviar_lembrete_geral(self):
+        confirmado = messagebox.askyesno("Confirmar Envio", "Deseja enviar um resumo de TODOS os agendamentos futuros para o grupo do Telegram agora?")
+        if confirmado:
             try:
-                response = requests.put(f"{API_BASE_URL}/agendamentos/{agendamento_id}", json=payload_editado)
+                response = requests.post(f"{API_BASE_URL}/agendamentos/enviar-lembrete-geral")
                 if response.status_code == 200:
-                    messagebox.showinfo("Sucesso", "Agendamento atualizado!", parent=popup)
-                    popup.destroy()
-                    self.carregar_agendamentos()
+                    messagebox.showinfo("Sucesso", "Resumo de agendamentos enviado para o grupo!")
                 else:
-                    messagebox.showerror("Erro da API", f"Falha ao atualizar: {response.json().get('mensagem', 'Erro')}", parent=popup)
+                    messagebox.showerror("Erro da API", f"Falha ao enviar o lembrete: {response.json().get('mensagem')}")
             except requests.exceptions.RequestException as e:
-                messagebox.showerror("Erro de Conexão", f"Não foi possível conectar à API: {e}", parent=popup)
-        ttk.Button(frame, text="Salvar Alterações", command=salvar_edicao).pack(pady=20, fill="x")
+                messagebox.showerror("Erro de Conexão", f"Não foi possível conectar à API: {e}") 
 
 if __name__ == "__main__":
     # --- FLUXO DE INICIALIZAÇÃO ---
