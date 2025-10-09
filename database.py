@@ -1066,21 +1066,23 @@ def limpar_entregas_do_mes_por_funcionario(funcionario_id):
 # == INÍCIO DO MÓDULO DE CIÊNCIA DE COMUNICADOS (NOVAS FUNÇÕES) =====
 # ===================================================================
 
-def criar_documento(titulo, conteudo, criador_id, pontos):
+def criar_documento(titulo, conteudo, criador_id, pontos, telegram_file_id_foto=None): # 1. Novo Parâmetro Opcional
     """
     Insere um novo documento na tabela Documentos e retorna o ID do novo registro.
+    Agora suporta um file_id de foto opcional.
     """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
             sql = """
-                INSERT INTO Documentos (Titulo, Conteudo, FuncionarioCriadorID, PontosPorCiencia)
-                VALUES (?, ?, ?, ?);
+                INSERT INTO Documentos (Titulo, Conteudo, FuncionarioCriadorID, PontosPorCiencia, TelegramFileIDFoto) -- 2. Nova Coluna no INSERT
+                VALUES (?, ?, ?, ?, ?); -- 3. Novo '?' para o valor
                 SELECT SCOPE_IDENTITY();
             """
-            cursor.execute(sql, titulo, conteudo, criador_id, pontos)
-            cursor.nextset() # <<< A CORREÇÃO MÁGICA ESTÁ AQUI
+            # 4. Passando o novo parâmetro para o comando execute
+            cursor.execute(sql, titulo, conteudo, criador_id, pontos, telegram_file_id_foto)
+            cursor.nextset()
             novo_id = cursor.fetchone()[0]
             conn.commit()
             return novo_id
@@ -2188,7 +2190,20 @@ def verificar_e_conceder_conquistas(funcionario_id):
 
     finally:
         if conn:
-
             conn.close()
+
+# Em database.py, adicione esta nova função
+def atualizar_documento_com_file_id(documento_id, file_id):
+    """Atualiza um registro de documento existente para adicionar o file_id da foto."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE Documentos SET TelegramFileIDFoto = ? WHERE DocumentoID = ?"
+            cursor.execute(sql, file_id, documento_id)
+            conn.commit()
+        finally:
+            conn.close()
+
 
 
