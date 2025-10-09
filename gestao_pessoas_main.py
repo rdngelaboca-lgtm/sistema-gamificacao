@@ -99,12 +99,16 @@ class AppGestaoPessoas:
         frame_docs.grid(row=0, column=1, sticky="nsew")
         frame_docs.rowconfigure(0, weight=1)
         frame_docs.columnconfigure(0, weight=1)
-        cols_docs = ('ID Doc', 'Tipo', 'Referência', 'Data Upload')
+        cols_docs = ('ID Doc', 'Tipo', 'Referência', 'Data Upload', 'Status Ciência', 'Data da Ciência')
         self.tree_rh_documentos = ttk.Treeview(frame_docs, columns=cols_docs, show='headings', selectmode='browse')
         self.tree_rh_documentos.heading('ID Doc', text='ID'); self.tree_rh_documentos.column('ID Doc', width=40)
         self.tree_rh_documentos.heading('Tipo', text='Tipo de Documento'); self.tree_rh_documentos.column('Tipo', width=150)
         self.tree_rh_documentos.heading('Referência', text='Mês/Ano Ref.'); self.tree_rh_documentos.column('Referência', width=100, anchor='center')
         self.tree_rh_documentos.heading('Data Upload', text='Data de Upload'); self.tree_rh_documentos.column('Data Upload', width=150, anchor='center')
+        self.tree_rh_documentos.heading('Status Ciência', text='Status')
+        self.tree_rh_documentos.column('Status Ciência', width=100, anchor='center')
+        self.tree_rh_documentos.heading('Data da Ciência', text='Data da Ciência')
+        self.tree_rh_documentos.column('Data da Ciência', width=150, anchor='center')
         self.tree_rh_documentos.grid(row=0, column=0, sticky="nsew")
         frame_botoes_docs = ttk.Frame(frame_docs)
         frame_botoes_docs.grid(row=1, column=0, sticky="ew", pady=(10,0))
@@ -159,15 +163,28 @@ class AppGestaoPessoas:
         for func in funcionarios: self.tree_rh_funcionarios.insert("", "end", values=(func.FuncionarioID, func.NomeCompleto))
 
     def on_rh_funcionario_selecionado(self, event):
-        for i in self.tree_rh_documentos.get_children(): self.tree_rh_documentos.delete(i)
+        """Chamada quando um funcionário é selecionado. Carrega seus documentos e status de ciência."""
+        for i in self.tree_rh_documentos.get_children():
+            self.tree_rh_documentos.delete(i)
+
         selecionado = self.tree_rh_funcionarios.focus()
-        if not selecionado: return
+        if not selecionado:
+            return
+
         funcionario_id = self.tree_rh_funcionarios.item(selecionado, 'values')[0]
+        
         documentos = database.listar_documentos_por_funcionario(funcionario_id)
         for doc in documentos:
+            # Formata as datas para exibição
             mes_ano_ref = doc.MesAno.strftime("%m/%Y")
             data_upload = doc.DataUpload.strftime("%d/%m/%Y %H:%M")
-            self.tree_rh_documentos.insert("", "end", values=(doc.DocumentoID, doc.TipoDocumento, mes_ano_ref, data_upload))
+            status_ciencia = doc.Status or "N/A" # Pega o status
+            data_ciencia = doc.DataCiencia.strftime("%d/%m/%Y %H:%M") if doc.DataCiencia else "---" # Pega a data da ciência
+
+            # Insere todos os dados na tabela
+            self.tree_rh_documentos.insert("", "end", values=(
+                doc.DocumentoID, doc.TipoDocumento, mes_ano_ref, data_upload, status_ciencia, data_ciencia
+            ))
 
     def abrir_janela_add_documento(self):
         """Abre a janela (Toplevel) para adicionar um novo documento pessoal."""
