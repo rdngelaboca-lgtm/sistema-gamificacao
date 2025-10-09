@@ -11,6 +11,11 @@ from telegram.ext import (Application, CommandHandler, MessageHandler, filters,
                           ContextTypes, CallbackQueryHandler)
 from telegram.helpers import escape_markdown
 from database import adicionar_pontos_ao_saldo
+import locale
+try:
+    locale.setlocale(locale.LC_TIME, 'pt_BR.UTF-8')
+except locale.Error:
+    print("Locale pt_BR.UTF-8 não encontrado. Usando o padrão do sistema.")
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
@@ -18,21 +23,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     chat_id = user.id
     funcionario = database.buscar_funcionario_por_chat_id(chat_id)
-    
-    # --- NOVO LAYOUT DO TECLADO ---
     REPLY_KEYBOARD = [
         ["📋 Minhas Tarefas", "🏆 Ranking do Mês"],
-        ["💰 Meu Saldo", "🏪 Loja de Recompensas"], # <<< NOVA LINHA
+        ["💰 Meu Saldo", "🏪 Loja de Recompensas"],
         ["📜 Meu Histórico", "💬 Solicitar Feedback"],
-        ["❓ Ajuda"]
+        ["❓ Ajuda", "📄 Meus Documentos"] 
     ]
     reply_markup = ReplyKeyboardMarkup(REPLY_KEYBOARD, resize_keyboard=True)
-    
     if funcionario:
         mensagem = f"Bem-vindo(a) de volta, <b>{funcionario.NomeCompleto}</b>! 👋\n\nUse os botões abaixo para interagir:"
     else:
         mensagem = "Olá! Parece que seu usuário não foi encontrado no sistema. Por favor, contate seu gestor."
-    
     await update.message.reply_html(mensagem, reply_markup=reply_markup)
 
 async def obter_id_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -42,8 +43,13 @@ async def obter_id_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     texto_ajuda = (
         "Olá! Eu sou seu assistente de gamificação. Aqui estão os comandos:\n\n"
-        "📋 **Minhas Tarefas**: Mostra sua lista de tarefas pendentes para hoje.\n\n"
-        "🏆 **Ranking do Mês**: Exibe a classificação de desempenho atual de todos os funcionários.\n\n"
+        "📋 **Minhas Tarefas**: Mostra sua lista de tarefas pendentes para hoje.\n"
+        "🏆 **Ranking do Mês**: Exibe a classificação de desempenho atual.\n"
+        "💰 **Meu Saldo**: Mostra seus pontos acumulados e o valor em R$.\n"
+        "🏪 **Loja de Recompensas**: Permite trocar seus pontos por prêmios.\n"
+        "📜 **Meu Histórico**: Exibe suas últimas 10 atividades.\n"
+        "💬 **Solicitar Feedback**: Envia um pedido de feedback ao seu gestor.\n"
+        "📄 **Meus Documentos**: Acessa documentos pessoais, como holerites.\n\n"
         "Use os botões abaixo para começar!"
     )
     await update.message.reply_text(texto_ajuda, reply_markup=update.message.reply_markup)
@@ -195,6 +201,93 @@ async def loja_recompensas(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     reply_markup = InlineKeyboardMarkup(keyboard)
     await context.bot.send_message(chat_id, texto, reply_markup=reply_markup)
 
+async def solicitar_holerite_inicio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Inicia o fluxo de solicitação de holerite com verificação de segurança."""
+    chat_id = update.effective_chat.id
+    funcionario = database.buscar_funcionario_por_chat_id(chat_id)
+
+    if not funcionario or not funcionario.VerificadorCPF:
+        await update.message.reply_text("Desculpe, esta funcionalidade não está habilitada para você. Por favor, contate o RH para cadastrar seu código de verificação.")
+        return
+
+    context.user_data['aguardando_verificador_cpf'] = True
+    await update.message.reply_text("Para sua segurança, por favor, digite os 3 primeiros dígitos do seu CPF.")
+
+
+async def roteador_de_texto_privado(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Esta função atua como um roteador para todas as mensagens de texto em chat privado.
+    Ela verifica o 'estado' do usuário e direciona para a ação correta.
+    """
+    user_data = context.user_data
+    texto_recebido = update.message.text
+    chat_id = update.effective_chat.id
+    funcionario = database.buscar_funcionario_por_chat_id(chat_id)
+
+    if not funcionario:
+        return # Se o funcionário não for encontrado, não faz nada
+
+    # Cenário 1: O usuário está enviando o código de verificação do CPF
+    if 'aguardando_verificador_cpf' in user_data:
+        user_data.pop('aguardando_verificador_cpf')
+        verificador_correto = database.buscar_verificador_cpf(funcionario.FuncionarioID)
+
+        if texto_recebido.strip() == verificador_correto:
+            await update.message.reply_text("✅ Verificação bem-sucedida! Buscando seus documentos...")
+            
+            holerites_disponiveis = database.buscar_holerites_disponiveis(funcionario.FuncionarioID)
+
+            if not holerites_disponiveis:
+                await update.message.reply_text("Você não possui novos holerites para visualizar no momento.")
+                return
+
+            keyboard = []
+            for holerite in holerites_disponiveis:
+                # Formata a data para ex: "Setembro/2025"
+                mes_ano_str = holerite.MesAno.strftime('%B/%Y').capitalize()
+                # Guarda a data no formato do banco para o callback
+                data_callback = holerite.MesAno.strftime('%Y-%m-%d')
+                
+                keyboard.append([
+                    InlineKeyboardButton(
+                        f"📄 {mes_ano_str}", 
+                        callback_data=f"get_holerite_{data_callback}"
+                    )
+                ])
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text("Selecione o holerite que deseja visualizar:", reply_markup=reply_markup)
+
+        else:
+            await update.message.reply_text("❌ Código de verificação incorreto. Por favor, inicie o processo novamente com /holerite ou usando o botão 'Meus Documentos'.")
+        return
+
+    # Cenário 2: O usuário está justificando uma tarefa "Não Aplicável"
+    if 'tarefa_nao_aplicavel' in user_data:
+        atribuicao_id = user_data.pop('tarefa_nao_aplicavel')
+        database.registrar_tarefa_nao_aplicavel(atribuicao_id, texto_recebido)
+        
+        keyboard = [[InlineKeyboardButton("⬅️ Ver Tarefas Restantes", callback_data="voltar_lista_tarefas")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text("Ok, justificativa registrada!", reply_markup=reply_markup)
+        return
+
+    # Cenário 3: O usuário está enviando o assunto para uma solicitação de feedback
+    if 'aguardando_assunto_feedback' in user_data:
+        user_data.pop('aguardando_assunto_feedback')
+        sucesso = database.criar_solicitacao_feedback(funcionario.FuncionarioID, texto_recebido)
+        if sucesso:
+            mensagem_gestor = (f"📢 **Nova Solicitação de Feedback**\n\n👤 **De:** {funcionario.NomeCompleto}\n📝 **Assunto:** {texto_recebido}")
+            notificador_telegram.enviar_mensagem(config.GESTOR_GROUP_CHAT_ID, mensagem_gestor)
+            await update.message.reply_text("✅ Sua solicitação de feedback foi enviada com sucesso aos gestores!")
+        else:
+            await update.message.reply_text("❌ Ocorreu um erro ao salvar sua solicitação. Tente novamente.")
+        return
+
+    # Cenário Padrão
+    await update.message.reply_text("Não entendi o que você quis dizer. Use os botões do menu para interagir comigo. Se precisar, use o comando /ajuda.")
+
+
 async def solicitar_feedback_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Inicia o processo de solicitação de feedback."""
     await update.message.reply_text(
@@ -203,46 +296,6 @@ async def solicitar_feedback_start(update: Update, context: ContextTypes.DEFAULT
     # Define um "estado" para o usuário, indicando que a próxima mensagem dele é o assunto.
     context.user_data['aguardando_assunto_feedback'] = True
 
-async def receber_assunto_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Processa a mensagem de texto do usuário contendo o assunto do feedback."""
-    # Primeiro, verificamos se o bot está realmente esperando por essa resposta.
-    if 'aguardando_assunto_feedback' not in context.user_data:
-        # Se não estiver, chamamos a função que lida com outras mensagens de texto.
-        # Isso evita que a função de feedback "roube" a justificativa de tarefa não aplicável.
-        await receber_justificativa_na(update, context)
-        return
-
-    # Se o estado estiver correto, processamos a solicitação.
-    assunto = update.message.text
-    chat_id = update.effective_chat.id
-    funcionario = database.buscar_funcionario_por_chat_id(chat_id)
-
-    if funcionario:
-        sucesso = database.criar_solicitacao_feedback(funcionario.FuncionarioID, assunto)
-        if sucesso:
-            # Notifica o grupo de gestores
-            mensagem_gestor = (
-                f"📢 **Nova Solicitação de Feedback**\n\n"
-                f"👤 **De:** {funcionario.NomeCompleto}\n"
-                f"📝 **Assunto:** {assunto}"
-            )
-            notificador_telegram.enviar_mensagem(config.GESTOR_GROUP_CHAT_ID, mensagem_gestor)
-            
-            # Confirma para o funcionário
-            await update.message.reply_text("✅ Sua solicitação de feedback foi enviada com sucesso aos gestores!")
-        else:
-            await update.message.reply_text("❌ Ocorreu um erro ao salvar sua solicitação. Tente novamente.")
-    
-    # Limpa o estado para finalizar a conversa
-    context.user_data.pop('aguardando_assunto_feedback')
-
-# SUBSTITUA TODA A SUA FUNÇÃO 'receber_foto' POR ESTA VERSÃO CORRIGIDA
-
-# Em telegram_bot.py, SUBSTITUA a função receber_foto inteira por esta:
-
-# Em telegram_bot.py, SUBSTITUA a função receber_foto inteira por esta:
-
-# Em telegram_bot.py, SUBSTITUA a função receber_foto inteira por esta versão FLEXÍVEL:
 
 async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     MAX_SECONDS_DIFFERENCE = 120
@@ -333,14 +386,6 @@ async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if temp_photo_path and os.path.exists(temp_photo_path):
             os.remove(temp_photo_path)
         
-async def receber_justificativa_na(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if 'tarefa_nao_aplicavel' not in context.user_data: return
-    atribuicao_id = context.user_data.pop('tarefa_nao_aplicavel')
-    database.registrar_tarefa_nao_aplicavel(atribuicao_id, update.message.text)
-    keyboard = [[InlineKeyboardButton("⬅️ Ver Tarefas Restantes", callback_data="voltar_lista_tarefas")]]; reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Ok, registrado!", reply_markup=reply_markup)
-
-# Em telegram_bot.py, SUBSTITUA a função antiga por esta versão COM PRINTS:
 
 async def receber_motivo_recusa(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     
@@ -386,61 +431,83 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
     data = query.data
     user = update.effective_user
 
-    # --- INÍCIO DA LÓGICA DA LOJA DE RECOMPENSAS (NOVA) ---
-    if data.startswith("ver_produto_"):
+    # --- LÓGICA DE DOCUMENTOS PESSOAIS (HOLERITE) ---
+    if data.startswith("get_holerite_"):
+        await query.edit_message_text("Processando sua solicitação...")
+        mes_ano_iso = data.split('_')[-1]
+        funcionario = database.buscar_funcionario_por_chat_id(user.id)
+        dados_holerite = database.buscar_dados_holerite_para_envio(funcionario.FuncionarioID, mes_ano_iso)
+        if not dados_holerite:
+            await query.edit_message_text("Erro: Não foi possível encontrar este documento.")
+            return
+        caminho_arquivo, ciencia_id = dados_holerite
+        keyboard = [[InlineKeyboardButton("✅ Recebi e estou ciente", callback_data=f"holerite_ciente_{ciencia_id}")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        try:
+            with open(caminho_arquivo, 'rb') as documento:
+                await context.bot.send_document(
+                    chat_id=user.id,
+                    document=documento,
+                    caption=f"Aqui está seu documento referente a {datetime.strptime(mes_ano_iso, '%Y-%m-%d').strftime('%B de %Y').capitalize()}.\n\nPor favor, confirme o recebimento.",
+                    reply_markup=reply_markup
+                )
+            await query.edit_message_text("✔️ Seu documento foi enviado. Por favor, verifique a nova mensagem e confirme a ciência.")
+        except FileNotFoundError:
+            await query.edit_message_text("❌ ERRO CRÍTICO: O arquivo do documento não foi encontrado no servidor. Por favor, contate o RH.")
+        except Exception as e:
+            await query.edit_message_text(f"❌ Ocorreu um erro inesperado ao enviar seu documento: {e}")
+
+    elif data.startswith("holerite_ciente_"):
+        ciencia_id = int(data.split('_')[-1])
+        sucesso = database.marcar_holerite_como_ciente(ciencia_id)
+        if not sucesso:
+            await query.answer("Este documento já foi assinado.", show_alert=True)
+            return
+        mensagem_gestor = f"✍️ O funcionário **{user.first_name}** confirmou o recebimento de um documento pessoal (Holerite)."
+        notificador_telegram.enviar_mensagem(config.GESTOR_GROUP_CHAT_ID, mensagem_gestor)
+        mensagem_recibo = (
+            f"\n\n---"
+            f"\n✍️ **CIÊNCIA REGISTRADA**"
+            f"\n**Protocolo:** `{ciencia_id}`"
+            f"\n**Data/Hora:** `{datetime.now().strftime('%d/%m/%Y %H:%M:%S')}`"
+        )
+        try:
+            texto_original = query.message.caption
+            await query.edit_message_caption(caption=f"{texto_original}{mensagem_recibo}", parse_mode='Markdown', reply_markup=None)
+        except Exception as e:
+            print(f"Erro ao editar a legenda do holerite: {e}")
+            await query.answer("Recebimento confirmado!", show_alert=True)
+
+    # --- LÓGICA DA LOJA DE RECOMPENSAS ---
+    elif data.startswith("ver_produto_"):
         produto_id = int(data.split('_')[-1])
         produtos = database.listar_produtos_loja(incluir_inativos=True)
         produto = next((p for p in produtos if p.ProdutoID == produto_id), None)
-
         if not produto:
             await query.edit_message_text("Este produto não está mais disponível.")
             return
-
         funcionario = database.buscar_funcionario_por_chat_id(user.id)
         saldo_atual = database.buscar_saldo_funcionario(funcionario.FuncionarioID)
-        
-        texto = (
-            f"<b>{produto.Nome}</b>\n\n"
-            f"<i>{produto.Descricao}</i>\n\n"
-            f"Custo: <b>{produto.CustoEmPontos} pontos</b>\n"
-            f"Seu Saldo: <b>{saldo_atual} pontos</b>"
-        )
-        
-        keyboard = [
-            [InlineKeyboardButton("✅ Confirmar Resgate", callback_data=f"confirmar_resgate_{produto.ProdutoID}")],
-            [InlineKeyboardButton("⬅️ Voltar para a Loja", callback_data="voltar_loja")]
-        ]
-        
+        texto = (f"<b>{produto.Nome}</b>\n\n<i>{produto.Descricao}</i>\n\nCusto: <b>{produto.CustoEmPontos} pontos</b>\nSeu Saldo: <b>{saldo_atual} pontos</b>")
+        keyboard = [[InlineKeyboardButton("✅ Confirmar Resgate", callback_data=f"confirmar_resgate_{produto.ProdutoID}")],
+                    [InlineKeyboardButton("⬅️ Voltar para a Loja", callback_data="voltar_loja")]]
         if saldo_atual < produto.CustoEmPontos:
-             texto += "\n\n⚠️ Você não tem pontos suficientes para resgatar este item."
-             keyboard.pop(0)
-        
+            texto += "\n\n⚠️ Você não tem pontos suficientes para resgatar este item."
+            keyboard.pop(0)
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(texto, reply_markup=reply_markup, parse_mode='HTML')
 
     elif data.startswith("confirmar_resgate_"):
         produto_id = int(data.split('_')[-1])
         funcionario = database.buscar_funcionario_por_chat_id(user.id)
-        
         sucesso, mensagem, resgate_id = database.solicitar_resgate(funcionario.FuncionarioID, produto_id)
-
         await query.edit_message_text(mensagem)
-
         if sucesso:
             produto = next((p for p in database.listar_produtos_loja(incluir_inativos=True) if p.ProdutoID == produto_id), None)
-            
-            msg_gestor = (
-                f"🔔 **Nova Solicitação de Resgate** 🔔\n\n"
-                f"👤 **Funcionário:** {funcionario.NomeCompleto}\n"
-                f"🎁 **Produto:** {produto.Nome}\n"
-                f"💰 **Custo:** {produto.CustoEmPontos} pontos\n\n"
-                f"Acesse o sistema (`main.py`) para aprovar."
-            )
+            msg_gestor = (f"🔔 **Nova Solicitação de Resgate** 🔔\n\n👤 **Funcionário:** {funcionario.NomeCompleto}\n🎁 **Produto:** {produto.Nome}\n💰 **Custo:** {produto.CustoEmPontos} pontos\n\nAcesse o sistema (`main.py`) para aprovar.")
             notificador_telegram.enviar_mensagem(config.GESTOR_GROUP_CHAT_ID, msg_gestor)
 
-    # Dentro de button_callback_handler, substitua o "voltar_loja" por este:
     elif data == "voltar_loja":
-        # Recria a mensagem da loja para o usuário, mas editando a mensagem atual
         produtos = database.listar_produtos_loja()
         texto = "🏪 **Loja de Recompensas** 🏪\n\nEscolha um item para ver os detalhes e resgatar:"
         keyboard = []
@@ -449,49 +516,30 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             texto_botao = f"{produto.Nome} - {produto.CustoEmPontos} pts {estoque_str}"
             keyboard.append([InlineKeyboardButton(texto_botao, callback_data=f"ver_produto_{produto.ProdutoID}")])
         reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        # A mágica está aqui: usamos query.edit_message_text para modificar a mensagem existente
         await query.edit_message_text(text=texto, reply_markup=reply_markup, parse_mode='Markdown')
 
     # --- LÓGICA DE FEEDBACK DE FIM DE JORNADA ---
     elif data == "avaliar_dia":
-        keyboard = []
-        row = []
+        keyboard = []; row = []
         for i in range(11):
             row.append(InlineKeyboardButton(str(i), callback_data=f"nota_dia_{i}"))
-            if len(row) == 5 or i == 10:
-                keyboard.append(row)
-                row = []
-
+            if len(row) == 5 or i == 10: keyboard.append(row); row = []
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(
-            text=(f"{query.message.text}\n\n"
-                  "Como você classificaria seu dia de 0 a 10?\n(0 = Muito Ruim / 10 = Excelente)"),
-            reply_markup=reply_markup
-        )
+        await query.edit_message_text(text=(f"{query.message.text}\n\nComo você classificaria seu dia de 0 a 10?\n(0 = Muito Ruim / 10 = Excelente)"), reply_markup=reply_markup)
 
     elif data.startswith("nota_dia_"):
         nota = int(data.split('_')[-1])
         funcionario_db = database.buscar_funcionario_por_chat_id(user.id)
-
         if funcionario_db:
             sucesso = database.salvar_feedback_do_dia(funcionario_db.FuncionarioID, nota)
             if sucesso:
-                TAREFA_ID_FEEDBACK = 40  # ATENÇÃO: Verifique se este é o ID correto da sua tarefa "Feedback Diário"
+                TAREFA_ID_FEEDBACK = 40
                 PONTOS_FEEDBACK = 5      
-                database.registrar_pontos_por_leitura(
-                    funcionario_db.FuncionarioID, PONTOS_FEEDBACK, "Feedback Diário (Bônus)"
-                )
-                texto_final = (
-                    f"Obrigado pelo seu feedback! Sua nota foi **{nota}**.\n\n"
-                    f"Você ganhou **{PONTOS_FEEDBACK}** pontos por sua participação. "
-                    f"Sua opinião nos ajuda a melhorar sempre! 💪"
-                )
+                database.registrar_pontos_por_leitura(funcionario_db.FuncionarioID, PONTOS_FEEDBACK, "Feedback Diário (Bônus)")
+                texto_final = (f"Obrigado pelo seu feedback! Sua nota foi **{nota}**.\n\nVocê ganhou **{PONTOS_FEEDBACK}** pontos por sua participação. Sua opinião nos ajuda a melhorar sempre! 💪")
                 await query.edit_message_text(texto_final, parse_mode='Markdown')
-            else:
-                await query.edit_message_text("Você já enviou seu feedback hoje. Obrigado!")
-        else:
-            await query.edit_message_text("Erro: não foi possível identificar seu usuário.")
+            else: await query.edit_message_text("Você já enviou seu feedback hoje. Obrigado!")
+        else: await query.edit_message_text("Erro: não foi possível identificar seu usuário.")
 
     # --- LÓGICA DE ACEITE DE TAREFAS DE GRUPO E DE FOLGA ---
     elif data.startswith("aceitar_tarefa_"):
@@ -691,31 +739,29 @@ def main() -> None:
     application.add_handler(CommandHandler("tarefas", tarefas))
     application.add_handler(CommandHandler("ranking", ranking))
     application.add_handler(CommandHandler("meuhistorico", meu_historico))
-    application.add_handler(CommandHandler("solicitarfeedback", solicitar_feedback_start))
     application.add_handler(CommandHandler("ajuda", ajuda))
-    
-    # --- NOVOS COMANDOS DA LOJA ---
     application.add_handler(CommandHandler("meusaldo", meu_saldo))
     application.add_handler(CommandHandler("loja", loja_recompensas))
-
+    application.add_handler(CommandHandler("holerite", solicitar_holerite_inicio)) # <<< NOVO COMANDO
+    
     # --- Handlers para os Botões do Menu Fixo ---
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^📋 Minhas Tarefas$'), tarefas))
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🏆 Ranking do Mês$'), ranking))
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^📜 Meu Histórico$'), meu_historico))
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^💬 Solicitar Feedback$'), solicitar_feedback_start))
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^❓ Ajuda$'), ajuda))
-    
-    # --- NOVOS HANDLERS DA LOJA ---
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^💰 Meu Saldo$'), meu_saldo))
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🏪 Loja de Recompensas$'), loja_recompensas))
+    application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^💬 Solicitar Feedback$'), solicitar_feedback_start)) 
+    application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^📄 Meus Documentos$'), solicitar_holerite_inicio)) 
 
     # --- Handlers de Interação e Respostas ---
     application.add_handler(CallbackQueryHandler(button_callback_handler))
     application.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, receber_foto))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, receber_assunto_feedback))
-    # (e seus outros handlers de mensagem de texto...)
-
-    print("🚀 Bot (v4.0 com Loja) iniciado com sucesso! 🚀")
+    
+    # <<< A GRANDE MUDANÇA: TROCAMOS O HANDLER ANTIGO PELO NOVO ROTEADOR >>>
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, roteador_de_texto_privado))
+    
+    print("🚀 Bot (v4.1 com Holerite) iniciado com sucesso! 🚀")
     application.run_polling()
 
 if __name__ == '__main__':
