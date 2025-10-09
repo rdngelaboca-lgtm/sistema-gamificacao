@@ -10,6 +10,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKe
 from telegram.ext import (Application, CommandHandler, MessageHandler, filters, 
                           ContextTypes, CallbackQueryHandler)
 from telegram.helpers import escape_markdown
+from database import adicionar_pontos_ao_saldo
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
@@ -569,18 +570,21 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
 
     # --- LÓGICA DE CIÊNCIA DE COMUNICADOS ---
     elif data.startswith("doc_ciente_"):
+        await query.answer() # Responde ao clique imediatamente para o usuário não ver o "carregando"
         assinatura_id = int(data.split('_')[-1])
         detalhes = database.buscar_detalhes_assinatura_para_bot(assinatura_id)
+        
         if not detalhes:
-            await query.edit_message_text(
-                f"{query.message.text}\n\n---\n_Esta ciência já foi registrada anteriormente._",
-                parse_mode='Markdown'
-            )
+            # Tenta avisar o usuário com um pop-up que é mais garantido
+            await query.answer("Esta ciência já foi registrada anteriormente.", show_alert=True)
             return
+
+        # Lógica de backend que já está funcionando perfeitamente
         nome_funcionario = user.first_name 
         mensagem_gestor = f"✅ O funcionário **{nome_funcionario}** confirmou ciência do comunicado: *'{detalhes.Titulo}'*."
         notificador_telegram.enviar_mensagem(config.GESTOR_GROUP_CHAT_ID, mensagem_gestor)
         database.marcar_como_ciente(assinatura_id)
+        
         datetime_ciencia = datetime.now()
         mensagem_confirmacao = (
             f"\n\n---"
@@ -592,12 +596,34 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         )
         if detalhes.PontosPorCiencia > 0:
             database.registrar_pontos_por_leitura(detalhes.FuncionarioID, detalhes.PontosPorCiencia, detalhes.Titulo)
+            adicionar_pontos_ao_saldo(detalhes.FuncionarioID, detalhes.PontosPorCiencia)
             mensagem_confirmacao += f"\n\n🎉 Você ganhou **{detalhes.PontosPorCiencia}** pontos por sua agilidade!"
-        await query.edit_message_text(
-            f"{query.message.text}{mensagem_confirmacao}",
-            parse_mode='Markdown',
-            reply_markup=None
-        )
+        
+        # <<< AQUI ESTÁ A LÓGICA DE EDIÇÃO BLINDADA E CORRIGIDA >>>
+        try:
+            # A verificação mais segura é se a mensagem tem o atributo 'photo'
+            if query.message.photo:
+                texto_original = query.message.caption
+                # A função correta: edit_message_caption
+                await query.edit_message_caption(
+                    caption=f"{texto_original}{mensagem_confirmacao}",
+                    parse_mode='Markdown',
+                    reply_markup=None
+                )
+            # Se não for foto, com certeza é texto
+            else:
+                texto_original = query.message.text
+                # A função para texto: edit_message_text
+                await query.edit_message_text(
+                    text=f"{texto_original}{mensagem_confirmacao}",
+                    parse_mode='Markdown',
+                    reply_markup=None
+                )
+        except Exception as e:
+            # Se, mesmo assim, a edição falhar, nós saberemos o porquê
+            print(f"!!!!!!!! ERRO AO TENTAR EDITAR A MENSAGEM DE CIÊNCIA: {e} !!!!!!!!")
+            # E o usuário receberá um feedback visual
+            await query.answer("Sua ciência foi registrada com sucesso!", show_alert=True)
 
     # --- LÓGICA DE ENTREGA DE TAREFAS (FUNCIONÁRIO) ---
     elif data.startswith("ver_tarefa_"):
