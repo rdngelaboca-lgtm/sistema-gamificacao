@@ -1,6 +1,7 @@
 import pyodbc
 from datetime import datetime, date, timedelta 
 import calendar 
+import hashlib
 
 SERVER = 'localhost'
 DATABASE = 'gamificacao_db'
@@ -12,7 +13,6 @@ CONNECTION_STRING = (
     f"PWD=Gamificacao#2025;" 
     f"TrustServerCertificate=yes;"  
 )
-
 
 def get_db_connection():
     try:
@@ -2533,3 +2533,17 @@ def buscar_agendamentos_para_periodo(data_inicio, data_fim, tipo_evento_filtro=N
         finally:
             conn.close()
     return []
+
+def autenticar_funcionario(funcionario_id):
+    """Busca o hash da senha de um funcionário pelo ID."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT SenhaHash, NomeCompleto, FuncionarioID FROM Funcionarios WHERE FuncionarioID = ?"
+            cursor.execute(sql, funcionario_id)
+            resultado = cursor.fetchone()
+            return resultado
+        finally:
+            conn.close()
+    return None
