@@ -13,7 +13,6 @@ CONNECTION_STRING = (
     f"TrustServerCertificate=yes;"  
 )
 
-
 def get_db_connection():
     try:
         conn = pyodbc.connect(CONNECTION_STRING)
@@ -102,16 +101,23 @@ def atualizar_agendamento(agendamento_id, dados_agendamento):
                     FuncionarioID = ?, Observacoes = ?
                 WHERE AgendamentoID = ?
             """
+            # <<< A CORREÇÃO DA ORDEM ESTÁ AQUI >>>
             cursor.execute(sql,
-                         dados_agendamento['nome_cliente'], dados_agendamento.get('cpf_cliente'),
-                         dados_agendamento.get('telefone_cliente'), dados_agendamento['tipo_evento'],
-                         dados_agendamento['data_evento'], dados_agendamento.get('status_agendamento', 'Confirmado'),
-                         dados_agendamento.get('status_pagamento', 'Pendente'), dados_agendamento['funcionario_id'],
-                         dados_agendamento.get('observacoes'), agendamento_id)
+                         dados_agendamento['nome_cliente'],
+                         dados_agendamento.get('cpf_cliente'),
+                         dados_agendamento.get('telefone_cliente'),
+                         dados_agendamento['tipo_evento'],
+                         dados_agendamento['data_evento'], # <-- Formato AAAA-MM-DD
+                         dados_agendamento.get('status_agendamento', 'Confirmado'),
+                         dados_agendamento.get('status_pagamento', 'Pendente'),
+                         dados_agendamento['funcionario_id'],
+                         dados_agendamento.get('observacoes'),
+                         agendamento_id)
             conn.commit()
             return True
         except Exception as e:
             print(f"ERRO ao atualizar agendamento: {e}")
+            conn.rollback() # Adicionado por segurança
             return False
         finally:
             conn.close()
