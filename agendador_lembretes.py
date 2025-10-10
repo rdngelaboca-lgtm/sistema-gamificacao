@@ -127,7 +127,7 @@ if __name__ == "__main__":
     schedule.every().day.at("09:00").do(enviar_lembretes_diarios)
 
     # NOVO ALERTA: Toda sexta-feira às 18:00, envia a prévia da semana que vem
-    schedule.every().Monday.at("08:00").do(enviar_lembretes_semanais)
+    schedule.every().monday.at("08:00").do(enviar_lembretes_semanais)
 
     # Loop infinito para manter o script rodando
     while True:
