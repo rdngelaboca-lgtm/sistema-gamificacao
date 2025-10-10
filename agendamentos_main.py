@@ -8,16 +8,19 @@ from datetime import datetime
 import database
 
 # --- CONFIGURAÇÃO ---
-API_BASE_URL = "http://192.168.2.23:5000" # Mantenha o IP do seu servidor
+API_BASE_URL = "https://09396f7674d5.ngrok-free.app" 
 
 # Em agendamentos_main.py, substitua a classe LoginWindow por esta
 import hashlib # Adicione esta importação no topo do arquivo
+
+# Em agendamentos_main.py, substitua a classe LoginWindow inteira por esta
+# Note que não precisamos mais de 'import hashlib' aqui!
 
 class LoginWindow:
     def __init__(self, root):
         self.root = root
         self.root.title("Gela Boca - Acesso ao Sistema")
-        self.root.geometry("350x280") # Aumentamos a altura
+        self.root.geometry("350x280")
         self.root.resizable(False, False)
         self.root.eval('tk::PlaceWindow . center')
 
@@ -29,7 +32,6 @@ class LoginWindow:
         self.entry_id.pack(fill="x", ipady=5)
         self.entry_id.focus()
 
-        # NOVO CAMPO DE SENHA
         ttk.Label(frame, text="Senha:", font=("Arial", 12)).pack(pady=(10, 5))
         self.entry_senha = ttk.Entry(frame, font=("Arial", 12), justify="center", show="*")
         self.entry_senha.pack(fill="x", ipady=5)
@@ -50,29 +52,31 @@ class LoginWindow:
             messagebox.showerror("Erro", "ID e Senha são obrigatórios.")
             return
 
+        # --- LÓGICA ATUALIZADA: AGORA USAMOS A API! ---
         try:
-            # Busca os dados do funcionário, incluindo o hash
-            dados_funcionario = database.autenticar_funcionario(int(funcionario_id))
-            
-            if dados_funcionario and dados_funcionario.SenhaHash:
-                senha_hash_digitada = hashlib.sha256(senha.encode('utf-8')).hexdigest()
+            payload = {"id": int(funcionario_id), "senha": senha}
+            # Usa a mesma API_BASE_URL (a URL do ngrok) que o resto do programa
+            response = requests.post(f"{API_BASE_URL}/login", json=payload)
+
+            if response.status_code == 200:
+                dados_resposta = response.json()
+                messagebox.showinfo("Bem-vindo(a)!", dados_resposta['mensagem'])
                 
-                # Compara o hash da senha digitada com o hash salvo no banco
-                if senha_hash_digitada == dados_funcionario.SenhaHash:
-                    messagebox.showinfo("Bem-vindo(a)!", f"Acesso liberado para {dados_funcionario.NomeCompleto}!")
-                    self.funcionario_logado = dados_funcionario # Salva o objeto completo
-                    self.root.destroy()
-                else:
-                    messagebox.showerror("Acesso Negado", "Senha incorreta.")
-                    self.entry_senha.delete(0, tk.END)
-            elif dados_funcionario:
-                 messagebox.showwarning("Acesso Negado", "Este usuário não possui uma senha cadastrada. Contate o administrador.")
+                # Armazena os dados do funcionário que a API retornou
+                self.funcionario_logado = type('Funcionario', (), dados_resposta['funcionario'])
+                # Renomeia os atributos para corresponder ao que o resto do código espera
+                self.funcionario_logado.FuncionarioID = self.funcionario_logado.id
+                self.funcionario_logado.NomeCompleto = self.funcionario_logado.nome
+
+                self.root.destroy()
             else:
-                messagebox.showerror("Acesso Negado", "ID de funcionário não encontrado.")
-                self.entry_id.delete(0, tk.END)
-                self.entry_senha.delete(0, tk.END)
+                # Mostra a mensagem de erro que a API enviou (Senha incorreta, ID não encontrado, etc.)
+                messagebox.showerror("Acesso Negado", response.json().get('mensagem', 'Erro desconhecido.'))
+
+        except requests.exceptions.RequestException as e:
+            messagebox.showerror("Erro de Conexão", f"Não foi possível conectar ao servidor de login.\nVerifique se a API e o ngrok estão no ar.\n\n{e}")
         except Exception as e:
-            messagebox.showerror("Erro Crítico", f"Não foi possível conectar ao banco de dados.\n\n{e}")
+            messagebox.showerror("Erro Crítico", f"Ocorreu um erro inesperado: {e}")
 
 # A classe principal continua a mesma, com uma pequena alteração no __init__
 class AppAgendamentos:
@@ -304,47 +308,47 @@ class AppAgendamentos:
         edit_combo_pagamento.pack(fill="x", pady=(0, 5))
         edit_combo_pagamento.set(dados_completos.get('status_pagamento', 'Pendente'))
     
-    # --- LÓGICA ATUALIZADA: Função interna de salvar ---
-    def salvar_edicao():
-        # 1. Lê os novos valores da data e da hora dos campos editáveis
-        try:
-            nova_data = edit_entry_data.get_date()
-            nova_hora_str = edit_entry_hora.get()
-            nova_data_hora_obj = datetime.combine(nova_data, datetime.strptime(nova_hora_str, "%H:%M").time())
-            # Formata para o padrão AAAA-MM-DD que a API espera
-            nova_data_hora_str_payload = nova_data_hora_obj.strftime('%Y-%m-%d %H:%M') 
-        except ValueError:
-            messagebox.showerror("Erro de Formato", "A hora deve estar no formato HH:MM (ex: 14:30).", parent=popup)
-            return
+        # --- LÓGICA ATUALIZADA: Função interna de salvar ---
+        def salvar_edicao():
+            # 1. Lê os novos valores da data e da hora dos campos editáveis
+            try:
+                nova_data = edit_entry_data.get_date()
+                nova_hora_str = edit_entry_hora.get()
+                nova_data_hora_obj = datetime.combine(nova_data, datetime.strptime(nova_hora_str, "%H:%M").time())
+                # Formata para o padrão AAAA-MM-DD que a API espera
+                nova_data_hora_str_payload = nova_data_hora_obj.strftime('%Y-%m-%d %H:%M') 
+            except ValueError:
+                messagebox.showerror("Erro de Formato", "A hora deve estar no formato HH:MM (ex: 14:30).", parent=popup)
+                return
 
-        # 2. Monta o payload COMPLETO para enviar à API
-        payload_editado = {
-            "nome_cliente": edit_entry_nome.get(),
-            "cpf_cliente": edit_entry_cpf.get(),
-            "telefone_cliente": edit_entry_telefone.get(),
-            "tipo_evento": edit_combo_tipo.get(),
-            "status_pagamento": edit_combo_pagamento.get(),
-            "observacoes": edit_txt_obs.get("1.0", tk.END).strip(),
-            "data_evento": nova_data_hora_str_payload, # <-- Usa a nova data/hora lida dos campos
-            # Mantém os dados que não são editáveis na tela
-            "funcionario_id": dados_completos['funcionario_id'],
-            "status_agendamento": dados_completos['status_agendamento']
-        }
-        
-        # 3. Envia os dados para a API (sem alteração aqui)
-        try:
-            response = requests.put(f"{API_BASE_URL}/agendamentos/{agendamento_id}", json=payload_editado)
-            if response.status_code == 200:
-                messagebox.showinfo("Sucesso", "Agendamento atualizado!", parent=popup)
-                popup.destroy()
-                self.carregar_agendamentos()
-            else:
-                erro_msg = response.json().get('mensagem', 'Erro desconhecido')
-                messagebox.showerror("Erro da API", f"Falha ao atualizar: {erro_msg}", parent=popup)
-        except requests.exceptions.RequestException as e:
-            messagebox.showerror("Erro de Conexão", f"Não foi possível conectar à API: {e}", parent=popup)
+            # 2. Monta o payload COMPLETO para enviar à API
+            payload_editado = {
+                "nome_cliente": edit_entry_nome.get(),
+                "cpf_cliente": edit_entry_cpf.get(),
+                "telefone_cliente": edit_entry_telefone.get(),
+                "tipo_evento": edit_combo_tipo.get(),
+                "status_pagamento": edit_combo_pagamento.get(),
+                "observacoes": edit_txt_obs.get("1.0", tk.END).strip(),
+                "data_evento": nova_data_hora_str_payload, # <-- Usa a nova data/hora lida dos campos
+                # Mantém os dados que não são editáveis na tela
+                "funcionario_id": dados_completos['funcionario_id'],
+                "status_agendamento": dados_completos['status_agendamento']
+            }
             
-    ttk.Button(frame, text="Salvar Alterações", command=salvar_edicao).pack(pady=20, fill="x")
+            # 3. Envia os dados para a API (sem alteração aqui)
+            try:
+                response = requests.put(f"{API_BASE_URL}/agendamentos/{agendamento_id}", json=payload_editado)
+                if response.status_code == 200:
+                    messagebox.showinfo("Sucesso", "Agendamento atualizado!", parent=popup)
+                    popup.destroy()
+                    self.carregar_agendamentos()
+                else:
+                    erro_msg = response.json().get('mensagem', 'Erro desconhecido')
+                    messagebox.showerror("Erro da API", f"Falha ao atualizar: {erro_msg}", parent=popup)
+            except requests.exceptions.RequestException as e:
+                messagebox.showerror("Erro de Conexão", f"Não foi possível conectar à API: {e}", parent=popup)
+                
+        ttk.Button(frame, text="Salvar Alterações", command=salvar_edicao).pack(pady=20, fill="x")
 
     def enviar_lembrete_geral(self):
         confirmado = messagebox.askyesno("Confirmar Envio", "Deseja enviar um resumo de TODOS os agendamentos futuros para o grupo do Telegram agora?")
