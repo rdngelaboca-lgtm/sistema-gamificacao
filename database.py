@@ -3,15 +3,15 @@ from datetime import datetime, date, timedelta
 import calendar 
 import hashlib
 
-SERVER = '192.168.2.23'
+SERVER = 'localhost'
 DATABASE = 'gamificacao_db'
 CONNECTION_STRING = (
-    f"DRIVER={{ODBC Driver 17 for SQL Server}};"  
+    f"DRIVER={{ODBC Driver 18 for SQL Server}};"  
     f"SERVER={SERVER};"
     f"DATABASE={DATABASE};"
-    f"UID=sa;"  # Informamos o usuário correto
-    f"PWD=Gamificacao#2025;" # << COLOQUE A SENHA AQUI
-    f"TrustServerCertificate=yes;"  # Necessário para aceitar o certificado do servidor
+    f"UID=sa;"  
+    f"PWD=Gamificacao#2025;" 
+    f"TrustServerCertificate=yes;"  
 )
 
 def get_db_connection():
@@ -2577,3 +2577,4 @@ def excluir_tarefa_do_agendamento(agendamento_id):
             conn.commit()
         finally:
             conn.close()
+
