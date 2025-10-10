@@ -26,9 +26,8 @@ def formatar_data_pt_br(dt_obj, formato_str):
     data_formatada = data_formatada.replace(dt_obj.strftime('%B'), meses[dt_obj.month - 1])
     return data_formatada
 
-
 def enviar_lembretes_diarios():
-    """Busca os agendamentos de AMANHÃ e envia um resumo com o novo layout."""
+    """Busca os agendamentos de AMANHÃ e envia um resumo com o layout final."""
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Verificando agendamentos de amanhã...")
 
     amanha = date.today() + timedelta(days=1)
@@ -40,7 +39,7 @@ def enviar_lembretes_diarios():
         mensagem = f"🗓️ **Agenda para Amanhã ({data_formatada})** 🗓️\n\nNenhum agendamento encontrado. ✅"
     else:
         mensagem = f"📢 **Lembretes para Amanhã ({data_formatada})** 📢\n"
-        for ag in agendamentos_de_amanha:
+        for i, ag in enumerate(agendamentos_de_amanha):
             hora_formatada = ag.DataEvento.strftime('%H:%M')
             mensagem += f"\n🔹 **{ag.TipoEvento}**\n"
             mensagem += f"  - ⏰ **{hora_formatada}**\n"
@@ -50,12 +49,16 @@ def enviar_lembretes_diarios():
                 mensagem += "  - 📝 **Observações:**\n"
                 for linha in ag.Observacoes.strip().splitlines():
                     mensagem += f"    > _{linha.strip()}_\n"
+            
+            # Adiciona o separador se não for o último agendamento do dia
+            if i < len(agendamentos_de_amanha) - 1:
+                mensagem += "\n`- - - - - - - - - - - - - - - - -`\n"
 
     notificador_telegram.enviar_mensagem(config.AGENDAMENTOS_GROUP_CHAT_ID, mensagem)
     print("--> Lembrete diário enviado com sucesso!")
 
 def enviar_lembretes_semanais():
-    """Busca os agendamentos da PRÓXIMA SEMANA e envia um resumo com o novo layout."""
+    """Busca os agendamentos da PRÓXIMA SEMANA e envia um resumo com o layout final."""
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Verificando agendamentos da PRÓXIMA SEMANA...")
 
     hoje = date.today()
@@ -71,21 +74,27 @@ def enviar_lembretes_semanais():
     else:
         mensagem = f"📅 **Prévia da Próxima Semana ({periodo_str})** 📅\n"
         data_atual = None
-        for ag in agendamentos_semana:
-            if ag.DataEvento.date() != data_atual:
-                data_atual = ag.DataEvento.date()
-                data_formatada = formatar_data_pt_br(data_atual, '%A, %d/%m')
-                mensagem += f"\n- - - - - - - - - - - -\n**{data_formatada}**\n- - - - - - - - - - - -\n"
+        from itertools import groupby
+        agendamentos_agrupados = groupby(agendamentos_semana, key=lambda ag: ag.DataEvento.date())
+
+        for dia, ags_do_dia_iter in agendamentos_agrupados:
+            ags_do_dia = list(ags_do_dia_iter)
+            data_formatada = formatar_data_pt_br(dia, '%A, %d/%m')
+            mensagem += f"\n{'=' * 40}\n**{data_formatada}**\n{'=' * 40}\n"
             
-            hora_formatada = ag.DataEvento.strftime('%H:%M')
-            mensagem += f"\n🔹 **{ag.TipoEvento}**\n"
-            mensagem += f"  - ⏰ **{hora_formatada}**\n"
-            mensagem += f"  - 👤 **Cliente:** {ag.NomeCliente}\n"
-            
-            if ag.Observacoes and ag.Observacoes.strip():
-                mensagem += "  - 📝 **Observações:**\n"
-                for linha in ag.Observacoes.strip().splitlines():
-                    mensagem += f"    > _{linha.strip()}_\n"
+            for i, ag in enumerate(ags_do_dia):
+                hora_formatada = ag.DataEvento.strftime('%H:%M')
+                mensagem += f"\n🔹 **{ag.TipoEvento}**\n"
+                mensagem += f"  - ⏰ **{hora_formatada}**\n"
+                mensagem += f"  - 👤 **Cliente:** {ag.NomeCliente}\n"
+                
+                if ag.Observacoes and ag.Observacoes.strip():
+                    mensagem += "  - 📝 **Observações:**\n"
+                    for linha in ag.Observacoes.strip().splitlines():
+                        mensagem += f"    > _{linha.strip()}_\n"
+
+                if i < len(ags_do_dia) - 1:
+                    mensagem += "\n`- - - - - - - - - - - - - - - - -`\n"
 
     notificador_telegram.enviar_mensagem(config.AGENDAMENTOS_GROUP_CHAT_ID, mensagem)
     print("--> Lembrete semanal enviado com sucesso!")
