@@ -12,6 +12,22 @@ app = Flask(__name__)
 
 PASTA_DOCUMENTOS_SEGUROS = "/home/rodrigoaraujo/documentos_rh"
 
+def formatar_data_pt_br(dt_obj, formato_str):
+    """Uma função 'tradutora' para garantir que as datas saiam em português."""
+    dias = ["Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado", "Domingo"]
+    meses = [
+        "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+        "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"
+    ]
+    
+    # Formata a data e depois substitui os nomes em inglês pelos em português
+    data_formatada = dt_obj.strftime(formato_str)
+    data_formatada = data_formatada.replace(dt_obj.strftime('%A'), dias[dt_obj.weekday()])
+    data_formatada = data_formatada.replace(dt_obj.strftime('%B'), meses[dt_obj.month - 1])
+    return data_formatada
+
+
+
 @app.route('/teste', methods=['GET'])
 def rota_de_teste():
     """
@@ -235,10 +251,9 @@ def rota_buscar_agendamento(agendamento_id):
 @app.route('/agendamentos/enviar-lembrete-geral', methods=['POST'])
 def rota_enviar_lembrete_geral():
     """
-    Busca todos os agendamentos futuros, agrupa por dia e envia um resumo para o Telegram.
+    Busca todos os agendamentos futuros, agrupa por dia, formata em um layout limpo e envia para o Telegram.
     """
     try:
-        # A busca no banco já está ordenada por data, o que é perfeito
         agendamentos_db = database.listar_agendamentos()
         
         agendamentos_futuros = [
@@ -252,19 +267,22 @@ def rota_enviar_lembrete_geral():
             mensagem = "🗓️ **Resumo de Todos os Agendamentos Futuros** 🗓️\n"
             data_atual = None
             for ag in agendamentos_futuros:
-                # Se o dia do agendamento atual for diferente do anterior, cria um novo cabeçalho de dia
                 if ag.DataEvento.date() != data_atual:
                     data_atual = ag.DataEvento.date()
-                    data_formatada = data_atual.strftime('%A, %d/%m/%Y').capitalize()
-                    mensagem += f"\n--- **{data_formatada}** ---\n"
+                    # Usa nossa nova função tradutora
+                    data_formatada = formatar_data_pt_br(data_atual, '%A, %d de %B de %Y')
+                    mensagem += f"\n- - - - - - - - - - - - - - - - - - - -\n**{data_formatada}**\n- - - - - - - - - - - - - - - - - - - -\n"
                 
-                # Adiciona a linha do agendamento
                 hora_formatada = ag.DataEvento.strftime('%H:%M')
-                mensagem += f"  - ⏰ **{hora_formatada}**: {ag.TipoEvento} - Cliente: {ag.NomeCliente}\n"
+                mensagem += f"\n🔹 **{ag.TipoEvento}**\n"
+                mensagem += f"  - ⏰ **{hora_formatada}**\n"
+                mensagem += f"  - 👤 **Cliente:** {ag.NomeCliente}\n"
                 
-                # Adiciona a observação (descrição) se ela existir
                 if ag.Observacoes and ag.Observacoes.strip():
-                    mensagem += f"    *Obs: {ag.Observacoes.strip()}*\n"
+                    mensagem += "  - 📝 **Observações:**\n"
+                    # Lógica para formatar múltiplas linhas de observação
+                    for linha in ag.Observacoes.strip().splitlines():
+                        mensagem += f"    > _{linha.strip()}_\n"
 
         notificador_telegram.enviar_mensagem(config.AGENDAMENTOS_GROUP_CHAT_ID, mensagem)
         return jsonify({"status": "sucesso", "mensagem": "Lembrete geral enviado com sucesso!"}), 200
