@@ -7,6 +7,8 @@ import notificador_telegram
 import config
 from datetime import datetime, date, timedelta
 import locale
+import re
+from itertools import groupby
 
 try:
     locale.setlocale(locale.LC_TIME, 'pt_BR.UTF-8')
@@ -26,13 +28,22 @@ def formatar_data_pt_br(dt_obj, formato_str):
     data_formatada = data_formatada.replace(dt_obj.strftime('%B'), meses[dt_obj.month - 1])
     return data_formatada
 
-def enviar_lembretes_diarios():
-    """Busca os agendamentos de AMANHÃ e envia um resumo com o layout final."""
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] Verificando agendamentos de amanhã...")
+def criar_link_whatsapp(telefone):
+    """Limpa o número de telefone e cria um link 'wa.me'."""
+    if not telefone or not telefone.strip():
+        return None, None
+    numeros = re.sub(r'\D', '', telefone)
+    if len(numeros) <= 11:
+        numeros = "55" + numeros
+    link = f"https://wa.me/{numeros}"
+    return telefone, link
 
+
+def enviar_lembretes_diarios():
+    """Busca os agendamentos de AMANHÃ e envia um resumo completo."""
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] Verificando agendamentos de amanhã...")
     amanha = date.today() + timedelta(days=1)
     agendamentos_de_amanha = database.buscar_agendamentos_para_periodo(amanha, amanha)
-
     data_formatada = formatar_data_pt_br(amanha, '%A, %d de %B')
 
     if not agendamentos_de_amanha:
@@ -45,36 +56,38 @@ def enviar_lembretes_diarios():
             mensagem += f"  - ⏰ **{hora_formatada}**\n"
             mensagem += f"  - 👤 **Cliente:** {ag.NomeCliente}\n"
             
+            telefone_limpo, link_wpp = criar_link_whatsapp(ag.TelefoneCliente)
+            if telefone_limpo:
+                mensagem += f"  - 📞 **Telefone:** [{telefone_limpo}]({link_wpp})\n"
+            if ag.CPFCliente and ag.CPFCliente.strip():
+                mensagem += f"  - 📄 **CPF:** {ag.CPFCliente.strip()}\n"
+            status_pag = "PAGO" if ag.StatusPagamento == "Pago" else "RECEBER (Pendente)"
+            mensagem += f"  - 💰 **Pagamento:** **{status_pag}**\n"
+
             if ag.Observacoes and ag.Observacoes.strip():
                 mensagem += "  - 📝 **Observações:**\n"
                 for linha in ag.Observacoes.strip().splitlines():
                     mensagem += f"    > _{linha.strip()}_\n"
             
-            # Adiciona o separador se não for o último agendamento do dia
             if i < len(agendamentos_de_amanha) - 1:
                 mensagem += "\n`- - - - - - - - - - - - - - - - -`\n"
-
     notificador_telegram.enviar_mensagem(config.AGENDAMENTOS_GROUP_CHAT_ID, mensagem)
     print("--> Lembrete diário enviado com sucesso!")
 
-def enviar_lembretes_semanais():
-    """Busca os agendamentos da PRÓXIMA SEMANA e envia um resumo com o layout final."""
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] Verificando agendamentos da PRÓXIMA SEMANA...")
 
+def enviar_lembretes_semanais():
+    """Busca os agendamentos da PRÓXIMA SEMANA e envia um resumo completo."""
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] Verificando agendamentos da PRÓXIMA SEMANA...")
     hoje = date.today()
     inicio_semana = hoje + timedelta(days=-hoje.weekday(), weeks=1)
     fim_semana = inicio_semana + timedelta(days=6)
-
     agendamentos_semana = database.buscar_agendamentos_para_periodo(inicio_semana, fim_semana)
-
     periodo_str = f"de {inicio_semana.strftime('%d/%m')} a {fim_semana.strftime('%d/%m')}"
 
     if not agendamentos_semana:
-        mensagem = f"🗓️ **Agenda da Próxima Semana ({periodo_str})** 🗓️\n\nNenhum agendamento encontrado para a próxima semana."
+        mensagem = f"🗓️ **Agenda da Próxima Semana ({periodo_str})** 🗓️\n\nNenhum agendamento encontrado."
     else:
         mensagem = f"📅 **Prévia da Próxima Semana ({periodo_str})** 📅\n"
-        data_atual = None
-        from itertools import groupby
         agendamentos_agrupados = groupby(agendamentos_semana, key=lambda ag: ag.DataEvento.date())
 
         for dia, ags_do_dia_iter in agendamentos_agrupados:
@@ -88,6 +101,14 @@ def enviar_lembretes_semanais():
                 mensagem += f"  - ⏰ **{hora_formatada}**\n"
                 mensagem += f"  - 👤 **Cliente:** {ag.NomeCliente}\n"
                 
+                telefone_limpo, link_wpp = criar_link_whatsapp(ag.TelefoneCliente)
+                if telefone_limpo:
+                    mensagem += f"  - 📞 **Telefone:** [{telefone_limpo}]({link_wpp})\n"
+                if ag.CPFCliente and ag.CPFCliente.strip():
+                    mensagem += f"  - 📄 **CPF:** {ag.CPFCliente.strip()}\n"
+                status_pag = "PAGO" if ag.StatusPagamento == "Pago" else "RECEBER (Pendente)"
+                mensagem += f"  - 💰 **Pagamento:** **{status_pag}**\n"
+
                 if ag.Observacoes and ag.Observacoes.strip():
                     mensagem += "  - 📝 **Observações:**\n"
                     for linha in ag.Observacoes.strip().splitlines():
@@ -95,7 +116,6 @@ def enviar_lembretes_semanais():
 
                 if i < len(ags_do_dia) - 1:
                     mensagem += "\n`- - - - - - - - - - - - - - - - -`\n"
-
     notificador_telegram.enviar_mensagem(config.AGENDAMENTOS_GROUP_CHAT_ID, mensagem)
     print("--> Lembrete semanal enviado com sucesso!")
 
@@ -104,7 +124,7 @@ if __name__ == "__main__":
     print("Verificação diária às 20:00 e semanal às sextas-feiras às 18:00.")
 
     # Alerta diário para os carrinhos de amanhã
-    schedule.every().day.at("10:40").do(enviar_lembretes_diarios)
+    schedule.every().day.at("09:00").do(enviar_lembretes_diarios)
 
     # NOVO ALERTA: Toda sexta-feira às 18:00, envia a prévia da semana que vem
     schedule.every().Monday.at("08:00").do(enviar_lembretes_semanais)
