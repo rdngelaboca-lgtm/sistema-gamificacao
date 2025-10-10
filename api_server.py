@@ -230,15 +230,17 @@ def rota_buscar_agendamento(agendamento_id):
         return jsonify({"status": "erro", "mensagem": "Agendamento não encontrado."}), 404
     
 
+# Em api_server.py, substitua a função inteira
+
 @app.route('/agendamentos/enviar-lembrete-geral', methods=['POST'])
 def rota_enviar_lembrete_geral():
     """
-    Busca todos os agendamentos futuros e envia um resumo para o grupo do Telegram.
+    Busca todos os agendamentos futuros, agrupa por dia e envia um resumo para o Telegram.
     """
     try:
+        # A busca no banco já está ordenada por data, o que é perfeito
         agendamentos_db = database.listar_agendamentos()
         
-        # Filtra para manter apenas agendamentos futuros
         agendamentos_futuros = [
             ag for ag in agendamentos_db 
             if ag.DataEvento > datetime.now()
@@ -247,10 +249,22 @@ def rota_enviar_lembrete_geral():
         if not agendamentos_futuros:
             mensagem = "✅ Nenhum agendamento futuro encontrado no sistema."
         else:
-            mensagem = "📋 **Resumo de Todos os Agendamentos Futuros** 📋\n\n"
+            mensagem = "🗓️ **Resumo de Todos os Agendamentos Futuros** 🗓️\n"
+            data_atual = None
             for ag in agendamentos_futuros:
-                data_formatada = ag.DataEvento.strftime('%d/%m/%Y %H:%M')
-                mensagem += f"  - **{data_formatada}**: {ag.TipoEvento} - Cliente: {ag.NomeCliente}\n"
+                # Se o dia do agendamento atual for diferente do anterior, cria um novo cabeçalho de dia
+                if ag.DataEvento.date() != data_atual:
+                    data_atual = ag.DataEvento.date()
+                    data_formatada = data_atual.strftime('%A, %d/%m/%Y').capitalize()
+                    mensagem += f"\n--- **{data_formatada}** ---\n"
+                
+                # Adiciona a linha do agendamento
+                hora_formatada = ag.DataEvento.strftime('%H:%M')
+                mensagem += f"  - ⏰ **{hora_formatada}**: {ag.TipoEvento} - Cliente: {ag.NomeCliente}\n"
+                
+                # Adiciona a observação (descrição) se ela existir
+                if ag.Observacoes and ag.Observacoes.strip():
+                    mensagem += f"    *Obs: {ag.Observacoes.strip()}*\n"
 
         notificador_telegram.enviar_mensagem(config.AGENDAMENTOS_GROUP_CHAT_ID, mensagem)
         return jsonify({"status": "sucesso", "mensagem": "Lembrete geral enviado com sucesso!"}), 200
