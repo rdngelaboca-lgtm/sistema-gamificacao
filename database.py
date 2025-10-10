@@ -46,7 +46,9 @@ def criar_agendamento(dados_agendamento):
                          dados_agendamento['funcionario_id'],
                          dados_agendamento.get('observacoes'))
 
-            novo_id = cursor.fetchone()[0]
+            cursor.nextset() # <<--- ADICIONE ESTA LINHA MÁGICA AQUI
+            
+            novo_id = cursor.fetchone()[0] # Agora vai funcionar!
             conn.commit()
             return True, novo_id
         except Exception as e:
@@ -273,62 +275,73 @@ def buscar_funcionarios_por_horario(horario_atual):
             conn.close()
     return []         
 
-# Em database.py, SUBSTITUA a função antiga por esta versão COMPLETA E CORRIGIDA:
-
 def listar_tarefas_do_dia_por_funcionario(funcionario_id):
+    """
+    (VERSÃO FINAL E COMPLETA)
+    Busca todas as tarefas pendentes para um funcionário no dia de HOJE,
+    incluindo recorrentes, únicas, de grupo e as agendadas.
+    """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            # SQL CORRIGIDO: Adicionamos o Bloco 3 para tarefas de grupo
+            # Esta é a query mais complexa do sistema, unificando todas as regras.
             sql = """
-                SELECT TA.AtribuicaoID, T.TarefaID, T.Titulo, T.Pontos, TA.TipoFrequencia AS Tipo
+                SELECT 
+                    TA.AtribuicaoID, 
+                    T.TarefaID, 
+                    T.Titulo, 
+                    T.Pontos, 
+                    TA.TipoFrequencia AS Tipo,
+                    -- Usa a descrição personalizada se existir, senão usa a descrição padrão da tarefa
+                    ISNULL(TA.DescricaoOverride, T.Descricao) AS Descricao
                 FROM TarefasAtribuidas TA
                 JOIN Tarefas T ON TA.TarefaID = T.TarefaID
-                WHERE TA.FuncionarioID = ? AND TA.DataFimVigencia IS NULL
-                AND (
-                    -- Bloco 1: Tarefas recorrentes para HOJE (sem alteração)
-                    (
-                        (TA.TipoFrequencia IN ('Diaria', 'Semanal', 'Mensal')) AND
+                WHERE 
+                    TA.FuncionarioID = ? 
+                    AND TA.DataFimVigencia IS NULL
+                    AND NOT EXISTS ( -- Regra Global: Ignora se já foi entregue hoje (Pendente ou Aprovada)
+                        SELECT 1 FROM Entregas E
+                        WHERE E.AtribuicaoID = TA.AtribuicaoID
+                        AND CONVERT(date, E.DataEnvio) = CONVERT(date, GETDATE())
+                        AND E.StatusValidacao IN ('Aprovada', 'Pendente')
+                    )
+                    AND (
+                        -- Regra 1: Tarefas recorrentes (Diária, Semanal, Mensal) para hoje
                         (
-                            (TA.TipoFrequencia = 'Diaria') OR
-                            (TA.TipoFrequencia = 'Semanal' AND TA.ValorFrequencia = DATEPART(weekday, GETDATE())) OR
-                            (TA.TipoFrequencia = 'Mensal' AND TA.ValorFrequencia = DATEPART(day, GETDATE()))
+                            TA.TipoFrequencia IN ('Diaria', 'Semanal', 'Mensal') AND
+                            (
+                                (TA.TipoFrequencia = 'Diaria') OR
+                                (TA.TipoFrequencia = 'Semanal' AND TA.ValorFrequencia = DATEPART(weekday, GETDATE())) OR
+                                (TA.TipoFrequencia = 'Mensal' AND TA.ValorFrequencia = DATEPART(day, GETDATE()))
+                            )
                         )
-                        AND NOT EXISTS (
-                            SELECT 1 FROM Entregas E
-                            WHERE E.AtribuicaoID = TA.AtribuicaoID
-                            AND CONVERT(date, E.DataEnvio) = CONVERT(date, GETDATE())
-                            AND E.StatusValidacao IN ('Aprovada', 'Pendente')
+                        OR
+                        -- Regra 2: Tarefas do tipo 'Unica' que não têm data agendada
+                        (
+                            TA.TipoFrequencia = 'Unica' AND TA.DataAgendamento IS NULL
                         )
-                    )
-                    OR
-                    -- Bloco 2: Tarefas únicas (sem alteração)
-                    (
-                        TA.TipoFrequencia = 'Unica'
-                        AND NOT EXISTS (
-                            SELECT 1 FROM Entregas E
-                            WHERE E.AtribuicaoID = TA.AtribuicaoID AND E.StatusValidacao IN ('Aprovada', 'Pendente')
+                        OR
+                        -- Regra 3: Tarefas de Grupo que foram aceitas HOJE
+                        (
+                           TA.TipoFrequencia = 'GrupoCompetitiva' AND CONVERT(date, TA.DataAceite) = CONVERT(date, GETDATE())
                         )
-                    )
-                    OR
-                    -- Bloco 3: Tarefas de GRUPO aceitas HOJE que ainda não foram entregues (AQUI ESTÁ A MÁGICA!)
-                    (
-                        TA.TipoFrequencia = 'GrupoCompetitiva'
-                        -- Garante que a tarefa só apareça no dia em que foi aceita
-                        AND CONVERT(date, TA.DataAceite) = CONVERT(date, GETDATE())
-                        -- Garante que ela desapareça da lista após o envio da evidência
-                        AND NOT EXISTS (
-                            SELECT 1 FROM Entregas E
-                            WHERE E.AtribuicaoID = TA.AtribuicaoID AND E.StatusValidacao IN ('Aprovada', 'Pendente')
+                        OR
+                        -- Regra 4 (A NOVA): Tarefas com data específica agendada para HOJE
+                        (
+                            TA.DataAgendamento IS NOT NULL
+                            AND CONVERT(date, TA.DataAgendamento) = CONVERT(date, GETDATE())
                         )
                     )
-                )
             """
             cursor.execute(sql, funcionario_id)
             return cursor.fetchall()
+        except Exception as e:
+            print(f"!!! ERRO CRÍTICO em listar_tarefas_do_dia_por_funcionario: {e}")
+            return [] # Retorna lista vazia em caso de erro
         finally:
-            conn.close()
+            if conn:
+                conn.close()
     return []
 
 def adicionar_funcionario(nome, chat_id, cargo, horario_notificacao, dia_folga):
@@ -2577,4 +2590,3 @@ def excluir_tarefa_do_agendamento(agendamento_id):
             conn.commit()
         finally:
             conn.close()
-
