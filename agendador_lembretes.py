@@ -39,6 +39,44 @@ def criar_link_whatsapp(telefone):
     return telefone, link
 
 
+# Em agendador_lembretes.py, adicione esta função
+def enviar_lembretes_hoje():
+    """Busca os agendamentos de HOJE e envia um resumo para o grupo."""
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] Verificando agendamentos de HOJE...")
+
+    hoje = date.today()
+    agendamentos_de_hoje = database.buscar_agendamentos_para_periodo(hoje, hoje)
+    data_formatada = formatar_data_pt_br(hoje, '%A, %d de %B')
+
+    if not agendamentos_de_hoje:
+        print("--> Nenhum agendamento para hoje. Nenhuma mensagem enviada.")
+        return
+    else:
+        mensagem = f"🔔 **Agenda de Hoje ({data_formatada})** 🔔\n"
+        # ... (Lógica de formatação da mensagem)
+        for i, ag in enumerate(agendamentos_de_hoje):
+            hora_formatada = ag.DataEvento.strftime('%H:%M')
+            mensagem += f"\n🔹 **{ag.TipoEvento}**\n"
+            mensagem += f"  - ⏰ **{hora_formatada}**\n"
+            mensagem += f"  - 👤 **Cliente:** {ag.NomeCliente}\n"
+            telefone_limpo, link_wpp = criar_link_whatsapp(ag.TelefoneCliente)
+            if telefone_limpo:
+                mensagem += f"  - 📞 **Telefone:** [{telefone_limpo}]({link_wpp})\n"
+            if ag.CPFCliente and ag.CPFCliente.strip():
+                mensagem += f"  - 📄 **CPF:** {ag.CPFCliente.strip()}\n"
+            status_pag = "PAGO" if ag.StatusPagamento == "Pago" else "RECEBER (Pendente)"
+            mensagem += f"  - 💰 **Pagamento:** **{status_pag}**\n"
+            if ag.Observacoes and ag.Observacoes.strip():
+                mensagem += "  - 📝 **Observações:**\n"
+                for linha in ag.Observacoes.strip().splitlines():
+                    mensagem += f"    > _{linha.strip()}_\n"
+            if i < len(agendamentos_de_hoje) - 1:
+                mensagem += "\n`- - - - - - - - - - - - - - - - -`\n"
+
+    notificador_telegram.enviar_mensagem(config.AGENDAMENTOS_GROUP_CHAT_ID, mensagem)
+    print("--> Lembrete de HOJE enviado com sucesso!")
+
+
 def enviar_lembretes_diarios():
     """Busca os agendamentos de AMANHÃ e envia um resumo completo."""
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Verificando agendamentos de amanhã...")
@@ -122,6 +160,8 @@ def enviar_lembretes_semanais():
 if __name__ == "__main__":
     print("--- 🤖 Robô de Lembretes de Agendamento v2.0 Iniciado 🤖 ---")
     print("Verificação diária às 20:00 e semanal às sextas-feiras às 18:00.")
+
+    schedule.every().day.at("08:00").do(enviar_lembretes_hoje)
 
     # Alerta diário para os carrinhos de amanhã
     schedule.every().day.at("09:00").do(enviar_lembretes_diarios)
