@@ -7,6 +7,7 @@ from flask import send_from_directory
 import notificador_telegram 
 import config
 import hashlib
+import re
 
 app = Flask(__name__)
 
@@ -25,6 +26,21 @@ def formatar_data_pt_br(dt_obj, formato_str):
     data_formatada = data_formatada.replace(dt_obj.strftime('%A'), dias[dt_obj.weekday()])
     data_formatada = data_formatada.replace(dt_obj.strftime('%B'), meses[dt_obj.month - 1])
     return data_formatada
+
+def criar_link_whatsapp(telefone):
+    """Limpa o número de telefone e cria um link 'wa.me'."""
+    if not telefone or not telefone.strip():
+        return None, None
+    
+    # Remove todos os caracteres que não são números
+    numeros = re.sub(r'\D', '', telefone)
+    
+    # Se não tiver um código de país (assumimos Brasil '55')
+    if len(numeros) <= 11:
+        numeros = "55" + numeros
+        
+    link = f"https://wa.me/{numeros}"
+    return telefone, link
 
 
 
@@ -248,7 +264,7 @@ def rota_buscar_agendamento(agendamento_id):
 @app.route('/agendamentos/enviar-lembrete-geral', methods=['POST'])
 def rota_enviar_lembrete_geral():
     """
-    Busca todos os agendamentos futuros, agrupa por dia, formata no layout final e envia para o Telegram.
+    Busca todos os agendamentos futuros e envia um resumo completo para o Telegram.
     """
     try:
         agendamentos_db = database.listar_agendamentos()
@@ -274,6 +290,18 @@ def rota_enviar_lembrete_geral():
                 mensagem += f"  - ⏰ **{hora_formatada}**\n"
                 mensagem += f"  - 👤 **Cliente:** {ag.NomeCliente}\n"
                 
+                # --- NOVAS INFORMAÇÕES AQUI ---
+                telefone_limpo, link_wpp = criar_link_whatsapp(ag.TelefoneCliente)
+                if telefone_limpo:
+                    mensagem += f"  - 📞 **Telefone:** [{telefone_limpo}]({link_wpp})\n"
+                
+                if ag.CPFCliente and ag.CPFCliente.strip():
+                    mensagem += f"  - 📄 **CPF:** {ag.CPFCliente.strip()}\n"
+
+                status_pag = "PAGO" if ag.StatusPagamento == "Pago" else "RECEBER (Pendente)"
+                mensagem += f"  - 💰 **Pagamento:** **{status_pag}**\n"
+                # --- FIM DAS NOVAS INFORMAÇÕES ---
+
                 if ag.Observacoes and ag.Observacoes.strip():
                     mensagem += "  - 📝 **Observações:**\n"
                     for linha in ag.Observacoes.strip().splitlines():
@@ -287,8 +315,7 @@ def rota_enviar_lembrete_geral():
 
     except Exception as e:
         print(f"!!! ERRO em /enviar-lembrete-geral: {e}")
-        return jsonify({"status": "erro", "mensagem": f"Erro interno no servidor: {e}"}), 500
-    
+        return jsonify({"status": "erro", "mensagem": f"Erro interno no servidor: {e}"}), 500    
 
 @app.route('/login', methods=['POST'])
 def rota_login():
