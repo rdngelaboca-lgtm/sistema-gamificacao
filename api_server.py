@@ -82,6 +82,8 @@ def rota_listar_agendamentos():
         return jsonify({"status": "erro", "mensagem": str(e)}), 500
 
 
+# Em api_server.py, SUBSTITUA a função rota_criar_agendamento inteira por esta:
+
 @app.route('/agendamentos/novo', methods=['POST'])
 def rota_criar_agendamento():
     """Endpoint para criar um novo agendamento."""
@@ -100,34 +102,52 @@ def rota_criar_agendamento():
     sucesso, resultado = database.criar_agendamento(dados)
 
     if sucesso:
-            novo_agendamento_id = resultado # Pegamos o ID aqui
+        novo_agendamento_id = resultado 
 
-            # --- LÓGICA DE SINCRONIZAÇÃO NA CRIAÇÃO ---
-            try:
-                descricao_tarefa = (
-                    f"Cliente: {dados['nome_cliente']}\n"
-                    f"Evento: {dados['tipo_evento']}\n"
-                    f"Data/Hora: {dados['data_evento'].strftime('%d/%m/%Y %H:%M')}\n"
-                    f"Telefone: {dados.get('telefone_cliente', 'N/A')}\n"
-                    f"Observações: {dados.get('observacoes', 'Nenhuma')}"
-                )
-                
-                database.atribuir_tarefa(
-                    tarefa_id=config.TAREFA_MODELO_AGENDAMENTO_ID,
-                    funcionario_id=config.RESPONSAVEL_AGENDAMENTOS_ID,
-                    tipo_frequencia='Unica', valor_frequencia=None,
-                    descricao_override=descricao_tarefa,
-                    data_agendamento=dados['data_evento'].date(),
-                    agendamento_id=novo_agendamento_id # <-- Construindo a "ponte"!
-                )
-                print(f">>> Tarefa de gamificação criada e vinculada ao Agendamento ID {novo_agendamento_id}")
-            except Exception as e:
-                print(f"!!! ATENÇÃO: Agendamento criado, mas falha ao criar a tarefa de gamificação: {e}")
+        # --- LÓGICA DE GAMIFICAÇÃO ---
+        try:
+            descricao_tarefa = (
+                f"Cliente: {dados['nome_cliente']}\n"
+                f"Evento: {dados['tipo_evento']}\n"
+                f"Data/Hora: {dados['data_evento'].strftime('%d/%m/%Y %H:%M')}\n"
+                f"Telefone: {dados.get('telefone_cliente', 'N/A')}\n"
+                f"Observações: {dados.get('observacoes', 'Nenhuma')}"
+            )
+            
+            database.atribuir_tarefa(
+                tarefa_id=config.TAREFA_MODELO_AGENDAMENTO_ID,
+                funcionario_id=config.RESPONSAVEL_AGENDAMENTOS_ID,
+                tipo_frequencia='Unica', valor_frequencia=None,
+                descricao_override=descricao_tarefa,
+                data_agendamento=dados['data_evento'].date(),
+                agendamento_id=novo_agendamento_id
+            )
+            print(f">>> Tarefa de gamificação criada e vinculada ao Agendamento ID {novo_agendamento_id}")
+        except Exception as e:
+            print(f"!!! ATENÇÃO: Agendamento criado, mas falha ao criar a tarefa de gamificação: {e}")
+        
+        # --- BLOCO DE NOTIFICAÇÃO QUE ESTAVA FALTANDO ---
+        try:
+            data_formatada = dados['data_evento'].strftime('%d/%m/%Y às %H:%M')
+            
+            mensagem_alerta = (
+                f"✅ **Novo Agendamento Recebido!** ✅\n\n"
+                f"**Cliente:** {dados['nome_cliente']}\n"
+                f"**Evento:** {dados['tipo_evento']}\n"
+                f"**Quando:** {data_formatada}\n"
+            )
+            observacoes = dados.get('observacoes')
+            if observacoes and observacoes.strip():
+                mensagem_alerta += f"**Obs:** {observacoes.strip()}"
+            
+            notificador_telegram.enviar_mensagem(config.AGENDAMENTOS_GROUP_CHAT_ID, mensagem_alerta)
+        except Exception as e:
+            print(f"!!! ATENÇÃO: Agendamento criado, mas falha ao enviar notificação no Telegram: {e}")
+        # --- FIM DO BLOCO DE NOTIFICAÇÃO ---
 
-            return jsonify({"status": "sucesso", "mensagem": "Agendamento criado e equipe notificada!"}), 201
+        return jsonify({"status": "sucesso", "mensagem": "Agendamento criado e equipe notificada!"}), 201
     else:
-            return jsonify({"status": "erro", "mensagem": f"Erro no banco de dados: {resultado}"}), 500
-    
+        return jsonify({"status": "erro", "mensagem": f"Erro no banco de dados: {resultado}"}), 500    
 
 @app.route('/documentos/upload', methods=['POST'])
 def rota_upload_documento():
@@ -381,3 +401,4 @@ def rota_login():
 if __name__ == '__main__':
     print(">>> Iniciando o Servidor da API...")
     app.run(host='0.0.0.0', port=5000, debug=True)
+
