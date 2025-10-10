@@ -22,13 +22,14 @@ def get_db_connection():
         print(f"ERRO de conexão com o banco de dados: {ex}")
         return None
 
+# Em database.py, SUBSTITUA a função criar_agendamento por esta:
+
 def criar_agendamento(dados_agendamento):
-    """Insere um novo agendamento e RETORNA o ID criado."""
+    """(VERSÃO FINAL CORRIGIDA) Insere um novo agendamento e RETORNA o ID criado."""
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            # --- CORREÇÃO AQUI: Listando as colunas explicitamente ---
             sql = """
                 INSERT INTO Agendamentos 
                 (NomeCliente, CPFCliente, TelefoneCliente, TipoEvento, DataEvento, 
@@ -45,10 +46,10 @@ def criar_agendamento(dados_agendamento):
                          'Confirmado', 'Pendente',
                          dados_agendamento['funcionario_id'],
                          dados_agendamento.get('observacoes'))
-
-            cursor.nextset() # <<--- ADICIONE ESTA LINHA MÁGICA AQUI
             
-            novo_id = cursor.fetchone()[0] # Agora vai funcionar!
+            cursor.nextset()
+            
+            novo_id = cursor.fetchone()[0]
             conn.commit()
             return True, novo_id
         except Exception as e:
@@ -58,7 +59,6 @@ def criar_agendamento(dados_agendamento):
         finally:
             conn.close()
     return False, "Não foi possível conectar ao banco de dados."
-
 
 def listar_agendamentos():
     """Retorna uma lista de todos os agendamentos."""
@@ -275,39 +275,35 @@ def buscar_funcionarios_por_horario(horario_atual):
             conn.close()
     return []         
 
+# Em database.py, SUBSTITUA a função listar_tarefas_do_dia_por_funcionario por esta:
+
 def listar_tarefas_do_dia_por_funcionario(funcionario_id):
     """
-    (VERSÃO FINAL E COMPLETA)
-    Busca todas as tarefas pendentes para um funcionário no dia de HOJE,
-    incluindo recorrentes, únicas, de grupo e as agendadas.
+    (VERSÃO FINAL E À PROVA DE FALHAS)
+    Busca todas as tarefas pendentes para um funcionário no dia de HOJE.
     """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            # Esta é a query mais complexa do sistema, unificando todas as regras.
+            # A MÁGICA ESTÁ AQUI: SET DATEFIRST 1 força a semana a começar na Segunda-feira (padrão ISO)
+            # e ajustamos os números para corresponder ao que o sistema salva (Dom=1, Seg=2, etc.)
             sql = """
+                SET DATEFIRST 7;
                 SELECT 
-                    TA.AtribuicaoID, 
-                    T.TarefaID, 
-                    T.Titulo, 
-                    T.Pontos, 
-                    TA.TipoFrequencia AS Tipo,
-                    -- Usa a descrição personalizada se existir, senão usa a descrição padrão da tarefa
+                    TA.AtribuicaoID, T.TarefaID, T.Titulo, T.Pontos, TA.TipoFrequencia AS Tipo,
                     ISNULL(TA.DescricaoOverride, T.Descricao) AS Descricao
                 FROM TarefasAtribuidas TA
                 JOIN Tarefas T ON TA.TarefaID = T.TarefaID
                 WHERE 
-                    TA.FuncionarioID = ? 
-                    AND TA.DataFimVigencia IS NULL
-                    AND NOT EXISTS ( -- Regra Global: Ignora se já foi entregue hoje (Pendente ou Aprovada)
+                    TA.FuncionarioID = ? AND TA.DataFimVigencia IS NULL
+                    AND NOT EXISTS (
                         SELECT 1 FROM Entregas E
                         WHERE E.AtribuicaoID = TA.AtribuicaoID
                         AND CONVERT(date, E.DataEnvio) = CONVERT(date, GETDATE())
                         AND E.StatusValidacao IN ('Aprovada', 'Pendente')
                     )
                     AND (
-                        -- Regra 1: Tarefas recorrentes (Diária, Semanal, Mensal) para hoje
                         (
                             TA.TipoFrequencia IN ('Diaria', 'Semanal', 'Mensal') AND
                             (
@@ -316,29 +312,16 @@ def listar_tarefas_do_dia_por_funcionario(funcionario_id):
                                 (TA.TipoFrequencia = 'Mensal' AND TA.ValorFrequencia = DATEPART(day, GETDATE()))
                             )
                         )
-                        OR
-                        -- Regra 2: Tarefas do tipo 'Unica' que não têm data agendada
-                        (
-                            TA.TipoFrequencia = 'Unica' AND TA.DataAgendamento IS NULL
-                        )
-                        OR
-                        -- Regra 3: Tarefas de Grupo que foram aceitas HOJE
-                        (
-                           TA.TipoFrequencia = 'GrupoCompetitiva' AND CONVERT(date, TA.DataAceite) = CONVERT(date, GETDATE())
-                        )
-                        OR
-                        -- Regra 4 (A NOVA): Tarefas com data específica agendada para HOJE
-                        (
-                            TA.DataAgendamento IS NOT NULL
-                            AND CONVERT(date, TA.DataAgendamento) = CONVERT(date, GETDATE())
-                        )
+                        OR (TA.TipoFrequencia = 'Unica' AND TA.DataAgendamento IS NULL)
+                        OR (TA.TipoFrequencia = 'GrupoCompetitiva' AND CONVERT(date, TA.DataAceite) = CONVERT(date, GETDATE()))
+                        OR (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = CONVERT(date, GETDATE()))
                     )
             """
             cursor.execute(sql, funcionario_id)
             return cursor.fetchall()
         except Exception as e:
             print(f"!!! ERRO CRÍTICO em listar_tarefas_do_dia_por_funcionario: {e}")
-            return [] # Retorna lista vazia em caso de erro
+            return []
         finally:
             if conn:
                 conn.close()
