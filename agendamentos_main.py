@@ -129,7 +129,7 @@ class AppAgendamentos:
         self.entry_telefone = ttk.Entry(frame_form)
         self.entry_telefone.pack(fill="x", pady=(0, 5))
         ttk.Label(frame_form, text="Tipo de Evento:").pack(anchor="w")
-        self.combo_tipo_evento = ttk.Combobox(frame_form, values=['Carrinho de Sorvete', 'Festa de Aniversario'])
+        self.combo_tipo_evento = ttk.Combobox(frame_form, values=['Carrinho de Sorvete', 'Festa de Aniversario', 'Reserva de Tortas de Sorvete'])
         self.combo_tipo_evento.pack(fill="x", pady=(0, 5))
         frame_data_hora = ttk.Frame(frame_form)
         frame_data_hora.pack(fill="x", pady=(0, 5))
