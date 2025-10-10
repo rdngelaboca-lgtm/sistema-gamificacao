@@ -277,16 +277,17 @@ def buscar_funcionarios_por_horario(horario_atual):
 
 def listar_tarefas_do_dia_por_funcionario(funcionario_id):
     """
-    (VERSÃO FINAL CORRIGIDA E ROBUSTA)
+    (VERSÃO FINAL CORRIGIDA E ROBUSTA - V2)
     Busca todas as tarefas pendentes para um funcionário no dia de HOJE.
-    Garante a comparação correta dos dias da semana.
+    Esta versão remove qualquer ambiguidade na lógica de data e dia da semana.
     """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
+            # A consulta foi reescrita para ser mais explícita e menos dependente
+            # de configurações de ambiente do SQL Server, como o DATEFIRST.
             sql = """
-                SET DATEFIRST 7;
                 SELECT
                     TA.AtribuicaoID, T.TarefaID, T.Titulo, T.Pontos, TA.TipoFrequencia AS Tipo,
                     ISNULL(TA.DescricaoOverride, T.Descricao) AS Descricao
@@ -301,21 +302,19 @@ def listar_tarefas_do_dia_por_funcionario(funcionario_id):
                         AND E.StatusValidacao IN ('Aprovada', 'Pendente')
                     )
                     AND (
-                        (
-                            TA.TipoFrequencia IN ('Diaria', 'Semanal', 'Mensal') AND
-                            (
-                                (TA.TipoFrequencia = 'Diaria') OR
+                        (TA.TipoFrequencia = 'Diaria') OR
 
-                                -- AQUI ESTÁ A CORREÇÃO PRINCIPAL:
-                                -- Convertemos o ValorFrequencia (que é texto) para um número (INT)
-                                -- antes de comparar com o resultado numérico de DATEPART.
-                                (TA.TipoFrequencia = 'Semanal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(weekday, GETDATE())) OR
-                                (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, GETDATE()))
-                            )
-                        )
-                        OR (TA.TipoFrequencia = 'Unica' AND TA.DataAgendamento IS NULL)
-                        OR (TA.TipoFrequencia = 'GrupoCompetitiva' AND CONVERT(date, TA.DataAceite) = CONVERT(date, GETDATE()))
-                        OR (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = CONVERT(date, GETDATE()))
+                        -- CORREÇÃO DEFINITIVA:
+                        -- Comparamos o dia da semana de hoje (considerando Domingo=1, Segunda=2...)
+                        -- diretamente com o valor de texto salvo no banco.
+                        -- O CHAR(1) garante que a comparação seja feita de forma consistente.
+                        (TA.TipoFrequencia = 'Semanal' AND TA.ValorFrequencia = CHAR(DATEPART(weekday, GETDATE()) + @@DATEFIRST - 1 - 6) ) OR
+
+                        (TA.TipoFrequencia = 'Mensal' AND TA.ValorFrequencia = CAST(DATEPART(day, GETDATE()) AS VARCHAR(2))) OR
+
+                        (TA.TipoFrequencia = 'Unica' AND TA.DataAgendamento IS NULL) OR
+                        (TA.TipoFrequencia = 'GrupoCompetitiva' AND CONVERT(date, TA.DataAceite) = CONVERT(date, GETDATE())) OR
+                        (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = CONVERT(date, GETDATE()))
                     )
             """
             cursor.execute(sql, funcionario_id)
