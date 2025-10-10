@@ -3,15 +3,15 @@ from datetime import datetime, date, timedelta
 import calendar 
 import hashlib
 
-SERVER = 'localhost'
+SERVER = '192.168.2.23'
 DATABASE = 'gamificacao_db'
 CONNECTION_STRING = (
-    f"DRIVER={{ODBC Driver 18 for SQL Server}};"  
+    f"DRIVER={{ODBC Driver 17 for SQL Server}};"  
     f"SERVER={SERVER};"
     f"DATABASE={DATABASE};"
-    f"UID=sa;"  
-    f"PWD=Gamificacao#2025;" 
-    f"TrustServerCertificate=yes;"  
+    f"UID=sa;"  # Informamos o usuário correto
+    f"PWD=Gamificacao#2025;" # << COLOQUE A SENHA AQUI
+    f"TrustServerCertificate=yes;"  # Necessário para aceitar o certificado do servidor
 )
 
 def get_db_connection():
@@ -23,16 +23,18 @@ def get_db_connection():
         return None
 
 def criar_agendamento(dados_agendamento):
-    """Insere um novo agendamento na tabela Agendamentos."""
+    """Insere um novo agendamento e RETORNA o ID criado."""
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
+            # --- CORREÇÃO AQUI: Listando as colunas explicitamente ---
             sql = """
-                INSERT INTO Agendamentos (
-                    NomeCliente, CPFCliente, TelefoneCliente, TipoEvento, DataEvento,
-                    StatusAgendamento, StatusPagamento, FuncionarioID, Observacoes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO Agendamentos 
+                (NomeCliente, CPFCliente, TelefoneCliente, TipoEvento, DataEvento, 
+                 StatusAgendamento, StatusPagamento, FuncionarioID, Observacoes) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+                SELECT SCOPE_IDENTITY();
             """
             cursor.execute(sql,
                          dados_agendamento['nome_cliente'],
@@ -40,13 +42,13 @@ def criar_agendamento(dados_agendamento):
                          dados_agendamento.get('telefone_cliente'),
                          dados_agendamento['tipo_evento'],
                          dados_agendamento['data_evento'],
-                         'Confirmado',
-                         'Pendente',
+                         'Confirmado', 'Pendente',
                          dados_agendamento['funcionario_id'],
-                         dados_agendamento.get('observacoes')
-                         )
+                         dados_agendamento.get('observacoes'))
+
+            novo_id = cursor.fetchone()[0]
             conn.commit()
-            return True, None
+            return True, novo_id
         except Exception as e:
             print(f"ERRO ao criar agendamento: {e}")
             conn.rollback()
@@ -54,6 +56,7 @@ def criar_agendamento(dados_agendamento):
         finally:
             conn.close()
     return False, "Não foi possível conectar ao banco de dados."
+
 
 def listar_agendamentos():
     """Retorna uma lista de todos os agendamentos."""
@@ -497,20 +500,21 @@ def atribuir_tarefa_recorrente_para_grupo(tarefa_id, grupo_id, tipo_frequencia, 
         finally:
             conn.close()
 
-def atribuir_tarefa(tarefa_id, funcionario_id, tipo_frequencia, valor_frequencia):
+def atribuir_tarefa(tarefa_id, funcionario_id, tipo_frequencia, valor_frequencia, descricao_override=None, data_agendamento=None, agendamento_id=None):
+    """Função universal para atribuir tarefas."""
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            # SQL ATUALIZADO para incluir a data de início da vigência
             sql = """
                 INSERT INTO TarefasAtribuidas 
-                (TarefaID, FuncionarioID, TipoFrequencia, ValorFrequencia, DataInicioVigencia) 
-                VALUES (?, ?, ?, ?, GETDATE())
+                (TarefaID, FuncionarioID, TipoFrequencia, ValorFrequencia, DataInicioVigencia, DescricaoOverride, DataAgendamento, AgendamentoID) 
+                VALUES (?, ?, ?, ?, GETDATE(), ?, ?, ?)
             """
-            cursor.execute(sql, tarefa_id, funcionario_id, tipo_frequencia, valor_frequencia)
+            cursor.execute(sql, tarefa_id, funcionario_id, tipo_frequencia, valor_frequencia, descricao_override, data_agendamento, agendamento_id)
             conn.commit()
-        finally: conn.close()
+        finally:
+            conn.close()
 
 def encerrar_atribuicao_tarefa(atribuicao_id):
     """
@@ -2545,3 +2549,31 @@ def autenticar_funcionario(funcionario_id):
         finally:
             conn.close()
     return None
+
+def atualizar_tarefa_do_agendamento(agendamento_id, novos_dados):
+    """Atualiza a data e a descrição da tarefa de gamificação vinculada a um agendamento."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                UPDATE TarefasAtribuidas
+                SET DataAgendamento = ?, DescricaoOverride = ?
+                WHERE AgendamentoID = ?
+            """
+            cursor.execute(sql, novos_dados['data_agendamento'], novos_dados['descricao_override'], agendamento_id)
+            conn.commit()
+        finally:
+            conn.close()
+
+def excluir_tarefa_do_agendamento(agendamento_id):
+    """Exclui a tarefa de gamificação vinculada a um agendamento."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "DELETE FROM TarefasAtribuidas WHERE AgendamentoID = ?"
+            cursor.execute(sql, agendamento_id)
+            conn.commit()
+        finally:
+            conn.close()
