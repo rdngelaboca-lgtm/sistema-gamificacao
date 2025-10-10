@@ -97,37 +97,36 @@ def rota_criar_agendamento():
     except (ValueError, TypeError):
         return jsonify({"status": "erro", "mensagem": "Formato de data_evento inválido. Use 'AAAA-MM-DD HH:MM'."}), 400
 
-    sucesso, erro_db = database.criar_agendamento(dados)
+    sucesso, resultado = database.criar_agendamento(dados)
 
     if sucesso:
-        # --- ALERTA DE NOVO AGENDAMENTO ---
-        try:
-            # Formatamos a data para o formato brasileiro para a notificação
-            data_formatada = dados['data_evento'].strftime('%d/%m/%Y às %H:%M')
-            
-            mensagem_alerta = (
-                f"✅ **Novo Agendamento Recebido!** ✅\n\n"
-                f"**Cliente:** {dados['nome_cliente']}\n"
-                f"**Evento:** {dados['tipo_evento']}\n"
-                f"**Quando:** {data_formatada}\n"
-            )
+            novo_agendamento_id = resultado # Pegamos o ID aqui
 
-            # --- AQUI ESTÁ A MUDANÇA ---
-            # Adiciona a observação apenas se ela não estiver vazia
-            observacoes = dados.get('observacoes')
-            if observacoes and observacoes.strip():
-                mensagem_alerta += f"**Obs:** {observacoes.strip()}"
-        # ---------------------------
-            notificador_telegram.enviar_mensagem(config.AGENDAMENTOS_GROUP_CHAT_ID, mensagem_alerta)
-        except Exception as e:
-            # Se a notificação falhar, o agendamento ainda foi criado.
-            # Apenas registramos o erro no console do servidor.
-            print(f"!!! ATENÇÃO: Agendamento criado, mas falha ao enviar notificação no Telegram: {e}")
-        # -----------------------------------
+            # --- LÓGICA DE SINCRONIZAÇÃO NA CRIAÇÃO ---
+            try:
+                descricao_tarefa = (
+                    f"Cliente: {dados['nome_cliente']}\n"
+                    f"Evento: {dados['tipo_evento']}\n"
+                    f"Data/Hora: {dados['data_evento'].strftime('%d/%m/%Y %H:%M')}\n"
+                    f"Telefone: {dados.get('telefone_cliente', 'N/A')}\n"
+                    f"Observações: {dados.get('observacoes', 'Nenhuma')}"
+                )
+                
+                database.atribuir_tarefa(
+                    tarefa_id=config.TAREFA_MODELO_AGENDAMENTO_ID,
+                    funcionario_id=config.RESPONSAVEL_AGENDAMENTOS_ID,
+                    tipo_frequencia='Unica', valor_frequencia=None,
+                    descricao_override=descricao_tarefa,
+                    data_agendamento=dados['data_evento'].date(),
+                    agendamento_id=novo_agendamento_id # <-- Construindo a "ponte"!
+                )
+                print(f">>> Tarefa de gamificação criada e vinculada ao Agendamento ID {novo_agendamento_id}")
+            except Exception as e:
+                print(f"!!! ATENÇÃO: Agendamento criado, mas falha ao criar a tarefa de gamificação: {e}")
 
-        return jsonify({"status": "sucesso", "mensagem": "Agendamento criado e equipe notificada!"}), 201
+            return jsonify({"status": "sucesso", "mensagem": "Agendamento criado e equipe notificada!"}), 201
     else:
-        return jsonify({"status": "erro", "mensagem": f"Erro no banco de dados: {erro_db}"}), 500
+            return jsonify({"status": "erro", "mensagem": f"Erro no banco de dados: {resultado}"}), 500
     
 
 @app.route('/documentos/upload', methods=['POST'])
@@ -217,19 +216,44 @@ def rota_atualizar_agendamento(agendamento_id):
 
     sucesso = database.atualizar_agendamento(agendamento_id, dados)
     if sucesso:
+        # --- LÓGICA DE SINCRONIZAÇÃO NA ATUALIZAÇÃO ---
+        try:
+            nova_descricao = (
+                f"Cliente: {dados['nome_cliente']}\n"
+                f"Evento: {dados['tipo_evento']}\n"
+                f"Data/Hora: {dados['data_evento'].strftime('%d/%m/%Y %H:%M')}\n"
+                f"Telefone: {dados.get('telefone_cliente', 'N/A')}\n"
+                f"Observações: {dados.get('observacoes', 'Nenhuma')}"
+            )
+            dados_sync = {
+                "data_agendamento": dados['data_evento'].date(),
+                "descricao_override": nova_descricao
+            }
+            database.atualizar_tarefa_do_agendamento(agendamento_id, dados_sync)
+            print(f">>> Tarefa de gamificação do Agendamento ID {agendamento_id} foi sincronizada.")
+        except Exception as e:
+            print(f"!!! ATENÇÃO: Agendamento atualizado, mas falha ao sincronizar a tarefa: {e}")
+
         return jsonify({"status": "sucesso", "mensagem": "Agendamento atualizado com sucesso!"}), 200
     else:
         return jsonify({"status": "erro", "mensagem": "Falha ao atualizar o agendamento."}), 500
 
+
 @app.route('/agendamentos/<int:agendamento_id>', methods=['DELETE'])
 def rota_excluir_agendamento(agendamento_id):
-    """Endpoint para excluir um agendamento."""
+    try:
+        # --- LÓGICA DE SINCRONIZAÇÃO NA EXCLUSÃO ---
+        database.excluir_tarefa_do_agendamento(agendamento_id)
+        print(f">>> Tarefa de gamificação do Agendamento ID {agendamento_id} foi excluída.")
+    except Exception as e:
+        print(f"!!! ATENÇÃO: Falha ao excluir a tarefa de gamificação vinculada: {e}")
+        
     sucesso = database.excluir_agendamento(agendamento_id)
     if sucesso:
         return '', 204
     else:
         return jsonify({"status": "erro", "mensagem": "Falha ao excluir o agendamento."}), 500
-
+    
 @app.route('/agendamentos/<int:agendamento_id>/pagamento', methods=['PATCH'])
 def rota_patch_pagamento(agendamento_id):
     """Endpoint para atualizar SOMENTE o status do pagamento."""
