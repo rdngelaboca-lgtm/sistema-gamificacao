@@ -9,3 +9,11 @@ TAXA_CONVERSAO_PONTO_REAL = 0.02 # Define que 1 Ponto = R$ 0,05
 
 # Adicione esta linha no final do config.py
 AGENDAMENTOS_GROUP_CHAT_ID = -4839358986 # << SUBSTITUA PELO ID DO SEU GRUPO DE AGENDAMENTOS
+
+# --- CONFIGURAÇÃO DA AUTOMAÇÃO DE TAREFAS DE AGENDAMENTO ---
+
+# ID do funcionário que receberá as tarefas de agendamento
+RESPONSAVEL_AGENDAMENTOS_ID = 2 # << TROQUE PELO ID DO FUNCIONÁRIO CORRETO
+
+# ID da tarefa "modelo" que você criou no Catálogo de Tarefas (ex: "Preparar Agendamento de Cliente")
+TAREFA_MODELO_AGENDAMENTO_ID = 92 # << TROQUE PELO ID DA TAREFA CORRETA
