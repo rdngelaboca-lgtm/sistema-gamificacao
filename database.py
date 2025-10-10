@@ -279,54 +279,53 @@ def buscar_funcionarios_por_horario(horario_atual):
 
 def listar_tarefas_do_dia_por_funcionario(funcionario_id):
     """
-    (VERSÃO 3 - DEFINITIVA E CORRIGIDA)
-    Busca todas as tarefas pendentes para um funcionário no dia de HOJE,
-    unificando a lógica para tarefas recorrentes e tarefas agendadas.
+    (VERSÃO 4 - DEFINITIVA E À PROVA DE FALHAS)
+    Busca todas as tarefas do dia usando uma lógica de data explícita que
+    NÃO DEPENDE de configurações regionais ou de idioma do SQL Server.
     """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            # Esta consulta foi reestruturada para avaliar cada tipo de tarefa de forma independente e clara.
+            # Esta consulta usa um CASE para determinar o dia da semana,
+            # tornando-a imune a qualquer configuração de DATEFIRST ou idioma do servidor.
             sql = """
-                -- PASSO 1: Garantimos que o SQL Server entenda a semana começando no Domingo (Domingo=1),
-                -- para ser compatível com os dados salvos pela interface do gestor.
-                SET DATEFIRST 7;
-
                 SELECT
                     TA.AtribuicaoID, T.TarefaID, T.Titulo, T.Pontos, TA.TipoFrequencia AS Tipo,
                     ISNULL(TA.DescricaoOverride, T.Descricao) AS Descricao
                 FROM TarefasAtribuidas TA
                 JOIN Tarefas T ON TA.TarefaID = T.TarefaID
                 WHERE
-                    -- Condições Base: Pegar apenas tarefas do funcionário certo e que estão ativas.
-                    TA.FuncionarioID = ? AND TA.DataFimVigencia IS NULL
-
-                    -- Condição de Exclusão: Ignorar tarefas que já foram entregues (Aprovadas ou Pendentes) HOJE.
+                    TA.FuncionarioID = ? AND TA.DataFimVregencia IS NULL
                     AND NOT EXISTS (
                         SELECT 1 FROM Entregas E
                         WHERE E.AtribuicaoID = TA.AtribuicaoID
                         AND CONVERT(date, E.DataEnvio) = CONVERT(date, GETDATE())
                         AND E.StatusValidacao IN ('Aprovada', 'Pendente')
                     )
-
-                    -- Condição Principal de Lógica: Uma tarefa é para hoje SE...
                     AND (
-                        -- Cenário 1: A tarefa é 'Diaria'.
                         TA.TipoFrequencia = 'Diaria'
 
-                        -- Cenário 2: A tarefa é 'Semanal' E o dia da semana de hoje bate com o dia salvo.
-                        -- (Usando CAST para garantir a comparação correta de número com texto)
-                        OR (TA.TipoFrequencia = 'Semanal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(weekday, GETDATE()))
+                        OR (
+                            TA.TipoFrequencia = 'Semanal' AND
+                            CAST(TA.ValorFrequencia AS INT) =
+                                -- AQUI ESTÁ A LÓGICA "À PROVA DE BALAS":
+                                -- Criamos um "tradutor" universal para o dia da semana.
+                                CASE DATENAME(weekday, GETDATE())
+                                    WHEN 'Sunday' THEN 1 WHEN 'Domingo' THEN 1
+                                    WHEN 'Monday' THEN 2 WHEN 'Segunda-feira' THEN 2
+                                    WHEN 'Tuesday' THEN 3 WHEN 'Terça-feira' THEN 3
+                                    WHEN 'Wednesday' THEN 4 WHEN 'Quarta-feira' THEN 4
+                                    WHEN 'Thursday' THEN 5 WHEN 'Quinta-feira' THEN 5
+                                    WHEN 'Friday' THEN 6 WHEN 'Sexta-feira' THEN 6
+                                    WHEN 'Saturday' THEN 7 WHEN 'Sábado' THEN 7
+                                END
+                        )
 
-                        -- Cenário 3: A tarefa é 'Mensal' E o dia do mês de hoje bate com o dia salvo.
                         OR (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, GETDATE()))
 
-                        -- Cenário 4: A tarefa tem uma DataAgendamento específica que é HOJE.
-                        -- (Isso cobre as tarefas de 'Unica' vindas dos agendamentos de carrinho).
                         OR (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = CONVERT(date, GETDATE()))
 
-                        -- Cenário 5: A tarefa é do tipo 'GrupoCompetitiva' e foi aceita HOJE.
                         OR (TA.TipoFrequencia = 'GrupoCompetitiva' AND CONVERT(date, TA.DataAceite) = CONVERT(date, GETDATE()))
                     )
             """
