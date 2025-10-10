@@ -13,36 +13,49 @@ try:
 except locale.Error:
     print("Locale pt_BR.UTF-8 não encontrado. Usando o padrão do sistema.")
 
-# Em agendador_lembretes.py, substitua as duas funções de envio de lembrete
+def formatar_data_pt_br(dt_obj, formato_str):
+    """Uma função 'tradutora' para garantir que as datas saiam em português."""
+    dias = ["Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado", "Domingo"]
+    meses = [
+        "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+        "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"
+    ]
+    
+    data_formatada = dt_obj.strftime(formato_str)
+    data_formatada = data_formatada.replace(dt_obj.strftime('%A'), dias[dt_obj.weekday()])
+    data_formatada = data_formatada.replace(dt_obj.strftime('%B'), meses[dt_obj.month - 1])
+    return data_formatada
+
 
 def enviar_lembretes_diarios():
-    """
-    Busca os agendamentos de AMANHÃ e envia um resumo para o grupo.
-    """
+    """Busca os agendamentos de AMANHÃ e envia um resumo com o novo layout."""
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Verificando agendamentos de amanhã...")
 
     amanha = date.today() + timedelta(days=1)
-    agendamentos_de_amanha = database.buscar_agendamentos_para_periodo(amanha, amanha) # Busca todos os tipos
+    agendamentos_de_amanha = database.buscar_agendamentos_para_periodo(amanha, amanha)
 
-    data_formatada = amanha.strftime("%A, %d de %B").capitalize()
+    data_formatada = formatar_data_pt_br(amanha, '%A, %d de %B')
 
     if not agendamentos_de_amanha:
         mensagem = f"🗓️ **Agenda para Amanhã ({data_formatada})** 🗓️\n\nNenhum agendamento encontrado. ✅"
     else:
-        mensagem = f"📢 **Lembretes para Amanhã ({data_formatada})** 📢\n\n"
+        mensagem = f"📢 **Lembretes para Amanhã ({data_formatada})** 📢\n"
         for ag in agendamentos_de_amanha:
             hora_formatada = ag.DataEvento.strftime('%H:%M')
-            mensagem += f"  - ⏰ **{hora_formatada}**: {ag.TipoEvento} - Cliente: {ag.NomeCliente}\n"
+            mensagem += f"\n🔹 **{ag.TipoEvento}**\n"
+            mensagem += f"  - ⏰ **{hora_formatada}**\n"
+            mensagem += f"  - 👤 **Cliente:** {ag.NomeCliente}\n"
+            
             if ag.Observacoes and ag.Observacoes.strip():
-                mensagem += f"    *Obs: {ag.Observacoes.strip()}*\n"
+                mensagem += "  - 📝 **Observações:**\n"
+                for linha in ag.Observacoes.strip().splitlines():
+                    mensagem += f"    > _{linha.strip()}_\n"
 
     notificador_telegram.enviar_mensagem(config.AGENDAMENTOS_GROUP_CHAT_ID, mensagem)
     print("--> Lembrete diário enviado com sucesso!")
 
 def enviar_lembretes_semanais():
-    """
-    Busca os agendamentos da PRÓXIMA SEMANA, agrupa por dia e envia um resumo.
-    """
+    """Busca os agendamentos da PRÓXIMA SEMANA e envia um resumo com o novo layout."""
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Verificando agendamentos da PRÓXIMA SEMANA...")
 
     hoje = date.today()
@@ -61,13 +74,18 @@ def enviar_lembretes_semanais():
         for ag in agendamentos_semana:
             if ag.DataEvento.date() != data_atual:
                 data_atual = ag.DataEvento.date()
-                data_formatada = data_atual.strftime('%A, %d/%m').capitalize()
-                mensagem += f"\n--- **{data_formatada}** ---\n"
+                data_formatada = formatar_data_pt_br(data_atual, '%A, %d/%m')
+                mensagem += f"\n- - - - - - - - - - - -\n**{data_formatada}**\n- - - - - - - - - - - -\n"
             
             hora_formatada = ag.DataEvento.strftime('%H:%M')
-            mensagem += f"  - ⏰ **{hora_formatada}**: {ag.TipoEvento} - Cliente: {ag.NomeCliente}\n"
+            mensagem += f"\n🔹 **{ag.TipoEvento}**\n"
+            mensagem += f"  - ⏰ **{hora_formatada}**\n"
+            mensagem += f"  - 👤 **Cliente:** {ag.NomeCliente}\n"
+            
             if ag.Observacoes and ag.Observacoes.strip():
-                mensagem += f"    *Obs: {ag.Observacoes.strip()}*\n"
+                mensagem += "  - 📝 **Observações:**\n"
+                for linha in ag.Observacoes.strip().splitlines():
+                    mensagem += f"    > _{linha.strip()}_\n"
 
     notificador_telegram.enviar_mensagem(config.AGENDAMENTOS_GROUP_CHAT_ID, mensagem)
     print("--> Lembrete semanal enviado com sucesso!")
