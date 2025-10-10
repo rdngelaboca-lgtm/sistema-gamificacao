@@ -6,6 +6,7 @@ from datetime import datetime
 from flask import send_from_directory
 import notificador_telegram 
 import config
+import hashlib
 
 app = Flask(__name__)
 
@@ -256,6 +257,44 @@ def rota_enviar_lembrete_geral():
 
     except Exception as e:
         print(f"!!! ERRO em /enviar-lembrete-geral: {e}")
+        return jsonify({"status": "erro", "mensagem": f"Erro interno no servidor: {e}"}), 500
+    
+
+@app.route('/login', methods=['POST'])
+def rota_login():
+    """Endpoint para autenticar um funcionário."""
+    dados = request.get_json()
+    if not dados or 'id' not in dados or 'senha' not in dados:
+        return jsonify({"status": "erro", "mensagem": "ID e senha são obrigatórios."}), 400
+
+    funcionario_id = dados['id']
+    senha_digitada = dados['senha']
+
+    try:
+        dados_funcionario_db = database.autenticar_funcionario(int(funcionario_id))
+
+        if dados_funcionario_db and dados_funcionario_db.SenhaHash:
+            senha_hash_digitada = hashlib.sha256(senha_digitada.encode('utf-8')).hexdigest()
+
+            if senha_hash_digitada == dados_funcionario_db.SenhaHash:
+                # Login bem-sucedido! Retorna os dados do funcionário.
+                return jsonify({
+                    "status": "sucesso",
+                    "mensagem": f"Acesso liberado para {dados_funcionario_db.NomeCompleto}!",
+                    "funcionario": {
+                        "id": dados_funcionario_db.FuncionarioID,
+                        "nome": dados_funcionario_db.NomeCompleto
+                    }
+                }), 200
+            else:
+                return jsonify({"status": "erro", "mensagem": "Senha incorreta."}), 401 # 401 Unauthorized
+        elif dados_funcionario_db:
+            return jsonify({"status": "erro", "mensagem": "Usuário sem senha cadastrada."}), 401
+        else:
+            return jsonify({"status": "erro", "mensagem": "ID de funcionário não encontrado."}), 404 # 404 Not Found
+
+    except Exception as e:
+        print(f"!!! ERRO em /login: {e}")
         return jsonify({"status": "erro", "mensagem": f"Erro interno no servidor: {e}"}), 500
 
 if __name__ == '__main__':
