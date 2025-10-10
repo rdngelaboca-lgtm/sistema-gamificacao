@@ -3,15 +3,15 @@ from datetime import datetime, date, timedelta
 import calendar 
 import hashlib
 
-SERVER = 'localhost'
+SERVER = '192.168.2.23'
 DATABASE = 'gamificacao_db'
 CONNECTION_STRING = (
-    f"DRIVER={{ODBC Driver 18 for SQL Server}};"  
+    f"DRIVER={{ODBC Driver 17 for SQL Server}};"  
     f"SERVER={SERVER};"
     f"DATABASE={DATABASE};"
-    f"UID=sa;"  
-    f"PWD=Gamificacao#2025;" 
-    f"TrustServerCertificate=yes;"  
+    f"UID=sa;"  # Informamos o usuário correto
+    f"PWD=Gamificacao#2025;" # << COLOQUE A SENHA AQUI
+    f"TrustServerCertificate=yes;"  # Necessário para aceitar o certificado do servidor
 )
 
 def get_db_connection():
@@ -277,18 +277,18 @@ def buscar_funcionarios_por_horario(horario_atual):
 
 # Em database.py, SUBSTITUA a função antiga por esta versão final e corrigida:
 
+# Em database.py, SUBSTITUA a função pela versão final com a correção do erro de digitação:
+
 def listar_tarefas_do_dia_por_funcionario(funcionario_id):
     """
-    (VERSÃO 4 - DEFINITIVA E À PROVA DE FALHAS)
-    Busca todas as tarefas do dia usando uma lógica de data explícita que
-    NÃO DEPENDE de configurações regionais ou de idioma do SQL Server.
+    (VERSÃO 5 - CORREÇÃO DEFINITIVA DO ERRO DE DIGITAÇÃO)
+    Busca todas as tarefas do dia usando a lógica explícita de data e com o nome
+    da coluna `DataFimVigencia` corrigido.
     """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            # Esta consulta usa um CASE para determinar o dia da semana,
-            # tornando-a imune a qualquer configuração de DATEFIRST ou idioma do servidor.
             sql = """
                 SELECT
                     TA.AtribuicaoID, T.TarefaID, T.Titulo, T.Pontos, TA.TipoFrequencia AS Tipo,
@@ -296,7 +296,9 @@ def listar_tarefas_do_dia_por_funcionario(funcionario_id):
                 FROM TarefasAtribuidas TA
                 JOIN Tarefas T ON TA.TarefaID = T.TarefaID
                 WHERE
-                    TA.FuncionarioID = ? AND TA.DataFimVregencia IS NULL
+                    -- O ERRO ESTAVA AQUI: O NOME DA COLUNA É "Vigencia" e não "Vregencia"
+                    TA.FuncionarioID = ? AND TA.DataFimVigencia IS NULL
+
                     AND NOT EXISTS (
                         SELECT 1 FROM Entregas E
                         WHERE E.AtribuicaoID = TA.AtribuicaoID
@@ -305,12 +307,9 @@ def listar_tarefas_do_dia_por_funcionario(funcionario_id):
                     )
                     AND (
                         TA.TipoFrequencia = 'Diaria'
-
                         OR (
                             TA.TipoFrequencia = 'Semanal' AND
                             CAST(TA.ValorFrequencia AS INT) =
-                                -- AQUI ESTÁ A LÓGICA "À PROVA DE BALAS":
-                                -- Criamos um "tradutor" universal para o dia da semana.
                                 CASE DATENAME(weekday, GETDATE())
                                     WHEN 'Sunday' THEN 1 WHEN 'Domingo' THEN 1
                                     WHEN 'Monday' THEN 2 WHEN 'Segunda-feira' THEN 2
@@ -321,17 +320,15 @@ def listar_tarefas_do_dia_por_funcionario(funcionario_id):
                                     WHEN 'Saturday' THEN 7 WHEN 'Sábado' THEN 7
                                 END
                         )
-
                         OR (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, GETDATE()))
-
                         OR (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = CONVERT(date, GETDATE()))
-
                         OR (TA.TipoFrequencia = 'GrupoCompetitiva' AND CONVERT(date, TA.DataAceite) = CONVERT(date, GETDATE()))
                     )
             """
             cursor.execute(sql, funcionario_id)
             return cursor.fetchall()
         except Exception as e:
+            # Esta parte do código estava escondendo o erro de nós
             print(f"!!! ERRO CRÍTICO em listar_tarefas_do_dia_por_funcionario: {e}")
             return []
         finally:
