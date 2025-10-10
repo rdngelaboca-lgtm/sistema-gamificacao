@@ -2476,4 +2476,3 @@ def listar_documentos_por_funcionario(funcionario_id):
             conn.close()
     return []
 
-
