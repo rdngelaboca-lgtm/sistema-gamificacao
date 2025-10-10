@@ -245,33 +245,29 @@ def rota_buscar_agendamento(agendamento_id):
     else:
         return jsonify({"status": "erro", "mensagem": "Agendamento não encontrado."}), 404
     
-
-# Em api_server.py, substitua a função inteira
-
 @app.route('/agendamentos/enviar-lembrete-geral', methods=['POST'])
 def rota_enviar_lembrete_geral():
     """
-    Busca todos os agendamentos futuros, agrupa por dia, formata em um layout limpo e envia para o Telegram.
+    Busca todos os agendamentos futuros, agrupa por dia, formata no layout final e envia para o Telegram.
     """
     try:
         agendamentos_db = database.listar_agendamentos()
         
-        agendamentos_futuros = [
-            ag for ag in agendamentos_db 
-            if ag.DataEvento > datetime.now()
-        ]
+        agendamentos_futuros = sorted(
+            [ag for ag in agendamentos_db if ag.DataEvento > datetime.now()],
+            key=lambda ag: ag.DataEvento
+        )
 
         if not agendamentos_futuros:
             mensagem = "✅ Nenhum agendamento futuro encontrado no sistema."
         else:
             mensagem = "🗓️ **Resumo de Todos os Agendamentos Futuros** 🗓️\n"
             data_atual = None
-            for ag in agendamentos_futuros:
+            for i, ag in enumerate(agendamentos_futuros):
                 if ag.DataEvento.date() != data_atual:
                     data_atual = ag.DataEvento.date()
-                    # Usa nossa nova função tradutora
                     data_formatada = formatar_data_pt_br(data_atual, '%A, %d de %B de %Y')
-                    mensagem += f"\n- - - - - - - - - - - - - - - - - - - -\n**{data_formatada}**\n- - - - - - - - - - - - - - - - - - - -\n"
+                    mensagem += f"\n{'=' * 40}\n**{data_formatada}**\n{'=' * 40}\n"
                 
                 hora_formatada = ag.DataEvento.strftime('%H:%M')
                 mensagem += f"\n🔹 **{ag.TipoEvento}**\n"
@@ -280,9 +276,11 @@ def rota_enviar_lembrete_geral():
                 
                 if ag.Observacoes and ag.Observacoes.strip():
                     mensagem += "  - 📝 **Observações:**\n"
-                    # Lógica para formatar múltiplas linhas de observação
                     for linha in ag.Observacoes.strip().splitlines():
                         mensagem += f"    > _{linha.strip()}_\n"
+                
+                if (i + 1) < len(agendamentos_futuros) and agendamentos_futuros[i+1].DataEvento.date() == data_atual:
+                    mensagem += "\n`- - - - - - - - - - - - - - - - -`\n"
 
         notificador_telegram.enviar_mensagem(config.AGENDAMENTOS_GROUP_CHAT_ID, mensagem)
         return jsonify({"status": "sucesso", "mensagem": "Lembrete geral enviado com sucesso!"}), 200
