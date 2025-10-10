@@ -275,27 +275,24 @@ def buscar_funcionarios_por_horario(horario_atual):
             conn.close()
     return []         
 
-# Em database.py, SUBSTITUA a função listar_tarefas_do_dia_por_funcionario por esta:
-
 def listar_tarefas_do_dia_por_funcionario(funcionario_id):
     """
-    (VERSÃO FINAL E À PROVA DE FALHAS)
+    (VERSÃO FINAL CORRIGIDA E ROBUSTA)
     Busca todas as tarefas pendentes para um funcionário no dia de HOJE.
+    Garante a comparação correta dos dias da semana.
     """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            # A MÁGICA ESTÁ AQUI: SET DATEFIRST 1 força a semana a começar na Segunda-feira (padrão ISO)
-            # e ajustamos os números para corresponder ao que o sistema salva (Dom=1, Seg=2, etc.)
             sql = """
                 SET DATEFIRST 7;
-                SELECT 
+                SELECT
                     TA.AtribuicaoID, T.TarefaID, T.Titulo, T.Pontos, TA.TipoFrequencia AS Tipo,
                     ISNULL(TA.DescricaoOverride, T.Descricao) AS Descricao
                 FROM TarefasAtribuidas TA
                 JOIN Tarefas T ON TA.TarefaID = T.TarefaID
-                WHERE 
+                WHERE
                     TA.FuncionarioID = ? AND TA.DataFimVigencia IS NULL
                     AND NOT EXISTS (
                         SELECT 1 FROM Entregas E
@@ -308,8 +305,12 @@ def listar_tarefas_do_dia_por_funcionario(funcionario_id):
                             TA.TipoFrequencia IN ('Diaria', 'Semanal', 'Mensal') AND
                             (
                                 (TA.TipoFrequencia = 'Diaria') OR
-                                (TA.TipoFrequencia = 'Semanal' AND TA.ValorFrequencia = DATEPART(weekday, GETDATE())) OR
-                                (TA.TipoFrequencia = 'Mensal' AND TA.ValorFrequencia = DATEPART(day, GETDATE()))
+
+                                -- AQUI ESTÁ A CORREÇÃO PRINCIPAL:
+                                -- Convertemos o ValorFrequencia (que é texto) para um número (INT)
+                                -- antes de comparar com o resultado numérico de DATEPART.
+                                (TA.TipoFrequencia = 'Semanal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(weekday, GETDATE())) OR
+                                (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, GETDATE()))
                             )
                         )
                         OR (TA.TipoFrequencia = 'Unica' AND TA.DataAgendamento IS NULL)
