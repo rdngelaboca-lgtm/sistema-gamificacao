@@ -2502,31 +2502,29 @@ def buscar_funcionario_por_id(funcionario_id):
             conn.close()
     return None
 
-# Adicione esta nova função ao final do seu arquivo database.py
+# Em database.py, substitua a função buscar_agendamentos_para_periodo
 
 def buscar_agendamentos_para_periodo(data_inicio, data_fim, tipo_evento_filtro=None):
     """
     Busca no banco todos os agendamentos confirmados para um período de datas.
-    Opcionalmente, filtra por um tipo de evento específico (ex: 'Carrinho de Sorvete').
+    (VERSÃO ATUALIZADA PARA BUSCAR TODOS OS DADOS)
     """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
             sql = """
-                SELECT NomeCliente, TipoEvento, DataEvento
-                FROM Agendamentos
-                WHERE CONVERT(date, DataEvento) BETWEEN ? AND ?
-                  AND StatusAgendamento = 'Confirmado'
+                SELECT A.* FROM Agendamentos A
+                WHERE CONVERT(date, A.DataEvento) BETWEEN ? AND ?
+                  AND A.StatusAgendamento = 'Confirmado'
             """
             params = [data_inicio, data_fim]
 
-            # Adiciona o filtro de tipo de evento dinamicamente se ele for fornecido
             if tipo_evento_filtro:
-                sql += " AND TipoEvento = ?"
+                sql += " AND A.TipoEvento = ?"
                 params.append(tipo_evento_filtro)
 
-            sql += " ORDER BY DataEvento ASC"
+            sql += " ORDER BY A.DataEvento ASC"
 
             cursor.execute(sql, params)
             return cursor.fetchall()
@@ -2547,4 +2545,3 @@ def autenticar_funcionario(funcionario_id):
         finally:
             conn.close()
     return None
-
