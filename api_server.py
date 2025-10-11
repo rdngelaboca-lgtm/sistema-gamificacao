@@ -11,7 +11,7 @@ import hashlib
 import re
 
 app = Flask(__name__)
-
+CORS(app)
 PASTA_DOCUMENTOS_SEGUROS = "/home/rodrigoaraujo/documentos_rh"
 
 def formatar_data_pt_br(dt_obj, formato_str):
@@ -408,15 +408,19 @@ def rota_painel_tarefas():
     """
     try:
         dados_painel = database.buscar_dados_para_painel_kanban()
-        # O jsonify converte o dicionário do Python para o formato JSON que a web entende
-        return jsonify(dados_painel), 200
+        
+        # --- O NOSSO TESTE ESTÁ AQUI ---
+        response = jsonify(dados_painel)
+        # Adicionamos manualmente um cabeçalho de teste para ver se o código novo está rodando
+        response.headers['X-Teste-Gamificacao'] = 'Ola Mundo v2' 
+        # -----------------------------
+
+        return response, 200
     except Exception as e:
         print(f"!!! ERRO no endpoint /api/painel/tarefas: {e}")
         return jsonify({"status": "erro", "mensagem": f"Erro interno no servidor: {e}"}), 500
 
 if __name__ == '__main__':
     print(">>> Iniciando o Servidor da API...")
-    app.run(host='0.0.0.0', port=5000, debug=false)
-
-
+    app.run(host='0.0.0.0', port=5000, debug=False)
 
