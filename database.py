@@ -2490,96 +2490,60 @@ def autenticar_funcionario(funcionario_id):
             conn.close()
     return None
 
+# Em database.py, substitua a função inteira por esta versão 100% correta
 
 def buscar_dados_para_painel_kanban():
     """
-    Busca e organiza todas as tarefas para exibição no painel Kanban.
-    (VERSÃO 2.0 - Com de-duplicação de tarefas atrasadas)
+    Busca e organiza todas as tarefas para o painel de ação diária.
+    (VERSÃO 3.1 - Com formatação de dados corrigida)
     """
     conn = get_db_connection()
     if not conn:
-        return {'atrasadas': [], 'hoje': [], 'validacao': []}
+        return {'para_fazer': [], 'validacao': [], 'concluidas': []}
 
     try:
         cursor = conn.cursor()
-        hoje_str = date.today().strftime('%Y-%m-%d')
-
-        sql_atrasadas = """
-            SELECT
-                T.Titulo,
-                F.NomeCompleto,
-                T.Pontos,
-                MIN(ISNULL(TA.DataAgendamento, TA.DataInicioVigencia)) as DataAtribuicao
-            FROM TarefasAtribuidas TA
-            JOIN Tarefas T ON TA.TarefaID = T.TarefaID
-            JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID
-            WHERE
-                TA.DataFimVigencia IS NULL
-                AND TA.TipoFrequencia != 'Diaria'
-                AND NOT EXISTS (
-                    SELECT 1 FROM Entregas E 
-                    WHERE E.AtribuicaoID = TA.AtribuicaoID 
-                    AND E.StatusValidacao != 'Recusada'
-                )
-                AND CONVERT(date, ISNULL(TA.DataAgendamento, TA.DataInicioVigencia)) < ?
-            GROUP BY
-                T.Titulo, F.NomeCompleto, T.Pontos
-            ORDER BY
-                DataAtribuicao;
-        """
-        cursor.execute(sql_atrasadas, hoje_str)
-        atrasadas = cursor.fetchall()
-
-        sql_hoje = """
-            SELECT T.Titulo, F.NomeCompleto, T.Pontos
-            FROM TarefasAtribuidas TA
-            JOIN Tarefas T ON TA.TarefaID = T.TarefaID
-            JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID
-            WHERE TA.FuncionarioID IS NOT NULL AND TA.DataFimVigencia IS NULL
-                AND NOT EXISTS (
-                    SELECT 1 FROM Entregas E
-                    WHERE E.AtribuicaoID = TA.AtribuicaoID AND CONVERT(date, E.DataEnvio) = ? 
-                                                          AND E.StatusValidacao != 'Recusada'
-                )
-                AND (
-                    TA.TipoFrequencia = 'Diaria'
-                    OR (TA.TipoFrequencia = 'Semanal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(weekday, ?))
-                    OR (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, ?))
-                    OR (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = ?)
-                )
-            ORDER BY F.NomeCompleto;
-        """
-        cursor.execute(sql_hoje, hoje_str, hoje_str, hoje_str, hoje_str)
-        hoje = cursor.fetchall()
-
-        # --- Query 3: Tarefas Em Validação (sem alteração) ---
-        sql_validacao = """
-            SELECT T.Titulo, F.NomeCompleto, E.DataEnvio, T.Pontos
-            FROM Entregas E
-            JOIN Tarefas T ON E.TarefaID = T.TarefaID
-            JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID
-            WHERE E.StatusValidacao = 'Pendente'
-            ORDER BY E.DataEnvio;
-        """
-        cursor.execute(sql_validacao)
-        validacao = cursor.fetchall()
-
-        # A lógica de formatação continua a mesma
-        dados_formatados = {'atrasadas': [], 'hoje': [], 'validacao': []}
         
-        cursor.execute(sql_atrasadas, hoje_str)
-        dados_formatados['atrasadas'] = [dict(zip([column[0] for column in cursor.description], row)) for row in cursor.fetchall()]
+        # --- Query 1: Tarefas PARA FAZER ---
+        sql_para_fazer = """
+            SELECT T.Titulo, F.NomeCompleto, T.Pontos, 'Hoje' as Categoria, TA.DataAtribuicao
+            FROM TarefasAtribuidas TA JOIN Tarefas T ON TA.TarefaID = T.TarefaID JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID
+            WHERE TA.FuncionarioID IS NOT NULL AND TA.DataFimVigencia IS NULL
+                AND NOT EXISTS (SELECT 1 FROM Entregas E WHERE E.AtribuicaoID = TA.AtribuicaoID AND CONVERT(date, E.DataEnvio) = GETDATE() AND E.StatusValidacao != 'Recusada')
+                AND (TA.TipoFrequencia = 'Diaria' OR (TA.TipoFrequencia = 'Semanal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(weekday, GETDATE())) OR (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, GETDATE())) OR (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = GETDATE()))
+            UNION ALL
+            SELECT T.Titulo, F.NomeCompleto, T.Pontos, 'Atrasada' as Categoria, TA.DataAtribuicao
+            FROM TarefasAtribuidas TA JOIN Tarefas T ON TA.TarefaID = T.TarefaID JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID
+            WHERE TA.FuncionarioID IS NOT NULL AND TA.DataFimVigencia IS NULL
+                AND NOT EXISTS (SELECT 1 FROM Entregas E WHERE E.AtribuicaoID = TA.AtribuicaoID AND CONVERT(date, E.DataEnvio) = DATEADD(day, -1, GETDATE()) AND E.StatusValidacao != 'Recusada')
+                AND (TA.TipoFrequencia = 'Diaria' OR (TA.TipoFrequencia = 'Semanal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(weekday, DATEADD(day, -1, GETDATE()))) OR (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, DATEADD(day, -1, GETDATE()))) OR (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = DATEADD(day, -1, GETDATE())))
+            ORDER BY Categoria DESC, F.NomeCompleto;
+        """
+        cursor.execute(sql_para_fazer)
+        para_fazer_cols = [column[0] for column in cursor.description]
+        para_fazer_rows = cursor.fetchall()
 
-        cursor.execute(sql_hoje, hoje_str, hoje_str, hoje_str, hoje_str)
-        dados_formatados['hoje'] = [dict(zip([column[0] for column in cursor.description], row)) for row in cursor.fetchall()]
-
+        # --- Query 2: Tarefas Em Validação ---
+        sql_validacao = "SELECT T.Titulo, F.NomeCompleto, E.DataEnvio, T.Pontos FROM Entregas E JOIN Tarefas T ON E.TarefaID = T.TarefaID JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID WHERE E.StatusValidacao = 'Pendente' ORDER BY E.DataEnvio;"
         cursor.execute(sql_validacao)
-        dados_formatados['validacao'] = [dict(zip([column[0] for column in cursor.description], row)) for row in cursor.fetchall()]
+        validacao_cols = [column[0] for column in cursor.description]
+        validacao_rows = cursor.fetchall()
+        
+        # --- Query 3: Tarefas Concluídas Hoje ---
+        sql_concluidas = "SELECT T.Titulo, F.NomeCompleto, E.DataEnvio, E.PontosGanhos as Pontos FROM Entregas E JOIN Tarefas T ON E.TarefaID = T.TarefaID JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID WHERE E.StatusValidacao = 'Aprovada' AND CONVERT(date, E.DataEnvio) = GETDATE() ORDER BY E.DataEnvio DESC;"
+        cursor.execute(sql_concluidas)
+        concluidas_cols = [column[0] for column in cursor.description]
+        concluidas_rows = cursor.fetchall()
 
-        return dados_formatados
+        # A LÓGICA DE FORMATAÇÃO CORRETA: usa os resultados já buscados
+        return {
+            'para_fazer': [dict(zip(para_fazer_cols, row)) for row in para_fazer_rows],
+            'validacao': [dict(zip(validacao_cols, row)) for row in validacao_rows],
+            'concluidas': [dict(zip(concluidas_cols, row)) for row in concluidas_rows]
+        }
     except Exception as e:
         print(f"ERRO ao buscar dados para o painel Kanban: {e}")
-        return {'atrasadas': [], 'hoje': [], 'validacao': []}
+        return {'para_fazer': [], 'validacao': [], 'concluidas': []}
     finally:
         if conn:
             conn.close()
