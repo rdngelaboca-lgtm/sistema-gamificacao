@@ -14,6 +14,7 @@ CONNECTION_STRING = (
     f"TrustServerCertificate=yes;"  
 )
 
+
 def get_db_connection():
     try:
         conn = pyodbc.connect(CONNECTION_STRING)
@@ -2488,3 +2489,85 @@ def autenticar_funcionario(funcionario_id):
         finally:
             conn.close()
     return None
+
+# Em database.py, adicione esta nova função ao final do arquivo
+
+def buscar_dados_para_painel_kanban():
+    """
+    Busca e organiza todas as tarefas para exibição no painel Kanban.
+    Retorna um dicionário com listas de tarefas: 'atrasadas', 'hoje', 'validacao'.
+    """
+    conn = get_db_connection()
+    if not conn:
+        return {'atrasadas': [], 'hoje': [], 'validacao': []}
+
+    try:
+        cursor = conn.cursor()
+        hoje_str = date.today().strftime('%Y-%m-%d')
+
+        # --- Query 1: Tarefas Atrasadas (de dias anteriores e não entregues) ---
+        sql_atrasadas = """
+            SELECT T.Titulo, F.NomeCompleto, TA.DataAtribuicao, TA.DataAgendamento
+            FROM TarefasAtribuidas TA
+            JOIN Tarefas T ON TA.TarefaID = T.TarefaID
+            JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID
+            WHERE
+                -- A tarefa não foi encerrada
+                TA.DataFimVigencia IS NULL
+                -- A tarefa não é recorrente diária (para não poluir com tarefas de ontem que se repetem hoje)
+                AND TA.TipoFrequencia != 'Diaria'
+                -- E não existe uma entrega para esta atribuição
+                AND NOT EXISTS (SELECT 1 FROM Entregas E WHERE E.AtribuicaoID = TA.AtribuicaoID)
+                -- E a data de início ou agendamento é de ONTEM ou antes
+                AND CONVERT(date, ISNULL(TA.DataAgendamento, TA.DataInicioVigencia)) < ?
+            ORDER BY ISNULL(TA.DataAgendamento, TA.DataInicioVigencia);
+        """
+        cursor.execute(sql_atrasadas, hoje_str)
+        atrasadas = cursor.fetchall()
+
+        # --- Query 2: Tarefas de Hoje (pendentes) ---
+        # Reutilizamos a lógica complexa que já existe, mas para todos os funcionários
+        sql_hoje = """
+            SELECT T.Titulo, F.NomeCompleto, T.Pontos
+            FROM TarefasAtribuidas TA
+            JOIN Tarefas T ON TA.TarefaID = T.TarefaID
+            JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID
+            WHERE TA.FuncionarioID IS NOT NULL AND TA.DataFimVigencia IS NULL
+                AND NOT EXISTS (
+                    SELECT 1 FROM Entregas E
+                    WHERE E.AtribuicaoID = TA.AtribuicaoID AND CONVERT(date, E.DataEnvio) = ?
+                )
+                AND (
+                    TA.TipoFrequencia = 'Diaria'
+                    OR (TA.TipoFrequencia = 'Semanal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(weekday, ?))
+                    OR (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, ?))
+                    OR (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = ?)
+                )
+            ORDER BY F.NomeCompleto;
+        """
+        cursor.execute(sql_hoje, hoje_str, hoje_str, hoje_str, hoje_str)
+        hoje = cursor.fetchall()
+
+        # --- Query 3: Tarefas Em Validação ---
+        sql_validacao = """
+            SELECT T.Titulo, F.NomeCompleto, E.DataEnvio, T.Pontos
+            FROM Entregas E
+            JOIN Tarefas T ON E.TarefaID = T.TarefaID
+            JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID
+            WHERE E.StatusValidacao = 'Pendente'
+            ORDER BY E.DataEnvio;
+        """
+        cursor.execute(sql_validacao)
+        validacao = cursor.fetchall()
+
+        return {
+            'atrasadas': [dict(zip([column[0] for column in cursor.description], row)) for row in atrasadas],
+            'hoje': [dict(zip([column[0] for column in cursor.description], row)) for row in hoje],
+            'validacao': [dict(zip([column[0] for column in cursor.description], row)) for row in validacao]
+        }
+    except Exception as e:
+        print(f"ERRO ao buscar dados para o painel Kanban: {e}")
+        return {'atrasadas': [], 'hoje': [], 'validacao': []}
+    finally:
+        if conn:
+            conn.close()
