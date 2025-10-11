@@ -3,15 +3,15 @@ from datetime import datetime, date, timedelta
 import calendar 
 import hashlib
 
-SERVER = 'localhost'
+SERVER = '192.168.2.23'
 DATABASE = 'gamificacao_db'
 CONNECTION_STRING = (
-    f"DRIVER={{ODBC Driver 18 for SQL Server}};"  
+    f"DRIVER={{ODBC Driver 17 for SQL Server}};"  
     f"SERVER={SERVER};"
     f"DATABASE={DATABASE};"
-    f"UID=sa;"  
-    f"PWD=Gamificacao#2025;" 
-    f"TrustServerCertificate=yes;"  
+    f"UID=sa;"  # Informamos o usuário correto
+    f"PWD=Gamificacao#2025;" # << COLOQUE A SENHA AQUI
+    f"TrustServerCertificate=yes;"  # Necessário para aceitar o certificado do servidor
 )
 
 def get_db_connection():
@@ -275,15 +275,11 @@ def buscar_funcionarios_por_horario(horario_atual):
             conn.close()
     return []         
 
-# Em database.py, SUBSTITUA a função antiga por esta versão final e corrigida:
-
-# Em database.py, SUBSTITUA a função pela versão final com a correção do erro de digitação:
-
+# Em database.py, esta é a versão final para produção:
 def listar_tarefas_do_dia_por_funcionario(funcionario_id):
     """
-    (VERSÃO 5 - CORREÇÃO DEFINITIVA DO ERRO DE DIGITAÇÃO)
-    Busca todas as tarefas do dia usando a lógica explícita de data e com o nome
-    da coluna `DataFimVigencia` corrigido.
+    (VERSÃO 5 - FINAL E SEGURA)
+    Busca todas as tarefas do dia com a lógica robusta e tratamento de erros.
     """
     conn = get_db_connection()
     if conn:
@@ -296,9 +292,7 @@ def listar_tarefas_do_dia_por_funcionario(funcionario_id):
                 FROM TarefasAtribuidas TA
                 JOIN Tarefas T ON TA.TarefaID = T.TarefaID
                 WHERE
-                    -- O ERRO ESTAVA AQUI: O NOME DA COLUNA É "Vigencia" e não "Vregencia"
                     TA.FuncionarioID = ? AND TA.DataFimVigencia IS NULL
-
                     AND NOT EXISTS (
                         SELECT 1 FROM Entregas E
                         WHERE E.AtribuicaoID = TA.AtribuicaoID
@@ -328,7 +322,6 @@ def listar_tarefas_do_dia_por_funcionario(funcionario_id):
             cursor.execute(sql, funcionario_id)
             return cursor.fetchall()
         except Exception as e:
-            # Esta parte do código estava escondendo o erro de nós
             print(f"!!! ERRO CRÍTICO em listar_tarefas_do_dia_por_funcionario: {e}")
             return []
         finally:
@@ -2472,4 +2465,43 @@ def listar_documentos_por_funcionario(funcionario_id):
             conn.close()
     return []
 
+# Em database.py, adicione esta nova função:
 
+def autenticar_funcionario(funcionario_id, senha):
+    """
+    Verifica se a senha fornecida corresponde à senha armazenada no banco de dados para um funcionário.
+    Retorna os dados do funcionário se a autenticação for bem-sucedida, caso contrário, retorna None.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+
+            # 1. Busca o hash da senha armazenada no banco para o ID fornecido.
+            sql = "SELECT SenhaHash FROM Funcionarios WHERE FuncionarioID = ?"
+            cursor.execute(sql, funcionario_id)
+            resultado = cursor.fetchone()
+
+            if resultado and resultado.SenhaHash:
+                senha_hash_armazenado = resultado.SenhaHash
+
+                # 2. Gera o hash da senha que o usuário digitou na tela de login.
+                #    (Usa o mesmo método do script definir_senha.py para garantir a compatibilidade)
+                senha_hash_fornecido = hashlib.sha256(senha.encode('utf-8')).hexdigest()
+
+                # 3. Compara os dois hashes.
+                if senha_hash_armazenado == senha_hash_fornecido:
+                    # Se as senhas correspondem, a autenticação é um sucesso!
+                    # Retornamos os dados completos do funcionário.
+                    print(f"--> [AUTH] Autenticação bem-sucedida para o funcionário ID: {funcionario_id}")
+                    return buscar_funcionario_por_id(funcionario_id)
+
+            # Se o funcionário não foi encontrado ou a senha está incorreta, retorna None.
+            print(f"--> [AUTH] Falha na autenticação para o funcionário ID: {funcionario_id}")
+            return None
+        except Exception as e:
+            print(f"ERRO durante a autenticação: {e}")
+            return None
+        finally:
+            conn.close()
+    return None
