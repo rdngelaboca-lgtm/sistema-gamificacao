@@ -74,6 +74,9 @@ body {
 .card-titulo {
     font-weight: bold;
     margin-bottom: 5px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
 }
 
 .card-info {
@@ -86,4 +89,20 @@ body {
     font-weight: bold;
     color: #28a745;
     margin-top: 8px;
+}
+
+.card-tag-atrasada {
+    font-size: 0.7em;
+    font-weight: bold;
+    color: #dc3545; /* Vermelho */
+    background-color: #f8d7da; /* Fundo vermelho claro */
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid #dc3545;
+}
+
+/* Estilo para os cards concluídos */
+.card.concluida {
+    border-left-color: #28a745; /* Borda verde */
+    background-color: #f0fff4; /* Fundo levemente esverdeado */
 }
