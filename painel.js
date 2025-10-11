@@ -1,9 +1,13 @@
+// Arquivo: painel.js (Versão Final com o IP correto)
+
 document.addEventListener('DOMContentLoaded', function() {
 
     async function atualizarPainel() {
         console.log("Iniciando atualização do painel...");
         try {
-            const response = await fetch('http://127.0.0.1:5000/api/painel/tarefas');
+            // A ÚNICA MUDANÇA ESTÁ AQUI: o endereço da API agora é o do servidor
+            const response = await fetch('http://192.168.2.23:5000/api/painel/tarefas');
+            
             if (!response.ok) {
                 throw new Error(`Erro na API: ${response.statusText}`);
             }
@@ -47,7 +51,6 @@ document.addEventListener('DOMContentLoaded', function() {
         cardDiv.className = 'card';
 
         let infoExtra = '';
-        // CORREÇÃO: Adicionamos uma verificação para o NomeCompleto no tipo 'atrasada'
         if (tipo === 'atrasada') {
             const data = new Date(tarefa.DataAtribuicao).toLocaleDateString('pt-BR');
             infoExtra = `<p class="card-info">Funcionário: ${tarefa.NomeCompleto}</p>
