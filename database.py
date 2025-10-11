@@ -2492,10 +2492,12 @@ def autenticar_funcionario(funcionario_id):
 
 # Em database.py, substitua a função inteira por esta versão 100% correta
 
+# Em database.py, substitua a função buscar_dados_para_painel_kanban inteira
+
 def buscar_dados_para_painel_kanban():
     """
     Busca e organiza todas as tarefas para o painel de ação diária.
-    (VERSÃO 3.1 - Com formatação de dados corrigida)
+    (VERSÃO 3.2 - Com correção na query de tarefas concluídas)
     """
     conn = get_db_connection()
     if not conn:
@@ -2504,7 +2506,7 @@ def buscar_dados_para_painel_kanban():
     try:
         cursor = conn.cursor()
         
-        # --- Query 1: Tarefas PARA FAZER ---
+        # --- Query 1: Tarefas PARA FAZER (sem alteração) ---
         sql_para_fazer = """
             SELECT T.Titulo, F.NomeCompleto, T.Pontos, 'Hoje' as Categoria, TA.DataAtribuicao
             FROM TarefasAtribuidas TA JOIN Tarefas T ON TA.TarefaID = T.TarefaID JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID
@@ -2523,19 +2525,26 @@ def buscar_dados_para_painel_kanban():
         para_fazer_cols = [column[0] for column in cursor.description]
         para_fazer_rows = cursor.fetchall()
 
-        # --- Query 2: Tarefas Em Validação ---
+        # --- Query 2: Tarefas Em Validação (sem alteração) ---
         sql_validacao = "SELECT T.Titulo, F.NomeCompleto, E.DataEnvio, T.Pontos FROM Entregas E JOIN Tarefas T ON E.TarefaID = T.TarefaID JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID WHERE E.StatusValidacao = 'Pendente' ORDER BY E.DataEnvio;"
         cursor.execute(sql_validacao)
         validacao_cols = [column[0] for column in cursor.description]
         validacao_rows = cursor.fetchall()
         
-        # --- Query 3: Tarefas Concluídas Hoje ---
-        sql_concluidas = "SELECT T.Titulo, F.NomeCompleto, E.DataEnvio, E.PontosGanhos as Pontos FROM Entregas E JOIN Tarefas T ON E.TarefaID = T.TarefaID JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID WHERE E.StatusValidacao = 'Aprovada' AND CONVERT(date, E.DataEnvio) = GETDATE() ORDER BY E.DataEnvio DESC;"
+        # --- Query 3: Tarefas Concluídas Hoje (COM A CORREÇÃO) ---
+        sql_concluidas = """
+            SELECT T.Titulo, F.NomeCompleto, E.DataEnvio, E.PontosGanhos as Pontos 
+            FROM Entregas E 
+            JOIN Tarefas T ON E.TarefaID = T.TarefaID 
+            JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID 
+            WHERE E.StatusValidacao = 'Aprovada' 
+              AND CONVERT(date, E.DataEnvio) = CONVERT(date, GETDATE()) -- <<< A CORREÇÃO ESTÁ AQUI
+            ORDER BY E.DataEnvio DESC;
+        """
         cursor.execute(sql_concluidas)
         concluidas_cols = [column[0] for column in cursor.description]
         concluidas_rows = cursor.fetchall()
 
-        # A LÓGICA DE FORMATAÇÃO CORRETA: usa os resultados já buscados
         return {
             'para_fazer': [dict(zip(para_fazer_cols, row)) for row in para_fazer_rows],
             'validacao': [dict(zip(validacao_cols, row)) for row in validacao_rows],
@@ -2547,3 +2556,4 @@ def buscar_dados_para_painel_kanban():
     finally:
         if conn:
             conn.close()
+
