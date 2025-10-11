@@ -397,6 +397,21 @@ def rota_login():
     except Exception as e:
         print(f"!!! ERRO em /login: {e}")
         return jsonify({"status": "erro", "mensagem": f"Erro interno no servidor: {e}"}), 500
+    
+# Em api_server.py, adicione esta nova rota
+
+@app.route('/api/painel/tarefas', methods=['GET'])
+def rota_painel_tarefas():
+    """
+    Endpoint dedicado para fornecer os dados para o painel de gestão (Kanban).
+    """
+    try:
+        dados_painel = database.buscar_dados_para_painel_kanban()
+        # O jsonify converte o dicionário do Python para o formato JSON que a web entende
+        return jsonify(dados_painel), 200
+    except Exception as e:
+        print(f"!!! ERRO no endpoint /api/painel/tarefas: {e}")
+        return jsonify({"status": "erro", "mensagem": f"Erro interno no servidor: {e}"}), 500
 
 if __name__ == '__main__':
     print(">>> Iniciando o Servidor da API...")
