@@ -2492,6 +2492,8 @@ def autenticar_funcionario(funcionario_id):
 
 # Em database.py, adicione esta nova função ao final do arquivo
 
+# Em database.py, substitua a função inteira pela versão corrigida abaixo
+
 def buscar_dados_para_painel_kanban():
     """
     Busca e organiza todas as tarefas para exibição no painel Kanban.
@@ -2505,20 +2507,16 @@ def buscar_dados_para_painel_kanban():
         cursor = conn.cursor()
         hoje_str = date.today().strftime('%Y-%m-%d')
 
-        # --- Query 1: Tarefas Atrasadas (de dias anteriores e não entregues) ---
+        # --- Query 1: Tarefas Atrasadas (CORRIGIDA para incluir os pontos) ---
         sql_atrasadas = """
-            SELECT T.Titulo, F.NomeCompleto, TA.DataAtribuicao, TA.DataAgendamento
+            SELECT T.Titulo, F.NomeCompleto, T.Pontos, TA.DataAtribuicao, TA.DataAgendamento
             FROM TarefasAtribuidas TA
             JOIN Tarefas T ON TA.TarefaID = T.TarefaID
             JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID
             WHERE
-                -- A tarefa não foi encerrada
                 TA.DataFimVigencia IS NULL
-                -- A tarefa não é recorrente diária (para não poluir com tarefas de ontem que se repetem hoje)
                 AND TA.TipoFrequencia != 'Diaria'
-                -- E não existe uma entrega para esta atribuição
                 AND NOT EXISTS (SELECT 1 FROM Entregas E WHERE E.AtribuicaoID = TA.AtribuicaoID)
-                -- E a data de início ou agendamento é de ONTEM ou antes
                 AND CONVERT(date, ISNULL(TA.DataAgendamento, TA.DataInicioVigencia)) < ?
             ORDER BY ISNULL(TA.DataAgendamento, TA.DataInicioVigencia);
         """
@@ -2526,7 +2524,6 @@ def buscar_dados_para_painel_kanban():
         atrasadas = cursor.fetchall()
 
         # --- Query 2: Tarefas de Hoje (pendentes) ---
-        # Reutilizamos a lógica complexa que já existe, mas para todos os funcionários
         sql_hoje = """
             SELECT T.Titulo, F.NomeCompleto, T.Pontos
             FROM TarefasAtribuidas TA
@@ -2560,14 +2557,27 @@ def buscar_dados_para_painel_kanban():
         cursor.execute(sql_validacao)
         validacao = cursor.fetchall()
 
-        return {
-            'atrasadas': [dict(zip([column[0] for column in cursor.description], row)) for row in atrasadas],
-            'hoje': [dict(zip([column[0] for column in cursor.description], row)) for row in hoje],
-            'validacao': [dict(zip([column[0] for column in cursor.description], row)) for row in validacao]
+        # O código abaixo converte o resultado do banco para um formato mais fácil de usar
+        dados_formatados = {
+            'atrasadas': [],
+            'hoje': [],
+            'validacao': []
         }
+        # re-executamos a query para pegar a descrição das colunas corretamente para cada lista
+        cursor.execute(sql_atrasadas, hoje_str)
+        dados_formatados['atrasadas'] = [dict(zip([column[0] for column in cursor.description], row)) for row in cursor.fetchall()]
+
+        cursor.execute(sql_hoje, hoje_str, hoje_str, hoje_str, hoje_str)
+        dados_formatados['hoje'] = [dict(zip([column[0] for column in cursor.description], row)) for row in cursor.fetchall()]
+
+        cursor.execute(sql_validacao)
+        dados_formatados['validacao'] = [dict(zip([column[0] for column in cursor.description], row)) for row in cursor.fetchall()]
+
+        return dados_formatados
     except Exception as e:
         print(f"ERRO ao buscar dados para o painel Kanban: {e}")
         return {'atrasadas': [], 'hoje': [], 'validacao': []}
     finally:
         if conn:
             conn.close()
+
