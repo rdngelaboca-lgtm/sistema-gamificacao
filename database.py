@@ -2490,14 +2490,11 @@ def autenticar_funcionario(funcionario_id):
             conn.close()
     return None
 
-# Em database.py, adicione esta nova função ao final do arquivo
-
-# Em database.py, substitua a função inteira pela versão corrigida abaixo
 
 def buscar_dados_para_painel_kanban():
     """
     Busca e organiza todas as tarefas para exibição no painel Kanban.
-    Retorna um dicionário com listas de tarefas: 'atrasadas', 'hoje', 'validacao'.
+    (VERSÃO 2.0 - Com de-duplicação de tarefas atrasadas)
     """
     conn = get_db_connection()
     if not conn:
@@ -2507,23 +2504,32 @@ def buscar_dados_para_painel_kanban():
         cursor = conn.cursor()
         hoje_str = date.today().strftime('%Y-%m-%d')
 
-        # --- Query 1: Tarefas Atrasadas (CORRIGIDA para incluir os pontos) ---
         sql_atrasadas = """
-            SELECT T.Titulo, F.NomeCompleto, T.Pontos, TA.DataAtribuicao, TA.DataAgendamento
+            SELECT
+                T.Titulo,
+                F.NomeCompleto,
+                T.Pontos,
+                MIN(ISNULL(TA.DataAgendamento, TA.DataInicioVigencia)) as DataAtribuicao
             FROM TarefasAtribuidas TA
             JOIN Tarefas T ON TA.TarefaID = T.TarefaID
             JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID
             WHERE
                 TA.DataFimVigencia IS NULL
                 AND TA.TipoFrequencia != 'Diaria'
-                AND NOT EXISTS (SELECT 1 FROM Entregas E WHERE E.AtribuicaoID = TA.AtribuicaoID)
+                AND NOT EXISTS (
+                    SELECT 1 FROM Entregas E 
+                    WHERE E.AtribuicaoID = TA.AtribuicaoID 
+                    AND E.StatusValidacao != 'Recusada'
+                )
                 AND CONVERT(date, ISNULL(TA.DataAgendamento, TA.DataInicioVigencia)) < ?
-            ORDER BY ISNULL(TA.DataAgendamento, TA.DataInicioVigencia);
+            GROUP BY
+                T.Titulo, F.NomeCompleto, T.Pontos
+            ORDER BY
+                DataAtribuicao;
         """
         cursor.execute(sql_atrasadas, hoje_str)
         atrasadas = cursor.fetchall()
 
-        # --- Query 2: Tarefas de Hoje (pendentes) ---
         sql_hoje = """
             SELECT T.Titulo, F.NomeCompleto, T.Pontos
             FROM TarefasAtribuidas TA
@@ -2532,7 +2538,8 @@ def buscar_dados_para_painel_kanban():
             WHERE TA.FuncionarioID IS NOT NULL AND TA.DataFimVigencia IS NULL
                 AND NOT EXISTS (
                     SELECT 1 FROM Entregas E
-                    WHERE E.AtribuicaoID = TA.AtribuicaoID AND CONVERT(date, E.DataEnvio) = ?
+                    WHERE E.AtribuicaoID = TA.AtribuicaoID AND CONVERT(date, E.DataEnvio) = ? 
+                                                          AND E.StatusValidacao != 'Recusada'
                 )
                 AND (
                     TA.TipoFrequencia = 'Diaria'
@@ -2545,7 +2552,7 @@ def buscar_dados_para_painel_kanban():
         cursor.execute(sql_hoje, hoje_str, hoje_str, hoje_str, hoje_str)
         hoje = cursor.fetchall()
 
-        # --- Query 3: Tarefas Em Validação ---
+        # --- Query 3: Tarefas Em Validação (sem alteração) ---
         sql_validacao = """
             SELECT T.Titulo, F.NomeCompleto, E.DataEnvio, T.Pontos
             FROM Entregas E
@@ -2557,13 +2564,9 @@ def buscar_dados_para_painel_kanban():
         cursor.execute(sql_validacao)
         validacao = cursor.fetchall()
 
-        # O código abaixo converte o resultado do banco para um formato mais fácil de usar
-        dados_formatados = {
-            'atrasadas': [],
-            'hoje': [],
-            'validacao': []
-        }
-        # re-executamos a query para pegar a descrição das colunas corretamente para cada lista
+        # A lógica de formatação continua a mesma
+        dados_formatados = {'atrasadas': [], 'hoje': [], 'validacao': []}
+        
         cursor.execute(sql_atrasadas, hoje_str)
         dados_formatados['atrasadas'] = [dict(zip([column[0] for column in cursor.description], row)) for row in cursor.fetchall()]
 
@@ -2580,4 +2583,3 @@ def buscar_dados_para_painel_kanban():
     finally:
         if conn:
             conn.close()
-
