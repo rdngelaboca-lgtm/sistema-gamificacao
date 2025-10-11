@@ -14,7 +14,6 @@ CONNECTION_STRING = (
     f"TrustServerCertificate=yes;"  
 )
 
-
 def get_db_connection():
     try:
         conn = pyodbc.connect(CONNECTION_STRING)
@@ -276,11 +275,13 @@ def buscar_funcionarios_por_horario(horario_atual):
             conn.close()
     return []         
 
-# Em database.py, esta é a versão final para produção:
+# Em database.py, SUBSTITUA a função listar_tarefas_do_dia_por_funcionario:
+
 def listar_tarefas_do_dia_por_funcionario(funcionario_id):
     """
-    (VERSÃO 5 - FINAL E SEGURA)
-    Busca todas as tarefas do dia com a lógica robusta e tratamento de erros.
+    (VERSÃO 6 - SIMPLIFICADA)
+    Busca todas as tarefas do dia. Agora não precisa mais de lógica especial
+    para tarefas de grupo, pois elas são convertidas para tarefas 'Unicas'.
     """
     conn = get_db_connection()
     if conn:
@@ -316,8 +317,9 @@ def listar_tarefas_do_dia_por_funcionario(funcionario_id):
                                 END
                         )
                         OR (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, GETDATE()))
+
+                        -- Esta linha agora lida tanto com tarefas de agendamento quanto com as de grupo que foram aceitas.
                         OR (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = CONVERT(date, GETDATE()))
-                        OR (TA.TipoFrequencia = 'GrupoCompetitiva' AND CONVERT(date, TA.DataAceite) = CONVERT(date, GETDATE()))
                     )
             """
             cursor.execute(sql, funcionario_id)
@@ -863,34 +865,33 @@ def buscar_tarefas_de_grupo_para_disparar(horario_atual):
             conn.close()
     return []
 
+
 def aceitar_tarefa_de_grupo(atribuicao_id, funcionario_id):
     """
+    (VERSÃO MELHORADA)
     Tenta atribuir uma tarefa de grupo a um funcionário.
-    Usa uma "trava" (UPDATE ... WHERE Status = 'Disponivel') para garantir que só o primeiro consiga.
-    Retorna True se foi bem-sucedido, False caso contrário.
+    Ao ser aceita, TRANSFORMA a tarefa em uma 'Tarefa Única' agendada para hoje.
     """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            # Esta é a parte mágica: só atualiza a linha se ela AINDA estiver 'Disponivel'
+            # A mágica está aqui: além de definir o funcionário, mudamos o tipo e a data.
             sql = """
-                UPDATE TarefasAtribuidas 
-                SET FuncionarioID = ?, StatusTarefaGrupo = 'Aceita', DataAceite = GETDATE()
+                UPDATE TarefasAtribuidas
+                SET
+                    FuncionarioID = ?,
+                    StatusTarefaGrupo = 'Aceita',
+                    TipoFrequencia = 'Unica',
+                    DataAgendamento = GETDATE()
                 WHERE AtribuicaoID = ? AND StatusTarefaGrupo = 'Disponivel'
             """
             cursor.execute(sql, funcionario_id, atribuicao_id)
             conn.commit()
-            # Se o número de linhas afetadas for 1, significa que NÓS conseguimos a tarefa!
-            if cursor.rowcount > 0:
-                return True
-            else:
-                return False # Alguém foi mais rápido
+            return cursor.rowcount > 0 # Retorna True se 1 linha foi afetada
         finally:
             conn.close()
-    return False           
-
-# NO ARQUIVO database.py, ADICIONE ESTA NOVA FUNÇÃO:
+    return False
 
 def buscar_detalhes_da_atribuicao(atribuicao_id):
     """Busca todos os detalhes de uma tarefa (título, descrição, pontos) a partir do ID da atribuição."""
@@ -2468,42 +2469,22 @@ def listar_documentos_por_funcionario(funcionario_id):
 
 # Em database.py, adicione esta nova função:
 
-def autenticar_funcionario(funcionario_id, senha):
+def autenticar_funcionario(funcionario_id):
     """
-    Verifica se a senha fornecida corresponde à senha armazenada no banco de dados para um funcionário.
-    Retorna os dados do funcionário se a autenticação for bem-sucedida, caso contrário, retorna None.
+    Verifica se um funcionário com o ID fornecido existe no banco de dados.
+    Não verifica a senha.
+    Retorna os dados do funcionário se encontrado, caso contrário, retorna None.
     """
     conn = get_db_connection()
     if conn:
         try:
-            cursor = conn.cursor()
-
-            # 1. Busca o hash da senha armazenada no banco para o ID fornecido.
-            sql = "SELECT SenhaHash FROM Funcionarios WHERE FuncionarioID = ?"
-            cursor.execute(sql, funcionario_id)
-            resultado = cursor.fetchone()
-
-            if resultado and resultado.SenhaHash:
-                senha_hash_armazenado = resultado.SenhaHash
-
-                # 2. Gera o hash da senha que o usuário digitou na tela de login.
-                #    (Usa o mesmo método do script definir_senha.py para garantir a compatibilidade)
-                senha_hash_fornecido = hashlib.sha256(senha.encode('utf-8')).hexdigest()
-
-                # 3. Compara os dois hashes.
-                if senha_hash_armazenado == senha_hash_fornecido:
-                    # Se as senhas correspondem, a autenticação é um sucesso!
-                    # Retornamos os dados completos do funcionário.
-                    print(f"--> [AUTH] Autenticação bem-sucedida para o funcionário ID: {funcionario_id}")
-                    return buscar_funcionario_por_id(funcionario_id)
-
-            # Se o funcionário não foi encontrado ou a senha está incorreta, retorna None.
-            print(f"--> [AUTH] Falha na autenticação para o funcionário ID: {funcionario_id}")
-            return None
+            # Reutilizamos a função que já temos para buscar um funcionário pelo ID.
+            # Se a função encontrar alguém, o login é um sucesso.
+            print(f"--> [AUTH] Realizando login simplificado (sem senha) para o ID: {funcionario_id}")
+            return buscar_funcionario_por_id(funcionario_id)
         except Exception as e:
-            print(f"ERRO durante a autenticação: {e}")
+            print(f"ERRO durante a autenticação simplificada: {e}")
             return None
         finally:
             conn.close()
     return None
-
