@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 import database 
 import os
 from werkzeug.utils import secure_filename
@@ -416,4 +417,5 @@ def rota_painel_tarefas():
 if __name__ == '__main__':
     print(">>> Iniciando o Servidor da API...")
     app.run(host='0.0.0.0', port=5000, debug=True)
+
 
