@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    
+    <title>Painel de Gestão</title>
+    
+    <link rel="stylesheet" href="estilo.css">
+</head>
+<body>
+    <div class="painel-container">
+        
+        <header class="cabecalho">
+            <h1>Painel de Gestão de Tarefas</h1>
+            <p id="ultima-atualizacao">Atualizando...</p>
+        </header>
+
+        <main class="kanban-board">
+
+            <div class="coluna">
+                <h2 class="coluna-titulo">PENDENTES (Atrasadas)</h2>
+                <div class="coluna-cards" id="coluna-atrasadas">
+                    </div>
+            </div>
+
+            <div class="coluna">
+                <h2 class="coluna-titulo">PARA HOJE</h2>
+                <div class="coluna-cards" id="coluna-hoje">
+                    </div>
+            </div>
+
+            <div class="coluna">
+                <h2 class="coluna-titulo">EM VALIDAÇÃO</h2>
+                <div class="coluna-cards" id="coluna-validacao">
+                    </div>
+            </div>
+
+        </main>
+
+    </div>
+
+    <script src="painel.js" defer></script>
+</body>
+</html>
