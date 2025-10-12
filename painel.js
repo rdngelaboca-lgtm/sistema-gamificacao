@@ -1,12 +1,16 @@
+
+
 document.addEventListener('DOMContentLoaded', function() {
+
+const API_BASE_URL = 'http://192.168.2.23:5000';    
 
     async function atualizarPainel() {
         console.log("Iniciando atualização do painel vFinal...");
         try {
             const [respostaTarefas, respostaRanking, respostaFeed] = await Promise.all([
-                fetch('http://192.168.2.23:5000/api/painel/tarefas'),
-                fetch('http://192.168.2.23:5000/api/ranking/diario'),
-                fetch('http://192.168.2.23:5000/api/feed')
+                fetch(`${API_BASE_URL}/api/painel/tarefas`),
+                fetch(`${API_BASE_URL}/api/ranking/diario`), 
+                fetch(`${API_BASE_URL}/api/feed`)             
             ]);
 
             if (!respostaTarefas.ok || !respostaRanking.ok || !respostaFeed.ok) {
