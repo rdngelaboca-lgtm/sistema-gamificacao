@@ -106,3 +106,12 @@ body {
     border-left-color: #28a745; /* Borda verde */
     background-color: #f0fff4; /* Fundo levemente esverdeado */
 }
+
+/* Em estilo.css, adicione no final */
+
+.card-info-debug {
+    font-size: 0.8em;
+    color: #007bff; /* Azul para destacar que é info de debug */
+    font-style: italic;
+    margin-top: 4px;
+}
