@@ -1,19 +1,50 @@
+# config.py - Arquivo Central de Configurações
+# Este é o "painel de controle" do seu sistema. Todas as senhas, tokens e IDs importantes ficam aqui.
+
+# --- CONFIGURAÇÕES DO TELEGRAM ---
+# Token secreto do seu bot, obtido com o @BotFather no Telegram.
 TELEGRAM_TOKEN = '8286167530:AAHsQlEHQwNB1O7SdyAqLk-rEhSXFdf___M'
 
-# Adicione seu Chat ID aqui. O bot só aceitará comandos de admin de você.
-# Use o comando /meuid no seu bot para ter certeza do número.
-ADMIN_CHAT_ID = 625106852
-GESTOR_GROUP_CHAT_ID = -1002979750507 # << SUBSTITUA PELO ID CORRETO
+# ID do chat de grupo para onde as notificações de gestão (validações, etc.) são enviadas.
+GESTOR_GROUP_CHAT_ID = -1002979750507
 
-TAXA_CONVERSAO_PONTO_REAL = 0.02 # Define que 1 Ponto = R$ 0,05
+# ID do chat de grupo para onde os lembretes de agendamentos são enviados.
+AGENDAMENTOS_GROUP_CHAT_ID = -4839358986
 
-# Adicione esta linha no final do config.py
-AGENDAMENTOS_GROUP_CHAT_ID = -4839358986 # << SUBSTITUA PELO ID DO SEU GRUPO DE AGENDAMENTOS
+# ID do chat de grupo para onde as tarefas de funcionários de folga são oferecidas.
+FOLGA_GROUP_CHAT_ID = -1002979750507
 
-# --- CONFIGURAÇÃO DA AUTOMAÇÃO DE TAREFAS DE AGENDAMENTO ---
+# --- CONFIGURAÇÕES DO BANCO DE DADOS ---
+# Endereço do seu servidor SQL Server.
+DB_SERVER = '192.168.2.23'
+# Nome do banco de dados que estamos usando.
+DB_DATABASE = 'gamificacao_db'
+# Usuário de acesso ao banco.
+DB_UID = 'sa'
+# Senha de acesso ao banco. MANTENHA ESTE ARQUIVO SEGURO!
+DB_PWD = 'Gamificacao#2025'
 
-# ID do funcionário que receberá as tarefas de agendamento
-RESPONSAVEL_AGENDAMENTOS_ID = 2 # << TROQUE PELO ID DO FUNCIONÁRIO CORRETO
+# --- CONFIGURAÇÕES DA API E ARQUIVOS ---
+# URL base para a API. Essencial para o ngrok e para o deploy final.
+API_BASE_URL = "https://09396f7674d5.ngrok-free.app" # Lembre-se de atualizar se o ngrok mudar!
 
-# ID da tarefa "modelo" que você criou no Catálogo de Tarefas (ex: "Preparar Agendamento de Cliente")
-TAREFA_MODELO_AGENDAMENTO_ID = 92 # << TROQUE PELO ID DA TAREFA CORRETA
+# Nome da pasta onde os documentos de RH (holerites, etc.) serão salvos no servidor.
+PASTA_DOCUMENTOS_RH = "documentos_rh_seguros"
+
+# --- CONFIGURAÇÕES DE REGRAS DE NEGÓCIO (GAMIFICAÇÃO) ---
+# Taxa para converter o saldo de pontos em valor monetário na loja.
+TAXA_CONVERSAO_PONTO_REAL = 0.02 # Ex: 1 ponto = R$ 0.02
+
+# ID do funcionário responsável por receber as tarefas geradas a partir de novos agendamentos.
+RESPONSAVEL_AGENDAMENTOS_ID = 2
+
+# ID da tarefa "modelo" usada para criar as tarefas de agendamento (Ex: "Preparar Agendamento").
+TAREFA_MODELO_AGENDAMENTO_ID = 92
+
+# ID da tarefa "modelo" usada para registrar os pontos ganhos pela leitura de comunicados.
+TAREFA_ID_LEITURA = 38
+
+# ID da tarefa "modelo" usada para registrar os pontos de feedback diário.
+TAREFA_ID_FEEDBACK_DIARIO = 5
+# Pontos de bônus concedidos ao dar o feedback diário.
+PONTOS_BONUS_FEEDBACK_DIARIO = 5
