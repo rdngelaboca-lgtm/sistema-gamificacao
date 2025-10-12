@@ -3,20 +3,25 @@
 document.addEventListener('DOMContentLoaded', function() {
 
     async function atualizarPainel() {
-        console.log("Iniciando atualização do painel v5.0 (Com Barra de Progresso)...");
+        console.log("Iniciando atualização do painel v6.0 (Com Pódio)...");
         try {
-            const response = await fetch('http://192.168.2.23:5000/api/painel/tarefas');
-            if (!response.ok) throw new Error(`Erro na API: ${response.statusText}`);
-            const dados = await response.json();
+            // TÉCNICA AVANÇADA: Fazemos as duas chamadas de API em paralelo
+            const [respostaTarefas, respostaRanking] = await Promise.all([
+                fetch('http://192.168.2.23:5000/api/painel/tarefas'),
+                fetch('http://192.168.2.23:5000/api/ranking/diario')
+            ]);
 
-            // Renderiza as colunas (lógica da aula anterior)
-            renderizarColunas(dados);
-            
-            // ===== NOVA LÓGICA DA BARRA DE PROGRESSO =====
-            if (dados.progresso) {
-                atualizarBarraDeProgresso(dados.progresso);
+            if (!respostaTarefas.ok || !respostaRanking.ok) {
+                throw new Error('Falha em uma das chamadas da API');
             }
-            // ===========================================
+
+            const dadosTarefas = await respostaTarefas.json();
+            const dadosRanking = await respostaRanking.json();
+
+            // Renderiza todas as partes do painel
+            renderizarColunas(dadosTarefas);
+            atualizarBarraDeProgresso(dadosTarefas.progresso);
+            renderizarPodio(dadosRanking); // Nova função para o pódio
 
             const timestamp = new Date().toLocaleTimeString('pt-BR');
             document.getElementById('ultima-atualizacao').textContent = `Última atualização: ${timestamp}`;
@@ -26,7 +31,31 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
     
-    // Todas as funções de renderização da aula anterior continuam aqui...
+    // NOVA FUNÇÃO para renderizar o pódio
+    function renderizarPodio(ranking) {
+        const podioContainer = document.getElementById('podio-diario');
+        podioContainer.innerHTML = ''; // Limpa o pódio antigo
+
+        if (ranking.length === 0) {
+            podioContainer.innerHTML = '<p><i>O pódio de hoje ainda está vazio. Conclua tarefas para aparecer aqui!</i></p>';
+            return;
+        }
+
+        const medalhas = ['🥇', '🥈', '🥉'];
+        ranking.forEach((item, index) => {
+            const podioItem = document.createElement('div');
+            podioItem.className = `podio-item posicao-${index + 1}`;
+            podioItem.innerHTML = `
+                <div class="posicao">${medalhas[index]}</div>
+                <div class="nome">${item.NomeCompleto}</div>
+                <div class="pontos">${item.TotalPontosHoje} pts hoje</div>
+            `;
+            podioContainer.appendChild(podioItem);
+        });
+    }
+
+    // O resto do seu arquivo JavaScript continua aqui (renderizarColunas, atualizarBarraDeProgresso, etc.)
+    // ... (COPIE E COLE TODAS AS OUTRAS FUNÇÕES DA AULA ANTERIOR AQUI) ...
     function renderizarColunas(dados) {
         const colunaParaFazer = document.getElementById('coluna-para-fazer');
         const colunaValidacao = document.getElementById('coluna-validacao');
@@ -45,12 +74,10 @@ document.addEventListener('DOMContentLoaded', function() {
         dados.validacao.forEach(tarefa => colunaValidacao.appendChild(criarCard(tarefa, 'validacao')));
     }
     
-    // NOVA FUNÇÃO PARA ATUALIZAR A BARRA
     function atualizarBarraDeProgresso(progresso) {
         const barraInterna = document.getElementById('progresso-barra-interna');
         const textoLabel = document.getElementById('progresso-texto-label');
-
-        if (progresso.total > 0) {
+        if (progresso && progresso.total > 0) {
             const percentual = (progresso.concluidas / progresso.total) * 100;
             barraInterna.style.width = `${percentual}%`;
             textoLabel.textContent = `Progresso do Dia: ${progresso.concluidas} / ${progresso.total} Tarefas`;
@@ -60,7 +87,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    // O resto das funções (agrupar, renderizar, criarCard) permanece igual à aula anterior...
     function agruparTarefasPorFuncionario(listaDeTarefas) {
         const grupos = {};
         for (const tarefa of listaDeTarefas) {
