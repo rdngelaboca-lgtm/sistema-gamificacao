@@ -27,35 +27,45 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    function criarCard(tarefa, tipo) {
-        const cardDiv = document.createElement('div');
-        cardDiv.className = 'card';
-        
-        let tituloHtml = `<h3 class="card-titulo">${tarefa.Titulo}</h3>`;
-        let infoExtra = `<p class="card-info">Funcionário: ${tarefa.NomeCompleto}</p>`;
+    // Em painel.js, substitua apenas a função criarCard
 
-        // Lógica para adicionar a tag [ATRASADA]
-        if (tipo === 'para_fazer' && tarefa.Categoria === 'Atrasada') {
-            tituloHtml = `
-                <h3 class="card-titulo">
-                    <span>${tarefa.Titulo}</span>
-                    <span class="card-tag-atrasada">ATRASADA</span>
-                </h3>`;
-        }
-        
-        // Lógica para adicionar classe ao card concluído
-        if (tipo === 'concluida') {
-            cardDiv.classList.add('concluida');
-            infoExtra += `<p class="card-info">Concluída em: ${new Date(tarefa.DataEnvio).toLocaleTimeString('pt-BR')}</p>`;
-        }
+function criarCard(tarefa, tipo) {
+    const cardDiv = document.createElement('div');
+    cardDiv.className = 'card';
+    
+    let tituloHtml = `<h3 class="card-titulo">${tarefa.Titulo}</h3>`;
+    let infoExtra = `<p class="card-info">Funcionário: ${tarefa.NomeCompleto}</p>`;
 
-        cardDiv.innerHTML = `
-            ${tituloHtml}
-            ${infoExtra}
-            <p class="card-pontos">+ ${tarefa.Pontos} pts</p>
-        `;
-        return cardDiv;
+    // Lógica para adicionar a tag [ATRASADA]
+    if (tipo === 'para_fazer' && tarefa.Categoria === 'Atrasada') {
+        tituloHtml = `
+            <h3 class="card-titulo">
+                <span>${tarefa.Titulo}</span>
+                <span class="card-tag-atrasada">ATRASADA</span>
+            </h3>`;
     }
+    
+    // Lógica para adicionar classe ao card concluído
+    if (tipo === 'concluida') {
+        cardDiv.classList.add('concluida');
+        infoExtra += `<p class="card-info">Concluída em: ${new Date(tarefa.DataEnvio).toLocaleTimeString('pt-BR')}</p>`;
+    }
+
+    // ===== NOVA LÓGICA DE DEPURAÇÃO =====
+    // Se a tarefa tiver uma DataReferencia, vamos exibi-la
+    if (tarefa.DataReferencia) {
+        const dataRef = new Date(tarefa.DataReferencia).toLocaleDateString('pt-BR');
+        infoExtra += `<p class="card-info-debug">Referente a: ${dataRef}</p>`;
+    }
+    // ===================================
+
+    cardDiv.innerHTML = `
+        ${tituloHtml}
+        ${infoExtra}
+        <p class="card-pontos">+ ${tarefa.Pontos} pts</p>
+    `;
+    return cardDiv;
+}
 
     atualizarPainel();
     setInterval(atualizarPainel, 60000);
