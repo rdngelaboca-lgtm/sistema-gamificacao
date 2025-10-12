@@ -229,3 +229,29 @@ body {
 .posicao-1 { border-color: #ffd700; } /* Ouro */
 .posicao-2 { border-color: #c0c0c0; } /* Prata */
 .posicao-3 { border-color: #cd7f32; } /* Bronze */
+
+/* ===== NOVOS ESTILOS - AULA 13 (Animações) ===== */
+
+/* 1. Definindo a "receita" da nossa animação */
+@keyframes fadeIn {
+  from {
+    opacity: 0; /* Começa invisível */
+    transform: translateY(10px); /* Começa um pouco para baixo */
+  }
+  to {
+    opacity: 1; /* Termina totalmente visível */
+    transform: translateY(0); /* Termina na sua posição normal */
+  }
+}
+
+/* 2. Aplicando a animação aos elementos que queremos */
+
+.card {
+    /* ... todos os estilos antigos do card ... */
+    animation: fadeIn 0.5s ease-out; /* Aplica a animação 'fadeIn' com duração de 0.5s */
+}
+
+.grupo-funcionario {
+    /* ... todos os estilos antigos do grupo ... */
+    animation: fadeIn 0.5s ease-out; /* Aplica a mesma animação para o grupo inteiro */
+}
