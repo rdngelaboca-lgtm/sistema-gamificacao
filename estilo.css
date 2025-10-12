@@ -115,3 +115,46 @@ body {
     font-style: italic;
     margin-top: 4px;
 }
+
+/* Em estilo.css, adicione este bloco no final */
+
+/* ===== NOVOS ESTILOS - AULA 10 ===== */
+
+/* Estilo para o container do grupo de um funcionário */
+.grupo-funcionario {
+    margin-bottom: 20px; /* Espaço entre os grupos de funcionários */
+}
+
+.grupo-titulo {
+    font-weight: bold;
+    color: #0056b3; /* Um azul escuro para destacar o nome */
+    padding-bottom: 5px;
+    margin-bottom: 10px;
+    border-bottom: 1px solid #c0c8d1;
+}
+
+/* Animação de pulsar para a etiqueta de atraso */
+@keyframes pulse {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.05);
+    opacity: 0.7;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.card-tag-atrasada {
+    /* ... estilos antigos ... */
+    animation: pulse 2s infinite; /* Aplica a animação 'pulse' em um loop infinito de 2s */
+}
+
+/* Estilo para os ícones dentro do título do card */
+.card-titulo span:first-child {
+    margin-right: 8px; /* Adiciona um espaço entre o ícone e o texto */
+}
