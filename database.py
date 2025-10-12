@@ -2592,3 +2592,49 @@ def buscar_ranking_do_dia():
         return [dict(zip(cols, row)) for row in cursor.fetchall()]
     finally:
         if conn: conn.close()
+
+# Em database.py, adicione esta nova função
+
+def buscar_feed_de_atividades(limite=5):
+    """
+    Busca os últimos eventos (tarefas aprovadas e conquistas) para o feed.
+    """
+    conn = get_db_connection()
+    if not conn: return []
+    try:
+        cursor = conn.cursor()
+        # Esta query une duas fontes de dados em uma única lista cronológica
+        sql = """
+            SELECT TOP (?) * FROM (
+                -- Evento do tipo 'tarefa_concluida'
+                SELECT
+                    E.DataAprovacao as Timestamp,
+                    'tarefa_concluida' as TipoEvento,
+                    F.NomeCompleto as TextoPrincipal,
+                    T.Titulo as TextoSecundario,
+                    E.PontosGanhos as Pontos
+                FROM Entregas E
+                JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID
+                JOIN Tarefas T ON E.TarefaID = T.TarefaID
+                WHERE E.StatusValidacao = 'Aprovada'
+
+                UNION ALL
+
+                -- Evento do tipo 'conquista'
+                SELECT
+                    CF.DataConquista as Timestamp,
+                    'conquista' as TipoEvento,
+                    F.NomeCompleto as TextoPrincipal,
+                    C.Nome as TextoSecundario,
+                    C.PontosBonus as Pontos
+                FROM ConquistasFuncionarios CF
+                JOIN Funcionarios F ON CF.FuncionarioID = F.FuncionarioID
+                JOIN Conquistas C ON CF.ConquistaID = C.ConquistaID
+            ) as FeedEventos
+            ORDER BY Timestamp DESC;
+        """
+        cursor.execute(sql, limite)
+        cols = [column[0] for column in cursor.description]
+        return [dict(zip(cols, row)) for row in cursor.fetchall()]
+    finally:
+        if conn: conn.close()
