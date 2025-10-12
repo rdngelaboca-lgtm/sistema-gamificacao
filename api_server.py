@@ -403,36 +403,26 @@ def rota_login():
 
 @app.route('/api/painel/tarefas', methods=['GET'])
 def rota_painel_tarefas():
-    """
-    Endpoint dedicado para fornecer os dados para o painel de gestão (Kanban).
-    """
     try:
         dados_painel = database.buscar_dados_para_painel_kanban()
-        
-        # --- O NOSSO TESTE ESTÁ AQUI ---
-        response = jsonify(dados_painel)
-        # Adicionamos manualmente um cabeçalho de teste para ver se o código novo está rodando
-        response.headers['X-Teste-Gamificacao'] = 'Ola Mundo v2' 
-        # -----------------------------
-
-        return response, 200
+        return jsonify(dados_painel), 200
     except Exception as e:
         print(f"!!! ERRO no endpoint /api/painel/tarefas: {e}")
         return jsonify({"status": "erro", "mensagem": f"Erro interno no servidor: {e}"}), 500
+
     
 
 # Em api_server.py, substitua a função inteira pela versão corrigida e simplificada
 
 @app.route('/api/ranking/diario', methods=['GET'])
 def rota_ranking_diario():
-    """
-    Endpoint que fornece o Top 3 de funcionários do dia.
-    (VERSÃO CORRIGIDA)
-    """
     try:
-        # A função do banco agora já retorna os dados no formato correto
         ranking_do_dia = database.buscar_ranking_do_dia()
         return jsonify(ranking_do_dia), 200
     except Exception as e:
         print(f"!!! ERRO no endpoint /api/ranking/diario: {e}")
         return jsonify([]), 500
+    
+if __name__ == '__main__':
+    # O debug=False é essencial para rodar como serviço
+    app.run(host='0.0.0.0', port=5000, debug=False)
