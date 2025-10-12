@@ -12,7 +12,17 @@ import re
 
 app = Flask(__name__)
 CORS(app)
-PASTA_DOCUMENTOS_SEGUROS = "/home/rodrigoaraujo/documentos_rh"
+
+# --- LÓGICA DE CRIAÇÃO DA PASTA ---
+# Pega o caminho do diretório onde o script está rodando
+BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+# Cria o caminho completo para a pasta de documentos
+PASTA_DOCUMENTOS_SEGUROS = os.path.join(BASE_DIR, config.PASTA_DOCUMENTOS_RH)
+
+# Cria a pasta se ela não existir
+if not os.path.exists(PASTA_DOCUMENTOS_SEGUROS):
+    os.makedirs(PASTA_DOCUMENTOS_SEGUROS)
+    print(f"--> PASTA CRIADA EM: {PASTA_DOCUMENTOS_SEGUROS}")
 
 def formatar_data_pt_br(dt_obj, formato_str):
     """Uma função 'tradutora' para garantir que as datas saiam em português."""
