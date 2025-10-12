@@ -14,6 +14,7 @@ CONNECTION_STRING = (
     f"TrustServerCertificate=yes;"  
 )
 
+
 def get_db_connection():
     try:
         conn = pyodbc.connect(CONNECTION_STRING)
@@ -2563,11 +2564,10 @@ def buscar_dados_para_painel_kanban():
         if conn:
             conn.close()
 
-# Em database.py, adicione esta nova função
-
 def buscar_ranking_do_dia():
     """
     Calcula o ranking dos 3 funcionários com mais pontos APROVADOS HOJE.
+    (VERSÃO CORRIGIDA - já retorna uma lista de dicionários)
     """
     conn = get_db_connection()
     if not conn: return []
@@ -2587,6 +2587,8 @@ def buscar_ranking_do_dia():
                 TotalPontosHoje DESC;
         """
         cursor.execute(sql)
-        return cursor.fetchall()
+        # CORREÇÃO: Converte o resultado para uma lista de dicionários aqui dentro
+        cols = [column[0] for column in cursor.description]
+        return [dict(zip(cols, row)) for row in cursor.fetchall()]
     finally:
         if conn: conn.close()
