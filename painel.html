@@ -6,11 +6,19 @@
     <title>Painel de Gestão</title>
     <link rel="stylesheet" href="estilo.css">
 </head>
+
+
 <body>
     <div class="painel-container">
+        
         <header class="cabecalho">
             <h1>Painel de Gestão de Tarefas</h1>
             <p id="ultima-atualizacao">Atualizando...</p>
+
+            <div class="progresso-container">
+                <div class="progresso-barra" id="progresso-barra-interna"></div>
+                <span class="progresso-texto" id="progresso-texto-label">Calculando...</span>
+            </div>
         </header>
 
         <main class="kanban-board">
@@ -36,6 +44,9 @@
 
     <script src="painel.js" defer></script>
 </body>
+
+
+
 
 <header class="cabecalho">
     <h1>Painel de Gestão de Tarefas</h1>
