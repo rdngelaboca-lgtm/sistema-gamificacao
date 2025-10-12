@@ -6,9 +6,7 @@ from tkinter import ttk, messagebox, Toplevel
 import requests
 from datetime import datetime
 import database
-
-# --- CONFIGURAÇÃO ---
-API_BASE_URL = "https://09396f7674d5.ngrok-free.app" 
+import config
 
 # Em agendamentos_main.py, substitua a classe LoginWindow por esta
 import hashlib # Adicione esta importação no topo do arquivo
@@ -56,7 +54,8 @@ class LoginWindow:
         try:
             payload = {"id": int(funcionario_id), "senha": senha}
             # Usa a mesma API_BASE_URL (a URL do ngrok) que o resto do programa
-            response = requests.post(f"{API_BASE_URL}/login", json=payload)
+            # Dentro de carregar_agendamentos:
+            response = requests.get(f"{config.API_BASE_URL}/agendamentos")
 
             if response.status_code == 200:
                 dados_resposta = response.json()
@@ -149,7 +148,7 @@ class AppAgendamentos:
     def carregar_agendamentos(self):
         for i in self.tree_agendamentos.get_children(): self.tree_agendamentos.delete(i)
         try:
-            response = requests.get(f"{API_BASE_URL}/agendamentos")
+            response = requests.get(f"{config.API_BASE_URL}/agendamentos")
             if response.status_code == 200:
                 agendamentos = response.json()
                 for ag in agendamentos:
@@ -182,7 +181,7 @@ class AppAgendamentos:
         }
         print(f"\n--- DEBUG ENVIANDO ---\n{payload}\n--- FIM DEBUG ---\n")
         try:
-            response = requests.post(f"{API_BASE_URL}/agendamentos/novo", json=payload)
+            response = requests.post(f"{config.API_BASE_URL}/agendamentos/novo", json=payload)
             if response.status_code == 201:
                 messagebox.showinfo("Sucesso", "Agendamento salvo com sucesso!")
                 self.limpar_formulario()
@@ -208,7 +207,7 @@ class AppAgendamentos:
         agendamento_id, nome_cliente = dados_ag[0], dados_ag[1]
         if messagebox.askyesno("Confirmar Exclusão", f"Tem certeza que deseja excluir o agendamento de '{nome_cliente}'?"):
             try:
-                response = requests.delete(f"{API_BASE_URL}/agendamentos/{agendamento_id}")
+                response = requests.delete(f"{config.API_BASE_URL}/agendamentos/{agendamento_id}")
                 if response.status_code == 204:
                     messagebox.showinfo("Sucesso", "Agendamento excluído com sucesso!")
                     self.carregar_agendamentos()
@@ -226,7 +225,7 @@ class AppAgendamentos:
         agendamento_id, status_atual = dados_ag[0], dados_ag[4]
         novo_status = "Pago" if status_atual == "Pendente" else "Pendente"
         try:
-            response = requests.patch(f"{API_BASE_URL}/agendamentos/{agendamento_id}/pagamento", json={"status": novo_status})
+            response = requests.patch(f"{config.API_BASE_URL}/agendamentos/{agendamento_id}/pagamento", json={"status": novo_status})
             if response.status_code == 200:
                 messagebox.showinfo("Sucesso", f"Status do pagamento alterado para '{novo_status}'.")
                 self.carregar_agendamentos()
@@ -246,7 +245,7 @@ class AppAgendamentos:
         agendamento_id = self.tree_agendamentos.item(selecionado, 'values')[0]
         
         try:
-            response = requests.get(f"{API_BASE_URL}/agendamentos/{agendamento_id}")
+            response = requests.post(f"{config.API_BASE_URL}/login", json=payload)
             if response.status_code != 200:
                 messagebox.showerror("Erro", "Não foi possível buscar os detalhes do agendamento.")
                 return
@@ -276,7 +275,7 @@ class AppAgendamentos:
         edit_entry_telefone.insert(0, dados_completos.get('telefone_cliente', '') or '')
 
         ttk.Label(frame, text="Tipo de Evento:").pack(anchor="w")
-        edit_combo_tipo = ttk.Combobox(frame, values=['Carrinho de Sorvete', 'Festa de Aniversario'])
+        edit_combo_tipo = ttk.Combobox(frame, values=['Carrinho de Sorvete', 'Festa de Aniversario', 'Reserva de Tortas de Sorvete'])
         edit_combo_tipo.pack(fill="x", pady=(0, 5))
         edit_combo_tipo.set(dados_completos.get('tipo_evento', ''))
 
@@ -337,7 +336,7 @@ class AppAgendamentos:
             
             # 3. Envia os dados para a API (sem alteração aqui)
             try:
-                response = requests.put(f"{API_BASE_URL}/agendamentos/{agendamento_id}", json=payload_editado)
+                response = requests.put(f"{config.API_BASE_URL}/agendamentos/{agendamento_id}", json=payload_editado)
                 if response.status_code == 200:
                     messagebox.showinfo("Sucesso", "Agendamento atualizado!", parent=popup)
                     popup.destroy()
@@ -354,7 +353,7 @@ class AppAgendamentos:
         confirmado = messagebox.askyesno("Confirmar Envio", "Deseja enviar um resumo de TODOS os agendamentos futuros para o grupo do Telegram agora?")
         if confirmado:
             try:
-                response = requests.post(f"{API_BASE_URL}/agendamentos/enviar-lembrete-geral")
+                response = requests.post(f"{config.API_BASE_URL}/agendamentos/enviar-lembrete-geral")
                 if response.status_code == 200:
                     messagebox.showinfo("Sucesso", "Resumo de agendamentos enviado para o grupo!")
                 else:
@@ -363,15 +362,14 @@ class AppAgendamentos:
                 messagebox.showerror("Erro de Conexão", f"Não foi possível conectar à API: {e}") 
 
 if __name__ == "__main__":
-    # --- FLUXO DE INICIALIZAÇÃO ---
-    # 1. Cria a janela de login
+    # 1. Cria e mostra a janela de login primeiro
     login_root = tk.Tk()
-    app_login = LoginWindow(login_root)
-    login_root.mainloop() # O programa pausa aqui até a janela de login ser fechada
+    login_app = LoginWindow(login_root)
+    login_root.mainloop()
 
-    # 2. Se o login foi bem-sucedido, 'app_login.funcionario_logado' terá os dados.
-    if app_login.funcionario_logado:
-        # 3. Cria a janela principal da aplicação, passando os dados do funcionário.
+    # 2. O código só continua se o login for bem-sucedido
+    if login_app.funcionario_logado:
+        # 3. Abre a janela principal, passando os dados do funcionário que logou
         main_app_root = tk.Tk()
-        app_principal = AppAgendamentos(main_app_root, app_login.funcionario_logado)
+        app_principal = AppAgendamentos(main_app_root, login_app.funcionario_logado)
         main_app_root.mainloop()
