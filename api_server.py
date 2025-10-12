@@ -423,6 +423,20 @@ def rota_ranking_diario():
         print(f"!!! ERRO no endpoint /api/ranking/diario: {e}")
         return jsonify([]), 500
     
+# Em api_server.py, adicione esta nova rota
+
+@app.route('/api/feed', methods=['GET'])
+def rota_feed():
+    """
+    Endpoint que fornece os últimos eventos para o feed de atividades.
+    """
+    try:
+        feed_data = database.buscar_feed_de_atividades(limite=7) # Podemos pegar 7, por exemplo
+        return jsonify(feed_data), 200
+    except Exception as e:
+        print(f"!!! ERRO no endpoint /api/feed: {e}")
+        return jsonify([]), 500
+    
 if __name__ == '__main__':
     # O debug=False é essencial para rodar como serviço
     app.run(host='0.0.0.0', port=5000, debug=False)
