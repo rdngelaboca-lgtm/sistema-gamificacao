@@ -2490,14 +2490,12 @@ def autenticar_funcionario(funcionario_id):
             conn.close()
     return None
 
-# Em database.py, substitua a função inteira por esta versão 100% correta
-
-# Em database.py, substitua a função buscar_dados_para_painel_kanban inteira
+# Em database.py, substitua a função inteira
 
 def buscar_dados_para_painel_kanban():
     """
     Busca e organiza todas as tarefas para o painel de ação diária.
-    (VERSÃO 3.2 - Com correção na query de tarefas concluídas)
+    (VERSÃO 3.3 - Com data de referência para depuração)
     """
     conn = get_db_connection()
     if not conn:
@@ -2506,41 +2504,36 @@ def buscar_dados_para_painel_kanban():
     try:
         cursor = conn.cursor()
         
-        # --- Query 1: Tarefas PARA FAZER (sem alteração) ---
+        # --- Query 1: Tarefas PARA FAZER (COM A NOVA COLUNA 'DataReferencia') ---
         sql_para_fazer = """
-            SELECT T.Titulo, F.NomeCompleto, T.Pontos, 'Hoje' as Categoria, TA.DataAtribuicao
+            -- Tarefas de HOJE
+            SELECT T.Titulo, F.NomeCompleto, T.Pontos, 'Hoje' as Categoria, TA.DataAtribuicao, GETDATE() as DataReferencia
             FROM TarefasAtribuidas TA JOIN Tarefas T ON TA.TarefaID = T.TarefaID JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID
             WHERE TA.FuncionarioID IS NOT NULL AND TA.DataFimVigencia IS NULL
-                AND NOT EXISTS (SELECT 1 FROM Entregas E WHERE E.AtribuicaoID = TA.AtribuicaoID AND CONVERT(date, E.DataEnvio) = GETDATE() AND E.StatusValidacao != 'Recusada')
-                AND (TA.TipoFrequencia = 'Diaria' OR (TA.TipoFrequencia = 'Semanal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(weekday, GETDATE())) OR (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, GETDATE())) OR (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = GETDATE()))
+                AND NOT EXISTS (SELECT 1 FROM Entregas E WHERE E.AtribuicaoID = TA.AtribuicaoID AND CONVERT(date, E.DataEnvio) = CONVERT(date, GETDATE()) AND E.StatusValidacao != 'Recusada')
+                AND (TA.TipoFrequencia = 'Diaria' OR (TA.TipoFrequencia = 'Semanal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(weekday, GETDATE())) OR (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, GETDATE())) OR (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = CONVERT(date, GETDATE())))
+            
             UNION ALL
-            SELECT T.Titulo, F.NomeCompleto, T.Pontos, 'Atrasada' as Categoria, TA.DataAtribuicao
+            
+            -- Tarefas de ONTEM que não foram feitas
+            SELECT T.Titulo, F.NomeCompleto, T.Pontos, 'Atrasada' as Categoria, TA.DataAtribuicao, DATEADD(day, -1, GETDATE()) as DataReferencia
             FROM TarefasAtribuidas TA JOIN Tarefas T ON TA.TarefaID = T.TarefaID JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID
             WHERE TA.FuncionarioID IS NOT NULL AND TA.DataFimVigencia IS NULL
-                AND NOT EXISTS (SELECT 1 FROM Entregas E WHERE E.AtribuicaoID = TA.AtribuicaoID AND CONVERT(date, E.DataEnvio) = DATEADD(day, -1, GETDATE()) AND E.StatusValidacao != 'Recusada')
-                AND (TA.TipoFrequencia = 'Diaria' OR (TA.TipoFrequencia = 'Semanal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(weekday, DATEADD(day, -1, GETDATE()))) OR (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, DATEADD(day, -1, GETDATE()))) OR (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = DATEADD(day, -1, GETDATE())))
+                AND NOT EXISTS (SELECT 1 FROM Entregas E WHERE E.AtribuicaoID = TA.AtribuicaoID AND CONVERT(date, E.DataEnvio) = CONVERT(date, DATEADD(day, -1, GETDATE())) AND E.StatusValidacao != 'Recusada')
+                AND (TA.TipoFrequencia = 'Diaria' OR (TA.TipoFrequencia = 'Semanal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(weekday, DATEADD(day, -1, GETDATE()))) OR (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, DATEADD(day, -1, GETDATE()))) OR (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = CONVERT(date, DATEADD(day, -1, GETDATE()))))
             ORDER BY Categoria DESC, F.NomeCompleto;
         """
         cursor.execute(sql_para_fazer)
         para_fazer_cols = [column[0] for column in cursor.description]
         para_fazer_rows = cursor.fetchall()
 
-        # --- Query 2: Tarefas Em Validação (sem alteração) ---
+        # O resto da função permanece igual...
         sql_validacao = "SELECT T.Titulo, F.NomeCompleto, E.DataEnvio, T.Pontos FROM Entregas E JOIN Tarefas T ON E.TarefaID = T.TarefaID JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID WHERE E.StatusValidacao = 'Pendente' ORDER BY E.DataEnvio;"
         cursor.execute(sql_validacao)
         validacao_cols = [column[0] for column in cursor.description]
         validacao_rows = cursor.fetchall()
         
-        # --- Query 3: Tarefas Concluídas Hoje (COM A CORREÇÃO) ---
-        sql_concluidas = """
-            SELECT T.Titulo, F.NomeCompleto, E.DataEnvio, E.PontosGanhos as Pontos 
-            FROM Entregas E 
-            JOIN Tarefas T ON E.TarefaID = T.TarefaID 
-            JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID 
-            WHERE E.StatusValidacao = 'Aprovada' 
-              AND CONVERT(date, E.DataEnvio) = CONVERT(date, GETDATE()) -- <<< A CORREÇÃO ESTÁ AQUI
-            ORDER BY E.DataEnvio DESC;
-        """
+        sql_concluidas = "SELECT T.Titulo, F.NomeCompleto, E.DataEnvio, E.PontosGanhos as Pontos FROM Entregas E JOIN Tarefas T ON E.TarefaID = T.TarefaID JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID WHERE E.StatusValidacao = 'Aprovada' AND CONVERT(date, E.DataEnvio) = CONVERT(date, GETDATE()) ORDER BY E.DataEnvio DESC;"
         cursor.execute(sql_concluidas)
         concluidas_cols = [column[0] for column in cursor.description]
         concluidas_rows = cursor.fetchall()
@@ -2556,4 +2549,3 @@ def buscar_dados_para_painel_kanban():
     finally:
         if conn:
             conn.close()
-
