@@ -421,21 +421,18 @@ def rota_painel_tarefas():
         return jsonify({"status": "erro", "mensagem": f"Erro interno no servidor: {e}"}), 500
     
 
+# Em api_server.py, substitua a função inteira pela versão corrigida e simplificada
+
 @app.route('/api/ranking/diario', methods=['GET'])
 def rota_ranking_diario():
     """
     Endpoint que fornece o Top 3 de funcionários do dia.
+    (VERSÃO CORRIGIDA)
     """
     try:
+        # A função do banco agora já retorna os dados no formato correto
         ranking_do_dia = database.buscar_ranking_do_dia()
-        # Converte o resultado para uma lista de dicionários
-        resultado = [dict(zip([column[0] for column in cursor.description], row)) for cursor in (ranking_do_dia._cursor,) for row in cursor.fetchall()]
-        return jsonify(resultado), 200
+        return jsonify(ranking_do_dia), 200
     except Exception as e:
         print(f"!!! ERRO no endpoint /api/ranking/diario: {e}")
         return jsonify([]), 500
-
-if __name__ == '__main__':
-    print(">>> Iniciando o Servidor da API...")
-    app.run(host='0.0.0.0', port=5000, debug=False)
-
