@@ -1,27 +1,26 @@
-// Em painel.js, substitua o conteúdo inteiro
-
 document.addEventListener('DOMContentLoaded', function() {
 
     async function atualizarPainel() {
-        console.log("Iniciando atualização do painel v6.0 (Com Pódio)...");
+        console.log("Iniciando atualização do painel vFinal...");
         try {
-            // TÉCNICA AVANÇADA: Fazemos as duas chamadas de API em paralelo
-            const [respostaTarefas, respostaRanking] = await Promise.all([
+            const [respostaTarefas, respostaRanking, respostaFeed] = await Promise.all([
                 fetch('http://192.168.2.23:5000/api/painel/tarefas'),
-                fetch('http://192.168.2.23:5000/api/ranking/diario')
+                fetch('http://192.168.2.23:5000/api/ranking/diario'),
+                fetch('http://192.168.2.23:5000/api/feed')
             ]);
 
-            if (!respostaTarefas.ok || !respostaRanking.ok) {
+            if (!respostaTarefas.ok || !respostaRanking.ok || !respostaFeed.ok) {
                 throw new Error('Falha em uma das chamadas da API');
             }
 
             const dadosTarefas = await respostaTarefas.json();
             const dadosRanking = await respostaRanking.json();
+            const dadosFeed = await respostaFeed.json();
 
-            // Renderiza todas as partes do painel
             renderizarColunas(dadosTarefas);
             atualizarBarraDeProgresso(dadosTarefas.progresso);
-            renderizarPodio(dadosRanking); // Nova função para o pódio
+            renderizarPodio(dadosRanking);
+            renderizarFeed(dadosFeed);
 
             const timestamp = new Date().toLocaleTimeString('pt-BR');
             document.getElementById('ultima-atualizacao').textContent = `Última atualização: ${timestamp}`;
@@ -31,16 +30,13 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
     
-    // NOVA FUNÇÃO para renderizar o pódio
     function renderizarPodio(ranking) {
         const podioContainer = document.getElementById('podio-diario');
-        podioContainer.innerHTML = ''; // Limpa o pódio antigo
-
+        podioContainer.innerHTML = '';
         if (ranking.length === 0) {
             podioContainer.innerHTML = '<p><i>O pódio de hoje ainda está vazio. Conclua tarefas para aparecer aqui!</i></p>';
             return;
         }
-
         const medalhas = ['🥇', '🥈', '🥉'];
         ranking.forEach((item, index) => {
             const podioItem = document.createElement('div');
@@ -54,8 +50,6 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // O resto do seu arquivo JavaScript continua aqui (renderizarColunas, atualizarBarraDeProgresso, etc.)
-    // ... (COPIE E COLE TODAS AS OUTRAS FUNÇÕES DA AULA ANTERIOR AQUI) ...
     function renderizarColunas(dados) {
         const colunaParaFazer = document.getElementById('coluna-para-fazer');
         const colunaValidacao = document.getElementById('coluna-validacao');
@@ -70,7 +64,6 @@ document.addEventListener('DOMContentLoaded', function() {
 
         renderizarGrupos(tarefasAgrupadasParaFazer, colunaParaFazer, 'para_fazer');
         renderizarGrupos(tarefasAgrupadasConcluidas, colunaConcluidas, 'concluida');
-        
         dados.validacao.forEach(tarefa => colunaValidacao.appendChild(criarCard(tarefa, 'validacao')));
     }
     
@@ -135,6 +128,36 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         cardDiv.innerHTML = `<div class="card-titulo">${tituloHtml}</div>${infoExtra}<p class="card-pontos">+ ${tarefa.Pontos} pts</p>`;
         return cardDiv;
+    }
+
+    function renderizarFeed(eventos) {
+        const feedLista = document.getElementById('feed-lista');
+        feedLista.innerHTML = '';
+
+        if (eventos.length === 0) {
+            feedLista.innerHTML = '<li>Nenhuma atividade recente.</li>';
+            return;
+        }
+
+        eventos.forEach(evento => {
+            const item = document.createElement('li');
+            const tempoAtras = new Date(evento.Timestamp).toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'});
+            let icone = '';
+            let texto = '';
+
+            if (evento.TipoEvento === 'tarefa_concluida') {
+                item.className = 'feed-item-tarefa';
+                icone = '✅';
+                texto = `<b>${evento.TextoPrincipal}</b> concluiu a tarefa <i>"${evento.TextoSecundario}"</i> (+${evento.Pontos} pts)`;
+            } else if (evento.TipoEvento === 'conquista') {
+                item.className = 'feed-item-conquista';
+                icone = '⭐';
+                texto = `<b>${evento.TextoPrincipal}</b> desbloqueou a conquista <i>"${evento.TextoSecundario}"</i>! (+${evento.Pontos} pts)`;
+            }
+
+            item.innerHTML = `<span class="feed-icone">${icone}</span> <div>${texto} <small style="color: #888;">às ${tempoAtras}</small></div>`;
+            feedLista.appendChild(item);
+        });
     }
 
     atualizarPainel();
