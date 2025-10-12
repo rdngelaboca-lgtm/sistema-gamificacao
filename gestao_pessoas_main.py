@@ -12,6 +12,7 @@ import requests
 import comunicado_generator
 import file_utils
 import recibo_generator
+import config
 
 
 class AppGestaoPessoas:
@@ -128,7 +129,7 @@ class AppGestaoPessoas:
         documento_id = dados_doc[0]
         nome_original = f"{dados_doc[1]}_{dados_doc[2].replace('/', '-')}.pdf" # Ex: Holerite_09-2025.pdf
 
-        url_download = f"http://192.168.2.23:5000/documentos/download/{documento_id}"
+        url_download = f"{config.API_BASE_URL}/documentos/download/{documento_id}"
 
         try:
             print(f"--> Solicitando download do documento ID {documento_id}...")
@@ -208,7 +209,7 @@ class AppGestaoPessoas:
 
         # --- Widgets do Formulário ---
         ttk.Label(frame, text="Tipo de Documento:").grid(row=0, column=0, sticky="w", pady=5)
-        combo_tipo = ttk.Combobox(frame, values=['Holerite', 'Contrato', 'Atestado', 'Advertência', 'Outro'])
+        combo_tipo = ttk.Combobox(frame, values=['Holerite', 'Cartão Ponto', 'Comprovante de Consumo', 'Contrato', 'Atestado', 'Advertência', 'Outro'])
         combo_tipo.grid(row=0, column=1, sticky="ew", pady=5)
         combo_tipo.set('Holerite')
 
@@ -251,7 +252,7 @@ class AppGestaoPessoas:
                 return
 
             # Prepara os dados para enviar à API
-            url_upload = f"http://192.168.2.23:5000/documentos/upload" # ATENÇÃO AO IP!
+            url_upload = f"{config.API_BASE_URL}/documentos/upload" # ATENÇÃO AO IP!
             dados_payload = {
                 'funcionario_id': funcionario_id,
                 'tipo_documento': tipo,
@@ -340,51 +341,102 @@ class AppGestaoPessoas:
                             ))
         btn_enviar.pack(pady=10, padx=10, fill='x', ipady=5)
     
+    # Em gestao_pessoas_main.py, SUBSTITUA a função antiga por esta:
+
     def enviar_comunicado(self, titulo, conteudo, premiar, pontos_str, indices_selecionados, listbox):
-        if not titulo or not conteudo.strip(): messagebox.showerror("Erro", "Título e Conteúdo são obrigatórios.", parent=self.popup_criacao); return
-        if not indices_selecionados: messagebox.showerror("Erro", "Selecione pelo menos um funcionário.", parent=self.popup_criacao); return
+        if not titulo or not conteudo.strip():
+            messagebox.showerror("Erro", "Título e Conteúdo são obrigatórios.", parent=self.popup_criacao)
+            return
+        if not indices_selecionados:
+            messagebox.showerror("Erro", "Selecione pelo menos um funcionário.", parent=self.popup_criacao)
+            return
+        
         pontos = 0
         if premiar:
             try:
                 pontos = int(pontos_str)
                 if pontos <= 0: raise ValueError
-            except ValueError: messagebox.showerror("Erro", "A pontuação deve ser um número inteiro positivo.", parent=self.popup_criacao); return
+            except ValueError:
+                messagebox.showerror("Erro", "A pontuação deve ser um número inteiro positivo.", parent=self.popup_criacao)
+                return
+
         try:
-            destinatarios = [listbox.get(i) for i in indices_selecionados]
-            enviados_com_sucesso = 0
-            legenda_completa = (f"🚨 **NOVO COMUNICADO IMPORTANTE** 🚨\n\n**Título:** {titulo}\n\n**Conteúdo:**\n{conteudo.strip()}\n\nSua confirmação de leitura é obrigatória e será registrada.")
-            imagem_anexada = hasattr(self, 'caminho_imagem_selecionada') and self.caminho_imagem_selecionada
-            GESTOR_ID = 2
+            destinatarios_nomes = [listbox.get(i) for i in indices_selecionados]
+            destinatarios_objs = [self.dados_funcionarios[nome] for nome in destinatarios_nomes]
+
+            GESTOR_ID = 2  # Assumindo ID 2 para o gestor
             documento_id = database.criar_documento(titulo, conteudo.strip(), GESTOR_ID, pontos)
-            if not documento_id: messagebox.showerror("Erro de BD", "Não foi possível criar o registro do documento.", parent=self.popup_criacao); return
+            if not documento_id:
+                messagebox.showerror("Erro de BD", "Não foi possível criar o registro do documento.", parent=self.popup_criacao)
+                return
+
+            imagem_anexada = hasattr(self, 'caminho_imagem_selecionada') and self.caminho_imagem_selecionada
             telegram_file_id = None
+            enviados_com_sucesso = 0
+
+            # --- LÓGICA DE ENVIO EM DUAS ETAPAS ---
+            
+            # 1. Prepara as mensagens
+            legenda_imagem_curta = f"🚨 **NOVO COMUNICADO** 🚨\n\n**Título:** {titulo}"
+            texto_principal = f"**Conteúdo:**\n{conteudo.strip()}\n\nSua confirmação de leitura é obrigatória e será registrada."
+
+            # 2. Envia para o primeiro funcionário para obter o file_id da imagem (se houver)
             if imagem_anexada:
-                primeiro_func_obj = self.dados_funcionarios[destinatarios[0]]
-                assinatura_id_primeiro = database.registrar_pendencia_assinatura(documento_id, primeiro_func_obj.FuncionarioID)
-                keyboard_primeiro = [[InlineKeyboardButton("✅ Li e estou ciente", callback_data=f"doc_ciente_{assinatura_id_primeiro}")]]
-                resposta_api = notificador_telegram.enviar_foto_com_botoes(primeiro_func_obj.ChatIDTelegram, self.caminho_imagem_selecionada, legenda_completa, InlineKeyboardMarkup(keyboard_primeiro))
-                if resposta_api and resposta_api.get('ok'):
-                    telegram_file_id = resposta_api['result']['photo'][-1]['file_id']
+                primeiro_func = destinatarios_objs[0]
+                resposta_api_foto = notificador_telegram.enviar_foto_com_botoes(
+                    primeiro_func.ChatIDTelegram, 
+                    self.caminho_imagem_selecionada, 
+                    legenda_imagem_curta
+                ) # Envia a foto SÓ com a legenda curta
+
+                if resposta_api_foto and resposta_api_foto.get('ok'):
+                    telegram_file_id = resposta_api_foto['result']['photo'][-1]['file_id']
                     database.atualizar_documento_com_file_id(documento_id, telegram_file_id)
-                    enviados_com_sucesso = 1
                 else:
                     messagebox.showerror("Erro Telegram", "Não foi possível enviar a imagem inicial.", parent=self.popup_criacao)
-                    database.excluir_documento(documento_id); return
-            lista_para_loop = destinatarios[1:] if imagem_anexada else destinatarios
-            for display_text in lista_para_loop:
-                funcionario = self.dados_funcionarios[display_text]
-                assinatura_id = database.registrar_pendencia_assinatura(documento_id, funcionario.FuncionarioID)
-                if assinatura_id:
-                    keyboard = [[InlineKeyboardButton("✅ Li e estou ciente", callback_data=f"doc_ciente_{assinatura_id}")]]
-                    if imagem_anexada: notificador_telegram.enviar_foto_com_botoes(funcionario.ChatIDTelegram, telegram_file_id, legenda_completa, InlineKeyboardMarkup(keyboard))
-                    else: notificador_telegram.enviar_mensagem_com_botao(funcionario.ChatIDTelegram, legenda_completa, InlineKeyboardMarkup(keyboard))
-                    enviados_com_sucesso += 1
-                    time.sleep(0.1)
-            messagebox.showinfo("Sucesso", f"{enviados_com_sucesso} de {len(destinatarios)} comunicados foram enviados.", parent=self.popup_criacao)
-            if imagem_anexada: del self.caminho_imagem_selecionada
+                    database.excluir_documento(documento_id)
+                    return
+
+            # 3. Itera sobre TODOS os funcionários para enviar o conteúdo e o botão
+            for func in destinatarios_objs:
+                assinatura_id = database.registrar_pendencia_assinatura(documento_id, func.FuncionarioID)
+                if not assinatura_id:
+                    print(f"!!! Falha ao registrar pendência para {func.NomeCompleto}")
+                    continue
+
+                keyboard = [[InlineKeyboardButton("✅ Li e estou ciente", callback_data=f"doc_ciente_{assinatura_id}")]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+
+                # Se tivermos um file_id (de uma imagem), enviamos a foto primeiro
+                if telegram_file_id:
+                    notificador_telegram.enviar_foto_com_botoes(
+                        func.ChatIDTelegram,
+                        telegram_file_id, # Reutiliza o file_id
+                        legenda_imagem_curta
+                    )
+                    time.sleep(0.2) # Pequena pausa entre as mensagens
+
+                # Envia a mensagem de texto com o conteúdo completo e o botão
+                notificador_telegram.enviar_mensagem_com_botao(
+                    func.ChatIDTelegram,
+                    texto_principal,
+                    reply_markup
+                )
+                enviados_com_sucesso += 1
+                time.sleep(0.1)
+
+            messagebox.showinfo("Sucesso", f"{enviados_com_sucesso} de {len(destinatarios_objs)} comunicados foram enviados.", parent=self.popup_criacao)
+            if imagem_anexada:
+                del self.caminho_imagem_selecionada
             self.popup_criacao.destroy()
             self.atualizar_lista_comunicados()
-        except Exception as e: messagebox.showerror("Erro Inesperado", f"Ocorreu um erro: {e}", parent=self.popup_criacao)
+
+        except Exception as e:
+            messagebox.showerror("Erro Inesperado", f"Ocorreu um erro: {e}", parent=self.popup_criacao)
+            # Tenta limpar o documento do banco em caso de erro no meio do processo
+            if 'documento_id' in locals() and documento_id:
+                database.excluir_documento(documento_id)
+
 
     def abrir_janela_detalhes(self):
         selecionado = self.tree_comunicados.focus()
