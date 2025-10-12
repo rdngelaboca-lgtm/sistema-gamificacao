@@ -2,16 +2,15 @@ import pyodbc
 from datetime import datetime, date, timedelta 
 import calendar 
 import hashlib
+import config 
 
-SERVER = 'localhost'
-DATABASE = 'gamificacao_db'
 CONNECTION_STRING = (
-    f"DRIVER={{ODBC Driver 18 for SQL Server}};"  
-    f"SERVER={SERVER};"
-    f"DATABASE={DATABASE};"
-    f"UID=sa;"  
-    f"PWD=Gamificacao#2025;" 
-    f"TrustServerCertificate=yes;"  
+    f"DRIVER={{ODBC Driver 17 for SQL Server}};"  
+    f"SERVER={config.DB_SERVER};"
+    f"DATABASE={config.DB_DATABASE};"
+    f"UID={config.DB_UID};"
+    f"PWD={config.DB_PWD};"
+    f"TrustServerCertificate=yes;"
 )
 
 
@@ -2468,31 +2467,6 @@ def listar_documentos_por_funcionario(funcionario_id):
             conn.close()
     return []
 
-# Em database.py, adicione esta nova função:
-
-def autenticar_funcionario(funcionario_id):
-    """
-    Verifica se um funcionário com o ID fornecido existe no banco de dados.
-    Não verifica a senha.
-    Retorna os dados do funcionário se encontrado, caso contrário, retorna None.
-    """
-    conn = get_db_connection()
-    if conn:
-        try:
-            # Reutilizamos a função que já temos para buscar um funcionário pelo ID.
-            # Se a função encontrar alguém, o login é um sucesso.
-            print(f"--> [AUTH] Realizando login simplificado (sem senha) para o ID: {funcionario_id}")
-            return buscar_funcionario_por_id(funcionario_id)
-        except Exception as e:
-            print(f"ERRO durante a autenticação simplificada: {e}")
-            return None
-        finally:
-            conn.close()
-    return None
-
-# Em database.py, substitua a função inteira
-
-# Em database.py, substitua a função inteira
 
 def buscar_dados_para_painel_kanban():
     """
@@ -2636,5 +2610,7 @@ def buscar_feed_de_atividades(limite=5):
         cursor.execute(sql, limite)
         cols = [column[0] for column in cursor.description]
         return [dict(zip(cols, row)) for row in cursor.fetchall()]
+
+
     finally:
         if conn: conn.close()
