@@ -47,27 +47,24 @@ def enviar_mensagem_com_botao(chat_id, texto, reply_markup_obj):
     except Exception as e:
         print(f"Erro ao enviar mensagem com botão para {chat_id}: {e}")
 
-# Em notificador_telegram.py, ADICIONE esta função no final:
-# Em notificador_telegram.py, SUBSTITUA a função antiga por esta versão corrigida:
-
-# Em notificador_telegram.py, SUBSTITUA a função antiga por esta
-
-# Em notificador_telegram.py, SUBSTITUA a função antiga por esta
-def enviar_foto_com_botoes(chat_id, foto, legenda, reply_markup_obj):
+def enviar_foto_com_botoes(chat_id, foto, legenda, reply_markup_obj=None): # Tornamos reply_markup_obj opcional
     """
-    Envia uma foto com legenda e botões e RETORNA a resposta da API.
+    (VERSÃO MELHORADA)
+    Envia uma foto com legenda e, opcionalmente, botões.
+    RETORNA a resposta da API.
     """
     token = config.TELEGRAM_TOKEN
     url = f"https://api.telegram.org/bot{token}/sendPhoto"
-
-    reply_markup_em_json = json.dumps(reply_markup_obj.to_dict())
 
     payload = {
         'chat_id': chat_id,
         'caption': legenda,
         'parse_mode': 'Markdown',
-        'reply_markup': reply_markup_em_json
     }
+    
+    # Adiciona os botões ao payload apenas se eles forem fornecidos
+    if reply_markup_obj:
+        payload['reply_markup'] = json.dumps(reply_markup_obj.to_dict())
     
     try:
         if os.path.exists(str(foto)):
@@ -75,19 +72,21 @@ def enviar_foto_com_botoes(chat_id, foto, legenda, reply_markup_obj):
                 files = {'photo': f}
                 response = requests.post(url, data=payload, files=files)
         else:
+            # Se a 'foto' não é um caminho de arquivo, asumimos que é um file_id
             payload['photo'] = foto
             response = requests.post(url, data=payload)
         
-        if not response.json().get('ok'):
-            print(f"!!! ERRO DA API DO TELEGRAM: {response.json()}")
+        resposta_json = response.json()
+        if not resposta_json.get('ok'):
+            print(f"!!! ERRO DA API DO TELEGRAM: {resposta_json}")
         else:
-            print(f"Foto com botão enviada para {chat_id}.")
+            print(f"Foto enviada para {chat_id}.")
         
-        return response.json() # <<< CORREÇÃO 1: Retorna o "recibo" em caso de sucesso ou falha da API
+        return resposta_json
 
     except Exception as e:
-        print(f"Erro ao enviar foto com botão para {chat_id}: {e}")
-        return None # <<< CORREÇÃO 2: Retorna "None" se houver um erro de conexão
+        print(f"Erro ao enviar foto para {chat_id}: {e}")
+        return None
     
 
 def enviar_documento(chat_id, path_documento, legenda):
