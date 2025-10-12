@@ -2562,3 +2562,31 @@ def buscar_dados_para_painel_kanban():
     finally:
         if conn:
             conn.close()
+
+# Em database.py, adicione esta nova função
+
+def buscar_ranking_do_dia():
+    """
+    Calcula o ranking dos 3 funcionários com mais pontos APROVADOS HOJE.
+    """
+    conn = get_db_connection()
+    if not conn: return []
+    try:
+        cursor = conn.cursor()
+        sql = """
+            SELECT TOP 3
+                F.NomeCompleto,
+                SUM(E.PontosGanhos) as TotalPontosHoje
+            FROM Entregas E
+            JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID
+            WHERE E.StatusValidacao = 'Aprovada'
+              AND CONVERT(date, E.DataEnvio) = CONVERT(date, GETDATE())
+            GROUP BY
+                F.NomeCompleto
+            ORDER BY
+                TotalPontosHoje DESC;
+        """
+        cursor.execute(sql)
+        return cursor.fetchall()
+    finally:
+        if conn: conn.close()
