@@ -158,3 +158,33 @@ body {
 .card-titulo span:first-child {
     margin-right: 8px; /* Adiciona um espaço entre o ícone e o texto */
 }
+
+
+.progresso-container {
+    width: 80%;
+    max-width: 800px;
+    margin: 15px auto 0 auto; /* Centraliza a barra */
+    background-color: #d0d7de;
+    border-radius: 10px;
+    height: 30px;
+    position: relative; /* Essencial para alinhar o texto sobre a barra */
+    overflow: hidden; /* Garante que a barra interna não transborde as bordas arredondadas */
+}
+
+.progresso-barra {
+    background-color: #007bff; /* Azul */
+    height: 100%;
+    width: 0%; /* Começa com 0% e o JavaScript atualiza */
+    border-radius: 10px;
+    transition: width 0.5s ease-in-out; /* Animação suave ao preencher */
+}
+
+.progresso-texto {
+    position: absolute; /* Coloca o texto "flutuando" sobre a barra */
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%); /* Centraliza o texto perfeitamente */
+    color: #ffffff;
+    font-weight: bold;
+    text-shadow: 1px 1px 2px rgba(0,0,0,0.5); /* Sombra para melhorar a legibilidade */
+}
