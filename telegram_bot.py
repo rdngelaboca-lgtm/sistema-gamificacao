@@ -533,10 +533,8 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         if funcionario_db:
             sucesso = database.salvar_feedback_do_dia(funcionario_db.FuncionarioID, nota)
             if sucesso:
-                TAREFA_ID_FEEDBACK = 40
-                PONTOS_FEEDBACK = 5      
-                database.registrar_pontos_por_leitura(funcionario_db.FuncionarioID, PONTOS_FEEDBACK, "Feedback Diário (Bônus)")
-                texto_final = (f"Obrigado pelo seu feedback! Sua nota foi **{nota}**.\n\nVocê ganhou **{PONTOS_FEEDBACK}** pontos por sua participação. Sua opinião nos ajuda a melhorar sempre! 💪")
+                database.registrar_pontos_por_leitura(funcionario_db.FuncionarioID, config.PONTOS_BONUS_FEEDBACK_DIARIO, "Feedback Diário (Bônus)")
+                texto_final = (f"Obrigado pelo seu feedback! Sua nota foi **{nota}**.\n\nVocê ganhou **{config.PONTOS_BONUS_FEEDBACK_DIARIO}** pontos por sua participação. Sua opinião nos ajuda a melhorar sempre! 💪")
                 await query.edit_message_text(texto_final, parse_mode='Markdown')
             else: await query.edit_message_text("Você já enviou seu feedback hoje. Obrigado!")
         else: await query.edit_message_text("Erro: não foi possível identificar seu usuário.")
