@@ -2582,7 +2582,7 @@ def buscar_feed_de_atividades(limite=5):
             SELECT TOP (?) * FROM (
                 -- Evento do tipo 'tarefa_concluida'
                 SELECT
-                    E.DataAprovacao as Timestamp,
+                    E.DataEnvio as Timestamp,      # <-- CORRIGIDO!
                     'tarefa_concluida' as TipoEvento,
                     F.NomeCompleto as TextoPrincipal,
                     T.Titulo as TextoSecundario,
@@ -2614,4 +2614,3 @@ def buscar_feed_de_atividades(limite=5):
 
     finally:
         if conn: conn.close()
-
