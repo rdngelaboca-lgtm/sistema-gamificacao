@@ -1937,27 +1937,27 @@ def buscar_funcionarios_de_folga_hoje():
             conn.close()
     return []
 
-def buscar_tarefas_recorrentes_agendadas_para_hoje(funcionario_id):
+def buscar_tarefas_recorrentes_agendadas_para_hoje(funcionario_id, dia_da_semana):
     """
-    Busca todas as tarefas DIÁRIAS ou SEMANAIS (para o dia de hoje)
-    atribuídas a um funcionário, ignorando se já foram feitas ou não.
+    (VERSÃO CORRIGIDA) Busca tarefas recorrentes, AGORA INCLUINDO O SETOR.
     """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
+            # A ÚNICA MUDANÇA É ADICIONAR T.Setor AO SELECT
             sql = """
-                SELECT T.TarefaID, T.Titulo, T.Pontos
+                SELECT T.TarefaID, T.Titulo, T.Pontos, T.Setor
                 FROM TarefasAtribuidas TA
                 JOIN Tarefas T ON TA.TarefaID = T.TarefaID
                 WHERE TA.FuncionarioID = ? 
                   AND TA.DataFimVigencia IS NULL
                   AND (
                     TA.TipoFrequencia = 'Diaria' OR
-                    (TA.TipoFrequencia = 'Semanal' AND TA.ValorFrequencia = DATEPART(weekday, GETDATE()))
+                    (TA.TipoFrequencia = 'Semanal' AND TA.ValorFrequencia = ?)
                   )
             """
-            cursor.execute(sql, funcionario_id)
+            cursor.execute(sql, funcionario_id, dia_da_semana)
             return cursor.fetchall()
         finally:
             conn.close()
@@ -2630,6 +2630,21 @@ def autenticar_funcionario(funcionario_id):
             sql = "SELECT * FROM Funcionarios WHERE FuncionarioID = ?"
             cursor.execute(sql, funcionario_id)
             return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
+
+# ADICIONE ESTA NOVA FUNÇÃO EM database.py
+def buscar_chat_id_por_nome_grupo(nome_grupo):
+    """Busca o Chat ID de um grupo a partir do seu nome exato."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT ChatIDTelegram FROM Grupos WHERE NomeGrupo = ?"
+            cursor.execute(sql, nome_grupo)
+            resultado = cursor.fetchone()
+            return resultado[0] if resultado else None
         finally:
             conn.close()
     return None
