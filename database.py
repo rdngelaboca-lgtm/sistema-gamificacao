@@ -5,7 +5,7 @@ import hashlib
 import config 
 
 CONNECTION_STRING = (
-    f"DRIVER={{ODBC Driver 17 for SQL Server}};"  
+    f"DRIVER={{ODBC Driver 18 for SQL Server}};"  
     f"SERVER={config.DB_SERVER};"
     f"DATABASE={config.DB_DATABASE};"
     f"UID={config.DB_UID};"
@@ -2614,3 +2614,4 @@ def buscar_feed_de_atividades(limite=5):
 
     finally:
         if conn: conn.close()
+
