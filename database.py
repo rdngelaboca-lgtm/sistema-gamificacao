@@ -2567,8 +2567,7 @@ def buscar_ranking_do_dia():
     finally:
         if conn: conn.close()
 
-# Em database.py, adicione esta nova função
-
+# COLE ESTA VERSÃO COMPLETA NO LUGAR DA SUA FUNÇÃO ANTIGA
 def buscar_feed_de_atividades(limite=5):
     """
     Busca os últimos eventos (tarefas aprovadas e conquistas) para o feed.
@@ -2582,7 +2581,7 @@ def buscar_feed_de_atividades(limite=5):
             SELECT TOP (?) * FROM (
                 -- Evento do tipo 'tarefa_concluida'
                 SELECT
-                    E.DataEnvio as Timestamp,      # <-- CORRIGIDO!
+                    E.DataEnvio as Timestamp,      # <-- CORREÇÃO APLICADA AQUI
                     'tarefa_concluida' as TipoEvento,
                     F.NomeCompleto as TextoPrincipal,
                     T.Titulo as TextoSecundario,
@@ -2611,6 +2610,9 @@ def buscar_feed_de_atividades(limite=5):
         cols = [column[0] for column in cursor.description]
         return [dict(zip(cols, row)) for row in cursor.fetchall()]
 
-
+    except Exception as e:
+        # Adicionamos um print mais detalhado aqui para o log
+        print(f"!!! ERRO CRÍTICO DENTRO de buscar_feed_de_atividades: {e}")
+        return [] # Retorna lista vazia em caso de erro
     finally:
         if conn: conn.close()
