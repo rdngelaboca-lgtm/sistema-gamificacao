@@ -135,12 +135,20 @@ def verificar_fim_jornada():
 
 def verificar_e_delegar_tarefas_de_folga():
     """
-    Verifica quem está de folga e oferece as tarefas recorrentes da pessoa
-    para o grupo geral como uma missão extra.
+    (VERSÃO FINAL COM DIRECIONAMENTO POR SETOR)
+    Verifica quem está de folga e oferece as tarefas para o grupo do setor correspondente.
     """
-    print(f"\n[{datetime.now().strftime('%H:%M:%S')}]  delegando tarefas de quem está de folga...  Delegando...!")
+    print(f"\n[{datetime.now().strftime('%H:%M:%S')}]  Verificando tarefas de funcionários de folga...")
     
-    funcionarios_de_folga = database.buscar_funcionarios_de_folga_hoje()
+    hoje = datetime.now()
+    # Python: Segunda = 0, ..., Domingo = 6
+    # Nosso DB: Domingo = 1, Segunda = 2, ...
+    dia_da_semana_hoje = (hoje.weekday() + 2) % 7
+    if dia_da_semana_hoje == 0: dia_da_semana_hoje = 7 # Ajuste para Sábado
+    if hoje.weekday() == 6: dia_da_semana_hoje = 1 # Ajuste para Domingo
+    
+    # Passamos o dia da semana como parâmetro para ser mais confiável
+    funcionarios_de_folga = database.buscar_funcionarios_de_folga_hoje(dia_da_semana_hoje)
     
     if not funcionarios_de_folga:
         print("--> Nenhum funcionário de folga hoje. Nenhuma tarefa a ser delegada.")
@@ -148,29 +156,42 @@ def verificar_e_delegar_tarefas_de_folga():
 
     print(f"--> Encontrados {len(funcionarios_de_folga)} funcionário(s) de folga hoje.")
     for funcionario in funcionarios_de_folga:
-        tarefas_do_dia = database.buscar_tarefas_recorrentes_agendadas_para_hoje(funcionario.FuncionarioID)
+        # Passamos o dia da semana aqui também
+        tarefas_do_dia = database.buscar_tarefas_recorrentes_agendadas_para_hoje(funcionario.FuncionarioID, dia_da_semana_hoje)
         
         if not tarefas_do_dia:
             continue
 
         for tarefa in tarefas_do_dia:
+            chat_id_destino = None
+            # --- A NOVA INTELIGÊNCIA ESTÁ AQUI ---
+            if tarefa.Setor:
+                # 1. Tenta encontrar o Chat ID do grupo com o mesmo nome do setor
+                chat_id_destino = database.buscar_chat_id_por_nome_grupo(tarefa.Setor)
+                print(f"--> Tarefa '{tarefa.Titulo}' é do setor '{tarefa.Setor}'. Tentando enviar para o grupo correspondente.")
+
+            # 2. Se não encontrar um grupo para o setor, envia para o grupo geral de GESTÃO como medida de segurança.
+            if not chat_id_destino:
+                chat_id_destino = config.GESTOR_GROUP_CHAT_ID
+                print(f"--> AVISO: Não foi encontrado um grupo para o setor '{tarefa.Setor}'. Enviando para o grupo de gestão padrão.")
+            
+            # O resto da lógica é a mesma, mas usando o chat_id_destino que encontramos
             mensagem = (
                 f"📢 **Missão Extra Disponível!** 📢\n\n"
                 f"O(a) colega **{funcionario.NomeCompleto}** está de folga hoje, mas a tarefa abaixo precisa ser feita:\n\n"
+                f"**Setor:** {tarefa.Setor or 'Geral'}\n"
                 f"**Tarefa:** {tarefa.Titulo}\n"
                 f"**Recompensa:** {tarefa.Pontos} pontos\n\n"
                 "Quem pode assumir essa missão e garantir os pontos?"
             )
-            
-            # Criamos um callback único para esta tarefa específica
             callback_data = f"aceitar_folga_{tarefa.TarefaID}"
-            
             keyboard = [[InlineKeyboardButton("✅ Eu aceito!", callback_data=callback_data)]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            notificador_telegram.enviar_mensagem_com_botao(config.FOLGA_GROUP_CHAT_ID, mensagem, reply_markup)
-            print(f"--> Tarefa '{tarefa.Titulo}' de {funcionario.NomeCompleto} delegada para o grupo.")
-
+            # 3. Envia a mensagem para o destino correto!
+            notificador_telegram.enviar_mensagem_com_botao(chat_id_destino, mensagem, reply_markup)
+            print(f"--> Tarefa '{tarefa.Titulo}' delegada com sucesso.")
+            
 # Em agendador.py, SUBSTITUA a função antiga por esta versão mais segura:
 def executar_fechamento_mensal():
     """
