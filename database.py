@@ -2616,3 +2616,20 @@ def buscar_feed_de_atividades(limite=5):
         return [] # Retorna lista vazia em caso de erro
     finally:
         if conn: conn.close()
+
+# COLE ESTA FUNÇÃO DE VOLTA NO SEU ARQUIVO database.py
+def autenticar_funcionario(funcionario_id):
+    """
+    Busca todos os dados de um funcionário pelo ID, incluindo o hash da senha,
+    para o processo de autenticação.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT * FROM Funcionarios WHERE FuncionarioID = ?"
+            cursor.execute(sql, funcionario_id)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
