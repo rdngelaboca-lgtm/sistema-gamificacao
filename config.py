@@ -26,7 +26,7 @@ DB_PWD = 'Gamificacao#2025'
 
 # --- CONFIGURAÇÕES DA API E ARQUIVOS ---
 # URL base para a API. Essencial para o ngrok e para o deploy final.
-API_BASE_URL = "https://09396f7674d5.ngrok-free.app" # Lembre-se de atualizar se o ngrok mudar!
+API_BASE_URL = "https://b38868822c12.ngrok-free.app" # Lembre-se de atualizar se o ngrok mudar!
 
 # Nome da pasta onde os documentos de RH (holerites, etc.) serão salvos no servidor.
 PASTA_DOCUMENTOS_RH = "documentos_rh_seguros"
