@@ -55,7 +55,7 @@ class LoginWindow:
             payload = {"id": int(funcionario_id), "senha": senha}
             # Usa a mesma API_BASE_URL (a URL do ngrok) que o resto do programa
             # Dentro de carregar_agendamentos:
-            response = requests.get(f"{config.API_BASE_URL}/agendamentos")
+            response = requests.post(f"{config.API_BASE_URL}/login", json=payload)
 
             if response.status_code == 200:
                 dados_resposta = response.json()
@@ -245,7 +245,8 @@ class AppAgendamentos:
         agendamento_id = self.tree_agendamentos.item(selecionado, 'values')[0]
         
         try:
-            response = requests.post(f"{config.API_BASE_URL}/login", json=payload)
+            # Dentro da função abrir_janela_edicao:
+            response = requests.get(f"{config.API_BASE_URL}/agendamentos/{agendamento_id}")
             if response.status_code != 200:
                 messagebox.showerror("Erro", "Não foi possível buscar os detalhes do agendamento.")
                 return
