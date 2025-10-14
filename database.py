@@ -2648,3 +2648,58 @@ def buscar_chat_id_por_nome_grupo(nome_grupo):
         finally:
             conn.close()
     return None
+
+# ADICIONE ESTAS DUAS NOVAS FUNÇÕES EM database.py
+
+def listar_funcionarios_por_setor(setor):
+    """Retorna uma lista de todos os funcionários de um setor específico."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Usamos a coluna Cargo para identificar o setor do funcionário
+            sql = "SELECT * FROM Funcionarios WHERE Cargo LIKE ?"
+            cursor.execute(sql, f"%{setor}%")
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def registrar_pontos_por_meta_equipe(lista_funcionarios, pontos_ganhos, meta_vendas, total_vendido):
+    """
+    Registra pontos de meta para uma lista de funcionários.
+    Cria uma entrega 'Aprovada' para cada um e adiciona os pontos ao saldo.
+    """
+    conn = get_db_connection()
+    # ATENÇÃO: Coloque aqui o ID da tarefa "Performance de Equipe (Metas)" que você criou.
+    TAREFA_ID_META = 121 # <<< MUDE ESTE NÚMERO PARA O SEU ID CORRETO!
+
+    if not conn or not lista_funcionarios:
+        return False
+    
+    try:
+        cursor = conn.cursor()
+        sql_entrega = """
+            INSERT INTO Entregas
+            (TarefaID, FuncionarioID, StatusValidacao, PontosGanhos, DataEnvio, MotivoRecusa)
+            VALUES (?, ?, 'Aprovada', ?, GETDATE(), ?)
+        """
+        motivo = f"Meta de Vendas Atingida! (Vendido: R${total_vendido:.2f} / Meta: R${meta_vendas:.2f})"
+        
+        for funcionario in lista_funcionarios:
+            # 1. Insere um registro na tabela Entregas para o ranking do mês.
+            cursor.execute(sql_entrega, TAREFA_ID_META, funcionario.FuncionarioID, pontos_ganhos, motivo)
+            
+            # 2. Adiciona os pontos ao saldo geral do funcionário.
+            adicionar_pontos_ao_saldo(funcionario.FuncionarioID, pontos_ganhos)
+
+        conn.commit()
+        print(f"--> [METAS EQUIPE] {pontos_ganhos} pts registrados para {len(lista_funcionarios)} funcionário(s).")
+        return True
+    except Exception as e:
+        conn.rollback()
+        print(f"ERRO ao registrar pontos por meta de equipe: {e}")
+        return False
+    finally:
+        if conn:
+            conn.close()
