@@ -35,6 +35,7 @@ class App:
         self.frame_solicitacoes = ttk.Frame(self.notebook)
         self.frame_agenda = ttk.Frame(self.notebook)
         self.frame_loja = ttk.Frame(self.notebook)
+        self.frame_metas = ttk.Frame(self.notebook, padding="10")
 
         self.notebook.add(self.frame_dashboard, text='Dashboard')
         self.notebook.add(self.frame_funcionarios, text='Gerenciar Funcionários')
@@ -48,6 +49,7 @@ class App:
         self.notebook.add(self.frame_solicitacoes, text='Feedbacks Pendentes')
         self.notebook.add(self.frame_agenda, text='Agenda Semanal')
         self.notebook.add(self.frame_loja, text='Loja e Resgates')
+        self.notebook.add(self.frame_metas, text='Metas de Equipe')
 
         self.criar_aba_dashboard()
         self.criar_aba_funcionarios()
@@ -61,6 +63,7 @@ class App:
         self.criar_aba_solicitacoes()
         self.criar_aba_agenda()
         self.criar_aba_loja()
+        self.criar_aba_metas()
 
     def popular_combobox_filtro_setor(self):
         """Busca os setores únicos e popula o combobox de filtro."""
@@ -1179,42 +1182,46 @@ class App:
         btn_salvar = ttk.Button(frame, text="Salvar", command=salvar)
         btn_salvar.grid(row=5, columnspan=2, pady=20)
 
-    # Em main.py, SUBSTITUA a função antiga por esta versão aprimorada
     def on_tarefa_selecionada_para_atribuicao(self, event):
         """
-        Chamada sempre que uma tarefa é selecionada.
-        Atualiza o painel de seleção de alvos e FILTRA o painel de atribuições ativas.
+        (VERSÃO CORRIGIDA)
+        Chamada sempre que um item é selecionado na árvore de tarefas.
         """
-        # Limpa a lista de atribuições ativas
+        # Limpa o painel da direita para começar
         for i in self.tree_atribuicoes_ativas.get_children():
             self.tree_atribuicoes_ativas.delete(i)
 
         selecionado = self.tree_atr_tarefas.focus()
+        if not selecionado: # Se nada estiver selecionado, não faz nada
+            return
+
+        # Pega os valores do item clicado
+        values = self.tree_atr_tarefas.item(selecionado, 'values')
+
+        # --- O PORTEIRO INTELIGENTE ESTÁ AQUI ---
+        if not values or not values[0]:
+            # Se 'values' estiver vazio ou o primeiro item for vazio, significa
+            # que o usuário clicou em um cabeçalho de setor (uma "pasta").
+            # Neste caso, apenas limpamos os painéis e paramos a função.
+            self.atualizar_painel_selecao() # Limpa o painel do meio
+            return # Para a execução aqui
+        # ----------------------------------------
         
-        # Se uma tarefa for selecionada...
-        if selecionado:
-            tarefa_id_selecionada = self.tree_atr_tarefas.item(selecionado, 'values')[0]
-            tarefa_titulo_selecionado = self.tree_atr_tarefas.item(selecionado, 'values')[1]
+        # Se o código chegou até aqui, sabemos que é uma tarefa válida ("arquivo").
+        # A execução continua normalmente.
+        tarefa_id_selecionada = values[0]
+        tarefa_titulo_selecionado = values[1]
 
-            # Atualiza o painel do meio (alvos) como antes
-            if self.modo_atribuicao.get() == "Individual":
-                self.atualizar_painel_selecao(tarefa_id=tarefa_id_selecionada)
-            else:
-                 self.atualizar_painel_selecao() # Para grupos não precisa filtrar
-
-            # FILTRA o painel da direita (atribuições ativas)
-            for atribuicao in database.listar_atribuicoes_ativas():
-                # A mágica está aqui: compara o título da tarefa da atribuição
-                # com o título da tarefa que selecionamos.
-                if atribuicao[2] == tarefa_titulo_selecionado:
-                    self.tree_atribuicoes_ativas.insert("", "end", values=atribuicao)
+        # Atualiza o painel do meio (alvos) como antes
+        if self.modo_atribuicao.get() == "Individual":
+            self.atualizar_painel_selecao(tarefa_id=tarefa_id_selecionada)
         else:
-            # Se nenhuma tarefa estiver selecionada, limpa os painéis
             self.atualizar_painel_selecao()
-            self.atualizar_lista_atribuicoes_ativas() # Mostra todas as atribuições
-    
-    # Em main.py, substitua adicionar_novo_funcionario
-    # Em main.py, dentro da class App, adicione esta função de volta
+
+        # FILTRA o painel da direita (atribuições ativas)
+        for atribuicao in database.listar_atribuicoes_ativas():
+            if atribuicao[2] == tarefa_titulo_selecionado:
+                self.tree_atribuicoes_ativas.insert("", "end", values=atribuicao)
 
     def adicionar_novo_funcionario(self):
         nome = self.entry_nome.get()
@@ -1952,6 +1959,84 @@ class App:
             self.atualizar_lista_solicitacoes()
         else:
             messagebox.showerror("Erro", "Ocorreu um erro ao salvar o feedback no banco de dados.")
+
+
+# COLE TODO ESTE BLOCO DE CÓDIGO NO FINAL DA CLASSE App EM main.py
+
+def criar_aba_metas(self):
+    """Cria a interface para lançamento de metas de equipe."""
+    ttk.Label(self.frame_metas, text="Premiação por Metas de Equipe", font=("Arial", 16)).pack(pady=10)
+    ttk.Label(self.frame_metas, text="Esta ferramenta premia todos os funcionários do setor 'Atendimento' se a meta de vendas do dia for atingida.", wraplength=700).pack(pady=(0, 20))
+
+    form_frame = ttk.Frame(self.frame_metas)
+    form_frame.pack(pady=10)
+
+    ttk.Label(form_frame, text="Meta de Vendas do Dia (R$):").grid(row=0, column=0, sticky="w", padx=5, pady=5)
+    self.entry_meta_vendas = ttk.Entry(form_frame, width=20, justify='right')
+    self.entry_meta_vendas.grid(row=0, column=1, padx=5, pady=5)
+
+    ttk.Label(form_frame, text="Total Vendido no Dia (R$):").grid(row=1, column=0, sticky="w", padx=5, pady=5)
+    self.entry_total_vendido = ttk.Entry(form_frame, width=20, justify='right')
+    self.entry_total_vendido.grid(row=1, column=1, padx=5, pady=5)
+
+    ttk.Label(form_frame, text="Pontos por Meta Batida:").grid(row=2, column=0, sticky="w", padx=5, pady=5)
+    self.entry_pontos_meta = ttk.Entry(form_frame, width=20, justify='right')
+    self.entry_pontos_meta.grid(row=2, column=1, padx=5, pady=5)
+    self.entry_pontos_meta.insert(0, "20") # Valor padrão de 20 pontos
+
+    btn_premiar = ttk.Button(self.frame_metas, text="Verificar Meta e Premiar Equipe", command=self.processar_meta_equipe)
+    btn_premiar.pack(pady=20, ipady=10, fill='x', padx=50)
+
+def processar_meta_equipe(self):
+    """Processa os valores de meta, verifica e premia a equipe se aplicável."""
+    try:
+        meta_str = self.entry_meta_vendas.get().replace(',', '.')
+        vendido_str = self.entry_total_vendido.get().replace(',', '.')
+        pontos_str = self.entry_pontos_meta.get()
+
+        if not all([meta_str, vendido_str, pontos_str]):
+            messagebox.showerror("Erro", "Todos os campos são obrigatórios.")
+            return
+
+        meta = float(meta_str)
+        vendido = float(vendido_str)
+        pontos = int(pontos_str)
+
+    except ValueError:
+        messagebox.showerror("Erro de Formato", "Os valores de meta, vendas e pontos devem ser números.")
+        return
+
+    if vendido >= meta:
+        confirmado = messagebox.askyesno("Meta Atingida!",
+                                         f"A meta de R${meta:.2f} foi ATINGIDA (Vendido: R${vendido:.2f})!\n\n"
+                                         f"Deseja premiar a equipe de 'Atendimento' com {pontos} pontos cada?")
+        if confirmado:
+            atendentes = database.listar_funcionarios_por_setor('Atendimento')
+            if not atendentes:
+                messagebox.showwarning("Aviso", "Nenhum funcionário do setor 'Atendimento' foi encontrado para premiar.")
+                return
+
+            sucesso = database.registrar_pontos_por_meta_equipe(atendentes, pontos, meta, vendido)
+
+            if sucesso:
+                # Notifica o grupo do Atendimento, se ele existir
+                chat_id_atendimento = database.buscar_chat_id_por_nome_grupo('Atendimento')
+                if chat_id_atendimento:
+                    mensagem = (f"🏆🎉 **META DE VENDAS BATIDA!** 🎉🏆\n\n"
+                                f"Parabéns, equipe de Atendimento! A meta de R${meta:.2f} foi superada, com um total de **R${vendido:.2f}** em vendas!\n\n"
+                                f"Cada membro da equipe ganhou **{pontos} pontos** pelo excelente trabalho coletivo! 🚀")
+                    notificador_telegram.enviar_mensagem(chat_id_atendimento, mensagem)
+
+                messagebox.showinfo("Sucesso", f"{len(atendentes)} funcionário(s) do Atendimento foram premiados com sucesso!")
+                # Limpa os campos
+                self.entry_meta_vendas.delete(0, 'end')
+                self.entry_total_vendido.delete(0, 'end')
+            else:
+                messagebox.showerror("Erro de Banco", "Ocorreu um erro ao registrar os pontos no banco de dados.")
+    else:
+        messagebox.showinfo("Meta não Atingida",
+                            f"A meta de R${meta:.2f} não foi atingida (Vendido: R${vendido:.2f}).\n\n"
+                            "Nenhum ponto foi distribuído. Mais sorte da próxima vez!")
 
 if __name__ == "__main__":
     root = tk.Tk()
