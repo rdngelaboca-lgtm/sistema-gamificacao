@@ -2167,7 +2167,7 @@ class App:
             messagebox.showinfo("Meta não Atingida",
                                 f"A meta de R${meta:.2f} não foi atingida (Vendido: R${vendido:.2f}).\n\n"
                                 "Nenhum ponto foi distribuído. Mais sorte da próxima vez!")
-            
+
     def on_data_meta_selecionada(self, event):
         """Chamada quando a data no calendário de metas é alterada."""
         self.carregar_instancias_de_metas_do_dia()
@@ -2176,10 +2176,10 @@ class App:
         """Busca e exibe as metas que foram lançadas para a data selecionada."""
         for i in self.tree_metas_instancias.get_children():
             self.tree_metas_instancias.delete(i)
-        
+
         data_selecionada = self.date_entry_metas.get_date().strftime("%Y-%m-%d")
         instancias = database.listar_metas_instancias_por_data(data_selecionada)
-        
+
         for inst in instancias:
             valor_meta = f"{inst.ValorMeta:.2f}"
             valor_atingido = f"{inst.ValorAtingido:.2f}" if inst.ValorAtingido is not None else "---"
@@ -2190,12 +2190,12 @@ class App:
     def abrir_janela_lancamento_meta(self):
         """Abre um pop-up para o gestor lançar uma nova meta para o dia selecionado."""
         data_selecionada = self.date_entry_metas.get_date()
-        
+
         popup = Toplevel(self.root)
         popup.title(f"Lançar Meta para {data_selecionada.strftime('%d/%m/%Y')}")
         popup.geometry("400x200")
         popup.transient(self.root)
-        
+
         frame = ttk.Frame(popup, padding="15")
         frame.pack(fill="both", expand=True)
 
@@ -2241,7 +2241,7 @@ class App:
 
         dados_inst = self.tree_metas_instancias.item(selecionado, 'values')
         instancia_id, nome_meta, setor_alvo, valor_meta_str, _, status = dados_inst
-        
+
         if status != 'Pendente':
             messagebox.showinfo("Informação", "Esta meta já foi apurada anteriormente.")
             return
@@ -2252,7 +2252,7 @@ class App:
         popup.title(f"Apurar Meta: {nome_meta}")
         popup.geometry("400x200")
         popup.transient(self.root)
-        
+
         frame = ttk.Frame(popup, padding="15")
         frame.pack(fill="both", expand=True)
 
@@ -2270,10 +2270,10 @@ class App:
             try:
                 valor_atingido = float(valor_atingido_str)
                 data_selecionada_str = self.date_entry_metas.get_date().strftime("%Y-%m-%d")
-                
+
                 if valor_atingido >= valor_meta:
                     novo_status = "Atingida"
-                    
+
                     modelos = database.listar_metas_modelos()
                     modelo_correto = next((m for m in modelos if m.NomeMeta == nome_meta), None)
                     pontos = modelo_correto.PontosPremio if modelo_correto else 0
@@ -2283,35 +2283,36 @@ class App:
                                                     parent=popup)
                     if confirmado:
                         if setor_alvo.lower() == 'equipe' or setor_alvo.lower() == 'geral':
-                            # Lógica para premiar todos que trabalharam
                             funcionarios_a_premiar = database.listar_TODOS_funcionarios_que_trabalharam_no_dia(data_selecionada_str)
                         else:
-                            # Lógica para premiar um setor específico
                             funcionarios_a_premiar = database.listar_funcionarios_que_trabalharam_no_dia(data_selecionada_str, setor_alvo)
-                        
+
                         if not funcionarios_a_premiar:
                             messagebox.showwarning("Aviso", f"Nenhum funcionário do setor '{setor_alvo}' teve atividade registrada neste dia. Nenhum ponto será distribuído.", parent=popup)
                         else:
                             database.registrar_pontos_por_meta_equipe(funcionarios_a_premiar, pontos, valor_meta, valor_atingido)
-                            
+
                             chat_id_grupo = database.buscar_chat_id_por_nome_grupo(setor_alvo)
                             if chat_id_grupo:
                                 mensagem = (f"🏆🎉 **META DE VENDAS BATIDA!** ({nome_meta}) 🎉🏆\n\n"
                                             f"Parabéns, equipe do setor **{setor_alvo}**! A meta de R${valor_meta:.2f} foi superada!\n\n"
                                             f"Cada membro da equipe que trabalhou hoje ganhou **{pontos} pontos**! 🚀")
                                 notificador_telegram.enviar_mensagem(chat_id_grupo, mensagem)
-                            
+
                             messagebox.showinfo("Sucesso", f"{len(funcionarios_a_premiar)} funcionário(s) premiados com sucesso!", parent=popup)
                 else:
                     novo_status = "NaoAtingida"
                     messagebox.showinfo("Resultado", "A meta não foi atingida. Nenhum ponto foi distribuído.", parent=popup)
-                
+
                 database.apurar_meta_instancia(instancia_id, valor_atingido, novo_status)
                 self.carregar_instancias_de_metas_do_dia()
                 popup.destroy()
 
             except ValueError:
                 messagebox.showerror("Erro de Formato", "O valor atingido deve ser um número.", parent=popup)
+
+        ttk.Button(frame, text="Confirmar e Apurar Resultado", command=confirmar_apuracao).pack(pady=20)
+
 
     def carregar_modelos_de_metas(self):
         """Busca os modelos de meta no banco e preenche a lista e o combobox."""

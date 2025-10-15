@@ -2853,3 +2853,80 @@ def listar_TODOS_funcionarios_que_trabalharam_no_dia(data):
         finally:
             conn.close()
     return []
+
+# ===================================================================
+# == INÍCIO DO MÓDULO DE GESTÃO DE METAS DIÁRIAS =====================
+# ===================================================================
+
+def lancar_meta_diaria(modelo_id, data, valor_meta):
+    """Cria uma instância de uma meta para um dia específico."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Verifica se já não existe uma meta desse modelo para esse dia
+            sql_check = "SELECT 1 FROM MetasDiariasInstancias WHERE MetaModeloID = ? AND Data = ?"
+            cursor.execute(sql_check, modelo_id, data)
+            if cursor.fetchone():
+                print(f"--> AVISO: Meta (ModeloID: {modelo_id}) já lançada para a data {data}.")
+                return False # Retorna False se já existir
+            
+            sql = "INSERT INTO MetasDiariasInstancias (MetaModeloID, Data, ValorMeta) VALUES (?, ?, ?)"
+            cursor.execute(sql, modelo_id, data, valor_meta)
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+
+def listar_metas_instancias_por_data(data):
+    """Lista todas as metas lançadas para uma data específica, com detalhes do modelo."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT I.*, M.NomeMeta, M.SetorAlvo, M.PontosPremio
+                FROM MetasDiariasInstancias I
+                JOIN MetasModelos M ON I.MetaModeloID = M.MetaModeloID
+                WHERE I.Data = ?
+                ORDER BY M.NomeMeta
+            """
+            cursor.execute(sql, data)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def apurar_meta_instancia(instancia_id, valor_atingido, status):
+    """Atualiza uma instância de meta com o valor atingido e o novo status."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE MetasDiariasInstancias SET ValorAtingido = ?, Status = ? WHERE MetaInstanciaID = ?"
+            cursor.execute(sql, valor_atingido, status, instancia_id)
+            conn.commit()
+        finally:
+            conn.close()
+
+def listar_funcionarios_que_trabalharam_no_dia(data, setor):
+    """
+    Retorna uma lista de funcionários de um setor que tiveram pelo menos uma
+    entrega registrada (com qualquer status) em um dia específico.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT DISTINCT F.*
+                FROM Funcionarios F
+                JOIN Entregas E ON F.FuncionarioID = E.FuncionarioID
+                WHERE F.Cargo LIKE ? 
+                  AND CONVERT(DATE, E.DataEnvio) = ?
+            """
+            cursor.execute(sql, f"%{setor}%", data)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
