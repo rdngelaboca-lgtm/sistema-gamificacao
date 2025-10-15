@@ -7,6 +7,7 @@ import os
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from datetime import datetime, timedelta
+from tkcalendar import DateEntry
 
 
 class App:
@@ -1033,6 +1034,7 @@ class App:
         elif tab_text == "Feedbacks Pendentes": self.atualizar_lista_solicitacoes()
         if tab_text == "Loja e Resgates": self.carregar_dados_loja()
         elif tab_text == "Gestão de Metas": self.carregar_modelos_de_metas()
+        self.carregar_instancias_de_metas_do_dia()
     
     def on_tab_atribuir_tarefas_selected(self):
         self.atualizar_lista_tarefas_atribuicao()
@@ -1962,78 +1964,89 @@ class App:
             messagebox.showerror("Erro", "Ocorreu um erro ao salvar o feedback no banco de dados.")
 
 
+    # SUBSTITUA A FUNÇÃO criar_aba_metas ANTIGA POR ESTA VERSÃO COMPLETA
     def criar_aba_metas(self):
         """Cria a interface completa para Gestão de Metas (Modelos e Lançamentos)."""
-        # --- Frame Principal com duas colunas ---
         main_frame = ttk.Frame(self.frame_metas)
         main_frame.pack(fill=tk.BOTH, expand=True)
         main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(0, weight=1)
+        main_frame.rowconfigure(1, weight=1) # A linha de baixo (metas diárias) vai crescer
 
-        # --- PAINEL ESQUERDO: Lista de Modelos de Meta ---
-        frame_lista = ttk.LabelFrame(main_frame, text="Modelos de Meta", padding="10")
-        frame_lista.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
-        frame_lista.rowconfigure(0, weight=1)
-        frame_lista.columnconfigure(0, weight=1)
-
-        cols = ('ID', 'Nome da Meta', 'Setor Alvo', 'Pontos')
-        self.tree_metas_modelos = ttk.Treeview(frame_lista, columns=cols, show='headings', selectmode='browse')
+        # --- PAINEL SUPERIOR ESQUERDO: Lista de Modelos de Meta ---
+        frame_lista_modelos = ttk.LabelFrame(main_frame, text="Modelos de Meta", padding="10")
+        frame_lista_modelos.grid(row=0, column=0, sticky="nsew", padx=(0, 10), pady=(0, 10))
+        # ... (código que já tínhamos para a lista de modelos, sem alterações)
+        cols_modelos = ('ID', 'Nome da Meta', 'Setor Alvo', 'Pontos')
+        self.tree_metas_modelos = ttk.Treeview(frame_lista_modelos, columns=cols_modelos, show='headings', selectmode='browse', height=5)
         self.tree_metas_modelos.heading('ID', text='ID'); self.tree_metas_modelos.column('ID', width=40)
         self.tree_metas_modelos.heading('Nome da Meta', text='Nome da Meta'); self.tree_metas_modelos.column('Nome da Meta', width=200)
         self.tree_metas_modelos.heading('Setor Alvo', text='Setor'); self.tree_metas_modelos.column('Setor Alvo', width=100)
         self.tree_metas_modelos.heading('Pontos', text='Prêmio'); self.tree_metas_modelos.column('Pontos', width=60, anchor='center')
-        self.tree_metas_modelos.grid(row=0, column=0, sticky="nsew")
+        self.tree_metas_modelos.pack(fill=tk.BOTH, expand=True)
         self.tree_metas_modelos.bind('<<TreeviewSelect>>', self.on_modelo_meta_selecionado)
+        frame_botoes_modelos = ttk.Frame(frame_lista_modelos); frame_botoes_modelos.grid(row=1, column=0, pady=10, sticky='ew') # Para centralizar
+        ttk.Button(frame_botoes_modelos, text="Excluir Modelo", command=self.excluir_modelo_meta_selecionado).pack()
 
-        frame_botoes_lista = ttk.Frame(frame_lista)
-        frame_botoes_lista.grid(row=1, column=0, pady=10)
-        ttk.Button(frame_botoes_lista, text="Excluir Modelo", command=self.excluir_modelo_meta_selecionado).pack()
-
-        # --- PAINEL DIREITO: Formulário para Criar/Editar Modelo ---
-        frame_form = ttk.LabelFrame(main_frame, text="Criar ou Editar Modelo", padding="15")
-        frame_form.grid(row=0, column=1, sticky="nsew")
-        frame_form.columnconfigure(1, weight=1)
-
-        ttk.Label(frame_form, text="Nome da Meta:").grid(row=0, column=0, sticky="w", pady=5)
-        self.entry_meta_nome = ttk.Entry(frame_form)
-        self.entry_meta_nome.grid(row=0, column=1, sticky="ew", pady=5)
-
-        ttk.Label(frame_form, text="Descrição:").grid(row=1, column=0, sticky="w", pady=5)
-        self.entry_meta_desc = ttk.Entry(frame_form)
-        self.entry_meta_desc.grid(row=1, column=1, sticky="ew", pady=5)
-
-        ttk.Label(frame_form, text="Setor Alvo:").grid(row=2, column=0, sticky="w", pady=5)
-        self.combo_meta_setor = ttk.Combobox(frame_form)
-        self.combo_meta_setor.grid(row=2, column=1, sticky="ew", pady=5)
-
-        ttk.Label(frame_form, text="Pontos de Prêmio:").grid(row=3, column=0, sticky="w", pady=5)
-        self.entry_meta_pontos = ttk.Entry(frame_form)
-        self.entry_meta_pontos.grid(row=3, column=1, sticky="w", pady=5)
-
-        frame_botoes_form = ttk.Frame(frame_form)
-        frame_botoes_form.grid(row=4, column=1, sticky="e", pady=20)
+        # --- PAINEL SUPERIOR DIREITO: Formulário para Criar/Editar Modelo ---
+        frame_form_modelos = ttk.LabelFrame(main_frame, text="Criar ou Editar Modelo", padding="15")
+        frame_form_modelos.grid(row=0, column=1, sticky="nsew", pady=(0, 10))
+        # ... (código do formulário que já tínhamos, sem alterações)
+        frame_form_modelos.columnconfigure(1, weight=1)
+        ttk.Label(frame_form_modelos, text="Nome da Meta:").grid(row=0, column=0, sticky="w", pady=5)
+        self.entry_meta_nome = ttk.Entry(frame_form_modelos); self.entry_meta_nome.grid(row=0, column=1, sticky="ew", pady=5)
+        ttk.Label(frame_form_modelos, text="Descrição:").grid(row=1, column=0, sticky="w", pady=5)
+        self.entry_meta_desc = ttk.Entry(frame_form_modelos); self.entry_meta_desc.grid(row=1, column=1, sticky="ew", pady=5)
+        ttk.Label(frame_form_modelos, text="Setor Alvo:").grid(row=2, column=0, sticky="w", pady=5)
+        self.combo_meta_setor = ttk.Combobox(frame_form_modelos); self.combo_meta_setor.grid(row=2, column=1, sticky="ew", pady=5)
+        ttk.Label(frame_form_modelos, text="Pontos de Prêmio:").grid(row=3, column=0, sticky="w", pady=5)
+        self.entry_meta_pontos = ttk.Entry(frame_form_modelos); self.entry_meta_pontos.grid(row=3, column=1, sticky="w", pady=5)
+        frame_botoes_form = ttk.Frame(frame_form_modelos); frame_botoes_form.grid(row=4, column=1, sticky="e", pady=20)
         self.btn_salvar_meta_modelo = ttk.Button(frame_botoes_form, text="Criar Novo Modelo", command=self.salvar_modelo_meta)
         self.btn_salvar_meta_modelo.pack(side="left")
         ttk.Button(frame_botoes_form, text="Limpar", command=self.limpar_formulario_meta_modelo).pack(side="left", padx=10)
 
+        # --- PAINEL INFERIOR: Gerenciamento de Metas do Dia ---
+        frame_diario = ttk.LabelFrame(main_frame, text="Metas do Dia", padding="10")
+        frame_diario.grid(row=1, column=0, columnspan=2, sticky="nsew")
+        frame_diario.rowconfigure(1, weight=1)
+        frame_diario.columnconfigure(0, weight=1)
 
-        # COLE ESTE BLOCO DE CÓDIGO COM AS 5 NOVAS FUNÇÕES EM main.py
+        frame_filtros_diario = ttk.Frame(frame_diario)
+        frame_filtros_diario.grid(row=0, column=0, sticky="ew", pady=5)
+        ttk.Label(frame_filtros_diario, text="Selecione a Data:").pack(side="left")
+        self.date_entry_metas = DateEntry(frame_filtros_diario, date_pattern='dd/mm/yyyy', width=12)
+        self.date_entry_metas.pack(side="left", padx=10)
+        self.date_entry_metas.bind("<<DateEntrySelected>>", self.on_data_meta_selecionada)
 
-    def carregar_modelos_de_metas(self):
-        """Busca os modelos de meta no banco e preenche a lista e o combobox."""
-        for i in self.tree_metas_modelos.get_children():
-            self.tree_metas_modelos.delete(i)
+        cols_instancias = ('ID', 'Nome Meta', 'Setor', 'Meta (R$)', 'Atingido (R$)', 'Status')
+        self.tree_metas_instancias = ttk.Treeview(frame_diario, columns=cols_instancias, show='headings', selectmode='browse')
+        self.tree_metas_instancias.heading('ID', text='ID'); self.tree_metas_instancias.column('ID', width=40)
+        self.tree_metas_instancias.heading('Nome Meta', text='Nome da Meta'); self.tree_metas_instancias.column('Nome Meta', width=250)
+        self.tree_metas_instancias.heading('Setor', text='Setor Alvo'); self.tree_metas_instancias.column('Setor', width=100)
+        self.tree_metas_instancias.heading('Meta (R$)', text='Meta (R$)'); self.tree_metas_instancias.column('Meta (R$)', width=100, anchor='e')
+        self.tree_metas_instancias.heading('Atingido (R$)', text='Atingido (R$)'); self.tree_metas_instancias.column('Atingido (R$)', width=100, anchor='e')
+        self.tree_metas_instancias.heading('Status', text='Status'); self.tree_metas_instancias.column('Status', width=100, anchor='center')
+        self.tree_metas_instancias.grid(row=1, column=0, sticky="nsew")
 
-        modelos = database.listar_metas_modelos()
-        for modelo in modelos:
-            self.tree_metas_modelos.insert("", "end", values=(
-                modelo.MetaModeloID, modelo.NomeMeta, modelo.SetorAlvo, modelo.PontosPremio
-            ))
+        frame_botoes_diario = ttk.Frame(frame_diario)
+        frame_botoes_diario.grid(row=2, column=0, pady=10)
+        ttk.Button(frame_botoes_diario, text="Lançar Nova Meta para o Dia", command=self.abrir_janela_lancamento_meta).pack(side="left", padx=5)
+        ttk.Button(frame_botoes_diario, text="Apurar Meta Selecionada", command=self.abrir_janela_apuracao_meta).pack(side="left", padx=5)
+        def carregar_modelos_de_metas(self):
+            """Busca os modelos de meta no banco e preenche a lista e o combobox."""
+            for i in self.tree_metas_modelos.get_children():
+                self.tree_metas_modelos.delete(i)
 
-        setores = database.listar_setores_unicos()
-        self.combo_meta_setor['values'] = setores + ['Caixa'] # Adicionando 'Caixa' manualmente se não existir
+            modelos = database.listar_metas_modelos()
+            for modelo in modelos:
+                self.tree_metas_modelos.insert("", "end", values=(
+                    modelo.MetaModeloID, modelo.NomeMeta, modelo.SetorAlvo, modelo.PontosPremio
+                ))
 
-        self.limpar_formulario_meta_modelo()
+            setores = database.listar_setores_unicos()
+            self.combo_meta_setor['values'] = setores + ['Caixa'] # Adicionando 'Caixa' manualmente se não existir
+
+            self.limpar_formulario_meta_modelo()
 
     def on_modelo_meta_selecionado(self, event):
         """Quando um modelo é selecionado, preenche o formulário para edição."""
@@ -2159,6 +2172,150 @@ class App:
             messagebox.showinfo("Meta não Atingida",
                                 f"A meta de R${meta:.2f} não foi atingida (Vendido: R${vendido:.2f}).\n\n"
                                 "Nenhum ponto foi distribuído. Mais sorte da próxima vez!")
+            
+    # COLE ESTE BLOCO DE CÓDIGO COM AS 3 NOVAS FUNÇÕES EM main.py
+
+    def on_data_meta_selecionada(self, event):
+        """Chamada quando a data no calendário de metas é alterada."""
+        self.carregar_instancias_de_metas_do_dia()
+
+    def carregar_instancias_de_metas_do_dia(self):
+        """Busca e exibe as metas que foram lançadas para a data selecionada."""
+        for i in self.tree_metas_instancias.get_children():
+            self.tree_metas_instancias.delete(i)
+
+        data_selecionada = self.date_entry_metas.get_date().strftime("%Y-%m-%d")
+        instancias = database.listar_metas_instancias_por_data(data_selecionada)
+
+        for inst in instancias:
+            valor_meta = f"{inst.ValorMeta:.2f}"
+            valor_atingido = f"{inst.ValorAtingido:.2f}" if inst.ValorAtingido is not None else "---"
+            self.tree_metas_instancias.insert("", "end", values=(
+                inst.MetaInstanciaID, inst.NomeMeta, inst.SetorAlvo, valor_meta, valor_atingido, inst.Status
+            ))
+
+    def abrir_janela_lancamento_meta(self):
+        """Abre um pop-up para o gestor lançar uma nova meta para o dia selecionado."""
+        data_selecionada = self.date_entry_metas.get_date()
+
+        popup = Toplevel(self.root)
+        popup.title(f"Lançar Meta para {data_selecionada.strftime('%d/%m/%Y')}")
+        popup.geometry("400x200")
+        popup.transient(self.root)
+
+        frame = ttk.Frame(popup, padding="15")
+        frame.pack(fill="both", expand=True)
+
+        ttk.Label(frame, text="Selecione o Modelo de Meta:").pack(anchor='w')
+        combo_modelos = ttk.Combobox(frame, state="readonly")
+        combo_modelos.pack(fill='x', pady=5)
+        modelos_db = database.listar_metas_modelos()
+        modelos_map = {m.NomeMeta: m.MetaModeloID for m in modelos_db}
+        combo_modelos['values'] = list(modelos_map.keys())
+
+        ttk.Label(frame, text="Valor da Meta (R$):").pack(anchor='w')
+        entry_valor = ttk.Entry(frame)
+        entry_valor.pack(fill='x', pady=5)
+
+        def confirmar_lancamento():
+            nome_modelo = combo_modelos.get()
+            valor_str = entry_valor.get().replace(',', '.')
+            if not nome_modelo or not valor_str:
+                messagebox.showerror("Erro", "Selecione um modelo e defina um valor para a meta.", parent=popup)
+                return
+            try:
+                valor = float(valor_str)
+                modelo_id = modelos_map[nome_modelo]
+                sucesso = database.lancar_meta_diaria(modelo_id, data_selecionada.strftime("%Y-%m-%d"), valor)
+                if sucesso:
+                    messagebox.showinfo("Sucesso", "Meta lançada para o dia!", parent=popup)
+                    self.carregar_instancias_de_metas_do_dia()
+                    popup.destroy()
+                else:
+                    messagebox.showwarning("Aviso", "Esta meta já foi lançada para este dia.", parent=popup)
+            except ValueError:
+                messagebox.showerror("Erro de Formato", "O valor da meta deve ser um número.", parent=popup)
+
+        ttk.Button(frame, text="Confirmar Lançamento", command=confirmar_lancamento).pack(pady=20)
+
+    def abrir_janela_apuracao_meta(self):
+        """Abre um pop-up para apurar o resultado de uma meta selecionada."""
+        selecionado = self.tree_metas_instancias.focus()
+        if not selecionado:
+            messagebox.showwarning("Aviso", "Selecione uma meta na lista 'Metas do Dia' para apurar.")
+            return
+
+        dados_inst = self.tree_metas_instancias.item(selecionado, 'values')
+        instancia_id, nome_meta, setor, valor_meta_str, _, status = dados_inst
+
+        if status != 'Pendente':
+            messagebox.showinfo("Informação", "Esta meta já foi apurada anteriormente.")
+            return
+
+        valor_meta = float(valor_meta_str)
+
+        popup = Toplevel(self.root)
+        popup.title(f"Apurar Meta: {nome_meta}")
+        popup.geometry("400x200")
+        popup.transient(self.root)
+
+        frame = ttk.Frame(popup, padding="15")
+        frame.pack(fill="both", expand=True)
+
+        ttk.Label(frame, text=f"Meta do Dia: R$ {valor_meta:.2f}").pack(anchor='w')
+        ttk.Label(frame, text="Digite o Valor Total Atingido (R$):").pack(anchor='w', pady=(10,0))
+        entry_valor_atingido = ttk.Entry(frame)
+        entry_valor_atingido.pack(fill='x', pady=5)
+        entry_valor_atingido.focus()
+
+        def confirmar_apuracao():
+            valor_atingido_str = entry_valor_atingido.get().replace(',', '.')
+            if not valor_atingido_str:
+                messagebox.showerror("Erro", "O valor atingido é obrigatório.", parent=popup)
+                return
+            try:
+                valor_atingido = float(valor_atingido_str)
+                data_selecionada = self.date_entry_metas.get_date().strftime("%Y-%m-%d")
+
+                if valor_atingido >= valor_meta:
+                    novo_status = "Atingida"
+                    confirmado = messagebox.askyesno("Meta Atingida!",
+                                                    f"A meta foi ATINGIDA!\nDeseja premiar a equipe do setor '{setor}'?",
+                                                    parent=popup)
+                    if confirmado:
+                        # Busca os pontos do modelo de meta
+                        modelos = database.listar_metas_modelos()
+                        modelo_correto = next((m for m in modelos if m.NomeMeta == nome_meta), None)
+                        pontos = modelo_correto.PontosPremio if modelo_correto else 0
+
+                        # Busca os funcionários que trabalharam
+                        funcionarios_a_premiar = database.listar_funcionarios_que_trabalharam_no_dia(data_selecionada, setor)
+
+                        if not funcionarios_a_premiar:
+                            messagebox.showwarning("Aviso", f"Nenhum funcionário do setor '{setor}' teve atividade registrada neste dia. Nenhum ponto será distribuído.", parent=popup)
+                        else:
+                            database.registrar_pontos_por_meta_equipe(funcionarios_a_premiar, pontos, valor_meta, valor_atingido)
+                            # Notificar o grupo (opcional)
+                            chat_id_grupo = database.buscar_chat_id_por_nome_grupo(setor)
+                            if chat_id_grupo:
+                                mensagem = (f"🏆🎉 **META DE VENDAS BATIDA!** ({nome_meta}) 🎉🏆\n\n"
+                                            f"Parabéns, equipe do setor **{setor}**! A meta de R${valor_meta:.2f} foi superada!\n\n"
+                                            f"Cada membro da equipe que trabalhou hoje ganhou **{pontos} pontos**! 🚀")
+                                notificador_telegram.enviar_mensagem(chat_id_grupo, mensagem)
+
+                            messagebox.showinfo("Sucesso", f"{len(funcionarios_a_premiar)} funcionário(s) premiados com sucesso!", parent=popup)
+                else:
+                    novo_status = "NaoAtingida"
+                    messagebox.showinfo("Resultado", "A meta não foi atingida. Nenhum ponto foi distribuído.", parent=popup)
+
+                database.apurar_meta_instancia(instancia_id, valor_atingido, novo_status)
+                self.carregar_instancias_de_metas_do_dia()
+                popup.destroy()
+
+            except ValueError:
+                messagebox.showerror("Erro de Formato", "O valor atingido deve ser um número.", parent=popup)
+
+        ttk.Button(frame, text="Confirmar e Apurar Resultado", command=confirmar_apuracao).pack(pady=20)
 
 if __name__ == "__main__":
     root = tk.Tk()
