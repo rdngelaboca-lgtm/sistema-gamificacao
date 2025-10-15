@@ -958,21 +958,17 @@ class App:
 
     def criar_aba_feedbacks(self):
         """Cria todos os widgets para a aba de visualização de feedbacks."""
-        # --- FRAME PRINCIPAL E TÍTULO ---
         frame_principal = ttk.Frame(self.frame_feedbacks, padding="10")
         frame_principal.pack(fill="both", expand=True)
         ttk.Label(frame_principal, text="Análise de Feedbacks dos Colaboradores", font=("Arial", 16)).pack(pady=10)
 
-        # --- FRAME DE FILTROS ---
         frame_filtros = ttk.LabelFrame(frame_principal, text="Filtros", padding="10")
         frame_filtros.pack(fill="x", padx=10, pady=5)
 
-        # Filtro por Funcionário
         ttk.Label(frame_filtros, text="Funcionário:").pack(side="left", padx=(0, 5))
         self.combo_funcionarios_feedback = ttk.Combobox(frame_filtros, state="readonly", width=30)
         self.combo_funcionarios_feedback.pack(side="left")
 
-        # Filtro por Data
         ttk.Label(frame_filtros, text="De:").pack(side="left", padx=(20, 5))
         self.entry_data_inicio_feedback = ttk.Entry(frame_filtros, width=12)
         self.entry_data_inicio_feedback.pack(side="left")
@@ -983,19 +979,16 @@ class App:
         self.entry_data_fim_feedback.pack(side="left")
         self.entry_data_fim_feedback.insert(0, "AAAA-MM-DD")
 
-        # Botões de Ação
         btn_filtrar = ttk.Button(frame_filtros, text="Filtrar", command=self.atualizar_lista_feedbacks)
         btn_filtrar.pack(side="left", padx=20)
         btn_limpar = ttk.Button(frame_filtros, text="Limpar Filtros", command=self.limpar_filtros_feedback)
         btn_limpar.pack(side="left")
 
-        # --- FRAME DE RESULTADOS E MÉDIA ---
         frame_resultados = ttk.Frame(frame_principal)
         frame_resultados.pack(fill="x", padx=10, pady=10)
         self.lbl_media_feedback = ttk.Label(frame_resultados, text="Nota Média do Período: --", font=("Arial", 12, "bold"))
         self.lbl_media_feedback.pack(side="right")
 
-        # --- LISTA (TREEVIEW) DE FEEDBACKS ---
         frame_lista = ttk.Frame(frame_principal)
         frame_lista.pack(fill="both", expand=True, padx=10, pady=5)
 
@@ -1017,24 +1010,40 @@ class App:
         self.tree_feedbacks.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="left", fill="y")
 
-        # --- Carregar dados iniciais ---
         self.carregar_funcionarios_feedback()
         self.atualizar_lista_feedbacks()
     
-    # --- SEÇÃO DE FUNÇÕES AUXILIARES ---
+
     def on_tab_change(self, event):
-        selected_tab_widget = event.widget.select()
-        tab_text = event.widget.tab(selected_tab_widget, "text")
-        if tab_text == "Gerenciar Grupos": self.atualizar_lista_grupos()
-        elif tab_text == "Atribuir Tarefas": self.on_tab_atribuir_tarefas_selected()
-        elif tab_text == "Dashboard": self.desenhar_grafico_ranking()
-        elif tab_text == "Ranking": self.atualizar_ranking()
-        elif tab_text == "Gerenciar Funcionários": self.atualizar_lista_funcionarios()
-        elif tab_text == "Catálogo de Tarefas": self.atualizar_catalogo_tarefas()
-        elif tab_text == "Feedbacks Pendentes": self.atualizar_lista_solicitacoes()
-        if tab_text == "Loja e Resgates": self.carregar_dados_loja()
-        elif tab_text == "Gestão de Metas": self.carregar_modelos_de_metas()
-        self.carregar_instancias_de_metas_do_dia()
+        """Chamada sempre que uma aba do notebook principal é alterada."""
+        try:
+            selected_tab_widget = event.widget.select()
+            if not selected_tab_widget:
+                return
+            tab_text = event.widget.tab(selected_tab_widget, "text")
+
+            tab_map = {
+                "Gerenciar Grupos": self.atualizar_lista_grupos,
+                "Atribuir Tarefas": self.on_tab_atribuir_tarefas_selected,
+                "Dashboard": self.desenhar_grafico_ranking,
+                "Ranking": self.atualizar_ranking,
+                "Gerenciar Funcionários": self.atualizar_lista_funcionarios,
+                "Catálogo de Tarefas": self.atualizar_catalogo_tarefas,
+                "Feedbacks Pendentes": self.atualizar_lista_solicitacoes,
+                "Loja e Resgates": self.carregar_dados_loja,
+                "Gestão de Metas": self.on_tab_gestao_metas_selected
+            }
+
+            if tab_text in tab_map:
+                tab_map[tab_text]()
+
+        except tk.TclError:
+            pass
+        
+    def on_tab_gestao_metas_selected(self):
+        """Função chamada especificamente quando a aba de Gestão de Metas é selecionada."""
+        self.carregar_modelos_de_metas()
+        self.carregar_instancias_de_metas_do_dia()   
     
     def on_tab_atribuir_tarefas_selected(self):
         self.atualizar_lista_tarefas_atribuicao()
@@ -1963,35 +1972,35 @@ class App:
         else:
             messagebox.showerror("Erro", "Ocorreu um erro ao salvar o feedback no banco de dados.")
 
-
-    # SUBSTITUA A FUNÇÃO criar_aba_metas ANTIGA POR ESTA VERSÃO COMPLETA
     def criar_aba_metas(self):
         """Cria a interface completa para Gestão de Metas (Modelos e Lançamentos)."""
         main_frame = ttk.Frame(self.frame_metas)
         main_frame.pack(fill=tk.BOTH, expand=True)
         main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(1, weight=1) # A linha de baixo (metas diárias) vai crescer
+        main_frame.rowconfigure(1, weight=1) 
 
-        # --- PAINEL SUPERIOR ESQUERDO: Lista de Modelos de Meta ---
         frame_lista_modelos = ttk.LabelFrame(main_frame, text="Modelos de Meta", padding="10")
         frame_lista_modelos.grid(row=0, column=0, sticky="nsew", padx=(0, 10), pady=(0, 10))
-        # ... (código que já tínhamos para a lista de modelos, sem alterações)
+        frame_lista_modelos.rowconfigure(0, weight=1)
+        frame_lista_modelos.columnconfigure(0, weight=1)
+
         cols_modelos = ('ID', 'Nome da Meta', 'Setor Alvo', 'Pontos')
         self.tree_metas_modelos = ttk.Treeview(frame_lista_modelos, columns=cols_modelos, show='headings', selectmode='browse', height=5)
         self.tree_metas_modelos.heading('ID', text='ID'); self.tree_metas_modelos.column('ID', width=40)
         self.tree_metas_modelos.heading('Nome da Meta', text='Nome da Meta'); self.tree_metas_modelos.column('Nome da Meta', width=200)
         self.tree_metas_modelos.heading('Setor Alvo', text='Setor'); self.tree_metas_modelos.column('Setor Alvo', width=100)
         self.tree_metas_modelos.heading('Pontos', text='Prêmio'); self.tree_metas_modelos.column('Pontos', width=60, anchor='center')
-        self.tree_metas_modelos.pack(fill=tk.BOTH, expand=True)
+        self.tree_metas_modelos.grid(row=0, column=0, sticky="nsew")
         self.tree_metas_modelos.bind('<<TreeviewSelect>>', self.on_modelo_meta_selecionado)
-        frame_botoes_modelos = ttk.Frame(frame_lista_modelos); frame_botoes_modelos.grid(row=1, column=0, pady=10, sticky='ew') # Para centralizar
+
+        frame_botoes_modelos = ttk.Frame(frame_lista_modelos)
+        frame_botoes_modelos.grid(row=1, column=0, pady=10)
         ttk.Button(frame_botoes_modelos, text="Excluir Modelo", command=self.excluir_modelo_meta_selecionado).pack()
 
-        # --- PAINEL SUPERIOR DIREITO: Formulário para Criar/Editar Modelo ---
         frame_form_modelos = ttk.LabelFrame(main_frame, text="Criar ou Editar Modelo", padding="15")
         frame_form_modelos.grid(row=0, column=1, sticky="nsew", pady=(0, 10))
-        # ... (código do formulário que já tínhamos, sem alterações)
         frame_form_modelos.columnconfigure(1, weight=1)
+        
         ttk.Label(frame_form_modelos, text="Nome da Meta:").grid(row=0, column=0, sticky="w", pady=5)
         self.entry_meta_nome = ttk.Entry(frame_form_modelos); self.entry_meta_nome.grid(row=0, column=1, sticky="ew", pady=5)
         ttk.Label(frame_form_modelos, text="Descrição:").grid(row=1, column=0, sticky="w", pady=5)
@@ -2013,11 +2022,12 @@ class App:
 
         frame_filtros_diario = ttk.Frame(frame_diario)
         frame_filtros_diario.grid(row=0, column=0, sticky="ew", pady=5)
-        ttk.Label(frame_filtros_diario, text="Selecione a Data:").pack(side="left")
+        
+        ttk.Label(frame_filtros_diario, text="Selecione a Data:").grid(row=0, column=0)
         self.date_entry_metas = DateEntry(frame_filtros_diario, date_pattern='dd/mm/yyyy', width=12)
-        self.date_entry_metas.pack(side="left", padx=10)
-        self.date_entry_metas.bind("<<DateEntrySelected>>", self.on_data_meta_selecionada)
-
+        self.date_entry_metas.grid(row=0, column=1, padx=10)
+        # self.date_entry_metas.bind("<<DateEntrySelected>>", self.on_data_meta_selecionada) # << Vamos ativar isso depois
+        
         cols_instancias = ('ID', 'Nome Meta', 'Setor', 'Meta (R$)', 'Atingido (R$)', 'Status')
         self.tree_metas_instancias = ttk.Treeview(frame_diario, columns=cols_instancias, show='headings', selectmode='browse')
         self.tree_metas_instancias.heading('ID', text='ID'); self.tree_metas_instancias.column('ID', width=40)
@@ -2030,44 +2040,29 @@ class App:
 
         frame_botoes_diario = ttk.Frame(frame_diario)
         frame_botoes_diario.grid(row=2, column=0, pady=10)
-        ttk.Button(frame_botoes_diario, text="Lançar Nova Meta para o Dia", command=self.abrir_janela_lancamento_meta).pack(side="left", padx=5)
-        ttk.Button(frame_botoes_diario, text="Apurar Meta Selecionada", command=self.abrir_janela_apuracao_meta).pack(side="left", padx=5)
-        def carregar_modelos_de_metas(self):
-            """Busca os modelos de meta no banco e preenche a lista e o combobox."""
-            for i in self.tree_metas_modelos.get_children():
-                self.tree_metas_modelos.delete(i)
+        
+        ttk.Button(frame_botoes_diario, text="Lançar Nova Meta para o Dia", command=self.abrir_janela_lancamento_meta).grid(row=0, column=0, padx=5)
+        ttk.Button(frame_botoes_diario, text="Apurar Meta Selecionada", command=self.abrir_janela_apuracao_meta).grid(row=0, column=1, padx=5)
+        def on_modelo_meta_selecionado(self, event):
+            """Quando um modelo é selecionado, preenche o formulário para edição."""
+            selecionado = self.tree_metas_modelos.focus()
+            if not selecionado: return
 
-            modelos = database.listar_metas_modelos()
-            for modelo in modelos:
-                self.tree_metas_modelos.insert("", "end", values=(
-                    modelo.MetaModeloID, modelo.NomeMeta, modelo.SetorAlvo, modelo.PontosPremio
-                ))
+            dados = self.tree_metas_modelos.item(selecionado, 'values')
+            modelo_id = dados[0]
 
-            setores = database.listar_setores_unicos()
-            self.combo_meta_setor['values'] = setores + ['Caixa'] # Adicionando 'Caixa' manualmente se não existir
+            modelos_completos = database.listar_metas_modelos()
+            modelo_completo = next((m for m in modelos_completos if m.MetaModeloID == int(modelo_id)), None)
 
-            self.limpar_formulario_meta_modelo()
-
-    def on_modelo_meta_selecionado(self, event):
-        """Quando um modelo é selecionado, preenche o formulário para edição."""
-        selecionado = self.tree_metas_modelos.focus()
-        if not selecionado: return
-
-        dados = self.tree_metas_modelos.item(selecionado, 'values')
-        modelo_id = dados[0]
-
-        modelos_completos = database.listar_metas_modelos()
-        modelo_completo = next((m for m in modelos_completos if m.MetaModeloID == int(modelo_id)), None)
-
-        if modelo_completo:
-            self.entry_meta_nome.delete(0, tk.END)
-            self.entry_meta_nome.insert(0, modelo_completo.NomeMeta)
-            self.entry_meta_desc.delete(0, tk.END)
-            self.entry_meta_desc.insert(0, modelo_completo.Descricao or "")
-            self.combo_meta_setor.set(modelo_completo.SetorAlvo)
-            self.entry_meta_pontos.delete(0, tk.END)
-            self.entry_meta_pontos.insert(0, modelo_completo.PontosPremio)
-            self.btn_salvar_meta_modelo.config(text="Salvar Alterações")
+            if modelo_completo:
+                self.entry_meta_nome.delete(0, tk.END)
+                self.entry_meta_nome.insert(0, modelo_completo.NomeMeta)
+                self.entry_meta_desc.delete(0, tk.END)
+                self.entry_meta_desc.insert(0, modelo_completo.Descricao or "")
+                self.combo_meta_setor.set(modelo_completo.SetorAlvo)
+                self.entry_meta_pontos.delete(0, tk.END)
+                self.entry_meta_pontos.insert(0, modelo_completo.PontosPremio)
+                self.btn_salvar_meta_modelo.config(text="Salvar Alterações")
 
     def salvar_modelo_meta(self):
         """Salva um novo modelo ou atualiza um existente."""
@@ -2316,6 +2311,215 @@ class App:
                 messagebox.showerror("Erro de Formato", "O valor atingido deve ser um número.", parent=popup)
 
         ttk.Button(frame, text="Confirmar e Apurar Resultado", command=confirmar_apuracao).pack(pady=20)
+
+    # COLE ESTE BLOCO DE CÓDIGO COM AS 5 NOVAS FUNÇÕES EM main.py
+
+    def carregar_modelos_de_metas(self):
+        """Busca os modelos de meta no banco e preenche a lista e o combobox."""
+        # Limpa a lista
+        for i in self.tree_metas_modelos.get_children():
+            self.tree_metas_modelos.delete(i)
+        
+        # Preenche a lista
+        modelos = database.listar_metas_modelos()
+        for modelo in modelos:
+            self.tree_metas_modelos.insert("", "end", values=(
+                modelo.MetaModeloID, modelo.NomeMeta, modelo.SetorAlvo, modelo.PontosPremio
+            ))
+        
+        # Atualiza o combobox de setores com os setores existentes nas tarefas
+        setores = database.listar_setores_unicos()
+        self.combo_meta_setor['values'] = setores + ['Caixa'] # Adicionando 'Caixa' manualmente se não existir
+        
+        self.limpar_formulario_meta_modelo()
+
+    def on_modelo_meta_selecionado(self, event):
+        """Quando um modelo é selecionado, preenche o formulário para edição."""
+        selecionado = self.tree_metas_modelos.focus()
+        if not selecionado: return
+
+        dados = self.tree_metas_modelos.item(selecionado, 'values')
+        modelo_id = dados[0]
+        
+        # Precisamos buscar os dados completos, incluindo a descrição
+        modelos_completos = database.listar_metas_modelos()
+        modelo_completo = next((m for m in modelos_completos if m.MetaModeloID == int(modelo_id)), None)
+
+        if modelo_completo:
+            self.entry_meta_nome.delete(0, tk.END)
+            self.entry_meta_nome.insert(0, modelo_completo.NomeMeta)
+            self.entry_meta_desc.delete(0, tk.END)
+            self.entry_meta_desc.insert(0, modelo_completo.Descricao or "")
+            self.combo_meta_setor.set(modelo_completo.SetorAlvo)
+            self.entry_meta_pontos.delete(0, tk.END)
+            self.entry_meta_pontos.insert(0, modelo_completo.PontosPremio)
+            self.btn_salvar_meta_modelo.config(text="Salvar Alterações")
+
+    def salvar_modelo_meta(self):
+        """Salva um novo modelo ou atualiza um existente."""
+        nome = self.entry_meta_nome.get()
+        desc = self.entry_meta_desc.get()
+        setor = self.combo_meta_setor.get()
+        pontos_str = self.entry_meta_pontos.get()
+
+        if not all([nome, setor, pontos_str]):
+            messagebox.showerror("Erro", "Nome da Meta, Setor Alvo e Pontos são obrigatórios.")
+            return
+        
+        try:
+            pontos = int(pontos_str)
+            selecionado = self.tree_metas_modelos.focus()
+            
+            # Se um item estiver selecionado, estamos em modo de edição
+            if selecionado:
+                modelo_id = self.tree_metas_modelos.item(selecionado, 'values')[0]
+                database.atualizar_meta_modelo(modelo_id, nome, desc, setor, pontos)
+                messagebox.showinfo("Sucesso", "Modelo de meta atualizado com sucesso!")
+            # Senão, estamos criando um novo
+            else:
+                database.criar_meta_modelo(nome, desc, setor, pontos)
+                messagebox.showinfo("Sucesso", "Novo modelo de meta criado com sucesso!")
+
+            self.carregar_modelos_de_metas()
+
+        except ValueError:
+            messagebox.showerror("Erro de Formato", "O campo 'Pontos' deve ser um número inteiro.")
+
+    def limpar_formulario_meta_modelo(self):
+        """Limpa o formulário de edição e reseta o botão."""
+        if self.tree_metas_modelos.selection():
+            self.tree_metas_modelos.selection_remove(self.tree_metas_modelos.selection()[0])
+        self.entry_meta_nome.delete(0, tk.END)
+        self.entry_meta_desc.delete(0, tk.END)
+        self.combo_meta_setor.set("")
+        self.entry_meta_pontos.delete(0, tk.END)
+        self.btn_salvar_meta_modelo.config(text="Criar Novo Modelo")
+
+    def excluir_modelo_meta_selecionado(self):
+        """Exclui o modelo de meta selecionado."""
+        selecionado = self.tree_metas_modelos.focus()
+        if not selecionado:
+            messagebox.showwarning("Aviso", "Selecione um modelo da lista para excluir.")
+            return
+        
+        dados = self.tree_metas_modelos.item(selecionado, 'values')
+        modelo_id, nome_meta = dados[0], dados[1]
+
+        if messagebox.askyesno("Confirmar Exclusão", f"Tem certeza que deseja excluir o modelo '{nome_meta}'?\n\nTodas as metas diárias baseadas neste modelo também serão excluídas."):
+            database.excluir_meta_modelo(modelo_id)
+            messagebox.showinfo("Sucesso", "Modelo de meta excluído.")
+            self.carregar_modelos_de_metas()
+
+
+    # COLE ESTE BLOCO DE CÓDIGO COM AS NOVAS FUNÇÕES EM main.py
+
+    def carregar_modelos_de_metas(self):
+        """Busca os modelos de meta no banco e preenche a lista e o combobox."""
+        for i in self.tree_metas_modelos.get_children():
+            self.tree_metas_modelos.delete(i)
+        
+        modelos = database.listar_metas_modelos()
+        for modelo in modelos:
+            self.tree_metas_modelos.insert("", "end", values=(
+                modelo.MetaModeloID, modelo.NomeMeta, modelo.SetorAlvo, modelo.PontosPremio
+            ))
+        
+        setores = database.listar_setores_unicos()
+        self.combo_meta_setor['values'] = setores + ['Caixa', 'Equipe'] # Adicionando manualmente
+        
+        self.limpar_formulario_meta_modelo()
+
+    def on_modelo_meta_selecionado(self, event):
+        """Quando um modelo é selecionado, preenche o formulário para edição."""
+        selecionado = self.tree_metas_modelos.focus()
+        if not selecionado: return
+
+        dados = self.tree_metas_modelos.item(selecionado, 'values')
+        modelo_id = dados[0]
+        
+        modelos_completos = database.listar_metas_modelos()
+        modelo_completo = next((m for m in modelos_completos if m.MetaModeloID == int(modelo_id)), None)
+
+        if modelo_completo:
+            self.entry_meta_nome.delete(0, tk.END)
+            self.entry_meta_nome.insert(0, modelo_completo.NomeMeta)
+            self.entry_meta_desc.delete(0, tk.END)
+            self.entry_meta_desc.insert(0, modelo_completo.Descricao or "")
+            self.combo_meta_setor.set(modelo_completo.SetorAlvo)
+            self.entry_meta_pontos.delete(0, tk.END)
+            self.entry_meta_pontos.insert(0, modelo_completo.PontosPremio)
+            self.btn_salvar_meta_modelo.config(text="Salvar Alterações")
+
+    def salvar_modelo_meta(self):
+        """Salva um novo modelo ou atualiza um existente."""
+        nome = self.entry_meta_nome.get()
+        desc = self.entry_meta_desc.get()
+        setor = self.combo_meta_setor.get()
+        pontos_str = self.entry_meta_pontos.get()
+
+        if not all([nome, setor, pontos_str]):
+            messagebox.showerror("Erro", "Nome da Meta, Setor Alvo e Pontos são obrigatórios.")
+            return
+        
+        try:
+            pontos = int(pontos_str)
+            selecionado = self.tree_metas_modelos.focus()
+            
+            if selecionado:
+                modelo_id = self.tree_metas_modelos.item(selecionado, 'values')[0]
+                database.atualizar_meta_modelo(modelo_id, nome, desc, setor, pontos)
+                messagebox.showinfo("Sucesso", "Modelo de meta atualizado com sucesso!")
+            else:
+                database.criar_meta_modelo(nome, desc, setor, pontos)
+                messagebox.showinfo("Sucesso", "Novo modelo de meta criado com sucesso!")
+
+            self.carregar_modelos_de_metas()
+
+        except ValueError:
+            messagebox.showerror("Erro de Formato", "O campo 'Pontos' deve ser um número inteiro.")
+
+    def limpar_formulario_meta_modelo(self):
+        """Limpa o formulário de edição e reseta o botão."""
+        if self.tree_metas_modelos.selection():
+            self.tree_metas_modelos.selection_remove(self.tree_metas_modelos.selection()[0])
+        self.entry_meta_nome.delete(0, tk.END)
+        self.entry_meta_desc.delete(0, tk.END)
+        self.combo_meta_setor.set("")
+        self.entry_meta_pontos.delete(0, tk.END)
+        self.btn_salvar_meta_modelo.config(text="Criar Novo Modelo")
+
+    def excluir_modelo_meta_selecionado(self):
+        """Exclui o modelo de meta selecionado."""
+        selecionado = self.tree_metas_modelos.focus()
+        if not selecionado:
+            messagebox.showwarning("Aviso", "Selecione um modelo da lista para excluir.")
+            return
+        
+        dados = self.tree_metas_modelos.item(selecionado, 'values')
+        modelo_id, nome_meta = dados[0], dados[1]
+
+        if messagebox.askyesno("Confirmar Exclusão", f"Tem certeza que deseja excluir o modelo '{nome_meta}'?\n\nTodas as metas diárias baseadas neste modelo também serão excluídas."):
+            database.excluir_meta_modelo(modelo_id)
+            messagebox.showinfo("Sucesso", "Modelo de meta excluído.")
+            self.carregar_modelos_de_metas()
+
+    # Funções para a parte de baixo (Metas do Dia) - VAMOS IMPLEMENTAR A LÓGICA DEPOIS
+    def on_data_meta_selecionada(self, event):
+        # self.carregar_instancias_de_metas_do_dia()
+        print("Data selecionada! Lógica de carregar metas será implementada aqui.")
+        pass
+
+    def carregar_instancias_de_metas_do_dia(self):
+        print("Lógica para carregar instâncias de metas será implementada aqui.")
+        pass
+
+    def abrir_janela_lancamento_meta(self):
+        messagebox.showinfo("Em Breve", "A funcionalidade de 'Lançar Nova Meta' será implementada no nosso próximo passo!")
+        pass
+
+    def abrir_janela_apuracao_meta(self):
+        messagebox.showinfo("Em Breve", "A funcionalidade de 'Apurar Meta' será implementada no nosso próximo passo!")
+        pass
 
 if __name__ == "__main__":
     root = tk.Tk()
