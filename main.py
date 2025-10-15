@@ -2026,7 +2026,7 @@ class App:
         ttk.Label(frame_filtros_diario, text="Selecione a Data:").grid(row=0, column=0)
         self.date_entry_metas = DateEntry(frame_filtros_diario, date_pattern='dd/mm/yyyy', width=12)
         self.date_entry_metas.grid(row=0, column=1, padx=10)
-        # self.date_entry_metas.bind("<<DateEntrySelected>>", self.on_data_meta_selecionada) # << Vamos ativar isso depois
+        self.date_entry_metas.bind("<<DateEntrySelected>>", self.on_data_meta_selecionada) 
         
         cols_instancias = ('ID', 'Nome Meta', 'Setor', 'Meta (R$)', 'Atingido (R$)', 'Status')
         self.tree_metas_instancias = ttk.Treeview(frame_diario, columns=cols_instancias, show='headings', selectmode='browse')
@@ -2168,8 +2168,6 @@ class App:
                                 f"A meta de R${meta:.2f} não foi atingida (Vendido: R${vendido:.2f}).\n\n"
                                 "Nenhum ponto foi distribuído. Mais sorte da próxima vez!")
             
-    # COLE ESTE BLOCO DE CÓDIGO COM AS 3 NOVAS FUNÇÕES EM main.py
-
     def on_data_meta_selecionada(self, event):
         """Chamada quando a data no calendário de metas é alterada."""
         self.carregar_instancias_de_metas_do_dia()
@@ -2178,10 +2176,10 @@ class App:
         """Busca e exibe as metas que foram lançadas para a data selecionada."""
         for i in self.tree_metas_instancias.get_children():
             self.tree_metas_instancias.delete(i)
-
+        
         data_selecionada = self.date_entry_metas.get_date().strftime("%Y-%m-%d")
         instancias = database.listar_metas_instancias_por_data(data_selecionada)
-
+        
         for inst in instancias:
             valor_meta = f"{inst.ValorMeta:.2f}"
             valor_atingido = f"{inst.ValorAtingido:.2f}" if inst.ValorAtingido is not None else "---"
@@ -2192,12 +2190,12 @@ class App:
     def abrir_janela_lancamento_meta(self):
         """Abre um pop-up para o gestor lançar uma nova meta para o dia selecionado."""
         data_selecionada = self.date_entry_metas.get_date()
-
+        
         popup = Toplevel(self.root)
         popup.title(f"Lançar Meta para {data_selecionada.strftime('%d/%m/%Y')}")
         popup.geometry("400x200")
         popup.transient(self.root)
-
+        
         frame = ttk.Frame(popup, padding="15")
         frame.pack(fill="both", expand=True)
 
@@ -2211,6 +2209,7 @@ class App:
         ttk.Label(frame, text="Valor da Meta (R$):").pack(anchor='w')
         entry_valor = ttk.Entry(frame)
         entry_valor.pack(fill='x', pady=5)
+        entry_valor.focus()
 
         def confirmar_lancamento():
             nome_modelo = combo_modelos.get()
@@ -2241,8 +2240,8 @@ class App:
             return
 
         dados_inst = self.tree_metas_instancias.item(selecionado, 'values')
-        instancia_id, nome_meta, setor, valor_meta_str, _, status = dados_inst
-
+        instancia_id, nome_meta, setor_alvo, valor_meta_str, _, status = dados_inst
+        
         if status != 'Pendente':
             messagebox.showinfo("Informação", "Esta meta já foi apurada anteriormente.")
             return
@@ -2253,7 +2252,7 @@ class App:
         popup.title(f"Apurar Meta: {nome_meta}")
         popup.geometry("400x200")
         popup.transient(self.root)
-
+        
         frame = ttk.Frame(popup, padding="15")
         frame.pack(fill="both", expand=True)
 
@@ -2270,49 +2269,49 @@ class App:
                 return
             try:
                 valor_atingido = float(valor_atingido_str)
-                data_selecionada = self.date_entry_metas.get_date().strftime("%Y-%m-%d")
-
+                data_selecionada_str = self.date_entry_metas.get_date().strftime("%Y-%m-%d")
+                
                 if valor_atingido >= valor_meta:
                     novo_status = "Atingida"
+                    
+                    modelos = database.listar_metas_modelos()
+                    modelo_correto = next((m for m in modelos if m.NomeMeta == nome_meta), None)
+                    pontos = modelo_correto.PontosPremio if modelo_correto else 0
+
                     confirmado = messagebox.askyesno("Meta Atingida!",
-                                                    f"A meta foi ATINGIDA!\nDeseja premiar a equipe do setor '{setor}'?",
+                                                    f"A meta foi ATINGIDA!\nDeseja premiar a equipe do setor '{setor_alvo}' com {pontos} pontos?",
                                                     parent=popup)
                     if confirmado:
-                        # Busca os pontos do modelo de meta
-                        modelos = database.listar_metas_modelos()
-                        modelo_correto = next((m for m in modelos if m.NomeMeta == nome_meta), None)
-                        pontos = modelo_correto.PontosPremio if modelo_correto else 0
-
-                        # Busca os funcionários que trabalharam
-                        funcionarios_a_premiar = database.listar_funcionarios_que_trabalharam_no_dia(data_selecionada, setor)
-
+                        if setor_alvo.lower() == 'equipe' or setor_alvo.lower() == 'geral':
+                            # Lógica para premiar todos que trabalharam
+                            funcionarios_a_premiar = database.listar_TODOS_funcionarios_que_trabalharam_no_dia(data_selecionada_str)
+                        else:
+                            # Lógica para premiar um setor específico
+                            funcionarios_a_premiar = database.listar_funcionarios_que_trabalharam_no_dia(data_selecionada_str, setor_alvo)
+                        
                         if not funcionarios_a_premiar:
-                            messagebox.showwarning("Aviso", f"Nenhum funcionário do setor '{setor}' teve atividade registrada neste dia. Nenhum ponto será distribuído.", parent=popup)
+                            messagebox.showwarning("Aviso", f"Nenhum funcionário do setor '{setor_alvo}' teve atividade registrada neste dia. Nenhum ponto será distribuído.", parent=popup)
                         else:
                             database.registrar_pontos_por_meta_equipe(funcionarios_a_premiar, pontos, valor_meta, valor_atingido)
-                            # Notificar o grupo (opcional)
-                            chat_id_grupo = database.buscar_chat_id_por_nome_grupo(setor)
+                            
+                            chat_id_grupo = database.buscar_chat_id_por_nome_grupo(setor_alvo)
                             if chat_id_grupo:
                                 mensagem = (f"🏆🎉 **META DE VENDAS BATIDA!** ({nome_meta}) 🎉🏆\n\n"
-                                            f"Parabéns, equipe do setor **{setor}**! A meta de R${valor_meta:.2f} foi superada!\n\n"
+                                            f"Parabéns, equipe do setor **{setor_alvo}**! A meta de R${valor_meta:.2f} foi superada!\n\n"
                                             f"Cada membro da equipe que trabalhou hoje ganhou **{pontos} pontos**! 🚀")
                                 notificador_telegram.enviar_mensagem(chat_id_grupo, mensagem)
-
+                            
                             messagebox.showinfo("Sucesso", f"{len(funcionarios_a_premiar)} funcionário(s) premiados com sucesso!", parent=popup)
                 else:
                     novo_status = "NaoAtingida"
                     messagebox.showinfo("Resultado", "A meta não foi atingida. Nenhum ponto foi distribuído.", parent=popup)
-
+                
                 database.apurar_meta_instancia(instancia_id, valor_atingido, novo_status)
                 self.carregar_instancias_de_metas_do_dia()
                 popup.destroy()
 
             except ValueError:
                 messagebox.showerror("Erro de Formato", "O valor atingido deve ser um número.", parent=popup)
-
-        ttk.Button(frame, text="Confirmar e Apurar Resultado", command=confirmar_apuracao).pack(pady=20)
-
-    # COLE ESTE BLOCO DE CÓDIGO COM AS 5 NOVAS FUNÇÕES EM main.py
 
     def carregar_modelos_de_metas(self):
         """Busca os modelos de meta no banco e preenche a lista e o combobox."""
@@ -2503,23 +2502,6 @@ class App:
             messagebox.showinfo("Sucesso", "Modelo de meta excluído.")
             self.carregar_modelos_de_metas()
 
-    # Funções para a parte de baixo (Metas do Dia) - VAMOS IMPLEMENTAR A LÓGICA DEPOIS
-    def on_data_meta_selecionada(self, event):
-        # self.carregar_instancias_de_metas_do_dia()
-        print("Data selecionada! Lógica de carregar metas será implementada aqui.")
-        pass
-
-    def carregar_instancias_de_metas_do_dia(self):
-        print("Lógica para carregar instâncias de metas será implementada aqui.")
-        pass
-
-    def abrir_janela_lancamento_meta(self):
-        messagebox.showinfo("Em Breve", "A funcionalidade de 'Lançar Nova Meta' será implementada no nosso próximo passo!")
-        pass
-
-    def abrir_janela_apuracao_meta(self):
-        messagebox.showinfo("Em Breve", "A funcionalidade de 'Apurar Meta' será implementada no nosso próximo passo!")
-        pass
 
 if __name__ == "__main__":
     root = tk.Tk()

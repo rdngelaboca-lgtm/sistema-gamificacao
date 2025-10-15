@@ -2704,60 +2704,6 @@ def registrar_pontos_por_meta_equipe(lista_funcionarios, pontos_ganhos, meta_ven
         if conn:
             conn.close()
 
-# ===================================================================
-# == INÍCIO DO MÓDULO DE GESTÃO DE METAS MODELOS ====================
-# ===================================================================
-
-def criar_meta_modelo(nome, descricao, setor, pontos):
-    """Cria um novo modelo de meta na tabela MetasModelos."""
-    conn = get_db_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            sql = "INSERT INTO MetasModelos (NomeMeta, Descricao, SetorAlvo, PontosPremio) VALUES (?, ?, ?, ?)"
-            cursor.execute(sql, nome, descricao, setor, pontos)
-            conn.commit()
-        finally:
-            conn.close()
-
-def listar_metas_modelos():
-    """Retorna uma lista de todos os modelos de meta ativos."""
-    conn = get_db_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            sql = "SELECT * FROM MetasModelos WHERE Ativo = 1 ORDER BY NomeMeta"
-            cursor.execute(sql)
-            return cursor.fetchall()
-        finally:
-            conn.close()
-    return []
-
-def atualizar_meta_modelo(modelo_id, nome, descricao, setor, pontos):
-    """Atualiza um modelo de meta existente."""
-    conn = get_db_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            sql = """UPDATE MetasModelos 
-                     SET NomeMeta = ?, Descricao = ?, SetorAlvo = ?, PontosPremio = ? 
-                     WHERE MetaModeloID = ?"""
-            cursor.execute(sql, nome, descricao, setor, pontos, modelo_id)
-            conn.commit()
-        finally:
-            conn.close()
-
-def excluir_meta_modelo(modelo_id):
-    """Exclui um modelo de meta (a exclusão em cascata cuidará das instâncias)."""
-    conn = get_db_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            sql = "DELETE FROM MetasModelos WHERE MetaModeloID = ?"
-            cursor.execute(sql, modelo_id)
-            conn.commit()
-        finally:
-            conn.close()
 
 # ===================================================================
 # == INÍCIO DO MÓDULO DE GESTÃO DE METAS DIÁRIAS =====================
@@ -2836,10 +2782,6 @@ def listar_funcionarios_que_trabalharam_no_dia(data, setor):
             conn.close()
     return []
 
-# ===================================================================
-# == INÍCIO DO MÓDULO DE GESTÃO DE METAS MODELOS ====================
-# ===================================================================
-
 def criar_meta_modelo(nome, descricao, setor, pontos):
     """Cria um novo modelo de meta na tabela MetasModelos."""
     conn = get_db_connection()
@@ -2890,3 +2832,24 @@ def excluir_meta_modelo(modelo_id):
             conn.commit()
         finally:
             conn.close()
+
+def listar_TODOS_funcionarios_que_trabalharam_no_dia(data):
+    """
+    Retorna uma lista de TODOS os funcionários, de QUALQUER setor, que tiveram
+    pelo menos uma entrega registrada em um dia específico.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT DISTINCT F.*
+                FROM Funcionarios F
+                JOIN Entregas E ON F.FuncionarioID = E.FuncionarioID
+                WHERE CONVERT(DATE, E.DataEnvio) = ?
+            """
+            cursor.execute(sql, data)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
