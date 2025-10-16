@@ -447,6 +447,21 @@ def rota_feed():
         print(f"!!! ERRO no endpoint /api/feed: {e}")
         return jsonify([]), 500
     
+# Adicione esta nova rota ao final de api_server.py
+@app.route('/api/meta_principal_do_dia', methods=['GET'])
+def rota_meta_principal_do_dia():
+    """Endpoint para o painel web buscar a meta principal ativa e seu progresso."""
+    try:
+        dados_meta = database.buscar_meta_principal_do_dia()
+        if dados_meta:
+            return jsonify(dados_meta), 200
+        else:
+            # Se não houver meta ativa, retorna um objeto vazio para não quebrar o painel
+            return jsonify({}), 200 
+    except Exception as e:
+        print(f"!!! ERRO no endpoint /api/meta_principal_do_dia: {e}")
+        return jsonify({"status": "erro", "mensagem": str(e)}), 500
+    
 if __name__ == '__main__':
     # O debug=False é essencial para rodar como serviço
     app.run(host='0.0.0.0', port=5000, debug=False)
