@@ -2993,3 +2993,26 @@ def distribuir_premio_meta_principal(meta_id):
         return []
     finally:
         if conn: conn.close()
+
+# Em database.py, adicione esta nova função ao final do arquivo
+
+def buscar_meta_ativa_id_hoje():
+    """Busca apenas o ID da meta principal ativa na data de hoje."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Query simples que busca o ID da meta cujo período (DataInicio e DataFim)
+            # inclui a data atual (GETDATE()) e que tenha o status 'Ativa'.
+            sql = """
+                SELECT TOP 1 MetaPrincipalID
+                FROM MetasPrincipais
+                WHERE GETDATE() BETWEEN DataInicio AND DataFim AND Status = 'Ativa'
+            """
+            cursor.execute(sql)
+            resultado = cursor.fetchone()
+            # Se encontrar um resultado, retorna o ID; senão, retorna None.
+            return resultado[0] if resultado else None
+        finally:
+            conn.close()
+    return None
