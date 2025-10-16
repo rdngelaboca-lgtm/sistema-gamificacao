@@ -118,7 +118,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = user.id
     funcionario = database.buscar_funcionario_por_chat_id(chat_id)
     REPLY_KEYBOARD = [
-        ["📋 Minhas Tarefas", "🏆 Ranking do Mês"],
+        ["📋 Minhas Tarefas", "🏆 Ranking do Mês", "🎯 Acompanhar Metas"], 
         ["💰 Meu Saldo", "🏪 Loja de Recompensas"],
         ["📜 Meu Histórico", "💬 Solicitar Feedback"],
         ["❓ Ajuda", "📄 Meus Documentos"] 
@@ -819,6 +819,41 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         await query.edit_message_reply_markup(reply_markup=None)
         await query.message.reply_text(f"Por favor, {query.from_user.first_name}, digite o motivo da recusa para esta tarefa.")
 
+# Em telegram_bot.py, adicione esta nova função antes de def main():
+
+async def acompanhar_metas(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Envia para o funcionário o status da meta principal em formato de porcentagem."""
+
+    # Reutilizamos a mesma função do backend que os gestores usam.
+    dados_meta = database.buscar_meta_principal_do_dia()
+
+    if not dados_meta or not dados_meta.get('valor_meta'):
+        await update.message.reply_text("Nenhuma meta de equipe está ativa no momento. Foco nas tarefas individuais! 💪")
+        return
+
+    # Coletamos os dados
+    nome = dados_meta['nome_meta']
+    atingido = dados_meta['valor_atingido']
+    total = dados_meta['valor_meta']
+    percentual = (atingido / total) * 100 if total > 0 else 0
+
+    # Criamos a mesma barra de progresso visual
+    blocos_cheios = int(percentual // 10)
+    blocos_vazios = 10 - blocos_cheios
+    barra_progresso = '▓' * blocos_cheios + '░' * blocos_vazios
+
+    # Montamos a mensagem focada em porcentagem, como você pediu!
+    mensagem = (
+        f"🎯 <b>Meta da Equipe: {nome}</b> 🎯\n\n"
+        f"Estamos quase lá! Este é o nosso progresso até agora:\n\n"
+        f"<code>{barra_progresso}</code>\n\n"
+        f"🏁 <b>Progresso: {percentual:.2f}% de 100%</b>\n\n"
+        "Vamos com tudo, equipe! 🚀"
+    )
+
+    await update.message.reply_html(mensagem)
+
+
 def main() -> None:
     application = Application.builder().token(config.TELEGRAM_TOKEN).connect_timeout(30).read_timeout(30).build()
     
@@ -841,6 +876,7 @@ def main() -> None:
     # --- Handlers para os Botões do Menu Fixo ---
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^📋 Minhas Tarefas$'), tarefas))
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🏆 Ranking do Mês$'), ranking))
+    application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🎯 Acompanhar Metas$'), acompanhar_metas))
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^📜 Meu Histórico$'), meu_historico))
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^❓ Ajuda$'), ajuda))
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^💰 Meu Saldo$'), meu_saldo))
