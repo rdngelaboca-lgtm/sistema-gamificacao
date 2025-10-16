@@ -2703,3 +2703,105 @@ def registrar_pontos_por_meta_equipe(lista_funcionarios, pontos_ganhos, meta_ven
     finally:
         if conn:
             conn.close()
+
+
+# ===================================================================
+# == INÍCIO DO NOVO MÓDULO DE GESTÃO DE METAS CONTÍNUAS (V2) ========
+# ===================================================================
+
+def criar_meta_principal(nome, desc, valor_total, data_inicio, data_fim, pontos, setor):
+    """Cria uma nova meta principal (ex: mensal) no banco de dados."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                INSERT INTO MetasPrincipais 
+                (NomeMeta, Descricao, ValorMetaTotal, DataInicio, DataFim, PontosPremio, SetorAlvo) 
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """
+            cursor.execute(sql, nome, desc, valor_total, data_inicio, data_fim, pontos, setor)
+            conn.commit()
+            return True
+        except Exception as e:
+            print(f"ERRO ao criar meta principal: {e}")
+            return False
+        finally:
+            conn.close()
+
+def listar_metas_principais():
+    """Lista todas as metas principais cadastradas, das mais novas para as mais antigas."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT * FROM MetasPrincipais ORDER BY DataInicio DESC"
+            cursor.execute(sql)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def lancar_apuracao_diaria(meta_principal_id, data_apuracao, valor_dia, funcionario_id):
+    """Salva o valor de vendas de um dia específico para uma meta principal."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Lógica inteligente: Se já existe um lançamento para este dia, atualiza. Senão, cria um novo.
+            sql = """
+                IF EXISTS (SELECT 1 FROM MetasDiariasApuracoes WHERE MetaPrincipalID = ? AND DataApuracao = ?)
+                    UPDATE MetasDiariasApuracoes SET ValorDia = ?, FuncionarioID_Lancamento = ? 
+                    WHERE MetaPrincipalID = ? AND DataApuracao = ?;
+                ELSE
+                    INSERT INTO MetasDiariasApuracoes 
+                    (MetaPrincipalID, DataApuracao, ValorDia, FuncionarioID_Lancamento) 
+                    VALUES (?, ?, ?, ?);
+            """
+            # Parâmetros para o UPDATE
+            params_update = (valor_dia, funcionario_id, meta_principal_id, data_apuracao)
+            # Parâmetros para o INSERT
+            params_insert = (meta_principal_id, data_apuracao, valor_dia, funcionario_id)
+            
+            cursor.execute(sql, *params_update, *params_insert)
+            conn.commit()
+            return True
+        except Exception as e:
+            print(f"ERRO ao lançar apuração diária: {e}")
+            return False
+        finally:
+            conn.close()
+
+def buscar_meta_principal_do_dia():
+    """
+    Busca a meta principal ativa para hoje e calcula o total já atingido
+    somando todas as apurações diárias vinculadas a ela.
+    Esta é a função que a API usará para o painel.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Esta query faz tudo: encontra a meta ativa e já calcula a soma do "extrato"
+            sql = """
+                SELECT TOP 1
+                    MP.MetaPrincipalID,
+                    MP.NomeMeta,
+                    MP.ValorMetaTotal,
+                    (SELECT SUM(ValorDia) FROM MetasDiariasApuracoes MDA WHERE MDA.MetaPrincipalID = MP.MetaPrincipalID) as ValorAtingidoTotal
+                FROM MetasPrincipais MP
+                WHERE GETDATE() BETWEEN MP.DataInicio AND MP.DataFim AND MP.Status = 'Ativa'
+            """
+            cursor.execute(sql)
+            meta_ativa = cursor.fetchone()
+            if meta_ativa:
+                return {
+                    "nome_meta": meta_ativa.NomeMeta,
+                    "valor_meta": float(meta_ativa.ValorMetaTotal),
+                    # Se não houver nenhum lançamento, o ValorAtingidoTotal será None. Garantimos que ele vire 0.
+                    "valor_atingido": float(meta_ativa.ValorAtingidoTotal or 0)
+                }
+            return None # Nenhuma meta ativa para o dia de hoje
+        finally:
+            conn.close()
+    return None
