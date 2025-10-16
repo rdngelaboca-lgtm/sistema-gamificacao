@@ -2743,51 +2743,42 @@ def listar_metas_principais():
     return []
 
 def lancar_apuracao_diaria(meta_principal_id, data_apuracao, valor_dia, funcionario_id):
-    """(VERSÃO CORRIGIDA) Salva o valor de vendas de um dia específico para uma meta principal."""
+    """(VERSÃO V3) Salva a apuração usando MERGE e RETORNA o ID da apuração."""
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            # A consulta SQL continua a mesma, com 10 marcadores de parâmetro (?)
+            # Este comando SQL moderno faz o UPDATE ou INSERT em uma única operação
+            # e depois seleciona o ID da linha afetada.
             sql = """
-                IF EXISTS (SELECT 1 FROM MetasDiariasApuracoes WHERE MetaPrincipalID = ? AND DataApuracao = ?)
-                    UPDATE MetasDiariasApuracoes SET ValorDia = ?, FuncionarioID_Lancamento = ? 
-                    WHERE MetaPrincipalID = ? AND DataApuracao = ?;
-                ELSE
-                    INSERT INTO MetasDiariasApuracoes 
-                    (MetaPrincipalID, DataApuracao, ValorDia, FuncionarioID_Lancamento) 
+                MERGE INTO MetasDiariasApuracoes AS target
+                USING (SELECT ? AS MetaPrincipalID, ? AS DataApuracao) AS source
+                ON (target.MetaPrincipalID = source.MetaPrincipalID AND target.DataApuracao = source.DataApuracao)
+                WHEN MATCHED THEN
+                    UPDATE SET ValorDia = ?, FuncionarioID_Lancamento = ?
+                WHEN NOT MATCHED THEN
+                    INSERT (MetaPrincipalID, DataApuracao, ValorDia, FuncionarioID_Lancamento)
                     VALUES (?, ?, ?, ?);
+
+                SELECT ApuracaoID FROM MetasDiariasApuracoes WHERE MetaPrincipalID = ? AND DataApuracao = ?;
             """
-            
-            # --- A CORREÇÃO ESTÁ AQUI ---
-            # Criamos uma única tupla com todos os 10 parâmetros na ordem exata em que aparecem no SQL.
             params = (
-                # 2 parâmetros para a cláusula IF EXISTS
-                meta_principal_id, 
-                data_apuracao, 
-                # 4 parâmetros para a cláusula UPDATE
-                valor_dia, 
-                funcionario_id, 
-                meta_principal_id, 
-                data_apuracao,
-                # 4 parâmetros para a cláusula INSERT
-                meta_principal_id, 
-                data_apuracao, 
-                valor_dia, 
-                funcionario_id
+                meta_principal_id, data_apuracao, # Para o USING
+                valor_dia, funcionario_id,         # Para o UPDATE
+                meta_principal_id, data_apuracao, valor_dia, funcionario_id, # Para o INSERT
+                meta_principal_id, data_apuracao  # Para o SELECT final
             )
-            
-            # Agora executamos a consulta com a lista completa de 10 parâmetros.
             cursor.execute(sql, params)
+            apuracao_id = cursor.fetchone()[0]
             conn.commit()
-            return True
+            return True, apuracao_id # Retorna sucesso E o ID do lançamento
         except Exception as e:
             print(f"ERRO ao lançar apuração diária: {e}")
-            return False
+            return False, str(e)
         finally:
             if conn:
                 conn.close()
-    return False
+    return False, "Erro de conexão com o banco."
 
 def buscar_meta_principal_do_dia():
     """
@@ -2893,34 +2884,30 @@ def buscar_modelo_meta_para_data(data_apuracao):
             conn.close()
     return None
 
+# Em database.py, SUBSTITUA a sua função registrar_pontos_meta_diaria por esta:
+
 def registrar_pontos_meta_diaria(apuracao_id, pontos_ganhos, setor):
     """
-    Marca uma apuração como premiada e distribui os pontos para os funcionários do setor.
+    (VERSÃO V2) Marca uma apuração como premiada, distribui os pontos e
+    RETORNA A LISTA de funcionários que foram premiados.
     """
     conn = get_db_connection()
-    # ATENÇÃO: Verifique o ID da sua tarefa "Performance de Equipe (Metas)"
-    TAREFA_ID_META = 121 # <<< MUDE SE O SEU ID FOR DIFERENTE!
+    TAREFA_ID_META = 121
 
-    if not conn: return False
-    
+    if not conn: return [] # Retorna lista vazia em caso de erro
+
     try:
         cursor = conn.cursor()
-        
-        # Etapa 1: Marcar a apuração para não premiar novamente
         sql_marcar = "UPDATE MetasDiariasApuracoes SET PontosMetaDiariaGanhos = ? WHERE ApuracaoID = ?"
         cursor.execute(sql_marcar, pontos_ganhos, apuracao_id)
 
-        # Etapa 2: Buscar os funcionários do setor alvo
         funcionarios_do_setor = listar_funcionarios_por_setor(setor)
         if not funcionarios_do_setor:
-            print(f"--> [METAS DIÁRIAS] Aviso: Meta diária batida, mas nenhum funcionário encontrado no setor '{setor}'.")
-            conn.commit() # Salva a marcação mesmo que não haja funcionários
-            return True
+            conn.commit()
+            return [] # Retorna lista vazia se não houver funcionários
 
-        # Etapa 3: Distribuir os pontos
         sql_entrega = """
-            INSERT INTO Entregas
-            (TarefaID, FuncionarioID, StatusValidacao, PontosGanhos, DataEnvio, MotivoRecusa)
+            INSERT INTO Entregas (TarefaID, FuncionarioID, StatusValidacao, PontosGanhos, DataEnvio, MotivoRecusa)
             VALUES (?, ?, 'Aprovada', ?, GETDATE(), ?)
         """
         motivo = f"Prêmio por atingir a meta diária do setor '{setor}'."
@@ -2931,11 +2918,70 @@ def registrar_pontos_meta_diaria(apuracao_id, pontos_ganhos, setor):
 
         conn.commit()
         print(f"--> [METAS DIÁRIAS] {pontos_ganhos} pts registrados para {len(funcionarios_do_setor)} funcionário(s) do setor '{setor}'.")
-        return True
+        return funcionarios_do_setor # <-- A MÁGICA! Retorna a lista de funcionários.
     except Exception as e:
         conn.rollback()
         print(f"ERRO ao registrar pontos por meta diária: {e}")
-        return False
+        return []
     finally:
         if conn:
             conn.close()
+
+# Em database.py, ADICIONE estas duas novas funções
+
+def marcar_meta_principal_como_concluida(meta_id):
+    """Atualiza o status de uma meta principal para 'Concluida'."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE MetasPrincipais SET Status = 'Concluida' WHERE MetaPrincipalID = ?"
+            cursor.execute(sql, meta_id)
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+    return False
+
+def distribuir_premio_meta_principal(meta_id):
+    """
+    Busca os detalhes da meta principal, encontra os funcionários do setor alvo,
+    distribui os pontos de prêmio e RETORNA a lista de funcionários premiados.
+    """
+    conn = get_db_connection()
+    if not conn: return []
+
+    try:
+        cursor = conn.cursor()
+        # Etapa 1: Buscar os detalhes da meta
+        cursor.execute("SELECT PontosPremio, SetorAlvo FROM MetasPrincipais WHERE MetaPrincipalID = ?", meta_id)
+        meta_detalhes = cursor.fetchone()
+        if not meta_detalhes: return []
+
+        pontos_premio, setor_alvo = meta_detalhes
+
+        # Etapa 2: Usar a função que já temos para buscar os funcionários
+        funcionarios_do_setor = listar_funcionarios_por_setor(setor_alvo)
+        if not funcionarios_do_setor: return []
+
+        # Etapa 3: Distribuir os pontos (reutilizando a lógica da meta diária)
+        TAREFA_ID_META = 121
+        sql_entrega = "INSERT INTO Entregas (TarefaID, FuncionarioID, StatusValidacao, PontosGanhos, DataEnvio, MotivoRecusa) VALUES (?, ?, 'Aprovada', ?, GETDATE(), ?)"
+        motivo = f"Prêmio por atingir a META MENSAL do setor '{setor_alvo}'!"
+        
+        for funcionario in funcionarios_do_setor:
+            cursor.execute(sql_entrega, TAREFA_ID_META, funcionario.FuncionarioID, pontos_premio, motivo)
+            adicionar_pontos_ao_saldo(funcionario.FuncionarioID, pontos_premio)
+
+        # Etapa 4: Marcar a meta como concluída para não premiar de novo
+        marcar_meta_principal_como_concluida(meta_id)
+        
+        conn.commit()
+        return funcionarios_do_setor
+
+    except Exception as e:
+        conn.rollback()
+        print(f"ERRO ao distribuir prêmio de meta principal: {e}")
+        return []
+    finally:
+        if conn: conn.close()
