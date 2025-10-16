@@ -2048,6 +2048,114 @@ class App:
         self.lbl_projecao_vendas = ttk.Label(frame_resumo, text="Projeção Final: R$ 0,00", font=("Arial", 12, "italic"))
         self.lbl_projecao_vendas.pack(anchor="w", pady=(15, 5))
 
+    def lancar_apuracao_diaria(self):
+        """(VERSÃO V3 FINAL) Lança a apuração, verifica a meta diária e NOTIFICA A EQUIPE se atingida."""
+        meta_selecionada_str = self.combo_metas_ativas.get()
+        data_apuracao_str = self.date_apuracao.get_date().strftime('%Y-%m-%d')
+        valor_dia_str = self.entry_valor_dia.get().replace(',', '.')
+        
+        if not meta_selecionada_str or not valor_dia_str:
+            messagebox.showwarning("Aviso", "Selecione uma meta e preencha o valor vendido no dia.")
+            return
+                
+        try:
+            meta_id = int(meta_selecionada_str.split('(ID: ')[1][:-1])
+            valor_dia = float(valor_dia_str)
+            id_funcionario_logado = 2
+                
+            sucesso, resultado = database.lancar_apuracao_diaria(meta_id, data_apuracao_str, valor_dia, id_funcionario_logado)
+                
+            if sucesso:
+                apuracao_id = resultado # Agora temos o ID do lançamento
+                messagebox.showinfo("Sucesso", "Apuração diária lançada com sucesso!")
+                self.entry_valor_dia.delete(0, tk.END)
+                self.on_meta_principal_selecionada(None)
+
+                # --- LÓGICA DE VERIFICAÇÃO E NOTIFICAÇÃO (APRIMORADA) ---
+                modelo_meta_diaria = database.buscar_modelo_meta_para_data(data_apuracao_str)
+                if modelo_meta_diaria and valor_dia >= modelo_meta_diaria.ValorMeta and modelo_meta_diaria.PontosPremio > 0:
+                    meta_principal = next((m for m in database.listar_metas_principais() if m.MetaPrincipalID == meta_id), None)
+                    if meta_principal:
+                        funcionarios_premiados = database.registrar_pontos_meta_diaria(apuracao_id, modelo_meta_diaria.PontosPremio, meta_principal.SetorAlvo)
+                        
+                        if funcionarios_premiados:
+                            mensagem_telegram = (
+                                f"🏆 **PARABÉNS, EQUIPE DO SETOR '{meta_principal.SetorAlvo.upper()}'!** 🏆\n\n"
+                                f"Vocês bateram a meta diária e cada um ganhou **{modelo_meta_diaria.PontosPremio} pontos**!\n\n"
+                                "Continuem com o trabalho incrível! 🚀"
+                            )
+                            for funcionario in funcionarios_premiados:
+                                notificador_telegram.enviar_mensagem(funcionario.ChatIDTelegram, mensagem_telegram)
+                            
+                            messagebox.showinfo("Meta Diária Atingida!", f"A equipe do setor '{meta_principal.SetorAlvo}' foi notificada no Telegram.")
+                # --------------------------------------------------------
+
+            else:
+                messagebox.showerror("Erro", f"Não foi possível salvar a apuração no banco de dados.\nDetalhe: {resultado}")
+        except (ValueError, IndexError):
+            messagebox.showerror("Erro de Formato", "Verifique o valor vendido e a seleção da meta.")
+
+    def on_meta_principal_selecionada(self, event):
+        """(VERSÃO V2 FINAL) Carrega o histórico, o resumo, a projeção E VERIFICA SE A META MENSAL FOI ATINGIDA."""
+        for i in self.tree_detalhes_apuracoes.get_children(): self.tree_detalhes_apuracoes.delete(i)
+        self.lbl_total_atingido.config(text="Total Atingido: R$ 0,00"); self.lbl_progresso_percentual.config(text="Progresso: 0.00%")
+        self.lbl_projecao_vendas.config(text="Projeção Final: R$ 0,00")
+
+        selecionados = self.tree_metas_principais.selection()
+        if not selecionados: return
+        item_selecionado = selecionados[0]
+
+        dados_meta = self.tree_metas_principais.item(item_selecionado, 'values')
+        if not dados_meta: return
+            
+        meta_id = int(dados_meta[0])
+        valor_meta_total_str = dados_meta[2].replace("R$ ", "").replace(".", "").replace(",", ".")
+        valor_meta_total = float(valor_meta_total_str)
+        data_inicio_str, data_fim_str = dados_meta[3], dados_meta[4]
+        status_meta = dados_meta[5]
+
+        apuracoes = database.listar_apuracoes_por_meta_principal(meta_id)
+
+        total_atingido = 0.0
+        for apuracao in apuracoes:
+            data_f = apuracao.DataApuracao.strftime('%d/%m/%Y'); valor_f = f"{apuracao.ValorDia:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            self.tree_detalhes_apuracoes.insert("", "end", values=(data_f, valor_f)); total_atingido += float(apuracao.ValorDia)
+
+        percentual = (total_atingido / valor_meta_total) * 100 if valor_meta_total > 0 else 0
+        total_atingido_f = f"R$ {total_atingido:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        self.lbl_total_atingido.config(text=f"Total Atingido: {total_atingido_f}"); self.lbl_progresso_percentual.config(text=f"Progresso: {percentual:.2f}%")
+
+        if len(apuracoes) > 0:
+            media_diaria = total_atingido / len(apuracoes)
+            total_dias_meta = (datetime.strptime(data_fim_str, '%d/%m/%Y') - datetime.strptime(data_inicio_str, '%d/%m/%Y')).days + 1
+            projecao = media_diaria * total_dias_meta
+            projecao_f = f"R$ {projecao:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            self.lbl_projecao_vendas.config(text=f"Projeção Final: {projecao_f}")
+
+        if total_atingido >= valor_meta_total and status_meta == 'Ativa':
+            meta_detalhes = next((m for m in database.listar_metas_principais() if m.MetaPrincipalID == meta_id), None)
+            if meta_detalhes:
+                confirmado = messagebox.askyesno(
+                    "🎉 META MENSAL ATINGIDA! 🎉",
+                    f"Parabéns! A meta '{meta_detalhes.NomeMeta}' foi alcançada!\n\n"
+                    f"Deseja distribuir os {meta_detalhes.PontosPremio} pontos de prêmio para a equipe do setor '{meta_detalhes.SetorAlvo}' agora?"
+                )
+                if confirmado:
+                    funcionarios_premiados = database.distribuir_premio_meta_principal(meta_id)
+                    if funcionarios_premiados:
+                        mensagem_telegram = (
+                            f"🎉🎊 **META MENSAL ATINGIDA!** 🎊🎉\n\n"
+                            f"Parabéns, equipe do setor '{meta_detalhes.SetorAlvo.upper()}'! Vocês alcançaram o grande objetivo do mês!\n\n"
+                            f"Cada um recebeu um super bônus de **{meta_detalhes.PontosPremio} pontos**!\n\n"
+                            "Vocês são incríveis! 🚀"
+                        )
+                        for funcionario in funcionarios_premiados:
+                            notificador_telegram.enviar_mensagem(funcionario.ChatIDTelegram, mensagem_telegram)
+                        
+                        messagebox.showinfo("Sucesso", "Prêmio distribuído e equipe notificada com sucesso!")
+                        self.carregar_dados_metas()
+
+
     def abrir_janela_metas_diarias(self):
         """Abre um pop-up para o gestor definir as metas para cada dia da semana."""
         popup = Toplevel(self.root)
@@ -2113,67 +2221,6 @@ class App:
                 messagebox.showerror("Erro de Formato", "Os valores devem ser números.", parent=popup)
 
         ttk.Button(frame, text="Salvar", command=salvar).pack(pady=10)
-
-    def on_meta_principal_selecionada(self, event):
-        """
-        (VERSÃO FINAL) Carrega o histórico, o resumo E CALCULA A PROJEÇÃO de vendas.
-        """
-        # Limpa os campos de detalhes antigos
-        for i in self.tree_detalhes_apuracoes.get_children():
-            self.tree_detalhes_apuracoes.delete(i)
-        self.lbl_total_atingido.config(text="Total Atingido: R$ 0,00")
-        self.lbl_progresso_percentual.config(text="Progresso: 0.00%")
-        self.lbl_projecao_vendas.config(text="Projeção Final: R$ 0,00") # Reseta a projeção também
-
-        selecionados = self.tree_metas_principais.selection()
-        if not selecionados:
-            return
-        item_selecionado = selecionados[0]
-
-        dados_meta = self.tree_metas_principais.item(item_selecionado, 'values')
-        if not dados_meta: return
-            
-        meta_id = int(dados_meta[0])
-        valor_meta_total_str = dados_meta[2].replace("R$ ", "").replace(".", "").replace(",", ".")
-        valor_meta_total = float(valor_meta_total_str)
-        
-        # --- NOVAS LINHAS PARA PEGAR AS DATAS ---
-        data_inicio_str = dados_meta[3]
-        data_fim_str = dados_meta[4]
-
-        apuracoes = database.listar_apuracoes_por_meta_principal(meta_id)
-
-        total_atingido = 0.0
-        for apuracao in apuracoes:
-            data_f = apuracao.DataApuracao.strftime('%d/%m/%Y')
-            valor_f = f"{apuracao.ValorDia:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-            self.tree_detalhes_apuracoes.insert("", "end", values=(data_f, valor_f))
-            total_atingido += float(apuracao.ValorDia)
-
-        percentual = (total_atingido / valor_meta_total) * 100 if valor_meta_total > 0 else 0
-
-        total_atingido_f = f"R$ {total_atingido:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-        self.lbl_total_atingido.config(text=f"Total Atingido: {total_atingido_f}")
-        self.lbl_progresso_percentual.config(text=f"Progresso: {percentual:.2f}%")
-
-        # --- LÓGICA DE CÁLCULO DA PROJEÇÃO (NOVA!) ---
-        dias_com_lancamento = len(apuracoes)
-        if dias_com_lancamento > 0:
-            # 1. Calcular a Média Diária
-            media_diaria = total_atingido / dias_com_lancamento
-
-            # 2. Calcular o Total de Dias da Meta
-            data_inicio = datetime.strptime(data_inicio_str, '%d/%m/%Y')
-            data_fim = datetime.strptime(data_fim_str, '%d/%m/%Y')
-            total_dias_meta = (data_fim - data_inicio).days + 1
-
-            # 3. Calcular a Projeção
-            projecao = media_diaria * total_dias_meta
-            
-            # 4. Exibir na tela
-            projecao_f = f"R$ {projecao:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-            self.lbl_projecao_vendas.config(text=f"Projeção Final: {projecao_f}")
-        # -------------------------------------------------
 
 
     def abrir_janela_edicao_apuracao(self, event):
@@ -2266,44 +2313,6 @@ class App:
             self.combo_metas_ativas.current(0)
 
 
-    def lancar_apuracao_diaria(self):
-        """(VERSÃO V2) Lança a apuração, verifica a meta diária e premia se atingida."""
-        meta_selecionada_str = self.combo_metas_ativas.get()
-        data_apuracao_str = self.date_apuracao.get_date().strftime('%Y-%m-%d')
-        valor_dia_str = self.entry_valor_dia.get().replace(',', '.')
-        
-        if not meta_selecionada_str or not valor_dia_str:
-            messagebox.showwarning("Aviso", "Selecione uma meta e preencha o valor vendido no dia.")
-            return
-                
-        try:
-            meta_id = int(meta_selecionada_str.split('(ID: ')[1][:-1])
-            valor_dia = float(valor_dia_str)
-            id_funcionario_logado = 2
-                
-            sucesso, resultado = database.lancar_apuracao_diaria(meta_id, data_apuracao_str, valor_dia, id_funcionario_logado)
-                
-            if sucesso:
-                apuracao_id = resultado # Agora temos o ID do lançamento
-                messagebox.showinfo("Sucesso", "Apuração diária lançada com sucesso!")
-                self.entry_valor_dia.delete(0, tk.END)
-                self.on_meta_principal_selecionada(None)
-
-                # --- NOVA LÓGICA DE VERIFICAÇÃO E PREMIAÇÃO ---
-                modelo_meta_diaria = database.buscar_modelo_meta_para_data(data_apuracao_str)
-                if modelo_meta_diaria and valor_dia >= modelo_meta_diaria.ValorMeta and modelo_meta_diaria.PontosPremio > 0:
-                    # O setor da meta principal determina para quem vão os pontos
-                    meta_principal = next((m for m in database.listar_metas_principais() if m.MetaPrincipalID == meta_id), None)
-                    if meta_principal:
-                        sucesso_pontos = database.registrar_pontos_meta_diaria(apuracao_id, modelo_meta_diaria.PontosPremio, meta_principal.SetorAlvo)
-                        if sucesso_pontos:
-                            messagebox.showinfo("Parabéns!", f"Meta diária atingida!\n\n{modelo_meta_diaria.PontosPremio} pontos foram distribuídos para a equipe do setor '{meta_principal.SetorAlvo}'.")
-                # -----------------------------------------------
-
-            else:
-                messagebox.showerror("Erro", f"Não foi possível salvar a apuração no banco de dados.\nDetalhe: {resultado}")
-        except (ValueError, IndexError):
-            messagebox.showerror("Erro de Formato", "Verifique o valor vendido e a seleção da meta.")
 
     def abrir_janela_criar_meta_principal(self):
         """Abre um popup para o gestor cadastrar uma nova meta principal."""
