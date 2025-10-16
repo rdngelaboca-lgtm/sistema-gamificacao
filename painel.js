@@ -70,18 +70,30 @@ document.addEventListener('DOMContentLoaded', function() {
         let infoExtra = '';
 
         if (tipo === 'para_fazer') {
-            infoExtra = `<p class="card-info">Funcionário: ${tarefa.NomeCompleto}</p>`;
+            // --- A MUDANÇA ESTÁ AQUI ---
+            // 1. Formata a data de referência que vem da API
+            const dataRef = new Date(tarefa.DataReferencia);
+            const dataRefFormatada = dataRef.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+
+            // 2. Adiciona a data no card
+            infoExtra = `<p class="card-info">Referente a: ${dataRefFormatada}</p>`; 
+
+            // 3. Adiciona a tag "ATRASADA" se for o caso
             if (tarefa.Categoria === 'Atrasada') {
                 tituloHtml += `<span class="card-tag-atrasada">ATRASADA</span>`;
             }
+            // --- FIM DA MUDANÇA ---
+
         } else if (tipo === 'validacao') {
             tituloHtml = `<span>⏳</span> ${tituloHtml}`;
-            infoExtra = `<p class="card-info">Funcionário: ${tarefa.NomeCompleto}</p><p class="card-info">Enviada às: ${formatarHora(tarefa.DataEnvio)}</p>`;
+            infoExtra = `<p class="card-info">Enviada às: ${formatarHora(tarefa.DataEnvio)}</p>`;
+
         } else if (tipo === 'concluidas') {
-            cardDiv.classList.add('concluida');
+            cardDiv.classList.add('conclida');
             tituloHtml = `<span>✅</span> ${tituloHtml}`;
             infoExtra = `<p class="card-info">Concluída em: ${formatarHora(tarefa.DataEnvio)}</p>`;
         }
+
         cardDiv.innerHTML = `<div class="card-titulo">${tituloHtml}</div>${infoExtra}<p class="card-pontos">+ ${tarefa.Pontos || tarefa.PontosGanhos} pts</p>`;
         return cardDiv;
     }
