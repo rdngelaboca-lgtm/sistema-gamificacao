@@ -2466,12 +2466,10 @@ def listar_documentos_por_funcionario(funcionario_id):
     return []
 
 
-# Em database.py, SUBSTITUA a função 'buscar_dados_para_painel_kanban' inteira por esta:
-
 def buscar_dados_para_painel_kanban():
     """
     Busca e organiza todas as tarefas para o painel de ação diária.
-    (VERSÃO 3.6 - LÓGICA DE FOLGA CORRIGIDA E ROBUSTA)
+    (VERSÃO 3.7 - Foco apenas nas tarefas de HOJE)
     """
     conn = get_db_connection()
     if not conn:
@@ -2480,7 +2478,9 @@ def buscar_dados_para_painel_kanban():
     try:
         cursor = conn.cursor()
 
-        # --- CONSULTA SQL ATUALIZADA COM LÓGICA DE DATENAME ROBUSTA ---
+        # --- A LÓGICA FOI SIMPLIFICADA AQUI ---
+        # Removemos a parte que buscava as tarefas de ontem (UNION ALL)
+        # Agora a consulta foca apenas em GETDATE() - o dia de hoje.
         sql_para_fazer = """
             WITH Datas AS (
                 SELECT 
@@ -2494,21 +2494,9 @@ def buscar_dados_para_painel_kanban():
                         WHEN 'Friday' THEN 6 WHEN 'Sexta-feira' THEN 6
                         WHEN 'Saturday' THEN 7 WHEN 'Sábado' THEN 7
                     END as DiaSemanaID_Hoje
-                UNION ALL
-                SELECT 
-                    DATEADD(day, -1, GETDATE()) as DataRef,
-                    CASE DATENAME(weekday, DATEADD(day, -1, GETDATE()))
-                        WHEN 'Sunday' THEN 1 WHEN 'Domingo' THEN 1
-                        WHEN 'Monday' THEN 2 WHEN 'Segunda-feira' THEN 2
-                        WHEN 'Tuesday' THEN 3 WHEN 'Terça-feira' THEN 3
-                        WHEN 'Wednesday' THEN 4 WHEN 'Quarta-feira' THEN 4
-                        WHEN 'Thursday' THEN 5 WHEN 'Quinta-feira' THEN 5
-                        WHEN 'Friday' THEN 6 WHEN 'Sexta-feira' THEN 6
-                        WHEN 'Saturday' THEN 7 WHEN 'Sábado' THEN 7
-                    END as DiaSemanaID_Hoje
             )
             SELECT T.Titulo, F.NomeCompleto, T.Pontos, 
-                CASE WHEN CONVERT(date, D.DataRef) = CONVERT(date, GETDATE()) THEN 'Hoje' ELSE 'Atrasada' END as Categoria, 
+                'Hoje' as Categoria, -- A categoria agora é sempre 'Hoje'
                 TA.DataAtribuicao, D.DataRef as DataReferencia
             FROM TarefasAtribuidas TA 
             JOIN Tarefas T ON TA.TarefaID = T.TarefaID 
@@ -2523,7 +2511,7 @@ def buscar_dados_para_painel_kanban():
                 (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = CONVERT(date, D.DataRef))
               )
               AND (F.DiaDeFolga IS NULL OR F.DiaDeFolga = 0 OR F.DiaDeFolga != D.DiaSemanaID_Hoje)
-            ORDER BY Categoria DESC, F.NomeCompleto;
+            ORDER BY F.NomeCompleto;
         """
         cursor.execute(sql_para_fazer)
         para_fazer_cols = [column[0] for column in cursor.description]
@@ -2542,7 +2530,7 @@ def buscar_dados_para_painel_kanban():
         para_fazer_lista = [dict(zip(para_fazer_cols, row)) for row in para_fazer_rows]
         concluidas_lista = [dict(zip(concluidas_cols, row)) for row in concluidas_rows]
 
-        tarefas_de_hoje_pendentes = len([t for t in para_fazer_lista if t['Categoria'] == 'Hoje'])
+        tarefas_de_hoje_pendentes = len(para_fazer_lista) # Simplificado, pois agora só há tarefas de hoje
         total_concluidas_hoje = len(concluidas_lista)
         total_tarefas_do_dia = tarefas_de_hoje_pendentes + total_concluidas_hoje
 
@@ -2557,9 +2545,6 @@ def buscar_dados_para_painel_kanban():
     except Exception as e:
         print(f"ERRO ao buscar dados para o painel Kanban: {e}")
         return {'para_fazer': [], 'validacao': [], 'concluidas': [], 'progresso': {}}
-    finally:
-        if conn:
-            conn.close()
             
 def buscar_ranking_do_dia():
     """
