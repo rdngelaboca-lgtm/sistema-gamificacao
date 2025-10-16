@@ -7,6 +7,7 @@ import os
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from datetime import datetime, timedelta
+from tkcalendar import DateEntry
 
 
 class App:
@@ -49,7 +50,7 @@ class App:
         self.notebook.add(self.frame_solicitacoes, text='Feedbacks Pendentes')
         self.notebook.add(self.frame_agenda, text='Agenda Semanal')
         self.notebook.add(self.frame_loja, text='Loja e Resgates')
-        self.notebook.add(self.frame_metas, text='Metas de Equipe')
+        self.notebook.add(self.frame_metas, text='Gestão de Metas')
 
         self.criar_aba_dashboard()
         self.criar_aba_funcionarios()
@@ -957,21 +958,17 @@ class App:
 
     def criar_aba_feedbacks(self):
         """Cria todos os widgets para a aba de visualização de feedbacks."""
-        # --- FRAME PRINCIPAL E TÍTULO ---
         frame_principal = ttk.Frame(self.frame_feedbacks, padding="10")
         frame_principal.pack(fill="both", expand=True)
         ttk.Label(frame_principal, text="Análise de Feedbacks dos Colaboradores", font=("Arial", 16)).pack(pady=10)
 
-        # --- FRAME DE FILTROS ---
         frame_filtros = ttk.LabelFrame(frame_principal, text="Filtros", padding="10")
         frame_filtros.pack(fill="x", padx=10, pady=5)
 
-        # Filtro por Funcionário
         ttk.Label(frame_filtros, text="Funcionário:").pack(side="left", padx=(0, 5))
         self.combo_funcionarios_feedback = ttk.Combobox(frame_filtros, state="readonly", width=30)
         self.combo_funcionarios_feedback.pack(side="left")
 
-        # Filtro por Data
         ttk.Label(frame_filtros, text="De:").pack(side="left", padx=(20, 5))
         self.entry_data_inicio_feedback = ttk.Entry(frame_filtros, width=12)
         self.entry_data_inicio_feedback.pack(side="left")
@@ -982,19 +979,16 @@ class App:
         self.entry_data_fim_feedback.pack(side="left")
         self.entry_data_fim_feedback.insert(0, "AAAA-MM-DD")
 
-        # Botões de Ação
         btn_filtrar = ttk.Button(frame_filtros, text="Filtrar", command=self.atualizar_lista_feedbacks)
         btn_filtrar.pack(side="left", padx=20)
         btn_limpar = ttk.Button(frame_filtros, text="Limpar Filtros", command=self.limpar_filtros_feedback)
         btn_limpar.pack(side="left")
 
-        # --- FRAME DE RESULTADOS E MÉDIA ---
         frame_resultados = ttk.Frame(frame_principal)
         frame_resultados.pack(fill="x", padx=10, pady=10)
         self.lbl_media_feedback = ttk.Label(frame_resultados, text="Nota Média do Período: --", font=("Arial", 12, "bold"))
         self.lbl_media_feedback.pack(side="right")
 
-        # --- LISTA (TREEVIEW) DE FEEDBACKS ---
         frame_lista = ttk.Frame(frame_principal)
         frame_lista.pack(fill="both", expand=True, padx=10, pady=5)
 
@@ -1016,23 +1010,40 @@ class App:
         self.tree_feedbacks.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="left", fill="y")
 
-        # --- Carregar dados iniciais ---
         self.carregar_funcionarios_feedback()
         self.atualizar_lista_feedbacks()
     
-    # --- SEÇÃO DE FUNÇÕES AUXILIARES ---
+
     def on_tab_change(self, event):
-        selected_tab_widget = event.widget.select()
-        tab_text = event.widget.tab(selected_tab_widget, "text")
-        if tab_text == "Gerenciar Grupos": self.atualizar_lista_grupos()
-        elif tab_text == "Atribuir Tarefas": self.on_tab_atribuir_tarefas_selected()
-        elif tab_text == "Dashboard": self.desenhar_grafico_ranking()
-        elif tab_text == "Ranking": self.atualizar_ranking()
-        elif tab_text == "Gerenciar Funcionários": self.atualizar_lista_funcionarios()
-        elif tab_text == "Catálogo de Tarefas": self.atualizar_catalogo_tarefas()
-        elif tab_text == "Feedbacks Pendentes": self.atualizar_lista_solicitacoes()
-        if tab_text == "Loja e Resgates": self.carregar_dados_loja()
-    
+            """Chamada sempre que uma aba do notebook principal é alterada."""
+            try:
+                # Pega o texto da aba que foi selecionada
+                tab_text = event.widget.tab(event.widget.select(), "text")
+
+                # O dicionário mapeia o nome da aba para a função que deve ser executada
+                tab_map = {
+                    "Gerenciar Grupos": self.atualizar_lista_grupos,
+                    "Atribuir Tarefas": self.on_tab_atribuir_tarefas_selected,
+                    "Dashboard": self.desenhar_grafico_ranking,
+                    "Ranking": self.atualizar_ranking,
+                    "Gerenciar Funcionários": self.atualizar_lista_funcionarios,
+                    "Catálogo de Tarefas": self.atualizar_catalogo_tarefas,
+                    "Feedbacks Pendentes": self.atualizar_lista_solicitacoes,
+                    "Loja e Resgates": self.carregar_dados_loja,
+                    "Gestão de Metas": self.carregar_dados_metas
+                }
+
+                # Verifica se a aba selecionada está no nosso mapa de funções
+                if tab_text in tab_map:
+                    # Se estiver, executa a função correspondente
+                    tab_map[tab_text]()
+
+            except tk.TclError:
+                # Isso evita um erro que pode acontecer se a janela for fechada
+                # enquanto uma aba está sendo trocada.
+                pass
+        
+   
     def on_tab_atribuir_tarefas_selected(self):
         self.atualizar_lista_tarefas_atribuicao()
         self.atualizar_painel_selecao()
@@ -1960,83 +1971,172 @@ class App:
         else:
             messagebox.showerror("Erro", "Ocorreu um erro ao salvar o feedback no banco de dados.")
 
+    # PASSO 1: Em main.py, SUBSTITUA a função criar_aba_metas por esta:
 
-# COLE TODO ESTE BLOCO DE CÓDIGO NO FINAL DA CLASSE App EM main.py
+    def criar_aba_metas(self):
+        """Cria a interface V2 para Gestão de Metas, com apuração diária."""
+        main_frame = ttk.Frame(self.frame_metas)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        main_frame.rowconfigure(1, weight=1)
+        main_frame.columnconfigure(0, weight=1)
 
-def criar_aba_metas(self):
-    """Cria a interface para lançamento de metas de equipe."""
-    ttk.Label(self.frame_metas, text="Premiação por Metas de Equipe", font=("Arial", 16)).pack(pady=10)
-    ttk.Label(self.frame_metas, text="Esta ferramenta premia todos os funcionários do setor 'Atendimento' se a meta de vendas do dia for atingida.", wraplength=700).pack(pady=(0, 20))
+        # --- Frame 1: Lançamento Diário (Ação principal do dia a dia) ---
+        frame_lancamento = ttk.LabelFrame(main_frame, text="Lançar Apuração Diária", padding="10")
+        frame_lancamento.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        frame_lancamento.columnconfigure(1, weight=1)
 
-    form_frame = ttk.Frame(self.frame_metas)
-    form_frame.pack(pady=10)
+        ttk.Label(frame_lancamento, text="Meta Principal Ativa:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
+        self.combo_metas_ativas = ttk.Combobox(frame_lancamento, state="readonly")
+        self.combo_metas_ativas.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
 
-    ttk.Label(form_frame, text="Meta de Vendas do Dia (R$):").grid(row=0, column=0, sticky="w", padx=5, pady=5)
-    self.entry_meta_vendas = ttk.Entry(form_frame, width=20, justify='right')
-    self.entry_meta_vendas.grid(row=0, column=1, padx=5, pady=5)
+        ttk.Label(frame_lancamento, text="Data da Apuração:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
+        self.date_apuracao = DateEntry(frame_lancamento, width=12, date_pattern='dd/mm/yyyy', locale='pt_BR')
+        self.date_apuracao.grid(row=1, column=1, padx=5, pady=5, sticky="w")
 
-    ttk.Label(form_frame, text="Total Vendido no Dia (R$):").grid(row=1, column=0, sticky="w", padx=5, pady=5)
-    self.entry_total_vendido = ttk.Entry(form_frame, width=20, justify='right')
-    self.entry_total_vendido.grid(row=1, column=1, padx=5, pady=5)
+        ttk.Label(frame_lancamento, text="Valor Vendido do Dia (R$):").grid(row=2, column=0, padx=5, pady=5, sticky="w")
+        self.entry_valor_dia = ttk.Entry(frame_lancamento)
+        self.entry_valor_dia.grid(row=2, column=1, padx=5, pady=5, sticky="w")
+        
+        btn_lancar = ttk.Button(frame_lancamento, text="Lançar Apuração Diária", command=self.lancar_apuracao_diaria)
+        btn_lancar.grid(row=3, column=1, padx=5, pady=10, sticky="e")
 
-    ttk.Label(form_frame, text="Pontos por Meta Batida:").grid(row=2, column=0, sticky="w", padx=5, pady=5)
-    self.entry_pontos_meta = ttk.Entry(form_frame, width=20, justify='right')
-    self.entry_pontos_meta.grid(row=2, column=1, padx=5, pady=5)
-    self.entry_pontos_meta.insert(0, "20") # Valor padrão de 20 pontos
 
-    btn_premiar = ttk.Button(self.frame_metas, text="Verificar Meta e Premiar Equipe", command=self.processar_meta_equipe)
-    btn_premiar.pack(pady=20, ipady=10, fill='x', padx=50)
+        # --- Frame 2: Gerenciamento das Metas Principais ---
+        frame_gerenciamento = ttk.LabelFrame(main_frame, text="Gerenciar Metas Principais (Mensais, etc.)", padding="10")
+        frame_gerenciamento.grid(row=1, column=0, sticky="nsew")
+        frame_gerenciamento.rowconfigure(0, weight=1)
+        frame_gerenciamento.columnconfigure(0, weight=1)
 
-def processar_meta_equipe(self):
-    """Processa os valores de meta, verifica e premia a equipe se aplicável."""
-    try:
-        meta_str = self.entry_meta_vendas.get().replace(',', '.')
-        vendido_str = self.entry_total_vendido.get().replace(',', '.')
-        pontos_str = self.entry_pontos_meta.get()
+        cols_principais = ('ID', 'Nome', 'Valor Total', 'Início', 'Fim', 'Status')
+        self.tree_metas_principais = ttk.Treeview(frame_gerenciamento, columns=cols_principais, show='headings', selectmode='browse')
+        for col in cols_principais: self.tree_metas_principais.heading(col, text=col)
+        self.tree_metas_principais.column('ID', width=40)
+        self.tree_metas_principais.column('Nome', width=250)
+        self.tree_metas_principais.column('Valor Total', width=120, anchor="e")
+        self.tree_metas_principais.column('Início', width=100, anchor="center")
+        self.tree_metas_principais.column('Fim', width=100, anchor="center")
+        self.tree_metas_principais.column('Status', width=80, anchor="center")
+        self.tree_metas_principais.pack(fill="both", expand=True, side="left")
+        
+        frame_botoes_gerenciamento = ttk.Frame(frame_gerenciamento)
+        frame_botoes_gerenciamento.pack(side="left", fill="y", padx=10)
+        ttk.Button(frame_botoes_gerenciamento, text="Criar Nova Meta Principal...", command=self.abrir_janela_criar_meta_principal).pack(pady=5)
+        # Futuramente:
+        # ttk.Button(frame_botoes_gerenciamento, text="Editar Meta").pack(pady=5)
+        # ttk.Button(frame_botoes_gerenciamento, text="Excluir Meta").pack(pady=5)
 
-        if not all([meta_str, vendido_str, pontos_str]):
-            messagebox.showerror("Erro", "Todos os campos são obrigatórios.")
+    # PASSO 2: Em main.py, ADICIONE estas duas novas funções (pode ser junto das outras funções de metas)
+
+    def carregar_dados_metas(self):
+        """Carrega as metas principais na lista e popula o combobox de metas ativas."""
+        # Limpa a lista de metas principais
+        for i in self.tree_metas_principais.get_children():
+            self.tree_metas_principais.delete(i)
+        
+        metas = database.listar_metas_principais()
+        metas_ativas = []
+        
+        for meta in metas:
+            data_inicio_f = meta.DataInicio.strftime('%d/%m/%Y')
+            data_fim_f = meta.DataFim.strftime('%d/%m/%Y')
+            valor_total_f = f"R$ {meta.ValorMetaTotal:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+            self.tree_metas_principais.insert("", "end", values=(
+                meta.MetaPrincipalID, meta.NomeMeta, valor_total_f, data_inicio_f, data_fim_f, meta.Status
+            ))
+            
+            # Popula a lista de metas ativas para o combobox
+            if meta.Status == 'Ativa':
+                metas_ativas.append(f"{meta.NomeMeta} (ID: {meta.MetaPrincipalID})")
+                
+        self.combo_metas_ativas['values'] = metas_ativas
+        if metas_ativas:
+            self.combo_metas_ativas.current(0)
+
+    def lancar_apuracao_diaria(self):
+        """Pega os dados da interface e salva a apuração do dia no banco."""
+        meta_selecionada_str = self.combo_metas_ativas.get()
+        data_apuracao = self.date_apuracao.get_date().strftime('%Y-%m-%d')
+        valor_dia_str = self.entry_valor_dia.get().replace(',', '.')
+        
+        if not meta_selecionada_str or not valor_dia_str:
+            messagebox.showwarning("Aviso", "Selecione uma meta e preencha o valor vendido no dia.")
             return
-
-        meta = float(meta_str)
-        vendido = float(vendido_str)
-        pontos = int(pontos_str)
-
-    except ValueError:
-        messagebox.showerror("Erro de Formato", "Os valores de meta, vendas e pontos devem ser números.")
-        return
-
-    if vendido >= meta:
-        confirmado = messagebox.askyesno("Meta Atingida!",
-                                         f"A meta de R${meta:.2f} foi ATINGIDA (Vendido: R${vendido:.2f})!\n\n"
-                                         f"Deseja premiar a equipe de 'Atendimento' com {pontos} pontos cada?")
-        if confirmado:
-            atendentes = database.listar_funcionarios_por_setor('Atendimento')
-            if not atendentes:
-                messagebox.showwarning("Aviso", "Nenhum funcionário do setor 'Atendimento' foi encontrado para premiar.")
-                return
-
-            sucesso = database.registrar_pontos_por_meta_equipe(atendentes, pontos, meta, vendido)
-
+            
+        try:
+            # Extrai o ID da string "Nome da Meta (ID: X)"
+            meta_id = int(meta_selecionada_str.split('(ID: ')[1][:-1])
+            valor_dia = float(valor_dia_str)
+            # O ID do funcionário logado será registrado no futuro, por enquanto usamos um fixo
+            id_funcionario_logado = 2 # IMPORTANTE: Trocar por um ID de gestor válido do seu banco
+            
+            sucesso = database.lancar_apuracao_diaria(meta_id, data_apuracao, valor_dia, id_funcionario_logado)
+            
             if sucesso:
-                # Notifica o grupo do Atendimento, se ele existir
-                chat_id_atendimento = database.buscar_chat_id_por_nome_grupo('Atendimento')
-                if chat_id_atendimento:
-                    mensagem = (f"🏆🎉 **META DE VENDAS BATIDA!** 🎉🏆\n\n"
-                                f"Parabéns, equipe de Atendimento! A meta de R${meta:.2f} foi superada, com um total de **R${vendido:.2f}** em vendas!\n\n"
-                                f"Cada membro da equipe ganhou **{pontos} pontos** pelo excelente trabalho coletivo! 🚀")
-                    notificador_telegram.enviar_mensagem(chat_id_atendimento, mensagem)
-
-                messagebox.showinfo("Sucesso", f"{len(atendentes)} funcionário(s) do Atendimento foram premiados com sucesso!")
-                # Limpa os campos
-                self.entry_meta_vendas.delete(0, 'end')
-                self.entry_total_vendido.delete(0, 'end')
+                messagebox.showinfo("Sucesso", "Apuração diária lançada com sucesso!")
+                self.entry_valor_dia.delete(0, tk.END)
             else:
-                messagebox.showerror("Erro de Banco", "Ocorreu um erro ao registrar os pontos no banco de dados.")
-    else:
-        messagebox.showinfo("Meta não Atingida",
-                            f"A meta de R${meta:.2f} não foi atingida (Vendido: R${vendido:.2f}).\n\n"
-                            "Nenhum ponto foi distribuído. Mais sorte da próxima vez!")
+                messagebox.showerror("Erro", "Não foi possível salvar a apuração no banco de dados.")
+        except (ValueError, IndexError):
+            messagebox.showerror("Erro de Formato", "Verifique o valor vendido e a seleção da meta.")
+
+    # PASSO 3: Adicione esta função auxiliar também, para criar a meta principal
+
+    def abrir_janela_criar_meta_principal(self):
+        """Abre um popup para o gestor cadastrar uma nova meta principal."""
+        popup = Toplevel(self.root)
+        popup.title("Criar Nova Meta Principal")
+        popup.geometry("400x350")
+        frame = ttk.Frame(popup, padding="15")
+        frame.pack(fill="both", expand=True)
+
+        ttk.Label(frame, text="Nome da Meta:").pack(anchor='w')
+        entry_nome = ttk.Entry(frame); entry_nome.pack(fill='x', pady=5)
+
+        ttk.Label(frame, text="Setor Alvo:").pack(anchor='w')
+        combo_setor = ttk.Combobox(frame, values=['Equipe', 'Caixa', 'Atendimento'])
+        combo_setor.pack(fill='x', pady=5)
+
+        ttk.Label(frame, text="Valor Total da Meta (R$):").pack(anchor='w')
+        entry_valor = ttk.Entry(frame); entry_valor.pack(fill='x', pady=5)
+
+        ttk.Label(frame, text="Pontos de Prêmio (se atingir):").pack(anchor='w')
+        entry_pontos = ttk.Entry(frame); entry_pontos.pack(fill='x', pady=5)
+
+        ttk.Label(frame, text="Período da Meta:").pack(anchor='w', pady=(10,0))
+        frame_datas = ttk.Frame(frame)
+        frame_datas.pack(fill='x')
+        ttk.Label(frame_datas, text="De:").pack(side='left')
+        date_inicio = DateEntry(frame_datas, width=12, date_pattern='dd/mm/yyyy', locale='pt_BR')
+        date_inicio.pack(side='left', padx=5)
+        ttk.Label(frame_datas, text="Até:").pack(side='left')
+        date_fim = DateEntry(frame_datas, width=12, date_pattern='dd/mm/yyyy', locale='pt_BR')
+        date_fim.pack(side='left', padx=5)
+
+        def salvar_meta_principal():
+            try:
+                nome = entry_nome.get()
+                setor = combo_setor.get()
+                valor = float(entry_valor.get().replace(',', '.'))
+                pontos = int(entry_pontos.get())
+                inicio = date_inicio.get_date().strftime('%Y-%m-%d')
+                fim = date_fim.get_date().strftime('%Y-%m-%d')
+
+                if not all([nome, setor, valor, pontos, inicio, fim]):
+                    messagebox.showerror("Erro", "Todos os campos são obrigatórios.", parent=popup)
+                    return
+
+                sucesso = database.criar_meta_principal(nome, "", valor, inicio, fim, pontos, setor)
+                if sucesso:
+                    messagebox.showinfo("Sucesso", "Meta principal criada com sucesso!", parent=popup)
+                    self.carregar_dados_metas() # Atualiza a lista na tela principal
+                    popup.destroy()
+                else:
+                    messagebox.showerror("Erro de Banco", "Não foi possível salvar a meta.", parent=popup)
+            except ValueError:
+                messagebox.showerror("Erro de Formato", "Valor da Meta e Pontos devem ser números.", parent=popup)
+
+        ttk.Button(frame, text="Salvar Meta Principal", command=salvar_meta_principal).pack(pady=20)
 
 if __name__ == "__main__":
     root = tk.Tk()
