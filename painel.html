@@ -9,26 +9,41 @@
 <body>
     <div class="painel-container">
         
-        <header class="cabecalho">
-            <h1>Painel de Gestão de Tarefas</h1>
-            <p id="ultima-atualizacao">Atualizando...</p>
+<header class="cabecalho">
+    <h1>Painel de Gestão de Tarefas</h1>
+    <p id="ultima-atualizacao">Atualizando...</p>
 
-            <div class="meta-container">
-                <h3 id="meta-titulo">Carregando meta...</h3>
-                <div class="meta-progresso-container">
-                    <div class="meta-progresso-barra" id="meta-progresso-barra"></div>
-                    <span class="meta-progresso-texto" id="meta-progresso-texto">--%</span>
-                </div>
-                <div class="meta-valores">
-                    <span id="meta-valor-atingido">R$ 0,00</span> / <span id="meta-valor-total">R$ 0,00</span>
-                </div>
+    <div class="metas-wrapper">
+
+        <div class="meta-container" id="container-meta-mensal">
+            <h3 id="meta-titulo">Carregando meta mensal...</h3>
+            <div class="meta-progresso-container">
+                <div class="meta-progresso-barra" id="meta-progresso-barra"></div>
+                <span class="meta-progresso-texto" id="meta-progresso-texto">--%</span>
             </div>
-            
-            <div class="progresso-container">
-                <div class="progresso-barra" id="progresso-barra-interna"></div>
-                <span class="progresso-texto" id="progresso-texto-label">Calculando...</span>
+            <div class="meta-valores">
+                <span id="meta-valor-atingido">R$ 0,00</span> / <span id="meta-valor-total">R$ 0,00</span>
             </div>
-        </header>
+        </div>
+
+        <div class="meta-container" id="container-meta-diaria">
+            <h3 id="meta-diaria-titulo">Meta do Dia</h3>
+            <div class="meta-progresso-container">
+                <div class="meta-progresso-barra" id="meta-diaria-progresso-barra"></div>
+                <span class="meta-progresso-texto" id="meta-diaria-progresso-texto">--%</span>
+            </div>
+            <div class="meta-valores">
+                <span id="meta-diaria-valor-atingido">R$ 0,00</span> / <span id="meta-diaria-valor-total">R$ 0,00</span>
+            </div>
+        </div>
+
+    </div>
+
+    <div class="progresso-container">
+        <div class="progresso-barra" id="progresso-barra-interna"></div>
+        <span class="progresso-texto" id="progresso-texto-label">Calculando...</span>
+    </div>
+</header>
 
         <div class="podio-container" id="podio-diario">
         </div>
