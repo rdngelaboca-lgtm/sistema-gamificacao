@@ -1,33 +1,15 @@
-# teste_tarefas.py
-import database
-import pyodbc
+# teste_folga.py
+import agendador
+from datetime import datetime
 
-# IMPORTANTE: Altere este número para o ID de um funcionário que DEVERIA ter tarefas hoje.
-# Pelo print do ranking, o ID do "Rodrigo Araujo" parece ser 7. Vamos usar esse como exemplo.
-# Se for outro, por favor, altere aqui.
-FUNCIONARIO_ID_PARA_TESTAR = 7
+print("=============================================")
+print(f"INICIANDO TESTE MANUAL DE DELEGAÇÃO DE FOLGAS")
+print(f"Horário do teste: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+print("=============================================\n")
 
-print(f"--- INICIANDO TESTE PARA O FUNCIONÁRIO ID: {FUNCIONARIO_ID_PARA_TESTAR} ---")
+# Esta é a linha que força a execução da função que queremos testar
+agendador.verificar_e_delegar_tarefas_de_folga()
 
-try:
-    # Vamos chamar a função diretamente
-    tarefas_encontradas = database.listar_tarefas_do_dia_por_funcionario(FUNCIONARIO_ID_PARA_TESTAR)
-
-    # Vamos verificar o resultado
-    if tarefas_encontradas:
-        print("\n✅ SUCESSO! Tarefas encontradas:")
-        for tarefa in tarefas_encontradas:
-            print(f"  - ID Atribuição: {tarefa.AtribuicaoID}, Título: {tarefa.Titulo}")
-    else:
-        print("\n❌ FALHA! Nenhuma tarefa foi encontrada pela função.")
-
-except pyodbc.Error as e:
-    print("\n💥 ERRO DE BANCO DE DADOS DETECTADO! 💥")
-    print("O problema está na consulta SQL. A mensagem de erro é:")
-    print(e)
-except Exception as e:
-    print("\n💥 ERRO INESPERADO NO PYTHON! 💥")
-    print("A mensagem de erro é:")
-    print(e)
-
-print("\n--- TESTE FINALIZADO ---")
+print("\n=============================================")
+print("TESTE MANUAL FINALIZADO.")
+print("=============================================")
