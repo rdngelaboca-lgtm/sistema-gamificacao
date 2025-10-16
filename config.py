@@ -12,7 +12,8 @@ GESTOR_GROUP_CHAT_ID = -1002979750507
 AGENDAMENTOS_GROUP_CHAT_ID = -4839358986
 
 # ID do chat de grupo para onde as tarefas de funcionários de folga são oferecidas.
-FOLGA_GROUP_CHAT_ID = -1002979750507
+ATENDIMENTO_GROUP_CHAT_ID = -3142022069
+COZINHA_GROUP_CHAT_ID = -4902264106
 
 # --- CONFIGURAÇÕES DO BANCO DE DADOS ---
 # Endereço do seu servidor SQL Server.
@@ -26,7 +27,7 @@ DB_PWD = 'Gamificacao#2025'
 
 # --- CONFIGURAÇÕES DA API E ARQUIVOS ---
 # URL base para a API. Essencial para o ngrok e para o deploy final.
-API_BASE_URL = "https://4e2f667459fb.ngrok-free.app" # Lembre-se de atualizar se o ngrok mudar!
+API_BASE_URL = "http://192.168.2.23:5000" # Lembre-se de atualizar se o ngrok mudar!
 
 # Nome da pasta onde os documentos de RH (holerites, etc.) serão salvos no servidor.
 PASTA_DOCUMENTOS_RH = "documentos_rh_seguros"
@@ -48,4 +49,3 @@ TAREFA_ID_LEITURA = 38
 TAREFA_ID_FEEDBACK_DIARIO = 5
 # Pontos de bônus concedidos ao dar o feedback diário.
 PONTOS_BONUS_FEEDBACK_DIARIO = 5
-
