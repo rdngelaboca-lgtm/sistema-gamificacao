@@ -2742,14 +2742,14 @@ def listar_metas_principais():
             conn.close()
     return []
 
+# Em database.py, SUBSTITUA a sua função lancar_apuracao_diaria por esta versão final:
+
 def lancar_apuracao_diaria(meta_principal_id, data_apuracao, valor_dia, funcionario_id):
-    """(VERSÃO V3) Salva a apuração usando MERGE e RETORNA o ID da apuração."""
+    """(VERSÃO V3.1 FINAL) Salva a apuração usando MERGE e RETORNA o ID da apuração."""
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            # Este comando SQL moderno faz o UPDATE ou INSERT em uma única operação
-            # e depois seleciona o ID da linha afetada.
             sql = """
                 MERGE INTO MetasDiariasApuracoes AS target
                 USING (SELECT ? AS MetaPrincipalID, ? AS DataApuracao) AS source
@@ -2769,11 +2769,19 @@ def lancar_apuracao_diaria(meta_principal_id, data_apuracao, valor_dia, funciona
                 meta_principal_id, data_apuracao  # Para o SELECT final
             )
             cursor.execute(sql, params)
+            
+            # --- A CORREÇÃO MÁGICA ESTÁ AQUI ---
+            # Diz ao driver para avançar para o próximo resultado (o do SELECT).
+            cursor.nextset()
+            # ------------------------------------
+            
             apuracao_id = cursor.fetchone()[0]
             conn.commit()
-            return True, apuracao_id # Retorna sucesso E o ID do lançamento
+            return True, apuracao_id
         except Exception as e:
             print(f"ERRO ao lançar apuração diária: {e}")
+            if conn:
+                conn.rollback()
             return False, str(e)
         finally:
             if conn:
