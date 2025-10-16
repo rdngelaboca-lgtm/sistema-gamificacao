@@ -1918,18 +1918,18 @@ def listar_agenda_semanal_por_funcionario(funcionario_id):
 
 # Em database.py, adicione estas duas funções no final do arquivo
 
-def buscar_funcionarios_de_folga_hoje():
-    """Busca no banco todos os funcionários cujo dia de folga é hoje."""
+def buscar_funcionarios_de_folga_hoje(dia_da_semana):
+    """Busca no banco todos os funcionários cujo dia de folga corresponde ao dia da semana fornecido."""
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            # A lógica é o inverso do que já temos: busca quem TEM o DiaDeFolga IGUAL a hoje.
+            # A lógica agora usa o valor que veio do agendador, em vez de GETDATE()
             sql = """
                 SELECT * FROM Funcionarios 
-                WHERE DiaDeFolga = DATEPART(weekday, GETDATE())
+                WHERE DiaDeFolga = ?
             """
-            cursor.execute(sql)
+            cursor.execute(sql, dia_da_semana)
             return cursor.fetchall()
         finally:
             conn.close()
