@@ -131,25 +131,19 @@ def verificar_fim_jornada():
         notificador_telegram.enviar_mensagem_com_botao(funcionario.ChatIDTelegram, mensagem, reply_markup)
         print(f"--> Resumo de fim de jornada com convite de feedback enviado para {funcionario.NomeCompleto}.")
 
-# Em agendador.py, adicione esta nova função
-
 def verificar_e_delegar_tarefas_de_folga():
     """
-    (VERSÃO FINAL COM DIRECIONAMENTO POR SETOR)
+    (VERSÃO FINAL COM DIRECIONAMENTO POR CARGO DO FUNCIONÁRIO)
     Verifica quem está de folga e oferece as tarefas para o grupo do setor correspondente.
     """
     print(f"\n[{datetime.now().strftime('%H:%M:%S')}]  Verificando tarefas de funcionários de folga...")
     
     hoje = datetime.now()
     # SQL Server: Domingo=1, Segunda=2, ..., Sábado=7
-    # Python .weekday(): Segunda=0, ..., Domingo=6
-    # A fórmula (hoje.weekday() + 2) % 7 ajusta perfeitamente, mas retorna 0 para Sábado.
-    # Corrigimos isso de forma simples:
     dia_da_semana_hoje = hoje.isoweekday() + 1
     if dia_da_semana_hoje == 8: # isoweekday() retorna 7 para Domingo, 7+1=8
         dia_da_semana_hoje = 1 # Converte para o padrão do SQL Server
     
-    # Passamos o dia da semana como parâmetro para ser mais confiável
     funcionarios_de_folga = database.buscar_funcionarios_de_folga_hoje(dia_da_semana_hoje)
     
     if not funcionarios_de_folga:
@@ -158,26 +152,29 @@ def verificar_e_delegar_tarefas_de_folga():
 
     print(f"--> Encontrados {len(funcionarios_de_folga)} funcionário(s) de folga hoje.")
     for funcionario in funcionarios_de_folga:
-        # Passamos o dia da semana aqui também
         tarefas_do_dia = database.buscar_tarefas_recorrentes_agendadas_para_hoje(funcionario.FuncionarioID, dia_da_semana_hoje)
         
         if not tarefas_do_dia:
             continue
 
-        for tarefa in tarefas_do_dia:
-            chat_id_destino = None
-            # --- A NOVA INTELIGÊNCIA ESTÁ AQUI ---
-            if tarefa.Setor:
-                # 1. Tenta encontrar o Chat ID do grupo com o mesmo nome do setor
-                chat_id_destino = database.buscar_chat_id_por_nome_grupo(tarefa.Setor)
-                print(f"--> Tarefa '{tarefa.Titulo}' é do setor '{tarefa.Setor}'. Tentando enviar para o grupo correspondente.")
+        # --- NOVA LÓGICA DE DIRECIONAMENTO POR CARGO ---
+        # 1. Determina o grupo de destino com base no CARGO do funcionário de folga.
+        chat_id_destino = None
+        # Usamos 'in' para ser mais flexível (ex: funciona para "Atendente" e "Líder de Atendimento")
+        if 'Atendimento' in funcionario.Cargo:
+            chat_id_destino = config.ATENDIMENTO_GROUP_CHAT_ID
+            print(f"--> Funcionário '{funcionario.NomeCompleto}' é do Atendimento. Direcionando para o grupo de Atendimento.")
+        elif 'Cozinha' in funcionario.Cargo:
+            chat_id_destino = config.COZINHA_GROUP_CHAT_ID
+            print(f"--> Funcionário '{funcionario.NomeCompleto}' é da Cozinha. Direcionando para o grupo de Cozinha.")
+        else:
+            # 2. Se o cargo não for nenhum dos dois, usa o grupo geral de folgas como fallback.
+            chat_id_destino = config.FOLGA_GROUP_CHAT_ID
+            print(f"--> AVISO: Cargo '{funcionario.Cargo}' não mapeado. Enviando para o grupo geral de folgas.")
+        # --- FIM DA NOVA LÓGICA ---
 
-            # 2. Se não encontrar um grupo para o setor, envia para o grupo geral de GESTÃO como medida de segurança.
-            if not chat_id_destino:
-                chat_id_destino = config.GESTOR_GROUP_CHAT_ID
-                print(f"--> AVISO: Não foi encontrado um grupo para o setor '{tarefa.Setor}'. Enviando para o grupo de gestão padrão.")
-            
-            # O resto da lógica é a mesma, mas usando o chat_id_destino que encontramos
+        # 3. Itera sobre as tarefas e envia para o grupo que foi decidido acima.
+        for tarefa in tarefas_do_dia:
             mensagem = (
                 f"📢 **Missão Extra Disponível!** 📢\n\n"
                 f"O(a) colega **{funcionario.NomeCompleto}** está de folga hoje, mas a tarefa abaixo precisa ser feita:\n\n"
@@ -190,10 +187,9 @@ def verificar_e_delegar_tarefas_de_folga():
             keyboard = [[InlineKeyboardButton("✅ Eu aceito!", callback_data=callback_data)]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            # 3. Envia a mensagem para o destino correto!
             notificador_telegram.enviar_mensagem_com_botao(chat_id_destino, mensagem, reply_markup)
-            print(f"--> Tarefa '{tarefa.Titulo}' delegada com sucesso.")
-            
+            print(f"--> Tarefa '{tarefa.Titulo}' delegada com sucesso para o destino ID: {chat_id_destino}.")
+
 # Em agendador.py, SUBSTITUA a função antiga por esta versão mais segura:
 def executar_fechamento_mensal():
     """
