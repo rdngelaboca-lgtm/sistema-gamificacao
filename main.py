@@ -2037,8 +2037,14 @@ class App:
 
         # Sub-painel direito: Resumo do Progresso
         frame_resumo = ttk.Frame(frame_detalhes, padding="20")
-        frame_resumo.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
-        
+        frame_resumo.grid(row=0, column=1, rowspan=2, sticky="nsew", padx=(10, 0))
+
+        frame_botoes_detalhes = ttk.Frame(frame_detalhes)
+        frame_botoes_detalhes.grid(row=1, column=0, sticky="w", padx=10, pady=5)
+
+        btn_excluir_apuracao = ttk.Button(frame_botoes_detalhes, text="Excluir Apuração Selecionada", command=self.excluir_apuracao_selecionada)
+        btn_excluir_apuracao.pack()
+                
         self.lbl_total_atingido = ttk.Label(frame_resumo, text="Total Atingido: R$ 0,00", font=("Arial", 12, "bold"))
         self.lbl_total_atingido.pack(anchor="w", pady=5)
         
@@ -2240,6 +2246,49 @@ class App:
         btn_salvar.pack(pady=15)
             # Permite salvar pressionando Enter
         entry_novo_valor.bind("<Return>", lambda e: salvar_edicao())
+
+
+    # Em main.py, adicione esta nova função à classe App
+
+    def excluir_apuracao_selecionada(self):
+        """Exclui o registro de apuração diária selecionado na lista de detalhes."""
+        # 1. Verifica se uma apuração e uma meta principal estão selecionadas
+        selecionado_apuracao = self.tree_detalhes_apuracoes.focus()
+        selecionado_meta = self.tree_metas_principais.focus()
+
+        if not selecionado_apuracao or not selecionado_meta:
+            messagebox.showwarning("Aviso", "Por favor, selecione uma meta na lista de cima e uma apuração na lista de detalhes para excluir.")
+            return
+
+        # 2. Pega os dados necessários
+        dados_apuracao = self.tree_detalhes_apuracoes.item(selecionado_apuracao, 'values')
+        meta_id = self.tree_metas_principais.item(selecionado_meta, 'values')[0]
+        data_lancamento_str_br = dados_apuracao[0] # Formato: dd/mm/yyyy
+
+        # 3. Pede confirmação ao usuário
+        confirmado = messagebox.askyesno(
+            "Confirmar Exclusão",
+            f"Tem certeza que deseja excluir permanentemente o lançamento do dia {data_lancamento_str_br}?\n\nEsta ação não pode ser desfeita.",
+            icon='warning'
+        )
+
+        if confirmado:
+            try:
+                # 4. Converte a data para o formato do banco (yyyy-mm-dd)
+                data_db_format = datetime.strptime(data_lancamento_str_br, '%d/%m/%Y').strftime('%Y-%m-%d')
+
+                # 5. Chama a nova função do banco de dados
+                sucesso = database.excluir_apuracao_diaria(meta_id, data_db_format)
+
+                if sucesso:
+                    messagebox.showinfo("Sucesso", "Lançamento excluído com sucesso!")
+                    # 6. Atualiza a tela para refletir a exclusão
+                    self.on_meta_principal_selecionada(None)
+                else:
+                    messagebox.showerror("Erro", "Não foi possível excluir o lançamento do banco de dados.")
+            except Exception as e:
+                messagebox.showerror("Erro Inesperado", f"Ocorreu um erro: {e}")
+
 
     def lancar_apuracao_diaria(self):
         """(VERSÃO V3 FINAL) Lança a apuração, verifica a meta diária e NOTIFICA A EQUIPE se atingida."""
