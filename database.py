@@ -499,8 +499,10 @@ def atribuir_tarefa_recorrente_para_grupo(tarefa_id, grupo_id, tipo_frequencia, 
         finally:
             conn.close()
 
+# Em database.py, substitua a função 'atribuir_tarefa' por esta:
+
 def atribuir_tarefa(tarefa_id, funcionario_id, tipo_frequencia, valor_frequencia, descricao_override=None, data_agendamento=None, agendamento_id=None):
-    """Função universal para atribuir tarefas."""
+    """Função universal para atribuir tarefas. AGORA RETORNA O NOVO ID DA ATRIBUIÇÃO."""
     conn = get_db_connection()
     if conn:
         try:
@@ -508,12 +510,22 @@ def atribuir_tarefa(tarefa_id, funcionario_id, tipo_frequencia, valor_frequencia
             sql = """
                 INSERT INTO TarefasAtribuidas 
                 (TarefaID, FuncionarioID, TipoFrequencia, ValorFrequencia, DataInicioVigencia, DescricaoOverride, DataAgendamento, AgendamentoID) 
-                VALUES (?, ?, ?, ?, GETDATE(), ?, ?, ?)
+                VALUES (?, ?, ?, ?, GETDATE(), ?, ?, ?);
+                SELECT SCOPE_IDENTITY();
             """
             cursor.execute(sql, tarefa_id, funcionario_id, tipo_frequencia, valor_frequencia, descricao_override, data_agendamento, agendamento_id)
+            
+            # --- ADIÇÃO IMPORTANTE ---
+            cursor.nextset()
+            novo_atribuicao_id = cursor.fetchone()[0]
             conn.commit()
+            return novo_atribuicao_id # Retorna o ID que acabamos de criar
+            # --- FIM DA ADIÇÃO ---
+            
         finally:
             conn.close()
+    return None # Retorna None em caso de falha
+
 
 def encerrar_atribuicao_tarefa(atribuicao_id):
     """
