@@ -66,6 +66,8 @@ class App:
         self.criar_aba_loja()
         self.criar_aba_metas()
 
+
+
     def popular_combobox_filtro_setor(self):
         """Busca os setores únicos e popula o combobox de filtro."""
         setores = database.listar_setores_unicos()
@@ -2014,6 +2016,7 @@ class App:
         frame_botoes_gerenciamento = ttk.Frame(frame_gerenciamento)
         frame_botoes_gerenciamento.pack(side="left", fill="y", padx=10)
         ttk.Button(frame_botoes_gerenciamento, text="Criar Nova Meta Principal...", command=self.abrir_janela_criar_meta_principal).pack(pady=5)
+        ttk.Button(frame_botoes_gerenciamento, text="Definir Metas Diárias...", command=self.abrir_janela_metas_diarias).pack(pady=5)
 
         # --- Frame 3: ACOMPANHAMENTO E DETALHES (NOVO!) ---
         frame_detalhes = ttk.LabelFrame(main_frame, text="Detalhes e Evolução da Meta Selecionada", padding="10")
@@ -2030,6 +2033,7 @@ class App:
         self.tree_detalhes_apuracoes.heading('Valor Lançado (R$)', text='Valor Lançado (R$)')
         self.tree_detalhes_apuracoes.column('Valor Lançado (R$)', anchor='e')
         self.tree_detalhes_apuracoes.grid(row=0, column=0, sticky="nsew")
+        self.tree_detalhes_apuracoes.bind("<Double-1>", self.abrir_janela_edicao_apuracao)
 
         # Sub-painel direito: Resumo do Progresso
         frame_resumo = ttk.Frame(frame_detalhes, padding="20")
@@ -2041,28 +2045,102 @@ class App:
         self.lbl_progresso_percentual = ttk.Label(frame_resumo, text="Progresso: 0.00%", font=("Arial", 12))
         self.lbl_progresso_percentual.pack(anchor="w", pady=5)
 
+        self.lbl_projecao_vendas = ttk.Label(frame_resumo, text="Projeção Final: R$ 0,00", font=("Arial", 12, "italic"))
+        self.lbl_projecao_vendas.pack(anchor="w", pady=(15, 5))
 
-    # PASSO 2: ADICIONE esta nova função de lógica em main.py.
+    def abrir_janela_metas_diarias(self):
+        """Abre um pop-up para o gestor definir as metas para cada dia da semana."""
+        popup = Toplevel(self.root)
+        popup.title("Definir Modelos de Metas Diárias")
+        popup.geometry("550x350")
+        popup.transient(self.root)
+        frame = ttk.Frame(popup, padding="15")
+        frame.pack(fill="both", expand=True)
+
+        ttk.Label(frame, text="Dê um duplo-clique em um dia para editar a meta.", font=("Arial", 9, "italic")).pack(pady=(0, 10))
+
+        cols = ('Dia da Semana', 'Valor da Meta (R$)', 'Prêmio (Pontos)')
+        tree = ttk.Treeview(frame, columns=cols, show='headings', selectmode='browse')
+        for col in cols: tree.heading(col, text=col)
+        tree.column('Valor da Meta (R$)', anchor='e')
+        tree.column('Prêmio (Pontos)', anchor='center')
+        tree.pack(fill="both", expand=True)
+
+        def carregar_dados():
+            for i in tree.get_children(): tree.delete(i)
+            modelos = database.listar_modelos_metas_diarias()
+            for modelo in modelos:
+                valor_f = f"{modelo.ValorMeta:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                tree.insert("", "end", values=(modelo.NomeDia, valor_f, modelo.PontosPremio), iid=modelo.DiaSemanaID)
+
+        def abrir_edicao(event):
+            selecionado = tree.focus()
+            if not selecionado: return
+            self.abrir_janela_edicao_meta_diaria(popup, selecionado, carregar_dados)
+
+        tree.bind("<Double-1>", abrir_edicao)
+        carregar_dados()
+
+    def abrir_janela_edicao_meta_diaria(self, parent, dia_semana_id, callback_refresh):
+        """Abre a pequena janela para editar os valores de uma meta diária."""
+        dados_modelo = next((m for m in database.listar_modelos_metas_diarias() if m.DiaSemanaID == int(dia_semana_id)), None)
+        if not dados_modelo: return
+
+        popup = Toplevel(parent)
+        popup.title(f"Editar Meta de {dados_modelo.NomeDia}")
+        popup.geometry("300x200")
+        frame = ttk.Frame(popup, padding="15")
+        frame.pack(fill="both", expand=True)
+
+        ttk.Label(frame, text="Valor da Meta (R$):").pack()
+        entry_valor = ttk.Entry(frame); entry_valor.pack(pady=5)
+        entry_valor.insert(0, f"{dados_modelo.ValorMeta:.2f}")
+
+        ttk.Label(frame, text="Prêmio por Atingir (Pontos):").pack()
+        entry_pontos = ttk.Entry(frame); entry_pontos.pack(pady=5)
+        entry_pontos.insert(0, dados_modelo.PontosPremio)
+
+        def salvar():
+            try:
+                valor = float(entry_valor.get().replace(",", "."))
+                pontos = int(entry_pontos.get())
+                if database.atualizar_modelo_meta_diaria(dia_semana_id, valor, pontos):
+                    popup.destroy()
+                    callback_refresh() # Chama a função para atualizar a lista
+                else:
+                    messagebox.showerror("Erro", "Falha ao salvar no banco de dados.", parent=popup)
+            except ValueError:
+                messagebox.showerror("Erro de Formato", "Os valores devem ser números.", parent=popup)
+
+        ttk.Button(frame, text="Salvar", command=salvar).pack(pady=10)
 
     def on_meta_principal_selecionada(self, event):
-        """Chamada ao clicar em uma meta. Carrega e exibe o histórico de apurações e o resumo."""
+        """
+        (VERSÃO FINAL) Carrega o histórico, o resumo E CALCULA A PROJEÇÃO de vendas.
+        """
         # Limpa os campos de detalhes antigos
         for i in self.tree_detalhes_apuracoes.get_children():
             self.tree_detalhes_apuracoes.delete(i)
         self.lbl_total_atingido.config(text="Total Atingido: R$ 0,00")
         self.lbl_progresso_percentual.config(text="Progresso: 0.00%")
+        self.lbl_projecao_vendas.config(text="Projeção Final: R$ 0,00") # Reseta a projeção também
 
-        selecionado = self.tree_metas_principais.focus()
-        if not selecionado:
+        selecionados = self.tree_metas_principais.selection()
+        if not selecionados:
             return
+        item_selecionado = selecionados[0]
 
-        dados_meta = self.tree_metas_principais.item(selecionado, 'values')
+        dados_meta = self.tree_metas_principais.item(item_selecionado, 'values')
+        if not dados_meta: return
+            
         meta_id = int(dados_meta[0])
-        # Pega o valor total da meta da string "R$ 300.000,00" e converte para número
         valor_meta_total_str = dados_meta[2].replace("R$ ", "").replace(".", "").replace(",", ".")
         valor_meta_total = float(valor_meta_total_str)
+        
+        # --- NOVAS LINHAS PARA PEGAR AS DATAS ---
+        data_inicio_str = dados_meta[3]
+        data_fim_str = dados_meta[4]
 
-        # Busca o "extrato" no banco de dados
         apuracoes = database.listar_apuracoes_por_meta_principal(meta_id)
 
         total_atingido = 0.0
@@ -2070,20 +2148,101 @@ class App:
             data_f = apuracao.DataApuracao.strftime('%d/%m/%Y')
             valor_f = f"{apuracao.ValorDia:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
             self.tree_detalhes_apuracoes.insert("", "end", values=(data_f, valor_f))
-            total_atingido += apuracao.ValorDia
+            total_atingido += float(apuracao.ValorDia)
 
-        # Calcula o progresso
         percentual = (total_atingido / valor_meta_total) * 100 if valor_meta_total > 0 else 0
 
-        # Atualiza as labels de resumo com os novos valores
         total_atingido_f = f"R$ {total_atingido:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
         self.lbl_total_atingido.config(text=f"Total Atingido: {total_atingido_f}")
         self.lbl_progresso_percentual.config(text=f"Progresso: {percentual:.2f}%")
 
+        # --- LÓGICA DE CÁLCULO DA PROJEÇÃO (NOVA!) ---
+        dias_com_lancamento = len(apuracoes)
+        if dias_com_lancamento > 0:
+            # 1. Calcular a Média Diária
+            media_diaria = total_atingido / dias_com_lancamento
+
+            # 2. Calcular o Total de Dias da Meta
+            data_inicio = datetime.strptime(data_inicio_str, '%d/%m/%Y')
+            data_fim = datetime.strptime(data_fim_str, '%d/%m/%Y')
+            total_dias_meta = (data_fim - data_inicio).days + 1
+
+            # 3. Calcular a Projeção
+            projecao = media_diaria * total_dias_meta
+            
+            # 4. Exibir na tela
+            projecao_f = f"R$ {projecao:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            self.lbl_projecao_vendas.config(text=f"Projeção Final: {projecao_f}")
+        # -------------------------------------------------
+
+
+    def abrir_janela_edicao_apuracao(self, event):
+        """Abre um pop-up para editar o valor de um lançamento diário selecionado."""
+        # Pega o item que foi duplamente clicado
+        selecionado = self.tree_detalhes_apuracoes.focus()
+        if not selecionado:
+            return
+
+        # Extrai os dados da linha selecionada
+        dados_apuracao = self.tree_detalhes_apuracoes.item(selecionado, 'values')
+        data_lancamento_str = dados_apuracao[0]
+        valor_antigo_str = dados_apuracao[1].replace(".", "").replace(",", ".")
+
+        # Cria a janela de pop-up
+        popup = Toplevel(self.root)
+        popup.title(f"Editar Lançamento de {data_lancamento_str}")
+        popup.geometry("350x200")
+        popup.transient(self.root) # Mantém na frente da janela principal
+        frame = ttk.Frame(popup, padding="15")
+        frame.pack(fill="both", expand=True)
+
+        # Mostra a data (não editável)
+        ttk.Label(frame, text=f"Data da Apuração: {data_lancamento_str}", font=("Arial", 10, "bold")).pack(pady=5)
+
+        # Campo para o novo valor, já preenchido com o valor antigo
+        ttk.Label(frame, text="Novo Valor Lançado (R$):").pack(pady=5)
+        entry_novo_valor = ttk.Entry(frame, justify="center")
+        entry_novo_valor.pack(pady=5, ipady=4)
+        entry_novo_valor.insert(0, valor_antigo_str)
+        entry_novo_valor.focus() # Foca no campo de texto
+
+        # Função interna para o botão Salvar
+        def salvar_edicao():
+            novo_valor_str = entry_novo_valor.get().replace(",", ".")
+            try:
+                novo_valor = float(novo_valor_str)
+                # Converte a data de 'dd/mm/yyyy' para 'yyyy-mm-dd' que o banco espera
+                data_db_format = datetime.strptime(data_lancamento_str, '%d/%m/%Y').strftime('%Y-%m-%d')
+                
+                # Pega o ID da meta principal que está selecionada na outra lista
+                meta_selecionada_item = self.tree_metas_principais.selection()[0]
+                meta_id = self.tree_metas_principais.item(meta_selecionada_item, 'values')[0]
+                
+                id_funcionario_logado = 2 # Lembre-se de ajustar se necessário
+                
+                # Reutilizamos a mesma função de lançamento!
+                sucesso = database.lancar_apuracao_diaria(meta_id, data_db_format, novo_valor, id_funcionario_logado)
+                
+                if sucesso:
+                    messagebox.showinfo("Sucesso", "Apuração atualizada com sucesso!", parent=popup)
+                    popup.destroy()
+                    # Força a atualização da tela principal para refletir a mudança
+                    self.on_meta_principal_selecionada(None)
+                else:
+                    messagebox.showerror("Erro", "Não foi possível atualizar a apuração no banco.", parent=popup)
+
+            except (ValueError, IndexError):
+                messagebox.showerror("Erro de Formato", "O valor deve ser um número.", parent=popup)
+
+        # Botão para salvar
+        btn_salvar = ttk.Button(frame, text="Salvar Alterações", command=salvar_edicao)
+        btn_salvar.pack(pady=15)
+            # Permite salvar pressionando Enter
+        entry_novo_valor.bind("<Return>", lambda e: salvar_edicao())
+
 
     def carregar_dados_metas(self):
         """Carrega as metas principais na lista e popula o combobox de metas ativas."""
-        # Limpa a lista de metas principais
         for i in self.tree_metas_principais.get_children():
             self.tree_metas_principais.delete(i)
         
@@ -2099,7 +2258,6 @@ class App:
                 meta.MetaPrincipalID, meta.NomeMeta, valor_total_f, data_inicio_f, data_fim_f, meta.Status
             ))
             
-            # Popula a lista de metas ativas para o combobox
             if meta.Status == 'Ativa':
                 metas_ativas.append(f"{meta.NomeMeta} (ID: {meta.MetaPrincipalID})")
                 
@@ -2107,34 +2265,45 @@ class App:
         if metas_ativas:
             self.combo_metas_ativas.current(0)
 
+
     def lancar_apuracao_diaria(self):
-        """Pega os dados da interface e salva a apuração do dia no banco."""
+        """(VERSÃO V2) Lança a apuração, verifica a meta diária e premia se atingida."""
         meta_selecionada_str = self.combo_metas_ativas.get()
-        data_apuracao = self.date_apuracao.get_date().strftime('%Y-%m-%d')
+        data_apuracao_str = self.date_apuracao.get_date().strftime('%Y-%m-%d')
         valor_dia_str = self.entry_valor_dia.get().replace(',', '.')
         
         if not meta_selecionada_str or not valor_dia_str:
             messagebox.showwarning("Aviso", "Selecione uma meta e preencha o valor vendido no dia.")
             return
-            
+                
         try:
-            # Extrai o ID da string "Nome da Meta (ID: X)"
             meta_id = int(meta_selecionada_str.split('(ID: ')[1][:-1])
             valor_dia = float(valor_dia_str)
-            # O ID do funcionário logado será registrado no futuro, por enquanto usamos um fixo
-            id_funcionario_logado = 2 # IMPORTANTE: Trocar por um ID de gestor válido do seu banco
-            
-            sucesso = database.lancar_apuracao_diaria(meta_id, data_apuracao, valor_dia, id_funcionario_logado)
-            
+            id_funcionario_logado = 2
+                
+            sucesso, resultado = database.lancar_apuracao_diaria(meta_id, data_apuracao_str, valor_dia, id_funcionario_logado)
+                
             if sucesso:
+                apuracao_id = resultado # Agora temos o ID do lançamento
                 messagebox.showinfo("Sucesso", "Apuração diária lançada com sucesso!")
                 self.entry_valor_dia.delete(0, tk.END)
+                self.on_meta_principal_selecionada(None)
+
+                # --- NOVA LÓGICA DE VERIFICAÇÃO E PREMIAÇÃO ---
+                modelo_meta_diaria = database.buscar_modelo_meta_para_data(data_apuracao_str)
+                if modelo_meta_diaria and valor_dia >= modelo_meta_diaria.ValorMeta and modelo_meta_diaria.PontosPremio > 0:
+                    # O setor da meta principal determina para quem vão os pontos
+                    meta_principal = next((m for m in database.listar_metas_principais() if m.MetaPrincipalID == meta_id), None)
+                    if meta_principal:
+                        sucesso_pontos = database.registrar_pontos_meta_diaria(apuracao_id, modelo_meta_diaria.PontosPremio, meta_principal.SetorAlvo)
+                        if sucesso_pontos:
+                            messagebox.showinfo("Parabéns!", f"Meta diária atingida!\n\n{modelo_meta_diaria.PontosPremio} pontos foram distribuídos para a equipe do setor '{meta_principal.SetorAlvo}'.")
+                # -----------------------------------------------
+
             else:
-                messagebox.showerror("Erro", "Não foi possível salvar a apuração no banco de dados.")
+                messagebox.showerror("Erro", f"Não foi possível salvar a apuração no banco de dados.\nDetalhe: {resultado}")
         except (ValueError, IndexError):
             messagebox.showerror("Erro de Formato", "Verifique o valor vendido e a seleção da meta.")
-
-    # PASSO 3: Adicione esta função auxiliar também, para criar a meta principal
 
     def abrir_janela_criar_meta_principal(self):
         """Abre um popup para o gestor cadastrar uma nova meta principal."""
