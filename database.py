@@ -2842,3 +2842,100 @@ def listar_apuracoes_por_meta_principal(meta_principal_id):
         finally:
             conn.close()
     return []
+
+# Em database.py, ADICIONE este bloco inteiro no final do arquivo
+
+# ===================================================================
+# == INÍCIO DO MÓDULO DE METAS DIÁRIAS POR DIA DA SEMANA ============
+# ===================================================================
+
+def listar_modelos_metas_diarias():
+    """Busca os 7 modelos de metas, um para cada dia da semana."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT * FROM MetasDiariasModelos ORDER BY DiaSemanaID"
+            cursor.execute(sql)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def atualizar_modelo_meta_diaria(dia_semana_id, valor_meta, pontos_premio):
+    """Atualiza o valor e os pontos de um modelo de meta diária."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE MetasDiariasModelos SET ValorMeta = ?, PontosPremio = ? WHERE DiaSemanaID = ?"
+            cursor.execute(sql, valor_meta, pontos_premio, dia_semana_id)
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+    return False
+
+def buscar_modelo_meta_para_data(data_apuracao):
+    """Busca o modelo de meta diária correspondente a uma data específica."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Esta query usa a data para descobrir o dia da semana correspondente no SQL Server
+            sql = """
+                SELECT * FROM MetasDiariasModelos 
+                WHERE DiaSemanaID = DATEPART(weekday, ?)
+            """
+            cursor.execute(sql, data_apuracao)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
+
+def registrar_pontos_meta_diaria(apuracao_id, pontos_ganhos, setor):
+    """
+    Marca uma apuração como premiada e distribui os pontos para os funcionários do setor.
+    """
+    conn = get_db_connection()
+    # ATENÇÃO: Verifique o ID da sua tarefa "Performance de Equipe (Metas)"
+    TAREFA_ID_META = 121 # <<< MUDE SE O SEU ID FOR DIFERENTE!
+
+    if not conn: return False
+    
+    try:
+        cursor = conn.cursor()
+        
+        # Etapa 1: Marcar a apuração para não premiar novamente
+        sql_marcar = "UPDATE MetasDiariasApuracoes SET PontosMetaDiariaGanhos = ? WHERE ApuracaoID = ?"
+        cursor.execute(sql_marcar, pontos_ganhos, apuracao_id)
+
+        # Etapa 2: Buscar os funcionários do setor alvo
+        funcionarios_do_setor = listar_funcionarios_por_setor(setor)
+        if not funcionarios_do_setor:
+            print(f"--> [METAS DIÁRIAS] Aviso: Meta diária batida, mas nenhum funcionário encontrado no setor '{setor}'.")
+            conn.commit() # Salva a marcação mesmo que não haja funcionários
+            return True
+
+        # Etapa 3: Distribuir os pontos
+        sql_entrega = """
+            INSERT INTO Entregas
+            (TarefaID, FuncionarioID, StatusValidacao, PontosGanhos, DataEnvio, MotivoRecusa)
+            VALUES (?, ?, 'Aprovada', ?, GETDATE(), ?)
+        """
+        motivo = f"Prêmio por atingir a meta diária do setor '{setor}'."
+        
+        for funcionario in funcionarios_do_setor:
+            cursor.execute(sql_entrega, TAREFA_ID_META, funcionario.FuncionarioID, pontos_ganhos, motivo)
+            adicionar_pontos_ao_saldo(funcionario.FuncionarioID, pontos_ganhos)
+
+        conn.commit()
+        print(f"--> [METAS DIÁRIAS] {pontos_ganhos} pts registrados para {len(funcionarios_do_setor)} funcionário(s) do setor '{setor}'.")
+        return True
+    except Exception as e:
+        conn.rollback()
+        print(f"ERRO ao registrar pontos por meta diária: {e}")
+        return False
+    finally:
+        if conn:
+            conn.close()
