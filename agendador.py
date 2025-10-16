@@ -131,18 +131,22 @@ def verificar_fim_jornada():
         notificador_telegram.enviar_mensagem_com_botao(funcionario.ChatIDTelegram, mensagem, reply_markup)
         print(f"--> Resumo de fim de jornada com convite de feedback enviado para {funcionario.NomeCompleto}.")
 
+# Em agendador.py, SUBSTITUA a função antiga por esta versão com suporte a múltiplos cargos:
+
+# Em agendador.py, SUBSTITUA a função antiga por esta versão com notificações individuais:
+
 def verificar_e_delegar_tarefas_de_folga():
     """
-    (VERSÃO FINAL COM DIRECIONAMENTO POR CARGO DO FUNCIONÁRIO)
-    Verifica quem está de folga e oferece as tarefas para o grupo do setor correspondente.
+    (VERSÃO FINAL COM NOTIFICAÇÕES INDIVIDUAIS)
+    Verifica folgas, envia a oferta para os grupos corretos e notifica
+    cada membro do grupo no privado.
     """
     print(f"\n[{datetime.now().strftime('%H:%M:%S')}]  Verificando tarefas de funcionários de folga...")
     
     hoje = datetime.now()
-    # SQL Server: Domingo=1, Segunda=2, ..., Sábado=7
     dia_da_semana_hoje = hoje.isoweekday() + 1
-    if dia_da_semana_hoje == 8: # isoweekday() retorna 7 para Domingo, 7+1=8
-        dia_da_semana_hoje = 1 # Converte para o padrão do SQL Server
+    if dia_da_semana_hoje == 8:
+        dia_da_semana_hoje = 1
     
     funcionarios_de_folga = database.buscar_funcionarios_de_folga_hoje(dia_da_semana_hoje)
     
@@ -157,25 +161,20 @@ def verificar_e_delegar_tarefas_de_folga():
         if not tarefas_do_dia:
             continue
 
-        # --- NOVA LÓGICA DE DIRECIONAMENTO POR CARGO ---
-        # 1. Determina o grupo de destino com base no CARGO do funcionário de folga.
-        chat_id_destino = None
-        # Usamos 'in' para ser mais flexível (ex: funciona para "Atendente" e "Líder de Atendimento")
+        lista_de_destinos = []
         if 'Atendimento' in funcionario.Cargo:
-            chat_id_destino = config.ATENDIMENTO_GROUP_CHAT_ID
-            print(f"--> Funcionário '{funcionario.NomeCompleto}' é do Atendimento. Direcionando para o grupo de Atendimento.")
-        elif 'Cozinha' in funcionario.Cargo:
-            chat_id_destino = config.COZINHA_GROUP_CHAT_ID
-            print(f"--> Funcionário '{funcionario.NomeCompleto}' é da Cozinha. Direcionando para o grupo de Cozinha.")
-        else:
-            # 2. Se o cargo não for nenhum dos dois, usa o grupo geral de folgas como fallback.
-            chat_id_destino = config.FOLGA_GROUP_CHAT_ID
-            print(f"--> AVISO: Cargo '{funcionario.Cargo}' não mapeado. Enviando para o grupo geral de folgas.")
-        # --- FIM DA NOVA LÓGICA ---
+            lista_de_destinos.append(config.ATENDIMENTO_GROUP_CHAT_ID)
+            print(f"--> Funcionário '{funcionario.NomeCompleto}' tem cargo de Atendimento. Adicionando grupo de Atendimento.")
+        if 'Cozinha' in funcionario.Cargo:
+            lista_de_destinos.append(config.COZINHA_GROUP_CHAT_ID)
+            print(f"--> Funcionário '{funcionario.NomeCompleto}' tem cargo de Cozinha. Adicionando grupo de Cozinha.")
 
-        # 3. Itera sobre as tarefas e envia para o grupo que foi decidido acima.
+        if not lista_de_destinos:
+            lista_de_destinos.append(config.GESTOR_GROUP_CHAT_ID)
+            print(f"--> AVISO: Cargo '{funcionario.Cargo}' não mapeado. Usando o grupo geral de folgas.")
+
         for tarefa in tarefas_do_dia:
-            mensagem = (
+            mensagem_grupo = (
                 f"📢 **Missão Extra Disponível!** 📢\n\n"
                 f"O(a) colega **{funcionario.NomeCompleto}** está de folga hoje, mas a tarefa abaixo precisa ser feita:\n\n"
                 f"**Setor:** {tarefa.Setor or 'Geral'}\n"
@@ -187,8 +186,38 @@ def verificar_e_delegar_tarefas_de_folga():
             keyboard = [[InlineKeyboardButton("✅ Eu aceito!", callback_data=callback_data)]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            notificador_telegram.enviar_mensagem_com_botao(chat_id_destino, mensagem, reply_markup)
-            print(f"--> Tarefa '{tarefa.Titulo}' delegada com sucesso para o destino ID: {chat_id_destino}.")
+            for chat_id_destino in lista_de_destinos:
+                # 1. Envia a mensagem principal para o grupo
+                notificador_telegram.enviar_mensagem_com_botao(chat_id_destino, mensagem_grupo, reply_markup)
+                print(f"--> Tarefa '{tarefa.Titulo}' delegada com sucesso para o grupo ID: {chat_id_destino}.")
+
+                # --- NOVA LÓGICA DE NOTIFICAÇÃO INDIVIDUAL ---
+                membros_do_grupo = database.listar_membros_por_chat_id_grupo(chat_id_destino)
+                if not membros_do_grupo:
+                    print(f"--> AVISO: Nenhum membro encontrado para o grupo {chat_id_destino}. Notificações individuais não enviadas.")
+                    continue
+
+                print(f"--> Encontrados {len(membros_do_grupo)} membros no grupo. Enviando notificações individuais...")
+                
+                grupo_info = database.buscar_grupo_por_chat_id(chat_id_destino)
+                nome_grupo = grupo_info.NomeGrupo if grupo_info else "do seu time"
+
+                mensagem_privada = (
+                    f"🚀 **Oportunidade de Pontos Extras!** 🚀\n\n"
+                    f"Uma nova 'Missão Extra' foi postada no grupo **{nome_grupo}**.\n\n"
+                    f"É a tarefa *'{tarefa.Titulo}'* que vale **{tarefa.Pontos} pontos**!\n\n"
+                    "Seja o primeiro(a) a aceitar no grupo e garanta a pontuação. Boa sorte! 💪"
+                )
+
+                for membro in membros_do_grupo:
+                    # Regra de segurança: não notifica a pessoa que já está de folga.
+                    if membro.FuncionarioID == funcionario.FuncionarioID:
+                        continue
+                        
+                    notificador_telegram.enviar_mensagem(membro.ChatIDTelegram, mensagem_privada)
+                    time.sleep(0.1) # Pausa de 0.1s para não sobrecarregar a API do Telegram
+                
+                print(f"--> Notificações individuais enviadas para os membros do grupo {nome_grupo}.")
 
 # Em agendador.py, SUBSTITUA a função antiga por esta versão mais segura:
 def executar_fechamento_mensal():
