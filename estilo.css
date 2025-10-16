@@ -293,3 +293,24 @@ body {
     font-size: 0.9em;
     color: #495057;
 }
+
+.metas-wrapper {
+    display: flex;
+    justify-content: center;
+    gap: 20px; /* Espaço entre os dois painéis de meta */
+    flex-wrap: wrap; /* Permite que quebre a linha em telas menores */
+    margin: 20px auto;
+}
+
+/* Ajuste para o container de meta individual */
+.meta-container {
+    width: 45%; /* Cada painel ocupa um pouco menos da metade */
+    max-width: 500px;
+    min-width: 300px; /* Largura mínima para não ficar muito espremido */
+    margin: 0; /* Remove a margem automática para o flexbox controlar */
+}
+
+/* Muda a cor da barra da meta diária para se diferenciar */
+#meta-diaria-progresso-barra {
+    background: linear-gradient(90deg, #17a2b8, #138496); /* Um tom de azul/ciano */
+}
