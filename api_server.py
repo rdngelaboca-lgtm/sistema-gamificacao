@@ -462,6 +462,21 @@ def rota_meta_principal_do_dia():
         print(f"!!! ERRO no endpoint /api/meta_principal_do_dia: {e}")
         return jsonify({"status": "erro", "mensagem": str(e)}), 500
     
+# Em api_server.py, adicione esta nova rota ao final
+
+@app.route('/api/meta_diaria_do_dia', methods=['GET'])
+def rota_meta_diaria_do_dia():
+    """Endpoint para o painel web buscar a meta diária e seu progresso."""
+    try:
+        dados_meta_diaria = database.buscar_dados_meta_diaria_hoje()
+        if dados_meta_diaria:
+            return jsonify(dados_meta_diaria), 200
+        else:
+            return jsonify({}), 200 # Retorna objeto vazio se não houver meta para o dia
+    except Exception as e:
+        print(f"!!! ERRO no endpoint /api/meta_diaria_do_dia: {e}")
+        return jsonify({"status": "erro", "mensagem": str(e)}), 500
+    
 if __name__ == '__main__':
     # O debug=False é essencial para rodar como serviço
     app.run(host='0.0.0.0', port=5000, debug=False)
