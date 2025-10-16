@@ -61,9 +61,8 @@ body {
     text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
 }
 
-/* ===== NOVA SEÇÃO SUPERIOR (METAS E PÓDIO) ===== */
+/* ===== NOVA SEÇÃO SUPERIOR (3 COLUNAS) ===== */
 
-/* O container principal agora tem 2 colunas: metas e pódio */
 .top-info-wrapper {
     display: flex;
     align-items: stretch;
@@ -71,17 +70,17 @@ body {
     margin-bottom: 25px;
 }
 
-/* Nova coluna da esquerda que agrupa as metas verticalmente */
+/* Coluna da Esquerda (Metas) - Menor */
 .metas-coluna-esquerda {
-    flex: 1; /* Ocupa uma parte do espaço */
+    flex: 1; /* Ocupa 1 parte do espaço */
     display: flex;
     flex-direction: column;
-    gap: 20px; /* Espaço entre a meta mensal e a diária */
+    gap: 20px;
 }
 
-/* O pódio agora ocupa mais espaço */
+/* Pódio (Centro) - Maior */
 .podio-container {
-    flex: 2; /* Ocupa duas partes do espaço, ficando maior */
+    flex: 1.5; /* Ocupa 1.5 partes do espaço (centralizado e maior) */
     display: flex;
     justify-content: center;
     gap: 20px;
@@ -100,9 +99,9 @@ body {
 .podio-item .posicao { font-size: 2em; font-weight: bold; }
 .podio-item .nome { font-weight: bold; margin: 5px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .podio-item .pontos { font-size: 1.1em; color: #28a745; }
-.posicao-1 { border-color: #ffd700; } /* Ouro */
-.posicao-2 { border-color: #c0c0c0; } /* Prata */
-.posicao-3 { border-color: #cd7f32; } /* Bronze */
+.posicao-1 { border-color: #ffd700; }
+.posicao-2 { border-color: #c0c0c0; }
+.posicao-3 { border-color: #cd7f32; }
 
 /* ===== PAINÉIS DE META (MENSAL E DIÁRIA) ===== */
 .meta-container {
@@ -138,10 +137,48 @@ body {
 #meta-diaria-progresso-barra {
     background: linear-gradient(90deg, #17a2b8, #138496);
 }
-
-/* Regra para esconder os valores apenas da meta mensal */
 #container-meta-mensal .meta-valores {
-    display: none;
+    display: none; /* Esconde valores R$ da meta mensal */
+}
+
+/* ===== NOVO PAINEL DE AGENDAMENTOS (DIREITA) ===== */
+.agendamentos-container {
+    flex: 1; /* Ocupa 1 parte do espaço */
+    background-color: #fff;
+    border-radius: 8px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    padding: 15px;
+    display: flex;
+    flex-direction: column;
+    max-height: 250px; /* Define uma altura máxima para o painel */
+}
+.agendamentos-titulo {
+    color: #0056b3;
+    font-size: 1.2em;
+    text-align: center;
+    margin-bottom: 10px;
+    padding-bottom: 10px;
+    border-bottom: 2px solid #e9eef2;
+}
+.agendamentos-lista {
+    overflow-y: auto; /* Adiciona barra de rolagem se a lista for longa */
+    padding-right: 5px; /* Espaço para a barra de rolagem */
+}
+.agendamento-item {
+    padding: 8px 0;
+    border-bottom: 1px solid #f0f0f0;
+}
+.agendamento-item:last-child {
+    border-bottom: none;
+}
+.agendamento-item strong {
+    color: #333;
+    display: block;
+    font-size: 0.95em;
+}
+.agendamento-item small {
+    color: #555;
+    font-size: 0.9em;
 }
 
 /* ===== KANBAN ===== */
