@@ -2048,52 +2048,6 @@ class App:
         self.lbl_projecao_vendas = ttk.Label(frame_resumo, text="Projeção Final: R$ 0,00", font=("Arial", 12, "italic"))
         self.lbl_projecao_vendas.pack(anchor="w", pady=(15, 5))
 
-    def lancar_apuracao_diaria(self):
-        """(VERSÃO V3 FINAL) Lança a apuração, verifica a meta diária e NOTIFICA A EQUIPE se atingida."""
-        meta_selecionada_str = self.combo_metas_ativas.get()
-        data_apuracao_str = self.date_apuracao.get_date().strftime('%Y-%m-%d')
-        valor_dia_str = self.entry_valor_dia.get().replace(',', '.')
-        
-        if not meta_selecionada_str or not valor_dia_str:
-            messagebox.showwarning("Aviso", "Selecione uma meta e preencha o valor vendido no dia.")
-            return
-                
-        try:
-            meta_id = int(meta_selecionada_str.split('(ID: ')[1][:-1])
-            valor_dia = float(valor_dia_str)
-            id_funcionario_logado = 2
-                
-            sucesso, resultado = database.lancar_apuracao_diaria(meta_id, data_apuracao_str, valor_dia, id_funcionario_logado)
-                
-            if sucesso:
-                apuracao_id = resultado # Agora temos o ID do lançamento
-                messagebox.showinfo("Sucesso", "Apuração diária lançada com sucesso!")
-                self.entry_valor_dia.delete(0, tk.END)
-                self.on_meta_principal_selecionada(None)
-
-                # --- LÓGICA DE VERIFICAÇÃO E NOTIFICAÇÃO (APRIMORADA) ---
-                modelo_meta_diaria = database.buscar_modelo_meta_para_data(data_apuracao_str)
-                if modelo_meta_diaria and valor_dia >= modelo_meta_diaria.ValorMeta and modelo_meta_diaria.PontosPremio > 0:
-                    meta_principal = next((m for m in database.listar_metas_principais() if m.MetaPrincipalID == meta_id), None)
-                    if meta_principal:
-                        funcionarios_premiados = database.registrar_pontos_meta_diaria(apuracao_id, modelo_meta_diaria.PontosPremio, meta_principal.SetorAlvo)
-                        
-                        if funcionarios_premiados:
-                            mensagem_telegram = (
-                                f"🏆 **PARABÉNS, EQUIPE DO SETOR '{meta_principal.SetorAlvo.upper()}'!** 🏆\n\n"
-                                f"Vocês bateram a meta diária e cada um ganhou **{modelo_meta_diaria.PontosPremio} pontos**!\n\n"
-                                "Continuem com o trabalho incrível! 🚀"
-                            )
-                            for funcionario in funcionarios_premiados:
-                                notificador_telegram.enviar_mensagem(funcionario.ChatIDTelegram, mensagem_telegram)
-                            
-                            messagebox.showinfo("Meta Diária Atingida!", f"A equipe do setor '{meta_principal.SetorAlvo}' foi notificada no Telegram.")
-                # --------------------------------------------------------
-
-            else:
-                messagebox.showerror("Erro", f"Não foi possível salvar a apuração no banco de dados.\nDetalhe: {resultado}")
-        except (ValueError, IndexError):
-            messagebox.showerror("Erro de Formato", "Verifique o valor vendido e a seleção da meta.")
 
     def on_meta_principal_selecionada(self, event):
         """(VERSÃO V2 FINAL) Carrega o histórico, o resumo, a projeção E VERIFICA SE A META MENSAL FOI ATINGIDA."""
@@ -2287,6 +2241,52 @@ class App:
             # Permite salvar pressionando Enter
         entry_novo_valor.bind("<Return>", lambda e: salvar_edicao())
 
+    def lancar_apuracao_diaria(self):
+        """(VERSÃO V3 FINAL) Lança a apuração, verifica a meta diária e NOTIFICA A EQUIPE se atingida."""
+        meta_selecionada_str = self.combo_metas_ativas.get()
+        data_apuracao_str = self.date_apuracao.get_date().strftime('%Y-%m-%d')
+        valor_dia_str = self.entry_valor_dia.get().replace(',', '.')
+        
+        if not meta_selecionada_str or not valor_dia_str:
+            messagebox.showwarning("Aviso", "Selecione uma meta e preencha o valor vendido no dia.")
+            return
+                
+        try:
+            meta_id = int(meta_selecionada_str.split('(ID: ')[1][:-1])
+            valor_dia = float(valor_dia_str)
+            id_funcionario_logado = 2
+                
+            sucesso, resultado = database.lancar_apuracao_diaria(meta_id, data_apuracao_str, valor_dia, id_funcionario_logado)
+                
+            if sucesso:
+                apuracao_id = resultado # Agora temos o ID do lançamento
+                messagebox.showinfo("Sucesso", "Apuração diária lançada com sucesso!")
+                self.entry_valor_dia.delete(0, tk.END)
+                self.on_meta_principal_selecionada(None)
+
+                # --- LÓGICA DE VERIFICAÇÃO E NOTIFICAÇÃO (APRIMORADA) ---
+                modelo_meta_diaria = database.buscar_modelo_meta_para_data(data_apuracao_str)
+                if modelo_meta_diaria and valor_dia >= modelo_meta_diaria.ValorMeta and modelo_meta_diaria.PontosPremio > 0:
+                    meta_principal = next((m for m in database.listar_metas_principais() if m.MetaPrincipalID == meta_id), None)
+                    if meta_principal:
+                        funcionarios_premiados = database.registrar_pontos_meta_diaria(apuracao_id, modelo_meta_diaria.PontosPremio, meta_principal.SetorAlvo)
+                        
+                        if funcionarios_premiados:
+                            mensagem_telegram = (
+                                f"🏆 **PARABÉNS, EQUIPE DO SETOR '{meta_principal.SetorAlvo.upper()}'!** 🏆\n\n"
+                                f"Vocês bateram a meta diária e cada um ganhou **{modelo_meta_diaria.PontosPremio} pontos**!\n\n"
+                                "Continuem com o trabalho incrível! 🚀"
+                            )
+                            for funcionario in funcionarios_premiados:
+                                notificador_telegram.enviar_mensagem(funcionario.ChatIDTelegram, mensagem_telegram)
+                            
+                            messagebox.showinfo("Meta Diária Atingida!", f"A equipe do setor '{meta_principal.SetorAlvo}' foi notificada no Telegram.")
+                # --------------------------------------------------------
+
+            else:
+                messagebox.showerror("Erro", f"Não foi possível salvar a apuração no banco de dados.\nDetalhe: {resultado}")
+        except (ValueError, IndexError):
+            messagebox.showerror("Erro de Formato", "Verifique o valor vendido e a seleção da meta.")
 
     def carregar_dados_metas(self):
         """Carrega as metas principais na lista e popula o combobox de metas ativas."""
