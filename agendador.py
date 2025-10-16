@@ -141,11 +141,13 @@ def verificar_e_delegar_tarefas_de_folga():
     print(f"\n[{datetime.now().strftime('%H:%M:%S')}]  Verificando tarefas de funcionários de folga...")
     
     hoje = datetime.now()
-    # Python: Segunda = 0, ..., Domingo = 6
-    # Nosso DB: Domingo = 1, Segunda = 2, ...
-    dia_da_semana_hoje = (hoje.weekday() + 2) % 7
-    if dia_da_semana_hoje == 0: dia_da_semana_hoje = 7 # Ajuste para Sábado
-    if hoje.weekday() == 6: dia_da_semana_hoje = 1 # Ajuste para Domingo
+    # SQL Server: Domingo=1, Segunda=2, ..., Sábado=7
+    # Python .weekday(): Segunda=0, ..., Domingo=6
+    # A fórmula (hoje.weekday() + 2) % 7 ajusta perfeitamente, mas retorna 0 para Sábado.
+    # Corrigimos isso de forma simples:
+    dia_da_semana_hoje = hoje.isoweekday() + 1
+    if dia_da_semana_hoje == 8: # isoweekday() retorna 7 para Domingo, 7+1=8
+        dia_da_semana_hoje = 1 # Converte para o padrão do SQL Server
     
     # Passamos o dia da semana como parâmetro para ser mais confiável
     funcionarios_de_folga = database.buscar_funcionarios_de_folga_hoje(dia_da_semana_hoje)
