@@ -4,36 +4,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
 const API_BASE_URL = 'http://192.168.2.23:5000';    
 
-    async function atualizarPainel() {
-        console.log("Iniciando atualização do painel vFinal...");
-        try {
-            const [respostaTarefas, respostaRanking, respostaFeed] = await Promise.all([
-                fetch(`${API_BASE_URL}/api/painel/tarefas`),
-                fetch(`${API_BASE_URL}/api/ranking/diario`), 
-                fetch(`${API_BASE_URL}/api/feed`)             
-            ]);
-
-            if (!respostaTarefas.ok || !respostaRanking.ok || !respostaFeed.ok) {
-                throw new Error('Falha em uma das chamadas da API');
-            }
-
-            const dadosTarefas = await respostaTarefas.json();
-            const dadosRanking = await respostaRanking.json();
-            const dadosFeed = await respostaFeed.json();
-
-            renderizarColunas(dadosTarefas);
-            atualizarBarraDeProgresso(dadosTarefas.progresso);
-            renderizarPodio(dadosRanking);
-            renderizarFeed(dadosFeed);
-
-            const timestamp = new Date().toLocaleTimeString('pt-BR');
-            document.getElementById('ultima-atualizacao').textContent = `Última atualização: ${timestamp}`;
-        } catch (error) {
-            console.error("Falha ao atualizar o painel:", error);
-            document.getElementById('ultima-atualizacao').textContent = "Erro ao carregar dados.";
-        }
-    }
-    
+      
     function renderizarPodio(ranking) {
         const podioContainer = document.getElementById('podio-diario');
         podioContainer.innerHTML = '';
@@ -163,6 +134,64 @@ const API_BASE_URL = 'http://192.168.2.23:5000';
             feedLista.appendChild(item);
         });
     }
+
+    function renderizarMetaPrincipal(meta) {
+        const tituloEl = document.getElementById('meta-titulo');
+        const barraEl = document.getElementById('meta-progresso-barra');
+        const textoEl = document.getElementById('meta-progresso-texto');
+        const atingidoEl = document.getElementById('meta-valor-atingido');
+        const totalEl = document.getElementById('meta-valor-total');
+
+        if (meta && meta.valor_meta > 0) {
+            const percentual = (meta.valor_atingido / meta.valor_meta) * 100;
+            
+            tituloEl.textContent = meta.nome_meta;
+            barraEl.style.width = `${Math.min(percentual, 100)}%`; // Não deixa passar de 100%
+            textoEl.textContent = `${percentual.toFixed(1)}%`;
+            atingidoEl.textContent = `R$ ${meta.valor_atingido.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
+            totalEl.textContent = `R$ ${meta.valor_meta.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
+        } else {
+            tituloEl.textContent = "Nenhuma meta principal ativa no momento.";
+            barraEl.style.width = '0%';
+            textoEl.textContent = '0%';
+            atingidoEl.textContent = 'R$ 0,00';
+            totalEl.textContent = 'R$ 0,00';
+        }
+    }
+
+    async function atualizarPainel() {
+        console.log("Iniciando atualização do painel vFinal...");
+        try {
+            // A linha abaixo é a que você vai ADICIONAR
+            const [respostaTarefas, respostaRanking, respostaFeed, respostaMeta] = await Promise.all([
+                fetch(`${API_BASE_URL}/api/painel/tarefas`),
+                fetch(`${API_BASE_URL}/api/ranking/diario`), 
+                fetch(`${API_BASE_URL}/api/feed`),
+                fetch(`${API_BASE_URL}/api/meta_principal_do_dia`) // <<< ADICIONE ESTA LINHA
+            ]);
+
+            if (!respostaTarefas.ok || !respostaRanking.ok || !respostaFeed.ok || !respostaMeta.ok) { // <<< ATUALIZE ESTA LINHA
+                throw new Error('Falha em uma das chamadas da API');
+            }
+
+            const dadosTarefas = await respostaTarefas.json();
+            const dadosRanking = await respostaRanking.json();
+            const dadosFeed = await respostaFeed.json();
+            const dadosMeta = await respostaMeta.json(); // <<< ADICIONE ESTA LINHA
+
+            renderizarColunas(dadosTarefas);
+            atualizarBarraDeProgresso(dadosTarefas.progresso);
+            renderizarPodio(dadosRanking);
+            renderizarFeed(dadosFeed);
+            renderizarMetaPrincipal(dadosMeta); // <<< ADICIONE ESTA LINHA
+
+            // ... o resto da função continua igual
+        } catch (error) {
+            // ...
+        }
+    }
+
+
 
     atualizarPainel();
     setInterval(atualizarPainel, 60000);
