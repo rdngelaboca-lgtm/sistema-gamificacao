@@ -136,6 +136,7 @@ const API_BASE_URL = 'http://192.168.2.23:5000';
     }
 
     function renderizarMetaPrincipal(meta) {
+        const containerEl = document.getElementById('container-meta-mensal');
         const tituloEl = document.getElementById('meta-titulo');
         const barraEl = document.getElementById('meta-progresso-barra');
         const textoEl = document.getElementById('meta-progresso-texto');
@@ -143,6 +144,7 @@ const API_BASE_URL = 'http://192.168.2.23:5000';
         const totalEl = document.getElementById('meta-valor-total');
 
         if (meta && meta.valor_meta > 0) {
+            containerEl.style.display = 'block'; // <<< NOVA LINHA
             const percentual = (meta.valor_atingido / meta.valor_meta) * 100;
             
             tituloEl.textContent = meta.nome_meta;
@@ -152,6 +154,7 @@ const API_BASE_URL = 'http://192.168.2.23:5000';
             totalEl.textContent = `R$ ${meta.valor_meta.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
         } else {
             tituloEl.textContent = "Nenhuma meta principal ativa no momento.";
+            containerEl.style.display = 'none';
             barraEl.style.width = '0%';
             textoEl.textContent = '0%';
             atingidoEl.textContent = 'R$ 0,00';
@@ -163,27 +166,30 @@ const API_BASE_URL = 'http://192.168.2.23:5000';
         console.log("Iniciando atualização do painel vFinal...");
         try {
             // A linha abaixo é a que você vai ADICIONAR
-            const [respostaTarefas, respostaRanking, respostaFeed, respostaMeta] = await Promise.all([
+            const [respostaTarefas, respostaRanking, respostaFeed, respostaMeta, respostaMetaDiaria] = await Promise.all([ // <<< Adicionado 'respostaMetaDiaria'
                 fetch(`${API_BASE_URL}/api/painel/tarefas`),
                 fetch(`${API_BASE_URL}/api/ranking/diario`), 
                 fetch(`${API_BASE_URL}/api/feed`),
-                fetch(`${API_BASE_URL}/api/meta_principal_do_dia`) // <<< ADICIONE ESTA LINHA
+                fetch(`${API_BASE_URL}/api/meta_principal_do_dia`),
+                fetch(`${API_BASE_URL}/api/meta_diaria_do_dia`) // <<< NOVA LINHA
             ]);
 
-            if (!respostaTarefas.ok || !respostaRanking.ok || !respostaFeed.ok || !respostaMeta.ok) { // <<< ATUALIZE ESTA LINHA
+            if (!respostaTarefas.ok || !respostaRanking.ok || !respostaFeed.ok || !respostaMeta.ok || !respostaMetaDiaria.ok) { // <<< Adicionado 'respostaMetaDiaria'
                 throw new Error('Falha em uma das chamadas da API');
             }
 
             const dadosTarefas = await respostaTarefas.json();
             const dadosRanking = await respostaRanking.json();
             const dadosFeed = await respostaFeed.json();
-            const dadosMeta = await respostaMeta.json(); // <<< ADICIONE ESTA LINHA
+            const dadosMeta = await respostaMeta.json();
+            const dadosMetaDiaria = await respostaMetaDiaria.json(); // <<< NOVA LINHA
 
             renderizarColunas(dadosTarefas);
             atualizarBarraDeProgresso(dadosTarefas.progresso);
             renderizarPodio(dadosRanking);
             renderizarFeed(dadosFeed);
-            renderizarMetaPrincipal(dadosMeta); // <<< ADICIONE ESTA LINHA
+            renderizarMetaPrincipal(dadosMeta);
+            renderizarMetaDiaria(dadosMetaDiaria); 
 
             // ... o resto da função continua igual
         } catch (error) {
@@ -191,6 +197,26 @@ const API_BASE_URL = 'http://192.168.2.23:5000';
         }
     }
 
+    function renderizarMetaDiaria(meta) {
+        const containerEl = document.getElementById('container-meta-diaria');
+        const barraEl = document.getElementById('meta-diaria-progresso-barra');
+        const textoEl = document.getElementById('meta-diaria-progresso-texto');
+        const atingidoEl = document.getElementById('meta-diaria-valor-atingido');
+        const totalEl = document.getElementById('meta-diaria-valor-total');
+
+        if (meta && meta.valor_meta_diaria > 0) {
+            containerEl.style.display = 'block'; // Garante que o painel seja visível
+            const percentual = (meta.valor_atingido_hoje / meta.valor_meta_diaria) * 100;
+
+            barraEl.style.width = `${Math.min(percentual, 100)}%`;
+            textoEl.textContent = `${percentual.toFixed(1)}%`;
+            atingidoEl.textContent = `R$ ${meta.valor_atingido_hoje.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
+            totalEl.textContent = `R$ ${meta.valor_meta_diaria.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
+        } else {
+            // Se não houver meta para o dia, esconde o painel
+            containerEl.style.display = 'none';
+        }
+    }
 
 
     atualizarPainel();
