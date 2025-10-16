@@ -3075,3 +3075,35 @@ def buscar_dados_meta_diaria_hoje():
         finally:
             conn.close()
     return None
+
+def buscar_grupo_por_chat_id(chat_id):
+    """Busca os detalhes de um grupo a partir do seu Chat ID."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT * FROM Grupos WHERE ChatIDTelegram = ?"
+            cursor.execute(sql, chat_id)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
+
+def listar_membros_por_chat_id_grupo(chat_id):
+    """Busca todos os funcionários que são membros de um grupo a partir do Chat ID do grupo."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT F.FuncionarioID, F.NomeCompleto, F.ChatIDTelegram
+                FROM Funcionarios F
+                JOIN FuncionariosGrupos FG ON F.FuncionarioID = FG.FuncionarioID
+                JOIN Grupos G ON FG.GrupoID = G.GrupoID
+                WHERE G.ChatIDTelegram = ?
+            """
+            cursor.execute(sql, chat_id)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
