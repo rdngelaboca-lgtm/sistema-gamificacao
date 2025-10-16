@@ -68,7 +68,7 @@ def rota_de_teste():
         }
     ), 200 # 200 é o código HTTP para "OK"
 
-@app.route('/agendamentos', methods=['GET'])
+@app.route('/api/agendamentos', methods=['GET'])
 def rota_listar_agendamentos():
     """Endpoint para listar todos os agendamentos."""
     try:
