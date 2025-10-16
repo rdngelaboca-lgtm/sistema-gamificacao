@@ -1971,61 +1971,115 @@ class App:
         else:
             messagebox.showerror("Erro", "Ocorreu um erro ao salvar o feedback no banco de dados.")
 
-    # PASSO 1: Em main.py, SUBSTITUA a função criar_aba_metas por esta:
 
     def criar_aba_metas(self):
-        """Cria a interface V2 para Gestão de Metas, com apuração diária."""
+        """Cria a interface V3 para Gestão de Metas, com painel de detalhes."""
         main_frame = ttk.Frame(self.frame_metas)
         main_frame.pack(fill=tk.BOTH, expand=True)
-        main_frame.rowconfigure(1, weight=1)
+        main_frame.rowconfigure(2, weight=1) # A nova linha de detalhes vai se expandir
         main_frame.columnconfigure(0, weight=1)
 
-        # --- Frame 1: Lançamento Diário (Ação principal do dia a dia) ---
+        # --- Frame 1: Lançamento Diário ---
         frame_lancamento = ttk.LabelFrame(main_frame, text="Lançar Apuração Diária", padding="10")
         frame_lancamento.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        # ... (o conteúdo deste frame continua igual) ...
         frame_lancamento.columnconfigure(1, weight=1)
-
         ttk.Label(frame_lancamento, text="Meta Principal Ativa:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
         self.combo_metas_ativas = ttk.Combobox(frame_lancamento, state="readonly")
         self.combo_metas_ativas.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
-
         ttk.Label(frame_lancamento, text="Data da Apuração:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
         self.date_apuracao = DateEntry(frame_lancamento, width=12, date_pattern='dd/mm/yyyy', locale='pt_BR')
         self.date_apuracao.grid(row=1, column=1, padx=5, pady=5, sticky="w")
-
         ttk.Label(frame_lancamento, text="Valor Vendido do Dia (R$):").grid(row=2, column=0, padx=5, pady=5, sticky="w")
         self.entry_valor_dia = ttk.Entry(frame_lancamento)
         self.entry_valor_dia.grid(row=2, column=1, padx=5, pady=5, sticky="w")
-        
         btn_lancar = ttk.Button(frame_lancamento, text="Lançar Apuração Diária", command=self.lancar_apuracao_diaria)
         btn_lancar.grid(row=3, column=1, padx=5, pady=10, sticky="e")
 
-
         # --- Frame 2: Gerenciamento das Metas Principais ---
-        frame_gerenciamento = ttk.LabelFrame(main_frame, text="Gerenciar Metas Principais (Mensais, etc.)", padding="10")
-        frame_gerenciamento.grid(row=1, column=0, sticky="nsew")
+        frame_gerenciamento = ttk.LabelFrame(main_frame, text="Gerenciar Metas Principais (Clique para ver detalhes)", padding="10")
+        frame_gerenciamento.grid(row=1, column=0, sticky="ew", pady=(0, 10))
+        # ... (o conteúdo deste frame continua igual, mas adicionamos o bind) ...
         frame_gerenciamento.rowconfigure(0, weight=1)
         frame_gerenciamento.columnconfigure(0, weight=1)
-
         cols_principais = ('ID', 'Nome', 'Valor Total', 'Início', 'Fim', 'Status')
         self.tree_metas_principais = ttk.Treeview(frame_gerenciamento, columns=cols_principais, show='headings', selectmode='browse')
         for col in cols_principais: self.tree_metas_principais.heading(col, text=col)
-        self.tree_metas_principais.column('ID', width=40)
-        self.tree_metas_principais.column('Nome', width=250)
-        self.tree_metas_principais.column('Valor Total', width=120, anchor="e")
-        self.tree_metas_principais.column('Início', width=100, anchor="center")
-        self.tree_metas_principais.column('Fim', width=100, anchor="center")
-        self.tree_metas_principais.column('Status', width=80, anchor="center")
-        self.tree_metas_principais.pack(fill="both", expand=True, side="left")
-        
+        self.tree_metas_principais.column('ID', width=40); self.tree_metas_principais.column('Nome', width=250)
+        self.tree_metas_principais.column('Valor Total', width=120, anchor="e"); self.tree_metas_principais.column('Início', width=100, anchor="center")
+        self.tree_metas_principais.column('Fim', width=100, anchor="center"); self.tree_metas_principais.column('Status', width=80, anchor="center")
+        self.tree_metas_principais.pack(fill="x", expand=True, side="left")
+        # A MÁGICA COMEÇA AQUI: Conectamos o clique na lista a uma nova função
+        self.tree_metas_principais.bind('<<TreeviewSelect>>', self.on_meta_principal_selecionada)
         frame_botoes_gerenciamento = ttk.Frame(frame_gerenciamento)
         frame_botoes_gerenciamento.pack(side="left", fill="y", padx=10)
         ttk.Button(frame_botoes_gerenciamento, text="Criar Nova Meta Principal...", command=self.abrir_janela_criar_meta_principal).pack(pady=5)
-        # Futuramente:
-        # ttk.Button(frame_botoes_gerenciamento, text="Editar Meta").pack(pady=5)
-        # ttk.Button(frame_botoes_gerenciamento, text="Excluir Meta").pack(pady=5)
 
-    # PASSO 2: Em main.py, ADICIONE estas duas novas funções (pode ser junto das outras funções de metas)
+        # --- Frame 3: ACOMPANHAMENTO E DETALHES (NOVO!) ---
+        frame_detalhes = ttk.LabelFrame(main_frame, text="Detalhes e Evolução da Meta Selecionada", padding="10")
+        frame_detalhes.grid(row=2, column=0, sticky="nsew")
+        frame_detalhes.rowconfigure(0, weight=1)
+        frame_detalhes.columnconfigure(0, weight=2) # Coluna da lista de lançamentos cresce mais
+        frame_detalhes.columnconfigure(1, weight=1) # Coluna do resumo
+
+        # Sub-painel esquerdo: Lista de Lançamentos Diários
+        cols_detalhes = ('Data do Lançamento', 'Valor Lançado (R$)')
+        self.tree_detalhes_apuracoes = ttk.Treeview(frame_detalhes, columns=cols_detalhes, show='headings', selectmode='browse')
+        self.tree_detalhes_apuracoes.heading('Data do Lançamento', text='Data do Lançamento')
+        self.tree_detalhes_apuracoes.column('Data do Lançamento', anchor='center')
+        self.tree_detalhes_apuracoes.heading('Valor Lançado (R$)', text='Valor Lançado (R$)')
+        self.tree_detalhes_apuracoes.column('Valor Lançado (R$)', anchor='e')
+        self.tree_detalhes_apuracoes.grid(row=0, column=0, sticky="nsew")
+
+        # Sub-painel direito: Resumo do Progresso
+        frame_resumo = ttk.Frame(frame_detalhes, padding="20")
+        frame_resumo.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
+        
+        self.lbl_total_atingido = ttk.Label(frame_resumo, text="Total Atingido: R$ 0,00", font=("Arial", 12, "bold"))
+        self.lbl_total_atingido.pack(anchor="w", pady=5)
+        
+        self.lbl_progresso_percentual = ttk.Label(frame_resumo, text="Progresso: 0.00%", font=("Arial", 12))
+        self.lbl_progresso_percentual.pack(anchor="w", pady=5)
+
+
+    # PASSO 2: ADICIONE esta nova função de lógica em main.py.
+
+    def on_meta_principal_selecionada(self, event):
+        """Chamada ao clicar em uma meta. Carrega e exibe o histórico de apurações e o resumo."""
+        # Limpa os campos de detalhes antigos
+        for i in self.tree_detalhes_apuracoes.get_children():
+            self.tree_detalhes_apuracoes.delete(i)
+        self.lbl_total_atingido.config(text="Total Atingido: R$ 0,00")
+        self.lbl_progresso_percentual.config(text="Progresso: 0.00%")
+
+        selecionado = self.tree_metas_principais.focus()
+        if not selecionado:
+            return
+
+        dados_meta = self.tree_metas_principais.item(selecionado, 'values')
+        meta_id = int(dados_meta[0])
+        # Pega o valor total da meta da string "R$ 300.000,00" e converte para número
+        valor_meta_total_str = dados_meta[2].replace("R$ ", "").replace(".", "").replace(",", ".")
+        valor_meta_total = float(valor_meta_total_str)
+
+        # Busca o "extrato" no banco de dados
+        apuracoes = database.listar_apuracoes_por_meta_principal(meta_id)
+
+        total_atingido = 0.0
+        for apuracao in apuracoes:
+            data_f = apuracao.DataApuracao.strftime('%d/%m/%Y')
+            valor_f = f"{apuracao.ValorDia:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            self.tree_detalhes_apuracoes.insert("", "end", values=(data_f, valor_f))
+            total_atingido += apuracao.ValorDia
+
+        # Calcula o progresso
+        percentual = (total_atingido / valor_meta_total) * 100 if valor_meta_total > 0 else 0
+
+        # Atualiza as labels de resumo com os novos valores
+        total_atingido_f = f"R$ {total_atingido:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        self.lbl_total_atingido.config(text=f"Total Atingido: {total_atingido_f}")
+        self.lbl_progresso_percentual.config(text=f"Progresso: {percentual:.2f}%")
+
 
     def carregar_dados_metas(self):
         """Carrega as metas principais na lista e popula o combobox de metas ativas."""
