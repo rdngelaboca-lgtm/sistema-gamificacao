@@ -2743,12 +2743,12 @@ def listar_metas_principais():
     return []
 
 def lancar_apuracao_diaria(meta_principal_id, data_apuracao, valor_dia, funcionario_id):
-    """Salva o valor de vendas de um dia específico para uma meta principal."""
+    """(VERSÃO CORRIGIDA) Salva o valor de vendas de um dia específico para uma meta principal."""
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            # Lógica inteligente: Se já existe um lançamento para este dia, atualiza. Senão, cria um novo.
+            # A consulta SQL continua a mesma, com 10 marcadores de parâmetro (?)
             sql = """
                 IF EXISTS (SELECT 1 FROM MetasDiariasApuracoes WHERE MetaPrincipalID = ? AND DataApuracao = ?)
                     UPDATE MetasDiariasApuracoes SET ValorDia = ?, FuncionarioID_Lancamento = ? 
@@ -2758,19 +2758,36 @@ def lancar_apuracao_diaria(meta_principal_id, data_apuracao, valor_dia, funciona
                     (MetaPrincipalID, DataApuracao, ValorDia, FuncionarioID_Lancamento) 
                     VALUES (?, ?, ?, ?);
             """
-            # Parâmetros para o UPDATE
-            params_update = (valor_dia, funcionario_id, meta_principal_id, data_apuracao)
-            # Parâmetros para o INSERT
-            params_insert = (meta_principal_id, data_apuracao, valor_dia, funcionario_id)
             
-            cursor.execute(sql, *params_update, *params_insert)
+            # --- A CORREÇÃO ESTÁ AQUI ---
+            # Criamos uma única tupla com todos os 10 parâmetros na ordem exata em que aparecem no SQL.
+            params = (
+                # 2 parâmetros para a cláusula IF EXISTS
+                meta_principal_id, 
+                data_apuracao, 
+                # 4 parâmetros para a cláusula UPDATE
+                valor_dia, 
+                funcionario_id, 
+                meta_principal_id, 
+                data_apuracao,
+                # 4 parâmetros para a cláusula INSERT
+                meta_principal_id, 
+                data_apuracao, 
+                valor_dia, 
+                funcionario_id
+            )
+            
+            # Agora executamos a consulta com a lista completa de 10 parâmetros.
+            cursor.execute(sql, params)
             conn.commit()
             return True
         except Exception as e:
             print(f"ERRO ao lançar apuração diária: {e}")
             return False
         finally:
-            conn.close()
+            if conn:
+                conn.close()
+    return False
 
 def buscar_meta_principal_do_dia():
     """
