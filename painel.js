@@ -206,7 +206,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 fetch(`${API_BASE_URL}/api/feed`),
                 fetch(`${API_BASE_URL}/api/meta_principal_do_dia`),
                 fetch(`${API_BASE_URL}/api/meta_diaria_do_dia`),
-                fetch(`${API_BASE_URL}/api/agendamentos`) // <-- NOVA CHAMADA DE API
+                fetch(`${API_BASE_URL}/api/agendamentos`) 
             ]);
 
             if (!resTarefas.ok) throw new Error(`Erro na API de tarefas: ${resTarefas.statusText}`);
@@ -221,6 +221,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
             // Chamamos as funções de renderização
             renderizarColunas(dadosTarefas);
+            renderizarProgressoGeral(dadosTarefas.progresso);
             renderizarPodio(dadosRanking);
             renderizarFeed(dadosFeed);
             renderizarMetaPrincipal(dadosMeta);
@@ -232,6 +233,22 @@ document.addEventListener('DOMContentLoaded', function() {
         } catch (error) {
             console.error("Falha ao atualizar o painel:", error);
             document.getElementById('ultima-atualizacao').textContent = `Erro ao atualizar. Tentando novamente...`;
+        }
+    }
+
+    // Adicione esta nova função ao seu painel.js
+
+    function renderizarProgressoGeral(progresso) {
+        const barraEl = document.getElementById('progresso-barra-interna');
+        const textoEl = document.getElementById('progresso-texto-label');
+
+        if (progresso && progresso.total > 0) {
+            const percentual = (progresso.concluidas / progresso.total) * 100;
+            barraEl.style.width = `${percentual}%`;
+            textoEl.textContent = `Progresso do Dia: ${progresso.concluidas} / ${progresso.total} tarefas`;
+        } else {
+            barraEl.style.width = '0%';
+            textoEl.textContent = 'Nenhuma tarefa para hoje';
         }
     }
 
