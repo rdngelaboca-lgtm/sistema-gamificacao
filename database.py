@@ -919,8 +919,8 @@ def buscar_funcionarios_para_lembrete(horario_atual):
                 SELECT * FROM Funcionarios
                 WHERE
                     (DATEDIFF(minute, CONVERT(TIME, GETDATE()), CONVERT(TIME, DATEADD(HOUR, 3, HorarioNotificacao))) = 0 OR
-                     DATEDIFF(minute, CONVERT(TIME, GETDATE()), CONVERT(TIME, DATEADD(HOUR, 6, HorarioNotificacao))) = 0)
-                    AND (DiaDeFolga = 0 OR DiaDeFolga != DATEPART(weekday, GETDATE()))
+                    DATEDIFF(minute, CONVERT(TIME, GETDATE()), CONVERT(TIME, DATEADD(HOUR, 6, HorarioNotificacao))) = 0)
+                    AND (DiaDeFolga = 0 OR DiaDeFolga IS NULL OR DiaDeFolga != DATEPART(weekday, GETDATE()))
             """
             cursor.execute(sql)
             return cursor.fetchall()
@@ -938,7 +938,7 @@ def buscar_funcionarios_para_resumo_final(horario_atual):
                 SELECT * FROM Funcionarios
                 WHERE
                     DATEDIFF(minute, CONVERT(TIME, GETDATE()), CONVERT(TIME, DATEADD(MINUTE, 500, HorarioNotificacao))) = 0
-                    AND (DiaDeFolga = 0 OR DiaDeFolga != DATEPART(weekday, GETDATE()))
+                    AND (DiaDeFolga = 0 OR DiaDeFolga IS NULL OR DiaDeFolga != DATEPART(weekday, GETDATE()))
             """
             cursor.execute(sql)
             return cursor.fetchall()
