@@ -275,11 +275,12 @@ def buscar_funcionarios_por_horario(horario_atual):
 
 # Em database.py, SUBSTITUA a função listar_tarefas_do_dia_por_funcionario:
 
+# Em database.py, SUBSTITUA a função listar_tarefas_do_dia_por_funcionario:
+
 def listar_tarefas_do_dia_por_funcionario(funcionario_id):
     """
-    (VERSÃO 6 - SIMPLIFICADA)
-    Busca todas as tarefas do dia. Agora não precisa mais de lógica especial
-    para tarefas de grupo, pois elas são convertidas para tarefas 'Unicas'.
+    (VERSÃO 7 - COM CORREÇÃO PARA TAREFAS 'Unica')
+    Busca todas as tarefas do dia, agora incluindo as tarefas únicas aceitas de folgas.
     """
     conn = get_db_connection()
     if conn:
@@ -316,8 +317,11 @@ def listar_tarefas_do_dia_por_funcionario(funcionario_id):
                         )
                         OR (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, GETDATE()))
 
-                        -- Esta linha agora lida tanto com tarefas de agendamento quanto com as de grupo que foram aceitas.
                         OR (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = CONVERT(date, GETDATE()))
+                        
+                        -- --- A CORREÇÃO ESTÁ AQUI ---
+                        -- Adicionamos a condição para incluir tarefas do tipo 'Unica' que foram criadas hoje.
+                        OR (TA.TipoFrequencia = 'Unica' AND CONVERT(date, TA.DataInicioVigencia) = CONVERT(date, GETDATE()))
                     )
             """
             cursor.execute(sql, funcionario_id)
