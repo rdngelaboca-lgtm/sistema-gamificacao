@@ -3037,3 +3037,33 @@ def excluir_apuracao_diaria(meta_principal_id, data_apuracao):
         finally:
             conn.close()
     return False
+
+# Em database.py, adicione esta nova função ao final
+
+def buscar_dados_meta_diaria_hoje():
+    """
+    Busca o modelo da meta para o dia de hoje e o valor já apurado para hoje.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Esta query busca duas informações em uma só consulta:
+            # 1. O valor da meta para o dia da semana de hoje.
+            # 2. O valor já lançado hoje para a meta principal ativa.
+            sql = """
+                SELECT
+                    (SELECT ValorMeta FROM MetasDiariasModelos WHERE DiaSemanaID = DATEPART(weekday, GETDATE())) as MetaDoDia,
+                    (SELECT SUM(ValorDia) FROM MetasDiariasApuracoes WHERE CONVERT(date, DataApuracao) = CONVERT(date, GETDATE())) as AtingidoHoje
+            """
+            cursor.execute(sql)
+            resultado = cursor.fetchone()
+            if resultado:
+                return {
+                    "valor_meta_diaria": float(resultado.MetaDoDia or 0),
+                    "valor_atingido_hoje": float(resultado.AtingidoHoje or 0)
+                }
+            return None
+        finally:
+            conn.close()
+    return None
