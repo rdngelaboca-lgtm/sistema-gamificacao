@@ -26,70 +26,59 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 async def status_meta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Envia o status atual da meta principal para o grupo de gestão."""
     chat_id = update.effective_chat.id
-    # Medida de segurança: apenas gestores podem usar este comando.
     if chat_id != config.GESTOR_GROUP_CHAT_ID:
         await update.message.reply_text("Este comando é exclusivo para o grupo de gestão.")
         return
 
-    # Reutilizamos a função que o painel da web já usa!
     dados_meta = database.buscar_meta_principal_do_dia()
-
     if not dados_meta or not dados_meta.get('valor_meta'):
         await update.message.reply_text("Nenhuma meta principal está ativa no momento.")
         return
 
-    # Coletando os dados
+    # Coleta de dados (sem alteração)
     nome = dados_meta['nome_meta']
     atingido = dados_meta['valor_atingido']
     total = dados_meta['valor_meta']
     percentual = (atingido / total) * 100 if total > 0 else 0
-
-    # Lógica para criar a barra de progresso visual
-    blocos_cheios = int(percentual // 10)  # 1 bloco para cada 10%
-    blocos_vazios = 10 - blocos_cheios
+    
+    # Barra de progresso (sem alteração)
+    blocos_cheios = int(percentual // 10); blocos_vazios = 10 - blocos_cheios
     barra_progresso = '▓' * blocos_cheios + '░' * blocos_vazios
 
-    # Lógica de projeção simples
+    # Cálculo da projeção (sem alteração)
     hoje = date.today()
     dias_no_mes = (hoje.replace(month=hoje.month % 12 + 1, day=1) - timedelta(days=1)).day
     dias_corridos = hoje.day
     media_diaria = atingido / dias_corridos if dias_corridos > 0 else 0
     projecao = media_diaria * dias_no_mes if media_diaria > 0 else 0
 
-    # Montando a mensagem final com formatação MarkdownV2
-    # É necessário escapar caracteres especiais como '.', ',', '(', ')'
-    atingido_f = f"{atingido:,.2f}".replace('.', '_').replace(',', '.').replace('_', ',')
-    total_f = f"{total:,.2f}".replace('.', '_').replace(',', '.').replace('_', ',')
-    projecao_f = f"{projecao:,.2f}".replace('.', '_').replace(',', '.').replace('_', ',')
-
+    # --- A CORREÇÃO DEFINITIVA ESTÁ AQUI ---
+    # Usamos tags HTML (<b> para negrito, <code> para fonte monoespaçada)
     mensagem = (
-        f"📊 *Status da Meta: {escape_markdown(nome, version=2)}* 📊\n\n"
-        f"`{barra_progresso}`  *{percentual:.2f}%*\n\n"
-        f"💰 *Atingido:* `R$ {escape_markdown(atingido_f, version=2)}`\n"
-        f"🎯 *Meta:* `R$ {escape_markdown(total_f, version=2)}`\n\n"
-        f"📈 *Projeção Final:* `R$ {escape_markdown(projecao_f, version=2)}`"
+        f"📊 <b>Status da Meta: {nome}</b> 📊\n\n"
+        f"<code>{barra_progresso}</code>  <b>{percentual:.2f}%</b>\n\n"
+        f"💰 <b>Atingido:</b> <code>R$ {atingido:,.2f}</code>\n"
+        f"🎯 <b>Meta:</b> <code>R$ {total:,.2f}</code>\n\n"
+        f"📈 <b>Projeção Final:</b> <code>R$ {projecao:,.2f}</code>"
     )
 
-    await update.message.reply_markdown_v2(mensagem)
+    # Enviamos a mensagem usando reply_html em vez de reply_markdown_v2
+    await update.message.reply_html(mensagem)
+
+# Em telegram_bot.py, SUBSTITUA também a função lancar_venda:
 
 async def lancar_venda(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Registra o valor da apuração diária enviado pelo gestor."""
     chat_id = update.effective_chat.id
-    # Assumimos que o ID do gestor que envia o comando está no banco.
-    # Se você tiver uma tabela de 'gestores', a lógica seria buscar nela.
-    # Por simplicidade, vamos buscar o usuário na tabela geral de funcionários.
     gestor = database.buscar_funcionario_por_chat_id(update.effective_user.id)
 
-    # Segurança: Apenas para gestores no grupo correto
     if chat_id != config.GESTOR_GROUP_CHAT_ID:
         await update.message.reply_text("Este comando é exclusivo para o grupo de gestão.")
         return
-
     if not gestor:
         await update.message.reply_text("Erro: Seu usuário do Telegram não foi encontrado no sistema para registrar esta ação.")
         return
 
-    # 1. Validação do Comando
     if not context.args:
         await update.message.reply_text("Por favor, informe o valor a ser lançado.\nExemplo: `/lancar 1250.50`")
         return
@@ -101,24 +90,21 @@ async def lancar_venda(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text("Valor inválido. Por favor, use apenas números.\nExemplo: `/lancar 1250.50`")
         return
 
-    # 2. Buscar dados necessários no banco
     meta_id = database.buscar_meta_ativa_id_hoje()
     if not meta_id:
         await update.message.reply_text("Erro: Nenhuma meta principal está ativa para hoje. Não é possível lançar.")
         return
 
-    # 3. Executar a ação de lançamento
     data_hoje_str = date.today().strftime('%Y-%m-%d')
     sucesso, resultado = database.lancar_apuracao_diaria(meta_id, data_hoje_str, valor_dia, gestor.FuncionarioID)
 
     if sucesso:
-        valor_dia_f = f"{valor_dia:,.2f}".replace('.', '_').replace(',', '.').replace('_', ',')
-        await update.message.reply_text(
-            f"✅ Sucesso! Lançamento de R$ {valor_dia_f} registrado por {gestor.NomeCompleto}.\n\n"
+        # A mensagem de sucesso agora usa HTML para consistência
+        await update.message.reply_html(
+            f"✅ <b>Sucesso!</b> Lançamento de <code>R$ {valor_dia:,.2f}</code> registrado por {gestor.NomeCompleto}.\n\n"
             "Aguarde, estou atualizando o status..."
         )
-        # Bônus: Chama a função de status para mostrar o resultado imediatamente!
-        await status_meta(update, context)
+        await status_meta(update, context) # Chama a nova status_meta que também usa HTML
     else:
         await update.message.reply_text(f"❌ Falha ao registrar o lançamento.\nErro: {resultado}")
 
