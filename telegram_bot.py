@@ -660,19 +660,34 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
                 text=f"Que pena, parece que um colega foi mais rápido e já aceitou a missão '{tarefa_titulo}'. Fique de olho na próxima! 👀",
             )
 
+    # Em telegram_bot.py, dentro de button_callback_handler, substitua o bloco "aceitar_folga_":
+
     elif data.startswith("aceitar_folga_"):
         tarefa_id = int(data.split('_')[-1])
         funcionario_aceitou = database.buscar_funcionario_por_chat_id(user.id)
         if not funcionario_aceitou:
             await context.bot.send_message(chat_id=user.id, text="Seu usuário do Telegram não foi encontrado no nosso sistema.")
             return
+
         tarefas_atuais = database.listar_tarefas_do_dia_por_funcionario(funcionario_aceitou.FuncionarioID)
         ids_tarefas_atuais = [t.TarefaID for t in tarefas_atuais]
         if tarefa_id in ids_tarefas_atuais:
             await context.bot.send_message(chat_id=user.id, text="Você já tem essa tarefa na sua lista de hoje ou ela já foi pega por outro colega. Obrigado pelo interesse!")
+            # Edita a mensagem do grupo para refletir que a tarefa já foi pega
+            try:
+                await query.edit_message_text(text=f"{query.message.text}\n\n--- TAREFA JÁ ATRIBUÍDA ---")
+            except:
+                pass # Ignora se não conseguir editar
             return
-        database.atribuir_tarefa(tarefa_id, funcionario_aceitou.FuncionarioID, 'Unica', None)
-        tarefa_info = database.buscar_tarefa_por_atribuicao(database.listar_tarefas_do_dia_por_funcionario(funcionario_aceitou.FuncionarioID)[-1].AtribuicaoID)
+
+        # --- LÓGICA CORRIGIDA E ROBUSTA ---
+        # 1. Atribui a tarefa e captura o novo ID da atribuição
+        novo_atribuicao_id = database.atribuir_tarefa(tarefa_id, funcionario_aceitou.FuncionarioID, 'Unica', None)
+        
+        # 2. Busca os detalhes da tarefa de forma segura, usando o ID que acabamos de obter
+        tarefa_info = database.buscar_tarefa_por_atribuicao(novo_atribuicao_id)
+        # --- FIM DA CORREÇÃO ---
+        
         nova_mensagem_grupo = (
             f"{query.message.text}\n\n"
             f"--- MISSÃO REIVINDICADA! ---\n"
