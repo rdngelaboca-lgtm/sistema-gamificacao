@@ -3016,3 +3016,24 @@ def buscar_meta_ativa_id_hoje():
         finally:
             conn.close()
     return None
+
+
+def excluir_apuracao_diaria(meta_principal_id, data_apuracao):
+    """Exclui um registro de apuração diária específico."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                DELETE FROM MetasDiariasApuracoes 
+                WHERE MetaPrincipalID = ? AND DataApuracao = ?
+            """
+            cursor.execute(sql, meta_principal_id, data_apuracao)
+            conn.commit()
+            return cursor.rowcount > 0 # Retorna True se uma linha foi afetada
+        except Exception as e:
+            print(f"ERRO ao excluir apuração diária: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
