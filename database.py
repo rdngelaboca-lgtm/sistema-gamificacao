@@ -2468,10 +2468,12 @@ def listar_documentos_por_funcionario(funcionario_id):
     return []
 
 
+# Em database.py, SUBSTITUA a função 'buscar_dados_para_painel_kanban' inteira por esta:
+
 def buscar_dados_para_painel_kanban():
     """
     Busca e organiza todas as tarefas para o painel de ação diária.
-    (VERSÃO 3.4 - Com cálculo de progresso)
+    (VERSÃO 3.5 - RESPEITA DIAS DE FOLGA)
     """
     conn = get_db_connection()
     if not conn:
@@ -2479,57 +2481,80 @@ def buscar_dados_para_painel_kanban():
 
     try:
         cursor = conn.cursor()
-        
-        # As queries são as mesmas da aula anterior
+
+        # --- CONSULTA SQL ATUALIZADA PARA RESPEITAR A FOLGA ---
         sql_para_fazer = """
+            -- Tarefas de HOJE
             SELECT T.Titulo, F.NomeCompleto, T.Pontos, 'Hoje' as Categoria, TA.DataAtribuicao, GETDATE() as DataReferencia
-            FROM TarefasAtribuidas TA JOIN Tarefas T ON TA.TarefaID = T.TarefaID JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID
-            WHERE TA.FuncionarioID IS NOT NULL AND TA.DataFimVigencia IS NULL AND NOT EXISTS (SELECT 1 FROM Entregas E WHERE E.AtribuicaoID = TA.AtribuicaoID AND CONVERT(date, E.DataEnvio) = CONVERT(date, GETDATE()) AND E.StatusValidacao != 'Recusada')
-            AND (TA.TipoFrequencia = 'Diaria' OR (TA.TipoFrequencia = 'Semanal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(weekday, GETDATE())) OR (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, GETDATE())) OR (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = CONVERT(date, GETDATE())))
+            FROM TarefasAtribuidas TA 
+            JOIN Tarefas T ON TA.TarefaID = T.TarefaID 
+            JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID
+            WHERE TA.FuncionarioID IS NOT NULL AND TA.DataFimVigencia IS NULL
+              AND NOT EXISTS (SELECT 1 FROM Entregas E WHERE E.AtribuicaoID = TA.AtribuicaoID AND CONVERT(date, E.DataEnvio) = CONVERT(date, GETDATE()) AND E.StatusValidacao != 'Recusada')
+              -- Lógica de Tarefas do Dia:
+              AND (
+                TA.TipoFrequencia = 'Diaria' OR 
+                (TA.TipoFrequencia = 'Semanal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(weekday, GETDATE())) OR 
+                (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, GETDATE())) OR 
+                (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = CONVERT(date, GETDATE()))
+              )
+              -- A MÁGICA ESTÁ AQUI: Só mostra se não for o dia de folga
+              AND (F.DiaDeFolga IS NULL OR F.DiaDeFolga = 0 OR F.DiaDeFolga != DATEPART(weekday, GETDATE()))
+
             UNION ALL
+
+            -- Tarefas de ONTEM (Atrasadas)
             SELECT T.Titulo, F.NomeCompleto, T.Pontos, 'Atrasada' as Categoria, TA.DataAtribuicao, DATEADD(day, -1, GETDATE()) as DataReferencia
-            FROM TarefasAtribuidas TA JOIN Tarefas T ON TA.TarefaID = T.TarefaID JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID
-            WHERE TA.FuncionarioID IS NOT NULL AND TA.DataFimVigencia IS NULL AND NOT EXISTS (SELECT 1 FROM Entregas E WHERE E.AtribuicaoID = TA.AtribuicaoID AND CONVERT(date, E.DataEnvio) = CONVERT(date, DATEADD(day, -1, GETDATE())) AND E.StatusValidacao != 'Recusada')
-            AND (TA.TipoFrequencia = 'Diaria' OR (TA.TipoFrequencia = 'Semanal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(weekday, DATEADD(day, -1, GETDATE()))) OR (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, DATEADD(day, -1, GETDATE()))) OR (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = CONVERT(date, DATEADD(day, -1, GETDATE()))))
+            FROM TarefasAtribuidas TA 
+            JOIN Tarefas T ON TA.TarefaID = T.TarefaID 
+            JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID
+            WHERE TA.FuncionarioID IS NOT NULL AND TA.DataFimVigencia IS NULL
+              AND NOT EXISTS (SELECT 1 FROM Entregas E WHERE E.AtribuicaoID = TA.AtribuicaoID AND CONVERT(date, E.DataEnvio) = CONVERT(date, DATEADD(day, -1, GETDATE())) AND E.StatusValidacao != 'Recusada')
+              -- Lógica de Tarefas de Ontem:
+              AND (
+                TA.TipoFrequencia = 'Diaria' OR 
+                (TA.TipoFrequencia = 'Semanal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(weekday, DATEADD(day, -1, GETDATE()))) OR 
+                (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, DATEADD(day, -1, GETDATE()))) OR 
+                (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = CONVERT(date, DATEADD(day, -1, GETDATE())))
+              )
+              -- A MÁGICA APLICADA AQUI TAMBÉM: Só mostra se ontem não foi o dia de folga
+              AND (F.DiaDeFolga IS NULL OR F.DiaDeFolga = 0 OR F.DiaDeFolga != DATEPART(weekday, DATEADD(day, -1, GETDATE())))
+
             ORDER BY Categoria DESC, F.NomeCompleto;
         """
         cursor.execute(sql_para_fazer)
         para_fazer_cols = [column[0] for column in cursor.description]
         para_fazer_rows = cursor.fetchall()
 
+        # As outras consultas não mudam
         sql_validacao = "SELECT T.Titulo, F.NomeCompleto, E.DataEnvio, T.Pontos FROM Entregas E JOIN Tarefas T ON E.TarefaID = T.TarefaID JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID WHERE E.StatusValidacao = 'Pendente' ORDER BY E.DataEnvio;"
         cursor.execute(sql_validacao)
         validacao_cols = [column[0] for column in cursor.description]
         validacao_rows = cursor.fetchall()
-        
+
         sql_concluidas = "SELECT T.Titulo, F.NomeCompleto, E.DataEnvio, E.PontosGanhos as Pontos FROM Entregas E JOIN Tarefas T ON E.TarefaID = T.TarefaID JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID WHERE E.StatusValidacao = 'Aprovada' AND CONVERT(date, E.DataEnvio) = CONVERT(date, GETDATE()) ORDER BY E.DataEnvio DESC;"
         cursor.execute(sql_concluidas)
         concluidas_cols = [column[0] for column in cursor.description]
         concluidas_rows = cursor.fetchall()
-        
-        # ===== NOVA LÓGICA DE CÁLCULO =====
-        # Primeiro, convertemos as linhas para dicionários para facilitar o acesso
+
+        # Lógica de Cálculo de Progresso (Modificada para usar a nova consulta)
         para_fazer_lista = [dict(zip(para_fazer_cols, row)) for row in para_fazer_rows]
         concluidas_lista = [dict(zip(concluidas_cols, row)) for row in concluidas_rows]
 
-        # Contamos quantas tarefas são efetivamente de hoje (não as atrasadas)
         tarefas_de_hoje_pendentes = len([t for t in para_fazer_lista if t['Categoria'] == 'Hoje'])
         total_concluidas_hoje = len(concluidas_lista)
-        
-        # O total de tarefas do dia é a soma do que falta fazer hoje + o que já foi concluído hoje
         total_tarefas_do_dia = tarefas_de_hoje_pendentes + total_concluidas_hoje
 
         progresso = {
             "concluidas": total_concluidas_hoje,
             "total": total_tarefas_do_dia
         }
-        # ==================================
 
         return {
             'para_fazer': para_fazer_lista,
             'validacao': [dict(zip(validacao_cols, row)) for row in validacao_rows],
             'concluidas': concluidas_lista,
-            'progresso': progresso # Adicionamos a nova informação na resposta
+            'progresso': progresso
         }
     except Exception as e:
         print(f"ERRO ao buscar dados para o painel Kanban: {e}")
@@ -2537,7 +2562,7 @@ def buscar_dados_para_painel_kanban():
     finally:
         if conn:
             conn.close()
-
+            
 def buscar_ranking_do_dia():
     """
     Calcula o ranking dos 3 funcionários com mais pontos APROVADOS HOJE.
