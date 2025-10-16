@@ -2822,3 +2822,23 @@ def buscar_meta_principal_do_dia():
         finally:
             conn.close()
     return None
+
+# Em database.py, adicione esta nova função no final do bloco de metas
+
+def listar_apuracoes_por_meta_principal(meta_principal_id):
+    """Busca o 'extrato' de todos os lançamentos diários para uma meta principal específica."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT DataApuracao, ValorDia 
+                FROM MetasDiariasApuracoes 
+                WHERE MetaPrincipalID = ? 
+                ORDER BY DataApuracao DESC
+            """
+            cursor.execute(sql, meta_principal_id)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
