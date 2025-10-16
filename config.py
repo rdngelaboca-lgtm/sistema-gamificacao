@@ -38,7 +38,7 @@ PASTA_DOCUMENTOS_RH = "documentos_rh_seguros"
 TAXA_CONVERSAO_PONTO_REAL = 0.02 # Ex: 1 ponto = R$ 0.02
 
 # ID do funcionário responsável por receber as tarefas geradas a partir de novos agendamentos.
-RESPONSAVEL_AGENDAMENTOS_ID = 2
+RESPONSAVEL_AGENDAMENTOS_ID = 3
 
 # ID da tarefa "modelo" usada para criar as tarefas de agendamento (Ex: "Preparar Agendamento").
 TAREFA_MODELO_AGENDAMENTO_ID = 92
@@ -50,3 +50,4 @@ TAREFA_ID_LEITURA = 38
 TAREFA_ID_FEEDBACK_DIARIO = 5
 # Pontos de bônus concedidos ao dar o feedback diário.
 PONTOS_BONUS_FEEDBACK_DIARIO = 5
+
