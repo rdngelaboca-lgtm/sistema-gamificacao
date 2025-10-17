@@ -1,5 +1,5 @@
 document.addEventListener('DOMContentLoaded', function() {
-    const API_BASE_URL = 'http://192.168.2.23:5000';
+    const API_BASE_URL = 'http://192.168.18.17:5000';
 
     function formatarHora(dataString) {
         if (!dataString) return '';
