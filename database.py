@@ -858,19 +858,21 @@ def agendar_tarefa_competitiva_para_grupo(tarefa_id, grupo_id, horario_disparo):
             conn.close()
 
 def buscar_tarefas_de_grupo_para_disparar(horario_atual):
-    """Busca tarefas de grupo que estão agendadas para o minuto atual."""
+    """
+    (VERSÃO PARA OFERTA DIÁRIA)
+    Busca tarefas de grupo que estão agendadas para o minuto atual,
+    INDEPENDENTEMENTE do status, para serem oferecidas diariamente.
+    """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            # CONSULTA MELHORADA: Converte a hora do banco para o formato 'HH:MM' antes de comparar
             sql = """
                 SELECT TA.AtribuicaoID, T.Titulo, T.Pontos, G.NomeGrupo, G.ChatIDTelegram
                 FROM TarefasAtribuidas TA
                 JOIN Tarefas T ON TA.TarefaID = T.TarefaID
                 JOIN Grupos G ON TA.GrupoID = G.GrupoID
-                WHERE TA.StatusTarefaGrupo = 'Disponivel' 
-                AND TA.TipoFrequencia = 'GrupoCompetitiva'
+                WHERE TA.TipoFrequencia = 'GrupoCompetitiva'
                 AND CONVERT(VARCHAR(5), TA.HorarioDisparo, 108) = ?
             """
             cursor.execute(sql, horario_atual)
@@ -879,33 +881,61 @@ def buscar_tarefas_de_grupo_para_disparar(horario_atual):
             conn.close()
     return []
 
-
-def aceitar_tarefa_de_grupo(atribuicao_id, funcionario_id):
+# Em database.py, SUBSTITUA a função aceitar_tarefa_de_grupo por esta:
+def aceitar_tarefa_de_grupo(origem_atribuicao_id, funcionario_id):
     """
-    (VERSÃO MELHORADA)
-    Tenta atribuir uma tarefa de grupo a um funcionário.
-    Ao ser aceita, TRANSFORMA a tarefa em uma 'Tarefa Única' agendada para hoje.
+    (VERSÃO PARA OFERTA DIÁRIA - CRIA INSTÂNCIA 'Unica')
+    Verifica se a tarefa originária já foi aceita HOJE.
+    Se não foi, CRIA uma NOVA atribuição do tipo 'Unica' para o funcionário,
+    vinculada à atribuição original e agendada para hoje.
+    Retorna o ID da NOVA atribuição criada ou None se falhar/já aceita hoje.
     """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            # A mágica está aqui: além de definir o funcionário, mudamos o tipo e a data.
-            sql = """
-                UPDATE TarefasAtribuidas
-                SET
-                    FuncionarioID = ?,
-                    StatusTarefaGrupo = 'Aceita',
-                    TipoFrequencia = 'Unica',
-                    DataAgendamento = GETDATE()
-                WHERE AtribuicaoID = ? AND StatusTarefaGrupo = 'Disponivel'
+
+            # 1. Buscar o TarefaID da atribuição original
+            cursor.execute("SELECT TarefaID FROM TarefasAtribuidas WHERE AtribuicaoID = ?", origem_atribuicao_id)
+            result = cursor.fetchone()
+            if not result:
+                print(f"--> [ERRO ACEITAR GRUPO] Atribuição de origem {origem_atribuicao_id} não encontrada.")
+                return None
+            tarefa_id_original = result[0]
+
+            # 2. Verificar se alguém já aceitou HOJE para esta tarefa de origem
+            sql_check = """
+                SELECT AtribuicaoID
+                FROM TarefasAtribuidas
+                WHERE OrigemAtribuicaoID = ?
+                  AND CONVERT(date, DataAgendamento) = CONVERT(date, GETDATE())
             """
-            cursor.execute(sql, funcionario_id, atribuicao_id)
+            cursor.execute(sql_check, origem_atribuicao_id)
+            if cursor.fetchone():
+                print(f"--> [ACEITAR GRUPO] Tarefa de origem {origem_atribuicao_id} já foi aceita hoje.")
+                return None # Retorna None indicando que já foi pega hoje
+
+            # 3. Se ninguém aceitou hoje, INSERIR a nova instância 'Unica'
+            sql_insert = """
+                INSERT INTO TarefasAtribuidas
+                (TarefaID, FuncionarioID, TipoFrequencia, DataInicioVigencia, DataAgendamento, OrigemAtribuicaoID, StatusTarefaGrupo)
+                VALUES (?, ?, 'Unica', GETDATE(), GETDATE(), ?, 'Aceita');
+                SELECT SCOPE_IDENTITY();
+            """
+            cursor.execute(sql_insert, tarefa_id_original, funcionario_id, origem_atribuicao_id)
+            cursor.nextset()
+            nova_atribuicao_id = cursor.fetchone()[0]
             conn.commit()
-            return cursor.rowcount > 0 # Retorna True se 1 linha foi afetada
+            print(f"--> [ACEITAR GRUPO] Nova atribuição 'Unica' (ID: {nova_atribuicao_id}) criada para FuncionarioID {funcionario_id} a partir da Origem {origem_atribuicao_id}.")
+            return nova_atribuicao_id # Retorna o ID da nova tarefa criada
+
+        except Exception as e:
+            print(f"ERRO CRÍTICO em aceitar_tarefa_de_grupo (v. Oferta Diária): {e}")
+            conn.rollback()
+            return None
         finally:
             conn.close()
-    return False
+    return None
 
 def buscar_detalhes_da_atribuicao(atribuicao_id):
     """Busca todos os detalhes de uma tarefa (título, descrição, pontos) a partir do ID da atribuição."""
