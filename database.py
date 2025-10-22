@@ -440,40 +440,35 @@ def buscar_tarefa_por_atribuicao(atribuicao_id):
     return None
 # Em database.py, SUBSTITUA a função existente por esta:
 
+# Em database.py, SUBSTITUA a função listar_tarefas_para_atribuicao por esta:
+
 def listar_tarefas_para_atribuicao(filtro_setor=None):
     """
-    (VERSÃO FINAL COM FILTRO)
-    Retorna uma lista de tarefas disponíveis para serem atribuídas.
+    (VERSÃO CORRIGIDA - SEMPRE MOSTRA TODOS OS MODELOS)
+    Retorna uma lista de TODOS os modelos de tarefa do catálogo.
     Se um 'filtro_setor' for fornecido, retorna apenas tarefas daquele setor.
     """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            
-            # A base da nossa consulta SQL é a mesma
-            sql = """
-                SELECT T.*
-                FROM Tarefas T
-                WHERE NOT EXISTS (
-                    SELECT 1
-                    FROM TarefasAtribuidas TA
-                    JOIN Entregas E ON TA.AtribuicaoID = E.AtribuicaoID
-                    WHERE TA.TarefaID = T.TarefaID
-                      AND TA.TipoFrequencia = 'Unica'
-                      AND E.StatusValidacao = 'Aprovada'
-                )
-            """
-            
+
+            # REMOVEMOS A CLÁUSULA WHERE NOT EXISTS COMPLETAMENTE
+            sql = "SELECT T.* FROM Tarefas T"
+
             params = [] # Lista para guardar os parâmetros da consulta
 
-            # A MÁGICA ACONTECE AQUI: Adicionamos a cláusula WHERE do filtro dinamicamente
+            # Adicionamos a cláusula WHERE do filtro (SE HOUVER FILTRO)
+            where_clauses = []
             if filtro_setor:
                 if filtro_setor == "Outras Tarefas":
-                     sql += " AND (T.Setor IS NULL OR T.Setor = '')"
+                     where_clauses.append("(T.Setor IS NULL OR T.Setor = '')")
                 else:
-                    sql += " AND T.Setor = ?"
+                    where_clauses.append("T.Setor = ?")
                     params.append(filtro_setor)
+
+            if where_clauses:
+                sql += " WHERE " + " AND ".join(where_clauses)
 
             # O final da consulta também é o mesmo
             sql += " ORDER BY ISNULL(T.Setor, 'Z-Sem Setor'), T.Titulo"
