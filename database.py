@@ -831,46 +831,66 @@ def remover_membro_do_grupo(funcionario_id, grupo_id):
         finally:
             conn.close()
 
-# NO ARQUIVO database.py, ADICIONE ESTAS 3 NOVAS FUNÇÕES NO FINAL:
-
-def agendar_tarefa_competitiva_para_grupo(tarefa_id, grupo_id, horario_disparo):
+# Em database.py, ADICIONE esta nova função (pode remover a antiga 'agendar_tarefa_competitiva_para_grupo' se quiser)
+def agendar_tarefa_recorrente_para_grupo(tarefa_id, grupo_id, tipo_frequencia_grupo, valor_frequencia, horario_disparo):
     """
-    Agenda uma nova tarefa "competitiva" para um grupo em um horário específico.
-    O FuncionarioID fica NULO inicialmente.
+    Agenda uma nova tarefa recorrente ('GrupoDiaria', 'GrupoSemanal', 'GrupoMensal')
+    para um grupo em um horário específico, com o valor de frequência apropriado.
     """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
+            # Usamos as colunas existentes TipoFrequencia e ValorFrequencia
             sql = """
-                INSERT INTO TarefasAtribuidas 
-                (TarefaID, GrupoID, TipoFrequencia, HorarioDisparo, StatusTarefaGrupo) 
-                VALUES (?, ?, 'GrupoCompetitiva', ?, 'Disponivel')
+                INSERT INTO TarefasAtribuidas
+                (TarefaID, GrupoID, TipoFrequencia, ValorFrequencia, HorarioDisparo, StatusTarefaGrupo)
+                VALUES (?, ?, ?, ?, ?, 'Disponivel')
             """
-            cursor.execute(sql, tarefa_id, grupo_id, horario_disparo)
+            # Para 'GrupoDiaria', o valor_frequencia pode ser None
+            cursor.execute(sql, tarefa_id, grupo_id, tipo_frequencia_grupo, valor_frequencia, horario_disparo)
             conn.commit()
+            return True
+        except Exception as e:
+            print(f"ERRO ao agendar tarefa recorrente para grupo: {e}")
+            conn.rollback()
+            return False
         finally:
             conn.close()
+    return False
 
-def buscar_tarefas_de_grupo_para_disparar(horario_atual):
+# Em database.py, SUBSTITUA a função buscar_tarefas_de_grupo_para_disparar por esta versão inteligente:
+def buscar_tarefas_de_grupo_para_disparar(horario_atual, dia_semana_hoje, dia_mes_hoje):
     """
-    (VERSÃO PARA OFERTA DIÁRIA)
-    Busca tarefas de grupo que estão agendadas para o minuto atual,
-    INDEPENDENTEMENTE do status, para serem oferecidas diariamente.
+    (VERSÃO FINAL - SUPORTA DIARIA/SEMANAL/MENSAL)
+    Busca tarefas de grupo agendadas para o horário atual E que correspondam
+    à frequência (diária, dia da semana específico ou dia do mês específico).
+    'dia_semana_hoje' usa a convenção SQL (Dom=1, Seg=2, ..., Sab=7).
     """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
+            # A query agora tem uma cláusula WHERE mais complexa
             sql = """
                 SELECT TA.AtribuicaoID, T.Titulo, T.Pontos, G.NomeGrupo, G.ChatIDTelegram
                 FROM TarefasAtribuidas TA
                 JOIN Tarefas T ON TA.TarefaID = T.TarefaID
                 JOIN Grupos G ON TA.GrupoID = G.GrupoID
-                WHERE TA.TipoFrequencia = 'GrupoCompetitiva'
-                AND CONVERT(VARCHAR(5), TA.HorarioDisparo, 108) = ?
+                WHERE
+                    -- Condição 1: O horário deve bater
+                    CONVERT(VARCHAR(5), TA.HorarioDisparo, 108) = ?
+                    -- Condição 2: E a frequência deve corresponder ao dia de hoje
+                    AND (
+                        -- Se for Diaria, sempre dispara
+                        TA.TipoFrequencia = 'GrupoDiaria'
+                        -- Ou se for Semanal E o dia da semana bate
+                        OR (TA.TipoFrequencia = 'GrupoSemanal' AND TA.ValorFrequencia = ?)
+                        -- Ou se for Mensal E o dia do mês bate
+                        OR (TA.TipoFrequencia = 'GrupoMensal' AND TA.ValorFrequencia = ?)
+                    )
             """
-            cursor.execute(sql, horario_atual)
+            cursor.execute(sql, horario_atual, dia_semana_hoje, dia_mes_hoje)
             return cursor.fetchall()
         finally:
             conn.close()
