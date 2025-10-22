@@ -10,33 +10,44 @@ from datetime import datetime, date, timedelta
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-# --- MÓDULO 1: TAREFAS DE GRUPO (sem alteração) ---
+# Em agendador.py, SUBSTITUA a função verificar_e_enviar_tarefas_de_grupo por esta:
 def verificar_e_enviar_tarefas_de_grupo():
-    """Verifica e envia tarefas competitivas agendadas para grupos."""
-    agora = datetime.now().strftime('%H:%M')
-    # print(f"[{agora}] Verificando tarefas de grupo...") # Log opcional
+    """
+    (VERSÃO FINAL - SUPORTA DIARIA/SEMANAL/MENSAL)
+    Verifica e envia tarefas recorrentes agendadas para grupos,
+    considerando a frequência correta.
+    """
+    agora_dt = datetime.now()
+    agora_hm = agora_dt.strftime('%H:%M')
+    # Obter dia da semana no formato SQL: Domingo=1, Segunda=2, ..., Sábado=7
+    dia_semana_sql = (agora_dt.weekday() + 1) % 7 + 1
+    # Obter dia do mês
+    dia_mes = agora_dt.day
 
-    tarefas_para_disparar = database.buscar_tarefas_de_grupo_para_disparar(agora)
-    
+    # print(f"[{agora_hm}] Verificando tarefas de grupo (DiaSem={dia_semana_sql}, DiaMes={dia_mes})...") # Log opcional
+
+    # Passamos os novos parâmetros para a função do banco
+    tarefas_para_disparar = database.buscar_tarefas_de_grupo_para_disparar(agora_hm, str(dia_semana_sql), str(dia_mes))
+
     if not tarefas_para_disparar:
         return
 
-    print(f"[{agora}] Encontradas {len(tarefas_para_disparar)} tarefas de GRUPO para disparar!")
+    print(f"[{agora_hm}] Encontradas {len(tarefas_para_disparar)} tarefas de GRUPO para disparar!")
     for tarefa in tarefas_para_disparar:
         atribuicao_id, titulo, pontos, nome_grupo, chat_id, *_ = tarefa
-        
+
         mensagem = (
             f"🚨 **Nova Missão para a Equipe!** 🚨\n\n"
             f"**Tarefa:** {titulo}\n"
             f"**Recompensa:** {pontos} pontos\n\n"
-            "O primeiro a aceitar fica responsável pela entrega. Quem vai encarar?"
+            "O primeiro a aceitar fica responsável pela entrega *de hoje*. Quem vai encarar?"
         )
-        
+
         keyboard = [[InlineKeyboardButton("✅ Eu aceito o desafio!", callback_data=f"aceitar_tarefa_{atribuicao_id}")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        
+
         notificador_telegram.enviar_mensagem_com_botao(chat_id, mensagem, reply_markup)
-        print(f"--> Missão de grupo '{titulo}' enviada para '{nome_grupo}'.")
+        print(f"--> Missão de grupo '{titulo}' (ID Origem: {atribuicao_id}) enviada para '{nome_grupo}'.")
 
 # --- MÓDULO 2: INÍCIO DA JORNADA (Lógica antiga, agora focada) ---
 def verificar_inicio_jornada():
