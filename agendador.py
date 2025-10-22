@@ -349,7 +349,6 @@ def processar_downloads_pendentes():
     import asyncio
     asyncio.run(processar_downloads_pendentes_async())
 
-
 if __name__ == "__main__":
     print("--- 🤖 Robô Agendador 2.0 Iniciado 🤖 ---")
     print("O sistema verificará a cada minuto e o fechamento mensal às 08:00.")
@@ -368,5 +367,3 @@ if __name__ == "__main__":
         schedule.run_pending()
         print(f"[{datetime.now().strftime('%H:%M:%S')}] Robô Ativo. Verificando agendamentos...", end='\r')
         time.sleep(1)
-
-
