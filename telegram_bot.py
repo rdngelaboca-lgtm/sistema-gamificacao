@@ -633,34 +633,44 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             else: await query.edit_message_text("Você já enviou seu feedback hoje. Obrigado!")
         else: await query.edit_message_text("Erro: não foi possível identificar seu usuário.")
 
-    # --- LÓGICA DE ACEITE DE TAREFAS DE GRUPO E DE FOLGA ---
     elif data.startswith("aceitar_tarefa_"):
-        atribuicao_id = int(data.split('_')[-1])
+        origem_atribuicao_id = int(data.split('_')[-1]) # ID da tarefa 'GrupoCompetitiva' original
         funcionario_db = database.buscar_funcionario_por_chat_id(user.id)
         if not funcionario_db:
             await context.bot.send_message(chat_id=user.id, text="Seu usuário do Telegram não foi encontrado no nosso sistema.")
             return
-        sucesso = database.aceitar_tarefa_de_grupo(atribuicao_id, funcionario_db.FuncionarioID)
-        tarefa = database.buscar_tarefa_por_atribuicao(atribuicao_id)
-        tarefa_titulo = tarefa.Titulo if tarefa else "Tarefa desconhecida"
-        if sucesso:
+
+        # Chama a NOVA versão da função, que tenta CRIAR a instância 'Unica'
+        nova_atribuicao_id_criada = database.aceitar_tarefa_de_grupo(origem_atribuicao_id, funcionario_db.FuncionarioID)
+
+        # Busca o título da tarefa original para as mensagens
+        tarefa_original = database.buscar_tarefa_por_atribuicao(origem_atribuicao_id)
+        tarefa_titulo = tarefa_original.Titulo if tarefa_original else "Tarefa desconhecida"
+
+        if nova_atribuicao_id_criada:
+            # SUCESSO! A instância 'Unica' foi criada para este funcionário HOJE.
             nova_mensagem_grupo = (
                 f"✅ **Missão Aceita por {user.first_name}!** ✅\n\n"
                 f"**Tarefa:** {tarefa_titulo}\n\n"
-                f"{user.first_name} agora é o responsável pela entrega. Boa sorte!"
+                f"{user.first_name} agora é o responsável pela entrega *de hoje*. Boa sorte!"
             )
-            await query.edit_message_text(text=nova_mensagem_grupo)
+            try:
+                # Tenta editar a mensagem original no grupo (pode falhar para msg antigas)
+                await query.edit_message_text(text=nova_mensagem_grupo, reply_markup=None) # Remove o botão
+            except Exception as e:
+                print(f"Aviso: Não foi possível editar a mensagem original no grupo para {origem_atribuicao_id}. Erro: {e}")
+                # Poderia enviar uma nova mensagem ou reply como alternativa aqui.
+
             await context.bot.send_message(
                 chat_id=user.id,
-                text=f"Você aceitou a missão '{tarefa_titulo}'. Agora ela aparecerá na sua lista de /tarefas. Capriche na entrega! 💪"
+                text=f"Você aceitou a missão '{tarefa_titulo}' para hoje. Agora ela aparecerá na sua lista de /tarefas. Capriche na entrega! 💪"
             )
         else:
+            # FALHA! Alguém já aceitou HOJE ou ocorreu outro erro.
             await context.bot.send_message(
                 chat_id=user.id,
-                text=f"Que pena, parece que um colega foi mais rápido e já aceitou a missão '{tarefa_titulo}'. Fique de olho na próxima! 👀",
+                text=f"Que pena, parece que um colega foi mais rápido e já aceitou a missão '{tarefa_titulo}' *hoje*. Fique de olho na oferta de amanhã! 👀",
             )
-
-    # Em telegram_bot.py, dentro de button_callback_handler, substitua o bloco "aceitar_folga_":
 
     elif data.startswith("aceitar_folga_"):
         tarefa_id = int(data.split('_')[-1])
