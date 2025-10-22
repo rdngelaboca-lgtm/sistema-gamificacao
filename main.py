@@ -683,70 +683,110 @@ class App:
         modo = self.modo_atribuicao.get()
 
         if modo == "Grupo":
-            # ... (a lógica de grupo não muda)
-            popup.geometry("300x200")
-            ttk.Label(frame, text="Disparar esta tarefa para o grupo no horário:").pack(pady=5)
-            horario_var = tk.StringVar(value="18:00"); ttk.Entry(frame, textvariable=horario_var, width=10).pack(pady=5)
-            def confirmar_atribuicao_grupo():
-                horario = horario_var.get()
-                try: datetime.strptime(horario, '%H:%M')
-                except ValueError: messagebox.showerror("Erro", "Formato inválido. Use HH:MM.", parent=popup); return
-                for item in alvos_selecionados_items:
-                    grupo_id = self.tree_atr_selecao.item(item, 'values')[0]
-                    # A MÁGICA ESTÁ AQUI: Usamos o novo nome da função
-                    database.agendar_tarefa_competitiva_para_grupo(tarefa_id, grupo_id, horario) # <<< LINHA CORRIGIDA
-                messagebox.showinfo("Sucesso", "Tarefa de grupo agendada!", parent=popup); popup.destroy(); self.atualizar_lista_atribuicoes_ativas()
-            ttk.Button(frame, text="Agendar Tarefa de Grupo", command=confirmar_atribuicao_grupo).pack(pady=20)
-        
-        else: # modo == "Individual"
-            # Lógica Individual (COM A NOVA VERIFICAÇÃO)
-            popup.geometry("350x350")
-            ttk.Label(frame, text="Selecione a Frequência:").pack(anchor=tk.W)
-            frequencia = tk.StringVar(value="Diaria")
-            ttk.Radiobutton(frame, text="Tarefa Única", variable=frequencia, value="Unica").pack(anchor=tk.W)
-            ttk.Radiobutton(frame, text="Diária", variable=frequencia, value="Diaria").pack(anchor=tk.W)
-            ttk.Radiobutton(frame, text="Semanal (marque os dias):", variable=frequencia, value="Semanal").pack(anchor=tk.W, pady=(10,0))
-            frame_semanal = ttk.Frame(frame, padding=(20, 2, 0, 0)); frame_semanal.pack(fill=tk.X)
-            dias_semana_vars = {"Seg": (tk.BooleanVar(), "2"), "Ter": (tk.BooleanVar(), "3"), "Qua": (tk.BooleanVar(), "4"),
-                                "Qui": (tk.BooleanVar(), "5"), "Sex": (tk.BooleanVar(), "6"), "Sáb": (tk.BooleanVar(), "7"),
-                                "Dom": (tk.BooleanVar(), "1")}
-            for dia, (var, _) in dias_semana_vars.items(): ttk.Checkbutton(frame_semanal, text=dia, variable=var).pack(side=tk.LEFT)
-            frame_mensal = ttk.Frame(frame); frame_mensal.pack(anchor=tk.W, fill=tk.X, pady=(10,0))
-            ttk.Radiobutton(frame_mensal, text="Mensal (dia):", variable=frequencia, value="Mensal").pack(side=tk.LEFT)
-            valor_mensal = tk.StringVar(); ttk.Entry(frame_mensal, textvariable=valor_mensal, width=5).pack(side=tk.LEFT)
+            popup.geometry("400x450") # Aumentar tamanho do popup
+            ttk.Label(frame, text="Selecione a Frequência de Oferta:", font=("Arial", 11, "bold")).pack(anchor=tk.W, pady=(0,10))
 
-            def confirmar_atribuicao_individual():
-                tipo_freq = frequencia.get()
-                alvos = {item: self.tree_atr_selecao.item(item, 'values') for item in alvos_selecionados_items}
-                ignorados = []
-                
-                for item_id, (func_id, func_nome) in alvos.items():
-                    # --- AQUI ESTÁ A NOVA VERIFICAÇÃO ---
-                    if database.verificar_atribuicao_existente(tarefa_id, func_id):
-                        ignorados.append(func_nome)
-                        continue # Pula para o próximo funcionário
+            # Variável para guardar a frequência escolhida
+            frequencia_grupo = tk.StringVar(value="Diaria")
 
-                    # Se não existe, atribui normalmente
-                    if tipo_freq == "Semanal":
-                        dias = [val for _, (var, val) in dias_semana_vars.items() if var.get()]
-                        if not dias: messagebox.showerror("Erro", "Selecione um dia da semana.", parent=popup); return
-                        for dia in dias: database.atribuir_tarefa(tarefa_id, func_id, tipo_freq, dia)
+            # --- Radio Buttons ---
+            frame_radios = ttk.Frame(frame)
+            frame_radios.pack(fill=tk.X)
+            ttk.Radiobutton(frame_radios, text="Diária", variable=frequencia_grupo, value="Diaria").pack(side=tk.LEFT, padx=5)
+            ttk.Radiobutton(frame_radios, text="Semanal", variable=frequencia_grupo, value="Semanal").pack(side=tk.LEFT, padx=5)
+            ttk.Radiobutton(frame_radios, text="Mensal", variable=frequencia_grupo, value="Mensal").pack(side=tk.LEFT, padx=5)
+
+            # --- Opções Semanais (inicialmente escondidas) ---
+            frame_semanal = ttk.Frame(frame, padding=(10, 5, 0, 0))
+            ttk.Label(frame_semanal, text="Selecione os dias da semana:").pack(anchor=tk.W)
+            frame_checks = ttk.Frame(frame_semanal)
+            frame_checks.pack(fill=tk.X)
+            # Mapeamento: Texto -> (Variável Checkbutton, Valor no Banco SQL Dom=1...Sab=7)
+            dias_semana_vars_grupo = {
+                "Dom": (tk.BooleanVar(), "1"), "Seg": (tk.BooleanVar(), "2"),
+                "Ter": (tk.BooleanVar(), "3"), "Qua": (tk.BooleanVar(), "4"),
+                "Qui": (tk.BooleanVar(), "5"), "Sex": (tk.BooleanVar(), "6"),
+                "Sáb": (tk.BooleanVar(), "7")
+            }
+            for dia, (var, _) in dias_semana_vars_grupo.items():
+                ttk.Checkbutton(frame_checks, text=dia, variable=var).pack(side=tk.LEFT)
+
+        # --- Opções Mensais (inicialmente escondidas) ---
+        frame_mensal = ttk.Frame(frame, padding=(10, 5, 0, 0))
+        ttk.Label(frame_mensal, text="Digite o dia do mês (1-31):").pack(side=tk.LEFT)
+        valor_mensal_grupo = tk.StringVar()
+        entry_mensal = ttk.Entry(frame_mensal, textvariable=valor_mensal_grupo, width=5)
+        entry_mensal.pack(side=tk.LEFT, padx=5)
+
+        # --- Horário de Disparo (como antes) ---
+        frame_horario = ttk.Frame(frame, padding=(0, 15, 0, 0))
+        frame_horario.pack(fill=tk.X)
+        ttk.Label(frame_horario, text="Horário de Disparo (HH:MM):").pack(side=tk.LEFT)
+        horario_var_grupo = tk.StringVar(value="19:00") # Exemplo
+        ttk.Entry(frame_horario, textvariable=horario_var_grupo, width=10).pack(side=tk.LEFT, padx=5)
+
+        # --- Lógica para mostrar/esconder opções ---
+        def atualizar_visibilidade_grupo(*args):
+            freq = frequencia_grupo.get()
+            if freq == "Semanal":
+                frame_semanal.pack(fill=tk.X, pady=5)
+                frame_mensal.pack_forget()
+            elif freq == "Mensal":
+                frame_mensal.pack(fill=tk.X, pady=5)
+                frame_semanal.pack_forget()
+            else: # Diaria
+                frame_semanal.pack_forget()
+                frame_mensal.pack_forget()
+        frequencia_grupo.trace_add("write", atualizar_visibilidade_grupo)
+        atualizar_visibilidade_grupo() # Chama uma vez para configurar no início
+
+        # --- Função de Confirmação Atualizada ---
+        def confirmar_atribuicao_grupo():
+            horario = horario_var_grupo.get()
+            tipo_freq_selecionada = frequencia_grupo.get()
+
+            # Validar Horário
+            try: datetime.strptime(horario, '%H:%M')
+            except ValueError: messagebox.showerror("Erro", "Formato de horário inválido. Use HH:MM.", parent=popup); return
+
+            # Coletar e Validar Frequência
+            valores_frequencia = []
+            tipo_freq_db = f"Grupo{tipo_freq_selecionada}" # Ex: GrupoDiaria, GrupoSemanal
+
+            if tipo_freq_selecionada == "Semanal":
+                valores_frequencia = [val_db for _, (var, val_db) in dias_semana_vars_grupo.items() if var.get()]
+                if not valores_frequencia:
+                    messagebox.showerror("Erro", "Selecione pelo menos um dia da semana.", parent=popup); return
+            elif tipo_freq_selecionada == "Mensal":
+                try:
+                    dia_mes = int(valor_mensal_grupo.get())
+                    if not 1 <= dia_mes <= 31: raise ValueError
+                    valores_frequencia.append(str(dia_mes))
+                except ValueError:
+                    messagebox.showerror("Erro", "O dia do mês deve ser um número entre 1 e 31.", parent=popup); return
+            else: # Diaria
+                valores_frequencia.append(None) # Valor não é usado para Diaria
+
+            # Iterar e Salvar
+            sucessos = 0
+            falhas = 0
+            for item_alvo in alvos_selecionados_items:
+                grupo_id = self.tree_atr_selecao.item(item_alvo, 'values')[0]
+                for valor in valores_frequencia: # Loop necessário para salvar múltiplos dias semanais
+                    if database.agendar_tarefa_recorrente_para_grupo(tarefa_id, grupo_id, tipo_freq_db, valor, horario):
+                        sucessos += 1
                     else:
-                        val = valor_mensal.get() if tipo_freq == "Mensal" else None
-                        if tipo_freq == "Mensal" and not val: messagebox.showerror("Erro", "Digite o dia do mês.", parent=popup); return
-                        database.atribuir_tarefa(tarefa_id, func_id, tipo_freq, val)
+                        falhas += 1
 
-                mensagem_sucesso = "Tarefa(s) atribuída(s) com sucesso!"
-                if ignorados:
-                    mensagem_sucesso += f"\n\nAviso: As atribuições para {', '.join(ignorados)} foram ignoradas pois já existiam."
+            if falhas == 0:
+                messagebox.showinfo("Sucesso", f"{sucessos} agendamento(s) de tarefa recorrente para grupo criado(s)!", parent=popup)
+            else:
+                messagebox.showwarning("Atenção", f"{sucessos} agendamentos criados, mas {falhas} falharam. Verifique os logs do banco.", parent=popup)
 
-                messagebox.showinfo("Sucesso", mensagem_sucesso, parent=popup)
-                popup.destroy()
-                
-                self.atualizar_lista_atribuicoes_ativas()
-                self.atualizar_painel_selecao(tarefa_id=tarefa_id)
+            popup.destroy()
+            self.atualizar_lista_atribuicoes_ativas() # Atualiza a lista na tela principal
 
-            ttk.Button(frame, text="Confirmar Atribuição", command=confirmar_atribuicao_individual).pack(pady=20)
+        ttk.Button(frame, text="Confirmar Agendamento Recorrente", command=confirmar_atribuicao_grupo).pack(pady=20, ipady=5)
 
     def criar_aba_tarefas(self):
         frame_formulario = ttk.LabelFrame(self.frame_tarefas, text="Criar ou Editar Modelo de Tarefa", padding="10"); frame_formulario.pack(fill=tk.X, padx=10, pady=5)
