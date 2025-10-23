@@ -1055,8 +1055,8 @@ def calcular_ranking_desempenho(data_final_calculo=None):
     conn = get_db_connection()
     if not conn: return []
 
-    PESO_A_DESEMPENHO = 0.5
-    PESO_B_PONTOS_BRUTOS = 0.5
+    PESO_A_DESEMPENHO = 0.7
+    PESO_B_PONTOS_BRUTOS = 0.3
 
     try:
         cursor = conn.cursor()
@@ -3168,3 +3168,4 @@ def listar_membros_por_chat_id_grupo(chat_id):
         finally:
             conn.close()
     return []
+
