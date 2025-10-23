@@ -2198,17 +2198,17 @@ def listar_conquistas_por_funcionario(funcionario_id):
 
 def verificar_e_conceder_conquistas(funcionario_id):
     """
-    Função principal que verifica todos os critérios de conquistas para um funcionário.
-    Esta função será chamada após eventos importantes (ex: aprovar uma entrega, fechar o mês).
+    (VERSÃO EXPANDIDA COM MAIS CRITÉRIOS)
+    Verifica critérios de conquistas para um funcionário após um evento relevante.
+    Retorna uma lista de objetos das novas conquistas desbloqueadas.
     """
     conn = get_db_connection()
     if not conn: return []
 
-    novas_conquistas_ganhas = [] # Lista para notificar o usuário
+    novas_conquistas_ganhas = []
 
     try:
         cursor = conn.cursor()
-        # 1. Busca todas as conquistas que o funcionário AINDA NÃO TEM.
         sql_conquistas_a_verificar = """
             SELECT * FROM Conquistas
             WHERE ConquistaID NOT IN (
@@ -2218,42 +2218,163 @@ def verificar_e_conceder_conquistas(funcionario_id):
         cursor.execute(sql_conquistas_a_verificar, funcionario_id)
         conquistas_a_verificar = cursor.fetchall()
 
+        if not conquistas_a_verificar:
+            return [] # Nenhuma nova conquista possível para verificar
+
+        # --- DADOS NECESSÁRIOS PARA AS VERIFICAÇÕES ---
+        # (Buscamos uma vez para otimizar)
+        
+        # Total de tarefas aprovadas (usado por 'total_tarefas_aprovadas')
+        sql_total_aprovadas = "SELECT COUNT(*) FROM Entregas WHERE FuncionarioID = ? AND StatusValidacao = 'Aprovada'"
+        cursor.execute(sql_total_aprovadas, funcionario_id)
+        total_tarefas_aprovadas = cursor.fetchone()[0] or 0
+
+        # Datas das últimas N tarefas aprovadas (usado por 'tarefas_aprovadas_periodo' e 'sequencia_dias_tarefas')
+        # Buscamos mais do que o necessário (ex: 10) para garantir que temos dados suficientes para sequências
+        sql_datas_aprovadas = """
+            SELECT DISTINCT TOP 10 CONVERT(DATE, DataEnvio) as Data
+            FROM Entregas
+            WHERE FuncionarioID = ? AND StatusValidacao = 'Aprovada'
+            ORDER BY Data DESC
+        """
+        cursor.execute(sql_datas_aprovadas, funcionario_id)
+        datas_tarefas_aprovadas = [row.Data for row in cursor.fetchall()]
+
+        # Total de tarefas de grupo competitivo aprovadas (usado por 'tarefas_grupo_competitivo_aceitas')
+        sql_total_grupo_comp = """
+            SELECT COUNT(E.EntregaID)
+            FROM Entregas E
+            JOIN TarefasAtribuidas TA ON E.AtribuicaoID = TA.AtribuicaoID
+            WHERE E.FuncionarioID = ?
+              AND E.StatusValidacao = 'Aprovada'
+              AND TA.OrigemAtribuicaoID IS NOT NULL -- Identifica tarefas criadas a partir de um grupo competitivo
+              AND TA.TipoFrequencia = 'Unica'      -- Confirma que é a instância aceita
+        """
+        cursor.execute(sql_total_grupo_comp, funcionario_id)
+        total_grupo_competitivo_aprovadas = cursor.fetchone()[0] or 0
+        
+        # Total de comunicados cientes (usado por 'total_comunicados_cientes')
+        sql_total_cientes = "SELECT COUNT(*) FROM DocumentosAssinaturas WHERE FuncionarioID = ? AND StatusAssinatura = 'Ciente'"
+        cursor.execute(sql_total_cientes, funcionario_id)
+        total_comunicados_cientes = cursor.fetchone()[0] or 0
+
+        # Datas dos últimos N feedbacks (usado por 'sequencia_feedback_diario')
+        sql_datas_feedback = """
+            SELECT DISTINCT TOP 10 DataFeedback as Data
+            FROM Feedbacks
+            WHERE FuncionarioID = ?
+            ORDER BY Data DESC
+        """
+        cursor.execute(sql_datas_feedback, funcionario_id)
+        datas_feedback = [row.Data for row in cursor.fetchall()]
+
+
+        # --- LOOP DE VERIFICAÇÃO ---
         for conquista in conquistas_a_verificar:
             atingiu_criterio = False
-            # 2. Verifica cada tipo de critério
+            
+            # --- CRITÉRIO 1: Total de Tarefas Aprovadas (Já Existia) ---
             if conquista.CriterioTipo == 'total_tarefas_aprovadas':
-                sql_check = "SELECT COUNT(*) FROM Entregas WHERE FuncionarioID = ? AND StatusValidacao = 'Aprovada'"
-                cursor.execute(sql_check, funcionario_id)
-                total = cursor.fetchone()[0]
-                if total and total >= conquista.CriterioValor:
+                if total_tarefas_aprovadas >= conquista.CriterioValor:
                     atingiu_criterio = True
             
-            # Adicionar mais 'elifs' aqui para outros critérios no futuro...
-            # elif conquista.CriterioTipo == 'desempenho_mensal': ...
-            # elif conquista.CriterioTipo == 'tarefas_de_folga_assumidas': ...
+            # --- CRITÉRIO 2: Tarefas Aprovadas nos Últimos N Dias ---
+            elif conquista.CriterioTipo == 'tarefas_aprovadas_periodo':
+                dias_periodo = conquista.CriterioValor # O valor aqui são os dias (ex: 7 para "Semana de Estreia")
+                data_limite = date.today() - timedelta(days=dias_periodo)
+                # Conta quantas das datas recentes são DENTRO do período
+                count_periodo = sum(1 for dt in datas_tarefas_aprovadas if dt >= data_limite)
+                if count_periodo >= conquista.CriterioValor: # O valor aqui é o número de tarefas (ex: 5)
+                     # ATENÇÃO: A CONQUISTA NO BANCO DEVE TER O NUM DE TAREFAS COMO CriterioValor
+                     # E o número de dias deve ser inferido do nome/descrição ou adicionado
+                     # como uma nova coluna 'CriterioParametroAdicional' no futuro.
+                     # Por ora, assume que CriterioValor = num tarefas E o período é fixo (ex: 7 dias)
+                     # Para a "Semana de Estreia", o CriterioValor deve ser 5.
+                     
+                     # Correção Lógica: O CriterioValor deve ser o NUMERO de tarefas, não os dias.
+                     # Vamos assumir que 'tarefas_aprovadas_periodo' sempre se refere aos últimos 7 dias.
+                     dias_periodo_fixo = 7 # Ex: Para "Semana de Estreia"
+                     data_limite_fixa = date.today() - timedelta(days=dias_periodo_fixo)
+                     count_periodo_fixo = sum(1 for dt in datas_tarefas_aprovadas if dt >= data_limite_fixa)
+                     if count_periodo_fixo >= conquista.CriterioValor: # CriterioValor = 5 para Semana Estreia
+                         atingiu_criterio = True
 
-            # 3. Se o critério foi atingido, concede a conquista
+
+            # --- CRITÉRIO 3: Sequência de Dias com Tarefas ---
+            elif conquista.CriterioTipo == 'sequencia_dias_tarefas':
+                dias_sequencia_necessaria = conquista.CriterioValor
+                if len(datas_tarefas_aprovadas) >= dias_sequencia_necessaria:
+                    sequencia_encontrada = True
+                    for i in range(dias_sequencia_necessaria - 1):
+                        # Verifica se a diferença entre dias consecutivos é exatamente 1
+                        if (datas_tarefas_aprovadas[i] - datas_tarefas_aprovadas[i+1]).days != 1:
+                            sequencia_encontrada = False
+                            break
+                    if sequencia_encontrada:
+                        atingiu_criterio = True
+
+            # --- CRITÉRIO 4: Tarefas de Grupo Competitivo Aceitas ---
+            elif conquista.CriterioTipo == 'tarefas_grupo_competitivo_aceitas':
+                 if total_grupo_competitivo_aprovadas >= conquista.CriterioValor:
+                     atingiu_criterio = True
+
+            # --- CRITÉRIO 5: Total de Comunicados Cientes ---
+            elif conquista.CriterioTipo == 'total_comunicados_cientes':
+                if total_comunicados_cientes >= conquista.CriterioValor:
+                    atingiu_criterio = True
+
+            # --- CRITÉRIO 6: Sequência de Dias com Feedback ---
+            elif conquista.CriterioTipo == 'sequencia_feedback_diario':
+                dias_sequencia_necessaria = conquista.CriterioValor
+                if len(datas_feedback) >= dias_sequencia_necessaria:
+                    sequencia_encontrada = True
+                    for i in range(dias_sequencia_necessaria - 1):
+                        # Verifica se a diferença entre dias consecutivos é exatamente 1
+                        if (datas_feedback[i] - datas_feedback[i+1]).days != 1:
+                            sequencia_encontrada = False
+                            break
+                    if sequencia_encontrada:
+                        atingiu_criterio = True
+
+            # --- FIM DAS VERIFICAÇÕES DE CRITÉRIOS ---
+
+            # Se qualquer um dos critérios acima foi atingido:
             if atingiu_criterio:
-                sql_grant = "INSERT INTO ConquistasFuncionarios (FuncionarioID, ConquistaID) VALUES (?, ?)"
-                cursor.execute(sql_grant, funcionario_id, conquista.ConquistaID)
-                conn.commit()
-                novas_conquistas_ganhas.append(conquista)
+                try:
+                    # Concede a conquista (insere na tabela ConquistasFuncionarios)
+                    sql_grant = "INSERT INTO ConquistasFuncionarios (FuncionarioID, ConquistaID) VALUES (?, ?)"
+                    cursor.execute(sql_grant, funcionario_id, conquista.ConquistaID)
+                    conn.commit()
+                    novas_conquistas_ganhas.append(conquista) # Adiciona à lista para notificação
+                    print(f"--> [CONQUISTA] '{conquista.Nome}' concedida para FuncionarioID {funcionario_id}!")
 
-                # 4. Concede os pontos de bônus, se houver
-                if conquista.PontosBonus > 0:
-                    # Reutilizamos a função de pontos de leitura!
-                    registrar_pontos_por_leitura(
-                        funcionario_id, 
-                        conquista.PontosBonus, 
-                        f"Bônus pela conquista: {conquista.Nome}"
-                    )
-        
+                    # Concede os pontos de bônus, se houver
+                    if conquista.PontosBonus > 0:
+                        registrar_pontos_por_leitura( # Reutiliza a função
+                            funcionario_id,
+                            conquista.PontosBonus,
+                            f"Bônus pela conquista: {conquista.Nome}"
+                        )
+                        # NÃO PRECISAMOS MAIS CHAMAR adicionar_pontos_ao_saldo AQUI
+                        # pois já ajustamos o telegram_bot.py para fazer isso DEPOIS que esta função retorna.
+                        
+                except pyodbc.IntegrityError:
+                    # Ignora erro se, por alguma concorrência rara, a conquista já foi inserida
+                    conn.rollback()
+                    print(f"--> [CONQUISTA] Aviso: Tentativa de inserir conquista duplicada para FuncionarioID {funcionario_id} e ConquistaID {conquista.ConquistaID}. Ignorando.")
+                except Exception as e_grant:
+                    conn.rollback()
+                    print(f"ERRO CRÍTICO ao conceder conquista ID {conquista.ConquistaID} para FuncionarioID {funcionario_id}: {e_grant}")
+
         return novas_conquistas_ganhas
 
+    except Exception as e_main:
+        print(f"ERRO CRÍTICO GERAL em verificar_e_conceder_conquistas para FuncionarioID {funcionario_id}: {e_main}")
+        return [] # Retorna lista vazia em caso de erro grave
     finally:
         if conn:
             conn.close()
-
+            
 # Em database.py, adicione esta nova função
 def atualizar_documento_com_file_id(documento_id, file_id):
     """Atualiza um registro de documento existente para adicionar o file_id da foto."""
