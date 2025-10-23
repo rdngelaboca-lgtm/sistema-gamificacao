@@ -3155,3 +3155,173 @@ def excluir_conquista(conquista_id):
         finally:
             conn.close()
     return False
+
+# Em database.py, ADICIONE estas funções no final:
+
+def buscar_atribuicoes_periodo(funcionario_id, data_inicio, data_fim):
+    """Busca tarefas atribuídas a um funcionário dentro de um período específico."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Seleciona atribuições cuja vigência INTERSECTA o período solicitado
+            sql = """
+                SELECT
+                    TA.AtribuicaoID, T.Titulo, T.Pontos, TA.TipoFrequencia, TA.ValorFrequencia,
+                    TA.DataInicioVigencia, TA.DataFimVigencia, TA.DataAceite
+                FROM TarefasAtribuidas TA
+                JOIN Tarefas T ON TA.TarefaID = T.TarefaID
+                WHERE TA.FuncionarioID = ?
+                  AND (TA.DataFimVigencia IS NULL OR TA.DataFimVigencia >= ?) -- Não encerrada antes do início do período
+                  AND (TA.DataInicioVigencia <= ?) -- Iniciada antes ou durante o fim do período
+                ORDER BY TA.DataInicioVigencia DESC
+            """
+            cursor.execute(sql, funcionario_id, data_inicio, data_fim)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def buscar_entregas_aprovadas_periodo(funcionario_id, data_inicio, data_fim):
+    """Busca entregas aprovadas de um funcionário dentro de um período específico."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT E.EntregaID, T.Titulo, E.DataEnvio, E.PontosGanhos
+                FROM Entregas E
+                JOIN Tarefas T ON E.TarefaID = T.TarefaID
+                WHERE E.FuncionarioID = ?
+                  AND E.StatusValidacao = 'Aprovada'
+                  AND CONVERT(DATE, E.DataEnvio) BETWEEN ? AND ?
+                ORDER BY E.DataEnvio DESC
+            """
+            cursor.execute(sql, funcionario_id, data_inicio, data_fim)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def calcular_pontos_possiveis_debug(funcionario_id, data_inicio, data_fim):
+    """
+    REPLICA a lógica de cálculo de pontos possíveis da função de ranking,
+    mas para um período específico, para fins de depuração.
+    Retorna o total de pontos possíveis calculados.
+    """
+    conn = get_db_connection()
+    if not conn: return 0
+
+    try:
+        cursor = conn.cursor()
+        # Busca as atribuições ativas E o dia de folga do funcionário
+        sql_tarefas_atribuidas = """
+            SELECT
+                   TA.AtribuicaoID, TA.TipoFrequencia, TA.ValorFrequencia,
+                   T.Pontos, TA.DataInicioVigencia, TA.DataFimVigencia,
+                   TA.DataAceite, F.DiaDeFolga
+            FROM TarefasAtribuidas TA
+            JOIN Tarefas T ON TA.TarefaID = T.TarefaID
+            JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID
+            WHERE TA.FuncionarioID = ?
+        """
+        cursor.execute(sql_tarefas_atribuidas, funcionario_id)
+        tarefas_funcionario = cursor.fetchall()
+
+        pontos_possiveis_total = 0
+        dia_folga_func = None # Pega a folga da primeira tarefa (deve ser a mesma para todas)
+
+        for tarefa in tarefas_funcionario:
+            if dia_folga_func is None: # Pega o dia de folga apenas uma vez
+                 dia_folga_func = tarefa.DiaDeFolga
+
+            # Lógica para tarefas 'Unica' ou 'GrupoCompetitiva'
+            if tarefa.TipoFrequencia in ('GrupoCompetitiva', 'Unica'):
+                data_ref = tarefa.DataAceite if tarefa.TipoFrequencia == 'GrupoCompetitiva' else tarefa.DataInicioVigencia
+                if data_ref and data_inicio <= _get_date_part(data_ref) <= data_fim: # Verifica se está DENTRO do período
+                    # Considera apenas se a atribuição estava ativa no período
+                    data_fim_vigencia = _get_date_part(tarefa.DataFimVigencia) if tarefa.DataFimVigencia else data_fim # Usa data_fim se for nulo
+                    if data_fim_vigencia >= data_inicio: # Garante que não encerrou antes do período começar
+                        pontos_possiveis_total += tarefa.Pontos
+                continue
+
+            # Lógica para tarefas recorrentes
+            dias_ocorrencia = 0
+            # Define o período de cálculo (intersecção da vigência da tarefa com o período solicitado)
+            start_date_tarefa = _get_date_part(tarefa.DataInicioVigencia) if tarefa.DataInicioVigencia else data_inicio
+            end_date_tarefa = _get_date_part(tarefa.DataFimVigencia) if tarefa.DataFimVigencia else data_fim
+
+            start_date_calc = max(start_date_tarefa, data_inicio)
+            end_date_calc = min(end_date_tarefa, data_fim)
+
+            if end_date_calc < start_date_calc: continue
+
+            for dia_atual in (start_date_calc + timedelta(days=n) for n in range((end_date_calc - start_date_calc).days + 1)):
+                dia_da_semana_sql = (dia_atual.weekday() + 1) % 7 + 1
+                if str(dia_da_semana_sql) == str(dia_folga_func):
+                    continue # PULA O DIA SE FOR FOLGA!
+
+                if tarefa.TipoFrequencia == 'Diaria': dias_ocorrencia += 1
+                elif tarefa.TipoFrequencia == 'Semanal':
+                    if str(dia_da_semana_sql) == str(tarefa.ValorFrequencia): dias_ocorrencia += 1
+                elif tarefa.TipoFrequencia == 'Mensal':
+                    # Verifica se o dia do mês é o correto E se está dentro do período da tarefa
+                    if dia_atual.day == int(tarefa.ValorFrequencia): dias_ocorrencia += 1
+
+            pontos_possiveis_total += dias_ocorrencia * tarefa.Pontos
+
+        return pontos_possiveis_total
+
+    except Exception as e:
+        print(f"ERRO ao calcular pontos possíveis (debug): {e}")
+        return 0
+    finally:
+        if conn: conn.close()
+
+def excluir_entrega(entrega_id):
+    """Exclui um registro específico da tabela Entregas."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "DELETE FROM Entregas WHERE EntregaID = ?"
+            cursor.execute(sql, entrega_id)
+            conn.commit()
+            return cursor.rowcount > 0 # Retorna True se deletou algo
+        except Exception as e:
+            print(f"ERRO ao excluir entrega: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
+
+def editar_pontos_entrega(entrega_id, novos_pontos):
+    """Edita apenas o valor de PontosGanhos para uma entrega específica."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Busca o funcionário ID para recalcular o saldo depois
+            cursor.execute("SELECT FuncionarioID, PontosGanhos FROM Entregas WHERE EntregaID = ?", entrega_id)
+            res = cursor.fetchone()
+            if not res: return False
+            funcionario_id, pontos_antigos = res
+            pontos_antigos = pontos_antigos or 0 # Garante que não seja None
+
+            # Atualiza os pontos na entrega
+            sql_update = "UPDATE Entregas SET PontosGanhos = ? WHERE EntregaID = ?"
+            cursor.execute(sql_update, novos_pontos, entrega_id)
+
+            # Recalcula o saldo do funcionário (remove o antigo, adiciona o novo)
+            diferenca = novos_pontos - pontos_antigos
+            adicionar_pontos_ao_saldo(funcionario_id, diferenca) # Usa a função existente
+
+            conn.commit()
+            return True
+        except Exception as e:
+            conn.rollback()
+            print(f"ERRO ao editar pontos da entrega: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
