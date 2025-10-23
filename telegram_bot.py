@@ -118,10 +118,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = user.id
     funcionario = database.buscar_funcionario_por_chat_id(chat_id)
     REPLY_KEYBOARD = [
-        ["📋 Minhas Tarefas", "🏆 Ranking do Mês", "🎯 Acompanhar Metas"], 
-        ["💰 Meu Saldo", "🏪 Loja de Recompensas"],
-        ["📜 Meu Histórico", "💬 Solicitar Feedback"],
-        ["❓ Ajuda", "📄 Meus Documentos"] 
+    ["📋 Minhas Tarefas", "🏆 Ranking do Mês", "🎯 Acompanhar Metas"],
+    ["💰 Meu Saldo", "🏪 Loja de Recompensas"],
+    ["📜 Meu Histórico", "💬 Solicitar Feedback"],
+    ["🏅 Minhas Conquistas", "📄 Meus Documentos"], # <<< BOTÃO ADICIONADO AQUI
+    ["❓ Ajuda"] # Botão Ajuda movido para a última linha
     ]
     reply_markup = ReplyKeyboardMarkup(REPLY_KEYBOARD, resize_keyboard=True)
     if funcionario:
@@ -645,6 +646,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             sucesso = database.salvar_feedback_do_dia(funcionario_db.FuncionarioID, nota)
             if sucesso:
                 database.registrar_pontos_por_leitura(funcionario_db.FuncionarioID, config.PONTOS_BONUS_FEEDBACK_DIARIO, "Feedback Diário (Bônus)")
+                database.adicionar_pontos_ao_saldo(funcionario_db.FuncionarioID, config.PONTOS_BONUS_FEEDBACK_DIARIO)
                 texto_final = (f"Obrigado pelo seu feedback! Sua nota foi **{nota}**.\n\nVocê ganhou **{config.PONTOS_BONUS_FEEDBACK_DIARIO}** pontos por sua participação. Sua opinião nos ajuda a melhorar sempre! 💪")
                 await query.edit_message_text(texto_final, parse_mode='Markdown')
             else: await query.edit_message_text("Você já enviou seu feedback hoje. Obrigado!")
@@ -829,7 +831,6 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
     elif data == "voltar_lista_tarefas":
         await tarefas(update, context, query=query)
 
-    # --- LÓGICA DE VALIDAÇÃO DE TAREFAS (GESTOR, NO GRUPO) ---
     elif data.startswith("aprovar_gestor_"):
         entrega_id = int(data.split('_')[-1])
         gestor_nome = query.from_user.first_name
@@ -854,6 +855,17 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
                          f"📝 **Tarefa:** {detalhes.Titulo} (+{detalhes.Pontos} pts)")
         await query.edit_message_caption(caption=legenda_final)
 
+        if novas_conquistas_ganhas:
+            for conquista in novas_conquistas_ganhas:
+                texto_notificacao += (
+                    f"\n\n✨ <b>NOVA CONQUISTA DESBLOQUEADA!</b> ✨\n"
+                    f"{conquista.Icone} <b>{conquista.Nome}</b>\n"
+                    f"<i>{conquista.Descricao}</i>\n"
+                    f"Você ganhou um bônus de <b>{conquista.PontosBonus}</b> pontos!"
+                )
+                if conquista.PontosBonus > 0:
+                    database.adicionar_pontos_ao_saldo(detalhes.FuncionarioID, conquista.PontosBonus) 
+
     elif data.startswith("reprovar_gestor_"):
         entrega_id = int(data.split('_')[-1])
         context.chat_data['aguardando_motivo_recusa'] = entrega_id
@@ -861,30 +873,24 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         await query.edit_message_reply_markup(reply_markup=None)
         await query.message.reply_text(f"Por favor, {query.from_user.first_name}, digite o motivo da recusa para esta tarefa.")
 
-# Em telegram_bot.py, adicione esta nova função antes de def main():
-
 async def acompanhar_metas(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Envia para o funcionário o status da meta principal em formato de porcentagem."""
 
-    # Reutilizamos a mesma função do backend que os gestores usam.
     dados_meta = database.buscar_meta_principal_do_dia()
 
     if not dados_meta or not dados_meta.get('valor_meta'):
         await update.message.reply_text("Nenhuma meta de equipe está ativa no momento. Foco nas tarefas individuais! 💪")
         return
 
-    # Coletamos os dados
     nome = dados_meta['nome_meta']
     atingido = dados_meta['valor_atingido']
     total = dados_meta['valor_meta']
     percentual = (atingido / total) * 100 if total > 0 else 0
 
-    # Criamos a mesma barra de progresso visual
     blocos_cheios = int(percentual // 10)
     blocos_vazios = 10 - blocos_cheios
     barra_progresso = '▓' * blocos_cheios + '░' * blocos_vazios
 
-    # Montamos a mensagem focada em porcentagem, como você pediu!
     mensagem = (
         f"🎯 <b>Meta da Equipe: {nome}</b> 🎯\n\n"
         f"Estamos quase lá! Este é o nosso progresso até agora:\n\n"
@@ -895,6 +901,34 @@ async def acompanhar_metas(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     await update.message.reply_html(mensagem)
 
+async def minhas_conquistas(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Exibe a lista de conquistas já desbloqueadas pelo funcionário."""
+    user = update.effective_user
+    chat_id = user.id
+    funcionario = database.buscar_funcionario_por_chat_id(chat_id) #
+
+    if not funcionario:
+        await update.message.reply_text("Desculpe, não consegui encontrar seu cadastro no sistema.") #
+        return
+
+    conquistas_ganhas = database.listar_conquistas_por_funcionario(funcionario.FuncionarioID) #
+
+    if not conquistas_ganhas:
+        await update.message.reply_text("Você ainda não desbloqueou nenhuma conquista. Continue se esforçando! 💪") #
+        return
+
+    texto_conquistas = f"🏅 **Suas Conquistas Desbloqueadas** ({len(conquistas_ganhas)}) 🏅\n\nParabéns pelas suas realizações!\n"
+
+    for conquista in conquistas_ganhas:
+        data_formatada = conquista.DataConquista.strftime('%d/%m/%Y') # - Formata a data
+        texto_conquistas += (
+            f"\n--------------------\n"
+            f"{conquista.Icone} <b>{conquista.Nome}</b>\n" # - Usa os dados do banco
+            f"<i>{conquista.Descricao}</i>\n" #
+            f"<pre>Desbloqueada em: {data_formatada}</pre>\n" # - Usa <pre> para monoespaçado
+        )
+
+    await update.message.reply_html(texto_conquistas) #
 
 def main() -> None:
     application = Application.builder().token(config.TELEGRAM_TOKEN).connect_timeout(30).read_timeout(30).build()
@@ -913,8 +947,11 @@ def main() -> None:
     application.add_handler(CommandHandler("ajuda", ajuda))
     application.add_handler(CommandHandler("meusaldo", meu_saldo))
     application.add_handler(CommandHandler("loja", loja_recompensas))
-    application.add_handler(CommandHandler("holerite", solicitar_holerite_inicio)) # <<< NOVO COMANDO
-    
+    application.add_handler(CommandHandler("holerite", solicitar_holerite_inicio)) 
+    application.add_handler(CommandHandler("conquistas", minhas_conquistas)) # <<< NOVO COMANDO
+    application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🏅 Minhas Conquistas$'), minhas_conquistas)) # <<< NOVO BOTÃO
+    application.add_handler(CallbackQueryHandler(button_callback_handler))
+
     # --- Handlers para os Botões do Menu Fixo ---
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^📋 Minhas Tarefas$'), tarefas))
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🏆 Ranking do Mês$'), ranking))
@@ -925,12 +962,8 @@ def main() -> None:
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🏪 Loja de Recompensas$'), loja_recompensas))
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^💬 Solicitar Feedback$'), solicitar_feedback_start)) 
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^📄 Meus Documentos$'), solicitar_holerite_inicio)) 
-
-    # --- Handlers de Interação e Respostas ---
-    application.add_handler(CallbackQueryHandler(button_callback_handler))
+    application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🏅 Minhas Conquistas$'), minhas_conquistas)) # <<< NOVO BOTÃO
     application.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, receber_foto))
-    
-    # <<< A GRANDE MUDANÇA: TROCAMOS O HANDLER ANTIGO PELO NOVO ROTEADOR >>>
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, roteador_de_texto_privado))
     
     print("🚀 Bot (v5.0 com Sala de Comando) iniciado com sucesso! 🚀")
