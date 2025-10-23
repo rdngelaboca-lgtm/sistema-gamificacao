@@ -2421,6 +2421,10 @@ class App:
                 if modelo_meta_diaria and valor_dia >= modelo_meta_diaria.ValorMeta and modelo_meta_diaria.PontosPremio > 0:
                     meta_principal = next((m for m in database.listar_metas_principais() if m.MetaPrincipalID == meta_id), None)
                     if meta_principal:
+                        print(f"--- DEBUG META DIÁRIA ---")
+                        print(f"Valor Lançado: {valor_dia}")
+                        print(f"Modelo Meta Dia: Valor={modelo_meta_diaria.ValorMeta}, Pontos={modelo_meta_diaria.PontosPremio}")
+                        print(f"Meta Principal: Setor Alvo='{meta_principal.SetorAlvo}'")
                         funcionarios_premiados = database.registrar_pontos_meta_diaria(apuracao_id, modelo_meta_diaria.PontosPremio, meta_principal.SetorAlvo)
                         
                         if funcionarios_premiados:
