@@ -1041,16 +1041,12 @@ def _get_date_part(dt_object):
         return dt_object.date()
     return dt_object # Se já for um objeto date
 
-# Agora, SUBSTITUA a calculadora inteira pela sua versão final e corrigida:
+# Em database.py, SUBSTITUA a função calcular_ranking_desempenho por esta versão com filtro:
 
-# Em database.py, SUBSTITUA a função antiga por esta versão HÍBRIDA E JUSTA
-
-# Em database.py, SUBSTITUA a função de ranking pela versão final e 100% justa
-
-def calcular_ranking_desempenho(data_final_calculo=None):
+def calcular_ranking_desempenho(data_final_calculo=None, setor_filtro=None): # <<< NOVO PARÂMETRO
     """
-    Calcula o ranking com SCORE HÍBRIDO. (VERSÃO 4.1 - COM LÓGICA DE FOLGA)
-    Agora, desconsidera tarefas recorrentes nos dias de folga do funcionário.
+    Calcula o ranking com SCORE HÍBRIDO, filtrado opcionalmente por setor.
+    PESOS: 70% Desempenho (Confiabilidade), 30% Pontos Brutos (Esforço).
     """
     conn = get_db_connection()
     if not conn: return []
@@ -1061,7 +1057,7 @@ def calcular_ranking_desempenho(data_final_calculo=None):
     try:
         cursor = conn.cursor()
         sql_tarefas_atribuidas = """
-            SELECT F.FuncionarioID, F.NomeCompleto, F.DiaDeFolga,
+            SELECT F.FuncionarioID, F.NomeCompleto, F.Cargo, F.DiaDeFolga, -- <<< Adicionado F.Cargo
                    TA.AtribuicaoID, TA.TipoFrequencia, TA.ValorFrequencia,
                    T.Pontos, TA.DataInicioVigencia, TA.DataFimVigencia,
                    TA.DataAceite
@@ -1070,55 +1066,62 @@ def calcular_ranking_desempenho(data_final_calculo=None):
             LEFT JOIN Tarefas T ON TA.TarefaID = T.TarefaID
             WHERE TA.AtribuicaoID IS NOT NULL
             ORDER BY F.FuncionarioID
-        """
-        cursor.execute(sql_tarefas_atribuidas)
-        todas_as_atribuicoes = cursor.fetchall()
-        
-        data_final = data_final_calculo if data_final_calculo else date.today()
-        inicio_mes = data_final.replace(day=1)
-        
-        ranking_parcial = []
-        
-        atribuicoes_por_funcionario = {}
-        funcionarios_todos = listar_funcionarios()
-        for func in funcionarios_todos:
+        """ #
+        cursor.execute(sql_tarefas_atribuidas) #
+        todas_as_atribuicoes = cursor.fetchall() #
+
+        data_final = data_final_calculo if data_final_calculo else date.today() #
+        inicio_mes = data_final.replace(day=1) #
+
+        ranking_parcial = [] #
+
+        # --- FILTRAGEM INICIAL POR SETOR ---
+        funcionarios_todos = listar_funcionarios() #
+        funcionarios_filtrados = []
+        if setor_filtro == 'Cozinha':
+            funcionarios_filtrados = [f for f in funcionarios_todos if f.Cargo and 'Cozinha' in f.Cargo]
+        elif setor_filtro == 'Loja':
+            funcionarios_filtrados = [f for f in funcionarios_todos if not f.Cargo or 'Cozinha' not in f.Cargo]
+        else: # Nenhum filtro ou filtro inválido, pega todos
+            funcionarios_filtrados = funcionarios_todos
+        # ------------------------------------
+
+        if not funcionarios_filtrados: return [] # Retorna vazio se o setor não tiver funcionários
+
+        atribuicoes_por_funcionario = {} #
+        # Cria a estrutura apenas para os funcionários filtrados
+        for func in funcionarios_filtrados:
              atribuicoes_por_funcionario[func.FuncionarioID] = {
                 'NomeCompleto': func.NomeCompleto,
-                'DiaDeFolga': func.DiaDeFolga, # <<< IMPORTANTE: Guardar a folga
+                'Cargo': func.Cargo, # Guarda o cargo
+                'DiaDeFolga': func.DiaDeFolga,
                 'tarefas': []
-            }
+            } #
 
+        # Preenche com as atribuições apenas dos funcionários filtrados
         for atribuicao in todas_as_atribuicoes:
             if atribuicao.FuncionarioID in atribuicoes_por_funcionario:
-                atribuicoes_por_funcionario[atribuicao.FuncionarioID]['tarefas'].append(atribuicao)
+                atribuicoes_por_funcionario[atribuicao.FuncionarioID]['tarefas'].append(atribuicao) #
 
+        # O cálculo de pontos possíveis e ganhos agora só roda para os funcionários filtrados
         for func_id, dados in atribuicoes_por_funcionario.items():
-            pontos_possiveis_total = 0
-            
+            pontos_possiveis_total = 0 #
+            # ... (Lógica interna para calcular pontos_possiveis_total permanece a mesma, incluindo a verificação de folga) ...
             for tarefa in dados['tarefas']:
                 if tarefa.TipoFrequencia in ('GrupoCompetitiva', 'Unica'):
                     data_ref = tarefa.DataAceite if tarefa.TipoFrequencia == 'GrupoCompetitiva' else tarefa.DataInicioVigencia
                     if data_ref and inicio_mes <= _get_date_part(data_ref) <= data_final:
                         pontos_possiveis_total += tarefa.Pontos
                     continue
-                
                 dias_ocorrencia = 0
                 start_date = max(_get_date_part(tarefa.DataInicioVigencia), inicio_mes) if tarefa.DataInicioVigencia else inicio_mes
                 end_date = min(_get_date_part(tarefa.DataFimVigencia), data_final) if tarefa.DataFimVigencia else data_final
-
                 if end_date < start_date: continue
-
                 for dia_atual in (start_date + timedelta(days=n) for n in range((end_date - start_date).days + 1)):
                     if dia_atual > data_final: break
-                    
-                    # --- A MÁGICA DA JUSTIÇA ACONTECE AQUI! ---
-                    dia_da_semana_sql = (dia_atual.weekday() + 2) % 7 # Segunda=2, Terça=3, ..., Domingo=1
-                    if dia_da_semana_sql == 0: dia_da_semana_sql = 1 # Ajuste para domingo
-
+                    dia_da_semana_sql = (dia_atual.weekday() + 1) % 7 + 1 # SQL Server: Dom=1..Sab=7
                     if str(dia_da_semana_sql) == str(dados['DiaDeFolga']):
-                        continue # PULA ESTE DIA, POIS É FOLGA! NÃO CONTA PONTOS POSSÍVEIS.
-                    # -----------------------------------------------
-
+                        continue
                     if tarefa.TipoFrequencia == 'Diaria': dias_ocorrencia += 1
                     elif tarefa.TipoFrequencia == 'Semanal':
                         if str(dia_da_semana_sql) == str(tarefa.ValorFrequencia): dias_ocorrencia += 1
@@ -1126,36 +1129,39 @@ def calcular_ranking_desempenho(data_final_calculo=None):
                         if dia_atual.day == int(tarefa.ValorFrequencia): dias_ocorrencia += 1
                 pontos_possiveis_total += dias_ocorrencia * tarefa.Pontos
 
-            pontos_ganhos = calcular_pontos_ganhos_no_periodo(func_id, inicio_mes, data_final)
-            percentual_desempenho = (pontos_ganhos / pontos_possiveis_total) * 100 if pontos_possiveis_total > 0 else 0
-            
+            pontos_ganhos = calcular_pontos_ganhos_no_periodo(func_id, inicio_mes, data_final) #
+            percentual_desempenho = (pontos_ganhos / pontos_possiveis_total) * 100 if pontos_possiveis_total > 0 else 0 #
+
             ranking_parcial.append({
                 'FuncionarioID': func_id, 'NomeCompleto': dados['NomeCompleto'],
                 'PontosGanhos': pontos_ganhos, 'PontosPossiveis': pontos_possiveis_total,
                 'Desempenho': round(percentual_desempenho, 2)
-            })
+            }) #
 
-        if not ranking_parcial: return []
-        
-        max_pontos_ganhos = max(p['PontosGanhos'] for p in ranking_parcial) if any(p['PontosGanhos'] for p in ranking_parcial) else 1
+        if not ranking_parcial: return [] #
 
-        ranking_final = []
+        # --- AJUSTE NO CÁLCULO DO MAX ---
+        # Calcula o máximo de pontos ganhos APENAS DENTRO DO GRUPO FILTRADO
+        max_pontos_ganhos_no_setor = max(p['PontosGanhos'] for p in ranking_parcial) if any(p['PontosGanhos'] for p in ranking_parcial) else 1
+        # --------------------------------
+
+        ranking_final = [] #
         for dados_func in ranking_parcial:
-            percentual_pontos_brutos = (dados_func['PontosGanhos'] / max_pontos_ganhos) * 100
-            score_hibrido = (dados_func['Desempenho'] * PESO_A_DESEMPENHO) + (percentual_pontos_brutos * PESO_B_PONTOS_BRUTOS)
-            dados_func['ScoreHibrido'] = round(score_hibrido, 2)
-            ranking_final.append(dados_func)
+            # Usa o máximo do setor para normalizar o esforço
+            percentual_pontos_brutos = (dados_func['PontosGanhos'] / max_pontos_ganhos_no_setor) * 100 #
+            score_hibrido = (dados_func['Desempenho'] * PESO_A_DESEMPENHO) + (percentual_pontos_brutos * PESO_B_PONTOS_BRUTOS) #
+            dados_func['ScoreHibrido'] = round(score_hibrido, 2) #
+            ranking_final.append(dados_func) #
 
-        ranking_ordenado = sorted(ranking_final, key=lambda x: x['ScoreHibrido'], reverse=True)
-        return ranking_ordenado
+        ranking_ordenado = sorted(ranking_final, key=lambda x: x['ScoreHibrido'], reverse=True) #
+        return ranking_ordenado #
 
     except Exception as e:
-        print(f"ERRO ao calcular ranking de desempenho HÍBRIDO: {e}")
-        return []
+        print(f"ERRO ao calcular ranking de desempenho HÍBRIDO com filtro '{setor_filtro}': {e}") #
+        return [] #
     finally:
-        if conn: conn.close()
+        if conn: conn.close() #
 
-# Em database.py, adicione esta função ao final do arquivo:
 def salvar_historico_ranking(ranking_do_mes):
     """Salva os resultados finais do ranking de um mês na tabela de histórico."""
     conn = get_db_connection()
@@ -1163,7 +1169,6 @@ def salvar_historico_ranking(ranking_do_mes):
         try:
             cursor = conn.cursor()
             hoje = date.today()
-            # Pega o ano e o mês do mês passado
             ano = (hoje.replace(day=1) - timedelta(days=1)).year
             mes = (hoje.replace(day=1) - timedelta(days=1)).month
 
@@ -1190,7 +1195,6 @@ def salvar_historico_ranking(ranking_do_mes):
         finally:
             conn.close()
 
-# Em database.py, adicione esta função no final:
 def verificar_se_fechamento_ja_rodou(ano, mes):
     """Verifica na tabela de histórico se o fechamento para um dado mês/ano já foi salvo."""
     conn = get_db_connection()
@@ -1203,8 +1207,6 @@ def verificar_se_fechamento_ja_rodou(ano, mes):
         finally:
             conn.close()
     return False
-
-# Em database.py, adicione esta função no final do arquivo:
 
 def calcular_pontos_ganhos_no_periodo(funcionario_id, inicio_periodo, fim_periodo):
     """
@@ -1230,8 +1232,6 @@ def calcular_pontos_ganhos_no_periodo(funcionario_id, inicio_periodo, fim_period
             conn.close()
     return 0
 
-# Em database.py, adicione esta NOVA função no final do arquivo:
-
 def limpar_entregas_do_mes_por_funcionario(funcionario_id):
     """
     (A "BOMBA ATÔMICA")
@@ -1242,10 +1242,6 @@ def limpar_entregas_do_mes_por_funcionario(funcionario_id):
     if conn:
         try:
             cursor = conn.cursor()
-            # Este comando SQL é o coração da nossa ferramenta.
-            # Ele deleta linhas da tabela de Entregas...
-            # ...onde o FuncionarioID corresponda ao que foi passado...
-            # ...e onde o MÊS e o ANO da DataEnvio sejam os mesmos do MÊS e ANO de AGORA.
             sql = """
                 DELETE FROM Entregas
                 WHERE FuncionarioID = ?
@@ -1259,10 +1255,6 @@ def limpar_entregas_do_mes_por_funcionario(funcionario_id):
             print(f"ERRO ao limpar as entregas do mês para o funcionário {funcionario_id}: {e}")
         finally:
             conn.close()
-
-# ===================================================================
-# == INÍCIO DO MÓDULO DE CIÊNCIA DE COMUNICADOS (NOVAS FUNÇÕES) =====
-# ===================================================================
 
 def criar_documento(titulo, conteudo, criador_id, pontos, telegram_file_id_foto=None): # 1. Novo Parâmetro Opcional
     """
@@ -1278,7 +1270,6 @@ def criar_documento(titulo, conteudo, criador_id, pontos, telegram_file_id_foto=
                 VALUES (?, ?, ?, ?, ?); -- 3. Novo '?' para o valor
                 SELECT SCOPE_IDENTITY();
             """
-            # 4. Passando o novo parâmetro para o comando execute
             cursor.execute(sql, titulo, conteudo, criador_id, pontos, telegram_file_id_foto)
             cursor.nextset()
             novo_id = cursor.fetchone()[0]
@@ -1365,14 +1356,11 @@ def registrar_pontos_por_leitura(funcionario_id, pontos, titulo_documento):
     Insere um registro na tabela Entregas para contabilizar os pontos no ranking.
     """
     conn = get_db_connection()
-    # ATENÇÃO: Coloque aqui o ID da tarefa "Leitura de Comunicado" que você criou no Passo 6.
-    # Se você não sabe o ID, execute 'SELECT TarefaID FROM Tarefas WHERE Titulo = 'Leitura de Comunicado''
     TAREFA_ID_LEITURA = 38 # <<< MUDE ESTE NÚMERO PARA O SEU ID CORRETO!
 
     if conn:
         try:
             cursor = conn.cursor()
-            # Inserimos uma entrega já 'Aprovada' diretamente
             sql = """
                 INSERT INTO Entregas
                 (TarefaID, FuncionarioID, StatusValidacao, PontosGanhos, DataEnvio, MotivoRecusa)
@@ -1387,7 +1375,6 @@ def registrar_pontos_por_leitura(funcionario_id, pontos, titulo_documento):
         finally:
             conn.close()
 
-# Em database.py, SUBSTITUA a função antiga por esta versão com filtro
 def listar_comunicados_com_status(filtro_titulo=None):
     """
     Lista todos os documentos com status. Se um filtro_titulo for fornecido,
@@ -1397,7 +1384,6 @@ def listar_comunicados_com_status(filtro_titulo=None):
     if conn:
         try:
             cursor = conn.cursor()
-            # A base da nossa consulta SQL continua a mesma
             sql_base = """
                 SELECT
                     D.DocumentoID, D.Titulo, D.DataCriacao,
@@ -1408,27 +1394,21 @@ def listar_comunicados_com_status(filtro_titulo=None):
             """
 
             params = [] # Lista para guardar os parâmetros da consulta
-
-            # A MÁGICA ACONTECE AQUI: Adicionamos a cláusula WHERE dinamicamente
             if filtro_titulo:
                 sql_base += " WHERE D.Titulo LIKE ?" # O 'LIKE' permite buscas parciais
                 params.append(f"%{filtro_titulo}%") # Os '%' são coringas: buscam o texto em qualquer parte do título
 
-            # O final da consulta também é o mesmo
             sql_final = """
                 GROUP BY D.DocumentoID, D.Titulo, D.DataCriacao
                 ORDER BY D.DataCriacao DESC
             """
 
-            # Juntamos tudo e executamos
             sql_completa = sql_base + sql_final
             cursor.execute(sql_completa, params)
             return cursor.fetchall()
         finally:
             conn.close()
     return []
-
-# Em database.py, substitua a função antiga por esta versão aprimorada
 
 def listar_destinatarios_de_documento(documento_id):
     """
@@ -1439,7 +1419,6 @@ def listar_destinatarios_de_documento(documento_id):
     if conn:
         try:
             cursor = conn.cursor()
-            # A ÚNICA MUDANÇA É ADICIONAR "DA.AssinaturaID" NO COMEÇO DO SELECT
             sql = """
                 SELECT
                     DA.AssinaturaID, 
@@ -1458,16 +1437,10 @@ def listar_destinatarios_de_documento(documento_id):
     return []
 
 if __name__ == '__main__':
-    # Este código só roda quando executamos 'python database.py' diretamente
-    # Ele não vai atrapalhar nossos outros programas.
-
-    # --- ATENÇÃO: Verifique se os IDs abaixo existem na sua tabela de Funcionarios! ---
     GESTOR_ID_TESTE = 3 # ID de um funcionário para ser o "criador"
     FUNCIONARIO_ID_TESTE = 3 # ID de um funcionário para receber o comunicado
 
     print("--- INICIANDO TESTE DO MÓDULO DE COMUNICADOS ---")
-
-    # 1. Testar criação de documento com pontos
     print("\n[TESTE 1] Criando um novo documento que vale 25 pontos...")
     id_doc = criar_documento(
         "Documento de Teste com Pontos",
@@ -1480,8 +1453,6 @@ if __name__ == '__main__':
     else:
         print("--> FALHA! Não foi possível criar o documento.")
         exit()
-
-    # 2. Registrar pendência para um funcionário
     print(f"\n[TESTE 2] Registrando pendência do Doc ID {id_doc} para o Funcionário ID {FUNCIONARIO_ID_TESTE}...")
     id_assinatura = registrar_pendencia_assinatura(id_doc, FUNCIONARIO_ID_TESTE)
     if id_assinatura:
@@ -1490,7 +1461,6 @@ if __name__ == '__main__':
         print("--> FALHA! Não foi possível registrar a pendência.")
         exit()
 
-    # 3. Simular o clique do bot
     print(f"\n[TESTE 3] Buscando detalhes da assinatura ID {id_assinatura}...")
     detalhes = buscar_detalhes_assinatura_para_bot(id_assinatura)
     if detalhes:
@@ -1510,8 +1480,6 @@ if __name__ == '__main__':
     print("\n--- TESTE FINALIZADO ---")
     print("Verifique as tabelas Documentos, DocumentosAssinaturas e Entregas no SSMS para confirmar os resultados.")
 
-# Em database.py, ADICIONE esta nova função no final do arquivo
-
 def buscar_assinaturas_pendentes_antigas(horas_atras=24):
     """
     Busca assinaturas que continuam 'Pendente' após um determinado número de horas do envio.
@@ -1521,8 +1489,6 @@ def buscar_assinaturas_pendentes_antigas(horas_atras=24):
     if conn:
         try:
             cursor = conn.cursor()
-            # DATEADD(hour, -24, GETDATE()) calcula a data e hora de 24h atrás.
-            # A consulta busca por pendências cujo envio foi ANTES desse horário.
             sql = """
                 SELECT
                     F.NomeCompleto,
@@ -1541,8 +1507,6 @@ def buscar_assinaturas_pendentes_antigas(horas_atras=24):
         finally:
             conn.close()
     return []
-
-# Em database.py, adicione estas duas novas funções ao final do arquivo
 
 def buscar_detalhes_completos_documento(documento_id):
     """
@@ -1569,11 +1533,8 @@ def excluir_documento(documento_id):
     if conn:
         try:
             cursor = conn.cursor()
-            # Etapa 1: Excluir as assinaturas associadas
             sql_assinaturas = "DELETE FROM DocumentosAssinaturas WHERE DocumentoID = ?"
             cursor.execute(sql_assinaturas, documento_id)
-
-            # Etapa 2: Excluir o documento principal
             sql_documento = "DELETE FROM Documentos WHERE DocumentoID = ?"
             cursor.execute(sql_documento, documento_id)
 
@@ -1585,7 +1546,6 @@ def excluir_documento(documento_id):
         finally:
             conn.close()
 
-# Em database.py, adicione esta nova função ao final
 def buscar_dados_completos_para_recibo(assinatura_id):
     """
     Busca todos os dados necessários para gerar o recibo em PDF a partir do ID da assinatura.
@@ -1611,10 +1571,6 @@ def buscar_dados_completos_para_recibo(assinatura_id):
             conn.close()
     return None
 
-# Em database.py, adicione esta nova função na seção de comunicados
-
-# Em database.py, substitua a função antiga por esta versão corrigida
-
 def listar_funcionarios_nao_destinatarios(documento_id):
     """
     Retorna uma lista de funcionários que AINDA NÃO estão associados a um
@@ -1624,7 +1580,6 @@ def listar_funcionarios_nao_destinatarios(documento_id):
     if conn:
         try:
             cursor = conn.cursor()
-            # A CORREÇÃO ESTÁ AQUI: Adicionamos F.ChatIDTelegram ao SELECT
             sql = """
                 SELECT F.FuncionarioID, F.NomeCompleto, F.ChatIDTelegram
                 FROM Funcionarios F
@@ -1640,15 +1595,12 @@ def listar_funcionarios_nao_destinatarios(documento_id):
             conn.close()
     return []
 
-# Em database.py, adicione esta nova função
-
 def salvar_feedback_do_dia(funcionario_id, nota):
     """Salva a nota de feedback do funcionário para a data atual."""
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            # Impede o envio de feedback duplicado no mesmo dia
             sql_check = "SELECT 1 FROM Feedbacks WHERE FuncionarioID = ? AND DataFeedback = CONVERT(date, GETDATE())"
             cursor.execute(sql_check, funcionario_id)
             if cursor.fetchone():
@@ -1663,8 +1615,6 @@ def salvar_feedback_do_dia(funcionario_id, nota):
             conn.close()
     return False
 
-# Em database.py, adicione esta nova função ao final do arquivo
-
 def buscar_feedbacks(funcionario_id=None, data_inicio=None, data_fim=None):
     """
     Busca os feedbacks no banco de dados, com filtros opcionais.
@@ -1675,7 +1625,6 @@ def buscar_feedbacks(funcionario_id=None, data_inicio=None, data_fim=None):
     if conn:
         try:
             cursor = conn.cursor()
-            # A consulta base que une as tabelas para pegar o nome do funcionário
             sql = """
                 SELECT
                     F.FeedbackID,
@@ -1689,7 +1638,6 @@ def buscar_feedbacks(funcionario_id=None, data_inicio=None, data_fim=None):
             condicoes = []
             params = []
 
-            # Adiciona as condições de filtro dinamicamente
             if funcionario_id:
                 condicoes.append("F.FuncionarioID = ?")
                 params.append(funcionario_id)
@@ -1702,7 +1650,6 @@ def buscar_feedbacks(funcionario_id=None, data_inicio=None, data_fim=None):
                 condicoes.append("F.DataFeedback <= ?")
                 params.append(data_fim)
 
-            # Se houver alguma condição, monta a cláusula WHERE
             if condicoes:
                 sql += " WHERE " + " AND ".join(condicoes)
 
@@ -1714,7 +1661,6 @@ def buscar_feedbacks(funcionario_id=None, data_inicio=None, data_fim=None):
             conn.close()
     return []
 
-# Em database.py, adicione esta nova função
 def relatorio_analise_tarefas(data_inicio, data_fim):
     """
     Busca no banco um resumo das tarefas que foram mais recusadas ou
@@ -1724,7 +1670,6 @@ def relatorio_analise_tarefas(data_inicio, data_fim):
     if conn:
         try:
             cursor = conn.cursor()
-            # Esta consulta agrupa por título da tarefa e conta as ocorrências
             sql = sql = """
                 SELECT
                     T.Titulo,
@@ -1749,8 +1694,6 @@ def relatorio_analise_tarefas(data_inicio, data_fim):
             conn.close()
     return []
 
-# Em database.py, adicione esta nova função
-
 def criar_solicitacao_feedback(funcionario_id, assunto):
     """Salva uma nova solicitação de feedback na tabela FeedbackSolicitacoes."""
     conn = get_db_connection()
@@ -1767,8 +1710,6 @@ def criar_solicitacao_feedback(funcionario_id, assunto):
         finally:
             conn.close()
     return False
-
-# Em database.py, adicione estas três novas funções no final
 
 def listar_solicitacoes_pendentes():
     """Busca no banco todas as solicitações de feedback com status 'Pendente'."""
@@ -1846,7 +1787,6 @@ def registrar_entrega_preliminar(tarefa_id, funcionario_id, atribuicao_id, file_
             """
             cursor.execute(sql, tarefa_id, funcionario_id, atribuicao_id, file_id)
             
-            # A CORREÇÃO MÁGICA ESTÁ AQUI:
             cursor.nextset() 
             
             new_id = cursor.fetchone()[0]
@@ -1862,7 +1802,6 @@ def buscar_entregas_para_download():
     if conn:
         try:
             cursor = conn.cursor()
-            # Procura por entregas com file_id mas sem caminho de foto local
             sql = "SELECT EntregaID, FileIDTelegram FROM Entregas WHERE FileIDTelegram IS NOT NULL AND PathFotoEvidencia IS NULL"
             cursor.execute(sql)
             return cursor.fetchall()
@@ -1882,14 +1821,12 @@ def finalizar_registro_entrega(entrega_id, path_foto):
         finally:
             conn.close()
 
-# Em database.py, adicione esta nova função
 def listar_atribuicoes_ativas_por_funcionario(funcionario_id):
     """Retorna todas as tarefas ativas para um funcionário específico."""
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            # Este SQL é uma versão filtrada do que já tínhamos
             sql = """
                 SELECT 
                     TA.AtribuicaoID, 
@@ -1923,7 +1860,6 @@ def listar_atribuicoes_ativas_por_funcionario(funcionario_id):
             conn.close()
     return []
 
-# Em database.py, adicione esta nova função
 def buscar_justificativas_nao_aplicavel(titulo_tarefa, data_inicio, data_fim):
     """Busca as justificativas para uma tarefa marcada como 'Não Aplicável' em um período."""
     conn = get_db_connection()
@@ -1950,14 +1886,12 @@ def buscar_justificativas_nao_aplicavel(titulo_tarefa, data_inicio, data_fim):
             conn.close()
     return []
 
-# Em database.py, adicione esta nova função
 def listar_agenda_semanal_por_funcionario(funcionario_id):
     """Busca todas as tarefas ativas de um funcionário e retorna o dia da semana para tarefas semanais."""
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            # A consulta foi adaptada para focar nas tarefas recorrentes e seu dia
             sql = """
                 SELECT 
                     T.Titulo,
@@ -1977,15 +1911,12 @@ def listar_agenda_semanal_por_funcionario(funcionario_id):
             conn.close()
     return []
 
-# Em database.py, adicione estas duas funções no final do arquivo
-
 def buscar_funcionarios_de_folga_hoje(dia_da_semana):
     """Busca no banco todos os funcionários cujo dia de folga corresponde ao dia da semana fornecido."""
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            # A lógica agora usa o valor que veio do agendador, em vez de GETDATE()
             sql = """
                 SELECT * FROM Funcionarios 
                 WHERE DiaDeFolga = ?
@@ -2004,7 +1935,6 @@ def buscar_tarefas_recorrentes_agendadas_para_hoje(funcionario_id, dia_da_semana
     if conn:
         try:
             cursor = conn.cursor()
-            # A ÚNICA MUDANÇA É ADICIONAR T.Setor AO SELECT
             sql = """
                 SELECT T.TarefaID, T.Titulo, T.Pontos, T.Setor
                 FROM TarefasAtribuidas TA
@@ -2030,15 +1960,10 @@ def listar_setores_unicos():
             cursor = conn.cursor()
             sql = "SELECT DISTINCT Setor FROM Tarefas WHERE Setor IS NOT NULL AND Setor != '' ORDER BY Setor"
             cursor.execute(sql)
-            # A linha abaixo transforma o resultado (que é uma lista de tuplas) em uma lista de strings
             return [row.Setor for row in cursor.fetchall()]
         finally:
             conn.close()
     return []
-
-# ===================================================================
-# == INÍCIO DO MÓDULO DE LOJA DE RECOMPENSAS ========================
-# ===================================================================
 
 def adicionar_pontos_ao_saldo(funcionario_id, pontos_a_adicionar):
     """Adiciona pontos ao saldo cumulativo de um funcionário."""
@@ -2046,7 +1971,6 @@ def adicionar_pontos_ao_saldo(funcionario_id, pontos_a_adicionar):
     if conn:
         try:
             cursor = conn.cursor()
-            # Esta query é "atômica": ela lê o valor atual e soma o novo em uma única operação.
             sql = "UPDATE Funcionarios SET SaldoPontos = SaldoPontos + ? WHERE FuncionarioID = ?"
             cursor.execute(sql, pontos_a_adicionar, funcionario_id)
             conn.commit()
@@ -2066,8 +1990,6 @@ def buscar_saldo_funcionario(funcionario_id):
         finally:
             conn.close()
     return 0
-
-# --- Funções de Gestão de Produtos (para o main.py do gestor) ---
 
 def listar_produtos_loja(incluir_inativos=False):
     """Lista os produtos da loja. Por padrão, lista apenas os ativos."""
@@ -3168,4 +3090,3 @@ def listar_membros_por_chat_id_grupo(chat_id):
         finally:
             conn.close()
     return []
-
