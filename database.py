@@ -2374,7 +2374,7 @@ def verificar_e_conceder_conquistas(funcionario_id):
     finally:
         if conn:
             conn.close()
-            
+
 # Em database.py, adicione esta nova função
 def atualizar_documento_com_file_id(documento_id, file_id):
     """Atualiza um registro de documento existente para adicionar o file_id da foto."""
@@ -3032,6 +3032,12 @@ def registrar_pontos_meta_diaria(apuracao_id, pontos_ganhos, setor):
         """
         motivo = f"Prêmio por atingir a meta diária do setor '{setor}'."
         
+        print(f"--- DEBUG REGISTRAR PONTOS META ---")
+        print(f"Setor Alvo Recebido: '{setor}'")
+        print(f"Funcionários Encontrados no Setor: {len(funcionarios_do_setor)}")
+        if funcionarios_do_setor:
+            print(f"IDs dos funcionários encontrados: {[f.FuncionarioID for f in funcionarios_do_setor]}")
+
         for funcionario in funcionarios_do_setor:
             cursor.execute(sql_entrega, TAREFA_ID_META, funcionario.FuncionarioID, pontos_ganhos, motivo)
             adicionar_pontos_ao_saldo(funcionario.FuncionarioID, pontos_ganhos)
@@ -3046,8 +3052,6 @@ def registrar_pontos_meta_diaria(apuracao_id, pontos_ganhos, setor):
     finally:
         if conn:
             conn.close()
-
-# Em database.py, ADICIONE estas duas novas funções
 
 def marcar_meta_principal_como_concluida(meta_id):
     """Atualiza o status de uma meta principal para 'Concluida'."""
@@ -3114,8 +3118,6 @@ def buscar_meta_ativa_id_hoje():
     if conn:
         try:
             cursor = conn.cursor()
-            # Query simples que busca o ID da meta cujo período (DataInicio e DataFim)
-            # inclui a data atual (GETDATE()) e que tenha o status 'Ativa'.
             sql = """
                 SELECT TOP 1 MetaPrincipalID
                 FROM MetasPrincipais
@@ -3123,7 +3125,6 @@ def buscar_meta_ativa_id_hoje():
             """
             cursor.execute(sql)
             resultado = cursor.fetchone()
-            # Se encontrar um resultado, retorna o ID; senão, retorna None.
             return resultado[0] if resultado else None
         finally:
             conn.close()
@@ -3150,8 +3151,6 @@ def excluir_apuracao_diaria(meta_principal_id, data_apuracao):
             conn.close()
     return False
 
-# Em database.py, adicione esta nova função ao final
-
 def buscar_dados_meta_diaria_hoje():
     """
     Busca o modelo da meta para o dia de hoje e o valor já apurado para hoje.
@@ -3160,9 +3159,6 @@ def buscar_dados_meta_diaria_hoje():
     if conn:
         try:
             cursor = conn.cursor()
-            # Esta query busca duas informações em uma só consulta:
-            # 1. O valor da meta para o dia da semana de hoje.
-            # 2. O valor já lançado hoje para a meta principal ativa.
             sql = """
                 SELECT
                     (SELECT ValorMeta FROM MetasDiariasModelos WHERE DiaSemanaID = DATEPART(weekday, GETDATE())) as MetaDoDia,
@@ -3211,8 +3207,6 @@ def listar_membros_por_chat_id_grupo(chat_id):
         finally:
             conn.close()
     return []
-
-# Em database.py, adicione estas TRÊS funções no final do arquivo:
 
 def criar_conquista(nome, descricao, icone, criterio_tipo, criterio_valor, pontos_bonus):
     """Insere um novo modelo de conquista no banco."""
