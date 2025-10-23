@@ -3090,3 +3090,68 @@ def listar_membros_por_chat_id_grupo(chat_id):
         finally:
             conn.close()
     return []
+
+# Em database.py, adicione estas TRÊS funções no final do arquivo:
+
+def criar_conquista(nome, descricao, icone, criterio_tipo, criterio_valor, pontos_bonus):
+    """Insere um novo modelo de conquista no banco."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                INSERT INTO Conquistas (Nome, Descricao, Icone, CriterioTipo, CriterioValor, PontosBonus)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """
+            cursor.execute(sql, nome, descricao, icone, criterio_tipo, criterio_valor, pontos_bonus)
+            conn.commit()
+            return True
+        except Exception as e:
+            print(f"ERRO ao criar conquista: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
+
+def atualizar_conquista(conquista_id, nome, descricao, icone, criterio_tipo, criterio_valor, pontos_bonus):
+    """Atualiza um modelo de conquista existente."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                UPDATE Conquistas
+                SET Nome = ?, Descricao = ?, Icone = ?, CriterioTipo = ?, CriterioValor = ?, PontosBonus = ?
+                WHERE ConquistaID = ?
+            """
+            cursor.execute(sql, nome, descricao, icone, criterio_tipo, criterio_valor, pontos_bonus, conquista_id)
+            conn.commit()
+            return cursor.rowcount > 0 # Retorna True se alguma linha foi afetada
+        except Exception as e:
+            print(f"ERRO ao atualizar conquista: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
+
+def excluir_conquista(conquista_id):
+    """Exclui um modelo de conquista e as associações com funcionários."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Primeiro, remove dos funcionários que a ganharam
+            sql_assoc = "DELETE FROM ConquistasFuncionarios WHERE ConquistaID = ?"
+            cursor.execute(sql_assoc, conquista_id)
+            # Depois, remove o modelo da conquista
+            sql_modelo = "DELETE FROM Conquistas WHERE ConquistaID = ?"
+            cursor.execute(sql_modelo, conquista_id)
+            conn.commit()
+            return True
+        except Exception as e:
+            print(f"ERRO ao excluir conquista: {e}")
+            conn.rollback() # Desfaz se der erro em uma das exclusões
+            return False
+        finally:
+            conn.close()
+    return False
