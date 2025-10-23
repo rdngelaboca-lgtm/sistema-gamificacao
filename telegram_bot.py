@@ -183,29 +183,46 @@ async def tarefas(update: Update, context: ContextTypes.DEFAULT_TYPE, query=None
     if query: await query.edit_message_text(texto, reply_markup=reply_markup, parse_mode='Markdown')
     else: await update.message.reply_text(texto, reply_markup=reply_markup, parse_mode='Markdown')
 
-# Em telegram_bot.py, SUBSTITUA a função ranking inteira:
 async def ranking(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    ranking_data = database.calcular_ranking_desempenho()
-    if not ranking_data:
-        await update.message.reply_text("Ainda não há dados para gerar um ranking este mês.")
+    # Chama a função do banco duas vezes, uma para cada setor
+    ranking_cozinha = database.calcular_ranking_desempenho(setor_filtro='Cozinha') #
+    ranking_loja = database.calcular_ranking_desempenho(setor_filtro='Loja') #
+
+    # Verifica se algum dos rankings tem dados
+    if not ranking_cozinha and not ranking_loja:
+        await update.message.reply_text("Ainda não há dados suficientes para gerar os rankings este mês.")
         return
 
-    texto_ranking = "🏆 **Ranking de Desempenho do Mês** 🏆\n\n"
-    texto_ranking += "O *Score Final* equilibra a Confiabilidade (fazer o que foi pedido) e o Esforço (volume de pontos).\n\n"
-    
-    icones = ["🥇", "🥈", "🥉"]
-    for i, dados in enumerate(ranking_data):
-        posicao_icone = icones[i] if i < len(icones) else f" {i+1}."
-        nome = dados['NomeCompleto']
-        score = dados['ScoreHibrido']
-        # Adicionamos os detalhes para que o funcionário entenda a composição da nota
-        detalhes = f"(Desempenho: {dados['Desempenho']}%, Pontos: {dados['PontosGanhos']})"
-        
-        texto_ranking += f"{posicao_icone} {nome} - **Score Final: {score}**\n   {detalhes}\n"
+    texto_final = "🏆 **Rankings de Desempenho do Mês** 🏆\n\n"
+    texto_final += "O *Score Final* equilibra Confiabilidade e Esforço (70%/30%).\n"
 
-    await update.message.reply_text(texto_ranking, parse_mode='Markdown')
+    # --- Ranking Cozinha ---
+    texto_final += "\n🍳 **--- Ranking Cozinha ---** 🍳\n"
+    if not ranking_cozinha:
+        texto_final += "_Sem dados para este setor no momento._\n"
+    else:
+        icones = ["🥇", "🥈", "🥉"]
+        for i, dados in enumerate(ranking_cozinha):
+            posicao_icone = icones[i] if i < len(icones) else f" {i+1}."
+            nome = dados['NomeCompleto']
+            score = dados['ScoreHibrido']
+            detalhes = f"(Desemp: {dados['Desempenho']}%, Pts: {dados['PontosGanhos']})" # - Usa os dados retornados
+            texto_final += f"{posicao_icone} {nome} - **Score: {score}**\n   {detalhes}\n"
 
-# Em telegram_bot.py, ADICIONE esta nova função:
+    # --- Ranking Atendimento/Loja ---
+    texto_final += "\n🛒 **--- Ranking Atendimento/Loja ---** 🛒\n"
+    if not ranking_loja:
+        texto_final += "_Sem dados para este setor no momento._\n"
+    else:
+        icones = ["🥇", "🥈", "🥉"]
+        for i, dados in enumerate(ranking_loja):
+            posicao_icone = icones[i] if i < len(icones) else f" {i+1}."
+            nome = dados['NomeCompleto']
+            score = dados['ScoreHibrido']
+            detalhes = f"(Desemp: {dados['Desempenho']}%, Pts: {dados['PontosGanhos']})" # - Usa os dados retornados
+            texto_final += f"{posicao_icone} {nome} - **Score: {score}**\n   {detalhes}\n"
+
+    await update.message.reply_text(texto_final, parse_mode='Markdown') # - Envia a mensagem combinada
 
 async def meu_historico(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Envia ao usuário um resumo de suas últimas 10 atividades."""
