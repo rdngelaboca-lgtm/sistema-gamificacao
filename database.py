@@ -2738,21 +2738,23 @@ def buscar_ranking_do_dia():
     finally:
         if conn: conn.close()
 
-# COLE ESTA VERSÃO COMPLETA NO LUGAR DA SUA FUNÇÃO ANTIGA
 def buscar_feed_de_atividades(limite=5):
     """
     Busca os últimos eventos (tarefas aprovadas e conquistas) para o feed.
+    (VERSÃO CORRIGIDA - TOP N dinâmico)
     """
     conn = get_db_connection()
     if not conn: return []
     try:
         cursor = conn.cursor()
-        # Esta query une duas fontes de dados em uma única lista cronológica
-        sql = """
-            SELECT TOP (?) * FROM (
+        # --- CORREÇÃO APLICADA AQUI ---
+        # Construímos a string SQL com f-string para incluir o TOP N dinamicamente.
+        # É seguro aqui porque 'limite' é um número controlado internamente.
+        sql = f"""
+            SELECT TOP ({int(limite)}) * FROM (
                 -- Evento do tipo 'tarefa_concluida'
                 SELECT
-                    E.DataEnvio as Timestamp,      # <-- CORREÇÃO APLICADA AQUI
+                    E.DataEnvio as Timestamp,
                     'tarefa_concluida' as TipoEvento,
                     F.NomeCompleto as TextoPrincipal,
                     T.Titulo as TextoSecundario,
@@ -2777,13 +2779,16 @@ def buscar_feed_de_atividades(limite=5):
             ) as FeedEventos
             ORDER BY Timestamp DESC;
         """
-        cursor.execute(sql, limite)
+        # Executamos a query SEM parâmetros adicionais para o TOP
+        cursor.execute(sql)
+        # --- FIM DA CORREÇÃO ---
+
         cols = [column[0] for column in cursor.description]
         return [dict(zip(cols, row)) for row in cursor.fetchall()]
 
     except Exception as e:
-        # Adicionamos um print mais detalhado aqui para o log
-        print(f"!!! ERRO CRÍTICO DENTRO de buscar_feed_de_atividades: {e}")
+        # Mantém o log de erro detalhado
+        logger.exception(f"Erro crítico dentro de buscar_feed_de_atividades: {e}") # Usando logger.exception
         return [] # Retorna lista vazia em caso de erro
     finally:
         if conn: conn.close()
