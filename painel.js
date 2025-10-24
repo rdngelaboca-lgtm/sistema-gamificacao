@@ -210,61 +210,51 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     
-    async function atualizarPainel() {
+async function atualizarPainel() {
+        const statusElement = document.getElementById('ultima-atualizacao');
         try {
-            // Adicionamos 'resAgendamentos' ao Promise.all
+            statusElement.textContent = 'Atualizando dados...';
+            statusElement.style.color = '#888';
+
             const [resTarefas, resRanking, resFeed, resMeta, resMetaDiaria, resAgendamentos] = await Promise.all([
                 fetch(`${API_BASE_URL}/api/painel/tarefas`),
                 fetch(`${API_BASE_URL}/api/ranking/diario`),
                 fetch(`${API_BASE_URL}/api/feed`),
                 fetch(`${API_BASE_URL}/api/meta_principal_do_dia`),
                 fetch(`${API_BASE_URL}/api/meta_diaria_do_dia`),
-                fetch(`${API_BASE_URL}/api/agendamentos`) 
+                fetch(`${API_BASE_URL}/api/agendamentos`)
             ]);
 
-            if (!resTarefas.ok) throw new Error(`Erro na API de tarefas: ${resTarefas.statusText}`);
+            if (!resTarefas.ok) {
+                throw new Error(`Erro na API de tarefas: ${resTarefas.status} ${resTarefas.statusText}`);
+            }
 
-            // Extraímos os dados da nova chamada
             const dadosTarefas = await resTarefas.json();
             const dadosRanking = resRanking.ok ? await resRanking.json() : [];
             const dadosFeed = resFeed.ok ? await resFeed.json() : [];
             const dadosMeta = resMeta.ok ? await resMeta.json() : {};
             const dadosMetaDiaria = resMetaDiaria.ok ? await resMetaDiaria.json() : {};
-            const dadosAgendamentos = resAgendamentos.ok ? await resAgendamentos.json() : []; // <-- NOVOS DADOS
+            const dadosAgendamentos = resAgendamentos.ok ? await resAgendamentos.json() : [];
 
-            // Chamamos as funções de renderização
             renderizarColunas(dadosTarefas);
-            renderizarProgressoGeral(dadosTarefas.progresso);
+            renderizarProgressoGeral(dadosTarefas.progresso); // Corrigido para pegar dadosTarefas.progresso
             renderizarPodio(dadosRanking);
             renderizarFeed(dadosFeed);
             renderizarMetaPrincipal(dadosMeta);
             renderizarMetaDiaria(dadosMetaDiaria);
-            renderizarProximosAgendamentos(dadosAgendamentos); // <-- NOVA CHAMADA DE RENDERIZAÇÃO
+            renderizarProximosAgendamentos(dadosAgendamentos);
 
-            document.getElementById('ultima-atualizacao').textContent = `Última atualização: ${new Date().toLocaleTimeString('pt-BR')}`;
+            statusElement.textContent = `Última atualização: ${new Date().toLocaleTimeString('pt-BR')}`;
 
         } catch (error) {
             console.error("Falha ao atualizar o painel:", error);
-            document.getElementById('ultima-atualizacao').textContent = `Erro ao atualizar. Tentando novamente...`;
+            statusElement.textContent = `Erro ao atualizar (${new Date().toLocaleTimeString('pt-BR')}). Verifique a conexão com a API e tente novamente.`;
+            statusElement.style.color = 'red';
         }
-    }
+    } // <<<<<< Fim da *ÚNICA* definição da função atualizarPainel
 
-    // Adicione esta nova função ao seu painel.js
+    // ===== Chamada inicial e agendamento da atualização =====
+    atualizarPainel(); // Chama a função uma vez ao carregar a página
+    setInterval(atualizarPainel, 60000); // Agenda para atualizar a cada 60 segundos (1 minuto)
 
-    function renderizarProgressoGeral(progresso) {
-        const barraEl = document.getElementById('progresso-barra-interna');
-        const textoEl = document.getElementById('progresso-texto-label');
-
-        if (progresso && progresso.total > 0) {
-            const percentual = (progresso.concluidas / progresso.total) * 100;
-            barraEl.style.width = `${percentual}%`;
-            textoEl.textContent = `Progresso do Dia: ${progresso.concluidas} / ${progresso.total} tarefas`;
-        } else {
-            barraEl.style.width = '0%';
-            textoEl.textContent = 'Nenhuma tarefa para hoje';
-        }
-    }
-
-    atualizarPainel();
-    setInterval(atualizarPainel, 60000); // Atualiza a cada 60 segundos
-});
+}); // <<<<<< Fim do addEventListener('DOMContentLoaded', ...)
