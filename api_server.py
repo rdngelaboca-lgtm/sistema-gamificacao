@@ -1,3 +1,61 @@
+# ==============================================================================
+# == INÍCIO BLOCO DE CONFIGURAÇÃO DE LOGGING ===================================
+# ==============================================================================
+import logging
+import logging.handlers
+import sys
+import os # Necessário para criar a pasta de logs
+
+# --- Configurações ---
+LOG_FILENAME = 'gamificacao_sistema.log'
+LOG_FOLDER = 'logs' # Nome da pasta onde os logs serão salvos
+LOG_LEVEL = logging.INFO # Nível mínimo para registrar (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
+LOG_MAX_BYTES = 10 * 1024 * 1024 # Tamanho máximo de cada arquivo de log (10 MB)
+LOG_BACKUP_COUNT = 5 # Quantos arquivos de log antigos manter
+
+# --- Cria a pasta de logs se não existir ---
+log_dir = os.path.join(os.path.dirname(__file__), LOG_FOLDER)
+if not os.path.exists(log_dir):
+    try:
+        os.makedirs(log_dir)
+        logger.info(f"Pasta de logs criada em: {log_dir}") # Print inicial para confirmar criação
+    except OSError as e:
+        logger.exception(f"Erro ao criar pasta de logs '{log_dir}': {e}", file=sys.stderr)
+        # Se não conseguir criar a pasta, tenta logar no diretório atual
+        log_dir = os.path.dirname(__file__)
+
+log_filepath = os.path.join(log_dir, LOG_FILENAME)
+
+# --- Configuração do Handler de Arquivo Rotativo ---
+# Rotaciona o log quando atinge LOG_MAX_BYTES, mantendo LOG_BACKUP_COUNT arquivos antigos
+file_handler = logging.handlers.RotatingFileHandler(
+    log_filepath, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT, encoding='utf-8'
+)
+file_handler.setLevel(LOG_LEVEL)
+file_formatter = logging.Formatter(LOG_FORMAT)
+file_handler.setFormatter(file_formatter)
+
+# --- Configuração do Handler do Console ---
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(LOG_LEVEL) # Pode ser diferente do arquivo se quiser (ex: logging.DEBUG)
+console_formatter = logging.Formatter(LOG_FORMAT)
+console_handler.setFormatter(console_formatter)
+
+# --- Configuração do Logger Raiz ---
+# Limpa handlers existentes para evitar duplicação em recargas
+logging.getLogger('').handlers = []
+# Adiciona os novos handlers
+logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT, handlers=[file_handler, console_handler])
+
+# Obtém um logger específico para este módulo
+logger = logging.getLogger(__name__)
+
+logger.info(f"*** Logging configurado para o módulo: {__name__} ***")
+# ==============================================================================
+# == FIM BLOCO DE CONFIGURAÇÃO DE LOGGING ======================================
+# ==============================================================================
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import database 
@@ -22,7 +80,7 @@ PASTA_DOCUMENTOS_SEGUROS = os.path.join(BASE_DIR, config.PASTA_DOCUMENTOS_RH)
 # Cria a pasta se ela não existir
 if not os.path.exists(PASTA_DOCUMENTOS_SEGUROS):
     os.makedirs(PASTA_DOCUMENTOS_SEGUROS)
-    print(f"--> PASTA CRIADA EM: {PASTA_DOCUMENTOS_SEGUROS}")
+    logger.info(f"--> PASTA CRIADA EM: {PASTA_DOCUMENTOS_SEGUROS}")
 
 def formatar_data_pt_br(dt_obj, formato_str):
     """Uma função 'tradutora' para garantir que as datas saiam em português."""
@@ -60,7 +118,7 @@ def rota_de_teste():
     """
     Um endpoint simples para verificar se o servidor está no ar e respondendo.
     """
-    print(">>> Rota /teste foi chamada com sucesso!")
+    logger.info("Rota /teste foi chamada.")
     return jsonify(
         {
             "status": "sucesso",
@@ -90,7 +148,7 @@ def rota_listar_agendamentos():
             
         return jsonify(lista_de_agendamentos), 200
     except Exception as e:
-        return jsonify({"status": "erro", "mensagem": str(e)}), 500
+        return jsonify({"status": "erro", "mensagem": "Ocorreu um erro interno no servidor. Tente novamente mais tarde ou contate o suporte."}), 500
 
 
 # Em api_server.py, SUBSTITUA a função rota_criar_agendamento inteira por esta:
@@ -133,9 +191,9 @@ def rota_criar_agendamento():
                 data_agendamento=dados['data_evento'].date(),
                 agendamento_id=novo_agendamento_id
             )
-            print(f">>> Tarefa de gamificação criada e vinculada ao Agendamento ID {novo_agendamento_id}")
+            logger.info(f"Tarefa de gamificação criada e vinculada ao Agendamento ID {novo_agendamento_id}")
         except Exception as e:
-            print(f"!!! ATENÇÃO: Agendamento criado, mas falha ao criar a tarefa de gamificação: {e}")
+            logger.warning(f"!!! ATENÇÃO: Agendamento criado, mas falha ao criar a tarefa de gamificação: {e}")
         
         # --- BLOCO DE NOTIFICAÇÃO QUE ESTAVA FALTANDO ---
         try:
@@ -153,12 +211,12 @@ def rota_criar_agendamento():
             
             notificador_telegram.enviar_mensagem(config.AGENDAMENTOS_GROUP_CHAT_ID, mensagem_alerta)
         except Exception as e:
-            print(f"!!! ATENÇÃO: Agendamento criado, mas falha ao enviar notificação no Telegram: {e}")
+            logger.warning(f"!!! ATENÇÃO: Agendamento criado, mas falha ao enviar notificação no Telegram: {e}")
         # --- FIM DO BLOCO DE NOTIFICAÇÃO ---
 
         return jsonify({"status": "sucesso", "mensagem": "Agendamento criado e equipe notificada!"}), 201
     else:
-        return jsonify({"status": "erro", "mensagem": f"Erro no banco de dados: {resultado}"}), 500    
+        return jsonify({"status": "erro", "mensagem": "Ocorreu um erro interno no servidor. Tente novamente mais tarde ou contate o suporte."}), 500    
 
 @app.route('/documentos/upload', methods=['POST'])
 def rota_upload_documento():
@@ -187,7 +245,7 @@ def rota_upload_documento():
         caminho_para_salvar = os.path.join(PASTA_DOCUMENTOS_SEGUROS, nome_arquivo_seguro)
 
         arquivo.save(caminho_para_salvar)
-        print(f">>> Arquivo '{nome_arquivo_seguro}' salvo com sucesso em '{PASTA_DOCUMENTOS_SEGUROS}'")
+        logger.info(f">>> Arquivo '{nome_arquivo_seguro}' salvo com sucesso em '{PASTA_DOCUMENTOS_SEGUROS}'")
 
         documento_id = database.salvar_documento_pessoal(
             funcionario_id=funcionario_id,
@@ -205,8 +263,8 @@ def rota_upload_documento():
         return jsonify({"status": "sucesso", "mensagem": "Documento enviado e registrado com sucesso!"}), 201
 
     except Exception as e:
-        print(f"!!! ERRO CRÍTICO em /documentos/upload: {e}")
-        return jsonify({"status": "erro", "mensagem": f"Erro interno no servidor: {e}"}), 500
+        logger.error(f"Erro crítico em /documentos/upload: {e}", exc_info=True)
+        return jsonify({"status": "erro", "mensagem": "Ocorreu um erro interno no servidor. Tente novamente mais tarde ou contate o suporte."}), 500
     
 @app.route('/documentos/download/<int:documento_id>', methods=['GET'])
 def rota_download_documento(documento_id):
@@ -221,12 +279,12 @@ def rota_download_documento(documento_id):
 
         diretorio, nome_arquivo = os.path.split(caminho_completo)
 
-        print(f">>> Enviando o arquivo '{nome_arquivo}' do diretório '{diretorio}'")
+        logger.info(f">>> Enviando o arquivo '{nome_arquivo}' do diretório '{diretorio}'")
         return send_from_directory(diretorio, nome_arquivo, as_attachment=True)
 
     except Exception as e:
-        print(f"!!! ERRO CRÍTICO em /documentos/download: {e}")
-        return jsonify({"status": "erro", "mensagem": f"Erro interno no servidor: {e}"}), 500
+        logger.exception(f"!!! ERRO CRÍTICO em /documentos/download: {e}")
+        return jsonify({"status": "erro", "mensagem": "Ocorreu um erro interno no servidor. Tente novamente mais tarde ou contate o suporte."}), 500
     
 
 @app.route('/agendamentos/<int:agendamento_id>', methods=['PUT'])
@@ -261,13 +319,13 @@ def rota_atualizar_agendamento(agendamento_id):
                 "descricao_override": nova_descricao
             }
             database.atualizar_tarefa_do_agendamento(agendamento_id, dados_sync)
-            print(f">>> Tarefa de gamificação do Agendamento ID {agendamento_id} foi sincronizada.")
+            logger.info(f"Tarefa de gamificação do Agendamento ID {agendamento_id} foi sincronizada.")
         except Exception as e:
-            print(f"!!! ATENÇÃO: Agendamento atualizado, mas falha ao sincronizar a tarefa: {e}")
+            logger.warning(f"!!! ATENÇÃO: Agendamento atualizado, mas falha ao sincronizar a tarefa: {e}")
 
         return jsonify({"status": "sucesso", "mensagem": "Agendamento atualizado com sucesso!"}), 200
     else:
-        return jsonify({"status": "erro", "mensagem": "Falha ao atualizar o agendamento."}), 500
+        return jsonify({"status": "erro", "mensagem": "Ocorreu um erro interno no servidor. Tente novamente mais tarde ou contate o suporte."}), 500
 
 
 @app.route('/agendamentos/<int:agendamento_id>', methods=['DELETE'])
@@ -275,15 +333,15 @@ def rota_excluir_agendamento(agendamento_id):
     try:
         # --- LÓGICA DE SINCRONIZAÇÃO NA EXCLUSÃO ---
         database.excluir_tarefa_do_agendamento(agendamento_id)
-        print(f">>> Tarefa de gamificação do Agendamento ID {agendamento_id} foi excluída.")
+        logger.info(f"Tarefa de gamificação do Agendamento ID {agendamento_id} foi excluída.")
     except Exception as e:
-        print(f"!!! ATENÇÃO: Falha ao excluir a tarefa de gamificação vinculada: {e}")
+        logger.warning(f"!!! ATENÇÃO: Falha ao excluir a tarefa de gamificação vinculada: {e}")
         
     sucesso = database.excluir_agendamento(agendamento_id)
     if sucesso:
         return '', 204
     else:
-        return jsonify({"status": "erro", "mensagem": "Falha ao excluir o agendamento."}), 500
+        return jsonify({"status": "erro", "mensagem": "Ocorreu um erro interno no servidor. Tente novamente mais tarde ou contate o suporte."}), 500
     
 @app.route('/agendamentos/<int:agendamento_id>/pagamento', methods=['PATCH'])
 def rota_patch_pagamento(agendamento_id):
@@ -369,8 +427,8 @@ def rota_enviar_lembrete_geral():
         return jsonify({"status": "sucesso", "mensagem": "Lembrete geral enviado com sucesso!"}), 200
 
     except Exception as e:
-        print(f"!!! ERRO em /enviar-lembrete-geral: {e}")
-        return jsonify({"status": "erro", "mensagem": f"Erro interno no servidor: {e}"}), 500    
+        logger.exception(f"!!! ERRO em /enviar-lembrete-geral: {e}")
+        return jsonify({"status": "erro", "mensagem": "Ocorreu um erro interno no servidor. Tente novamente mais tarde ou contate o suporte."}), 500    
 
 @app.route('/login', methods=['POST'])
 def rota_login():
@@ -406,8 +464,8 @@ def rota_login():
             return jsonify({"status": "erro", "mensagem": "ID de funcionário não encontrado."}), 404 # 404 Not Found
 
     except Exception as e:
-        print(f"!!! ERRO em /login: {e}")
-        return jsonify({"status": "erro", "mensagem": f"Erro interno no servidor: {e}"}), 500
+        logger.exception(f"!!! ERRO em /login: {e}")
+        return jsonify({"status": "erro", "mensagem": "Ocorreu um erro interno no servidor. Tente novamente mais tarde ou contate o suporte."}), 500
     
 # Em api_server.py, adicione esta nova rota
 
@@ -417,8 +475,8 @@ def rota_painel_tarefas():
         dados_painel = database.buscar_dados_para_painel_kanban()
         return jsonify(dados_painel), 200
     except Exception as e:
-        print(f"!!! ERRO no endpoint /api/painel/tarefas: {e}")
-        return jsonify({"status": "erro", "mensagem": f"Erro interno no servidor: {e}"}), 500
+        logger.exception(f"!!! ERRO no endpoint /api/painel/tarefas: {e}")
+        return jsonify({"status": "erro", "mensagem": "Ocorreu um erro interno no servidor. Tente novamente mais tarde ou contate o suporte."}), 500
 
     
 
@@ -430,8 +488,8 @@ def rota_ranking_diario():
         ranking_do_dia = database.buscar_ranking_do_dia()
         return jsonify(ranking_do_dia), 200
     except Exception as e:
-        print(f"!!! ERRO no endpoint /api/ranking/diario: {e}")
-        return jsonify([]), 500
+        logger.exception(f"!!! ERRO no endpoint /api/ranking/diario: {e}")
+        return jsonify({"status": "erro", "mensagem": "Ocorreu um erro interno no servidor. Tente novamente mais tarde ou contate o suporte."}), 500
     
 # Em api_server.py, adicione esta nova rota
 
@@ -444,8 +502,8 @@ def rota_feed():
         feed_data = database.buscar_feed_de_atividades(limite=7) # Podemos pegar 7, por exemplo
         return jsonify(feed_data), 200
     except Exception as e:
-        print(f"!!! ERRO no endpoint /api/feed: {e}")
-        return jsonify([]), 500
+        logger.exception(f"!!! ERRO no endpoint /api/feed: {e}")
+        return jsonify({"status": "erro", "mensagem": "Ocorreu um erro interno no servidor. Tente novamente mais tarde ou contate o suporte."}), 500
     
 # Adicione esta nova rota ao final de api_server.py
 @app.route('/api/meta_principal_do_dia', methods=['GET'])
@@ -459,8 +517,8 @@ def rota_meta_principal_do_dia():
             # Se não houver meta ativa, retorna um objeto vazio para não quebrar o painel
             return jsonify({}), 200 
     except Exception as e:
-        print(f"!!! ERRO no endpoint /api/meta_principal_do_dia: {e}")
-        return jsonify({"status": "erro", "mensagem": str(e)}), 500
+        logger.exception(f"!!! ERRO no endpoint /api/meta_principal_do_dia: {e}")
+        return jsonify({"status": "erro", "mensagem": "Ocorreu um erro interno no servidor. Tente novamente mais tarde ou contate o suporte."}), 500
     
 # Em api_server.py, adicione esta nova rota ao final
 
@@ -474,8 +532,8 @@ def rota_meta_diaria_do_dia():
         else:
             return jsonify({}), 200 # Retorna objeto vazio se não houver meta para o dia
     except Exception as e:
-        print(f"!!! ERRO no endpoint /api/meta_diaria_do_dia: {e}")
-        return jsonify({"status": "erro", "mensagem": str(e)}), 500
+        logger.exception(f"!!! ERRO no endpoint /api/meta_diaria_do_dia: {e}")
+        return jsonify({"status": "erro", "mensagem": "Ocorreu um erro interno no servidor. Tente novamente mais tarde ou contate o suporte."}), 500
     
 if __name__ == '__main__':
     # O debug=False é essencial para rodar como serviço
