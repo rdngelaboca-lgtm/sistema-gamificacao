@@ -1,6 +1,3 @@
-# config.py - Arquivo Central de Configurações
-# Este é o "painel de controle" do seu sistema. Todas as senhas, tokens e IDs importantes ficam aqui.
-
 # --- CONFIGURAÇÕES DO TELEGRAM ---
 # Token secreto do seu bot, obtido com o @BotFather no Telegram.
 TELEGRAM_TOKEN = '8286167530:AAHsQlEHQwNB1O7SdyAqLk-rEhSXFdf___M'
@@ -45,8 +42,18 @@ TAREFA_MODELO_AGENDAMENTO_ID = 92
 
 # ID da tarefa "modelo" usada para registrar os pontos ganhos pela leitura de comunicados.
 TAREFA_ID_LEITURA = 38
+TAREFA_ID_PONTOS_META = 121
 
 # ID da tarefa "modelo" usada para registrar os pontos de feedback diário.
 TAREFA_ID_FEEDBACK_DIARIO = 5
 # Pontos de bônus concedidos ao dar o feedback diário.
 PONTOS_BONUS_FEEDBACK_DIARIO = 5
+
+ID_GESTOR_PADRAO = 2
+HORARIO_FECHAMENTO_MENSAL = "08:00" # Roda todo dia, mas só executa no dia 1
+HORARIO_DELEGACAO_FOLGA = "09:05"
+HORARIO_LEMBRETE_COMUNICADOS = "09:00"
+HORARIO_LEMBRETE_HOJE = "08:00"
+HORARIO_LEMBRETE_DIARIO_AMANHA = "09:00"
+HORARIO_LEMBRETE_SEMANAL = "08:00"
+MAX_DIFERENCA_FOTO_SEGUNDOS = 120
