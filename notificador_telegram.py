@@ -1,3 +1,64 @@
+# ==============================================================================
+# == INÍCIO BLOCO DE CONFIGURAÇÃO DE LOGGING ===================================
+# ==============================================================================
+import logging
+import logging.handlers
+import sys
+import os # Necessário para criar a pasta de logs
+
+# --- Configurações ---
+LOG_FILENAME = 'gamificacao_sistema.log'
+LOG_FOLDER = 'logs' # Nome da pasta onde os logs serão salvos
+LOG_LEVEL = logging.INFO # Nível mínimo para registrar (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
+LOG_MAX_BYTES = 10 * 1024 * 1024 # Tamanho máximo de cada arquivo de log (10 MB)
+LOG_BACKUP_COUNT = 5 # Quantos arquivos de log antigos manter
+
+# --- Cria a pasta de logs se não existir ---
+log_dir = os.path.join(os.path.dirname(__file__), LOG_FOLDER)
+if not os.path.exists(log_dir):
+    try:
+        os.makedirs(log_dir)
+        print(f"Pasta de logs criada em: {log_dir}") # Print inicial para confirmar criação
+    except OSError as e:
+        print(f"Erro ao criar pasta de logs '{log_dir}': {e}", file=sys.stderr)
+        # Se não conseguir criar a pasta, tenta logar no diretório atual
+        log_dir = os.path.dirname(__file__)
+
+log_filepath = os.path.join(log_dir, LOG_FILENAME)
+
+# --- Configuração do Handler de Arquivo Rotativo ---
+# Rotaciona o log quando atinge LOG_MAX_BYTES, mantendo LOG_BACKUP_COUNT arquivos antigos
+file_handler = logging.handlers.RotatingFileHandler(
+    log_filepath, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT, encoding='utf-8'
+)
+file_handler.setLevel(LOG_LEVEL)
+file_formatter = logging.Formatter(LOG_FORMAT)
+file_handler.setFormatter(file_formatter)
+
+# --- Configuração do Handler do Console ---
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(LOG_LEVEL) # Pode ser diferente do arquivo se quiser (ex: logging.DEBUG)
+console_formatter = logging.Formatter(LOG_FORMAT)
+console_handler.setFormatter(console_formatter)
+
+# --- Configuração do Logger Raiz ---
+# Limpa handlers existentes para evitar duplicação em recargas
+logging.getLogger('').handlers = []
+# Adiciona os novos handlers
+logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT, handlers=[file_handler, console_handler])
+
+# Obtém um logger específico para este módulo
+logger = logging.getLogger(__name__)
+
+logger.info(f"*** Logging configurado para o módulo: {__name__} ***")
+# ==============================================================================
+# == FIM BLOCO DE CONFIGURAÇÃO DE LOGGING ======================================
+# ==============================================================================
+
+
+
+
 # notificador_telegram.py
 import requests
 import json 
@@ -19,15 +80,12 @@ def enviar_mensagem(chat_id, texto):
     
     try:
         response = requests.post(url, data=payload)
-        print(f"Notificação enviada para {chat_id}. Resposta: {response.json()}")
+        logger.info(f"Notificação enviada para chat_id {chat_id}. Resposta API: {response.json()}")
         return response.json()
     except Exception as e:
-        print(f"Erro ao enviar notificação para {chat_id}: {e}")
+        logger.error(f"Erro ao enviar notificação para chat_id {chat_id}: {e}", exc_info=True) 
         return None
     
-# NO ARQUIVO notificador_telegram.py, ADICIONE ESTA NOVA FUNÇÃO:
-
-# NO ARQUIVO notificador_telegram.py, SUBSTITUA A FUNÇÃO ANTIGA POR ESTA:
 def enviar_mensagem_com_botao(chat_id, texto, reply_markup_obj):
     """Envia uma mensagem com um teclado inline (botões)."""
     token = config.TELEGRAM_TOKEN
@@ -43,9 +101,9 @@ def enviar_mensagem_com_botao(chat_id, texto, reply_markup_obj):
     }
     try:
         response = requests.post(url, json=payload) # Usando json=payload que é mais robusto
-        print(f"Mensagem com botão enviada para {chat_id}. Resposta: {response.json()}")
+        logger.info(f"Mensagem com botão enviada para {chat_id}. Resposta: {response.json()}")
     except Exception as e:
-        print(f"Erro ao enviar mensagem com botão para {chat_id}: {e}")
+        logger.error(f"Erro ao enviar mensagem com botão para {chat_id}: {e}")
 
 def enviar_foto_com_botoes(chat_id, foto, legenda, reply_markup_obj=None): # Tornamos reply_markup_obj opcional
     """
@@ -78,14 +136,14 @@ def enviar_foto_com_botoes(chat_id, foto, legenda, reply_markup_obj=None): # Tor
         
         resposta_json = response.json()
         if not resposta_json.get('ok'):
-            print(f"!!! ERRO DA API DO TELEGRAM: {resposta_json}")
+            logger.error(f"!!! ERRO DA API DO TELEGRAM: {resposta_json}")
         else:
-            print(f"Foto enviada para {chat_id}.")
+            logger.info(f"Foto enviada para {chat_id}.")
         
         return resposta_json
 
     except Exception as e:
-        print(f"Erro ao enviar foto para {chat_id}: {e}")
+        logger.error(f"Erro ao enviar foto para {chat_id}: {e}")
         return None
     
 
@@ -104,7 +162,7 @@ def enviar_documento(chat_id, path_documento, legenda):
             files = {'document': doc}
             response = requests.post(url, data=payload, files=files)
 
-        print(f"Documento enviado para {chat_id}. Resposta: {response.json()}")
+        logger.info(f"Documento enviado para {chat_id}. Resposta: {response.json()}")
         return response.json()
     except Exception as e:
         print(f"Erro ao enviar documento para {chat_id}: {e}")
@@ -136,9 +194,9 @@ def enviar_documento_com_botoes(chat_id, path_documento, legenda, reply_markup_o
             response = requests.post(url, data=payload, files=files)
         
         if not response.json().get('ok'):
-            print(f"!!! ERRO DA API DO TELEGRAM (sendDocument): {response.json()}")
+            logger.error(f"!!! ERRO DA API DO TELEGRAM (sendDocument): {response.json()}")
         else:
-            print(f"Documento com botão enviado para {chat_id}. Resposta: {response.json()}")
+            logger.info(f"Documento com botão enviado para {chat_id}. Resposta: {response.json()}")
 
     except Exception as e:
-        print(f"Erro ao enviar documento com botão para {chat_id}: {e}")
+        logger.error(f"Erro ao enviar documento com botão para {chat_id}: {e}")
