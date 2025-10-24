@@ -1,4 +1,60 @@
-# agendador.py (O Robô Notificador 2.0 - Versão Jornada de Trabalho)
+# ==============================================================================
+# == INÍCIO BLOCO DE CONFIGURAÇÃO DE LOGGING ===================================
+# ==============================================================================
+import logging
+import logging.handlers
+import sys
+import os # Necessário para criar a pasta de logs
+
+# --- Configurações ---
+LOG_FILENAME = 'gamificacao_sistema.log'
+LOG_FOLDER = 'logs' # Nome da pasta onde os logs serão salvos
+LOG_LEVEL = logging.INFO # Nível mínimo para registrar (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
+LOG_MAX_BYTES = 10 * 1024 * 1024 # Tamanho máximo de cada arquivo de log (10 MB)
+LOG_BACKUP_COUNT = 5 # Quantos arquivos de log antigos manter
+
+# --- Cria a pasta de logs se não existir ---
+log_dir = os.path.join(os.path.dirname(__file__), LOG_FOLDER)
+if not os.path.exists(log_dir):
+    try:
+        os.makedirs(log_dir)
+        print(f"Pasta de logs criada em: {log_dir}") # Print inicial para confirmar criação
+    except OSError as e:
+        print(f"Erro ao criar pasta de logs '{log_dir}': {e}", file=sys.stderr)
+        # Se não conseguir criar a pasta, tenta logar no diretório atual
+        log_dir = os.path.dirname(__file__)
+
+log_filepath = os.path.join(log_dir, LOG_FILENAME)
+
+# --- Configuração do Handler de Arquivo Rotativo ---
+# Rotaciona o log quando atinge LOG_MAX_BYTES, mantendo LOG_BACKUP_COUNT arquivos antigos
+file_handler = logging.handlers.RotatingFileHandler(
+    log_filepath, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT, encoding='utf-8'
+)
+file_handler.setLevel(LOG_LEVEL)
+file_formatter = logging.Formatter(LOG_FORMAT)
+file_handler.setFormatter(file_formatter)
+
+# --- Configuração do Handler do Console ---
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(LOG_LEVEL) # Pode ser diferente do arquivo se quiser (ex: logging.DEBUG)
+console_formatter = logging.Formatter(LOG_FORMAT)
+console_handler.setFormatter(console_formatter)
+
+# --- Configuração do Logger Raiz ---
+# Limpa handlers existentes para evitar duplicação em recargas
+logging.getLogger('').handlers = []
+# Adiciona os novos handlers
+logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT, handlers=[file_handler, console_handler])
+
+# Obtém um logger específico para este módulo
+logger = logging.getLogger(__name__)
+
+logger.info(f"*** Logging configurado para o módulo: {__name__} ***")
+# ==============================================================================
+# == FIM BLOCO DE CONFIGURAÇÃO DE LOGGING ======================================
+# ==============================================================================
 
 import schedule
 import time
@@ -24,7 +80,6 @@ def verificar_e_enviar_tarefas_de_grupo():
     # Obter dia do mês
     dia_mes = agora_dt.day
 
-    # print(f"[{agora_hm}] Verificando tarefas de grupo (DiaSem={dia_semana_sql}, DiaMes={dia_mes})...") # Log opcional
 
     # Passamos os novos parâmetros para a função do banco
     tarefas_para_disparar = database.buscar_tarefas_de_grupo_para_disparar(agora_hm, str(dia_semana_sql), str(dia_mes))
@@ -32,7 +87,7 @@ def verificar_e_enviar_tarefas_de_grupo():
     if not tarefas_para_disparar:
         return
 
-    print(f"[{agora_hm}] Encontradas {len(tarefas_para_disparar)} tarefas de GRUPO para disparar!")
+    logger.info(f"[{agora_hm}] Encontradas {len(tarefas_para_disparar)} tarefas de GRUPO para disparar!")
     for tarefa in tarefas_para_disparar:
         atribuicao_id, titulo, pontos, nome_grupo, chat_id, *_ = tarefa
 
@@ -59,7 +114,7 @@ def verificar_inicio_jornada():
     if not funcionarios_para_notificar:
         return
 
-    print(f"[{agora}] {len(funcionarios_para_notificar)} funcionário(s) iniciando a jornada!")
+    logger.info(f"[{agora}] {len(funcionarios_para_notificar)} funcionário(s) iniciando a jornada!")
     
     for funcionario in funcionarios_para_notificar:
         print(f"--> Processando início de jornada para: {funcionario.NomeCompleto}")
@@ -77,7 +132,7 @@ def verificar_inicio_jornada():
             mensagem += "\nUse o comando /tarefas para começar. Bom trabalho! 💪"
             
         notificador_telegram.enviar_mensagem(funcionario.ChatIDTelegram, mensagem)
-        print(f"--> Notificação de início de jornada enviada com sucesso para {funcionario.NomeCompleto}.")
+        logger.info(f"--> Notificação de início de jornada enviada com sucesso para {funcionario.NomeCompleto}.")
 
 # --- MÓDULO 3: LEMBRETES INTERMEDIÁRIOS (Lógica Nova!) ---
 def verificar_lembretes_intermediarios():
@@ -89,13 +144,13 @@ def verificar_lembretes_intermediarios():
     if not funcionarios_para_lembrar:
         return
 
-    print(f"[{agora}] {len(funcionarios_para_lembrar)} funcionário(s) para enviar LEMBRETE!")
+    logger.info(f"[{agora}] {len(funcionarios_para_lembrar)} funcionário(s) para enviar LEMBRETE!")
     
     for funcionario in funcionarios_para_lembrar:
         tarefas_pendentes = database.listar_tarefas_do_dia_por_funcionario(funcionario.FuncionarioID)
 
         if tarefas_pendentes:
-            print(f"--> {funcionario.NomeCompleto} tem tarefas pendentes. Enviando lembrete.")
+            logger.info(f"--> {funcionario.NomeCompleto} tem tarefas pendentes. Enviando lembrete.")
             mensagem = f"Olá, <b>{funcionario.NomeCompleto}</b>! 👋 Só um lembrete amigável sobre seus desafios de hoje que ainda estão em aberto:\n\n"
             for tarefa in tarefas_pendentes:
                 mensagem += f"  - {tarefa.Titulo} - <i>{tarefa.Pontos} pts</i>\n"
@@ -118,7 +173,7 @@ def verificar_fim_jornada():
     if not funcionarios_para_resumo:
         return
 
-    print(f"[{agora}] {len(funcionarios_para_resumo)} funcionário(s) finalizando a jornada!")
+    logger.info(f"[{agora}] {len(funcionarios_para_resumo)} funcionário(s) finalizando a jornada!")
 
     for funcionario in funcionarios_para_resumo:
         tarefas_pendentes = database.listar_tarefas_do_dia_por_funcionario(funcionario.FuncionarioID)
@@ -228,7 +283,7 @@ def verificar_e_delegar_tarefas_de_folga():
                     notificador_telegram.enviar_mensagem(membro.ChatIDTelegram, mensagem_privada)
                     time.sleep(0.1) # Pausa de 0.1s para não sobrecarregar a API do Telegram
                 
-                print(f"--> Notificações individuais enviadas para os membros do grupo {nome_grupo}.")
+                logger.info(f"--> Notificações individuais enviadas para os membros do grupo {nome_grupo}.")
 
 # Em agendador.py, SUBSTITUA a função antiga por esta versão mais segura:
 def executar_fechamento_mensal():
