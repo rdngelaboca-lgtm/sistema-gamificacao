@@ -209,6 +209,26 @@ document.addEventListener('DOMContentLoaded', function() {
             container.appendChild(itemDiv);
         });
     }
+
+function renderizarProgressoGeral(progresso) {
+    const barraInterna = document.getElementById('progresso-barra-interna');
+    const textoLabel = document.getElementById('progresso-texto-label');
+
+    if (barraInterna && textoLabel && progresso && typeof progresso.total !== 'undefined' && progresso.total >= 0) {
+        const concluidas = progresso.concluidas || 0;
+        const total = progresso.total;
+        const percentual = total > 0 ? (concluidas / total) * 100 : 0;
+
+        barraInterna.style.width = `${Math.min(percentual, 100)}%`; // Define a largura da barra
+        textoLabel.textContent = `${concluidas} de ${total} tarefas concluídas (${percentual.toFixed(0)}%)`; // Atualiza o texto
+    } else {
+        // Se não houver dados de progresso, mostra um estado padrão
+        if (barraInterna) barraInterna.style.width = '0%';
+        if (textoLabel) textoLabel.textContent = 'Calculando...';
+        // Você pode querer logar um aviso aqui se os dados de progresso estiverem faltando
+        // console.warn("Dados de progresso ausentes ou inválidos:", progresso);
+    }
+}
     
 async function atualizarPainel() {
         const statusElement = document.getElementById('ultima-atualizacao');
