@@ -1,3 +1,62 @@
+# ==============================================================================
+# == INÍCIO BLOCO DE CONFIGURAÇÃO DE LOGGING ===================================
+# ==============================================================================
+import logging
+import logging.handlers
+import sys
+import os # Necessário para criar a pasta de logs
+
+# --- Configurações ---
+LOG_FILENAME = 'gamificacao_sistema.log'
+LOG_FOLDER = 'logs' # Nome da pasta onde os logs serão salvos
+LOG_LEVEL = logging.INFO # Nível mínimo para registrar (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
+LOG_MAX_BYTES = 10 * 1024 * 1024 # Tamanho máximo de cada arquivo de log (10 MB)
+LOG_BACKUP_COUNT = 5 # Quantos arquivos de log antigos manter
+
+# --- Cria a pasta de logs se não existir ---
+log_dir = os.path.join(os.path.dirname(__file__), LOG_FOLDER)
+if not os.path.exists(log_dir):
+    try:
+        os.makedirs(log_dir)
+        print(f"Pasta de logs criada em: {log_dir}") # Print inicial para confirmar criação
+    except OSError as e:
+        logger.error(f"Erro ao criar pasta de logs '{log_dir}': {e}", file=sys.stderr)
+        # Se não conseguir criar a pasta, tenta logar no diretório atual
+        log_dir = os.path.dirname(__file__)
+
+log_filepath = os.path.join(log_dir, LOG_FILENAME)
+
+# --- Configuração do Handler de Arquivo Rotativo ---
+# Rotaciona o log quando atinge LOG_MAX_BYTES, mantendo LOG_BACKUP_COUNT arquivos antigos
+file_handler = logging.handlers.RotatingFileHandler(
+    log_filepath, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT, encoding='utf-8'
+)
+file_handler.setLevel(LOG_LEVEL)
+file_formatter = logging.Formatter(LOG_FORMAT)
+file_handler.setFormatter(file_formatter)
+
+# --- Configuração do Handler do Console ---
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(LOG_LEVEL) # Pode ser diferente do arquivo se quiser (ex: logging.DEBUG)
+console_formatter = logging.Formatter(LOG_FORMAT)
+console_handler.setFormatter(console_formatter)
+
+# --- Configuração do Logger Raiz ---
+# Limpa handlers existentes para evitar duplicação em recargas
+logging.getLogger('').handlers = []
+# Adiciona os novos handlers
+logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT, handlers=[file_handler, console_handler])
+
+# Obtém um logger específico para este módulo
+logger = logging.getLogger(__name__)
+
+logger.info(f"*** Logging configurado para o módulo: {__name__} ***")
+# ==============================================================================
+# == FIM BLOCO DE CONFIGURAÇÃO DE LOGGING ======================================
+# ==============================================================================
+
+
 import pyodbc
 from datetime import datetime, date, timedelta 
 import calendar 
@@ -19,7 +78,7 @@ def get_db_connection():
         conn = pyodbc.connect(CONNECTION_STRING)
         return conn
     except pyodbc.Error as ex:
-        print(f"ERRO de conexão com o banco de dados: {ex}")
+        logger.critical(f"FALHA CRÍTICA na conexão com o banco de dados: {ex}", exc_info=True) # Usamos critical e exc_info para detalhes
         return None
 
 def criar_agendamento(dados_agendamento):
@@ -51,7 +110,7 @@ def criar_agendamento(dados_agendamento):
             conn.commit()
             return True, novo_id
         except Exception as e:
-            print(f"ERRO ao criar agendamento: {e}")
+            logger.error(f"ERRO ao criar agendamento: {e}")
             conn.rollback()
             return False, str(e)
         finally:
@@ -120,7 +179,7 @@ def atualizar_agendamento(agendamento_id, dados_agendamento):
             conn.commit()
             return True
         except Exception as e:
-            print(f"ERRO ao atualizar agendamento: {e}")
+            logger.error(f"ERRO ao atualizar agendamento: {e}")
             conn.rollback() # Adicionado por segurança
             return False
         finally:
@@ -138,7 +197,7 @@ def excluir_agendamento(agendamento_id):
             conn.commit()
             return True
         except Exception as e:
-            print(f"ERRO ao excluir agendamento: {e}")
+            logger.error(f"ERRO ao excluir agendamento: {e}")
             return False
         finally:
             conn.close()
@@ -155,7 +214,7 @@ def atualizar_status_pagamento(agendamento_id, novo_status):
             conn.commit()
             return True
         except Exception as e:
-            print(f"ERRO ao atualizar status de pagamento: {e}")
+            logger.error(f"ERRO ao atualizar status de pagamento: {e}")
             return False
         finally:
             conn.close()
@@ -539,7 +598,7 @@ def encerrar_atribuicao_tarefa(atribuicao_id):
             sql = "UPDATE TarefasAtribuidas SET DataFimVigencia = GETDATE() WHERE AtribuicaoID = ?"
             cursor.execute(sql, atribuicao_id)
             conn.commit()
-            print(f"--> [DATABASE.PY] Atribuição {atribuicao_id} encerrada com sucesso.")
+            logger.info(f"Atribuição {atribuicao_id} encerrada com sucesso.")
         except Exception as e:
             print(f"--> [DATABASE.PY] ERRO ao encerrar a AtribuiçãoID {atribuicao_id}: {e}")
         finally:
@@ -682,7 +741,7 @@ def aprovar_entrega(entrega_id, funcionario_id, pontos):
 
         except pyodbc.Error as e: 
             conn.rollback() # Desfaz tudo se uma das operações falhar
-            print(f"Erro ao aprovar entrega e adicionar saldo: {e}")
+            logger.error(f"Erro ao aprovar entrega e adicionar saldo: {e}")
         finally: 
             conn.close()
     return [] # Retorna uma lista vazia em caso de falha
@@ -852,7 +911,7 @@ def agendar_tarefa_recorrente_para_grupo(tarefa_id, grupo_id, tipo_frequencia_gr
             conn.commit()
             return True
         except Exception as e:
-            print(f"ERRO ao agendar tarefa recorrente para grupo: {e}")
+            logger.error(f"ERRO ao agendar tarefa recorrente para grupo: {e}")
             conn.rollback()
             return False
         finally:
@@ -945,7 +1004,7 @@ def aceitar_tarefa_de_grupo(origem_atribuicao_id, funcionario_id):
             return nova_atribuicao_id # Retorna o ID da nova tarefa criada
 
         except Exception as e:
-            print(f"ERRO CRÍTICO em aceitar_tarefa_de_grupo (v. Oferta Diária): {e}")
+            logger.error(f"ERRO CRÍTICO em aceitar_tarefa_de_grupo (v. Oferta Diária): {e}")
             conn.rollback()
             return None
         finally:
@@ -1157,7 +1216,7 @@ def calcular_ranking_desempenho(data_final_calculo=None, setor_filtro=None): # <
         return ranking_ordenado #
 
     except Exception as e:
-        print(f"ERRO ao calcular ranking de desempenho HÍBRIDO com filtro '{setor_filtro}': {e}") #
+        logger.error(f"ERRO ao calcular ranking de desempenho HÍBRIDO com filtro '{setor_filtro}': {e}") #
         return [] #
     finally:
         if conn: conn.close() #
@@ -1191,7 +1250,7 @@ def salvar_historico_ranking(ranking_do_mes):
             conn.commit()
             print(f"--> [DATABASE.PY] Histórico do ranking de {mes}/{ano} salvo com sucesso.")
         except Exception as e:
-            print(f"ERRO ao salvar histórico do ranking: {e}")
+            logger.error(f"ERRO ao salvar histórico do ranking: {e}")
         finally:
             conn.close()
 
@@ -1252,7 +1311,7 @@ def limpar_entregas_do_mes_por_funcionario(funcionario_id):
             conn.commit()
             print(f"--> [BOMBA ATÔMICA] Entregas do mês corrente para o funcionário {funcionario_id} foram DELETADAS.")
         except Exception as e:
-            print(f"ERRO ao limpar as entregas do mês para o funcionário {funcionario_id}: {e}")
+            logger.error(f"ERRO ao limpar as entregas do mês para o funcionário {funcionario_id}: {e}")
         finally:
             conn.close()
 
@@ -1276,7 +1335,7 @@ def criar_documento(titulo, conteudo, criador_id, pontos, telegram_file_id_foto=
             conn.commit()
             return novo_id
         except Exception as e:
-            print(f"ERRO ao criar documento: {e}")
+            logger.error(f"ERRO ao criar documento: {e}")
             return None
         finally:
             conn.close()
@@ -1301,7 +1360,7 @@ def registrar_pendencia_assinatura(documento_id, funcionario_id):
             conn.commit()
             return assinatura_id
         except Exception as e:
-            print(f"ERRO ao registrar pendência de assinatura: {e}")
+            logger.error(f"ERRO ao registrar pendência de assinatura: {e}")
             return None
         finally:
             conn.close()
@@ -1371,7 +1430,7 @@ def registrar_pontos_por_leitura(funcionario_id, pontos, titulo_documento):
             conn.commit()
             print(f"--> [PONTOS] {pontos} pts registrados para FuncionarioID {funcionario_id} pela leitura.")
         except Exception as e:
-            print(f"ERRO ao registrar pontos por leitura: {e}")
+            logger.error(f"ERRO ao registrar pontos por leitura: {e}")
         finally:
             conn.close()
 
@@ -1541,7 +1600,7 @@ def excluir_documento(documento_id):
             conn.commit()
             print(f"--> [DATABASE] Documento ID {documento_id} e suas assinaturas foram excluídos.")
         except Exception as e:
-            print(f"ERRO ao excluir documento: {e}")
+            logger.error(f"ERRO ao excluir documento: {e}")
             conn.rollback() # Desfaz a operação em caso de erro
         finally:
             conn.close()
@@ -1705,7 +1764,7 @@ def criar_solicitacao_feedback(funcionario_id, assunto):
             conn.commit()
             return True
         except Exception as e:
-            print(f"ERRO ao criar solicitação de feedback: {e}")
+            logger.error(f"ERRO ao criar solicitação de feedback: {e}")
             return False
         finally:
             conn.close()
@@ -2075,7 +2134,7 @@ def solicitar_resgate(funcionario_id, produto_id):
             return (True, f"Resgate do item '{nome_produto}' solicitado com sucesso! Aguarde a aprovação do seu gestor.", resgate_id)
         except Exception as e:
             conn.rollback() # Segurança: Desfaz tudo em caso de erro
-            print(f"ERRO CRÍTICO em solicitar_resgate: {e}")
+            logger.error(f"ERRO CRÍTICO em solicitar_resgate: {e}")
             return (False, f"Ocorreu um erro inesperado no servidor. Tente novamente mais tarde.", None)
         finally:
             conn.close()
@@ -2137,7 +2196,7 @@ def recusar_resgate(resgate_id, gestor_id):
                 return True
         except Exception as e:
             conn.rollback()
-            print(f"ERRO ao recusar resgate: {e}")
+            logger.error(f"ERRO ao recusar resgate: {e}")
         finally:
             conn.close()
     return False
@@ -2364,12 +2423,12 @@ def verificar_e_conceder_conquistas(funcionario_id):
                     print(f"--> [CONQUISTA] Aviso: Tentativa de inserir conquista duplicada para FuncionarioID {funcionario_id} e ConquistaID {conquista.ConquistaID}. Ignorando.")
                 except Exception as e_grant:
                     conn.rollback()
-                    print(f"ERRO CRÍTICO ao conceder conquista ID {conquista.ConquistaID} para FuncionarioID {funcionario_id}: {e_grant}")
+                    logger.error(f"ERRO CRÍTICO ao conceder conquista ID {conquista.ConquistaID} para FuncionarioID {funcionario_id}: {e_grant}")
 
         return novas_conquistas_ganhas
 
     except Exception as e_main:
-        print(f"ERRO CRÍTICO GERAL em verificar_e_conceder_conquistas para FuncionarioID {funcionario_id}: {e_main}")
+        logger.error(f"ERRO CRÍTICO GERAL em verificar_e_conceder_conquistas para FuncionarioID {funcionario_id}: {e_main}")
         return [] # Retorna lista vazia em caso de erro grave
     finally:
         if conn:
@@ -2413,7 +2472,7 @@ def salvar_documento_pessoal(funcionario_id, tipo_documento, mes_ano, caminho_ar
             conn.commit()
             return novo_id
         except Exception as e:
-            print(f"ERRO ao salvar documento pessoal: {e}")
+            logger.error(f"ERRO ao salvar documento pessoal: {e}")
             return None
         finally:
             conn.close()
@@ -2438,7 +2497,7 @@ def criar_pendencia_ciencia_documento_pessoal(documento_id, funcionario_id):
             conn.commit()
             return ciencia_id
         except Exception as e:
-            print(f"ERRO ao criar pendência de ciência para documento pessoal: {e}")
+            logger.error(f"ERRO ao criar pendência de ciência para documento pessoal: {e}")
             return None
         finally:
             conn.close()
@@ -2647,7 +2706,7 @@ def buscar_dados_para_painel_kanban():
             'progresso': progresso
         }
     except Exception as e:
-        print(f"ERRO ao buscar dados para o painel Kanban: {e}")
+        logger.error(f"ERRO ao buscar dados para o painel Kanban: {e}")
         return {'para_fazer': [], 'validacao': [], 'concluidas': [], 'progresso': {}}
             
 def buscar_ranking_do_dia():
@@ -2810,7 +2869,7 @@ def registrar_pontos_por_meta_equipe(lista_funcionarios, pontos_ganhos, meta_ven
         return True
     except Exception as e:
         conn.rollback()
-        print(f"ERRO ao registrar pontos por meta de equipe: {e}")
+        logger.error(f"ERRO ao registrar pontos por meta de equipe: {e}")
         return False
     finally:
         if conn:
@@ -2836,7 +2895,7 @@ def criar_meta_principal(nome, desc, valor_total, data_inicio, data_fim, pontos,
             conn.commit()
             return True
         except Exception as e:
-            print(f"ERRO ao criar meta principal: {e}")
+            logger.error(f"ERRO ao criar meta principal: {e}")
             return False
         finally:
             conn.close()
@@ -2891,7 +2950,7 @@ def lancar_apuracao_diaria(meta_principal_id, data_apuracao, valor_dia, funciona
             conn.commit()
             return True, apuracao_id
         except Exception as e:
-            print(f"ERRO ao lançar apuração diária: {e}")
+            logger.error(f"ERRO ao lançar apuração diária: {e}")
             if conn:
                 conn.rollback()
             return False, str(e)
@@ -3047,7 +3106,7 @@ def registrar_pontos_meta_diaria(apuracao_id, pontos_ganhos, setor):
         return funcionarios_do_setor # <-- A MÁGICA! Retorna a lista de funcionários.
     except Exception as e:
         conn.rollback()
-        print(f"ERRO ao registrar pontos por meta diária: {e}")
+        logger.error(f"ERRO ao registrar pontos por meta diária: {e}")
         return []
     finally:
         if conn:
@@ -3105,7 +3164,7 @@ def distribuir_premio_meta_principal(meta_id):
 
     except Exception as e:
         conn.rollback()
-        print(f"ERRO ao distribuir prêmio de meta principal: {e}")
+        logger.error(f"ERRO ao distribuir prêmio de meta principal: {e}")
         return []
     finally:
         if conn: conn.close()
@@ -3145,7 +3204,7 @@ def excluir_apuracao_diaria(meta_principal_id, data_apuracao):
             conn.commit()
             return cursor.rowcount > 0 # Retorna True se uma linha foi afetada
         except Exception as e:
-            print(f"ERRO ao excluir apuração diária: {e}")
+            logger.error(f"ERRO ao excluir apuração diária: {e}")
             return False
         finally:
             conn.close()
@@ -3222,7 +3281,7 @@ def criar_conquista(nome, descricao, icone, criterio_tipo, criterio_valor, ponto
             conn.commit()
             return True
         except Exception as e:
-            print(f"ERRO ao criar conquista: {e}")
+            logger.error(f"ERRO ao criar conquista: {e}")
             return False
         finally:
             conn.close()
@@ -3243,7 +3302,7 @@ def atualizar_conquista(conquista_id, nome, descricao, icone, criterio_tipo, cri
             conn.commit()
             return cursor.rowcount > 0 # Retorna True se alguma linha foi afetada
         except Exception as e:
-            print(f"ERRO ao atualizar conquista: {e}")
+            logger.error(f"ERRO ao atualizar conquista: {e}")
             return False
         finally:
             conn.close()
@@ -3264,7 +3323,7 @@ def excluir_conquista(conquista_id):
             conn.commit()
             return True
         except Exception as e:
-            print(f"ERRO ao excluir conquista: {e}")
+            logger.error(f"ERRO ao excluir conquista: {e}")
             conn.rollback() # Desfaz se der erro em uma das exclusões
             return False
         finally:
@@ -3388,7 +3447,7 @@ def calcular_pontos_possiveis_debug(funcionario_id, data_inicio, data_fim):
         return pontos_possiveis_total
 
     except Exception as e:
-        print(f"ERRO ao calcular pontos possíveis (debug): {e}")
+        logger.error(f"ERRO ao calcular pontos possíveis (debug): {e}")
         return 0
     finally:
         if conn: conn.close()
@@ -3404,7 +3463,7 @@ def excluir_entrega(entrega_id):
             conn.commit()
             return cursor.rowcount > 0 # Retorna True se deletou algo
         except Exception as e:
-            print(f"ERRO ao excluir entrega: {e}")
+            logger.error(f"ERRO ao excluir entrega: {e}")
             return False
         finally:
             conn.close()
@@ -3435,7 +3494,7 @@ def editar_pontos_entrega(entrega_id, novos_pontos):
             return True
         except Exception as e:
             conn.rollback()
-            print(f"ERRO ao editar pontos da entrega: {e}")
+            logger.error(f"ERRO ao editar pontos da entrega: {e}")
             return False
         finally:
             conn.close()
