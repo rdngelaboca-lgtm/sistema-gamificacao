@@ -514,42 +514,9 @@ async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         temp_photo_path = f"temp_{photo_file.file_id}.jpg"
         await photo_file.download_to_drive(temp_photo_path)
 
-        photo_timestamp_utc = None # Inicializa como None
-        try: # Tenta ler os metadados EXIF
-            with open(temp_photo_path, 'rb') as f:
-                tags = exifread.process_file(f, stop_tag="EXIF DateTimeOriginal")
-                if "EXIF DateTimeOriginal" in tags:
-                    date_str = str(tags["EXIF DateTimeOriginal"])
-                    photo_timestamp_naive = datetime.strptime(date_str, '%Y:%m:%d %H:%M:%S')
-                    try:
-                        local_tz = ZoneInfo("America/Cuiaba")
-                    except Exception:
-                        local_tz = ZoneInfo("America/Sao_Paulo") # Fallback
-                    photo_timestamp_aware = photo_timestamp_naive.replace(tzinfo=local_tz)
-                    photo_timestamp_utc = photo_timestamp_aware.astimezone(timezone.utc)
-        except Exception as exif_error:
-            logger.warning(f"Não foi possível ler metadados EXIF da foto: {exif_error}")
-            # photo_timestamp_utc continua None se não conseguiu ler EXIF ou deu erro
-
-        # --- LÓGICA DE VALIDAÇÃO TEMPORAL AJUSTADA (CORRIGIDA) ---
-        # Validar SOMENTE se conseguimos obter um timestamp UTC da foto
-        if photo_timestamp_utc:
-            time_difference = message_timestamp_utc - photo_timestamp_utc
-            # Verifica se a foto é do futuro (negativo) ou mais antiga que o limite
-            if time_difference.total_seconds() < 0 or time_difference.total_seconds() > MAX_SECONDS_DIFFERENCE:
-                minutos = MAX_SECONDS_DIFFERENCE // 60
-                await update.message.reply_text(f"❌ Foto recusada! A evidência (com data/hora válida) parece ter sido tirada há mais de {minutos} minutos. Por favor, envie uma foto tirada na hora.")
-                # Limpa o caminho temporário antes de retornar
-                if temp_photo_path and os.path.exists(temp_photo_path):
-                    try: os.remove(temp_photo_path)
-                    except Exception as del_err: logger.error(f"Erro ao remover arquivo temporário (recusa EXIF OLD) {temp_photo_path}: {del_err}")
-                return # <<< REJEITA FOTO COM EXIF INVÁLIDO >>>
-
-        # <<< O BLOCO 'ELSE' FOI REMOVIDO DAQUI >>>
-        # Se photo_timestamp_utc for None (sem EXIF ou erro na leitura),
-        # a validação acima é pulada e o código CONTINUA para as próximas verificações.
-
-        # --- FIM DA LÓGICA AJUSTADA (CORRIGIDA) ---
+        # <<< VALIDAÇÃO DE DATA/HORA DA FOTO (EXIF) REMOVIDA COMPLETAMENTE >>>
+        # A foto será aceita independentemente dos metadados de data/hora ou da idade da foto.
+        pass # Usamos 'pass' como um placeholder explícito indicando que a lógica foi removida intencionalmente.
 
         # Se chegou até aqui, a foto é considerada válida (ou sem EXIF confiável)
         if 'identificador_tarefa' not in context.user_data:
