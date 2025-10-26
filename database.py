@@ -3742,6 +3742,67 @@ def buscar_historico_lucro_ultimos_meses(num_meses=3):
 # == FIM DO MÓDULO DE HISTÓRICO DE LUCRO MENSAL =====================
 # ===================================================================
 
+def listar_lucros_mensais():
+    """Busca todos os lucros mensais lançados, ordenados por data."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Adicionamos o LucroID para permitir edição/exclusão
+            sql = """
+                SELECT LucroID, Ano, Mes, PercentualLucro 
+                FROM LucroMensalHistorico 
+                ORDER BY Ano DESC, Mes DESC
+            """
+            cursor.execute(sql)
+            return cursor.fetchall()
+        except Exception as e:
+            logger.error(f"Erro ao listar lucros mensais: {e}", exc_info=True)
+            return []
+        finally:
+            if conn:
+                conn.close()
+    return []
+
+def atualizar_lucro_mensal(lucro_id, novo_percentual):
+    """Atualiza o percentual de um lançamento de lucro específico."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE LucroMensalHistorico SET PercentualLucro = ? WHERE LucroID = ?"
+            cursor.execute(sql, novo_percentual, lucro_id)
+            conn.commit()
+            return cursor.rowcount > 0 # Retorna True se a atualização foi bem-sucedida
+        except Exception as e:
+            logger.error(f"Erro ao atualizar lucro mensal (ID: {lucro_id}): {e}", exc_info=True)
+            if conn:
+                conn.rollback()
+            return False
+        finally:
+            if conn:
+                conn.close()
+    return False
+
+def excluir_lucro_mensal(lucro_id):
+    """Exclui um lançamento de lucro mensal específico."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "DELETE FROM LucroMensalHistorico WHERE LucroID = ?"
+            cursor.execute(sql, lucro_id)
+            conn.commit()
+            return cursor.rowcount > 0 # Retorna True se a exclusão foi bem-sucedida
+        except Exception as e:
+            logger.error(f"Erro ao excluir lucro mensal (ID: {lucro_id}): {e}", exc_info=True)
+            if conn:
+                conn.rollback()
+            return False
+        finally:
+            if conn:
+                conn.close()
+    return False
 # O logger já deve estar configurado pelo bloco no início do arquivo.
 
 def verificar_e_premiar_meta_diaria(apuracao_id, data_apuracao_str, valor_dia, meta_principal_id):
