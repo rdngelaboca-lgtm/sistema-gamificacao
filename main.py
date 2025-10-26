@@ -208,19 +208,19 @@ class App:
 
     # Em main.py, DENTRO da classe App, adicione estas funções:
 
-    def atualizar_lista_conquistas(self):
-        """Limpa a Treeview e recarrega os modelos de conquistas do banco."""
-        try: # <--- ADICIONADO TRY
-            for i in self.tree_conquistas.get_children():
-                self.tree_conquistas.delete(i)
-            conquistas = database.listar_modelos_conquistas() # Pode falhar
-            for conq in conquistas:
-                self.tree_conquistas.insert("", "end", values=(conq.ConquistaID, conq.Icone, conq.Nome))
-            self.limpar_formulario_conquista()
-        except Exception as e: # <--- ADICIONADO EXCEPT
-            logger.exception(f"Erro ao atualizar lista de conquistas: {e}")
-            messagebox.showerror("Erro de Banco", f"Não foi possível carregar os modelos de conquistas:\n{e}", parent=self.root)
-
+def atualizar_lista_conquistas(self):
+    """Limpa a Treeview e recarrega os modelos de conquistas do banco."""
+    try: # <--- ADICIONADO TRY
+        for i in self.tree_conquistas.get_children():
+            self.tree_conquistas.delete(i)
+        conquistas = database.listar_modelos_conquistas() # Pode falhar
+        for conq in conquistas:
+            self.tree_conquistas.insert("", "end", values=(conq.ConquistaID, conq.Icone, conq.Nome))
+        self.limpar_formulario_conquista()
+    except Exception as e: # <--- ADICIONADO EXCEPT
+        logger.exception(f"Erro ao atualizar lista de conquistas: {e}") # Loga o erro completo
+        messagebox.showerror("Erro de Banco", f"Não foi possível carregar os modelos de conquistas:\n{e}", parent=self.root) # Informa o usuário
+        
     def selecionar_conquista_para_edicao(self, event):
         """Preenche o formulário com os dados da conquista selecionada na lista."""
         try: # <--- ADICIONADO TRY
