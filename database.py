@@ -3750,7 +3750,7 @@ def listar_lucros_mensais():
             cursor = conn.cursor()
             # Adicionamos o LucroID para permitir edição/exclusão
             sql = """
-                SELECT LucroID, Ano, Mes, PercentualLucro 
+                SELECT HistoricoID, Ano, Mes, PercentualLucro 
                 FROM LucroMensalHistorico 
                 ORDER BY Ano DESC, Mes DESC
             """
@@ -3770,7 +3770,7 @@ def atualizar_lucro_mensal(lucro_id, novo_percentual):
     if conn:
         try:
             cursor = conn.cursor()
-            sql = "UPDATE LucroMensalHistorico SET PercentualLucro = ? WHERE LucroID = ?"
+            sql = "UPDATE LucroMensalHistorico SET PercentualLucro = ? WHERE HistoricoID = ?"
             cursor.execute(sql, novo_percentual, lucro_id)
             conn.commit()
             return cursor.rowcount > 0 # Retorna True se a atualização foi bem-sucedida
@@ -3790,7 +3790,7 @@ def excluir_lucro_mensal(lucro_id):
     if conn:
         try:
             cursor = conn.cursor()
-            sql = "DELETE FROM LucroMensalHistorico WHERE LucroID = ?"
+            sql = "DELETE FROM LucroMensalHistorico WHERE HistoricoID = ?"
             cursor.execute(sql, lucro_id)
             conn.commit()
             return cursor.rowcount > 0 # Retorna True se a exclusão foi bem-sucedida
