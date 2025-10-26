@@ -65,6 +65,7 @@ import os
 from datetime import datetime, date, timedelta
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 import requests
+import logging
 
 # Em agendador.py, SUBSTITUA a função verificar_e_enviar_tarefas_de_grupo por esta:
 def verificar_e_enviar_tarefas_de_grupo():
@@ -407,6 +408,7 @@ def processar_downloads_pendentes_sync():
     token = config.TELEGRAM_TOKEN # Pega o token do config
 
     for entrega in entregas_para_baixar:
+        local_file_path = None # Initialize path to None for error handling
         try:
             logger.info(f"--> Baixando foto para EntregaID: {entrega.EntregaID} (FileID: {entrega.FileIDTelegram})...")
 
@@ -444,23 +446,82 @@ def processar_downloads_pendentes_sync():
                     logger.error(f"Erro ao criar pasta '{pasta_entregas}': {e}", exc_info=True)
                     continue # Pula esta entrega se não conseguir criar a pasta
 
+            # Define local_file_path *before* the 'with open' block
             local_file_path = os.path.join(pasta_entregas, f'{timestamp}_{entrega.EntregaID}.jpg')
 
             with open(local_file_path, 'wb') as f:
                 for chunk in response_download.iter_content(chunk_size=8192):
                     f.write(chunk)
 
-            # 5. Atualizar o banco de dados
-            database.finalizar_registro_entrega(entrega.EntregaID, local_file_path)
+            # 5. Atualizar o banco de dados com o caminho da foto
+            database.finalizar_registro_entrega(entrega.EntregaID, local_file_path) #
             logger.info(f"--> SUCESSO! Foto da EntregaID {entrega.EntregaID} salva em {local_file_path}")
+
+            # --- Início: Verificação e Reenvio da Notificação ao Gestor ---
+            try:
+                # Verifica se a notificação já foi marcada como enviada
+                notificacao_ja_enviada = database.verificar_status_notificacao_gestor(entrega.EntregaID) #
+
+                if not notificacao_ja_enviada:
+                    logger.info(f"--> Notificação para Gestor da EntregaID {entrega.EntregaID} pendente. Tentando enviar...")
+
+                    # Busca detalhes necessários para a notificação
+                    detalhes_entrega_para_notif = database.buscar_detalhes_da_entrega(entrega.EntregaID) #
+
+                    if detalhes_entrega_para_notif and config.GESTOR_GROUP_CHAT_ID: #
+                        # Tenta buscar a data de envio original (pode ser necessário ajustar a buscar_detalhes_da_entrega)
+                        data_envio_original_str = "(data indisponível)" # Placeholder
+                        # if hasattr(detalhes_entrega_para_notif, 'DataEnvio'):
+                        #    data_envio_original_str = detalhes_entrega_para_notif.DataEnvio.strftime('%d/%m/%Y %H:%M')
+
+                        legenda = (f"<b>Nova Entrega para Validação (Via Agendador)</b>\n\n"
+                                f"👤 <b>Funcionário:</b> {detalhes_entrega_para_notif.NomeCompleto}\n"
+                                f"📝 <b>Tarefa:</b> {detalhes_entrega_para_notif.Titulo} ({detalhes_entrega_para_notif.Pontos} pts)\n"
+                                f"🗓️ <b>Data Envio Original:</b> {data_envio_original_str}\n" # Inclui a data
+                                f"📦 <b>Entrega ID:</b> {entrega.EntregaID}")
+                        keyboard = [[
+                            InlineKeyboardButton("✅ Aprovar", callback_data=f"aprovar_gestor_{entrega.EntregaID}"),
+                            InlineKeyboardButton("❌ Reprovar", callback_data=f"reprovar_gestor_{entrega.EntregaID}")
+                        ]]
+                        reply_markup = InlineKeyboardMarkup(keyboard)
+
+                        # Envia a foto recém-baixada
+                        resposta_api = notificador_telegram.enviar_foto_com_botoes( #
+                            config.GESTOR_GROUP_CHAT_ID, #
+                            local_file_path, # Usa o caminho da foto baixada
+                            legenda,
+                            reply_markup,
+                            parse_mode='HTML'
+                        )
+
+                        # Se o envio pelo agendador funcionou, marca a flag
+                        if resposta_api and resposta_api.get('ok'):
+                            database.marcar_notificacao_gestor_enviada(entrega.EntregaID) #
+                            logger.info(f"--> Notificação para Gestor da EntregaID {entrega.EntregaID} enviada com sucesso pelo agendador.")
+                        else:
+                            logger.error(f"--> Falha ao enviar notificação para Gestor (EntregaID {entrega.EntregaID}) pelo agendador. Resposta API: {resposta_api}")
+                    else:
+                        logger.warning(f"--> Não foi possível obter detalhes completos ou GESTOR_GROUP_CHAT_ID para notificar sobre EntregaID {entrega.EntregaID}.")
+                else:
+                   logger.debug(f"--> Notificação para Gestor da EntregaID {entrega.EntregaID} já havia sido enviada anteriormente.")
+
+            except Exception as check_notify_err:
+                logger.error(f"--> Erro ao verificar/reenviar notificação gestor para EntregaID {entrega.EntregaID}: {check_notify_err}", exc_info=True)
+            # --- Fim: Verificação e Reenvio da Notificação ao Gestor ---
 
         except requests.exceptions.Timeout:
             logger.warning(f"--> TIMEOUT ao tentar baixar foto da EntregaID {entrega.EntregaID}. Tentaremos novamente.")
         except requests.exceptions.RequestException as req_err:
              logger.error(f"--> FALHA DE REDE ao baixar foto da EntregaID {entrega.EntregaID}. Erro: {req_err}. Tentaremos novamente.")
         except Exception as e:
-             logger.error(f"--> FALHA GERAL ao baixar foto da EntregaID {entrega.EntregaID}. Erro: {e}. Tentaremos novamente.", exc_info=True)
-
+             logger.error(f"--> FALHA GERAL ao processar foto da EntregaID {entrega.EntregaID}. Erro: {e}. Tentaremos novamente.", exc_info=True)
+             # Limpeza adicional em caso de falha após o download, mas antes de finalizar
+             if local_file_path and os.path.exists(local_file_path):
+                 try:
+                     # os.remove(local_file_path) # Comente ou remova se quiser manter a foto mesmo em caso de erro posterior
+                     logger.warning(f"--> Arquivo temporário {local_file_path} mantido apesar de erro posterior ao download.")
+                 except Exception as del_err:
+                     logger.error(f"--> Erro ao tentar remover arquivo {local_file_path} após falha: {del_err}")
 
 if __name__ == "__main__":
     print("--- 🤖 Robô Agendador 2.0 Iniciado 🤖 ---")
