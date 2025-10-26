@@ -2524,7 +2524,7 @@ class App:
                     self.on_meta_principal_selecionada(None) # Atualiza a lista na janela principal
 
                     # Chama a função auxiliar _verificar_e_premiar_meta_diaria (sem alteração)
-                    self._verificar_e_premiar_meta_diaria(apuracao_id, data_db_format, novo_valor, meta_id) #
+                    database.verificar_e_premiar_meta_diaria(apuracao_id, data_db_format, novo_valor, meta_id)
 
                 else:
                     print(f">>> DEBUG (EDIÇÃO): Lançamento no DB falhou. Não vai verificar premiação.")
@@ -2572,65 +2572,6 @@ class App:
                 messagebox.showerror("Erro Inesperado", f"Ocorreu um erro: {e}")
 
 
-    # Em main.py, DENTRO da classe App, ADICIONE esta nova função auxiliar:
-
-    def _verificar_e_premiar_meta_diaria(self, apuracao_id, data_apuracao_str, valor_dia, meta_principal_id):
-        """
-        Função auxiliar para verificar se a meta diária foi atingida e premiar a equipe.
-        Chamada tanto no lançamento quanto na edição.
-        """
-        try:
-            modelo_meta_diaria = database.buscar_modelo_meta_para_data(data_apuracao_str) #
-            
-            # Condição: Modelo existe? Valor >= Meta? Pontos > 0?
-            if modelo_meta_diaria and valor_dia >= modelo_meta_diaria.ValorMeta and modelo_meta_diaria.PontosPremio > 0: #
-                
-                # Busca detalhes da meta principal para pegar o SetorAlvo
-                meta_principal = next((m for m in database.listar_metas_principais() if m.MetaPrincipalID == meta_principal_id), None) #
-                
-                if meta_principal:
-                    print(f"--- VERIFICANDO PREMIAÇÃO META DIÁRIA ({data_apuracao_str}) ---") # Log
-                    print(f"Valor Atingido: {valor_dia} >= Meta: {modelo_meta_diaria.ValorMeta}. Pontos Prêmio: {modelo_meta_diaria.PontosPremio}") # Log
-                    print(f"Setor Alvo da Meta Principal: '{meta_principal.SetorAlvo}'") # Log
-
-                    # Chama a função do banco para registrar os pontos e pegar a lista de premiados
-                    funcionarios_premiados = database.registrar_pontos_meta_diaria(
-                        apuracao_id, 
-                        modelo_meta_diaria.PontosPremio, 
-                        meta_principal.SetorAlvo
-                    ) #
-                    
-                    if funcionarios_premiados:
-                        print(f"--> {len(funcionarios_premiados)} funcionários premiados. Enviando notificações...") # Log
-                        mensagem_telegram = (
-                            f"🏆 **PARABÉNS, EQUIPE DO SETOR '{meta_principal.SetorAlvo.upper()}'!** 🏆\n\n"
-                            f"Vocês bateram a meta diária de hoje ({data_apuracao_str}) e cada um ganhou **{modelo_meta_diaria.PontosPremio} pontos**!\n\n"
-                            "Continuem com o trabalho incrível! 🚀"
-                        ) #
-                        for funcionario in funcionarios_premiados:
-                            notificador_telegram.enviar_mensagem(funcionario.ChatIDTelegram, mensagem_telegram) #
-                        
-                        # Mostra pop-up apenas se estivermos na função de lançamento original (evita pop-up duplo na edição)
-                        # Verificamos se a janela de edição existe para diferenciar
-                        if not hasattr(self, 'popup_edicao_apuracao') or not self.popup_edicao_apuracao.winfo_exists():
-                             messagebox.showinfo("Meta Diária Atingida!", f"A equipe do setor '{meta_principal.SetorAlvo}' foi notificada no Telegram.") #
-                    else:
-                         print("--> Nenhum funcionário encontrado no setor alvo para premiar.") # Log
-            else:
-                 # Log se a meta não foi atingida ou não tem prêmio
-                 if modelo_meta_diaria:
-                      print(f"--- VERIFICANDO PREMIAÇÃO META DIÁRIA ({data_apuracao_str}) ---")
-                      print(f"Meta NÃO atingida ou sem prêmio. Valor: {valor_dia}, Meta: {modelo_meta_diaria.ValorMeta}, Pontos: {modelo_meta_diaria.PontosPremio}")
-                 else:
-                      print(f"--- VERIFICANDO PREMIAÇÃO META DIÁRIA ({data_apuracao_str}) ---")
-                      print(f"Nenhum modelo de meta diária encontrado para esta data.")
-                      
-        except Exception as e:
-            print(f"!!! ERRO durante a verificação/premiação da meta diária: {e}")
-            # Não mostramos messagebox aqui para não interromper o fluxo principal
-
-
-
     def lancar_apuracao_diaria(self):
         """(VERSÃO V4) Lança a apuração e CHAMA A FUNÇÃO AUXILIAR para verificar/premiar."""
         print(">>> DEBUG: Função lancar_apuracao_diaria FOI CHAMADA!") # <-- Mantém o print de teste
@@ -2661,7 +2602,7 @@ class App:
 
                 # --- CHAMADA DA FUNÇÃO AUXILIAR ---
                 # Chama a função que verifica e premia, passando os dados necessários
-                self._verificar_e_premiar_meta_diaria(apuracao_id, data_apuracao_str, valor_dia, meta_id) 
+                database.verificar_e_premiar_meta_diaria(apuracao_id, data_apuracao_str, valor_dia, meta_id) 
                 # --- FIM DA CHAMADA ---
 
             else:
