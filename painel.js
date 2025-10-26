@@ -136,6 +136,16 @@ document.addEventListener('DOMContentLoaded', function() {
             textoEl.textContent = `${percentual.toFixed(1)}%`;
             atingidoEl.textContent = `R$ ${meta.valor_atingido_hoje.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
             totalEl.textContent = `R$ ${meta.valor_meta_diaria.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
+            // --- INÍCIO: Lógica para Animação de Meta Diária Batida ---
+        const valorAtingido = meta.valor_atingido_hoje || 0;
+        const valorMeta = meta.valor_meta_diaria || 0;
+
+        // Verifica se a meta foi atingida (e se a meta existe > 0)
+        if (valorMeta > 0 && valorAtingido >= valorMeta) {
+            console.log("Meta diária ATINGIDA! Acionando animação..."); // Log para depuração
+            dispararFogos(); // Chama a função que dispara a animação
+        }
+        // --- FIM: Lógica para Animação ---
         } else {
             containerEl.style.display = 'none';
         }
@@ -274,3 +284,29 @@ async function atualizarPainel() {
     setInterval(atualizarPainel, 60000); // Agenda para atualizar a cada 60 segundos (1 minuto)
 
 }); // <<<<<< Fim do addEventListener('DOMContentLoaded', ...)
+// --- INÍCIO: Função para disparar a animação de fogos ---
+function dispararFogos() {
+    // Usa a biblioteca canvas-confetti
+    // Configuração para simular fogos (cores, formas, etc.)
+    const duration = 5 * 1000; // Duração da animação (5 segundos)
+    const animationEnd = Date.now() + duration;
+    const defaults = { startVelocity: 30, spread: 360, ticks: 60, zIndex: 9999 };
+
+    function randomInRange(min, max) {
+        return Math.random() * (max - min) + min;
+    }
+
+    const interval = setInterval(function() {
+        const timeLeft = animationEnd - Date.now();
+
+        if (timeLeft <= 0) {
+            return clearInterval(interval);
+        }
+
+        const particleCount = 50 * (timeLeft / duration);
+        // Dispara da esquerda e da direita
+        confetti(Object.assign({}, defaults, { particleCount, origin: { x: randomInRange(0.1, 0.3), y: Math.random() - 0.2 }, shapes: ['star'], colors: ['#FFD700', '#FF4500', '#FFFFFF', '#00FF00', '#0000FF'] }));
+        confetti(Object.assign({}, defaults, { particleCount, origin: { x: randomInRange(0.7, 0.9), y: Math.random() - 0.2 }, shapes: ['star'], colors: ['#FFD700', '#FF4500', '#FFFFFF', '#00FF00', '#0000FF'] }));
+    }, 250);
+}
+// --- FIM: Função para disparar a animação ---
