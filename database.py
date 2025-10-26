@@ -64,6 +64,7 @@ import hashlib
 import config 
 import notificador_telegram
 import logging
+import random
 
 CONNECTION_STRING = (
     f"DRIVER={{ODBC Driver 18 for SQL Server}};"  
@@ -3623,32 +3624,70 @@ def verificar_e_premiar_meta_diaria(apuracao_id, data_apuracao_str, valor_dia, m
                 logger.info(f"Valor Atingido: {valor_dia} >= Meta: {modelo_meta_diaria.ValorMeta}. Pontos Prêmio: {modelo_meta_diaria.PontosPremio}")
                 logger.info(f"Setor Alvo da Meta Principal: '{meta_principal.SetorAlvo}'")
 
-                # Chama a função do banco (interna) para registrar os pontos e pegar a lista de premiados
                 # Chamada interna, sem 'database.'
-                funcionarios_premiados = registrar_pontos_meta_diaria(
-                    apuracao_id,
-                    modelo_meta_diaria.PontosPremio,
-                    meta_principal.SetorAlvo
-                )
+                # --- INÍCIO DA NOVA LÓGICA [Missão Cumprida!] ---
 
-                if funcionarios_premiados:
-                    logger.info(f"--> {len(funcionarios_premiados)} funcionários premiados. Enviando notificações...")
-                    mensagem_telegram = (
-                        f"🏆 **PARABÉNS, EQUIPE DO SETOR '{meta_principal.SetorAlvo.upper()}'!** 🏆\n\n"
-                        f"Vocês bateram a meta diária de hoje ({data_apuracao_str}) e cada um ganhou **{modelo_meta_diaria.PontosPremio} pontos**!\n\n"
-                        "Continuem com o trabalho incrível! 🚀"
-                    )
-                    for funcionario in funcionarios_premiados:
-                        # Chamada externa para o módulo notificador_telegram
-                        notificador_telegram.enviar_mensagem(funcionario.ChatIDTelegram, mensagem_telegram)
+            pontos_premio_diario = modelo_meta_diaria.PontosPremio
 
-                    # Substituímos o messagebox por um log
-                    logger.info(f"Meta Diária Atingida! Equipe do setor '{meta_principal.SetorAlvo}' notificada.")
-                else:
-                     logger.info("--> Nenhum funcionário encontrado no setor alvo para premiar.") # Usando logger
-            # else: # Opcional: Logar se a meta principal não for encontrada (pouco provável)
-            #    logger.warning(f"Meta principal ID {meta_principal_id} não encontrada ao verificar prêmio diário.")
+            # Marca a apuração como premiada (mantém o registro de que o prêmio foi distribuído neste dia)
+            conn_interno = get_db_connection() # Abre conexão temporária para esta operação
+            if conn_interno:
+                try:
+                    cursor_interno = conn_interno.cursor()
+                    sql_marcar = "UPDATE MetasDiariasApuracoes SET PontosMetaDiariaGanhos = ? WHERE ApuracaoID = ?"
+                    cursor_interno.execute(sql_marcar, pontos_premio_diario, apuracao_id)
+                    conn_interno.commit()
+                    logger.info(f"ApuracaoID {apuracao_id} marcada como premiada com {pontos_premio_diario} pontos.")
+                except Exception as e_marcar:
+                    logger.error(f"Erro ao marcar ApuracaoID {apuracao_id} como premiada: {e_marcar}")
+                    if conn_interno: conn_interno.rollback()
+                finally:
+                    if conn_interno: conn_interno.close()
+            else:
+                logger.error(f"Não foi possível conectar ao banco para marcar ApuracaoID {apuracao_id} como premiada.")
+                # Continua mesmo assim para tentar premiar e notificar
 
+            # Busca TODOS os funcionários ativos
+            funcionarios_todos = listar_funcionarios() # Reutiliza a função existente
+
+            if funcionarios_todos:
+                logger.info(f"--> Meta diária atingida! Distribuindo {pontos_premio_diario} pontos para {len(funcionarios_todos)} funcionários.")
+
+                # Escolhe uma mensagem aleatória e formata com os pontos
+                mensagem_base = random.choice(config.MENSAGENS_META_DIARIA_CUMPRIDA)
+                mensagem_telegram = mensagem_base.format(pontos=pontos_premio_diario)
+
+                # Loop para premiar e notificar TODOS
+                for funcionario in funcionarios_todos:
+                    try:
+                        # 1. Adiciona os pontos ao saldo geral do funcionário
+                        adicionar_pontos_ao_saldo(funcionario.FuncionarioID, pontos_premio_diario)
+
+                        # 2. Registra a pontuação no histórico (usando a tarefa TAREFA_ID_PONTOS_META)
+                        motivo_log = f"Meta Diária Atingida ({data_apuracao_str})"
+                        registrar_pontos_por_leitura( # Reutiliza a função para log simples
+                            funcionario.FuncionarioID,
+                            pontos_premio_diario,
+                            motivo_log
+                        )
+
+                        # 3. Envia a notificação individual
+                        if funcionario.ChatIDTelegram:
+                            notificador_telegram.enviar_mensagem(funcionario.ChatIDTelegram, mensagem_telegram)
+                        else:
+                            logger.warning(f"Funcionário {funcionario.NomeCompleto} (ID: {funcionario.FuncionarioID}) sem ChatIDTelegram. Não foi possível notificar.")
+
+                    except Exception as e_func:
+                        logger.error(f"Erro ao processar prêmio/notificação para {funcionario.NomeCompleto} (ID: {funcionario.FuncionarioID}): {e_func}", exc_info=True)
+                        # Continua para o próximo funcionário
+
+                logger.info(f"Distribuição de pontos e notificações da meta diária concluída.")
+
+            else:
+                 logger.warning("--> Nenhum funcionário encontrado no sistema para premiar pela meta diária.")
+
+            # --- FIM DA NOVA LÓGICA ---
+            
         # Log mais detalhado se a meta não foi atingida ou não tem prêmio
         elif modelo_meta_diaria:
             logger.info(f"--- VERIFICANDO PREMIAÇÃO META DIÁRIA ({data_apuracao_str}) ---")
