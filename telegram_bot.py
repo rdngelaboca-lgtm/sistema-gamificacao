@@ -580,7 +580,7 @@ async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             )
             database.marcar_notificacao_gestor_enviada(entrega_id)
     except Exception as notify_error: # <-- Captura erro da notificação
-        
+
         await update.message.reply_text("✅ Evidência válida! Entrega registrada com sucesso e enviada para validação!")
 
     except Exception as e:
@@ -749,19 +749,20 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         else: await query.edit_message_text("Erro: não foi possível identificar seu usuário.")
 
     elif data.startswith("aceitar_tarefa_"):
-        origem_atribuicao_id = int(data.split('_')[-1]) # ID da tarefa 'GrupoCompetitiva' original
+        origem_atribuicao_id = int(data.split('_')[-1])
         funcionario_db = database.buscar_funcionario_por_chat_id(user.id)
         if not funcionario_db:
-            await context.bot.send_message(chat_id=user.id, text="Seu usuário do Telegram não foi encontrado no nosso sistema.")
+            await query.answer("Seu usuário do Telegram não foi encontrado no nosso sistema.", show_alert=True) # Avisa via popup
             return
 
-        # Chama a NOVA versão da função, que tenta CRIAR a instância 'Unica'
+        # Chama a função do banco
         nova_atribuicao_id_criada = database.aceitar_tarefa_de_grupo(origem_atribuicao_id, funcionario_db.FuncionarioID)
 
         # Busca o título da tarefa original para as mensagens
         tarefa_original = database.buscar_tarefa_por_atribuicao(origem_atribuicao_id)
         tarefa_titulo = tarefa_original.Titulo if tarefa_original else "Tarefa desconhecida"
 
+        # <<< CORREÇÃO: Verifica se a atribuição foi criada com sucesso >>>
         if nova_atribuicao_id_criada:
             # SUCESSO! A instância 'Unica' foi criada para este funcionário HOJE.
             nova_mensagem_grupo = (
@@ -770,22 +771,21 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
                 f"{user.first_name} agora é o responsável pela entrega *de hoje*. Boa sorte!"
             )
             try:
-                # Tenta editar a mensagem original no grupo (pode falhar para msg antigas)
-                await query.edit_message_text(text=nova_mensagem_grupo, reply_markup=None) # Remove o botão
+                await query.edit_message_text(text=nova_mensagem_grupo, reply_markup=None)
             except Exception as e:
                 logger.info(f"Aviso: Não foi possível editar a mensagem original no grupo para {origem_atribuicao_id}. Erro: {e}")
-                # Poderia enviar uma nova mensagem ou reply como alternativa aqui.
 
+            # Mensagem privada de sucesso
             await context.bot.send_message(
                 chat_id=user.id,
                 text=f"Você aceitou a missão '{tarefa_titulo}' para hoje. Agora ela aparecerá na sua lista de /tarefas. Capriche na entrega! 💪"
             )
         else:
-            # FALHA! Alguém já aceitou HOJE ou ocorreu outro erro.
-            await context.bot.send_message(
-                chat_id=user.id,
-                text=f"Que pena, parece que um colega foi mais rápido e já aceitou a missão '{tarefa_titulo}' *hoje*. Fique de olho na oferta de amanhã! 👀",
-            )
+            # FALHA! Alguém já aceitou HOJE ou ocorreu outro erro no banco.
+            # Avisa o usuário que clicou via popup (show_alert=True)
+            await query.answer(f"Que pena, parece que a missão '{tarefa_titulo}' já foi aceita por outro colega hoje.", show_alert=True)
+            # Opcional: Logar que a tentativa falhou
+            logger.info(f"Funcionário {funcionario_db.FuncionarioID} tentou aceitar tarefa {origem_atribuicao_id} que já foi aceita hoje ou falhou no DB.")
 
     elif data.startswith("aceitar_folga_"):
         tarefa_id = int(data.split('_')[-1])
@@ -848,23 +848,27 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text("Selecione um funcionário para ver as tarefas pendentes:", reply_markup=reply_markup)
 
-    # --- LÓGICA DE CIÊNCIA DE COMUNICADOS ---
     elif data.startswith("doc_ciente_"):
-        await query.answer() # Responde ao clique imediatamente para o usuário não ver o "carregando"
+        await query.answer()
         assinatura_id = int(data.split('_')[-1])
         detalhes = database.buscar_detalhes_assinatura_para_bot(assinatura_id)
-        
-        if not detalhes:
-            # Tenta avisar o usuário com um pop-up que é mais garantido
-            await query.answer("Esta ciência já foi registrada anteriormente.", show_alert=True)
-            return
 
-        # Lógica de backend que já está funcionando perfeitamente
-        nome_funcionario = user.first_name 
+        # <<< CORREÇÃO: Verifica se 'detalhes' foi encontrado (ou seja, se a assinatura ainda estava pendente) >>>
+        if not detalhes:
+            await query.answer("Esta ciência já foi registrada anteriormente.", show_alert=True)
+            # Tenta remover o botão se a edição anterior falhou
+            try:
+                await query.edit_message_reply_markup(reply_markup=None)
+            except Exception:
+                pass # Ignora erro se não conseguir editar
+            return # Interrompe a execução aqui
+
+        # Se 'detalhes' existe, prossegue com a lógica original
+        nome_funcionario = user.first_name
         mensagem_gestor = f"✅ O funcionário **{nome_funcionario}** confirmou ciência do comunicado: *'{detalhes.Titulo}'*."
         notificador_telegram.enviar_mensagem(config.GESTOR_GROUP_CHAT_ID, mensagem_gestor)
         database.marcar_como_ciente(assinatura_id)
-        
+
         datetime_ciencia = datetime.now()
         mensagem_confirmacao = (
             f"\n\n---"
@@ -875,35 +879,31 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             f"\n**Hora:** `{datetime_ciencia.strftime('%H:%M:%S')}`"
         )
         if detalhes.PontosPorCiencia > 0:
+            # Adiciona pontos ao saldo PRIMEIRO (mais crítico)
+            database.adicionar_pontos_ao_saldo(detalhes.FuncionarioID, detalhes.PontosPorCiencia)
+            # DEPOIS registra no histórico (menos crítico se falhar)
             database.registrar_pontos_por_leitura(detalhes.FuncionarioID, detalhes.PontosPorCiencia, detalhes.Titulo)
-            adicionar_pontos_ao_saldo(detalhes.FuncionarioID, detalhes.PontosPorCiencia)
             mensagem_confirmacao += f"\n\n🎉 Você ganhou **{detalhes.PontosPorCiencia}** pontos por sua agilidade!"
-        
-        # <<< AQUI ESTÁ A LÓGICA DE EDIÇÃO BLINDADA E CORRIGIDA >>>
+
+        # Lógica de edição da mensagem (permanece a mesma, já corrigida anteriormente)
         try:
-            # A verificação mais segura é se a mensagem tem o atributo 'photo'
             if query.message.photo:
                 texto_original = query.message.caption
-                # A função correta: edit_message_caption
                 await query.edit_message_caption(
                     caption=f"{texto_original}{mensagem_confirmacao}",
                     parse_mode='Markdown',
                     reply_markup=None
                 )
-            # Se não for foto, com certeza é texto
             else:
                 texto_original = query.message.text
-                # A função para texto: edit_message_text
                 await query.edit_message_text(
                     text=f"{texto_original}{mensagem_confirmacao}",
                     parse_mode='Markdown',
                     reply_markup=None
                 )
         except Exception as e:
-            # Se, mesmo assim, a edição falhar, nós saberemos o porquê
-            logger.error(f"!!!!!!!! ERRO AO TENTAR EDITAR A MENSAGEM DE CIÊNCIA: {e} !!!!!!!!")
-            # E o usuário receberá um feedback visual
-            await query.answer("Sua ciência foi registrada com sucesso!", show_alert=True)
+            logger.error(f"Erro ao editar a mensagem de ciência (ID: {assinatura_id}): {e}")
+            await query.answer("Sua ciência foi registrada!", show_alert=True) # Feedback mínimo
 
     # --- LÓGICA DE ENTREGA DE TAREFAS (FUNCIONÁRIO) ---
     elif data.startswith("ver_tarefa_"):
@@ -930,28 +930,24 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
     elif data.startswith("aprovar_gestor_"):
         entrega_id = int(data.split('_')[-1])
         gestor_nome = query.from_user.first_name
-        detalhes = database.buscar_detalhes_da_entrega(entrega_id)
-        if not detalhes or detalhes.StatusValidacao != 'Pendente':
-            await query.edit_message_caption(caption=f"Esta tarefa já foi validada por outro gestor. (Status: {detalhes.StatusValidacao if detalhes else 'N/A'})")
-            return
-        novas_conquistas_ganhas = database.aprovar_entrega(entrega_id, detalhes.FuncionarioID, detalhes.Pontos)
-        texto_notificacao = (f"🎉 Parabéns, <b>{detalhes.NomeCompleto}</b>!\nSua entrega para '<b>{detalhes.Titulo}</b>' foi APROVADA!\n\n"
-                             f"Você ganhou <b>{detalhes.Pontos}</b> pontos. Continue assim!")
-        if novas_conquistas_ganhas:
-            for conquista in novas_conquistas_ganhas:
-                # Apenas monta a string da notificação
-                texto_notificacao += (
-                    f"\n\n✨ <b>NOVA CONQUISTA DESBLOQUEADA!</b> ✨\n"
-                    f"{conquista.Icone} <b>{conquista.Nome}</b>\n"
-                    f"<i>{conquista.Descricao}</i>\n"
-                    f"Você ganhou um bônus de <b>{conquista.PontosBonus}</b> pontos!"
-                )
-        notificador_telegram.enviar_mensagem(detalhes.ChatIDFuncionario, texto_notificacao)
-        legenda_final = (f"**Entrega APROVADA por {gestor_nome}**\n\n"
-                         f"👤 **Funcionário:** {detalhes.NomeCompleto}\n"
-                         f"📝 **Tarefa:** {detalhes.Titulo} (+{detalhes.Pontos} pts)")
-        await query.edit_message_caption(caption=legenda_final)
+        detalhes = database.buscar_detalhes_da_entrega(entrega_id) # Busca detalhes uma vez
 
+        # <<< CORREÇÃO: Verifica o status ANTES de tentar aprovar >>>
+        if not detalhes:
+            try: await query.edit_message_caption(caption="ERRO: Entrega não encontrada no banco de dados.")
+            except Exception: pass
+            return
+        if detalhes.StatusValidacao != 'Pendente':
+            try: await query.edit_message_caption(caption=f"Esta tarefa já foi validada anteriormente. (Status: {detalhes.StatusValidacao})")
+            except Exception: pass
+            return
+
+        # Se passou nas verificações, tenta aprovar no banco
+        novas_conquistas_ganhas = database.aprovar_entrega(entrega_id, detalhes.FuncionarioID, detalhes.Pontos)
+
+        # Prepara notificação para funcionário (mesma lógica de antes)
+        texto_notificacao = (f"🎉 Parabéns, <b>{detalhes.NomeCompleto}</b>!\nSua entrega para '<b>{detalhes.Titulo}</b>' foi APROVADA!\n\n"
+                            f"Você ganhou <b>{detalhes.Pontos}</b> pontos. Continue assim!")
         if novas_conquistas_ganhas:
             for conquista in novas_conquistas_ganhas:
                 texto_notificacao += (
@@ -960,8 +956,23 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
                     f"<i>{conquista.Descricao}</i>\n"
                     f"Você ganhou um bônus de <b>{conquista.PontosBonus}</b> pontos!"
                 )
+                # Adiciona pontos bônus AO SALDO aqui, pois aprovar_entrega só registra
                 if conquista.PontosBonus > 0:
-                    database.adicionar_pontos_ao_saldo(detalhes.FuncionarioID, conquista.PontosBonus) 
+                    database.adicionar_pontos_ao_saldo(detalhes.FuncionarioID, conquista.PontosBonus)
+
+        notificador_telegram.enviar_mensagem(detalhes.ChatIDFuncionario, texto_notificacao)
+
+        # Edita a mensagem no grupo GESTOR
+        legenda_final = (f"**Entrega APROVADA por {gestor_nome}**\n\n"
+                        f"👤 **Funcionário:** {detalhes.NomeCompleto}\n"
+                        f"📝 **Tarefa:** {detalhes.Titulo} (+{detalhes.Pontos} pts)")
+        # <<< CORREÇÃO: Adiciona try/except para a edição da mensagem >>>
+        try:
+            await query.edit_message_caption(caption=legenda_final, reply_markup=None) # Remove botões também
+        except Exception as e:
+            logger.warning(f"Não foi possível editar a mensagem de aprovação {entrega_id} no grupo gestor: {e}")
+            # Opcional: Enviar uma nova mensagem se a edição falhar
+            # await context.bot.send_message(chat_id=query.message.chat_id, text=legenda_final)
 
     elif data.startswith("reprovar_gestor_"):
         entrega_id = int(data.split('_')[-1])
