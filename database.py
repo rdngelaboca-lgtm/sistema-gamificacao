@@ -1922,6 +1922,41 @@ def finalizar_registro_entrega(entrega_id, path_foto):
         finally:
             conn.close()
 
+def marcar_notificacao_gestor_enviada(entrega_id):
+    """Atualiza a flag indicando que a notificação ao gestor foi enviada com sucesso."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE Entregas SET NotificacaoGestorEnviada = 1 WHERE EntregaID = ?"
+            cursor.execute(sql, entrega_id)
+            conn.commit()
+            logger.info(f"Flag NotificacaoGestorEnviada marcada para EntregaID {entrega_id}.")
+        except Exception as e:
+            logger.error(f"Erro ao marcar flag NotificacaoGestorEnviada para EntregaID {entrega_id}: {e}", exc_info=True)
+        finally:
+            if conn:
+                conn.close()
+
+def verificar_status_notificacao_gestor(entrega_id):
+    """Verifica se a flag de notificação ao gestor está marcada como enviada."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT NotificacaoGestorEnviada FROM Entregas WHERE EntregaID = ?"
+            cursor.execute(sql, entrega_id)
+            resultado = cursor.fetchone()
+            # Retorna True se for 1, False caso contrário (incluindo NULL ou 0)
+            return resultado[0] == 1 if resultado else False
+        except Exception as e:
+            logger.error(f"Erro ao verificar flag NotificacaoGestorEnviada para EntregaID {entrega_id}: {e}", exc_info=True)
+            return False # Assume que não foi enviada em caso de erro
+        finally:
+            if conn:
+                conn.close()
+    return False # Assume que não foi enviada se a conexão falhar
+
 def listar_atribuicoes_ativas_por_funcionario(funcionario_id):
     """Retorna todas as tarefas ativas para um funcionário específico."""
     conn = get_db_connection()
@@ -3711,3 +3746,4 @@ def verificar_e_premiar_meta_diaria(apuracao_id, data_apuracao_str, valor_dia, m
 
     except Exception as e:
         logger.exception(f"!!! ERRO GERAL durante a verificação/premiação da meta diária (ApuracaoID: {apuracao_id}): {e}")
+
