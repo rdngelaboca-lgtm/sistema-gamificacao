@@ -235,9 +235,22 @@ def verificar_e_delegar_tarefas_de_folga():
             lista_de_destinos.append(config.COZINHA_GROUP_CHAT_ID)
             print(f"--> Funcionário '{funcionario.NomeCompleto}' tem cargo de Cozinha. Adicionando grupo de Cozinha.")
 
+        cargo_funcionario = funcionario.Cargo if funcionario.Cargo else "" # Garante que não seja None
+
+        # Verifica se contém as palavras-chave, independentemente de outros termos
+        if 'Atendimento' in cargo_funcionario:
+            lista_de_destinos.append(config.ATENDIMENTO_GROUP_CHAT_ID)
+            print(f"--> Funcionário '{funcionario.NomeCompleto}' (Cargo: '{cargo_funcionario}') tem cargo de Atendimento. Adicionando grupo de Atendimento.")
+        if 'Cozinha' in cargo_funcionario:
+            lista_de_destinos.append(config.COZINHA_GROUP_CHAT_ID)
+            print(f"--> Funcionário '{funcionario.NomeCompleto}' (Cargo: '{cargo_funcionario}') tem cargo de Cozinha. Adicionando grupo de Cozinha.")
+
+        # Se NENHUM grupo específico foi adicionado, usa o grupo geral de FOLGA como fallback
         if not lista_de_destinos:
-            lista_de_destinos.append(config.GESTOR_GROUP_CHAT_ID)
-            print(f"--> AVISO: Cargo '{funcionario.Cargo}' não mapeado. Usando o grupo geral de folgas.")
+            lista_de_destinos.append(config.FOLGA_GROUP_CHAT_ID) # <--- ALTERAÇÃO AQUI
+            print(f"--> AVISO: Cargo '{cargo_funcionario}' não mapeado ou vazio. Usando o grupo geral de folgas ID: {config.FOLGA_GROUP_CHAT_ID}.")
+            # Opcional: Notificar gestores também neste caso
+            # notificador_telegram.enviar_mensagem(config.GESTOR_GROUP_CHAT_ID, f"Tarefa de {funcionario.NomeCompleto} (folga, cargo '{cargo_funcionario}') enviada para o grupo geral de folgas.")
 
         for tarefa in tarefas_do_dia:
             mensagem_grupo = (
