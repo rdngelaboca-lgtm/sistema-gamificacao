@@ -2290,7 +2290,7 @@ class App:
         ttk.Label(frame_lancamento, text="Valor Vendido do Dia (R$):").grid(row=2, column=0, padx=5, pady=5, sticky="w")
         self.entry_valor_dia = ttk.Entry(frame_lancamento)
         self.entry_valor_dia.grid(row=2, column=1, padx=5, pady=5, sticky="w")
-        btn_lancar = ttk.Button(frame_lancamento, text="Lançar Apuração Diária", command=lambda: print(">>> BOTÃO CLICADO! <<<"))
+        btn_lancar = ttk.Button(frame_lancamento, text="Lançar Apuração Diária", command=self.lancar_apuracao_diaria)
         btn_lancar.grid(row=3, column=1, padx=5, pady=10, sticky="e")
         frame_gerenciamento = ttk.LabelFrame(main_frame, text="Gerenciar Metas Principais (Clique para ver detalhes)", padding="10")
         frame_gerenciamento.grid(row=1, column=0, sticky="ew", pady=(0, 10))
@@ -2488,8 +2488,6 @@ class App:
         entry_novo_valor.insert(0, valor_antigo_str)
         entry_novo_valor.focus() # Foca no campo de texto
 
-        # Em main.py, dentro de abrir_janela_edicao_apuracao, DENTRO da função interna salvar_edicao:
-        # Em main.py, dentro de abrir_janela_edicao_apuracao, SUBSTITUA a função interna salvar_edicao:
         def salvar_edicao():
             try:
                 # --- MOVIDO PARA DENTRO DO TRY ---
@@ -2504,7 +2502,12 @@ class App:
                 data_db_format = datetime.strptime(data_lancamento_str, '%d/%m/%Y').strftime('%Y-%m-%d')
 
                 # Obtém meta ID (sem alteração)
-                meta_selecionada_item = self.tree_metas_principais.selection()[0]
+                # Garante que temos uma seleção antes de tentar acessar
+                selecao_meta = self.tree_metas_principais.selection()
+                if not selecao_meta:
+                    messagebox.showerror("Erro", "Nenhuma meta principal selecionada na janela principal.", parent=popup)
+                    return
+                meta_selecionada_item = selecao_meta[0]
                 meta_id = self.tree_metas_principais.item(meta_selecionada_item, 'values')[0]
 
                 # Obtém ID do funcionário (sem alteração)
@@ -2518,19 +2521,19 @@ class App:
                     apuracao_id = resultado
                     messagebox.showinfo("Sucesso", "Apuração atualizada com sucesso!", parent=popup) #
                     popup.destroy()
-                    self.on_meta_principal_selecionada(None)
+                    self.on_meta_principal_selecionada(None) # Atualiza a lista na janela principal
 
                     # Chama a função auxiliar _verificar_e_premiar_meta_diaria (sem alteração)
                     self._verificar_e_premiar_meta_diaria(apuracao_id, data_db_format, novo_valor, meta_id) #
 
                 else:
                     print(f">>> DEBUG (EDIÇÃO): Lançamento no DB falhou. Não vai verificar premiação.")
-                    messagebox.showerror("Erro", "Não foi possível atualizar a apuração no banco.", parent=popup) #
+                    messagebox.showerror("Erro", f"Não foi possível atualizar a apuração no banco.\nDetalhe: {resultado}", parent=popup) #
 
             except (ValueError, IndexError): # Captura erro de conversão float ou seleção da meta
-                messagebox.showerror("Erro de Formato", "O valor deve ser um número válido.", parent=popup) #
-            except Exception as e: # Captura outros erros, incluindo NameError se ainda ocorrer
-                 messagebox.showerror("Erro Inesperado", f"Ocorreu um erro: {e}", parent=popup) #
+                messagebox.showerror("Erro de Formato ou Seleção", "O valor deve ser um número válido e uma meta deve estar selecionada.", parent=popup) #
+            except Exception as e: # Captura outros erros
+                messagebox.showerror("Erro Inesperado", f"Ocorreu um erro: {e}", parent=popup)
 
         btn_salvar = ttk.Button(frame, text="Salvar Alterações", command=salvar_edicao)
         btn_salvar.pack(pady=15)
