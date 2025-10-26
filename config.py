@@ -57,3 +57,12 @@ HORARIO_LEMBRETE_HOJE = "08:00"
 HORARIO_LEMBRETE_DIARIO_AMANHA = "09:00"
 HORARIO_LEMBRETE_SEMANAL = "08:00"
 MAX_DIFERENCA_FOTO_SEGUNDOS = 120
+
+# --- MENSAGENS PARA META DIÁRIA ATINGIDA ---
+MENSAGENS_META_DIARIA_CUMPRIDA = [
+    "🏆 UHUUUL! Batemos a meta de hoje! 🎉 Cada um ganhou +{pontos} pontos! Vocês são demais! 🚀",
+    "🎯 META DIÁRIA NO ALVO! Parabéns, equipe! +{pontos} pontos na conta de todo mundo! 🥳",
+    "✨ MISSÃO CUMPRIDA! A meta de hoje foi superada! Valeu, time! +{pontos} pontos para geral! 💪",
+    "🚀 IMPARÁVEIS! Meta diária batida mais uma vez! +{pontos} pontos de recompensa para todos! 🔥",
+    "💰 SHOW DE BOLA! Meta do dia alcançada com sucesso! +{pontos} pontos para cada membro da equipe! 🤩",
+]
