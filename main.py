@@ -1837,10 +1837,13 @@ class App:
             texto_notificacao = f"🎉 Parabéns, <b>{entrega_atual.NomeCompleto}</b>! ... Você ganhou <b>{entrega_atual.Pontos}</b> pontos. ..."
             if novas_conquistas_ganhas:
                 for conquista in novas_conquistas_ganhas:
-                    texto_notificacao += f"\n\n✨ <b>NOVA CONQUISTA...</b> (+<b>{conquista.PontosBonus}</b> pontos!)"
-                    # Adiciona pontos bônus ao saldo se necessário (pode falhar)
-                    if conquista.PontosBonus > 0:
-                        database.adicionar_pontos_ao_saldo(entrega_atual.FuncionarioID, conquista.PontosBonus)
+                    # Apenas monta a string da notificação
+                    texto_notificacao += (
+                        f"\n\n✨ <b>NOVA CONQUISTA DESBLOQUEADA!</b> ✨\n"
+                        f"{conquista.Icone} <b>{conquista.Nome}</b>\n"
+                        f"<i>{conquista.Descricao}</i>\n"
+                        f"Você ganhou um bônus de <b>{conquista.PontosBonus}</b> pontos!"
+                    )
 
             notificador_telegram.enviar_mensagem(entrega_atual.ChatIDTelegram, texto_notificacao) # Pode falhar
             messagebox.showinfo("Sucesso", "Entrega aprovada e pontuação atribuída!", parent=self.root) # Adicionado parent
