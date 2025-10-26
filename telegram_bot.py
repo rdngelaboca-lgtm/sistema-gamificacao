@@ -517,41 +517,36 @@ async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         photo_timestamp_utc = None # Inicializa como None
         try: # Tenta ler os metadados EXIF
             with open(temp_photo_path, 'rb') as f:
-                # process_file pode levantar exceções se o arquivo não for imagem ou estiver corrompido
                 tags = exifread.process_file(f, stop_tag="EXIF DateTimeOriginal")
                 if "EXIF DateTimeOriginal" in tags:
                     date_str = str(tags["EXIF DateTimeOriginal"])
-                    # Converte para datetime NAIVE (sem fuso horário inicial)
                     photo_timestamp_naive = datetime.strptime(date_str, '%Y:%m:%d %H:%M:%S')
-
-                    # Tenta aplicar o fuso horário local (ex: São Paulo) - AJUSTE SE NECESSÁRIO
                     try:
-                        # Tenta usar Cuiabá, se falhar, usa São Paulo
                         local_tz = ZoneInfo("America/Cuiaba")
                     except Exception:
                         local_tz = ZoneInfo("America/Sao_Paulo") # Fallback
-
-                    # Torna o datetime "aware" com o fuso local
                     photo_timestamp_aware = photo_timestamp_naive.replace(tzinfo=local_tz)
-
-                    # Converte para UTC para comparação segura
                     photo_timestamp_utc = photo_timestamp_aware.astimezone(timezone.utc)
-
         except Exception as exif_error:
             logger.warning(f"Não foi possível ler metadados EXIF da foto: {exif_error}")
             # photo_timestamp_utc continua None se não conseguiu ler EXIF ou deu erro
 
-        # --- LÓGICA DE VALIDAÇÃO TEMPORAL REFINADA ---
-        # SÓ executa a validação se CONSEGUIMOS obter um timestamp UTC da foto
+        # --- LÓGICA DE VALIDAÇÃO TEMPORAL AJUSTADA ---
+        # Validar SOMENTE se conseguimos obter um timestamp UTC da foto
         if photo_timestamp_utc:
             time_difference = message_timestamp_utc - photo_timestamp_utc
             # Verifica se a foto é do futuro (negativo) ou mais antiga que o limite
             if time_difference.total_seconds() < 0 or time_difference.total_seconds() > MAX_SECONDS_DIFFERENCE:
                 minutos = MAX_SECONDS_DIFFERENCE // 60
-                await update.message.reply_text(f"❌ Foto recusada! A evidência parece ter sido tirada há mais de {minutos} minutos. Por favor, envie uma foto tirada na hora.")
+                await update.message.reply_text(f"❌ Foto recusada! A evidência (com data/hora válida) parece ter sido tirada há mais de {minutos} minutos. Por favor, envie uma foto tirada na hora.")
                 # Limpa o caminho temporário antes de retornar
-                if temp_photo_path and os.path.exists(temp_photo_path): os.remove(temp_photo_path)
-                return
+                if temp_photo_path and os.path.exists(temp_photo_path):
+                    try: os.remove(temp_photo_path)
+                    except Exception as del_err: logger.error(f"Erro ao remover arquivo temporário (recusa EXIF OLD) {temp_photo_path}: {del_err}")
+                return # <<< REJEITA FOTO COM EXIF INVÁLIDO >>>
+
+# --- FIM DA LÓGICA AJUSTADA ---
+
 
         else:
             await update.message.reply_text(f"❌ Foto recusada! Não foi possível verificar a data/hora original da foto (EXIF ausente ou inválido). Use a câmera do Telegram.")
