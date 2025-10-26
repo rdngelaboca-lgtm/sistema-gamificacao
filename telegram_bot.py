@@ -531,7 +531,7 @@ async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             logger.warning(f"Não foi possível ler metadados EXIF da foto: {exif_error}")
             # photo_timestamp_utc continua None se não conseguiu ler EXIF ou deu erro
 
-        # --- LÓGICA DE VALIDAÇÃO TEMPORAL AJUSTADA ---
+        # --- LÓGICA DE VALIDAÇÃO TEMPORAL AJUSTADA (CORRIGIDA) ---
         # Validar SOMENTE se conseguimos obter um timestamp UTC da foto
         if photo_timestamp_utc:
             time_difference = message_timestamp_utc - photo_timestamp_utc
@@ -545,26 +545,16 @@ async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                     except Exception as del_err: logger.error(f"Erro ao remover arquivo temporário (recusa EXIF OLD) {temp_photo_path}: {del_err}")
                 return # <<< REJEITA FOTO COM EXIF INVÁLIDO >>>
 
-# --- FIM DA LÓGICA AJUSTADA ---
+        # <<< O BLOCO 'ELSE' FOI REMOVIDO DAQUI >>>
+        # Se photo_timestamp_utc for None (sem EXIF ou erro na leitura),
+        # a validação acima é pulada e o código CONTINUA para as próximas verificações.
 
-
-        else:
-            await update.message.reply_text(f"❌ Foto recusada! Não foi possível verificar a data/hora original da foto (EXIF ausente ou inválido). Use a câmera do Telegram.")
-            # Limpa o arquivo temporário antes de retornar
-            if temp_photo_path and os.path.exists(temp_photo_path):
-                 try:
-                      os.remove(temp_photo_path)
-                 except Exception as del_err:
-                      logger.error(f"Erro ao remover arquivo temporário (recusa EXIF) {temp_photo_path}: {del_err}")
-            return
-
-        # Se photo_timestamp_utc for None (sem EXIF ou erro na leitura), a verificação é pulada.
-        # --- FIM DA LÓGICA REFINADA ---
+        # --- FIM DA LÓGICA AJUSTADA (CORRIGIDA) ---
 
         # Se chegou até aqui, a foto é considerada válida (ou sem EXIF confiável)
         if 'identificador_tarefa' not in context.user_data:
             await update.message.reply_text("Parece que você enviou uma foto sem antes selecionar uma tarefa. Por favor, use o comando /tarefas primeiro.")
-             # Limpa o caminho temporário antes de retornar
+            # Limpa o caminho temporário antes de retornar
             if temp_photo_path and os.path.exists(temp_photo_path): os.remove(temp_photo_path)
             return
 
