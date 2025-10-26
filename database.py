@@ -333,9 +333,6 @@ def buscar_funcionarios_por_horario(horario_atual):
     return []         
 
 # Em database.py, SUBSTITUA a função listar_tarefas_do_dia_por_funcionario:
-
-# Em database.py, SUBSTITUA a função listar_tarefas_do_dia_por_funcionario:
-
 def listar_tarefas_do_dia_por_funcionario(funcionario_id):
     """
     (VERSÃO 7 - COM CORREÇÃO PARA TAREFAS 'Unica')
@@ -357,9 +354,10 @@ def listar_tarefas_do_dia_por_funcionario(funcionario_id):
                         SELECT 1 FROM Entregas E
                         WHERE E.AtribuicaoID = TA.AtribuicaoID
                         AND CONVERT(date, E.DataEnvio) = CONVERT(date, GETDATE())
-                        AND E.StatusValidacao IN ('Aprovada', 'Pendente')
+                        AND E.StatusValidacao IN ('Aprovada', 'Pendente') -- Exclui Aprovada ou Pendente HOJE
                     )
                     AND (
+                        -- Condições existentes para Diaria, Semanal, Mensal, Agendada
                         TA.TipoFrequencia = 'Diaria'
                         OR (
                             TA.TipoFrequencia = 'Semanal' AND
@@ -375,18 +373,19 @@ def listar_tarefas_do_dia_por_funcionario(funcionario_id):
                                 END
                         )
                         OR (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, GETDATE()))
-
                         OR (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = CONVERT(date, GETDATE()))
-                        
+
                         -- --- A CORREÇÃO ESTÁ AQUI ---
-                        -- Adicionamos a condição para incluir tarefas do tipo 'Unica' que foram criadas hoje.
+                        -- Adicionamos a condição para incluir tarefas do tipo 'Unica' que foram criadas HOJE.
                         OR (TA.TipoFrequencia = 'Unica' AND CONVERT(date, TA.DataInicioVigencia) = CONVERT(date, GETDATE()))
+                        -- --- FIM DA CORREÇÃO ---
                     )
             """
             cursor.execute(sql, funcionario_id)
             return cursor.fetchall()
         except Exception as e:
-            print(f"!!! ERRO CRÍTICO em listar_tarefas_do_dia_por_funcionario: {e}")
+            # Log aprimorado
+            logger.exception(f"!!! ERRO CRÍTICO em listar_tarefas_do_dia_por_funcionario para ID {funcionario_id}: {e}")
             return []
         finally:
             if conn:
@@ -2337,26 +2336,25 @@ def verificar_e_conceder_conquistas(funcionario_id):
                 if total_tarefas_aprovadas >= conquista.CriterioValor:
                     atingiu_criterio = True
             
-            # --- CRITÉRIO 2: Tarefas Aprovadas nos Últimos N Dias ---
             elif conquista.CriterioTipo == 'tarefas_aprovadas_periodo':
-                dias_periodo = conquista.CriterioValor # O valor aqui são os dias (ex: 7 para "Semana de Estreia")
-                data_limite = date.today() - timedelta(days=dias_periodo)
-                # Conta quantas das datas recentes são DENTRO do período
-                count_periodo = sum(1 for dt in datas_tarefas_aprovadas if dt >= data_limite)
-                if count_periodo >= conquista.CriterioValor: # O valor aqui é o número de tarefas (ex: 5)
-                     # ATENÇÃO: A CONQUISTA NO BANCO DEVE TER O NUM DE TAREFAS COMO CriterioValor
-                     # E o número de dias deve ser inferido do nome/descrição ou adicionado
-                     # como uma nova coluna 'CriterioParametroAdicional' no futuro.
-                     # Por ora, assume que CriterioValor = num tarefas E o período é fixo (ex: 7 dias)
-                     # Para a "Semana de Estreia", o CriterioValor deve ser 5.
-                     
-                     # Correção Lógica: O CriterioValor deve ser o NUMERO de tarefas, não os dias.
-                     # Vamos assumir que 'tarefas_aprovadas_periodo' sempre se refere aos últimos 7 dias.
-                     dias_periodo_fixo = 7 # Ex: Para "Semana de Estreia"
-                     data_limite_fixa = date.today() - timedelta(days=dias_periodo_fixo)
-                     count_periodo_fixo = sum(1 for dt in datas_tarefas_aprovadas if dt >= data_limite_fixa)
-                     if count_periodo_fixo >= conquista.CriterioValor: # CriterioValor = 5 para Semana Estreia
-                         atingiu_criterio = True
+                try: # Adiciona try/except para conversão segura
+                    # Assume que CriterioValor é o NÚMERO DE TAREFAS necessárias.
+                    num_tarefas_necessarias = int(conquista.CriterioValor)
+                    # Assume um PERÍODO FIXO para este tipo de critério (ex: 7 dias).
+                    # Se precisar de períodos variáveis, a estrutura do banco precisaria mudar.
+                    dias_periodo_fixo = 7 # Ex: Para "Semana de Estreia"
+                    data_limite = date.today() - timedelta(days=dias_periodo_fixo)
+
+                    # Conta quantas das datas recentes (datas_tarefas_aprovadas)
+                    # estão DENTRO do período definido pela data_limite.
+                    count_dentro_periodo = sum(1 for dt in datas_tarefas_aprovadas if dt >= data_limite)
+
+                    # Compara a contagem com o número de tarefas necessárias.
+                    if count_dentro_periodo >= num_tarefas_necessarias:
+                        atingiu_criterio = True
+                except (ValueError, TypeError):
+                    logger.warning(f"Valor de critério inválido para conquista ID {conquista.ConquistaID} (tipo 'tarefas_aprovadas_periodo'). Esperado um número, recebido: {conquista.CriterioValor}")
+                    atingiu_criterio = False # Garante que não conceda a conquista
 
 
             # --- CRITÉRIO 3: Sequência de Dias com Tarefas ---
@@ -2641,41 +2639,59 @@ def buscar_dados_para_painel_kanban():
     try:
         cursor = conn.cursor()
 
-        # --- A LÓGICA FOI SIMPLIFICADA AQUI ---
-        # Removemos a parte que buscava as tarefas de ontem (UNION ALL)
-        # Agora a consulta foca apenas em GETDATE() - o dia de hoje.
         sql_para_fazer = """
             WITH Datas AS (
-                SELECT 
-                    GETDATE() as DataRef,
+                SELECT
+                    GETDATE() as DataHoje,
+                    DATEADD(day, -1, GETDATE()) as DataOntem,
                     CASE DATENAME(weekday, GETDATE())
-                        WHEN 'Sunday' THEN 1 WHEN 'Domingo' THEN 1
-                        WHEN 'Monday' THEN 2 WHEN 'Segunda-feira' THEN 2
-                        WHEN 'Tuesday' THEN 3 WHEN 'Terça-feira' THEN 3
-                        WHEN 'Wednesday' THEN 4 WHEN 'Quarta-feira' THEN 4
-                        WHEN 'Thursday' THEN 5 WHEN 'Quinta-feira' THEN 5
-                        WHEN 'Friday' THEN 6 WHEN 'Sexta-feira' THEN 6
+                        WHEN 'Sunday' THEN 1 WHEN 'Domingo' THEN 1 WHEN 'Monday' THEN 2 WHEN 'Segunda-feira' THEN 2
+                        WHEN 'Tuesday' THEN 3 WHEN 'Terça-feira' THEN 3 WHEN 'Wednesday' THEN 4 WHEN 'Quarta-feira' THEN 4
+                        WHEN 'Thursday' THEN 5 WHEN 'Quinta-feira' THEN 5 WHEN 'Friday' THEN 6 WHEN 'Sexta-feira' THEN 6
                         WHEN 'Saturday' THEN 7 WHEN 'Sábado' THEN 7
-                    END as DiaSemanaID_Hoje
+                    END as DiaSemanaID_Hoje,
+                    CASE DATENAME(weekday, DATEADD(day, -1, GETDATE()))
+                        WHEN 'Sunday' THEN 1 WHEN 'Domingo' THEN 1 WHEN 'Monday' THEN 2 WHEN 'Segunda-feira' THEN 2
+                        WHEN 'Tuesday' THEN 3 WHEN 'Terça-feira' THEN 3 WHEN 'Wednesday' THEN 4 WHEN 'Quarta-feira' THEN 4
+                        WHEN 'Thursday' THEN 5 WHEN 'Quinta-feira' THEN 5 WHEN 'Friday' THEN 6 WHEN 'Sexta-feira' THEN 6
+                        WHEN 'Saturday' THEN 7 WHEN 'Sábado' THEN 7
+                    END as DiaSemanaID_Ontem
             )
-            SELECT T.Titulo, F.NomeCompleto, T.Pontos, 
-                'Hoje' as Categoria, -- A categoria agora é sempre 'Hoje'
-                TA.DataAtribuicao, D.DataRef as DataReferencia
-            FROM TarefasAtribuidas TA 
-            JOIN Tarefas T ON TA.TarefaID = T.TarefaID 
-            JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID
-            JOIN Datas D ON 1=1
+            -- Tarefas de HOJE
+            SELECT T.Titulo, F.NomeCompleto, T.Pontos, 'Hoje' as Categoria, TA.DataAtribuicao, D.DataHoje as DataReferencia
+            FROM TarefasAtribuidas TA JOIN Tarefas T ON TA.TarefaID = T.TarefaID JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID JOIN Datas D ON 1=1
             WHERE TA.FuncionarioID IS NOT NULL AND TA.DataFimVigencia IS NULL
-              AND NOT EXISTS (SELECT 1 FROM Entregas E WHERE E.AtribuicaoID = TA.AtribuicaoID AND CONVERT(date, E.DataEnvio) = CONVERT(date, D.DataRef) AND E.StatusValidacao != 'Recusada')
-              AND (
-                TA.TipoFrequencia = 'Diaria' OR 
-                (TA.TipoFrequencia = 'Semanal' AND CAST(TA.ValorFrequencia AS INT) = D.DiaSemanaID_Hoje) OR 
-                (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, D.DataRef)) OR 
-                (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = CONVERT(date, D.DataRef))
-              )
-              AND (F.DiaDeFolga IS NULL OR F.DiaDeFolga = 0 OR F.DiaDeFolga != D.DiaSemanaID_Hoje)
-            ORDER BY F.NomeCompleto;
-        """
+            AND NOT EXISTS (SELECT 1 FROM Entregas E WHERE E.AtribuicaoID = TA.AtribuicaoID AND CONVERT(date, E.DataEnvio) = CONVERT(date, D.DataHoje) AND E.StatusValidacao != 'Recusada')
+            AND ( TA.TipoFrequencia = 'Diaria' OR
+                    (TA.TipoFrequencia = 'Semanal' AND CAST(TA.ValorFrequencia AS INT) = D.DiaSemanaID_Hoje) OR
+                    (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, D.DataHoje)) OR
+                    (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = CONVERT(date, D.DataHoje)) OR
+                    (TA.TipoFrequencia = 'Unica' AND CONVERT(date, TA.DataInicioVigencia) = CONVERT(date, D.DataHoje)) -- Inclui Unica de Hoje
+                )
+            AND (F.DiaDeFolga IS NULL OR F.DiaDeFolga = 0 OR F.DiaDeFolga != D.DiaSemanaID_Hoje)
+
+            UNION ALL
+
+            -- Tarefas de ONTEM que não foram feitas
+            SELECT T.Titulo, F.NomeCompleto, T.Pontos, 'Atrasada' as Categoria, TA.DataAtribuicao, D.DataOntem as DataReferencia
+            FROM TarefasAtribuidas TA JOIN Tarefas T ON TA.TarefaID = T.TarefaID JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID JOIN Datas D ON 1=1
+            WHERE TA.FuncionarioID IS NOT NULL AND TA.DataFimVigencia IS NULL
+            -- Verifica se NÃO existe entrega feita ONTEM (Aprovada ou Pendente)
+            AND NOT EXISTS (SELECT 1 FROM Entregas E WHERE E.AtribuicaoID = TA.AtribuicaoID AND CONVERT(date, E.DataEnvio) = CONVERT(date, D.DataOntem) AND E.StatusValidacao IN ('Aprovada', 'Pendente'))
+            -- Verifica se a tarefa ERA devida ONTEM
+            AND ( TA.TipoFrequencia = 'Diaria' OR
+                    (TA.TipoFrequencia = 'Semanal' AND CAST(TA.ValorFrequencia AS INT) = D.DiaSemanaID_Ontem) OR
+                    (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, D.DataOntem)) OR
+                    (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = CONVERT(date, D.DataOntem)) OR
+                    (TA.TipoFrequencia = 'Unica' AND CONVERT(date, TA.DataInicioVigencia) = CONVERT(date, D.DataOntem)) -- Inclui Unica de Ontem
+                )
+            -- Verifica se o funcionário NÃO estava de folga ONTEM
+            AND (F.DiaDeFolga IS NULL OR F.DiaDeFolga = 0 OR F.DiaDeFolga != D.DiaSemanaID_Ontem)
+            -- Garante que não apareça se foi feita HOJE (Aprovada ou Pendente)
+            AND NOT EXISTS (SELECT 1 FROM Entregas E WHERE E.AtribuicaoID = TA.AtribuicaoID AND CONVERT(date, E.DataEnvio) = CONVERT(date, D.DataHoje) AND E.StatusValidacao IN ('Aprovada', 'Pendente'))
+
+            ORDER BY NomeCompleto, Categoria DESC; -- Ordena para Atrasadas virem antes de Hoje
+        """        
         cursor.execute(sql_para_fazer)
         para_fazer_cols = [column[0] for column in cursor.description]
         para_fazer_rows = cursor.fetchall()
@@ -2693,17 +2709,20 @@ def buscar_dados_para_painel_kanban():
         para_fazer_lista = [dict(zip(para_fazer_cols, row)) for row in para_fazer_rows]
         concluidas_lista = [dict(zip(concluidas_cols, row)) for row in concluidas_rows]
 
-        tarefas_de_hoje_pendentes = len(para_fazer_lista) # Simplificado, pois agora só há tarefas de hoje
+        # Recalcula o total corretamente considerando a query modificada
+        tarefas_hoje_e_atrasadas_pendentes = len(para_fazer_lista)
         total_concluidas_hoje = len(concluidas_lista)
-        total_tarefas_do_dia = tarefas_de_hoje_pendentes + total_concluidas_hoje
+        # O total de tarefas 'devidas' hoje/ontem é a soma das pendentes + as concluídas hoje
+        total_tarefas_do_dia_ou_atrasadas = tarefas_hoje_e_atrasadas_pendentes + total_concluidas_hoje
 
-        progresso = { "concluidas": total_concluidas_hoje, "total": total_tarefas_do_dia }
+        progresso = { "concluidas": total_concluidas_hoje, "total": total_tarefas_do_dia_ou_atrasadas }
+
 
         return {
             'para_fazer': para_fazer_lista,
             'validacao': [dict(zip(validacao_cols, row)) for row in validacao_rows],
             'concluidas': concluidas_lista,
-            'progresso': progresso
+            'progresso': progresso # Retorna o progresso calculado corretamente
         }
     except Exception as e:
         logger.error(f"ERRO ao buscar dados para o painel Kanban: {e}")
