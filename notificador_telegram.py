@@ -105,9 +105,10 @@ def enviar_mensagem_com_botao(chat_id, texto, reply_markup_obj):
     except Exception as e:
         logger.error(f"Erro ao enviar mensagem com botão para {chat_id}: {e}")
 
-def enviar_foto_com_botoes(chat_id, foto, legenda, reply_markup_obj=None): # Tornamos reply_markup_obj opcional
+# ---> ADICIONE parse_mode AQUI      <---- e aqui
+def enviar_foto_com_botoes(chat_id, foto, legenda, reply_markup_obj=None, parse_mode='Markdown'): # Padrão Markdown se não for fornecido
     """
-    (VERSÃO MELHORADA)
+    (VERSÃO CORRIGIDA PARA ACEITAR PARSE_MODE)
     Envia uma foto com legenda e, opcionalmente, botões.
     RETORNA a resposta da API.
     """
@@ -117,33 +118,40 @@ def enviar_foto_com_botoes(chat_id, foto, legenda, reply_markup_obj=None): # Tor
     payload = {
         'chat_id': chat_id,
         'caption': legenda,
-        'parse_mode': 'Markdown',
+        'parse_mode': parse_mode, # <-- Usa o parse_mode fornecido
     }
-    
+
     # Adiciona os botões ao payload apenas se eles forem fornecidos
     if reply_markup_obj:
+        # Garante que o reply_markup seja serializado corretamente para JSON
         payload['reply_markup'] = json.dumps(reply_markup_obj.to_dict())
-    
+
     try:
-        if os.path.exists(str(foto)):
+        # Verifica se 'foto' é um caminho de arquivo existente
+        if isinstance(foto, str) and os.path.exists(foto):
             with open(foto, 'rb') as f:
                 files = {'photo': f}
-                response = requests.post(url, data=payload, files=files)
+                # Envia como multipart/form-data quando há arquivo
+                response = requests.post(url, data=payload, files=files, timeout=60) # Timeout aumentado para uploads
         else:
-            # Se a 'foto' não é um caminho de arquivo, asumimos que é um file_id
+            # Se não for um caminho, assume que é um file_id
             payload['photo'] = foto
-            response = requests.post(url, data=payload)
-        
+            # Envia como application/x-www-form-urlencoded ou JSON (requests cuida disso)
+            response = requests.post(url, data=payload, timeout=30)
+
         resposta_json = response.json()
         if not resposta_json.get('ok'):
-            logger.error(f"!!! ERRO DA API DO TELEGRAM: {resposta_json}")
+            logger.error(f"!!! ERRO DA API DO TELEGRAM (sendPhoto): {resposta_json}")
         else:
             logger.info(f"Foto enviada para {chat_id}.")
-        
-        return resposta_json
 
+        return resposta_json # Retorna a resposta completa da API
+
+    except requests.exceptions.RequestException as req_err: # Captura erros de rede específicos
+         logger.error(f"Erro de rede ao enviar foto para {chat_id}: {req_err}", exc_info=True)
+         return None
     except Exception as e:
-        logger.error(f"Erro ao enviar foto para {chat_id}: {e}")
+        logger.error(f"Erro inesperado ao enviar foto para {chat_id}: {e}", exc_info=True)
         return None
     
 
