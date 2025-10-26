@@ -578,7 +578,9 @@ async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 reply_markup,
                 parse_mode='HTML' # Mantenha como HTML
             )
-
+            database.marcar_notificacao_gestor_enviada(entrega_id)
+    except Exception as notify_error: # <-- Captura erro da notificação
+        
         await update.message.reply_text("✅ Evidência válida! Entrega registrada com sucesso e enviada para validação!")
 
     except Exception as e:
