@@ -424,14 +424,20 @@ async def roteador_de_texto_privado(update: Update, context: ContextTypes.DEFAUL
     if not funcionario:
         return # Se o funcionário não for encontrado, não faz nada
 
-    # Cenário 1: O usuário está enviando o código de verificação do CPF
-    if 'aguardando_verificador_cpf' in user_data:
-        user_data.pop('aguardando_verificador_cpf')
+    # Comando /cancelar para limpar estado
+    if texto_recebido.strip().lower() == '/cancelar':
+        user_data.clear()
+        await update.message.reply_text("Ação cancelada. Use os botões do menu.")
+        return
+
+    # Verifica estados específicos PRIMEIRO
+    if user_data.get('aguardando_verificador_cpf'): # Usar .get() é mais seguro
+        user_data.pop('aguardando_verificador_cpf', None) # Limpa mesmo se falhar
         verificador_correto = database.buscar_verificador_cpf(funcionario.FuncionarioID)
 
-        if texto_recebido.strip() == verificador_correto:
+        if verificador_correto and texto_recebido.strip() == verificador_correto: # Adiciona verificação se verificador_correto existe
             await update.message.reply_text("✅ Verificação bem-sucedida! Buscando seus documentos...")
-            
+
             holerites_disponiveis = database.buscar_holerites_disponiveis(funcionario.FuncionarioID)
 
             if not holerites_disponiveis:
@@ -444,46 +450,54 @@ async def roteador_de_texto_privado(update: Update, context: ContextTypes.DEFAUL
                 mes_ano_str = holerite.MesAno.strftime('%B/%Y').capitalize()
                 # Guarda a data no formato do banco para o callback
                 data_callback = holerite.MesAno.strftime('%Y-%m-%d')
-                
+
                 keyboard.append([
                     InlineKeyboardButton(
-                        f"📄 {mes_ano_str}", 
+                        f"📄 {mes_ano_str}",
                         callback_data=f"get_holerite_{data_callback}"
                     )
                 ])
-            
+
             reply_markup = InlineKeyboardMarkup(keyboard)
             await update.message.reply_text("Selecione o holerite que deseja visualizar:", reply_markup=reply_markup)
 
         else:
-            await update.message.reply_text("❌ Código de verificação incorreto. Por favor, inicie o processo novamente com /holerite ou usando o botão 'Meus Documentos'.")
+            await update.message.reply_text("❌ Código de verificação incorreto ou não cadastrado. Por favor, inicie o processo novamente ou contate o RH.")
+        return # Importante retornar após tratar um estado
+
+    elif user_data.get('tarefa_nao_aplicavel'):
+        atribuicao_id = user_data.pop('tarefa_nao_aplicavel', None)
+        if atribuicao_id: # Só prossegue se conseguiu pegar o ID
+            database.registrar_tarefa_nao_aplicavel(atribuicao_id, texto_recebido)
+            keyboard = [[InlineKeyboardButton("⬅️ Ver Tarefas Restantes", callback_data="voltar_lista_tarefas")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text("Ok, justificativa registrada!", reply_markup=reply_markup)
+        else:
+             await update.message.reply_text("Ocorreu um erro. Por favor, tente marcar como 'Não Aplicável' novamente.")
         return
 
-    # Cenário 2: O usuário está justificando uma tarefa "Não Aplicável"
-    if 'tarefa_nao_aplicavel' in user_data:
-        atribuicao_id = user_data.pop('tarefa_nao_aplicavel')
-        database.registrar_tarefa_nao_aplicavel(atribuicao_id, texto_recebido)
-        
-        keyboard = [[InlineKeyboardButton("⬅️ Ver Tarefas Restantes", callback_data="voltar_lista_tarefas")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text("Ok, justificativa registrada!", reply_markup=reply_markup)
-        return
-
-    # Cenário 3: O usuário está enviando o assunto para uma solicitação de feedback
-    if 'aguardando_assunto_feedback' in user_data:
-        user_data.pop('aguardando_assunto_feedback')
+    elif user_data.get('aguardando_assunto_feedback'):
+        user_data.pop('aguardando_assunto_feedback', None)
         sucesso = database.criar_solicitacao_feedback(funcionario.FuncionarioID, texto_recebido)
         if sucesso:
             mensagem_gestor = (f"📢 **Nova Solicitação de Feedback**\n\n👤 **De:** {funcionario.NomeCompleto}\n📝 **Assunto:** {texto_recebido}")
-            notificador_telegram.enviar_mensagem(config.GESTOR_GROUP_CHAT_ID, mensagem_gestor)
-            await update.message.reply_text("✅ Sua solicitação de feedback foi enviada com sucesso aos gestores!")
+            # Usar try-except para envio de notificação
+            try:
+                notificador_telegram.enviar_mensagem(config.GESTOR_GROUP_CHAT_ID, mensagem_gestor)
+            except Exception as e_notify:
+                logger.error(f"Falha ao notificar gestores sobre feedback: {e_notify}")
+                # Informa o usuário mesmo se a notificação falhar
+            await update.message.reply_text("✅ Sua solicitação de feedback foi enviada com sucesso!")
         else:
             await update.message.reply_text("❌ Ocorreu um erro ao salvar sua solicitação. Tente novamente.")
         return
 
-    # Cenário Padrão
-    await update.message.reply_text("Não entendi o que você quis dizer. Use os botões do menu para interagir comigo. Se precisar, use o comando /ajuda.")
-
+    # Se não caiu em nenhum estado específico, é uma mensagem normal não esperada
+    else:
+         # Limpa qualquer estado residual por segurança
+         user_data.clear()
+         await update.message.reply_text("Não entendi o que você quis dizer. Use os botões do menu para interagir comigo. Se precisar, use o comando /ajuda ou digite /cancelar para recomeçar.")
+         
 
 async def solicitar_feedback_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Inicia o processo de solicitação de feedback."""
@@ -923,6 +937,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
                              f"Você ganhou <b>{detalhes.Pontos}</b> pontos. Continue assim!")
         if novas_conquistas_ganhas:
             for conquista in novas_conquistas_ganhas:
+                # Apenas monta a string da notificação
                 texto_notificacao += (
                     f"\n\n✨ <b>NOVA CONQUISTA DESBLOQUEADA!</b> ✨\n"
                     f"{conquista.Icone} <b>{conquista.Nome}</b>\n"
