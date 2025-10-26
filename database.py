@@ -62,6 +62,8 @@ from datetime import datetime, date, timedelta
 import calendar 
 import hashlib
 import config 
+import notificador_telegram
+import logging
 
 CONNECTION_STRING = (
     f"DRIVER={{ODBC Driver 18 for SQL Server}};"  
@@ -80,6 +82,46 @@ def get_db_connection():
     except pyodbc.Error as ex:
         logger.critical(f"FALHA CRÍTICA na conexão com o banco de dados: {ex}", exc_info=True) # Usamos critical e exc_info para detalhes
         return None
+
+def buscar_proximos_agendamentos(limite=5):
+    """Busca os próximos 'limite' agendamentos a partir de hoje."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Query otimizada para buscar apenas os próximos 'limite' agendamentos
+            # Usando CAST para garantir que GETDATE() compare apenas a data
+            # Adicionado tratamento para StatusAgendamento (ex: 'Confirmado')
+            sql = f"""
+                SELECT TOP ({int(limite)})
+                    A.NomeCliente, A.TipoEvento, A.DataEvento, A.TelefoneCliente -- Adicionado Telefone
+                FROM Agendamentos A
+                WHERE A.DataEvento >= CAST(GETDATE() AS DATE) -- Apenas agendamentos futuros (a partir de hoje)
+                  AND A.StatusAgendamento = 'Confirmado' -- Apenas confirmados (ou ajuste conforme necessário)
+                ORDER BY A.DataEvento ASC
+            """
+            cursor.execute(sql)
+            cols = [column[0] for column in cursor.description]
+            agendamentos = []
+            for row in cursor.fetchall():
+                ag_dict = dict(zip(cols, row))
+                # Formata a data/hora para o JS (dd/mm/yyyy HH:MM)
+                ag_dict['data_evento'] = ag_dict['DataEvento'].strftime('%d/%m/%Y %H:%M')
+                # Renomeia as chaves para corresponder ao JS (se necessário, mas o JS será ajustado)
+                ag_dict['nome_cliente'] = ag_dict.pop('NomeCliente')
+                ag_dict['tipo_evento'] = ag_dict.pop('TipoEvento')
+                ag_dict['telefone_cliente'] = ag_dict.pop('TelefoneCliente') # Adicionado
+                del ag_dict['DataEvento'] # Remove a chave original
+                agendamentos.append(ag_dict)
+            return agendamentos
+        except Exception as e:
+            logger.error(f"Erro ao buscar próximos agendamentos: {e}", exc_info=True)
+            return []
+        finally:
+            if conn:
+                conn.close()
+    return []
+
 
 def criar_agendamento(dados_agendamento):
     """(VERSÃO FINAL CORRIGIDA) Insere um novo agendamento e RETORNA o ID criado."""
@@ -3476,21 +3518,50 @@ def calcular_pontos_possiveis_debug(funcionario_id, data_inicio, data_fim):
     finally:
         if conn: conn.close()
 
+# Em database.py
+
 def excluir_entrega(entrega_id):
-    """Exclui um registro específico da tabela Entregas."""
+    """Exclui um registro específico da tabela Entregas E AJUSTA O SALDO DE PONTOS."""
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            sql = "DELETE FROM Entregas WHERE EntregaID = ?"
-            cursor.execute(sql, entrega_id)
+
+            # 1. Buscar os dados ANTES de excluir
+            sql_find = "SELECT FuncionarioID, PontosGanhos FROM Entregas WHERE EntregaID = ?"
+            cursor.execute(sql_find, entrega_id)
+            entrega_dados = cursor.fetchone()
+
+            if not entrega_dados:
+                logger.warning(f"Tentativa de excluir EntregaID {entrega_id} que não foi encontrada.")
+                return False # Entrega não existe
+
+            funcionario_id, pontos_a_remover = entrega_dados
+            # Garante que pontos_a_remover seja 0 se for None (caso a entrega não tivesse pontos)
+            pontos_a_remover = pontos_a_remover or 0
+
+            # 2. Excluir a entrega
+            sql_delete = "DELETE FROM Entregas WHERE EntregaID = ?"
+            cursor.execute(sql_delete, entrega_id)
+            rows_affected = cursor.rowcount # Verifica se realmente excluiu algo
+
+            # 3. Subtrair os pontos do saldo (APENAS se a exclusão foi bem-sucedida E havia pontos a remover)
+            if rows_affected > 0 and pontos_a_remover != 0: # Verifica se pontos_a_remover é diferente de zero
+                 # Usamos a função adicionar_pontos_ao_saldo com valor negativo
+                 # A função adicionar_pontos_ao_saldo já existe e lida com a conexão
+                 adicionar_pontos_ao_saldo(funcionario_id, -pontos_a_remover)
+                 logger.info(f"Saldo ajustado em {-pontos_a_remover} pontos para FuncionarioID {funcionario_id} após exclusão da EntregaID {entrega_id}.")
+
             conn.commit()
-            return cursor.rowcount > 0 # Retorna True se deletou algo
+            return rows_affected > 0 # Retorna True se deletou algo
+
         except Exception as e:
-            logger.error(f"ERRO ao excluir entrega: {e}")
+            conn.rollback() # Desfaz tudo em caso de erro
+            logger.error(f"ERRO CRÍTICO ao excluir entrega e ajustar saldo (EntregaID: {entrega_id}): {e}", exc_info=True)
             return False
         finally:
-            conn.close()
+            if conn:
+                conn.close()
     return False
 
 def editar_pontos_entrega(entrega_id, novos_pontos):
@@ -3523,3 +3594,72 @@ def editar_pontos_entrega(entrega_id, novos_pontos):
         finally:
             conn.close()
     return False
+
+# --- COLE ESTE BLOCO NO FINAL DO ARQUIVO database.py ---
+
+# Certifique-se de que 'import notificador_telegram' e 'import logging' (e datetime)
+# estão no topo do arquivo database.py
+# O logger já deve estar configurado pelo bloco no início do arquivo.
+
+def verificar_e_premiar_meta_diaria(apuracao_id, data_apuracao_str, valor_dia, meta_principal_id):
+    """
+    Função auxiliar para verificar se a meta diária foi atingida e premiar a equipe.
+    Chamada tanto no lançamento quanto na edição. AGORA RESIDE EM database.py
+    """
+    try:
+        # Chamada interna, sem 'database.'
+        modelo_meta_diaria = buscar_modelo_meta_para_data(data_apuracao_str)
+
+        # Condição: Modelo existe? Valor >= Meta? Pontos > 0?
+        if modelo_meta_diaria and valor_dia >= modelo_meta_diaria.ValorMeta and modelo_meta_diaria.PontosPremio > 0:
+
+            # Busca detalhes da meta principal para pegar o SetorAlvo
+            # Chamada interna, sem 'database.'
+            meta_principal = next((m for m in listar_metas_principais() if m.MetaPrincipalID == meta_principal_id), None)
+
+            if meta_principal:
+                # Usando logger em vez de print para consistência
+                logger.info(f"--- VERIFICANDO PREMIAÇÃO META DIÁRIA ({data_apuracao_str}) ---")
+                logger.info(f"Valor Atingido: {valor_dia} >= Meta: {modelo_meta_diaria.ValorMeta}. Pontos Prêmio: {modelo_meta_diaria.PontosPremio}")
+                logger.info(f"Setor Alvo da Meta Principal: '{meta_principal.SetorAlvo}'")
+
+                # Chama a função do banco (interna) para registrar os pontos e pegar a lista de premiados
+                # Chamada interna, sem 'database.'
+                funcionarios_premiados = registrar_pontos_meta_diaria(
+                    apuracao_id,
+                    modelo_meta_diaria.PontosPremio,
+                    meta_principal.SetorAlvo
+                )
+
+                if funcionarios_premiados:
+                    logger.info(f"--> {len(funcionarios_premiados)} funcionários premiados. Enviando notificações...")
+                    mensagem_telegram = (
+                        f"🏆 **PARABÉNS, EQUIPE DO SETOR '{meta_principal.SetorAlvo.upper()}'!** 🏆\n\n"
+                        f"Vocês bateram a meta diária de hoje ({data_apuracao_str}) e cada um ganhou **{modelo_meta_diaria.PontosPremio} pontos**!\n\n"
+                        "Continuem com o trabalho incrível! 🚀"
+                    )
+                    for funcionario in funcionarios_premiados:
+                        # Chamada externa para o módulo notificador_telegram
+                        notificador_telegram.enviar_mensagem(funcionario.ChatIDTelegram, mensagem_telegram)
+
+                    # Substituímos o messagebox por um log
+                    logger.info(f"Meta Diária Atingida! Equipe do setor '{meta_principal.SetorAlvo}' notificada.")
+                else:
+                     logger.info("--> Nenhum funcionário encontrado no setor alvo para premiar.") # Usando logger
+            # else: # Opcional: Logar se a meta principal não for encontrada (pouco provável)
+            #    logger.warning(f"Meta principal ID {meta_principal_id} não encontrada ao verificar prêmio diário.")
+
+        # Log mais detalhado se a meta não foi atingida ou não tem prêmio
+        elif modelo_meta_diaria:
+            logger.info(f"--- VERIFICANDO PREMIAÇÃO META DIÁRIA ({data_apuracao_str}) ---")
+            logger.info(f"Meta NÃO atingida ou sem prêmio. Valor: {valor_dia}, Meta: {modelo_meta_diaria.ValorMeta}, Pontos: {modelo_meta_diaria.PontosPremio}")
+        else:
+            logger.info(f"--- VERIFICANDO PREMIAÇÃO META DIÁRIA ({data_apuracao_str}) ---")
+            logger.info(f"Nenhum modelo de meta diária encontrado para esta data.")
+
+    except Exception as e:
+        # Usar logger.exception para incluir o traceback completo no log
+        logger.exception(f"!!! ERRO durante a verificação/premiação da meta diária (ApuracaoID: {apuracao_id}): {e}")
+        # Não mostramos erros para o usuário aqui, apenas logamos.
+
+# --- FIM DO BLOCO PARA COLAR ---
