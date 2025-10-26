@@ -535,6 +535,18 @@ def rota_meta_diaria_do_dia():
         logger.exception(f"!!! ERRO no endpoint /api/meta_diaria_do_dia: {e}")
         return jsonify({"status": "erro", "mensagem": "Ocorreu um erro interno no servidor. Tente novamente mais tarde ou contate o suporte."}), 500
     
+@app.route('/api/agendamentos/proximos', methods=['GET'])
+def rota_proximos_agendamentos():
+    """Endpoint para buscar apenas os próximos agendamentos para o painel."""
+    try:
+        # Chama a nova função do banco
+        proximos = database.buscar_proximos_agendamentos(limite=5)
+        # A função do banco já retorna a lista de dicionários formatada
+        return jsonify(proximos), 200
+    except Exception as e:
+        logger.exception(f"!!! ERRO no endpoint /api/agendamentos/proximos: {e}")
+        return jsonify({"status": "erro", "mensagem": "Erro ao buscar próximos agendamentos."}), 500
+    
 if __name__ == '__main__':
     # O debug=False é essencial para rodar como serviço
     app.run(host='0.0.0.0', port=5000, debug=False)
