@@ -123,24 +123,26 @@ async def status_meta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     # Enviamos a mensagem usando reply_html em vez de reply_markdown_v2
     await update.message.reply_html(mensagem)
 
-# Em telegram_bot.py, SUBSTITUA também a função lancar_venda:
-
 async def lancar_venda(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Registra o valor da apuração diária enviado pelo gestor."""
     chat_id = update.effective_chat.id
     gestor = database.buscar_funcionario_por_chat_id(update.effective_user.id)
 
+    # Verifica se é o grupo de gestão
     if chat_id != config.GESTOR_GROUP_CHAT_ID:
         await update.message.reply_text("Este comando é exclusivo para o grupo de gestão.")
         return
+    # Verifica se o gestor foi encontrado no banco
     if not gestor:
         await update.message.reply_text("Erro: Seu usuário do Telegram não foi encontrado no sistema para registrar esta ação.")
         return
 
+    # Verifica se o valor foi fornecido
     if not context.args:
         await update.message.reply_text("Por favor, informe o valor a ser lançado.\nExemplo: `/lancar 1250.50`")
         return
 
+    # Tenta converter o valor para float
     try:
         valor_str = context.args[0].replace(',', '.')
         valor_dia = float(valor_str)
@@ -148,22 +150,47 @@ async def lancar_venda(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text("Valor inválido. Por favor, use apenas números.\nExemplo: `/lancar 1250.50`")
         return
 
+    # Busca o ID da meta principal ativa para hoje
     meta_id = database.buscar_meta_ativa_id_hoje()
     if not meta_id:
         await update.message.reply_text("Erro: Nenhuma meta principal está ativa para hoje. Não é possível lançar.")
         return
 
-    data_hoje_str = date.today().strftime('%Y-%m-%d')
+    # Pega a data de hoje e formata para o banco
+    data_hoje_obj = date.today() # Pega o objeto date
+    data_hoje_str = data_hoje_obj.strftime('%Y-%m-%d')
+
+    # Tenta lançar a apuração no banco
     sucesso, resultado = database.lancar_apuracao_diaria(meta_id, data_hoje_str, valor_dia, gestor.FuncionarioID)
 
     if sucesso:
-        # A mensagem de sucesso agora usa HTML para consistência
+        apuracao_id = resultado # Captura o ID da apuração retornado pelo banco
+
+        # Envia mensagem de sucesso
         await update.message.reply_html(
             f"✅ <b>Sucesso!</b> Lançamento de <code>R$ {valor_dia:,.2f}</code> registrado por {gestor.NomeCompleto}.\n\n"
             "Aguarde, estou atualizando o status..."
         )
-        await status_meta(update, context) # Chama a nova status_meta que também usa HTML
+
+        # --- CORREÇÃO APLICADA AQUI ---
+        # Chama a função auxiliar para verificar e premiar a meta diária
+        try:
+            # ASSUMINDO QUE A FUNÇÃO FOI MOVIDA PARA database.py:
+            database._verificar_e_premiar_meta_diaria(apuracao_id, data_hoje_str, valor_dia, meta_id)
+            # SE OPTOU POR IMPORTAR DE main.py (Opção B no Passo 1.2), use:
+            # _verificar_e_premiar_meta_diaria(apuracao_id, data_hoje_str, valor_dia, meta_id)
+            logger.info(f"Verificação de meta diária (ID {apuracao_id}) acionada via Telegram.")
+        except NameError:
+             logger.error("!!! ERRO: Função _verificar_e_premiar_meta_diaria não encontrada/importada corretamente. Premiação diária via Telegram falhou.")
+        except Exception as e_premio:
+             logger.error(f"Erro ao tentar verificar/premiar meta diária após lançamento via Telegram: {e_premio}", exc_info=True)
+        # --- FIM DA CORREÇÃO ---
+
+        # Mostra o status atualizado da meta principal
+        await status_meta(update, context)
+
     else:
+        # Envia mensagem de falha
         await update.message.reply_text(f"❌ Falha ao registrar o lançamento.\nErro: {resultado}")
 
 
@@ -525,6 +552,17 @@ async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 # Limpa o caminho temporário antes de retornar
                 if temp_photo_path and os.path.exists(temp_photo_path): os.remove(temp_photo_path)
                 return
+
+        else:
+            await update.message.reply_text(f"❌ Foto recusada! Não foi possível verificar a data/hora original da foto (EXIF ausente ou inválido). Use a câmera do Telegram.")
+            # Limpa o arquivo temporário antes de retornar
+            if temp_photo_path and os.path.exists(temp_photo_path):
+                 try:
+                      os.remove(temp_photo_path)
+                 except Exception as del_err:
+                      logger.error(f"Erro ao remover arquivo temporário (recusa EXIF) {temp_photo_path}: {del_err}")
+            return
+
         # Se photo_timestamp_utc for None (sem EXIF ou erro na leitura), a verificação é pulada.
         # --- FIM DA LÓGICA REFINADA ---
 
