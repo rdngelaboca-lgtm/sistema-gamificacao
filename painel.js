@@ -27,6 +27,63 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
+    // ===== FUNÇÃO SIMPLIFICADA PARA RENDERIZAR HISTÓRICO DE LUCRO (SÓ BARRAS) =====
+    function renderizarHistoricoLucro(historico) {
+        const container = document.getElementById('historico-lucro-barras');
+        if (!container) return;
+        container.innerHTML = ''; // Limpa o conteúdo anterior
+
+        if (!historico || historico.length === 0 || historico.every(item => item.percentual === 0.0 && item.mes.toLowerCase().includes('erro') || item.mes === 'N/A')) {
+            // Mantém a mensagem de indisponível, mas sem necessidade de ocupar muito espaço
+            container.innerHTML = '<p style="text-align: center; color: #888; font-size: 0.9em;"><i>Histórico indisponível.</i></p>';
+            return;
+        }
+
+        const META_LUCRO = 18.0; // Meta de 18%
+        const MAX_BARRA_PERCENTUAL = 25; // Teto visual
+
+        historico.forEach(item => {
+             if (item.mes === 'N/A' || item.mes.toLowerCase().includes('erro')) {
+                return; // Pula meses N/A ou Erro
+            }
+
+            const mesItemDiv = document.createElement('div');
+            mesItemDiv.className = 'mes-lucro-item';
+
+            // 1. Label do Mês
+            const mesLabel = document.createElement('span');
+            mesLabel.className = 'mes-lucro-label';
+            mesLabel.textContent = item.mes;
+            mesItemDiv.appendChild(mesLabel);
+
+            // 2. Container da Barra de Progresso
+            const progressoContainer = document.createElement('div');
+            progressoContainer.className = 'progresso-lucro-container';
+
+            const progressoBarra = document.createElement('div');
+            progressoBarra.className = 'progresso-lucro-barra';
+
+            // Calcula a largura da barra
+            let larguraBarra = 0;
+            if (item.percentual > 0) {
+                larguraBarra = Math.max(1, Math.min((item.percentual / MAX_BARRA_PERCENTUAL) * 100, 100));
+            }
+            progressoBarra.style.width = `${larguraBarra}%`;
+
+            // Adiciona classe se a meta foi batida para mudar a cor
+            if (item.percentual >= META_LUCRO) {
+                progressoBarra.classList.add('meta-lucro-batida');
+            }
+
+            progressoContainer.appendChild(progressoBarra);
+            mesItemDiv.appendChild(progressoContainer);
+
+            // 3. REMOVIDO: Ícone de Olho e Div de Detalhes
+
+            container.appendChild(mesItemDiv);
+        });
+    }
+    // ===== FIM DA FUNÇÃO SIMPLIFICADA =====
     function renderizarColunas(dados) {
         const colunas = {
             'coluna-para-fazer': dados.para_fazer,
@@ -243,27 +300,35 @@ async function atualizarPainel() {
             statusElement.textContent = 'Atualizando dados...';
             statusElement.style.color = '#888';
 
-            const [resTarefas, resRanking, resFeed, resMeta, resMetaDiaria, resProximosAgendamentos] = await Promise.all([
-            fetch(`${API_BASE_URL}/api/painel/tarefas`),
-            fetch(`${API_BASE_URL}/api/ranking/diario`),
-            fetch(`${API_BASE_URL}/api/feed`),
-            fetch(`${API_BASE_URL}/api/meta_principal_do_dia`),
-            fetch(`${API_BASE_URL}/api/meta_diaria_do_dia`),
-            fetch(`${API_BASE_URL}/api/agendamentos/proximos`)
+            // Adiciona o fetch para o novo endpoint
+            const [resTarefas, resRanking, resFeed, resMeta, resMetaDiaria, resProximosAgendamentos, resHistoricoLucro] = await Promise.all([ // Adicionado resHistoricoLucro
+                fetch(`${API_BASE_URL}/api/painel/tarefas`),
+                fetch(`${API_BASE_URL}/api/ranking/diario`),
+                fetch(`${API_BASE_URL}/api/feed`),
+                fetch(`${API_BASE_URL}/api/meta_principal_do_dia`),
+                fetch(`${API_BASE_URL}/api/meta_diaria_do_dia`),
+                fetch(`${API_BASE_URL}/api/agendamentos/proximos`),
+                fetch(`${API_BASE_URL}/api/historico_lucro`) // <<< NOVO FETCH
             ]);
 
-            if (!resTarefas.ok || !resRanking.ok || !resFeed.ok || !resMeta.ok || !resMetaDiaria.ok || !resProximosAgendamentos.ok) {
-             // Log mais detalhado do erro
-             const errorDetails = await Promise.all([
-                 resTarefas.ok ? null : resTarefas.text(),
-                 resRanking.ok ? null : resRanking.text(),
-                 resFeed.ok ? null : resFeed.text(),
-                 resMeta.ok ? null : resMeta.text(),
-                 resMetaDiaria.ok ? null : resMetaDiaria.text(),
-                 resProximosAgendamentos.ok ? null : resProximosAgendamentos.text()
-             ]);
-             console.error("Pelo menos uma resposta da API falhou:", errorDetails.filter(d => d));
-             throw new Error(`Erro na API. Status: Tarefas=${resTarefas.status}, Ranking=${resRanking.status}, Feed=${resFeed.status}, MetaP=${resMeta.status}, MetaD=${resMetaDiaria.status}, Agend=${resProximosAgendamentos.status}`);
+            // Verifica se TODOS os responses estão OK
+            if (!resTarefas.ok || !resRanking.ok || !resFeed.ok || !resMeta.ok || !resMetaDiaria.ok || !resProximosAgendamentos.ok || !resHistoricoLucro.ok) { // Adicionado resHistoricoLucro.ok
+                 // Log mais detalhado do erro (adaptado para incluir o novo fetch)
+                 const errorDetails = await Promise.all([
+                    resTarefas.ok ? null : { url: resTarefas.url, status: resTarefas.status, text: await resTarefas.text() },
+                    resRanking.ok ? null : { url: resRanking.url, status: resRanking.status, text: await resRanking.text() },
+                    resFeed.ok ? null : { url: resFeed.url, status: resFeed.status, text: await resFeed.text() },
+                    resMeta.ok ? null : { url: resMeta.url, status: resMeta.status, text: await resMeta.text() },
+                    resMetaDiaria.ok ? null : { url: resMetaDiaria.url, status: resMetaDiaria.status, text: await resMetaDiaria.text() },
+                    resProximosAgendamentos.ok ? null : { url: resProximosAgendamentos.url, status: resProximosAgendamentos.status, text: await resProximosAgendamentos.text() },
+                    resHistoricoLucro.ok ? null : { url: resHistoricoLucro.url, status: resHistoricoLucro.status, text: await resHistoricoLucro.text() }, // <<< NOVO CHECK
+                 ]);
+                 // Filtra apenas os erros e loga
+                 const errorsFound = errorDetails.filter(d => d);
+                 console.error("Pelo menos uma resposta da API falhou:", errorsFound);
+                 // Monta uma mensagem de erro mais informativa
+                 const errorSummary = errorsFound.map(e => `${new URL(e.url).pathname}: ${e.status}`).join(', ');
+                 throw new Error(`Erro na API. Falhas em: ${errorSummary}. Verifique o console.`);
              }
 
             const dadosTarefas = await resTarefas.json();
@@ -273,6 +338,7 @@ async function atualizarPainel() {
             const dadosMetaDiaria = await resMetaDiaria.json();
             // <<< ALTERAÇÃO AQUI: A API já retorna os dados prontos >>>
             const dadosAgendamentos = await resProximosAgendamentos.json();
+            const dadosHistoricoLucro = await resHistoricoLucro.json(); // <<< OBTÉM OS DADOS DO HISTÓRICO
 
             renderizarColunas(dadosTarefas);
             renderizarProgressoGeral(dadosTarefas.progresso);
@@ -282,6 +348,7 @@ async function atualizarPainel() {
             renderizarMetaDiaria(dadosMetaDiaria);
             // <<< ALTERAÇÃO AQUI: Passa os dados diretamente para a função de renderização >>>
             renderizarProximosAgendamentos(dadosAgendamentos);
+            renderizarHistoricoLucro(dadosHistoricoLucro); // <<< CHAMA A NOVA FUNÇÃO DE RENDERIZAÇÃO
 
             statusElement.textContent = `Última atualização: ${new Date().toLocaleTimeString('pt-BR')}`;
             statusElement.style.color = 'inherit'; // Volta para a cor padrão
@@ -298,6 +365,22 @@ async function atualizarPainel() {
     setInterval(atualizarPainel, 60000); // Agenda para atualizar a cada 60 segundos (1 minuto)
 
 }); // <<<<<< Fim do addEventListener('DOMContentLoaded', ...)
+
+// ===== EVENT LISTENER PARA O OLHO GLOBAL DO HISTÓRICO DE LUCRO =====
+const toggleLucroHistButton = document.getElementById('toggle-lucro-hist');
+const historicoLucroContainer = document.getElementById('historico-lucro-container');
+
+if (toggleLucroHistButton && historicoLucroContainer) {
+    toggleLucroHistButton.addEventListener('click', () => {
+        historicoLucroContainer.classList.toggle('visible');
+        // Muda o ícone
+        toggleLucroHistButton.textContent = historicoLucroContainer.classList.contains('visible') ? '🙈' : '👁️';
+    });
+} else {
+    console.error("Erro: Elemento do botão de toggle ou container do histórico de lucro não encontrado.");
+}
+// ===== FIM DO EVENT LISTENER =====
+
 // --- INÍCIO: Função para disparar a animação de fogos ---
 function dispararFogos() {
     // Usa a biblioteca canvas-confetti
