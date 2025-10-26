@@ -468,83 +468,106 @@ async def solicitar_feedback_start(update: Update, context: ContextTypes.DEFAULT
 
 
 async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    MAX_SECONDS_DIFFERENCE = 120
+    MAX_SECONDS_DIFFERENCE = config.MAX_DIFERENCA_FOTO_SEGUNDOS # Usa valor do config.py
     temp_photo_path = None
 
     try:
-        # Camada 1 de Verificação (continua igual)
+        # Camada 1 de Verificação (sem alteração)
         if update.message.forward_from or update.message.forward_from_chat:
             await update.message.reply_text("❌ Desculpe, fotos encaminhadas não são aceitas.")
             return
         if update.message.document and 'image' in update.message.document.mime_type:
             await update.message.reply_text("❌ Por favor, envie a imagem como 'Foto', e não como 'Arquivo'.")
             return
-        
-        # Camada 2 de Verificação (com a lógica de fuso horário e MAIS FLEXÍVEL)
+
+        # Camada 2 de Verificação (LÓGICA AJUSTADA)
         photo_file = await update.message.photo[-1].get_file()
-        message_timestamp_utc = update.message.date 
+        message_timestamp_utc = update.message.date # Timestamp do Telegram (já em UTC)
 
         temp_photo_path = f"temp_{photo_file.file_id}.jpg"
         await photo_file.download_to_drive(temp_photo_path)
 
-        with open(temp_photo_path, 'rb') as f:
-            tags = exifread.process_file(f, stop_tag="EXIF DateTimeOriginal")
-            
-            # --- A LÓGICA FOI AJUSTADA AQUI ---
-            # Agora, nós SÓ fazemos a verificação de tempo SE a etiqueta de data existir.
-            if "EXIF DateTimeOriginal" in tags:
-                date_str = str(tags["EXIF DateTimeOriginal"])
-                photo_timestamp_naive = datetime.strptime(date_str, '%Y:%m:%d %H:%M:%S')
-                
-                try:
-                    # Tenta usar o fuso de Cuiabá, se não conseguir, usa o de São Paulo como padrão
-                    photo_timestamp_aware = photo_timestamp_naive.replace(tzinfo=ZoneInfo("America/Cuiaba"))
-                except:
-                    photo_timestamp_aware = photo_timestamp_naive.replace(tzinfo=ZoneInfo("America/Sao_Paulo"))
+        photo_timestamp_utc = None # Inicializa como None
+        try: # Tenta ler os metadados EXIF
+            with open(temp_photo_path, 'rb') as f:
+                # process_file pode levantar exceções se o arquivo não for imagem ou estiver corrompido
+                tags = exifread.process_file(f, stop_tag="EXIF DateTimeOriginal")
+                if "EXIF DateTimeOriginal" in tags:
+                    date_str = str(tags["EXIF DateTimeOriginal"])
+                    # Converte para datetime NAIVE (sem fuso horário inicial)
+                    photo_timestamp_naive = datetime.strptime(date_str, '%Y:%m:%d %H:%M:%S')
 
-                photo_timestamp_utc = photo_timestamp_aware.astimezone(timezone.utc)
-                time_difference = message_timestamp_utc - photo_timestamp_utc
-                
-                # Se a etiqueta existe E a foto é antiga, aí sim nós recusamos.
-                if time_difference.total_seconds() < 0 or time_difference.total_seconds() > MAX_SECONDS_DIFFERENCE:
-                    await update.message.reply_text(f"❌ Foto recusada! A evidência parece ser antiga (de mais de 2 minutos atrás). Por favor, envie uma foto tirada na hora.")
-                    return
-            
-            # Se a etiqueta "EXIF DateTimeOriginal" simplesmente não existir, o código não faz nada
-            # e segue em frente, confiando nas outras verificações. O 'else' que recusava foi removido.
-            # --- FIM DO AJUSTE ---
+                    # Tenta aplicar o fuso horário local (ex: São Paulo) - AJUSTE SE NECESSÁRIO
+                    try:
+                        # Tenta usar Cuiabá, se falhar, usa São Paulo
+                        local_tz = ZoneInfo("America/Cuiaba")
+                    except Exception:
+                        local_tz = ZoneInfo("America/Sao_Paulo") # Fallback
 
-        # Se chegou até aqui, a foto é válida! O código continua normalmente...
-        if 'identificador_tarefa' not in context.user_data: 
+                    # Torna o datetime "aware" com o fuso local
+                    photo_timestamp_aware = photo_timestamp_naive.replace(tzinfo=local_tz)
+
+                    # Converte para UTC para comparação segura
+                    photo_timestamp_utc = photo_timestamp_aware.astimezone(timezone.utc)
+
+        except Exception as exif_error:
+            logger.warning(f"Não foi possível ler metadados EXIF da foto: {exif_error}")
+            # photo_timestamp_utc continua None se não conseguiu ler EXIF ou deu erro
+
+        # --- LÓGICA DE VALIDAÇÃO TEMPORAL REFINADA ---
+        # SÓ executa a validação se CONSEGUIMOS obter um timestamp UTC da foto
+        if photo_timestamp_utc:
+            time_difference = message_timestamp_utc - photo_timestamp_utc
+            # Verifica se a foto é do futuro (negativo) ou mais antiga que o limite
+            if time_difference.total_seconds() < 0 or time_difference.total_seconds() > MAX_SECONDS_DIFFERENCE:
+                minutos = MAX_SECONDS_DIFFERENCE // 60
+                await update.message.reply_text(f"❌ Foto recusada! A evidência parece ter sido tirada há mais de {minutos} minutos. Por favor, envie uma foto tirada na hora.")
+                # Limpa o caminho temporário antes de retornar
+                if temp_photo_path and os.path.exists(temp_photo_path): os.remove(temp_photo_path)
+                return
+        # Se photo_timestamp_utc for None (sem EXIF ou erro na leitura), a verificação é pulada.
+        # --- FIM DA LÓGICA REFINADA ---
+
+        # Se chegou até aqui, a foto é considerada válida (ou sem EXIF confiável)
+        if 'identificador_tarefa' not in context.user_data:
             await update.message.reply_text("Parece que você enviou uma foto sem antes selecionar uma tarefa. Por favor, use o comando /tarefas primeiro.")
+             # Limpa o caminho temporário antes de retornar
+            if temp_photo_path and os.path.exists(temp_photo_path): os.remove(temp_photo_path)
             return
-        
-        # ... (O resto da função continua exatamente igual)
+
+        # Continua com o registro da entrega...
         atribuicao_id = int(context.user_data.pop('identificador_tarefa'))
-        funcionario = database.buscar_funcionario_por_chat_id(update.effective_user.id)
-        tarefa = database.buscar_tarefa_por_atribuicao(atribuicao_id)
-        
+        funcionario = database.buscar_funcionario_por_chat_id(update.effective_user.id) #
+        tarefa = database.buscar_tarefa_por_atribuicao(atribuicao_id) #
+
         if not (funcionario and tarefa):
             await update.message.reply_text("Ocorreu um erro ao identificar seus dados ou a tarefa.")
+            # Limpa o caminho temporário antes de retornar
+            if temp_photo_path and os.path.exists(temp_photo_path): os.remove(temp_photo_path)
             return
-            
+
         photo_size = update.message.photo[-1]
         file_id = photo_size.file_id
-        entrega_id = database.registrar_entrega_preliminar(tarefa.TarefaID, funcionario.FuncionarioID, atribuicao_id, file_id)
+        # Registra preliminarmente com file_id
+        entrega_id = database.registrar_entrega_preliminar(tarefa.TarefaID, funcionario.FuncionarioID, atribuicao_id, file_id) #
 
-        if entrega_id and config.GESTOR_GROUP_CHAT_ID:
-            titulo_sanitizado = escape_markdown(str(tarefa.Titulo), version=2)
-            nome_funcionario_sanitizado = escape_markdown(str(funcionario.NomeCompleto), version=2)
-            legenda = (f"**Nova Entrega para Validação**\n\n"
-                    f"👤 **Funcionário:** {nome_funcionario_sanitizado}\n"
-                    f"📝 **Tarefa:** {tarefa.Titulo} ({tarefa.Pontos} pts)\n"
-                    f"🗓️ **Data:** {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+        if entrega_id and config.GESTOR_GROUP_CHAT_ID: #
+            # Prepara notificação para gestor
+            # Usar html.escape para segurança se os títulos puderem conter < ou >
+            # import html
+            # titulo_escaped = html.escape(tarefa.Titulo)
+            # nome_funcionario_escaped = html.escape(funcionario.NomeCompleto)
+            legenda = (f"<b>Nova Entrega para Validação</b>\n\n"
+                    f"👤 <b>Funcionário:</b> {funcionario.NomeCompleto}\n"
+                    f"📝 <b>Tarefa:</b> {tarefa.Titulo} ({tarefa.Pontos} pts)\n"
+                    f"🗓️ <b>Data:</b> {datetime.now().strftime('%d/%m/%Y %H:%M')}")
             keyboard = [[
                 InlineKeyboardButton("✅ Aprovar", callback_data=f"aprovar_gestor_{entrega_id}"),
                 InlineKeyboardButton("❌ Reprovar", callback_data=f"reprovar_gestor_{entrega_id}")
             ]]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            notificador_telegram.enviar_foto_com_botoes(config.GESTOR_GROUP_CHAT_ID, file_id, legenda, reply_markup)
+            # Envia foto com botões para o grupo de gestores (usando parse_mode='HTML')
+            await notificador_telegram.enviar_foto_com_botoes(config.GESTOR_GROUP_CHAT_ID, file_id, legenda, reply_markup, parse_mode='HTML') # Passa parse_mode='HTML'
 
         await update.message.reply_text("✅ Evidência válida! Entrega registrada com sucesso e enviada para validação!")
 
@@ -553,9 +576,12 @@ async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text("Ocorreu um erro crítico ao registrar sua entrega. Contate o administrador.")
 
     finally:
+        # Garante que o arquivo temporário seja sempre removido
         if temp_photo_path and os.path.exists(temp_photo_path):
-            os.remove(temp_photo_path)
-        
+            try:
+                os.remove(temp_photo_path)
+            except Exception as del_err:
+                logger.error(f"Erro ao remover arquivo temporário {temp_photo_path}: {del_err}")        
 
 async def receber_motivo_recusa(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     
