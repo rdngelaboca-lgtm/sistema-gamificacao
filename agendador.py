@@ -64,7 +64,7 @@ import config
 import os
 from datetime import datetime, date, timedelta
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+import requests
 
 # Em agendador.py, SUBSTITUA a função verificar_e_enviar_tarefas_de_grupo por esta:
 def verificar_e_enviar_tarefas_de_grupo():
@@ -377,43 +377,77 @@ def verificar_e_enviar_lembretes_comunicados():
         notificador_telegram.enviar_mensagem(pendencia.ChatIDTelegram, mensagem)
         print(f"--> Lembrete sobre '{pendencia.Titulo}' enviado para {pendencia.NomeCompleto}.")
 
-# Em agendador.py, SUBSTITUA a função antiga por esta versão async
+# Em agendador.py
 
-async def processar_downloads_pendentes_async():
-    """Busca por entregas sem foto baixada e tenta fazer o download (VERSÃO ASYNC)."""
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] Verificando downloads de fotos pendentes...")
-    
+def processar_downloads_pendentes_sync():
+    """Busca por entregas sem foto baixada e tenta fazer o download (VERSÃO SÍNCRONA COM REQUESTS)."""
+    # Usando logger em vez de print para consistência
+    logger.info(f"[{datetime.now().strftime('%H:%M:%S')}] Verificando downloads de fotos pendentes...")
+
     entregas_para_baixar = database.buscar_entregas_para_download()
     if not entregas_para_baixar:
+        logger.debug("--> Nenhuma foto pendente para download.") # Usando debug para menos poluição no log normal
         return
 
-    print(f"--> Encontradas {len(entregas_para_baixar)} fotos para baixar.")
-    
-    from telegram.ext import Application
-    # Criamos uma instância da aplicação apenas para usar suas ferramentas de rede
-    app = Application.builder().token(config.TELEGRAM_TOKEN).connect_timeout(30).read_timeout(30).build()
+    logger.info(f"--> Encontradas {len(entregas_para_baixar)} fotos para baixar.")
+
+    token = config.TELEGRAM_TOKEN # Pega o token do config
 
     for entrega in entregas_para_baixar:
         try:
-            print(f"--> Baixando foto para EntregaID: {entrega.EntregaID}...")
-            # A CORREÇÃO MÁGICA: Usamos 'await' para esperar a chamada de rede
-            file_info = await app.bot.get_file(entrega.FileIDTelegram)
-            
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            file_path = os.path.join('entregas', f'{timestamp}_{entrega.EntregaID}.jpg')
-            
-            # E usamos 'await' aqui também para esperar o download
-            await file_info.download_to_drive(file_path)
-            
-            database.finalizar_registro_entrega(entrega.EntregaID, file_path)
-            print(f"--> SUCESSO! Foto da EntregaID {entrega.EntregaID} salva em {file_path}")
-        except Exception as e:
-            print(f"--> FALHA ao baixar foto da EntregaID {entrega.EntregaID}. Erro: {e}. Tentaremos novamente no próximo minuto.")
+            logger.info(f"--> Baixando foto para EntregaID: {entrega.EntregaID} (FileID: {entrega.FileIDTelegram})...")
 
-# Função "empacotadora" que o schedule pode chamar
-def processar_downloads_pendentes():
-    import asyncio
-    asyncio.run(processar_downloads_pendentes_async())
+            # 1. Obter informações do arquivo (incluindo file_path)
+            get_file_url = f"https://api.telegram.org/bot{token}/getFile"
+            params = {'file_id': entrega.FileIDTelegram}
+            # Adiciona timeout para evitar bloqueios indefinidos
+            response_file_info = requests.get(get_file_url, params=params, timeout=30)
+            response_file_info.raise_for_status() # Lança erro se a requisição falhar
+            file_info = response_file_info.json()
+
+            if not file_info.get('ok'):
+                logger.error(f"--> FALHA API getFile para EntregaID {entrega.EntregaID}: {file_info.get('description')}")
+                continue # Pula para a próxima entrega
+
+            telegram_file_path = file_info['result']['file_path']
+
+            # 2. Construir a URL de download
+            download_url = f"https://api.telegram.org/file/bot{token}/{telegram_file_path}"
+
+            # 3. Fazer o download do arquivo
+            # Adiciona timeout para o download
+            response_download = requests.get(download_url, stream=True, timeout=60)
+            response_download.raise_for_status() # Lança erro se o download falhar
+
+            # 4. Salvar o arquivo localmente
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            # Cria a pasta 'entregas' se não existir (melhor prática)
+            pasta_entregas = 'entregas'
+            if not os.path.exists(pasta_entregas):
+                try:
+                    os.makedirs(pasta_entregas)
+                    logger.info(f"Pasta '{pasta_entregas}' criada.")
+                except OSError as e:
+                    logger.error(f"Erro ao criar pasta '{pasta_entregas}': {e}", exc_info=True)
+                    continue # Pula esta entrega se não conseguir criar a pasta
+
+            local_file_path = os.path.join(pasta_entregas, f'{timestamp}_{entrega.EntregaID}.jpg')
+
+            with open(local_file_path, 'wb') as f:
+                for chunk in response_download.iter_content(chunk_size=8192):
+                    f.write(chunk)
+
+            # 5. Atualizar o banco de dados
+            database.finalizar_registro_entrega(entrega.EntregaID, local_file_path)
+            logger.info(f"--> SUCESSO! Foto da EntregaID {entrega.EntregaID} salva em {local_file_path}")
+
+        except requests.exceptions.Timeout:
+            logger.warning(f"--> TIMEOUT ao tentar baixar foto da EntregaID {entrega.EntregaID}. Tentaremos novamente.")
+        except requests.exceptions.RequestException as req_err:
+             logger.error(f"--> FALHA DE REDE ao baixar foto da EntregaID {entrega.EntregaID}. Erro: {req_err}. Tentaremos novamente.")
+        except Exception as e:
+             logger.error(f"--> FALHA GERAL ao baixar foto da EntregaID {entrega.EntregaID}. Erro: {e}. Tentaremos novamente.", exc_info=True)
+
 
 if __name__ == "__main__":
     print("--- 🤖 Robô Agendador 2.0 Iniciado 🤖 ---")
@@ -427,7 +461,7 @@ if __name__ == "__main__":
     schedule.every().day.at("08:00").do(verificar_e_executar_fechamento)
     schedule.every().day.at("09:05").do(verificar_e_delegar_tarefas_de_folga)
     schedule.every().day.at("09:00").do(verificar_e_enviar_lembretes_comunicados)
-    schedule.every(1).minutes.do(processar_downloads_pendentes)
+    schedule.every(1).minutes.do(processar_downloads_pendentes_sync)
 
     while True:
         schedule.run_pending()
