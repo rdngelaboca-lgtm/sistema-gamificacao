@@ -1366,18 +1366,23 @@ class App:
                     "Catálogo de Tarefas": self.atualizar_catalogo_tarefas,
                     "Feedbacks Pendentes": self.atualizar_lista_solicitacoes,
                     "Loja e Resgates": self.carregar_dados_loja,
-                    "Gestão de Metas": self.carregar_dados_metas,
+                    # "Gestão de Metas" é tratado abaixo
                     "Gerenciar Conquistas": self.atualizar_lista_conquistas,
                 }
+
+                if tab_text == "Gestão de Metas":
+                    # A aba de Metas tem duas funções de carregamento
+                    self.carregar_dados_metas()
+                    self.atualizar_lista_lucros() 
+                    return # Sai para não chamar a outra
 
                 if tab_text in tab_map:
                     # Se estiver, executa a função correspondente
                     tab_map[tab_text]()
 
             except tk.TclError:
-                pass
-        
-   
+                pass        
+    
     def on_tab_atribuir_tarefas_selected(self):
         self.atualizar_lista_tarefas_atribuicao()
         self.atualizar_painel_selecao()
@@ -2299,16 +2304,15 @@ class App:
         else:
             messagebox.showerror("Erro", "Ocorreu um erro ao salvar o feedback no banco de dados.")
 
-
     def criar_aba_metas(self):
-        """Cria a interface V4 para Gestão de Metas, com input de lucro."""
+        """(VERSÃO V5) Cria a interface para Gestão de Metas, com histórico de lucro."""
         main_frame = ttk.Frame(self.frame_metas)
         main_frame.pack(fill=tk.BOTH, expand=True)
-        # Agora temos 4 linhas principais: Lançar Venda, Lançar Lucro, Gerenciar Metas, Detalhes
-        main_frame.rowconfigure(3, weight=1) # Linha 3 (Detalhes) que se expande
+        # Layout: Venda (0), Lucro (1), Hist Lucro (2), Ger. Metas (3), Detalhes Vendas (4)
+        main_frame.rowconfigure(4, weight=1) # Linha 4 (Detalhes) que se expande
         main_frame.columnconfigure(0, weight=1)
 
-        # Frame Lançamento Venda (agora na linha 0)
+        # --- Frame Lançamento Venda (Linha 0) ---
         frame_lancamento = ttk.LabelFrame(main_frame, text="Lançar Apuração Diária (Vendas R$)", padding="10")
         frame_lancamento.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         frame_lancamento.columnconfigure(1, weight=1)
@@ -2323,32 +2327,28 @@ class App:
         self.entry_valor_dia.grid(row=2, column=1, padx=5, pady=5, sticky="w")
         btn_lancar = ttk.Button(frame_lancamento, text="Lançar Apuração Diária", command=self.lancar_apuracao_diaria)
         btn_lancar.grid(row=3, column=1, padx=5, pady=10, sticky="e")
-        # --- Nova seção para Lançar Lucro Mensal ---
+
+        # --- Frame Lançar Lucro Mensal (Linha 1) ---
         frame_lucro = ttk.LabelFrame(main_frame, text="Lançar Lucro Mensal (%)", padding="10")
         frame_lucro.grid(row=1, column=0, sticky="ew", pady=(0, 10))
         frame_lucro.columnconfigure(1, weight=1)
-
         # Label e Campo Ano
         ttk.Label(frame_lucro, text="Ano:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
         self.entry_lucro_ano = ttk.Entry(frame_lucro, width=6)
         self.entry_lucro_ano.grid(row=0, column=1, padx=5, pady=5, sticky="w")
-
         # Label e Campo Mês (Combobox)
         ttk.Label(frame_lucro, text="Mês:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
         meses_nomes = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
                     "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
         self.combo_lucro_mes = ttk.Combobox(frame_lucro, values=meses_nomes, state="readonly", width=15)
         self.combo_lucro_mes.grid(row=1, column=1, padx=5, pady=5, sticky="w")
-
         # Label e Campo Percentual
         ttk.Label(frame_lucro, text="Percentual (%):").grid(row=2, column=0, padx=5, pady=5, sticky="w")
         self.entry_lucro_percentual = ttk.Entry(frame_lucro, width=10)
         self.entry_lucro_percentual.grid(row=2, column=1, padx=5, pady=5, sticky="w")
-
         # Botão Salvar
         btn_salvar_lucro = ttk.Button(frame_lucro, text="Salvar Lucro Mensal", command=self.salvar_lucro_interface)
         btn_salvar_lucro.grid(row=3, column=1, padx=5, pady=10, sticky="e")
-
         # Preencher ano e mês anteriores como padrão
         hoje = datetime.now()
         primeiro_dia_mes_atual = hoje.replace(day=1)
@@ -2356,9 +2356,27 @@ class App:
         self.entry_lucro_ano.insert(0, str(ultimo_dia_mes_passado.year))
         self.combo_lucro_mes.current(ultimo_dia_mes_passado.month - 1)
 
-        # --- Seção Gerenciar Metas Principais (agora na linha 2) ---
+        # --- NOVO: Frame Histórico de Lucro (Linha 2) ---
+        frame_historico_lucro = ttk.LabelFrame(main_frame, text="Histórico de Lucro Lançado (Duplo-clique para editar)", padding="10")
+        frame_historico_lucro.grid(row=2, column=0, sticky="ew", pady=(0, 10))
+        frame_historico_lucro.columnconfigure(0, weight=1)
+        frame_historico_lucro.rowconfigure(0, weight=1)
+
+        cols_lucro = ('ID', 'Ano', 'Mês', 'Percentual')
+        self.tree_lucros_lancados = ttk.Treeview(frame_historico_lucro, columns=cols_lucro, show='headings', selectmode='browse', height=4)
+        self.tree_lucros_lancados.heading('ID', text='ID'); self.tree_lucros_lancados.column('ID', width=40, anchor="center")
+        self.tree_lucros_lancados.heading('Ano', text='Ano'); self.tree_lucros_lancados.column('Ano', width=80, anchor="center")
+        self.tree_lucros_lancados.heading('Mês', text='Mês'); self.tree_lucros_lancados.column('Mês', width=100, anchor="center")
+        self.tree_lucros_lancados.heading('Percentual', text='Percentual (%)'); self.tree_lucros_lancados.column('Percentual', width=100, anchor="e")
+        self.tree_lucros_lancados.grid(row=0, column=0, sticky="ew")
+        self.tree_lucros_lancados.bind("<Double-1>", self.abrir_janela_edicao_lucro) # <-- Bind para Edição
+
+        btn_excluir_lucro = ttk.Button(frame_historico_lucro, text="Excluir Lançamento Selecionado", command=self.excluir_lancamento_lucro_selecionado)
+        btn_excluir_lucro.grid(row=1, column=0, sticky="e", pady=(10, 0))
+
+        # --- Seção Gerenciar Metas Principais (agora na linha 3) ---
         frame_gerenciamento = ttk.LabelFrame(main_frame, text="Gerenciar Metas Principais (Clique para ver detalhes)", padding="10")
-        frame_gerenciamento.grid(row=2, column=0, sticky="ew", pady=(0, 10)) # Mudou para row=2
+        frame_gerenciamento.grid(row=3, column=0, sticky="ew", pady=(0, 10)) # Mudou para row=3
         frame_gerenciamento.rowconfigure(0, weight=1)
         frame_gerenciamento.columnconfigure(0, weight=1)
         cols_principais = ('ID', 'Nome', 'Valor Total', 'Início', 'Fim', 'Status')
@@ -2374,9 +2392,9 @@ class App:
         ttk.Button(frame_botoes_gerenciamento, text="Criar Nova Meta Principal...", command=self.abrir_janela_criar_meta_principal).pack(pady=5)
         ttk.Button(frame_botoes_gerenciamento, text="Definir Metas Diárias...", command=self.abrir_janela_metas_diarias).pack(pady=5)
 
-                # Frame Detalhes (agora na linha 3)
+        # --- Frame Detalhes (agora na linha 4) ---
         frame_detalhes = ttk.LabelFrame(main_frame, text="Detalhes e Evolução da Meta de Vendas Selecionada", padding="10")
-        frame_detalhes.grid(row=3, column=0, sticky="nsew") # Mudou para row=3
+        frame_detalhes.grid(row=4, column=0, sticky="nsew") # Mudou para row=4
         frame_detalhes.rowconfigure(0, weight=1)
         frame_detalhes.columnconfigure(0, weight=2) # Coluna da lista de lançamentos cresce mais
         frame_detalhes.columnconfigure(1, weight=1) # Coluna do resumo
@@ -2476,8 +2494,8 @@ class App:
 
             if database.salvar_lucro_mensal(ano, mes, percentual):
                 messagebox.showinfo("Sucesso", f"Percentual de lucro para {mes:02d}/{ano} salvo com sucesso!", parent=self.root)
-                # Limpar campos? Opcional. Deixar preenchido pode ser útil.
-                # self.entry_lucro_percentual.delete(0, tk.END)
+                self.entry_lucro_percentual.delete(0, tk.END)
+                self.atualizar_lista_lucros() # <-- ATUALIZA A LISTA
             else:
                 messagebox.showerror("Erro de Banco", "Não foi possível salvar o percentual de lucro.", parent=self.root)
 
@@ -2485,7 +2503,6 @@ class App:
             messagebox.showerror("Erro de Formato", f"Verifique os valores digitados.\nAno, Mês e Percentual devem ser números válidos.\nDetalhe: {e}", parent=self.root)
         except Exception as e:
             messagebox.showerror("Erro Inesperado", f"Ocorreu um erro: {e}", parent=self.root)
-
 
     def abrir_janela_metas_diarias(self):
         """Abre um pop-up para o gestor definir as metas para cada dia da semana."""
@@ -2728,6 +2745,9 @@ class App:
         if metas_ativas:
             self.combo_metas_ativas.current(0)
 
+            # Ao final, também chamamos a atualização da lista de lucros
+    # self.atualizar_lista_lucros() # Movido para on_tab_change para evitar duplicação
+
 
 
     def abrir_janela_criar_meta_principal(self):
@@ -2785,6 +2805,93 @@ class App:
                 messagebox.showerror("Erro de Formato", "Valor da Meta e Pontos devem ser números.", parent=popup)
 
         ttk.Button(frame, text="Salvar Meta Principal", command=salvar_meta_principal).pack(pady=20)
+
+
+        # --- NOVAS FUNÇÕES PARA GERENCIAR HISTÓRICO DE LUCRO ---
+    # --- NOVAS FUNÇÕES PARA GERENCIAR HISTÓRICO DE LUCRO ---
+
+    def atualizar_lista_lucros(self):
+        """Carrega (ou recarrega) o histórico de lucros mensais na treeview."""
+        try:
+            for i in self.tree_lucros_lancados.get_children():
+                self.tree_lucros_lancados.delete(i)
+
+            lucros = database.listar_lucros_mensais()
+            meses_nomes = ["", "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+                        "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+
+            for lucro in lucros:
+                lucro_id, ano, mes_num, percentual = lucro
+                nome_mes = meses_nomes[mes_num] if 1 <= mes_num <= 12 else "Mês Inválido"
+                percentual_f = f"{percentual:.2f} %"
+                self.tree_lucros_lancados.insert("", "end", values=(lucro_id, ano, nome_mes, percentual_f))
+
+        except Exception as e:
+            logger.error(f"Erro ao atualizar lista de lucros: {e}", exc_info=True)
+            messagebox.showerror("Erro", f"Não foi possível carregar o histórico de lucros:\n{e}", parent=self.root)
+
+    def abrir_janela_edicao_lucro(self, event):
+        """Chamada com duplo-clique para editar um lançamento de lucro."""
+        selecionado = self.tree_lucros_lancados.focus()
+        if not selecionado:
+            return
+
+        dados = self.tree_lucros_lancados.item(selecionado, 'values')
+        try:
+            lucro_id = int(dados[0])
+            ano = dados[1]
+            mes = dados[2]
+            percentual_antigo_str = dados[3].replace(" %", "").replace(",", ".")
+
+            novo_percentual_str = simpledialog.askstring(
+                "Editar Percentual de Lucro",
+                f"Digite o NOVO percentual de lucro para {mes} de {ano}:",
+                initialvalue=percentual_antigo_str,
+                parent=self.root
+            )
+
+            if novo_percentual_str is None:
+                return # Usuário cancelou
+
+            novo_percentual = float(novo_percentual_str.replace(",", "."))
+
+            if database.atualizar_lucro_mensal(lucro_id, novo_percentual):
+                messagebox.showinfo("Sucesso", "Percentual de lucro atualizado!", parent=self.root)
+                self.atualizar_lista_lucros() # Recarrega a lista
+            else:
+                messagebox.showerror("Erro", "Não foi possível atualizar o registro no banco.", parent=self.root)
+
+        except (ValueError, TypeError) as e:
+            messagebox.showerror("Erro de Formato", f"Valor inválido: {novo_percentual_str}\nO percentual deve ser um número.", parent=self.root)
+        except Exception as e:
+            logger.error(f"Erro ao editar lucro (ID: {lucro_id}): {e}", exc_info=True)
+            messagebox.showerror("Erro Inesperado", f"Ocorreu um erro: {e}", parent=self.root)
+
+    def excluir_lancamento_lucro_selecionado(self):
+        """Exclui um lançamento de lucro selecionado na treeview."""
+        selecionado = self.tree_lucros_lancados.focus()
+        if not selecionado:
+            messagebox.showwarning("Aviso", "Selecione um lançamento da lista de histórico de lucro para excluir.", parent=self.root)
+            return
+
+        dados = self.tree_lucros_lancados.item(selecionado, 'values')
+        try:
+            lucro_id = int(dados[0])
+            ano = dados[1]
+            mes = dados[2]
+
+            if not messagebox.askyesno("Confirmar Exclusão", f"Tem certeza que deseja excluir o lançamento de lucro de {mes} de {ano}?", parent=self.root):
+                return
+
+            if database.excluir_lucro_mensal(lucro_id):
+                messagebox.showinfo("Sucesso", "Lançamento excluído com sucesso.", parent=self.root)
+                self.atualizar_lista_lucros()
+            else:
+                messagebox.showerror("Erro", "Não foi possível excluir o registro do banco.", parent=self.root)
+
+        except Exception as e:
+            logger.error(f"Erro ao excluir lucro (ID: {lucro_id}): {e}", exc_info=True)
+            messagebox.showerror("Erro Inesperado", f"Ocorreu um erro ao tentar excluir: {e}", parent=self.root)
 
 if __name__ == "__main__":
     root = tk.Tk()
