@@ -1,939 +1,3713 @@
-# -*- coding: utf-8 -*-
-"""
-Módulo de conexão com o banco de dados SQL Server.
-"""
-
-import os
+# ==============================================================================
+# == INÍCIO BLOCO DE CONFIGURAÇÃO DE LOGGING ===================================
+# ==============================================================================
 import logging
+import logging.handlers
+import sys
+import os # Necessário para criar a pasta de logs
+
+# --- Configurações ---
+LOG_FILENAME = 'gamificacao_sistema.log'
+LOG_FOLDER = 'logs' # Nome da pasta onde os logs serão salvos
+LOG_LEVEL = logging.INFO # Nível mínimo para registrar (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
+LOG_MAX_BYTES = 10 * 1024 * 1024 # Tamanho máximo de cada arquivo de log (10 MB)
+LOG_BACKUP_COUNT = 5 # Quantos arquivos de log antigos manter
+
+# --- Cria a pasta de logs se não existir ---
+log_dir = os.path.join(os.path.dirname(__file__), LOG_FOLDER)
+if not os.path.exists(log_dir):
+    try:
+        os.makedirs(log_dir)
+        print(f"Pasta de logs criada em: {log_dir}") # Print inicial para confirmar criação
+    except OSError as e:
+        logger.error(f"Erro ao criar pasta de logs '{log_dir}': {e}", file=sys.stderr)
+        # Se não conseguir criar a pasta, tenta logar no diretório atual
+        log_dir = os.path.dirname(__file__)
+
+log_filepath = os.path.join(log_dir, LOG_FILENAME)
+
+# --- Configuração do Handler de Arquivo Rotativo ---
+# Rotaciona o log quando atinge LOG_MAX_BYTES, mantendo LOG_BACKUP_COUNT arquivos antigos
+file_handler = logging.handlers.RotatingFileHandler(
+    log_filepath, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT, encoding='utf-8'
+)
+file_handler.setLevel(LOG_LEVEL)
+file_formatter = logging.Formatter(LOG_FORMAT)
+file_handler.setFormatter(file_formatter)
+
+# --- Configuração do Handler do Console ---
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(LOG_LEVEL) # Pode ser diferente do arquivo se quiser (ex: logging.DEBUG)
+console_formatter = logging.Formatter(LOG_FORMAT)
+console_handler.setFormatter(console_formatter)
+
+# --- Configuração do Logger Raiz ---
+# Limpa handlers existentes para evitar duplicação em recargas
+logging.getLogger('').handlers = []
+# Adiciona os novos handlers
+logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT, handlers=[file_handler, console_handler])
+
+# Obtém um logger específico para este módulo
+logger = logging.getLogger(__name__)
+
+logger.info(f"*** Logging configurado para o módulo: {__name__} ***")
+# ==============================================================================
+# == FIM BLOCO DE CONFIGURAÇÃO DE LOGGING ======================================
+# ==============================================================================
+
+
 import pyodbc
-from dotenv import load_dotenv
-from typing import List, Tuple, Optional
-from decimal import Decimal, ROUND_HALF_UP
-from collections import defaultdict
-import datetime
+from datetime import datetime, date, timedelta 
+import calendar 
+import hashlib
+import config 
+import notificador_telegram
+import logging
+import random
 
-# Configura um logging básico
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-load_dotenv()
-
-# --- Configurações do Banco de Dados ---
-DB_SERVER: str | None = os.getenv("DB_SERVER")
-DB_DATABASE: str | None = os.getenv("DB_DATABASE")
-DB_USERNAME: str | None = os.getenv("DB_USERNAME")
-DB_PASSWORD: str | None = os.getenv("DB_PASSWORD")
-
-if not DB_SERVER or not DB_DATABASE:
-    error_msg = "Erro crítico: Variáveis de ambiente DB_SERVER ou DB_DATABASE não definidas."
-    logging.error(error_msg)
-    raise ValueError(error_msg)
-
-# --- Montagem da String de Conexão ---
-connection_string: str
-# ... (código existente da string de conexão) ...
-if not DB_USERNAME:
-    connection_string = (
-        f"DRIVER={{ODBC Driver 18 for SQL Server}};"
-        f"SERVER={DB_SERVER};"
-        f"DATABASE={DB_DATABASE};"
-        f"Trusted_Connection=yes;"
-        f"Encrypt=yes;"
-        f"TrustServerCertificate=yes;"
-    )
-else:
-    connection_string = (
-        f"DRIVER={{ODBC Driver 18 for SQL Server}};"
-        f"SERVER={DB_SERVER};"
-        f"DATABASE={DB_DATABASE};"
-        f"UID={DB_USERNAME};"
-        f"PWD={DB_PASSWORD};"
-        f"Encrypt=yes;"
-        f"TrustServerCertificate=yes;"
-    )
+CONNECTION_STRING = (
+    f"DRIVER={{ODBC Driver 18 for SQL Server}};"  
+    f"SERVER={config.DB_SERVER};"
+    f"DATABASE={config.DB_DATABASE};"
+    f"UID={config.DB_UID};"
+    f"PWD={config.DB_PWD};"
+    f"TrustServerCertificate=yes;"
+)
 
 
-def get_db_connection() -> Optional[pyodbc.Connection]:
+def get_db_connection():
     try:
-        return pyodbc.connect(connection_string, autocommit=False) # Mudamos autocommit para False para usar transações explícitas
+        conn = pyodbc.connect(CONNECTION_STRING)
+        return conn
     except pyodbc.Error as ex:
-        logging.error(f"Falha ao conectar ao banco: {ex}")
+        logger.critical(f"FALHA CRÍTICA na conexão com o banco de dados: {ex}", exc_info=True) # Usamos critical e exc_info para detalhes
         return None
 
-def get_categories(tipo: str) -> List[Tuple[int, str]]:
+def buscar_proximos_agendamentos(limite=5):
+    """Busca os próximos 'limite' agendamentos a partir de hoje."""
     conn = get_db_connection()
-    if not conn: return []
-
-    # --- INÍCIO DA CORREÇÃO ---
-    # A lógica antiga falharia se novas categorias de receita fossem adicionadas.
-    # Esta nova query filtra pela coluna 'Tipo' no banco de dados,
-    # que é a forma correta e robusta de separar os tipos.
-    query = "SELECT CategoriaID, Nome FROM dbo.Categorias WHERE Tipo = ? ORDER BY Nome;"
-    # --- FIM DA CORREÇÃO ---
-
-    try:
-        cursor = conn.cursor()
-
-        # --- INÍCIO DA CORREÇÃO ---
-        cursor.execute(query, tipo) # Passamos 'Receita' ou 'Despesa' como parâmetro
-        # --- FIM DA CORREÇÃO ---
-
-        result = cursor.fetchall()
-        # Removido: conn.commit() 
-        return result
-    except pyodbc.Error as ex:
-        logging.error(f"Erro ao buscar categorias: {ex}")
-        conn.rollback() 
-        return []
-    finally:
-        if conn: conn.close()
-
-def ensure_user_exists(user_id: int, user_name: str) -> None:
-    conn = get_db_connection()
-    if not conn: return
-    try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT UsuarioID FROM dbo.Usuarios WHERE UsuarioID = ?", user_id)
-        if cursor.fetchone() is None:
-            logging.info(f"Usuário {user_name} ({user_id}) não encontrado. Criando novo registro.")
-            cursor.execute("INSERT INTO dbo.Usuarios (UsuarioID, NomeUsuario) VALUES (?, ?)", user_id, user_name)
-        conn.commit()
-    except pyodbc.Error as ex:
-        logging.error(f"Erro ao verificar/criar usuário: {ex}")
-        conn.rollback()
-    finally:
-        if conn: conn.close()
-
-def save_lancamento(user_id: int, categoria_id: int, tipo: str, valor: Decimal, descricao: str | None) -> bool:
-    conn = get_db_connection()
-    if not conn: return False
-    query = "INSERT INTO dbo.Lancamentos (UsuarioID, CategoriaID, Tipo, Valor, Descricao) VALUES (?, ?, ?, ?, ?)"
-    try:
-        cursor = conn.cursor()
-        cursor.execute(query, user_id, categoria_id, tipo, valor, descricao)
-        conn.commit()
-        return True
-    except pyodbc.Error as ex:
-        logging.error(f"Erro ao salvar lançamento: {ex}")
-        conn.rollback()
-        return False
-    finally:
-        if conn: conn.close()
-
-def get_latest_lancamentos(user_id: int, limit: int = 10) -> List[pyodbc.Row]:
-    conn = get_db_connection()
-    if not conn: return []
-    query = """
-        SELECT TOP (?) l.Tipo, l.Valor, c.Nome AS CategoriaNome, l.Descricao, l.DataLancamento
-        FROM dbo.Lancamentos AS l JOIN dbo.Categorias AS c ON l.CategoriaID = c.CategoriaID
-        WHERE l.UsuarioID = ? ORDER BY l.DataLancamento DESC
-    """
-    try:
-        cursor = conn.cursor()
-        cursor.execute(query, limit, user_id)
-        result = cursor.fetchall()
-        # Removido: conn.commit() 
-        return result
-    except pyodbc.Error as ex:
-        logging.error(f"Erro ao buscar extrato para o usuário {user_id}: {ex}")
-        conn.rollback()
-        return []
-    finally:
-        if conn: conn.close()
-
-
-def get_monthly_summary(user_id: int, ano: int, mes: int) -> dict | None:
-    conn = get_db_connection()
-    if not conn: return None
-    
-    summary = {
-        "total_receitas": Decimal(0),
-        "total_despesas": Decimal(0),
-        "metas": []
-    }
-    
-    query_totais = """
-        SELECT Tipo, COALESCE(SUM(Valor), 0) AS Total
-        FROM dbo.Lancamentos
-        WHERE UsuarioID = ? AND YEAR(DataLancamento) = ? AND MONTH(DataLancamento) = ?
-        GROUP BY Tipo;
-    """
-    
-    query_metas = """
-        SELECT 
-            c.Nome AS CategoriaNome, m.ValorMeta, COALESCE(gastos.TotalGasto, 0) AS TotalGasto
-        FROM dbo.Metas m
-        JOIN dbo.Categorias c ON m.CategoriaID = c.CategoriaID
-        LEFT JOIN (
-            SELECT CategoriaID, SUM(Valor) AS TotalGasto
-            FROM dbo.Lancamentos
-            WHERE UsuarioID = ? AND Tipo = 'Despesa' AND YEAR(DataLancamento) = ? AND MONTH(DataLancamento) = ?
-            GROUP BY CategoriaID
-        ) AS gastos ON m.CategoriaID = gastos.CategoriaID
-        WHERE m.UsuarioID = ? AND m.Ano = ? AND m.Mes = ?
-        ORDER BY c.Nome;
-    """
-    
-    try:
-        cursor = conn.cursor()
-        
-        # Busca Receitas e Despesas
-        cursor.execute(query_totais, user_id, ano, mes)
-        for row in cursor.fetchall():
-            if row.Tipo == 'Receita':
-                summary["total_receitas"] = row.Total
-            elif row.Tipo == 'Despesa':
-                summary["total_despesas"] = row.Total
-                
-        # Busca progresso das Metas
-        cursor.execute(query_metas, user_id, ano, mes, user_id, ano, mes)
-        summary["metas"] = cursor.fetchall()
-        
-        return summary
-        
-    except pyodbc.Error as ex:
-        logging.error(f"Erro ao gerar resumo mensal para usuário {user_id}: {ex}")
-        conn.rollback()
-        return None
-    finally:
-        if conn: conn.close()
-
-
-def get_weekly_summary(user_id: int, end_date: datetime.date) -> Decimal:
-    conn = get_db_connection()
-    if not conn: return Decimal(0)
-    
-    start_date = end_date - datetime.timedelta(days=6)
-    
-    query = """
-        SELECT COALESCE(SUM(Valor), 0) AS TotalSemana
-        FROM dbo.Lancamentos
-        WHERE UsuarioID = ? AND Tipo = 'Despesa' AND DataLancamento BETWEEN ? AND ?;
-    """
-    
-    try:
-        cursor = conn.cursor()
-        cursor.execute(query, user_id, start_date, end_date)
-        total = cursor.fetchval()
-        return total or Decimal(0)
-        
-    except pyodbc.Error as ex:
-        logging.error(f"Erro ao gerar resumo semanal para usuário {user_id}: {ex}")
-        conn.rollback()
-        return Decimal(0)
-    finally:
-        if conn: conn.close()
-
-def set_meta(user_id: int, categoria_id: int, valor: Decimal, ano: int, mes: int) -> bool:
-    conn = get_db_connection()
-    if not conn: return False
-    query = """
-        MERGE dbo.Metas AS target USING (VALUES (?, ?, ?, ?)) AS source (UsuarioID, CategoriaID, Ano, Mes)
-        ON target.UsuarioID = source.UsuarioID AND target.CategoriaID = source.CategoriaID AND target.Ano = source.Ano AND target.Mes = source.Mes
-        WHEN MATCHED THEN UPDATE SET ValorMeta = ?
-        WHEN NOT MATCHED THEN INSERT (UsuarioID, CategoriaID, ValorMeta, Ano, Mes) VALUES (?, ?, ?, ?, ?);
-    """
-    try:
-        cursor = conn.cursor()
-        cursor.execute(query, user_id, categoria_id, ano, mes, valor, user_id, categoria_id, valor, ano, mes)
-        conn.commit()
-        return True
-    except pyodbc.Error as ex:
-        logging.error(f"Erro ao definir meta para o usuário {user_id}: {ex}")
-        conn.rollback()
-        return False
-    finally:
-        if conn: conn.close()
-
-def get_meta_progress(user_id: int, categoria_id: int, ano: int, mes: int) -> tuple[Optional[Decimal], Optional[Decimal]]:
-    conn = get_db_connection()
-    if not conn: return None, None
-    query = """
-        SELECT
-            (SELECT m.ValorMeta FROM dbo.Metas m WHERE m.UsuarioID = ? AND m.CategoriaID = ? AND m.Ano = ? AND m.Mes = ?) AS ValorMeta,
-            (SELECT SUM(l.Valor) FROM dbo.Lancamentos l WHERE l.UsuarioID = ? AND l.CategoriaID = ? AND l.Tipo = 'Despesa'
-               AND YEAR(l.DataLancamento) = ? AND MONTH(l.DataLancamento) = ?) AS TotalGasto;
-    """
-    try:
-        cursor = conn.cursor()
-        cursor.execute(query, user_id, categoria_id, ano, mes, user_id, categoria_id, ano, mes)
-        resultado = cursor.fetchone()
-        # Removido: conn.commit()
-        return (resultado.ValorMeta, resultado.TotalGasto or Decimal(0)) if resultado else (None, None)
-    finally:
-        if conn: conn.close()
-
-def get_ativos() -> List[pyodbc.Row]:
-    conn = get_db_connection()
-    if not conn: return []
-    query = "SELECT AtivoID, Simbolo, NomeAmigavel FROM dbo.Ativos ORDER BY NomeAmigavel;"
-    try:
-        cursor = conn.cursor()
-        cursor.execute(query)
-        result = cursor.fetchall()
-        # Removido: conn.commit()
-        return result
-    finally:
-        if conn: conn.close()
-
-def save_alerta(user_id: int, ativo_id: int, indicador: str, condicao: str, valor_alvo: Decimal, timeframe: str | None, recorrente: bool = False) -> bool:
-    conn = get_db_connection()
-    if not conn: return False
-    query = "INSERT INTO dbo.Alertas (UsuarioID, AtivoID, Indicador, Condicao, ValorAlvo, Timeframe, Recorrente) VALUES (?, ?, ?, ?, ?, ?, ?);"
-    try:
-        cursor = conn.cursor()
-        cursor.execute(query, user_id, ativo_id, indicador, condicao, valor_alvo, timeframe, recorrente)
-        conn.commit()
-        return True
-    except pyodbc.Error as ex:
-        logging.error(f"Erro ao salvar alerta: {ex}")
-        conn.rollback()
-        return False
-    finally:
-        if conn: conn.close()
-
-def get_active_alerts(user_id: int) -> List[pyodbc.Row]:
-    conn = get_db_connection()
-    if not conn: return []
-    query = """
-        SELECT al.Indicador, al.Condicao, al.ValorAlvo, al.Timeframe, at.NomeAmigavel, al.Recorrente
-        FROM dbo.Alertas AS al JOIN dbo.Ativos AS at ON al.AtivoID = at.AtivoID
-        WHERE al.UsuarioID = ? AND al.Status = 'ativo' ORDER BY at.NomeAmigavel, al.Indicador;
-    """
-    try:
-        cursor = conn.cursor()
-        cursor.execute(query, user_id)
-        result = cursor.fetchall()
-        # Removido: conn.commit()
-        return result
-    finally:
-        if conn: conn.close()
-
-def get_all_active_alerts() -> List[pyodbc.Row]:
-    conn = get_db_connection()
-    if not conn: return []
-    query = """
-        SELECT al.AlertaID, al.UsuarioID, al.Indicador, al.Condicao, al.ValorAlvo, al.Timeframe, at.Simbolo, at.NomeAmigavel, al.Recorrente
-        FROM dbo.Alertas AS al JOIN dbo.Ativos AS at ON al.AtivoID = at.AtivoID WHERE al.Status = 'ativo';
-    """
-    try:
-        cursor = conn.cursor()
-        cursor.execute(query)
-        result = cursor.fetchall()
-        # Removido: conn.commit()
-        return result
-    finally:
-        if conn: conn.close()
-
-def update_alert_status(alerta_id: int, new_status: str) -> bool:
-    conn = get_db_connection()
-    if not conn: return False
-    query = "UPDATE dbo.Alertas SET Status = ? WHERE AlertaID = ?;"
-    try:
-        cursor = conn.cursor()
-        cursor.execute(query, new_status, alerta_id)
-        conn.commit()
-        logging.info(f"Status do AlertaID {alerta_id} atualizado para '{new_status}'.")
-        return True
-    except pyodbc.Error as ex:
-        logging.error(f"Erro ao atualizar status do alerta {alerta_id}: {ex}")
-        conn.rollback()
-        return False
-    finally:
-        if conn: conn.close()
-
-def add_product(nome: str, custo: Decimal, preco_venda: Decimal) -> Tuple[bool, str]:
-    conn = get_db_connection()
-    if not conn: return False, "Falha ao conectar ao banco."
-    cursor = conn.cursor()
-    try:
-        cursor.execute("SELECT ProdutoID FROM dbo.Produtos WHERE LOWER(Nome) = LOWER(?)", nome)
-        if cursor.fetchone():
-            return False, f"Produto '{nome}' já cadastrado."
-        
-        cursor.execute("INSERT INTO dbo.Produtos (Nome, Custo, PrecoVenda) OUTPUT INSERTED.ProdutoID VALUES (?, ?, ?);", nome, custo, preco_venda)
-        produto_id = cursor.fetchone()[0]
-        cursor.execute("INSERT INTO dbo.Estoque (ProdutoID, Quantidade) VALUES (?, 0);", produto_id)
-        
-        conn.commit() # USAMOS O COMMIT DA CONEXÃO
-        
-        logging.info(f"Produto '{nome}' (ID: {produto_id}) cadastrado.")
-        return True, f"Produto '{nome}' cadastrado!"
-    except pyodbc.Error as ex:
-        logging.error(f"Erro ao adicionar produto '{nome}': {ex}")
-        
-        conn.rollback() # USAMOS O ROLLBACK DA CONEXÃO
-       
-        return False, "Erro ao cadastrar produto."
-    finally:
-        if conn: conn.close()
-
-def get_all_products() -> List[pyodbc.Row]:
-    conn = get_db_connection()
-    if not conn: return []
-    query = "SELECT ProdutoID, Nome FROM dbo.Produtos WHERE Status = 'ativo' ORDER BY Nome;"
-    try:
-        cursor = conn.cursor()
-        cursor.execute(query)
-        result = cursor.fetchall()
-        # Removido: conn.commit()
-        return result
-    finally:
-        if conn: conn.close()
-
-def add_stock(produto_id: int, quantidade: int) -> bool:
-    conn = get_db_connection()
-    if not conn: return False
-    query = "UPDATE dbo.Estoque SET Quantidade = Quantidade + ? WHERE ProdutoID = ?;"
-    try:
-        cursor = conn.cursor()
-        cursor.execute(query, quantidade, produto_id)
-        conn.commit()
-        logging.info(f"Adicionado {quantidade} unidades ao estoque do ProdutoID {produto_id}.")
-        return True
-    except pyodbc.Error as ex:
-        logging.error(f"Erro ao adicionar estoque para ProdutoID {produto_id}: {ex}")
-        conn.rollback()
-        return False
-    finally:
-        if conn: conn.close()
-
-def get_stock_status() -> List[pyodbc.Row]:
-    conn = get_db_connection()
-    if not conn: return []
-    query = "SELECT p.Nome, e.Quantidade FROM dbo.Estoque e JOIN dbo.Produtos p ON e.ProdutoID = p.ProdutoID WHERE p.Status = 'ativo' ORDER BY p.Nome;"
-    try:
-        cursor = conn.cursor()
-        cursor.execute(query)
-        result = cursor.fetchall()
-        # Removido: conn.commit()
-        return result
-    finally:
-        if conn: conn.close()
-        
-def get_product_details(produto_id: int) -> Optional[pyodbc.Row]:
-    conn = get_db_connection()
-    if not conn: return None
-    query = "SELECT p.Nome, p.Custo, p.PrecoVenda, COALESCE(e.Quantidade, 0) AS QuantidadeEstoque FROM dbo.Produtos p LEFT JOIN dbo.Estoque e ON p.ProdutoID = e.ProdutoID WHERE p.ProdutoID = ? AND p.Status = 'ativo';"
-    try:
-        cursor = conn.cursor()
-        cursor.execute(query, produto_id)
-        result = cursor.fetchone()
-        # Removido: conn.commit()
-        return result
-    except pyodbc.Error as ex:
-        logging.error(f"Erro ao buscar detalhes do ProdutoID {produto_id}: {ex}")
-        conn.rollback()
-        return None
-    finally:
-        if conn: conn.close()
-
-# --- Funções de Clientes (Novas) ---
-
-def add_cliente(nome: str, telefone: Optional[str] = None) -> Tuple[bool, str, Optional[int]]:
-    conn = get_db_connection()
-    if not conn: return False, "Falha na conexão.", None
-    query = "INSERT INTO dbo.Clientes (Nome, Telefone) OUTPUT INSERTED.ClienteID VALUES (?, ?);"
-    try:
-        cursor = conn.cursor()
-        cursor.execute(query, nome, telefone)
-        cliente_id = cursor.fetchone()[0]
-        conn.commit()
-        logging.info(f"Cliente '{nome}' (ID: {cliente_id}) adicionado.")
-        return True, f"Cliente '{nome}' adicionado com sucesso!", cliente_id
-    except pyodbc.Error as ex:
-        logging.error(f"Erro ao adicionar cliente '{nome}': {ex}")
-        conn.rollback()
-        return False, "Erro ao adicionar cliente.", None
-    finally:
-        if conn: conn.close()
-
-def find_cliente(search_term: str) -> List[pyodbc.Row]:
-    conn = get_db_connection()
-    if not conn: return []
-    query = "SELECT ClienteID, Nome, Telefone FROM dbo.Clientes WHERE Nome LIKE ? OR Telefone LIKE ? ORDER BY Nome;"
-    term = f"%{search_term}%"
-    try:
-        cursor = conn.cursor()
-        cursor.execute(query, term, term)
-        result = cursor.fetchall()
-        # Removido: conn.commit()
-        return result
-    finally:
-        if conn: conn.close()
-
-def register_sale(user_id: int, items: List[dict], num_installments: int = 1, sale_date: Optional[datetime.date] = None, cliente_id: Optional[int] = None) -> Tuple[bool, str, Optional[int]]:
-    conn = get_db_connection()
-    if not conn: return False, "Falha na conexão.", None
-    cursor = conn.cursor()
-    sale_date = sale_date or datetime.date.today()
-    try:
-
-        # --- INÍCIO DA CORREÇÃO ---
-        # 1. Agrega as quantidades por produto_id
-        produtos_agregados: dict[int, dict] = defaultdict(lambda: {'quantidade': 0, 'nome': '', 'ids_carrinho': []})
-
-        for idx, item in enumerate(items):
-            pid = item['produto_id']
-            produtos_agregados[pid]['quantidade'] += item['quantidade']
-            # Armazena o nome do item (presumindo que o nome é o mesmo para o mesmo produto_id)
-            if 'nome' in item:
-                produtos_agregados[pid]['nome'] = item['nome'] 
-            produtos_agregados[pid]['ids_carrinho'].append(idx) # Guarda os índices originais (não usado aqui, mas boa prática)
-
-        # 2. Verifica o estoque com base nos totais agregados
-        for produto_id, dados_agregados in produtos_agregados.items():
-            quantidade_total = dados_agregados['quantidade']
-
-            cursor.execute("SELECT Quantidade FROM dbo.Estoque WHERE ProdutoID = ?", produto_id)
-            stock = cursor.fetchval() or 0
-
-            if stock < quantidade_total:
-                conn.rollback() # USAMOS O ROLLBACK DA CONEXÃO
-
-                # Pega o nome do produto (se não tivermos, busca no DB)
-                nome_produto = dados_agregados.get('nome')
-                if not nome_produto:
-                     cursor.execute("SELECT Nome FROM dbo.Produtos WHERE ProdutoID = ?", produto_id)
-                     nome_produto = cursor.fetchval() or f"ProdutoID {produto_id}"
-
-                return False, f"Estoque insuficiente para '{nome_produto}'. Pedido total: {quantidade_total} un. Disponível: {stock} un.", None
-        # --- FIM DA CORREÇÃO ---
-
-        # 3. O resto da lógica de inserção permanece a mesma, pois ela itera
-        #    a lista original 'items', que é o comportamento correto.
-
-        valor_total = sum(Decimal(str(item['preco_unitario'])) * item['quantidade'] for item in items) 
-        custo_total = sum(Decimal(str(item['custo_unitario'])) * item['quantidade'] for item in items) 
-
-        query_venda = "INSERT INTO dbo.Vendas (UsuarioID, DataVenda, ValorTotal, CustoTotal, ClienteID) OUTPUT INSERTED.VendaID VALUES (?, ?, ?, ?, ?);"
-        cursor.execute(query_venda, user_id, sale_date, valor_total, custo_total, cliente_id)
-        venda_id = cursor.fetchone()[0]
-
-        query_item = "INSERT INTO dbo.ItensVenda (VendaID, ProdutoID, Quantidade, PrecoUnitario, CustoUnitario) VALUES (?, ?, ?, ?, ?);"
-        for item in items: # Insere os itens originais (não agregados)
-            cursor.execute(query_item, venda_id, item['produto_id'], item['quantidade'], item['preco_unitario'], item['custo_unitario'])
-
-        query_stock = "UPDATE dbo.Estoque SET Quantidade = Quantidade - ? WHERE ProdutoID = ?;"
-        for item in items: # Abate o estoque (agora sabemos que é seguro)
-            cursor.execute(query_stock, item['quantidade'], item['produto_id'])
-
-        # --- INÍCIO DA CORREÇÃO (Lógica de Pagamento) ---
-
-        if num_installments == 1:
-            # 1. É "Pago (A Vista)". Registra no Caixa imediatamente.
-            desc_caixa = f"Recebimento Venda à Vista #{venda_id}"
-            query_caixa = "INSERT INTO dbo.Caixa (Descricao, Valor, TipoMovimento, VendaID) VALUES (?, ?, 'entrada', ?);"
-            cursor.execute(query_caixa, desc_caixa, valor_total, venda_id)
-
-            # 2. Cria a 'ContaAReceber' já PAGA, para fins de histórico.
-            query_parcela_paga = """
-                INSERT INTO dbo.ContasAReceber (VendaID, ClienteID, NumeroParcela, ValorParcela, DataVencimento, Status, DataPagamento) 
-                VALUES (?, ?, 1, ?, ?, 'pago', ?);
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Query otimizada para buscar apenas os próximos 'limite' agendamentos
+            # Usando CAST para garantir que GETDATE() compare apenas a data
+            # Adicionado tratamento para StatusAgendamento (ex: 'Confirmado')
+            sql = f"""
+                SELECT TOP ({int(limite)})
+                    A.NomeCliente, A.TipoEvento, A.DataEvento, A.TelefoneCliente -- Adicionado Telefone
+                FROM Agendamentos A
+                WHERE A.DataEvento >= CAST(GETDATE() AS DATE) -- Apenas agendamentos futuros (a partir de hoje)
+                  AND A.StatusAgendamento = 'Confirmado' -- Apenas confirmados (ou ajuste conforme necessário)
+                ORDER BY A.DataEvento ASC
             """
-            cursor.execute(query_parcela_paga, venda_id, cliente_id, valor_total, sale_date, sale_date)
+            cursor.execute(sql)
+            cols = [column[0] for column in cursor.description]
+            agendamentos = []
+            for row in cursor.fetchall():
+                ag_dict = dict(zip(cols, row))
+                # Formata a data/hora para o JS (dd/mm/yyyy HH:MM)
+                ag_dict['data_evento'] = ag_dict['DataEvento'].strftime('%d/%m/%Y %H:%M')
+                # Renomeia as chaves para corresponder ao JS (se necessário, mas o JS será ajustado)
+                ag_dict['nome_cliente'] = ag_dict.pop('NomeCliente')
+                ag_dict['tipo_evento'] = ag_dict.pop('TipoEvento')
+                ag_dict['telefone_cliente'] = ag_dict.pop('TelefoneCliente') # Adicionado
+                del ag_dict['DataEvento'] # Remove a chave original
+                agendamentos.append(ag_dict)
+            return agendamentos
+        except Exception as e:
+            logger.error(f"Erro ao buscar próximos agendamentos: {e}", exc_info=True)
+            return []
+        finally:
+            if conn:
+                conn.close()
+    return []
 
-            msg_log = f"Venda {venda_id} (R$ {valor_total}) registrada à vista e baixada no caixa."
-            msg_retorno = f"Venda registrada! Total: R$ {valor_total:.2f} (À Vista)"
 
-        else:
-            # 3. É parcelado. Mantém a lógica antiga de criar parcelas 'pendentes'.
-            valor_parcela = (valor_total / Decimal(num_installments)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-            valor_ultima_parcela = valor_total - (valor_parcela * (num_installments - 1))
-            query_parcela_pendente = "INSERT INTO dbo.ContasAReceber (VendaID, ClienteID, NumeroParcela, ValorParcela, DataVencimento) VALUES (?, ?, ?, ?, ?);"
+def criar_agendamento(dados_agendamento):
+    """(VERSÃO FINAL CORRIGIDA) Insere um novo agendamento e RETORNA o ID criado."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                INSERT INTO Agendamentos 
+                (NomeCliente, CPFCliente, TelefoneCliente, TipoEvento, DataEvento, 
+                 StatusAgendamento, StatusPagamento, FuncionarioID, Observacoes) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+                SELECT SCOPE_IDENTITY();
+            """
+            cursor.execute(sql,
+                         dados_agendamento['nome_cliente'],
+                         dados_agendamento.get('cpf_cliente'),
+                         dados_agendamento.get('telefone_cliente'),
+                         dados_agendamento['tipo_evento'],
+                         dados_agendamento['data_evento'],
+                         'Confirmado', 'Pendente',
+                         dados_agendamento['funcionario_id'],
+                         dados_agendamento.get('observacoes'))
+            
+            cursor.nextset()
+            
+            novo_id = cursor.fetchone()[0]
+            conn.commit()
+            return True, novo_id
+        except Exception as e:
+            logger.error(f"ERRO ao criar agendamento: {e}")
+            conn.rollback()
+            return False, str(e)
+        finally:
+            conn.close()
+    return False, "Não foi possível conectar ao banco de dados."
 
-            for i in range(1, num_installments + 1):
-                # O vencimento da primeira parcela é em 30 dias (i=1 -> 30 dias)
-                vencimento = sale_date + datetime.timedelta(days=30 * i)
-                valor = valor_ultima_parcela if i == num_installments else valor_parcela
-                cursor.execute(query_parcela_pendente, venda_id, cliente_id, i, valor, vencimento)
+def listar_agendamentos():
+    """Retorna uma lista de todos os agendamentos."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT A.*, F.NomeCompleto AS NomeFuncionario
+                FROM Agendamentos A JOIN Funcionarios F ON A.FuncionarioID = F.FuncionarioID
+                ORDER BY A.DataEvento ASC
+            """
+            cursor.execute(sql)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
 
-            msg_log = f"Venda {venda_id} registrada com {num_installments} parcela(s)."
-            msg_retorno = f"Venda registrada! Total: R$ {valor_total:.2f} ({num_installments}x R$ {valor_parcela:.2f})"
+def buscar_agendamento_por_id(agendamento_id):
+    """Busca todos os detalhes de um único agendamento pelo seu ID."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT A.*, F.NomeCompleto AS NomeFuncionario
+                FROM Agendamentos A JOIN Funcionarios F ON A.FuncionarioID = F.FuncionarioID
+                WHERE A.AgendamentoID = ?
+            """
+            cursor.execute(sql, agendamento_id)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
 
-        # --- FIM DA CORREÇÃO ---
+def atualizar_agendamento(agendamento_id, dados_agendamento):
+    """Atualiza um agendamento existente com novos dados."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                UPDATE Agendamentos SET
+                    NomeCliente = ?, CPFCliente = ?, TelefoneCliente = ?, TipoEvento = ?,
+                    DataEvento = ?, StatusAgendamento = ?, StatusPagamento = ?,
+                    FuncionarioID = ?, Observacoes = ?
+                WHERE AgendamentoID = ?
+            """
+            # <<< A CORREÇÃO DA ORDEM ESTÁ AQUI >>>
+            cursor.execute(sql,
+                         dados_agendamento['nome_cliente'],
+                         dados_agendamento.get('cpf_cliente'),
+                         dados_agendamento.get('telefone_cliente'),
+                         dados_agendamento['tipo_evento'],
+                         dados_agendamento['data_evento'], # <-- Formato AAAA-MM-DD
+                         dados_agendamento.get('status_agendamento', 'Confirmado'),
+                         dados_agendamento.get('status_pagamento', 'Pendente'),
+                         dados_agendamento['funcionario_id'],
+                         dados_agendamento.get('observacoes'),
+                         agendamento_id)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"ERRO ao atualizar agendamento: {e}")
+            conn.rollback() # Adicionado por segurança
+            return False
+        finally:
+            conn.close()
+    return False
 
-        conn.commit() # USAMOS O COMMIT DA CONEXÃO
+def excluir_agendamento(agendamento_id):
+    """Exclui um agendamento do banco de dados."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "DELETE FROM Agendamentos WHERE AgendamentoID = ?"
+            cursor.execute(sql, agendamento_id)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"ERRO ao excluir agendamento: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
 
-        logging.info(msg_log)
-        return True, msg_retorno, venda_id
-    except pyodbc.Error as ex:
-        logging.error(f"Erro ao registrar venda: {ex}")
+def atualizar_status_pagamento(agendamento_id, novo_status):
+    """Atualiza apenas o status de pagamento de um agendamento."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE Agendamentos SET StatusPagamento = ? WHERE AgendamentoID = ?"
+            cursor.execute(sql, novo_status, agendamento_id)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"ERRO ao atualizar status de pagamento: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
 
-        conn.rollback() # USAMOS O ROLLBACK DA CONEXÃO
-        return False, "Erro ao registrar venda no banco.", None
-    finally:
-        if conn: conn.close()
+# --- Nova Função para a Opção "Não Aplicável" ---
+def registrar_tarefa_nao_aplicavel(atribuicao_id, justificativa):
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Primeiro, precisamos buscar os IDs da tarefa e do funcionário a partir da atribuição
+            sql_busca = "SELECT TarefaID, FuncionarioID FROM TarefasAtribuidas WHERE AtribuicaoID = ?"
+            cursor.execute(sql_busca, atribuicao_id)
+            resultado = cursor.fetchone()
+            if resultado:
+                tarefa_id, funcionario_id = resultado
+                # Agora, inserimos na tabela de Entregas com status especial
+                sql_insert = """
+                    INSERT INTO Entregas 
+                    (TarefaID, FuncionarioID, AtribuicaoID, StatusValidacao, PontosGanhos, MotivoRecusa, DataEnvio)
+                    VALUES (?, ?, ?, 'Aprovada', 0, ?, GETDATE())
+                """
+                cursor.execute(sql_insert, tarefa_id, funcionario_id, atribuicao_id, f"Não aplicável: {justificativa}")
+                conn.commit()
+        finally:
+            conn.close()
 
-def get_contas_pendentes(cliente_id: Optional[int] = None) -> List[pyodbc.Row]:
+def atualizar_funcionario(funcionario_id, nome, chat_id, cargo, horario_notificacao, dia_folga, verificador_cpf): # 1. Novo parâmetro
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                UPDATE Funcionarios 
+                SET NomeCompleto = ?, ChatIDTelegram = ?, Cargo = ?, HorarioNotificacao = ?, DiaDeFolga = ?, VerificadorCPF = ? -- 2. Nova coluna
+                WHERE FuncionarioID = ?
+            """
+            cursor.execute(sql, nome, chat_id, cargo, horario_notificacao, dia_folga, verificador_cpf, funcionario_id) # 3. Novo valor
+            conn.commit()
+        finally:
+            conn.close()
+
+# Em database.py, esta é a ÚNICA versão da função que deve existir no seu código.
+
+def listar_funcionarios_por_tarefa(tarefa_id):
+    """
+    Retorna duas listas de funcionários: os que JÁ ESTÃO atribuídos a uma tarefa ATIVA
+    e os que AINDA NÃO ESTÃO. (VERSÃO FINAL E CORRETA)
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            
+            # Pergunta 1: Quem JÁ tem essa tarefa ATIVA?
+            # A query verifica se a tarefa não foi encerrada (DataFimVigencia IS NULL).
+            sql_atribuidos = """
+                SELECT 
+                    TA.AtribuicaoID, F.NomeCompleto, 
+                    TA.TipoFrequencia + 
+                    CASE 
+                        WHEN TA.TipoFrequencia = 'Semanal' THEN ' (' + 
+                            CASE TA.ValorFrequencia 
+                                WHEN '1' THEN 'Dom' WHEN '2' THEN 'Seg' WHEN '3' THEN 'Ter'
+                                WHEN '4' THEN 'Qua' WHEN '5' THEN 'Qui' WHEN '6' THEN 'Sex'
+                                WHEN '7' THEN 'Sab'
+                            END + ')'
+                        WHEN TA.TipoFrequencia = 'Mensal' THEN ' (Dia ' + CAST(TA.ValorFrequencia AS VARCHAR) + ')'
+                        ELSE '' 
+                    END AS FrequenciaCompleta
+                FROM Funcionarios F
+                JOIN TarefasAtribuidaS TA ON F.FuncionarioID = TA.FuncionarioID
+                WHERE TA.TarefaID = ? AND TA.DataFimVigencia IS NULL
+                ORDER BY F.NomeCompleto
+            """
+            cursor.execute(sql_atribuidos, tarefa_id)
+            atribuidos = cursor.fetchall()
+            
+            # Pergunta 2: Quem AINDA NÃO tem essa tarefa ATIVA?
+            # A subquery ignora tarefas que já foram encerradas.
+            sql_disponiveis = """
+                SELECT * FROM Funcionarios F
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM TarefasAtribuidas TA
+                    WHERE TA.TarefaID = ? AND TA.FuncionarioID = F.FuncionarioID AND TA.DataFimVigencia IS NULL
+                )
+                ORDER BY F.NomeCompleto
+            """
+            cursor.execute(sql_disponiveis, tarefa_id)
+            disponiveis = cursor.fetchall()
+            
+            return atribuidos, disponiveis
+        finally:
+            conn.close()
+    return [], []    
+
+ ### ADICIONE ESTA FUNÇÃO AO SEU ARQUIVO database.py ###
+
+def buscar_funcionarios_por_horario(horario_atual):
+    """Busca funcionários para notificação de início, RESPEITANDO O DIA DE FOLGA."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # A NOVA REGRA: AND (DiaDeFolga = 0 OR DiaDeFolga != DATEPART(weekday, GETDATE()))
+            sql = """
+                SELECT * FROM Funcionarios 
+                WHERE CONVERT(VARCHAR(5), HorarioNotificacao, 108) = ?
+                AND (DiaDeFolga = 0 OR DiaDeFolga != DATEPART(weekday, GETDATE()))
+            """
+            cursor.execute(sql, horario_atual)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []         
+
+# Em database.py, SUBSTITUA a função listar_tarefas_do_dia_por_funcionario:
+def listar_tarefas_do_dia_por_funcionario(funcionario_id):
+    """
+    (VERSÃO 7 - COM CORREÇÃO PARA TAREFAS 'Unica')
+    Busca todas as tarefas do dia, agora incluindo as tarefas únicas aceitas de folgas.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT
+                    TA.AtribuicaoID, T.TarefaID, T.Titulo, T.Pontos, TA.TipoFrequencia AS Tipo,
+                    ISNULL(TA.DescricaoOverride, T.Descricao) AS Descricao
+                FROM TarefasAtribuidas TA
+                JOIN Tarefas T ON TA.TarefaID = T.TarefaID
+                WHERE
+                    TA.FuncionarioID = ? AND TA.DataFimVigencia IS NULL
+                    AND NOT EXISTS (
+                        SELECT 1 FROM Entregas E
+                        WHERE E.AtribuicaoID = TA.AtribuicaoID
+                        AND CONVERT(date, E.DataEnvio) = CONVERT(date, GETDATE())
+                        AND E.StatusValidacao IN ('Aprovada', 'Pendente') -- Exclui Aprovada ou Pendente HOJE
+                    )
+                    AND (
+                        -- Condições existentes para Diaria, Semanal, Mensal, Agendada
+                        TA.TipoFrequencia = 'Diaria'
+                        OR (
+                            TA.TipoFrequencia = 'Semanal' AND
+                            CAST(TA.ValorFrequencia AS INT) =
+                                CASE DATENAME(weekday, GETDATE())
+                                    WHEN 'Sunday' THEN 1 WHEN 'Domingo' THEN 1
+                                    WHEN 'Monday' THEN 2 WHEN 'Segunda-feira' THEN 2
+                                    WHEN 'Tuesday' THEN 3 WHEN 'Terça-feira' THEN 3
+                                    WHEN 'Wednesday' THEN 4 WHEN 'Quarta-feira' THEN 4
+                                    WHEN 'Thursday' THEN 5 WHEN 'Quinta-feira' THEN 5
+                                    WHEN 'Friday' THEN 6 WHEN 'Sexta-feira' THEN 6
+                                    WHEN 'Saturday' THEN 7 WHEN 'Sábado' THEN 7
+                                END
+                        )
+                        OR (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, GETDATE()))
+                        OR (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = CONVERT(date, GETDATE()))
+
+                        -- --- A CORREÇÃO ESTÁ AQUI ---
+                        -- Adicionamos a condição para incluir tarefas do tipo 'Unica' que foram criadas HOJE.
+                        OR (TA.TipoFrequencia = 'Unica' AND CONVERT(date, TA.DataInicioVigencia) = CONVERT(date, GETDATE()))
+                        -- --- FIM DA CORREÇÃO ---
+                    )
+            """
+            cursor.execute(sql, funcionario_id)
+            return cursor.fetchall()
+        except Exception as e:
+            # Log aprimorado
+            logger.exception(f"!!! ERRO CRÍTICO em listar_tarefas_do_dia_por_funcionario para ID {funcionario_id}: {e}")
+            return []
+        finally:
+            if conn:
+                conn.close()
+    return []
+
+def adicionar_funcionario(nome, chat_id, cargo, horario_notificacao, dia_folga):
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "INSERT INTO Funcionarios (NomeCompleto, ChatIDTelegram, Cargo, HorarioNotificacao, DiaDeFolga) VALUES (?, ?, ?, ?, ?)"
+            cursor.execute(sql, nome, chat_id, cargo, horario_notificacao, dia_folga)
+            conn.commit()
+        finally: 
+            conn.close()
+
+def listar_funcionarios():
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor(); sql = "SELECT * FROM Funcionarios ORDER BY NomeCompleto"; cursor.execute(sql); return cursor.fetchall()
+        finally: conn.close()
+    return []
+def buscar_funcionario_por_chat_id(chat_id):
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor(); sql = "SELECT * FROM Funcionarios WHERE ChatIDTelegram = ?"; cursor.execute(sql, str(chat_id)); return cursor.fetchone()
+        finally: conn.close()
+    return None
+
+def buscar_funcionario_por_id(funcionario_id):
+    """Busca um funcionário pelo seu ID (chave primária)."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT * FROM Funcionarios WHERE FuncionarioID = ?"
+            cursor.execute(sql, funcionario_id)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
+
+def excluir_funcionario(funcionario_id):
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor(); sql = "DELETE FROM Funcionarios WHERE FuncionarioID = ?"; cursor.execute(sql, funcionario_id); conn.commit()
+        finally: conn.close()
+def obter_historico_funcionario(funcionario_id):
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT T.Titulo, TA.DataAtribuicao, E.DataEnvio, ISNULL(E.StatusValidacao, 'Pendente (Não Entregue)') AS Status, E.PontosGanhos, E.MotivoRecusa
+                FROM TarefasAtribuidas TA
+                JOIN Tarefas T ON TA.TarefaID = T.TarefaID
+                LEFT JOIN Entregas E ON TA.AtribuicaoID = E.AtribuicaoID
+                WHERE TA.FuncionarioID = ? ORDER BY TA.DataAtribuicao DESC
+            """
+            cursor.execute(sql, funcionario_id); return cursor.fetchall()
+        finally: conn.close()
+    return []
+
+def criar_tarefa(titulo, descricao, pontos, setor): # Adicionamos 'setor'
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Adicionamos a coluna Setor ao INSERT
+            sql = "INSERT INTO Tarefas (Titulo, Descricao, Pontos, Setor) VALUES (?, ?, ?, ?)"
+            cursor.execute(sql, titulo, descricao, pontos, setor) # Adicionamos 'setor' aos parâmetros
+            conn.commit()
+        finally: conn.close()
+
+def atualizar_tarefa(tarefa_id, titulo, descricao, pontos, setor): # 1. Adicionado 'setor' aqui
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # 2. Adicionado 'Setor = ?' ao comando SQL
+            sql = "UPDATE Tarefas SET Titulo = ?, Descricao = ?, Pontos = ?, Setor = ? WHERE TarefaID = ?"
+            # 3. Adicionado 'setor' na lista de parâmetros a serem executados
+            cursor.execute(sql, titulo, descricao, pontos, setor, tarefa_id)
+            conn.commit()
+        finally: conn.close()
+
+def excluir_tarefa(tarefa_id):
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor(); sql = "DELETE FROM Tarefas WHERE TarefaID = ?"; cursor.execute(sql, tarefa_id); conn.commit()
+        finally: conn.close()
+def listar_todas_as_tarefas():
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor(); sql = "SELECT * FROM Tarefas ORDER BY Titulo"; cursor.execute(sql); return cursor.fetchall()
+        finally: conn.close()
+    return []
+def buscar_tarefa_por_atribuicao(atribuicao_id):
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor(); sql = "SELECT T.* FROM Tarefas T JOIN TarefasAtribuidas TA ON T.TarefaID = TA.TarefaID WHERE TA.AtribuicaoID = ?"; cursor.execute(sql, atribuicao_id); return cursor.fetchone()
+        finally: conn.close()
+    return None
+# Em database.py, SUBSTITUA a função existente por esta:
+
+# Em database.py, SUBSTITUA a função listar_tarefas_para_atribuicao por esta:
+
+def listar_tarefas_para_atribuicao(filtro_setor=None):
+    """
+    (VERSÃO CORRIGIDA - SEMPRE MOSTRA TODOS OS MODELOS)
+    Retorna uma lista de TODOS os modelos de tarefa do catálogo.
+    Se um 'filtro_setor' for fornecido, retorna apenas tarefas daquele setor.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+
+            # REMOVEMOS A CLÁUSULA WHERE NOT EXISTS COMPLETAMENTE
+            sql = "SELECT T.* FROM Tarefas T"
+
+            params = [] # Lista para guardar os parâmetros da consulta
+
+            # Adicionamos a cláusula WHERE do filtro (SE HOUVER FILTRO)
+            where_clauses = []
+            if filtro_setor:
+                if filtro_setor == "Outras Tarefas":
+                     where_clauses.append("(T.Setor IS NULL OR T.Setor = '')")
+                else:
+                    where_clauses.append("T.Setor = ?")
+                    params.append(filtro_setor)
+
+            if where_clauses:
+                sql += " WHERE " + " AND ".join(where_clauses)
+
+            # O final da consulta também é o mesmo
+            sql += " ORDER BY ISNULL(T.Setor, 'Z-Sem Setor'), T.Titulo"
+
+            cursor.execute(sql, params)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def atribuir_tarefa_recorrente_para_grupo(tarefa_id, grupo_id, tipo_frequencia, valor_frequencia):
+    """
+    Cria uma nova atribuição de tarefa para um GRUPO inteiro.
+    O FuncionarioID fica NULO neste caso.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                INSERT INTO TarefasAtribuidas 
+                (TarefaID, GrupoID, TipoFrequencia, ValorFrequencia) 
+                VALUES (?, ?, ?, ?)
+            """
+            cursor.execute(sql, tarefa_id, grupo_id, tipo_frequencia, valor_frequencia)
+            conn.commit()
+        finally:
+            conn.close()
+
+# Em database.py, substitua a função 'atribuir_tarefa' por esta:
+
+def atribuir_tarefa(tarefa_id, funcionario_id, tipo_frequencia, valor_frequencia, descricao_override=None, data_agendamento=None, agendamento_id=None):
+    """Função universal para atribuir tarefas. AGORA RETORNA O NOVO ID DA ATRIBUIÇÃO."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                INSERT INTO TarefasAtribuidas 
+                (TarefaID, FuncionarioID, TipoFrequencia, ValorFrequencia, DataInicioVigencia, DescricaoOverride, DataAgendamento, AgendamentoID) 
+                VALUES (?, ?, ?, ?, GETDATE(), ?, ?, ?);
+                SELECT SCOPE_IDENTITY();
+            """
+            cursor.execute(sql, tarefa_id, funcionario_id, tipo_frequencia, valor_frequencia, descricao_override, data_agendamento, agendamento_id)
+            
+            # --- ADIÇÃO IMPORTANTE ---
+            cursor.nextset()
+            novo_atribuicao_id = cursor.fetchone()[0]
+            conn.commit()
+            return novo_atribuicao_id # Retorna o ID que acabamos de criar
+            # --- FIM DA ADIÇÃO ---
+            
+        finally:
+            conn.close()
+    return None # Retorna None em caso de falha
+
+
+def encerrar_atribuicao_tarefa(atribuicao_id):
+    """
+    NÃO DELETA a atribuição. Em vez disso, define a DataFimVigencia para hoje,
+    encerrando a validade da tarefa e preservando o histórico.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # A mágica está aqui: de DELETE para UPDATE!
+            sql = "UPDATE TarefasAtribuidas SET DataFimVigencia = GETDATE() WHERE AtribuicaoID = ?"
+            cursor.execute(sql, atribuicao_id)
+            conn.commit()
+            logger.info(f"Atribuição {atribuicao_id} encerrada com sucesso.")
+        except Exception as e:
+            print(f"--> [DATABASE.PY] ERRO ao encerrar a AtribuiçãoID {atribuicao_id}: {e}")
+        finally:
+            conn.close()
+
+def verificar_atribuicao_existente(tarefa_id, funcionario_id):
+    """
+    Verifica se já existe uma atribuição ATIVA (sem data de fim)
+    para uma combinação de tarefa e funcionário.
+    Retorna True se existir, False caso contrário.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT COUNT(1) 
+                FROM TarefasAtribuidas 
+                WHERE TarefaID = ? 
+                  AND FuncionarioID = ? 
+                  AND DataFimVigencia IS NULL
+            """
+            cursor.execute(sql, tarefa_id, funcionario_id)
+            # Se a contagem for maior que 0, significa que já existe.
+            return cursor.fetchone()[0] > 0
+        finally:
+            conn.close()
+    return False
+
+# Em database.py, SUBSTITUA a função registrar_entrega pela versão abaixo:
+
+def registrar_entrega(tarefa_id, funcionario_id, path_foto, atribuicao_id=None):
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # SQL CORRIGIDO: Agora inserimos a data e hora exata do envio.
+            sql = """
+                INSERT INTO Entregas 
+                (TarefaID, FuncionarioID, PathFotoEvidencia, AtribuicaoID, DataEnvio) 
+                VALUES (?, ?, ?, ?, GETDATE()); 
+                SELECT SCOPE_IDENTITY();
+            """
+            cursor.execute(sql, tarefa_id, funcionario_id, path_foto, atribuicao_id)
+            cursor.nextset() 
+            new_id = cursor.fetchone()[0]
+            conn.commit()
+            return new_id
+        finally: 
+            conn.close()
+    return None
+
+# Em database.py, SUBSTITUA a função antiga por esta versão completa e corrigida:
+
+def listar_atribuicoes_ativas():
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # O SQL foi atualizado com uma nova regra na cláusula WHERE
+            sql = """
+                SELECT 
+                    TA.AtribuicaoID, 
+                    ISNULL(F.NomeCompleto, G.NomeGrupo + ' (Grupo)') AS Alvo,
+                    T.Titulo, 
+                    TA.TipoFrequencia + 
+                    CASE 
+                        WHEN TA.TipoFrequencia = 'Semanal' THEN ' (' + 
+                            CASE TA.ValorFrequencia 
+                                WHEN '1' THEN 'Dom' WHEN '2' THEN 'Seg' WHEN '3' THEN 'Ter'
+                                WHEN '4' THEN 'Qua' WHEN '5' THEN 'Qui' WHEN '6' THEN 'Sex'
+                                WHEN '7' THEN 'Sab'
+                            END + ')'
+                        WHEN TA.TipoFrequencia = 'Mensal' THEN ' (Dia ' + CAST(TA.ValorFrequencia AS VARCHAR) + ')'
+                        WHEN TA.TipoFrequencia = 'GrupoCompetitiva' THEN ' (às ' + CONVERT(VARCHAR(5), TA.HorarioDisparo, 108) + ')'
+                        ELSE '' 
+                    END AS FrequenciaCompleta
+                FROM TarefasAtribuidas TA
+                JOIN Tarefas T ON TA.TarefaID = T.TarefaID
+                LEFT JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID
+                LEFT JOIN Grupos G ON TA.GrupoID = G.GrupoID
+                WHERE
+                    -- Regra 1: A atribuição não pode ter sido encerrada manualmente.
+                    TA.DataFimVigencia IS NULL
+                    -- E AQUI ESTÁ A NOVA REGRA INTELIGENTE:
+                    AND NOT (
+                        TA.TipoFrequencia = 'Unica' AND EXISTS (
+                            SELECT 1 FROM Entregas E
+                            WHERE E.AtribuicaoID = TA.AtribuicaoID AND E.StatusValidacao = 'Aprovada'
+                        )
+                    )
+                ORDER BY Alvo, T.Titulo
+            """
+            cursor.execute(sql)
+            rows_do_banco = cursor.fetchall()
+            resultados_em_tupla = [tuple(row) for row in rows_do_banco]
+            return resultados_em_tupla
+        finally:
+            conn.close()
+    return []
+
+def listar_entregas_pendentes():
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT E.EntregaID, E.PathFotoEvidencia, E.FuncionarioID, F.NomeCompleto, F.ChatIDTelegram, T.Titulo, T.Pontos
+                FROM Entregas E JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID JOIN Tarefas T ON E.TarefaID = T.TarefaID
+                WHERE E.StatusValidacao = 'Pendente' ORDER BY E.DataEnvio ASC
+            """
+            cursor.execute(sql); return cursor.fetchall()
+        finally: conn.close()
+    return []
+# Em database.py, substitua a função antiga por esta versão mais simples e correta:
+
+def aprovar_entrega(entrega_id, funcionario_id, pontos):
+    """
+    (VERSÃO FINAL COM SALDO)
+    Aprova uma entrega, registra os pontos e ADICIONA OS PONTOS AO SALDO GERAL.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Atualiza o status da entrega
+            sql_update_entrega = "UPDATE Entregas SET StatusValidacao = 'Aprovada', PontosGanhos = ? WHERE EntregaID = ?"
+            cursor.execute(sql_update_entrega, pontos, entrega_id)
+            
+            # --- A NOVA ENGRENAGEM! ---
+            # Adiciona os pontos ganhos na tarefa ao saldo cumulativo do funcionário.
+            adicionar_pontos_ao_saldo(funcionario_id, pontos)
+
+            # Commita as duas operações juntas para garantir consistência.
+            conn.commit() 
+            
+            # (O código de verificação de conquistas continua o mesmo)
+            novas_conquistas = verificar_e_conceder_conquistas(funcionario_id)
+            return novas_conquistas
+
+        except pyodbc.Error as e: 
+            conn.rollback() # Desfaz tudo se uma das operações falhar
+            logger.error(f"Erro ao aprovar entrega e adicionar saldo: {e}")
+        finally: 
+            conn.close()
+    return [] # Retorna uma lista vazia em caso de falha
+
+def recusar_entrega(entrega_id, motivo):
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor(); sql = "UPDATE Entregas SET StatusValidacao = 'Recusada', MotivoRecusa = ? WHERE EntregaID = ?"; cursor.execute(sql, motivo, entrega_id); conn.commit()
+        finally: conn.close()
+def obter_ranking():
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor(); sql = "SELECT NomeCompleto, PontosTotal FROM Funcionarios ORDER BY PontosTotal DESC"; cursor.execute(sql); return cursor.fetchall()
+        finally: conn.close()
+    return []
+def relatorio_pendencias(funcionario_id, data):
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT T.Titulo, T.Pontos
+                FROM TarefasAtribuidas TA
+                JOIN Tarefas T ON TA.TarefaID = T.TarefaID
+                WHERE TA.FuncionarioID = ?
+                AND (
+                    (TA.TipoFrequencia = 'Diaria' AND CONVERT(date, TA.DataAtribuicao) <= ?) OR
+                    (TA.TipoFrequencia = 'Semanal' AND TA.ValorFrequencia = DATEPART(weekday, ?) AND CONVERT(date, TA.DataAtribuicao) <= ?) OR
+                    (TA.TipoFrequencia = 'Mensal' AND TA.ValorFrequencia = DATEPART(day, ?) AND CONVERT(date, TA.DataAtribuicao) <= ?)
+                )
+                AND NOT EXISTS (
+                    SELECT 1 FROM Entregas E
+                    WHERE E.AtribuicaoID = TA.AtribuicaoID AND CONVERT(date, E.DataEnvio) = ?
+                )
+            """
+            cursor.execute(sql, funcionario_id, data, data, data, data, data, data); return cursor.fetchall()
+        finally: conn.close()
+    return []
+
+# --- FUNÇÕES DE GERENCIAMENTO DE GRUPOS ---
+def criar_grupo(nome_grupo, chat_id):
+    """Cria um novo grupo na tabela Grupos."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "INSERT INTO Grupos (NomeGrupo, ChatIDTelegram) VALUES (?, ?)"
+            cursor.execute(sql, nome_grupo, chat_id)
+            conn.commit()
+        finally:
+            conn.close()
+
+def listar_grupos():
+    """Retorna uma lista de todos os grupos."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT * FROM Grupos ORDER BY NomeGrupo"
+            cursor.execute(sql)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def atualizar_grupo(grupo_id, nome_grupo, chat_id):
+    """Atualiza o nome e o ChatID de um grupo existente."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE Grupos SET NomeGrupo = ?, ChatIDTelegram = ? WHERE GrupoID = ?"
+            cursor.execute(sql, nome_grupo, chat_id, grupo_id)
+            conn.commit()
+        finally:
+            conn.close()
+
+def excluir_grupo(grupo_id):
+    """Exclui um grupo. A deleção em cascata cuidará dos membros."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "DELETE FROM Grupos WHERE GrupoID = ?"
+            cursor.execute(sql, grupo_id)
+            conn.commit()
+        finally:
+            conn.close()
+
+def listar_membros_e_nao_membros(grupo_id):
+    """Retorna duas listas: membros de um grupo e funcionários que não são membros."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Membros
+            sql_membros = """
+                SELECT F.FuncionarioID, F.NomeCompleto 
+                FROM Funcionarios F
+                JOIN FuncionariosGrupos FG ON F.FuncionarioID = FG.FuncionarioID
+                WHERE FG.GrupoID = ? ORDER BY F.NomeCompleto
+            """
+            cursor.execute(sql_membros, grupo_id)
+            membros = cursor.fetchall()
+            
+            # Não Membros
+            sql_nao_membros = """
+                SELECT F.FuncionarioID, F.NomeCompleto 
+                FROM Funcionarios F
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM FuncionariosGrupos FG
+                    WHERE FG.GrupoID = ? AND FG.FuncionarioID = F.FuncionarioID
+                ) ORDER BY F.NomeCompleto
+            """
+            cursor.execute(sql_nao_membros, grupo_id)
+            nao_membros = cursor.fetchall()
+            
+            return membros, nao_membros
+        finally:
+            conn.close()
+    return [], []
+
+def adicionar_membro_ao_grupo(funcionario_id, grupo_id):
+    """Adiciona um funcionário a um grupo."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "INSERT INTO FuncionariosGrupos (FuncionarioID, GrupoID) VALUES (?, ?)"
+            cursor.execute(sql, funcionario_id, grupo_id)
+            conn.commit()
+        finally:
+            conn.close()
+
+def remover_membro_do_grupo(funcionario_id, grupo_id):
+    """Remove um funcionário de um grupo."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "DELETE FROM FuncionariosGrupos WHERE FuncionarioID = ? AND GrupoID = ?"
+            cursor.execute(sql, funcionario_id, grupo_id)
+            conn.commit()
+        finally:
+            conn.close()
+
+# Em database.py, ADICIONE esta nova função (pode remover a antiga 'agendar_tarefa_competitiva_para_grupo' se quiser)
+def agendar_tarefa_recorrente_para_grupo(tarefa_id, grupo_id, tipo_frequencia_grupo, valor_frequencia, horario_disparo):
+    """
+    Agenda uma nova tarefa recorrente ('GrupoDiaria', 'GrupoSemanal', 'GrupoMensal')
+    para um grupo em um horário específico, com o valor de frequência apropriado.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Usamos as colunas existentes TipoFrequencia e ValorFrequencia
+            sql = """
+                INSERT INTO TarefasAtribuidas
+                (TarefaID, GrupoID, TipoFrequencia, ValorFrequencia, HorarioDisparo, StatusTarefaGrupo)
+                VALUES (?, ?, ?, ?, ?, 'Disponivel')
+            """
+            # Para 'GrupoDiaria', o valor_frequencia pode ser None
+            cursor.execute(sql, tarefa_id, grupo_id, tipo_frequencia_grupo, valor_frequencia, horario_disparo)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"ERRO ao agendar tarefa recorrente para grupo: {e}")
+            conn.rollback()
+            return False
+        finally:
+            conn.close()
+    return False
+
+# Em database.py, SUBSTITUA a função buscar_tarefas_de_grupo_para_disparar por esta versão inteligente:
+def buscar_tarefas_de_grupo_para_disparar(horario_atual, dia_semana_hoje, dia_mes_hoje):
+    """
+    (VERSÃO FINAL - SUPORTA DIARIA/SEMANAL/MENSAL)
+    Busca tarefas de grupo agendadas para o horário atual E que correspondam
+    à frequência (diária, dia da semana específico ou dia do mês específico).
+    'dia_semana_hoje' usa a convenção SQL (Dom=1, Seg=2, ..., Sab=7).
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # A query agora tem uma cláusula WHERE mais complexa
+            sql = """
+                SELECT TA.AtribuicaoID, T.Titulo, T.Pontos, G.NomeGrupo, G.ChatIDTelegram
+                FROM TarefasAtribuidas TA
+                JOIN Tarefas T ON TA.TarefaID = T.TarefaID
+                JOIN Grupos G ON TA.GrupoID = G.GrupoID
+                WHERE
+                    -- Condição 1: O horário deve bater
+                    CONVERT(VARCHAR(5), TA.HorarioDisparo, 108) = ?
+                    -- Condição 2: E a frequência deve corresponder ao dia de hoje
+                    AND (
+                        -- Se for Diaria, sempre dispara
+                        TA.TipoFrequencia = 'GrupoDiaria'
+                        -- Ou se for Semanal E o dia da semana bate
+                        OR (TA.TipoFrequencia = 'GrupoSemanal' AND TA.ValorFrequencia = ?)
+                        -- Ou se for Mensal E o dia do mês bate
+                        OR (TA.TipoFrequencia = 'GrupoMensal' AND TA.ValorFrequencia = ?)
+                    )
+            """
+            cursor.execute(sql, horario_atual, dia_semana_hoje, dia_mes_hoje)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+# Em database.py, SUBSTITUA a função aceitar_tarefa_de_grupo por esta:
+def aceitar_tarefa_de_grupo(origem_atribuicao_id, funcionario_id):
+    """
+    (VERSÃO PARA OFERTA DIÁRIA - CRIA INSTÂNCIA 'Unica')
+    Verifica se a tarefa originária já foi aceita HOJE.
+    Se não foi, CRIA uma NOVA atribuição do tipo 'Unica' para o funcionário,
+    vinculada à atribuição original e agendada para hoje.
+    Retorna o ID da NOVA atribuição criada ou None se falhar/já aceita hoje.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+
+            # 1. Buscar o TarefaID da atribuição original
+            cursor.execute("SELECT TarefaID FROM TarefasAtribuidas WHERE AtribuicaoID = ?", origem_atribuicao_id)
+            result = cursor.fetchone()
+            if not result:
+                print(f"--> [ERRO ACEITAR GRUPO] Atribuição de origem {origem_atribuicao_id} não encontrada.")
+                return None
+            tarefa_id_original = result[0]
+
+            # 2. Verificar se alguém já aceitou HOJE para esta tarefa de origem
+            sql_check = """
+                SELECT AtribuicaoID
+                FROM TarefasAtribuidas
+                WHERE OrigemAtribuicaoID = ?
+                  AND CONVERT(date, DataAgendamento) = CONVERT(date, GETDATE())
+            """
+            cursor.execute(sql_check, origem_atribuicao_id)
+            if cursor.fetchone():
+                print(f"--> [ACEITAR GRUPO] Tarefa de origem {origem_atribuicao_id} já foi aceita hoje.")
+                return None # Retorna None indicando que já foi pega hoje
+
+            # 3. Se ninguém aceitou hoje, INSERIR a nova instância 'Unica'
+            sql_insert = """
+                INSERT INTO TarefasAtribuidas
+                (TarefaID, FuncionarioID, TipoFrequencia, DataInicioVigencia, DataAgendamento, OrigemAtribuicaoID, StatusTarefaGrupo)
+                VALUES (?, ?, 'Unica', GETDATE(), GETDATE(), ?, 'Aceita');
+                SELECT SCOPE_IDENTITY();
+            """
+            cursor.execute(sql_insert, tarefa_id_original, funcionario_id, origem_atribuicao_id)
+            cursor.nextset()
+            nova_atribuicao_id = cursor.fetchone()[0]
+            conn.commit()
+            print(f"--> [ACEITAR GRUPO] Nova atribuição 'Unica' (ID: {nova_atribuicao_id}) criada para FuncionarioID {funcionario_id} a partir da Origem {origem_atribuicao_id}.")
+            return nova_atribuicao_id # Retorna o ID da nova tarefa criada
+
+        except Exception as e:
+            logger.error(f"ERRO CRÍTICO em aceitar_tarefa_de_grupo (v. Oferta Diária): {e}")
+            conn.rollback()
+            return None
+        finally:
+            conn.close()
+    return None
+
+def buscar_detalhes_da_atribuicao(atribuicao_id):
+    """Busca todos os detalhes de uma tarefa (título, descrição, pontos) a partir do ID da atribuição."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT T.Titulo, T.Descricao, T.Pontos
+                FROM Tarefas T
+                JOIN TarefasAtribuidas TA ON T.TarefaID = TA.TarefaID
+                WHERE TA.AtribuicaoID = ?
+            """
+            cursor.execute(sql, atribuicao_id)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
+
+def buscar_funcionarios_para_lembrete(horario_atual):
+    """Busca funcionários para lembrete, RESPEITANDO O DIA DE FOLGA."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT * FROM Funcionarios
+                WHERE
+                    (DATEDIFF(minute, CONVERT(TIME, GETDATE()), CONVERT(TIME, DATEADD(HOUR, 3, HorarioNotificacao))) = 0 OR
+                    DATEDIFF(minute, CONVERT(TIME, GETDATE()), CONVERT(TIME, DATEADD(HOUR, 6, HorarioNotificacao))) = 0)
+                    AND (DiaDeFolga = 0 OR DiaDeFolga IS NULL OR DiaDeFolga != DATEPART(weekday, GETDATE()))
+            """
+            cursor.execute(sql)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def buscar_funcionarios_para_resumo_final(horario_atual):
+    """Busca funcionários para resumo final, RESPEITANDO O DIA DE FOLGA."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT * FROM Funcionarios
+                WHERE
+                    DATEDIFF(minute, CONVERT(TIME, GETDATE()), CONVERT(TIME, DATEADD(MINUTE, 500, HorarioNotificacao))) = 0
+                    AND (DiaDeFolga = 0 OR DiaDeFolga IS NULL OR DiaDeFolga != DATEPART(weekday, GETDATE()))
+            """
+            cursor.execute(sql)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+# Em database.py, ADICIONE esta função no final do arquivo:
+def buscar_detalhes_da_entrega(entrega_id):
+    """Busca todos os detalhes de uma entrega para as notificações."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT 
+                    E.StatusValidacao,
+                    F.NomeCompleto, F.ChatIDTelegram AS ChatIDFuncionario,
+                    T.Titulo, T.Pontos,
+                    E.FuncionarioID, E.EntregaID
+                FROM Entregas E
+                JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID
+                JOIN Tarefas T ON E.TarefaID = T.TarefaID
+                WHERE E.EntregaID = ?
+            """
+            cursor.execute(sql, entrega_id)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
+
+
+def _get_date_part(dt_object):
+    """
+    Função auxiliar segura que retorna a parte 'date' de um objeto.
+    Funciona tanto para objetos 'datetime' quanto para 'date'.
+    """
+    if hasattr(dt_object, 'date'): # Se for um objeto datetime completo
+        return dt_object.date()
+    return dt_object # Se já for um objeto date
+
+# Em database.py, SUBSTITUA a função calcular_ranking_desempenho por esta versão com filtro:
+
+def calcular_ranking_desempenho(data_final_calculo=None, setor_filtro=None): # <<< NOVO PARÂMETRO
+    """
+    Calcula o ranking com SCORE HÍBRIDO, filtrado opcionalmente por setor.
+    PESOS: 70% Desempenho (Confiabilidade), 30% Pontos Brutos (Esforço).
+    """
     conn = get_db_connection()
     if not conn: return []
-    query = """
-        SELECT cr.ContaID, cr.VendaID, cr.NumeroParcela, cr.ValorParcela, cr.DataVencimento, c.Nome AS NomeCliente
-        FROM dbo.ContasAReceber cr LEFT JOIN dbo.Clientes c ON cr.ClienteID = c.ClienteID
-        WHERE cr.Status = 'pendente'
+
+    PESO_A_DESEMPENHO = 0.7
+    PESO_B_PONTOS_BRUTOS = 0.3
+
+    try:
+        cursor = conn.cursor()
+        sql_tarefas_atribuidas = """
+            SELECT F.FuncionarioID, F.NomeCompleto, F.Cargo, F.DiaDeFolga, -- <<< Adicionado F.Cargo
+                   TA.AtribuicaoID, TA.TipoFrequencia, TA.ValorFrequencia,
+                   T.Pontos, TA.DataInicioVigencia, TA.DataFimVigencia,
+                   TA.DataAceite
+            FROM Funcionarios F
+            LEFT JOIN TarefasAtribuidas TA ON F.FuncionarioID = TA.FuncionarioID
+            LEFT JOIN Tarefas T ON TA.TarefaID = T.TarefaID
+            WHERE TA.AtribuicaoID IS NOT NULL
+            ORDER BY F.FuncionarioID
+        """ #
+        cursor.execute(sql_tarefas_atribuidas) #
+        todas_as_atribuicoes = cursor.fetchall() #
+
+        data_final = data_final_calculo if data_final_calculo else date.today() #
+        inicio_mes = data_final.replace(day=1) #
+
+        ranking_parcial = [] #
+
+        # --- FILTRAGEM INICIAL POR SETOR ---
+        funcionarios_todos = listar_funcionarios() #
+        funcionarios_filtrados = []
+        if setor_filtro == 'Cozinha':
+            funcionarios_filtrados = [f for f in funcionarios_todos if f.Cargo and 'Cozinha' in f.Cargo]
+        elif setor_filtro == 'Loja':
+            funcionarios_filtrados = [f for f in funcionarios_todos if not f.Cargo or 'Cozinha' not in f.Cargo]
+        else: # Nenhum filtro ou filtro inválido, pega todos
+            funcionarios_filtrados = funcionarios_todos
+        # ------------------------------------
+
+        if not funcionarios_filtrados: return [] # Retorna vazio se o setor não tiver funcionários
+
+        atribuicoes_por_funcionario = {} #
+        # Cria a estrutura apenas para os funcionários filtrados
+        for func in funcionarios_filtrados:
+             atribuicoes_por_funcionario[func.FuncionarioID] = {
+                'NomeCompleto': func.NomeCompleto,
+                'Cargo': func.Cargo, # Guarda o cargo
+                'DiaDeFolga': func.DiaDeFolga,
+                'tarefas': []
+            } #
+
+        # Preenche com as atribuições apenas dos funcionários filtrados
+        for atribuicao in todas_as_atribuicoes:
+            if atribuicao.FuncionarioID in atribuicoes_por_funcionario:
+                atribuicoes_por_funcionario[atribuicao.FuncionarioID]['tarefas'].append(atribuicao) #
+
+        # O cálculo de pontos possíveis e ganhos agora só roda para os funcionários filtrados
+        for func_id, dados in atribuicoes_por_funcionario.items():
+            pontos_possiveis_total = 0 #
+            # ... (Lógica interna para calcular pontos_possiveis_total permanece a mesma, incluindo a verificação de folga) ...
+            for tarefa in dados['tarefas']:
+                if tarefa.TipoFrequencia in ('GrupoCompetitiva', 'Unica'):
+                    data_ref = tarefa.DataAceite if tarefa.TipoFrequencia == 'GrupoCompetitiva' else tarefa.DataInicioVigencia
+                    if data_ref and inicio_mes <= _get_date_part(data_ref) <= data_final:
+                        pontos_possiveis_total += tarefa.Pontos
+                    continue
+                dias_ocorrencia = 0
+                start_date = max(_get_date_part(tarefa.DataInicioVigencia), inicio_mes) if tarefa.DataInicioVigencia else inicio_mes
+                end_date = min(_get_date_part(tarefa.DataFimVigencia), data_final) if tarefa.DataFimVigencia else data_final
+                if end_date < start_date: continue
+                for dia_atual in (start_date + timedelta(days=n) for n in range((end_date - start_date).days + 1)):
+                    if dia_atual > data_final: break
+                    dia_da_semana_sql = (dia_atual.weekday() + 1) % 7 + 1 # SQL Server: Dom=1..Sab=7
+                    if str(dia_da_semana_sql) == str(dados['DiaDeFolga']):
+                        continue
+                    if tarefa.TipoFrequencia == 'Diaria': dias_ocorrencia += 1
+                    elif tarefa.TipoFrequencia == 'Semanal':
+                        if str(dia_da_semana_sql) == str(tarefa.ValorFrequencia): dias_ocorrencia += 1
+                    elif tarefa.TipoFrequencia == 'Mensal':
+                        if dia_atual.day == int(tarefa.ValorFrequencia): dias_ocorrencia += 1
+                pontos_possiveis_total += dias_ocorrencia * tarefa.Pontos
+
+            pontos_ganhos = calcular_pontos_ganhos_no_periodo(func_id, inicio_mes, data_final) #
+            percentual_desempenho = (pontos_ganhos / pontos_possiveis_total) * 100 if pontos_possiveis_total > 0 else 0 #
+
+            ranking_parcial.append({
+                'FuncionarioID': func_id, 'NomeCompleto': dados['NomeCompleto'],
+                'PontosGanhos': pontos_ganhos, 'PontosPossiveis': pontos_possiveis_total,
+                'Desempenho': round(percentual_desempenho, 2)
+            }) #
+
+        if not ranking_parcial: return [] #
+
+        # --- AJUSTE NO CÁLCULO DO MAX ---
+        # Calcula o máximo de pontos ganhos APENAS DENTRO DO GRUPO FILTRADO
+        max_pontos_ganhos_no_setor = max(p['PontosGanhos'] for p in ranking_parcial) if any(p['PontosGanhos'] for p in ranking_parcial) else 1
+        # --------------------------------
+
+        ranking_final = [] #
+        for dados_func in ranking_parcial:
+            # Usa o máximo do setor para normalizar o esforço
+            percentual_pontos_brutos = (dados_func['PontosGanhos'] / max_pontos_ganhos_no_setor) * 100 #
+            score_hibrido = (dados_func['Desempenho'] * PESO_A_DESEMPENHO) + (percentual_pontos_brutos * PESO_B_PONTOS_BRUTOS) #
+            dados_func['ScoreHibrido'] = round(score_hibrido, 2) #
+            ranking_final.append(dados_func) #
+
+        ranking_ordenado = sorted(ranking_final, key=lambda x: x['ScoreHibrido'], reverse=True) #
+        return ranking_ordenado #
+
+    except Exception as e:
+        logger.error(f"ERRO ao calcular ranking de desempenho HÍBRIDO com filtro '{setor_filtro}': {e}") #
+        return [] #
+    finally:
+        if conn: conn.close() #
+
+def salvar_historico_ranking(ranking_do_mes):
+    """Salva os resultados finais do ranking de um mês na tabela de histórico."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            hoje = date.today()
+            ano = (hoje.replace(day=1) - timedelta(days=1)).year
+            mes = (hoje.replace(day=1) - timedelta(days=1)).month
+
+            sql = """
+                INSERT INTO HistoricoRanking 
+                (Ano, Mes, Posicao, FuncionarioID, NomeFuncionario, PontosGanhos, PontosPossiveis, PercentualDesempenho) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """
+            for i, dados_vencedor in enumerate(ranking_do_mes):
+                cursor.execute(sql,
+                               ano,
+                               mes,
+                               i + 1, # Posição no ranking
+                               dados_vencedor['FuncionarioID'],
+                               dados_vencedor['NomeCompleto'],
+                               dados_vencedor['PontosGanhos'],
+                               dados_vencedor['PontosPossiveis'],
+                               dados_vencedor['Desempenho']
+                               )
+            conn.commit()
+            print(f"--> [DATABASE.PY] Histórico do ranking de {mes}/{ano} salvo com sucesso.")
+        except Exception as e:
+            logger.error(f"ERRO ao salvar histórico do ranking: {e}")
+        finally:
+            conn.close()
+
+def verificar_se_fechamento_ja_rodou(ano, mes):
+    """Verifica na tabela de histórico se o fechamento para um dado mês/ano já foi salvo."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT COUNT(1) FROM HistoricoRanking WHERE Ano = ? AND Mes = ?"
+            cursor.execute(sql, ano, mes)
+            return cursor.fetchone()[0] > 0
+        finally:
+            conn.close()
+    return False
+
+def calcular_pontos_ganhos_no_periodo(funcionario_id, inicio_periodo, fim_periodo):
     """
-    params = []
-    if cliente_id:
-        query += " AND cr.ClienteID = ?"
-        params.append(cliente_id)
-    query += " ORDER BY cr.DataVencimento;"
-    try:
-        cursor = conn.cursor()
-        cursor.execute(query, params if params else []) 
-        result = cursor.fetchall()
-        # Removido: conn.commit()
-        return result
-    finally:
-        if conn: conn.close()
-
-def get_contas_pendentes_total() -> Decimal:
+    Soma os pontos de todas as entregas APROVADAS de um funcionário
+    dentro de um período de datas específico.
+    """
     conn = get_db_connection()
-    if not conn: return Decimal(0)
-    query = "SELECT COALESCE(SUM(ValorParcela), 0) FROM dbo.ContasAReceber WHERE Status = 'pendente';"
-    try:
-        cursor = conn.cursor()
-        cursor.execute(query)
-        total = cursor.fetchval()
-        return total or Decimal(0)
-    except pyodbc.Error as ex:
-        logging.error(f"Erro ao calcular total de contas a receber: {ex}")
-        conn.rollback()
-        return Decimal(0)
-    finally:
-        if conn: conn.close()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT SUM(ISNULL(PontosGanhos, 0))
+                FROM Entregas
+                WHERE FuncionarioID = ?
+                  AND StatusValidacao = 'Aprovada'
+                  AND CONVERT(DATE, DataEnvio) BETWEEN ? AND ?
+            """
+            cursor.execute(sql, funcionario_id, inicio_periodo, fim_periodo)
+            resultado = cursor.fetchone()[0]
+            # Se o resultado for None (nenhuma entrega), retorna 0
+            return resultado if resultado is not None else 0
+        finally:
+            conn.close()
+    return 0
 
-def add_conta_pagar(descricao_base: str, valor_total: Decimal, data_primeiro_vencimento: datetime.date, num_parcelas: int = 1) -> bool:
+def limpar_entregas_do_mes_por_funcionario(funcionario_id):
+    """
+    (A "BOMBA ATÔMICA")
+    DELETA todas as entregas de um funcionário feitas no mês e ano correntes.
+    Esta é uma operação DESTRUTIVA e irreversível.
+    """
     conn = get_db_connection()
-    if not conn: return False
-    cursor = conn.cursor()
-    
-    query = "INSERT INTO dbo.ContasAPagar (Descricao, Valor, DataVencimento) VALUES (?, ?, ?);"
-    
-    try:
-        if num_parcelas <= 0:
-            num_parcelas = 1
-            
-        # Calcula o valor de cada parcela, garantindo que o total feche
-        valor_parcela = (valor_total / Decimal(num_parcelas)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-        valor_ultima_parcela = valor_total - (valor_parcela * (num_parcelas - 1))
-        
-        for i in range(1, num_parcelas + 1):
-            valor = valor_ultima_parcela if i == num_parcelas else valor_parcela
-            # Calcula o vencimento (Parcela 1 vence na data exata, Parcela 2 em 30 dias, etc.)
-            vencimento = data_primeiro_vencimento + datetime.timedelta(days=30 * (i-1)) 
-            
-            descricao = f"{descricao_base} [{i}/{num_parcelas}]" if num_parcelas > 1 else descricao_base
-            
-            cursor.execute(query, descricao, valor, vencimento)
-            
-        conn.commit()
-        logging.info(f"Conta a pagar '{descricao_base}' (R$ {valor_total}) adicionada em {num_parcelas} parcela(s).")
-        return True
-        
-    except pyodbc.Error as ex:
-        logging.error(f"Erro ao adicionar conta a pagar parcelada: {ex}")
-        conn.rollback()
-        return False
-    finally:
-        if conn: conn.close()
-        
-def mark_conta_pagar_paga(conta_pagar_id: int, payment_date: Optional[datetime.date] = None) -> bool:
-    conn = get_db_connection()
-    if not conn: return False
-    payment_date = payment_date or datetime.date.today()
-    cursor = conn.cursor()
-    try:
-        # 1. Verifica se a conta existe e está pendente
-        cursor.execute("SELECT Descricao, Valor FROM dbo.ContasAPagar WHERE ContaPagarID = ? AND Status = 'pendente';", conta_pagar_id)
-        conta_info = cursor.fetchone()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                DELETE FROM Entregas
+                WHERE FuncionarioID = ?
+                  AND MONTH(DataEnvio) = MONTH(GETDATE())
+                  AND YEAR(DataEnvio) = YEAR(GETDATE())
+            """
+            cursor.execute(sql, funcionario_id)
+            conn.commit()
+            print(f"--> [BOMBA ATÔMICA] Entregas do mês corrente para o funcionário {funcionario_id} foram DELETADAS.")
+        except Exception as e:
+            logger.error(f"ERRO ao limpar as entregas do mês para o funcionário {funcionario_id}: {e}")
+        finally:
+            conn.close()
 
-        if not conta_info:
-            logging.warning(f"Conta a pagar ID {conta_pagar_id} não encontrada ou já paga.")
-            conn.rollback() # Usar o rollback da conexão principal
+def criar_documento(titulo, conteudo, criador_id, pontos, telegram_file_id_foto=None): # 1. Novo Parâmetro Opcional
+    """
+    Insere um novo documento na tabela Documentos e retorna o ID do novo registro.
+    Agora suporta um file_id de foto opcional.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                INSERT INTO Documentos (Titulo, Conteudo, FuncionarioCriadorID, PontosPorCiencia, TelegramFileIDFoto) -- 2. Nova Coluna no INSERT
+                VALUES (?, ?, ?, ?, ?); -- 3. Novo '?' para o valor
+                SELECT SCOPE_IDENTITY();
+            """
+            cursor.execute(sql, titulo, conteudo, criador_id, pontos, telegram_file_id_foto)
+            cursor.nextset()
+            novo_id = cursor.fetchone()[0]
+            conn.commit()
+            return novo_id
+        except Exception as e:
+            logger.error(f"ERRO ao criar documento: {e}")
+            return None
+        finally:
+            conn.close()
+
+def registrar_pendencia_assinatura(documento_id, funcionario_id):
+    """
+    Cria um registro de 'Pendente' para um funcionário em um documento específico.
+    Retorna o ID da nova pendência (AssinaturaID).
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                INSERT INTO DocumentosAssinaturas (DocumentoID, FuncionarioID)
+                VALUES (?, ?);
+                SELECT SCOPE_IDENTITY();
+            """
+            cursor.execute(sql, documento_id, funcionario_id)
+            cursor.nextset() # <<< A CORREÇÃO MÁGICA ESTÁ AQUI
+            assinatura_id = cursor.fetchone()[0]
+            conn.commit()
+            return assinatura_id
+        except Exception as e:
+            logger.error(f"ERRO ao registrar pendência de assinatura: {e}")
+            return None
+        finally:
+            conn.close()
+
+def buscar_detalhes_assinatura_para_bot(assinatura_id):
+    """
+    Busca informações cruciais sobre uma assinatura pendente para o bot usar.
+    Retorna o ID do funcionário, os pontos a serem ganhos e o chat_id do telegram.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT
+                    DA.FuncionarioID,
+                    D.PontosPorCiencia,
+                    F.ChatIDTelegram,
+                    D.Titulo
+                FROM DocumentosAssinaturas DA
+                JOIN Documentos D ON DA.DocumentoID = D.DocumentoID
+                JOIN Funcionarios F ON DA.FuncionarioID = F.FuncionarioID
+                WHERE DA.AssinaturaID = ? AND DA.StatusAssinatura = 'Pendente'
+            """
+            cursor.execute(sql, assinatura_id)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
+
+def marcar_como_ciente(assinatura_id):
+    """
+    Atualiza uma pendência de assinatura para 'Ciente' e preenche a data/hora.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                UPDATE DocumentosAssinaturas
+                SET StatusAssinatura = 'Ciente', DataCiencia = GETDATE()
+                WHERE AssinaturaID = ?
+            """
+            cursor.execute(sql, assinatura_id)
+            conn.commit()
+        finally:
+            conn.close()
+
+def registrar_pontos_por_leitura(funcionario_id, pontos, titulo_documento):
+    """
+    (O "TRUQUE MÁGICO")
+    Insere um registro na tabela Entregas para contabilizar os pontos no ranking.
+    """
+    conn = get_db_connection()
+    TAREFA_ID_LEITURA = 38 # <<< MUDE ESTE NÚMERO PARA O SEU ID CORRETO!
+
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                INSERT INTO Entregas
+                (TarefaID, FuncionarioID, StatusValidacao, PontosGanhos, DataEnvio, MotivoRecusa)
+                VALUES (?, ?, 'Aprovada', ?, GETDATE(), ?)
+            """
+            motivo = f"Ciência do comunicado: {titulo_documento}"
+            cursor.execute(sql, TAREFA_ID_LEITURA, funcionario_id, pontos, motivo)
+            conn.commit()
+            print(f"--> [PONTOS] {pontos} pts registrados para FuncionarioID {funcionario_id} pela leitura.")
+        except Exception as e:
+            logger.error(f"ERRO ao registrar pontos por leitura: {e}")
+        finally:
+            conn.close()
+
+def listar_comunicados_com_status(filtro_titulo=None):
+    """
+    Lista todos os documentos com status. Se um filtro_titulo for fornecido,
+    retorna apenas os documentos cujo título contém o texto do filtro.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql_base = """
+                SELECT
+                    D.DocumentoID, D.Titulo, D.DataCriacao,
+                    COUNT(DA.AssinaturaID) AS TotalEnviado,
+                    SUM(CASE WHEN DA.StatusAssinatura = 'Ciente' THEN 1 ELSE 0 END) AS TotalCientes
+                FROM Documentos D
+                LEFT JOIN DocumentosAssinaturas DA ON D.DocumentoID = DA.DocumentoID
+            """
+
+            params = [] # Lista para guardar os parâmetros da consulta
+            if filtro_titulo:
+                sql_base += " WHERE D.Titulo LIKE ?" # O 'LIKE' permite buscas parciais
+                params.append(f"%{filtro_titulo}%") # Os '%' são coringas: buscam o texto em qualquer parte do título
+
+            sql_final = """
+                GROUP BY D.DocumentoID, D.Titulo, D.DataCriacao
+                ORDER BY D.DataCriacao DESC
+            """
+
+            sql_completa = sql_base + sql_final
+            cursor.execute(sql_completa, params)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def listar_destinatarios_de_documento(documento_id):
+    """
+    Função de relatório para o gestor. Mostra o status detalhado de
+    cada funcionário para um documento específico, AGORA INCLUINDO O ID DA ASSINATURA.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT
+                    DA.AssinaturaID, 
+                    F.NomeCompleto,
+                    DA.StatusAssinatura,
+                    DA.DataCiencia
+                FROM DocumentosAssinaturas DA
+                JOIN Funcionarios F ON DA.FuncionarioID = F.FuncionarioID
+                WHERE DA.DocumentoID = ?
+                ORDER BY F.NomeCompleto
+            """
+            cursor.execute(sql, documento_id)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+if __name__ == '__main__':
+    GESTOR_ID_TESTE = 3 # ID de um funcionário para ser o "criador"
+    FUNCIONARIO_ID_TESTE = 3 # ID de um funcionário para receber o comunicado
+
+    print("--- INICIANDO TESTE DO MÓDULO DE COMUNICADOS ---")
+    print("\n[TESTE 1] Criando um novo documento que vale 25 pontos...")
+    id_doc = criar_documento(
+        "Documento de Teste com Pontos",
+        "Este é o conteúdo do nosso teste automatizado.",
+        GESTOR_ID_TESTE,
+        25
+    )
+    if id_doc:
+        print(f"--> SUCESSO! Documento criado com ID: {id_doc}")
+    else:
+        print("--> FALHA! Não foi possível criar o documento.")
+        exit()
+    print(f"\n[TESTE 2] Registrando pendência do Doc ID {id_doc} para o Funcionário ID {FUNCIONARIO_ID_TESTE}...")
+    id_assinatura = registrar_pendencia_assinatura(id_doc, FUNCIONARIO_ID_TESTE)
+    if id_assinatura:
+        print(f"--> SUCESSO! Pendência registrada com AssinaturaID: {id_assinatura}")
+    else:
+        print("--> FALHA! Não foi possível registrar a pendência.")
+        exit()
+
+    print(f"\n[TESTE 3] Buscando detalhes da assinatura ID {id_assinatura}...")
+    detalhes = buscar_detalhes_assinatura_para_bot(id_assinatura)
+    if detalhes:
+        print(f"--> SUCESSO! Detalhes encontrados: FuncID={detalhes.FuncionarioID}, Pontos={detalhes.PontosPorCiencia}")
+
+        print(f"\n[TESTE 4] Marcando a assinatura ID {id_assinatura} como 'Ciente'...")
+        marcar_como_ciente(id_assinatura)
+        print("--> SUCESSO! Status atualizado.")
+
+        if detalhes.PontosPorCiencia > 0:
+            print(f"\n[TESTE 5] Registrando {detalhes.PontosPorCiencia} pontos pela leitura...")
+            registrar_pontos_por_leitura(detalhes.FuncionarioID, detalhes.PontosPorCiencia, detalhes.Titulo)
+            print("--> SUCESSO! Pontos registrados na tabela Entregas.")
+    else:
+        print("--> FALHA! Não foi possível buscar os detalhes da assinatura.")
+
+    print("\n--- TESTE FINALIZADO ---")
+    print("Verifique as tabelas Documentos, DocumentosAssinaturas e Entregas no SSMS para confirmar os resultados.")
+
+def buscar_assinaturas_pendentes_antigas(horas_atras=24):
+    """
+    Busca assinaturas que continuam 'Pendente' após um determinado número de horas do envio.
+    Retorna uma lista com Nome, ChatID e Título do documento para o lembrete.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT
+                    F.NomeCompleto,
+                    F.ChatIDTelegram,
+                    D.Titulo,
+                    DA.DataEnvio
+                FROM DocumentosAssinaturas DA
+                JOIN Funcionarios F ON DA.FuncionarioID = F.FuncionarioID
+                JOIN Documentos D ON DA.DocumentoID = D.DocumentoID
+                WHERE
+                    DA.StatusAssinatura = 'Pendente'
+                    AND DA.DataEnvio < DATEADD(hour, -?, GETDATE())
+            """
+            cursor.execute(sql, horas_atras)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def buscar_detalhes_completos_documento(documento_id):
+    """
+    Busca todos os campos de um documento específico, incluindo seu conteúdo completo.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT Titulo, Conteudo FROM Documentos WHERE DocumentoID = ?"
+            cursor.execute(sql, documento_id)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
+
+def excluir_documento(documento_id):
+    """
+    Exclui um documento e todas as suas assinaturas pendentes ou cientes.
+    A exclusão em cascata deve estar configurada no banco de dados para segurança,
+    mas faremos a exclusão em duas etapas para garantir.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql_assinaturas = "DELETE FROM DocumentosAssinaturas WHERE DocumentoID = ?"
+            cursor.execute(sql_assinaturas, documento_id)
+            sql_documento = "DELETE FROM Documentos WHERE DocumentoID = ?"
+            cursor.execute(sql_documento, documento_id)
+
+            conn.commit()
+            print(f"--> [DATABASE] Documento ID {documento_id} e suas assinaturas foram excluídos.")
+        except Exception as e:
+            logger.error(f"ERRO ao excluir documento: {e}")
+            conn.rollback() # Desfaz a operação em caso de erro
+        finally:
+            conn.close()
+
+def buscar_dados_completos_para_recibo(assinatura_id):
+    """
+    Busca todos os dados necessários para gerar o recibo em PDF a partir do ID da assinatura.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT
+                    F.NomeCompleto,
+                    D.Titulo,
+                    D.Conteudo,
+                    DA.DataCiencia
+                FROM DocumentosAssinaturas DA
+                JOIN Funcionarios F ON DA.FuncionarioID = F.FuncionarioID
+                JOIN Documentos D ON DA.DocumentoID = D.DocumentoID
+                WHERE DA.AssinaturaID = ?
+            """
+            cursor.execute(sql, assinatura_id)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
+
+def listar_funcionarios_nao_destinatarios(documento_id):
+    """
+    Retorna uma lista de funcionários que AINDA NÃO estão associados a um
+    documento específico, AGORA INCLUINDO O CHAT ID PARA NOTIFICAÇÃO.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT F.FuncionarioID, F.NomeCompleto, F.ChatIDTelegram
+                FROM Funcionarios F
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM DocumentosAssinaturas DA
+                    WHERE DA.DocumentoID = ? AND DA.FuncionarioID = F.FuncionarioID
+                )
+                ORDER BY F.NomeCompleto
+            """
+            cursor.execute(sql, documento_id)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def salvar_feedback_do_dia(funcionario_id, nota):
+    """Salva a nota de feedback do funcionário para a data atual."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql_check = "SELECT 1 FROM Feedbacks WHERE FuncionarioID = ? AND DataFeedback = CONVERT(date, GETDATE())"
+            cursor.execute(sql_check, funcionario_id)
+            if cursor.fetchone():
+                print(f"--> [FEEDBACK] Feedback já recebido hoje para o funcionário {funcionario_id}.")
+                return False
+
+            sql_insert = "INSERT INTO Feedbacks (FuncionarioID, DataFeedback, NotaDia) VALUES (?, GETDATE(), ?)"
+            cursor.execute(sql_insert, funcionario_id, nota)
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+    return False
+
+def buscar_feedbacks(funcionario_id=None, data_inicio=None, data_fim=None):
+    """
+    Busca os feedbacks no banco de dados, com filtros opcionais.
+    - Retorna todos se nenhum filtro for passado.
+    - Filtra por funcionário, por período ou por ambos.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT
+                    F.FeedbackID,
+                    FUNC.NomeCompleto,
+                    F.DataFeedback,
+                    F.NotaDia
+                FROM Feedbacks F
+                JOIN Funcionarios FUNC ON F.FuncionarioID = FUNC.FuncionarioID
+            """
+
+            condicoes = []
+            params = []
+
+            if funcionario_id:
+                condicoes.append("F.FuncionarioID = ?")
+                params.append(funcionario_id)
+
+            if data_inicio:
+                condicoes.append("F.DataFeedback >= ?")
+                params.append(data_inicio)
+
+            if data_fim:
+                condicoes.append("F.DataFeedback <= ?")
+                params.append(data_fim)
+
+            if condicoes:
+                sql += " WHERE " + " AND ".join(condicoes)
+
+            sql += " ORDER BY F.DataFeedback DESC" # Ordena do mais recente para o mais antigo
+
+            cursor.execute(sql, params)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def relatorio_analise_tarefas(data_inicio, data_fim):
+    """
+    Busca no banco um resumo das tarefas que foram mais recusadas ou
+    marcadas como "Não Aplicável" dentro de um período.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = sql = """
+                SELECT
+                    T.Titulo,
+                    SUM(CASE WHEN E.StatusValidacao = 'Recusada' THEN 1 ELSE 0 END) AS QtdRecusada,
+                    SUM(CASE WHEN E.MotivoRecusa LIKE 'Não aplicável:%' THEN 1 ELSE 0 END) AS QtdNaoAplicavel,
+                    -- A CORREÇÃO LÓGICA ESTÁ AQUI: Somamos os dois casos acima
+                    SUM(CASE WHEN E.StatusValidacao = 'Recusada' THEN 1 ELSE 0 END) +
+                    SUM(CASE WHEN E.MotivoRecusa LIKE 'Não aplicável:%' THEN 1 ELSE 0 END) AS TotalEntregasProblematicas
+                FROM Entregas E
+                JOIN Tarefas T ON E.TarefaID = T.TarefaID
+                WHERE
+                    (E.StatusValidacao = 'Recusada' OR E.MotivoRecusa LIKE 'Não aplicável:%')
+                    AND CONVERT(DATE, E.DataEnvio) BETWEEN ? AND ?
+                GROUP BY
+                    T.Titulo
+                ORDER BY
+                    TotalEntregasProblematicas DESC
+            """
+            cursor.execute(sql, data_inicio, data_fim)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def criar_solicitacao_feedback(funcionario_id, assunto):
+    """Salva uma nova solicitação de feedback na tabela FeedbackSolicitacoes."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "INSERT INTO FeedbackSolicitacoes (FuncionarioID, TextoAssunto) VALUES (?, ?)"
+            cursor.execute(sql, funcionario_id, assunto)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"ERRO ao criar solicitação de feedback: {e}")
             return False
+        finally:
+            conn.close()
+    return False
 
-        descricao_conta, valor_pago = conta_info
-
-        # 2. Atualiza o status da conta (Transação A)
-        cursor.execute("UPDATE dbo.ContasAPagar SET Status = 'pago', DataPagamento = ? WHERE ContaPagarID = ?;", payment_date, conta_pagar_id)
-
-        # 3. Gera a descrição para o caixa
-        desc_caixa = f"Pagamento: {descricao_conta} (ContaPagarID #{conta_pagar_id})"
-
-        # 4. Registra a SAÍDA no caixa USANDO O MESMO CURSOR E TRANSAÇÃO
-        #    (Lógica anteriormente em add_retirada/add_caixa_movement)
-        if valor_pago > 0:
-            query_caixa = "INSERT INTO dbo.Caixa (Descricao, Valor, TipoMovimento) VALUES (?, ?, 'saida');"
-            cursor.execute(query_caixa, desc_caixa, valor_pago)
-        else:
-             # Se o valor for 0, não precisamos registrar no caixa, mas o pagamento da conta (status) é válido.
-             pass
-
-        # 5. Comita as DUAS operações (UPDATE e INSERT) juntas
-        conn.commit()
-        logging.info(f"Conta a pagar {conta_pagar_id} marcada como paga e registrada no caixa.")
-        return True
-
-    except pyodbc.Error as ex:
-        logging.error(f"Erro ao marcar conta a pagar {conta_pagar_id} como paga: {ex}")
-        conn.rollback() # Desfaz TUDO (UPDATE e INSERT) se algo der errado
-        return False
-    finally:
-        if conn: conn.close()
-
-# --- Função de Fluxo de Caixa (Nova - Etapa 3) ---
-
-def get_fluxo_caixa_projetado(dias_frente: int = 30) -> dict:
+def listar_solicitacoes_pendentes():
+    """Busca no banco todas as solicitações de feedback com status 'Pendente'."""
     conn = get_db_connection()
-    if not conn: 
-        return {'saldo_atual': Decimal(0), 'projecao': [], 'erros': 'Falha na conexão.'}
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT
+                    FS.SolicitacaoID,
+                    F.NomeCompleto,
+                    FS.DataSolicitacao,
+                    FS.TextoAssunto
+                FROM FeedbackSolicitacoes FS
+                JOIN Funcionarios F ON FS.FuncionarioID = F.FuncionarioID
+                WHERE FS.Status = 'Pendente'
+                ORDER BY FS.DataSolicitacao ASC
+            """
+            cursor.execute(sql)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
 
-    # 1. Define o período da projeção
-    data_hoje = datetime.date.today()
-    data_limite = data_hoje + datetime.timedelta(days=dias_frente)
-    
-    # 2. Busca o saldo atual
-    saldo_atual = get_caixa_balance()
-    
-    # 3. Esta query SQL combina todas as entradas e saídas futuras em uma única "agenda"
-    #    e agrupa os valores por dia.
-    query_projecao = """
-        WITH Futuro AS (
-            SELECT 
-                DataVencimento AS Data,
-                ValorParcela AS Valor,
-                'entrada' AS Tipo
-            FROM dbo.ContasAReceber
-            WHERE Status = 'pendente' AND DataVencimento BETWEEN ? AND ?
+def responder_solicitacao_feedback(solicitacao_id, texto_resposta):
+    """Atualiza uma solicitação com a resposta do gestor e muda o status."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                UPDATE FeedbackSolicitacoes
+                SET Status = 'Respondido',
+                    TextoResposta = ?,
+                    DataResposta = GETDATE()
+                WHERE SolicitacaoID = ?
+            """
+            cursor.execute(sql, texto_resposta, solicitacao_id)
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+    return False
+
+def buscar_dados_para_notificacao_feedback(solicitacao_id):
+    """Busca o nome e o ChatID de um funcionário a partir de uma solicitação."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT
+                    F.NomeCompleto,
+                    F.ChatIDTelegram
+                FROM FeedbackSolicitacoes FS
+                JOIN Funcionarios F ON FS.FuncionarioID = F.FuncionarioID
+                WHERE FS.SolicitacaoID = ?
+            """
+            cursor.execute(sql, solicitacao_id)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
+
+def registrar_entrega_preliminar(tarefa_id, funcionario_id, atribuicao_id, file_id):
+    """Cria um registro inicial na tabela Entregas, apenas com a file_id."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                INSERT INTO Entregas (TarefaID, FuncionarioID, AtribuicaoID, FileIDTelegram, DataEnvio, StatusValidacao) 
+                VALUES (?, ?, ?, ?, GETDATE(), 'Pendente'); 
+                SELECT SCOPE_IDENTITY();
+            """
+            cursor.execute(sql, tarefa_id, funcionario_id, atribuicao_id, file_id)
             
+            cursor.nextset() 
+            
+            new_id = cursor.fetchone()[0]
+            conn.commit()
+            return new_id
+        finally: 
+            conn.close()
+    return None
+
+def buscar_entregas_para_download():
+    """Busca entregas que foram registradas preliminarmente mas ainda não tiveram a foto baixada."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT EntregaID, FileIDTelegram FROM Entregas WHERE FileIDTelegram IS NOT NULL AND PathFotoEvidencia IS NULL"
+            cursor.execute(sql)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def finalizar_registro_entrega(entrega_id, path_foto):
+    """Atualiza o registro da entrega com o caminho da foto baixada."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE Entregas SET PathFotoEvidencia = ? WHERE EntregaID = ?"
+            cursor.execute(sql, path_foto, entrega_id)
+            conn.commit()
+        finally:
+            conn.close()
+
+def listar_atribuicoes_ativas_por_funcionario(funcionario_id):
+    """Retorna todas as tarefas ativas para um funcionário específico."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT 
+                    TA.AtribuicaoID, 
+                    T.Titulo, 
+                    TA.TipoFrequencia + 
+                    CASE 
+                        WHEN TA.TipoFrequencia = 'Semanal' THEN ' (' + 
+                            CASE TA.ValorFrequencia 
+                                WHEN '1' THEN 'Dom' WHEN '2' THEN 'Seg' WHEN '3' THEN 'Ter'
+                                WHEN '4' THEN 'Qua' WHEN '5' THEN 'Qui' WHEN '6' THEN 'Sex'
+                                WHEN '7' THEN 'Sab'
+                            END + ')'
+                        WHEN TA.TipoFrequencia = 'Mensal' THEN ' (Dia ' + CAST(TA.ValorFrequencia AS VARCHAR) + ')'
+                        ELSE '' 
+                    END AS FrequenciaCompleta
+                FROM TarefasAtribuidas TA
+                JOIN Tarefas T ON TA.TarefaID = T.TarefaID
+                WHERE
+                    TA.FuncionarioID = ? AND TA.DataFimVigencia IS NULL
+                    AND NOT (
+                        TA.TipoFrequencia = 'Unica' AND EXISTS (
+                            SELECT 1 FROM Entregas E
+                            WHERE E.AtribuicaoID = TA.AtribuicaoID AND E.StatusValidacao = 'Aprovada'
+                        )
+                    )
+                ORDER BY T.Titulo
+            """
+            cursor.execute(sql, funcionario_id)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def buscar_justificativas_nao_aplicavel(titulo_tarefa, data_inicio, data_fim):
+    """Busca as justificativas para uma tarefa marcada como 'Não Aplicável' em um período."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT
+                    E.DataEnvio,
+                    F.NomeCompleto,
+                    E.MotivoRecusa
+                FROM Entregas E
+                JOIN Tarefas T ON E.TarefaID = T.TarefaID
+                JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID
+                WHERE
+                    T.Titulo = ?
+                    AND E.MotivoRecusa LIKE 'Não aplicável:%'
+                    AND CONVERT(DATE, E.DataEnvio) BETWEEN ? AND ?
+                ORDER BY E.DataEnvio DESC
+            """
+            cursor.execute(sql, titulo_tarefa, data_inicio, data_fim)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def listar_agenda_semanal_por_funcionario(funcionario_id):
+    """Busca todas as tarefas ativas de um funcionário e retorna o dia da semana para tarefas semanais."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT 
+                    T.Titulo,
+                    TA.TipoFrequencia,
+                    TA.ValorFrequencia
+                FROM TarefasAtribuidas TA
+                JOIN Tarefas T ON TA.TarefaID = T.TarefaID
+                WHERE
+                    TA.FuncionarioID = ? 
+                    AND TA.DataFimVigencia IS NULL
+                    AND TA.TipoFrequencia IN ('Diaria', 'Semanal')
+                ORDER BY T.Titulo
+            """
+            cursor.execute(sql, funcionario_id)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def buscar_funcionarios_de_folga_hoje(dia_da_semana):
+    """Busca no banco todos os funcionários cujo dia de folga corresponde ao dia da semana fornecido."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT * FROM Funcionarios 
+                WHERE DiaDeFolga = ?
+            """
+            cursor.execute(sql, dia_da_semana)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def buscar_tarefas_recorrentes_agendadas_para_hoje(funcionario_id, dia_da_semana):
+    """
+    (VERSÃO CORRIGIDA) Busca tarefas recorrentes, AGORA INCLUINDO O SETOR.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT T.TarefaID, T.Titulo, T.Pontos, T.Setor
+                FROM TarefasAtribuidas TA
+                JOIN Tarefas T ON TA.TarefaID = T.TarefaID
+                WHERE TA.FuncionarioID = ? 
+                  AND TA.DataFimVigencia IS NULL
+                  AND (
+                    TA.TipoFrequencia = 'Diaria' OR
+                    (TA.TipoFrequencia = 'Semanal' AND TA.ValorFrequencia = ?)
+                  )
+            """
+            cursor.execute(sql, funcionario_id, dia_da_semana)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def listar_setores_unicos():
+    """Retorna uma lista com todos os nomes de setores distintos já cadastrados."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT DISTINCT Setor FROM Tarefas WHERE Setor IS NOT NULL AND Setor != '' ORDER BY Setor"
+            cursor.execute(sql)
+            return [row.Setor for row in cursor.fetchall()]
+        finally:
+            conn.close()
+    return []
+
+def adicionar_pontos_ao_saldo(funcionario_id, pontos_a_adicionar):
+    """Adiciona pontos ao saldo cumulativo de um funcionário."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE Funcionarios SET SaldoPontos = SaldoPontos + ? WHERE FuncionarioID = ?"
+            cursor.execute(sql, pontos_a_adicionar, funcionario_id)
+            conn.commit()
+        finally:
+            conn.close()
+
+def buscar_saldo_funcionario(funcionario_id):
+    """Busca o saldo de pontos atual de um funcionário."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT SaldoPontos FROM Funcionarios WHERE FuncionarioID = ?"
+            cursor.execute(sql, funcionario_id)
+            resultado = cursor.fetchone()
+            return resultado[0] if resultado else 0
+        finally:
+            conn.close()
+    return 0
+
+def listar_produtos_loja(incluir_inativos=False):
+    """Lista os produtos da loja. Por padrão, lista apenas os ativos."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT * FROM ProdutosLoja"
+            if not incluir_inativos:
+                sql += " WHERE Ativo = 1"
+            sql += " ORDER BY CustoEmPontos"
+            cursor.execute(sql)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def criar_produto_loja(nome, descricao, custo, estoque, ativo):
+    """Cria um novo produto na loja de recompensas."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "INSERT INTO ProdutosLoja (Nome, Descricao, CustoEmPontos, EstoqueDisponivel, Ativo) VALUES (?, ?, ?, ?, ?)"
+            cursor.execute(sql, nome, descricao, custo, estoque, ativo)
+            conn.commit()
+        finally:
+            conn.close()
+
+def atualizar_produto_loja(produto_id, nome, descricao, custo, estoque, ativo):
+    """Atualiza um produto existente na loja."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """UPDATE ProdutosLoja SET Nome = ?, Descricao = ?, CustoEmPontos = ?, 
+                     EstoqueDisponivel = ?, Ativo = ? WHERE ProdutoID = ?"""
+            cursor.execute(sql, nome, descricao, custo, estoque, ativo, produto_id)
+            conn.commit()
+        finally:
+            conn.close()
+
+# --- Funções de Gestão de Resgates ---
+
+def solicitar_resgate(funcionario_id, produto_id):
+    """
+    Processa uma solicitação de resgate.
+    Retorna uma tupla: (True, "Mensagem de Sucesso") ou (False, "Mensagem de Erro").
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # 1. Pega os detalhes do produto e o saldo do funcionário de uma vez
+            sql_check = """
+                SELECT P.CustoEmPontos, P.Nome, F.SaldoPontos 
+                FROM ProdutosLoja P, Funcionarios F
+                WHERE P.ProdutoID = ? AND F.FuncionarioID = ? AND P.Ativo = 1
+            """
+            cursor.execute(sql_check, produto_id, funcionario_id)
+            resultado = cursor.fetchone()
+            if not resultado:
+                return (False, "Produto não encontrado ou indisponível.")
+
+            custo_produto, nome_produto, saldo_atual = resultado
+
+            # 2. Verifica se há saldo suficiente
+            if saldo_atual < custo_produto:
+                return (False, f"Saldo insuficiente! Você tem {saldo_atual} pontos, mas o item '{nome_produto}' custa {custo_produto}.")
+
+            # 3. Se chegou até aqui, pode resgatar!
+            # Debita os pontos do saldo do funcionário
+            sql_debitar = "UPDATE Funcionarios SET SaldoPontos = SaldoPontos - ? WHERE FuncionarioID = ?"
+            cursor.execute(sql_debitar, custo_produto, funcionario_id)
+
+            # Insere o registro de resgate como 'Pendente'
+            sql_resgate = "INSERT INTO Resgates (FuncionarioID, ProdutoID, PontosGastos) VALUES (?, ?, ?); SELECT SCOPE_IDENTITY();"
+            cursor.execute(sql_resgate, funcionario_id, produto_id, custo_produto)
+            cursor.nextset()
+            resgate_id = cursor.fetchone()[0]
+            
+            conn.commit()
+            return (True, f"Resgate do item '{nome_produto}' solicitado com sucesso! Aguarde a aprovação do seu gestor.", resgate_id)
+        except Exception as e:
+            conn.rollback() # Segurança: Desfaz tudo em caso de erro
+            logger.error(f"ERRO CRÍTICO em solicitar_resgate: {e}")
+            return (False, f"Ocorreu um erro inesperado no servidor. Tente novamente mais tarde.", None)
+        finally:
+            conn.close()
+
+def listar_resgates_pendentes():
+    """Busca todos os resgates com status 'Pendente' para o gestor aprovar."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT R.ResgateID, F.NomeCompleto, P.Nome, R.PontosGastos, R.DataSolicitacao
+                FROM Resgates R
+                JOIN Funcionarios F ON R.FuncionarioID = F.FuncionarioID
+                JOIN ProdutosLoja P ON R.ProdutoID = P.ProdutoID
+                WHERE R.Status = 'Pendente'
+                ORDER BY R.DataSolicitacao ASC
+            """
+            cursor.execute(sql)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def aprovar_resgate(resgate_id, gestor_id):
+    """Muda o status de um resgate para 'Aprovado'."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE Resgates SET Status = 'Aprovado', GestorID_Aprovacao = ?, DataAprovacao = GETDATE() WHERE ResgateID = ?"
+            cursor.execute(sql, gestor_id, resgate_id)
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+    return False
+
+def recusar_resgate(resgate_id, gestor_id):
+    """Muda o status para 'Recusado' e DEVOLVE os pontos para o funcionário."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Primeiro, busca quantos pontos foram gastos e para qual funcionário
+            sql_find = "SELECT FuncionarioID, PontosGastos FROM Resgates WHERE ResgateID = ?"
+            cursor.execute(sql_find, resgate_id)
+            resgate = cursor.fetchone()
+            if resgate:
+                funcionario_id, pontos_gastos = resgate
+                # Devolve os pontos
+                sql_refund = "UPDATE Funcionarios SET SaldoPontos = SaldoPontos + ? WHERE FuncionarioID = ?"
+                cursor.execute(sql_refund, pontos_gastos, funcionario_id)
+
+                # Atualiza o status do resgate
+                sql_update = "UPDATE Resgates SET Status = 'Recusado', GestorID_Aprovacao = ?, DataAprovacao = GETDATE() WHERE ResgateID = ?"
+                cursor.execute(sql_update, gestor_id, resgate_id)
+                conn.commit()
+                return True
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"ERRO ao recusar resgate: {e}")
+        finally:
+            conn.close()
+    return False
+
+def buscar_dados_resgate_para_notificacao(resgate_id):
+    """Busca dados para notificar o funcionário sobre o status do resgate."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT F.NomeCompleto, F.ChatIDTelegram, P.Nome 
+                FROM Resgates R
+                JOIN Funcionarios F ON R.FuncionarioID = F.FuncionarioID
+                JOIN ProdutosLoja P ON R.ProdutoID = P.ProdutoID
+                WHERE R.ResgateID = ?
+            """
+            cursor.execute(sql, resgate_id)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
+
+# ===================================================================
+# == INÍCIO DO MÓDULO DE CONQUISTAS (BADGES) ========================
+# ===================================================================
+
+def listar_modelos_conquistas():
+    """Lista todos os modelos de conquistas disponíveis para gerenciamento."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM Conquistas ORDER BY Nome")
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def listar_conquistas_por_funcionario(funcionario_id):
+    """Lista todas as conquistas que um funcionário específico já ganhou."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT C.Nome, C.Descricao, C.Icone, CF.DataConquista
+                FROM ConquistasFuncionarios CF
+                JOIN Conquistas C ON CF.ConquistaID = C.ConquistaID
+                WHERE CF.FuncionarioID = ?
+                ORDER BY CF.DataConquista DESC
+            """
+            cursor.execute(sql, funcionario_id)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def verificar_e_conceder_conquistas(funcionario_id):
+    """
+    (VERSÃO EXPANDIDA COM MAIS CRITÉRIOS)
+    Verifica critérios de conquistas para um funcionário após um evento relevante.
+    Retorna uma lista de objetos das novas conquistas desbloqueadas.
+    """
+    conn = get_db_connection()
+    if not conn: return []
+
+    novas_conquistas_ganhas = []
+
+    try:
+        cursor = conn.cursor()
+        sql_conquistas_a_verificar = """
+            SELECT * FROM Conquistas
+            WHERE ConquistaID NOT IN (
+                SELECT ConquistaID FROM ConquistasFuncionarios WHERE FuncionarioID = ?
+            )
+        """
+        cursor.execute(sql_conquistas_a_verificar, funcionario_id)
+        conquistas_a_verificar = cursor.fetchall()
+
+        if not conquistas_a_verificar:
+            return [] # Nenhuma nova conquista possível para verificar
+
+        # --- DADOS NECESSÁRIOS PARA AS VERIFICAÇÕES ---
+        # (Buscamos uma vez para otimizar)
+        
+        # Total de tarefas aprovadas (usado por 'total_tarefas_aprovadas')
+        sql_total_aprovadas = "SELECT COUNT(*) FROM Entregas WHERE FuncionarioID = ? AND StatusValidacao = 'Aprovada'"
+        cursor.execute(sql_total_aprovadas, funcionario_id)
+        total_tarefas_aprovadas = cursor.fetchone()[0] or 0
+
+        # Datas das últimas N tarefas aprovadas (usado por 'tarefas_aprovadas_periodo' e 'sequencia_dias_tarefas')
+        # Buscamos mais do que o necessário (ex: 10) para garantir que temos dados suficientes para sequências
+        sql_datas_aprovadas = """
+            SELECT DISTINCT TOP 10 CONVERT(DATE, DataEnvio) as Data
+            FROM Entregas
+            WHERE FuncionarioID = ? AND StatusValidacao = 'Aprovada'
+            ORDER BY Data DESC
+        """
+        cursor.execute(sql_datas_aprovadas, funcionario_id)
+        datas_tarefas_aprovadas = [row.Data for row in cursor.fetchall()]
+
+        # Total de tarefas de grupo competitivo aprovadas (usado por 'tarefas_grupo_competitivo_aceitas')
+        sql_total_grupo_comp = """
+            SELECT COUNT(E.EntregaID)
+            FROM Entregas E
+            JOIN TarefasAtribuidas TA ON E.AtribuicaoID = TA.AtribuicaoID
+            WHERE E.FuncionarioID = ?
+              AND E.StatusValidacao = 'Aprovada'
+              AND TA.OrigemAtribuicaoID IS NOT NULL -- Identifica tarefas criadas a partir de um grupo competitivo
+              AND TA.TipoFrequencia = 'Unica'      -- Confirma que é a instância aceita
+        """
+        cursor.execute(sql_total_grupo_comp, funcionario_id)
+        total_grupo_competitivo_aprovadas = cursor.fetchone()[0] or 0
+        
+        # Total de comunicados cientes (usado por 'total_comunicados_cientes')
+        sql_total_cientes = "SELECT COUNT(*) FROM DocumentosAssinaturas WHERE FuncionarioID = ? AND StatusAssinatura = 'Ciente'"
+        cursor.execute(sql_total_cientes, funcionario_id)
+        total_comunicados_cientes = cursor.fetchone()[0] or 0
+
+        # Datas dos últimos N feedbacks (usado por 'sequencia_feedback_diario')
+        sql_datas_feedback = """
+            SELECT DISTINCT TOP 10 DataFeedback as Data
+            FROM Feedbacks
+            WHERE FuncionarioID = ?
+            ORDER BY Data DESC
+        """
+        cursor.execute(sql_datas_feedback, funcionario_id)
+        datas_feedback = [row.Data for row in cursor.fetchall()]
+
+
+        # --- LOOP DE VERIFICAÇÃO ---
+        for conquista in conquistas_a_verificar:
+            atingiu_criterio = False
+            
+            # --- CRITÉRIO 1: Total de Tarefas Aprovadas (Já Existia) ---
+            if conquista.CriterioTipo == 'total_tarefas_aprovadas':
+                if total_tarefas_aprovadas >= conquista.CriterioValor:
+                    atingiu_criterio = True
+            
+            elif conquista.CriterioTipo == 'tarefas_aprovadas_periodo':
+                try: # Adiciona try/except para conversão segura
+                    # Assume que CriterioValor é o NÚMERO DE TAREFAS necessárias.
+                    num_tarefas_necessarias = int(conquista.CriterioValor)
+                    # Assume um PERÍODO FIXO para este tipo de critério (ex: 7 dias).
+                    # Se precisar de períodos variáveis, a estrutura do banco precisaria mudar.
+                    dias_periodo_fixo = 7 # Ex: Para "Semana de Estreia"
+                    data_limite = date.today() - timedelta(days=dias_periodo_fixo)
+
+                    # Conta quantas das datas recentes (datas_tarefas_aprovadas)
+                    # estão DENTRO do período definido pela data_limite.
+                    count_dentro_periodo = sum(1 for dt in datas_tarefas_aprovadas if dt >= data_limite)
+
+                    # Compara a contagem com o número de tarefas necessárias.
+                    if count_dentro_periodo >= num_tarefas_necessarias:
+                        atingiu_criterio = True
+                except (ValueError, TypeError):
+                    logger.warning(f"Valor de critério inválido para conquista ID {conquista.ConquistaID} (tipo 'tarefas_aprovadas_periodo'). Esperado um número, recebido: {conquista.CriterioValor}")
+                    atingiu_criterio = False # Garante que não conceda a conquista
+
+
+            # --- CRITÉRIO 3: Sequência de Dias com Tarefas ---
+            elif conquista.CriterioTipo == 'sequencia_dias_tarefas':
+                dias_sequencia_necessaria = conquista.CriterioValor
+                if len(datas_tarefas_aprovadas) >= dias_sequencia_necessaria:
+                    sequencia_encontrada = True
+                    for i in range(dias_sequencia_necessaria - 1):
+                        # Verifica se a diferença entre dias consecutivos é exatamente 1
+                        if (datas_tarefas_aprovadas[i] - datas_tarefas_aprovadas[i+1]).days != 1:
+                            sequencia_encontrada = False
+                            break
+                    if sequencia_encontrada:
+                        atingiu_criterio = True
+
+            # --- CRITÉRIO 4: Tarefas de Grupo Competitivo Aceitas ---
+            elif conquista.CriterioTipo == 'tarefas_grupo_competitivo_aceitas':
+                 if total_grupo_competitivo_aprovadas >= conquista.CriterioValor:
+                     atingiu_criterio = True
+
+            # --- CRITÉRIO 5: Total de Comunicados Cientes ---
+            elif conquista.CriterioTipo == 'total_comunicados_cientes':
+                if total_comunicados_cientes >= conquista.CriterioValor:
+                    atingiu_criterio = True
+
+            # --- CRITÉRIO 6: Sequência de Dias com Feedback ---
+            elif conquista.CriterioTipo == 'sequencia_feedback_diario':
+                dias_sequencia_necessaria = conquista.CriterioValor
+                if len(datas_feedback) >= dias_sequencia_necessaria:
+                    sequencia_encontrada = True
+                    for i in range(dias_sequencia_necessaria - 1):
+                        # Verifica se a diferença entre dias consecutivos é exatamente 1
+                        if (datas_feedback[i] - datas_feedback[i+1]).days != 1:
+                            sequencia_encontrada = False
+                            break
+                    if sequencia_encontrada:
+                        atingiu_criterio = True
+
+            # --- FIM DAS VERIFICAÇÕES DE CRITÉRIOS ---
+
+            # Se qualquer um dos critérios acima foi atingido:
+            if atingiu_criterio:
+                try:
+                    # Concede a conquista (insere na tabela ConquistasFuncionarios)
+                    sql_grant = "INSERT INTO ConquistasFuncionarios (FuncionarioID, ConquistaID) VALUES (?, ?)"
+                    cursor.execute(sql_grant, funcionario_id, conquista.ConquistaID)
+                    conn.commit()
+                    novas_conquistas_ganhas.append(conquista) # Adiciona à lista para notificação
+                    print(f"--> [CONQUISTA] '{conquista.Nome}' concedida para FuncionarioID {funcionario_id}!")
+
+                    # Concede os pontos de bônus, se houver
+                    if conquista.PontosBonus > 0:
+                        registrar_pontos_por_leitura( # Reutiliza a função
+                            funcionario_id,
+                            conquista.PontosBonus,
+                            f"Bônus pela conquista: {conquista.Nome}"
+                        )
+                        # NÃO PRECISAMOS MAIS CHAMAR adicionar_pontos_ao_saldo AQUI
+                        # pois já ajustamos o telegram_bot.py para fazer isso DEPOIS que esta função retorna.
+                        
+                except pyodbc.IntegrityError:
+                    # Ignora erro se, por alguma concorrência rara, a conquista já foi inserida
+                    conn.rollback()
+                    print(f"--> [CONQUISTA] Aviso: Tentativa de inserir conquista duplicada para FuncionarioID {funcionario_id} e ConquistaID {conquista.ConquistaID}. Ignorando.")
+                except Exception as e_grant:
+                    conn.rollback()
+                    logger.error(f"ERRO CRÍTICO ao conceder conquista ID {conquista.ConquistaID} para FuncionarioID {funcionario_id}: {e_grant}")
+
+        return novas_conquistas_ganhas
+
+    except Exception as e_main:
+        logger.error(f"ERRO CRÍTICO GERAL em verificar_e_conceder_conquistas para FuncionarioID {funcionario_id}: {e_main}")
+        return [] # Retorna lista vazia em caso de erro grave
+    finally:
+        if conn:
+            conn.close()
+
+# Em database.py, adicione esta nova função
+def atualizar_documento_com_file_id(documento_id, file_id):
+    """Atualiza um registro de documento existente para adicionar o file_id da foto."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE Documentos SET TelegramFileIDFoto = ? WHERE DocumentoID = ?"
+            cursor.execute(sql, file_id, documento_id)
+            conn.commit()
+        finally:
+            conn.close()
+
+# Em database.py, adicione este bloco inteiro no final do arquivo
+
+# ===================================================================
+# == INÍCIO DO MÓDULO DE DOCUMENTOS PESSOAIS (RH) ===================
+# ===================================================================
+
+def salvar_documento_pessoal(funcionario_id, tipo_documento, mes_ano, caminho_arquivo):
+    """
+    Salva um novo documento pessoal (como um holerite) no catálogo e retorna o ID do novo documento.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                INSERT INTO DocumentosPessoais (FuncionarioID, TipoDocumento, MesAno, CaminhoArquivo)
+                VALUES (?, ?, ?, ?);
+                SELECT SCOPE_IDENTITY();
+            """
+            cursor.execute(sql, funcionario_id, tipo_documento, mes_ano, caminho_arquivo)
+            cursor.nextset()
+            novo_id = cursor.fetchone()[0]
+            conn.commit()
+            return novo_id
+        except Exception as e:
+            logger.error(f"ERRO ao salvar documento pessoal: {e}")
+            return None
+        finally:
+            conn.close()
+
+def criar_pendencia_ciencia_documento_pessoal(documento_id, funcionario_id):
+    """
+    Cria o registro de 'Pendente' na tabela de ciência para um novo documento pessoal.
+    Retorna o ID da nova pendência (CienciaID).
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                INSERT INTO DocumentosPessoaisCiencia (DocumentoID, FuncionarioID)
+                VALUES (?, ?);
+                SELECT SCOPE_IDENTITY();
+            """
+            cursor.execute(sql, documento_id, funcionario_id)
+            cursor.nextset()
+            ciencia_id = cursor.fetchone()[0]
+            conn.commit()
+            return ciencia_id
+        except Exception as e:
+            logger.error(f"ERRO ao criar pendência de ciência para documento pessoal: {e}")
+            return None
+        finally:
+            conn.close()
+
+def atualizar_verificador_cpf(funcionario_id, verificador):
+    """Atualiza ou insere os 3 dígitos do CPF para verificação de segurança."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE Funcionarios SET VerificadorCPF = ? WHERE FuncionarioID = ?"
+            cursor.execute(sql, verificador, funcionario_id)
+            conn.commit()
+        finally:
+            conn.close()
+
+def buscar_verificador_cpf(funcionario_id):
+    """Busca o verificador de CPF de um funcionário."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT VerificadorCPF FROM Funcionarios WHERE FuncionarioID = ?"
+            cursor.execute(sql, funcionario_id)
+            resultado = cursor.fetchone()
+            return resultado[0] if resultado else None
+        finally:
+            conn.close()
+    return None
+
+def buscar_caminho_documento(documento_id):
+    """Busca o caminho completo de um arquivo no servidor a partir do seu ID."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT CaminhoArquivo FROM DocumentosPessoais WHERE DocumentoID = ?"
+            cursor.execute(sql, documento_id)
+            resultado = cursor.fetchone()
+            return resultado[0] if resultado else None
+        finally:
+            conn.close()
+    return None
+
+def buscar_holerites_disponiveis(funcionario_id):
+    """
+    Busca os holerites que um funcionário ainda não deu ciência
+    e retorna o MesAno para exibição nos botões do Telegram.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT DP.MesAno
+                FROM DocumentosPessoais DP
+                JOIN DocumentosPessoaisCiencia DPC ON DP.DocumentoID = DPC.DocumentoID
+                WHERE DP.FuncionarioID = ? AND DP.TipoDocumento = 'Holerite' AND DPC.Status = 'Pendente'
+                ORDER BY DP.MesAno DESC;
+            """
+            cursor.execute(sql, funcionario_id)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def buscar_dados_holerite_para_envio(funcionario_id, mes_ano):
+    """
+    Busca o caminho do arquivo do holerite e o ID da pendência de ciência
+    para um funcionário e mês específicos.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT DP.CaminhoArquivo, DPC.CienciaID
+                FROM DocumentosPessoais DP
+                JOIN DocumentosPessoaisCiencia DPC ON DP.DocumentoID = DPC.DocumentoID
+                WHERE DP.FuncionarioID = ? AND DP.MesAno = ? AND DP.TipoDocumento = 'Holerite'
+            """
+            cursor.execute(sql, funcionario_id, mes_ano)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
+
+def marcar_holerite_como_ciente(ciencia_id):
+    """
+    Atualiza uma pendência de assinatura de holerite para 'Ciente'
+    e preenche a data/hora da confirmação.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                UPDATE DocumentosPessoaisCiencia
+                SET Status = 'Ciente', DataCiencia = GETDATE()
+                WHERE CienciaID = ? AND Status = 'Pendente'
+            """
+            cursor.execute(sql, ciencia_id)
+            conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            conn.close()
+    return False
+
+def listar_documentos_por_funcionario(funcionario_id):
+    """Busca os documentos de um funcionário, incluindo o status de ciência."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # AGORA FAZEMOS UM JOIN PARA BUSCAR OS DADOS DA TABELA DE CIÊNCIA
+            sql = """
+                SELECT 
+                    DP.DocumentoID, DP.TipoDocumento, DP.MesAno, DP.DataUpload,
+                    DPC.Status, DPC.DataCiencia
+                FROM DocumentosPessoais DP
+                LEFT JOIN DocumentosPessoaisCiencia DPC ON DP.DocumentoID = DPC.DocumentoID
+                WHERE DP.FuncionarioID = ?
+                ORDER BY DP.MesAno DESC
+            """
+            cursor.execute(sql, funcionario_id)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+
+def buscar_dados_para_painel_kanban():
+    """
+    Busca e organiza todas as tarefas para o painel de ação diária.
+    (VERSÃO 3.7 - Foco apenas nas tarefas de HOJE)
+    """
+    conn = get_db_connection()
+    if not conn:
+        return {'para_fazer': [], 'validacao': [], 'concluidas': [], 'progresso': {}}
+
+    try:
+        cursor = conn.cursor()
+
+        sql_para_fazer = """
+            WITH Datas AS (
+                SELECT
+                    GETDATE() as DataHoje,
+                    DATEADD(day, -1, GETDATE()) as DataOntem,
+                    CASE DATENAME(weekday, GETDATE())
+                        WHEN 'Sunday' THEN 1 WHEN 'Domingo' THEN 1 WHEN 'Monday' THEN 2 WHEN 'Segunda-feira' THEN 2
+                        WHEN 'Tuesday' THEN 3 WHEN 'Terça-feira' THEN 3 WHEN 'Wednesday' THEN 4 WHEN 'Quarta-feira' THEN 4
+                        WHEN 'Thursday' THEN 5 WHEN 'Quinta-feira' THEN 5 WHEN 'Friday' THEN 6 WHEN 'Sexta-feira' THEN 6
+                        WHEN 'Saturday' THEN 7 WHEN 'Sábado' THEN 7
+                    END as DiaSemanaID_Hoje,
+                    CASE DATENAME(weekday, DATEADD(day, -1, GETDATE()))
+                        WHEN 'Sunday' THEN 1 WHEN 'Domingo' THEN 1 WHEN 'Monday' THEN 2 WHEN 'Segunda-feira' THEN 2
+                        WHEN 'Tuesday' THEN 3 WHEN 'Terça-feira' THEN 3 WHEN 'Wednesday' THEN 4 WHEN 'Quarta-feira' THEN 4
+                        WHEN 'Thursday' THEN 5 WHEN 'Quinta-feira' THEN 5 WHEN 'Friday' THEN 6 WHEN 'Sexta-feira' THEN 6
+                        WHEN 'Saturday' THEN 7 WHEN 'Sábado' THEN 7
+                    END as DiaSemanaID_Ontem
+            )
+            -- Tarefas de HOJE
+            SELECT T.Titulo, F.NomeCompleto, T.Pontos, 'Hoje' as Categoria, TA.DataAtribuicao, D.DataHoje as DataReferencia
+            FROM TarefasAtribuidas TA JOIN Tarefas T ON TA.TarefaID = T.TarefaID JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID JOIN Datas D ON 1=1
+            WHERE TA.FuncionarioID IS NOT NULL AND TA.DataFimVigencia IS NULL
+            AND NOT EXISTS (SELECT 1 FROM Entregas E WHERE E.AtribuicaoID = TA.AtribuicaoID AND CONVERT(date, E.DataEnvio) = CONVERT(date, D.DataHoje) AND E.StatusValidacao != 'Recusada')
+            AND ( TA.TipoFrequencia = 'Diaria' OR
+                    (TA.TipoFrequencia = 'Semanal' AND CAST(TA.ValorFrequencia AS INT) = D.DiaSemanaID_Hoje) OR
+                    (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, D.DataHoje)) OR
+                    (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = CONVERT(date, D.DataHoje)) OR
+                    (TA.TipoFrequencia = 'Unica' AND CONVERT(date, TA.DataInicioVigencia) = CONVERT(date, D.DataHoje)) -- Inclui Unica de Hoje
+                )
+            AND (F.DiaDeFolga IS NULL OR F.DiaDeFolga = 0 OR F.DiaDeFolga != D.DiaSemanaID_Hoje)
+
             UNION ALL
+
+            -- Tarefas de ONTEM que não foram feitas
+            SELECT T.Titulo, F.NomeCompleto, T.Pontos, 'Atrasada' as Categoria, TA.DataAtribuicao, D.DataOntem as DataReferencia
+            FROM TarefasAtribuidas TA JOIN Tarefas T ON TA.TarefaID = T.TarefaID JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID JOIN Datas D ON 1=1
+            WHERE TA.FuncionarioID IS NOT NULL AND TA.DataFimVigencia IS NULL
+            -- Verifica se NÃO existe entrega feita ONTEM (Aprovada ou Pendente)
+            AND NOT EXISTS (SELECT 1 FROM Entregas E WHERE E.AtribuicaoID = TA.AtribuicaoID AND CONVERT(date, E.DataEnvio) = CONVERT(date, D.DataOntem) AND E.StatusValidacao IN ('Aprovada', 'Pendente'))
+            -- Verifica se a tarefa ERA devida ONTEM
+            AND ( TA.TipoFrequencia = 'Diaria' OR
+                    (TA.TipoFrequencia = 'Semanal' AND CAST(TA.ValorFrequencia AS INT) = D.DiaSemanaID_Ontem) OR
+                    (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, D.DataOntem)) OR
+                    (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = CONVERT(date, D.DataOntem)) OR
+                    (TA.TipoFrequencia = 'Unica' AND CONVERT(date, TA.DataInicioVigencia) = CONVERT(date, D.DataOntem)) -- Inclui Unica de Ontem
+                )
+            -- Verifica se o funcionário NÃO estava de folga ONTEM
+            AND (F.DiaDeFolga IS NULL OR F.DiaDeFolga = 0 OR F.DiaDeFolga != D.DiaSemanaID_Ontem)
+            -- Garante que não apareça se foi feita HOJE (Aprovada ou Pendente)
+            AND NOT EXISTS (SELECT 1 FROM Entregas E WHERE E.AtribuicaoID = TA.AtribuicaoID AND CONVERT(date, E.DataEnvio) = CONVERT(date, D.DataHoje) AND E.StatusValidacao IN ('Aprovada', 'Pendente'))
+
+            ORDER BY NomeCompleto, Categoria DESC; -- Ordena para Atrasadas virem antes de Hoje
+        """        
+        cursor.execute(sql_para_fazer)
+        para_fazer_cols = [column[0] for column in cursor.description]
+        para_fazer_rows = cursor.fetchall()
+
+        sql_validacao = "SELECT T.Titulo, F.NomeCompleto, E.DataEnvio, T.Pontos FROM Entregas E JOIN Tarefas T ON E.TarefaID = T.TarefaID JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID WHERE E.StatusValidacao = 'Pendente' ORDER BY E.DataEnvio;"
+        cursor.execute(sql_validacao)
+        validacao_cols = [column[0] for column in cursor.description]
+        validacao_rows = cursor.fetchall()
+
+        sql_concluidas = "SELECT T.Titulo, F.NomeCompleto, E.DataEnvio, E.PontosGanhos as Pontos FROM Entregas E JOIN Tarefas T ON E.TarefaID = T.TarefaID JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID WHERE E.StatusValidacao = 'Aprovada' AND CONVERT(date, E.DataEnvio) = CONVERT(date, GETDATE()) ORDER BY E.DataEnvio DESC;"
+        cursor.execute(sql_concluidas)
+        concluidas_cols = [column[0] for column in cursor.description]
+        concluidas_rows = cursor.fetchall()
+
+        para_fazer_lista = [dict(zip(para_fazer_cols, row)) for row in para_fazer_rows]
+        concluidas_lista = [dict(zip(concluidas_cols, row)) for row in concluidas_rows]
+
+        # Recalcula o total corretamente considerando a query modificada
+        tarefas_hoje_e_atrasadas_pendentes = len(para_fazer_lista)
+        total_concluidas_hoje = len(concluidas_lista)
+        # O total de tarefas 'devidas' hoje/ontem é a soma das pendentes + as concluídas hoje
+        total_tarefas_do_dia_ou_atrasadas = tarefas_hoje_e_atrasadas_pendentes + total_concluidas_hoje
+
+        progresso = { "concluidas": total_concluidas_hoje, "total": total_tarefas_do_dia_ou_atrasadas }
+
+
+        return {
+            'para_fazer': para_fazer_lista,
+            'validacao': [dict(zip(validacao_cols, row)) for row in validacao_rows],
+            'concluidas': concluidas_lista,
+            'progresso': progresso # Retorna o progresso calculado corretamente
+        }
+    except Exception as e:
+        logger.error(f"ERRO ao buscar dados para o painel Kanban: {e}")
+        return {'para_fazer': [], 'validacao': [], 'concluidas': [], 'progresso': {}}
             
-            SELECT 
-                DataVencimento AS Data,
-                Valor AS Valor,
-                'saida' AS Tipo
-            FROM dbo.ContasAPagar
-            WHERE Status = 'pendente' AND DataVencimento BETWEEN ? AND ?
-        ),
-        EventosDiarios AS (
-            SELECT 
-                Data,
-                SUM(CASE WHEN Tipo = 'entrada' THEN Valor ELSE 0 END) AS Entradas,
-                SUM(CASE WHEN Tipo = 'saida' THEN Valor ELSE 0 END) AS Saidas
-            FROM Futuro
-            GROUP BY Data
-        )
-        SELECT * FROM EventosDiarios ORDER BY Data;
+def buscar_ranking_do_dia():
     """
-    
-    resultado = {'saldo_atual': saldo_atual, 'projecao': []}
-    
+    Calcula o ranking dos 3 funcionários com mais pontos APROVADOS HOJE.
+    (VERSÃO CORRIGIDA - já retorna uma lista de dicionários)
+    """
+    conn = get_db_connection()
+    if not conn: return []
     try:
         cursor = conn.cursor()
-        cursor.execute(query_projecao, data_hoje, data_limite, data_hoje, data_limite)
-        eventos_futuros = cursor.fetchall()
-        
-        saldo_projetado = saldo_atual
-        
-        # 4. Processa os eventos dia a dia e calcula o saldo corrente
-        for evento in eventos_futuros:
-            saldo_projetado = saldo_projetado + evento.Entradas - evento.Saidas
-            resultado['projecao'].append({
-                'data': evento.Data,
-                'entradas': evento.Entradas,
-                'saidas': evento.Saidas,
-                'saldo_projetado': saldo_projetado
-            })
-            
-        return resultado
-        
-    except pyodbc.Error as ex:
-        logging.error(f"Erro ao gerar projeção de fluxo de caixa: {ex}")
-        conn.rollback()
-        return {'saldo_atual': saldo_atual, 'projecao': [], 'erros': str(ex)}
+        sql = """
+            SELECT TOP 3
+                F.NomeCompleto,
+                SUM(E.PontosGanhos) as TotalPontosHoje
+            FROM Entregas E
+            JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID
+            WHERE E.StatusValidacao = 'Aprovada'
+              AND CONVERT(date, E.DataEnvio) = CONVERT(date, GETDATE())
+            GROUP BY
+                F.NomeCompleto
+            ORDER BY
+                TotalPontosHoje DESC;
+        """
+        cursor.execute(sql)
+        # CORREÇÃO: Converte o resultado para uma lista de dicionários aqui dentro
+        cols = [column[0] for column in cursor.description]
+        return [dict(zip(cols, row)) for row in cursor.fetchall()]
     finally:
         if conn: conn.close()
 
-# --- Funções de Cancelamento (Novas - Etapa 3.1) ---
-
-def cancelar_conta_pagar_pendente(conta_pagar_id: int) -> bool:
+def buscar_feed_de_atividades(limite=5):
+    """
+    Busca os últimos eventos (tarefas aprovadas e conquistas) para o feed.
+    (VERSÃO CORRIGIDA - TOP N dinâmico)
+    """
     conn = get_db_connection()
-    if not conn: return False
-    cursor = conn.cursor()
-    
-    query_check = "SELECT Status FROM dbo.ContasAPagar WHERE ContaPagarID = ?;"
-    query_update = "UPDATE dbo.ContasAPagar SET Status = 'cancelado' WHERE ContaPagarID = ?;"
+    if not conn: return []
+    try:
+        cursor = conn.cursor()
+        # --- CORREÇÃO APLICADA AQUI ---
+        # Construímos a string SQL com f-string para incluir o TOP N dinamicamente.
+        # É seguro aqui porque 'limite' é um número controlado internamente.
+        sql = f"""
+            SELECT TOP ({int(limite)}) * FROM (
+                -- Evento do tipo 'tarefa_concluida'
+                SELECT
+                    E.DataEnvio as Timestamp,
+                    'tarefa_concluida' as TipoEvento,
+                    F.NomeCompleto as TextoPrincipal,
+                    T.Titulo as TextoSecundario,
+                    E.PontosGanhos as Pontos
+                FROM Entregas E
+                JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID
+                JOIN Tarefas T ON E.TarefaID = T.TarefaID
+                WHERE E.StatusValidacao = 'Aprovada'
+
+                UNION ALL
+
+                -- Evento do tipo 'conquista'
+                SELECT
+                    CF.DataConquista as Timestamp,
+                    'conquista' as TipoEvento,
+                    F.NomeCompleto as TextoPrincipal,
+                    C.Nome as TextoSecundario,
+                    C.PontosBonus as Pontos
+                FROM ConquistasFuncionarios CF
+                JOIN Funcionarios F ON CF.FuncionarioID = F.FuncionarioID
+                JOIN Conquistas C ON CF.ConquistaID = C.ConquistaID
+            ) as FeedEventos
+            ORDER BY Timestamp DESC;
+        """
+        # Executamos a query SEM parâmetros adicionais para o TOP
+        cursor.execute(sql)
+        # --- FIM DA CORREÇÃO ---
+
+        cols = [column[0] for column in cursor.description]
+        return [dict(zip(cols, row)) for row in cursor.fetchall()]
+
+    except Exception as e:
+        # Mantém o log de erro detalhado
+        logger.exception(f"Erro crítico dentro de buscar_feed_de_atividades: {e}") # Usando logger.exception
+        return [] # Retorna lista vazia em caso de erro
+    finally:
+        if conn: conn.close()
+
+# COLE ESTA FUNÇÃO DE VOLTA NO SEU ARQUIVO database.py
+def autenticar_funcionario(funcionario_id):
+    """
+    Busca todos os dados de um funcionário pelo ID, incluindo o hash da senha,
+    para o processo de autenticação.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT * FROM Funcionarios WHERE FuncionarioID = ?"
+            cursor.execute(sql, funcionario_id)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
+
+# ADICIONE ESTA NOVA FUNÇÃO EM database.py
+def buscar_chat_id_por_nome_grupo(nome_grupo):
+    """Busca o Chat ID de um grupo a partir do seu nome exato."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT ChatIDTelegram FROM Grupos WHERE NomeGrupo = ?"
+            cursor.execute(sql, nome_grupo)
+            resultado = cursor.fetchone()
+            return resultado[0] if resultado else None
+        finally:
+            conn.close()
+    return None
+
+# ADICIONE ESTAS DUAS NOVAS FUNÇÕES EM database.py
+
+def listar_funcionarios_por_setor(setor):
+    """Retorna uma lista de todos os funcionários de um setor específico."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Usamos a coluna Cargo para identificar o setor do funcionário
+            sql = "SELECT * FROM Funcionarios WHERE Cargo LIKE ?"
+            cursor.execute(sql, f"%{setor}%")
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def registrar_pontos_por_meta_equipe(lista_funcionarios, pontos_ganhos, meta_vendas, total_vendido):
+    """
+    Registra pontos de meta para uma lista de funcionários.
+    Cria uma entrega 'Aprovada' para cada um e adiciona os pontos ao saldo.
+    """
+    conn = get_db_connection()
+    # ATENÇÃO: Coloque aqui o ID da tarefa "Performance de Equipe (Metas)" que você criou.
+    TAREFA_ID_META = 121 # <<< MUDE ESTE NÚMERO PARA O SEU ID CORRETO!
+
+    if not conn or not lista_funcionarios:
+        return False
     
     try:
-        cursor.execute(query_check, conta_pagar_id)
-        resultado = cursor.fetchone()
+        cursor = conn.cursor()
+        sql_entrega = """
+            INSERT INTO Entregas
+            (TarefaID, FuncionarioID, StatusValidacao, PontosGanhos, DataEnvio, MotivoRecusa)
+            VALUES (?, ?, 'Aprovada', ?, GETDATE(), ?)
+        """
+        motivo = f"Meta de Vendas Atingida! (Vendido: R${total_vendido:.2f} / Meta: R${meta_vendas:.2f})"
         
-        if not resultado:
-            logging.warning(f"Tentativa de cancelar ContaPagarID {conta_pagar_id} falhou: ID não encontrado.")
-            conn.rollback()
-            return False
-        
-        if resultado.Status != 'pendente':
-            logging.warning(f"Tentativa de cancelar ContaPagarID {conta_pagar_id} falhou: Status é '{resultado.Status}', não 'pendente'.")
-            conn.rollback()
-            return False
+        for funcionario in lista_funcionarios:
+            # 1. Insere um registro na tabela Entregas para o ranking do mês.
+            cursor.execute(sql_entrega, TAREFA_ID_META, funcionario.FuncionarioID, pontos_ganhos, motivo)
             
-        cursor.execute(query_update, conta_pagar_id)
+            # 2. Adiciona os pontos ao saldo geral do funcionário.
+            adicionar_pontos_ao_saldo(funcionario.FuncionarioID, pontos_ganhos)
+
         conn.commit()
-        logging.info(f"ContaPagarID {conta_pagar_id} cancelada com sucesso.")
+        print(f"--> [METAS EQUIPE] {pontos_ganhos} pts registrados para {len(lista_funcionarios)} funcionário(s).")
         return True
-        
-    except pyodbc.Error as ex:
-        logging.error(f"Erro ao cancelar ContaPagarID {conta_pagar_id}: {ex}")
+    except Exception as e:
         conn.rollback()
+        logger.error(f"ERRO ao registrar pontos por meta de equipe: {e}")
         return False
     finally:
-        if conn: conn.close()
+        if conn:
+            conn.close()
 
-def cancelar_conta_receber_pendente(conta_receber_id: int) -> bool:
+
+# ===================================================================
+# == INÍCIO DO NOVO MÓDULO DE GESTÃO DE METAS CONTÍNUAS (V2) ========
+# ===================================================================
+
+def criar_meta_principal(nome, desc, valor_total, data_inicio, data_fim, pontos, setor):
+    """Cria uma nova meta principal (ex: mensal) no banco de dados."""
     conn = get_db_connection()
-    if not conn: return False
-    cursor = conn.cursor()
-    
-    query_check = "SELECT Status FROM dbo.ContasAReceber WHERE ContaID = ?;"
-    query_update = "UPDATE dbo.ContasAReceber SET Status = 'cancelado' WHERE ContaID = ?;"
-    
-    try:
-        cursor.execute(query_check, conta_receber_id)
-        resultado = cursor.fetchone()
-        
-        if not resultado:
-            logging.warning(f"Tentativa de cancelar ContaID {conta_receber_id} (A Receber) falhou: ID não encontrado.")
-            conn.rollback()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                INSERT INTO MetasPrincipais 
+                (NomeMeta, Descricao, ValorMetaTotal, DataInicio, DataFim, PontosPremio, SetorAlvo) 
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """
+            cursor.execute(sql, nome, desc, valor_total, data_inicio, data_fim, pontos, setor)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"ERRO ao criar meta principal: {e}")
             return False
-        
-        if resultado.Status != 'pendente':
-            logging.warning(f"Tentativa de cancelar ContaID {conta_receber_id} (A Receber) falhou: Status é '{resultado.Status}', não 'pendente'.")
-            conn.rollback()
-            return False
+        finally:
+            conn.close()
+
+def listar_metas_principais():
+    """Lista todas as metas principais cadastradas, das mais novas para as mais antigas."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT * FROM MetasPrincipais ORDER BY DataInicio DESC"
+            cursor.execute(sql)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+# Em database.py, SUBSTITUA a sua função lancar_apuracao_diaria por esta versão final:
+
+def lancar_apuracao_diaria(meta_principal_id, data_apuracao, valor_dia, funcionario_id):
+    """(VERSÃO V3.1 FINAL) Salva a apuração usando MERGE e RETORNA o ID da apuração."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                MERGE INTO MetasDiariasApuracoes AS target
+                USING (SELECT ? AS MetaPrincipalID, ? AS DataApuracao) AS source
+                ON (target.MetaPrincipalID = source.MetaPrincipalID AND target.DataApuracao = source.DataApuracao)
+                WHEN MATCHED THEN
+                    UPDATE SET ValorDia = ?, FuncionarioID_Lancamento = ?
+                WHEN NOT MATCHED THEN
+                    INSERT (MetaPrincipalID, DataApuracao, ValorDia, FuncionarioID_Lancamento)
+                    VALUES (?, ?, ?, ?);
+
+                SELECT ApuracaoID FROM MetasDiariasApuracoes WHERE MetaPrincipalID = ? AND DataApuracao = ?;
+            """
+            params = (
+                meta_principal_id, data_apuracao, # Para o USING
+                valor_dia, funcionario_id,         # Para o UPDATE
+                meta_principal_id, data_apuracao, valor_dia, funcionario_id, # Para o INSERT
+                meta_principal_id, data_apuracao  # Para o SELECT final
+            )
+            cursor.execute(sql, params)
             
-        cursor.execute(query_update, conta_receber_id)
+            # --- A CORREÇÃO MÁGICA ESTÁ AQUI ---
+            # Diz ao driver para avançar para o próximo resultado (o do SELECT).
+            cursor.nextset()
+            # ------------------------------------
+            
+            apuracao_id = cursor.fetchone()[0]
+            conn.commit()
+            return True, apuracao_id
+        except Exception as e:
+            logger.error(f"ERRO ao lançar apuração diária: {e}")
+            if conn:
+                conn.rollback()
+            return False, str(e)
+        finally:
+            if conn:
+                conn.close()
+    return False, "Erro de conexão com o banco."
+
+def buscar_meta_principal_do_dia():
+    """
+    Busca a meta principal ativa para hoje e calcula o total já atingido
+    somando todas as apurações diárias vinculadas a ela.
+    Esta é a função que a API usará para o painel.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Esta query faz tudo: encontra a meta ativa e já calcula a soma do "extrato"
+            sql = """
+                SELECT TOP 1
+                    MP.MetaPrincipalID,
+                    MP.NomeMeta,
+                    MP.ValorMetaTotal,
+                    (SELECT SUM(ValorDia) FROM MetasDiariasApuracoes MDA WHERE MDA.MetaPrincipalID = MP.MetaPrincipalID) as ValorAtingidoTotal
+                FROM MetasPrincipais MP
+                WHERE GETDATE() BETWEEN MP.DataInicio AND MP.DataFim AND MP.Status = 'Ativa'
+            """
+            cursor.execute(sql)
+            meta_ativa = cursor.fetchone()
+            if meta_ativa:
+                return {
+                    "nome_meta": meta_ativa.NomeMeta,
+                    "valor_meta": float(meta_ativa.ValorMetaTotal),
+                    # Se não houver nenhum lançamento, o ValorAtingidoTotal será None. Garantimos que ele vire 0.
+                    "valor_atingido": float(meta_ativa.ValorAtingidoTotal or 0)
+                }
+            return None # Nenhuma meta ativa para o dia de hoje
+        finally:
+            conn.close()
+    return None
+
+# Em database.py, adicione esta nova função no final do bloco de metas
+
+def listar_apuracoes_por_meta_principal(meta_principal_id):
+    """Busca o 'extrato' de todos os lançamentos diários para uma meta principal específica."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT DataApuracao, ValorDia 
+                FROM MetasDiariasApuracoes 
+                WHERE MetaPrincipalID = ? 
+                ORDER BY DataApuracao DESC
+            """
+            cursor.execute(sql, meta_principal_id)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+# Em database.py, ADICIONE este bloco inteiro no final do arquivo
+
+# ===================================================================
+# == INÍCIO DO MÓDULO DE METAS DIÁRIAS POR DIA DA SEMANA ============
+# ===================================================================
+
+def listar_modelos_metas_diarias():
+    """Busca os 7 modelos de metas, um para cada dia da semana."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT * FROM MetasDiariasModelos ORDER BY DiaSemanaID"
+            cursor.execute(sql)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def atualizar_modelo_meta_diaria(dia_semana_id, valor_meta, pontos_premio):
+    """Atualiza o valor e os pontos de um modelo de meta diária."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE MetasDiariasModelos SET ValorMeta = ?, PontosPremio = ? WHERE DiaSemanaID = ?"
+            cursor.execute(sql, valor_meta, pontos_premio, dia_semana_id)
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+    return False
+
+def buscar_modelo_meta_para_data(data_apuracao):
+    """Busca o modelo de meta diária correspondente a uma data específica."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Esta query usa a data para descobrir o dia da semana correspondente no SQL Server
+            sql = """
+                SELECT * FROM MetasDiariasModelos 
+                WHERE DiaSemanaID = DATEPART(weekday, ?)
+            """
+            cursor.execute(sql, data_apuracao)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
+
+# Em database.py, SUBSTITUA a sua função registrar_pontos_meta_diaria por esta:
+
+def registrar_pontos_meta_diaria(apuracao_id, pontos_ganhos, setor):
+    """
+    (VERSÃO V2) Marca uma apuração como premiada, distribui os pontos e
+    RETORNA A LISTA de funcionários que foram premiados.
+    """
+    conn = get_db_connection()
+    TAREFA_ID_META = 121
+
+    if not conn: return [] # Retorna lista vazia em caso de erro
+
+    try:
+        cursor = conn.cursor()
+        sql_marcar = "UPDATE MetasDiariasApuracoes SET PontosMetaDiariaGanhos = ? WHERE ApuracaoID = ?"
+        cursor.execute(sql_marcar, pontos_ganhos, apuracao_id)
+
+        funcionarios_do_setor = listar_funcionarios_por_setor(setor)
+        if not funcionarios_do_setor:
+            conn.commit()
+            return [] # Retorna lista vazia se não houver funcionários
+
+        sql_entrega = """
+            INSERT INTO Entregas (TarefaID, FuncionarioID, StatusValidacao, PontosGanhos, DataEnvio, MotivoRecusa)
+            VALUES (?, ?, 'Aprovada', ?, GETDATE(), ?)
+        """
+        motivo = f"Prêmio por atingir a meta diária do setor '{setor}'."
+        
+        print(f"--- DEBUG REGISTRAR PONTOS META ---")
+        print(f"Setor Alvo Recebido: '{setor}'")
+        print(f"Funcionários Encontrados no Setor: {len(funcionarios_do_setor)}")
+        if funcionarios_do_setor:
+            print(f"IDs dos funcionários encontrados: {[f.FuncionarioID for f in funcionarios_do_setor]}")
+
+        for funcionario in funcionarios_do_setor:
+            cursor.execute(sql_entrega, TAREFA_ID_META, funcionario.FuncionarioID, pontos_ganhos, motivo)
+            adicionar_pontos_ao_saldo(funcionario.FuncionarioID, pontos_ganhos)
+
         conn.commit()
-        logging.info(f"ContaID {conta_receber_id} (A Receber) cancelada com sucesso.")
-        return True
-        
-    except pyodbc.Error as ex:
-        logging.error(f"Erro ao cancelar ContaID {conta_receber_id} (A Receber): {ex}")
+        print(f"--> [METAS DIÁRIAS] {pontos_ganhos} pts registrados para {len(funcionarios_do_setor)} funcionário(s) do setor '{setor}'.")
+        return funcionarios_do_setor # <-- A MÁGICA! Retorna a lista de funcionários.
+    except Exception as e:
         conn.rollback()
-        return False
+        logger.error(f"ERRO ao registrar pontos por meta diária: {e}")
+        return []
     finally:
-        if conn: conn.close()
+        if conn:
+            conn.close()
 
-# --- Fim das Funções de Cancelamento ---
-
-def mark_conta_paga(conta_id: int, payment_date: Optional[datetime.date] = None) -> bool:
+def marcar_meta_principal_como_concluida(meta_id):
+    """Atualiza o status de uma meta principal para 'Concluida'."""
     conn = get_db_connection()
-    if not conn: return False
-    payment_date = payment_date or datetime.date.today()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("SELECT VendaID, ValorParcela FROM dbo.ContasAReceber WHERE ContaID = ? AND Status = 'pendente';", conta_id)
-        conta_info = cursor.fetchone()
-        if not conta_info:
-            logging.warning(f"Conta {conta_id} não encontrada ou já paga.")
-            
-            conn.rollback() # USAMOS O ROLLBACK DA CONEXÃO
-            
-            return False
-        
-        venda_id, valor_parcela = conta_info
-        cursor.execute("UPDATE dbo.ContasAReceber SET Status = 'pago', DataPagamento = ? WHERE ContaID = ?;", payment_date, conta_id)
-        desc_caixa = f"Recebimento Parcela (Venda #{venda_id}, Conta #{conta_id})"
-        cursor.execute("INSERT INTO dbo.Caixa (Descricao, Valor, TipoMovimento, VendaID, ContaReceberID) VALUES (?, ?, 'entrada', ?, ?);", desc_caixa, valor_parcela, venda_id, conta_id)
-        
-        conn.commit() # USAMOS O COMMIT DA CONEXÃO
-        
-        logging.info(f"Conta a receber {conta_id} marcada como paga.")
-        return True
-    except pyodbc.Error as ex:
-        logging.error(f"Erro ao marcar conta {conta_id} como paga: {ex}")
-        
-        conn.rollback() # USAMOS O ROLLBACK DA CONEXÃO
-        
-        return False
-    finally:
-        if conn: conn.close()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE MetasPrincipais SET Status = 'Concluida' WHERE MetaPrincipalID = ?"
+            cursor.execute(sql, meta_id)
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+    return False
 
-def add_caixa_movement(descricao: str, valor: Decimal, tipo: str, venda_id: Optional[int] = None, conta_receber_id: Optional[int] = None) -> bool:
+def distribuir_premio_meta_principal(meta_id):
+    """
+    Busca os detalhes da meta principal, encontra os funcionários do setor alvo,
+    distribui os pontos de prêmio e RETORNA a lista de funcionários premiados.
+    """
     conn = get_db_connection()
-    if not conn: return False
-    query = "INSERT INTO dbo.Caixa (Descricao, Valor, TipoMovimento, VendaID, ContaReceberID) VALUES (?, ?, ?, ?, ?);"
+    if not conn: return []
+
     try:
         cursor = conn.cursor()
-        cursor.execute(query, descricao, valor, tipo, venda_id, conta_receber_id)
+        # Etapa 1: Buscar os detalhes da meta
+        cursor.execute("SELECT PontosPremio, SetorAlvo FROM MetasPrincipais WHERE MetaPrincipalID = ?", meta_id)
+        meta_detalhes = cursor.fetchone()
+        if not meta_detalhes: return []
+
+        pontos_premio, setor_alvo = meta_detalhes
+
+        # Etapa 2: Usar a função que já temos para buscar os funcionários
+        funcionarios_do_setor = listar_funcionarios_por_setor(setor_alvo)
+        if not funcionarios_do_setor: return []
+
+        # Etapa 3: Distribuir os pontos (reutilizando a lógica da meta diária)
+        TAREFA_ID_META = 121
+        sql_entrega = "INSERT INTO Entregas (TarefaID, FuncionarioID, StatusValidacao, PontosGanhos, DataEnvio, MotivoRecusa) VALUES (?, ?, 'Aprovada', ?, GETDATE(), ?)"
+        motivo = f"Prêmio por atingir a META MENSAL do setor '{setor_alvo}'!"
+        
+        for funcionario in funcionarios_do_setor:
+            cursor.execute(sql_entrega, TAREFA_ID_META, funcionario.FuncionarioID, pontos_premio, motivo)
+            adicionar_pontos_ao_saldo(funcionario.FuncionarioID, pontos_premio)
+
+        # Etapa 4: Marcar a meta como concluída para não premiar de novo
+        marcar_meta_principal_como_concluida(meta_id)
+        
         conn.commit()
-        logging.info(f"Movimento de caixa: {tipo} de R$ {valor} - {descricao}")
-        return True
-    except pyodbc.Error as ex:
-        logging.error(f"Erro ao registrar movimento no caixa: {ex}")
+        return funcionarios_do_setor
+
+    except Exception as e:
         conn.rollback()
-        return False
+        logger.error(f"ERRO ao distribuir prêmio de meta principal: {e}")
+        return []
     finally:
         if conn: conn.close()
 
-def get_caixa_balance() -> Decimal:
+# Em database.py, adicione esta nova função ao final do arquivo
+
+def buscar_meta_ativa_id_hoje():
+    """Busca apenas o ID da meta principal ativa na data de hoje."""
     conn = get_db_connection()
-    if not conn: return Decimal(0)
-    query = "SELECT SUM(CASE WHEN TipoMovimento = 'entrada' THEN Valor ELSE -Valor END) FROM dbo.Caixa;"
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT TOP 1 MetaPrincipalID
+                FROM MetasPrincipais
+                WHERE GETDATE() BETWEEN DataInicio AND DataFim AND Status = 'Ativa'
+            """
+            cursor.execute(sql)
+            resultado = cursor.fetchone()
+            return resultado[0] if resultado else None
+        finally:
+            conn.close()
+    return None
+
+
+def excluir_apuracao_diaria(meta_principal_id, data_apuracao):
+    """Exclui um registro de apuração diária específico."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                DELETE FROM MetasDiariasApuracoes 
+                WHERE MetaPrincipalID = ? AND DataApuracao = ?
+            """
+            cursor.execute(sql, meta_principal_id, data_apuracao)
+            conn.commit()
+            return cursor.rowcount > 0 # Retorna True se uma linha foi afetada
+        except Exception as e:
+            logger.error(f"ERRO ao excluir apuração diária: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
+
+def buscar_dados_meta_diaria_hoje():
+    """
+    Busca o modelo da meta para o dia de hoje e o valor já apurado para hoje.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT
+                    (SELECT ValorMeta FROM MetasDiariasModelos WHERE DiaSemanaID = DATEPART(weekday, GETDATE())) as MetaDoDia,
+                    (SELECT SUM(ValorDia) FROM MetasDiariasApuracoes WHERE CONVERT(date, DataApuracao) = CONVERT(date, GETDATE())) as AtingidoHoje
+            """
+            cursor.execute(sql)
+            resultado = cursor.fetchone()
+            if resultado:
+                return {
+                    "valor_meta_diaria": float(resultado.MetaDoDia or 0),
+                    "valor_atingido_hoje": float(resultado.AtingidoHoje or 0)
+                }
+            return None
+        finally:
+            conn.close()
+    return None
+
+def buscar_grupo_por_chat_id(chat_id):
+    """Busca os detalhes de um grupo a partir do seu Chat ID."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT * FROM Grupos WHERE ChatIDTelegram = ?"
+            cursor.execute(sql, chat_id)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
+
+def listar_membros_por_chat_id_grupo(chat_id):
+    """Busca todos os funcionários que são membros de um grupo a partir do Chat ID do grupo."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT F.FuncionarioID, F.NomeCompleto, F.ChatIDTelegram
+                FROM Funcionarios F
+                JOIN FuncionariosGrupos FG ON F.FuncionarioID = FG.FuncionarioID
+                JOIN Grupos G ON FG.GrupoID = G.GrupoID
+                WHERE G.ChatIDTelegram = ?
+            """
+            cursor.execute(sql, chat_id)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def criar_conquista(nome, descricao, icone, criterio_tipo, criterio_valor, pontos_bonus):
+    """Insere um novo modelo de conquista no banco."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                INSERT INTO Conquistas (Nome, Descricao, Icone, CriterioTipo, CriterioValor, PontosBonus)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """
+            cursor.execute(sql, nome, descricao, icone, criterio_tipo, criterio_valor, pontos_bonus)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"ERRO ao criar conquista: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
+
+def atualizar_conquista(conquista_id, nome, descricao, icone, criterio_tipo, criterio_valor, pontos_bonus):
+    """Atualiza um modelo de conquista existente."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                UPDATE Conquistas
+                SET Nome = ?, Descricao = ?, Icone = ?, CriterioTipo = ?, CriterioValor = ?, PontosBonus = ?
+                WHERE ConquistaID = ?
+            """
+            cursor.execute(sql, nome, descricao, icone, criterio_tipo, criterio_valor, pontos_bonus, conquista_id)
+            conn.commit()
+            return cursor.rowcount > 0 # Retorna True se alguma linha foi afetada
+        except Exception as e:
+            logger.error(f"ERRO ao atualizar conquista: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
+
+def excluir_conquista(conquista_id):
+    """Exclui um modelo de conquista e as associações com funcionários."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Primeiro, remove dos funcionários que a ganharam
+            sql_assoc = "DELETE FROM ConquistasFuncionarios WHERE ConquistaID = ?"
+            cursor.execute(sql_assoc, conquista_id)
+            # Depois, remove o modelo da conquista
+            sql_modelo = "DELETE FROM Conquistas WHERE ConquistaID = ?"
+            cursor.execute(sql_modelo, conquista_id)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"ERRO ao excluir conquista: {e}")
+            conn.rollback() # Desfaz se der erro em uma das exclusões
+            return False
+        finally:
+            conn.close()
+    return False
+
+# Em database.py, ADICIONE estas funções no final:
+
+def buscar_atribuicoes_periodo(funcionario_id, data_inicio, data_fim):
+    """Busca tarefas atribuídas a um funcionário dentro de um período específico."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Seleciona atribuições cuja vigência INTERSECTA o período solicitado
+            sql = """
+                SELECT
+                    TA.AtribuicaoID, T.Titulo, T.Pontos, TA.TipoFrequencia, TA.ValorFrequencia,
+                    TA.DataInicioVigencia, TA.DataFimVigencia, TA.DataAceite
+                FROM TarefasAtribuidas TA
+                JOIN Tarefas T ON TA.TarefaID = T.TarefaID
+                WHERE TA.FuncionarioID = ?
+                  AND (TA.DataFimVigencia IS NULL OR TA.DataFimVigencia >= ?) -- Não encerrada antes do início do período
+                  AND (TA.DataInicioVigencia <= ?) -- Iniciada antes ou durante o fim do período
+                ORDER BY TA.DataInicioVigencia DESC
+            """
+            cursor.execute(sql, funcionario_id, data_inicio, data_fim)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def buscar_entregas_aprovadas_periodo(funcionario_id, data_inicio, data_fim):
+    """Busca entregas aprovadas de um funcionário dentro de um período específico."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT E.EntregaID, T.Titulo, E.DataEnvio, E.PontosGanhos
+                FROM Entregas E
+                JOIN Tarefas T ON E.TarefaID = T.TarefaID
+                WHERE E.FuncionarioID = ?
+                  AND E.StatusValidacao = 'Aprovada'
+                  AND CONVERT(DATE, E.DataEnvio) BETWEEN ? AND ?
+                ORDER BY E.DataEnvio DESC
+            """
+            cursor.execute(sql, funcionario_id, data_inicio, data_fim)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def calcular_pontos_possiveis_debug(funcionario_id, data_inicio, data_fim):
+    """
+    REPLICA a lógica de cálculo de pontos possíveis da função de ranking,
+    mas para um período específico, para fins de depuração.
+    Retorna o total de pontos possíveis calculados.
+    """
+    conn = get_db_connection()
+    if not conn: return 0
+
     try:
         cursor = conn.cursor()
-        cursor.execute(query)
-        saldo = cursor.fetchval()
-        # Removido: conn.commit()
-        return saldo or Decimal(0)
+        # Busca as atribuições ativas E o dia de folga do funcionário
+        sql_tarefas_atribuidas = """
+            SELECT
+                   TA.AtribuicaoID, TA.TipoFrequencia, TA.ValorFrequencia,
+                   T.Pontos, TA.DataInicioVigencia, TA.DataFimVigencia,
+                   TA.DataAceite, F.DiaDeFolga
+            FROM TarefasAtribuidas TA
+            JOIN Tarefas T ON TA.TarefaID = T.TarefaID
+            JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID
+            WHERE TA.FuncionarioID = ?
+        """
+        cursor.execute(sql_tarefas_atribuidas, funcionario_id)
+        tarefas_funcionario = cursor.fetchall()
+
+        pontos_possiveis_total = 0
+        dia_folga_func = None # Pega a folga da primeira tarefa (deve ser a mesma para todas)
+
+        for tarefa in tarefas_funcionario:
+            if dia_folga_func is None: # Pega o dia de folga apenas uma vez
+                 dia_folga_func = tarefa.DiaDeFolga
+
+            # Lógica para tarefas 'Unica' ou 'GrupoCompetitiva'
+            if tarefa.TipoFrequencia in ('GrupoCompetitiva', 'Unica'):
+                data_ref = tarefa.DataAceite if tarefa.TipoFrequencia == 'GrupoCompetitiva' else tarefa.DataInicioVigencia
+                if data_ref and data_inicio <= _get_date_part(data_ref) <= data_fim: # Verifica se está DENTRO do período
+                    # Considera apenas se a atribuição estava ativa no período
+                    data_fim_vigencia = _get_date_part(tarefa.DataFimVigencia) if tarefa.DataFimVigencia else data_fim # Usa data_fim se for nulo
+                    if data_fim_vigencia >= data_inicio: # Garante que não encerrou antes do período começar
+                        pontos_possiveis_total += tarefa.Pontos
+                continue
+
+            # Lógica para tarefas recorrentes
+            dias_ocorrencia = 0
+            # Define o período de cálculo (intersecção da vigência da tarefa com o período solicitado)
+            start_date_tarefa = _get_date_part(tarefa.DataInicioVigencia) if tarefa.DataInicioVigencia else data_inicio
+            end_date_tarefa = _get_date_part(tarefa.DataFimVigencia) if tarefa.DataFimVigencia else data_fim
+
+            start_date_calc = max(start_date_tarefa, data_inicio)
+            end_date_calc = min(end_date_tarefa, data_fim)
+
+            if end_date_calc < start_date_calc: continue
+
+            for dia_atual in (start_date_calc + timedelta(days=n) for n in range((end_date_calc - start_date_calc).days + 1)):
+                dia_da_semana_sql = (dia_atual.weekday() + 1) % 7 + 1
+                if str(dia_da_semana_sql) == str(dia_folga_func):
+                    continue # PULA O DIA SE FOR FOLGA!
+
+                if tarefa.TipoFrequencia == 'Diaria': dias_ocorrencia += 1
+                elif tarefa.TipoFrequencia == 'Semanal':
+                    if str(dia_da_semana_sql) == str(tarefa.ValorFrequencia): dias_ocorrencia += 1
+                elif tarefa.TipoFrequencia == 'Mensal':
+                    # Verifica se o dia do mês é o correto E se está dentro do período da tarefa
+                    if dia_atual.day == int(tarefa.ValorFrequencia): dias_ocorrencia += 1
+
+            pontos_possiveis_total += dias_ocorrencia * tarefa.Pontos
+
+        return pontos_possiveis_total
+
+    except Exception as e:
+        logger.error(f"ERRO ao calcular pontos possíveis (debug): {e}")
+        return 0
     finally:
         if conn: conn.close()
 
-def get_sales_report(ano: int, mes: int) -> dict:
+# Em database.py
+
+def excluir_entrega(entrega_id):
+    """Exclui um registro específico da tabela Entregas E AJUSTA O SALDO DE PONTOS."""
     conn = get_db_connection()
-    if not conn: return {"faturamento": Decimal(0), "cmv": Decimal(0), "lucro_bruto": Decimal(0)}
-    query = "SELECT COALESCE(SUM(ValorTotal), 0) AS Faturamento, COALESCE(SUM(CustoTotal), 0) AS CMV FROM dbo.Vendas WHERE YEAR(DataVenda) = ? AND MONTH(DataVenda) = ?;"
-    try:
-        cursor = conn.cursor()
-        cursor.execute(query, ano, mes)
-        data = cursor.fetchone()
-        # Removido: conn.commit()
-        fat = data.Faturamento if data else Decimal(0)
-        cmv = data.CMV if data else Decimal(0)
-        return {"faturamento": fat, "cmv": cmv, "lucro_bruto": fat - cmv}
-    except pyodbc.Error as ex:
-        logging.error(f"Erro ao gerar relatório vendas {mes}/{ano}: {ex}")
-        conn.rollback()
-        return {"faturamento": Decimal(0), "cmv": Decimal(0), "lucro_bruto": Decimal(0)}
-    finally:
-        if conn: conn.close()
+    if conn:
+        try:
+            cursor = conn.cursor()
 
-def set_saldo_inicial(valor: Decimal) -> bool:
+            # 1. Buscar os dados ANTES de excluir
+            sql_find = "SELECT FuncionarioID, PontosGanhos FROM Entregas WHERE EntregaID = ?"
+            cursor.execute(sql_find, entrega_id)
+            entrega_dados = cursor.fetchone()
+
+            if not entrega_dados:
+                logger.warning(f"Tentativa de excluir EntregaID {entrega_id} que não foi encontrada.")
+                return False # Entrega não existe
+
+            funcionario_id, pontos_a_remover = entrega_dados
+            # Garante que pontos_a_remover seja 0 se for None (caso a entrega não tivesse pontos)
+            pontos_a_remover = pontos_a_remover or 0
+
+            # 2. Excluir a entrega
+            sql_delete = "DELETE FROM Entregas WHERE EntregaID = ?"
+            cursor.execute(sql_delete, entrega_id)
+            rows_affected = cursor.rowcount # Verifica se realmente excluiu algo
+
+            # 3. Subtrair os pontos do saldo (APENAS se a exclusão foi bem-sucedida E havia pontos a remover)
+            if rows_affected > 0 and pontos_a_remover != 0: # Verifica se pontos_a_remover é diferente de zero
+                 # Usamos a função adicionar_pontos_ao_saldo com valor negativo
+                 # A função adicionar_pontos_ao_saldo já existe e lida com a conexão
+                 adicionar_pontos_ao_saldo(funcionario_id, -pontos_a_remover)
+                 logger.info(f"Saldo ajustado em {-pontos_a_remover} pontos para FuncionarioID {funcionario_id} após exclusão da EntregaID {entrega_id}.")
+
+            conn.commit()
+            return rows_affected > 0 # Retorna True se deletou algo
+
+        except Exception as e:
+            conn.rollback() # Desfaz tudo em caso de erro
+            logger.error(f"ERRO CRÍTICO ao excluir entrega e ajustar saldo (EntregaID: {entrega_id}): {e}", exc_info=True)
+            return False
+        finally:
+            if conn:
+                conn.close()
+    return False
+
+def editar_pontos_entrega(entrega_id, novos_pontos):
+    """Edita apenas o valor de PontosGanhos para uma entrega específica."""
     conn = get_db_connection()
-    if not conn: return False
-    cursor = conn.cursor()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Busca o funcionário ID para recalcular o saldo depois
+            cursor.execute("SELECT FuncionarioID, PontosGanhos FROM Entregas WHERE EntregaID = ?", entrega_id)
+            res = cursor.fetchone()
+            if not res: return False
+            funcionario_id, pontos_antigos = res
+            pontos_antigos = pontos_antigos or 0 # Garante que não seja None
+
+            # Atualiza os pontos na entrega
+            sql_update = "UPDATE Entregas SET PontosGanhos = ? WHERE EntregaID = ?"
+            cursor.execute(sql_update, novos_pontos, entrega_id)
+
+            # Recalcula o saldo do funcionário (remove o antigo, adiciona o novo)
+            diferenca = novos_pontos - pontos_antigos
+            adicionar_pontos_ao_saldo(funcionario_id, diferenca) # Usa a função existente
+
+            conn.commit()
+            return True
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"ERRO ao editar pontos da entrega: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
+
+# --- COLE ESTE BLOCO NO FINAL DO ARQUIVO database.py ---
+
+# Certifique-se de que 'import notificador_telegram' e 'import logging' (e datetime)
+# estão no topo do arquivo database.py
+# O logger já deve estar configurado pelo bloco no início do arquivo.
+
+def verificar_e_premiar_meta_diaria(apuracao_id, data_apuracao_str, valor_dia, meta_principal_id):
+    """
+    Função auxiliar para verificar se a meta diária foi atingida e premiar a equipe DO SETOR CORRETO.
+    Chamada tanto no lançamento quanto na edição. AGORA RESIDE EM database.py (e premia por setor)
+    """
     try:
-        
-        logging.warning("Apagando histórico do caixa para definir saldo inicial.")
-        cursor.execute("DELETE FROM dbo.Caixa;")
-        cursor.execute("INSERT INTO dbo.Caixa (Descricao, Valor, TipoMovimento) VALUES (?, ?, 'entrada');", "Saldo Inicial", valor)
-        
-        conn.commit() # USAMOS O COMMIT DA CONEXÃO
-        
-        logging.info(f"Saldo inicial do caixa definido para R$ {valor}.")
-        return True
-    except pyodbc.Error as ex:
-        logging.error(f"Erro ao definir saldo inicial: {ex}")
-        
-        conn.rollback() # USAMOS O ROLLBACK DA CONEXÃO
-        
-        return False
-    finally:
-        if conn: conn.close()
+        modelo_meta_diaria = buscar_modelo_meta_para_data(data_apuracao_str) # Chamada interna
 
-def add_retirada(valor: Decimal, descricao: str = "Retirada de Lucro/Pró-labore") -> bool:
-    if valor <= 0: return False
-    return add_caixa_movement(descricao, valor, 'saida')
+        # Condição: Modelo existe? Valor >= Meta? Pontos > 0? Apuração ainda não premiada?
+        conn_check = get_db_connection()
+        ja_premiada = False
+        if conn_check:
+            try:
+                cursor_check = conn_check.cursor()
+                cursor_check.execute("SELECT PontosMetaDiariaGanhos FROM MetasDiariasApuracoes WHERE ApuracaoID = ?", apuracao_id)
+                res_check = cursor_check.fetchone()
+                # Verifica se res_check não é None e se o valor é maior que 0
+                if res_check and res_check[0] is not None and res_check[0] > 0:
+                    ja_premiada = True
+                    logger.info(f"ApuracaoID {apuracao_id} já foi premiada anteriormente com {res_check[0]} pontos. Pulando nova premiação.")
+            except Exception as e_check:
+                 logger.error(f"Erro ao verificar se ApuracaoID {apuracao_id} já foi premiada: {e_check}")
+            finally:
+                if conn_check: conn_check.close()
 
-if __name__ == "__main__":
-    pass
+        # Só continua se o modelo existe, a meta foi batida, tem prêmio E AINDA NÃO FOI PREMIADA
+        if modelo_meta_diaria and valor_dia >= modelo_meta_diaria.ValorMeta and modelo_meta_diaria.PontosPremio > 0 and not ja_premiada:
+
+            meta_principal = next((m for m in listar_metas_principais() if m.MetaPrincipalID == meta_principal_id), None) # Chamada interna
+
+            # Só continua se encontrou a meta principal E ela tem um setor alvo definido
+            if meta_principal and meta_principal.SetorAlvo:
+                setor_alvo_diario = meta_principal.SetorAlvo
+
+                logger.info(f"--- VERIFICANDO PREMIAÇÃO META DIÁRIA ({data_apuracao_str}) ---")
+                logger.info(f"Valor Atingido: {valor_dia} >= Meta: {modelo_meta_diaria.ValorMeta}. Pontos Prêmio: {modelo_meta_diaria.PontosPremio}")
+                logger.info(f"Setor Alvo: '{setor_alvo_diario}'")
+
+                pontos_premio_diario = modelo_meta_diaria.PontosPremio
+
+                # Marca a apuração como premiada (registra que o prêmio foi distribuído neste dia)
+                conn_interno = get_db_connection()
+                if conn_interno:
+                    try:
+                        cursor_interno = conn_interno.cursor()
+                        sql_marcar = "UPDATE MetasDiariasApuracoes SET PontosMetaDiariaGanhos = ? WHERE ApuracaoID = ?"
+                        cursor_interno.execute(sql_marcar, pontos_premio_diario, apuracao_id)
+                        conn_interno.commit()
+                        logger.info(f"ApuracaoID {apuracao_id} marcada como premiada com {pontos_premio_diario} pontos.")
+                    except Exception as e_marcar:
+                        logger.error(f"Erro ao marcar ApuracaoID {apuracao_id} como premiada: {e_marcar}")
+                        if conn_interno: conn_interno.rollback()
+                    finally:
+                        if conn_interno: conn_interno.close()
+                else:
+                    logger.error(f"Não foi possível conectar ao banco para marcar ApuracaoID {apuracao_id} como premiada.")
+                    # Considerar se deve parar aqui ou tentar premiar mesmo assim
+
+                # Busca funcionários APENAS do setor alvo
+                funcionarios_do_setor = listar_funcionarios_por_setor(setor_alvo_diario) # Chamada interna
+
+                if funcionarios_do_setor:
+                    logger.info(f"--> Meta diária atingida! Distribuindo {pontos_premio_diario} pontos para {len(funcionarios_do_setor)} funcionários do setor '{setor_alvo_diario}'.")
+
+                    mensagem_base = random.choice(config.MENSAGENS_META_DIARIA_CUMPRIDA)
+                    mensagem_telegram = mensagem_base.format(pontos=pontos_premio_diario)
+
+                    # Loop para premiar e notificar OS FUNCIONÁRIOS DO SETOR
+                    for funcionario in funcionarios_do_setor:
+                        try:
+                            # 1. Adiciona os pontos ao saldo geral do funcionário
+                            adicionar_pontos_ao_saldo(funcionario.FuncionarioID, pontos_premio_diario) # Chamada interna
+
+                            # 2. Registra a pontuação no histórico (usando a tarefa TAREFA_ID_PONTOS_META)
+                            motivo_log = f"Meta Diária Atingida ({data_apuracao_str}) - Setor: {setor_alvo_diario}"
+                            registrar_pontos_por_leitura( # Reutiliza a função para log simples (Chamada interna)
+                                funcionario.FuncionarioID,
+                                pontos_premio_diario,
+                                motivo_log
+                            )
+
+                            # 3. Envia a notificação individual
+                            if funcionario.ChatIDTelegram:
+                                notificador_telegram.enviar_mensagem(funcionario.ChatIDTelegram, mensagem_telegram)
+                            else:
+                                logger.warning(f"Funcionário {funcionario.NomeCompleto} (ID: {funcionario.FuncionarioID}) sem ChatIDTelegram. Não foi possível notificar.")
+
+                        except Exception as e_func:
+                            logger.error(f"Erro ao processar prêmio/notificação para {funcionario.NomeCompleto} (ID: {funcionario.FuncionarioID}): {e_func}", exc_info=True)
+
+                    logger.info(f"Distribuição de pontos e notificações da meta diária para o setor '{setor_alvo_diario}' concluída.")
+                else:
+                    logger.warning(f"--> Nenhum funcionário encontrado no setor '{setor_alvo_diario}' para premiar pela meta diária.")
+            else:
+                logger.warning(f"Meta diária ({data_apuracao_str}) atingida, mas a Meta Principal ID {meta_principal_id} não foi encontrada ou não tem SetorAlvo definido. Prêmio diário NÃO distribuído.")
+
+        # Logs para outros cenários (meta não atingida, já premiada, etc.)
+        elif ja_premiada:
+            logger.info(f"--- VERIFICANDO PREMIAÇÃO META DIÁRIA ({data_apuracao_str}) ---")
+            logger.info(f"Meta atingida, mas ApuracaoID {apuracao_id} já foi premiada anteriormente. Nenhuma nova ação.")
+        elif modelo_meta_diaria:
+            logger.info(f"--- VERIFICANDO PREMIAÇÃO META DIÁRIA ({data_apuracao_str}) ---")
+            logger.info(f"Meta NÃO atingida ou sem prêmio. Valor: {valor_dia}, Meta: {modelo_meta_diaria.ValorMeta}, Pontos: {modelo_meta_diaria.PontosPremio}")
+        else:
+            logger.info(f"--- VERIFICANDO PREMIAÇÃO META DIÁRIA ({data_apuracao_str}) ---")
+            logger.info(f"Nenhum modelo de meta diária encontrado para esta data.")
+
+    except Exception as e:
+        logger.exception(f"!!! ERRO GERAL durante a verificação/premiação da meta diária (ApuracaoID: {apuracao_id}): {e}")
