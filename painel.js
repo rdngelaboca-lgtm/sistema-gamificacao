@@ -155,60 +155,43 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // ===== NOVA FUNÇÃO PARA RENDERIZAR OS AGENDAMENTOS =====
-    function renderizarProximosAgendamentos(agendamentos) {
-        const container = document.getElementById('lista-proximos-agendamentos');
-        container.innerHTML = '';
-        
-        if (!agendamentos || agendamentos.length === 0) {
-            container.innerHTML = '<p style="text-align: center; color: #888;"><i>Nenhum agendamento futuro.</i></p>';
-            return;
-        }
+// Em painel.js
 
-        const hoje = new Date();
-        hoje.setHours(0, 0, 0, 0); // Normaliza para o início do dia
-        
-        // 1. Mapeia, Converte a data de 'dd/mm/yyyy HH:MM' para um objeto Date
-        const proximos = agendamentos
-            .map(ag => {
-                try {
-                    const [dataParte, horaParte] = ag.data_evento.split(' ');
-                    const [dia, mes, ano] = dataParte.split('/');
-                    ag.dataObj = new Date(`${ano}-${mes}-${dia}T${horaParte}`);
-                    return ag;
-                } catch (e) {
-                    console.error("Erro ao parsear data do agendamento:", ag.data_evento);
-                    return null; // Ignora agendamentos com data inválida
-                }
-            })
-            .filter(ag => ag && ag.dataObj >= hoje) // 2. Filtra (pega só de hoje em diante)
-            .slice(0, 5); // 3. Pega apenas os 5 primeiros
+function renderizarProximosAgendamentos(agendamentos) {
+    const container = document.getElementById('lista-proximos-agendamentos');
+    container.innerHTML = ''; // Limpa antes
 
-        if (proximos.length === 0) {
-            container.innerHTML = '<p style="text-align: center; color: #888;"><i>Nenhum agendamento futuro.</i></p>';
-            return;
-        }
-
-        // 4. Renderiza os itens na tela
-        proximos.forEach(ag => {
-            const itemDiv = document.createElement('div');
-            itemDiv.className = 'agendamento-item';
-            
-            const dataFormatada = ag.dataObj.toLocaleDateString('pt-BR', {
-                weekday: 'short', day: '2-digit', month: '2-digit'
-            });
-            const horaFormatada = ag.dataObj.toLocaleTimeString('pt-BR', {
-                hour: '2-digit', minute: '2-digit'
-            });
-
-            itemDiv.innerHTML = `
-                <strong>${ag.tipo_evento}</strong>
-                <small>${ag.nome_cliente}</small>
-                <small style="font-weight: bold; color: #0056b3;">${dataFormatada} às ${horaFormatada}</small>
-            `;
-            container.appendChild(itemDiv);
-        });
+    if (!agendamentos || agendamentos.length === 0) {
+        container.innerHTML = '<p style="text-align: center; color: #888;"><i>Nenhum agendamento futuro confirmado.</i></p>';
+        return;
     }
+
+    // A API já envia apenas os próximos 5 confirmados e formatados.
+    agendamentos.forEach(ag => {
+        const itemDiv = document.createElement('div');
+        itemDiv.className = 'agendamento-item';
+
+        // A API envia data_evento como 'dd/mm/yyyy HH:MM'
+        const [dataParte, horaParte] = ag.data_evento.split(' ');
+        const dataHoraFormatada = `${dataParte} às ${horaParte}`;
+
+        // Cria o link do WhatsApp (se houver telefone)
+        let telefoneHtml = '';
+        if (ag.telefone_cliente) {
+            const numeros = ag.telefone_cliente.replace(/\D/g, '');
+            let linkWpp = `https://wa.me/55${numeros}`; // Assume 55 como padrão
+            telefoneHtml = `<small>📞 <a href="${linkWpp}" target="_blank">${ag.telefone_cliente}</a></small>`;
+        }
+
+
+        itemDiv.innerHTML = `
+            <strong>${ag.nome_cliente}</strong>
+            <small>${ag.tipo_evento}</small>
+            ${telefoneHtml}  <small style="font-weight: bold; color: #0056b3;">${dataHoraFormatada}</small>
+        `;
+        container.appendChild(itemDiv);
+    });
+}
 
 function renderizarProgressoGeral(progresso) {
     const barraInterna = document.getElementById('progresso-barra-interna');
@@ -236,42 +219,55 @@ async function atualizarPainel() {
             statusElement.textContent = 'Atualizando dados...';
             statusElement.style.color = '#888';
 
-            const [resTarefas, resRanking, resFeed, resMeta, resMetaDiaria, resAgendamentos] = await Promise.all([
-                fetch(`${API_BASE_URL}/api/painel/tarefas`),
-                fetch(`${API_BASE_URL}/api/ranking/diario`),
-                fetch(`${API_BASE_URL}/api/feed`),
-                fetch(`${API_BASE_URL}/api/meta_principal_do_dia`),
-                fetch(`${API_BASE_URL}/api/meta_diaria_do_dia`),
-                fetch(`${API_BASE_URL}/api/agendamentos`)
+            const [resTarefas, resRanking, resFeed, resMeta, resMetaDiaria, resProximosAgendamentos] = await Promise.all([
+            fetch(`${API_BASE_URL}/api/painel/tarefas`),
+            fetch(`${API_BASE_URL}/api/ranking/diario`),
+            fetch(`${API_BASE_URL}/api/feed`),
+            fetch(`${API_BASE_URL}/api/meta_principal_do_dia`),
+            fetch(`${API_BASE_URL}/api/meta_diaria_do_dia`),
+            fetch(`${API_BASE_URL}/api/agendamentos/proximos`)
             ]);
 
-            if (!resTarefas.ok) {
-                throw new Error(`Erro na API de tarefas: ${resTarefas.status} ${resTarefas.statusText}`);
-            }
+            if (!resTarefas.ok || !resRanking.ok || !resFeed.ok || !resMeta.ok || !resMetaDiaria.ok || !resProximosAgendamentos.ok) {
+             // Log mais detalhado do erro
+             const errorDetails = await Promise.all([
+                 resTarefas.ok ? null : resTarefas.text(),
+                 resRanking.ok ? null : resRanking.text(),
+                 resFeed.ok ? null : resFeed.text(),
+                 resMeta.ok ? null : resMeta.text(),
+                 resMetaDiaria.ok ? null : resMetaDiaria.text(),
+                 resProximosAgendamentos.ok ? null : resProximosAgendamentos.text()
+             ]);
+             console.error("Pelo menos uma resposta da API falhou:", errorDetails.filter(d => d));
+             throw new Error(`Erro na API. Status: Tarefas=${resTarefas.status}, Ranking=${resRanking.status}, Feed=${resFeed.status}, MetaP=${resMeta.status}, MetaD=${resMetaDiaria.status}, Agend=${resProximosAgendamentos.status}`);
+             }
 
             const dadosTarefas = await resTarefas.json();
-            const dadosRanking = resRanking.ok ? await resRanking.json() : [];
-            const dadosFeed = resFeed.ok ? await resFeed.json() : [];
-            const dadosMeta = resMeta.ok ? await resMeta.json() : {};
-            const dadosMetaDiaria = resMetaDiaria.ok ? await resMetaDiaria.json() : {};
-            const dadosAgendamentos = resAgendamentos.ok ? await resAgendamentos.json() : [];
+            const dadosRanking = await resRanking.json(); // Não precisa mais verificar .ok aqui
+            const dadosFeed = await resFeed.json();
+            const dadosMeta = await resMeta.json();
+            const dadosMetaDiaria = await resMetaDiaria.json();
+            // <<< ALTERAÇÃO AQUI: A API já retorna os dados prontos >>>
+            const dadosAgendamentos = await resProximosAgendamentos.json();
 
             renderizarColunas(dadosTarefas);
-            renderizarProgressoGeral(dadosTarefas.progresso); // Corrigido para pegar dadosTarefas.progresso
+            renderizarProgressoGeral(dadosTarefas.progresso);
             renderizarPodio(dadosRanking);
             renderizarFeed(dadosFeed);
             renderizarMetaPrincipal(dadosMeta);
             renderizarMetaDiaria(dadosMetaDiaria);
+            // <<< ALTERAÇÃO AQUI: Passa os dados diretamente para a função de renderização >>>
             renderizarProximosAgendamentos(dadosAgendamentos);
 
             statusElement.textContent = `Última atualização: ${new Date().toLocaleTimeString('pt-BR')}`;
+            statusElement.style.color = 'inherit'; // Volta para a cor padrão
 
-        } catch (error) {
-            console.error("Falha ao atualizar o painel:", error);
-            statusElement.textContent = `Erro ao atualizar (${new Date().toLocaleTimeString('pt-BR')}). Verifique a conexão com a API e tente novamente.`;
-            statusElement.style.color = 'red';
-        }
-    } // <<<<<< Fim da *ÚNICA* definição da função atualizarPainel
+    } catch (error) {
+        console.error("Falha ao atualizar o painel:", error);
+        statusElement.textContent = `Erro ao atualizar (${new Date().toLocaleTimeString('pt-BR')}). Verifique a conexão com a API.`;
+        statusElement.style.color = 'red';
+    }
+}
 
     // ===== Chamada inicial e agendamento da atualização =====
     atualizarPainel(); // Chama a função uma vez ao carregar a página
