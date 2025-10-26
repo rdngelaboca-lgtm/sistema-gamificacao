@@ -571,15 +571,26 @@ async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             ]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             # Envia foto com botões para o grupo de gestores (usando parse_mode='HTML')
-            await notificador_telegram.enviar_foto_com_botoes(
+            # Envia foto com botões para o grupo de gestores (usando parse_mode='HTML')
+            resposta_api = await notificador_telegram.enviar_foto_com_botoes( # Captura a resposta
                 config.GESTOR_GROUP_CHAT_ID,
                 file_id,
                 legenda,
                 reply_markup,
                 parse_mode='HTML' # Mantenha como HTML
             )
-            database.marcar_notificacao_gestor_enviada(entrega_id)
-    except Exception as notify_error: # <-- Captura erro da notificação
+
+            # --- CORREÇÃO: Tenta marcar a flag SÓ SE o envio funcionou ---
+            if resposta_api and resposta_api.get('ok'):
+                try:
+                    database.marcar_notificacao_gestor_enviada(entrega_id) # Tenta marcar
+                except Exception as flag_error:
+                    # Loga especificamente o erro ao MARCAR a flag
+                    logger.error(f"Sucesso ao notificar gestor (EntregaID {entrega_id}), MAS FALHA AO MARCAR FLAG: {flag_error}", exc_info=True)
+            else:
+                # Loga o erro original do envio da notificação
+                logger.error(f"Falha ao notificar gestores sobre EntregaID {entrega_id}. Resposta API: {resposta_api}", exc_info=False) # Não precisa exc_info aqui talvez
+    except Exception as notify_error: # <-- Captura erro GERAL da notificação (inclui o 'await')
 
         await update.message.reply_text("✅ Evidência válida! Entrega registrada com sucesso e enviada para validação!")
 
