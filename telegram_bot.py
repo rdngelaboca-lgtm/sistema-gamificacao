@@ -557,7 +557,13 @@ async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             ]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             # Envia foto com botões para o grupo de gestores (usando parse_mode='HTML')
-            await notificador_telegram.enviar_foto_com_botoes(config.GESTOR_GROUP_CHAT_ID, file_id, legenda, reply_markup, parse_mode='HTML') # Passa parse_mode='HTML'
+            await notificador_telegram.enviar_foto_com_botoes(
+                config.GESTOR_GROUP_CHAT_ID,
+                file_id,
+                legenda,
+                reply_markup,
+                parse_mode='HTML' # Mantenha como HTML
+            )
 
         await update.message.reply_text("✅ Evidência válida! Entrega registrada com sucesso e enviada para validação!")
 
