@@ -208,19 +208,19 @@ class App:
 
     # Em main.py, DENTRO da classe App, adicione estas funções:
 
-def atualizar_lista_conquistas(self):
-    """Limpa a Treeview e recarrega os modelos de conquistas do banco."""
-    try: # <--- ADICIONADO TRY
-        for i in self.tree_conquistas.get_children():
-            self.tree_conquistas.delete(i)
-        conquistas = database.listar_modelos_conquistas() # Pode falhar
-        for conq in conquistas:
-            self.tree_conquistas.insert("", "end", values=(conq.ConquistaID, conq.Icone, conq.Nome))
-        self.limpar_formulario_conquista()
-    except Exception as e: # <--- ADICIONADO EXCEPT
-        logger.exception(f"Erro ao atualizar lista de conquistas: {e}") # Loga o erro completo
-        messagebox.showerror("Erro de Banco", f"Não foi possível carregar os modelos de conquistas:\n{e}", parent=self.root) # Informa o usuário
-        
+    def atualizar_lista_conquistas(self):
+        """Limpa a Treeview e recarrega os modelos de conquistas do banco."""
+        try: # <--- ADICIONADO TRY
+            for i in self.tree_conquistas.get_children():
+                self.tree_conquistas.delete(i)
+            conquistas = database.listar_modelos_conquistas() # Pode falhar
+            for conq in conquistas:
+                self.tree_conquistas.insert("", "end", values=(conq.ConquistaID, conq.Icone, conq.Nome))
+            self.limpar_formulario_conquista()
+        except Exception as e: # <--- ADICIONADO EXCEPT
+            logger.exception(f"Erro ao atualizar lista de conquistas: {e}") # Loga o erro completo
+            messagebox.showerror("Erro de Banco", f"Não foi possível carregar os modelos de conquistas:\n{e}", parent=self.root) # Informa o usuário
+
     def selecionar_conquista_para_edicao(self, event):
         """Preenche o formulário com os dados da conquista selecionada na lista."""
         try: # <--- ADICIONADO TRY
@@ -1005,31 +1005,57 @@ def atualizar_lista_conquistas(self):
                 else: frame_semanal_ind.pack_forget(); frame_mensal_ind.pack_forget()
             frequencia_individual.trace_add("write", atualizar_visibilidade_individual); atualizar_visibilidade_individual()
             # --- Função de Confirmação Individual (sem alterações internas) ---
+# --- Função de Confirmação Individual (COM CORREÇÃO) ---
             def confirmar_atribuicao_individual():
-                # (Código interno desta função permanece o mesmo)
                 tipo_freq_selecionada = frequencia_individual.get()
                 valores_freq = []
+                # ... (lógica para obter valores_freq permanece a mesma) ...
                 if tipo_freq_selecionada == "Semanal":
                     valores_freq = [val_db for _, (var, val_db) in dias_semana_vars_individual.items() if var.get()]
                     if not valores_freq: messagebox.showerror("Erro", "Selecione pelo menos um dia da semana.", parent=popup); return
                 elif tipo_freq_selecionada == "Mensal":
                     try: dia_mes = int(valor_mensal_individual.get()); assert 1 <= dia_mes <= 31; valores_freq.append(str(dia_mes))
                     except (ValueError, AssertionError): messagebox.showerror("Erro", "O dia do mês deve ser um número entre 1 e 31.", parent=popup); return
-                else: valores_freq.append(None)
+                else: # Para Unica e Diaria
+                    valores_freq.append(None) # Garante que o loop abaixo rode uma vez
+
                 sucessos = falhas = ignorados = 0
                 for item_alvo in alvos_selecionados_items:
                     funcionario_id = self.tree_atr_selecao.item(item_alvo, 'values')[0]
+
+                    # <<< --- CORREÇÃO ESTÁ AQUI --- >>>
+                    # Mova a verificação para ANTES do loop de 'valores_freq'
+                    if database.verificar_atribuicao_existente(tarefa_id, funcionario_id):
+                        ignorados += 1
+                        logger.warning(f"--> Atribuição ignorada (check ANTES do loop): Tarefa {tarefa_id} já está ativa para Funcionário {funcionario_id}.")
+                        continue # Pula para o próximo funcionário
+                    # <<< --- FIM DA CORREÇÃO --- >>>
+
+                    # Agora, itera pelos valores (dias da semana/mês ou None)
                     for valor in valores_freq:
-                        if database.verificar_atribuicao_existente(tarefa_id, funcionario_id):
-                            ignorados += 1
-                            print(f"--> Atribuição ignorada: Tarefa {tarefa_id} já está ativa para Funcionário {funcionario_id}.")
-                            break
-                        if database.atribuir_tarefa(tarefa_id, funcionario_id, tipo_freq_selecionada, valor): sucessos += 1
-                        else: falhas += 1
-                msg_final = f"{sucessos} atribuição(ões) criada(s) com sucesso!"
-                if ignorados > 0: msg_final += f"\n{ignorados} funcionário(s) foram ignorados pois já tinham esta tarefa ativa."
-                if falhas > 0: messagebox.showwarning("Atenção", f"{msg_final}\n{falhas} falharam.", parent=popup)
-                else: messagebox.showinfo("Sucesso", msg_final, parent=popup)
+                        # NÃO precisamos mais verificar aqui dentro
+                        # if database.verificar_atribuicao_existente(tarefa_id, funcionario_id): # <-- LINHA REMOVIDA
+                        #    ignorados += 1                                                     # <-- LINHA REMOVIDA
+                        #    print(f"--> Atribuição ignorada: Tarefa {tarefa_id} já está ativa para Funcionário {funcionario_id}.") # <-- LINHA REMOVIDA
+                        #    break # <-- LINHA REMOVIDA
+
+                        # Tenta atribuir a tarefa para este valor específico
+                        if database.atribuir_tarefa(tarefa_id, funcionario_id, tipo_freq_selecionada, valor):
+                            sucessos += 1
+                        else:
+                            falhas += 1
+                            # Se falhar aqui, pode ser um erro de banco, logar seria bom
+                            logger.error(f"Falha ao chamar database.atribuir_tarefa para Func:{funcionario_id}, Tar:{tarefa_id}, Freq:{tipo_freq_selecionada}, Val:{valor}")
+
+                # Lógica de mensagem final (ajustada para contar sucessos corretamente)
+                msg_final = f"{sucessos} atribuição(ões) de frequência criada(s) com sucesso!" # Mensagem mais precisa
+                if ignorados > 0:
+                    msg_final += f"\n{ignorados} funcionário(s) foram ignorados pois já tinham esta tarefa ativa."
+                if falhas > 0:
+                    messagebox.showwarning("Atenção", f"{msg_final}\n{falhas} falharam ao salvar no banco.", parent=popup)
+                else:
+                    messagebox.showinfo("Sucesso", msg_final, parent=popup)
+
                 popup.destroy()
                 self.atualizar_lista_atribuicoes_ativas()
                 self.atualizar_painel_selecao(tarefa_id=tarefa_id)
@@ -2275,13 +2301,15 @@ def atualizar_lista_conquistas(self):
 
 
     def criar_aba_metas(self):
-        """Cria a interface V3 para Gestão de Metas, com painel de detalhes."""
+        """Cria a interface V4 para Gestão de Metas, com input de lucro."""
         main_frame = ttk.Frame(self.frame_metas)
         main_frame.pack(fill=tk.BOTH, expand=True)
-        main_frame.rowconfigure(2, weight=1) # A nova linha de detalhes vai se expandir
+        # Agora temos 4 linhas principais: Lançar Venda, Lançar Lucro, Gerenciar Metas, Detalhes
+        main_frame.rowconfigure(3, weight=1) # Linha 3 (Detalhes) que se expande
         main_frame.columnconfigure(0, weight=1)
 
-        frame_lancamento = ttk.LabelFrame(main_frame, text="Lançar Apuração Diária", padding="10")
+        # Frame Lançamento Venda (agora na linha 0)
+        frame_lancamento = ttk.LabelFrame(main_frame, text="Lançar Apuração Diária (Vendas R$)", padding="10")
         frame_lancamento.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         frame_lancamento.columnconfigure(1, weight=1)
         ttk.Label(frame_lancamento, text="Meta Principal Ativa:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
@@ -2295,8 +2323,42 @@ def atualizar_lista_conquistas(self):
         self.entry_valor_dia.grid(row=2, column=1, padx=5, pady=5, sticky="w")
         btn_lancar = ttk.Button(frame_lancamento, text="Lançar Apuração Diária", command=self.lancar_apuracao_diaria)
         btn_lancar.grid(row=3, column=1, padx=5, pady=10, sticky="e")
+        # --- Nova seção para Lançar Lucro Mensal ---
+        frame_lucro = ttk.LabelFrame(main_frame, text="Lançar Lucro Mensal (%)", padding="10")
+        frame_lucro.grid(row=1, column=0, sticky="ew", pady=(0, 10))
+        frame_lucro.columnconfigure(1, weight=1)
+
+        # Label e Campo Ano
+        ttk.Label(frame_lucro, text="Ano:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
+        self.entry_lucro_ano = ttk.Entry(frame_lucro, width=6)
+        self.entry_lucro_ano.grid(row=0, column=1, padx=5, pady=5, sticky="w")
+
+        # Label e Campo Mês (Combobox)
+        ttk.Label(frame_lucro, text="Mês:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
+        meses_nomes = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+                    "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+        self.combo_lucro_mes = ttk.Combobox(frame_lucro, values=meses_nomes, state="readonly", width=15)
+        self.combo_lucro_mes.grid(row=1, column=1, padx=5, pady=5, sticky="w")
+
+        # Label e Campo Percentual
+        ttk.Label(frame_lucro, text="Percentual (%):").grid(row=2, column=0, padx=5, pady=5, sticky="w")
+        self.entry_lucro_percentual = ttk.Entry(frame_lucro, width=10)
+        self.entry_lucro_percentual.grid(row=2, column=1, padx=5, pady=5, sticky="w")
+
+        # Botão Salvar
+        btn_salvar_lucro = ttk.Button(frame_lucro, text="Salvar Lucro Mensal", command=self.salvar_lucro_interface)
+        btn_salvar_lucro.grid(row=3, column=1, padx=5, pady=10, sticky="e")
+
+        # Preencher ano e mês anteriores como padrão
+        hoje = datetime.now()
+        primeiro_dia_mes_atual = hoje.replace(day=1)
+        ultimo_dia_mes_passado = primeiro_dia_mes_atual - timedelta(days=1)
+        self.entry_lucro_ano.insert(0, str(ultimo_dia_mes_passado.year))
+        self.combo_lucro_mes.current(ultimo_dia_mes_passado.month - 1)
+
+        # --- Seção Gerenciar Metas Principais (agora na linha 2) ---
         frame_gerenciamento = ttk.LabelFrame(main_frame, text="Gerenciar Metas Principais (Clique para ver detalhes)", padding="10")
-        frame_gerenciamento.grid(row=1, column=0, sticky="ew", pady=(0, 10))
+        frame_gerenciamento.grid(row=2, column=0, sticky="ew", pady=(0, 10)) # Mudou para row=2
         frame_gerenciamento.rowconfigure(0, weight=1)
         frame_gerenciamento.columnconfigure(0, weight=1)
         cols_principais = ('ID', 'Nome', 'Valor Total', 'Início', 'Fim', 'Status')
@@ -2311,8 +2373,10 @@ def atualizar_lista_conquistas(self):
         frame_botoes_gerenciamento.pack(side="left", fill="y", padx=10)
         ttk.Button(frame_botoes_gerenciamento, text="Criar Nova Meta Principal...", command=self.abrir_janela_criar_meta_principal).pack(pady=5)
         ttk.Button(frame_botoes_gerenciamento, text="Definir Metas Diárias...", command=self.abrir_janela_metas_diarias).pack(pady=5)
-        frame_detalhes = ttk.LabelFrame(main_frame, text="Detalhes e Evolução da Meta Selecionada", padding="10")
-        frame_detalhes.grid(row=2, column=0, sticky="nsew")
+
+                # Frame Detalhes (agora na linha 3)
+        frame_detalhes = ttk.LabelFrame(main_frame, text="Detalhes e Evolução da Meta de Vendas Selecionada", padding="10")
+        frame_detalhes.grid(row=3, column=0, sticky="nsew") # Mudou para row=3
         frame_detalhes.rowconfigure(0, weight=1)
         frame_detalhes.columnconfigure(0, weight=2) # Coluna da lista de lançamentos cresce mais
         frame_detalhes.columnconfigure(1, weight=1) # Coluna do resumo
@@ -2336,7 +2400,6 @@ def atualizar_lista_conquistas(self):
         self.lbl_progresso_percentual.pack(anchor="w", pady=5)
         self.lbl_projecao_vendas = ttk.Label(frame_resumo, text="Projeção Final: R$ 0,00", font=("Arial", 12, "italic"))
         self.lbl_projecao_vendas.pack(anchor="w", pady=(15, 5))
-
 
     def on_meta_principal_selecionada(self, event):
         """(VERSÃO V2 FINAL) Carrega o histórico, o resumo, a projeção E VERIFICA SE A META MENSAL FOI ATINGIDA."""
@@ -2397,6 +2460,31 @@ def atualizar_lista_conquistas(self):
                         
                         messagebox.showinfo("Sucesso", "Prêmio distribuído e equipe notificada com sucesso!")
                         self.carregar_dados_metas()
+
+    def salvar_lucro_interface(self):
+        """Lê os dados da interface e salva o lucro mensal no banco."""
+        try:
+            ano = int(self.entry_lucro_ano.get())
+            mes = int(self.combo_lucro_mes.current() + 1) # Pega o índice (0-11) e soma 1
+            percentual_str = self.entry_lucro_percentual.get().replace(',', '.')
+            percentual = float(percentual_str)
+
+            if not (2020 <= ano <= 2100): # Validação simples do ano
+                raise ValueError("Ano inválido.")
+            if not (0 <= percentual <= 1000): # Validação do percentual (permite > 100 se necessário)
+                raise ValueError("Percentual inválido.")
+
+            if database.salvar_lucro_mensal(ano, mes, percentual):
+                messagebox.showinfo("Sucesso", f"Percentual de lucro para {mes:02d}/{ano} salvo com sucesso!", parent=self.root)
+                # Limpar campos? Opcional. Deixar preenchido pode ser útil.
+                # self.entry_lucro_percentual.delete(0, tk.END)
+            else:
+                messagebox.showerror("Erro de Banco", "Não foi possível salvar o percentual de lucro.", parent=self.root)
+
+        except ValueError as e:
+            messagebox.showerror("Erro de Formato", f"Verifique os valores digitados.\nAno, Mês e Percentual devem ser números válidos.\nDetalhe: {e}", parent=self.root)
+        except Exception as e:
+            messagebox.showerror("Erro Inesperado", f"Ocorreu um erro: {e}", parent=self.root)
 
 
     def abrir_janela_metas_diarias(self):
