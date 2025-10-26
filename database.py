@@ -3706,7 +3706,9 @@ def verificar_e_premiar_meta_diaria(apuracao_id, data_apuracao_str, valor_dia, m
 
                     # Loop para premiar e notificar OS FUNCIONÁRIOS DO SETOR
                     for funcionario in funcionarios_do_setor:
+
                         try:
+                            logger.info(f"Processando prêmio meta diária (ApuracaoID {apuracao_id}) para FuncionarioID {funcionario.FuncionarioID}...")
                             # 1. Adiciona os pontos ao saldo geral do funcionário
                             adicionar_pontos_ao_saldo(funcionario.FuncionarioID, pontos_premio_diario) # Chamada interna
 
@@ -3721,6 +3723,7 @@ def verificar_e_premiar_meta_diaria(apuracao_id, data_apuracao_str, valor_dia, m
                             # 3. Envia a notificação individual
                             if funcionario.ChatIDTelegram:
                                 notificador_telegram.enviar_mensagem(funcionario.ChatIDTelegram, mensagem_telegram)
+                                
                             else:
                                 logger.warning(f"Funcionário {funcionario.NomeCompleto} (ID: {funcionario.FuncionarioID}) sem ChatIDTelegram. Não foi possível notificar.")
 
