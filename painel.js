@@ -1,4 +1,5 @@
 document.addEventListener('DOMContentLoaded', function() {
+    let metaDiariaAnimacaoExibida = false; // Flag para controlar a animação
     const API_BASE_URL = 'http://192.168.18.17:5000';
 
     function formatarHora(dataString) {
@@ -118,6 +119,9 @@ document.addEventListener('DOMContentLoaded', function() {
             totalEl.textContent = `R$ ${meta.valor_meta.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
         } else {
             containerEl.style.display = 'none';
+            // Se não há meta ou ela é 0, reseta a flag (caso a meta seja removida/zerada durante o dia)
+            // Não reseta aqui para permitir que a animação ocorra apenas uma vez por dia. O reset é feito no atualizarPainel.
+            // metaDiariaAnimacaoExibida = false; // Linha removida/comentada
         }
     }
 
@@ -140,11 +144,14 @@ document.addEventListener('DOMContentLoaded', function() {
         const valorAtingido = meta.valor_atingido_hoje || 0;
         const valorMeta = meta.valor_meta_diaria || 0;
 
-        // Verifica se a meta foi atingida (e se a meta existe > 0)
-        if (valorMeta > 0 && valorAtingido >= valorMeta) {
-            console.log("Meta diária ATINGIDA! Acionando animação..."); // Log para depuração
+        // --- INÍCIO: Lógica para Animação de Meta Diária Batida ---
+        // Verifica se a meta foi atingida E se a animação AINDA NÃO foi exibida
+        if (valorMeta > 0 && valorAtingido >= valorMeta && !metaDiariaAnimacaoExibida) {
+            console.log("Meta diária ATINGIDA pela primeira vez! Acionando animação..."); // Log para depuração
             dispararFogos(); // Chama a função que dispara a animação
+            metaDiariaAnimacaoExibida = true; // Define a flag para true para não exibir de novo
         }
+        // Opcional: Resetar a flag em um novo dia (requer lógica adicional, talvez no atualizarPainel)
         // --- FIM: Lógica para Animação ---
         } else {
             containerEl.style.display = 'none';
@@ -224,6 +231,13 @@ function renderizarProgressoGeral(progresso) {
 }
     
 async function atualizarPainel() {
+        // Reseta a flag da animação se o dia mudou (usando localStorage)
+        const hoje = new Date().toDateString();
+        if (localStorage.getItem('ultimoDiaAnimacaoMetaDiaria') !== hoje) {
+            metaDiariaAnimacaoExibida = false;
+            localStorage.setItem('ultimoDiaAnimacaoMetaDiaria', hoje);
+            console.log("Novo dia detectado, flag de animação da meta diária resetada.");
+        }
         const statusElement = document.getElementById('ultima-atualizacao');
         try {
             statusElement.textContent = 'Atualizando dados...';
