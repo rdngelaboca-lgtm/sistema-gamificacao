@@ -3635,6 +3635,113 @@ def editar_pontos_entrega(entrega_id, novos_pontos):
 
 # Certifique-se de que 'import notificador_telegram' e 'import logging' (e datetime)
 # estão no topo do arquivo database.py
+# ===================================================================
+# == INÍCIO DO MÓDULO DE HISTÓRICO DE LUCRO MENSAL ==================
+# ===================================================================
+import locale # Adicione esta importação se ainda não existir no topo do arquivo database.py
+
+def salvar_lucro_mensal(ano, mes, percentual):
+    """
+    Salva ou atualiza o percentual de lucro para um ano/mês específico.
+    Retorna True em caso de sucesso, False em caso de erro.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                MERGE INTO LucroMensalHistorico AS target
+                USING (SELECT ? AS Ano, ? AS Mes) AS source
+                ON (target.Ano = source.Ano AND target.Mes = source.Mes)
+                WHEN MATCHED THEN
+                    UPDATE SET PercentualLucro = ?, DataRegistro = GETDATE()
+                WHEN NOT MATCHED THEN
+                    INSERT (Ano, Mes, PercentualLucro)
+                    VALUES (?, ?, ?);
+            """
+            cursor.execute(sql,
+                           ano, mes, # Para o USING
+                           percentual, # Para o UPDATE
+                           ano, mes, percentual) # Para o INSERT
+            conn.commit()
+            logger.info(f"Lucro de {mes}/{ano} salvo/atualizado para {percentual}%.")
+            return True
+        except Exception as e:
+            logger.error(f"ERRO ao salvar lucro mensal para {mes}/{ano}: {e}", exc_info=True)
+            if conn:
+                conn.rollback()
+            return False
+        finally:
+            if conn:
+                conn.close()
+    return False
+
+def buscar_historico_lucro_ultimos_meses(num_meses=3):
+    """
+    Busca o histórico de lucro dos últimos 'num_meses' registrados.
+    Retorna uma lista de dicionários: [{'mes': 'NomeMes', 'percentual': 18.5}, ...]
+    """
+    conn = get_db_connection()
+    historico = []
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Busca os últimos N meses registrados, ordenados do mais recente para o mais antigo
+            sql = f"""
+                SELECT TOP ({int(num_meses)})
+                    Ano, Mes, PercentualLucro
+                FROM LucroMensalHistorico
+                ORDER BY Ano DESC, Mes DESC
+            """
+            cursor.execute(sql)
+            resultados = cursor.fetchall()
+
+            # Tenta configurar o locale para português para nomes dos meses
+            try:
+                locale.setlocale(locale.LC_TIME, 'pt_BR.UTF-8')
+                locale_ok = True
+            except locale.Error:
+                logger.warning("Locale pt_BR.UTF-8 não disponível para nomes de meses no histórico de lucro.")
+                locale_ok = False
+
+            for row in reversed(resultados): # Inverte para mostrar do mais antigo para o mais recente
+                # Cria um objeto date para facilitar a formatação do nome do mês
+                try:
+                     # Cria uma data (dia 1 do mês/ano)
+                    data_obj = date(row.Ano, row.Mes, 1)
+                    if locale_ok:
+                        nome_mes = data_obj.strftime('%B').capitalize()
+                    else:
+                         # Fallback manual simples se o locale falhar
+                        meses_pt = ["Inválido", "Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
+                        nome_mes = meses_pt[row.Mes] if 1 <= row.Mes <= 12 else "Mês?"
+                except ValueError:
+                     nome_mes = f"Data Inv. ({row.Mes}/{row.Ano})"
+
+
+                historico.append({"mes": nome_mes, "percentual": float(row.PercentualLucro)})
+
+            # Garante que sempre retorne 'num_meses' itens, preenchendo com N/A se faltar
+            while len(historico) < num_meses:
+                historico.insert(0, {"mes": "N/A", "percentual": 0.0})
+
+            return historico
+
+        except Exception as e:
+            logger.error(f"Erro ao buscar histórico de lucro: {e}", exc_info=True)
+            # Retorna N/A se der erro
+            return [{"mes": "Erro", "percentual": 0.0}] * num_meses
+        finally:
+            if conn:
+                conn.close()
+    # Retorna N/A se der erro de conexão
+    return [{"mes": "Erro DB", "percentual": 0.0}] * num_meses
+
+
+# ===================================================================
+# == FIM DO MÓDULO DE HISTÓRICO DE LUCRO MENSAL =====================
+# ===================================================================
+
 # O logger já deve estar configurado pelo bloco no início do arquivo.
 
 def verificar_e_premiar_meta_diaria(apuracao_id, data_apuracao_str, valor_dia, meta_principal_id):
