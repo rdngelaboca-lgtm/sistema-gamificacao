@@ -547,6 +547,17 @@ def rota_proximos_agendamentos():
         logger.exception(f"!!! ERRO no endpoint /api/agendamentos/proximos: {e}")
         return jsonify({"status": "erro", "mensagem": "Erro ao buscar próximos agendamentos."}), 500
     
+# Em api_server.py, adicione esta nova rota
+@app.route('/api/historico_lucro', methods=['GET'])
+def rota_historico_lucro():
+    """Endpoint para fornecer o histórico de lucro dos últimos 3 meses."""
+    try:
+        historico = database.buscar_historico_lucro_ultimos_meses(num_meses=3)
+        return jsonify(historico), 200
+    except Exception as e:
+        logger.exception(f"!!! ERRO no endpoint /api/historico_lucro: {e}")
+        return jsonify({"status": "erro", "mensagem": "Erro ao buscar histórico de lucro."}), 500 
+    
 if __name__ == '__main__':
     # O debug=False é essencial para rodar como serviço
     app.run(host='0.0.0.0', port=5000, debug=False)
