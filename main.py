@@ -1568,8 +1568,17 @@ class App:
         dia_folga_valor = self.dias_semana_mapa.get(dia_folga_texto, 0)
 
         if not all([nome, chat_id, cargo, horario]): 
+
             messagebox.showerror("Erro", "Todos os campos, exceto a folga, são obrigatórios!")
             return
+
+        # --- NOVA VALIDAÇÃO DE HORÁRIO ---
+        try:
+            datetime.strptime(horario, '%H:%M') # Tenta converter para validar o formato
+        except ValueError:
+            messagebox.showerror("Erro de Formato", "O Horário de Notificação deve estar no formato HH:MM (ex: 08:30).")
+            return # Impede o salvamento se o formato for inválido
+        # --- FIM DA VALIDAÇÃO ---
 
         database.adicionar_funcionario(nome, chat_id, cargo, horario, dia_folga_valor)
         messagebox.showinfo("Sucesso", f"Funcionário {nome} adicionado com sucesso!")
@@ -1650,6 +1659,23 @@ class App:
         if verificador_cpf and len(verificador_cpf) != 3:
             messagebox.showerror("Erro", "O Verificador de Segurança deve ter exatamente 3 dígitos.")
             return
+                    # --- NOVA VALIDAÇÃO DE HORÁRIO ---
+        try:
+            # Adiciona um check extra para permitir horário vazio (se for o caso)
+            if horario and horario.strip(): # Só valida se não estiver vazio
+                datetime.strptime(horario, '%H:%M') # Tenta converter para validar o formato
+            # Se estiver vazio, assume que é válido (ou ajuste a regra se horário for obrigatório)
+        except ValueError:
+            messagebox.showerror("Erro de Formato", "O Horário de Notificação deve estar no formato HH:MM (ex: 08:30) ou vazio.")
+            # Garante que a janela de edição não seja fechada
+            if hasattr(self, 'edit_window') and self.edit_window.winfo_exists():
+                self.edit_window.focus_force() # Traz a janela de edição para frente
+            return # Impede o salvamento se o formato for inválido
+        # --- FIM DA VALIDAÇÃO ---
+
+        # Se passou nas validações, continua com o salvamento
+        # (A linha abaixo já existe, apenas continue a partir daqui)
+        # database.atualizar_funcionario(func_id, nome, chat_id, cargo, horario, dia_folga_valor, verificador_cpf)
 
         database.atualizar_funcionario(func_id, nome, chat_id, cargo, horario, dia_folga_valor, verificador_cpf)
         
@@ -2305,11 +2331,11 @@ class App:
             messagebox.showerror("Erro", "Ocorreu um erro ao salvar o feedback no banco de dados.")
 
     def criar_aba_metas(self):
-        """(VERSÃO V5) Cria a interface para Gestão de Metas, com histórico de lucro."""
+        """(VERSÃO V6) Cria a interface para Gestão de Metas, com histórico de lucro ao lado."""
         main_frame = ttk.Frame(self.frame_metas)
         main_frame.pack(fill=tk.BOTH, expand=True)
-        # Layout: Venda (0), Lucro (1), Hist Lucro (2), Ger. Metas (3), Detalhes Vendas (4)
-        main_frame.rowconfigure(4, weight=1) # Linha 4 (Detalhes) que se expande
+        # Layout: Venda (0), [Lançar Lucro + Histórico Lucro] (1), Ger. Metas (2), Detalhes Vendas (3)
+        main_frame.rowconfigure(3, weight=1) # Linha 3 (Detalhes) que se expande
         main_frame.columnconfigure(0, weight=1)
 
         # --- Frame Lançamento Venda (Linha 0) ---
@@ -2328,60 +2354,60 @@ class App:
         btn_lancar = ttk.Button(frame_lancamento, text="Lançar Apuração Diária", command=self.lancar_apuracao_diaria)
         btn_lancar.grid(row=3, column=1, padx=5, pady=10, sticky="e")
 
-        # --- Frame Lançar Lucro Mensal (Linha 1) ---
-        frame_lucro = ttk.LabelFrame(main_frame, text="Lançar Lucro Mensal (%)", padding="10")
-        frame_lucro.grid(row=1, column=0, sticky="ew", pady=(0, 10))
+        # --- NOVO: Frame Intermediário para Lucro (Linha 1) ---
+        frame_linha_lucro = ttk.Frame(main_frame)
+        frame_linha_lucro.grid(row=1, column=0, sticky="ew", pady=(0, 10))
+        frame_linha_lucro.columnconfigure(0, weight=1) # Coluna do lançamento
+        frame_linha_lucro.columnconfigure(1, weight=2) # Coluna do histórico (maior)
+        # --- FIM NOVO ---
+
+        # --- Frame Lançar Lucro Mensal (Linha 1, Coluna 0 do frame_linha_lucro) ---
+        frame_lucro = ttk.LabelFrame(frame_linha_lucro, text="Lançar Lucro Mensal (%)", padding="10")
+        frame_lucro.grid(row=0, column=0, sticky="nsew", padx=(0, 5)) # Adicionado padx
+        # (Conteúdo interno do frame_lucro permanece o mesmo)
         frame_lucro.columnconfigure(1, weight=1)
-        # Label e Campo Ano
         ttk.Label(frame_lucro, text="Ano:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
         self.entry_lucro_ano = ttk.Entry(frame_lucro, width=6)
         self.entry_lucro_ano.grid(row=0, column=1, padx=5, pady=5, sticky="w")
-        # Label e Campo Mês (Combobox)
         ttk.Label(frame_lucro, text="Mês:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
         meses_nomes = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
                     "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
         self.combo_lucro_mes = ttk.Combobox(frame_lucro, values=meses_nomes, state="readonly", width=15)
         self.combo_lucro_mes.grid(row=1, column=1, padx=5, pady=5, sticky="w")
-        # Label e Campo Percentual
         ttk.Label(frame_lucro, text="Percentual (%):").grid(row=2, column=0, padx=5, pady=5, sticky="w")
         self.entry_lucro_percentual = ttk.Entry(frame_lucro, width=10)
         self.entry_lucro_percentual.grid(row=2, column=1, padx=5, pady=5, sticky="w")
-        # Botão Salvar
         btn_salvar_lucro = ttk.Button(frame_lucro, text="Salvar Lucro Mensal", command=self.salvar_lucro_interface)
         btn_salvar_lucro.grid(row=3, column=1, padx=5, pady=10, sticky="e")
-        # Preencher ano e mês anteriores como padrão
         hoje = datetime.now()
         primeiro_dia_mes_atual = hoje.replace(day=1)
         ultimo_dia_mes_passado = primeiro_dia_mes_atual - timedelta(days=1)
         self.entry_lucro_ano.insert(0, str(ultimo_dia_mes_passado.year))
         self.combo_lucro_mes.current(ultimo_dia_mes_passado.month - 1)
 
-        # --- NOVO: Frame Histórico de Lucro (Linha 2) ---
-        frame_historico_lucro = ttk.LabelFrame(main_frame, text="Histórico de Lucro Lançado (Duplo-clique para editar)", padding="10")
-        frame_historico_lucro.grid(row=2, column=0, sticky="ew", pady=(0, 10))
+        # --- Frame Histórico de Lucro (Linha 1, Coluna 1 do frame_linha_lucro) ---
+        frame_historico_lucro = ttk.LabelFrame(frame_linha_lucro, text="Histórico de Lucro Lançado (Duplo-clique para editar)", padding="10")
+        frame_historico_lucro.grid(row=0, column=1, sticky="nsew", padx=(5, 0)) # Adicionado padx
         frame_historico_lucro.columnconfigure(0, weight=1)
-        frame_historico_lucro.rowconfigure(0, weight=1)
-
+        frame_historico_lucro.rowconfigure(0, weight=1) # Permite que a Treeview cresça verticalmente se necessário
         cols_lucro = ('ID', 'Ano', 'Mês', 'Percentual')
-        self.tree_lucros_lancados = ttk.Treeview(frame_historico_lucro, columns=cols_lucro, show='headings', selectmode='browse', height=4)
+        self.tree_lucros_lancados = ttk.Treeview(frame_historico_lucro, columns=cols_lucro, show='headings', selectmode='browse', height=5) # Ajuste a altura (height) conforme necessário
         self.tree_lucros_lancados.heading('ID', text='ID'); self.tree_lucros_lancados.column('ID', width=40, anchor="center")
         self.tree_lucros_lancados.heading('Ano', text='Ano'); self.tree_lucros_lancados.column('Ano', width=80, anchor="center")
         self.tree_lucros_lancados.heading('Mês', text='Mês'); self.tree_lucros_lancados.column('Mês', width=100, anchor="center")
         self.tree_lucros_lancados.heading('Percentual', text='Percentual (%)'); self.tree_lucros_lancados.column('Percentual', width=100, anchor="e")
-        self.tree_lucros_lancados.grid(row=0, column=0, sticky="ew")
-        self.tree_lucros_lancados.bind("<Double-1>", self.abrir_janela_edicao_lucro) # <-- Bind para Edição
-
+        self.tree_lucros_lancados.grid(row=0, column=0, sticky="nsew") # Treeview cresce
+        self.tree_lucros_lancados.bind("<Double-1>", self.abrir_janela_edicao_lucro)
         btn_excluir_lucro = ttk.Button(frame_historico_lucro, text="Excluir Lançamento Selecionado", command=self.excluir_lancamento_lucro_selecionado)
-        btn_excluir_lucro.grid(row=1, column=0, sticky="e", pady=(10, 0))
+        btn_excluir_lucro.grid(row=1, column=0, sticky="e", pady=(5, 0)) # Botão abaixo da lista
 
-        # --- Seção Gerenciar Metas Principais (agora na linha 3) ---
+        # --- Seção Gerenciar Metas Principais (agora na linha 2) ---
         frame_gerenciamento = ttk.LabelFrame(main_frame, text="Gerenciar Metas Principais (Clique para ver detalhes)", padding="10")
-        frame_gerenciamento.grid(row=3, column=0, sticky="ew", pady=(0, 10)) # Mudou para row=3
+        frame_gerenciamento.grid(row=2, column=0, sticky="ew", pady=(10, 10)) # Mudou para row=2
         frame_gerenciamento.rowconfigure(0, weight=1)
         frame_gerenciamento.columnconfigure(0, weight=1)
         cols_principais = ('ID', 'Nome', 'Valor Total', 'Início', 'Fim', 'Status')
-        self.tree_metas_principais = ttk.Treeview(frame_gerenciamento, columns=cols_principais, show='headings', selectmode='browse')
-        for col in cols_principais: self.tree_metas_principais.heading(col, text=col)
+        self.tree_metas_principais = ttk.Treeview(frame_gerenciamento, columns=cols_principais, show='headings', selectmode='browse', height=5) # Definindo altura inicial        for col in cols_principais: self.tree_metas_principais.heading(col, text=col)
         self.tree_metas_principais.column('ID', width=40); self.tree_metas_principais.column('Nome', width=250)
         self.tree_metas_principais.column('Valor Total', width=120, anchor="e"); self.tree_metas_principais.column('Início', width=100, anchor="center")
         self.tree_metas_principais.column('Fim', width=100, anchor="center"); self.tree_metas_principais.column('Status', width=80, anchor="center")
@@ -2392,26 +2418,38 @@ class App:
         ttk.Button(frame_botoes_gerenciamento, text="Criar Nova Meta Principal...", command=self.abrir_janela_criar_meta_principal).pack(pady=5)
         ttk.Button(frame_botoes_gerenciamento, text="Definir Metas Diárias...", command=self.abrir_janela_metas_diarias).pack(pady=5)
 
-        # --- Frame Detalhes (agora na linha 4) ---
+        # --- Frame Detalhes (agora na linha 3) ---
         frame_detalhes = ttk.LabelFrame(main_frame, text="Detalhes e Evolução da Meta de Vendas Selecionada", padding="10")
-        frame_detalhes.grid(row=4, column=0, sticky="nsew") # Mudou para row=4
-        frame_detalhes.rowconfigure(0, weight=1)
-        frame_detalhes.columnconfigure(0, weight=2) # Coluna da lista de lançamentos cresce mais
-        frame_detalhes.columnconfigure(1, weight=1) # Coluna do resumo
+        frame_detalhes.grid(row=3, column=0, sticky="nsew") # Ocupa a linha 3 do main_frame
+
+        # --- CORREÇÃO AQUI ---
+        # Configura as linhas e colunas DENTRO do frame_detalhes
+        frame_detalhes.rowconfigure(3, weight=1)    # Linha 0 (onde está a Treeview) pode expandir verticalmente
+        frame_detalhes.rowconfigure(1, weight=0)    # Linha 1 (botão excluir) não expande
+        frame_detalhes.columnconfigure(0, weight=3) # Coluna 0 (Treeview) expande mais horizontalmente
+        frame_detalhes.columnconfigure(1, weight=1) # Coluna 1 (Resumo) expande menos
+        # --- FIM DA CORREÇÃO ---
+
         cols_detalhes = ('Data do Lançamento', 'Valor Lançado (R$)')
-        self.tree_detalhes_apuracoes = ttk.Treeview(frame_detalhes, columns=cols_detalhes, show='headings', selectmode='browse')
+        # Removemos o height=10 daqui
+        self.tree_detalhes_apuracoes = ttk.Treeview(frame_detalhes, columns=cols_detalhes, show='headings', selectmode='browse') 
         self.tree_detalhes_apuracoes.heading('Data do Lançamento', text='Data do Lançamento')
-        self.tree_detalhes_apuracoes.column('Data do Lançamento', anchor='center')
+        self.tree_detalhes_apuracoes.column('Data do Lançamento', anchor='center', width=150) # Ajuste a largura se necessário
         self.tree_detalhes_apuracoes.heading('Valor Lançado (R$)', text='Valor Lançado (R$)')
-        self.tree_detalhes_apuracoes.column('Valor Lançado (R$)', anchor='e')
-        self.tree_detalhes_apuracoes.grid(row=0, column=0, sticky="nsew")
+        self.tree_detalhes_apuracoes.column('Valor Lançado (R$)', anchor='e', width=150) # Ajuste a largura se necessário
+        # A treeview agora ocupa a linha 0, coluna 0 e se expande (nsew)
+        self.tree_detalhes_apuracoes.grid(row=0, column=0, sticky="nsew", pady=(0, 5)) 
         self.tree_detalhes_apuracoes.bind("<Double-1>", self.abrir_janela_edicao_apuracao)
+
+        # Frame do botão excluir fica na linha 1, coluna 0
+        frame_botoes_detalhes = ttk.Frame(frame_detalhes)
+        frame_botoes_detalhes.grid(row=1, column=0, sticky="w", padx=0, pady=(0, 5)) # Ajustado padx e pady
+        btn_excluir_apuracao = ttk.Button(frame_botoes_detalhes, text="Excluir Apuração Selecionada", command=self.excluir_apuracao_selecionada)
+        btn_excluir_apuracao.pack() # Pack dentro do seu próprio frame
+
+        # Frame de resumo ocupa a linha 0 e 1 (rowspan=2) na coluna 1
         frame_resumo = ttk.Frame(frame_detalhes, padding="20")
         frame_resumo.grid(row=0, column=1, rowspan=2, sticky="nsew", padx=(10, 0))
-        frame_botoes_detalhes = ttk.Frame(frame_detalhes)
-        frame_botoes_detalhes.grid(row=1, column=0, sticky="w", padx=10, pady=5)
-        btn_excluir_apuracao = ttk.Button(frame_botoes_detalhes, text="Excluir Apuração Selecionada", command=self.excluir_apuracao_selecionada)
-        btn_excluir_apuracao.pack()
         self.lbl_total_atingido = ttk.Label(frame_resumo, text="Total Atingido: R$ 0,00", font=("Arial", 12, "bold"))
         self.lbl_total_atingido.pack(anchor="w", pady=5)
         self.lbl_progresso_percentual = ttk.Label(frame_resumo, text="Progresso: 0.00%", font=("Arial", 12))
