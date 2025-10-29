@@ -268,11 +268,24 @@ async def tarefas(update: Update, context: ContextTypes.DEFAULT_TYPE, query=None
     else: await update.message.reply_text(texto, reply_markup=reply_markup, parse_mode='Markdown')
 
 async def ranking(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # Chama a função do banco duas vezes, uma para cada setor
-    ranking_cozinha = database.calcular_ranking_desempenho(setor_filtro='Cozinha') #
-    ranking_loja = database.calcular_ranking_desempenho(setor_filtro='Loja') #
+    ranking_cozinha = []
+    ranking_loja = []
+    erro_db = None
 
-    # Verifica se algum dos rankings tem dados
+    try: # <<< ADICIONADO TRY >>>
+        # Tenta buscar ambos os rankings
+        ranking_cozinha = database.calcular_ranking_desempenho(setor_filtro='Cozinha')
+        ranking_loja = database.calcular_ranking_desempenho(setor_filtro='Loja')
+
+    except Exception as e: # <<< ADICIONADO EXCEPT >>>
+        logger.exception(f"Erro ao buscar dados do ranking para o comando /ranking do Telegram: {e}")
+        erro_db = e # Guarda o erro para informar o usuário
+
+    # --- Lógica de exibição com tratamento de erro ---
+    if erro_db:
+        await update.message.reply_text(f"❌ Desculpe, ocorreu um erro ao buscar os dados do ranking no momento.\nPor favor, tente novamente mais tarde ou contate o suporte se o problema persistir.")
+        return # Interrompe se houve erro no banco
+
     if not ranking_cozinha and not ranking_loja:
         await update.message.reply_text("Ainda não há dados suficientes para gerar os rankings este mês.")
         return
@@ -290,7 +303,7 @@ async def ranking(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             posicao_icone = icones[i] if i < len(icones) else f" {i+1}."
             nome = dados['NomeCompleto']
             score = dados['ScoreHibrido']
-            detalhes = f"(Desemp: {dados['Desempenho']}%, Pts: {dados['PontosGanhos']})" # - Usa os dados retornados
+            detalhes = f"(Desemp: {dados['Desempenho']}%, Pts: {dados['PontosGanhos']})"
             texto_final += f"{posicao_icone} {nome} - **Score: {score}**\n   {detalhes}\n"
 
     # --- Ranking Atendimento/Loja ---
@@ -303,10 +316,11 @@ async def ranking(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             posicao_icone = icones[i] if i < len(icones) else f" {i+1}."
             nome = dados['NomeCompleto']
             score = dados['ScoreHibrido']
-            detalhes = f"(Desemp: {dados['Desempenho']}%, Pts: {dados['PontosGanhos']})" # - Usa os dados retornados
+            detalhes = f"(Desemp: {dados['Desempenho']}%, Pts: {dados['PontosGanhos']})"
             texto_final += f"{posicao_icone} {nome} - **Score: {score}**\n   {detalhes}\n"
 
-    await update.message.reply_text(texto_final, parse_mode='Markdown') # - Envia a mensagem combinada
+    # Envia a mensagem formatada (usando Markdown para compatibilidade anterior)
+    await update.message.reply_text(texto_final, parse_mode='Markdown')
 
 async def meu_historico(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Envia ao usuário um resumo de suas últimas 10 atividades."""
