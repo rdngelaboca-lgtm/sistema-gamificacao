@@ -759,34 +759,72 @@ def listar_entregas_pendentes():
 
 def aprovar_entrega(entrega_id, funcionario_id, pontos):
     """
-    (VERSÃO FINAL COM SALDO)
-    Aprova uma entrega, registra os pontos e ADICIONA OS PONTOS AO SALDO GERAL.
+    (VERSÃO FINAL COM SALDO E TRATAMENTO DE ERRO ROBUSTO)
+    Aprova uma entrega, registra os pontos, ADICIONA OS PONTOS AO SALDO GERAL,
+    verifica conquistas e garante rollback em caso de erro.
     """
     conn = get_db_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            # Atualiza o status da entrega
-            sql_update_entrega = "UPDATE Entregas SET StatusValidacao = 'Aprovada', PontosGanhos = ? WHERE EntregaID = ?"
-            cursor.execute(sql_update_entrega, pontos, entrega_id)
-            
-            # --- A NOVA ENGRENAGEM! ---
-            # Adiciona os pontos ganhos na tarefa ao saldo cumulativo do funcionário.
-            adicionar_pontos_ao_saldo(funcionario_id, pontos)
+    if not conn:
+        logger.error(f"Falha de conexão ao tentar aprovar entrega {entrega_id}.")
+        return [] # Retorna lista vazia indicando falha
 
-            # Commita as duas operações juntas para garantir consistência.
-            conn.commit() 
-            
-            # (O código de verificação de conquistas continua o mesmo)
-            novas_conquistas = verificar_e_conceder_conquistas(funcionario_id)
-            return novas_conquistas
+    novas_conquistas = [] # Inicializa fora do try
 
-        except pyodbc.Error as e: 
-            conn.rollback() # Desfaz tudo se uma das operações falhar
-            logger.error(f"Erro ao aprovar entrega e adicionar saldo: {e}")
-        finally: 
+    try:
+        cursor = conn.cursor()
+        # 1. Atualiza o status da entrega
+        sql_update_entrega = "UPDATE Entregas SET StatusValidacao = 'Aprovada', PontosGanhos = ? WHERE EntregaID = ?"
+        cursor.execute(sql_update_entrega, pontos, entrega_id)
+        logger.debug(f"UPDATE Entregas executado para EntregaID {entrega_id}.")
+
+        # 2. Adiciona os pontos ao saldo (delegação para função com seu próprio tratamento)
+        # Chamamos a função aqui dentro do try principal. Se ela falhar e não tratar
+        # internamente e relançar a exceção, o rollback abaixo será acionado.
+        # Se ela tratar internamente e retornar False/None, a transação continua,
+        # o que pode ser aceitável dependendo da criticidade do saldo vs. entrega.
+        # Assumindo que adicionar_pontos_ao_saldo é robusta e loga seus erros.
+        adicionar_pontos_ao_saldo(funcionario_id, pontos)
+        logger.debug(f"adicionar_pontos_ao_saldo chamado para FuncionarioID {funcionario_id} com {pontos} pontos.")
+
+        # 3. Commita as operações da entrega e saldo juntas
+        conn.commit()
+        logger.info(f"Entrega {entrega_id} aprovada e {pontos} pontos adicionados ao saldo de FuncionarioID {funcionario_id}. Commit realizado.")
+
+        # 4. Verifica conquistas (após o commit principal)
+        # Esta função já possui tratamento de erro robusto internamente.
+        novas_conquistas = verificar_e_conceder_conquistas(funcionario_id)
+        logger.debug(f"Verificação de conquistas concluída para FuncionarioID {funcionario_id}. Novas conquistas: {len(novas_conquistas)}")
+
+    except pyodbc.Error as db_err:
+        # Se qualquer operação de banco DENTRO deste try falhar, desfaz TUDO.
+        logger.exception(f"Erro de Banco de Dados Crítico ao aprovar entrega {entrega_id}. Iniciando Rollback: {db_err}")
+        if conn:
+            try:
+                conn.rollback()
+                logger.info(f"Rollback realizado com sucesso para entrega {entrega_id}.")
+            except Exception as rb_err:
+                logger.error(f"Erro adicional durante o rollback da entrega {entrega_id}: {rb_err}")
+        novas_conquistas = [] # Garante retorno vazio em caso de erro
+
+    except Exception as e:
+        # Captura outros erros inesperados
+        logger.exception(f"Erro inesperado ao aprovar entrega {entrega_id}. Iniciando Rollback: {e}")
+        if conn:
+            try:
+                conn.rollback()
+                logger.info(f"Rollback realizado com sucesso para entrega {entrega_id}.")
+            except Exception as rb_err:
+                logger.error(f"Erro adicional durante o rollback da entrega {entrega_id}: {rb_err}")
+        novas_conquistas = [] # Garante retorno vazio em caso de erro
+
+    finally:
+        # Garante que a conexão seja sempre fechada
+        if conn:
             conn.close()
-    return [] # Retorna uma lista vazia em caso de falha
+            logger.debug(f"Conexão do banco fechada para aprovação da entrega {entrega_id}.")
+
+    return novas_conquistas # Retorna a lista (vazia ou não)
+
 
 def recusar_entrega(entrega_id, motivo):
     conn = get_db_connection()
