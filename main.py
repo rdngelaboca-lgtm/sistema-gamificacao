@@ -1226,31 +1226,39 @@ class App:
 
     # Em main.py, SUBSTITUA a função atualizar_ranking por esta:
 
-    def atualizar_ranking(self, event=None): # Adicionado event=None para funcionar com o bind do Combobox
-        for i in self.tree_ranking.get_children(): self.tree_ranking.delete(i) #
+    def atualizar_ranking(self, event=None):
+        # Limpa a tabela antes de tentar buscar novos dados
+        for i in self.tree_ranking.get_children(): self.tree_ranking.delete(i)
 
-        # --- LÊ O FILTRO SELECIONADO ---
-        setor_selecionado = self.combo_filtro_setor_ranking.get()
-        filtro_db = None # Padrão é None (Geral)
-        if setor_selecionado == 'Cozinha':
-            filtro_db = 'Cozinha'
-        elif setor_selecionado == 'Loja':
-            filtro_db = 'Loja'
-        # ---------------------------------
+        try: # <<< ADICIONADO TRY >>>
+            setor_selecionado = self.combo_filtro_setor_ranking.get()
+            filtro_db = None
+            if setor_selecionado == 'Cozinha':
+                filtro_db = 'Cozinha'
+            elif setor_selecionado == 'Loja':
+                filtro_db = 'Loja'
 
-        # Passa o filtro para a função do banco
-        ranking_data = database.calcular_ranking_desempenho(setor_filtro=filtro_db) # - Chama com o filtro
+            # --- Chamada ao banco DENTRO do try ---
+            ranking_data = database.calcular_ranking_desempenho(setor_filtro=filtro_db)
 
-        # O resto da lógica para preencher a tabela permanece o mesmo
-        for i, row in enumerate(ranking_data): #
-            posicao = f"{i+1}º" #
-            nome = row['NomeCompleto'] #
-            score_final = f"{row['ScoreHibrido']}" #
-            desempenho = f"{row['Desempenho']}%" #
-            ganhos = row['PontosGanhos'] #
-            possiveis = row['PontosPossiveis'] #
+            if not ranking_data: # Adiciona feedback se não houver dados
+                self.tree_ranking.insert("", "end", values=("Sem dados para este filtro.", "", "", "", "", ""))
+            else:
+                for i, row in enumerate(ranking_data):
+                    posicao = f"{i+1}º"
+                    nome = row['NomeCompleto']
+                    score_final = f"{row['ScoreHibrido']}"
+                    desempenho = f"{row['Desempenho']}%"
+                    ganhos = row['PontosGanhos']
+                    possiveis = row['PontosPossiveis']
+                    self.tree_ranking.insert("", "end", values=(posicao, nome, score_final, desempenho, ganhos, possiveis))
 
-            self.tree_ranking.insert("", "end", values=(posicao, nome, score_final, desempenho, ganhos, possiveis)) #
+        except Exception as e: # <<< ADICIONADO EXCEPT >>>
+            logger.exception(f"Erro ao atualizar o ranking na interface gráfica: {e}")
+            # Insere uma linha na tabela indicando o erro
+            self.tree_ranking.insert("", "end", values=("Erro ao carregar dados.", "", "", "", "", ""))
+            # Mostra uma messagebox para o usuário
+            messagebox.showerror("Erro de Ranking", f"Não foi possível carregar os dados do ranking:\n{e}", parent=self.root)
 
     def criar_aba_relatorios(self):
         frame_principal = ttk.Frame(self.frame_relatorios, padding="10")
