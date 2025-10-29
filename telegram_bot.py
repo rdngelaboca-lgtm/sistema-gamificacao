@@ -570,32 +570,42 @@ async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             reply_markup = InlineKeyboardMarkup(keyboard)
             # Envia foto com botões para o grupo de gestores (usando parse_mode='HTML')
             # Envia foto com botões para o grupo de gestores (usando parse_mode='HTML')
-            resposta_api = await notificador_telegram.enviar_foto_com_botoes( # Captura a resposta
-                config.GESTOR_GROUP_CHAT_ID,
-                file_id,
-                legenda,
-                reply_markup,
-                parse_mode='HTML' # Mantenha como HTML
-            )
-            # --- CORREÇÃO REVISADA: Tenta marcar a flag SÓ SE o envio funcionou ---
-        # --- E ADICIONA TRATAMENTO CASO A MARCAÇÃO FALHE ---
-        if resposta_api and resposta_api.get('ok'):
+            # --- CORREÇÃO FINAL: Marcar a flag ANTES de enviar a notificação ---
+            flag_marcada_com_sucesso = False
             try:
-                database.marcar_notificacao_gestor_enviada(entrega_id) # Tenta marcar
-                logger.info(f"Notificação para gestor (EntregaID {entrega_id}) enviada E flag marcada com sucesso.")
+                database.marcar_notificacao_gestor_enviada(entrega_id) # Tenta marcar PRIMEIRO
+                flag_marcada_com_sucesso = True
+                logger.info(f"Flag NotificacaoGestorEnviada marcada com sucesso para EntregaID {entrega_id} ANTES do envio.")
             except Exception as flag_error:
-                # Loga especificamente o erro ao MARCAR a flag
-                logger.error(f"Sucesso ao notificar gestor (EntregaID {entrega_id}), MAS FALHA AO MARCAR FLAG: {flag_error}", exc_info=True)
-                # NOTA: Mesmo com a falha na marcação, a notificação inicial foi enviada.
-                # O agendador atuará como fallback, mas a duplicidade pode ocorrer neste caso raro.
-                # A prioridade aqui é o log detalhado para diagnóstico.
-        else:
-            # Loga o erro original do envio da notificação
-            logger.error(f"Falha ao notificar gestores sobre EntregaID {entrega_id}. Resposta API: {resposta_api}", exc_info=False)
+                # Loga o erro crítico ao MARCAR a flag ANTES
+                logger.error(f"FALHA CRÍTICA AO MARCAR FLAG para EntregaID {entrega_id} ANTES do envio: {flag_error}", exc_info=True)
+                # Decide se continua ou não. Vamos continuar e tentar notificar, mas o agendador VAI reenviar.
+                # Ou poderia retornar aqui e avisar o usuário que houve um erro grave. Vamos optar por tentar notificar.
 
-    except Exception as notify_error: # <-- Captura erro GERAL da notificação (inclui o 'await')
+            # Tenta enviar a notificação para o gestor, independentemente da flag ter sido marcada com sucesso ou não
+            # (se a flag falhou, o agendador reenviará de qualquer forma, mas pelo menos tentamos agora)
+            try:
+                resposta_api = await notificador_telegram.enviar_foto_com_botoes( # Captura a resposta
+                    config.GESTOR_GROUP_CHAT_ID,
+                    file_id,
+                    legenda,
+                    reply_markup,
+                    parse_mode='HTML' # Mantenha como HTML
+                )
 
-        await update.message.reply_text("✅ Evidência válida! Entrega registrada com sucesso e enviada para validação!")
+                # Loga o resultado do envio
+                if resposta_api and resposta_api.get('ok'):
+                    logger.info(f"Notificação inicial para gestor (EntregaID {entrega_id}) enviada com sucesso.")
+                else:
+                    logger.error(f"Falha ao enviar notificação inicial para gestores sobre EntregaID {entrega_id}. Resposta API: {resposta_api}", exc_info=False)
+                    # Se a flag foi marcada mas o envio falhou, o gestor só verá em main.py (trade-off)
+
+            except Exception as notify_error:
+                logger.error(f"Erro inesperado durante o envio da notificação inicial para gestor (EntregaID {entrega_id}): {notify_error}", exc_info=True)
+                # Se a flag foi marcada mas o envio falhou, o gestor só verá em main.py (trade-off)
+
+            # Envia confirmação para o usuário (esta linha já existe depois do bloco acima)
+            await update.message.reply_text("✅ Evidência válida! Entrega registrada com sucesso e enviada para validação!")
 
     except Exception as e:
         logger.error(f"Erro crítico em receber_foto: {e}", exc_info=True)
