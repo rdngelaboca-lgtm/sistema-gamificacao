@@ -175,17 +175,15 @@ async def lancar_venda(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         # --- CORREÇÃO APLICADA AQUI ---
         # Chama a função auxiliar para verificar e premiar a meta diária
         try:
-            # ASSUMINDO QUE A FUNÇÃO FOI MOVIDA PARA database.py:
-            database._verificar_e_premiar_meta_diaria(apuracao_id, data_hoje_str, valor_dia, meta_id)
-            # SE OPTOU POR IMPORTAR DE main.py (Opção B no Passo 1.2), use:
-            # _verificar_e_premiar_meta_diaria(apuracao_id, data_hoje_str, valor_dia, meta_id)
+            # REMOVE O UNDERSCORE DA CHAMADA DA FUNÇÃO DO DATABASE
+            database.verificar_e_premiar_meta_diaria(apuracao_id, data_hoje_str, valor_dia, meta_id)
             logger.info(f"Verificação de meta diária (ID {apuracao_id}) acionada via Telegram.")
+        # O except NameError pode ser mantido para capturar erros de importação, se necessário.
         except NameError:
-             logger.error("!!! ERRO: Função _verificar_e_premiar_meta_diaria não encontrada/importada corretamente. Premiação diária via Telegram falhou.")
+            logger.error("!!! ERRO: Função verificar_e_premiar_meta_diaria não encontrada/importada corretamente. Premiação diária via Telegram falhou.")
         except Exception as e_premio:
-             logger.error(f"Erro ao tentar verificar/premiar meta diária após lançamento via Telegram: {e_premio}", exc_info=True)
+            logger.error(f"Erro ao tentar verificar/premiar meta diária após lançamento via Telegram: {e_premio}", exc_info=True)
         # --- FIM DA CORREÇÃO ---
-
         # Mostra o status atualizado da meta principal
         await status_meta(update, context)
 
@@ -579,17 +577,22 @@ async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 reply_markup,
                 parse_mode='HTML' # Mantenha como HTML
             )
+            # --- CORREÇÃO REVISADA: Tenta marcar a flag SÓ SE o envio funcionou ---
+        # --- E ADICIONA TRATAMENTO CASO A MARCAÇÃO FALHE ---
+        if resposta_api and resposta_api.get('ok'):
+            try:
+                database.marcar_notificacao_gestor_enviada(entrega_id) # Tenta marcar
+                logger.info(f"Notificação para gestor (EntregaID {entrega_id}) enviada E flag marcada com sucesso.")
+            except Exception as flag_error:
+                # Loga especificamente o erro ao MARCAR a flag
+                logger.error(f"Sucesso ao notificar gestor (EntregaID {entrega_id}), MAS FALHA AO MARCAR FLAG: {flag_error}", exc_info=True)
+                # NOTA: Mesmo com a falha na marcação, a notificação inicial foi enviada.
+                # O agendador atuará como fallback, mas a duplicidade pode ocorrer neste caso raro.
+                # A prioridade aqui é o log detalhado para diagnóstico.
+        else:
+            # Loga o erro original do envio da notificação
+            logger.error(f"Falha ao notificar gestores sobre EntregaID {entrega_id}. Resposta API: {resposta_api}", exc_info=False)
 
-            # --- CORREÇÃO: Tenta marcar a flag SÓ SE o envio funcionou ---
-            if resposta_api and resposta_api.get('ok'):
-                try:
-                    database.marcar_notificacao_gestor_enviada(entrega_id) # Tenta marcar
-                except Exception as flag_error:
-                    # Loga especificamente o erro ao MARCAR a flag
-                    logger.error(f"Sucesso ao notificar gestor (EntregaID {entrega_id}), MAS FALHA AO MARCAR FLAG: {flag_error}", exc_info=True)
-            else:
-                # Loga o erro original do envio da notificação
-                logger.error(f"Falha ao notificar gestores sobre EntregaID {entrega_id}. Resposta API: {resposta_api}", exc_info=False) # Não precisa exc_info aqui talvez
     except Exception as notify_error: # <-- Captura erro GERAL da notificação (inclui o 'await')
 
         await update.message.reply_text("✅ Evidência válida! Entrega registrada com sucesso e enviada para validação!")
@@ -607,14 +610,41 @@ async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 logger.error(f"Erro ao remover arquivo temporário {temp_photo_path}: {del_err}")        
 
 async def receber_motivo_recusa(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    
     chat_id_grupo = update.effective_chat.id
-    if 'aguardando_motivo_recusa' not in context.chat_data or chat_id_grupo != config.GESTOR_GROUP_CHAT_ID:
-        return
-
-    entrega_id = context.chat_data.pop('aguardando_motivo_recusa')
-    motivo = update.message.text
+    gestor_id = update.effective_user.id
     gestor_nome = update.effective_user.first_name
+    motivo = update.message.text
+
+    # --- CORREÇÃO: Ler e limpar de bot_data ---
+    dados_recusa = None
+    # Verifica a existência das chaves de forma segura
+    if 'pendencias_recusa' in context.bot_data and \
+    chat_id_grupo in context.bot_data['pendencias_recusa'] and \
+    gestor_id in context.bot_data['pendencias_recusa'][chat_id_grupo]:
+
+        # Pega os dados associados a este gestor neste chat
+        dados_recusa = context.bot_data['pendencias_recusa'][chat_id_grupo].pop(gestor_id)
+        logger.info(f"Dados de recusa encontrados em bot_data para GestorID {gestor_id} no ChatID {chat_id_grupo}.")
+
+        # Limpa entradas vazias do dicionário para higiene (opcional, mas boa prática)
+        if not context.bot_data['pendencias_recusa'][chat_id_grupo]:
+            context.bot_data['pendencias_recusa'].pop(chat_id_grupo)
+            logger.debug(f"Entrada de chat {chat_id_grupo} removida de pendencias_recusa.")
+        if not context.bot_data['pendencias_recusa']:
+            context.bot_data.pop('pendencias_recusa')
+            logger.debug("Dicionário pendencias_recusa removido de bot_data.")
+    # --- FIM CORREÇÃO ---
+
+    # Se não encontrou dados para este gestor/chat, simplesmente ignora a mensagem
+    if not dados_recusa:
+        logger.debug(f"Mensagem de GestorID {gestor_id} no ChatID {chat_id_grupo} ignorada (sem pendência de recusa encontrada em bot_data).")
+        # Opcional: responder ao gestor que não há recusa pendente para ele
+        # await update.message.reply_text("Não encontrei nenhuma recusa pendente para você neste momento.")
+        return # Interrompe a função aqui
+
+    # Extrai os dados recuperados de bot_data
+    entrega_id = dados_recusa['entrega_id']
+    id_mensagem_original = dados_recusa['msg_id']
 
     detalhes = database.buscar_detalhes_da_entrega(entrega_id)
     
@@ -636,14 +666,27 @@ async def receber_motivo_recusa(update: Update, context: ContextTypes.DEFAULT_TY
                      f"📝 **Tarefa:** {detalhes.Titulo}\n"
                      f"💬 **Motivo:** {motivo}")
     
-    id_mensagem_original = context.chat_data.pop(f'msg_id_{entrega_id}', None)
+    id_mensagem_original = context.chat_data.pop(f'msg_id_{entrega_id}', None) # Assume que ainda usa chat_data aqui, será corrigido no Problema 4
     if id_mensagem_original:
+        # <<< CORREÇÃO REVISADA: Adiciona try/except e fallback com nova mensagem >>>
         try:
             await context.bot.edit_message_caption(chat_id=chat_id_grupo, message_id=id_mensagem_original, caption=legenda_final)
-        except Exception as e:
-            logger.error(f"Erro ao editar caption da mensagem recusada: {e}")
+        except Exception as e_edit:
+            logger.error(f"Erro ao editar caption da mensagem recusada (ID: {entrega_id}): {e_edit}")
+            # Fallback: Envia como nova mensagem para garantir que o status seja atualizado no grupo
+            try:
+                await update.message.reply_text(legenda_final)
+            except Exception as e_send:
+                logger.error(f"Falha também ao enviar mensagem de fallback para recusa {entrega_id}: {e_send}")
+    else:
+        # Se não encontrou o ID da mensagem original (ou ele era None), envia como nova mensagem
+        logger.warning(f"Não foi possível encontrar msg_id original para recusa {entrega_id}. Enviando status como nova mensagem.")
+        try:
             await update.message.reply_text(legenda_final)
-    
+        except Exception as e_send:
+            logger.error(f"Falha ao enviar mensagem de fallback (sem msg_id) para recusa {entrega_id}: {e_send}")
+
+
 async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
@@ -977,20 +1020,48 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         legenda_final = (f"**Entrega APROVADA por {gestor_nome}**\n\n"
                         f"👤 **Funcionário:** {detalhes.NomeCompleto}\n"
                         f"📝 **Tarefa:** {detalhes.Titulo} (+{detalhes.Pontos} pts)")
-        # <<< CORREÇÃO: Adiciona try/except para a edição da mensagem >>>
+
+                # <<< CORREÇÃO REVISADA: Adiciona try/except e fallback com nova mensagem >>>
         try:
             await query.edit_message_caption(caption=legenda_final, reply_markup=None) # Remove botões também
-        except Exception as e:
-            logger.warning(f"Não foi possível editar a mensagem de aprovação {entrega_id} no grupo gestor: {e}")
-            # Opcional: Enviar uma nova mensagem se a edição falhar
-            # await context.bot.send_message(chat_id=query.message.chat_id, text=legenda_final)
+        except Exception as e_edit:
+            logger.warning(f"Não foi possível editar a mensagem de aprovação {entrega_id} no grupo gestor: {e_edit}")
+            # Fallback: Envia uma nova mensagem se a edição falhar
+            try:
+                await context.bot.send_message(chat_id=query.message.chat_id, text=legenda_final)
+            except Exception as e_send:
+                logger.error(f"Falha também ao enviar mensagem de fallback para aprovação {entrega_id}: {e_send}")
+
 
     elif data.startswith("reprovar_gestor_"):
         entrega_id = int(data.split('_')[-1])
-        context.chat_data['aguardando_motivo_recusa'] = entrega_id
-        context.chat_data[f'msg_id_{entrega_id}'] = query.message.message_id
-        await query.edit_message_reply_markup(reply_markup=None)
+        gestor_id = query.from_user.id
+        chat_id_grupo = query.message.chat_id
+        msg_id_original = query.message.message_id
+
+        # --- CORREÇÃO: Usar bot_data ---
+        # Garante que a estrutura de dicionários exista
+        if 'pendencias_recusa' not in context.bot_data:
+            context.bot_data['pendencias_recusa'] = {}
+        if chat_id_grupo not in context.bot_data['pendencias_recusa']:
+            context.bot_data['pendencias_recusa'][chat_id_grupo] = {}
+
+        # Armazena os dados associados ao gestor que clicou dentro do chat específico
+        context.bot_data['pendencias_recusa'][chat_id_grupo][gestor_id] = {
+            'entrega_id': entrega_id,
+            'msg_id': msg_id_original
+        }
+        logger.info(f"Estado de recusa para EntregaID {entrega_id} armazenado em bot_data para GestorID {gestor_id} no ChatID {chat_id_grupo}.")
+        # --- FIM CORREÇÃO ---
+
+        # Remove botões da mensagem original (pode falhar, mas o estado já está salvo)
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception as e_edit_markup:
+            logger.warning(f"Não foi possível remover botões ao iniciar recusa {entrega_id}: {e_edit_markup}")
+
         await query.message.reply_text(f"Por favor, {query.from_user.first_name}, digite o motivo da recusa para esta tarefa.")
+
 
 async def acompanhar_metas(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Envia para o funcionário o status da meta principal em formato de porcentagem."""
