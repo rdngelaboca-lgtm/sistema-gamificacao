@@ -418,12 +418,29 @@ body {
     align-items: center;
 }
 
-.mes-lucro-label {
-    font-weight: bold;
-    color: #555;
-    margin-bottom: 8px;
-    display: block; /* Garante que fique acima da barra */
+/* ===== CORREÇÃO: Readicionando estilos da barra de lucro ===== */
+.progresso-lucro-container {
+    background-color: #e9ecef;
+    border-radius: 50px;
+    height: 25px;
+    width: 80%; /* Barra não ocupa 100% da largura do item */
+    position: relative;
+    overflow: hidden;
 }
+
+.progresso-lucro-barra {
+    background: linear-gradient(90deg, #ffc107, #e0a800); /* Gradiente Amarelo/Ouro */
+    height: 100%;
+    width: 0%; /* Será definido pelo JS */
+    border-radius: 50px;
+    transition: width 0.7s ease-in-out, background 0.5s ease; /* Transição suave */
+}
+
+/* Estilo para quando a meta de lucro é batida (Já deve existir, mas garantindo) */
+.progresso-lucro-barra.meta-lucro-batida {
+     background: linear-gradient(90deg, #28a745, #218838); /* Muda para Verde */
+}
+/* ===== FIM DA CORREÇÃO ===== */
 
 /* Estilo para quando a meta de lucro é batida */
 .progresso-lucro-barra.meta-lucro-batida {
