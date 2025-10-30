@@ -558,6 +558,17 @@ def rota_historico_lucro():
         logger.exception(f"!!! ERRO no endpoint /api/historico_lucro: {e}")
         return jsonify({"status": "erro", "mensagem": "Erro ao buscar histórico de lucro."}), 500 
     
+@app.route('/api/resgates/recentes', methods=['GET'])
+def rota_resgates_recentes():
+    """Endpoint para fornecer os últimos resgates aprovados para o painel."""
+    try:
+        resgates = database.buscar_resgates_recentes(limite=5) # Busca os últimos 5
+        return jsonify(resgates), 200
+    except Exception as e:
+        logger.exception(f"!!! ERRO no endpoint /api/resgates/recentes: {e}")
+        return jsonify({"status": "erro", "mensagem": "Erro ao buscar resgates recentes."}), 500    
+
+    
 if __name__ == '__main__':
     # O debug=False é essencial para rodar como serviço
     app.run(host='0.0.0.0', port=5000, debug=False)
