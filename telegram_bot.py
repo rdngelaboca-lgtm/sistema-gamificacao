@@ -203,7 +203,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     REPLY_KEYBOARD = [
     ["📋 Minhas Tarefas", "🏆 Ranking do Mês", "🎯 Acompanhar Metas"],
     ["💰 Meu Saldo", "🏪 Loja de Recompensas"],
-    ["📜 Meu Histórico", "💬 Solicitar Feedback"],
+    ["📜 Meu Histórico", "💬 Canal Confidencial"],
     ["🏅 Minhas Conquistas", "📄 Meus Documentos"], # <<< BOTÃO ADICIONADO AQUI
     ["❓ Ajuda"] # Botão Ajuda movido para a última linha
     ]
@@ -234,7 +234,7 @@ async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
     # Usamos reply_html por causa do <b>
     await update.message.reply_html(texto_ajuda, reply_markup=update.message.reply_markup)
-    
+
 async def pendencias_gestor(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     if chat_id != config.GESTOR_GROUP_CHAT_ID:
@@ -1201,7 +1201,7 @@ def main() -> None:
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^❓ Ajuda$'), ajuda))
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^💰 Meu Saldo$'), meu_saldo))
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🏪 Loja de Recompensas$'), loja_recompensas))
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^💬 Solicitar Feedback$'), solicitar_feedback_start)) 
+    application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^💬 Canal Confidencial$'), solicitar_feedback_start)) 
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^📄 Meus Documentos$'), solicitar_holerite_inicio)) 
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🏅 Minhas Conquistas$'), minhas_conquistas)) # <<< NOVO BOTÃO
     application.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, receber_foto))
