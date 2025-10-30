@@ -3764,6 +3764,107 @@ def editar_pontos_entrega(entrega_id, novos_pontos):
             conn.close()
     return False
 
+def buscar_extrato_pontos_funcionario(funcionario_id, data_inicio, data_fim):
+    """
+    Busca um extrato completo de todas as transações de pontos (entradas e saídas)
+    para um funcionário dentro de um período, ordenado por data.
+    Retorna uma lista de dicionários ou lista vazia se erro/sem dados.
+    """
+    conn = get_db_connection()
+    extrato = []
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Query que une Entregas (pontos ganhos) e Resgates (pontos gastos)
+            # Inclui um Saldo Parcial calculado na hora (requer SQL Server 2012+)
+            sql = """
+                WITH Transacoes AS (
+                    -- Entradas de Pontos (Tarefas Aprovadas, Bônus)
+                    SELECT
+                        E.DataEnvio AS DataTransacao, -- Usamos DataEnvio (que agora é data da aprovação)
+                        CASE
+                            WHEN E.TarefaID = ? THEN 'Bônus: Feedback Diário'
+                            WHEN E.TarefaID = ? THEN 'Bônus: Leitura Comunicado'
+                            WHEN E.TarefaID = ? THEN 'Bônus: Meta Equipe Atingida'
+                            -- Adicione mais casos para outros bônus se necessário
+                            ELSE ISNULL(T.Titulo, 'Entrada Desconhecida')
+                        END AS Descricao,
+                        ISNULL(E.PontosGanhos, 0) AS Pontos -- Pontos positivos
+                    FROM Entregas E
+                    LEFT JOIN Tarefas T ON E.TarefaID = T.TarefaID
+                    WHERE E.FuncionarioID = ?
+                      AND E.StatusValidacao = 'Aprovada'
+                      AND CONVERT(DATE, E.DataEnvio) BETWEEN ? AND ?
+                      AND ISNULL(E.PontosGanhos, 0) != 0 -- Ignora entradas com 0 pontos
+
+                    UNION ALL
+
+                    -- Saídas de Pontos (Resgates Aprovados)
+                    SELECT
+                        R.DataAprovacao AS DataTransacao,
+                        'Resgate: ' + P.Nome AS Descricao,
+                        -R.PontosGastos AS Pontos -- Pontos negativos
+                    FROM Resgates R
+                    JOIN ProdutosLoja P ON R.ProdutoID = P.ProdutoID
+                    WHERE R.FuncionarioID = ?
+                      AND R.Status = 'Aprovado'
+                      AND R.DataAprovacao IS NOT NULL
+                      AND CONVERT(DATE, R.DataAprovacao) BETWEEN ? AND ?
+                )
+                -- Seleciona as transações e calcula o saldo acumulado
+                SELECT
+                    DataTransacao,
+                    Descricao,
+                    Pontos
+                FROM Transacoes
+                ORDER BY DataTransacao ASC; -- Ordena do mais antigo para o mais recente
+            """
+
+            # Passa os IDs das tarefas de bônus e os parâmetros do funcionário/datas
+            params = [
+                config.TAREFA_ID_FEEDBACK_DIARIO,
+                config.TAREFA_ID_LEITURA,
+                config.TAREFA_ID_PONTOS_META,
+                funcionario_id, data_inicio, data_fim, # Para Entregas
+                funcionario_id, data_inicio, data_fim  # Para Resgates
+            ]
+
+            cursor.execute(sql, params)
+            cols = [column[0] for column in cursor.description]
+            extrato = [dict(zip(cols, row)) for row in cursor.fetchall()]
+
+            # --- Cálculo do Saldo Inicial e Acumulado (feito em Python) ---
+            # 1. Buscar saldo ANTES da data de início
+            sql_saldo_inicial = """
+                SELECT ISNULL(SUM(CASE WHEN Tipo = 'Entrada' THEN Pontos ELSE -Pontos END), 0)
+                FROM (
+                    SELECT 'Entrada' as Tipo, ISNULL(PontosGanhos, 0) as Pontos, DataEnvio as DataOp
+                    FROM Entregas WHERE FuncionarioID = ? AND StatusValidacao = 'Aprovada' AND CONVERT(DATE, DataEnvio) < ?
+                    UNION ALL
+                    SELECT 'Saida' as Tipo, PontosGastos as Pontos, DataAprovacao as DataOp
+                    FROM Resgates WHERE FuncionarioID = ? AND Status = 'Aprovado' AND DataAprovacao IS NOT NULL AND CONVERT(DATE, DataAprovacao) < ?
+                ) as SaldoAntes;
+            """
+            cursor.execute(sql_saldo_inicial, funcionario_id, data_inicio, funcionario_id, data_inicio)
+            saldo_inicial = cursor.fetchone()[0] or 0
+
+            # 2. Adicionar Saldo Acumulado ao extrato
+            saldo_acumulado = saldo_inicial
+            for transacao in extrato:
+                saldo_acumulado += transacao['Pontos']
+                transacao['SaldoNaData'] = saldo_acumulado # Adiciona nova chave
+
+            return extrato, saldo_inicial # Retorna o extrato e o saldo inicial
+
+        except Exception as e:
+            logger.error(f"Erro ao buscar extrato de pontos: {e}", exc_info=True)
+            return [], 0 # Retorna vazio e saldo 0 em caso de erro
+        finally:
+            if conn:
+                conn.close()
+    return [], 0 # Retorna vazio e saldo 0 se conexão falhar
+
+
 # --- COLE ESTE BLOCO NO FINAL DO ARQUIVO database.py ---
 
 # Certifique-se de que 'import notificador_telegram' e 'import logging' (e datetime)
