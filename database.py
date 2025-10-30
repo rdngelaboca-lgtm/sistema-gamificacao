@@ -3903,6 +3903,37 @@ def excluir_lucro_mensal(lucro_id):
     return False
 # O logger já deve estar configurado pelo bloco no início do arquivo.
 
+def buscar_resgates_recentes(limite=5):
+    """
+    Busca os últimos resgates APROVADOS para o novo feed de Resgates Recentes.
+    """
+    conn = get_db_connection()
+    if not conn: return []
+    try:
+        cursor = conn.cursor()
+        # Busca os últimos N resgates aprovados
+        sql = f"""
+            SELECT TOP ({int(limite)})
+                F.NomeCompleto AS TextoPrincipal,
+                P.Nome AS TextoSecundario,
+                R.PontosGastos AS Pontos,
+                R.DataAprovacao AS Timestamp
+            FROM Resgates R
+            JOIN Funcionarios F ON R.FuncionarioID = F.FuncionarioID
+            JOIN ProdutosLoja P ON R.ProdutoID = P.ProdutoID
+            WHERE R.Status = 'Aprovado' AND R.DataAprovacao IS NOT NULL
+            ORDER BY R.DataAprovacao DESC;
+        """
+        cursor.execute(sql)
+        cols = [column[0] for column in cursor.description]
+        return [dict(zip(cols, row)) for row in cursor.fetchall()]
+
+    except Exception as e:
+        logger.exception(f"Erro crítico dentro de buscar_resgates_recentes: {e}")
+        return [] # Retorna lista vazia em caso de erro
+    finally:
+        if conn: conn.close()
+
 def verificar_e_premiar_meta_diaria(apuracao_id, data_apuracao_str, valor_dia, meta_principal_id):
     """
     Função auxiliar para verificar se a meta diária foi atingida e premiar a equipe DO SETOR CORRETO.
