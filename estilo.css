@@ -308,20 +308,38 @@ body {
     margin-right: 10px; /* Menos espaço */
 }
 
-/* REQ 4: Estilos para o NOVO feed de Resgates (no rodapé) */
-.feed-container {
-    margin-top: 20px;
-    padding: 15px 20px;
-    background-color: #fff;
-    border-radius: 8px;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+/* REQ 3: Estilo para o novo título secundário (Resgates) dentro da coluna */
+.coluna-titulo-secundario {
+    font-size: 1.0em; /* Menor que o título principal da coluna */
+    font-weight: bold;
+    color: #5a3e8d; /* Cor roxa (pode ajustar) */
+    text-align: center;
+    padding-bottom: 10px;
+    margin-top: 20px; /* Espaço para separar do feed de atividades */
+    margin-bottom: 15px;
+    border-bottom: 2px solid #d0d7de;
 }
 
-.feed-container h2 {
-    text-align: center;
-    margin-bottom: 15px;
-    color: #333;
+/* REQ 3: Ajusta a lista de resgates (que agora está no Kanban) */
+#resgates-lista {
+    list-style: none;
+    padding: 0;
+    margin: 0;
 }
+
+#resgates-lista li {
+    display: flex;
+    align-items: center;
+    padding: 10px;
+    border-bottom: 1px solid #e9eef2;
+    font-size: 0.9em; /* Mesmo tamanho do feed de atividades */
+}
+
+#resgates-lista li:last-child {
+    border-bottom: none;
+}
+
+
 
 #resgates-lista {
     list-style: none;
