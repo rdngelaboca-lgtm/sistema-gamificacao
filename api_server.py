@@ -499,7 +499,7 @@ def rota_feed():
     Endpoint que fornece os últimos eventos para o feed de atividades.
     """
     try:
-        feed_data = database.buscar_feed_de_atividades(limite=7) # Podemos pegar 7, por exemplo
+        feed_data = database.buscar_feed_de_atividades(limite=15) # Podemos pegar 7, por exemplo
         return jsonify(feed_data), 200
     except Exception as e:
         logger.exception(f"!!! ERRO no endpoint /api/feed: {e}")
@@ -562,7 +562,7 @@ def rota_historico_lucro():
 def rota_resgates_recentes():
     """Endpoint para fornecer os últimos resgates aprovados para o painel."""
     try:
-        resgates = database.buscar_resgates_recentes(limite=5) # Busca os últimos 5
+        resgates = database.buscar_resgates_recentes(limite=15) # Busca os últimos 5
         return jsonify(resgates), 200
     except Exception as e:
         logger.exception(f"!!! ERRO no endpoint /api/resgates/recentes: {e}")
