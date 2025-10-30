@@ -772,10 +772,16 @@ def aprovar_entrega(entrega_id, funcionario_id, pontos):
 
     try:
         cursor = conn.cursor()
-        # 1. Atualiza o status da entrega
-        sql_update_entrega = "UPDATE Entregas SET StatusValidacao = 'Aprovada', PontosGanhos = ? WHERE EntregaID = ?"
+        # 1. Atualiza o status E A DATA DE ENVIO (para refletir a data da aprovação)
+        # Isso corrige o Pódio Diário e o Feed de Atividades Recentes.
+        sql_update_entrega = """
+            UPDATE Entregas 
+            SET StatusValidacao = 'Aprovada', PontosGanhos = ?, DataEnvio = GETDATE() 
+            WHERE EntregaID = ?
+        """
         cursor.execute(sql_update_entrega, pontos, entrega_id)
-        logger.debug(f"UPDATE Entregas executado para EntregaID {entrega_id}.")
+        logger.debug(f"UPDATE Entregas (com GETDATE()) executado para EntregaID {entrega_id}.")
+
 
         # 2. Adiciona os pontos ao saldo (delegação para função com seu próprio tratamento)
         # Chamamos a função aqui dentro do try principal. Se ela falhar e não tratar
