@@ -221,17 +221,20 @@ async def obter_id_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     texto_ajuda = (
         "Olá! Eu sou seu assistente de gamificação. Aqui estão os comandos:\n\n"
+        "<b>Comandos Principais (Botões):</b>\n"
         "📋 **Minhas Tarefas**: Mostra sua lista de tarefas pendentes para hoje.\n"
         "🏆 **Ranking do Mês**: Exibe a classificação de desempenho atual.\n"
         "💰 **Meu Saldo**: Mostra seus pontos acumulados e o valor em R$.\n"
         "🏪 **Loja de Recompensas**: Permite trocar seus pontos por prêmios.\n"
         "📜 **Meu Histórico**: Exibe suas últimas 10 atividades.\n"
-        "💬 **Solicitar Feedback**: Envia um pedido de feedback ao seu gestor.\n"
+        "🏅 **Minhas Conquistas**: Lista suas conquistas desbloqueadas.\n"
         "📄 **Meus Documentos**: Acessa documentos pessoais, como holerites.\n\n"
-        "Use os botões abaixo para começar!"
+        "💬 **Canal Confidencial** (Botão 'Solicitar Feedback'):\n"
+        "   Envia uma sugestão, reclamação ou denúncia de forma <b>100% ANÔNIMA</b> para a gestão.\n"
     )
-    await update.message.reply_text(texto_ajuda, reply_markup=update.message.reply_markup)
-
+    # Usamos reply_html por causa do <b>
+    await update.message.reply_html(texto_ajuda, reply_markup=update.message.reply_markup)
+    
 async def pendencias_gestor(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     if chat_id != config.GESTOR_GROUP_CHAT_ID:
@@ -488,21 +491,36 @@ async def roteador_de_texto_privado(update: Update, context: ContextTypes.DEFAUL
              await update.message.reply_text("Ocorreu um erro. Por favor, tente marcar como 'Não Aplicável' novamente.")
         return
 
-    elif user_data.get('aguardando_assunto_feedback'):
-        user_data.pop('aguardando_assunto_feedback', None)
-        sucesso = database.criar_solicitacao_feedback(funcionario.FuncionarioID, texto_recebido)
-        if sucesso:
-            mensagem_gestor = (f"📢 **Nova Solicitação de Feedback**\n\n👤 **De:** {funcionario.NomeCompleto}\n📝 **Assunto:** {texto_recebido}")
-            # Usar try-except para envio de notificação
+    elif user_data.get('aguardando_denuncia_anonima'):
+        # Limpa o estado
+        user_data.pop('aguardando_denuncia_anonima', None)
+
+        # IMPORTANTE: NÃO HÁ 'funcionario.FuncionarioID' aqui.
+        # Salva a mensagem anonimamente no banco
+        # (Certifique-se que a função registrar_denuncia_anonima e a tabela DenunciasAnonimas foram criadas no banco)
+        novo_id = database.registrar_denuncia_anonima(texto_recebido)
+
+        if novo_id:
+            # Envia a confirmação ANÔNIMA para o gestor
+            mensagem_gestor = (
+                f"Atenção: Nova mensagem anônima recebida (Protocolo: {novo_id})\n\n"
+                f"<b>Mensagem:</b>\n"
+                f"<i>\"{texto_recebido}\"</i>"
+            )
+            # Envia para o grupo de gestão
             try:
                 notificador_telegram.enviar_mensagem(config.GESTOR_GROUP_CHAT_ID, mensagem_gestor)
             except Exception as e_notify:
-                logger.error(f"Falha ao notificar gestores sobre feedback: {e_notify}")
-                # Informa o usuário mesmo se a notificação falhar
-            await update.message.reply_text("✅ Sua solicitação de feedback foi enviada com sucesso!")
+                logger.error(f"Falha ao notificar gestores sobre denuncia anonima (ID: {novo_id}): {e_notify}")
+                # O usuário não precisa saber se a notificação falhou, apenas que foi registrada.
+
+            # Envia a confirmação para o usuário que enviou
+            await update.message.reply_text(
+                "✅ Sua mensagem anônima foi registrada e enviada à gestão. Obrigado por sua contribuição."
+            )
         else:
-            await update.message.reply_text("❌ Ocorreu um erro ao salvar sua solicitação. Tente novamente.")
-        return
+            await update.message.reply_text("❌ Ocorreu um erro ao tentar registrar sua mensagem. Tente novamente mais tarde.")
+        return # Fim do fluxo
 
     # Se não caiu em nenhum estado específico, é uma mensagem normal não esperada
     else:
@@ -512,13 +530,22 @@ async def roteador_de_texto_privado(update: Update, context: ContextTypes.DEFAUL
          
 
 async def solicitar_feedback_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Inicia o processo de solicitação de feedback."""
-    await update.message.reply_text(
-        "Entendido. Sobre qual tarefa ou assunto você gostaria de solicitar um feedback?"
-    )
-    # Define um "estado" para o usuário, indicando que a próxima mensagem dele é o assunto.
-    context.user_data['aguardando_assunto_feedback'] = True
+    """(REAPROVEITADO) Inicia o processo de Denúncia/Sugestão Anônima."""
 
+    # Envia a mensagem explicativa conforme solicitado
+    texto_explicativo = (
+        "Este é o seu <b>Canal Confidencial</b>.\n\n"
+        "Use este espaço para enviar sugestões, reclamações ou denúncias de forma <b>100% ANÔNIMA</b>.\n\n"
+        "⚠️ <b>IMPORTANTE:</b> Sua identidade <b>NÃO</b> será registrada nem enviada à gestão. O sistema foi programado para descartar seu nome e ID de usuário nesta operação.\n\n"
+        "Por favor, digite sua mensagem completa abaixo e pressione Enviar. (Ou digite /cancelar para sair)."
+    )
+
+    await update.message.reply_html(texto_explicativo) # Usar HTML por causa do <b>
+
+    # Define o NOVO estado para o roteador
+    context.user_data['aguardando_denuncia_anonima'] = True
+    # Remove o estado antigo, caso exista (segurança)
+    context.user_data.pop('aguardando_assunto_feedback', None)
 
 async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     MAX_SECONDS_DIFFERENCE = config.MAX_DIFERENCA_FOTO_SEGUNDOS # Usa valor do config.py
