@@ -83,20 +83,34 @@ document.addEventListener('DOMContentLoaded', function() {
             container.appendChild(mesItemDiv);
         });
     }
-    // ===== FIM DA FUNÇÃO SIMPLIFICADA =====
+
     function renderizarColunas(dados) {
-        const colunas = {
-            'coluna-para-fazer': dados.para_fazer,
-            'coluna-validacao': dados.validacao,
-            'coluna-concluidas': dados.concluidas
-        };
-        for (const idColuna in colunas) {
-            const elementoColuna = document.getElementById(idColuna);
+    // --- CORREÇÃO APLICADA AQUI ---
+    // Removemos 'coluna-concluidas' deste objeto, pois ela não existe mais no HTML.
+    // A coluna "ATIVIDADE RECENTE" é preenchida pela função renderizarFeed().
+    const colunas = {
+        'coluna-para-fazer': dados.para_fazer,
+        'coluna-validacao': dados.validacao
+        // 'coluna-concluidas': dados.concluidas // <-- REMOVIDO
+    };
+    // ---------------------------------
+
+    for (const idColuna in colunas) {
+        const elementoColuna = document.getElementById(idColuna);
+
+        // Adicionamos uma verificação de segurança (embora o erro fosse 'coluna-concluidas')
+        if (elementoColuna) {
             elementoColuna.innerHTML = '';
             const tarefasAgrupadas = agruparTarefasPorFuncionario(colunas[idColuna]);
             renderizarGrupos(tarefasAgrupadas, elementoColuna, idColuna.split('-')[1]);
+        } else {
+            // Isso não deve acontecer agora que removemos 'coluna-concluidas'
+            console.error(`Elemento da coluna não encontrado: #${idColuna}`);
         }
     }
+}
+
+
 
     function agruparTarefasPorFuncionario(listaDeTarefas) {
         if (!listaDeTarefas) return {};
