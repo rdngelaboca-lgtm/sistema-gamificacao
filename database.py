@@ -1242,40 +1242,54 @@ def calcular_ranking_desempenho(data_final_calculo=None, setor_filtro=None): # <
             if atribuicao.FuncionarioID in atribuicoes_por_funcionario:
                 atribuicoes_por_funcionario[atribuicao.FuncionarioID]['tarefas'].append(atribuicao) #
 
-        # O cálculo de pontos possíveis e ganhos agora só roda para os funcionários filtrados
+                # O cálculo de pontos possíveis e ganhos agora só roda para os funcionários filtrados
         for func_id, dados in atribuicoes_por_funcionario.items():
             pontos_possiveis_total = 0 #
-            # ... (Lógica interna para calcular pontos_possiveis_total permanece a mesma, incluindo a verificação de folga) ...
+            # --- Início da Lógica de Cálculo de Pontos Possíveis (EXISTENTE, SEM ALTERAÇÃO) ---
+            # (Itera sobre tarefas, verifica frequência, datas, folga, etc.)
             for tarefa in dados['tarefas']:
                 if tarefa.TipoFrequencia in ('GrupoCompetitiva', 'Unica'):
                     data_ref = tarefa.DataAceite if tarefa.TipoFrequencia == 'GrupoCompetitiva' else tarefa.DataInicioVigencia
                     if data_ref and inicio_mes <= _get_date_part(data_ref) <= data_final:
-                        pontos_possiveis_total += tarefa.Pontos
+                        # Considera apenas se a atribuição estava ativa no período
+                        data_fim_vigencia = _get_date_part(tarefa.DataFimVigencia) if tarefa.DataFimVigencia else data_final # Usa data_fim se for nulo
+                        if data_fim_vigencia >= inicio_mes: # Garante que não encerrou antes do período começar
+                            pontos_possiveis_total += tarefa.Pontos
                     continue
                 dias_ocorrencia = 0
-                start_date = max(_get_date_part(tarefa.DataInicioVigencia), inicio_mes) if tarefa.DataInicioVigencia else inicio_mes
-                end_date = min(_get_date_part(tarefa.DataFimVigencia), data_final) if tarefa.DataFimVigencia else data_final
-                if end_date < start_date: continue
-                for dia_atual in (start_date + timedelta(days=n) for n in range((end_date - start_date).days + 1)):
-                    if dia_atual > data_final: break
-                    dia_da_semana_sql = (dia_atual.weekday() + 1) % 7 + 1 # SQL Server: Dom=1..Sab=7
-                    if str(dia_da_semana_sql) == str(dados['DiaDeFolga']):
-                        continue
+                start_date_tarefa = _get_date_part(tarefa.DataInicioVigencia) if tarefa.DataInicioVigencia else inicio_mes
+                end_date_tarefa = _get_date_part(tarefa.DataFimVigencia) if tarefa.DataFimVigencia else data_final
+                start_date_calc = max(start_date_tarefa, inicio_mes)
+                end_date_calc = min(end_date_tarefa, data_final)
+                if end_date_calc < start_date_calc: continue
+                for dia_atual in (start_date_calc + timedelta(days=n) for n in range((end_date_calc - start_date_calc).days + 1)):
+                    dia_da_semana_sql = (dia_atual.weekday() + 1) % 7 + 1
+                    if str(dia_da_semana_sql) == str(dados['DiaDeFolga']): continue # PULA O DIA SE FOR FOLGA!
                     if tarefa.TipoFrequencia == 'Diaria': dias_ocorrencia += 1
                     elif tarefa.TipoFrequencia == 'Semanal':
                         if str(dia_da_semana_sql) == str(tarefa.ValorFrequencia): dias_ocorrencia += 1
                     elif tarefa.TipoFrequencia == 'Mensal':
                         if dia_atual.day == int(tarefa.ValorFrequencia): dias_ocorrencia += 1
                 pontos_possiveis_total += dias_ocorrencia * tarefa.Pontos
+            # --- Fim da Lógica de Cálculo de Pontos Possíveis ---
 
-            pontos_ganhos = calcular_pontos_ganhos_no_periodo(func_id, inicio_mes, data_final) #
-            percentual_desempenho = (pontos_ganhos / pontos_possiveis_total) * 100 if pontos_possiveis_total > 0 else 0 #
+            # --- CORREÇÃO APLICADA AQUI ---
+            # 1. Calcula os pontos ganhos APENAS de tarefas regulares para o PERCENTUAL
+            pontos_ganhos_regulares = calcular_pontos_ganhos_tarefas_regulares(func_id, inicio_mes, data_final) # <<< USA A NOVA FUNÇÃO
+
+            # 2. Calcula o percentual usando os pontos regulares
+            percentual_desempenho = (pontos_ganhos_regulares / pontos_possiveis_total) * 100 if pontos_possiveis_total > 0 else 0
+
+            # 3. Calcula os pontos ganhos TOTAIS (incluindo bônus) para a COLUNA "Pontos (Esforço)"
+            pontos_ganhos_totais = calcular_pontos_ganhos_no_periodo(func_id, inicio_mes, data_final) # <<< USA A FUNÇÃO ORIGINAL
+            # --- FIM DA CORREÇÃO ---
 
             ranking_parcial.append({
                 'FuncionarioID': func_id, 'NomeCompleto': dados['NomeCompleto'],
-                'PontosGanhos': pontos_ganhos, 'PontosPossiveis': pontos_possiveis_total,
-                'Desempenho': round(percentual_desempenho, 2)
-            }) #
+                'PontosGanhos': pontos_ganhos_totais, # <<< Exibe o total (com bônus)
+                'PontosPossiveis': pontos_possiveis_total,
+                'Desempenho': round(percentual_desempenho, 2) # <<< Exibe o percentual (sem bônus, <= 100%)
+            })
 
         if not ranking_parcial: return [] #
 
@@ -1367,6 +1381,52 @@ def calcular_pontos_ganhos_no_periodo(funcionario_id, inicio_periodo, fim_period
             resultado = cursor.fetchone()[0]
             # Se o resultado for None (nenhuma entrega), retorna 0
             return resultado if resultado is not None else 0
+        finally:
+            conn.close()
+    return 0
+
+def calcular_pontos_ganhos_tarefas_regulares(funcionario_id, inicio_periodo, fim_periodo):
+    """
+    Soma os pontos das entregas APROVADAS de um funcionário em um período,
+    EXCLUINDO pontos de tarefas de bônus (Leitura, Feedback, Metas).
+    Usado especificamente para o cálculo do percentual de desempenho/confiabilidade.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Lista de IDs de tarefas consideradas "bônus" ou não regulares
+            # Certifique-se que TAREFA_ID_LEITURA, TAREFA_ID_FEEDBACK_DIARIO, TAREFA_ID_PONTOS_META
+            # existem e estão corretos em config.py
+            ids_bonus = (
+                config.TAREFA_ID_LEITURA,
+                config.TAREFA_ID_FEEDBACK_DIARIO,
+                config.TAREFA_ID_PONTOS_META
+                # Adicione outros IDs de tarefas "bônus" se existirem
+            )
+            # Cria os placeholders (?) para a cláusula NOT IN dinamicamente
+            placeholders = ','.join('?' * len(ids_bonus))
+
+            sql = f"""
+                SELECT SUM(ISNULL(PontosGanhos, 0))
+                FROM Entregas
+                WHERE FuncionarioID = ?
+                  AND StatusValidacao = 'Aprovada'
+                  AND CONVERT(DATE, DataEnvio) BETWEEN ? AND ?
+                  AND TarefaID NOT IN ({placeholders}) -- Exclui tarefas de bônus
+            """
+            params = [funcionario_id, inicio_periodo, fim_periodo] + list(ids_bonus)
+
+            cursor.execute(sql, params)
+            resultado = cursor.fetchone()[0]
+            return resultado if resultado is not None else 0
+        except AttributeError as e:
+             # Log específico se alguma constante não existir em config.py
+             logger.error(f"Erro ao calcular pontos regulares: Constante de Tarefa Bônus não encontrada em config.py? Detalhe: {e}")
+             return 0 # Retorna 0 em caso de erro na configuração
+        except Exception as e:
+             logger.error(f"Erro ao calcular pontos ganhos (tarefas regulares): {e}", exc_info=True)
+             return 0 # Retorna 0 em caso de erro genérico
         finally:
             conn.close()
     return 0
