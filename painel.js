@@ -331,7 +331,8 @@ function renderizarProgressoGeral(progresso) {
         const percentual = total > 0 ? (concluidas / total) * 100 : 0;
 
         barraInterna.style.width = `${Math.min(percentual, 100)}%`; // Define a largura da barra
-        textoLabel.textContent = `${concluidas} de ${total} tarefas concluídas (${percentual.toFixed(0)}%)`; // Atualiza o texto
+        // Usamos Math.round() para garantir o arredondamento correto (ex: 1.69 -> 2)
+        textoLabel.textContent = `${concluidas} de ${total} tarefas concluídas (${Math.round(percentual)}%)`; // Atualiza o texto
     } else {
         // Se não houver dados de progresso, mostra um estado padrão
         if (barraInterna) barraInterna.style.width = '0%';
