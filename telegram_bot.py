@@ -660,77 +660,68 @@ async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             except Exception as del_err:
                 logger.error(f"Erro ao remover arquivo temporário {temp_photo_path}: {del_err}")        
 
+# Em telegram_bot.py, SUBSTITUA a função receber_motivo_recusa por esta:
+
 async def receber_motivo_recusa(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id_grupo = update.effective_chat.id
     gestor_id = update.effective_user.id
     gestor_nome = update.effective_user.first_name
     motivo = update.message.text
 
-    # --- CORREÇÃO: Ler e limpar de bot_data ---
+    # --- Bloco de leitura (sem alteração) ---
     dados_recusa = None
-    # Verifica a existência das chaves de forma segura
     if 'pendencias_recusa' in context.bot_data and \
     chat_id_grupo in context.bot_data['pendencias_recusa'] and \
     gestor_id in context.bot_data['pendencias_recusa'][chat_id_grupo]:
-
-        # Pega os dados associados a este gestor neste chat
         dados_recusa = context.bot_data['pendencias_recusa'][chat_id_grupo].pop(gestor_id)
         logger.info(f"Dados de recusa encontrados em bot_data para GestorID {gestor_id} no ChatID {chat_id_grupo}.")
-
-        # Limpa entradas vazias do dicionário para higiene (opcional, mas boa prática)
         if not context.bot_data['pendencias_recusa'][chat_id_grupo]:
             context.bot_data['pendencias_recusa'].pop(chat_id_grupo)
-            logger.debug(f"Entrada de chat {chat_id_grupo} removida de pendencias_recusa.")
         if not context.bot_data['pendencias_recusa']:
             context.bot_data.pop('pendencias_recusa')
-            logger.debug("Dicionário pendencias_recusa removido de bot_data.")
-    # --- FIM CORREÇÃO ---
+    # --- Fim do Bloco de leitura ---
 
-    # Se não encontrou dados para este gestor/chat, simplesmente ignora a mensagem
     if not dados_recusa:
-        logger.debug(f"Mensagem de GestorID {gestor_id} no ChatID {chat_id_grupo} ignorada (sem pendência de recusa encontrada em bot_data).")
-        # Opcional: responder ao gestor que não há recusa pendente para ele
-        # await update.message.reply_text("Não encontrei nenhuma recusa pendente para você neste momento.")
-        return # Interrompe a função aqui
+        logger.debug(f"Mensagem de GestorID {gestor_id} no ChatID {chat_id_grupo} ignorada (sem pendência).")
+        return
 
-    # Extrai os dados recuperados de bot_data
+    # --- CORREÇÃO APLICADA AQUI ---
+    # Extrai os dados recuperados de bot_data (que já continha o msg_id)
     entrega_id = dados_recusa['entrega_id']
-    id_mensagem_original = dados_recusa['msg_id']
+    id_mensagem_original = dados_recusa['msg_id'] # <-- USAMOS O VALOR CORRETO
+    # --- FIM DA CORREÇÃO ---
 
     detalhes = database.buscar_detalhes_da_entrega(entrega_id)
-    
+
     if not detalhes or detalhes.StatusValidacao != 'Pendente':
         await update.message.reply_text("Esta tarefa já foi validada por outro gestor ou não foi encontrada.")
         return
-    
+
     database.recusar_entrega(entrega_id, motivo)
-    
+
     texto_notificacao = (f"⚠️ Atenção, <b>{detalhes.NomeCompleto}</b>!\n\n"
-                         f"Sua entrega para a tarefa '<b>{detalhes.Titulo}</b>' foi RECUSADA.\n\n"
-                         f"<b>Motivo:</b> {motivo}\n\n"
-                         "Por favor, corrija e envie novamente.")
-    
+                        f"Sua entrega para a tarefa '<b>{detalhes.Titulo}</b>' foi RECUSADA.\n\n"
+                        f"<b>Motivo:</b> {motivo}\n\n"
+                        "Por favor, corrija e envie novamente.")
+
     notificador_telegram.enviar_mensagem(detalhes.ChatIDFuncionario, texto_notificacao)
 
     legenda_final = (f"**Entrega RECUSADA por {gestor_nome}**\n\n"
-                     f"👤 **Funcionário:** {detalhes.NomeCompleto}\n"
-                     f"📝 **Tarefa:** {detalhes.Titulo}\n"
-                     f"💬 **Motivo:** {motivo}")
-    
-    id_mensagem_original = context.chat_data.pop(f'msg_id_{entrega_id}', None) # Assume que ainda usa chat_data aqui, será corrigido no Problema 4
-    if id_mensagem_original:
-        # <<< CORREÇÃO REVISADA: Adiciona try/except e fallback com nova mensagem >>>
+                    f"👤 **Funcionário:** {detalhes.NomeCompleto}\n"
+                    f"📝 **Tarefa:** {detalhes.Titulo}\n"
+                    f"💬 **Motivo:** {motivo}")
+
+    # A linha "context.chat_data.pop" foi removida.
+    if id_mensagem_original: # Agora usamos a variável correta
         try:
             await context.bot.edit_message_caption(chat_id=chat_id_grupo, message_id=id_mensagem_original, caption=legenda_final)
         except Exception as e_edit:
             logger.error(f"Erro ao editar caption da mensagem recusada (ID: {entrega_id}): {e_edit}")
-            # Fallback: Envia como nova mensagem para garantir que o status seja atualizado no grupo
             try:
                 await update.message.reply_text(legenda_final)
             except Exception as e_send:
                 logger.error(f"Falha também ao enviar mensagem de fallback para recusa {entrega_id}: {e_send}")
     else:
-        # Se não encontrou o ID da mensagem original (ou ele era None), envia como nova mensagem
         logger.warning(f"Não foi possível encontrar msg_id original para recusa {entrega_id}. Enviando status como nova mensagem.")
         try:
             await update.message.reply_text(legenda_final)
@@ -846,7 +837,17 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         if funcionario_db:
             sucesso = database.salvar_feedback_do_dia(funcionario_db.FuncionarioID, nota)
             if sucesso:
-                database.registrar_pontos_por_leitura(funcionario_db.FuncionarioID, config.PONTOS_BONUS_FEEDBACK_DIARIO, "Feedback Diário (Bônus)")
+                
+                # --- CORREÇÃO APLICADA AQUI ---
+                # Usamos a nova função genérica de bônus, especificando o ID correto da tarefa de feedback.
+                database.registrar_pontos_de_bonus(
+                    funcionario_db.FuncionarioID, 
+                    config.PONTOS_BONUS_FEEDBACK_DIARIO, 
+                    "Feedback Diário (Bônus)",
+                    config.TAREFA_ID_FEEDBACK_DIARIO # <-- Usa o ID correto (ex: 5)
+                )
+                # --- FIM DA CORREÇÃO ---
+                
                 database.adicionar_pontos_ao_saldo(funcionario_db.FuncionarioID, config.PONTOS_BONUS_FEEDBACK_DIARIO)
                 texto_final = (f"Obrigado pelo seu feedback! Sua nota foi **{nota}**.\n\nVocê ganhou **{config.PONTOS_BONUS_FEEDBACK_DIARIO}** pontos por sua participação. Sua opinião nos ajuda a melhorar sempre! 💪")
                 await query.edit_message_text(texto_final, parse_mode='Markdown')
@@ -892,42 +893,50 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             # Opcional: Logar que a tentativa falhou
             logger.info(f"Funcionário {funcionario_db.FuncionarioID} tentou aceitar tarefa {origem_atribuicao_id} que já foi aceita hoje ou falhou no DB.")
 
+
+
+    # Em telegram_bot.py, SUBSTITUA a lógica do 'aceitar_folga_' dentro de button_callback_handler
+
     elif data.startswith("aceitar_folga_"):
         tarefa_id = int(data.split('_')[-1])
         funcionario_aceitou = database.buscar_funcionario_por_chat_id(user.id)
         if not funcionario_aceitou:
-            await context.bot.send_message(chat_id=user.id, text="Seu usuário do Telegram não foi encontrado no nosso sistema.")
-            return
-
-        tarefas_atuais = database.listar_tarefas_do_dia_por_funcionario(funcionario_aceitou.FuncionarioID)
-        ids_tarefas_atuais = [t.TarefaID for t in tarefas_atuais]
-        if tarefa_id in ids_tarefas_atuais:
-            await context.bot.send_message(chat_id=user.id, text="Você já tem essa tarefa na sua lista de hoje ou ela já foi pega por outro colega. Obrigado pelo interesse!")
-            # Edita a mensagem do grupo para refletir que a tarefa já foi pega
-            try:
-                await query.edit_message_text(text=f"{query.message.text}\n\n--- TAREFA JÁ ATRIBUÍDA ---")
-            except:
-                pass # Ignora se não conseguir editar
+            await context.bot.send_message(chat_id=user.id, text="Seu usuário do Telegram não foi encontrado.")
             return
 
         # --- LÓGICA CORRIGIDA E ROBUSTA ---
-        # 1. Atribui a tarefa e captura o novo ID da atribuição
-        novo_atribuicao_id = database.atribuir_tarefa(tarefa_id, funcionario_aceitou.FuncionarioID, 'Unica', None)
-        
-        # 2. Busca os detalhes da tarefa de forma segura, usando o ID que acabamos de obter
-        tarefa_info = database.buscar_tarefa_por_atribuicao(novo_atribuicao_id)
+        # 1. Chama a nova função transacional do banco
+        novo_atribuicao_id = database.verificar_e_aceitar_tarefa_de_folga(tarefa_id, funcionario_aceitou.FuncionarioID)
+
+        # 2. Busca os detalhes da tarefa (apenas para a mensagem de confirmação)
+        tarefa_info = database.buscar_tarefa_por_atribuicao(novo_atribuicao_id) if novo_atribuicao_id else None
+
+        # 3. Verifica o resultado da transação
+        if novo_atribuicao_id:
+            # SUCESSO! A pessoa pegou a tarefa.
+            nova_mensagem_grupo = (
+                f"{query.message.text}\n\n"
+                f"--- MISSÃO REIVINDICADA! ---\n"
+                f"✅ **{funcionario_aceitou.NomeCompleto}** assumiu a tarefa."
+            )
+            # Tenta editar a mensagem do grupo para "travar" (remover o botão)
+            try:
+                await query.edit_message_text(text=nova_mensagem_grupo, reply_markup=None)
+            except Exception as e:
+                logger.warning(f"Não foi possível editar a msg de 'aceitar_folga_' (provavelmente já editada): {e}")
+
+            # Envia a confirmação privada
+            await context.bot.send_message(
+                chat_id=user.id,
+                text=f"🚀 Você assumiu a missão extra '{tarefa_info.Titulo}'! Ela já está na sua lista de /tarefas. Bom trabalho!"
+            )
+        else:
+            # FALHA! (Função retornou False ou None)
+            # Avisa o usuário que clicou (mas não conseguiu) via popup
+            await query.answer("Que pena! Parece que outro colega já pegou esta missão.", show_alert=True)
         # --- FIM DA CORREÇÃO ---
-        
-        nova_mensagem_grupo = (
-            f"{query.message.text}\n\n"
-            f"--- MISSÃO REIVINDICADA! ---\n"
-            f"✅ **{funcionario_aceitou.NomeCompleto}** assumiu a tarefa."
-        )
-        await query.edit_message_text(text=nova_mensagem_grupo, reply_markup=None)
-        await context.bot.send_message(
-            chat_id=user.id,
-            text=f"🚀 Você assumiu a missão extra '{tarefa_info.Titulo}'! Ela já está na sua lista de /tarefas. Bom trabalho!"
-        )
+
+
 
     # --- LÓGICA DE VISUALIZAÇÃO DE PENDÊNCIAS (GESTOR) ---
     elif data.startswith("ver_pendencias_"):
