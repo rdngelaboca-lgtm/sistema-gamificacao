@@ -757,9 +757,11 @@ def listar_entregas_pendentes():
     return []
 # Em database.py, substitua a função antiga por esta versão mais simples e correta:
 
+# Em database.py, SUBSTITUA a função aprovar_entrega por esta:
+
 def aprovar_entrega(entrega_id, funcionario_id, pontos):
     """
-    (VERSÃO FINAL COM SALDO E TRATAMENTO DE ERRO ROBUSTO)
+    (VERSÃO CORRIGIDA - NÃO SOBRESCREVE DataEnvio)
     Aprova uma entrega, registra os pontos, ADICIONA OS PONTOS AO SALDO GERAL,
     verifica conquistas e garante rollback em caso de erro.
     """
@@ -772,23 +774,23 @@ def aprovar_entrega(entrega_id, funcionario_id, pontos):
 
     try:
         cursor = conn.cursor()
-        # 1. Atualiza o status E A DATA DE ENVIO (para refletir a data da aprovação)
-        # Isso corrige o Pódio Diário e o Feed de Atividades Recentes.
+
+        # --- CORREÇÃO APLICADA AQUI ---
+        # Removemos a atualização do DataEnvio. Agora, apenas o status e os pontos são definidos.
+        # O DataEnvio original (do momento da submissão) é preservado.
+        # (Opcional: Adicionar "DataValidacao = GETDATE()" se a coluna existir)
         sql_update_entrega = """
             UPDATE Entregas 
-            SET StatusValidacao = 'Aprovada', PontosGanhos = ?, DataEnvio = GETDATE() 
+            SET StatusValidacao = 'Aprovada', PontosGanhos = ?
             WHERE EntregaID = ?
         """
+        # --- FIM DA CORREÇÃO ---
+
         cursor.execute(sql_update_entrega, pontos, entrega_id)
-        logger.debug(f"UPDATE Entregas (com GETDATE()) executado para EntregaID {entrega_id}.")
+        logger.debug(f"UPDATE Entregas executado para EntregaID {entrega_id}.")
 
 
         # 2. Adiciona os pontos ao saldo (delegação para função com seu próprio tratamento)
-        # Chamamos a função aqui dentro do try principal. Se ela falhar e não tratar
-        # internamente e relançar a exceção, o rollback abaixo será acionado.
-        # Se ela tratar internamente e retornar False/None, a transação continua,
-        # o que pode ser aceitável dependendo da criticidade do saldo vs. entrega.
-        # Assumindo que adicionar_pontos_ao_saldo é robusta e loga seus erros.
         adicionar_pontos_ao_saldo(funcionario_id, pontos)
         logger.debug(f"adicionar_pontos_ao_saldo chamado para FuncionarioID {funcionario_id} com {pontos} pontos.")
 
@@ -797,12 +799,10 @@ def aprovar_entrega(entrega_id, funcionario_id, pontos):
         logger.info(f"Entrega {entrega_id} aprovada e {pontos} pontos adicionados ao saldo de FuncionarioID {funcionario_id}. Commit realizado.")
 
         # 4. Verifica conquistas (após o commit principal)
-        # Esta função já possui tratamento de erro robusto internamente.
         novas_conquistas = verificar_e_conceder_conquistas(funcionario_id)
         logger.debug(f"Verificação de conquistas concluída para FuncionarioID {funcionario_id}. Novas conquistas: {len(novas_conquistas)}")
 
     except pyodbc.Error as db_err:
-        # Se qualquer operação de banco DENTRO deste try falhar, desfaz TUDO.
         logger.exception(f"Erro de Banco de Dados Crítico ao aprovar entrega {entrega_id}. Iniciando Rollback: {db_err}")
         if conn:
             try:
@@ -813,7 +813,6 @@ def aprovar_entrega(entrega_id, funcionario_id, pontos):
         novas_conquistas = [] # Garante retorno vazio em caso de erro
 
     except Exception as e:
-        # Captura outros erros inesperados
         logger.exception(f"Erro inesperado ao aprovar entrega {entrega_id}. Iniciando Rollback: {e}")
         if conn:
             try:
@@ -824,7 +823,6 @@ def aprovar_entrega(entrega_id, funcionario_id, pontos):
         novas_conquistas = [] # Garante retorno vazio em caso de erro
 
     finally:
-        # Garante que a conexão seja sempre fechada
         if conn:
             conn.close()
             logger.debug(f"Conexão do banco fechada para aprovação da entrega {entrega_id}.")
@@ -1579,6 +1577,33 @@ def registrar_pontos_por_leitura(funcionario_id, pontos, titulo_documento):
             logger.error(f"ERRO ao registrar pontos por leitura: {e}")
         finally:
             conn.close()
+
+
+# Em database.py, adicione esta nova função (pode ser perto da 'registrar_pontos_por_leitura')
+
+def registrar_pontos_de_bonus(funcionario_id, pontos, motivo_log, tarefa_id_bonus):
+    """
+    Insere um registro na tabela Entregas para contabilizar pontos de bônus
+    contra um TAREFA_ID específico (ex: Meta, Feedback, Conquista).
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                INSERT INTO Entregas
+                (TarefaID, FuncionarioID, StatusValidacao, PontosGanhos, DataEnvio, MotivoRecusa)
+                VALUES (?, ?, 'Aprovada', ?, GETDATE(), ?)
+            """
+            cursor.execute(sql, tarefa_id_bonus, funcionario_id, pontos, motivo_log)
+            conn.commit()
+            logger.info(f"--> [BÔNUS] {pontos} pts (TarefaID: {tarefa_id_bonus}) registrados para FuncID {funcionario_id}. Motivo: {motivo_log}")
+        except Exception as e:
+            logger.error(f"ERRO ao registrar pontos de bônus (TarefaID: {tarefa_id_bonus}): {e}", exc_info=True)
+        finally:
+            conn.close()
+
+
 
 def listar_comunicados_com_status(filtro_titulo=None):
     """
@@ -2589,13 +2614,21 @@ def verificar_e_conceder_conquistas(funcionario_id):
 
                     # Concede os pontos de bônus, se houver
                     if conquista.PontosBonus > 0:
-                        registrar_pontos_por_leitura( # Reutiliza a função
+
+                        # --- CHAMADA CORRIGIDA ---
+                        # (Assumindo que temos um ID para "Bônus de Conquista",
+                        # se não tiver, podemos manter o TAREFA_ID_LEITURA como fallback
+                        # ou criar um TAREFA_ID_CONQUISTA. Vamos usar TAREFA_ID_LEITURA
+                        # por enquanto, mas com a função nova.)
+
+                        motivo_log = f"Bônus pela conquista: {conquista.Nome}"
+
+                        registrar_pontos_de_bonus(
                             funcionario_id,
                             conquista.PontosBonus,
-                            f"Bônus pela conquista: {conquista.Nome}"
+                            motivo_log,
+                            config.TAREFA_ID_LEITURA # <-- Manter este ID se for o "ID de Bônus" geral
                         )
-                        # NÃO PRECISAMOS MAIS CHAMAR adicionar_pontos_ao_saldo AQUI
-                        # pois já ajustamos o telegram_bot.py para fazer isso DEPOIS que esta função retorna.
                         
                 except pyodbc.IntegrityError:
                     # Ignora erro se, por alguma concorrência rara, a conquista já foi inserida
@@ -3070,6 +3103,129 @@ def listar_funcionarios_por_setor(setor):
         finally:
             conn.close()
     return []
+
+
+# Em database.py, adicione esta função auxiliar (pode ser perto de 'registrar_pontos_por_meta_equipe')
+
+def _reverter_pontos_meta_diaria(apuracao_id, pontos_a_remover, meta_principal_id):
+    """
+    Função auxiliar interna para reverter pontos de meta diária.
+    Remove o valor do saldo e exclui o registro de 'Entregas'.
+    """
+    conn = get_db_connection()
+    if not conn:
+        return False
+
+    try:
+        cursor = conn.cursor()
+        # 1. Buscar o setor alvo da meta principal associada
+        cursor.execute("SELECT SetorAlvo FROM MetasPrincipais WHERE MetaPrincipalID = ?", meta_principal_id)
+        meta_detalhes = cursor.fetchone()
+        if not meta_detalhes or not meta_detalhes.SetorAlvo:
+            logger.error(f"Clawback falhou: Não foi possível encontrar SetorAlvo para MetaID {meta_principal_id} (ApuracaoID: {apuracao_id})")
+            return False
+
+        setor_alvo = meta_detalhes.SetorAlvo
+
+        # 2. Buscar os funcionários desse setor
+        funcionarios_do_setor = listar_funcionarios_por_setor(setor_alvo) # Reusa a função existente
+        if not funcionarios_do_setor:
+            logger.warning(f"Clawback: Nenhum funcionário encontrado no setor '{setor_alvo}' para reverter pontos.")
+            return True # Não é um erro, apenas não há ninguém para reverter
+
+        ids_funcionarios = [f.FuncionarioID for f in funcionarios_do_setor]
+        placeholders = ','.join('?' * len(ids_funcionarios))
+
+        # 3. Remover os pontos do saldo desses funcionários
+        sql_saldo = f"UPDATE Funcionarios SET SaldoPontos = SaldoPontos - ? WHERE FuncionarioID IN ({placeholders})"
+        params_saldo = [pontos_a_remover] + ids_funcionarios
+        cursor.execute(sql_saldo, params_saldo)
+        logger.info(f"Clawback: Saldo de {len(ids_funcionarios)} funcionários (Setor: {setor_alvo}) revertido em -{pontos_a_remover} pontos.")
+
+        # 4. Excluir os registros de 'Entregas' que foram gerados por esta meta
+        # (Usamos o ApuracaoID, que deveria estar no MotivoRecusa, mas como não está, filtramos pela data e TarefaID)
+        # NOTA: Esta é a parte mais frágil. Idealmente, o ApuracaoID deveria ser salvo na Entrega.
+        # Vamos usar uma lógica baseada na data da apuração.
+        cursor.execute("SELECT DataApuracao FROM MetasDiariasApuracoes WHERE ApuracaoID = ?", apuracao_id)
+        data_apuracao_obj = cursor.fetchone().DataApuracao
+
+        sql_del_entregas = f"""
+            DELETE FROM Entregas
+            WHERE TarefaID = ? 
+              AND CONVERT(DATE, DataEnvio) = CONVERT(DATE, ?)
+              AND FuncionarioID IN ({placeholders})
+              AND PontosGanhos = ?
+        """
+        params_del = [config.TAREFA_ID_PONTOS_META, data_apuracao_obj] + ids_funcionarios + [pontos_a_remover]
+        cursor.execute(sql_del_entregas, params_del)
+        logger.info(f"Clawback: Registros de 'Entregas' da meta diária ({data_apuracao_obj}) para o setor '{setor_alvo}' excluídos.")
+
+        conn.commit()
+        return True
+
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"ERRO CRÍTICO no clawback de pontos (ApuracaoID: {apuracao_id}): {e}", exc_info=True)
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+# Em database.py, SUBSTITUA a função 'excluir_apuracao_diaria' por esta:
+
+def excluir_apuracao_diaria(meta_principal_id, data_apuracao):
+    """
+    Exclui um registro de apuração diária específico.
+    Se esse registro gerou prêmios, executa o 'clawback' (reversão) dos pontos.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+
+            # 1. Buscar os detalhes ANTES de excluir
+            sql_find = """
+                SELECT ApuracaoID, PontosMetaDiariaGanhos 
+                FROM MetasDiariasApuracoes 
+                WHERE MetaPrincipalID = ? AND DataApuracao = ?
+            """
+            cursor.execute(sql_find, meta_principal_id, data_apuracao)
+            apuracao_dados = cursor.fetchone()
+
+            if not apuracao_dados:
+                logger.warning(f"Exclusão falhou: Apuração para MetaID {meta_principal_id} na data {data_apuracao} não encontrada.")
+                return False
+
+            apuracao_id, pontos_gerados = apuracao_dados
+            pontos_gerados = pontos_gerados or 0 # Garante que não seja None
+
+            # 2. Se gerou pontos, reverter
+            if pontos_gerados > 0:
+                logger.warning(f"Excluindo ApuracaoID {apuracao_id} que gerou {pontos_gerados} pontos. Iniciando Clawback...")
+                if not _reverter_pontos_meta_diaria(apuracao_id, pontos_gerados, meta_principal_id):
+                    # Se a reversão falhar, abortamos a exclusão
+                    logger.error("Falha no Clawback. A exclusão da apuração foi ABORTADA.")
+                    conn.rollback()
+                    return False
+
+            # 3. Excluir o registro de apuração
+            sql_delete = "DELETE FROM MetasDiariasApuracoes WHERE ApuracaoID = ?"
+            cursor.execute(sql_delete, apuracao_id)
+
+            conn.commit()
+            logger.info(f"ApuracaoID {apuracao_id} (Data: {data_apuracao}) excluída com sucesso.")
+            return cursor.rowcount > 0
+
+        except Exception as e:
+            logger.error(f"ERRO ao excluir apuração diária: {e}", exc_info=True)
+            if conn: conn.rollback()
+            return False
+        finally:
+            if conn:
+                conn.close()
+    return False
+
+
 
 def registrar_pontos_por_meta_equipe(lista_funcionarios, pontos_ganhos, meta_vendas, total_vendido):
     """
@@ -4147,11 +4303,15 @@ def verificar_e_premiar_meta_diaria(apuracao_id, data_apuracao_str, valor_dia, m
 
                             # 2. Registra a pontuação no histórico (usando a tarefa TAREFA_ID_PONTOS_META)
                             motivo_log = f"Meta Diária Atingida ({data_apuracao_str}) - Setor: {setor_alvo_diario}"
-                            registrar_pontos_por_leitura( # Reutiliza a função para log simples (Chamada interna)
+
+                            # --- CHAMADA CORRIGIDA ---
+                            registrar_pontos_de_bonus(
                                 funcionario.FuncionarioID,
                                 pontos_premio_diario,
-                                motivo_log
+                                motivo_log,
+                                config.TAREFA_ID_PONTOS_META # <-- Usa o ID correto
                             )
+                            # --- FIM DA CORREÇÃO ---
 
                             # 3. Envia a notificação individual
                             if funcionario.ChatIDTelegram:
@@ -4217,4 +4377,55 @@ def registrar_denuncia_anonima(mensagem):
             if conn:
                 conn.close()
     return None
+
+# Em database.py, adicione esta nova função (pode ser perto de 'aceitar_tarefa_de_grupo')
+
+def verificar_e_aceitar_tarefa_de_folga(tarefa_id, funcionario_id):
+    """
+    Verifica se uma tarefa de folga (baseada no TarefaID) já foi aceita hoje
+    por qualquer pessoa. Se não, atribui ao funcionário e retorna True.
+    Executa de forma transacional para evitar race conditions.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Inicia a transação (implícito, mas o commit/rollback é o controle)
+
+            # 1. Verifica se alguém já pegou uma 'Unica' desta TarefaID HOJE
+            sql_check = """
+                SELECT 1
+                FROM TarefasAtribuidas
+                WHERE TarefaID = ?
+                  AND TipoFrequencia = 'Unica'
+                  AND CONVERT(date, DataInicioVigencia) = CONVERT(date, GETDATE())
+            """
+            cursor.execute(sql_check, tarefa_id)
+
+            if cursor.fetchone():
+                # Alguém já pegou!
+                conn.rollback() # Cancela a transação
+                return False # Retorna Falha (já foi pega)
+
+            # 2. Se ninguém pegou, atribui ao funcionário
+            sql_insert = """
+                INSERT INTO TarefasAtribuidas
+                (TarefaID, FuncionarioID, TipoFrequencia, ValorFrequencia, DataInicioVigencia, DataAgendamento)
+                VALUES (?, ?, 'Unica', NULL, GETDATE(), GETDATE());
+                SELECT SCOPE_IDENTITY();
+            """
+            cursor.execute(sql_insert, tarefa_id, funcionario_id)
+            cursor.nextset()
+            novo_atribuicao_id = cursor.fetchone()[0]
+
+            conn.commit() # Confirma a transação
+            return novo_atribuicao_id # Retorna o ID da nova atribuição (Sucesso)
+
+        except Exception as e:
+            logger.error(f"ERRO CRÍTICO em verificar_e_aceitar_tarefa_de_folga: {e}")
+            conn.rollback()
+            return None # Retorna None (Erro)
+        finally:
+            conn.close()
+    return None # Retorna None (Erro de conexão)
 
