@@ -58,16 +58,17 @@ logger.info(f"*** Logging configurado para o módulo: {__name__} ***")
 
 
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk, messagebox
 from tkcalendar import DateEntry
 from datetime import datetime, date, timedelta
 import database # Importa nosso módulo de banco de dados
+import config # Necessário para buscar_extrato_pontos_funcionario
 
-class AppAnalyzer:
+class AppExtratoPontos: # <<< NOME DA CLASSE ALTERADO
     def __init__(self, root):
         self.root = root
-        self.root.title("Analisador de Pontuação e Ranking")
-        self.root.geometry("1000x700")
+        self.root.title("Extrato Detalhado de Pontos") # <<< TÍTULO ALTERADO
+        self.root.geometry("900x600") # <<< Geometria pode ser ajustada
 
         self.dados_funcionarios = {}
 
@@ -75,10 +76,9 @@ class AppAnalyzer:
         main_frame = ttk.Frame(root, padding="10")
         main_frame.pack(fill=tk.BOTH, expand=True)
         main_frame.columnconfigure(0, weight=1)
-        main_frame.rowconfigure(2, weight=1) # Linha das tarefas atribuídas
-        main_frame.rowconfigure(4, weight=1) # Linha das entregas
+        main_frame.rowconfigure(1, weight=1) # Linha do Extrato expande
 
-        # --- Frame de Filtros ---
+        # --- Frame de Filtros (Mantido, mas simplificado) ---
         frame_filtros = ttk.LabelFrame(main_frame, text="Filtros", padding="10")
         frame_filtros.grid(row=0, column=0, sticky="ew", pady=(0, 10))
 
@@ -89,7 +89,6 @@ class AppAnalyzer:
         ttk.Label(frame_filtros, text="De:").pack(side=tk.LEFT, padx=(15, 5))
         self.date_inicio = DateEntry(frame_filtros, width=12, date_pattern='dd/mm/yyyy', locale='pt_BR')
         self.date_inicio.pack(side=tk.LEFT)
-        # Define data inicial para o primeiro dia do mês atual
         hoje = date.today()
         primeiro_dia_mes = hoje.replace(day=1)
         self.date_inicio.set_date(primeiro_dia_mes)
@@ -97,88 +96,63 @@ class AppAnalyzer:
         ttk.Label(frame_filtros, text="Até:").pack(side=tk.LEFT, padx=5)
         self.date_fim = DateEntry(frame_filtros, width=12, date_pattern='dd/mm/yyyy', locale='pt_BR')
         self.date_fim.pack(side=tk.LEFT)
-        self.date_fim.set_date(hoje) # Data final padrão é hoje
+        self.date_fim.set_date(hoje)
 
-        btn_analisar = ttk.Button(frame_filtros, text="Analisar Pontuação", command=self.analisar_pontos)
-        btn_analisar.pack(side=tk.LEFT, padx=20)
+        btn_buscar = ttk.Button(frame_filtros, text="Buscar Extrato", command=self.buscar_extrato) # <<< COMANDO ALTERADO
+        btn_buscar.pack(side=tk.LEFT, padx=20)
 
-        # --- Frame de Resumo ---
-        frame_resumo = ttk.LabelFrame(main_frame, text="Resumo Calculado", padding="10")
-        frame_resumo.grid(row=1, column=0, sticky="ew", pady=(0, 10))
-        self.lbl_pontos_possiveis = ttk.Label(frame_resumo, text="Pontos Possíveis Calculados: --", font=("Arial", 10, "bold"))
-        self.lbl_pontos_possiveis.pack(side=tk.LEFT, padx=10)
-        self.lbl_pontos_ganhos = ttk.Label(frame_resumo, text="Pontos Ganhos (Entregas): --", font=("Arial", 10, "bold"))
-        self.lbl_pontos_ganhos.pack(side=tk.LEFT, padx=10)
-        self.lbl_desempenho = ttk.Label(frame_resumo, text="Desempenho Calculado: --%", font=("Arial", 10, "bold"))
-        self.lbl_desempenho.pack(side=tk.LEFT, padx=10)
-        self.lbl_folga = ttk.Label(frame_resumo, text="Dia de Folga: --", font=("Arial", 10))
-        self.lbl_folga.pack(side=tk.LEFT, padx=10)
+        # --- Frame Extrato ---
+        frame_extrato = ttk.LabelFrame(main_frame, text="Extrato de Pontos", padding="10")
+        frame_extrato.grid(row=1, column=0, sticky="nsew") # Ocupa a linha 1
+        frame_extrato.rowconfigure(1, weight=1) # Linha da Treeview expande
+        frame_extrato.columnconfigure(0, weight=1) # Coluna da Treeview expande
 
+        # Labels Saldo Inicial/Final
+        frame_saldos = ttk.Frame(frame_extrato)
+        frame_saldos.grid(row=0, column=0, sticky="ew", pady=(0, 5))
+        self.lbl_saldo_inicial = ttk.Label(frame_saldos, text="Saldo Inicial no Período: --", font=("Arial", 10, "bold"))
+        self.lbl_saldo_inicial.pack(side=tk.LEFT, padx=10)
+        self.lbl_saldo_final = ttk.Label(frame_saldos, text="Saldo Final no Período: --", font=("Arial", 10, "bold"))
+        self.lbl_saldo_final.pack(side=tk.RIGHT, padx=10)
 
-        # --- Frame Tarefas Atribuídas ---
-        frame_atribuidas = ttk.LabelFrame(main_frame, text="Tarefas Atribuídas no Período (Ativas ou Encerradas)", padding="10")
-        frame_atribuidas.grid(row=2, column=0, sticky="nsew", pady=(0, 10))
-        frame_atribuidas.rowconfigure(0, weight=1)
-        frame_atribuidas.columnconfigure(0, weight=1)
+        # Treeview do Extrato
+        cols_ext = ('Data/Hora', 'Descrição/Origem', 'Pontos (+/-)', 'Saldo na Data') # <<< COLUNAS ALTERADAS
+        self.tree_extrato = ttk.Treeview(frame_extrato, columns=cols_ext, show='headings') # <<< NOVO TREEVIEW
 
-        cols_atr = ('ID', 'Título', 'Pts', 'Freq.', 'Valor', 'Início Vig.', 'Fim Vig.', 'Aceite')
-        self.tree_atribuidas = ttk.Treeview(frame_atribuidas, columns=cols_atr, show='headings', height=6)
-        for col in cols_atr: self.tree_atribuidas.heading(col, text=col)
-        self.tree_atribuidas.column('ID', width=40); self.tree_atribuidas.column('Título', width=250)
-        self.tree_atribuidas.column('Pts', width=40); self.tree_atribuidas.column('Freq.', width=60)
-        self.tree_atribuidas.column('Valor', width=50); self.tree_atribuidas.column('Início Vig.', width=100)
-        self.tree_atribuidas.column('Fim Vig.', width=100); self.tree_atribuidas.column('Aceite', width=100)
-        self.tree_atribuidas.pack(fill=tk.BOTH, expand=True)
+        # Configuração das Colunas
+        self.tree_extrato.heading('Data/Hora', text='Data/Hora')
+        self.tree_extrato.column('Data/Hora', width=150, anchor='center')
+        self.tree_extrato.heading('Descrição/Origem', text='Descrição/Origem')
+        self.tree_extrato.column('Descrição/Origem', width=350) # Maior largura
+        self.tree_extrato.heading('Pontos (+/-)', text='Pontos (+/-)')
+        self.tree_extrato.column('Pontos (+/-)', width=100, anchor='e') # Alinhado à direita
+        self.tree_extrato.heading('Saldo na Data', text='Saldo na Data')
+        self.tree_extrato.column('Saldo na Data', width=120, anchor='e') # Alinhado à direita
 
-        # --- Frame Entregas Aprovadas ---
-        frame_entregas = ttk.LabelFrame(main_frame, text="Entregas Aprovadas no Período", padding="10")
-        frame_entregas.grid(row=3, column=0, sticky="nsew") # Mudado para row=3
-        frame_entregas.rowconfigure(0, weight=1)             # Mudado para row=0
-        frame_entregas.columnconfigure(0, weight=1)          # Mudado para column=0
+        # Adiciona Scrollbar
+        scrollbar = ttk.Scrollbar(frame_extrato, orient="vertical", command=self.tree_extrato.yview)
+        self.tree_extrato.configure(yscrollcommand=scrollbar.set)
 
-        cols_ent = ('ID Entrega', 'Tarefa', 'Data Envio', 'Pts Ganhos')
-        self.tree_entregas = ttk.Treeview(frame_entregas, columns=cols_ent, show='headings', height=6)
-        for col in cols_ent: self.tree_entregas.heading(col, text=col)
-        self.tree_entregas.column('ID Entrega', width=80); self.tree_entregas.column('Tarefa', width=300)
-        self.tree_entregas.column('Data Envio', width=150); self.tree_entregas.column('Pts Ganhos', width=100)
-        self.tree_entregas.grid(row=0, column=0, sticky="nsew") # Adicionado grid aqui
-
-
-        # --- Frame de Botões de Edição ---
-        frame_botoes_edicao = ttk.Frame(main_frame, padding="5") # Mudado para row=4
-        frame_botoes_edicao.grid(row=4, column=0, sticky="ew") # Adicionado grid aqui
-
-        btn_editar_pontos = ttk.Button(frame_botoes_edicao, text="Editar Pontos da Entrega Selecionada", command=self.editar_pontos_entrega_selecionada)
-        btn_editar_pontos.pack(side=tk.LEFT, padx=5)
-
-        btn_excluir_entrega = ttk.Button(frame_botoes_edicao, text="Excluir Entrega Selecionada", command=self.excluir_entrega_selecionada)
-        btn_excluir_entrega.pack(side=tk.LEFT, padx=5)
-        # --- FIM DAS MUDANÇAS ---
-
+        self.tree_extrato.grid(row=1, column=0, sticky="nsew") # Treeview na linha 1
+        scrollbar.grid(row=1, column=1, sticky="ns")
 
         self.carregar_funcionarios()
 
     def carregar_funcionarios(self):
         """Carrega a lista de funcionários para o combobox."""
         funcionarios = database.listar_funcionarios()
-        # Guarda Nome -> ID no dicionário
         self.dados_funcionarios = {f.NomeCompleto: f.FuncionarioID for f in funcionarios}
-        # Popula o combobox apenas com os nomes
         self.combo_funcionarios['values'] = list(self.dados_funcionarios.keys())
         if self.combo_funcionarios['values']:
-            self.combo_funcionarios.current(0) # Seleciona o primeiro por padrão
+            self.combo_funcionarios.current(0)
 
-    def analisar_pontos(self):
-        """Função principal que busca os dados e atualiza a interface."""
+    def buscar_extrato(self): # <<< NOME DA FUNÇÃO ALTERADO
+        """Busca o extrato de pontos e atualiza a interface."""
         # Limpa resultados anteriores
-        for tree in [self.tree_atribuidas, self.tree_entregas]:
-            for i in tree.get_children():
-                tree.delete(i)
-        self.lbl_pontos_possiveis.config(text="Pontos Possíveis Calculados: --")
-        self.lbl_pontos_ganhos.config(text="Pontos Ganhos (Entregas): --")
-        self.lbl_desempenho.config(text="Desempenho Calculado: --%")
-        self.lbl_folga.config(text="Dia de Folga: --")
-
+        for i in self.tree_extrato.get_children():
+            self.tree_extrato.delete(i)
+        self.lbl_saldo_inicial.config(text="Saldo Inicial no Período: --")
+        self.lbl_saldo_final.config(text="Saldo Final no Período: --")
 
         nome_selecionado = self.combo_funcionarios.get()
         if not nome_selecionado:
@@ -193,97 +167,42 @@ class AppAnalyzer:
             messagebox.showerror("Erro", "A data de início não pode ser posterior à data de fim.")
             return
 
-        # Busca dados no banco
+        # Busca dados no banco usando a NOVA função
         try:
-            atribuicoes = database.buscar_atribuicoes_periodo(funcionario_id, data_inicio, data_fim)
-            entregas = database.buscar_entregas_aprovadas_periodo(funcionario_id, data_inicio, data_fim)
-            # Recalcula os pontos possíveis usando a lógica de debug
-            pontos_possiveis = database.calcular_pontos_possiveis_debug(funcionario_id, data_inicio, data_fim)
-            # Reusa a função para somar pontos ganhos
-            pontos_ganhos = database.calcular_pontos_ganhos_no_periodo(funcionario_id, data_inicio, data_fim)
-            # Busca dados do funcionário para pegar a folga
-            funcionario_db = database.buscar_funcionario_por_id(funcionario_id)
-            dia_folga_num = funcionario_db.DiaDeFolga if funcionario_db else 0
-            dias_semana_mapa_rev = {1: 'Dom', 2: 'Seg', 3: 'Ter', 4: 'Qua', 5: 'Qui', 6: 'Sex', 7: 'Sab', 0: 'N/A'}
-            dia_folga_str = dias_semana_mapa_rev.get(dia_folga_num, 'N/A')
-
+            extrato_completo, saldo_inicial_periodo = database.buscar_extrato_pontos_funcionario(funcionario_id, data_inicio, data_fim)
         except Exception as e:
-            messagebox.showerror("Erro de Banco", f"Erro ao buscar dados: {e}")
+            messagebox.showerror("Erro de Banco", f"Erro ao buscar extrato: {e}")
+            logger.exception("Erro em buscar_extrato:") # Loga o traceback
             return
 
-        # Preenche a lista de Tarefas Atribuídas
-        for atr in atribuicoes:
-            inicio_f = atr.DataInicioVigencia.strftime('%d/%m/%Y') if atr.DataInicioVigencia else ''
-            fim_f = atr.DataFimVigencia.strftime('%d/%m/%Y') if atr.DataFimVigencia else 'Ativa'
-            aceite_f = atr.DataAceite.strftime('%d/%m/%Y %H:%M') if atr.DataAceite else ''
-            self.tree_atribuidas.insert("", "end", values=(
-                atr.AtribuicaoID, atr.Titulo, atr.Pontos, atr.TipoFrequencia, atr.ValorFrequencia or '',
-                inicio_f, fim_f, aceite_f
-            ))
+        # Preenche a Treeview do Extrato
+        saldo_final_periodo = saldo_inicial_periodo # Começa com o saldo inicial
+        if not extrato_completo:
+            self.tree_extrato.insert("", "end", values=("", "Nenhuma transação no período.", "", ""))
+        else:
+            for transacao in extrato_completo:
+                data_hora_f = transacao['DataTransacao'].strftime('%d/%m/%Y %H:%M:%S') if transacao['DataTransacao'] else 'N/A'
+                pontos_f = f"+{transacao['Pontos']}" if transacao['Pontos'] > 0 else str(transacao['Pontos'])
+                saldo_f = transacao.get('SaldoNaData', 'N/A') # Pega o saldo calculado no DB
 
-        # Preenche a lista de Entregas Aprovadas
-        for ent in entregas:
-            envio_f = ent.DataEnvio.strftime('%d/%m/%Y %H:%M')
-            self.tree_entregas.insert("", "end", values=(
-                ent.EntregaID, ent.Titulo, envio_f, ent.PontosGanhos or 0
-            ))
+                # Atualiza o saldo final com a última transação
+                if saldo_f != 'N/A':
+                     saldo_final_periodo = saldo_f
 
-        # Calcula e exibe o resumo
-        desempenho = (pontos_ganhos / pontos_possiveis) * 100 if pontos_possiveis > 0 else 0
-        self.lbl_pontos_possiveis.config(text=f"Pontos Possíveis Calculados: {pontos_possiveis}")
-        self.lbl_pontos_ganhos.config(text=f"Pontos Ganhos (Entregas): {pontos_ganhos}")
-        self.lbl_desempenho.config(text=f"Desempenho Calculado: {desempenho:.2f}%")
-        self.lbl_folga.config(text=f"Dia de Folga: {dia_folga_str}")
+                self.tree_extrato.insert("", "end", values=(
+                    data_hora_f,
+                    transacao['Descricao'],
+                    pontos_f,
+                    saldo_f
+                ))
 
-
-    def excluir_entrega_selecionada(self):
-        """Exclui a entrega selecionada na tree_entregas."""
-        selecionado = self.tree_entregas.focus()
-        if not selecionado:
-            messagebox.showwarning("Aviso", "Selecione uma entrega da lista 'Entregas Aprovadas'.")
-            return
-
-        entrega_id = self.tree_entregas.item(selecionado, 'values')[0]
-        tarefa_titulo = self.tree_entregas.item(selecionado, 'values')[1]
-
-        if messagebox.askyesno("Confirmar Exclusão", f"Tem certeza que deseja EXCLUIR PERMANENTEMENTE a entrega da tarefa '{tarefa_titulo}' (ID: {entrega_id})?\n\nIsso afetará o ranking e o saldo de pontos."):
-            try:
-                if database.excluir_entrega(entrega_id):
-                    messagebox.showinfo("Sucesso", "Entrega excluída com sucesso.")
-                    self.analisar_pontos() # Reanalisa para atualizar os totais
-                else:
-                    messagebox.showerror("Erro", "Falha ao excluir a entrega do banco.")
-            except Exception as e:
-                messagebox.showerror("Erro Inesperado", f"Ocorreu um erro: {e}")
-
-    def editar_pontos_entrega_selecionada(self):
-        """Abre um popup para editar os pontos ganhos da entrega selecionada."""
-        selecionado = self.tree_entregas.focus()
-        if not selecionado:
-            messagebox.showwarning("Aviso", "Selecione uma entrega da lista 'Entregas Aprovadas'.")
-            return
-
-        entrega_id = self.tree_entregas.item(selecionado, 'values')[0]
-        pontos_atuais = self.tree_entregas.item(selecionado, 'values')[3]
-
-        novos_pontos = simpledialog.askinteger("Editar Pontos Ganhos",
-                                                f"Digite o novo valor de pontos para a Entrega ID {entrega_id}:",
-                                                initialvalue=pontos_atuais,
-                                                minvalue=0, # Pontos não podem ser negativos
-                                                parent=self.root)
-
-        if novos_pontos is not None: # Se o usuário não cancelou
-            try:
-                if database.editar_pontos_entrega(entrega_id, novos_pontos):
-                    messagebox.showinfo("Sucesso", "Pontos da entrega atualizados com sucesso.")
-                    self.analisar_pontos() # Reanalisa para atualizar os totais
-                else:
-                    messagebox.showerror("Erro", "Falha ao atualizar os pontos no banco.")
-            except Exception as e:
-                messagebox.showerror("Erro Inesperado", f"Ocorreu um erro: {e}")
+        # Atualiza os labels de Saldo Inicial e Final
+        self.lbl_saldo_inicial.config(text=f"Saldo Inicial no Período: {saldo_inicial_periodo}")
+        self.lbl_saldo_final.config(text=f"Saldo Final no Período: {saldo_final_periodo}")
 
 
+# Início do Bloco Principal (fora da classe)
 if __name__ == "__main__":
     root = tk.Tk()
-    app = AppAnalyzer(root)
+    app = AppExtratoPontos(root) # <<< NOME DA CLASSE ALTERADO
     root.mainloop()
