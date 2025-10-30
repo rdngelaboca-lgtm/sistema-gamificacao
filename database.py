@@ -4016,3 +4016,38 @@ def verificar_e_premiar_meta_diaria(apuracao_id, data_apuracao_str, valor_dia, m
     except Exception as e:
         logger.exception(f"!!! ERRO GERAL durante a verificação/premiação da meta diária (ApuracaoID: {apuracao_id}): {e}")
 
+# ===================================================================
+# == INÍCIO DO MÓDULO DE DENÚNCIA ANÔNIMA ==========================
+# ===================================================================
+
+def registrar_denuncia_anonima(mensagem):
+    """
+    Salva uma nova denúncia/sugestão anônima.
+    IMPORTANTE: Não salva o FuncionarioID.
+    Retorna o ID da nova denúncia ou None se falhar.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                INSERT INTO DenunciasAnonimas (Mensagem) 
+                VALUES (?);
+                SELECT SCOPE_IDENTITY();
+            """
+            cursor.execute(sql, mensagem)
+            cursor.nextset()
+            novo_id = cursor.fetchone()[0]
+            conn.commit()
+            logger.info(f"Nova denúncia anônima (ID: {novo_id}) registrada com sucesso.")
+            return novo_id
+        except Exception as e:
+            logger.error(f"ERRO ao registrar denúncia anônima: {e}", exc_info=True)
+            if conn:
+                conn.rollback()
+            return None
+        finally:
+            if conn:
+                conn.close()
+    return None
+
