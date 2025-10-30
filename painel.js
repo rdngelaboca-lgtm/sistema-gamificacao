@@ -197,14 +197,28 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function renderizarMetaDiaria(meta) {
-        const containerEl = document.getElementById('container-meta-diaria');
-        if (!containerEl) return;
-        const barraEl = document.getElementById('meta-diaria-progresso-barra');
-        const textoEl = document.getElementById('meta-diaria-progresso-texto');
-        const atingidoEl = document.getElementById('meta-diaria-valor-atingido');
-        const totalEl = document.getElementById('meta-diaria-valor-total');
+    const containerEl = document.getElementById('container-meta-diaria');
+    if (!containerEl) return;
+    const barraEl = document.getElementById('meta-diaria-progresso-barra');
+    const textoEl = document.getElementById('meta-diaria-progresso-texto');
 
-        if (meta && meta.valor_meta_diaria > 0) {
+    // --- CORREÇÃO APLICADA AQUI ---
+    // Buscamos o container dos valores (que tem o ID)
+    const valoresContainerEl = document.getElementById('meta-diaria-valores');
+    if (!valoresContainerEl) {
+        console.error("Elemento #meta-diaria-valores não encontrado.");
+        return; 
+    }
+
+    // Buscamos os spans PELA CLASSE, dentro do container
+    // .valor-ocultavel:first-child -> Pega o primeiro span (Atingido)
+    // .valor-ocultavel:nth-child(2) -> Pega o segundo span (Total)
+    const atingidoEl = valoresContainerEl.querySelector('.valor-ocultavel:first-child');
+    const totalEl = valoresContainerEl.querySelector('.valor-ocultavel:nth-child(2)');
+    // --- FIM DA CORREÇÃO ---
+
+    // Adicionamos uma verificação de segurança para os novos seletores
+        if (meta && meta.valor_meta_diaria > 0 && atingidoEl && totalEl) {
             containerEl.style.display = 'flex';
             const percentual = (meta.valor_atingido_hoje / meta.valor_meta_diaria) * 100;
             barraEl.style.width = `${Math.min(percentual, 100)}%`;
