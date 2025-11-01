@@ -1222,11 +1222,14 @@ def calcular_ranking_desempenho(data_final_calculo=None, setor_filtro=None): # <
         funcionarios_todos = listar_funcionarios() #
         funcionarios_filtrados = []
         if setor_filtro == 'Cozinha':
+            # Filtro 1: Apenas quem tem 'Cozinha' no cargo
             funcionarios_filtrados = [f for f in funcionarios_todos if f.Cargo and 'Cozinha' in f.Cargo]
         elif setor_filtro == 'Loja':
-            funcionarios_filtrados = [f for f in funcionarios_todos if not f.Cargo or 'Cozinha' not in f.Cargo]
-        else: # Nenhum filtro ou filtro inválido, pega todos
+            # Filtro 2: Apenas quem tem 'Loja' OU 'Atendimento' no cargo
+            funcionarios_filtrados = [f for f in funcionarios_todos if f.Cargo and ('Loja' in f.Cargo or 'Atendimento' in f.Cargo)]
+        else: # Nenhum filtro ou filtro 'Geral'
             funcionarios_filtrados = funcionarios_todos
+
         # ------------------------------------
 
         if not funcionarios_filtrados: return [] # Retorna vazio se o setor não tiver funcionários
@@ -4375,7 +4378,7 @@ def verificar_e_premiar_meta_diaria(apuracao_id, data_apuracao_str, valor_dia, m
     except Exception as e:
         logger.exception(f"!!! ERRO GERAL durante a verificação/premiação da meta diária (ApuracaoID: {apuracao_id}): {e}")
 
-        
+
 def registrar_nota_fiscal(funcionario_id, file_id):
     """
     Salva uma nova Nota Fiscal na tabela de rastreio.
