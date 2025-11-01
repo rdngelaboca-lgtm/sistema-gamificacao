@@ -1206,60 +1206,57 @@ class App:
                 else: frame_semanal_ind.pack_forget(); frame_mensal_ind.pack_forget()
             frequencia_individual.trace_add("write", atualizar_visibilidade_individual); atualizar_visibilidade_individual()
             # --- Função de Confirmação Individual (sem alterações internas) ---
-# --- Função de Confirmação Individual (COM CORREÇÃO) ---
-            def confirmar_atribuicao_individual():
-                tipo_freq_selecionada = frequencia_individual.get()
-                valores_freq = []
-                # ... (lógica para obter valores_freq permanece a mesma) ...
-                if tipo_freq_selecionada == "Semanal":
-                    valores_freq = [val_db for _, (var, val_db) in dias_semana_vars_individual.items() if var.get()]
-                    if not valores_freq: messagebox.showerror("Erro", "Selecione pelo menos um dia da semana.", parent=popup); return
-                elif tipo_freq_selecionada == "Mensal":
-                    try: dia_mes = int(valor_mensal_individual.get()); assert 1 <= dia_mes <= 31; valores_freq.append(str(dia_mes))
-                    except (ValueError, AssertionError): messagebox.showerror("Erro", "O dia do mês deve ser um número entre 1 e 31.", parent=popup); return
-                else: # Para Unica e Diaria
-                    valores_freq.append(None) # Garante que o loop abaixo rode uma vez
 
-                sucessos = falhas = ignorados = 0
-                for item_alvo in alvos_selecionados_items:
-                    funcionario_id = self.tree_atr_selecao.item(item_alvo, 'values')[0]
+            # --- Função de Confirmação Individual (COM CORREÇÃO DE LÓGICA DE VERIFICAÇÃO) ---
+        def confirmar_atribuicao_individual():
+            tipo_freq_selecionada = frequencia_individual.get()
+            valores_freq = []
+            # ... (lógica para obter valores_freq permanece a mesma) ...
+            if tipo_freq_selecionada == "Semanal":
+                valores_freq = [val_db for _, (var, val_db) in dias_semana_vars_individual.items() if var.get()]
+                if not valores_freq: messagebox.showerror("Erro", "Selecione pelo menos um dia da semana.", parent=popup); return
+            elif tipo_freq_selecionada == "Mensal":
+                try: dia_mes = int(valor_mensal_individual.get()); assert 1 <= dia_mes <= 31; valores_freq.append(str(dia_mes))
+                except (ValueError, AssertionError): messagebox.showerror("Erro", "O dia do mês deve ser um número entre 1 e 31.", parent=popup); return
+            else: # Para Unica e Diaria
+                valores_freq.append(None) # Garante que o loop abaixo rode uma vez
 
-                    # <<< --- CORREÇÃO ESTÁ AQUI --- >>>
-                    # Mova a verificação para ANTES do loop de 'valores_freq'
-                    if database.verificar_atribuicao_existente(tarefa_id, funcionario_id):
-                        ignorados += 1
-                        logger.warning(f"--> Atribuição ignorada (check ANTES do loop): Tarefa {tarefa_id} já está ativa para Funcionário {funcionario_id}.")
-                        continue # Pula para o próximo funcionário
-                    # <<< --- FIM DA CORREÇÃO --- >>>
+            sucessos = falhas = ignorados = 0
+            for item_alvo in alvos_selecionados_items:
+                funcionario_id = self.tree_atr_selecao.item(item_alvo, 'values')[0]
 
-                    # Agora, itera pelos valores (dias da semana/mês ou None)
-                    for valor in valores_freq:
-                        # NÃO precisamos mais verificar aqui dentro
-                        # if database.verificar_atribuicao_existente(tarefa_id, funcionario_id): # <-- LINHA REMOVIDA
-                        #    ignorados += 1                                                     # <-- LINHA REMOVIDA
-                        #    print(f"--> Atribuição ignorada: Tarefa {tarefa_id} já está ativa para Funcionário {funcionario_id}.") # <-- LINHA REMOVIDA
-                        #    break # <-- LINHA REMOVIDA
+                # <<< --- CORREÇÃO ESTÁ AQUI --- >>>
+                # Mova a verificação para ANTES do loop de 'valores_freq'
+                if database.verificar_atribuicao_existente(tarefa_id, funcionario_id):
+                    ignorados += 1
+                    logger.warning(f"--> Atribuição ignorada (check ANTES do loop): Tarefa {tarefa_id} já está ativa para Funcionário {funcionario_id}.")
+                    continue # Pula para o próximo funcionário
+                # <<< --- FIM DA CORREÇÃO --- >>>
 
-                        # Tenta atribuir a tarefa para este valor específico
-                        if database.atribuir_tarefa(tarefa_id, funcionario_id, tipo_freq_selecionada, valor):
-                            sucessos += 1
-                        else:
-                            falhas += 1
-                            # Se falhar aqui, pode ser um erro de banco, logar seria bom
-                            logger.error(f"Falha ao chamar database.atribuir_tarefa para Func:{funcionario_id}, Tar:{tarefa_id}, Freq:{tipo_freq_selecionada}, Val:{valor}")
+                # Agora, itera pelos valores (dias da semana/mês ou None)
+                for valor in valores_freq:
+                    # NÃO precisamos mais verificar aqui dentro
 
-                # Lógica de mensagem final (ajustada para contar sucessos corretamente)
-                msg_final = f"{sucessos} atribuição(ões) de frequência criada(s) com sucesso!" # Mensagem mais precisa
-                if ignorados > 0:
-                    msg_final += f"\n{ignorados} funcionário(s) foram ignorados pois já tinham esta tarefa ativa."
-                if falhas > 0:
-                    messagebox.showwarning("Atenção", f"{msg_final}\n{falhas} falharam ao salvar no banco.", parent=popup)
-                else:
-                    messagebox.showinfo("Sucesso", msg_final, parent=popup)
+                    # Tenta atribuir a tarefa para este valor específico
+                    if database.atribuir_tarefa(tarefa_id, funcionario_id, tipo_freq_selecionada, valor):
+                        sucessos += 1
+                    else:
+                        falhas += 1
+                        # Se falhar aqui, pode ser um erro de banco, logar seria bom
+                        logger.error(f"Falha ao chamar database.atribuir_tarefa para Func:{funcionario_id}, Tar:{tarefa_id}, Freq:{tipo_freq_selecionada}, Val:{valor}")
 
-                popup.destroy()
-                self.atualizar_lista_atribuicoes_ativas()
-                self.atualizar_painel_selecao(tarefa_id=tarefa_id)
+            # Lógica de mensagem final (ajustada para contar sucessos corretamente)
+            msg_final = f"{sucessos} atribuição(ões) de frequência criada(s) com sucesso!" # Mensagem mais precisa
+            if ignorados > 0:
+                msg_final += f"\n{ignorados} funcionário(s) foram ignorados pois já tinham esta tarefa ativa."
+            if falhas > 0:
+                messagebox.showwarning("Atenção", f"{msg_final}\n{falhas} falharam ao salvar no banco.", parent=popup)
+            else:
+                messagebox.showinfo("Sucesso", msg_final, parent=popup)
+
+            popup.destroy()
+            self.atualizar_lista_atribuicoes_ativas()
+            self.atualizar_painel_selecao(tarefa_id=tarefa_id) 
 
             # --- BOTÃO SOMENTE PARA INDIVIDUAL (APENAS UM!) ---
             ttk.Button(frame, text="Confirmar Atribuição", command=confirmar_atribuicao_individual).pack(pady=20, ipady=5)
