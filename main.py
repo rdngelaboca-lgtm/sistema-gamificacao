@@ -68,6 +68,9 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from datetime import datetime, timedelta
 from tkcalendar import DateEntry
 import config
+import file_utils
+import urllib.parse
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 
 class App:
@@ -98,6 +101,7 @@ class App:
         self.frame_loja = ttk.Frame(self.notebook)
         self.frame_metas = ttk.Frame(self.notebook, padding="10")
         self.frame_conquistas = ttk.Frame(self.notebook, padding="10")
+        self.frame_consulta_nf = ttk.Frame(self.notebook, padding="10")
 
         self.notebook.add(self.frame_dashboard, text='Dashboard')
         self.notebook.add(self.frame_funcionarios, text='Gerenciar Funcionários')
@@ -113,6 +117,7 @@ class App:
         self.notebook.add(self.frame_loja, text='Loja e Resgates')
         self.notebook.add(self.frame_metas, text='Gestão de Metas')
         self.notebook.add(self.frame_conquistas, text='Gerenciar Conquistas')
+        self.notebook.add(self.frame_consulta_nf, text='Consultar NFs')
 
         self.criar_aba_dashboard()
         self.criar_aba_funcionarios()
@@ -128,6 +133,7 @@ class App:
         self.criar_aba_loja()
         self.criar_aba_metas()
         self.criar_aba_conquistas()
+        self.criar_aba_consulta_nf()
 
     # Em main.py, DENTRO da classe App, adicione esta função completa:
     def criar_aba_conquistas(self):
@@ -326,6 +332,201 @@ class App:
             except Exception as e: # <--- ADICIONADO EXCEPT
                 logger.exception(f"Erro inesperado em excluir_conquista_selecionada: {e}")
                 messagebox.showerror("Erro Inesperado", f"Ocorreu um erro ao excluir a conquista:\n{e}", parent=self.root) # Adicionado parent
+
+
+        # --- INÍCIO: Funções da Aba "Consultar NFs" ---
+
+    def criar_aba_consulta_nf(self):
+        """Cria a interface para consultar o histórico de Notas Fiscais."""
+        main_frame = ttk.Frame(self.frame_consulta_nf)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        main_frame.columnconfigure(0, weight=1)
+        main_frame.rowconfigure(1, weight=1) # Linha da Treeview expande
+
+        # --- Frame de Filtros ---
+        frame_filtros = ttk.LabelFrame(main_frame, text="Filtros de Busca", padding="10")
+        frame_filtros.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+
+        ttk.Label(frame_filtros, text="De:").grid(row=0, column=0, padx=(0, 5), pady=5)
+        self.nf_date_inicio = DateEntry(frame_filtros, width=12, date_pattern='dd/mm/yyyy', locale='pt_BR')
+        self.nf_date_inicio.grid(row=0, column=1, padx=5, pady=5)
+
+        ttk.Label(frame_filtros, text="Até:").grid(row=0, column=2, padx=(10, 5), pady=5)
+        self.nf_date_fim = DateEntry(frame_filtros, width=12, date_pattern='dd/mm/yyyy', locale='pt_BR')
+        self.nf_date_fim.grid(row=0, column=3, padx=5, pady=5)
+
+        ttk.Label(frame_filtros, text="Funcionário:").grid(row=0, column=4, padx=(10, 5), pady=5)
+        self.nf_combo_funcionarios = ttk.Combobox(frame_filtros, state="readonly", width=30)
+        self.nf_combo_funcionarios.grid(row=0, column=5, padx=5, pady=5)
+
+        ttk.Label(frame_filtros, text="Status:").grid(row=0, column=6, padx=(10, 5), pady=5)
+        self.nf_combo_status = ttk.Combobox(frame_filtros, state="readonly", values=["Todos", "Pendente", "Processada"])
+        self.nf_combo_status.grid(row=0, column=7, padx=5, pady=5)
+        self.nf_combo_status.set("Todos")
+
+        btn_buscar = ttk.Button(frame_filtros, text="Buscar", command=self.buscar_historico_nfs)
+        btn_buscar.grid(row=0, column=8, padx=(10, 5), pady=5)
+        btn_limpar = ttk.Button(frame_filtros, text="Limpar", command=self.limpar_filtros_nf)
+        btn_limpar.grid(row=0, column=9, padx=5, pady=5)
+
+        # --- Frame da Lista (Treeview) ---
+        frame_lista = ttk.LabelFrame(main_frame, text="Histórico de Notas Fiscais Recebidas", padding="10")
+        frame_lista.grid(row=1, column=0, sticky="nsew")
+        frame_lista.rowconfigure(0, weight=1)
+        frame_lista.columnconfigure(0, weight=1)
+
+        cols_nf = ('ID', 'Data/Hora', 'Funcionário', 'Status', 'Caminho')
+        self.tree_consulta_nf = ttk.Treeview(frame_lista, columns=cols_nf, show='headings', selectmode='browse')
+        self.tree_consulta_nf.heading('ID', text='ID'); self.tree_consulta_nf.column('ID', width=50, anchor='center')
+        self.tree_consulta_nf.heading('Data/Hora', text='Data/Hora'); self.tree_consulta_nf.column('Data/Hora', width=150, anchor='center')
+        self.tree_consulta_nf.heading('Funcionário', text='Funcionário'); self.tree_consulta_nf.column('Funcionário', width=250)
+        self.tree_consulta_nf.heading('Status', text='Status'); self.tree_consulta_nf.column('Status', width=100, anchor='center')
+        self.tree_consulta_nf.heading('Caminho', text='Caminho'); self.tree_consulta_nf.column('Caminho', width=0, stretch=tk.NO) # Oculta
+
+        scrollbar = ttk.Scrollbar(frame_lista, orient="vertical", command=self.tree_consulta_nf.yview)
+        self.tree_consulta_nf.configure(yscrollcommand=scrollbar.set)
+        self.tree_consulta_nf.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+
+        # --- Frame de Ações ---
+        frame_acoes = ttk.Frame(frame_lista)
+        frame_acoes.grid(row=1, column=0, columnspan=2, sticky="w", pady=(10, 0))
+
+        btn_ver_foto = ttk.Button(frame_acoes, text="Ver Foto da NF Selecionada", command=self.ver_foto_nf_selecionada)
+        btn_ver_foto.pack(side=tk.LEFT)
+        btn_recriar_botoes = ttk.Button(frame_acoes, text="Recriar Ações no Telegram", command=self.recriar_botoes_nf_telegram)
+        btn_recriar_botoes.pack(side=tk.LEFT, padx=10)
+
+        # Carrega os dados iniciais
+        self.carregar_filtros_nf()
+        self.buscar_historico_nfs()
+
+    def carregar_filtros_nf(self):
+        """Carrega a lista de funcionários para o combobox de filtro de NFs."""
+        # Reutiliza o dicionário já carregado pela aba de relatórios
+        if not hasattr(self, 'dados_funcionarios_relatorio') or not self.dados_funcionarios_relatorio:
+            funcionarios = database.listar_funcionarios()
+            self.dados_funcionarios_relatorio = {f"{f.NomeCompleto} (ID: {f.FuncionarioID})": f.FuncionarioID for f in funcionarios}
+
+        nomes_para_combobox = ["Todos"] + list(self.dados_funcionarios_relatorio.keys())
+        self.nf_combo_funcionarios['values'] = nomes_para_combobox
+        self.nf_combo_funcionarios.set("Todos")
+        # Define datas padrão (últimos 30 dias)
+        self.nf_date_fim.set_date(datetime.now())
+        self.nf_date_inicio.set_date(datetime.now() - timedelta(days=30))
+
+    def limpar_filtros_nf(self):
+        """Limpa os filtros da aba de NFs e busca todos os registros."""
+        self.nf_combo_funcionarios.set("Todos")
+        self.nf_combo_status.set("Todos")
+        self.nf_date_fim.set_date(datetime.now())
+        self.nf_date_inicio.set_date(datetime.now() - timedelta(days=30))
+        self.buscar_historico_nfs()
+
+    def buscar_historico_nfs(self):
+        """Executa a busca no banco com base nos filtros e preenche a treeview."""
+        for i in self.tree_consulta_nf.get_children():
+            self.tree_consulta_nf.delete(i)
+
+        data_inicio = self.nf_date_inicio.get_date()
+        data_fim = self.nf_date_fim.get_date()
+
+        nome_selecionado = self.nf_combo_funcionarios.get()
+        func_id = self.dados_funcionarios_relatorio.get(nome_selecionado) if nome_selecionado != "Todos" else None
+
+        status = self.nf_combo_status.get()
+
+        historico = database.buscar_notas_fiscais_historico(data_inicio, data_fim, func_id, status)
+
+        for item in historico:
+            data_f = item.DataRecebimento.strftime("%d/%m/%Y %H:%M")
+            self.tree_consulta_nf.insert("", "end", values=(
+                item.NotaFiscalID, data_f, item.NomeCompleto, item.Status, item.PathFoto or ""
+            ))
+
+    def ver_foto_nf_selecionada(self):
+        """Abre o arquivo de foto da NF selecionada."""
+        selecionado = self.tree_consulta_nf.focus()
+        if not selecionado:
+            messagebox.showwarning("Aviso", "Selecione uma NF na lista para ver a foto.")
+            return
+
+        dados = self.tree_consulta_nf.item(selecionado, 'values')
+        path_foto = dados[4] # Coluna 'Caminho'
+
+        if not path_foto:
+            messagebox.showerror("Erro", "O download desta foto ainda não foi processado pelo servidor (PathFoto está NULO).")
+            return
+
+        if not os.path.exists(path_foto):
+            messagebox.showerror("Erro de Arquivo", f"O arquivo da foto não foi encontrado no servidor no caminho:\n{path_foto}")
+            return
+
+        try:
+            file_utils.abrir_arquivo(path_foto)
+        except Exception as e:
+            messagebox.showerror("Erro ao Abrir", f"Não foi possível abrir o arquivo de imagem:\n{e}")
+
+    def recriar_botoes_nf_telegram(self):
+        """
+        Busca os dados da NF selecionada e re-envia a foto e os botões
+        para o grupo de gestores, caso a mensagem original tenha sido perdida.
+        """
+        selecionado = self.tree_consulta_nf.focus()
+        if not selecionado:
+            messagebox.showwarning("Aviso", "Selecione uma NF na lista para recriar as ações.")
+            return
+
+        nota_fiscal_id = self.tree_consulta_nf.item(selecionado, 'values')[0]
+
+        if not messagebox.askyesno("Confirmar", f"Deseja reenviar a foto e os botões de ação para a NF ID: {nota_fiscal_id} no grupo de Gestores?"):
+            return
+
+        try:
+            dados_nf = database.buscar_nota_fiscal(nota_fiscal_id)
+            if not dados_nf:
+                messagebox.showerror("Erro", "Não foi possível encontrar os dados desta NF no banco.")
+                return
+
+            # Prepara a mesma mensagem do bot
+            legenda_gestor = (
+                f"🧾 **Nota Fiscal (Reenviada)** 🧾\n\n"
+                f"👤 **Enviada por:** {dados_nf.NomeFuncionario}\n"
+                f"🗓️ **Data Original:** {dados_nf.DataRecebimento.strftime('%d/%m/%Y %H:%M')}\n"
+                f"🆔 **NF ID:** {dados_nf.NotaFiscalID}\n\n"
+                "Ações Rápidas:"
+            )
+
+            keyboard = [
+                [InlineKeyboardButton("📲 Encaminhar p/ Financeiro", callback_data=f"nf_prep_fwd_{nota_fiscal_id}")],
+                [InlineKeyboardButton("📦 Criar Tarefa 'Guardar'", callback_data=f"nf_create_task_{nota_fiscal_id}")],
+                [InlineKeyboardButton("👍 Arquivar (Nenhuma Ação)", callback_data=f"nf_ignore_{nota_fiscal_id}")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            # Usa o notificador_telegram (HTTP) para enviar
+            # Usamos o FileID se a foto ainda não foi baixada, ou o PathFoto se já foi.
+            foto_para_enviar = dados_nf.PathFoto if dados_nf.PathFoto else dados_nf.FileIDTelegram
+
+            if not foto_para_enviar:
+                messagebox.showerror("Erro", "Esta NF não possui FileID nem PathFoto. Não é possível reenviar.")
+                return
+
+            notificador_telegram.enviar_foto_com_botoes(
+                config.GESTOR_GROUP_CHAT_ID,
+                foto_para_enviar,
+                legenda_gestor,
+                reply_markup,
+                parse_mode='HTML'
+            )
+            messagebox.showinfo("Sucesso", "A Nota Fiscal e os botões de ação foram reenviados para o grupo de Gestores.")
+
+        except Exception as e:
+            logger.error(f"Erro ao recriar botões de NF: {e}", exc_info=True)
+            messagebox.showerror("Erro Inesperado", f"Não foi possível reenviar as ações:\n{e}")
+
+    # --- FIM: Funções da Aba "Consultar NFs" ---
+
 
 
     def popular_combobox_filtro_setor(self):
@@ -1383,6 +1584,11 @@ class App:
                     self.carregar_dados_metas()
                     self.atualizar_lista_lucros() 
                     return # Sai para não chamar a outra
+                
+                if tab_text == "Consultar NFs":
+                    self.carregar_filtros_nf()
+                    # self.buscar_historico_nfs() # Opcional: recarregar automaticamente ao clicar na aba
+                    return
 
                 if tab_text in tab_map:
                     # Se estiver, executa a função correspondente
