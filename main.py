@@ -2767,6 +2767,8 @@ class App:
         except Exception as e:
              messagebox.showerror("Erro Inesperado", f"Ocorreu um erro: {e}")
 
+# Em main.py, SUBSTITUA a função carregar_dados_metas por esta:
+
     def carregar_dados_metas(self):
         """Carrega as metas principais na lista e popula o combobox de metas ativas."""
         for i in self.tree_metas_principais.get_children():
@@ -2774,7 +2776,8 @@ class App:
         
         metas = database.listar_metas_principais()
         metas_ativas = []
-        
+        data_hoje = datetime.now().date() # Pega a data de HOJE
+
         for meta in metas:
             data_inicio_f = meta.DataInicio.strftime('%d/%m/%Y')
             data_fim_f = meta.DataFim.strftime('%d/%m/%Y')
@@ -2784,16 +2787,18 @@ class App:
                 meta.MetaPrincipalID, meta.NomeMeta, valor_total_f, data_inicio_f, data_fim_f, meta.Status
             ))
             
-            if meta.Status == 'Ativa':
+            # --- CORREÇÃO APLICADA AQUI ---
+            # Verifica o Status E TAMBÉM o intervalo de datas
+            data_inicio_obj = meta.DataInicio.date()
+            data_fim_obj = meta.DataFim.date()
+            
+            if meta.Status == 'Ativa' and (data_inicio_obj <= data_hoje <= data_fim_obj):
                 metas_ativas.append(f"{meta.NomeMeta} (ID: {meta.MetaPrincipalID})")
+            # --- FIM DA CORREÇÃO ---
                 
         self.combo_metas_ativas['values'] = metas_ativas
         if metas_ativas:
             self.combo_metas_ativas.current(0)
-
-            # Ao final, também chamamos a atualização da lista de lucros
-    # self.atualizar_lista_lucros() # Movido para on_tab_change para evitar duplicação
-
 
 
     def abrir_janela_criar_meta_principal(self):
