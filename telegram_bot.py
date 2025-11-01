@@ -811,6 +811,19 @@ async def receber_nota_fiscal(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.error(f"Erro crítico em receber_nota_fiscal: {e}", exc_info=True)
         await update.message.reply_text("Ocorreu um erro crítico. Contate o administrador.")
 
+async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Roteador principal para fotos privadas.
+    Verifica o estado do usuário e decide qual handler de foto chamar.
+    """
+    # Verifica primeiro se o usuário está no estado de enviar NF
+    if context.user_data.get('aguardando_nota_fiscal', False):
+        await receber_nota_fiscal(update, context)
+
+    # Se não, chama o handler padrão de envio de fotos de tarefas
+    else:
+        await handler_foto_tarefa(update, context)
+
 
 async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
@@ -1386,16 +1399,13 @@ def main() -> None:
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^📄 Meus Documentos$'), solicitar_holerite_inicio)) 
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🏅 Minhas Conquistas$'), minhas_conquistas)) # <<< NOVO BOTÃO
     # Handler de FOTO para Nota Fiscal (verifica o estado 'aguardando_nota_fiscal')
-    application.add_handler(MessageHandler(
-        filters.PHOTO & filters.ChatType.PRIVATE & (lambda m: m.chat_id in m.bot.user_data and m.bot.user_data[m.chat_id].get('aguardando_nota_fiscal', False)),
-        receber_nota_fiscal
-    ))
-    # Handler de FOTO genérico (para tarefas normais, verifica 'identificador_tarefa')
+    # Handler de FOTO (Roteador):
+    # Esta única linha agora chama a nossa nova função roteadora "receber_foto".
+    # Ela cuidará de direcionar para "receber_nota_fiscal" ou "handler_foto_tarefa".
     application.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, receber_foto))
 
     # Handler de TEXTO genérico (para justificativas, cpf, etc.)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, roteador_de_texto_privado))
-
 
     logger.info("--- BOT INICIADO COM SUCESSO ---")
     application.run_polling()
