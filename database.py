@@ -3568,7 +3568,7 @@ def buscar_meta_ativa_id_hoje():
     if conn:
         try:
             cursor = conn.cursor()
-
+            
             # --- CORREÇÃO APLICADA AQUI ---
             # Usamos CONVERT(DATE, ...) para ignorar as horas, minutos e segundos.
             # Isso garante que a data de hoje (ex: 31/10 23:00) seja
@@ -3580,7 +3580,7 @@ def buscar_meta_ativa_id_hoje():
                   AND MP.Status = 'Ativa'
             """
             # --- FIM DA CORREÇÃO ---
-
+            
             cursor.execute(sql)
             resultado = cursor.fetchone()
             # Adiciona um log para sabermos se encontrou
@@ -3588,9 +3588,9 @@ def buscar_meta_ativa_id_hoje():
                 logger.info(f"Meta ativa ID {resultado[0]} encontrada para hoje.")
             else:
                 logger.warning("Nenhuma meta principal ativa encontrada para hoje na verificação (buscar_meta_ativa_id_hoje).")
-
+            
             return resultado[0] if resultado else None
-
+        
         except Exception as e:
             # Adiciona log de erro para esta função específica
             logger.error(f"Erro ao buscar meta ativa ID hoje: {e}", exc_info=True)
