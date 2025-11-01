@@ -627,12 +627,12 @@ async def handler_foto_tarefa(update: Update, context: ContextTypes.DEFAULT_TYPE
             # Tenta enviar a notificação para o gestor, independentemente da flag ter sido marcada com sucesso ou não
             # (se a flag falhou, o agendador reenviará de qualquer forma, mas pelo menos tentamos agora)
             try:
-                resposta_api = await notificador_telegram.enviar_foto_com_botoes( # Captura a resposta
-                    config.GESTOR_GROUP_CHAT_ID,
-                    file_id,
-                    legenda,
-                    reply_markup,
-                    parse_mode='HTML' # Mantenha como HTML
+                resposta_api = notificador_telegram.enviar_foto_com_botoes( # Captura a resposta
+                config.GESTOR_GROUP_CHAT_ID,
+                file_id,
+                legenda,
+                reply_markup,
+                parse_mode='HTML' # Mantenha como HTML
                 )
 
                 # Loga o resultado do envio
@@ -798,7 +798,7 @@ async def receber_nota_fiscal(update: Update, context: ContextTypes.DEFAULT_TYPE
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        await notificador_telegram.enviar_foto_com_botoes(
+        notificador_telegram.enviar_foto_com_botoes(
             config.GESTOR_GROUP_CHAT_ID,
             file_id,
             legenda_gestor,
