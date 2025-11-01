@@ -548,7 +548,7 @@ async def solicitar_feedback_start(update: Update, context: ContextTypes.DEFAULT
     # Remove o estado antigo, caso exista (segurança)
     context.user_data.pop('aguardando_assunto_feedback', None)
 
-async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handler_foto_tarefa(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     MAX_SECONDS_DIFFERENCE = config.MAX_DIFERENCA_FOTO_SEGUNDOS # Usa valor do config.py
     temp_photo_path = None
 
