@@ -3560,7 +3560,7 @@ def distribuir_premio_meta_principal(meta_id):
     finally:
         if conn: conn.close()
 
-# Em database.py, adicione esta nova função ao final do arquivo
+# Em database.py, SUBSTITUA a função buscar_meta_ativa_id_hoje por esta:
 
 def buscar_meta_ativa_id_hoje():
     """Busca apenas o ID da meta principal ativa na data de hoje."""
@@ -3568,18 +3568,37 @@ def buscar_meta_ativa_id_hoje():
     if conn:
         try:
             cursor = conn.cursor()
+
+            # --- CORREÇÃO APLICADA AQUI ---
+            # Usamos CONVERT(DATE, ...) para ignorar as horas, minutos e segundos.
+            # Isso garante que a data de hoje (ex: 31/10 23:00) seja
+            # considerada "entre" a data de início (01/10 00:00) e a data de fim (31/10 00:00).
             sql = """
                 SELECT TOP 1 MetaPrincipalID
-                FROM MetasPrincipais
-                WHERE GETDATE() BETWEEN DataInicio AND DataFim AND Status = 'Ativa'
+                FROM MetasPrincipais MP
+                WHERE CONVERT(DATE, GETDATE()) BETWEEN CONVERT(DATE, MP.DataInicio) AND CONVERT(DATE, MP.DataFim)
+                  AND MP.Status = 'Ativa'
             """
+            # --- FIM DA CORREÇÃO ---
+
             cursor.execute(sql)
             resultado = cursor.fetchone()
-            return resultado[0] if resultado else None
-        finally:
-            conn.close()
-    return None
+            # Adiciona um log para sabermos se encontrou
+            if resultado:
+                logger.info(f"Meta ativa ID {resultado[0]} encontrada para hoje.")
+            else:
+                logger.warning("Nenhuma meta principal ativa encontrada para hoje na verificação (buscar_meta_ativa_id_hoje).")
 
+            return resultado[0] if resultado else None
+
+        except Exception as e:
+            # Adiciona log de erro para esta função específica
+            logger.error(f"Erro ao buscar meta ativa ID hoje: {e}", exc_info=True)
+            return None
+        finally:
+            if conn:
+                conn.close()
+    return None
 
 def excluir_apuracao_diaria(meta_principal_id, data_apuracao):
     """Exclui um registro de apuração diária específico."""
@@ -4342,6 +4361,154 @@ def verificar_e_premiar_meta_diaria(apuracao_id, data_apuracao_str, valor_dia, m
 
     except Exception as e:
         logger.exception(f"!!! ERRO GERAL durante a verificação/premiação da meta diária (ApuracaoID: {apuracao_id}): {e}")
+
+
+
+# ===================================================================
+# == INÍCIO DO MÓDULO DE NOTAS FISCAIS (NF) =========================
+# ===================================================================
+
+def registrar_nota_fiscal(funcionario_id, file_id):
+    """
+    Salva uma nova Nota Fiscal na tabela de rastreio.
+    Retorna o ID da nova NF ou None se falhar.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                INSERT INTO NotasFiscais (FuncionarioID, FileIDTelegram, Status) 
+                VALUES (?, ?, 'Pendente');
+                SELECT SCOPE_IDENTITY();
+            """
+            cursor.execute(sql, funcionario_id, file_id)
+            cursor.nextset()
+            novo_id = cursor.fetchone()[0]
+            conn.commit()
+            logger.info(f"Nova Nota Fiscal (ID: {novo_id}) registrada para FuncionarioID {funcionario_id}.")
+            return novo_id
+        except Exception as e:
+            logger.error(f"ERRO ao registrar Nota Fiscal: {e}", exc_info=True)
+            if conn:
+                conn.rollback()
+            return None
+        finally:
+            if conn:
+                conn.close()
+    return None
+
+def buscar_nota_fiscal(nota_fiscal_id):
+    """Busca todos os dados de uma nota fiscal pelo seu ID."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT 
+                    NF.NotaFiscalID, NF.FuncionarioID, NF.FileIDTelegram, 
+                    NF.PathFoto, NF.Status, NF.DataRecebimento,
+                    F.NomeCompleto as NomeFuncionario,
+                    F.ChatIDTelegram as ChatIDFuncionario
+                FROM NotasFiscais NF
+                JOIN Funcionarios F ON NF.FuncionarioID = F.FuncionarioID
+                WHERE NF.NotaFiscalID = ?
+            """
+            cursor.execute(sql, nota_fiscal_id)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
+
+def buscar_notas_para_download():
+    """Busca NFs que foram registradas mas ainda não tiveram a foto baixada."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT NotaFiscalID, FileIDTelegram FROM NotasFiscais WHERE PathFoto IS NULL"
+            cursor.execute(sql)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def finalizar_download_nota_fiscal(nota_fiscal_id, path_foto):
+    """Atualiza o registro da NF com o caminho da foto baixada."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE NotasFiscais SET PathFoto = ? WHERE NotaFiscalID = ?"
+            cursor.execute(sql, path_foto, nota_fiscal_id)
+            conn.commit()
+        finally:
+            conn.close()
+
+def atualizar_status_nota_fiscal(nota_fiscal_id, novo_status):
+    """Atualiza o status de uma NF (ex: 'Processada')."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE NotasFiscais SET Status = ? WHERE NotaFiscalID = ?"
+            cursor.execute(sql, novo_status, nota_fiscal_id)
+            conn.commit()
+        finally:
+            conn.close()
+
+def buscar_notas_fiscais_historico(data_inicio=None, data_fim=None, funcionario_id=None, status=None):
+    """
+    Busca o histórico de notas fiscais com base em filtros para o painel de gestor.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT 
+                    NF.NotaFiscalID,
+                    NF.DataRecebimento,
+                    F.NomeCompleto,
+                    NF.Status,
+                    NF.PathFoto
+                FROM NotasFiscais NF
+                JOIN Funcionarios F ON NF.FuncionarioID = F.FuncionarioID
+            """
+            condicoes = []
+            params = []
+
+            if data_inicio:
+                condicoes.append("CONVERT(DATE, NF.DataRecebimento) >= ?")
+                params.append(data_inicio)
+            if data_fim:
+                condicoes.append("CONVERT(DATE, NF.DataRecebimento) <= ?")
+                params.append(data_fim)
+            if funcionario_id:
+                condicoes.append("NF.FuncionarioID = ?")
+                params.append(funcionario_id)
+            if status and status != 'Todos':
+                condicoes.append("NF.Status = ?")
+                params.append(status)
+
+            if condicoes:
+                sql += " WHERE " + " AND ".join(condicoes)
+
+            sql += " ORDER BY NF.DataRecebimento DESC"
+
+            cursor.execute(sql, params)
+            return cursor.fetchall()
+        except Exception as e:
+            logger.error(f"Erro ao buscar histórico de NFs: {e}", exc_info=True)
+            return []
+        finally:
+            conn.close()
+    return []
+
+# ===================================================================
+# == FIM DO MÓDULO DE NOTAS FISCAIS (NF) ============================
+# ===================================================================
+
 
 # ===================================================================
 # == INÍCIO DO MÓDULO DE DENÚNCIA ANÔNIMA ==========================
