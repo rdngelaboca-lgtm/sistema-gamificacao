@@ -65,6 +65,7 @@ import os
 from datetime import datetime, date, timedelta
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 import requests
+import urllib.parse
 
 
 # Em agendador.py, SUBSTITUA a função verificar_e_enviar_tarefas_de_grupo por esta:
@@ -526,6 +527,75 @@ def processar_downloads_pendentes_sync():
             except Exception as db_update_err:
                  logger.error(f"--> FALHA GERAL ao finalizar registro ou notificar para EntregaID {entrega.EntregaID}. Erro: {db_update_err}. Tentaremos novamente.", exc_info=True)
 
+def processar_downloads_notas_fiscais():
+    """Busca por NFs sem foto baixada, tenta fazer o download e salva o caminho."""
+    logger.info(f"[{datetime.now().strftime('%H:%M:%S')}] Verificando downloads de NOTAS FISCAIS pendentes...")
+
+    try:
+        notas_para_baixar = database.buscar_notas_para_download()
+    except Exception as db_err:
+        logger.error(f"Erro ao buscar Notas Fiscais para download: {db_err}", exc_info=True)
+        return
+
+    if not notas_para_baixar:
+        logger.debug("--> Nenhuma Nota Fiscal pendente para download.")
+        return
+
+    logger.info(f"--> Encontradas {len(notas_para_baixar)} Notas Fiscais para baixar.")
+    token = config.TELEGRAM_TOKEN
+    pasta_notas_fiscais = 'notas_fiscais' # Pasta para salvar as NFs
+
+    if not os.path.exists(pasta_notas_fiscais):
+        try:
+            os.makedirs(pasta_notas_fiscais)
+            logger.info(f"Pasta '{pasta_notas_fiscais}' criada.")
+        except OSError as e:
+            logger.error(f"Erro ao criar pasta '{pasta_notas_fiscais}': {e}", exc_info=True)
+            return
+
+    for nf in notas_para_baixar:
+        local_file_path = None
+        download_sucesso = False
+        nf_id = nf.NotaFiscalID
+        file_id = nf.FileIDTelegram
+
+        try:
+            logger.info(f"--> Baixando foto para NotaFiscalID: {nf_id} (FileID: {file_id})...")
+            get_file_url = f"https://api.telegram.org/bot{token}/getFile"
+            params = {'file_id': file_id}
+            response_file_info = requests.get(get_file_url, params=params, timeout=30)
+            response_file_info.raise_for_status()
+            file_info = response_file_info.json()
+
+            if not file_info.get('ok'):
+                logger.error(f"--> FALHA API getFile para NotaFiscalID {nf_id}: {file_info.get('description')}")
+                continue
+
+            telegram_file_path = file_info['result']['file_path']
+            download_url = f"https://api.telegram.org/file/bot{token}/{telegram_file_path}"
+            response_download = requests.get(download_url, stream=True, timeout=60)
+            response_download.raise_for_status()
+
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            local_file_path = os.path.join(pasta_notas_fiscais, f'NF_{timestamp}_{nf_id}.jpg')
+
+            with open(local_file_path, 'wb') as f:
+                for chunk in response_download.iter_content(chunk_size=8192):
+                    f.write(chunk)
+
+            download_sucesso = True
+            logger.info(f"--> Download SUCESSO! Foto da NotaFiscalID {nf_id} salva em {local_file_path}")
+
+        except Exception as e:
+            logger.error(f"--> FALHA GERAL ao baixar foto da NotaFiscalID {nf_id}. Erro: {e}. Tentaremos novamente.", exc_info=True)
+            continue
+
+        if download_sucesso and local_file_path:
+            try:
+                database.finalizar_download_nota_fiscal(nf_id, local_file_path)
+                logger.info(f"--> Registro da NotaFiscalID {nf_id} finalizado no banco com path: {local_file_path}")
+            except Exception as db_update_err:
+                 logger.error(f"--> FALHA GERAL ao finalizar registro da NotaFiscalID {nf_id}. Erro: {db_update_err}. Tentaremos novamente.", exc_info=True)
 
 if __name__ == "__main__":
     print("--- 🤖 Robô Agendador 2.0 Iniciado 🤖 ---")
@@ -540,6 +610,8 @@ if __name__ == "__main__":
     schedule.every().day.at("09:05").do(verificar_e_delegar_tarefas_de_folga)
     schedule.every().day.at("09:00").do(verificar_e_enviar_lembretes_comunicados)
     schedule.every(1).minutes.do(processar_downloads_pendentes_sync)
+    schedule.every(1).minutes.do(processar_downloads_notas_fiscais)
+
 
     while True:
         schedule.run_pending()
