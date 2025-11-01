@@ -3562,6 +3562,8 @@ def distribuir_premio_meta_principal(meta_id):
 
 # Em database.py, SUBSTITUA a função buscar_meta_ativa_id_hoje por esta:
 
+# Em database.py, SUBSTITUA a função buscar_meta_ativa_id_hoje por esta:
+
 def buscar_meta_ativa_id_hoje():
     """Busca apenas o ID da meta principal ativa na data de hoje."""
     conn = get_db_connection()
@@ -3599,7 +3601,6 @@ def buscar_meta_ativa_id_hoje():
             if conn:
                 conn.close()
     return None
-
 def excluir_apuracao_diaria(meta_principal_id, data_apuracao):
     """Exclui um registro de apuração diária específico."""
     conn = get_db_connection()
@@ -4245,6 +4246,8 @@ def buscar_resgates_recentes(limite=5):
     finally:
         if conn: conn.close()
 
+# Em database.py, SUBSTITUA a função verificar_e_premiar_meta_diaria por esta:
+
 def verificar_e_premiar_meta_diaria(apuracao_id, data_apuracao_str, valor_dia, meta_principal_id):
     """
     Função auxiliar para verificar se a meta diária foi atingida e premiar a equipe DO SETOR CORRETO.
@@ -4273,7 +4276,19 @@ def verificar_e_premiar_meta_diaria(apuracao_id, data_apuracao_str, valor_dia, m
         # Só continua se o modelo existe, a meta foi batida, tem prêmio E AINDA NÃO FOI PREMIADA
         if modelo_meta_diaria and valor_dia >= modelo_meta_diaria.ValorMeta and modelo_meta_diaria.PontosPremio > 0 and not ja_premiada:
 
-            meta_principal = next((m for m in listar_metas_principais() if m.MetaPrincipalID == meta_principal_id), None) # Chamada interna
+            # --- CORREÇÃO APLICADA AQUI ---
+            # Em vez de buscar a lista inteira (listar_metas_principais()),
+            # buscamos OS DADOS DA META ESPECÍFICA (ID 1) que foi passada como parâmetro.
+            meta_principal = None
+            conn_meta = get_db_connection()
+            if conn_meta:
+                try:
+                    cursor_meta = conn_meta.cursor()
+                    cursor_meta.execute("SELECT * FROM MetasPrincipais WHERE MetaPrincipalID = ?", meta_principal_id)
+                    meta_principal = cursor_meta.fetchone()
+                finally:
+                    conn_meta.close()
+            # --- FIM DA CORREÇÃO ---
 
             # Só continua se encontrou a meta principal E ela tem um setor alvo definido
             if meta_principal and meta_principal.SetorAlvo:
@@ -4346,6 +4361,7 @@ def verificar_e_premiar_meta_diaria(apuracao_id, data_apuracao_str, valor_dia, m
                 else:
                     logger.warning(f"--> Nenhum funcionário encontrado no setor '{setor_alvo_diario}' para premiar pela meta diária.")
             else:
+                # Este é o log que você está vendo
                 logger.warning(f"Meta diária ({data_apuracao_str}) atingida, mas a Meta Principal ID {meta_principal_id} não foi encontrada ou não tem SetorAlvo definido. Prêmio diário NÃO distribuído.")
 
         # Logs para outros cenários (meta não atingida, já premiada, etc.)
@@ -4361,7 +4377,6 @@ def verificar_e_premiar_meta_diaria(apuracao_id, data_apuracao_str, valor_dia, m
 
     except Exception as e:
         logger.exception(f"!!! ERRO GERAL durante a verificação/premiação da meta diária (ApuracaoID: {apuracao_id}): {e}")
-
 
 
 # ===================================================================
