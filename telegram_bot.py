@@ -68,6 +68,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKe
 from telegram.ext import (Application, CommandHandler, MessageHandler, filters, 
                           ContextTypes, CallbackQueryHandler)
 from telegram.helpers import escape_markdown
+import urllib.parse
 from database import adicionar_pontos_ao_saldo
 import locale
 try:
@@ -202,10 +203,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     funcionario = database.buscar_funcionario_por_chat_id(chat_id)
     REPLY_KEYBOARD = [
     ["📋 Minhas Tarefas", "🏆 Ranking do Mês", "🎯 Acompanhar Metas"],
-    ["💰 Meu Saldo", "🏪 Loja de Recompensas"],
+    ["💰 Meu Saldo", "🏪 Loja de Recompensas", "🧾 Enviar Nota Fiscal"],
     ["📜 Meu Histórico", "💬 Canal Confidencial"],
-    ["🏅 Minhas Conquistas", "📄 Meus Documentos"], # <<< BOTÃO ADICIONADO AQUI
-    ["❓ Ajuda"] # Botão Ajuda movido para a última linha
+    ["🏅 Minhas Conquistas", "📄 Meus Documentos"],
+    ["❓ Ajuda"]
     ]
     reply_markup = ReplyKeyboardMarkup(REPLY_KEYBOARD, resize_keyboard=True)
     if funcionario:
@@ -727,6 +728,88 @@ async def receber_motivo_recusa(update: Update, context: ContextTypes.DEFAULT_TY
             await update.message.reply_text(legenda_final)
         except Exception as e_send:
             logger.error(f"Falha ao enviar mensagem de fallback (sem msg_id) para recusa {entrega_id}: {e_send}")
+
+
+async def solicitar_foto_nf(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Define o estado para aguardar a foto da Nota Fiscal."""
+    logger.info(f"Solicitação de envio de NF recebida de {update.effective_user.id}")
+    context.user_data['aguardando_nota_fiscal'] = True
+    await update.message.reply_text(
+        "Entendido. Por favor, envie agora a foto da Nota Fiscal que você recebeu.\n\n"
+        "(Se mudar de ideia, digite /cancelar)"
+    )
+
+async def receber_nota_fiscal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Handler dedicado para receber a foto da Nota Fiscal (Regras 1, 2, 3).
+    Este handler SÓ é ativado se o estado 'aguardando_nota_fiscal' for True.
+    """
+    # Limpa o estado imediatamente
+    context.user_data.pop('aguardando_nota_fiscal', None)
+
+    # 1. Validações básicas (não encaminhada, não arquivo)
+    if update.message.forward_from or update.message.forward_from_chat:
+        await update.message.reply_text("❌ Desculpe, fotos encaminhadas não são aceitas. Por favor, tire a foto na hora ou envie da sua galeria.")
+        return
+    if update.message.document and 'image' in update.message.document.mime_type:
+        await update.message.reply_text("❌ Por favor, envie a imagem como 'Foto', e não como 'Arquivo'.")
+        return
+
+    try:
+        funcionario = database.buscar_funcionario_por_chat_id(update.effective_user.id)
+        if not funcionario:
+            await update.message.reply_text("Erro: Não consegui encontrar seu cadastro no sistema.")
+            return
+
+        file_id = update.message.photo[-1].file_id
+
+        # 2. Salva o registro preliminar no banco (tabela NotasFiscais)
+        nota_fiscal_id = database.registrar_nota_fiscal(funcionario.FuncionarioID, file_id)
+        if not nota_fiscal_id:
+            await update.message.reply_text("❌ Ocorreu um erro interno ao tentar registrar sua nota fiscal. Tente novamente.")
+            return
+
+        # 3. Dá os pontos bônus (Regra 1)
+        pontos_bonus = config.PONTOS_BONUS_NOTA_FISCAL
+        database.registrar_pontos_de_bonus(
+            funcionario.FuncionarioID,
+            pontos_bonus,
+            f"Envio de Nota Fiscal (ID: {nota_fiscal_id})",
+            config.TAREFA_ID_NOTA_FISCAL
+        )
+        database.adicionar_pontos_ao_saldo(funcionario.FuncionarioID, pontos_bonus)
+
+        await update.message.reply_text(f"✅ Nota Fiscal enviada com sucesso! Você ganhou *{pontos_bonus} pontos* pelo recebimento!", parse_mode='Markdown')
+
+        # 4. Encaminha para os Gestores (Regras 2, 3, 4)
+        legenda_gestor = (
+            f"🧾 **Nova Nota Fiscal Recebida** 🧾\n\n"
+            f"👤 **Enviada por:** {funcionario.NomeCompleto}\n"
+            f"🗓️ **Data:** {datetime.now().strftime('%d/%m/%Y %H:%M')}\n"
+            f"🆔 **NF ID:** {nota_fiscal_id}\n\n"
+            "Ações Rápidas:"
+        )
+
+        # Prepara botões com o ID da NF para rastreio
+        keyboard = [
+            [InlineKeyboardButton("📲 Encaminhar p/ Financeiro", callback_data=f"nf_prep_fwd_{nota_fiscal_id}")],
+            [InlineKeyboardButton("📦 Criar Tarefa 'Guardar'", callback_data=f"nf_create_task_{nota_fiscal_id}")],
+            [InlineKeyboardButton("👍 Arquivar (Nenhuma Ação)", callback_data=f"nf_ignore_{nota_fiscal_id}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await notificador_telegram.enviar_foto_com_botoes(
+            config.GESTOR_GROUP_CHAT_ID,
+            file_id,
+            legenda_gestor,
+            reply_markup,
+            parse_mode='HTML'
+        )
+        logger.info(f"Nota Fiscal {nota_fiscal_id} encaminhada para o grupo de gestores.")
+
+    except Exception as e:
+        logger.error(f"Erro crítico em receber_nota_fiscal: {e}", exc_info=True)
+        await update.message.reply_text("Ocorreu um erro crítico. Contate o administrador.")
 
 
 async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
