@@ -1174,7 +1174,95 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
                 await context.bot.send_message(chat_id=query.message.chat_id, text=legenda_final)
             except Exception as e_send:
                 logger.error(f"Falha também ao enviar mensagem de fallback para aprovação {entrega_id}: {e_send}")
+    # --- INÍCIO: LÓGICA DE GERENCIAMENTO DE NOTA FISCAL (GESTOR) ---
 
+    elif data.startswith("nf_prep_fwd_"):
+        # Regra 3: Encaminhar para o WhatsApp
+        await query.answer("Processando...")
+        gestor_chat_id = query.from_user.id
+        try:
+            nota_fiscal_id = int(data.split('_')[-1])
+            dados_nf = database.buscar_nota_fiscal(nota_fiscal_id)
+
+            if not dados_nf:
+                await context.bot.send_message(gestor_chat_id, "Erro: Não encontrei os dados desta NF no banco.")
+                return
+
+            if not dados_nf.PathFoto:
+                await context.bot.send_message(gestor_chat_id, "O download desta foto ainda está sendo processado pelo servidor. Tente novamente em 1 minuto.")
+                return
+
+            # Constrói o link do WhatsApp
+            texto_mensagem_wpp = urllib.parse.quote(f"Olá, segue a Nota Fiscal recebida (ID Interno: {nota_fiscal_id})")
+            link_wpp = f"https://wa.me/{config.WHATSAPP_CONTATO_FINANCEIRO}?text={texto_mensagem_wpp}"
+
+            # Envia o arquivo da NF (do disco) PRIVADAMENTE para o gestor
+            with open(dados_nf.PathFoto, 'rb') as nf_file:
+                await context.bot.send_document(
+                    chat_id=gestor_chat_id,
+                    document=nf_file,
+                    caption=f"Pronto! Por favor, encaminhe este arquivo para o Financeiro.\n\nVocê também pode usar este link:\n{link_wpp}"
+                )
+            # Atualiza o status no grupo
+            await query.edit_message_caption(caption=f"{query.message.caption}\n\n---\n✅ Encaminhada para o Financeiro por {query.from_user.first_name}.")
+
+        except Exception as e:
+            logger.error(f"Erro em nf_prep_fwd: {e}", exc_info=True)
+            await context.bot.send_message(gestor_chat_id, f"Ocorreu um erro ao preparar o encaminhamento: {e}")
+
+    elif data.startswith("nf_create_task_"):
+        # Regra 4: Criar Tarefa "Guardar Mercadoria"
+        await query.answer("Criando tarefa...")
+        try:
+            nota_fiscal_id = int(data.split('_')[-1])
+            dados_nf = database.buscar_nota_fiscal(nota_fiscal_id)
+
+            if not dados_nf:
+                await query.edit_message_caption(caption=f"{query.message.caption}\n\n---\n❌ Erro: Não encontrei os dados desta NF.")
+                return
+
+            # Cria a nova tarefa 'Unica'
+            nova_atribuicao_id = database.atribuir_tarefa(
+                tarefa_id=config.TAREFA_ID_GUARDAR_MERCADORIA_MODELO,
+                funcionario_id=dados_nf.FuncionarioID,
+                tipo_frequencia='Unica',
+                valor_frequencia=None,
+                descricao_override="Guarde a mercadoria referente a esta Nota Fiscal.",
+                data_agendamento=datetime.now().date() # Agenda para hoje
+            )
+
+            if not nova_atribuicao_id:
+                await query.edit_message_caption(caption=f"{query.message.caption}\n\n---\n❌ Erro: Falha ao salvar a nova tarefa no banco.")
+                return
+
+            # Atualiza o status da NF
+            database.atualizar_status_nota_fiscal(nota_fiscal_id, "Processada")
+
+            # Notifica o funcionário PRIVADAMENTE
+            await context.bot.send_photo(
+                chat_id=dados_nf.ChatIDFuncionario,
+                photo=dados_nf.FileIDTelegram,
+                caption="📦 **Nova Tarefa Atribuída!** 📦\n\nUma tarefa para *'Guardar Mercadoria (NF)'* foi criada para você com base na nota fiscal que você enviou.\n\nUse o comando /tarefas para ver e enviar a evidência."
+            )
+
+            # Atualiza a mensagem no grupo
+            await query.edit_message_caption(caption=f"{query.message.caption}\n\n---\n✅ Tarefa 'Guardar' criada para o funcionário por {query.from_user.first_name}.")
+
+        except Exception as e:
+            logger.error(f"Erro em nf_create_task: {e}", exc_info=True)
+            await query.edit_message_caption(caption=f"{query.message.caption}\n\n---\n❌ Erro inesperado ao criar tarefa: {e}")
+
+    elif data.startswith("nf_ignore_"):
+        # Ação de arquivar/ignorar
+        await query.answer("Arquivando...")
+        try:
+            nota_fiscal_id = int(data.split('_')[-1])
+            database.atualizar_status_nota_fiscal(nota_fiscal_id, "Processada")
+            await query.edit_message_caption(caption=f"{query.message.caption}\n\n---\n👍 Nota revisada e arquivada por {query.from_user.first_name}.")
+        except Exception as e:
+            logger.error(f"Erro em nf_ignore: {e}", exc_info=True)
+
+    # --- FIM: LÓGICA DE GERENCIAMENTO DE NOTA FISCAL (GESTOR) ---
 
     elif data.startswith("reprovar_gestor_"):
         entrega_id = int(data.split('_')[-1])
@@ -1283,6 +1371,7 @@ def main() -> None:
     application.add_handler(CommandHandler("holerite", solicitar_holerite_inicio)) 
     application.add_handler(CommandHandler("conquistas", minhas_conquistas)) # <<< NOVO COMANDO
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🏅 Minhas Conquistas$'), minhas_conquistas)) # <<< NOVO BOTÃO
+    application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🧾 Enviar Nota Fiscal$'), solicitar_foto_nf))
     application.add_handler(CallbackQueryHandler(button_callback_handler))
 
     # --- Handlers para os Botões do Menu Fixo ---
@@ -1296,9 +1385,18 @@ def main() -> None:
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^💬 Canal Confidencial$'), solicitar_feedback_start)) 
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^📄 Meus Documentos$'), solicitar_holerite_inicio)) 
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🏅 Minhas Conquistas$'), minhas_conquistas)) # <<< NOVO BOTÃO
+    # Handler de FOTO para Nota Fiscal (verifica o estado 'aguardando_nota_fiscal')
+    application.add_handler(MessageHandler(
+        filters.PHOTO & filters.ChatType.PRIVATE & (lambda m: m.chat_id in m.bot.user_data and m.bot.user_data[m.chat_id].get('aguardando_nota_fiscal', False)),
+        receber_nota_fiscal
+    ))
+    # Handler de FOTO genérico (para tarefas normais, verifica 'identificador_tarefa')
     application.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, receber_foto))
+
+    # Handler de TEXTO genérico (para justificativas, cpf, etc.)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, roteador_de_texto_privado))
-    
+
+
     logger.info("--- BOT INICIADO COM SUCESSO ---")
     application.run_polling()
 
