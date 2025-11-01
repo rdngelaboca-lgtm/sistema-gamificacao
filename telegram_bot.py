@@ -610,41 +610,37 @@ async def handler_foto_tarefa(update: Update, context: ContextTypes.DEFAULT_TYPE
                 InlineKeyboardButton("❌ Reprovar", callback_data=f"reprovar_gestor_{entrega_id}")
             ]]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            # Envia foto com botões para o grupo de gestores (usando parse_mode='HTML')
-            # Envia foto com botões para o grupo de gestores (usando parse_mode='HTML')
-            # --- CORREÇÃO FINAL: Marcar a flag ANTES de enviar a notificação ---
-            flag_marcada_com_sucesso = False
-            try:
-                database.marcar_notificacao_gestor_enviada(entrega_id) # Tenta marcar PRIMEIRO
-                flag_marcada_com_sucesso = True
-                logger.info(f"Flag NotificacaoGestorEnviada marcada com sucesso para EntregaID {entrega_id} ANTES do envio.")
-            except Exception as flag_error:
-                # Loga o erro crítico ao MARCAR a flag ANTES
-                logger.error(f"FALHA CRÍTICA AO MARCAR FLAG para EntregaID {entrega_id} ANTES do envio: {flag_error}", exc_info=True)
-                # Decide se continua ou não. Vamos continuar e tentar notificar, mas o agendador VAI reenviar.
-                # Ou poderia retornar aqui e avisar o usuário que houve um erro grave. Vamos optar por tentar notificar.
+            # --- CORREÇÃO: Enviar a notificação ANTES de marcar a flag ---
 
-            # Tenta enviar a notificação para o gestor, independentemente da flag ter sido marcada com sucesso ou não
-            # (se a flag falhou, o agendador reenviará de qualquer forma, mas pelo menos tentamos agora)
+            # Tenta enviar a notificação para o gestor PRIMEIRO
             try:
                 resposta_api = notificador_telegram.enviar_foto_com_botoes( # Captura a resposta
-                config.GESTOR_GROUP_CHAT_ID,
-                file_id,
-                legenda,
-                reply_markup,
-                parse_mode='HTML' # Mantenha como HTML
+                    config.GESTOR_GROUP_CHAT_ID,
+                    file_id,
+                    legenda,
+                    reply_markup,
+                    parse_mode='HTML' # Mantenha como HTML
                 )
 
-                # Loga o resultado do envio
+                # SE (e somente SE) o envio foi um sucesso, marcamos a flag
                 if resposta_api and resposta_api.get('ok'):
-                    logger.info(f"Notificação inicial para gestor (EntregaID {entrega_id}) enviada com sucesso.")
+                    try:
+                        database.marcar_notificacao_gestor_enviada(entrega_id)
+                        logger.info(f"Notificação inicial para gestor (EntregaID {entrega_id}) enviada com sucesso E flag marcada.")
+                    except Exception as flag_error:
+                        logger.error(f"Notificação enviada, MAS FALHOU AO MARCAR FLAG para EntregaID {entrega_id}: {flag_error}", exc_info=True)
+                        # Trade-off: O agendador pode enviar uma duplicata, o que é aceitável.
                 else:
-                    logger.error(f"Falha ao enviar notificação inicial para gestores sobre EntregaID {entrega_id}. Resposta API: {resposta_api}", exc_info=False)
-                    # Se a flag foi marcada mas o envio falhou, o gestor só verá em main.py (trade-off)
+                    # Se falhou, logamos o erro e NÃO marcamos a flag.
+                    # O agendador.py vai pegar esta entrega.
+                    logger.error(f"Falha ao enviar notificação inicial para gestores sobre EntregaID {entrega_id}. Resposta API: {resposta_api}. Flag NÃO marcada.")
 
             except Exception as notify_error:
-                logger.error(f"Erro inesperado durante o envio da notificação inicial para gestor (EntregaID {entrega_id}): {notify_error}", exc_info=True)
-                # Se a flag foi marcada mas o envio falhou, o gestor só verá em main.py (trade-off)
+                # Se ocorreu um erro de rede/timeout, também NÃO marcamos a flag.
+                # O agendador.py vai pegar esta entrega.
+                logger.error(f"Erro inesperado durante o envio da notificação inicial para gestor (EntregaID {entrega_id}): {notify_error}. Flag NÃO marcada.", exc_info=True)
+
+            # --- FIM DA CORREÇÃO ---
 
             # Envia confirmação para o usuário (esta linha já existe depois do bloco acima)
             await update.message.reply_text("✅ Evidência válida! Entrega registrada com sucesso e enviada para validação!")
@@ -1412,3 +1408,4 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
+
