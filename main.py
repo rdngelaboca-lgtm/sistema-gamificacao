@@ -2995,9 +2995,10 @@ class App:
             
             # --- CORREÇÃO APLICADA AQUI ---
             # Verifica o Status E TAMBÉM o intervalo de datas
-            data_inicio_obj = meta.DataInicio.date()
-            data_fim_obj = meta.DataFim.date()
-            
+            # CORREÇÃO: Removemos .date() pois meta.DataInicio já é um objeto 'date'
+            data_inicio_obj = meta.DataInicio
+            data_fim_obj = meta.DataFim
+
             if meta.Status == 'Ativa' and (data_inicio_obj <= data_hoje <= data_fim_obj):
                 metas_ativas.append(f"{meta.NomeMeta} (ID: {meta.MetaPrincipalID})")
             # --- FIM DA CORREÇÃO ---
