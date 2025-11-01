@@ -58,6 +58,20 @@ HORARIO_LEMBRETE_DIARIO_AMANHA = "09:00"
 HORARIO_LEMBRETE_SEMANAL = "08:00"
 MAX_DIFERENCA_FOTO_SEGUNDOS = 120
 
+# --- CONFIGURAÇÕES DA FUNCIONALIDADE DE NOTA FISCAL (NF) ---
+# Pontos de bônus que o funcionário ganha por enviar a NF (Regra 1)
+PONTOS_BONUS_NOTA_FISCAL = 10
+
+# ID da Tarefa "Bônus: Envio de Nota Fiscal" que você criou no Passo 0.1 (Regra 1)
+TAREFA_ID_NOTA_FISCAL = 156 # <--- SUBSTITUA O 0 PELO ID CORRETO
+
+# ID da Tarefa "Guardar Mercadoria (NF)" que você criou no Passo 0.2 (Regra 4)
+TAREFA_ID_GUARDAR_MERCADORIA_MODELO = 157 # <--- SUBSTITUA O 0 PELO ID CORRETO
+
+# Número de WhatsApp do financeiro/contato para encaminhar a NF (Regra 3)
+# Formato: 55 (País) + DDD (Cidade) + Número (sem 9 extra se for SP)
+WHATSAPP_CONTATO_FINANCEIRO = "5544997408569" # <--- SUBSTITUA PELO NÚMERO CORRETO
+
 # --- MENSAGENS PARA META DIÁRIA ATINGIDA ---
 MENSAGENS_META_DIARIA_CUMPRIDA = [
     "🏆 UHUUUL! Batemos a meta de hoje! 🎉 Cada um ganhou +{pontos} pontos! Vocês são demais! 🚀",
