@@ -169,11 +169,16 @@ def enviar_lembretes_diarios():
     logger.info("--> Lembrete diário enviado com sucesso!")
 
 
+# Em agendador_lembretes.py
 def enviar_lembretes_semanais():
-    """Busca os agendamentos da PRÓXIMA SEMANA e envia um resumo completo."""
-    logger.info(f"[{datetime.now().strftime('%H:%M:%S')}] Verificando agendamentos da PRÓXIMA SEMANA...")
+    """Busca os agendamentos da SEMANA ATUAL (que se inicia) e envia um resumo completo."""
+    logger.info(f"[{datetime.now().strftime('%H:%M:%S')}] Verificando agendamentos da SEMANA ATUAL...")
     hoje = date.today()
-    inicio_semana = hoje + timedelta(days=-hoje.weekday(), weeks=1)
+    # --- CORREÇÃO APLICADA AQUI ---
+    # Removemos 'weeks=1'. Agora, se rodar na Segunda-feira (weekday=0),
+    # 'inicio_semana' será a própria Segunda-feira (hoje).
+    inicio_semana = hoje + timedelta(days=-hoje.weekday())
+    # --- FIM DA CORREÇÃO ---
     fim_semana = inicio_semana + timedelta(days=6)
     agendamentos_semana = database.buscar_agendamentos_para_periodo(inicio_semana, fim_semana)
     periodo_str = f"de {inicio_semana.strftime('%d/%m')} a {fim_semana.strftime('%d/%m')}"
