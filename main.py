@@ -1234,16 +1234,7 @@ class App:
                 # <<< --- FIM DA CORREÇÃO --- >>>
 
                 # Agora, itera pelos valores (dias da semana/mês ou None)
-                for valor in valores_freq:
-                    # NÃO precisamos mais verificar aqui dentro
 
-                    # Tenta atribuir a tarefa para este valor específico
-                    if database.atribuir_tarefa(tarefa_id, funcionario_id, tipo_freq_selecionada, valor):
-                        sucessos += 1
-                    else:
-                        falhas += 1
-                        # Se falhar aqui, pode ser um erro de banco, logar seria bom
-                        logger.error(f"Falha ao chamar database.atribuir_tarefa para Func:{funcionario_id}, Tar:{tarefa_id}, Freq:{tipo_freq_selecionada}, Val:{valor}")
 
             # Lógica de mensagem final (ajustada para contar sucessos corretamente)
             msg_final = f"{sucessos} atribuição(ões) de frequência criada(s) com sucesso!" # Mensagem mais precisa
@@ -2112,6 +2103,13 @@ class App:
                         f"<i>{conquista.Descricao}</i>\n"
                         f"Você ganhou um bônus de <b>{conquista.PontosBonus}</b> pontos!"
                     )
+
+            # --- CORREÇÃO ADICIONADA AQUI ---
+                # Adiciona os pontos bônus da conquista ao saldo geral do funcionário.
+                # Esta linha estava faltando (comparado ao telegram_bot.py).
+                if conquista.PontosBonus > 0:
+                    database.adicionar_pontos_ao_saldo(entrega_atual.FuncionarioID, conquista.PontosBonus)
+                # --- FIM DA CORREÇÃO ---
 
             notificador_telegram.enviar_mensagem(entrega_atual.ChatIDTelegram, texto_notificacao) # Pode falhar
             messagebox.showinfo("Sucesso", "Entrega aprovada e pontuação atribuída!", parent=self.root) # Adicionado parent
