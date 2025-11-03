@@ -14,14 +14,17 @@ LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d]
 LOG_MAX_BYTES = 10 * 1024 * 1024 # Tamanho máximo de cada arquivo de log (10 MB)
 LOG_BACKUP_COUNT = 5 # Quantos arquivos de log antigos manter
 
+# Em telegram_bot.py
 # --- Cria a pasta de logs se não existir ---
 log_dir = os.path.join(os.path.dirname(__file__), LOG_FOLDER)
 if not os.path.exists(log_dir):
     try:
         os.makedirs(log_dir)
-        logger.info(f"Pasta de logs criada em: {log_dir}") # Print inicial para confirmar criação
+        # CORREÇÃO: Usar print() antes do logger ser definido.
+        print(f"Pasta de logs criada em: {log_dir}") 
     except OSError as e:
-        logger.error(f"Erro ao criar pasta de logs '{log_dir}': {e}", file=sys.stderr)
+        # CORREÇÃO: Usar print() antes do logger ser definido.
+        print(f"Erro ao criar pasta de logs '{log_dir}': {e}", file=sys.stderr)
         # Se não conseguir criar a pasta, tenta logar no diretório atual
         log_dir = os.path.dirname(__file__)
 
@@ -173,13 +176,12 @@ async def lancar_venda(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             "Aguarde, estou atualizando o status..."
         )
 
-        # --- CORREÇÃO APLICADA AQUI ---
-        # Chama a função auxiliar para verificar e premiar a meta diária
         try:
-            # REMOVE O UNDERSCORE DA CHAMADA DA FUNÇÃO DO DATABASE
+            # --- A CORREÇÃO ESTÁ AQUI ---
+            # A função correta em database.py NÃO tem o underscore no início.
             database.verificar_e_premiar_meta_diaria(apuracao_id, data_hoje_str, valor_dia, meta_id)
+            # --- FIM DA CORREÇÃO ---
             logger.info(f"Verificação de meta diária (ID {apuracao_id}) acionada via Telegram.")
-        # O except NameError pode ser mantido para capturar erros de importação, se necessário.
         except NameError:
             logger.error("!!! ERRO: Função verificar_e_premiar_meta_diaria não encontrada/importada corretamente. Premiação diária via Telegram falhou.")
         except Exception as e_premio:
@@ -1402,7 +1404,10 @@ def main() -> None:
 
     # Handler de TEXTO genérico (para justificativas, cpf, etc.)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, roteador_de_texto_privado))
-
+    # --- CORREÇÃO ADICIONADA AQUI ---
+    # Adiciona o handler para capturar o "motivo da recusa" digitado pelo gestor no GRUPO.
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUP, receber_motivo_recusa))
+    # --- FIM DA CORREÇÃO ---
     logger.info("--- BOT INICIADO COM SUCESSO ---")
     application.run_polling()
 
