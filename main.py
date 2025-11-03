@@ -71,6 +71,7 @@ import config
 import file_utils
 import urllib.parse
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from database import adicionar_pontos_ao_saldo
 
 
 class App:
