@@ -486,13 +486,21 @@ def processar_downloads_pendentes_sync():
                             detalhes_entrega_para_notif = database.buscar_detalhes_da_entrega(entrega.EntregaID)
 
                             if detalhes_entrega_para_notif and config.GESTOR_GROUP_CHAT_ID:
-                                data_envio_original_str = "(data indisponível)" # Placeholder, pode ser melhorado buscando a data original
+
+                            # --- CORREÇÃO APLICADA AQUI ---
+                            # Verifica se o campo DataEnvio (adicionado na Correção A) existe e o formata
+                                if detalhes_entrega_para_notif.DataEnvio:
+                                    data_envio_original_str = detalhes_entrega_para_notif.DataEnvio.strftime('%d/%m/%Y %H:%M:%S')
+                                else:
+                                    data_envio_original_str = "(data indisponível)"
+                                # --- FIM DA CORREÇÃO ---
 
                                 legenda = (f"<b>Nova Entrega para Validação (Via Agendador)</b>\n\n"
                                         f"👤 <b>Funcionário:</b> {detalhes_entrega_para_notif.NomeCompleto}\n"
                                         f"📝 <b>Tarefa:</b> {detalhes_entrega_para_notif.Titulo} ({detalhes_entrega_para_notif.Pontos} pts)\n"
                                         f"🗓️ <b>Data Envio Original:</b> {data_envio_original_str}\n"
                                         f"📦 <b>Entrega ID:</b> {entrega.EntregaID}")
+                            
                                 keyboard = [[
                                     InlineKeyboardButton("✅ Aprovar", callback_data=f"aprovar_gestor_{entrega.EntregaID}"),
                                     InlineKeyboardButton("❌ Reprovar", callback_data=f"reprovar_gestor_{entrega.EntregaID}")
