@@ -439,13 +439,15 @@ class AppGestaoPessoas:
             texto_principal = f"**Conteúdo:**\n{conteudo.strip()}\n\nSua confirmação de leitura é obrigatória e será registrada."
 
             # 2. Envia para o primeiro funcionário para obter o file_id da imagem (se houver)
+            # 2. Envia para o GRUPO DE GESTORES para obter o file_id da imagem (se houver)
             if imagem_anexada:
-                primeiro_func = destinatarios_objs[0]
+                # ENVIAMOS PARA O GRUPO DE GESTÃO (um ID seguro) EM VEZ DO PRIMEIRO USUÁRIO
+                logger.info(f"Enviando foto para GESTOR_GROUP_CHAT_ID ({config.GESTOR_GROUP_CHAT_ID}) para obter file_id...")
                 resposta_api_foto = notificador_telegram.enviar_foto_com_botoes(
-                    primeiro_func.ChatIDTelegram, 
+                    config.GESTOR_GROUP_CHAT_ID, 
                     self.caminho_imagem_selecionada, 
-                    legenda_imagem_curta
-                ) # Envia a foto SÓ com a legenda curta
+                    f"(Log de Envio: {titulo})" # Legenda curta para o log do gestor
+                ) # Envia a foto SÓ com a legenda curta, sem botões
 
                 if resposta_api_foto and resposta_api_foto.get('ok'):
                     telegram_file_id = resposta_api_foto['result']['photo'][-1]['file_id']
