@@ -14,17 +14,14 @@ LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d]
 LOG_MAX_BYTES = 10 * 1024 * 1024 # Tamanho máximo de cada arquivo de log (10 MB)
 LOG_BACKUP_COUNT = 5 # Quantos arquivos de log antigos manter
 
-# Em telegram_bot.py
 # --- Cria a pasta de logs se não existir ---
 log_dir = os.path.join(os.path.dirname(__file__), LOG_FOLDER)
 if not os.path.exists(log_dir):
     try:
         os.makedirs(log_dir)
-        # CORREÇÃO: Usar print() antes do logger ser definido.
-        print(f"Pasta de logs criada em: {log_dir}") 
+        print(f"Pasta de logs criada em: {log_dir}") # Print inicial para confirmar criação
     except OSError as e:
-        # CORREÇÃO: Usar print() antes do logger ser definido.
-        print(f"Erro ao criar pasta de logs '{log_dir}': {e}", file=sys.stderr)
+        logger.error(f"Erro ao criar pasta de logs '{log_dir}': {e}", file=sys.stderr)
         # Se não conseguir criar a pasta, tenta logar no diretório atual
         log_dir = os.path.dirname(__file__)
 
@@ -59,1358 +56,4645 @@ logger.info(f"*** Logging configurado para o módulo: {__name__} ***")
 # == FIM BLOCO DE CONFIGURAÇÃO DE LOGGING ======================================
 # ==============================================================================
 
-import recibo_generator
+
+import pyodbc
+from datetime import datetime, date, timedelta 
+import calendar 
+import hashlib
+import config 
+import notificador_telegram
+import logging
 import random
-import os
-import logging, config, database, random, notificador_telegram
-from datetime import datetime, timedelta, timezone, date
-from zoneinfo import ZoneInfo
-from PIL import Image
-import exifread
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
-from telegram.ext import (Application, CommandHandler, MessageHandler, filters, 
-                          ContextTypes, CallbackQueryHandler)
-from telegram.helpers import escape_markdown
-import urllib.parse
-from database import adicionar_pontos_ao_saldo
-import locale
-try:
-    locale.setlocale(locale.LC_TIME, 'pt_BR.UTF-8')
-except locale.Error:
-    print("Locale pt_BR.UTF-8 não encontrado. Usando o padrão do sistema.")
 
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# ===================================================================
-# == INÍCIO DAS NOVAS FUNÇÕES DA SALA DE COMANDO (GESTORES) =========
-# ===================================================================
+CONNECTION_STRING = (
+    f"DRIVER={{ODBC Driver 18 for SQL Server}};"  
+    f"SERVER={config.DB_SERVER};"
+    f"DATABASE={config.DB_DATABASE};"
+    f"UID={config.DB_UID};"
+    f"PWD={config.DB_PWD};"
+    f"TrustServerCertificate=yes;"
+)
 
-async def status_meta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Envia o status atual da meta principal para o grupo de gestão."""
-    chat_id = update.effective_chat.id
-    if chat_id != config.GESTOR_GROUP_CHAT_ID:
-        await update.message.reply_text("Este comando é exclusivo para o grupo de gestão.")
-        return
 
-    dados_meta = database.buscar_meta_principal_do_dia()
-    if not dados_meta or not dados_meta.get('valor_meta'):
-        await update.message.reply_text("Nenhuma meta principal está ativa no momento.")
-        return
-
-    # Coleta de dados (sem alteração)
-    nome = dados_meta['nome_meta']
-    atingido = dados_meta['valor_atingido']
-    total = dados_meta['valor_meta']
-    percentual = (atingido / total) * 100 if total > 0 else 0
-    
-    # Barra de progresso (sem alteração)
-    blocos_cheios = int(percentual // 10); blocos_vazios = 10 - blocos_cheios
-    barra_progresso = '▓' * blocos_cheios + '░' * blocos_vazios
-
-    # Cálculo da projeção (sem alteração)
-    hoje = date.today()
-    dias_no_mes = (hoje.replace(month=hoje.month % 12 + 1, day=1) - timedelta(days=1)).day
-    dias_corridos = hoje.day
-    media_diaria = atingido / dias_corridos if dias_corridos > 0 else 0
-    projecao = media_diaria * dias_no_mes if media_diaria > 0 else 0
-
-    # --- A CORREÇÃO DEFINITIVA ESTÁ AQUI ---
-    # Usamos tags HTML (<b> para negrito, <code> para fonte monoespaçada)
-    mensagem = (
-        f"📊 <b>Status da Meta: {nome}</b> 📊\n\n"
-        f"<code>{barra_progresso}</code>  <b>{percentual:.2f}%</b>\n\n"
-        f"💰 <b>Atingido:</b> <code>R$ {atingido:,.2f}</code>\n"
-        f"🎯 <b>Meta:</b> <code>R$ {total:,.2f}</code>\n\n"
-        f"📈 <b>Projeção Final:</b> <code>R$ {projecao:,.2f}</code>"
-    )
-
-    # Enviamos a mensagem usando reply_html em vez de reply_markdown_v2
-    await update.message.reply_html(mensagem)
-
-async def lancar_venda(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Registra o valor da apuração diária enviado pelo gestor."""
-    chat_id = update.effective_chat.id
-    gestor = database.buscar_funcionario_por_chat_id(update.effective_user.id)
-
-    # Verifica se é o grupo de gestão
-    if chat_id != config.GESTOR_GROUP_CHAT_ID:
-        await update.message.reply_text("Este comando é exclusivo para o grupo de gestão.")
-        return
-    # Verifica se o gestor foi encontrado no banco
-    if not gestor:
-        await update.message.reply_text("Erro: Seu usuário do Telegram não foi encontrado no sistema para registrar esta ação.")
-        return
-
-    # Verifica se o valor foi fornecido
-    if not context.args:
-        await update.message.reply_text("Por favor, informe o valor a ser lançado.\nExemplo: `/lancar 1250.50`")
-        return
-
-    # Tenta converter o valor para float
+def get_db_connection():
     try:
-        valor_str = context.args[0].replace(',', '.')
-        valor_dia = float(valor_str)
-    except (ValueError, IndexError):
-        await update.message.reply_text("Valor inválido. Por favor, use apenas números.\nExemplo: `/lancar 1250.50`")
-        return
+        conn = pyodbc.connect(CONNECTION_STRING)
+        return conn
+    except pyodbc.Error as ex:
+        logger.critical(f"FALHA CRÍTICA na conexão com o banco de dados: {ex}", exc_info=True) # Usamos critical e exc_info para detalhes
+        return None
 
-    # Busca o ID da meta principal ativa para hoje
-    meta_id = database.buscar_meta_ativa_id_hoje()
-    if not meta_id:
-        await update.message.reply_text("Erro: Nenhuma meta principal está ativa para hoje. Não é possível lançar.")
-        return
-
-    # Pega a data de hoje e formata para o banco
-    data_hoje_obj = date.today() # Pega o objeto date
-    data_hoje_str = data_hoje_obj.strftime('%Y-%m-%d')
-
-    # Tenta lançar a apuração no banco
-    sucesso, resultado = database.lancar_apuracao_diaria(meta_id, data_hoje_str, valor_dia, gestor.FuncionarioID)
-
-    if sucesso:
-        apuracao_id = resultado # Captura o ID da apuração retornado pelo banco
-
-        # Envia mensagem de sucesso
-        await update.message.reply_html(
-            f"✅ <b>Sucesso!</b> Lançamento de <code>R$ {valor_dia:,.2f}</code> registrado por {gestor.NomeCompleto}.\n\n"
-            "Aguarde, estou atualizando o status..."
-        )
-
+def buscar_proximos_agendamentos(limite=5):
+    """Busca os próximos 'limite' agendamentos a partir de hoje."""
+    conn = get_db_connection()
+    if conn:
         try:
-            # --- A CORREÇÃO ESTÁ AQUI ---
-            # A função correta em database.py NÃO tem o underscore no início.
-            database.verificar_e_premiar_meta_diaria(apuracao_id, data_hoje_str, valor_dia, meta_id)
-            # --- FIM DA CORREÇÃO ---
-            logger.info(f"Verificação de meta diária (ID {apuracao_id}) acionada via Telegram.")
-        except NameError:
-            logger.error("!!! ERRO: Função verificar_e_premiar_meta_diaria não encontrada/importada corretamente. Premiação diária via Telegram falhou.")
-        except Exception as e_premio:
-            logger.error(f"Erro ao tentar verificar/premiar meta diária após lançamento via Telegram: {e_premio}", exc_info=True)
-        # --- FIM DA CORREÇÃO ---
-        # Mostra o status atualizado da meta principal
-        await status_meta(update, context)
-
-    else:
-        # Envia mensagem de falha
-        await update.message.reply_text(f"❌ Falha ao registrar o lançamento.\nErro: {resultado}")
-
-
-# ===================================================================
-# == FIM DAS NOVAS FUNÇÕES DA SALA DE COMANDO =======================
-# ===================================================================
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user = update.effective_user
-    chat_id = user.id
-    funcionario = database.buscar_funcionario_por_chat_id(chat_id)
-    REPLY_KEYBOARD = [
-    ["📋 Minhas Tarefas", "🏆 Ranking do Mês", "🎯 Acompanhar Metas"],
-    ["💰 Meu Saldo", "🏪 Loja de Recompensas", "🧾 Enviar Nota Fiscal"],
-    ["📜 Meu Histórico", "💬 Canal Confidencial"],
-    ["🏅 Minhas Conquistas", "📄 Meus Documentos"],
-    ["❓ Ajuda"]
-    ]
-    reply_markup = ReplyKeyboardMarkup(REPLY_KEYBOARD, resize_keyboard=True)
-    if funcionario:
-        mensagem = f"Bem-vindo(a) de volta, <b>{funcionario.NomeCompleto}</b>! 👋\n\nUse os botões abaixo para interagir:"
-    else:
-        mensagem = "Olá! Parece que seu usuário não foi encontrado no sistema. Por favor, contate seu gestor."
-    await update.message.reply_html(mensagem, reply_markup=reply_markup)
-
-async def obter_id_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id = update.effective_chat.id
-    await update.message.reply_html(f"O ID deste chat é: <code>{chat_id}</code>")
-
-async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    texto_ajuda = (
-        "Olá! Eu sou seu assistente de gamificação. Aqui estão os comandos:\n\n"
-        "<b>Comandos Principais (Botões):</b>\n"
-        "📋 **Minhas Tarefas**: Mostra sua lista de tarefas pendentes para hoje.\n"
-        "🏆 **Ranking do Mês**: Exibe a classificação de desempenho atual.\n"
-        "💰 **Meu Saldo**: Mostra seus pontos acumulados e o valor em R$.\n"
-        "🏪 **Loja de Recompensas**: Permite trocar seus pontos por prêmios.\n"
-        "📜 **Meu Histórico**: Exibe suas últimas 10 atividades.\n"
-        "🏅 **Minhas Conquistas**: Lista suas conquistas desbloqueadas.\n"
-        "📄 **Meus Documentos**: Acessa documentos pessoais, como holerites.\n\n"
-        "💬 **Canal Confidencial** (Botão 'Solicitar Feedback'):\n"
-        "   Envia uma sugestão, reclamação ou denúncia de forma <b>100% ANÔNIMA</b> para a gestão.\n"
-    )
-    # Usamos reply_html por causa do <b>
-    await update.message.reply_html(texto_ajuda, reply_markup=update.message.reply_markup)
-
-async def pendencias_gestor(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id = update.effective_chat.id
-    if chat_id != config.GESTOR_GROUP_CHAT_ID:
-        await update.message.reply_text("Este comando só pode ser usado no grupo de gestão.")
-        return
-    funcionarios = database.listar_funcionarios()
-    if not funcionarios:
-        await update.message.reply_text("Não há funcionários cadastrados no sistema.")
-        return
-    keyboard = []
-    for func in funcionarios:
-        keyboard.append([
-            InlineKeyboardButton(
-                func.NomeCompleto, 
-                callback_data=f"ver_pendencias_{func.FuncionarioID}"
-            )
-        ])
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Selecione um funcionário para ver as tarefas pendentes:", reply_markup=reply_markup)
-
-async def tarefas(update: Update, context: ContextTypes.DEFAULT_TYPE, query=None) -> None:
-    chat_id = update.effective_chat.id; funcionario = database.buscar_funcionario_por_chat_id(chat_id)
-    if not funcionario: return
-    tarefas_do_dia = database.listar_tarefas_do_dia_por_funcionario(funcionario.FuncionarioID)
-    if not tarefas_do_dia:
-        texto = "Você não tem nenhuma tarefa pendente para hoje. Bom trabalho! ✨"
-        if query: await query.edit_message_text(texto)
-        else: await context.bot.send_message(chat_id, texto)
-        return
-    texto = "📋 **Suas Tarefas para Hoje:**\n\nClique em uma tarefa para ver os detalhes:"
-    keyboard = [[InlineKeyboardButton(f"👀 {t.Titulo} ({t.Pontos} pts)", callback_data=f"ver_tarefa_{t.AtribuicaoID}")] for t in tarefas_do_dia]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    if query: await query.edit_message_text(texto, reply_markup=reply_markup, parse_mode='Markdown')
-    else: await update.message.reply_text(texto, reply_markup=reply_markup, parse_mode='Markdown')
-
-async def ranking(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    ranking_cozinha = []
-    ranking_loja = []
-    erro_db = None
-
-    try: # <<< ADICIONADO TRY >>>
-        # Tenta buscar ambos os rankings
-        ranking_cozinha = database.calcular_ranking_desempenho(setor_filtro='Cozinha')
-        ranking_loja = database.calcular_ranking_desempenho(setor_filtro='Loja')
-
-    except Exception as e: # <<< ADICIONADO EXCEPT >>>
-        logger.exception(f"Erro ao buscar dados do ranking para o comando /ranking do Telegram: {e}")
-        erro_db = e # Guarda o erro para informar o usuário
-
-    # --- Lógica de exibição com tratamento de erro ---
-    if erro_db:
-        await update.message.reply_text(f"❌ Desculpe, ocorreu um erro ao buscar os dados do ranking no momento.\nPor favor, tente novamente mais tarde ou contate o suporte se o problema persistir.")
-        return # Interrompe se houve erro no banco
-
-    if not ranking_cozinha and not ranking_loja:
-        await update.message.reply_text("Ainda não há dados suficientes para gerar os rankings este mês.")
-        return
-
-    texto_final = "🏆 **Rankings de Desempenho do Mês** 🏆\n\n"
-    texto_final += "O *Score Final* equilibra Confiabilidade e Esforço (70%/30%).\n"
-
-    # --- Ranking Cozinha ---
-    texto_final += "\n🍳 **--- Ranking Cozinha ---** 🍳\n"
-    if not ranking_cozinha:
-        texto_final += "_Sem dados para este setor no momento._\n"
-    else:
-        icones = ["🥇", "🥈", "🥉"]
-        for i, dados in enumerate(ranking_cozinha):
-            posicao_icone = icones[i] if i < len(icones) else f" {i+1}."
-            nome = dados['NomeCompleto']
-            score = dados['ScoreHibrido']
-            detalhes = f"(Desemp: {dados['Desempenho']}%, Pts: {dados['PontosGanhos']})"
-            texto_final += f"{posicao_icone} {nome} - **Score: {score}**\n   {detalhes}\n"
-
-    # --- Ranking Atendimento/Loja ---
-    texto_final += "\n🛒 **--- Ranking Atendimento/Loja ---** 🛒\n"
-    if not ranking_loja:
-        texto_final += "_Sem dados para este setor no momento._\n"
-    else:
-        icones = ["🥇", "🥈", "🥉"]
-        for i, dados in enumerate(ranking_loja):
-            posicao_icone = icones[i] if i < len(icones) else f" {i+1}."
-            nome = dados['NomeCompleto']
-            score = dados['ScoreHibrido']
-            detalhes = f"(Desemp: {dados['Desempenho']}%, Pts: {dados['PontosGanhos']})"
-            texto_final += f"{posicao_icone} {nome} - **Score: {score}**\n   {detalhes}\n"
-
-    # Envia a mensagem formatada (usando Markdown para compatibilidade anterior)
-    await update.message.reply_text(texto_final, parse_mode='Markdown')
-
-async def meu_historico(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Envia ao usuário um resumo de suas últimas 10 atividades."""
-    chat_id = update.effective_chat.id
-    
-    # 1. Identifica o funcionário pelo Chat ID do Telegram
-    funcionario = database.buscar_funcionario_por_chat_id(chat_id)
-    if not funcionario:
-        await update.message.reply_text("Desculpe, não consegui encontrar seu cadastro no sistema.")
-        return
-
-    # 2. Busca o histórico completo no banco de dados
-    historico_completo = database.obter_historico_funcionario(funcionario.FuncionarioID)
-
-    if not historico_completo:
-        await update.message.reply_text("Você ainda não possui nenhuma atividade registrada no seu histórico.")
-        return
-
-    # 3. Monta a mensagem de resposta, pegando apenas os 10 itens mais recentes
-    texto_historico = f"📜 <b>Seu Histórico Recente (últimas 10 atividades)</b> 📜\n\n"
-    
-    for item in historico_completo[:10]: # O [:10] fatia a lista para pegar só os 10 primeiros
-        status_icone = "❓" # Padrão
-        if item.Status == 'Aprovada':
-            status_icone = "✅"
-        elif item.Status == 'Recusada':
-            status_icone = "❌"
-        elif item.Status == 'Pendente (Não Entregue)':
-            status_icone = "⏳"
-
-        # Formata a data para ficar mais amigável
-        data_envio = item.DataEnvio.strftime("%d/%m/%Y") if item.DataEnvio else "N/A"
-        pontos = item.PontosGanhos if item.PontosGanhos is not None else 0
-        
-        texto_historico += f"{status_icone} <b>{item.Titulo}</b>\n"
-        texto_historico += f"    - Status: {item.Status}\n"
-        texto_historico += f"    - Pontos: {pontos}\n"
-        
-        # Adiciona o motivo da recusa, se houver
-        if item.MotivoRecusa:
-            texto_historico += f"    - Motivo: <i>{item.MotivoRecusa}</i>\n"
-        
-        texto_historico += "\n"
-
-    # 4. Envia a mensagem formatada em HTML para o usuário
-    await update.message.reply_html(texto_historico)    
+            cursor = conn.cursor()
+            # Query otimizada para buscar apenas os próximos 'limite' agendamentos
+            # Usando CAST para garantir que GETDATE() compare apenas a data
+            # Adicionado tratamento para StatusAgendamento (ex: 'Confirmado')
+            sql = f"""
+                SELECT TOP ({int(limite)})
+                    A.NomeCliente, A.TipoEvento, A.DataEvento, A.TelefoneCliente -- Adicionado Telefone
+                FROM Agendamentos A
+                WHERE A.DataEvento >= CAST(GETDATE() AS DATE) -- Apenas agendamentos futuros (a partir de hoje)
+                  AND A.StatusAgendamento = 'Confirmado' -- Apenas confirmados (ou ajuste conforme necessário)
+                ORDER BY A.DataEvento ASC
+            """
+            cursor.execute(sql)
+            cols = [column[0] for column in cursor.description]
+            agendamentos = []
+            for row in cursor.fetchall():
+                ag_dict = dict(zip(cols, row))
+                # Formata a data/hora para o JS (dd/mm/yyyy HH:MM)
+                ag_dict['data_evento'] = ag_dict['DataEvento'].strftime('%d/%m/%Y %H:%M')
+                # Renomeia as chaves para corresponder ao JS (se necessário, mas o JS será ajustado)
+                ag_dict['nome_cliente'] = ag_dict.pop('NomeCliente')
+                ag_dict['tipo_evento'] = ag_dict.pop('TipoEvento')
+                ag_dict['telefone_cliente'] = ag_dict.pop('TelefoneCliente') # Adicionado
+                del ag_dict['DataEvento'] # Remove a chave original
+                agendamentos.append(ag_dict)
+            return agendamentos
+        except Exception as e:
+            logger.error(f"Erro ao buscar próximos agendamentos: {e}", exc_info=True)
+            return []
+        finally:
+            if conn:
+                conn.close()
+    return []
 
 
-async def meu_saldo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Mostra o saldo de pontos cumulativo do funcionário."""
-    chat_id = update.effective_chat.id
-    funcionario = database.buscar_funcionario_por_chat_id(chat_id)
-    if not funcionario:
-        await update.message.reply_text("Não encontrei seu cadastro no sistema.")
-        return
+def criar_agendamento(dados_agendamento):
+    """(VERSÃO FINAL CORRIGIDA) Insere um novo agendamento e RETORNA o ID criado."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                INSERT INTO Agendamentos 
+                (NomeCliente, CPFCliente, TelefoneCliente, TipoEvento, DataEvento, 
+                 StatusAgendamento, StatusPagamento, FuncionarioID, Observacoes) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+                SELECT SCOPE_IDENTITY();
+            """
+            cursor.execute(sql,
+                         dados_agendamento['nome_cliente'],
+                         dados_agendamento.get('cpf_cliente'),
+                         dados_agendamento.get('telefone_cliente'),
+                         dados_agendamento['tipo_evento'],
+                         dados_agendamento['data_evento'],
+                         'Confirmado', 'Pendente',
+                         dados_agendamento['funcionario_id'],
+                         dados_agendamento.get('observacoes'))
+            
+            cursor.nextset()
+            
+            novo_id = cursor.fetchone()[0]
+            conn.commit()
+            return True, novo_id
+        except Exception as e:
+            logger.error(f"ERRO ao criar agendamento: {e}")
+            conn.rollback()
+            return False, str(e)
+        finally:
+            conn.close()
+    return False, "Não foi possível conectar ao banco de dados."
 
-    saldo_pontos = database.buscar_saldo_funcionario(funcionario.FuncionarioID)
-    # Usamos a taxa de conversão que definimos no config.py
-    valor_monetario = saldo_pontos * config.TAXA_CONVERSAO_PONTO_REAL
+def listar_agendamentos():
+    """Retorna uma lista de todos os agendamentos."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT A.*, F.NomeCompleto AS NomeFuncionario
+                FROM Agendamentos A JOIN Funcionarios F ON A.FuncionarioID = F.FuncionarioID
+                ORDER BY A.DataEvento ASC
+            """
+            cursor.execute(sql)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
 
-    texto = (
-        f"💰 <b>Seu Saldo Atual</b> 💰\n\n"
-        f"Você acumulou: <b>{saldo_pontos} pontos</b>\n\n"
-        f"Isso equivale a <b>R$ {valor_monetario:.2f}</b> para troca na nossa Loja de Recompensas!\n\n"
-        "Continue assim para resgatar prêmios incríveis! ✨"
-    )
-    await update.message.reply_html(texto)
+def buscar_agendamento_por_id(agendamento_id):
+    """Busca todos os detalhes de um único agendamento pelo seu ID."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT A.*, F.NomeCompleto AS NomeFuncionario
+                FROM Agendamentos A JOIN Funcionarios F ON A.FuncionarioID = F.FuncionarioID
+                WHERE A.AgendamentoID = ?
+            """
+            cursor.execute(sql, agendamento_id)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
 
-async def loja_recompensas(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Exibe os produtos da loja como um menu de botões."""
-    # Usamos 'update.effective_chat.id' para funcionar tanto com comandos (/loja) quanto com cliques de botão.
-    chat_id = update.effective_chat.id
-    produtos = database.listar_produtos_loja() # Lista apenas os produtos ativos por padrão
+def atualizar_agendamento(agendamento_id, dados_agendamento):
+    """Atualiza um agendamento existente com novos dados."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                UPDATE Agendamentos SET
+                    NomeCliente = ?, CPFCliente = ?, TelefoneCliente = ?, TipoEvento = ?,
+                    DataEvento = ?, StatusAgendamento = ?, StatusPagamento = ?,
+                    FuncionarioID = ?, Observacoes = ?
+                WHERE AgendamentoID = ?
+            """
+            # <<< A CORREÇÃO DA ORDEM ESTÁ AQUI >>>
+            cursor.execute(sql,
+                         dados_agendamento['nome_cliente'],
+                         dados_agendamento.get('cpf_cliente'),
+                         dados_agendamento.get('telefone_cliente'),
+                         dados_agendamento['tipo_evento'],
+                         dados_agendamento['data_evento'], # <-- Formato AAAA-MM-DD
+                         dados_agendamento.get('status_agendamento', 'Confirmado'),
+                         dados_agendamento.get('status_pagamento', 'Pendente'),
+                         dados_agendamento['funcionario_id'],
+                         dados_agendamento.get('observacoes'),
+                         agendamento_id)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"ERRO ao atualizar agendamento: {e}")
+            conn.rollback() # Adicionado por segurança
+            return False
+        finally:
+            conn.close()
+    return False
 
-    if not produtos:
-        await context.bot.send_message(chat_id, "Nossa loja de recompensas está vazia no momento. Volte em breve!")
-        return
+def excluir_agendamento(agendamento_id):
+    """Exclui um agendamento do banco de dados."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "DELETE FROM Agendamentos WHERE AgendamentoID = ?"
+            cursor.execute(sql, agendamento_id)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"ERRO ao excluir agendamento: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
 
-    texto = "🏪 **Loja de Recompensas** 🏪\n\nEscolha um item para ver os detalhes e resgatar:"
-    keyboard = []
-    for produto in produtos:
-        # Mostra o estoque se ele for limitado
-        estoque_str = f"({produto.EstoqueDisponivel} un.)" if produto.EstoqueDisponivel is not None else ""
-        texto_botao = f"{produto.Nome} - {produto.CustoEmPontos} pts {estoque_str}"
-        keyboard.append([InlineKeyboardButton(texto_botao, callback_data=f"ver_produto_{produto.ProdutoID}")])
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await context.bot.send_message(chat_id, texto, reply_markup=reply_markup)
+def atualizar_status_pagamento(agendamento_id, novo_status):
+    """Atualiza apenas o status de pagamento de um agendamento."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE Agendamentos SET StatusPagamento = ? WHERE AgendamentoID = ?"
+            cursor.execute(sql, novo_status, agendamento_id)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"ERRO ao atualizar status de pagamento: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
 
-async def solicitar_holerite_inicio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Inicia o fluxo de solicitação de holerite com verificação de segurança."""
-    chat_id = update.effective_chat.id
-    funcionario = database.buscar_funcionario_por_chat_id(chat_id)
-
-    if not funcionario or not funcionario.VerificadorCPF:
-        await update.message.reply_text("Desculpe, esta funcionalidade não está habilitada para você. Por favor, contate o RH para cadastrar seu código de verificação.")
-        return
-
-    context.user_data['aguardando_verificador_cpf'] = True
-    await update.message.reply_text("Para sua segurança, por favor, digite os 3 primeiros dígitos do seu CPF.")
-
-
-async def roteador_de_texto_privado(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+def buscar_agendamentos_para_periodo(data_inicio, data_fim):
     """
-    Esta função atua como um roteador para todas as mensagens de texto em chat privado.
-    Ela verifica o 'estado' do usuário e direciona para a ação correta.
+    Busca agendamentos cuja DataEvento esteja DENTRO de um período específico (inclusive).
+    (Esta função estava faltando e foi adicionada para o agendador_lembretes.py).
     """
-    user_data = context.user_data
-    texto_recebido = update.message.text
-    chat_id = update.effective_chat.id
-    funcionario = database.buscar_funcionario_por_chat_id(chat_id)
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Adiciona uma cláusula WHERE para filtrar entre data_inicio e data_fim.
+            # Usa CAST(DataEvento AS DATE) para ignorar a hora na comparação de datas.
+            sql = """
+                SELECT A.*, F.NomeCompleto AS NomeFuncionario
+                FROM Agendamentos A 
+                JOIN Funcionarios F ON A.FuncionarioID = F.FuncionarioID
+                WHERE CAST(A.DataEvento AS DATE) BETWEEN ? AND ?
+                ORDER BY A.DataEvento ASC
+            """
+            cursor.execute(sql, data_inicio, data_fim)
+            return cursor.fetchall()
+        except Exception as e:
+            logger.error(f"ERRO ao buscar agendamentos por período: {e}", exc_info=True)
+            return []
+        finally:
+            conn.close()
+    return []
 
-    if not funcionario:
-        return # Se o funcionário não for encontrado, não faz nada
+# --- Nova Função para a Opção "Não Aplicável" ---
+def registrar_tarefa_nao_aplicavel(atribuicao_id, justificativa):
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Primeiro, precisamos buscar os IDs da tarefa e do funcionário a partir da atribuição
+            sql_busca = "SELECT TarefaID, FuncionarioID FROM TarefasAtribuidas WHERE AtribuicaoID = ?"
+            cursor.execute(sql_busca, atribuicao_id)
+            resultado = cursor.fetchone()
+            if resultado:
+                tarefa_id, funcionario_id = resultado
+                # Agora, inserimos na tabela de Entregas com status especial
+                sql_insert = """
+                    INSERT INTO Entregas 
+                    (TarefaID, FuncionarioID, AtribuicaoID, StatusValidacao, PontosGanhos, MotivoRecusa, DataEnvio)
+                    VALUES (?, ?, ?, 'Aprovada', 0, ?, GETDATE())
+                """
+                cursor.execute(sql_insert, tarefa_id, funcionario_id, atribuicao_id, f"Não aplicável: {justificativa}")
+                conn.commit()
+        finally:
+            conn.close()
 
-    # Comando /cancelar para limpar estado
-    if texto_recebido.strip().lower() == '/cancelar':
-        user_data.clear()
-        await update.message.reply_text("Ação cancelada. Use os botões do menu.")
-        return
+def atualizar_funcionario(funcionario_id, nome, chat_id, cargo, horario_notificacao, dia_folga, verificador_cpf): # 1. Novo parâmetro
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                UPDATE Funcionarios 
+                SET NomeCompleto = ?, ChatIDTelegram = ?, Cargo = ?, HorarioNotificacao = ?, DiaDeFolga = ?, VerificadorCPF = ? -- 2. Nova coluna
+                WHERE FuncionarioID = ?
+            """
+            cursor.execute(sql, nome, chat_id, cargo, horario_notificacao, dia_folga, verificador_cpf, funcionario_id) # 3. Novo valor
+            conn.commit()
+        finally:
+            conn.close()
 
-    # Verifica estados específicos PRIMEIRO
-    if user_data.get('aguardando_verificador_cpf'): # Usar .get() é mais seguro
-        user_data.pop('aguardando_verificador_cpf', None) # Limpa mesmo se falhar
-        verificador_correto = database.buscar_verificador_cpf(funcionario.FuncionarioID)
+# Em database.py, esta é a ÚNICA versão da função que deve existir no seu código.
 
-        if verificador_correto and texto_recebido.strip() == verificador_correto: # Adiciona verificação se verificador_correto existe
-            await update.message.reply_text("✅ Verificação bem-sucedida! Buscando seus documentos...")
+def listar_funcionarios_por_tarefa(tarefa_id):
+    """
+    Retorna duas listas de funcionários: os que JÁ ESTÃO atribuídos a uma tarefa ATIVA
+    e os que AINDA NÃO ESTÃO. (VERSÃO FINAL E CORRETA)
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            
+            # Pergunta 1: Quem JÁ tem essa tarefa ATIVA?
+            # A query verifica se a tarefa não foi encerrada (DataFimVigencia IS NULL).
+            sql_atribuidos = """
+                SELECT 
+                    TA.AtribuicaoID, F.NomeCompleto, 
+                    TA.TipoFrequencia + 
+                    CASE 
+                        WHEN TA.TipoFrequencia = 'Semanal' THEN ' (' + 
+                            CASE TA.ValorFrequencia 
+                                WHEN '1' THEN 'Dom' WHEN '2' THEN 'Seg' WHEN '3' THEN 'Ter'
+                                WHEN '4' THEN 'Qua' WHEN '5' THEN 'Qui' WHEN '6' THEN 'Sex'
+                                WHEN '7' THEN 'Sab'
+                            END + ')'
+                        WHEN TA.TipoFrequencia = 'Mensal' THEN ' (Dia ' + CAST(TA.ValorFrequencia AS VARCHAR) + ')'
+                        ELSE '' 
+                    END AS FrequenciaCompleta
+                FROM Funcionarios F
+                JOIN TarefasAtribuidaS TA ON F.FuncionarioID = TA.FuncionarioID
+                WHERE TA.TarefaID = ? AND TA.DataFimVigencia IS NULL
+                ORDER BY F.NomeCompleto
+            """
+            cursor.execute(sql_atribuidos, tarefa_id)
+            atribuidos = cursor.fetchall()
+            
+            # Pergunta 2: Quem AINDA NÃO tem essa tarefa ATIVA?
+            # A subquery ignora tarefas que já foram encerradas.
+            sql_disponiveis = """
+                SELECT * FROM Funcionarios F
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM TarefasAtribuidas TA
+                    WHERE TA.TarefaID = ? AND TA.FuncionarioID = F.FuncionarioID AND TA.DataFimVigencia IS NULL
+                )
+                ORDER BY F.NomeCompleto
+            """
+            cursor.execute(sql_disponiveis, tarefa_id)
+            disponiveis = cursor.fetchall()
+            
+            return atribuidos, disponiveis
+        finally:
+            conn.close()
+    return [], []    
 
-            holerites_disponiveis = database.buscar_holerites_disponiveis(funcionario.FuncionarioID)
+ ### ADICIONE ESTA FUNÇÃO AO SEU ARQUIVO database.py ###
 
-            if not holerites_disponiveis:
-                await update.message.reply_text("Você não possui novos holerites para visualizar no momento.")
-                return
+def buscar_funcionarios_por_horario(horario_atual):
+    """Busca funcionários para notificação de início, RESPEITANDO O DIA DE FOLGA."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # A NOVA REGRA: AND (DiaDeFolga = 0 OR DiaDeFolga != DATEPART(weekday, GETDATE()))
+            sql = """
+                SELECT * FROM Funcionarios 
+                WHERE CONVERT(VARCHAR(5), HorarioNotificacao, 108) = ?
+                AND (DiaDeFolga = 0 OR DiaDeFolga != DATEPART(weekday, GETDATE()))
+            """
+            cursor.execute(sql, horario_atual)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []         
 
-            keyboard = []
-            for holerite in holerites_disponiveis:
-                # Formata a data para ex: "Setembro/2025"
-                mes_ano_str = holerite.MesAno.strftime('%B/%Y').capitalize()
-                # Guarda a data no formato do banco para o callback
-                data_callback = holerite.MesAno.strftime('%Y-%m-%d')
-
-                keyboard.append([
-                    InlineKeyboardButton(
-                        f"📄 {mes_ano_str}",
-                        callback_data=f"get_holerite_{data_callback}"
+# Em database.py, SUBSTITUA a função listar_tarefas_do_dia_por_funcionario:
+def listar_tarefas_do_dia_por_funcionario(funcionario_id):
+    """
+    (VERSÃO 7 - COM CORREÇÃO PARA TAREFAS 'Unica')
+    Busca todas as tarefas do dia, agora incluindo as tarefas únicas aceitas de folgas.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT
+                    TA.AtribuicaoID, T.TarefaID, T.Titulo, T.Pontos, TA.TipoFrequencia AS Tipo,
+                    ISNULL(TA.DescricaoOverride, T.Descricao) AS Descricao
+                FROM TarefasAtribuidas TA
+                JOIN Tarefas T ON TA.TarefaID = T.TarefaID
+                WHERE
+                    TA.FuncionarioID = ? AND TA.DataFimVigencia IS NULL
+                    AND NOT EXISTS (
+                        SELECT 1 FROM Entregas E
+                        WHERE E.AtribuicaoID = TA.AtribuicaoID
+                        AND CONVERT(date, E.DataEnvio) = CONVERT(date, GETDATE())
+                        AND E.StatusValidacao IN ('Aprovada', 'Pendente') -- Exclui Aprovada ou Pendente HOJE
                     )
-                ])
+                    AND (
+                        -- Condições existentes para Diaria, Semanal, Mensal, Agendada
+                        TA.TipoFrequencia = 'Diaria'
+                        OR (
+                            TA.TipoFrequencia = 'Semanal' AND
+                            CAST(TA.ValorFrequencia AS INT) =
+                                CASE DATENAME(weekday, GETDATE())
+                                    WHEN 'Sunday' THEN 1 WHEN 'Domingo' THEN 1
+                                    WHEN 'Monday' THEN 2 WHEN 'Segunda-feira' THEN 2
+                                    WHEN 'Tuesday' THEN 3 WHEN 'Terça-feira' THEN 3
+                                    WHEN 'Wednesday' THEN 4 WHEN 'Quarta-feira' THEN 4
+                                    WHEN 'Thursday' THEN 5 WHEN 'Quinta-feira' THEN 5
+                                    WHEN 'Friday' THEN 6 WHEN 'Sexta-feira' THEN 6
+                                    WHEN 'Saturday' THEN 7 WHEN 'Sábado' THEN 7
+                                END
+                        )
+                        OR (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, GETDATE()))
+                        OR (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = CONVERT(date, GETDATE()))
 
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text("Selecione o holerite que deseja visualizar:", reply_markup=reply_markup)
+                        -- --- A CORREÇÃO ESTÁ AQUI ---
+                        -- Adicionamos a condição para incluir tarefas do tipo 'Unica' que foram criadas HOJE.
+                        OR (TA.TipoFrequencia = 'Unica' AND CONVERT(date, TA.DataInicioVigencia) = CONVERT(date, GETDATE()))
+                        -- --- FIM DA CORREÇÃO ---
+                    )
+            """
+            cursor.execute(sql, funcionario_id)
+            return cursor.fetchall()
+        except Exception as e:
+            # Log aprimorado
+            logger.exception(f"!!! ERRO CRÍTICO em listar_tarefas_do_dia_por_funcionario para ID {funcionario_id}: {e}")
+            return []
+        finally:
+            if conn:
+                conn.close()
+    return []
 
-        else:
-            await update.message.reply_text("❌ Código de verificação incorreto ou não cadastrado. Por favor, inicie o processo novamente ou contate o RH.")
-        return # Importante retornar após tratar um estado
+def adicionar_funcionario(nome, chat_id, cargo, horario_notificacao, dia_folga):
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "INSERT INTO Funcionarios (NomeCompleto, ChatIDTelegram, Cargo, HorarioNotificacao, DiaDeFolga) VALUES (?, ?, ?, ?, ?)"
+            cursor.execute(sql, nome, chat_id, cargo, horario_notificacao, dia_folga)
+            conn.commit()
+        finally: 
+            conn.close()
 
-    elif user_data.get('tarefa_nao_aplicavel'):
-        atribuicao_id = user_data.pop('tarefa_nao_aplicavel', None)
-        if atribuicao_id: # Só prossegue se conseguiu pegar o ID
-            database.registrar_tarefa_nao_aplicavel(atribuicao_id, texto_recebido)
-            keyboard = [[InlineKeyboardButton("⬅️ Ver Tarefas Restantes", callback_data="voltar_lista_tarefas")]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text("Ok, justificativa registrada!", reply_markup=reply_markup)
-        else:
-             await update.message.reply_text("Ocorreu um erro. Por favor, tente marcar como 'Não Aplicável' novamente.")
-        return
+def listar_funcionarios():
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor(); sql = "SELECT * FROM Funcionarios ORDER BY NomeCompleto"; cursor.execute(sql); return cursor.fetchall()
+        finally: conn.close()
+    return []
+def buscar_funcionario_por_chat_id(chat_id):
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor(); sql = "SELECT * FROM Funcionarios WHERE ChatIDTelegram = ?"; cursor.execute(sql, str(chat_id)); return cursor.fetchone()
+        finally: conn.close()
+    return None
 
-    elif user_data.get('aguardando_denuncia_anonima'):
-        # Limpa o estado
-        user_data.pop('aguardando_denuncia_anonima', None)
+def buscar_funcionario_por_id(funcionario_id):
+    """Busca um funcionário pelo seu ID (chave primária)."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT * FROM Funcionarios WHERE FuncionarioID = ?"
+            cursor.execute(sql, funcionario_id)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
 
-        # IMPORTANTE: NÃO HÁ 'funcionario.FuncionarioID' aqui.
-        # Salva a mensagem anonimamente no banco
-        # (Certifique-se que a função registrar_denuncia_anonima e a tabela DenunciasAnonimas foram criadas no banco)
-        novo_id = database.registrar_denuncia_anonima(texto_recebido)
+def excluir_funcionario(funcionario_id):
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor(); sql = "DELETE FROM Funcionarios WHERE FuncionarioID = ?"; cursor.execute(sql, funcionario_id); conn.commit()
+        finally: conn.close()
+def obter_historico_funcionario(funcionario_id):
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT T.Titulo, TA.DataAtribuicao, E.DataEnvio, ISNULL(E.StatusValidacao, 'Pendente (Não Entregue)') AS Status, E.PontosGanhos, E.MotivoRecusa
+                FROM TarefasAtribuidas TA
+                JOIN Tarefas T ON TA.TarefaID = T.TarefaID
+                LEFT JOIN Entregas E ON TA.AtribuicaoID = E.AtribuicaoID
+                WHERE TA.FuncionarioID = ? ORDER BY TA.DataAtribuicao DESC
+            """
+            cursor.execute(sql, funcionario_id); return cursor.fetchall()
+        finally: conn.close()
+    return []
 
-        if novo_id:
-            # Envia a confirmação ANÔNIMA para o gestor
-            mensagem_gestor = (
-                f"Atenção: Nova mensagem anônima recebida (Protocolo: {novo_id})\n\n"
-                f"<b>Mensagem:</b>\n"
-                f"<i>\"{texto_recebido}\"</i>"
-            )
-            # Envia para o grupo de gestão
-            try:
-                notificador_telegram.enviar_mensagem(config.GESTOR_GROUP_CHAT_ID, mensagem_gestor)
-            except Exception as e_notify:
-                logger.error(f"Falha ao notificar gestores sobre denuncia anonima (ID: {novo_id}): {e_notify}")
-                # O usuário não precisa saber se a notificação falhou, apenas que foi registrada.
+def criar_tarefa(titulo, descricao, pontos, setor): # Adicionamos 'setor'
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Adicionamos a coluna Setor ao INSERT
+            sql = "INSERT INTO Tarefas (Titulo, Descricao, Pontos, Setor) VALUES (?, ?, ?, ?)"
+            cursor.execute(sql, titulo, descricao, pontos, setor) # Adicionamos 'setor' aos parâmetros
+            conn.commit()
+        finally: conn.close()
 
-            # Envia a confirmação para o usuário que enviou
-            await update.message.reply_text(
-                "✅ Sua mensagem anônima foi registrada e enviada à gestão. Obrigado por sua contribuição."
-            )
-        else:
-            await update.message.reply_text("❌ Ocorreu um erro ao tentar registrar sua mensagem. Tente novamente mais tarde.")
-        return # Fim do fluxo
+def atualizar_tarefa(tarefa_id, titulo, descricao, pontos, setor): # 1. Adicionado 'setor' aqui
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # 2. Adicionado 'Setor = ?' ao comando SQL
+            sql = "UPDATE Tarefas SET Titulo = ?, Descricao = ?, Pontos = ?, Setor = ? WHERE TarefaID = ?"
+            # 3. Adicionado 'setor' na lista de parâmetros a serem executados
+            cursor.execute(sql, titulo, descricao, pontos, setor, tarefa_id)
+            conn.commit()
+        finally: conn.close()
 
-    # Se não caiu em nenhum estado específico, é uma mensagem normal não esperada
-    else:
-         # Limpa qualquer estado residual por segurança
-         user_data.clear()
-         await update.message.reply_text("Não entendi o que você quis dizer. Use os botões do menu para interagir comigo. Se precisar, use o comando /ajuda ou digite /cancelar para recomeçar.")
-         
+def excluir_tarefa(tarefa_id):
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor(); sql = "DELETE FROM Tarefas WHERE TarefaID = ?"; cursor.execute(sql, tarefa_id); conn.commit()
+        finally: conn.close()
+def listar_todas_as_tarefas():
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor(); sql = "SELECT * FROM Tarefas ORDER BY Titulo"; cursor.execute(sql); return cursor.fetchall()
+        finally: conn.close()
+    return []
+def buscar_tarefa_por_atribuicao(atribuicao_id):
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor(); sql = "SELECT T.* FROM Tarefas T JOIN TarefasAtribuidas TA ON T.TarefaID = TA.TarefaID WHERE TA.AtribuicaoID = ?"; cursor.execute(sql, atribuicao_id); return cursor.fetchone()
+        finally: conn.close()
+    return None
+# Em database.py, SUBSTITUA a função existente por esta:
 
-async def solicitar_feedback_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """(REAPROVEITADO) Inicia o processo de Denúncia/Sugestão Anônima."""
+# Em database.py, SUBSTITUA a função listar_tarefas_para_atribuicao por esta:
 
-    # Envia a mensagem explicativa conforme solicitado
-    texto_explicativo = (
-        "Este é o seu <b>Canal Confidencial</b>.\n\n"
-        "Use este espaço para enviar sugestões, reclamações ou denúncias de forma <b>100% ANÔNIMA</b>.\n\n"
-        "⚠️ <b>IMPORTANTE:</b> Sua identidade <b>NÃO</b> será registrada nem enviada à gestão. O sistema foi programado para descartar seu nome e ID de usuário nesta operação.\n\n"
-        "Por favor, digite sua mensagem completa abaixo e pressione Enviar. (Ou digite /cancelar para sair)."
-    )
+def listar_tarefas_para_atribuicao(filtro_setor=None):
+    """
+    (VERSÃO CORRIGIDA - SEMPRE MOSTRA TODOS OS MODELOS)
+    Retorna uma lista de TODOS os modelos de tarefa do catálogo.
+    Se um 'filtro_setor' for fornecido, retorna apenas tarefas daquele setor.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
 
-    await update.message.reply_html(texto_explicativo) # Usar HTML por causa do <b>
+            # REMOVEMOS A CLÁUSULA WHERE NOT EXISTS COMPLETAMENTE
+            sql = "SELECT T.* FROM Tarefas T"
 
-    # Define o NOVO estado para o roteador
-    context.user_data['aguardando_denuncia_anonima'] = True
-    # Remove o estado antigo, caso exista (segurança)
-    context.user_data.pop('aguardando_assunto_feedback', None)
+            params = [] # Lista para guardar os parâmetros da consulta
 
-async def handler_foto_tarefa(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    MAX_SECONDS_DIFFERENCE = config.MAX_DIFERENCA_FOTO_SEGUNDOS # Usa valor do config.py
-    temp_photo_path = None
+            # Adicionamos a cláusula WHERE do filtro (SE HOUVER FILTRO)
+            where_clauses = []
+            if filtro_setor:
+                if filtro_setor == "Outras Tarefas":
+                     where_clauses.append("(T.Setor IS NULL OR T.Setor = '')")
+                else:
+                    where_clauses.append("T.Setor = ?")
+                    params.append(filtro_setor)
+
+            if where_clauses:
+                sql += " WHERE " + " AND ".join(where_clauses)
+
+            # O final da consulta também é o mesmo
+            sql += " ORDER BY ISNULL(T.Setor, 'Z-Sem Setor'), T.Titulo"
+
+            cursor.execute(sql, params)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def atribuir_tarefa_recorrente_para_grupo(tarefa_id, grupo_id, tipo_frequencia, valor_frequencia):
+    """
+    Cria uma nova atribuição de tarefa para um GRUPO inteiro.
+    O FuncionarioID fica NULO neste caso.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                INSERT INTO TarefasAtribuidas 
+                (TarefaID, GrupoID, TipoFrequencia, ValorFrequencia) 
+                VALUES (?, ?, ?, ?)
+            """
+            cursor.execute(sql, tarefa_id, grupo_id, tipo_frequencia, valor_frequencia)
+            conn.commit()
+        finally:
+            conn.close()
+
+# Em database.py, substitua a função 'atribuir_tarefa' por esta:
+
+def atribuir_tarefa(tarefa_id, funcionario_id, tipo_frequencia, valor_frequencia, descricao_override=None, data_agendamento=None, agendamento_id=None):
+    """Função universal para atribuir tarefas. AGORA RETORNA O NOVO ID DA ATRIBUIÇÃO."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                INSERT INTO TarefasAtribuidas 
+                (TarefaID, FuncionarioID, TipoFrequencia, ValorFrequencia, DataInicioVigencia, DescricaoOverride, DataAgendamento, AgendamentoID) 
+                VALUES (?, ?, ?, ?, GETDATE(), ?, ?, ?);
+                SELECT SCOPE_IDENTITY();
+            """
+            cursor.execute(sql, tarefa_id, funcionario_id, tipo_frequencia, valor_frequencia, descricao_override, data_agendamento, agendamento_id)
+            
+            # --- ADIÇÃO IMPORTANTE ---
+            cursor.nextset()
+            novo_atribuicao_id = cursor.fetchone()[0]
+            conn.commit()
+            return novo_atribuicao_id # Retorna o ID que acabamos de criar
+            # --- FIM DA ADIÇÃO ---
+            
+        finally:
+            conn.close()
+    return None # Retorna None em caso de falha
+
+
+def encerrar_atribuicao_tarefa(atribuicao_id):
+    """
+    NÃO DELETA a atribuição. Em vez disso, define a DataFimVigencia para hoje,
+    encerrando a validade da tarefa e preservando o histórico.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # A mágica está aqui: de DELETE para UPDATE!
+            sql = "UPDATE TarefasAtribuidas SET DataFimVigencia = GETDATE() WHERE AtribuicaoID = ?"
+            cursor.execute(sql, atribuicao_id)
+            conn.commit()
+            logger.info(f"Atribuição {atribuicao_id} encerrada com sucesso.")
+        except Exception as e:
+            print(f"--> [DATABASE.PY] ERRO ao encerrar a AtribuiçãoID {atribuicao_id}: {e}")
+        finally:
+            conn.close()
+
+def verificar_atribuicao_especifica_existente(tarefa_id, funcionario_id, tipo_frequencia, valor_frequencia):
+    """
+    Verifica se uma atribuição ATIVA e EXATA (mesma tarefa, func, freq e valor) já existe.
+    Retorna True se existir, False caso contrário.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT COUNT(1) 
+                FROM TarefasAtribuidas 
+                WHERE TarefaID = ? 
+                  AND FuncionarioID = ? 
+                  AND TipoFrequencia = ?
+                  AND ValorFrequencia = ?
+                  AND DataFimVigencia IS NULL
+            """
+            # Para 'Diaria' ou 'Unica', o valor_frequencia é None, o SQL precisa ser 'IS NULL'
+            if valor_frequencia is None:
+                sql = """
+                    SELECT COUNT(1) 
+                    FROM TarefasAtribuidas 
+                    WHERE TarefaID = ? 
+                      AND FuncionarioID = ? 
+                      AND TipoFrequencia = ?
+                      AND ValorFrequencia IS NULL
+                      AND DataFimVigencia IS NULL
+                """
+                cursor.execute(sql, tarefa_id, funcionario_id, tipo_frequencia)
+            else:
+                cursor.execute(sql, tarefa_id, funcionario_id, tipo_frequencia, valor_frequencia)
+
+            return cursor.fetchone()[0] > 0
+        except Exception as e:
+            logger.error(f"Erro ao verificar atribuição específica: {e}", exc_info=True)
+            return True # Assume que existe para evitar falha
+        finally:
+            conn.close()
+    return True # Assume que existe para evitar falha
+
+def verificar_atribuicao_existente(tarefa_id, funcionario_id):
+    """
+    Verifica se já existe uma atribuição ATIVA (sem data de fim)
+    para uma combinação de tarefa e funcionário.
+    Retorna True se existir, False caso contrário.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT COUNT(1) 
+                FROM TarefasAtribuidas 
+                WHERE TarefaID = ? 
+                  AND FuncionarioID = ? 
+                  AND DataFimVigencia IS NULL
+            """
+            cursor.execute(sql, tarefa_id, funcionario_id)
+            # Se a contagem for maior que 0, significa que já existe.
+            return cursor.fetchone()[0] > 0
+        finally:
+            conn.close()
+    return False
+
+# Em database.py, SUBSTITUA a função registrar_entrega pela versão abaixo:
+
+def registrar_entrega(tarefa_id, funcionario_id, path_foto, atribuicao_id=None):
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # SQL CORRIGIDO: Agora inserimos a data e hora exata do envio.
+            sql = """
+                INSERT INTO Entregas 
+                (TarefaID, FuncionarioID, PathFotoEvidencia, AtribuicaoID, DataEnvio) 
+                VALUES (?, ?, ?, ?, GETDATE()); 
+                SELECT SCOPE_IDENTITY();
+            """
+            cursor.execute(sql, tarefa_id, funcionario_id, path_foto, atribuicao_id)
+            cursor.nextset() 
+            new_id = cursor.fetchone()[0]
+            conn.commit()
+            return new_id
+        finally: 
+            conn.close()
+    return None
+
+# Em database.py, SUBSTITUA a função antiga por esta versão completa e corrigida:
+
+def listar_atribuicoes_ativas():
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # O SQL foi atualizado com uma nova regra na cláusula WHERE
+            sql = """
+                SELECT 
+                    TA.AtribuicaoID, 
+                    ISNULL(F.NomeCompleto, G.NomeGrupo + ' (Grupo)') AS Alvo,
+                    T.Titulo, 
+                    TA.TipoFrequencia + 
+                    CASE 
+                        WHEN TA.TipoFrequencia = 'Semanal' THEN ' (' + 
+                            CASE TA.ValorFrequencia 
+                                WHEN '1' THEN 'Dom' WHEN '2' THEN 'Seg' WHEN '3' THEN 'Ter'
+                                WHEN '4' THEN 'Qua' WHEN '5' THEN 'Qui' WHEN '6' THEN 'Sex'
+                                WHEN '7' THEN 'Sab'
+                            END + ')'
+                        WHEN TA.TipoFrequencia = 'Mensal' THEN ' (Dia ' + CAST(TA.ValorFrequencia AS VARCHAR) + ')'
+                        WHEN TA.TipoFrequencia = 'GrupoCompetitiva' THEN ' (às ' + CONVERT(VARCHAR(5), TA.HorarioDisparo, 108) + ')'
+                        ELSE '' 
+                    END AS FrequenciaCompleta
+                FROM TarefasAtribuidas TA
+                JOIN Tarefas T ON TA.TarefaID = T.TarefaID
+                LEFT JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID
+                LEFT JOIN Grupos G ON TA.GrupoID = G.GrupoID
+                WHERE
+                    -- Regra 1: A atribuição não pode ter sido encerrada manualmente.
+                    TA.DataFimVigencia IS NULL
+                    -- E AQUI ESTÁ A NOVA REGRA INTELIGENTE:
+                    AND NOT (
+                        TA.TipoFrequencia = 'Unica' AND EXISTS (
+                            SELECT 1 FROM Entregas E
+                            WHERE E.AtribuicaoID = TA.AtribuicaoID AND E.StatusValidacao = 'Aprovada'
+                        )
+                    )
+                ORDER BY Alvo, T.Titulo
+            """
+            cursor.execute(sql)
+            rows_do_banco = cursor.fetchall()
+            resultados_em_tupla = [tuple(row) for row in rows_do_banco]
+            return resultados_em_tupla
+        finally:
+            conn.close()
+    return []
+
+def listar_entregas_pendentes():
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT E.EntregaID, E.PathFotoEvidencia, E.FuncionarioID, F.NomeCompleto, F.ChatIDTelegram, T.Titulo, T.Pontos
+                FROM Entregas E JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID JOIN Tarefas T ON E.TarefaID = T.TarefaID
+                WHERE E.StatusValidacao = 'Pendente' ORDER BY E.DataEnvio ASC
+            """
+            cursor.execute(sql); return cursor.fetchall()
+        finally: conn.close()
+    return []
+# Em database.py, substitua a função antiga por esta versão mais simples e correta:
+
+# Em database.py, SUBSTITUA a função aprovar_entrega por esta:
+
+def aprovar_entrega(entrega_id, funcionario_id, pontos):
+    """
+    (VERSÃO CORRIGIDA - NÃO SOBRESCREVE DataEnvio)
+    Aprova uma entrega, registra os pontos, ADICIONA OS PONTOS AO SALDO GERAL,
+    verifica conquistas e garante rollback em caso de erro.
+    """
+    conn = get_db_connection()
+    if not conn:
+        logger.error(f"Falha de conexão ao tentar aprovar entrega {entrega_id}.")
+        return [] # Retorna lista vazia indicando falha
+
+    novas_conquistas = [] # Inicializa fora do try
 
     try:
-        # Camada 1 de Verificação (sem alteração)
-        if update.message.forward_from or update.message.forward_from_chat:
-            await update.message.reply_text("❌ Desculpe, fotos encaminhadas não são aceitas.")
-            return
-        if update.message.document and 'image' in update.message.document.mime_type:
-            await update.message.reply_text("❌ Por favor, envie a imagem como 'Foto', e não como 'Arquivo'.")
-            return
+        cursor = conn.cursor()
 
-        # Camada 2 de Verificação (LÓGICA AJUSTADA)
-        photo_file = await update.message.photo[-1].get_file()
-        message_timestamp_utc = update.message.date # Timestamp do Telegram (já em UTC)
+        # --- CORREÇÃO APLICADA AQUI ---
+        # Removemos a atualização do DataEnvio. Agora, apenas o status e os pontos são definidos.
+        # O DataEnvio original (do momento da submissão) é preservado.
+        # (Opcional: Adicionar "DataValidacao = GETDATE()" se a coluna existir)
+        sql_update_entrega = """
+            UPDATE Entregas 
+            SET StatusValidacao = 'Aprovada', PontosGanhos = ?
+            WHERE EntregaID = ?
+        """
+        # --- FIM DA CORREÇÃO ---
 
-        temp_photo_path = f"temp_{photo_file.file_id}.jpg"
-        await photo_file.download_to_drive(temp_photo_path)
+        cursor.execute(sql_update_entrega, pontos, entrega_id)
+        logger.debug(f"UPDATE Entregas executado para EntregaID {entrega_id}.")
 
-        # <<< VALIDAÇÃO DE DATA/HORA DA FOTO (EXIF) REMOVIDA COMPLETAMENTE >>>
-        # A foto será aceita independentemente dos metadados de data/hora ou da idade da foto.
-        pass # Usamos 'pass' como um placeholder explícito indicando que a lógica foi removida intencionalmente.
 
-        # Se chegou até aqui, a foto é considerada válida (ou sem EXIF confiável)
-        if 'identificador_tarefa' not in context.user_data:
-            await update.message.reply_text("Parece que você enviou uma foto sem antes selecionar uma tarefa. Por favor, use o comando /tarefas primeiro.")
-            # Limpa o caminho temporário antes de retornar
-            if temp_photo_path and os.path.exists(temp_photo_path): os.remove(temp_photo_path)
-            return
+        # 2. Adiciona os pontos ao saldo (delegação para função com seu próprio tratamento)
+        adicionar_pontos_ao_saldo(funcionario_id, pontos)
+        logger.debug(f"adicionar_pontos_ao_saldo chamado para FuncionarioID {funcionario_id} com {pontos} pontos.")
 
-        # Continua com o registro da entrega...
-        atribuicao_id = int(context.user_data.pop('identificador_tarefa'))
-        funcionario = database.buscar_funcionario_por_chat_id(update.effective_user.id) #
-        tarefa = database.buscar_tarefa_por_atribuicao(atribuicao_id) #
+        # 3. Commita as operações da entrega e saldo juntas
+        conn.commit()
+        logger.info(f"Entrega {entrega_id} aprovada e {pontos} pontos adicionados ao saldo de FuncionarioID {funcionario_id}. Commit realizado.")
 
-        if not (funcionario and tarefa):
-            await update.message.reply_text("Ocorreu um erro ao identificar seus dados ou a tarefa.")
-            # Limpa o caminho temporário antes de retornar
-            if temp_photo_path and os.path.exists(temp_photo_path): os.remove(temp_photo_path)
-            return
+        # 4. Verifica conquistas (após o commit principal)
+        novas_conquistas = verificar_e_conceder_conquistas(funcionario_id)
+        logger.debug(f"Verificação de conquistas concluída para FuncionarioID {funcionario_id}. Novas conquistas: {len(novas_conquistas)}")
 
-        photo_size = update.message.photo[-1]
-        file_id = photo_size.file_id
-        # Registra preliminarmente com file_id
-        entrega_id = database.registrar_entrega_preliminar(tarefa.TarefaID, funcionario.FuncionarioID, atribuicao_id, file_id) #
-
-        if entrega_id and config.GESTOR_GROUP_CHAT_ID: #
-            # Prepara notificação para gestor
-            # Usar html.escape para segurança se os títulos puderem conter < ou >
-            # import html
-            # titulo_escaped = html.escape(tarefa.Titulo)
-            # nome_funcionario_escaped = html.escape(funcionario.NomeCompleto)
-            legenda = (f"<b>Nova Entrega para Validação</b>\n\n"
-                    f"👤 <b>Funcionário:</b> {funcionario.NomeCompleto}\n"
-                    f"📝 <b>Tarefa:</b> {tarefa.Titulo} ({tarefa.Pontos} pts)\n"
-                    f"🗓️ <b>Data:</b> {datetime.now().strftime('%d/%m/%Y %H:%M')}")
-            keyboard = [[
-                InlineKeyboardButton("✅ Aprovar", callback_data=f"aprovar_gestor_{entrega_id}"),
-                InlineKeyboardButton("❌ Reprovar", callback_data=f"reprovar_gestor_{entrega_id}")
-            ]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            # --- CORREÇÃO: Enviar a notificação ANTES de marcar a flag ---
-
-            # Tenta enviar a notificação para o gestor PRIMEIRO
+    except pyodbc.Error as db_err:
+        logger.exception(f"Erro de Banco de Dados Crítico ao aprovar entrega {entrega_id}. Iniciando Rollback: {db_err}")
+        if conn:
             try:
-                resposta_api = notificador_telegram.enviar_foto_com_botoes( # Captura a resposta
-                    config.GESTOR_GROUP_CHAT_ID,
-                    file_id,
-                    legenda,
-                    reply_markup,
-                    parse_mode='HTML' # Mantenha como HTML
-                )
-
-                # SE (e somente SE) o envio foi um sucesso, marcamos a flag
-                if resposta_api and resposta_api.get('ok'):
-                    try:
-                        database.marcar_notificacao_gestor_enviada(entrega_id)
-                        logger.info(f"Notificação inicial para gestor (EntregaID {entrega_id}) enviada com sucesso E flag marcada.")
-                    except Exception as flag_error:
-                        logger.error(f"Notificação enviada, MAS FALHOU AO MARCAR FLAG para EntregaID {entrega_id}: {flag_error}", exc_info=True)
-                        # Trade-off: O agendador pode enviar uma duplicata, o que é aceitável.
-                else:
-                    # Se falhou, logamos o erro e NÃO marcamos a flag.
-                    # O agendador.py vai pegar esta entrega.
-                    logger.error(f"Falha ao enviar notificação inicial para gestores sobre EntregaID {entrega_id}. Resposta API: {resposta_api}. Flag NÃO marcada.")
-
-            except Exception as notify_error:
-                # Se ocorreu um erro de rede/timeout, também NÃO marcamos a flag.
-                # O agendador.py vai pegar esta entrega.
-                logger.error(f"Erro inesperado durante o envio da notificação inicial para gestor (EntregaID {entrega_id}): {notify_error}. Flag NÃO marcada.", exc_info=True)
-
-            # --- FIM DA CORREÇÃO ---
-
-            # Envia confirmação para o usuário (esta linha já existe depois do bloco acima)
-            await update.message.reply_text("✅ Evidência válida! Entrega registrada com sucesso e enviada para validação!")
+                conn.rollback()
+                logger.info(f"Rollback realizado com sucesso para entrega {entrega_id}.")
+            except Exception as rb_err:
+                logger.error(f"Erro adicional durante o rollback da entrega {entrega_id}: {rb_err}")
+        novas_conquistas = [] # Garante retorno vazio em caso de erro
 
     except Exception as e:
-        logger.error(f"Erro crítico em receber_foto: {e}", exc_info=True)
-        await update.message.reply_text("Ocorreu um erro crítico ao registrar sua entrega. Contate o administrador.")
+        logger.exception(f"Erro inesperado ao aprovar entrega {entrega_id}. Iniciando Rollback: {e}")
+        if conn:
+            try:
+                conn.rollback()
+                logger.info(f"Rollback realizado com sucesso para entrega {entrega_id}.")
+            except Exception as rb_err:
+                logger.error(f"Erro adicional durante o rollback da entrega {entrega_id}: {rb_err}")
+        novas_conquistas = [] # Garante retorno vazio em caso de erro
 
     finally:
-        # Garante que o arquivo temporário seja sempre removido
-        if temp_photo_path and os.path.exists(temp_photo_path):
-            try:
-                os.remove(temp_photo_path)
-            except Exception as del_err:
-                logger.error(f"Erro ao remover arquivo temporário {temp_photo_path}: {del_err}")        
+        if conn:
+            conn.close()
+            logger.debug(f"Conexão do banco fechada para aprovação da entrega {entrega_id}.")
 
-# Em telegram_bot.py, SUBSTITUA a função receber_motivo_recusa por esta:
+    return novas_conquistas # Retorna a lista (vazia ou não)
 
-async def receber_motivo_recusa(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id_grupo = update.effective_chat.id
-    gestor_id = update.effective_user.id
-    gestor_nome = update.effective_user.first_name
-    motivo = update.message.text
 
-    # --- Bloco de leitura (sem alteração) ---
-    dados_recusa = None
-    if 'pendencias_recusa' in context.bot_data and \
-    chat_id_grupo in context.bot_data['pendencias_recusa'] and \
-    gestor_id in context.bot_data['pendencias_recusa'][chat_id_grupo]:
-        dados_recusa = context.bot_data['pendencias_recusa'][chat_id_grupo].pop(gestor_id)
-        logger.info(f"Dados de recusa encontrados em bot_data para GestorID {gestor_id} no ChatID {chat_id_grupo}.")
-        if not context.bot_data['pendencias_recusa'][chat_id_grupo]:
-            context.bot_data['pendencias_recusa'].pop(chat_id_grupo)
-        if not context.bot_data['pendencias_recusa']:
-            context.bot_data.pop('pendencias_recusa')
-    # --- Fim do Bloco de leitura ---
-
-    if not dados_recusa:
-        logger.debug(f"Mensagem de GestorID {gestor_id} no ChatID {chat_id_grupo} ignorada (sem pendência).")
-        return
-
-    # --- CORREÇÃO APLICADA AQUI ---
-    # Extrai os dados recuperados de bot_data (que já continha o msg_id)
-    entrega_id = dados_recusa['entrega_id']
-    id_mensagem_original = dados_recusa['msg_id'] # <-- USAMOS O VALOR CORRETO
-    # --- FIM DA CORREÇÃO ---
-
-    detalhes = database.buscar_detalhes_da_entrega(entrega_id)
-
-    if not detalhes or detalhes.StatusValidacao != 'Pendente':
-        await update.message.reply_text("Esta tarefa já foi validada por outro gestor ou não foi encontrada.")
-        return
-
-    database.recusar_entrega(entrega_id, motivo)
-
-    texto_notificacao = (f"⚠️ Atenção, <b>{detalhes.NomeCompleto}</b>!\n\n"
-                        f"Sua entrega para a tarefa '<b>{detalhes.Titulo}</b>' foi RECUSADA.\n\n"
-                        f"<b>Motivo:</b> {motivo}\n\n"
-                        "Por favor, corrija e envie novamente.")
-
-    notificador_telegram.enviar_mensagem(detalhes.ChatIDFuncionario, texto_notificacao)
-
-    legenda_final = (f"**Entrega RECUSADA por {gestor_nome}**\n\n"
-                    f"👤 **Funcionário:** {detalhes.NomeCompleto}\n"
-                    f"📝 **Tarefa:** {detalhes.Titulo}\n"
-                    f"💬 **Motivo:** {motivo}")
-
-    # A linha "context.chat_data.pop" foi removida.
-    if id_mensagem_original: # Agora usamos a variável correta
+def recusar_entrega(entrega_id, motivo):
+    conn = get_db_connection()
+    if conn:
         try:
-            await context.bot.edit_message_caption(chat_id=chat_id_grupo, message_id=id_mensagem_original, caption=legenda_final)
-        except Exception as e_edit:
-            logger.error(f"Erro ao editar caption da mensagem recusada (ID: {entrega_id}): {e_edit}")
-            try:
-                await update.message.reply_text(legenda_final)
-            except Exception as e_send:
-                logger.error(f"Falha também ao enviar mensagem de fallback para recusa {entrega_id}: {e_send}")
-    else:
-        logger.warning(f"Não foi possível encontrar msg_id original para recusa {entrega_id}. Enviando status como nova mensagem.")
+            cursor = conn.cursor(); sql = "UPDATE Entregas SET StatusValidacao = 'Recusada', MotivoRecusa = ? WHERE EntregaID = ?"; cursor.execute(sql, motivo, entrega_id); conn.commit()
+        finally: conn.close()
+def obter_ranking():
+    conn = get_db_connection()
+    if conn:
         try:
-            await update.message.reply_text(legenda_final)
-        except Exception as e_send:
-            logger.error(f"Falha ao enviar mensagem de fallback (sem msg_id) para recusa {entrega_id}: {e_send}")
+            cursor = conn.cursor(); sql = "SELECT NomeCompleto, PontosTotal FROM Funcionarios ORDER BY PontosTotal DESC"; cursor.execute(sql); return cursor.fetchall()
+        finally: conn.close()
+    return []
+def relatorio_pendencias(funcionario_id, data):
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT T.Titulo, T.Pontos
+                FROM TarefasAtribuidas TA
+                JOIN Tarefas T ON TA.TarefaID = T.TarefaID
+                WHERE TA.FuncionarioID = ?
+                AND (
+                    (TA.TipoFrequencia = 'Diaria' AND CONVERT(date, TA.DataAtribuicao) <= ?) OR
+                    (TA.TipoFrequencia = 'Semanal' AND TA.ValorFrequencia = DATEPART(weekday, ?) AND CONVERT(date, TA.DataAtribuicao) <= ?) OR
+                    (TA.TipoFrequencia = 'Mensal' AND TA.ValorFrequencia = DATEPART(day, ?) AND CONVERT(date, TA.DataAtribuicao) <= ?)
+                )
+                AND NOT EXISTS (
+                    SELECT 1 FROM Entregas E
+                    WHERE E.AtribuicaoID = TA.AtribuicaoID AND CONVERT(date, E.DataEnvio) = ?
+                )
+            """
+            cursor.execute(sql, funcionario_id, data, data, data, data, data, data); return cursor.fetchall()
+        finally: conn.close()
+    return []
 
+# --- FUNÇÕES DE GERENCIAMENTO DE GRUPOS ---
+def criar_grupo(nome_grupo, chat_id):
+    """Cria um novo grupo na tabela Grupos."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "INSERT INTO Grupos (NomeGrupo, ChatIDTelegram) VALUES (?, ?)"
+            cursor.execute(sql, nome_grupo, chat_id)
+            conn.commit()
+        finally:
+            conn.close()
 
-async def solicitar_foto_nf(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Define o estado para aguardar a foto da Nota Fiscal."""
-    logger.info(f"Solicitação de envio de NF recebida de {update.effective_user.id}")
-    context.user_data['aguardando_nota_fiscal'] = True
-    await update.message.reply_text(
-        "Entendido. Por favor, envie agora a foto da Nota Fiscal que você recebeu.\n\n"
-        "(Se mudar de ideia, digite /cancelar)"
-    )
+def listar_grupos():
+    """Retorna uma lista de todos os grupos."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT * FROM Grupos ORDER BY NomeGrupo"
+            cursor.execute(sql)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
 
-async def receber_nota_fiscal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+def atualizar_grupo(grupo_id, nome_grupo, chat_id):
+    """Atualiza o nome e o ChatID de um grupo existente."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE Grupos SET NomeGrupo = ?, ChatIDTelegram = ? WHERE GrupoID = ?"
+            cursor.execute(sql, nome_grupo, chat_id, grupo_id)
+            conn.commit()
+        finally:
+            conn.close()
+
+def excluir_grupo(grupo_id):
+    """Exclui um grupo. A deleção em cascata cuidará dos membros."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "DELETE FROM Grupos WHERE GrupoID = ?"
+            cursor.execute(sql, grupo_id)
+            conn.commit()
+        finally:
+            conn.close()
+
+def listar_membros_e_nao_membros(grupo_id):
+    """Retorna duas listas: membros de um grupo e funcionários que não são membros."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Membros
+            sql_membros = """
+                SELECT F.FuncionarioID, F.NomeCompleto 
+                FROM Funcionarios F
+                JOIN FuncionariosGrupos FG ON F.FuncionarioID = FG.FuncionarioID
+                WHERE FG.GrupoID = ? ORDER BY F.NomeCompleto
+            """
+            cursor.execute(sql_membros, grupo_id)
+            membros = cursor.fetchall()
+            
+            # Não Membros
+            sql_nao_membros = """
+                SELECT F.FuncionarioID, F.NomeCompleto 
+                FROM Funcionarios F
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM FuncionariosGrupos FG
+                    WHERE FG.GrupoID = ? AND FG.FuncionarioID = F.FuncionarioID
+                ) ORDER BY F.NomeCompleto
+            """
+            cursor.execute(sql_nao_membros, grupo_id)
+            nao_membros = cursor.fetchall()
+            
+            return membros, nao_membros
+        finally:
+            conn.close()
+    return [], []
+
+def adicionar_membro_ao_grupo(funcionario_id, grupo_id):
+    """Adiciona um funcionário a um grupo."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "INSERT INTO FuncionariosGrupos (FuncionarioID, GrupoID) VALUES (?, ?)"
+            cursor.execute(sql, funcionario_id, grupo_id)
+            conn.commit()
+        finally:
+            conn.close()
+
+def remover_membro_do_grupo(funcionario_id, grupo_id):
+    """Remove um funcionário de um grupo."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "DELETE FROM FuncionariosGrupos WHERE FuncionarioID = ? AND GrupoID = ?"
+            cursor.execute(sql, funcionario_id, grupo_id)
+            conn.commit()
+        finally:
+            conn.close()
+
+# Em database.py, ADICIONE esta nova função (pode remover a antiga 'agendar_tarefa_competitiva_para_grupo' se quiser)
+def agendar_tarefa_recorrente_para_grupo(tarefa_id, grupo_id, tipo_frequencia_grupo, valor_frequencia, horario_disparo):
     """
-    Handler dedicado para receber a foto da Nota Fiscal (Regras 1, 2, 3).
-    Este handler SÓ é ativado se o estado 'aguardando_nota_fiscal' for True.
+    Agenda uma nova tarefa recorrente ('GrupoDiaria', 'GrupoSemanal', 'GrupoMensal')
+    para um grupo em um horário específico, com o valor de frequência apropriado.
     """
-    # Limpa o estado imediatamente
-    context.user_data.pop('aguardando_nota_fiscal', None)
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Usamos as colunas existentes TipoFrequencia e ValorFrequencia
+            sql = """
+                INSERT INTO TarefasAtribuidas
+                (TarefaID, GrupoID, TipoFrequencia, ValorFrequencia, HorarioDisparo, StatusTarefaGrupo)
+                VALUES (?, ?, ?, ?, ?, 'Disponivel')
+            """
+            # Para 'GrupoDiaria', o valor_frequencia pode ser None
+            cursor.execute(sql, tarefa_id, grupo_id, tipo_frequencia_grupo, valor_frequencia, horario_disparo)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"ERRO ao agendar tarefa recorrente para grupo: {e}")
+            conn.rollback()
+            return False
+        finally:
+            conn.close()
+    return False
 
-    # 1. Validações básicas (não encaminhada, não arquivo)
-    if update.message.forward_from or update.message.forward_from_chat:
-        await update.message.reply_text("❌ Desculpe, fotos encaminhadas não são aceitas. Por favor, tire a foto na hora ou envie da sua galeria.")
-        return
-    if update.message.document and 'image' in update.message.document.mime_type:
-        await update.message.reply_text("❌ Por favor, envie a imagem como 'Foto', e não como 'Arquivo'.")
-        return
+# Em database.py, SUBSTITUA a função buscar_tarefas_de_grupo_para_disparar por esta versão inteligente:
+def buscar_tarefas_de_grupo_para_disparar(horario_atual, dia_semana_hoje, dia_mes_hoje):
+    """
+    (VERSÃO FINAL - SUPORTA DIARIA/SEMANAL/MENSAL)
+    Busca tarefas de grupo agendadas para o horário atual E que correspondam
+    à frequência (diária, dia da semana específico ou dia do mês específico).
+    'dia_semana_hoje' usa a convenção SQL (Dom=1, Seg=2, ..., Sab=7).
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # A query agora tem uma cláusula WHERE mais complexa
+            sql = """
+                SELECT TA.AtribuicaoID, T.Titulo, T.Pontos, G.NomeGrupo, G.ChatIDTelegram
+                FROM TarefasAtribuidas TA
+                JOIN Tarefas T ON TA.TarefaID = T.TarefaID
+                JOIN Grupos G ON TA.GrupoID = G.GrupoID
+                WHERE
+                    -- Condição 1: O horário deve bater
+                    CONVERT(VARCHAR(5), TA.HorarioDisparo, 108) = ?
+                    -- Condição 2: E a frequência deve corresponder ao dia de hoje
+                    AND (
+                        -- Se for Diaria, sempre dispara
+                        TA.TipoFrequencia = 'GrupoDiaria'
+                        -- Ou se for Semanal E o dia da semana bate
+                        OR (TA.TipoFrequencia = 'GrupoSemanal' AND TA.ValorFrequencia = ?)
+                        -- Ou se for Mensal E o dia do mês bate
+                        OR (TA.TipoFrequencia = 'GrupoMensal' AND TA.ValorFrequencia = ?)
+                    )
+            """
+            cursor.execute(sql, horario_atual, dia_semana_hoje, dia_mes_hoje)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+
+# Em database.py
+def aceitar_tarefa_de_grupo(origem_atribuicao_id, funcionario_id):
+    """
+    (VERSÃO CORRIGIDA COM TRANSAÇÃO PARA EVITAR RACE CONDITION)
+    Verifica e cria uma atribuição 'Unica' para o funcionário de forma atômica.
+    Retorna o ID da NOVA atribuição criada ou None se falhar/já aceita hoje.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Inicia a transação (implícito, mas o commit/rollback é o controle)
+
+            # 1. Buscar o TarefaID da atribuição original
+            cursor.execute("SELECT TarefaID FROM TarefasAtribuidas WHERE AtribuicaoID = ?", origem_atribuicao_id)
+            result = cursor.fetchone()
+            if not result:
+                logger.warning(f"--> [ACEITAR GRUPO] Atribuição de origem {origem_atribuicao_id} não encontrada.")
+                conn.rollback() # Cancela a transação
+                return None
+            tarefa_id_original = result[0]
+
+            # 2. Verificar se alguém já aceitou HOJE para esta tarefa de origem
+            #    Adicionamos WITH (UPDLOCK, HOLDLOCK) para travar o resultado da verificação
+            #    até que a transação seja concluída (commit ou rollback).
+            sql_check = """
+                SELECT AtribuicaoID
+                FROM TarefasAtribuidas WITH (UPDLOCK, HOLDLOCK)
+                WHERE OrigemAtribuicaoID = ?
+                  AND CONVERT(date, DataAgendamento) = CONVERT(date, GETDATE())
+            """
+            cursor.execute(sql_check, origem_atribuicao_id)
+
+            if cursor.fetchone():
+                # Se encontrou, significa que outro processo já inseriu E COMITOU (ou este processo está esperando o lock).
+                logger.info(f"--> [ACEITAR GRUPO] Tarefa de origem {origem_atribuicao_id} já foi aceita hoje (detectado pela transação).")
+                conn.rollback() # Cancela a transação
+                return None # Retorna None indicando que já foi pega hoje
+
+            # 3. Se ninguém aceitou (e a tabela está travada), INSERIR a nova instância 'Unica'
+            sql_insert = """
+                INSERT INTO TarefasAtribuidas
+                (TarefaID, FuncionarioID, TipoFrequencia, DataInicioVigencia, DataAgendamento, OrigemAtribuicaoID, StatusTarefaGrupo)
+                VALUES (?, ?, 'Unica', GETDATE(), GETDATE(), ?, 'Aceita');
+                SELECT SCOPE_IDENTITY();
+            """
+            cursor.execute(sql_insert, tarefa_id_original, funcionario_id, origem_atribuicao_id)
+            cursor.nextset()
+            nova_atribuicao_id = cursor.fetchone()[0]
+
+            conn.commit() # Confirma a transação, liberando o lock
+
+            logger.info(f"--> [ACEITAR GRUPO] Nova atribuição 'Unica' (ID: {nova_atribuicao_id}) criada para FuncionarioID {funcionario_id} a partir da Origem {origem_atribuicao_id}.")
+            return nova_atribuicao_id # Retorna o ID da nova tarefa criada
+
+        except Exception as e:
+            logger.error(f"ERRO CRÍTICO em aceitar_tarefa_de_grupo (transacional): {e}", exc_info=True)
+            if conn:
+                conn.rollback() # Garante rollback em qualquer erro
+            return None
+        finally:
+            if conn:
+                conn.close()
+    return None # Erro de conexão
+
+
+def buscar_detalhes_da_atribuicao(atribuicao_id):
+    """Busca todos os detalhes de uma tarefa (título, descrição, pontos) a partir do ID da atribuição."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT T.Titulo, T.Descricao, T.Pontos
+                FROM Tarefas T
+                JOIN TarefasAtribuidas TA ON T.TarefaID = TA.TarefaID
+                WHERE TA.AtribuicaoID = ?
+            """
+            cursor.execute(sql, atribuicao_id)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
+
+def buscar_funcionarios_para_lembrete(horario_atual):
+    """Busca funcionários para lembrete, RESPEITANDO O DIA DE FOLGA."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT * FROM Funcionarios
+                WHERE
+                    (DATEDIFF(minute, CONVERT(TIME, GETDATE()), CONVERT(TIME, DATEADD(HOUR, 3, HorarioNotificacao))) = 0 OR
+                    DATEDIFF(minute, CONVERT(TIME, GETDATE()), CONVERT(TIME, DATEADD(HOUR, 6, HorarioNotificacao))) = 0)
+                    AND (DiaDeFolga = 0 OR DiaDeFolga IS NULL OR DiaDeFolga != DATEPART(weekday, GETDATE()))
+            """
+            cursor.execute(sql)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def buscar_funcionarios_para_resumo_final(horario_atual):
+    """Busca funcionários para resumo final, RESPEITANDO O DIA DE FOLGA."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT * FROM Funcionarios
+                WHERE
+                    DATEDIFF(minute, CONVERT(TIME, GETDATE()), CONVERT(TIME, DATEADD(MINUTE, 500, HorarioNotificacao))) = 0
+                    AND (DiaDeFolga = 0 OR DiaDeFolga IS NULL OR DiaDeFolga != DATEPART(weekday, GETDATE()))
+            """
+            cursor.execute(sql)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+# Em database.py
+def buscar_detalhes_da_entrega(entrega_id):
+    """Busca todos os detalhes de uma entrega para as notificações."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT 
+                    E.StatusValidacao,
+                    E.DataEnvio, -- <-- CAMPO ADICIONADO
+                    F.NomeCompleto, F.ChatIDTelegram AS ChatIDFuncionario,
+                    T.Titulo, T.Pontos,
+                    E.FuncionarioID, E.EntregaID
+                FROM Entregas E
+                JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID
+                JOIN Tarefas T ON E.TarefaID = T.TarefaID
+                WHERE E.EntregaID = ?
+            """
+            cursor.execute(sql, entrega_id)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
+
+def _get_date_part(dt_object):
+    """
+    Função auxiliar segura que retorna a parte 'date' de um objeto.
+    Funciona tanto para objetos 'datetime' quanto para 'date'.
+    """
+    if hasattr(dt_object, 'date'): # Se for um objeto datetime completo
+        return dt_object.date()
+    return dt_object # Se já for um objeto date
+
+# Em database.py, SUBSTITUA a função calcular_ranking_desempenho por esta versão com filtro:
+
+def calcular_ranking_desempenho(data_final_calculo=None, setor_filtro=None): # <<< NOVO PARÂMETRO
+    """
+    Calcula o ranking com SCORE HÍBRIDO, filtrado opcionalmente por setor.
+    PESOS: 70% Desempenho (Confiabilidade), 30% Pontos Brutos (Esforço).
+    """
+    conn = get_db_connection()
+    if not conn: return []
+
+    PESO_A_DESEMPENHO = 0.7
+    PESO_B_PONTOS_BRUTOS = 0.3
 
     try:
-        funcionario = database.buscar_funcionario_por_chat_id(update.effective_user.id)
-        if not funcionario:
-            await update.message.reply_text("Erro: Não consegui encontrar seu cadastro no sistema.")
-            return
+        cursor = conn.cursor()
+        sql_tarefas_atribuidas = """
+            SELECT F.FuncionarioID, F.NomeCompleto, F.Cargo, F.DiaDeFolga, -- <<< Adicionado F.Cargo
+                   TA.AtribuicaoID, TA.TipoFrequencia, TA.ValorFrequencia,
+                   T.Pontos, TA.DataInicioVigencia, TA.DataFimVigencia,
+                   TA.DataAceite
+            FROM Funcionarios F
+            LEFT JOIN TarefasAtribuidas TA ON F.FuncionarioID = TA.FuncionarioID
+            LEFT JOIN Tarefas T ON TA.TarefaID = T.TarefaID
+            WHERE TA.AtribuicaoID IS NOT NULL
+            ORDER BY F.FuncionarioID
+        """ #
+        cursor.execute(sql_tarefas_atribuidas) #
+        todas_as_atribuicoes = cursor.fetchall() #
 
-        file_id = update.message.photo[-1].file_id
+        data_final = data_final_calculo if data_final_calculo else date.today() #
+        inicio_mes = data_final.replace(day=1) #
 
-        # 2. Salva o registro preliminar no banco (tabela NotasFiscais)
-        nota_fiscal_id = database.registrar_nota_fiscal(funcionario.FuncionarioID, file_id)
-        if not nota_fiscal_id:
-            await update.message.reply_text("❌ Ocorreu um erro interno ao tentar registrar sua nota fiscal. Tente novamente.")
-            return
+        ranking_parcial = [] #
 
-        # 3. Dá os pontos bônus (Regra 1)
-        pontos_bonus = config.PONTOS_BONUS_NOTA_FISCAL
-        database.registrar_pontos_de_bonus(
-            funcionario.FuncionarioID,
-            pontos_bonus,
-            f"Envio de Nota Fiscal (ID: {nota_fiscal_id})",
-            config.TAREFA_ID_NOTA_FISCAL
-        )
-        database.adicionar_pontos_ao_saldo(funcionario.FuncionarioID, pontos_bonus)
+        # --- FILTRAGEM INICIAL POR SETOR ---
+        funcionarios_todos = listar_funcionarios() #
+        funcionarios_filtrados = []
+        if setor_filtro == 'Cozinha':
+            # Filtro 1: Apenas quem tem 'Cozinha' no cargo
+            funcionarios_filtrados = [f for f in funcionarios_todos if f.Cargo and 'Cozinha' in f.Cargo]
+        elif setor_filtro == 'Loja':
+            # Filtro 2: Apenas quem tem 'Loja' OU 'Atendimento' no cargo
+            funcionarios_filtrados = [f for f in funcionarios_todos if f.Cargo and ('Loja' in f.Cargo or 'Atendimento' in f.Cargo)]
+        else: # Nenhum filtro ou filtro 'Geral'
+            funcionarios_filtrados = funcionarios_todos
 
-        await update.message.reply_text(f"✅ Nota Fiscal enviada com sucesso! Você ganhou *{pontos_bonus} pontos* pelo recebimento!", parse_mode='Markdown')
+        # ------------------------------------
 
-        # 4. Encaminha para os Gestores (Regras 2, 3, 4)
-        legenda_gestor = (
-            f"🧾 **Nova Nota Fiscal Recebida** 🧾\n\n"
-            f"👤 **Enviada por:** {funcionario.NomeCompleto}\n"
-            f"🗓️ **Data:** {datetime.now().strftime('%d/%m/%Y %H:%M')}\n"
-            f"🆔 **NF ID:** {nota_fiscal_id}\n\n"
-            "Ações Rápidas:"
-        )
+        if not funcionarios_filtrados: return [] # Retorna vazio se o setor não tiver funcionários
 
-        # Prepara botões com o ID da NF para rastreio
-        keyboard = [
-            [InlineKeyboardButton("📲 Encaminhar p/ Financeiro", callback_data=f"nf_prep_fwd_{nota_fiscal_id}")],
-            [InlineKeyboardButton("📦 Criar Tarefa 'Guardar'", callback_data=f"nf_create_task_{nota_fiscal_id}")],
-            [InlineKeyboardButton("👍 Arquivar (Nenhuma Ação)", callback_data=f"nf_ignore_{nota_fiscal_id}")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        atribuicoes_por_funcionario = {} #
+        # Cria a estrutura apenas para os funcionários filtrados
+        for func in funcionarios_filtrados:
+             atribuicoes_por_funcionario[func.FuncionarioID] = {
+                'NomeCompleto': func.NomeCompleto,
+                'Cargo': func.Cargo, # Guarda o cargo
+                'DiaDeFolga': func.DiaDeFolga,
+                'tarefas': []
+            } #
 
-        notificador_telegram.enviar_foto_com_botoes(
-            config.GESTOR_GROUP_CHAT_ID,
-            file_id,
-            legenda_gestor,
-            reply_markup,
-            parse_mode='HTML'
-        )
-        logger.info(f"Nota Fiscal {nota_fiscal_id} encaminhada para o grupo de gestores.")
+        # Preenche com as atribuições apenas dos funcionários filtrados
+        for atribuicao in todas_as_atribuicoes:
+            if atribuicao.FuncionarioID in atribuicoes_por_funcionario:
+                atribuicoes_por_funcionario[atribuicao.FuncionarioID]['tarefas'].append(atribuicao) #
+
+                # O cálculo de pontos possíveis e ganhos agora só roda para os funcionários filtrados
+        for func_id, dados in atribuicoes_por_funcionario.items():
+            pontos_possiveis_total = 0 #
+            # --- Início da Lógica de Cálculo de Pontos Possíveis (EXISTENTE, SEM ALTERAÇÃO) ---
+            # (Itera sobre tarefas, verifica frequência, datas, folga, etc.)
+            for tarefa in dados['tarefas']:
+                if tarefa.TipoFrequencia in ('GrupoCompetitiva', 'Unica'):
+                    data_ref = tarefa.DataAceite if tarefa.TipoFrequencia == 'GrupoCompetitiva' else tarefa.DataInicioVigencia
+                    if data_ref and inicio_mes <= _get_date_part(data_ref) <= data_final:
+                        # Considera apenas se a atribuição estava ativa no período
+                        data_fim_vigencia = _get_date_part(tarefa.DataFimVigencia) if tarefa.DataFimVigencia else data_final # Usa data_fim se for nulo
+                        if data_fim_vigencia >= inicio_mes: # Garante que não encerrou antes do período começar
+                            pontos_possiveis_total += tarefa.Pontos
+                    continue
+                dias_ocorrencia = 0
+                start_date_tarefa = _get_date_part(tarefa.DataInicioVigencia) if tarefa.DataInicioVigencia else inicio_mes
+                end_date_tarefa = _get_date_part(tarefa.DataFimVigencia) if tarefa.DataFimVigencia else data_final
+                start_date_calc = max(start_date_tarefa, inicio_mes)
+                end_date_calc = min(end_date_tarefa, data_final)
+                if end_date_calc < start_date_calc: continue
+                for dia_atual in (start_date_calc + timedelta(days=n) for n in range((end_date_calc - start_date_calc).days + 1)):
+                    dia_da_semana_sql = (dia_atual.weekday() + 1) % 7 + 1
+                    if str(dia_da_semana_sql) == str(dados['DiaDeFolga']): continue # PULA O DIA SE FOR FOLGA!
+                    if tarefa.TipoFrequencia == 'Diaria': dias_ocorrencia += 1
+                    elif tarefa.TipoFrequencia == 'Semanal':
+                        if str(dia_da_semana_sql) == str(tarefa.ValorFrequencia): dias_ocorrencia += 1
+                    elif tarefa.TipoFrequencia == 'Mensal':
+                        if dia_atual.day == int(tarefa.ValorFrequencia): dias_ocorrencia += 1
+                pontos_possiveis_total += dias_ocorrencia * tarefa.Pontos
+            # --- Fim da Lógica de Cálculo de Pontos Possíveis ---
+
+            # --- CORREÇÃO APLICADA AQUI ---
+            # 1. Calcula os pontos ganhos APENAS de tarefas regulares para o PERCENTUAL
+            pontos_ganhos_regulares = calcular_pontos_ganhos_tarefas_regulares(func_id, inicio_mes, data_final) # <<< USA A NOVA FUNÇÃO
+
+            # 2. Calcula o percentual usando os pontos regulares
+            percentual_desempenho = (pontos_ganhos_regulares / pontos_possiveis_total) * 100 if pontos_possiveis_total > 0 else 0
+
+            # 3. Calcula os pontos ganhos TOTAIS (incluindo bônus) para a COLUNA "Pontos (Esforço)"
+            pontos_ganhos_totais = calcular_pontos_ganhos_no_periodo(func_id, inicio_mes, data_final) # <<< USA A FUNÇÃO ORIGINAL
+            # --- FIM DA CORREÇÃO ---
+
+            ranking_parcial.append({
+                'FuncionarioID': func_id, 'NomeCompleto': dados['NomeCompleto'],
+                'PontosGanhos': pontos_ganhos_totais, # <<< Exibe o total (com bônus)
+                'PontosPossiveis': pontos_possiveis_total,
+                'Desempenho': round(percentual_desempenho, 2) # <<< Exibe o percentual (sem bônus, <= 100%)
+            })
+
+        if not ranking_parcial: return [] #
+
+        # --- AJUSTE NO CÁLCULO DO MAX ---
+        # Calcula o máximo de pontos ganhos APENAS DENTRO DO GRUPO FILTRADO
+        max_pontos_ganhos_no_setor = max(p['PontosGanhos'] for p in ranking_parcial) if any(p['PontosGanhos'] for p in ranking_parcial) else 1
+        # --------------------------------
+
+        ranking_final = [] #
+        for dados_func in ranking_parcial:
+            # Usa o máximo do setor para normalizar o esforço
+            percentual_pontos_brutos = (dados_func['PontosGanhos'] / max_pontos_ganhos_no_setor) * 100 #
+            score_hibrido = (dados_func['Desempenho'] * PESO_A_DESEMPENHO) + (percentual_pontos_brutos * PESO_B_PONTOS_BRUTOS) #
+            dados_func['ScoreHibrido'] = round(score_hibrido, 2) #
+            ranking_final.append(dados_func) #
+
+        ranking_ordenado = sorted(ranking_final, key=lambda x: x['ScoreHibrido'], reverse=True) #
+        return ranking_ordenado #
 
     except Exception as e:
-        logger.error(f"Erro crítico em receber_nota_fiscal: {e}", exc_info=True)
-        await update.message.reply_text("Ocorreu um erro crítico. Contate o administrador.")
+        logger.error(f"ERRO ao calcular ranking de desempenho HÍBRIDO com filtro '{setor_filtro}': {e}") #
+        return [] #
+    finally:
+        if conn: conn.close() #
 
-async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+def salvar_historico_ranking(ranking_do_mes):
+    """Salva os resultados finais do ranking de um mês na tabela de histórico."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            hoje = date.today()
+            ano = (hoje.replace(day=1) - timedelta(days=1)).year
+            mes = (hoje.replace(day=1) - timedelta(days=1)).month
+
+            sql = """
+                INSERT INTO HistoricoRanking 
+                (Ano, Mes, Posicao, FuncionarioID, NomeFuncionario, PontosGanhos, PontosPossiveis, PercentualDesempenho) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """
+            for i, dados_vencedor in enumerate(ranking_do_mes):
+                cursor.execute(sql,
+                               ano,
+                               mes,
+                               i + 1, # Posição no ranking
+                               dados_vencedor['FuncionarioID'],
+                               dados_vencedor['NomeCompleto'],
+                               dados_vencedor['PontosGanhos'],
+                               dados_vencedor['PontosPossiveis'],
+                               dados_vencedor['Desempenho']
+                               )
+            conn.commit()
+            print(f"--> [DATABASE.PY] Histórico do ranking de {mes}/{ano} salvo com sucesso.")
+        except Exception as e:
+            logger.error(f"ERRO ao salvar histórico do ranking: {e}")
+        finally:
+            conn.close()
+
+def verificar_se_fechamento_ja_rodou(ano, mes):
+    """Verifica na tabela de histórico se o fechamento para um dado mês/ano já foi salvo."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT COUNT(1) FROM HistoricoRanking WHERE Ano = ? AND Mes = ?"
+            cursor.execute(sql, ano, mes)
+            return cursor.fetchone()[0] > 0
+        finally:
+            conn.close()
+    return False
+
+def calcular_pontos_ganhos_no_periodo(funcionario_id, inicio_periodo, fim_periodo):
     """
-    Roteador principal para fotos privadas.
-    Verifica o estado do usuário e decide qual handler de foto chamar.
+    Soma os pontos de todas as entregas APROVADAS de um funcionário
+    dentro de um período de datas específico.
     """
-    # Verifica primeiro se o usuário está no estado de enviar NF
-    if context.user_data.get('aguardando_nota_fiscal', False):
-        await receber_nota_fiscal(update, context)
-
-    # Se não, chama o handler padrão de envio de fotos de tarefas
-    else:
-        await handler_foto_tarefa(update, context)
-
-
-async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-    user = update.effective_user
-
-    # --- LÓGICA DE DOCUMENTOS PESSOAIS (HOLERITE) ---
-    if data.startswith("get_holerite_"):
-        await query.edit_message_text("Processando sua solicitação...")
-        mes_ano_iso = data.split('_')[-1]
-        funcionario = database.buscar_funcionario_por_chat_id(user.id)
-        dados_holerite = database.buscar_dados_holerite_para_envio(funcionario.FuncionarioID, mes_ano_iso)
-        if not dados_holerite:
-            await query.edit_message_text("Erro: Não foi possível encontrar este documento.")
-            return
-        caminho_arquivo, ciencia_id = dados_holerite
-        keyboard = [[InlineKeyboardButton("✅ Recebi e estou ciente", callback_data=f"holerite_ciente_{ciencia_id}")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+    conn = get_db_connection()
+    if conn:
         try:
-            with open(caminho_arquivo, 'rb') as documento:
-                await context.bot.send_document(
-                    chat_id=user.id,
-                    document=documento,
-                    caption=f"Aqui está seu documento referente a {datetime.strptime(mes_ano_iso, '%Y-%m-%d').strftime('%B de %Y').capitalize()}.\n\nPor favor, confirme o recebimento.",
-                    reply_markup=reply_markup
-                )
-            await query.edit_message_text("✔️ Seu documento foi enviado. Por favor, verifique a nova mensagem e confirme a ciência.")
-        except FileNotFoundError:
-            await query.edit_message_text("❌ ERRO CRÍTICO: O arquivo do documento não foi encontrado no servidor. Por favor, contate o RH.")
-        except Exception as e:
-            await query.edit_message_text(f"❌ Ocorreu um erro inesperado ao enviar seu documento: {e}")
+            cursor = conn.cursor()
+            sql = """
+                SELECT SUM(ISNULL(PontosGanhos, 0))
+                FROM Entregas
+                WHERE FuncionarioID = ?
+                  AND StatusValidacao = 'Aprovada'
+                  AND CONVERT(DATE, DataEnvio) BETWEEN ? AND ?
+            """
+            cursor.execute(sql, funcionario_id, inicio_periodo, fim_periodo)
+            resultado = cursor.fetchone()[0]
+            # Se o resultado for None (nenhuma entrega), retorna 0
+            return resultado if resultado is not None else 0
+        finally:
+            conn.close()
+    return 0
 
-    elif data.startswith("holerite_ciente_"):
-        ciencia_id = int(data.split('_')[-1])
-        sucesso = database.marcar_holerite_como_ciente(ciencia_id)
-        if not sucesso:
-            await query.answer("Este documento já foi assinado.", show_alert=True)
-            return
-        mensagem_gestor = f"✍️ O funcionário **{user.first_name}** confirmou o recebimento de um documento pessoal (Holerite)."
-        notificador_telegram.enviar_mensagem(config.GESTOR_GROUP_CHAT_ID, mensagem_gestor)
-        mensagem_recibo = (
-            f"\n\n---"
-            f"\n✍️ **CIÊNCIA REGISTRADA**"
-            f"\n**Protocolo:** `{ciencia_id}`"
-            f"\n**Data/Hora:** `{datetime.now().strftime('%d/%m/%Y %H:%M:%S')}`"
-        )
+def calcular_pontos_ganhos_tarefas_regulares(funcionario_id, inicio_periodo, fim_periodo):
+    """
+    Soma os pontos das entregas APROVADAS de um funcionário em um período,
+    EXCLUINDO pontos de tarefas de bônus (Leitura, Feedback, Metas).
+    Usado especificamente para o cálculo do percentual de desempenho/confiabilidade.
+    """
+    conn = get_db_connection()
+    if conn:
         try:
-            texto_original = query.message.caption
-            await query.edit_message_caption(caption=f"{texto_original}{mensagem_recibo}", parse_mode='Markdown', reply_markup=None)
-        except Exception as e:
-            logger.error(f"Erro ao editar a legenda do holerite: {e}")
-            await query.answer("Recebimento confirmado!", show_alert=True)
-
-    # --- LÓGICA DA LOJA DE RECOMPENSAS ---
-    elif data.startswith("ver_produto_"):
-        produto_id = int(data.split('_')[-1])
-        produtos = database.listar_produtos_loja(incluir_inativos=True)
-        produto = next((p for p in produtos if p.ProdutoID == produto_id), None)
-        if not produto:
-            await query.edit_message_text("Este produto não está mais disponível.")
-            return
-        funcionario = database.buscar_funcionario_por_chat_id(user.id)
-        saldo_atual = database.buscar_saldo_funcionario(funcionario.FuncionarioID)
-        texto = (f"<b>{produto.Nome}</b>\n\n<i>{produto.Descricao}</i>\n\nCusto: <b>{produto.CustoEmPontos} pontos</b>\nSeu Saldo: <b>{saldo_atual} pontos</b>")
-        keyboard = [[InlineKeyboardButton("✅ Confirmar Resgate", callback_data=f"confirmar_resgate_{produto.ProdutoID}")],
-                    [InlineKeyboardButton("⬅️ Voltar para a Loja", callback_data="voltar_loja")]]
-        if saldo_atual < produto.CustoEmPontos:
-            texto += "\n\n⚠️ Você não tem pontos suficientes para resgatar este item."
-            keyboard.pop(0)
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(texto, reply_markup=reply_markup, parse_mode='HTML')
-
-    elif data.startswith("confirmar_resgate_"):
-        produto_id = int(data.split('_')[-1])
-        funcionario = database.buscar_funcionario_por_chat_id(user.id)
-        sucesso, mensagem, resgate_id = database.solicitar_resgate(funcionario.FuncionarioID, produto_id)
-        await query.edit_message_text(mensagem)
-        if sucesso:
-            produto = next((p for p in database.listar_produtos_loja(incluir_inativos=True) if p.ProdutoID == produto_id), None)
-            msg_gestor = (f"🔔 **Nova Solicitação de Resgate** 🔔\n\n👤 **Funcionário:** {funcionario.NomeCompleto}\n🎁 **Produto:** {produto.Nome}\n💰 **Custo:** {produto.CustoEmPontos} pontos\n\nAcesse o sistema (`main.py`) para aprovar.")
-            notificador_telegram.enviar_mensagem(config.GESTOR_GROUP_CHAT_ID, msg_gestor)
-
-    elif data == "voltar_loja":
-        produtos = database.listar_produtos_loja()
-        texto = "🏪 **Loja de Recompensas** 🏪\n\nEscolha um item para ver os detalhes e resgatar:"
-        keyboard = []
-        for produto in produtos:
-            estoque_str = f"({produto.EstoqueDisponivel} un.)" if produto.EstoqueDisponivel is not None else ""
-            texto_botao = f"{produto.Nome} - {produto.CustoEmPontos} pts {estoque_str}"
-            keyboard.append([InlineKeyboardButton(texto_botao, callback_data=f"ver_produto_{produto.ProdutoID}")])
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(text=texto, reply_markup=reply_markup, parse_mode='Markdown')
-
-    # --- LÓGICA DE FEEDBACK DE FIM DE JORNADA ---
-    elif data == "avaliar_dia":
-        keyboard = []; row = []
-        for i in range(11):
-            row.append(InlineKeyboardButton(str(i), callback_data=f"nota_dia_{i}"))
-            if len(row) == 5 or i == 10: keyboard.append(row); row = []
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(text=(f"{query.message.text}\n\nComo você classificaria seu dia de 0 a 10?\n(0 = Muito Ruim / 10 = Excelente)"), reply_markup=reply_markup)
-
-    elif data.startswith("nota_dia_"):
-        nota = int(data.split('_')[-1])
-        funcionario_db = database.buscar_funcionario_por_chat_id(user.id)
-        if funcionario_db:
-            sucesso = database.salvar_feedback_do_dia(funcionario_db.FuncionarioID, nota)
-            if sucesso:
-                
-                # --- CORREÇÃO APLICADA AQUI ---
-                # Usamos a nova função genérica de bônus, especificando o ID correto da tarefa de feedback.
-                database.registrar_pontos_de_bonus(
-                    funcionario_db.FuncionarioID, 
-                    config.PONTOS_BONUS_FEEDBACK_DIARIO, 
-                    "Feedback Diário (Bônus)",
-                    config.TAREFA_ID_FEEDBACK_DIARIO # <-- Usa o ID correto (ex: 5)
-                )
-                # --- FIM DA CORREÇÃO ---
-                
-                database.adicionar_pontos_ao_saldo(funcionario_db.FuncionarioID, config.PONTOS_BONUS_FEEDBACK_DIARIO)
-                texto_final = (f"Obrigado pelo seu feedback! Sua nota foi **{nota}**.\n\nVocê ganhou **{config.PONTOS_BONUS_FEEDBACK_DIARIO}** pontos por sua participação. Sua opinião nos ajuda a melhorar sempre! 💪")
-                await query.edit_message_text(texto_final, parse_mode='Markdown')
-            else: await query.edit_message_text("Você já enviou seu feedback hoje. Obrigado!")
-        else: await query.edit_message_text("Erro: não foi possível identificar seu usuário.")
-
-    elif data.startswith("aceitar_tarefa_"):
-        origem_atribuicao_id = int(data.split('_')[-1])
-        funcionario_db = database.buscar_funcionario_por_chat_id(user.id)
-        if not funcionario_db:
-            await query.answer("Seu usuário do Telegram não foi encontrado no nosso sistema.", show_alert=True) # Avisa via popup
-            return
-
-        # Chama a função do banco
-        nova_atribuicao_id_criada = database.aceitar_tarefa_de_grupo(origem_atribuicao_id, funcionario_db.FuncionarioID)
-
-        # Busca o título da tarefa original para as mensagens
-        tarefa_original = database.buscar_tarefa_por_atribuicao(origem_atribuicao_id)
-        tarefa_titulo = tarefa_original.Titulo if tarefa_original else "Tarefa desconhecida"
-
-        # <<< CORREÇÃO: Verifica se a atribuição foi criada com sucesso >>>
-        if nova_atribuicao_id_criada:
-            # SUCESSO! A instância 'Unica' foi criada para este funcionário HOJE.
-            nova_mensagem_grupo = (
-                f"✅ **Missão Aceita por {user.first_name}!** ✅\n\n"
-                f"**Tarefa:** {tarefa_titulo}\n\n"
-                f"{user.first_name} agora é o responsável pela entrega *de hoje*. Boa sorte!"
+            cursor = conn.cursor()
+            # Lista de IDs de tarefas consideradas "bônus" ou não regulares
+            # Certifique-se que TAREFA_ID_LEITURA, TAREFA_ID_FEEDBACK_DIARIO, TAREFA_ID_PONTOS_META
+            # existem e estão corretos em config.py
+            ids_bonus = (
+                config.TAREFA_ID_LEITURA,
+                config.TAREFA_ID_FEEDBACK_DIARIO,
+                config.TAREFA_ID_PONTOS_META
+                # Adicione outros IDs de tarefas "bônus" se existirem
             )
-            try:
-                await query.edit_message_text(text=nova_mensagem_grupo, reply_markup=None)
-            except Exception as e:
-                logger.info(f"Aviso: Não foi possível editar a mensagem original no grupo para {origem_atribuicao_id}. Erro: {e}")
+            # Cria os placeholders (?) para a cláusula NOT IN dinamicamente
+            placeholders = ','.join('?' * len(ids_bonus))
 
-            # Mensagem privada de sucesso
-            await context.bot.send_message(
-                chat_id=user.id,
-                text=f"Você aceitou a missão '{tarefa_titulo}' para hoje. Agora ela aparecerá na sua lista de /tarefas. Capriche na entrega! 💪"
-            )
-        else:
-            # FALHA! Alguém já aceitou HOJE ou ocorreu outro erro no banco.
-            # Avisa o usuário que clicou via popup (show_alert=True)
-            await query.answer(f"Que pena, parece que a missão '{tarefa_titulo}' já foi aceita por outro colega hoje.", show_alert=True)
-            # Opcional: Logar que a tentativa falhou
-            logger.info(f"Funcionário {funcionario_db.FuncionarioID} tentou aceitar tarefa {origem_atribuicao_id} que já foi aceita hoje ou falhou no DB.")
+            sql = f"""
+                SELECT SUM(ISNULL(PontosGanhos, 0))
+                FROM Entregas
+                WHERE FuncionarioID = ?
+                  AND StatusValidacao = 'Aprovada'
+                  AND CONVERT(DATE, DataEnvio) BETWEEN ? AND ?
+                  AND TarefaID NOT IN ({placeholders}) -- Exclui tarefas de bônus
+            """
+            params = [funcionario_id, inicio_periodo, fim_periodo] + list(ids_bonus)
 
-
-
-    # Em telegram_bot.py, SUBSTITUA a lógica do 'aceitar_folga_' dentro de button_callback_handler
-
-    elif data.startswith("aceitar_folga_"):
-        tarefa_id = int(data.split('_')[-1])
-        funcionario_aceitou = database.buscar_funcionario_por_chat_id(user.id)
-        if not funcionario_aceitou:
-            await context.bot.send_message(chat_id=user.id, text="Seu usuário do Telegram não foi encontrado.")
-            return
-
-        # --- LÓGICA CORRIGIDA E ROBUSTA ---
-        # 1. Chama a nova função transacional do banco
-        novo_atribuicao_id = database.verificar_e_aceitar_tarefa_de_folga(tarefa_id, funcionario_aceitou.FuncionarioID)
-
-        # 2. Busca os detalhes da tarefa (apenas para a mensagem de confirmação)
-        tarefa_info = database.buscar_tarefa_por_atribuicao(novo_atribuicao_id) if novo_atribuicao_id else None
-
-        # 3. Verifica o resultado da transação
-        if novo_atribuicao_id:
-            # SUCESSO! A pessoa pegou a tarefa.
-            nova_mensagem_grupo = (
-                f"{query.message.text}\n\n"
-                f"--- MISSÃO REIVINDICADA! ---\n"
-                f"✅ **{funcionario_aceitou.NomeCompleto}** assumiu a tarefa."
-            )
-            # Tenta editar a mensagem do grupo para "travar" (remover o botão)
-            try:
-                await query.edit_message_text(text=nova_mensagem_grupo, reply_markup=None)
-            except Exception as e:
-                logger.warning(f"Não foi possível editar a msg de 'aceitar_folga_' (provavelmente já editada): {e}")
-
-            # Envia a confirmação privada
-            await context.bot.send_message(
-                chat_id=user.id,
-                text=f"🚀 Você assumiu a missão extra '{tarefa_info.Titulo}'! Ela já está na sua lista de /tarefas. Bom trabalho!"
-            )
-        else:
-            # FALHA! (Função retornou False ou None)
-            # Avisa o usuário que clicou (mas não conseguiu) via popup
-            await query.answer("Que pena! Parece que outro colega já pegou esta missão.", show_alert=True)
-        # --- FIM DA CORREÇÃO ---
-
-
-
-    # --- LÓGICA DE VISUALIZAÇÃO DE PENDÊNCIAS (GESTOR) ---
-    elif data.startswith("ver_pendencias_"):
-        funcionario_id = int(data.split('_')[-1])
-        funcionario = database.buscar_funcionario_por_id(funcionario_id)
-        tarefas_pendentes = database.listar_tarefas_do_dia_por_funcionario(funcionario_id)
-        if not funcionario:
-            await query.edit_message_text("Erro: Funcionário não encontrado.")
-            return
-        texto_resposta = f"📋 **Tarefas Pendentes para {funcionario.NomeCompleto}**\n\n"
-        if not tarefas_pendentes:
-            texto_resposta += "Nenhuma tarefa pendente no momento. Bom trabalho! ✅"
-        else:
-            for tarefa in tarefas_pendentes:
-                texto_resposta += f"  - {tarefa.Titulo} ({tarefa.Pontos} pts)\n"
-        keyboard = [[InlineKeyboardButton("⬅️ Voltar para a lista", callback_data="voltar_lista_funcs")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(texto_resposta, reply_markup=reply_markup, parse_mode='Markdown')
-
-    elif data == "voltar_lista_funcs":
-        funcionarios = database.listar_funcionarios()
-        keyboard = [[InlineKeyboardButton(f.NomeCompleto, callback_data=f"ver_pendencias_{f.FuncionarioID}")] for f in funcionarios]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text("Selecione um funcionário para ver as tarefas pendentes:", reply_markup=reply_markup)
-
-    elif data.startswith("doc_ciente_"):
-        await query.answer()
-        assinatura_id = int(data.split('_')[-1])
-        detalhes = database.buscar_detalhes_assinatura_para_bot(assinatura_id)
-
-        # <<< CORREÇÃO: Verifica se 'detalhes' foi encontrado (ou seja, se a assinatura ainda estava pendente) >>>
-        if not detalhes:
-            await query.answer("Esta ciência já foi registrada anteriormente.", show_alert=True)
-            # Tenta remover o botão se a edição anterior falhou
-            try:
-                await query.edit_message_reply_markup(reply_markup=None)
-            except Exception:
-                pass # Ignora erro se não conseguir editar
-            return # Interrompe a execução aqui
-
-        # Se 'detalhes' existe, prossegue com a lógica original
-        nome_funcionario = user.first_name
-        mensagem_gestor = f"✅ O funcionário **{nome_funcionario}** confirmou ciência do comunicado: *'{detalhes.Titulo}'*."
-        notificador_telegram.enviar_mensagem(config.GESTOR_GROUP_CHAT_ID, mensagem_gestor)
-        database.marcar_como_ciente(assinatura_id)
-
-        datetime_ciencia = datetime.now()
-        mensagem_confirmacao = (
-            f"\n\n---"
-            f"\n📜 **RECIBO DE CIÊNCIA** 📜"
-            f"\n\nSua confirmação de leitura foi registrada com sucesso."
-            f"\n\n**Protocolo:** `{assinatura_id}`"
-            f"\n**Data:** `{datetime_ciencia.strftime('%d/%m/%Y')}`"
-            f"\n**Hora:** `{datetime_ciencia.strftime('%H:%M:%S')}`"
-        )
-        if detalhes.PontosPorCiencia > 0:
-            # Adiciona pontos ao saldo PRIMEIRO (mais crítico)
-            database.adicionar_pontos_ao_saldo(detalhes.FuncionarioID, detalhes.PontosPorCiencia)
-            # DEPOIS registra no histórico (menos crítico se falhar)
-            database.registrar_pontos_por_leitura(detalhes.FuncionarioID, detalhes.PontosPorCiencia, detalhes.Titulo)
-            mensagem_confirmacao += f"\n\n🎉 Você ganhou **{detalhes.PontosPorCiencia}** pontos por sua agilidade!"
-
-        # Lógica de edição da mensagem (permanece a mesma, já corrigida anteriormente)
-        try:
-            if query.message.photo:
-                texto_original = query.message.caption
-                await query.edit_message_caption(
-                    caption=f"{texto_original}{mensagem_confirmacao}",
-                    parse_mode='Markdown',
-                    reply_markup=None
-                )
-            else:
-                texto_original = query.message.text
-                await query.edit_message_text(
-                    text=f"{texto_original}{mensagem_confirmacao}",
-                    parse_mode='Markdown',
-                    reply_markup=None
-                )
+            cursor.execute(sql, params)
+            resultado = cursor.fetchone()[0]
+            return resultado if resultado is not None else 0
+        except AttributeError as e:
+             # Log específico se alguma constante não existir em config.py
+             logger.error(f"Erro ao calcular pontos regulares: Constante de Tarefa Bônus não encontrada em config.py? Detalhe: {e}")
+             return 0 # Retorna 0 em caso de erro na configuração
         except Exception as e:
-            logger.error(f"Erro ao editar a mensagem de ciência (ID: {assinatura_id}): {e}")
-            await query.answer("Sua ciência foi registrada!", show_alert=True) # Feedback mínimo
+             logger.error(f"Erro ao calcular pontos ganhos (tarefas regulares): {e}", exc_info=True)
+             return 0 # Retorna 0 em caso de erro genérico
+        finally:
+            conn.close()
+    return 0
 
-    # --- LÓGICA DE ENTREGA DE TAREFAS (FUNCIONÁRIO) ---
-    elif data.startswith("ver_tarefa_"):
-        atribuicao_id = int(data.split('_')[-1])
-        detalhes = database.buscar_detalhes_da_atribuicao(atribuicao_id)
-        if not detalhes: await query.edit_message_text("Erro: Tarefa não encontrada."); return
-        texto = f"📄 **Detalhes:** *{detalhes.Descricao}*\n\nO que deseja fazer?"
-        keyboard = [[InlineKeyboardButton("✅ Enviar Evidência", callback_data=f"entregar_{atribuicao_id}")],
-                    [InlineKeyboardButton("🤷 Não Aplicável", callback_data=f"nao_aplicavel_{atribuicao_id}")],
-                    [InlineKeyboardButton("⬅️ Voltar", callback_data="voltar_lista_tarefas")]]
-        await query.edit_message_text(text=texto, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
-
-    elif data.startswith("entregar_"):
-        context.user_data['identificador_tarefa'] = int(data.split('_')[-1])
-        await query.edit_message_text(text="Excelente! ✅\nAgora, por favor, envie a foto de evidência.")
-
-    elif data.startswith("nao_aplicavel_"):
-        context.user_data['tarefa_nao_aplicavel'] = int(data.split('_')[-1])
-        await query.edit_message_text(text="Entendido. 🤷\nPor favor, diga o motivo (ex: 'Chuva', 'Nenhum cliente').")
-
-    elif data == "voltar_lista_tarefas":
-        await tarefas(update, context, query=query)
-
-    elif data.startswith("aprovar_gestor_"):
-        entrega_id = int(data.split('_')[-1])
-        gestor_nome = query.from_user.first_name
-        detalhes = database.buscar_detalhes_da_entrega(entrega_id) # Busca detalhes uma vez
-
-        # <<< CORREÇÃO: Verifica o status ANTES de tentar aprovar >>>
-        if not detalhes:
-            try: await query.edit_message_caption(caption="ERRO: Entrega não encontrada no banco de dados.")
-            except Exception: pass
-            return
-        if detalhes.StatusValidacao != 'Pendente':
-            try: await query.edit_message_caption(caption=f"Esta tarefa já foi validada anteriormente. (Status: {detalhes.StatusValidacao})")
-            except Exception: pass
-            return
-
-        # Se passou nas verificações, tenta aprovar no banco
-        novas_conquistas_ganhas = database.aprovar_entrega(entrega_id, detalhes.FuncionarioID, detalhes.Pontos)
-
-        # Prepara notificação para funcionário (mesma lógica de antes)
-        texto_notificacao = (f"🎉 Parabéns, <b>{detalhes.NomeCompleto}</b>!\nSua entrega para '<b>{detalhes.Titulo}</b>' foi APROVADA!\n\n"
-                            f"Você ganhou <b>{detalhes.Pontos}</b> pontos. Continue assim!")
-        if novas_conquistas_ganhas:
-            for conquista in novas_conquistas_ganhas:
-                texto_notificacao += (
-                    f"\n\n✨ <b>NOVA CONQUISTA DESBLOQUEADA!</b> ✨\n"
-                    f"{conquista.Icone} <b>{conquista.Nome}</b>\n"
-                    f"<i>{conquista.Descricao}</i>\n"
-                    f"Você ganhou um bônus de <b>{conquista.PontosBonus}</b> pontos!"
-                )
-                # Adiciona pontos bônus AO SALDO aqui, pois aprovar_entrega só registra
-                if conquista.PontosBonus > 0:
-                    database.adicionar_pontos_ao_saldo(detalhes.FuncionarioID, conquista.PontosBonus)
-
-        notificador_telegram.enviar_mensagem(detalhes.ChatIDFuncionario, texto_notificacao)
-
-        # Edita a mensagem no grupo GESTOR
-        legenda_final = (f"**Entrega APROVADA por {gestor_nome}**\n\n"
-                        f"👤 **Funcionário:** {detalhes.NomeCompleto}\n"
-                        f"📝 **Tarefa:** {detalhes.Titulo} (+{detalhes.Pontos} pts)")
-
-                # <<< CORREÇÃO REVISADA: Adiciona try/except e fallback com nova mensagem >>>
+def limpar_entregas_do_mes_por_funcionario(funcionario_id):
+    """
+    (A "BOMBA ATÔMICA")
+    DELETA todas as entregas de um funcionário feitas no mês e ano correntes.
+    Esta é uma operação DESTRUTIVA e irreversível.
+    """
+    conn = get_db_connection()
+    if conn:
         try:
-            await query.edit_message_caption(caption=legenda_final, reply_markup=None) # Remove botões também
-        except Exception as e_edit:
-            logger.warning(f"Não foi possível editar a mensagem de aprovação {entrega_id} no grupo gestor: {e_edit}")
-            # Fallback: Envia uma nova mensagem se a edição falhar
-            try:
-                await context.bot.send_message(chat_id=query.message.chat_id, text=legenda_final)
-            except Exception as e_send:
-                logger.error(f"Falha também ao enviar mensagem de fallback para aprovação {entrega_id}: {e_send}")
-    # --- INÍCIO: LÓGICA DE GERENCIAMENTO DE NOTA FISCAL (GESTOR) ---
-
-    elif data.startswith("nf_prep_fwd_"):
-        # Regra 3: Encaminhar para o WhatsApp
-        await query.answer("Processando...")
-        gestor_chat_id = query.from_user.id
-        try:
-            nota_fiscal_id = int(data.split('_')[-1])
-            dados_nf = database.buscar_nota_fiscal(nota_fiscal_id)
-
-            if not dados_nf:
-                await context.bot.send_message(gestor_chat_id, "Erro: Não encontrei os dados desta NF no banco.")
-                return
-
-            if not dados_nf.PathFoto:
-                await context.bot.send_message(gestor_chat_id, "O download desta foto ainda está sendo processado pelo servidor. Tente novamente em 1 minuto.")
-                return
-
-            # Constrói o link do WhatsApp
-            texto_mensagem_wpp = urllib.parse.quote(f"Olá, segue a Nota Fiscal recebida (ID Interno: {nota_fiscal_id})")
-            link_wpp = f"https://wa.me/{config.WHATSAPP_CONTATO_FINANCEIRO}?text={texto_mensagem_wpp}"
-
-            # Envia o arquivo da NF (do disco) PRIVADAMENTE para o gestor
-            with open(dados_nf.PathFoto, 'rb') as nf_file:
-                await context.bot.send_document(
-                    chat_id=gestor_chat_id,
-                    document=nf_file,
-                    caption=f"Pronto! Por favor, encaminhe este arquivo para o Financeiro.\n\nVocê também pode usar este link:\n{link_wpp}"
-                )
-            # Atualiza o status no grupo
-            await query.edit_message_caption(caption=f"{query.message.caption}\n\n---\n✅ Encaminhada para o Financeiro por {query.from_user.first_name}.")
-
+            cursor = conn.cursor()
+            sql = """
+                DELETE FROM Entregas
+                WHERE FuncionarioID = ?
+                  AND MONTH(DataEnvio) = MONTH(GETDATE())
+                  AND YEAR(DataEnvio) = YEAR(GETDATE())
+            """
+            cursor.execute(sql, funcionario_id)
+            conn.commit()
+            print(f"--> [BOMBA ATÔMICA] Entregas do mês corrente para o funcionário {funcionario_id} foram DELETADAS.")
         except Exception as e:
-            logger.error(f"Erro em nf_prep_fwd: {e}", exc_info=True)
-            await context.bot.send_message(gestor_chat_id, f"Ocorreu um erro ao preparar o encaminhamento: {e}")
+            logger.error(f"ERRO ao limpar as entregas do mês para o funcionário {funcionario_id}: {e}")
+        finally:
+            conn.close()
 
-    elif data.startswith("nf_create_task_"):
-        # Regra 4: Criar Tarefa "Guardar Mercadoria"
-        await query.answer("Criando tarefa...")
+def criar_documento(titulo, conteudo, criador_id, pontos, telegram_file_id_foto=None): # 1. Novo Parâmetro Opcional
+    """
+    Insere um novo documento na tabela Documentos e retorna o ID do novo registro.
+    Agora suporta um file_id de foto opcional.
+    """
+    conn = get_db_connection()
+    if conn:
         try:
-            nota_fiscal_id = int(data.split('_')[-1])
-            dados_nf = database.buscar_nota_fiscal(nota_fiscal_id)
-
-            if not dados_nf:
-                await query.edit_message_caption(caption=f"{query.message.caption}\n\n---\n❌ Erro: Não encontrei os dados desta NF.")
-                return
-
-            # Cria a nova tarefa 'Unica'
-            nova_atribuicao_id = database.atribuir_tarefa(
-                tarefa_id=config.TAREFA_ID_GUARDAR_MERCADORIA_MODELO,
-                funcionario_id=dados_nf.FuncionarioID,
-                tipo_frequencia='Unica',
-                valor_frequencia=None,
-                descricao_override="Guarde a mercadoria referente a esta Nota Fiscal.",
-                data_agendamento=datetime.now().date() # Agenda para hoje
-            )
-
-            if not nova_atribuicao_id:
-                await query.edit_message_caption(caption=f"{query.message.caption}\n\n---\n❌ Erro: Falha ao salvar a nova tarefa no banco.")
-                return
-
-            # Atualiza o status da NF
-            database.atualizar_status_nota_fiscal(nota_fiscal_id, "Processada")
-
-            # Notifica o funcionário PRIVADAMENTE
-            await context.bot.send_photo(
-                chat_id=dados_nf.ChatIDFuncionario,
-                photo=dados_nf.FileIDTelegram,
-                caption="📦 **Nova Tarefa Atribuída!** 📦\n\nUma tarefa para *'Guardar Mercadoria (NF)'* foi criada para você com base na nota fiscal que você enviou.\n\nUse o comando /tarefas para ver e enviar a evidência."
-            )
-
-            # Atualiza a mensagem no grupo
-            await query.edit_message_caption(caption=f"{query.message.caption}\n\n---\n✅ Tarefa 'Guardar' criada para o funcionário por {query.from_user.first_name}.")
-
+            cursor = conn.cursor()
+            sql = """
+                INSERT INTO Documentos (Titulo, Conteudo, FuncionarioCriadorID, PontosPorCiencia, TelegramFileIDFoto) -- 2. Nova Coluna no INSERT
+                VALUES (?, ?, ?, ?, ?); -- 3. Novo '?' para o valor
+                SELECT SCOPE_IDENTITY();
+            """
+            cursor.execute(sql, titulo, conteudo, criador_id, pontos, telegram_file_id_foto)
+            cursor.nextset()
+            novo_id = cursor.fetchone()[0]
+            conn.commit()
+            return novo_id
         except Exception as e:
-            logger.error(f"Erro em nf_create_task: {e}", exc_info=True)
-            await query.edit_message_caption(caption=f"{query.message.caption}\n\n---\n❌ Erro inesperado ao criar tarefa: {e}")
+            logger.error(f"ERRO ao criar documento: {e}")
+            return None
+        finally:
+            conn.close()
 
-    elif data.startswith("nf_ignore_"):
-        # Ação de arquivar/ignorar
-        await query.answer("Arquivando...")
+def registrar_pendencia_assinatura(documento_id, funcionario_id):
+    """
+    Cria um registro de 'Pendente' para um funcionário em um documento específico.
+    Retorna o ID da nova pendência (AssinaturaID).
+    """
+    conn = get_db_connection()
+    if conn:
         try:
-            nota_fiscal_id = int(data.split('_')[-1])
-            database.atualizar_status_nota_fiscal(nota_fiscal_id, "Processada")
-            await query.edit_message_caption(caption=f"{query.message.caption}\n\n---\n👍 Nota revisada e arquivada por {query.from_user.first_name}.")
+            cursor = conn.cursor()
+            sql = """
+                INSERT INTO DocumentosAssinaturas (DocumentoID, FuncionarioID)
+                VALUES (?, ?);
+                SELECT SCOPE_IDENTITY();
+            """
+            cursor.execute(sql, documento_id, funcionario_id)
+            cursor.nextset() # <<< A CORREÇÃO MÁGICA ESTÁ AQUI
+            assinatura_id = cursor.fetchone()[0]
+            conn.commit()
+            return assinatura_id
         except Exception as e:
-            logger.error(f"Erro em nf_ignore: {e}", exc_info=True)
+            logger.error(f"ERRO ao registrar pendência de assinatura: {e}")
+            return None
+        finally:
+            conn.close()
 
-    # --- FIM: LÓGICA DE GERENCIAMENTO DE NOTA FISCAL (GESTOR) ---
-
-    elif data.startswith("reprovar_gestor_"):
-        entrega_id = int(data.split('_')[-1])
-        gestor_id = query.from_user.id
-        chat_id_grupo = query.message.chat_id
-        msg_id_original = query.message.message_id
-
-        # --- CORREÇÃO: Usar bot_data ---
-        # Garante que a estrutura de dicionários exista
-        if 'pendencias_recusa' not in context.bot_data:
-            context.bot_data['pendencias_recusa'] = {}
-        if chat_id_grupo not in context.bot_data['pendencias_recusa']:
-            context.bot_data['pendencias_recusa'][chat_id_grupo] = {}
-
-        # Armazena os dados associados ao gestor que clicou dentro do chat específico
-        context.bot_data['pendencias_recusa'][chat_id_grupo][gestor_id] = {
-            'entrega_id': entrega_id,
-            'msg_id': msg_id_original
-        }
-        logger.info(f"Estado de recusa para EntregaID {entrega_id} armazenado em bot_data para GestorID {gestor_id} no ChatID {chat_id_grupo}.")
-        # --- FIM CORREÇÃO ---
-
-        # Remove botões da mensagem original (pode falhar, mas o estado já está salvo)
+def buscar_detalhes_assinatura_para_bot(assinatura_id):
+    """
+    Busca informações cruciais sobre uma assinatura pendente para o bot usar.
+    Retorna o ID do funcionário, os pontos a serem ganhos e o chat_id do telegram.
+    """
+    conn = get_db_connection()
+    if conn:
         try:
-            await query.edit_message_reply_markup(reply_markup=None)
-        except Exception as e_edit_markup:
-            logger.warning(f"Não foi possível remover botões ao iniciar recusa {entrega_id}: {e_edit_markup}")
+            cursor = conn.cursor()
+            sql = """
+                SELECT
+                    DA.FuncionarioID,
+                    D.PontosPorCiencia,
+                    F.ChatIDTelegram,
+                    D.Titulo
+                FROM DocumentosAssinaturas DA
+                JOIN Documentos D ON DA.DocumentoID = D.DocumentoID
+                JOIN Funcionarios F ON DA.FuncionarioID = F.FuncionarioID
+                WHERE DA.AssinaturaID = ? AND DA.StatusAssinatura = 'Pendente'
+            """
+            cursor.execute(sql, assinatura_id)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
 
-        await query.message.reply_text(f"Por favor, {query.from_user.first_name}, digite o motivo da recusa para esta tarefa.")
+def marcar_como_ciente(assinatura_id):
+    """
+    Atualiza uma pendência de assinatura para 'Ciente' e preenche a data/hora.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                UPDATE DocumentosAssinaturas
+                SET StatusAssinatura = 'Ciente', DataCiencia = GETDATE()
+                WHERE AssinaturaID = ?
+            """
+            cursor.execute(sql, assinatura_id)
+            conn.commit()
+        finally:
+            conn.close()
+
+def registrar_pontos_por_leitura(funcionario_id, pontos, titulo_documento):
+    """
+    (O "TRUQUE MÁGICO")
+    Insere um registro na tabela Entregas para contabilizar os pontos no ranking.
+    """
+    conn = get_db_connection()
+    TAREFA_ID_LEITURA = 38 # <<< MUDE ESTE NÚMERO PARA O SEU ID CORRETO!
+
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                INSERT INTO Entregas
+                (TarefaID, FuncionarioID, StatusValidacao, PontosGanhos, DataEnvio, MotivoRecusa)
+                VALUES (?, ?, 'Aprovada', ?, GETDATE(), ?)
+            """
+            motivo = f"Ciência do comunicado: {titulo_documento}"
+            cursor.execute(sql, TAREFA_ID_LEITURA, funcionario_id, pontos, motivo)
+            conn.commit()
+            print(f"--> [PONTOS] {pontos} pts registrados para FuncionarioID {funcionario_id} pela leitura.")
+        except Exception as e:
+            logger.error(f"ERRO ao registrar pontos por leitura: {e}")
+        finally:
+            conn.close()
 
 
-async def acompanhar_metas(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Envia para o funcionário o status da meta principal em formato de porcentagem."""
+# Em database.py
+def registrar_pontos_de_bonus(funcionario_id, pontos, motivo_log, tarefa_id_bonus, vinculo_id=None):
+    """
+    Insere um registro na tabela Entregas para contabilizar pontos de bônus
+    contra um TAREFA_ID específico (ex: Meta, Feedback, Conquista).
+    Opcionalmente, salva um 'vinculo_id' (como um ApuracaoID) no campo AtribuicaoID.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                INSERT INTO Entregas
+                (TarefaID, FuncionarioID, StatusValidacao, PontosGanhos, DataEnvio, MotivoRecusa, AtribuicaoID)
+                VALUES (?, ?, 'Aprovada', ?, GETDATE(), ?, ?)
+            """
+            cursor.execute(sql, tarefa_id_bonus, funcionario_id, pontos, motivo_log, vinculo_id)
+            conn.commit()
+            logger.info(f"--> [BÔNUS] {pontos} pts (TarefaID: {tarefa_id_bonus}, Vínculo: {vinculo_id}) registrados para FuncID {funcionario_id}. Motivo: {motivo_log}")
+        except Exception as e:
+            logger.error(f"ERRO ao registrar pontos de bônus (TarefaID: {tarefa_id_bonus}): {e}", exc_info=True)
+        finally:
+            conn.close()
 
-    dados_meta = database.buscar_meta_principal_do_dia()
 
-    if not dados_meta or not dados_meta.get('valor_meta'):
-        await update.message.reply_text("Nenhuma meta de equipe está ativa no momento. Foco nas tarefas individuais! 💪")
-        return
+def listar_comunicados_com_status(filtro_titulo=None):
+    """
+    Lista todos os documentos com status. Se um filtro_titulo for fornecido,
+    retorna apenas os documentos cujo título contém o texto do filtro.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql_base = """
+                SELECT
+                    D.DocumentoID, D.Titulo, D.DataCriacao,
+                    COUNT(DA.AssinaturaID) AS TotalEnviado,
+                    SUM(CASE WHEN DA.StatusAssinatura = 'Ciente' THEN 1 ELSE 0 END) AS TotalCientes
+                FROM Documentos D
+                LEFT JOIN DocumentosAssinaturas DA ON D.DocumentoID = DA.DocumentoID
+            """
 
-    nome = dados_meta['nome_meta']
-    atingido = dados_meta['valor_atingido']
-    total = dados_meta['valor_meta']
-    percentual = (atingido / total) * 100 if total > 0 else 0
+            params = [] # Lista para guardar os parâmetros da consulta
+            if filtro_titulo:
+                sql_base += " WHERE D.Titulo LIKE ?" # O 'LIKE' permite buscas parciais
+                params.append(f"%{filtro_titulo}%") # Os '%' são coringas: buscam o texto em qualquer parte do título
 
-    blocos_cheios = int(percentual // 10)
-    blocos_vazios = 10 - blocos_cheios
-    barra_progresso = '▓' * blocos_cheios + '░' * blocos_vazios
+            sql_final = """
+                GROUP BY D.DocumentoID, D.Titulo, D.DataCriacao
+                ORDER BY D.DataCriacao DESC
+            """
 
-    mensagem = (
-        f"🎯 <b>Meta da Equipe: {nome}</b> 🎯\n\n"
-        f"Estamos quase lá! Este é o nosso progresso até agora:\n\n"
-        f"<code>{barra_progresso}</code>\n\n"
-        f"🏁 <b>Progresso: {percentual:.2f}% de 100%</b>\n\n"
-        "Vamos com tudo, equipe! 🚀"
-    )
+            sql_completa = sql_base + sql_final
+            cursor.execute(sql_completa, params)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
 
-    await update.message.reply_html(mensagem)
-
-async def minhas_conquistas(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Exibe a lista de conquistas já desbloqueadas pelo funcionário."""
-    user = update.effective_user
-    chat_id = user.id
-    funcionario = database.buscar_funcionario_por_chat_id(chat_id) #
-
-    if not funcionario:
-        await update.message.reply_text("Desculpe, não consegui encontrar seu cadastro no sistema.") #
-        return
-
-    conquistas_ganhas = database.listar_conquistas_por_funcionario(funcionario.FuncionarioID) #
-
-    if not conquistas_ganhas:
-        await update.message.reply_text("Você ainda não desbloqueou nenhuma conquista. Continue se esforçando! 💪") #
-        return
-
-    texto_conquistas = f"🏅 **Suas Conquistas Desbloqueadas** ({len(conquistas_ganhas)}) 🏅\n\nParabéns pelas suas realizações!\n"
-
-    for conquista in conquistas_ganhas:
-        data_formatada = conquista.DataConquista.strftime('%d/%m/%Y') # - Formata a data
-        texto_conquistas += (
-            f"\n--------------------\n"
-            f"{conquista.Icone} <b>{conquista.Nome}</b>\n" # - Usa os dados do banco
-            f"<i>{conquista.Descricao}</i>\n" #
-            f"<pre>Desbloqueada em: {data_formatada}</pre>\n" # - Usa <pre> para monoespaçado
-        )
-
-    await update.message.reply_html(texto_conquistas) #
-
-def main() -> None:
-    application = Application.builder().token(config.TELEGRAM_TOKEN).connect_timeout(30).read_timeout(30).build()
-    
-    # --- Comandos do Admin ---
-    application.add_handler(CommandHandler("id", obter_id_chat))
-    application.add_handler(CommandHandler("pendencias", pendencias_gestor))
-    application.add_handler(CommandHandler("status_meta", status_meta))
-    application.add_handler(CommandHandler("lancar", lancar_venda))
-
-    # --- Comandos do Funcionário ---
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("tarefas", tarefas))
-    application.add_handler(CommandHandler("ranking", ranking))
-    application.add_handler(CommandHandler("meuhistorico", meu_historico))
-    application.add_handler(CommandHandler("ajuda", ajuda))
-    application.add_handler(CommandHandler("meusaldo", meu_saldo))
-    application.add_handler(CommandHandler("loja", loja_recompensas))
-    application.add_handler(CommandHandler("holerite", solicitar_holerite_inicio)) 
-    application.add_handler(CommandHandler("conquistas", minhas_conquistas)) # <<< NOVO COMANDO
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🏅 Minhas Conquistas$'), minhas_conquistas)) # <<< NOVO BOTÃO
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🧾 Enviar Nota Fiscal$'), solicitar_foto_nf))
-    application.add_handler(CallbackQueryHandler(button_callback_handler))
-
-    # --- Handlers para os Botões do Menu Fixo ---
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^📋 Minhas Tarefas$'), tarefas))
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🏆 Ranking do Mês$'), ranking))
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🎯 Acompanhar Metas$'), acompanhar_metas))
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^📜 Meu Histórico$'), meu_historico))
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^❓ Ajuda$'), ajuda))
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^💰 Meu Saldo$'), meu_saldo))
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🏪 Loja de Recompensas$'), loja_recompensas))
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^💬 Canal Confidencial$'), solicitar_feedback_start)) 
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^📄 Meus Documentos$'), solicitar_holerite_inicio)) 
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🏅 Minhas Conquistas$'), minhas_conquistas)) # <<< NOVO BOTÃO
-    # Handler de FOTO para Nota Fiscal (verifica o estado 'aguardando_nota_fiscal')
-    # Handler de FOTO (Roteador):
-    # Esta única linha agora chama a nossa nova função roteadora "receber_foto".
-    # Ela cuidará de direcionar para "receber_nota_fiscal" ou "handler_foto_tarefa".
-    application.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, receber_foto))
-
-    # Handler de TEXTO genérico (para justificativas, cpf, etc.)
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, roteador_de_texto_privado))
-    # --- CORREÇÃO ADICIONADA AQUI ---
-    # Adiciona o handler para capturar o "motivo da recusa" digitado pelo gestor no GRUPO.
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUP, receber_motivo_recusa))
-    # --- FIM DA CORREÇÃO ---
-    logger.info("--- BOT INICIADO COM SUCESSO ---")
-    application.run_polling()
+def listar_destinatarios_de_documento(documento_id):
+    """
+    Função de relatório para o gestor. Mostra o status detalhado de
+    cada funcionário para um documento específico, AGORA INCLUINDO O ID DA ASSINATURA.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT
+                    DA.AssinaturaID, 
+                    F.NomeCompleto,
+                    DA.StatusAssinatura,
+                    DA.DataCiencia
+                FROM DocumentosAssinaturas DA
+                JOIN Funcionarios F ON DA.FuncionarioID = F.FuncionarioID
+                WHERE DA.DocumentoID = ?
+                ORDER BY F.NomeCompleto
+            """
+            cursor.execute(sql, documento_id)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
 
 if __name__ == '__main__':
-    main()
+    GESTOR_ID_TESTE = 3 # ID de um funcionário para ser o "criador"
+    FUNCIONARIO_ID_TESTE = 3 # ID de um funcionário para receber o comunicado
 
+    print("--- INICIANDO TESTE DO MÓDULO DE COMUNICADOS ---")
+    print("\n[TESTE 1] Criando um novo documento que vale 25 pontos...")
+    id_doc = criar_documento(
+        "Documento de Teste com Pontos",
+        "Este é o conteúdo do nosso teste automatizado.",
+        GESTOR_ID_TESTE,
+        25
+    )
+    if id_doc:
+        print(f"--> SUCESSO! Documento criado com ID: {id_doc}")
+    else:
+        print("--> FALHA! Não foi possível criar o documento.")
+        exit()
+    print(f"\n[TESTE 2] Registrando pendência do Doc ID {id_doc} para o Funcionário ID {FUNCIONARIO_ID_TESTE}...")
+    id_assinatura = registrar_pendencia_assinatura(id_doc, FUNCIONARIO_ID_TESTE)
+    if id_assinatura:
+        print(f"--> SUCESSO! Pendência registrada com AssinaturaID: {id_assinatura}")
+    else:
+        print("--> FALHA! Não foi possível registrar a pendência.")
+        exit()
+
+    print(f"\n[TESTE 3] Buscando detalhes da assinatura ID {id_assinatura}...")
+    detalhes = buscar_detalhes_assinatura_para_bot(id_assinatura)
+    if detalhes:
+        print(f"--> SUCESSO! Detalhes encontrados: FuncID={detalhes.FuncionarioID}, Pontos={detalhes.PontosPorCiencia}")
+
+        print(f"\n[TESTE 4] Marcando a assinatura ID {id_assinatura} como 'Ciente'...")
+        marcar_como_ciente(id_assinatura)
+        print("--> SUCESSO! Status atualizado.")
+
+        if detalhes.PontosPorCiencia > 0:
+            print(f"\n[TESTE 5] Registrando {detalhes.PontosPorCiencia} pontos pela leitura...")
+            registrar_pontos_por_leitura(detalhes.FuncionarioID, detalhes.PontosPorCiencia, detalhes.Titulo)
+            print("--> SUCESSO! Pontos registrados na tabela Entregas.")
+    else:
+        print("--> FALHA! Não foi possível buscar os detalhes da assinatura.")
+
+    print("\n--- TESTE FINALIZADO ---")
+    print("Verifique as tabelas Documentos, DocumentosAssinaturas e Entregas no SSMS para confirmar os resultados.")
+
+def buscar_assinaturas_pendentes_antigas(horas_atras=24):
+    """
+    Busca assinaturas que continuam 'Pendente' após um determinado número de horas do envio.
+    Retorna uma lista com Nome, ChatID e Título do documento para o lembrete.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT
+                    F.NomeCompleto,
+                    F.ChatIDTelegram,
+                    D.Titulo,
+                    DA.DataEnvio
+                FROM DocumentosAssinaturas DA
+                JOIN Funcionarios F ON DA.FuncionarioID = F.FuncionarioID
+                JOIN Documentos D ON DA.DocumentoID = D.DocumentoID
+                WHERE
+                    DA.StatusAssinatura = 'Pendente'
+                    AND DA.DataEnvio < DATEADD(hour, -?, GETDATE())
+            """
+            cursor.execute(sql, horas_atras)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def buscar_detalhes_completos_documento(documento_id):
+    """
+    Busca todos os campos de um documento específico, incluindo seu conteúdo completo.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT Titulo, Conteudo FROM Documentos WHERE DocumentoID = ?"
+            cursor.execute(sql, documento_id)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
+
+def excluir_documento(documento_id):
+    """
+    Exclui um documento e todas as suas assinaturas pendentes ou cientes.
+    A exclusão em cascata deve estar configurada no banco de dados para segurança,
+    mas faremos a exclusão em duas etapas para garantir.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql_assinaturas = "DELETE FROM DocumentosAssinaturas WHERE DocumentoID = ?"
+            cursor.execute(sql_assinaturas, documento_id)
+            sql_documento = "DELETE FROM Documentos WHERE DocumentoID = ?"
+            cursor.execute(sql_documento, documento_id)
+
+            conn.commit()
+            print(f"--> [DATABASE] Documento ID {documento_id} e suas assinaturas foram excluídos.")
+        except Exception as e:
+            logger.error(f"ERRO ao excluir documento: {e}")
+            conn.rollback() # Desfaz a operação em caso de erro
+        finally:
+            conn.close()
+
+def buscar_dados_completos_para_recibo(assinatura_id):
+    """
+    Busca todos os dados necessários para gerar o recibo em PDF a partir do ID da assinatura.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT
+                    F.NomeCompleto,
+                    D.Titulo,
+                    D.Conteudo,
+                    DA.DataCiencia
+                FROM DocumentosAssinaturas DA
+                JOIN Funcionarios F ON DA.FuncionarioID = F.FuncionarioID
+                JOIN Documentos D ON DA.DocumentoID = D.DocumentoID
+                WHERE DA.AssinaturaID = ?
+            """
+            cursor.execute(sql, assinatura_id)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
+
+def listar_funcionarios_nao_destinatarios(documento_id):
+    """
+    Retorna uma lista de funcionários que AINDA NÃO estão associados a um
+    documento específico, AGORA INCLUINDO O CHAT ID PARA NOTIFICAÇÃO.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT F.FuncionarioID, F.NomeCompleto, F.ChatIDTelegram
+                FROM Funcionarios F
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM DocumentosAssinaturas DA
+                    WHERE DA.DocumentoID = ? AND DA.FuncionarioID = F.FuncionarioID
+                )
+                ORDER BY F.NomeCompleto
+            """
+            cursor.execute(sql, documento_id)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def salvar_feedback_do_dia(funcionario_id, nota):
+    """Salva a nota de feedback do funcionário para a data atual."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql_check = "SELECT 1 FROM Feedbacks WHERE FuncionarioID = ? AND DataFeedback = CONVERT(date, GETDATE())"
+            cursor.execute(sql_check, funcionario_id)
+            if cursor.fetchone():
+                print(f"--> [FEEDBACK] Feedback já recebido hoje para o funcionário {funcionario_id}.")
+                return False
+
+            sql_insert = "INSERT INTO Feedbacks (FuncionarioID, DataFeedback, NotaDia) VALUES (?, GETDATE(), ?)"
+            cursor.execute(sql_insert, funcionario_id, nota)
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+    return False
+
+def buscar_feedbacks(funcionario_id=None, data_inicio=None, data_fim=None):
+    """
+    Busca os feedbacks no banco de dados, com filtros opcionais.
+    - Retorna todos se nenhum filtro for passado.
+    - Filtra por funcionário, por período ou por ambos.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT
+                    F.FeedbackID,
+                    FUNC.NomeCompleto,
+                    F.DataFeedback,
+                    F.NotaDia
+                FROM Feedbacks F
+                JOIN Funcionarios FUNC ON F.FuncionarioID = FUNC.FuncionarioID
+            """
+
+            condicoes = []
+            params = []
+
+            if funcionario_id:
+                condicoes.append("F.FuncionarioID = ?")
+                params.append(funcionario_id)
+
+            if data_inicio:
+                condicoes.append("F.DataFeedback >= ?")
+                params.append(data_inicio)
+
+            if data_fim:
+                condicoes.append("F.DataFeedback <= ?")
+                params.append(data_fim)
+
+            if condicoes:
+                sql += " WHERE " + " AND ".join(condicoes)
+
+            sql += " ORDER BY F.DataFeedback DESC" # Ordena do mais recente para o mais antigo
+
+            cursor.execute(sql, params)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def relatorio_analise_tarefas(data_inicio, data_fim):
+    """
+    Busca no banco um resumo das tarefas que foram mais recusadas ou
+    marcadas como "Não Aplicável" dentro de um período.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = sql = """
+                SELECT
+                    T.Titulo,
+                    SUM(CASE WHEN E.StatusValidacao = 'Recusada' THEN 1 ELSE 0 END) AS QtdRecusada,
+                    SUM(CASE WHEN E.MotivoRecusa LIKE 'Não aplicável:%' THEN 1 ELSE 0 END) AS QtdNaoAplicavel,
+                    -- A CORREÇÃO LÓGICA ESTÁ AQUI: Somamos os dois casos acima
+                    SUM(CASE WHEN E.StatusValidacao = 'Recusada' THEN 1 ELSE 0 END) +
+                    SUM(CASE WHEN E.MotivoRecusa LIKE 'Não aplicável:%' THEN 1 ELSE 0 END) AS TotalEntregasProblematicas
+                FROM Entregas E
+                JOIN Tarefas T ON E.TarefaID = T.TarefaID
+                WHERE
+                    (E.StatusValidacao = 'Recusada' OR E.MotivoRecusa LIKE 'Não aplicável:%')
+                    AND CONVERT(DATE, E.DataEnvio) BETWEEN ? AND ?
+                GROUP BY
+                    T.Titulo
+                ORDER BY
+                    TotalEntregasProblematicas DESC
+            """
+            cursor.execute(sql, data_inicio, data_fim)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def criar_solicitacao_feedback(funcionario_id, assunto):
+    """Salva uma nova solicitação de feedback na tabela FeedbackSolicitacoes."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "INSERT INTO FeedbackSolicitacoes (FuncionarioID, TextoAssunto) VALUES (?, ?)"
+            cursor.execute(sql, funcionario_id, assunto)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"ERRO ao criar solicitação de feedback: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
+
+def listar_solicitacoes_pendentes():
+    """Busca no banco todas as solicitações de feedback com status 'Pendente'."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT
+                    FS.SolicitacaoID,
+                    F.NomeCompleto,
+                    FS.DataSolicitacao,
+                    FS.TextoAssunto
+                FROM FeedbackSolicitacoes FS
+                JOIN Funcionarios F ON FS.FuncionarioID = F.FuncionarioID
+                WHERE FS.Status = 'Pendente'
+                ORDER BY FS.DataSolicitacao ASC
+            """
+            cursor.execute(sql)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def responder_solicitacao_feedback(solicitacao_id, texto_resposta):
+    """Atualiza uma solicitação com a resposta do gestor e muda o status."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                UPDATE FeedbackSolicitacoes
+                SET Status = 'Respondido',
+                    TextoResposta = ?,
+                    DataResposta = GETDATE()
+                WHERE SolicitacaoID = ?
+            """
+            cursor.execute(sql, texto_resposta, solicitacao_id)
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+    return False
+
+def buscar_dados_para_notificacao_feedback(solicitacao_id):
+    """Busca o nome e o ChatID de um funcionário a partir de uma solicitação."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT
+                    F.NomeCompleto,
+                    F.ChatIDTelegram
+                FROM FeedbackSolicitacoes FS
+                JOIN Funcionarios F ON FS.FuncionarioID = F.FuncionarioID
+                WHERE FS.SolicitacaoID = ?
+            """
+            cursor.execute(sql, solicitacao_id)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
+
+def registrar_entrega_preliminar(tarefa_id, funcionario_id, atribuicao_id, file_id):
+    """Cria um registro inicial na tabela Entregas, apenas com a file_id."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                INSERT INTO Entregas (TarefaID, FuncionarioID, AtribuicaoID, FileIDTelegram, DataEnvio, StatusValidacao) 
+                VALUES (?, ?, ?, ?, GETDATE(), 'Pendente'); 
+                SELECT SCOPE_IDENTITY();
+            """
+            cursor.execute(sql, tarefa_id, funcionario_id, atribuicao_id, file_id)
+            
+            cursor.nextset() 
+            
+            new_id = cursor.fetchone()[0]
+            conn.commit()
+            return new_id
+        finally: 
+            conn.close()
+    return None
+
+def buscar_entregas_para_download():
+    """Busca entregas que foram registradas preliminarmente mas ainda não tiveram a foto baixada."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT EntregaID, FileIDTelegram FROM Entregas WHERE FileIDTelegram IS NOT NULL AND PathFotoEvidencia IS NULL"
+            cursor.execute(sql)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def finalizar_registro_entrega(entrega_id, path_foto):
+    """Atualiza o registro da entrega com o caminho da foto baixada."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE Entregas SET PathFotoEvidencia = ? WHERE EntregaID = ?"
+            cursor.execute(sql, path_foto, entrega_id)
+            conn.commit()
+        finally:
+            conn.close()
+
+def marcar_notificacao_gestor_enviada(entrega_id):
+    """Atualiza a flag indicando que a notificação ao gestor foi enviada com sucesso."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE Entregas SET NotificacaoGestorEnviada = 1 WHERE EntregaID = ?"
+            cursor.execute(sql, entrega_id)
+            conn.commit()
+            logger.info(f"Flag NotificacaoGestorEnviada marcada para EntregaID {entrega_id}.")
+        except Exception as e:
+            logger.error(f"Erro ao marcar flag NotificacaoGestorEnviada para EntregaID {entrega_id}: {e}", exc_info=True)
+        finally:
+            if conn:
+                conn.close()
+
+def verificar_status_notificacao_gestor(entrega_id):
+    """Verifica se a flag de notificação ao gestor está marcada como enviada."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT NotificacaoGestorEnviada FROM Entregas WHERE EntregaID = ?"
+            cursor.execute(sql, entrega_id)
+            resultado = cursor.fetchone()
+            # Retorna True se for 1, False caso contrário (incluindo NULL ou 0)
+            return resultado[0] == 1 if resultado else False
+        except Exception as e:
+            logger.error(f"Erro ao verificar flag NotificacaoGestorEnviada para EntregaID {entrega_id}: {e}", exc_info=True)
+            return False # Assume que não foi enviada em caso de erro
+        finally:
+            if conn:
+                conn.close()
+    return False # Assume que não foi enviada se a conexão falhar
+
+def listar_atribuicoes_ativas_por_funcionario(funcionario_id):
+    """Retorna todas as tarefas ativas para um funcionário específico."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT 
+                    TA.AtribuicaoID, 
+                    T.Titulo, 
+                    TA.TipoFrequencia + 
+                    CASE 
+                        WHEN TA.TipoFrequencia = 'Semanal' THEN ' (' + 
+                            CASE TA.ValorFrequencia 
+                                WHEN '1' THEN 'Dom' WHEN '2' THEN 'Seg' WHEN '3' THEN 'Ter'
+                                WHEN '4' THEN 'Qua' WHEN '5' THEN 'Qui' WHEN '6' THEN 'Sex'
+                                WHEN '7' THEN 'Sab'
+                            END + ')'
+                        WHEN TA.TipoFrequencia = 'Mensal' THEN ' (Dia ' + CAST(TA.ValorFrequencia AS VARCHAR) + ')'
+                        ELSE '' 
+                    END AS FrequenciaCompleta
+                FROM TarefasAtribuidas TA
+                JOIN Tarefas T ON TA.TarefaID = T.TarefaID
+                WHERE
+                    TA.FuncionarioID = ? AND TA.DataFimVigencia IS NULL
+                    AND NOT (
+                        TA.TipoFrequencia = 'Unica' AND EXISTS (
+                            SELECT 1 FROM Entregas E
+                            WHERE E.AtribuicaoID = TA.AtribuicaoID AND E.StatusValidacao = 'Aprovada'
+                        )
+                    )
+                ORDER BY T.Titulo
+            """
+            cursor.execute(sql, funcionario_id)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def buscar_justificativas_nao_aplicavel(titulo_tarefa, data_inicio, data_fim):
+    """Busca as justificativas para uma tarefa marcada como 'Não Aplicável' em um período."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT
+                    E.DataEnvio,
+                    F.NomeCompleto,
+                    E.MotivoRecusa
+                FROM Entregas E
+                JOIN Tarefas T ON E.TarefaID = T.TarefaID
+                JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID
+                WHERE
+                    T.Titulo = ?
+                    AND E.MotivoRecusa LIKE 'Não aplicável:%'
+                    AND CONVERT(DATE, E.DataEnvio) BETWEEN ? AND ?
+                ORDER BY E.DataEnvio DESC
+            """
+            cursor.execute(sql, titulo_tarefa, data_inicio, data_fim)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def listar_agenda_semanal_por_funcionario(funcionario_id):
+    """Busca todas as tarefas ativas de um funcionário e retorna o dia da semana para tarefas semanais."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT 
+                    T.Titulo,
+                    TA.TipoFrequencia,
+                    TA.ValorFrequencia
+                FROM TarefasAtribuidas TA
+                JOIN Tarefas T ON TA.TarefaID = T.TarefaID
+                WHERE
+                    TA.FuncionarioID = ? 
+                    AND TA.DataFimVigencia IS NULL
+                    AND TA.TipoFrequencia IN ('Diaria', 'Semanal')
+                ORDER BY T.Titulo
+            """
+            cursor.execute(sql, funcionario_id)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def buscar_funcionarios_de_folga_hoje(dia_da_semana):
+    """Busca no banco todos os funcionários cujo dia de folga corresponde ao dia da semana fornecido."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT * FROM Funcionarios 
+                WHERE DiaDeFolga = ?
+            """
+            cursor.execute(sql, dia_da_semana)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def buscar_tarefas_recorrentes_agendadas_para_hoje(funcionario_id, dia_da_semana):
+    """
+    (VERSÃO CORRIGIDA) Busca tarefas recorrentes, AGORA INCLUINDO O SETOR.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT T.TarefaID, T.Titulo, T.Pontos, T.Setor
+                FROM TarefasAtribuidas TA
+                JOIN Tarefas T ON TA.TarefaID = T.TarefaID
+                WHERE TA.FuncionarioID = ? 
+                  AND TA.DataFimVigencia IS NULL
+                  AND (
+                    TA.TipoFrequencia = 'Diaria' OR
+                    (TA.TipoFrequencia = 'Semanal' AND TA.ValorFrequencia = ?)
+                  )
+            """
+            cursor.execute(sql, funcionario_id, dia_da_semana)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def listar_setores_unicos():
+    """Retorna uma lista com todos os nomes de setores distintos já cadastrados."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT DISTINCT Setor FROM Tarefas WHERE Setor IS NOT NULL AND Setor != '' ORDER BY Setor"
+            cursor.execute(sql)
+            return [row.Setor for row in cursor.fetchall()]
+        finally:
+            conn.close()
+    return []
+
+def adicionar_pontos_ao_saldo(funcionario_id, pontos_a_adicionar):
+    """Adiciona pontos ao saldo cumulativo de um funcionário."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE Funcionarios SET SaldoPontos = SaldoPontos + ? WHERE FuncionarioID = ?"
+            cursor.execute(sql, pontos_a_adicionar, funcionario_id)
+            conn.commit()
+        finally:
+            conn.close()
+
+def buscar_saldo_funcionario(funcionario_id):
+    """Busca o saldo de pontos atual de um funcionário."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT SaldoPontos FROM Funcionarios WHERE FuncionarioID = ?"
+            cursor.execute(sql, funcionario_id)
+            resultado = cursor.fetchone()
+            return resultado[0] if resultado else 0
+        finally:
+            conn.close()
+    return 0
+
+def listar_produtos_loja(incluir_inativos=False):
+    """Lista os produtos da loja. Por padrão, lista apenas os ativos."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT * FROM ProdutosLoja"
+            if not incluir_inativos:
+                sql += " WHERE Ativo = 1"
+            sql += " ORDER BY CustoEmPontos"
+            cursor.execute(sql)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def criar_produto_loja(nome, descricao, custo, estoque, ativo):
+    """Cria um novo produto na loja de recompensas."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "INSERT INTO ProdutosLoja (Nome, Descricao, CustoEmPontos, EstoqueDisponivel, Ativo) VALUES (?, ?, ?, ?, ?)"
+            cursor.execute(sql, nome, descricao, custo, estoque, ativo)
+            conn.commit()
+        finally:
+            conn.close()
+
+def atualizar_produto_loja(produto_id, nome, descricao, custo, estoque, ativo):
+    """Atualiza um produto existente na loja."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """UPDATE ProdutosLoja SET Nome = ?, Descricao = ?, CustoEmPontos = ?, 
+                     EstoqueDisponivel = ?, Ativo = ? WHERE ProdutoID = ?"""
+            cursor.execute(sql, nome, descricao, custo, estoque, ativo, produto_id)
+            conn.commit()
+        finally:
+            conn.close()
+
+# --- Funções de Gestão de Resgates ---
+
+def solicitar_resgate(funcionario_id, produto_id):
+    """
+    Processa uma solicitação de resgate.
+    Retorna uma tupla: (True, "Mensagem de Sucesso") ou (False, "Mensagem de Erro").
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # 1. Pega os detalhes do produto e o saldo do funcionário de uma vez
+            sql_check = """
+                SELECT P.CustoEmPontos, P.Nome, F.SaldoPontos 
+                FROM ProdutosLoja P, Funcionarios F
+                WHERE P.ProdutoID = ? AND F.FuncionarioID = ? AND P.Ativo = 1
+            """
+            cursor.execute(sql_check, produto_id, funcionario_id)
+            resultado = cursor.fetchone()
+            if not resultado:
+                return (False, "Produto não encontrado ou indisponível.")
+
+            custo_produto, nome_produto, saldo_atual = resultado
+
+            # 2. Verifica se há saldo suficiente
+            if saldo_atual < custo_produto:
+                return (False, f"Saldo insuficiente! Você tem {saldo_atual} pontos, mas o item '{nome_produto}' custa {custo_produto}.")
+
+            # 3. Se chegou até aqui, pode resgatar!
+            # Debita os pontos do saldo do funcionário
+            sql_debitar = "UPDATE Funcionarios SET SaldoPontos = SaldoPontos - ? WHERE FuncionarioID = ?"
+            cursor.execute(sql_debitar, custo_produto, funcionario_id)
+
+            # Insere o registro de resgate como 'Pendente'
+            sql_resgate = "INSERT INTO Resgates (FuncionarioID, ProdutoID, PontosGastos) VALUES (?, ?, ?); SELECT SCOPE_IDENTITY();"
+            cursor.execute(sql_resgate, funcionario_id, produto_id, custo_produto)
+            cursor.nextset()
+            resgate_id = cursor.fetchone()[0]
+            
+            conn.commit()
+            return (True, f"Resgate do item '{nome_produto}' solicitado com sucesso! Aguarde a aprovação do seu gestor.", resgate_id)
+        except Exception as e:
+            conn.rollback() # Segurança: Desfaz tudo em caso de erro
+            logger.error(f"ERRO CRÍTICO em solicitar_resgate: {e}")
+            return (False, f"Ocorreu um erro inesperado no servidor. Tente novamente mais tarde.", None)
+        finally:
+            conn.close()
+
+def listar_resgates_pendentes():
+    """Busca todos os resgates com status 'Pendente' para o gestor aprovar."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT R.ResgateID, F.NomeCompleto, P.Nome, R.PontosGastos, R.DataSolicitacao
+                FROM Resgates R
+                JOIN Funcionarios F ON R.FuncionarioID = F.FuncionarioID
+                JOIN ProdutosLoja P ON R.ProdutoID = P.ProdutoID
+                WHERE R.Status = 'Pendente'
+                ORDER BY R.DataSolicitacao ASC
+            """
+            cursor.execute(sql)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def aprovar_resgate(resgate_id, gestor_id):
+    """Muda o status de um resgate para 'Aprovado'."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE Resgates SET Status = 'Aprovado', GestorID_Aprovacao = ?, DataAprovacao = GETDATE() WHERE ResgateID = ?"
+            cursor.execute(sql, gestor_id, resgate_id)
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+    return False
+
+def recusar_resgate(resgate_id, gestor_id):
+    """Muda o status para 'Recusado' e DEVOLVE os pontos para o funcionário."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Primeiro, busca quantos pontos foram gastos e para qual funcionário
+            sql_find = "SELECT FuncionarioID, PontosGastos FROM Resgates WHERE ResgateID = ?"
+            cursor.execute(sql_find, resgate_id)
+            resgate = cursor.fetchone()
+            if resgate:
+                funcionario_id, pontos_gastos = resgate
+                # Devolve os pontos
+                sql_refund = "UPDATE Funcionarios SET SaldoPontos = SaldoPontos + ? WHERE FuncionarioID = ?"
+                cursor.execute(sql_refund, pontos_gastos, funcionario_id)
+
+                # Atualiza o status do resgate
+                sql_update = "UPDATE Resgates SET Status = 'Recusado', GestorID_Aprovacao = ?, DataAprovacao = GETDATE() WHERE ResgateID = ?"
+                cursor.execute(sql_update, gestor_id, resgate_id)
+                conn.commit()
+                return True
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"ERRO ao recusar resgate: {e}")
+        finally:
+            conn.close()
+    return False
+
+def buscar_dados_resgate_para_notificacao(resgate_id):
+    """Busca dados para notificar o funcionário sobre o status do resgate."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT F.NomeCompleto, F.ChatIDTelegram, P.Nome 
+                FROM Resgates R
+                JOIN Funcionarios F ON R.FuncionarioID = F.FuncionarioID
+                JOIN ProdutosLoja P ON R.ProdutoID = P.ProdutoID
+                WHERE R.ResgateID = ?
+            """
+            cursor.execute(sql, resgate_id)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
+
+# ===================================================================
+# == INÍCIO DO MÓDULO DE CONQUISTAS (BADGES) ========================
+# ===================================================================
+
+def listar_modelos_conquistas():
+    """Lista todos os modelos de conquistas disponíveis para gerenciamento."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM Conquistas ORDER BY Nome")
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def listar_conquistas_por_funcionario(funcionario_id):
+    """Lista todas as conquistas que um funcionário específico já ganhou."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT C.Nome, C.Descricao, C.Icone, CF.DataConquista
+                FROM ConquistasFuncionarios CF
+                JOIN Conquistas C ON CF.ConquistaID = C.ConquistaID
+                WHERE CF.FuncionarioID = ?
+                ORDER BY CF.DataConquista DESC
+            """
+            cursor.execute(sql, funcionario_id)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def verificar_e_conceder_conquistas(funcionario_id):
+    """
+    (VERSÃO EXPANDIDA COM MAIS CRITÉRIOS)
+    Verifica critérios de conquistas para um funcionário após um evento relevante.
+    Retorna uma lista de objetos das novas conquistas desbloqueadas.
+    """
+    conn = get_db_connection()
+    if not conn: return []
+
+    novas_conquistas_ganhas = []
+
+    try:
+        cursor = conn.cursor()
+        sql_conquistas_a_verificar = """
+            SELECT * FROM Conquistas
+            WHERE ConquistaID NOT IN (
+                SELECT ConquistaID FROM ConquistasFuncionarios WHERE FuncionarioID = ?
+            )
+        """
+        cursor.execute(sql_conquistas_a_verificar, funcionario_id)
+        conquistas_a_verificar = cursor.fetchall()
+
+        if not conquistas_a_verificar:
+            return [] # Nenhuma nova conquista possível para verificar
+
+        # --- DADOS NECESSÁRIOS PARA AS VERIFICAÇÕES ---
+        # (Buscamos uma vez para otimizar)
+        
+        # Total de tarefas aprovadas (usado por 'total_tarefas_aprovadas')
+        sql_total_aprovadas = "SELECT COUNT(*) FROM Entregas WHERE FuncionarioID = ? AND StatusValidacao = 'Aprovada'"
+        cursor.execute(sql_total_aprovadas, funcionario_id)
+        total_tarefas_aprovadas = cursor.fetchone()[0] or 0
+
+        # Datas das últimas N tarefas aprovadas (usado por 'tarefas_aprovadas_periodo' e 'sequencia_dias_tarefas')
+        # Buscamos mais do que o necessário (ex: 10) para garantir que temos dados suficientes para sequências
+        sql_datas_aprovadas = """
+            SELECT DISTINCT TOP 10 CONVERT(DATE, DataEnvio) as Data
+            FROM Entregas
+            WHERE FuncionarioID = ? AND StatusValidacao = 'Aprovada'
+            ORDER BY Data DESC
+        """
+        cursor.execute(sql_datas_aprovadas, funcionario_id)
+        datas_tarefas_aprovadas = [row.Data for row in cursor.fetchall()]
+
+        # Total de tarefas de grupo competitivo aprovadas (usado por 'tarefas_grupo_competitivo_aceitas')
+        sql_total_grupo_comp = """
+            SELECT COUNT(E.EntregaID)
+            FROM Entregas E
+            JOIN TarefasAtribuidas TA ON E.AtribuicaoID = TA.AtribuicaoID
+            WHERE E.FuncionarioID = ?
+              AND E.StatusValidacao = 'Aprovada'
+              AND TA.OrigemAtribuicaoID IS NOT NULL -- Identifica tarefas criadas a partir de um grupo competitivo
+              AND TA.TipoFrequencia = 'Unica'      -- Confirma que é a instância aceita
+        """
+        cursor.execute(sql_total_grupo_comp, funcionario_id)
+        total_grupo_competitivo_aprovadas = cursor.fetchone()[0] or 0
+        
+        # Total de comunicados cientes (usado por 'total_comunicados_cientes')
+        sql_total_cientes = "SELECT COUNT(*) FROM DocumentosAssinaturas WHERE FuncionarioID = ? AND StatusAssinatura = 'Ciente'"
+        cursor.execute(sql_total_cientes, funcionario_id)
+        total_comunicados_cientes = cursor.fetchone()[0] or 0
+
+        # Datas dos últimos N feedbacks (usado por 'sequencia_feedback_diario')
+        sql_datas_feedback = """
+            SELECT DISTINCT TOP 10 DataFeedback as Data
+            FROM Feedbacks
+            WHERE FuncionarioID = ?
+            ORDER BY Data DESC
+        """
+        cursor.execute(sql_datas_feedback, funcionario_id)
+        datas_feedback = [row.Data for row in cursor.fetchall()]
+
+
+        # --- LOOP DE VERIFICAÇÃO ---
+        for conquista in conquistas_a_verificar:
+            atingiu_criterio = False
+            
+            # --- CRITÉRIO 1: Total de Tarefas Aprovadas (Já Existia) ---
+            if conquista.CriterioTipo == 'total_tarefas_aprovadas':
+                if total_tarefas_aprovadas >= conquista.CriterioValor:
+                    atingiu_criterio = True
+            
+            elif conquista.CriterioTipo == 'tarefas_aprovadas_periodo':
+                try: # Adiciona try/except para conversão segura
+                    # Assume que CriterioValor é o NÚMERO DE TAREFAS necessárias.
+                    num_tarefas_necessarias = int(conquista.CriterioValor)
+                    # Assume um PERÍODO FIXO para este tipo de critério (ex: 7 dias).
+                    # Se precisar de períodos variáveis, a estrutura do banco precisaria mudar.
+                    dias_periodo_fixo = 7 # Ex: Para "Semana de Estreia"
+                    data_limite = date.today() - timedelta(days=dias_periodo_fixo)
+
+                    # Conta quantas das datas recentes (datas_tarefas_aprovadas)
+                    # estão DENTRO do período definido pela data_limite.
+                    count_dentro_periodo = sum(1 for dt in datas_tarefas_aprovadas if dt >= data_limite)
+
+                    # Compara a contagem com o número de tarefas necessárias.
+                    if count_dentro_periodo >= num_tarefas_necessarias:
+                        atingiu_criterio = True
+                except (ValueError, TypeError):
+                    logger.warning(f"Valor de critério inválido para conquista ID {conquista.ConquistaID} (tipo 'tarefas_aprovadas_periodo'). Esperado um número, recebido: {conquista.CriterioValor}")
+                    atingiu_criterio = False # Garante que não conceda a conquista
+
+
+            # --- CRITÉRIO 3: Sequência de Dias com Tarefas ---
+            elif conquista.CriterioTipo == 'sequencia_dias_tarefas':
+                dias_sequencia_necessaria = conquista.CriterioValor
+                if len(datas_tarefas_aprovadas) >= dias_sequencia_necessaria:
+                    sequencia_encontrada = True
+                    for i in range(dias_sequencia_necessaria - 1):
+                        # Verifica se a diferença entre dias consecutivos é exatamente 1
+                        if (datas_tarefas_aprovadas[i] - datas_tarefas_aprovadas[i+1]).days != 1:
+                            sequencia_encontrada = False
+                            break
+                    if sequencia_encontrada:
+                        atingiu_criterio = True
+
+            # --- CRITÉRIO 4: Tarefas de Grupo Competitivo Aceitas ---
+            elif conquista.CriterioTipo == 'tarefas_grupo_competitivo_aceitas':
+                 if total_grupo_competitivo_aprovadas >= conquista.CriterioValor:
+                     atingiu_criterio = True
+
+            # --- CRITÉRIO 5: Total de Comunicados Cientes ---
+            elif conquista.CriterioTipo == 'total_comunicados_cientes':
+                if total_comunicados_cientes >= conquista.CriterioValor:
+                    atingiu_criterio = True
+
+            # --- CRITÉRIO 6: Sequência de Dias com Feedback ---
+            elif conquista.CriterioTipo == 'sequencia_feedback_diario':
+                dias_sequencia_necessaria = conquista.CriterioValor
+                if len(datas_feedback) >= dias_sequencia_necessaria:
+                    sequencia_encontrada = True
+                    for i in range(dias_sequencia_necessaria - 1):
+                        # Verifica se a diferença entre dias consecutivos é exatamente 1
+                        if (datas_feedback[i] - datas_feedback[i+1]).days != 1:
+                            sequencia_encontrada = False
+                            break
+                    if sequencia_encontrada:
+                        atingiu_criterio = True
+
+            # --- FIM DAS VERIFICAÇÕES DE CRITÉRIOS ---
+
+            # Se qualquer um dos critérios acima foi atingido:
+            if atingiu_criterio:
+                try:
+                    # Concede a conquista (insere na tabela ConquistasFuncionarios)
+                    sql_grant = "INSERT INTO ConquistasFuncionarios (FuncionarioID, ConquistaID) VALUES (?, ?)"
+                    cursor.execute(sql_grant, funcionario_id, conquista.ConquistaID)
+                    conn.commit()
+                    novas_conquistas_ganhas.append(conquista) # Adiciona à lista para notificação
+                    print(f"--> [CONQUISTA] '{conquista.Nome}' concedida para FuncionarioID {funcionario_id}!")
+
+                    # Concede os pontos de bônus, se houver
+                    if conquista.PontosBonus > 0:
+
+                        # --- CHAMADA CORRIGIDA ---
+                        # (Assumindo que temos um ID para "Bônus de Conquista",
+                        # se não tiver, podemos manter o TAREFA_ID_LEITURA como fallback
+                        # ou criar um TAREFA_ID_CONQUISTA. Vamos usar TAREFA_ID_LEITURA
+                        # por enquanto, mas com a função nova.)
+
+                        motivo_log = f"Bônus pela conquista: {conquista.Nome}"
+
+                        registrar_pontos_de_bonus(
+                            funcionario_id,
+                            conquista.PontosBonus,
+                            motivo_log,
+                            config.TAREFA_ID_LEITURA # <-- Manter este ID se for o "ID de Bônus" geral
+                        )
+                        
+                except pyodbc.IntegrityError:
+                    # Ignora erro se, por alguma concorrência rara, a conquista já foi inserida
+                    conn.rollback()
+                    print(f"--> [CONQUISTA] Aviso: Tentativa de inserir conquista duplicada para FuncionarioID {funcionario_id} e ConquistaID {conquista.ConquistaID}. Ignorando.")
+                except Exception as e_grant:
+                    conn.rollback()
+                    logger.error(f"ERRO CRÍTICO ao conceder conquista ID {conquista.ConquistaID} para FuncionarioID {funcionario_id}: {e_grant}")
+
+        return novas_conquistas_ganhas
+
+    except Exception as e_main:
+        logger.error(f"ERRO CRÍTICO GERAL em verificar_e_conceder_conquistas para FuncionarioID {funcionario_id}: {e_main}")
+        return [] # Retorna lista vazia em caso de erro grave
+    finally:
+        if conn:
+            conn.close()
+
+# Em database.py, adicione esta nova função
+def atualizar_documento_com_file_id(documento_id, file_id):
+    """Atualiza um registro de documento existente para adicionar o file_id da foto."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE Documentos SET TelegramFileIDFoto = ? WHERE DocumentoID = ?"
+            cursor.execute(sql, file_id, documento_id)
+            conn.commit()
+        finally:
+            conn.close()
+
+# Em database.py, adicione este bloco inteiro no final do arquivo
+
+# ===================================================================
+# == INÍCIO DO MÓDULO DE DOCUMENTOS PESSOAIS (RH) ===================
+# ===================================================================
+
+def salvar_documento_pessoal(funcionario_id, tipo_documento, mes_ano, caminho_arquivo):
+    """
+    Salva um novo documento pessoal (como um holerite) no catálogo e retorna o ID do novo documento.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                INSERT INTO DocumentosPessoais (FuncionarioID, TipoDocumento, MesAno, CaminhoArquivo)
+                VALUES (?, ?, ?, ?);
+                SELECT SCOPE_IDENTITY();
+            """
+            cursor.execute(sql, funcionario_id, tipo_documento, mes_ano, caminho_arquivo)
+            cursor.nextset()
+            novo_id = cursor.fetchone()[0]
+            conn.commit()
+            return novo_id
+        except Exception as e:
+            logger.error(f"ERRO ao salvar documento pessoal: {e}")
+            return None
+        finally:
+            conn.close()
+
+def criar_pendencia_ciencia_documento_pessoal(documento_id, funcionario_id):
+    """
+    Cria o registro de 'Pendente' na tabela de ciência para um novo documento pessoal.
+    Retorna o ID da nova pendência (CienciaID).
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                INSERT INTO DocumentosPessoaisCiencia (DocumentoID, FuncionarioID)
+                VALUES (?, ?);
+                SELECT SCOPE_IDENTITY();
+            """
+            cursor.execute(sql, documento_id, funcionario_id)
+            cursor.nextset()
+            ciencia_id = cursor.fetchone()[0]
+            conn.commit()
+            return ciencia_id
+        except Exception as e:
+            logger.error(f"ERRO ao criar pendência de ciência para documento pessoal: {e}")
+            return None
+        finally:
+            conn.close()
+
+def atualizar_verificador_cpf(funcionario_id, verificador):
+    """Atualiza ou insere os 3 dígitos do CPF para verificação de segurança."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE Funcionarios SET VerificadorCPF = ? WHERE FuncionarioID = ?"
+            cursor.execute(sql, verificador, funcionario_id)
+            conn.commit()
+        finally:
+            conn.close()
+
+def buscar_verificador_cpf(funcionario_id):
+    """Busca o verificador de CPF de um funcionário."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT VerificadorCPF FROM Funcionarios WHERE FuncionarioID = ?"
+            cursor.execute(sql, funcionario_id)
+            resultado = cursor.fetchone()
+            return resultado[0] if resultado else None
+        finally:
+            conn.close()
+    return None
+
+def buscar_caminho_documento(documento_id):
+    """Busca o caminho completo de um arquivo no servidor a partir do seu ID."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT CaminhoArquivo FROM DocumentosPessoais WHERE DocumentoID = ?"
+            cursor.execute(sql, documento_id)
+            resultado = cursor.fetchone()
+            return resultado[0] if resultado else None
+        finally:
+            conn.close()
+    return None
+
+def buscar_holerites_disponiveis(funcionario_id):
+    """
+    Busca os holerites que um funcionário ainda não deu ciência
+    e retorna o MesAno para exibição nos botões do Telegram.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT DP.MesAno
+                FROM DocumentosPessoais DP
+                JOIN DocumentosPessoaisCiencia DPC ON DP.DocumentoID = DPC.DocumentoID
+                WHERE DP.FuncionarioID = ? AND DP.TipoDocumento = 'Holerite' AND DPC.Status = 'Pendente'
+                ORDER BY DP.MesAno DESC;
+            """
+            cursor.execute(sql, funcionario_id)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def buscar_dados_holerite_para_envio(funcionario_id, mes_ano):
+    """
+    Busca o caminho do arquivo do holerite e o ID da pendência de ciência
+    para um funcionário e mês específicos.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT DP.CaminhoArquivo, DPC.CienciaID
+                FROM DocumentosPessoais DP
+                JOIN DocumentosPessoaisCiencia DPC ON DP.DocumentoID = DPC.DocumentoID
+                WHERE DP.FuncionarioID = ? AND DP.MesAno = ? AND DP.TipoDocumento = 'Holerite'
+            """
+            cursor.execute(sql, funcionario_id, mes_ano)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
+
+def marcar_holerite_como_ciente(ciencia_id):
+    """
+    Atualiza uma pendência de assinatura de holerite para 'Ciente'
+    e preenche a data/hora da confirmação.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                UPDATE DocumentosPessoaisCiencia
+                SET Status = 'Ciente', DataCiencia = GETDATE()
+                WHERE CienciaID = ? AND Status = 'Pendente'
+            """
+            cursor.execute(sql, ciencia_id)
+            conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            conn.close()
+    return False
+
+def listar_documentos_por_funcionario(funcionario_id):
+    """Busca os documentos de um funcionário, incluindo o status de ciência."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # AGORA FAZEMOS UM JOIN PARA BUSCAR OS DADOS DA TABELA DE CIÊNCIA
+            sql = """
+                SELECT 
+                    DP.DocumentoID, DP.TipoDocumento, DP.MesAno, DP.DataUpload,
+                    DPC.Status, DPC.DataCiencia
+                FROM DocumentosPessoais DP
+                LEFT JOIN DocumentosPessoaisCiencia DPC ON DP.DocumentoID = DPC.DocumentoID
+                WHERE DP.FuncionarioID = ?
+                ORDER BY DP.MesAno DESC
+            """
+            cursor.execute(sql, funcionario_id)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+
+def buscar_dados_para_painel_kanban():
+    """
+    Busca e organiza todas as tarefas para o painel de ação diária.
+    (VERSÃO CORRIGIDA - Inclui Tarefas de Grupo no 'PARA FAZER' e na contagem)
+    """
+    conn = get_db_connection()
+    if not conn:
+        return {'para_fazer': [], 'validacao': [], 'concluidas': [], 'progresso': {}}
+
+    try:
+        cursor = conn.cursor()
+
+        # --- SQL CORRIGIDA ---
+        # A query agora tem 3 PARTES:
+        # 1. Tarefas Individuais de Hoje
+        # 2. Tarefas Individuais Atrasadas
+        # 3. Tarefas de Grupo (Competitivas) de Hoje
+        sql_para_fazer = """
+            WITH Datas AS (
+                SELECT
+                    GETDATE() as DataHoje,
+                    DATEADD(day, -1, GETDATE()) as DataOntem,
+                    CASE DATENAME(weekday, GETDATE())
+                        WHEN 'Sunday' THEN 1 WHEN 'Domingo' THEN 1 WHEN 'Monday' THEN 2 WHEN 'Segunda-feira' THEN 2
+                        WHEN 'Tuesday' THEN 3 WHEN 'Terça-feira' THEN 3 WHEN 'Wednesday' THEN 4 WHEN 'Quarta-feira' THEN 4
+                        WHEN 'Thursday' THEN 5 WHEN 'Quinta-feira' THEN 5 WHEN 'Friday' THEN 6 WHEN 'Sexta-feira' THEN 6
+                        WHEN 'Saturday' THEN 7 WHEN 'Sábado' THEN 7
+                    END as DiaSemanaID_Hoje,
+                    CASE DATENAME(weekday, DATEADD(day, -1, GETDATE()))
+                        WHEN 'Sunday' THEN 1 WHEN 'Domingo' THEN 1 WHEN 'Monday' THEN 2 WHEN 'Segunda-feira' THEN 2
+                        WHEN 'Tuesday' THEN 3 WHEN 'Terça-feira' THEN 3 WHEN 'Wednesday' THEN 4 WHEN 'Quarta-feira' THEN 4
+                        WHEN 'Thursday' THEN 5 WHEN 'Quinta-feira' THEN 5 WHEN 'Friday' THEN 6 WHEN 'Sexta-feira' THEN 6
+                        WHEN 'Saturday' THEN 7 WHEN 'Sábado' THEN 7
+                    END as DiaSemanaID_Ontem
+            )
+
+            -- Parte 1: Tarefas Individuais de HOJE (FuncionarioID IS NOT NULL)
+            SELECT T.Titulo, F.NomeCompleto, T.Pontos, 'Hoje' as Categoria, TA.DataAtribuicao, D.DataHoje as DataReferencia
+            FROM TarefasAtribuidas TA JOIN Tarefas T ON TA.TarefaID = T.TarefaID JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID JOIN Datas D ON 1=1
+            WHERE TA.FuncionarioID IS NOT NULL AND TA.DataFimVigencia IS NULL
+            AND NOT EXISTS (SELECT 1 FROM Entregas E WHERE E.AtribuicaoID = TA.AtribuicaoID AND CONVERT(date, E.DataEnvio) = CONVERT(date, D.DataHoje) AND E.StatusValidacao != 'Recusada')
+            AND ( TA.TipoFrequencia = 'Diaria' OR
+                    (TA.TipoFrequencia = 'Semanal' AND CAST(TA.ValorFrequencia AS INT) = D.DiaSemanaID_Hoje) OR
+                    (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, D.DataHoje)) OR
+                    (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = CONVERT(date, D.DataHoje)) OR
+                    (TA.TipoFrequencia = 'Unica' AND CONVERT(date, TA.DataInicioVigencia) = CONVERT(date, D.DataHoje))
+                )
+            AND (F.DiaDeFolga IS NULL OR F.DiaDeFolga = 0 OR F.DiaDeFolga != D.DiaSemanaID_Hoje)
+
+            UNION ALL
+
+            -- Parte 2: Tarefas Individuais ATRASADAS de ONTEM (FuncionarioID IS NOT NULL)
+            SELECT T.Titulo, F.NomeCompleto, T.Pontos, 'Atrasada' as Categoria, TA.DataAtribuicao, D.DataOntem as DataReferencia
+            FROM TarefasAtribuidas TA JOIN Tarefas T ON TA.TarefaID = T.TarefaID JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID JOIN Datas D ON 1=1
+            WHERE TA.FuncionarioID IS NOT NULL AND TA.DataFimVigencia IS NULL
+            AND NOT EXISTS (SELECT 1 FROM Entregas E WHERE E.AtribuicaoID = TA.AtribuicaoID AND CONVERT(date, E.DataEnvio) = CONVERT(date, D.DataOntem) AND E.StatusValidacao IN ('Aprovada', 'Pendente'))
+            AND ( TA.TipoFrequencia = 'Diaria' OR
+                    (TA.TipoFrequencia = 'Semanal' AND CAST(TA.ValorFrequencia AS INT) = D.DiaSemanaID_Ontem) OR
+                    (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, D.DataOntem)) OR
+                    (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = CONVERT(date, D.DataOntem)) OR
+                    (TA.TipoFrequencia = 'Unica' AND CONVERT(date, TA.DataInicioVigencia) = CONVERT(date, D.DataOntem))
+                )
+            AND (F.DiaDeFolga IS NULL OR F.DiaDeFolga = 0 OR F.DiaDeFolga != D.DiaSemanaID_Ontem)
+            AND NOT EXISTS (SELECT 1 FROM Entregas E WHERE E.AtribuicaoID = TA.AtribuicaoID AND CONVERT(date, E.DataEnvio) = CONVERT(date, D.DataHoje) AND E.StatusValidacao IN ('Aprovada', 'Pendente'))
+
+            UNION ALL
+
+            -- Parte 3: Tarefas de GRUPO de HOJE (GrupoID IS NOT NULL)
+            SELECT T.Titulo, G.NomeGrupo AS NomeCompleto, T.Pontos, 'Hoje' as Categoria, TA.DataAtribuicao, D.DataHoje as DataReferencia
+            FROM TarefasAtribuidas TA JOIN Tarefas T ON TA.TarefaID = T.TarefaID JOIN Grupos G ON TA.GrupoID = G.GrupoID JOIN Datas D ON 1=1
+            WHERE TA.GrupoID IS NOT NULL AND TA.DataFimVigencia IS NULL
+            -- Verifica se NÃO existe uma 'Unica' ACEITA para esta origem HOJE
+            AND NOT EXISTS (
+                SELECT 1 FROM TarefasAtribuidas TA_Aceita
+                WHERE TA_Aceita.OrigemAtribuicaoID = TA.AtribuicaoID
+                AND CONVERT(date, TA_Aceita.DataAgendamento) = CONVERT(date, D.DataHoje)
+                AND TA_Aceita.StatusTarefaGrupo = 'Aceita'
+            )
+            -- Verifica se o horário de disparo é HOJE
+            AND (
+                (TA.TipoFrequencia = 'GrupoDiaria') OR
+                (TA.TipoFrequencia = 'GrupoSemanal' AND TA.ValorFrequencia = D.DiaSemanaID_Hoje) OR
+                (TA.TipoFrequencia = 'GrupoMensal' AND TA.ValorFrequencia = DATEPART(day, D.DataHoje))
+            )
+
+            ORDER BY NomeCompleto, Categoria DESC;
+        """
+        # --- FIM DA SQL CORRIGIDA ---
+
+        cursor.execute(sql_para_fazer)
+        para_fazer_cols = [column[0] for column in cursor.description]
+        para_fazer_rows = cursor.fetchall()
+
+        # O restante do código permanece o MESMO
+        sql_validacao = "SELECT T.Titulo, F.NomeCompleto, E.DataEnvio, T.Pontos FROM Entregas E JOIN Tarefas T ON E.TarefaID = T.TarefaID JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID WHERE E.StatusValidacao = 'Pendente' ORDER BY E.DataEnvio;"
+        cursor.execute(sql_validacao)
+        validacao_cols = [column[0] for column in cursor.description]
+        validacao_rows = cursor.fetchall()
+
+        sql_concluidas = "SELECT T.Titulo, F.NomeCompleto, E.DataEnvio, E.PontosGanhos as Pontos FROM Entregas E JOIN Tarefas T ON E.TarefaID = T.TarefaID JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID WHERE E.StatusValidacao = 'Aprovada' AND CONVERT(date, E.DataEnvio) = CONVERT(date, GETDATE()) ORDER BY E.DataEnvio DESC;"
+        cursor.execute(sql_concluidas)
+        concluidas_cols = [column[0] for column in cursor.description]
+        concluidas_rows = cursor.fetchall()
+
+        para_fazer_lista = [dict(zip(para_fazer_cols, row)) for row in para_fazer_rows]
+        concluidas_lista = [dict(zip(concluidas_cols, row)) for row in concluidas_rows]
+
+        # Esta lógica agora está CORRETA, pois 'para_fazer_lista' inclui tarefas de grupo e individuais
+        tarefas_hoje_e_atrasadas_pendentes = len(para_fazer_lista)
+        total_concluidas_hoje = len(concluidas_lista)
+        total_tarefas_do_dia_ou_atrasadas = tarefas_hoje_e_atrasadas_pendentes + total_concluidas_hoje
+
+        progresso = { "concluidas": total_concluidas_hoje, "total": total_tarefas_do_dia_ou_atrasadas }
+
+
+        return {
+            'para_fazer': para_fazer_lista,
+            'validacao': [dict(zip(validacao_cols, row)) for row in validacao_rows],
+            'concluidas': concluidas_lista,
+            'progresso': progresso
+        }
+    except Exception as e:
+        logger.exception(f"ERRO ao buscar dados para o painel Kanban: {e}") # Use logger.exception
+        return {'para_fazer': [], 'validacao': [], 'concluidas': [], 'progresso': {}}
+    finally:
+        if conn:
+            conn.close()
+
+
+
+def buscar_ranking_do_dia():
+    """
+    Calcula o ranking dos 3 funcionários com mais pontos APROVADOS HOJE.
+    (VERSÃO CORRIGIDA - já retorna uma lista de dicionários)
+    """
+    conn = get_db_connection()
+    if not conn: return []
+    try:
+        cursor = conn.cursor()
+        sql = """
+            SELECT TOP 3
+                F.NomeCompleto,
+                SUM(E.PontosGanhos) as TotalPontosHoje
+            FROM Entregas E
+            JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID
+            WHERE E.StatusValidacao = 'Aprovada'
+              AND CONVERT(date, E.DataEnvio) = CONVERT(date, GETDATE())
+            GROUP BY
+                F.NomeCompleto
+            ORDER BY
+                TotalPontosHoje DESC;
+        """
+        cursor.execute(sql)
+        # CORREÇÃO: Converte o resultado para uma lista de dicionários aqui dentro
+        cols = [column[0] for column in cursor.description]
+        return [dict(zip(cols, row)) for row in cursor.fetchall()]
+    finally:
+        if conn: conn.close()
+
+def buscar_feed_de_atividades(limite=5):
+    """
+    Busca os últimos eventos (tarefas aprovadas e conquistas) para o feed.
+    (VERSÃO CORRIGIDA - TOP N dinâmico)
+    """
+    conn = get_db_connection()
+    if not conn: return []
+    try:
+        cursor = conn.cursor()
+        # --- CORREÇÃO APLICADA AQUI ---
+        # Construímos a string SQL com f-string para incluir o TOP N dinamicamente.
+        # É seguro aqui porque 'limite' é um número controlado internamente.
+        sql = f"""
+            SELECT TOP ({int(limite)}) * FROM (
+                -- Evento do tipo 'tarefa_concluida'
+                SELECT
+                    E.DataEnvio as Timestamp,
+                    'tarefa_concluida' as TipoEvento,
+                    F.NomeCompleto as TextoPrincipal,
+                    T.Titulo as TextoSecundario,
+                    E.PontosGanhos as Pontos
+                FROM Entregas E
+                JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID
+                JOIN Tarefas T ON E.TarefaID = T.TarefaID
+                WHERE E.StatusValidacao = 'Aprovada'
+
+                UNION ALL
+
+                -- Evento do tipo 'conquista'
+                SELECT
+                    CF.DataConquista as Timestamp,
+                    'conquista' as TipoEvento,
+                    F.NomeCompleto as TextoPrincipal,
+                    C.Nome as TextoSecundario,
+                    C.PontosBonus as Pontos
+                FROM ConquistasFuncionarios CF
+                JOIN Funcionarios F ON CF.FuncionarioID = F.FuncionarioID
+                JOIN Conquistas C ON CF.ConquistaID = C.ConquistaID
+            ) as FeedEventos
+            ORDER BY Timestamp DESC;
+        """
+        # Executamos a query SEM parâmetros adicionais para o TOP
+        cursor.execute(sql)
+        # --- FIM DA CORREÇÃO ---
+
+        cols = [column[0] for column in cursor.description]
+        return [dict(zip(cols, row)) for row in cursor.fetchall()]
+
+    except Exception as e:
+        # Mantém o log de erro detalhado
+        logger.exception(f"Erro crítico dentro de buscar_feed_de_atividades: {e}") # Usando logger.exception
+        return [] # Retorna lista vazia em caso de erro
+    finally:
+        if conn: conn.close()
+
+# COLE ESTA FUNÇÃO DE VOLTA NO SEU ARQUIVO database.py
+def autenticar_funcionario(funcionario_id):
+    """
+    Busca todos os dados de um funcionário pelo ID, incluindo o hash da senha,
+    para o processo de autenticação.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT * FROM Funcionarios WHERE FuncionarioID = ?"
+            cursor.execute(sql, funcionario_id)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
+
+# ADICIONE ESTA NOVA FUNÇÃO EM database.py
+def buscar_chat_id_por_nome_grupo(nome_grupo):
+    """Busca o Chat ID de um grupo a partir do seu nome exato."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT ChatIDTelegram FROM Grupos WHERE NomeGrupo = ?"
+            cursor.execute(sql, nome_grupo)
+            resultado = cursor.fetchone()
+            return resultado[0] if resultado else None
+        finally:
+            conn.close()
+    return None
+
+# ADICIONE ESTAS DUAS NOVAS FUNÇÕES EM database.py
+
+def listar_funcionarios_por_setor(setor):
+    """Retorna uma lista de todos os funcionários de um setor específico."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Usamos a coluna Cargo para identificar o setor do funcionário
+            sql = "SELECT * FROM Funcionarios WHERE Cargo LIKE ?"
+            cursor.execute(sql, f"%{setor}%")
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+
+# Em database.py, adicione esta função auxiliar (pode ser perto de 'registrar_pontos_por_meta_equipe')
+
+def _reverter_pontos_meta_diaria(apuracao_id, pontos_a_remover, meta_principal_id):
+    """
+    Função auxiliar interna para reverter pontos de meta diária.
+    Remove o valor do saldo e exclui o registro de 'Entregas'.
+    """
+    conn = get_db_connection()
+    if not conn:
+        return False
+
+    try:
+        cursor = conn.cursor()
+        # 1. Buscar o setor alvo da meta principal associada
+        cursor.execute("SELECT SetorAlvo FROM MetasPrincipais WHERE MetaPrincipalID = ?", meta_principal_id)
+        meta_detalhes = cursor.fetchone()
+        if not meta_detalhes or not meta_detalhes.SetorAlvo:
+            logger.error(f"Clawback falhou: Não foi possível encontrar SetorAlvo para MetaID {meta_principal_id} (ApuracaoID: {apuracao_id})")
+            return False
+
+        setor_alvo = meta_detalhes.SetorAlvo
+
+        # 2. Buscar os funcionários desse setor
+        funcionarios_do_setor = listar_funcionarios_por_setor(setor_alvo) # Reusa a função existente
+        if not funcionarios_do_setor:
+            logger.warning(f"Clawback: Nenhum funcionário encontrado no setor '{setor_alvo}' para reverter pontos.")
+            return True # Não é um erro, apenas não há ninguém para reverter
+
+        ids_funcionarios = [f.FuncionarioID for f in funcionarios_do_setor]
+        placeholders = ','.join('?' * len(ids_funcionarios))
+
+        # 3. Remover os pontos do saldo desses funcionários
+        sql_saldo = f"UPDATE Funcionarios SET SaldoPontos = SaldoPontos - ? WHERE FuncionarioID IN ({placeholders})"
+        params_saldo = [pontos_a_remover] + ids_funcionarios
+        cursor.execute(sql_saldo, params_saldo)
+        logger.info(f"Clawback: Saldo de {len(ids_funcionarios)} funcionários (Setor: {setor_alvo}) revertido em -{pontos_a_remover} pontos.")
+
+        # ignorando a data.
+        sql_del_entregas = f"""
+            DELETE FROM Entregas
+            WHERE TarefaID = ? 
+              AND AtribuicaoID = ? 
+              AND FuncionarioID IN ({placeholders})
+        """
+        params_del = [config.TAREFA_ID_PONTOS_META, apuracao_id] + ids_funcionarios
+        cursor.execute(sql_del_entregas, params_del)
+        logger.info(f"Clawback: Registros de 'Entregas' (TarefaID {config.TAREFA_ID_PONTOS_META}) vinculados ao ApuracaoID {apuracao_id} para o setor '{setor_alvo}' excluídos.")
+        # --- FIM DA CORREÇÃO ---
+        conn.commit()
+        return True
+
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"ERRO CRÍTICO no clawback de pontos (ApuracaoID: {apuracao_id}): {e}", exc_info=True)
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+# Em database.py, SUBSTITUA a função 'excluir_apuracao_diaria' por esta:
+
+def excluir_apuracao_diaria(meta_principal_id, data_apuracao):
+    """
+    Exclui um registro de apuração diária específico.
+    Se esse registro gerou prêmios, executa o 'clawback' (reversão) dos pontos.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+
+            # 1. Buscar os detalhes ANTES de excluir
+            sql_find = """
+                SELECT ApuracaoID, PontosMetaDiariaGanhos 
+                FROM MetasDiariasApuracoes 
+                WHERE MetaPrincipalID = ? AND DataApuracao = ?
+            """
+            cursor.execute(sql_find, meta_principal_id, data_apuracao)
+            apuracao_dados = cursor.fetchone()
+
+            if not apuracao_dados:
+                logger.warning(f"Exclusão falhou: Apuração para MetaID {meta_principal_id} na data {data_apuracao} não encontrada.")
+                return False
+
+            apuracao_id, pontos_gerados = apuracao_dados
+            pontos_gerados = pontos_gerados or 0 # Garante que não seja None
+
+            # 2. Se gerou pontos, reverter
+            if pontos_gerados > 0:
+                logger.warning(f"Excluindo ApuracaoID {apuracao_id} que gerou {pontos_gerados} pontos. Iniciando Clawback...")
+                if not _reverter_pontos_meta_diaria(apuracao_id, pontos_gerados, meta_principal_id):
+                    # Se a reversão falhar, abortamos a exclusão
+                    logger.error("Falha no Clawback. A exclusão da apuração foi ABORTADA.")
+                    conn.rollback()
+                    return False
+
+            # 3. Excluir o registro de apuração
+            sql_delete = "DELETE FROM MetasDiariasApuracoes WHERE ApuracaoID = ?"
+            cursor.execute(sql_delete, apuracao_id)
+
+            conn.commit()
+            logger.info(f"ApuracaoID {apuracao_id} (Data: {data_apuracao}) excluída com sucesso.")
+            return cursor.rowcount > 0
+
+        except Exception as e:
+            logger.error(f"ERRO ao excluir apuração diária: {e}", exc_info=True)
+            if conn: conn.rollback()
+            return False
+        finally:
+            if conn:
+                conn.close()
+    return False
+
+
+
+def registrar_pontos_por_meta_equipe(lista_funcionarios, pontos_ganhos, meta_vendas, total_vendido):
+    """
+    Registra pontos de meta para uma lista de funcionários.
+    Cria uma entrega 'Aprovada' para cada um e adiciona os pontos ao saldo.
+    """
+    conn = get_db_connection()
+    # ATENÇÃO: Coloque aqui o ID da tarefa "Performance de Equipe (Metas)" que você criou.
+    TAREFA_ID_META = 121 # <<< MUDE ESTE NÚMERO PARA O SEU ID CORRETO!
+
+    if not conn or not lista_funcionarios:
+        return False
+    
+    try:
+        cursor = conn.cursor()
+        sql_entrega = """
+            INSERT INTO Entregas
+            (TarefaID, FuncionarioID, StatusValidacao, PontosGanhos, DataEnvio, MotivoRecusa)
+            VALUES (?, ?, 'Aprovada', ?, GETDATE(), ?)
+        """
+        motivo = f"Meta de Vendas Atingida! (Vendido: R${total_vendido:.2f} / Meta: R${meta_vendas:.2f})"
+        
+        for funcionario in lista_funcionarios:
+            # 1. Insere um registro na tabela Entregas para o ranking do mês.
+            cursor.execute(sql_entrega, TAREFA_ID_META, funcionario.FuncionarioID, pontos_ganhos, motivo)
+            
+            # 2. Adiciona os pontos ao saldo geral do funcionário.
+            adicionar_pontos_ao_saldo(funcionario.FuncionarioID, pontos_ganhos)
+
+        conn.commit()
+        print(f"--> [METAS EQUIPE] {pontos_ganhos} pts registrados para {len(lista_funcionarios)} funcionário(s).")
+        return True
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"ERRO ao registrar pontos por meta de equipe: {e}")
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+
+# ===================================================================
+# == INÍCIO DO NOVO MÓDULO DE GESTÃO DE METAS CONTÍNUAS (V2) ========
+# ===================================================================
+
+def criar_meta_principal(nome, desc, valor_total, data_inicio, data_fim, pontos, setor):
+    """Cria uma nova meta principal (ex: mensal) no banco de dados."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                INSERT INTO MetasPrincipais 
+                (NomeMeta, Descricao, ValorMetaTotal, DataInicio, DataFim, PontosPremio, SetorAlvo) 
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """
+            cursor.execute(sql, nome, desc, valor_total, data_inicio, data_fim, pontos, setor)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"ERRO ao criar meta principal: {e}")
+            return False
+        finally:
+            conn.close()
+
+def listar_metas_principais():
+    """Lista todas as metas principais cadastradas, das mais novas para as mais antigas."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT * FROM MetasPrincipais ORDER BY DataInicio DESC"
+            cursor.execute(sql)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+# Em database.py, SUBSTITUA a sua função lancar_apuracao_diaria por esta versão final:
+
+def lancar_apuracao_diaria(meta_principal_id, data_apuracao, valor_dia, funcionario_id):
+    """(VERSÃO V3.1 FINAL) Salva a apuração usando MERGE e RETORNA o ID da apuração."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                MERGE INTO MetasDiariasApuracoes AS target
+                USING (SELECT ? AS MetaPrincipalID, ? AS DataApuracao) AS source
+                ON (target.MetaPrincipalID = source.MetaPrincipalID AND target.DataApuracao = source.DataApuracao)
+                WHEN MATCHED THEN
+                    UPDATE SET ValorDia = ?, FuncionarioID_Lancamento = ?
+                WHEN NOT MATCHED THEN
+                    INSERT (MetaPrincipalID, DataApuracao, ValorDia, FuncionarioID_Lancamento)
+                    VALUES (?, ?, ?, ?);
+
+                SELECT ApuracaoID FROM MetasDiariasApuracoes WHERE MetaPrincipalID = ? AND DataApuracao = ?;
+            """
+            params = (
+                meta_principal_id, data_apuracao, # Para o USING
+                valor_dia, funcionario_id,         # Para o UPDATE
+                meta_principal_id, data_apuracao, valor_dia, funcionario_id, # Para o INSERT
+                meta_principal_id, data_apuracao  # Para o SELECT final
+            )
+            cursor.execute(sql, params)
+            
+            # --- A CORREÇÃO MÁGICA ESTÁ AQUI ---
+            # Diz ao driver para avançar para o próximo resultado (o do SELECT).
+            cursor.nextset()
+            # ------------------------------------
+            
+            apuracao_id = cursor.fetchone()[0]
+            conn.commit()
+            return True, apuracao_id
+        except Exception as e:
+            logger.error(f"ERRO ao lançar apuração diária: {e}")
+            if conn:
+                conn.rollback()
+            return False, str(e)
+        finally:
+            if conn:
+                conn.close()
+    return False, "Erro de conexão com o banco."
+
+def buscar_meta_principal_do_dia():
+    """
+    Busca a meta principal ativa para hoje e calcula o total já atingido
+    somando todas as apurações diárias vinculadas a ela.
+    Esta é a função que a API usará para o painel.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Esta query faz tudo: encontra a meta ativa e já calcula a soma do "extrato"
+            sql = """
+                SELECT TOP 1
+                    MP.MetaPrincipalID,
+                    MP.NomeMeta,
+                    MP.ValorMetaTotal,
+                    (SELECT SUM(ValorDia) FROM MetasDiariasApuracoes MDA WHERE MDA.MetaPrincipalID = MP.MetaPrincipalID) as ValorAtingidoTotal
+                FROM MetasPrincipais MP
+                WHERE GETDATE() BETWEEN MP.DataInicio AND MP.DataFim AND MP.Status = 'Ativa'
+            """
+            cursor.execute(sql)
+            meta_ativa = cursor.fetchone()
+            if meta_ativa:
+                return {
+                    "nome_meta": meta_ativa.NomeMeta,
+                    "valor_meta": float(meta_ativa.ValorMetaTotal),
+                    # Se não houver nenhum lançamento, o ValorAtingidoTotal será None. Garantimos que ele vire 0.
+                    "valor_atingido": float(meta_ativa.ValorAtingidoTotal or 0)
+                }
+            return None # Nenhuma meta ativa para o dia de hoje
+        finally:
+            conn.close()
+    return None
+
+# Em database.py, adicione esta nova função no final do bloco de metas
+
+def listar_apuracoes_por_meta_principal(meta_principal_id):
+    """Busca o 'extrato' de todos os lançamentos diários para uma meta principal específica."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT DataApuracao, ValorDia 
+                FROM MetasDiariasApuracoes 
+                WHERE MetaPrincipalID = ? 
+                ORDER BY DataApuracao DESC
+            """
+            cursor.execute(sql, meta_principal_id)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+# Em database.py, ADICIONE este bloco inteiro no final do arquivo
+
+# ===================================================================
+# == INÍCIO DO MÓDULO DE METAS DIÁRIAS POR DIA DA SEMANA ============
+# ===================================================================
+
+def listar_modelos_metas_diarias():
+    """Busca os 7 modelos de metas, um para cada dia da semana."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT * FROM MetasDiariasModelos ORDER BY DiaSemanaID"
+            cursor.execute(sql)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def atualizar_modelo_meta_diaria(dia_semana_id, valor_meta, pontos_premio):
+    """Atualiza o valor e os pontos de um modelo de meta diária."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE MetasDiariasModelos SET ValorMeta = ?, PontosPremio = ? WHERE DiaSemanaID = ?"
+            cursor.execute(sql, valor_meta, pontos_premio, dia_semana_id)
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+    return False
+
+def buscar_modelo_meta_para_data(data_apuracao):
+    """Busca o modelo de meta diária correspondente a uma data específica."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Esta query usa a data para descobrir o dia da semana correspondente no SQL Server
+            sql = """
+                SELECT * FROM MetasDiariasModelos 
+                WHERE DiaSemanaID = DATEPART(weekday, ?)
+            """
+            cursor.execute(sql, data_apuracao)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
+
+# Em database.py, SUBSTITUA a sua função registrar_pontos_meta_diaria por esta:
+
+def registrar_pontos_meta_diaria(apuracao_id, pontos_ganhos, setor):
+    """
+    (VERSÃO V2) Marca uma apuração como premiada, distribui os pontos e
+    RETORNA A LISTA de funcionários que foram premiados.
+    """
+    conn = get_db_connection()
+    TAREFA_ID_META = 121
+
+    if not conn: return [] # Retorna lista vazia em caso de erro
+
+    try:
+        cursor = conn.cursor()
+        sql_marcar = "UPDATE MetasDiariasApuracoes SET PontosMetaDiariaGanhos = ? WHERE ApuracaoID = ?"
+        cursor.execute(sql_marcar, pontos_ganhos, apuracao_id)
+
+        funcionarios_do_setor = listar_funcionarios_por_setor(setor)
+        if not funcionarios_do_setor:
+            conn.commit()
+            return [] # Retorna lista vazia se não houver funcionários
+
+        sql_entrega = """
+            INSERT INTO Entregas (TarefaID, FuncionarioID, StatusValidacao, PontosGanhos, DataEnvio, MotivoRecusa)
+            VALUES (?, ?, 'Aprovada', ?, GETDATE(), ?)
+        """
+        motivo = f"Prêmio por atingir a meta diária do setor '{setor}'."
+        
+        print(f"--- DEBUG REGISTRAR PONTOS META ---")
+        print(f"Setor Alvo Recebido: '{setor}'")
+        print(f"Funcionários Encontrados no Setor: {len(funcionarios_do_setor)}")
+        if funcionarios_do_setor:
+            print(f"IDs dos funcionários encontrados: {[f.FuncionarioID for f in funcionarios_do_setor]}")
+
+        for funcionario in funcionarios_do_setor:
+            cursor.execute(sql_entrega, TAREFA_ID_META, funcionario.FuncionarioID, pontos_ganhos, motivo)
+            adicionar_pontos_ao_saldo(funcionario.FuncionarioID, pontos_ganhos)
+
+        conn.commit()
+        print(f"--> [METAS DIÁRIAS] {pontos_ganhos} pts registrados para {len(funcionarios_do_setor)} funcionário(s) do setor '{setor}'.")
+        return funcionarios_do_setor # <-- A MÁGICA! Retorna a lista de funcionários.
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"ERRO ao registrar pontos por meta diária: {e}")
+        return []
+    finally:
+        if conn:
+            conn.close()
+
+def marcar_meta_principal_como_concluida(meta_id):
+    """Atualiza o status de uma meta principal para 'Concluida'."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE MetasPrincipais SET Status = 'Concluida' WHERE MetaPrincipalID = ?"
+            cursor.execute(sql, meta_id)
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+    return False
+
+def distribuir_premio_meta_principal(meta_id):
+    """
+    Busca os detalhes da meta principal, encontra os funcionários do setor alvo,
+    distribui os pontos de prêmio e RETORNA a lista de funcionários premiados.
+    """
+    conn = get_db_connection()
+    if not conn: return []
+
+    try:
+        cursor = conn.cursor()
+        # Etapa 1: Buscar os detalhes da meta
+        cursor.execute("SELECT PontosPremio, SetorAlvo FROM MetasPrincipais WHERE MetaPrincipalID = ?", meta_id)
+        meta_detalhes = cursor.fetchone()
+        if not meta_detalhes: return []
+
+        pontos_premio, setor_alvo = meta_detalhes
+
+        # Etapa 2: Usar a função que já temos para buscar os funcionários
+        funcionarios_do_setor = listar_funcionarios_por_setor(setor_alvo)
+        if not funcionarios_do_setor: return []
+
+        # Etapa 3: Distribuir os pontos (reutilizando a lógica da meta diária)
+        TAREFA_ID_META = 121
+        sql_entrega = "INSERT INTO Entregas (TarefaID, FuncionarioID, StatusValidacao, PontosGanhos, DataEnvio, MotivoRecusa) VALUES (?, ?, 'Aprovada', ?, GETDATE(), ?)"
+        motivo = f"Prêmio por atingir a META MENSAL do setor '{setor_alvo}'!"
+        
+        for funcionario in funcionarios_do_setor:
+            cursor.execute(sql_entrega, TAREFA_ID_META, funcionario.FuncionarioID, pontos_premio, motivo)
+            adicionar_pontos_ao_saldo(funcionario.FuncionarioID, pontos_premio)
+
+        # Etapa 4: Marcar a meta como concluída para não premiar de novo
+        marcar_meta_principal_como_concluida(meta_id)
+        
+        conn.commit()
+        return funcionarios_do_setor
+
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"ERRO ao distribuir prêmio de meta principal: {e}")
+        return []
+    finally:
+        if conn: conn.close()
+
+# Em database.py, SUBSTITUA a função buscar_meta_ativa_id_hoje por esta:
+
+# Em database.py, SUBSTITUA a função buscar_meta_ativa_id_hoje por esta:
+
+def buscar_meta_ativa_id_hoje():
+    """Busca apenas o ID da meta principal ativa na data de hoje."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            
+            # --- CORREÇÃO APLICADA AQUI ---
+            # Usamos CONVERT(DATE, ...) para ignorar as horas, minutos e segundos.
+            # Isso garante que a data de hoje (ex: 31/10 23:00) seja
+            # considerada "entre" a data de início (01/10 00:00) e a data de fim (31/10 00:00).
+            sql = """
+                SELECT TOP 1 MetaPrincipalID
+                FROM MetasPrincipais MP
+                WHERE CONVERT(DATE, GETDATE()) BETWEEN CONVERT(DATE, MP.DataInicio) AND CONVERT(DATE, MP.DataFim)
+                  AND MP.Status = 'Ativa'
+            """
+            # --- FIM DA CORREÇÃO ---
+            
+            cursor.execute(sql)
+            resultado = cursor.fetchone()
+            # Adiciona um log para sabermos se encontrou
+            if resultado:
+                logger.info(f"Meta ativa ID {resultado[0]} encontrada para hoje.")
+            else:
+                logger.warning("Nenhuma meta principal ativa encontrada para hoje na verificação (buscar_meta_ativa_id_hoje).")
+            
+            return resultado[0] if resultado else None
+        
+        except Exception as e:
+            # Adiciona log de erro para esta função específica
+            logger.error(f"Erro ao buscar meta ativa ID hoje: {e}", exc_info=True)
+            return None
+        finally:
+            if conn:
+                conn.close()
+    return None
+def excluir_apuracao_diaria(meta_principal_id, data_apuracao):
+    """Exclui um registro de apuração diária específico."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                DELETE FROM MetasDiariasApuracoes 
+                WHERE MetaPrincipalID = ? AND DataApuracao = ?
+            """
+            cursor.execute(sql, meta_principal_id, data_apuracao)
+            conn.commit()
+            return cursor.rowcount > 0 # Retorna True se uma linha foi afetada
+        except Exception as e:
+            logger.error(f"ERRO ao excluir apuração diária: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
+
+def buscar_dados_meta_diaria_hoje():
+    """
+    Busca o modelo da meta para o dia de hoje e o valor já apurado para hoje.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT
+                    (SELECT ValorMeta FROM MetasDiariasModelos WHERE DiaSemanaID = DATEPART(weekday, GETDATE())) as MetaDoDia,
+                    (SELECT SUM(ValorDia) FROM MetasDiariasApuracoes WHERE CONVERT(date, DataApuracao) = CONVERT(date, GETDATE())) as AtingidoHoje
+            """
+            cursor.execute(sql)
+            resultado = cursor.fetchone()
+            if resultado:
+                return {
+                    "valor_meta_diaria": float(resultado.MetaDoDia or 0),
+                    "valor_atingido_hoje": float(resultado.AtingidoHoje or 0)
+                }
+            return None
+        finally:
+            conn.close()
+    return None
+
+def buscar_grupo_por_chat_id(chat_id):
+    """Busca os detalhes de um grupo a partir do seu Chat ID."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT * FROM Grupos WHERE ChatIDTelegram = ?"
+            cursor.execute(sql, chat_id)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
+
+def listar_membros_por_chat_id_grupo(chat_id):
+    """Busca todos os funcionários que são membros de um grupo a partir do Chat ID do grupo."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT F.FuncionarioID, F.NomeCompleto, F.ChatIDTelegram
+                FROM Funcionarios F
+                JOIN FuncionariosGrupos FG ON F.FuncionarioID = FG.FuncionarioID
+                JOIN Grupos G ON FG.GrupoID = G.GrupoID
+                WHERE G.ChatIDTelegram = ?
+            """
+            cursor.execute(sql, chat_id)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def criar_conquista(nome, descricao, icone, criterio_tipo, criterio_valor, pontos_bonus):
+    """Insere um novo modelo de conquista no banco."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                INSERT INTO Conquistas (Nome, Descricao, Icone, CriterioTipo, CriterioValor, PontosBonus)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """
+            cursor.execute(sql, nome, descricao, icone, criterio_tipo, criterio_valor, pontos_bonus)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"ERRO ao criar conquista: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
+
+def atualizar_conquista(conquista_id, nome, descricao, icone, criterio_tipo, criterio_valor, pontos_bonus):
+    """Atualiza um modelo de conquista existente."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                UPDATE Conquistas
+                SET Nome = ?, Descricao = ?, Icone = ?, CriterioTipo = ?, CriterioValor = ?, PontosBonus = ?
+                WHERE ConquistaID = ?
+            """
+            cursor.execute(sql, nome, descricao, icone, criterio_tipo, criterio_valor, pontos_bonus, conquista_id)
+            conn.commit()
+            return cursor.rowcount > 0 # Retorna True se alguma linha foi afetada
+        except Exception as e:
+            logger.error(f"ERRO ao atualizar conquista: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
+
+def excluir_conquista(conquista_id):
+    """Exclui um modelo de conquista e as associações com funcionários."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Primeiro, remove dos funcionários que a ganharam
+            sql_assoc = "DELETE FROM ConquistasFuncionarios WHERE ConquistaID = ?"
+            cursor.execute(sql_assoc, conquista_id)
+            # Depois, remove o modelo da conquista
+            sql_modelo = "DELETE FROM Conquistas WHERE ConquistaID = ?"
+            cursor.execute(sql_modelo, conquista_id)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"ERRO ao excluir conquista: {e}")
+            conn.rollback() # Desfaz se der erro em uma das exclusões
+            return False
+        finally:
+            conn.close()
+    return False
+
+# Em database.py, ADICIONE estas funções no final:
+
+def buscar_atribuicoes_periodo(funcionario_id, data_inicio, data_fim):
+    """Busca tarefas atribuídas a um funcionário dentro de um período específico."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Seleciona atribuições cuja vigência INTERSECTA o período solicitado
+            sql = """
+                SELECT
+                    TA.AtribuicaoID, T.Titulo, T.Pontos, TA.TipoFrequencia, TA.ValorFrequencia,
+                    TA.DataInicioVigencia, TA.DataFimVigencia, TA.DataAceite
+                FROM TarefasAtribuidas TA
+                JOIN Tarefas T ON TA.TarefaID = T.TarefaID
+                WHERE TA.FuncionarioID = ?
+                  AND (TA.DataFimVigencia IS NULL OR TA.DataFimVigencia >= ?) -- Não encerrada antes do início do período
+                  AND (TA.DataInicioVigencia <= ?) -- Iniciada antes ou durante o fim do período
+                ORDER BY TA.DataInicioVigencia DESC
+            """
+            cursor.execute(sql, funcionario_id, data_inicio, data_fim)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def buscar_entregas_aprovadas_periodo(funcionario_id, data_inicio, data_fim):
+    """Busca entregas aprovadas de um funcionário dentro de um período específico."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT E.EntregaID, T.Titulo, E.DataEnvio, E.PontosGanhos
+                FROM Entregas E
+                JOIN Tarefas T ON E.TarefaID = T.TarefaID
+                WHERE E.FuncionarioID = ?
+                  AND E.StatusValidacao = 'Aprovada'
+                  AND CONVERT(DATE, E.DataEnvio) BETWEEN ? AND ?
+                ORDER BY E.DataEnvio DESC
+            """
+            cursor.execute(sql, funcionario_id, data_inicio, data_fim)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def calcular_pontos_possiveis_debug(funcionario_id, data_inicio, data_fim):
+    """
+    REPLICA a lógica de cálculo de pontos possíveis da função de ranking,
+    mas para um período específico, para fins de depuração.
+    Retorna o total de pontos possíveis calculados.
+    """
+    conn = get_db_connection()
+    if not conn: return 0
+
+    try:
+        cursor = conn.cursor()
+        # Busca as atribuições ativas E o dia de folga do funcionário
+        sql_tarefas_atribuidas = """
+            SELECT
+                   TA.AtribuicaoID, TA.TipoFrequencia, TA.ValorFrequencia,
+                   T.Pontos, TA.DataInicioVigencia, TA.DataFimVigencia,
+                   TA.DataAceite, F.DiaDeFolga
+            FROM TarefasAtribuidas TA
+            JOIN Tarefas T ON TA.TarefaID = T.TarefaID
+            JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID
+            WHERE TA.FuncionarioID = ?
+        """
+        cursor.execute(sql_tarefas_atribuidas, funcionario_id)
+        tarefas_funcionario = cursor.fetchall()
+
+        pontos_possiveis_total = 0
+        dia_folga_func = None # Pega a folga da primeira tarefa (deve ser a mesma para todas)
+
+        for tarefa in tarefas_funcionario:
+            if dia_folga_func is None: # Pega o dia de folga apenas uma vez
+                 dia_folga_func = tarefa.DiaDeFolga
+
+            # Lógica para tarefas 'Unica' ou 'GrupoCompetitiva'
+            if tarefa.TipoFrequencia in ('GrupoCompetitiva', 'Unica'):
+                data_ref = tarefa.DataAceite if tarefa.TipoFrequencia == 'GrupoCompetitiva' else tarefa.DataInicioVigencia
+                if data_ref and data_inicio <= _get_date_part(data_ref) <= data_fim: # Verifica se está DENTRO do período
+                    # Considera apenas se a atribuição estava ativa no período
+                    data_fim_vigencia = _get_date_part(tarefa.DataFimVigencia) if tarefa.DataFimVigencia else data_fim # Usa data_fim se for nulo
+                    if data_fim_vigencia >= data_inicio: # Garante que não encerrou antes do período começar
+                        pontos_possiveis_total += tarefa.Pontos
+                continue
+
+            # Lógica para tarefas recorrentes
+            dias_ocorrencia = 0
+            # Define o período de cálculo (intersecção da vigência da tarefa com o período solicitado)
+            start_date_tarefa = _get_date_part(tarefa.DataInicioVigencia) if tarefa.DataInicioVigencia else data_inicio
+            end_date_tarefa = _get_date_part(tarefa.DataFimVigencia) if tarefa.DataFimVigencia else data_fim
+
+            start_date_calc = max(start_date_tarefa, data_inicio)
+            end_date_calc = min(end_date_tarefa, data_fim)
+
+            if end_date_calc < start_date_calc: continue
+
+            for dia_atual in (start_date_calc + timedelta(days=n) for n in range((end_date_calc - start_date_calc).days + 1)):
+                dia_da_semana_sql = (dia_atual.weekday() + 1) % 7 + 1
+                if str(dia_da_semana_sql) == str(dia_folga_func):
+                    continue # PULA O DIA SE FOR FOLGA!
+
+                if tarefa.TipoFrequencia == 'Diaria': dias_ocorrencia += 1
+                elif tarefa.TipoFrequencia == 'Semanal':
+                    if str(dia_da_semana_sql) == str(tarefa.ValorFrequencia): dias_ocorrencia += 1
+                elif tarefa.TipoFrequencia == 'Mensal':
+                    # Verifica se o dia do mês é o correto E se está dentro do período da tarefa
+                    if dia_atual.day == int(tarefa.ValorFrequencia): dias_ocorrencia += 1
+
+            pontos_possiveis_total += dias_ocorrencia * tarefa.Pontos
+
+        return pontos_possiveis_total
+
+    except Exception as e:
+        logger.error(f"ERRO ao calcular pontos possíveis (debug): {e}")
+        return 0
+    finally:
+        if conn: conn.close()
+
+# Em database.py
+
+def excluir_entrega(entrega_id):
+    """Exclui um registro específico da tabela Entregas E AJUSTA O SALDO DE PONTOS."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+
+            # 1. Buscar os dados ANTES de excluir
+            sql_find = "SELECT FuncionarioID, PontosGanhos FROM Entregas WHERE EntregaID = ?"
+            cursor.execute(sql_find, entrega_id)
+            entrega_dados = cursor.fetchone()
+
+            if not entrega_dados:
+                logger.warning(f"Tentativa de excluir EntregaID {entrega_id} que não foi encontrada.")
+                return False # Entrega não existe
+
+            funcionario_id, pontos_a_remover = entrega_dados
+            # Garante que pontos_a_remover seja 0 se for None (caso a entrega não tivesse pontos)
+            pontos_a_remover = pontos_a_remover or 0
+
+            # 2. Excluir a entrega
+            sql_delete = "DELETE FROM Entregas WHERE EntregaID = ?"
+            cursor.execute(sql_delete, entrega_id)
+            rows_affected = cursor.rowcount # Verifica se realmente excluiu algo
+
+            # 3. Subtrair os pontos do saldo (APENAS se a exclusão foi bem-sucedida E havia pontos a remover)
+            if rows_affected > 0 and pontos_a_remover != 0: # Verifica se pontos_a_remover é diferente de zero
+                 # Usamos a função adicionar_pontos_ao_saldo com valor negativo
+                 # A função adicionar_pontos_ao_saldo já existe e lida com a conexão
+                 adicionar_pontos_ao_saldo(funcionario_id, -pontos_a_remover)
+                 logger.info(f"Saldo ajustado em {-pontos_a_remover} pontos para FuncionarioID {funcionario_id} após exclusão da EntregaID {entrega_id}.")
+
+            conn.commit()
+            return rows_affected > 0 # Retorna True se deletou algo
+
+        except Exception as e:
+            conn.rollback() # Desfaz tudo em caso de erro
+            logger.error(f"ERRO CRÍTICO ao excluir entrega e ajustar saldo (EntregaID: {entrega_id}): {e}", exc_info=True)
+            return False
+        finally:
+            if conn:
+                conn.close()
+    return False
+
+def editar_pontos_entrega(entrega_id, novos_pontos):
+    """Edita apenas o valor de PontosGanhos para uma entrega específica."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Busca o funcionário ID para recalcular o saldo depois
+            cursor.execute("SELECT FuncionarioID, PontosGanhos FROM Entregas WHERE EntregaID = ?", entrega_id)
+            res = cursor.fetchone()
+            if not res: return False
+            funcionario_id, pontos_antigos = res
+            pontos_antigos = pontos_antigos or 0 # Garante que não seja None
+
+            # Atualiza os pontos na entrega
+            sql_update = "UPDATE Entregas SET PontosGanhos = ? WHERE EntregaID = ?"
+            cursor.execute(sql_update, novos_pontos, entrega_id)
+
+            # Recalcula o saldo do funcionário (remove o antigo, adiciona o novo)
+            diferenca = novos_pontos - pontos_antigos
+            adicionar_pontos_ao_saldo(funcionario_id, diferenca) # Usa a função existente
+
+            conn.commit()
+            return True
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"ERRO ao editar pontos da entrega: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
+
+def buscar_extrato_pontos_funcionario(funcionario_id, data_inicio, data_fim):
+    """
+    Busca um extrato completo de todas as transações de pontos (entradas e saídas)
+    para um funcionário dentro de um período, ordenado por data.
+    Retorna uma lista de dicionários ou lista vazia se erro/sem dados.
+    """
+    conn = get_db_connection()
+    extrato = []
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Query que une Entregas (pontos ganhos) e Resgates (pontos gastos)
+            # Inclui um Saldo Parcial calculado na hora (requer SQL Server 2012+)
+            sql = """
+                WITH Transacoes AS (
+                    -- Entradas de Pontos (Tarefas Aprovadas, Bônus)
+                    SELECT
+                        E.DataEnvio AS DataTransacao, -- Usamos DataEnvio (que agora é data da aprovação)
+                        CASE
+                            WHEN E.TarefaID = ? THEN 'Bônus: Feedback Diário'
+                            WHEN E.TarefaID = ? THEN 'Bônus: Leitura Comunicado'
+                            WHEN E.TarefaID = ? THEN 'Bônus: Meta Equipe Atingida'
+                            -- Adicione mais casos para outros bônus se necessário
+                            ELSE ISNULL(T.Titulo, 'Entrada Desconhecida')
+                        END AS Descricao,
+                        ISNULL(E.PontosGanhos, 0) AS Pontos -- Pontos positivos
+                    FROM Entregas E
+                    LEFT JOIN Tarefas T ON E.TarefaID = T.TarefaID
+                    WHERE E.FuncionarioID = ?
+                      AND E.StatusValidacao = 'Aprovada'
+                      AND CONVERT(DATE, E.DataEnvio) BETWEEN ? AND ?
+                      AND ISNULL(E.PontosGanhos, 0) != 0 -- Ignora entradas com 0 pontos
+
+                    UNION ALL
+
+                    -- Saídas de Pontos (Resgates Aprovados)
+                    SELECT
+                        R.DataAprovacao AS DataTransacao,
+                        'Resgate: ' + P.Nome AS Descricao,
+                        -R.PontosGastos AS Pontos -- Pontos negativos
+                    FROM Resgates R
+                    JOIN ProdutosLoja P ON R.ProdutoID = P.ProdutoID
+                    WHERE R.FuncionarioID = ?
+                      AND R.Status = 'Aprovado'
+                      AND R.DataAprovacao IS NOT NULL
+                      AND CONVERT(DATE, R.DataAprovacao) BETWEEN ? AND ?
+                )
+                -- Seleciona as transações e calcula o saldo acumulado
+                SELECT
+                    DataTransacao,
+                    Descricao,
+                    Pontos
+                FROM Transacoes
+                ORDER BY DataTransacao ASC; -- Ordena do mais antigo para o mais recente
+            """
+
+            # Passa os IDs das tarefas de bônus e os parâmetros do funcionário/datas
+            params = [
+                config.TAREFA_ID_FEEDBACK_DIARIO,
+                config.TAREFA_ID_LEITURA,
+                config.TAREFA_ID_PONTOS_META,
+                funcionario_id, data_inicio, data_fim, # Para Entregas
+                funcionario_id, data_inicio, data_fim  # Para Resgates
+            ]
+
+            cursor.execute(sql, params)
+            cols = [column[0] for column in cursor.description]
+            extrato = [dict(zip(cols, row)) for row in cursor.fetchall()]
+
+            # --- Cálculo do Saldo Inicial e Acumulado (feito em Python) ---
+            # 1. Buscar saldo ANTES da data de início
+            sql_saldo_inicial = """
+                SELECT ISNULL(SUM(CASE WHEN Tipo = 'Entrada' THEN Pontos ELSE -Pontos END), 0)
+                FROM (
+                    SELECT 'Entrada' as Tipo, ISNULL(PontosGanhos, 0) as Pontos, DataEnvio as DataOp
+                    FROM Entregas WHERE FuncionarioID = ? AND StatusValidacao = 'Aprovada' AND CONVERT(DATE, DataEnvio) < ?
+                    UNION ALL
+                    SELECT 'Saida' as Tipo, PontosGastos as Pontos, DataAprovacao as DataOp
+                    FROM Resgates WHERE FuncionarioID = ? AND Status = 'Aprovado' AND DataAprovacao IS NOT NULL AND CONVERT(DATE, DataAprovacao) < ?
+                ) as SaldoAntes;
+            """
+            cursor.execute(sql_saldo_inicial, funcionario_id, data_inicio, funcionario_id, data_inicio)
+            saldo_inicial = cursor.fetchone()[0] or 0
+
+            # 2. Adicionar Saldo Acumulado ao extrato
+            saldo_acumulado = saldo_inicial
+            for transacao in extrato:
+                saldo_acumulado += transacao['Pontos']
+                transacao['SaldoNaData'] = saldo_acumulado # Adiciona nova chave
+
+            return extrato, saldo_inicial # Retorna o extrato e o saldo inicial
+
+        except Exception as e:
+            logger.error(f"Erro ao buscar extrato de pontos: {e}", exc_info=True)
+            return [], 0 # Retorna vazio e saldo 0 em caso de erro
+        finally:
+            if conn:
+                conn.close()
+    return [], 0 # Retorna vazio e saldo 0 se conexão falhar
+
+
+# --- COLE ESTE BLOCO NO FINAL DO ARQUIVO database.py ---
+
+# Certifique-se de que 'import notificador_telegram' e 'import logging' (e datetime)
+# estão no topo do arquivo database.py
+# ===================================================================
+# == INÍCIO DO MÓDULO DE HISTÓRICO DE LUCRO MENSAL ==================
+# ===================================================================
+import locale # Adicione esta importação se ainda não existir no topo do arquivo database.py
+
+def salvar_lucro_mensal(ano, mes, percentual):
+    """
+    Salva ou atualiza o percentual de lucro para um ano/mês específico.
+    Retorna True em caso de sucesso, False em caso de erro.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                MERGE INTO LucroMensalHistorico AS target
+                USING (SELECT ? AS Ano, ? AS Mes) AS source
+                ON (target.Ano = source.Ano AND target.Mes = source.Mes)
+                WHEN MATCHED THEN
+                    UPDATE SET PercentualLucro = ?, DataRegistro = GETDATE()
+                WHEN NOT MATCHED THEN
+                    INSERT (Ano, Mes, PercentualLucro)
+                    VALUES (?, ?, ?);
+            """
+            cursor.execute(sql,
+                           ano, mes, # Para o USING
+                           percentual, # Para o UPDATE
+                           ano, mes, percentual) # Para o INSERT
+            conn.commit()
+            logger.info(f"Lucro de {mes}/{ano} salvo/atualizado para {percentual}%.")
+            return True
+        except Exception as e:
+            logger.error(f"ERRO ao salvar lucro mensal para {mes}/{ano}: {e}", exc_info=True)
+            if conn:
+                conn.rollback()
+            return False
+        finally:
+            if conn:
+                conn.close()
+    return False
+
+def buscar_historico_lucro_ultimos_meses(num_meses=3):
+    """
+    Busca o histórico de lucro dos últimos 'num_meses' registrados.
+    Retorna uma lista de dicionários: [{'mes': 'NomeMes', 'percentual': 18.5}, ...]
+    """
+    conn = get_db_connection()
+    historico = []
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Busca os últimos N meses registrados, ordenados do mais recente para o mais antigo
+            sql = f"""
+                SELECT TOP ({int(num_meses)})
+                    Ano, Mes, PercentualLucro
+                FROM LucroMensalHistorico
+                ORDER BY Ano DESC, Mes DESC
+            """
+            cursor.execute(sql)
+            resultados = cursor.fetchall()
+
+            # Tenta configurar o locale para português para nomes dos meses
+            try:
+                locale.setlocale(locale.LC_TIME, 'pt_BR.UTF-8')
+                locale_ok = True
+            except locale.Error:
+                logger.warning("Locale pt_BR.UTF-8 não disponível para nomes de meses no histórico de lucro.")
+                locale_ok = False
+
+            for row in reversed(resultados): # Inverte para mostrar do mais antigo para o mais recente
+                # Cria um objeto date para facilitar a formatação do nome do mês
+                try:
+                     # Cria uma data (dia 1 do mês/ano)
+                    data_obj = date(row.Ano, row.Mes, 1)
+                    if locale_ok:
+                        nome_mes = data_obj.strftime('%B').capitalize()
+                    else:
+                         # Fallback manual simples se o locale falhar
+                        meses_pt = ["Inválido", "Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
+                        nome_mes = meses_pt[row.Mes] if 1 <= row.Mes <= 12 else "Mês?"
+                except ValueError:
+                     nome_mes = f"Data Inv. ({row.Mes}/{row.Ano})"
+
+
+                historico.append({"mes": nome_mes, "percentual": float(row.PercentualLucro)})
+
+            # Garante que sempre retorne 'num_meses' itens, preenchendo com N/A se faltar
+            while len(historico) < num_meses:
+                historico.insert(0, {"mes": "N/A", "percentual": 0.0})
+
+            return historico
+
+        except Exception as e:
+            logger.error(f"Erro ao buscar histórico de lucro: {e}", exc_info=True)
+            # Retorna N/A se der erro
+            return [{"mes": "Erro", "percentual": 0.0}] * num_meses
+        finally:
+            if conn:
+                conn.close()
+    # Retorna N/A se der erro de conexão
+    return [{"mes": "Erro DB", "percentual": 0.0}] * num_meses
+
+
+# ===================================================================
+# == FIM DO MÓDULO DE HISTÓRICO DE LUCRO MENSAL =====================
+# ===================================================================
+
+def listar_lucros_mensais():
+    """Busca todos os lucros mensais lançados, ordenados por data."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Adicionamos o LucroID para permitir edição/exclusão
+            sql = """
+                SELECT HistoricoID, Ano, Mes, PercentualLucro 
+                FROM LucroMensalHistorico 
+                ORDER BY Ano DESC, Mes DESC
+            """
+            cursor.execute(sql)
+            return cursor.fetchall()
+        except Exception as e:
+            logger.error(f"Erro ao listar lucros mensais: {e}", exc_info=True)
+            return []
+        finally:
+            if conn:
+                conn.close()
+    return []
+
+def atualizar_lucro_mensal(lucro_id, novo_percentual):
+    """Atualiza o percentual de um lançamento de lucro específico."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE LucroMensalHistorico SET PercentualLucro = ? WHERE HistoricoID = ?"
+            cursor.execute(sql, novo_percentual, lucro_id)
+            conn.commit()
+            return cursor.rowcount > 0 # Retorna True se a atualização foi bem-sucedida
+        except Exception as e:
+            logger.error(f"Erro ao atualizar lucro mensal (ID: {lucro_id}): {e}", exc_info=True)
+            if conn:
+                conn.rollback()
+            return False
+        finally:
+            if conn:
+                conn.close()
+    return False
+
+def excluir_lucro_mensal(lucro_id):
+    """Exclui um lançamento de lucro mensal específico."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "DELETE FROM LucroMensalHistorico WHERE HistoricoID = ?"
+            cursor.execute(sql, lucro_id)
+            conn.commit()
+            return cursor.rowcount > 0 # Retorna True se a exclusão foi bem-sucedida
+        except Exception as e:
+            logger.error(f"Erro ao excluir lucro mensal (ID: {lucro_id}): {e}", exc_info=True)
+            if conn:
+                conn.rollback()
+            return False
+        finally:
+            if conn:
+                conn.close()
+    return False
+# O logger já deve estar configurado pelo bloco no início do arquivo.
+
+def buscar_resgates_recentes(limite=5):
+    """
+    Busca os últimos resgates APROVADOS para o novo feed de Resgates Recentes.
+    """
+    conn = get_db_connection()
+    if not conn: return []
+    try:
+        cursor = conn.cursor()
+        # Busca os últimos N resgates aprovados
+        sql = f"""
+            SELECT TOP ({int(limite)})
+                F.NomeCompleto AS TextoPrincipal,
+                P.Nome AS TextoSecundario,
+                R.PontosGastos AS Pontos,
+                R.DataAprovacao AS Timestamp
+            FROM Resgates R
+            JOIN Funcionarios F ON R.FuncionarioID = F.FuncionarioID
+            JOIN ProdutosLoja P ON R.ProdutoID = P.ProdutoID
+            WHERE R.Status = 'Aprovado' AND R.DataAprovacao IS NOT NULL
+            ORDER BY R.DataAprovacao DESC;
+        """
+        cursor.execute(sql)
+        cols = [column[0] for column in cursor.description]
+        return [dict(zip(cols, row)) for row in cursor.fetchall()]
+
+    except Exception as e:
+        logger.exception(f"Erro crítico dentro de buscar_resgates_recentes: {e}")
+        return [] # Retorna lista vazia em caso de erro
+    finally:
+        if conn: conn.close()
+
+# Em database.py, SUBSTITUA a função verificar_e_premiar_meta_diaria por esta:
+
+def verificar_e_premiar_meta_diaria(apuracao_id, data_apuracao_str, valor_dia, meta_principal_id):
+    """
+    Função auxiliar para verificar se a meta diária foi atingida e premiar a equipe DO SETOR CORRETO.
+    (VERSÃO CORRIGIDA COM LÓGICA DE CLAWBACK)
+    """
+    try:
+        modelo_meta_diaria = buscar_modelo_meta_para_data(data_apuracao_str) # Chamada interna
+
+        # Buscar o status de premiação ANTES de qualquer ação
+        conn_check = get_db_connection()
+        ja_premiada = False
+        pontos_premiados_anteriormente = 0 # << NOVO
+        if conn_check:
+            try:
+                cursor_check = conn_check.cursor()
+                cursor_check.execute("SELECT PontosMetaDiariaGanhos FROM MetasDiariasApuracoes WHERE ApuracaoID = ?", apuracao_id)
+                res_check = cursor_check.fetchone()
+                # Verifica se res_check não é None e se o valor é maior que 0
+                if res_check and res_check[0] is not None and res_check[0] > 0:
+                    ja_premiada = True
+                    pontos_premiados_anteriormente = res_check[0] # << NOVO
+            except Exception as e_check:
+                 logger.error(f"Erro ao verificar se ApuracaoID {apuracao_id} já foi premiada: {e_check}")
+            finally:
+                if conn_check: conn_check.close()
+
+        # --- INÍCIO DA NOVA LÓGICA DE DECISÃO ---
+
+        meta_foi_batida = modelo_meta_diaria and valor_dia >= modelo_meta_diaria.ValorMeta and modelo_meta_diaria.PontosPremio > 0
+
+        if meta_foi_batida and not ja_premiada:
+            # Cenário 1: Meta batida, ainda não premiada (Lançamento Original ou Edição para Cima)
+            logger.info(f"Meta diária ATINGIDA (ApuracaoID: {apuracao_id}). Valor: {valor_dia} >= {modelo_meta_diaria.ValorMeta}. Premiando...")
+
+            # (Lógica de premiação existente)
+            meta_principal = None
+            conn_meta = get_db_connection()
+            if conn_meta:
+                try:
+                    cursor_meta = conn_meta.cursor()
+                    cursor_meta.execute("SELECT * FROM MetasPrincipais WHERE MetaPrincipalID = ?", meta_principal_id)
+                    meta_principal = cursor_meta.fetchone()
+                finally:
+                    conn_meta.close()
+
+            if meta_principal and meta_principal.SetorAlvo:
+                setor_alvo_diario = meta_principal.SetorAlvo
+                pontos_premio_diario = modelo_meta_diaria.PontosPremio
+
+                # Marca a apuração como premiada
+                conn_interno = get_db_connection()
+                if conn_interno:
+                    try:
+                        cursor_interno = conn_interno.cursor()
+                        sql_marcar = "UPDATE MetasDiariasApuracoes SET PontosMetaDiariaGanhos = ? WHERE ApuracaoID = ?"
+                        cursor_interno.execute(sql_marcar, pontos_premio_diario, apuracao_id)
+                        conn_interno.commit()
+                    except Exception as e_marcar:
+                        logger.error(f"Erro ao marcar ApuracaoID {apuracao_id} como premiada: {e_marcar}")
+                        if conn_interno: conn_interno.rollback()
+                    finally:
+                        if conn_interno: conn_interno.close()
+
+                funcionarios_do_setor = listar_funcionarios_por_setor(setor_alvo_diario)
+
+                if funcionarios_do_setor:
+                    logger.info(f"--> Meta diária atingida! Distribuindo {pontos_premio_diario} pontos para {len(funcionarios_do_setor)} funcionários do setor '{setor_alvo_diario}'.")
+                    mensagem_base = random.choice(config.MENSAGENS_META_DIARIA_CUMPRIDA)
+                    mensagem_telegram = mensagem_base.format(pontos=pontos_premio_diario)
+
+                    for funcionario in funcionarios_do_setor:
+                        try:
+
+
+
+                                # Em database.py, dentro de verificar_e_premiar_meta_diaria
+                            adicionar_pontos_ao_saldo(funcionario.FuncionarioID, pontos_premio_diario)
+                            motivo_log = f"Meta Diária Atingida ({data_apuracao_str}) - Setor: {setor_alvo_diario}"
+
+                            # --- CORREÇÃO APLICADA AQUI ---
+                            # Passamos o ApuracaoID como o quinto parâmetro (vinculo_id)
+                            registrar_pontos_de_bonus(
+                                funcionario.FuncionarioID,
+                                pontos_premio_diario,
+                                motivo_log,
+                                config.TAREFA_ID_PONTOS_META,
+                                vinculo_id=apuracao_id
+                            )
+                            # --- FIM DA CORREÇÃO ---
+
+                            if funcionario.ChatIDTelegram:
+
+
+
+                                notificador_telegram.enviar_mensagem(funcionario.ChatIDTelegram, mensagem_telegram)
+                        except Exception as e_func:
+                            logger.error(f"Erro ao processar prêmio/notificação para {funcionario.NomeCompleto} (ID: {funcionario.FuncionarioID}): {e_func}", exc_info=True)
+                else:
+                     logger.warning(f"--> Nenhum funcionário encontrado no setor '{setor_alvo_diario}' para premiar pela meta diária.")
+            else:
+                logger.warning(f"Meta diária ({data_apuracao_str}) atingida, mas a Meta Principal ID {meta_principal_id} não foi encontrada ou não tem SetorAlvo definido. Prêmio diário NÃO distribuído.")
+
+        elif not meta_foi_batida and ja_premiada:
+            # Cenário 2: Meta NÃO batida, mas JÁ ESTAVA premiada (Edição para Baixo - CLAWBACK!)
+            logger.warning(f"Meta diária NÃO ATINGIDA (ApuracaoID: {apuracao_id}). Valor: {valor_dia}. REVERTENDO {pontos_premiados_anteriormente} pontos...")
+
+            # 1. Reverter os pontos dos funcionários
+            reversao_ok = _reverter_pontos_meta_diaria(apuracao_id, pontos_premiados_anteriormente, meta_principal_id)
+
+            if reversao_ok:
+                # 2. Zerar os pontos no registro da apuração
+                conn_zero = get_db_connection()
+                if conn_zero:
+                    try:
+                        cursor_zero = conn_zero.cursor()
+                        sql_zero = "UPDATE MetasDiariasApuracoes SET PontosMetaDiariaGanhos = 0 WHERE ApuracaoID = ?"
+                        cursor_zero.execute(sql_zero, apuracao_id)
+                        conn_zero.commit()
+                        logger.info(f"Clawback concluído. ApuracaoID {apuracao_id} zerada.")
+                    except Exception as e_zero:
+                        logger.error(f"Erro ao zerar pontos (ApuracaoID {apuracao_id}): {e_zero}")
+                        if conn_zero: conn_zero.rollback()
+                    finally:
+                        if conn_zero: conn_zero.close()
+            else:
+                logger.error(f"FALHA CRÍTICA NO CLAWBACK para ApuracaoID {apuracao_id}. Os pontos não foram revertidos, mas a apuração foi editada.")
+
+        elif meta_foi_batida and ja_premiada:
+            # Cenário 3: Meta batida e já premiada (Ex: Editar 1200 para 1100). Nenhuma ação necessária.
+            logger.info(f"Meta diária (ApuracaoID: {apuracao_id}) permanece atingida. Nenhuma alteração nos pontos.")
+
+        else: # not meta_foi_batida and not ja_premiada
+            # Cenário 4: Meta não batida e não premiada (Ex: Editar 900 para 800). Nenhuma ação necessária.
+            logger.info(f"Meta diária (ApuracaoID: {apuracao_id}) permanece não atingida.")
+
+        # --- FIM DA NOVA LÓGICA DE DECISÃO ---
+
+    except Exception as e:
+        logger.exception(f"!!! ERRO GERAL durante a verificação/premiação da meta diária (ApuracaoID: {apuracao_id}): {e}")
+
+
+def registrar_nota_fiscal(funcionario_id, file_id):
+    """
+    Salva uma nova Nota Fiscal na tabela de rastreio.
+    Retorna o ID da nova NF ou None se falhar.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                INSERT INTO NotasFiscais (FuncionarioID, FileIDTelegram, Status) 
+                VALUES (?, ?, 'Pendente');
+                SELECT SCOPE_IDENTITY();
+            """
+            cursor.execute(sql, funcionario_id, file_id)
+            cursor.nextset()
+            novo_id = cursor.fetchone()[0]
+            conn.commit()
+            logger.info(f"Nova Nota Fiscal (ID: {novo_id}) registrada para FuncionarioID {funcionario_id}.")
+            return novo_id
+        except Exception as e:
+            logger.error(f"ERRO ao registrar Nota Fiscal: {e}", exc_info=True)
+            if conn:
+                conn.rollback()
+            return None
+        finally:
+            if conn:
+                conn.close()
+    return None
+
+def buscar_nota_fiscal(nota_fiscal_id):
+    """Busca todos os dados de uma nota fiscal pelo seu ID."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT 
+                    NF.NotaFiscalID, NF.FuncionarioID, NF.FileIDTelegram, 
+                    NF.PathFoto, NF.Status, NF.DataRecebimento,
+                    F.NomeCompleto as NomeFuncionario,
+                    F.ChatIDTelegram as ChatIDFuncionario
+                FROM NotasFiscais NF
+                JOIN Funcionarios F ON NF.FuncionarioID = F.FuncionarioID
+                WHERE NF.NotaFiscalID = ?
+            """
+            cursor.execute(sql, nota_fiscal_id)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
+
+def buscar_notas_para_download():
+    """Busca NFs que foram registradas mas ainda não tiveram a foto baixada."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT NotaFiscalID, FileIDTelegram FROM NotasFiscais WHERE PathFoto IS NULL"
+            cursor.execute(sql)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def finalizar_download_nota_fiscal(nota_fiscal_id, path_foto):
+    """Atualiza o registro da NF com o caminho da foto baixada."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE NotasFiscais SET PathFoto = ? WHERE NotaFiscalID = ?"
+            cursor.execute(sql, path_foto, nota_fiscal_id)
+            conn.commit()
+        finally:
+            conn.close()
+
+def atualizar_status_nota_fiscal(nota_fiscal_id, novo_status):
+    """Atualiza o status de uma NF (ex: 'Processada')."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE NotasFiscais SET Status = ? WHERE NotaFiscalID = ?"
+            cursor.execute(sql, novo_status, nota_fiscal_id)
+            conn.commit()
+        finally:
+            conn.close()
+
+def buscar_notas_fiscais_historico(data_inicio=None, data_fim=None, funcionario_id=None, status=None):
+    """
+    Busca o histórico de notas fiscais com base em filtros para o painel de gestor.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT 
+                    NF.NotaFiscalID,
+                    NF.DataRecebimento,
+                    F.NomeCompleto,
+                    NF.Status,
+                    NF.PathFoto
+                FROM NotasFiscais NF
+                JOIN Funcionarios F ON NF.FuncionarioID = F.FuncionarioID
+            """
+            condicoes = []
+            params = []
+
+            if data_inicio:
+                condicoes.append("CONVERT(DATE, NF.DataRecebimento) >= ?")
+                params.append(data_inicio)
+            if data_fim:
+                condicoes.append("CONVERT(DATE, NF.DataRecebimento) <= ?")
+                params.append(data_fim)
+            if funcionario_id:
+                condicoes.append("NF.FuncionarioID = ?")
+                params.append(funcionario_id)
+            if status and status != 'Todos':
+                condicoes.append("NF.Status = ?")
+                params.append(status)
+
+            if condicoes:
+                sql += " WHERE " + " AND ".join(condicoes)
+
+            sql += " ORDER BY NF.DataRecebimento DESC"
+
+            cursor.execute(sql, params)
+            return cursor.fetchall()
+        except Exception as e:
+            logger.error(f"Erro ao buscar histórico de NFs: {e}", exc_info=True)
+            return []
+        finally:
+            conn.close()
+    return []
+
+# ===================================================================
+# == FIM DO MÓDULO DE NOTAS FISCAIS (NF) ============================
+# ===================================================================
+
+
+# ===================================================================
+# == INÍCIO DO MÓDULO DE DENÚNCIA ANÔNIMA ==========================
+# ===================================================================
+
+def registrar_denuncia_anonima(mensagem):
+    """
+    Salva uma nova denúncia/sugestão anônima.
+    IMPORTANTE: Não salva o FuncionarioID.
+    Retorna o ID da nova denúncia ou None se falhar.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                INSERT INTO DenunciasAnonimas (Mensagem) 
+                VALUES (?);
+                SELECT SCOPE_IDENTITY();
+            """
+            cursor.execute(sql, mensagem)
+            cursor.nextset()
+            novo_id = cursor.fetchone()[0]
+            conn.commit()
+            logger.info(f"Nova denúncia anônima (ID: {novo_id}) registrada com sucesso.")
+            return novo_id
+        except Exception as e:
+            logger.error(f"ERRO ao registrar denúncia anônima: {e}", exc_info=True)
+            if conn:
+                conn.rollback()
+            return None
+        finally:
+            if conn:
+                conn.close()
+    return None
+
+# Em database.py, adicione esta nova função (pode ser perto de 'aceitar_tarefa_de_grupo')
+
+# Em database.py
+def verificar_e_aceitar_tarefa_de_folga(tarefa_id, funcionario_id):
+    """
+    (VERSÃO CORRIGIDA COM TRANSAÇÃO E LOCK)
+    Verifica se uma tarefa de folga (baseada no TarefaID) já foi aceita hoje
+    por qualquer pessoa. Se não, atribui ao funcionário e retorna True.
+    Executa de forma transacional e atômica para evitar race conditions.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Inicia a transação (implícito, mas o commit/rollback é o controle)
+
+            # 1. Verifica se alguém já pegou uma 'Unica' desta TarefaID HOJE
+            #    Adicionamos WITH (UPDLOCK, HOLDLOCK) para travar o resultado da verificação
+            sql_check = """
+                SELECT 1
+                FROM TarefasAtribuidas WITH (UPDLOCK, HOLDLOCK)
+                WHERE TarefaID = ?
+                  AND TipoFrequencia = 'Unica'
+                  AND CONVERT(date, DataInicioVigencia) = CONVERT(date, GETDATE())
+            """
+            cursor.execute(sql_check, tarefa_id)
+
+            if cursor.fetchone():
+                # Alguém já pegou! (Ou outro processo está inserindo agora)
+                conn.rollback() # Cancela a transação
+                logger.info(f"--> [TAREFA FOLGA] FuncionarioID {funcionario_id} tentou pegar TarefaID {tarefa_id} que já foi aceita.")
+                return None # Retorna None (já foi pega)
+
+            # 2. Se ninguém pegou (e a tabela está travada), atribui ao funcionário
+            sql_insert = """
+                INSERT INTO TarefasAtribuidas
+                (TarefaID, FuncionarioID, TipoFrequencia, ValorFrequencia, DataInicioVigencia, DataAgendamento)
+                VALUES (?, ?, 'Unica', NULL, GETDATE(), GETDATE());
+                SELECT SCOPE_IDENTITY();
+            """
+            cursor.execute(sql_insert, tarefa_id, funcionario_id)
+            cursor.nextset()
+            novo_atribuicao_id = cursor.fetchone()[0]
+
+            conn.commit() # Confirma a transação
+            logger.info(f"--> [TAREFA FOLGA] FuncionarioID {funcionario_id} aceitou a TarefaID {tarefa_id}. Nova AtribuicaoID: {novo_atribuicao_id}.")
+            return novo_atribuicao_id # Retorna o ID da nova atribuição (Sucesso)
+
+        except Exception as e:
+            logger.error(f"ERRO CRÍTICO em verificar_e_aceitar_tarefa_de_folga: {e}", exc_info=True)
+            if conn:
+                conn.rollback()
+            return None # Retorna None (Erro)
+        finally:
+            if conn:
+                conn.close()
+    return None # Retorna None (Erro de conexão)
