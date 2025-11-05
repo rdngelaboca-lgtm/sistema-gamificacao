@@ -1091,6 +1091,8 @@ class App:
                 messagebox.showerror("Erro", f"Não foi possível encerrar a atribuição:\n{e}", parent=self.root)
 
 
+    # Em main.py, SUBSTITUA a função inteira abrir_popup_frequencia_universal por esta:
+
     def abrir_popup_frequencia_universal(self):
         """
         (VERSÃO REVISADA - BOTÕES CORRIGIDOS)
@@ -1141,12 +1143,26 @@ class App:
             ttk.Label(frame_horario, text="Horário de Disparo (HH:MM):").pack(side=tk.LEFT)
             horario_var_grupo = tk.StringVar(value="19:00")
             ttk.Entry(frame_horario, textvariable=horario_var_grupo, width=10).pack(side=tk.LEFT, padx=5)
+            
+            # --- CORREÇÃO DE LÓGICA DE LAYOUT ---
+            # 1. Definimos o botão, mas não o "empacotamos" (sem .pack())
+            btn_confirmar_grupo = ttk.Button(frame, text="Confirmar Agendamento Recorrente")
+            # --- FIM DA CORREÇÃO ---
+
             def atualizar_visibilidade_grupo(*args):
                 freq = frequencia_grupo.get()
                 if freq == "Semanal": frame_semanal.pack(fill=tk.X, pady=5); frame_mensal.pack_forget()
                 elif freq == "Mensal": frame_mensal.pack(fill=tk.X, pady=5); frame_semanal.pack_forget()
                 else: frame_semanal.pack_forget(); frame_mensal.pack_forget()
-            frequencia_grupo.trace_add("write", atualizar_visibilidade_grupo); atualizar_visibilidade_grupo()
+                
+                # --- CORREÇÃO DE LÓGICA DE LAYOUT ---
+                # 2. Empacotamos o botão *dentro* da função de atualização,
+                #    garantindo que ele seja sempre o último widget a ser desenhado.
+                btn_confirmar_grupo.pack(pady=20, ipady=5)
+                # --- FIM DA CORREÇÃO ---
+                
+            frequencia_grupo.trace_add("write", atualizar_visibilidade_grupo)
+            
             # --- Função de Confirmação do Grupo (sem alterações) ---
             def confirmar_atribuicao_grupo():
                 # (Código interno desta função permanece o mesmo)
@@ -1174,8 +1190,11 @@ class App:
                 popup.destroy()
                 self.atualizar_lista_atribuicoes_ativas()
 
-            # --- BOTÃO SOMENTE PARA GRUPO ---
-            ttk.Button(frame, text="Confirmar Agendamento Recorrente", command=confirmar_atribuicao_grupo).pack(pady=20, ipady=5)
+            # --- CORREÇÃO DE LÓGICA DE LAYOUT ---
+            # 3. Atribuímos o comando ao botão e chamamos a atualização pela primeira vez.
+            btn_confirmar_grupo.config(command=confirmar_atribuicao_grupo)
+            atualizar_visibilidade_grupo() # Desenha o layout inicial
+            # --- FIM DA CORREÇÃO ---
 
 
         # ====================================================================
@@ -1200,58 +1219,86 @@ class App:
             ttk.Label(frame_mensal_ind, text="Digite o dia do mês (1-31):").pack(side=tk.LEFT)
             valor_mensal_individual = tk.StringVar()
             entry_mensal_ind = ttk.Entry(frame_mensal_ind, textvariable=valor_mensal_individual, width=5); entry_mensal_ind.pack(side=tk.LEFT, padx=5)
+
+            # --- CORREÇÃO DE LÓGICA DE LAYOUT (MESMA LÓGICA DO GRUPO) ---
+            # 1. Definimos o botão, mas não o "empacotamos" (sem .pack())
+            btn_confirmar_individual = ttk.Button(frame, text="Confirmar Atribuição")
+            # --- FIM DA CORREÇÃO ---
+
             def atualizar_visibilidade_individual(*args):
                 freq = frequencia_individual.get()
                 if freq == "Semanal": frame_semanal_ind.pack(fill=tk.X, pady=5); frame_mensal_ind.pack_forget()
                 elif freq == "Mensal": frame_mensal_ind.pack(fill=tk.X, pady=5); frame_semanal_ind.pack_forget()
                 else: frame_semanal_ind.pack_forget(); frame_mensal_ind.pack_forget()
-            frequencia_individual.trace_add("write", atualizar_visibilidade_individual); atualizar_visibilidade_individual()
-            # --- Função de Confirmação Individual (sem alterações internas) ---
+                
+                # --- CORREÇÃO DE LÓGICA DE LAYOUT ---
+                # 2. Empacotamos o botão *dentro* da função de atualização.
+                btn_confirmar_individual.pack(pady=20, ipady=5)
+                # --- FIM DA CORREÇÃO ---
+            
+            frequencia_individual.trace_add("write", atualizar_visibilidade_individual)
+            
+            # --- Função de Confirmação Individual (COM CORREÇÃO) ---
+            def confirmar_atribuicao_individual():
+                tipo_freq_selecionada = frequencia_individual.get()
+                valores_freq = []
+                # ... (lógica para obter valores_freq permanece a mesma) ...
+                if tipo_freq_selecionada == "Semanal":
+                    valores_freq = [val_db for _, (var, val_db) in dias_semana_vars_individual.items() if var.get()]
+                    if not valores_freq: messagebox.showerror("Erro", "Selecione pelo menos um dia da semana.", parent=popup); return
+                elif tipo_freq_selecionada == "Mensal":
+                    try: dia_mes = int(valor_mensal_individual.get()); assert 1 <= dia_mes <= 31; valores_freq.append(str(dia_mes))
+                    except (ValueError, AssertionError): messagebox.showerror("Erro", "O dia do mês deve ser um número entre 1 e 31.", parent=popup); return
+                else: # Para Unica e Diaria
+                    valores_freq.append(None) # Garante que o loop abaixo rode uma vez
 
-            # --- Função de Confirmação Individual (COM CORREÇÃO DE LÓGICA DE VERIFICAÇÃO) ---
-        def confirmar_atribuicao_individual():
-            tipo_freq_selecionada = frequencia_individual.get()
-            valores_freq = []
-            # ... (lógica para obter valores_freq permanece a mesma) ...
-            if tipo_freq_selecionada == "Semanal":
-                valores_freq = [val_db for _, (var, val_db) in dias_semana_vars_individual.items() if var.get()]
-                if not valores_freq: messagebox.showerror("Erro", "Selecione pelo menos um dia da semana.", parent=popup); return
-            elif tipo_freq_selecionada == "Mensal":
-                try: dia_mes = int(valor_mensal_individual.get()); assert 1 <= dia_mes <= 31; valores_freq.append(str(dia_mes))
-                except (ValueError, AssertionError): messagebox.showerror("Erro", "O dia do mês deve ser um número entre 1 e 31.", parent=popup); return
-            else: # Para Unica e Diaria
-                valores_freq.append(None) # Garante que o loop abaixo rode uma vez
+                sucessos = falhas = ignorados = 0
+                for item_alvo in alvos_selecionados_items:
+                    funcionario_id = self.tree_atr_selecao.item(item_alvo, 'values')[0]
 
-            sucessos = falhas = ignorados = 0
-            for item_alvo in alvos_selecionados_items:
-                funcionario_id = self.tree_atr_selecao.item(item_alvo, 'values')[0]
+                    # <<< --- CORREÇÃO ESTÁ AQUI --- >>>
+                    # Mova a verificação para ANTES do loop de 'valores_freq'
+                    if database.verificar_atribuicao_existente(tarefa_id, funcionario_id):
+                        ignorados += 1
+                        logger.warning(f"--> Atribuição ignorada (check ANTES do loop): Tarefa {tarefa_id} já está ativa para Funcionário {funcionario_id}.")
+                        continue # Pula para o próximo funcionário
+                    # <<< --- FIM DA CORREÇÃO --- >>>
 
-                # <<< --- CORREÇÃO ESTÁ AQUI --- >>>
-                # Mova a verificação para ANTES do loop de 'valores_freq'
-                if database.verificar_atribuicao_existente(tarefa_id, funcionario_id):
-                    ignorados += 1
-                    logger.warning(f"--> Atribuição ignorada (check ANTES do loop): Tarefa {tarefa_id} já está ativa para Funcionário {funcionario_id}.")
-                    continue # Pula para o próximo funcionário
-                # <<< --- FIM DA CORREÇÃO --- >>>
+                    # Agora, itera pelos valores (dias da semana/mês ou None)
+                    for valor in valores_freq:
+                        # NÃO precisamos mais verificar aqui dentro
+                        # if database.verificar_atribuicao_existente(tarefa_id, funcionario_id): # <-- LINHA REMOVIDA
+                        #    ignorados += 1                                                     # <-- LINHA REMOVIDA
+                        #    print(f"--> Atribuição ignorada: Tarefa {tarefa_id} já está ativa para Funcionário {funcionario_id}.") # <-- LINHA REMOVIDA
+                        #    break # <-- LINHA REMOVIDA
 
-                # Agora, itera pelos valores (dias da semana/mês ou None)
+                        # Tenta atribuir a tarefa para este valor específico
+                        if database.atribuir_tarefa(tarefa_id, funcionario_id, tipo_freq_selecionada, valor):
+                            sucessos += 1
+                        else:
+                            falhas += 1
+                            # Se falhar aqui, pode ser um erro de banco, logar seria bom
+                            logger.error(f"Falha ao chamar database.atribuir_tarefa para Func:{funcionario_id}, Tar:{tarefa_id}, Freq:{tipo_freq_selecionada}, Val:{valor}")
 
+                # Lógica de mensagem final (ajustada para contar sucessos corretamente)
+                msg_final = f"{sucessos} atribuição(ões) de frequência criada(s) com sucesso!" # Mensagem mais precisa
+                if ignorados > 0:
+                    msg_final += f"\n{ignorados} funcionário(s) foram ignorados pois já tinham esta tarefa ativa."
+                if falhas > 0:
+                    messagebox.showwarning("Atenção", f"{msg_final}\n{falhas} falharam ao salvar no banco.", parent=popup)
+                else:
+                    messagebox.showinfo("Sucesso", msg_final, parent=popup)
 
-            # Lógica de mensagem final (ajustada para contar sucessos corretamente)
-            msg_final = f"{sucessos} atribuição(ões) de frequência criada(s) com sucesso!" # Mensagem mais precisa
-            if ignorados > 0:
-                msg_final += f"\n{ignorados} funcionário(s) foram ignorados pois já tinham esta tarefa ativa."
-            if falhas > 0:
-                messagebox.showwarning("Atenção", f"{msg_final}\n{falhas} falharam ao salvar no banco.", parent=popup)
-            else:
-                messagebox.showinfo("Sucesso", msg_final, parent=popup)
+                popup.destroy()
+                self.atualizar_lista_atribuicoes_ativas()
+                self.atualizar_painel_selecao(tarefa_id=tarefa_id)
 
-            popup.destroy()
-            self.atualizar_lista_atribuicoes_ativas()
-            self.atualizar_painel_selecao(tarefa_id=tarefa_id) 
+            # --- CORREÇÃO DE LÓGICA DE LAYOUT ---
+            # 3. Atribuímos o comando ao botão e chamamos a atualização pela primeira vez.
+            btn_confirmar_individual.config(command=confirmar_atribuicao_individual)
+            atualizar_visibilidade_individual() # Desenha o layout inicial
+            # --- FIM DA CORREÇÃO ---
 
-            # --- BOTÃO SOMENTE PARA INDIVIDUAL (APENAS UM!) ---
-            ttk.Button(frame, text="Confirmar Atribuição", command=confirmar_atribuicao_individual).pack(pady=20, ipady=5)
 
     def criar_aba_tarefas(self):
         frame_formulario = ttk.LabelFrame(self.frame_tarefas, text="Criar ou Editar Modelo de Tarefa", padding="10"); frame_formulario.pack(fill=tk.X, padx=10, pady=5)
