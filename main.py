@@ -1414,7 +1414,6 @@ class App:
 
         self.atualizar_ranking() # - Chama ao iniciar a aba
 
-    # Em main.py, SUBSTITUA a função atualizar_ranking por esta:
 
     def atualizar_ranking(self, event=None):
         # Limpa a tabela antes de tentar buscar novos dados
@@ -1427,7 +1426,7 @@ class App:
                 filtro_db = 'Cozinha'
             elif setor_selecionado == 'Loja':
                 filtro_db = 'Loja'
-
+            # (O resto da função continua exatamente o mesmo...)
             # --- Chamada ao banco DENTRO do try ---
             ranking_data = database.calcular_ranking_desempenho(setor_filtro=filtro_db)
 
