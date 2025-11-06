@@ -218,11 +218,14 @@ def rota_criar_agendamento():
     else:
         return jsonify({"status": "erro", "mensagem": "Ocorreu um erro interno no servidor. Tente novamente mais tarde ou contate o suporte."}), 500    
 
+# Em api_server.py, SUBSTITUA a função rota_upload_documento por esta:
+
 @app.route('/documentos/upload', methods=['POST'])
 def rota_upload_documento():
     """
     Endpoint para fazer o upload de um documento pessoal (holerite, etc.)
     e salvar o registro no banco de dados.
+    (VERSÃO CORRIGIDA PARA ACEITAR PDF e JPG)
     """
     try:
         if 'file' not in request.files:
@@ -241,7 +244,19 @@ def rota_upload_documento():
         if not all([funcionario_id, tipo_documento, mes_ano_str]):
             return jsonify({"status": "erro", "mensagem": "Dados do formulário incompletos."}), 400
 
-        nome_arquivo_seguro = secure_filename(f"{tipo_documento.lower()}_{funcionario_id}_{mes_ano_str}.pdf")
+        # --- CORREÇÃO APLICADA AQUI ---
+        # 1. Pegamos a extensão do arquivo original enviado
+        nome_original = arquivo.filename
+        extensao = os.path.splitext(nome_original)[1].lower() # ex: '.jpg' ou '.pdf'
+
+        # 2. Validamos por segurança (opcional, mas recomendado)
+        if extensao not in ['.pdf', '.jpg', '.jpeg']:
+            return jsonify({"status": "erro", "mensagem": "Tipo de arquivo não suportado pelo servidor."}), 400
+
+        # 3. Usamos a extensão dinâmica no nome do arquivo
+        nome_arquivo_seguro = secure_filename(f"{tipo_documento.lower()}_{funcionario_id}_{mes_ano_str}{extensao}")
+        # --- FIM DA CORREÇÃO ---
+        
         caminho_para_salvar = os.path.join(PASTA_DOCUMENTOS_SEGUROS, nome_arquivo_seguro)
 
         arquivo.save(caminho_para_salvar)
@@ -265,7 +280,7 @@ def rota_upload_documento():
     except Exception as e:
         logger.error(f"Erro crítico em /documentos/upload: {e}", exc_info=True)
         return jsonify({"status": "erro", "mensagem": "Ocorreu um erro interno no servidor. Tente novamente mais tarde ou contate o suporte."}), 500
-    
+        
 @app.route('/documentos/download/<int:documento_id>', methods=['GET'])
 def rota_download_documento(documento_id):
     """
