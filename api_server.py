@@ -220,12 +220,14 @@ def rota_criar_agendamento():
 
 # Em api_server.py, SUBSTITUA a função rota_upload_documento por esta:
 
+# Em api_server.py, SUBSTITUA a função rota_upload_documento por esta:
+
 @app.route('/documentos/upload', methods=['POST'])
 def rota_upload_documento():
     """
     Endpoint para fazer o upload de um documento pessoal (holerite, etc.)
     e salvar o registro no banco de dados.
-    (VERSÃO CORRIGIDA PARA ACEITAR PDF e JPG)
+    (VERSÃO CORRIGIDA PARA ACEITAR PDF, JPG e PNG)
     """
     try:
         if 'file' not in request.files:
@@ -247,10 +249,10 @@ def rota_upload_documento():
         # --- CORREÇÃO APLICADA AQUI ---
         # 1. Pegamos a extensão do arquivo original enviado
         nome_original = arquivo.filename
-        extensao = os.path.splitext(nome_original)[1].lower() # ex: '.jpg' ou '.pdf'
+        extensao = os.path.splitext(nome_original)[1].lower() # ex: '.jpg', '.pdf', '.png'
 
-        # 2. Validamos por segurança (opcional, mas recomendado)
-        if extensao not in ['.pdf', '.jpg', '.jpeg']:
+        # 2. Validamos por segurança (adicionado .png)
+        if extensao not in ['.pdf', '.jpg', '.jpeg', '.png']: # <-- ADICIONADO .png
             return jsonify({"status": "erro", "mensagem": "Tipo de arquivo não suportado pelo servidor."}), 400
 
         # 3. Usamos a extensão dinâmica no nome do arquivo
@@ -280,7 +282,7 @@ def rota_upload_documento():
     except Exception as e:
         logger.error(f"Erro crítico em /documentos/upload: {e}", exc_info=True)
         return jsonify({"status": "erro", "mensagem": "Ocorreu um erro interno no servidor. Tente novamente mais tarde ou contate o suporte."}), 500
-        
+            
 @app.route('/documentos/download/<int:documento_id>', methods=['GET'])
 def rota_download_documento(documento_id):
     """
