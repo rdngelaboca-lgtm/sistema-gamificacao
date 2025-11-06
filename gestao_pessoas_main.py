@@ -247,6 +247,8 @@ class AppGestaoPessoas:
 
 # Em gestao_pessoas_main.py, SUBSTITUA a função inteira pelo código abaixo:
 
+# Em gestao_pessoas_main.py, SUBSTITUA a função inteira pelo código abaixo:
+
     def abrir_janela_add_documento(self):
         """Abre a janela (Toplevel) para adicionar um novo documento pessoal."""
         selecionado = self.tree_rh_funcionarios.focus()
@@ -279,7 +281,7 @@ class AppGestaoPessoas:
         entry_data_ref = DateEntry(frame, date_pattern='dd/mm/yyyy', width=18)
         entry_data_ref.grid(row=1, column=1, sticky="w", pady=5)
 
-        ttk.Label(frame, text="Arquivo (PDF ou JPG):").grid(row=2, column=0, sticky="w", pady=5) # <-- Texto alterado
+        ttk.Label(frame, text="Arquivo (PDF, JPG, PNG):").grid(row=2, column=0, sticky="w", pady=5) # <-- Texto alterado
         frame_arquivo = ttk.Frame(frame)
         frame_arquivo.grid(row=2, column=1, sticky="ew", pady=5)
         
@@ -288,14 +290,15 @@ class AppGestaoPessoas:
         
         caminho_arquivo_selecionado = {"path": ""} # Usamos um dicionário para passar por referência
 
-        # --- CORREÇÃO 1: Renomeada para selecionar_arquivo e tipos de arquivo atualizados ---
+        # --- CORREÇÃO 1: Adicionado suporte a .png na seleção ---
         def selecionar_arquivo():
             filepath = filedialog.askopenfilename(
-                title="Selecione o documento (PDF ou JPG)",
+                title="Selecione o documento (PDF, JPG ou PNG)",
                 filetypes=[
-                    ("Documentos Suportados", "*.pdf *.jpg *.jpeg"),
+                    ("Documentos Suportados", "*.pdf *.jpg *.jpeg *.png"), # <-- ADICIONADO .png
                     ("Arquivos PDF", "*.pdf"),
-                    ("Imagens JPG", "*.jpg *.jpeg")
+                    ("Imagens JPG", "*.jpg *.jpeg"),
+                    ("Imagens PNG", "*.png") # <-- ADICIONADA NOVA LINHA
                 ]
             )
             if filepath:
@@ -316,7 +319,7 @@ class AppGestaoPessoas:
                 messagebox.showerror("Erro", "Todos os campos são obrigatórios.", parent=popup)
                 return
 
-            # --- CORREÇÃO 2: Determinar extensão e MIME type dinamicamente ---
+            # --- CORREÇÃO 2: Adicionado suporte a .png no MIME type ---
             nome_arquivo = os.path.basename(caminho_arquivo)
             # Pega a extensão (ex: '.jpg' ou '.pdf')
             extensao = os.path.splitext(nome_arquivo)[1].lower() 
@@ -325,8 +328,10 @@ class AppGestaoPessoas:
                 mime_type = 'application/pdf'
             elif extensao in ['.jpg', '.jpeg']:
                 mime_type = 'image/jpeg'
+            elif extensao == '.png': # <-- ADICIONADO ELIF
+                mime_type = 'image/png'
             else:
-                messagebox.showerror("Erro", "Tipo de arquivo não suportado. Use PDF ou JPG/JPEG.", parent=popup)
+                messagebox.showerror("Erro", "Tipo de arquivo não suportado. Use PDF, JPG ou PNG.", parent=popup)
                 return
             # --- FIM DA CORREÇÃO 2 ---
 
@@ -360,8 +365,7 @@ class AppGestaoPessoas:
         btn_salvar = ttk.Button(frame, text="Salvar e Disponibilizar", command=enviar_documento)
         btn_salvar.grid(row=3, column=0, columnspan=2, pady=20, ipady=5)
 
-        frame.columnconfigure(1, weight=1)      
-
+        frame.columnconfigure(1, weight=1)
     
     def atualizar_lista_comunicados(self, filtro=None):
         for i in self.tree_comunicados.get_children(): self.tree_comunicados.delete(i)
