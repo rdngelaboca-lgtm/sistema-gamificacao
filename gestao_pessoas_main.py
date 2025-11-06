@@ -245,6 +245,8 @@ class AppGestaoPessoas:
                 doc.DocumentoID, doc.TipoDocumento, mes_ano_ref, data_upload, status_ciencia, data_ciencia
             ))
 
+# Em gestao_pessoas_main.py, SUBSTITUA a função inteira pelo código abaixo:
+
     def abrir_janela_add_documento(self):
         """Abre a janela (Toplevel) para adicionar um novo documento pessoal."""
         selecionado = self.tree_rh_funcionarios.focus()
@@ -277,7 +279,7 @@ class AppGestaoPessoas:
         entry_data_ref = DateEntry(frame, date_pattern='dd/mm/yyyy', width=18)
         entry_data_ref.grid(row=1, column=1, sticky="w", pady=5)
 
-        ttk.Label(frame, text="Arquivo (PDF):").grid(row=2, column=0, sticky="w", pady=5)
+        ttk.Label(frame, text="Arquivo (PDF ou JPG):").grid(row=2, column=0, sticky="w", pady=5) # <-- Texto alterado
         frame_arquivo = ttk.Frame(frame)
         frame_arquivo.grid(row=2, column=1, sticky="ew", pady=5)
         
@@ -286,16 +288,21 @@ class AppGestaoPessoas:
         
         caminho_arquivo_selecionado = {"path": ""} # Usamos um dicionário para passar por referência
 
-        def selecionar_pdf():
+        # --- CORREÇÃO 1: Renomeada para selecionar_arquivo e tipos de arquivo atualizados ---
+        def selecionar_arquivo():
             filepath = filedialog.askopenfilename(
-                title="Selecione o documento PDF",
-                filetypes=[("Arquivos PDF", "*.pdf")]
+                title="Selecione o documento (PDF ou JPG)",
+                filetypes=[
+                    ("Documentos Suportados", "*.pdf *.jpg *.jpeg"),
+                    ("Arquivos PDF", "*.pdf"),
+                    ("Imagens JPG", "*.jpg *.jpeg")
+                ]
             )
             if filepath:
                 caminho_arquivo_selecionado["path"] = filepath
                 lbl_caminho_pdf.config(text=os.path.basename(filepath))
 
-        btn_selecionar = ttk.Button(frame_arquivo, text="Selecionar...", command=selecionar_pdf)
+        btn_selecionar = ttk.Button(frame_arquivo, text="Selecionar...", command=selecionar_arquivo) # <-- Usa a nova função
         btn_selecionar.pack(side="left")
 
         # --- Lógica de Envio ---
@@ -309,6 +316,20 @@ class AppGestaoPessoas:
                 messagebox.showerror("Erro", "Todos os campos são obrigatórios.", parent=popup)
                 return
 
+            # --- CORREÇÃO 2: Determinar extensão e MIME type dinamicamente ---
+            nome_arquivo = os.path.basename(caminho_arquivo)
+            # Pega a extensão (ex: '.jpg' ou '.pdf')
+            extensao = os.path.splitext(nome_arquivo)[1].lower() 
+
+            if extensao == '.pdf':
+                mime_type = 'application/pdf'
+            elif extensao in ['.jpg', '.jpeg']:
+                mime_type = 'image/jpeg'
+            else:
+                messagebox.showerror("Erro", "Tipo de arquivo não suportado. Use PDF ou JPG/JPEG.", parent=popup)
+                return
+            # --- FIM DA CORREÇÃO 2 ---
+
             # Prepara os dados para enviar à API
             url_upload = f"{config.API_BASE_URL}/documentos/upload" # ATENÇÃO AO IP!
             dados_payload = {
@@ -319,7 +340,9 @@ class AppGestaoPessoas:
             
             try:
                 with open(caminho_arquivo, 'rb') as f:
-                    arquivos_payload = {'file': (os.path.basename(caminho_arquivo), f, 'application/pdf')}
+                    # --- CORREÇÃO 3: Usa o nome e o MIME type dinâmicos ---
+                    arquivos_payload = {'file': (nome_arquivo, f, mime_type)}
+                    # --- FIM DA CORREÇÃO 3 ---
                     
                     # Faz a requisição para a API
                     response = requests.post(url_upload, data=dados_payload, files=arquivos_payload)
@@ -337,8 +360,7 @@ class AppGestaoPessoas:
         btn_salvar = ttk.Button(frame, text="Salvar e Disponibilizar", command=enviar_documento)
         btn_salvar.grid(row=3, column=0, columnspan=2, pady=20, ipady=5)
 
-        frame.columnconfigure(1, weight=1)
-      
+        frame.columnconfigure(1, weight=1)      
 
     
     def atualizar_lista_comunicados(self, filtro=None):
