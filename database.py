@@ -2973,21 +2973,6 @@ def buscar_dados_para_painel_kanban():
                 )
             AND (F.DiaDeFolga IS NULL OR F.DiaDeFolga = 0 OR F.DiaDeFolga != D.DiaSemanaID_Hoje)
 
-            UNION ALL
-
-            -- Parte 2: Tarefas Individuais ATRASADAS de ONTEM (FuncionarioID IS NOT NULL)
-            SELECT T.Titulo, F.NomeCompleto, T.Pontos, 'Atrasada' as Categoria, TA.DataAtribuicao, D.DataOntem as DataReferencia
-            FROM TarefasAtribuidas TA JOIN Tarefas T ON TA.TarefaID = T.TarefaID JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID JOIN Datas D ON 1=1
-            WHERE TA.FuncionarioID IS NOT NULL AND TA.DataFimVigencia IS NULL
-            AND NOT EXISTS (SELECT 1 FROM Entregas E WHERE E.AtribuicaoID = TA.AtribuicaoID AND CONVERT(date, E.DataEnvio) = CONVERT(date, D.DataOntem) AND E.StatusValidacao IN ('Aprovada', 'Pendente'))
-            AND ( TA.TipoFrequencia = 'Diaria' OR
-                    (TA.TipoFrequencia = 'Semanal' AND CAST(TA.ValorFrequencia AS INT) = D.DiaSemanaID_Ontem) OR
-                    (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, D.DataOntem)) OR
-                    (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = CONVERT(date, D.DataOntem)) OR
-                    (TA.TipoFrequencia = 'Unica' AND CONVERT(date, TA.DataInicioVigencia) = CONVERT(date, D.DataOntem))
-                )
-            AND (F.DiaDeFolga IS NULL OR F.DiaDeFolga = 0 OR F.DiaDeFolga != D.DiaSemanaID_Ontem)
-            AND NOT EXISTS (SELECT 1 FROM Entregas E WHERE E.AtribuicaoID = TA.AtribuicaoID AND CONVERT(date, E.DataEnvio) = CONVERT(date, D.DataHoje) AND E.StatusValidacao IN ('Aprovada', 'Pendente'))
 
             UNION ALL
 
