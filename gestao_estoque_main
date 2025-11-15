@@ -344,13 +344,25 @@ class AppGestaoEstoque:
         self.tree_vincular.heading('Produto no XML', text='Produto no XML'); self.tree_vincular.column('Produto no XML', width=300)
         self.tree_vincular.heading('Vinculado a', text='Produto Mestre'); self.tree_vincular.column('Vinculado a', width=200)
         self.tree_vincular.grid(row=0, column=0, sticky="nsew")
+
+
+    # --- Frame 3: Ferramenta de Vinculação ---
         frame_ferramenta = ttk.Frame(main_frame)
         frame_ferramenta.grid(row=2, column=0, sticky="ew", pady=10)
+
         ttk.Label(frame_ferramenta, text="Vincular item selecionado ao Produto Mestre:").pack(side=tk.LEFT)
+
         self.combo_produtos_mestre = ttk.Combobox(frame_ferramenta, state="readonly", width=40)
         self.combo_produtos_mestre.pack(side=tk.LEFT, padx=10, fill=tk.X, expand=True)
+
         btn_vincular = ttk.Button(frame_ferramenta, text="Vincular", command=self.vincular_produto_selecionado)
-        btn_vincular.pack(side=tk.LEFT)
+        btn_vincular.pack(side=tk.LEFT, padx=5)
+
+        # --- NOVO BOTÃO ADICIONADO AQUI ---
+        btn_criar_vincular = ttk.Button(frame_ferramenta, text="Criar Mestre e Vincular", command=self.criar_mestre_e_vincular)
+        btn_criar_vincular.pack(side=tk.LEFT, padx=5)
+
+
         frame_prontos = ttk.LabelFrame(main_frame, text="3. Itens Prontos para Salvar (Já Vinculados)", padding="10")
         frame_prontos.grid(row=3, column=0, sticky="nsew", pady=5)
         frame_prontos.rowconfigure(0, weight=1)
@@ -553,6 +565,68 @@ class AppGestaoEstoque:
         for i in self.tree_prontos.get_children(): self.tree_prontos.delete(i)
         self.itens_xml_nao_vinculados.clear()
         self.dados_notas_processadas.clear()
+
+    def criar_mestre_e_vincular(self):
+        """
+        Pega o item pendente selecionado, cria um novo Produto Mestre
+        com o nome do XML e já faz a vinculação DE/PARA.
+        """
+        selecionado_tree = self.tree_vincular.focus()
+        if not selecionado_tree:
+            messagebox.showwarning("Aviso", "Selecione um item pendente na lista 'Itens Pendentes' (Passo 2).", parent=self.root)
+            return
+
+        # Pega o índice e os dados do item pendente
+        indice_item = self.tree_vincular.index(selecionado_tree)
+        item_pendente = self.itens_xml_nao_vinculados[indice_item]
+
+        nome_novo_produto = item_pendente['DescricaoXML']
+        fornecedor_id = item_pendente['FornecedorID']
+
+        if not messagebox.askyesno("Confirmar Auto-Criação",
+                                f"Deseja criar um novo Produto Mestre com o nome:\n\n"
+                                f"'{nome_novo_produto}'\n\n"
+                                f"(Unidade: 'UN', Est. Mínimo: 0.0) e vinculá-lo?",
+                                parent=self.root):
+            return
+
+        try:
+            # 1. Cria o Produto Mestre (agora retorna o ID)
+            novo_produto_id = database.criar_produto_estoque(
+                nome=nome_novo_produto,
+                unidade="UN", # Define "UN" como padrão
+                estoque_min=0.0
+            )
+
+            if not novo_produto_id:
+                raise Exception("Falha ao criar o produto mestre, não retornou ID.")
+
+            # 2. Cria o Vínculo (DE/PARA)
+            database.criar_vinculo_produto_fornecedor(
+                novo_produto_id,
+                fornecedor_id,
+                nome_novo_produto
+            )
+
+            # 3. Limpa da interface
+            self.itens_xml_nao_vinculados.pop(indice_item)
+            self.tree_vincular.delete(selecionado_tree)
+
+            # 4. Atualiza todas as listas
+            self.atualizar_lista_produtos() # Atualiza a Aba 1
+            self.popular_combobox_produtos_mestre() # Atualiza os combos
+
+            messagebox.showinfo("Sucesso", 
+                                f"Produto '{nome_novo_produto}' criado e vinculado!\n\n"
+                                "Por favor, re-importe a pasta de XMLs para que este item apareça na lista 'Prontos para Salvar'.",
+                                parent=self.root)
+
+        except Exception as e:
+            logger.error(f"Erro ao auto-criar e vincular: {e}", exc_info=True)
+            messagebox.showerror("Erro Crítico", f"Não foi possível criar e vincular o produto.\nVerifique se o nome já existe no Catálogo Mestre.\n\nErro: {e}", parent=self.root)
+
+
+    
 
     # ===================================================================
     # == ABA 4: LANÇAR CONTAGEM FÍSICA (NOVO) ===========================
