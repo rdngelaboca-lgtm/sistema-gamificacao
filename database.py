@@ -4842,3 +4842,128 @@ def excluir_fornecedor(fornecedor_id):
 # ===================================================================
 # == FIM DO MÓDULO DE GESTÃO DE ESTOQUE (FORNECEDORES) ==============
 # ===================================================================
+# ===================================================================
+# == INÍCIO DO MÓDULO DE GESTÃO DE ESTOQUE (IMPORTAÇÃO XML) =========
+# ===================================================================
+
+def buscar_fornecedor_por_cnpj(cnpj):
+    """Busca um fornecedor pelo CNPJ e retorna seu ID."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT FornecedorID FROM Fornecedores WHERE CNPJ = ?"
+            cursor.execute(sql, cnpj)
+            resultado = cursor.fetchone()
+            return resultado[0] if resultado else None
+        except Exception as e:
+            logger.error(f"ERRO ao buscar fornecedor por CNPJ: {e}", exc_info=True)
+            return None
+        finally:
+            if conn:
+                conn.close()
+    return None
+
+def buscar_vinculo_produto_fornecedor(fornecedor_id, descricao_xml):
+    """Verifica se um vínculo 'DE/PARA' já existe para um produto de um fornecedor."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT ProdutoFornecedorID, ProdutoID FROM ProdutosFornecedor WHERE FornecedorID = ? AND DescricaoXML = ?"
+            cursor.execute(sql, fornecedor_id, descricao_xml)
+            return cursor.fetchone() # Retorna o ID do vínculo e o ID do produto mestre
+        except Exception as e:
+            logger.error(f"ERRO ao buscar vínculo DE/PARA: {e}", exc_info=True)
+            return None
+        finally:
+            if conn:
+                conn.close()
+    return None
+
+def criar_vinculo_produto_fornecedor(produto_id_mestre, fornecedor_id, descricao_xml):
+    """Cria um novo vínculo 'DE/PARA' na tabela ProdutosFornecedor."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                INSERT INTO ProdutosFornecedor (ProdutoID, FornecedorID, DescricaoXML)
+                VALUES (?, ?, ?);
+                SELECT SCOPE_IDENTITY();
+            """
+            cursor.execute(sql, produto_id_mestre, fornecedor_id, descricao_xml)
+            cursor.nextset()
+            novo_id = cursor.fetchone()[0]
+            conn.commit()
+            logger.info(f"Novo vínculo DE/PARA criado (ID: {novo_id}) para {descricao_xml}")
+            return novo_id
+        except Exception as e:
+            logger.error(f"ERRO ao criar vínculo DE/PARA: {e}", exc_info=True)
+            if conn: conn.rollback()
+            return None
+        finally:
+            if conn:
+                conn.close()
+    return None
+
+def salvar_nota_fiscal_completa(dados_nf_cabecalho, lista_itens_nf):
+    """
+    Salva a Nota Fiscal (cabeçalho e itens) de forma transacional.
+    'dados_nf_cabecalho' é um dict: {'NumeroNF', 'FornecedorID', 'DataEmissao', 'ValorTotalNF'}
+    'lista_itens_nf' é uma lista de dicts: [{'ProdutoFornecedorID', 'Quantidade', 'PrecoCustoUnitario'}]
+    """
+    conn = get_db_connection()
+    if not conn:
+        return False, "Falha de conexão com o banco."
+    
+    try:
+        cursor = conn.cursor()
+        
+        # 1. Inserir o Cabeçalho da NF
+        sql_nf = """
+            INSERT INTO NotasFiscaisEntrada (NumeroNF, FornecedorID, DataEmissao, ValorTotalNF)
+            VALUES (?, ?, ?, ?);
+            SELECT SCOPE_IDENTITY();
+        """
+        cursor.execute(sql_nf, 
+                       dados_nf_cabecalho['NumeroNF'], 
+                       dados_nf_cabecalho['FornecedorID'], 
+                       dados_nf_cabecalho['DataEmissao'], 
+                       dados_nf_cabecalho['ValorTotalNF'])
+        
+        cursor.nextset()
+        nova_nota_id = cursor.fetchone()[0]
+        
+        if not nova_nota_id:
+            raise Exception("Falha ao obter o ID da nova Nota Fiscal.")
+            
+        # 2. Inserir os Itens da NF
+        sql_item = """
+            INSERT INTO ItensNotaFiscalEntrada (NotaID, ProdutoFornecedorID, Quantidade, PrecoCustoUnitario)
+            VALUES (?, ?, ?, ?)
+        """
+        # Prepara os dados para executemany (mais rápido)
+        itens_para_inserir = [
+            (nova_nota_id, item['ProdutoFornecedorID'], item['Quantidade'], item['PrecoCustoUnitario'])
+            for item in lista_itens_nf
+        ]
+        
+        cursor.executemany(sql_item, itens_para_inserir)
+        
+        # 3. Se tudo deu certo, commita a transação
+        conn.commit()
+        logger.info(f"Nota Fiscal {dados_nf_cabecalho['NumeroNF']} (ID: {nova_nota_id}) e seus {len(itens_para_inserir)} itens foram salvos com sucesso.")
+        return True, f"Nota Fiscal {dados_nf_cabecalho['NumeroNF']} salva com sucesso."
+
+    except Exception as e:
+        if conn: conn.rollback() # Desfaz tudo em caso de erro
+        logger.error(f"ERRO CRÍTICO ao salvar NF completa (NF: {dados_nf_cabecalho.get('NumeroNF', 'N/A')}): {e}", exc_info=True)
+        return False, f"Erro ao salvar NF: {e}"
+    finally:
+        if conn:
+            conn.close()
+
+# ===================================================================
+# == FIM DO MÓDULO DE GESTÃO DE ESTOQUE (IMPORTAÇÃO XML) ===========
+# ===================================================================
