@@ -65,6 +65,7 @@ import config
 import notificador_telegram
 import logging
 import random
+from decimal import Decimal
 
 
 CONNECTION_STRING = (
@@ -5101,12 +5102,13 @@ def _somar_compras_no_periodo(cursor, produto_id_mestre, data_inicio, data_fim):
     """
     cursor.execute(sql, produto_id_mestre, data_inicio, data_fim)
     resultado = cursor.fetchone()
-    return resultado.TotalComprado if resultado and resultado.TotalComprado else 0.0
+    return resultado.TotalComprado if resultado and resultado.TotalComprado else Decimal('0.0')
 
 def gerar_relatorio_posicao_estoque():
     """
     Função principal que calcula o Perfil de Consumo (UMD) e o Estoque Atual
     para TODOS os produtos, baseado nas duas últimas contagens.
+    (VERSÃO CORRIGIDA COM TIPAGEM DECIMAL)
     """
     conn = get_db_connection()
     if not conn:
@@ -5130,47 +5132,45 @@ def gerar_relatorio_posicao_estoque():
                     "ProdutoID": produto.ProdutoID,
                     "NomeProduto": produto.NomeProduto,
                     "Unidade": produto.UnidadeMedida,
-                    "EstoqueAtual": contagens[0].QuantidadeContada if len(contagens) == 1 else 0.0,
-                    "UsoMedioDiario": 0.0, # Não podemos calcular
+                    # CORREÇÃO: Converte para Decimal ou usa Decimal('0.0')
+                    "EstoqueAtual": contagens[0].QuantidadeContada if len(contagens) == 1 else Decimal('0.0'),
+                    "UsoMedioDiario": Decimal('0.0'), # CORREÇÃO: Usa Decimal
                     "EstoqueMinimo": produto.EstoqueMinimo,
                     "Status": "Falta 2ª contagem"
                 })
                 continue
 
-            # 3. Temos 2 contagens, vamos organizar
-            # Contagem 2 (Mais recente)
+            # 3. Temos 2 contagens, vamos organizar (os valores aqui JÁ SÃO Decimal)
             contagem_final = contagens[0]
             data_final = contagem_final.DataContagem
-            estoque_final = contagem_final.QuantidadeContada
+            estoque_final = contagem_final.QuantidadeContada # É Decimal
             
-            # Contagem 1 (Penúltima)
             contagem_inicial = contagens[1]
             data_inicial = contagem_inicial.DataContagem
-            estoque_inicial = contagem_inicial.QuantidadeContada
+            estoque_inicial = contagem_inicial.QuantidadeContada # É Decimal
 
             # 4. Calcula o período em dias
             dias_periodo = (data_final - data_inicial).days
             if dias_periodo <= 0:
-                # Contagens feitas no mesmo dia, não podemos calcular
                 relatorio_final.append({
                     "ProdutoID": produto.ProdutoID,
                     "NomeProduto": produto.NomeProduto,
                     "Unidade": produto.UnidadeMedida,
-                    "EstoqueAtual": estoque_final,
-                    "UsoMedioDiario": 0.0,
+                    "EstoqueAtual": estoque_final, # É Decimal
+                    "UsoMedioDiario": Decimal('0.0'), # CORREÇÃO: Usa Decimal
                     "EstoqueMinimo": produto.EstoqueMinimo,
                     "Status": "Contagens no mesmo dia"
                 })
                 continue
                 
             # 5. Soma as compras (XMLs) feitas ENTRE as duas contagens
-            total_comprado = _somar_compras_no_periodo(cursor, produto.ProdutoID, data_inicial, data_final)
+            total_comprado = _somar_compras_no_periodo(cursor, produto.ProdutoID, data_inicial, data_final) # Agora retorna Decimal
             
-            # 6. Aplica a FÓRMULA que combinamos
+            # 6. Aplica a FÓRMULA (Agora é Decimal + Decimal - Decimal, o que funciona)
             uso_total_periodo = (estoque_inicial + total_comprado) - estoque_final
             
-            # 7. Calcula o Uso Médio Diário (UMD)
-            uso_medio_diario = uso_total_periodo / dias_periodo if dias_periodo > 0 else 0.0
+            # 7. Calcula o Uso Médio Diário (UMD) (Decimal / int = Decimal)
+            uso_medio_diario = uso_total_periodo / dias_periodo if dias_periodo > 0 else Decimal('0.0')
             
             relatorio_final.append({
                 "ProdutoID": produto.ProdutoID,
@@ -5190,7 +5190,7 @@ def gerar_relatorio_posicao_estoque():
     finally:
         if conn:
             conn.close()
-
+            
 # ===================================================================
 # == FIM DO MÓDULO DE GESTÃO DE ESTOQUE (SUGESTÃO DE COMPRA) ========
 # ===================================================================
