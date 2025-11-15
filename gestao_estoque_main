@@ -42,14 +42,16 @@ logger.info(f"*** Logging configurado para o módulo: {__name__} ***")
 # ==============================================================================
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 import database # Importa nosso arquivo de banco de dados
+from lxml import etree as ET # Nova biblioteca para ler XML
+from datetime import datetime
 
 class AppGestaoEstoque:
     def __init__(self, root):
         self.root = root
         self.root.title("Módulo de Gestão de Estoque")
-        self.root.geometry("1000x600") # Aumentei a largura
+        self.root.geometry("1100x700") # Aumentei a tela
         
         # --- NOVO: Notebook (Abas) ---
         self.notebook = ttk.Notebook(root)
@@ -58,82 +60,72 @@ class AppGestaoEstoque:
         # --- Frames para cada Aba ---
         self.frame_produtos = ttk.Frame(self.notebook, padding="10")
         self.frame_fornecedores = ttk.Frame(self.notebook, padding="10")
-        # (Futuramente adicionaremos a frame_xml aqui)
+        self.frame_importacao = ttk.Frame(self.notebook, padding="10") # NOVO
 
         self.notebook.add(self.frame_produtos, text='1. Catálogo Mestre (Produtos)')
         self.notebook.add(self.frame_fornecedores, text='2. Fornecedores')
+        self.notebook.add(self.frame_importacao, text='3. Importar XMLs (DE/PARA)') # NOVO
 
         # --- Variáveis de rastreio ---
         self.produto_selecionado_id = None
-        self.fornecedor_selecionado_id = None # NOVO
+        self.fornecedor_selecionado_id = None
+        
+        # --- NOVAS Variáveis para a Aba 3 ---
+        self.itens_xml_nao_vinculados = [] # Guarda itens que precisam de DE/PARA
+        self.dados_notas_processadas = []  # Guarda notas prontas para salvar no DB
+        self.mapa_produtos_mestre = {}     # Cache para o ComboBox
 
         # --- Chama as funções para construir cada aba ---
         self.criar_aba_catalogo_produtos()
-        self.criar_aba_fornecedores() # NOVO
+        self.criar_aba_fornecedores()
+        self.criar_aba_importacao_xml() # NOVO
+        
+        # Carrega o cache de produtos mestre ao iniciar
+        self.popular_combobox_produtos_mestre()
 
     # ===================================================================
-    # == ABA 1: CATÁLOGO MESTRE DE PRODUTOS =============================
-    # (Este é o código que já tínhamos, agora dentro de uma função)
+    # == ABA 1: CATÁLOGO MESTRE DE PRODUTOS (Sem alterações) ============
     # ===================================================================
     def criar_aba_catalogo_produtos(self):
         main_frame = ttk.Frame(self.frame_produtos)
         main_frame.pack(fill=tk.BOTH, expand=True)
-
-        # --- Frame do Formulário (Esquerda) ---
         form_frame = ttk.LabelFrame(main_frame, text="Cadastrar/Editar Produto Mestre", padding="10")
         form_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
-
         ttk.Label(form_frame, text="Nome do Produto:").grid(row=0, column=0, sticky="w", pady=2)
         self.entry_prod_nome = ttk.Entry(form_frame, width=40)
         self.entry_prod_nome.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 10))
-
         ttk.Label(form_frame, text="Unidade (Ex: UN, KG, L):").grid(row=2, column=0, sticky="w", pady=2)
         self.entry_prod_unidade = ttk.Entry(form_frame, width=15)
         self.entry_prod_unidade.grid(row=3, column=0, sticky="w", pady=(0, 10))
-
         ttk.Label(form_frame, text="Estoque Mínimo:").grid(row=2, column=1, sticky="w", pady=2)
         self.entry_prod_estoque_min = ttk.Entry(form_frame, width=15)
         self.entry_prod_estoque_min.grid(row=3, column=1, sticky="w", pady=(0, 10))
         self.entry_prod_estoque_min.insert(0, "0.0")
-
         btn_frame = ttk.Frame(form_frame)
         btn_frame.grid(row=4, column=0, columnspan=2, pady=10)
-
         self.btn_prod_salvar = ttk.Button(btn_frame, text="Salvar Novo", command=self.salvar_produto)
         self.btn_prod_salvar.pack(side=tk.LEFT, padx=5)
-
         self.btn_prod_limpar = ttk.Button(btn_frame, text="Limpar", command=self.limpar_formulario_produto)
         self.btn_prod_limpar.pack(side=tk.LEFT, padx=5)
-
-        # --- Frame da Lista (Direita) ---
         lista_frame = ttk.LabelFrame(main_frame, text="Catálogo Mestre de Produtos", padding="10")
         lista_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
-        
         lista_frame.rowconfigure(0, weight=1)
         lista_frame.columnconfigure(0, weight=1)
-
         cols = ('ID', 'Nome', 'Unidade', 'Estoque Mínimo')
         self.tree_produtos = ttk.Treeview(lista_frame, columns=cols, show='headings', selectmode='browse')
-        
         self.tree_produtos.heading('ID', text='ID'); self.tree_produtos.column('ID', width=40, anchor='center')
         self.tree_produtos.heading('Nome', text='Nome'); self.tree_produtos.column('Nome', width=250)
         self.tree_produtos.heading('Unidade', text='UN'); self.tree_produtos.column('Unidade', width=50, anchor='center')
         self.tree_produtos.heading('Estoque Mínimo', text='Est. Mínimo'); self.tree_produtos.column('Estoque Mínimo', width=80, anchor='e')
-        
         scrollbar = ttk.Scrollbar(lista_frame, orient="vertical", command=self.tree_produtos.yview)
         self.tree_produtos.configure(yscrollcommand=scrollbar.set)
-        
         self.tree_produtos.grid(row=0, column=0, sticky="nsew")
         scrollbar.grid(row=0, column=1, sticky="ns")
-        
         self.tree_produtos.bind('<<TreeviewSelect>>', self.selecionar_produto_para_edicao)
-
         lista_btn_frame = ttk.Frame(lista_frame)
         lista_btn_frame.grid(row=1, column=0, columnspan=2, pady=(10, 0))
-
         btn_excluir = ttk.Button(lista_btn_frame, text="Excluir Selecionado", command=self.excluir_produto_selecionado)
         btn_excluir.pack(side=tk.LEFT)
-
         self.atualizar_lista_produtos()
 
     def limpar_formulario_produto(self):
@@ -167,6 +159,8 @@ class AppGestaoEstoque:
                 messagebox.showinfo("Sucesso", "Produto criado com sucesso!", parent=self.root)
             self.limpar_formulario_produto()
             self.atualizar_lista_produtos()
+            # NOVO: Atualiza o combobox na outra aba
+            self.popular_combobox_produtos_mestre()
         except Exception as e:
             logger.error(f"Erro ao salvar produto: {e}", exc_info=True)
             messagebox.showerror("Erro de Banco", f"Não foi possível salvar o produto.\nErro: {e}", parent=self.root)
@@ -205,66 +199,50 @@ class AppGestaoEstoque:
             messagebox.showinfo("Sucesso", "Produto excluído com sucesso!", parent=self.root)
             self.limpar_formulario_produto()
             self.atualizar_lista_produtos()
+            # NOVO: Atualiza o combobox na outra aba
+            self.popular_combobox_produtos_mestre()
         except Exception as e:
             logger.error(f"Erro ao excluir produto: {e}", exc_info=True)
             messagebox.showerror("Erro de Banco", "Não foi possível excluir o produto.\nVerifique se ele já está vinculado a notas fiscais ou contagens.", parent=self.root)
 
     # ===================================================================
-    # == ABA 2: CADASTRO DE FORNECEDORES (NOVO) =========================
+    # == ABA 2: CADASTRO DE FORNECEDORES (Sem alterações) ===============
     # ===================================================================
     def criar_aba_fornecedores(self):
         main_frame = ttk.Frame(self.frame_fornecedores)
         main_frame.pack(fill=tk.BOTH, expand=True)
-
-        # --- Frame do Formulário (Esquerda) ---
         form_frame = ttk.LabelFrame(main_frame, text="Cadastrar/Editar Fornecedor", padding="10")
         form_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
-
         ttk.Label(form_frame, text="Nome Fantasia:").grid(row=0, column=0, sticky="w", pady=2)
         self.entry_forn_nome = ttk.Entry(form_frame, width=40)
         self.entry_forn_nome.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 10))
-
         ttk.Label(form_frame, text="CNPJ (apenas números):").grid(row=2, column=0, sticky="w", pady=2)
         self.entry_forn_cnpj = ttk.Entry(form_frame, width=40)
         self.entry_forn_cnpj.grid(row=3, column=0, columnspan=2, sticky="w", pady=(0, 10))
-
         btn_frame = ttk.Frame(form_frame)
         btn_frame.grid(row=4, column=0, columnspan=2, pady=10)
-
         self.btn_forn_salvar = ttk.Button(btn_frame, text="Salvar Novo", command=self.salvar_fornecedor)
         self.btn_forn_salvar.pack(side=tk.LEFT, padx=5)
-
         self.btn_forn_limpar = ttk.Button(btn_frame, text="Limpar", command=self.limpar_formulario_fornecedor)
         self.btn_forn_limpar.pack(side=tk.LEFT, padx=5)
-
-        # --- Frame da Lista (Direita) ---
         lista_frame = ttk.LabelFrame(main_frame, text="Fornecedores Cadastrados", padding="10")
         lista_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
-        
         lista_frame.rowconfigure(0, weight=1)
         lista_frame.columnconfigure(0, weight=1)
-
         cols_forn = ('ID', 'Nome Fantasia', 'CNPJ')
         self.tree_fornecedores = ttk.Treeview(lista_frame, columns=cols_forn, show='headings', selectmode='browse')
-        
         self.tree_fornecedores.heading('ID', text='ID'); self.tree_fornecedores.column('ID', width=40, anchor='center')
         self.tree_fornecedores.heading('Nome Fantasia', text='Nome'); self.tree_fornecedores.column('Nome Fantasia', width=250)
         self.tree_fornecedores.heading('CNPJ', text='CNPJ'); self.tree_fornecedores.column('CNPJ', width=150, anchor='center')
-        
         scrollbar_forn = ttk.Scrollbar(lista_frame, orient="vertical", command=self.tree_fornecedores.yview)
         self.tree_fornecedores.configure(yscrollcommand=scrollbar_forn.set)
-        
         self.tree_fornecedores.grid(row=0, column=0, sticky="nsew")
         scrollbar_forn.grid(row=0, column=1, sticky="ns")
-        
         self.tree_fornecedores.bind('<<TreeviewSelect>>', self.selecionar_fornecedor_para_edicao)
-
         lista_btn_frame_forn = ttk.Frame(lista_frame)
         lista_btn_frame_forn.grid(row=1, column=0, columnspan=2, pady=(10, 0))
-
         btn_excluir_forn = ttk.Button(lista_btn_frame_forn, text="Excluir Selecionado", command=self.excluir_fornecedor_selecionado)
         btn_excluir_forn.pack(side=tk.LEFT)
-
         self.atualizar_lista_fornecedores()
 
     def limpar_formulario_fornecedor(self):
@@ -279,11 +257,9 @@ class AppGestaoEstoque:
     def salvar_fornecedor(self):
         nome = self.entry_forn_nome.get()
         cnpj = self.entry_forn_cnpj.get()
-
         if not nome or not cnpj:
             messagebox.showerror("Erro", "Nome Fantasia e CNPJ são obrigatórios.", parent=self.root)
             return
-        
         try:
             if self.fornecedor_selecionado_id:
                 database.atualizar_fornecedor(self.fornecedor_selecionado_id, cnpj, nome)
@@ -291,10 +267,8 @@ class AppGestaoEstoque:
             else:
                 database.criar_fornecedor(cnpj, nome)
                 messagebox.showinfo("Sucesso", "Fornecedor criado com sucesso!", parent=self.root)
-            
             self.limpar_formulario_fornecedor()
             self.atualizar_lista_fornecedores()
-
         except Exception as e:
             logger.error(f"Erro ao salvar fornecedor: {e}", exc_info=True)
             messagebox.showerror("Erro de Banco", f"Não foi possível salvar o fornecedor.\nVerifique se o CNPJ já não está cadastrado.\nErro: {e}", parent=self.root)
@@ -324,11 +298,9 @@ class AppGestaoEstoque:
         if not self.fornecedor_selecionado_id:
             messagebox.showwarning("Aviso", "Selecione um fornecedor da lista para excluir.", parent=self.root)
             return
-        
         nome_fornecedor = self.entry_forn_nome.get()
         if not messagebox.askyesno("Confirmar Exclusão", f"Tem certeza que deseja excluir o fornecedor:\n\n'{nome_fornecedor}'?", icon='warning', parent=self.root):
             return
-        
         try:
             database.excluir_fornecedor(self.fornecedor_selecionado_id)
             messagebox.showinfo("Sucesso", "Fornecedor excluído com sucesso!", parent=self.root)
@@ -338,6 +310,306 @@ class AppGestaoEstoque:
             logger.error(f"Erro ao excluir fornecedor: {e}", exc_info=True)
             messagebox.showerror("Erro de Banco", "Não foi possível excluir o fornecedor.\nVerifique se ele já está vinculado a notas fiscais.", parent=self.root)
 
+    # ===================================================================
+    # == ABA 3: IMPORTAÇÃO DE XML E VINCULAÇÃO (NOVO) ===================
+    # ===================================================================
+    def criar_aba_importacao_xml(self):
+        main_frame = ttk.Frame(self.frame_importacao)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        main_frame.columnconfigure(0, weight=1)
+        main_frame.rowconfigure(1, weight=1) # Lista de itens
+        main_frame.rowconfigure(3, weight=1) # Lista de vinculação
+
+        # --- Frame 1: Botão de Importação ---
+        frame_botoes = ttk.Frame(main_frame)
+        frame_botoes.grid(row=0, column=0, sticky="ew", pady=5)
+        
+        btn_selecionar_pasta = ttk.Button(frame_botoes, text="1. Selecionar Pasta com XMLs de Compra", command=self.abrir_seletor_pasta_xml)
+        btn_selecionar_pasta.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=10)
+
+        # --- Frame 2: Lista de Itens Não Vinculados (DE/PARA) ---
+        frame_vincular = ttk.LabelFrame(main_frame, text="2. Itens Pendentes de Vinculação (DE/PARA)", padding="10")
+        frame_vincular.grid(row=1, column=0, sticky="nsew", pady=5)
+        frame_vincular.rowconfigure(0, weight=1)
+        frame_vincular.columnconfigure(0, weight=1)
+        
+        cols_vinc = ('Fornecedor', 'Produto no XML', 'Vinculado a')
+        self.tree_vincular = ttk.Treeview(frame_vincular, columns=cols_vinc, show='headings', selectmode='browse')
+        self.tree_vincular.heading('Fornecedor', text='Fornecedor'); self.tree_vincular.column('Fornecedor', width=200)
+        self.tree_vincular.heading('Produto no XML', text='Produto no XML'); self.tree_vincular.column('Produto no XML', width=300)
+        self.tree_vincular.heading('Vinculado a', text='Produto Mestre'); self.tree_vincular.column('Vinculado a', width=200)
+        
+        self.tree_vincular.grid(row=0, column=0, sticky="nsew")
+        
+        # --- Frame 3: Ferramenta de Vinculação ---
+        frame_ferramenta = ttk.Frame(main_frame)
+        frame_ferramenta.grid(row=2, column=0, sticky="ew", pady=10)
+        
+        ttk.Label(frame_ferramenta, text="Vincular item selecionado ao Produto Mestre:").pack(side=tk.LEFT)
+        
+        self.combo_produtos_mestre = ttk.Combobox(frame_ferramenta, state="readonly", width=40)
+        self.combo_produtos_mestre.pack(side=tk.LEFT, padx=10, fill=tk.X, expand=True)
+        
+        btn_vincular = ttk.Button(frame_ferramenta, text="Vincular", command=self.vincular_produto_selecionado)
+        btn_vincular.pack(side=tk.LEFT)
+
+        # --- Frame 4: Lista de Itens Prontos para Salvar ---
+        frame_prontos = ttk.LabelFrame(main_frame, text="3. Itens Prontos para Salvar (Já Vinculados)", padding="10")
+        frame_prontos.grid(row=3, column=0, sticky="nsew", pady=5)
+        frame_prontos.rowconfigure(0, weight=1)
+        frame_prontos.columnconfigure(0, weight=1)
+
+        cols_prontos = ('NF', 'Fornecedor', 'Produto Mestre', 'Qtd', 'Custo Unit.', 'Custo Total')
+        self.tree_prontos = ttk.Treeview(frame_prontos, columns=cols_prontos, show='headings', selectmode='none')
+        for col in cols_prontos: self.tree_prontos.heading(col, text=col)
+        self.tree_prontos.column('NF', width=80, anchor='center')
+        self.tree_prontos.column('Fornecedor', width=150)
+        self.tree_prontos.column('Produto Mestre', width=200)
+        self.tree_prontos.column('Qtd', width=60, anchor='e')
+        self.tree_prontos.column('Custo Unit.', width=80, anchor='e')
+        self.tree_prontos.column('Custo Total', width=80, anchor='e')
+        
+        self.tree_prontos.grid(row=0, column=0, sticky="nsew")
+
+        # --- Frame 5: Botão de Salvar ---
+        btn_salvar_tudo = ttk.Button(main_frame, text="4. Salvar Todas as Notas Processadas no Banco", command=self.salvar_notas_processadas)
+        btn_salvar_tudo.grid(row=4, column=0, sticky="ew", pady=10, ipady=10)
+
+    def popular_combobox_produtos_mestre(self):
+        """Busca os produtos do Catálogo Mestre e preenche o combobox e o mapa."""
+        try:
+            produtos = database.listar_produtos_estoque()
+            self.mapa_produtos_mestre.clear()
+            nomes_produtos = []
+            for p in produtos:
+                nome_display = f"{p.NomeProduto} (ID: {p.ProdutoID})"
+                nomes_produtos.append(nome_display)
+                self.mapa_produtos_mestre[nome_display] = p.ProdutoID
+            
+            self.combo_produtos_mestre['values'] = nomes_produtos
+        except Exception as e:
+            logger.error(f"Erro ao carregar produtos mestre no combobox: {e}", exc_info=True)
+
+    def abrir_seletor_pasta_xml(self):
+        """Abre o seletor de pastas e inicia o processamento dos XMLs."""
+        pasta_selecionada = filedialog.askdirectory(title="Selecione a pasta contendo os XMLs")
+        if not pasta_selecionada:
+            return
+            
+        # Limpa as listas da tela e da memória
+        for i in self.tree_vincular.get_children(): self.tree_vincular.delete(i)
+        for i in self.tree_prontos.get_children(): self.tree_prontos.delete(i)
+        self.itens_xml_nao_vinculados.clear()
+        self.dados_notas_processadas.clear()
+
+        try:
+            self.processar_arquivos_xml(pasta_selecionada)
+            messagebox.showinfo("Processamento Concluído", 
+                                f"Leitura de XMLs concluída.\n\n"
+                                f"- {len(self.itens_xml_nao_vinculados)} itens precisam de vinculação (Passo 2).\n"
+                                f"- {len(self.dados_notas_processadas)} NFs foram processadas com sucesso e estão prontas para salvar (Passo 3).",
+                                parent=self.root)
+        except Exception as e:
+            logger.error(f"Erro GERAL ao processar pasta XML: {e}", exc_info=True)
+            messagebox.showerror("Erro Crítico no Processamento", f"Ocorreu um erro ao ler os arquivos:\n{e}", parent=self.root)
+            
+    def ler_xml_nota_fiscal(self, caminho_arquivo_xml):
+        """Lê um único arquivo XML e extrai os dados do cabeçalho e dos itens."""
+        try:
+            parser = ET.XMLParser(remove_blank_text=True)
+            tree = ET.parse(caminho_arquivo_xml, parser)
+            root = tree.getroot()
+            
+            # Namespace (essencial para XML de NF-e)
+            ns = {'nfe': 'http://www.portalfiscal.inf.br/nfe'}
+            
+            # --- Dados do Cabeçalho ---
+            ide = root.find('.//nfe:ide', ns)
+            emit = root.find('.//nfe:emit', ns)
+            total = root.find('.//nfe:total/nfe:ICMSTot', ns)
+            
+            dados_nf = {
+                'NumeroNF': ide.find('nfe:nNF', ns).text,
+                'DataEmissao': ide.find('nfe:dhEmi', ns).text.split('T')[0], # Pega só AAAA-MM-DD
+                'ValorTotalNF': float(total.find('nfe:vNF', ns).text),
+                'FornecedorCNPJ': emit.find('nfe:CNPJ', ns).text,
+                'FornecedorNome': emit.find('nfe:xNome', ns).text
+            }
+            
+            # --- Dados dos Itens ---
+            itens = []
+            produtos_xml = root.findall('.//nfe:det', ns)
+            for prod in produtos_xml:
+                item_data = prod.find('nfe:prod', ns)
+                itens.append({
+                    'DescricaoXML': item_data.find('nfe:xProd', ns).text,
+                    'Quantidade': float(item_data.find('nfe:qCom', ns).text),
+                    'PrecoCustoUnitario': float(item_data.find('nfe:vUnCom', ns).text)
+                })
+                
+            return dados_nf, itens
+            
+        except Exception as e:
+            logger.error(f"Erro ao ler o arquivo XML '{caminho_arquivo_xml}': {e}", exc_info=True)
+            raise Exception(f"Falha ao ler o arquivo: {os.path.basename(caminho_arquivo_xml)}\n{e}")
+
+    def processar_arquivos_xml(self, pasta_selecionada):
+        """Itera sobre os arquivos XML em uma pasta e os processa."""
+        arquivos_xml = [os.path.join(pasta_selecionada, f) for f in os.listdir(pasta_selecionada) if f.lower().endswith('.xml')]
+        
+        for caminho_xml in arquivos_xml:
+            try:
+                cabecalho_nf, itens_nf = self.ler_xml_nota_fiscal(caminho_xml)
+                
+                # --- Lógica de Fornecedor ---
+                cnpj = cabecalho_nf['FornecedorCNPJ']
+                nome = cabecalho_nf['FornecedorNome']
+                
+                fornecedor_id = database.buscar_fornecedor_por_cnpj(cnpj)
+                if not fornecedor_id:
+                    # Se não existe, cria e atualiza a lista na Aba 2
+                    database.criar_fornecedor(cnpj, nome)
+                    fornecedor_id = database.buscar_fornecedor_por_cnpj(cnpj)
+                    self.atualizar_lista_fornecedores() # Atualiza a GUI
+                
+                # Adiciona o FornecedorID ao cabeçalho para salvar depois
+                cabecalho_nf['FornecedorID'] = fornecedor_id
+                
+                itens_vinculados_para_salvar = []
+                
+                # --- Lógica de Vinculação (DE/PARA) ---
+                for item in itens_nf:
+                    desc_xml = item['DescricaoXML']
+                    vinculo_existente = database.buscar_vinculo_produto_fornecedor(fornecedor_id, desc_xml)
+                    
+                    if vinculo_existente:
+                        # Se já está vinculado, preparamos para salvar
+                        produto_fornecedor_id, produto_mestre_id = vinculo_existente
+                        
+                        item_pronto = item.copy() # Copia os dados do XML (Qtd, Custo)
+                        item_pronto['ProdutoFornecedorID'] = produto_fornecedor_id
+                        
+                        itens_vinculados_para_salvar.append(item_pronto)
+                        
+                        # Adiciona na árvore de "Prontos para Salvar" (GUI)
+                        nome_mestre = [k for k, v in self.mapa_produtos_mestre.items() if v == produto_mestre_id][0]
+                        custo_total = item['Quantidade'] * item['PrecoCustoUnitario']
+                        
+                        self.tree_prontos.insert("", "end", values=(
+                            cabecalho_nf['NumeroNF'], nome, nome_mestre, 
+                            f"{item['Quantidade']:.2f}", f"{item['PrecoCustoUnitario']:.4f}", f"{custo_total:.2f}"
+                        ))
+                    
+                    else:
+                        # Se NÃO está vinculado, adiciona na lista de pendentes
+                        item_pendente = {
+                            'FornecedorID': fornecedor_id,
+                            'FornecedorNome': nome,
+                            'DescricaoXML': desc_xml
+                        }
+                        self.itens_xml_nao_vinculados.append(item_pendente)
+                        self.tree_vincular.insert("", "end", values=(
+                            nome, desc_xml, "--- PENDENTE ---"
+                        ))
+
+                # Se a nota teve itens (mesmo que alguns pendentes), ela é processada
+                if itens_nf:
+                    # Armazena em memória para salvar depois
+                    self.dados_notas_processadas.append({
+                        'cabecalho': cabecalho_nf,
+                        'itens_vinculados': itens_vinculados_para_salvar
+                    })
+                    
+            except Exception as e:
+                logger.warning(f"Falha ao processar o arquivo {caminho_xml}: {e}")
+                # Opcional: mostrar um aviso ao usuário
+                # messagebox.showwarning("Aviso de Arquivo", f"Não foi possível processar o arquivo:\n{os.path.basename(caminho_xml)}\n\n{e}", parent=self.root)
+
+    def vincular_produto_selecionado(self):
+        """Cria o vínculo DE/PARA entre o item do XML e o Produto Mestre."""
+        selecionado_tree = self.tree_vincular.focus()
+        produto_mestre_selecionado = self.combo_produtos_mestre.get()
+        
+        if not selecionado_tree:
+            messagebox.showwarning("Aviso", "Selecione um item pendente na lista 'Itens Pendentes' (Passo 2).", parent=self.root)
+            return
+        
+        if not produto_mestre_selecionado:
+            messagebox.showwarning("Aviso", "Selecione um 'Produto Mestre' no menu dropdown para vincular.", parent=self.root)
+            return
+
+        # Pega o item correspondente da nossa lista em memória
+        item_pendente = self.itens_xml_nao_vinculados[self.tree_vincular.index(selecionado_tree)]
+        
+        produto_mestre_id = self.mapa_produtos_mestre[produto_mestre_selecionado]
+        
+        try:
+            database.criar_vinculo_produto_fornecedor(
+                produto_mestre_id,
+                item_pendente['FornecedorID'],
+                item_pendente['DescricaoXML']
+            )
+            
+            # Atualiza a GUI
+            self.tree_vincular.item(selecionado_tree, values=(
+                item_pendente['FornecedorNome'],
+                item_pendente['DescricaoXML'],
+                produto_mestre_selecionado # Mostra o nome do produto vinculado
+            ))
+            
+            # Remove da lista de pendentes (opcional, ou apenas atualiza a cor)
+            # Por simplicidade, vamos apenas atualizar o texto.
+            
+            messagebox.showinfo("Sucesso", "Vínculo criado! Na próxima importação, este item será automático.", parent=self.root)
+            
+        except Exception as e:
+            logger.error(f"Erro ao criar vínculo: {e}", exc_info=True)
+            messagebox.showerror("Erro de Banco", f"Não foi possível criar o vínculo.\n{e}", parent=self.root)
+
+    def salvar_notas_processadas(self):
+        """Salva todas as notas e itens que já estão vinculados no banco de dados."""
+        if not self.dados_notas_processadas:
+            messagebox.showwarning("Aviso", "Nenhuma nota fiscal foi processada ou não há itens vinculados para salvar.", parent=self.root)
+            return
+            
+        if any(self.itens_xml_nao_vinculados):
+             if not messagebox.askyesno("Aviso", "Você ainda possui itens pendentes de vinculação (na lista do Passo 2).\n\n"
+                                     "Deseja salvar assim mesmo? (Apenas os itens já vinculados serão salvos)", parent=self.root):
+                return
+
+        sucessos = 0
+        falhas = 0
+        
+        for nf in self.dados_notas_processadas:
+            cabecalho = nf['cabecalho']
+            itens_para_salvar = nf['itens_vinculados']
+            
+            if not itens_para_salvar:
+                logger.warning(f"Pulando NF {cabecalho['NumeroNF']} pois não possui itens vinculados prontos para salvar.")
+                continue
+            
+            try:
+                sucesso_db, msg_db = database.salvar_nota_fiscal_completa(cabecalho, itens_para_salvar)
+                if sucesso_db:
+                    sucessos += 1
+                else:
+                    falhas += 1
+                    logger.error(f"Falha ao salvar NF {cabecalho['NumeroNF']} no banco: {msg_db}")
+            except Exception as e:
+                falhas += 1
+                logger.error(f"Erro crítico ao tentar salvar NF {cabecalho['NumeroNF']}: {e}", exc_info=True)
+
+        messagebox.showinfo("Processamento Concluído", 
+                            f"Processo de salvamento finalizado.\n\n"
+                            f"Notas Salvas com Sucesso: {sucessos}\n"
+                            f"Notas que Falharam: {falhas}",
+                            parent=self.root)
+        
+        # Limpa tudo após salvar
+        for i in self.tree_vincular.get_children(): self.tree_vincular.delete(i)
+        for i in self.tree_prontos.get_children(): self.tree_prontos.delete(i)
+        self.itens_xml_nao_vinculados.clear()
+        self.dados_notas_processadas.clear()
 
 # --- Bloco de Execução Principal ---
 if __name__ == "__main__":
