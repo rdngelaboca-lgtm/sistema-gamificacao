@@ -5071,3 +5071,126 @@ def buscar_itens_contagem(contagem_id):
 # ===================================================================
 # == FIM DO MÓDULO DE GESTÃO DE ESTOQUE (CONTAGEM) ==================
 # ===================================================================
+
+# ===================================================================
+# == INÍCIO DO MÓDULO DE GESTÃO DE ESTOQUE (SUGESTÃO DE COMPRA) =====
+# ===================================================================
+
+def _buscar_ultimas_duas_contagens(cursor, produto_id):
+    """Função auxiliar para buscar as duas contagens mais recentes de um produto."""
+    sql = """
+        SELECT TOP 2
+            C.DataContagem, IC.QuantidadeContada
+        FROM ContagensEstoque C
+        JOIN ItensContagemEstoque IC ON C.ContagemID = IC.ContagemID
+        WHERE IC.ProdutoID = ?
+        ORDER BY C.DataContagem DESC
+    """
+    cursor.execute(sql, produto_id)
+    return cursor.fetchall()
+
+def _somar_compras_no_periodo(cursor, produto_id_mestre, data_inicio, data_fim):
+    """Função auxiliar para somar todas as compras de XMLs num período."""
+    sql = """
+        SELECT SUM(INI.Quantidade) as TotalComprado
+        FROM ItensNotaFiscalEntrada INI
+        JOIN NotasFiscaisEntrada NF ON INI.NotaID = NF.NotaID
+        JOIN ProdutosFornecedor PF ON INI.ProdutoFornecedorID = PF.ProdutoFornecedorID
+        WHERE PF.ProdutoID = ?
+          AND NF.DataEmissao BETWEEN ? AND ?
+    """
+    cursor.execute(sql, produto_id_mestre, data_inicio, data_fim)
+    resultado = cursor.fetchone()
+    return resultado.TotalComprado if resultado and resultado.TotalComprado else 0.0
+
+def gerar_relatorio_posicao_estoque():
+    """
+    Função principal que calcula o Perfil de Consumo (UMD) e o Estoque Atual
+    para TODOS os produtos, baseado nas duas últimas contagens.
+    """
+    conn = get_db_connection()
+    if not conn:
+        return []
+
+    relatorio_final = []
+    
+    try:
+        cursor = conn.cursor()
+        
+        # 1. Pega todos os produtos do Catálogo Mestre
+        produtos_mestre = listar_produtos_estoque()
+        
+        for produto in produtos_mestre:
+            # 2. Busca as duas últimas contagens para este produto
+            contagens = _buscar_ultimas_duas_contagens(cursor, produto.ProdutoID)
+            
+            if len(contagens) < 2:
+                # Se não temos 2 contagens, não podemos calcular o UMD
+                relatorio_final.append({
+                    "ProdutoID": produto.ProdutoID,
+                    "NomeProduto": produto.NomeProduto,
+                    "Unidade": produto.UnidadeMedida,
+                    "EstoqueAtual": contagens[0].QuantidadeContada if len(contagens) == 1 else 0.0,
+                    "UsoMedioDiario": 0.0, # Não podemos calcular
+                    "EstoqueMinimo": produto.EstoqueMinimo,
+                    "Status": "Falta 2ª contagem"
+                })
+                continue
+
+            # 3. Temos 2 contagens, vamos organizar
+            # Contagem 2 (Mais recente)
+            contagem_final = contagens[0]
+            data_final = contagem_final.DataContagem
+            estoque_final = contagem_final.QuantidadeContada
+            
+            # Contagem 1 (Penúltima)
+            contagem_inicial = contagens[1]
+            data_inicial = contagem_inicial.DataContagem
+            estoque_inicial = contagem_inicial.QuantidadeContada
+
+            # 4. Calcula o período em dias
+            dias_periodo = (data_final - data_inicial).days
+            if dias_periodo <= 0:
+                # Contagens feitas no mesmo dia, não podemos calcular
+                relatorio_final.append({
+                    "ProdutoID": produto.ProdutoID,
+                    "NomeProduto": produto.NomeProduto,
+                    "Unidade": produto.UnidadeMedida,
+                    "EstoqueAtual": estoque_final,
+                    "UsoMedioDiario": 0.0,
+                    "EstoqueMinimo": produto.EstoqueMinimo,
+                    "Status": "Contagens no mesmo dia"
+                })
+                continue
+                
+            # 5. Soma as compras (XMLs) feitas ENTRE as duas contagens
+            total_comprado = _somar_compras_no_periodo(cursor, produto.ProdutoID, data_inicial, data_final)
+            
+            # 6. Aplica a FÓRMULA que combinamos
+            uso_total_periodo = (estoque_inicial + total_comprado) - estoque_final
+            
+            # 7. Calcula o Uso Médio Diário (UMD)
+            uso_medio_diario = uso_total_periodo / dias_periodo if dias_periodo > 0 else 0.0
+            
+            relatorio_final.append({
+                "ProdutoID": produto.ProdutoID,
+                "NomeProduto": produto.NomeProduto,
+                "Unidade": produto.UnidadeMedida,
+                "EstoqueAtual": estoque_final,
+                "UsoMedioDiario": uso_medio_diario,
+                "EstoqueMinimo": produto.EstoqueMinimo,
+                "Status": "OK"
+            })
+
+        return relatorio_final
+
+    except Exception as e:
+        logger.error(f"ERRO CRÍTICO ao gerar relatório de posição de estoque: {e}", exc_info=True)
+        return []
+    finally:
+        if conn:
+            conn.close()
+
+# ===================================================================
+# == FIM DO MÓDULO DE GESTÃO DE ESTOQUE (SUGESTÃO DE COMPRA) ========
+# ===================================================================
