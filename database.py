@@ -4967,3 +4967,107 @@ def salvar_nota_fiscal_completa(dados_nf_cabecalho, lista_itens_nf):
 # ===================================================================
 # == FIM DO MÓDULO DE GESTÃO DE ESTOQUE (IMPORTAÇÃO XML) ===========
 # ===================================================================
+
+# ===================================================================
+# == INÍCIO DO MÓDULO DE GESTÃO DE ESTOQUE (CONTAGEM) ===============
+# ===================================================================
+
+def salvar_contagem_estoque(data_contagem, funcionario_id, lista_itens_contados):
+    """
+    Salva uma nova contagem de estoque e seus itens de forma transacional.
+    'lista_itens_contados' é uma lista de dicts: [{'ProdutoID', 'QuantidadeContada'}]
+    """
+    conn = get_db_connection()
+    if not conn:
+        return False, "Falha de conexão com o banco."
+
+    try:
+        cursor = conn.cursor()
+        
+        # 1. Inserir o Cabeçalho da Contagem
+        sql_contagem = """
+            INSERT INTO ContagensEstoque (DataContagem, FuncionarioID)
+            VALUES (?, ?);
+            SELECT SCOPE_IDENTITY();
+        """
+        cursor.execute(sql_contagem, data_contagem, funcionario_id)
+        
+        cursor.nextset()
+        nova_contagem_id = cursor.fetchone()[0]
+        
+        if not nova_contagem_id:
+            raise Exception("Falha ao obter o ID da nova Contagem.")
+            
+        # 2. Inserir os Itens da Contagem
+        sql_item = """
+            INSERT INTO ItensContagemEstoque (ContagemID, ProdutoID, QuantidadeContada)
+            VALUES (?, ?, ?)
+        """
+        itens_para_inserir = [
+            (nova_contagem_id, item['ProdutoID'], item['QuantidadeContada'])
+            for item in lista_itens_contados
+        ]
+        
+        cursor.executemany(sql_item, itens_para_inserir)
+        
+        # 3. Commita a transação
+        conn.commit()
+        logger.info(f"Contagem ID {nova_contagem_id} (Data: {data_contagem}) salva com {len(itens_para_inserir)} itens.")
+        return True, f"Contagem de {data_contagem} salva com sucesso."
+
+    except Exception as e:
+        if conn: conn.rollback()
+        logger.error(f"ERRO CRÍTICO ao salvar contagem de estoque: {e}", exc_info=True)
+        return False, f"Erro ao salvar contagem: {e}"
+    finally:
+        if conn:
+            conn.close()
+
+def listar_contagens_cabecalho():
+    """Lista os cabeçalhos das contagens de estoque já realizadas."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT C.ContagemID, C.DataContagem, F.NomeCompleto
+                FROM ContagensEstoque C
+                JOIN Funcionarios F ON C.FuncionarioID = F.FuncionarioID
+                ORDER BY C.DataContagem DESC
+            """
+            cursor.execute(sql)
+            return cursor.fetchall()
+        except Exception as e:
+            logger.error(f"ERRO ao listar cabeçalhos de contagem: {e}", exc_info=True)
+            return []
+        finally:
+            if conn:
+                conn.close()
+    return []
+
+def buscar_itens_contagem(contagem_id):
+    """Busca os itens de uma contagem específica."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT P.NomeProduto, IC.QuantidadeContada, P.UnidadeMedida
+                FROM ItensContagemEstoque IC
+                JOIN ProdutosEstoque P ON IC.ProdutoID = P.ProdutoID
+                WHERE IC.ContagemID = ?
+                ORDER BY P.NomeProduto
+            """
+            cursor.execute(sql, contagem_id)
+            return cursor.fetchall()
+        except Exception as e:
+            logger.error(f"ERRO ao buscar itens da contagem ID {contagem_id}: {e}", exc_info=True)
+            return []
+        finally:
+            if conn:
+                conn.close()
+    return []
+
+# ===================================================================
+# == FIM DO MÓDULO DE GESTÃO DE ESTOQUE (CONTAGEM) ==================
+# ===================================================================
