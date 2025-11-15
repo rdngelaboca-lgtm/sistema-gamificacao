@@ -4690,24 +4690,31 @@ def verificar_e_aceitar_tarefa_de_folga(tarefa_id, funcionario_id):
 # ===================================================================
 
 def criar_produto_estoque(nome, unidade, estoque_min):
-    """Insere um novo produto mestre na tabela ProdutosEstoque."""
+    """Insere um novo produto mestre na tabela ProdutosEstoque.
+    RETORNA O ID do novo produto criado."""
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
             sql = """
                 INSERT INTO ProdutosEstoque (NomeProduto, UnidadeMedida, EstoqueMinimo)
-                VALUES (?, ?, ?)
+                VALUES (?, ?, ?);
+                SELECT SCOPE_IDENTITY();
             """
             cursor.execute(sql, nome, unidade, estoque_min)
+            cursor.nextset()
+            novo_id = cursor.fetchone()[0]
             conn.commit()
-            logger.info(f"Novo produto mestre criado: {nome}")
+            logger.info(f"Novo produto mestre criado (ID: {novo_id}): {nome}")
+            return novo_id # <-- MUDANÇA IMPORTANTE
         except Exception as e:
             logger.error(f"ERRO ao criar produto mestre: {e}", exc_info=True)
+            if conn: conn.rollback()
             raise e # Lança o erro para que a interface (Tkinter) possa capturá-lo
         finally:
             if conn:
                 conn.close()
+    return None # Retorna None se a conexão falhar
 
 def listar_produtos_estoque():
     """Lista todos os produtos do catálogo mestre (ProdutosEstoque)."""
@@ -5190,7 +5197,7 @@ def gerar_relatorio_posicao_estoque():
     finally:
         if conn:
             conn.close()
-            
+
 # ===================================================================
 # == FIM DO MÓDULO DE GESTÃO DE ESTOQUE (SUGESTÃO DE COMPRA) ========
 # ===================================================================
