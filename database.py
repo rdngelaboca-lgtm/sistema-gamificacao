@@ -4683,3 +4683,86 @@ def verificar_e_aceitar_tarefa_de_folga(tarefa_id, funcionario_id):
             if conn:
                 conn.close()
     return None # Retorna None (Erro de conexão)
+
+# ===================================================================
+# == INÍCIO DO MÓDULO DE GESTÃO DE ESTOQUE (CATÁLOGO MESTRE) =========
+# ===================================================================
+
+def criar_produto_estoque(nome, unidade, estoque_min):
+    """Insere um novo produto mestre na tabela ProdutosEstoque."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                INSERT INTO ProdutosEstoque (NomeProduto, UnidadeMedida, EstoqueMinimo)
+                VALUES (?, ?, ?)
+            """
+            cursor.execute(sql, nome, unidade, estoque_min)
+            conn.commit()
+            logger.info(f"Novo produto mestre criado: {nome}")
+        except Exception as e:
+            logger.error(f"ERRO ao criar produto mestre: {e}", exc_info=True)
+            raise e # Lança o erro para que a interface (Tkinter) possa capturá-lo
+        finally:
+            if conn:
+                conn.close()
+
+def listar_produtos_estoque():
+    """Lista todos os produtos do catálogo mestre (ProdutosEstoque)."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT * FROM ProdutosEstoque ORDER BY NomeProduto"
+            cursor.execute(sql)
+            return cursor.fetchall()
+        except Exception as e:
+            logger.error(f"ERRO ao listar produtos mestre: {e}", exc_info=True)
+            return []
+        finally:
+            if conn:
+                conn.close()
+    return []
+
+def atualizar_produto_estoque(produto_id, nome, unidade, estoque_min):
+    """Atualiza um produto mestre existente na tabela ProdutosEstoque."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                UPDATE ProdutosEstoque
+                SET NomeProduto = ?, UnidadeMedida = ?, EstoqueMinimo = ?
+                WHERE ProdutoID = ?
+            """
+            cursor.execute(sql, nome, unidade, estoque_min, produto_id)
+            conn.commit()
+            logger.info(f"Produto mestre ID {produto_id} ({nome}) atualizado.")
+        except Exception as e:
+            logger.error(f"ERRO ao atualizar produto mestre ID {produto_id}: {e}", exc_info=True)
+            raise e # Lança o erro para a interface
+        finally:
+            if conn:
+                conn.close()
+
+def excluir_produto_estoque(produto_id):
+    """Exclui um produto mestre da tabela ProdutosEstoque."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "DELETE FROM ProdutosEstoque WHERE ProdutoID = ?"
+            cursor.execute(sql, produto_id)
+            conn.commit()
+            logger.info(f"Produto mestre ID {produto_id} excluído.")
+        except Exception as e:
+            logger.error(f"ERRO ao excluir produto mestre ID {produto_id}: {e}", exc_info=True)
+            raise e # Lança o erro (provavelmente por restrição de chave estrangeira)
+        finally:
+            if conn:
+                conn.close()
+
+# ===================================================================
+# == FIM DO MÓDULO DE GESTÃO DE ESTOQUE (CATÁLOGO MESTRE) ===========
+# ===================================================================
