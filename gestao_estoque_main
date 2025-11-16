@@ -82,7 +82,7 @@ class AppGestaoEstoque:
 
         self.criar_aba_catalogo_produtos()
         self.criar_aba_fornecedores()
-        self.criar_aba_importacao_xml() # ATUALIZADA
+        self.criar_aba_importacao_xml() 
         self.criar_aba_contagem_estoque()
         self.criar_aba_sugestao_compra() 
         
@@ -160,7 +160,7 @@ class AppGestaoEstoque:
                 database.atualizar_produto_estoque(self.produto_selecionado_id, nome, unidade, estoque_min)
                 messagebox.showinfo("Sucesso", "Produto atualizado com sucesso!", parent=self.root)
             else:
-                novo_id = database.criar_produto_estoque(nome, unidade, estoque_min) # Captura o novo ID
+                novo_id = database.criar_produto_estoque(nome, unidade, estoque_min) 
                 if not novo_id: raise Exception("Falha ao criar produto, não retornou ID.")
                 messagebox.showinfo("Sucesso", "Produto criado com sucesso!", parent=self.root)
             self.limpar_formulario_produto()
@@ -317,14 +317,14 @@ class AppGestaoEstoque:
             messagebox.showerror("Erro de Banco", "Não foi possível excluir o fornecedor.\nVerifique se ele já está vinculado a notas fiscais.", parent=self.root)
 
     # ===================================================================
-    # == ABA 3: IMPORTAÇÃO XML (ATUALIZADA) =============================
+    # == ABA 3: IMPORTAÇÃO XML (Sem alterações) =========================
     # ===================================================================
     def criar_aba_importacao_xml(self):
         main_frame = ttk.Frame(self.frame_importacao)
         main_frame.pack(fill=tk.BOTH, expand=True)
         main_frame.columnconfigure(0, weight=1)
-        main_frame.rowconfigure(1, weight=1) # Lista de itens
-        main_frame.rowconfigure(3, weight=1) # Lista de vinculação
+        main_frame.rowconfigure(1, weight=1) 
+        main_frame.rowconfigure(3, weight=1) 
 
         # --- Frame 1: Botão de Importação ---
         frame_botoes = ttk.Frame(main_frame)
@@ -339,7 +339,6 @@ class AppGestaoEstoque:
         frame_vincular.rowconfigure(0, weight=1)
         frame_vincular.columnconfigure(0, weight=1)
         
-        # --- COLUNAS ATUALIZADAS ---
         cols_vinc = ('Fornecedor', 'Produto no XML', 'Cod. Forn.', 'EAN', 'NCM')
         self.tree_vincular = ttk.Treeview(frame_vincular, columns=cols_vinc, show='headings', selectmode='browse')
         self.tree_vincular.heading('Fornecedor', text='Fornecedor'); self.tree_vincular.column('Fornecedor', width=150)
@@ -350,7 +349,7 @@ class AppGestaoEstoque:
         
         self.tree_vincular.grid(row=0, column=0, sticky="nsew")
 
-        # --- Frame 3: Ferramenta de Vinculação (Botão Adicionado) ---
+        # --- Frame 3: Ferramenta de Vinculação ---
         frame_ferramenta = ttk.Frame(main_frame)
         frame_ferramenta.grid(row=2, column=0, sticky="ew", pady=10)
         
@@ -362,7 +361,6 @@ class AppGestaoEstoque:
         btn_vincular = ttk.Button(frame_ferramenta, text="Vincular", command=self.vincular_produto_selecionado)
         btn_vincular.pack(side=tk.LEFT, padx=5)
         
-        # --- BOTÃO ATUALIZADO ---
         btn_criar_vincular = ttk.Button(frame_ferramenta, text="Criar Mestre e Vincular", command=self.criar_mestre_e_vincular)
         btn_criar_vincular.pack(side=tk.LEFT, padx=5)
 
@@ -425,7 +423,7 @@ class AppGestaoEstoque:
             logger.error(f"Erro GERAL ao processar pasta XML: {e}", exc_info=True)
             messagebox.showerror("Erro Crítico no Processamento", f"Ocorreu um erro ao ler os arquivos:\n{e}", parent=self.root)
 
-    # --- FUNÇÃO ATUALIZADA ---
+    # --- FUNÇÃO ATUALIZADA (v2) ---
     def ler_xml_nota_fiscal(self, caminho_arquivo_xml):
         """Lê um único arquivo XML e extrai os dados do cabeçalho e dos itens."""
         try:
@@ -435,37 +433,37 @@ class AppGestaoEstoque:
             
             # Namespace (essencial para XML de NF-e)
             ns = {'nfe': 'http://www.portalfiscal.inf.br/nfe'}
-            
-            # Função auxiliar para buscar texto com segurança
-            def find_text(node, path, default=''):
-                found = node.find(path, ns)
-                return found.text if found is not None else default
 
-            # --- Dados do Cabeçalho ---
+            # --- Dados do Cabeçalho (Usando findtext) ---
             ide = root.find('.//nfe:ide', ns)
             emit = root.find('.//nfe:emit', ns)
             total = root.find('.//nfe:total/nfe:ICMSTot', ns)
             
+            if ide is None or emit is None or total is None:
+                raise Exception("Estrutura do XML inválida (tags <ide>, <emit> or <total> não encontradas).")
+
             dados_nf = {
-                'NumeroNF': find_text(ide, 'nfe:nNF'),
-                'DataEmissao': find_text(ide, 'nfe:dhEmi').split('T')[0],
-                'ValorTotalNF': float(find_text(total, 'nfe:vNF', '0.0')),
-                'FornecedorCNPJ': find_text(emit, 'nfe:CNPJ'),
-                'FornecedorNome': find_text(emit, 'nfe:xNome')
+                'NumeroNF': ide.findtext('nfe:nNF', default='', namespaces=ns),
+                'DataEmissao': ide.findtext('nfe:dhEmi', default='T', namespaces=ns).split('T')[0],
+                'ValorTotalNF': float(total.findtext('nfe:vNF', default='0.0', namespaces=ns)),
+                'FornecedorCNPJ': emit.findtext('nfe:CNPJ', default='', namespaces=ns),
+                'FornecedorNome': emit.findtext('nfe:xNome', default='', namespaces=ns)
             }
             
-            # --- Dados dos Itens ---
+            # --- Dados dos Itens (Usando findtext) ---
             itens = []
             produtos_xml = root.findall('.//nfe:det', ns)
             for prod in produtos_xml:
                 item_data = prod.find('nfe:prod', ns)
+                if item_data is None: continue # Pula se não houver tag <prod>
+
                 itens.append({
-                    'cProd': find_text(item_data, 'nfe:cProd'),
-                    'cEAN': find_text(item_data, 'nfe:cEAN'),
-                    'DescricaoXML': find_text(item_data, 'nfe:xProd'),
-                    'NCM': find_text(item_data, 'nfe:NCM'),
-                    'Quantidade': float(find_text(item_data, 'nfe:qCom', '0.0')),
-                    'PrecoCustoUnitario': float(find_text(item_data, 'nfe:vUnCom', '0.0'))
+                    'cProd': item_data.findtext('nfe:cProd', default='', namespaces=ns),
+                    'cEAN': item_data.findtext('nfe:cEAN', default='', namespaces=ns),
+                    'DescricaoXML': item_data.findtext('nfe:xProd', default='', namespaces=ns),
+                    'NCM': item_data.findtext('nfe:NCM', default='', namespaces=ns),
+                    'Quantidade': float(item_data.findtext('nfe:qCom', default='0.0', namespaces=ns)),
+                    'PrecoCustoUnitario': float(item_data.findtext('nfe:vUnCom', default='0.0', namespaces=ns))
                 })
                 
             return dados_nf, itens
@@ -474,7 +472,6 @@ class AppGestaoEstoque:
             logger.error(f"Erro ao ler o arquivo XML '{caminho_arquivo_xml}': {e}", exc_info=True)
             raise Exception(f"Falha ao ler o arquivo: {os.path.basename(caminho_arquivo_xml)}\n{e}")
 
-    # --- FUNÇÃO ATUALIZADA ---
     def processar_arquivos_xml(self, pasta_selecionada):
         extensoes_permitidas = ('.xml', '.txt')
         arquivos_xml = [os.path.join(pasta_selecionada, f) for f in os.listdir(pasta_selecionada) if f.lower().endswith(extensoes_permitidas)]
@@ -518,7 +515,6 @@ class AppGestaoEstoque:
                             f"{item['Quantidade']:.2f}", f"{item['PrecoCustoUnitario']:.4f}", f"{custo_total:.2f}"
                         ))
                     else:
-                        # Guarda TODOS os dados lidos do XML
                         item_pendente = {
                             'FornecedorID': fornecedor_id,
                             'FornecedorNome': nome_fornecedor,
@@ -529,7 +525,6 @@ class AppGestaoEstoque:
                         }
                         if not any(p['DescricaoXML'] == desc_xml and p['FornecedorID'] == fornecedor_id for p in self.itens_xml_nao_vinculados):
                             self.itens_xml_nao_vinculados.append(item_pendente)
-                            # Atualiza a árvore com os novos dados
                             self.tree_vincular.insert("", "end", values=(
                                 nome_fornecedor, desc_xml, item['cProd'], item['cEAN'], item['NCM']
                             ))
@@ -538,7 +533,6 @@ class AppGestaoEstoque:
         
         self.dados_notas_processadas = list(notas_processadas_nesta_sessao.values())
 
-    # --- FUNÇÃO ATUALIZADA ---
     def vincular_produto_selecionado(self):
         selecionado_tree = self.tree_vincular.focus()
         produto_mestre_selecionado = self.combo_produtos_mestre.get()
@@ -554,7 +548,6 @@ class AppGestaoEstoque:
         produto_mestre_id = self.mapa_produtos_mestre[produto_mestre_selecionado]
         
         try:
-            # Passa os novos dados para a função do banco
             database.criar_vinculo_produto_fornecedor(
                 produto_id_mestre=produto_mestre_id,
                 fornecedor_id=item_pendente['FornecedorID'],
@@ -610,7 +603,6 @@ class AppGestaoEstoque:
         self.itens_xml_nao_vinculados.clear()
         self.dados_notas_processadas.clear()
 
-    # --- FUNÇÃO ATUALIZADA ---
     def criar_mestre_e_vincular(self):
         selecionado_tree = self.tree_vincular.focus()
         if not selecionado_tree:
@@ -891,11 +883,10 @@ class AppGestaoEstoque:
                     estoque_ideal = (umd * dias_cobertura) + minimo
                     sugestao_compra = estoque_ideal - atual
                     if sugestao_compra < 0:
-                        sugestao_compra = Decimal('0.0') # Usa Decimal
+                        sugestao_compra = Decimal('0.0')
                 else:
-                    sugestao_compra = Decimal('0.0') # Usa Decimal
+                    sugestao_compra = Decimal('0.0')
                     
-                # Formatação para exibição
                 atual_f = f"{atual:.3f}"
                 umd_f = f"{umd:.3f}"
                 sugestao_f = f"{sugestao_compra:.3f}"
