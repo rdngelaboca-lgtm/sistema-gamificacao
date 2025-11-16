@@ -604,61 +604,78 @@ class AppGestaoEstoque:
         self.dados_notas_processadas.clear()
 
     def criar_mestre_e_vincular(self):
-        selecionado_tree = self.tree_vincular.focus()
-        if not selecionado_tree:
-            messagebox.showwarning("Aviso", "Selecione um item pendente na lista 'Itens Pendentes' (Passo 2).", parent=self.root)
-            return
+            """
+            Pega o item pendente selecionado.
+            VERIFICA se o produto mestre já existe. Se sim, apenas vincula.
+            Se não, pergunta ao usuário se quer criar o mestre e então vincula.
+            """
+            selecionado_tree = self.tree_vincular.focus()
+            if not selecionado_tree:
+                messagebox.showwarning("Aviso", "Selecione um item pendente na lista 'Itens Pendentes' (Passo 2).", parent=self.root)
+                return
 
-        indice_item = self.tree_vincular.index(selecionado_tree)
-        item_pendente = self.itens_xml_nao_vinculados[indice_item]
-        
-        nome_novo_produto = item_pendente['DescricaoXML']
-        
-        if not messagebox.askyesno("Confirmar Auto-Criação",
-                                  f"Deseja criar um novo Produto Mestre com o nome:\n\n"
-                                  f"'{nome_novo_produto}'\n\n"
-                                  f"(Unidade: 'UN', Est. Mínimo: 0.0) e vinculá-lo?",
-                                  parent=self.root):
-            return
+            indice_item = self.tree_vincular.index(selecionado_tree)
+            item_pendente = self.itens_xml_nao_vinculados[indice_item]
             
-        try:
-            # 1. Cria o Produto Mestre
-            novo_produto_id = database.criar_produto_estoque(
-                nome=nome_novo_produto,
-                unidade="UN", 
-                estoque_min=0.0
-            )
+            nome_produto_xml = item_pendente['DescricaoXML']
+            fornecedor_id = item_pendente['FornecedorID']
             
-            if not novo_produto_id:
-                raise Exception("Falha ao criar o produto mestre, não retornou ID.")
+            try:
+                # 1. VERIFICA SE O PRODUTO MESTRE JÁ EXISTE
+                produto_id_mestre = database.buscar_produto_mestre_por_nome(nome_produto_xml)
+                
+                produto_foi_criado = False # Flag para sabermos se precisamos atualizar as listas
 
-            # 2. Cria o Vínculo (DE/PARA) com os novos dados
-            database.criar_vinculo_produto_fornecedor(
-                produto_id_mestre=novo_produto_id,
-                fornecedor_id=item_pendente['FornecedorID'],
-                descricao_xml=item_pendente['DescricaoXML'],
-                cProd=item_pendente['cProd'],
-                cEAN=item_pendente['cEAN'],
-                NCM=item_pendente['NCM']
-            )
-            
-            # 3. Limpa da interface
-            self.itens_xml_nao_vinculados.pop(indice_item)
-            self.tree_vincular.delete(selecionado_tree)
-            
-            # 4. Atualiza todas as listas
-            self.atualizar_lista_produtos()
-            self.popular_combobox_produtos_mestre()
-            
-            messagebox.showinfo("Sucesso", 
-                                f"Produto '{nome_novo_produto}' criado e vinculado!\n\n"
-                                "Por favor, re-importe a pasta de XMLs para que este item apareça na lista 'Prontos para Salvar'.",
-                                parent=self.root)
+                # 2. SE NÃO EXISTE, CRIA
+                if not produto_id_mestre:
+                    if not messagebox.askyesno("Confirmar Auto-Criação",
+                                            f"O produto mestre '{nome_produto_xml}' não existe no Catálogo (Aba 1).\n\n"
+                                            f"Deseja criá-lo automaticamente agora?\n"
+                                            f"(Unidade: 'UN', Est. Mínimo: 0.0)",
+                                            parent=self.root):
+                        return # Usuário cancelou
+                    
+                    # Cria o Produto Mestre
+                    produto_id_mestre = database.criar_produto_estoque(
+                        nome=nome_produto_xml,
+                        unidade="UN", 
+                        estoque_min=0.0
+                    )
+                    
+                    if not produto_id_mestre:
+                        raise Exception("Falha ao criar o produto mestre, não retornou ID.")
+                    
+                    produto_foi_criado = True # Marca que precisamos atualizar a GUI
+                
+                # 3. (Agora temos um produto_id_mestre, seja novo ou existente)
+                # Cria o Vínculo (DE/PARA)
+                database.criar_vinculo_produto_fornecedor(
+                    produto_id_mestre=produto_id_mestre,
+                    fornecedor_id=item_pendente['FornecedorID'],
+                    descricao_xml=item_pendente['DescricaoXML'],
+                    cProd=item_pendente['cProd'],
+                    cEAN=item_pendente['cEAN'],
+                    NCM=item_pendente['NCM']
+                )
+                
+                # 4. Limpa da interface
+                self.itens_xml_nao_vinculados.pop(indice_item)
+                self.tree_vincular.delete(selecionado_tree)
+                
+                # 5. Atualiza as listas (Aba 1 e combos) APENAS se um novo produto foi criado
+                if produto_foi_criado:
+                    self.atualizar_lista_produtos()
+                    self.popular_combobox_produtos_mestre()
+                
+                messagebox.showinfo("Sucesso", 
+                                    f"Produto vinculado com sucesso!\n\n"
+                                    "Por favor, re-importe a pasta de XMLs para que este item apareça na lista 'Prontos para Salvar'.",
+                                    parent=self.root)
 
-        except Exception as e:
-            logger.error(f"Erro ao auto-criar e vincular: {e}", exc_info=True)
-            messagebox.showerror("Erro Crítico", f"Não foi possível criar e vincular o produto.\nVerifique se o nome já existe no Catálogo Mestre.\n\nErro: {e}", parent=self.root)
-
+            except Exception as e:
+                logger.error(f"Erro ao auto-criar e vincular: {e}", exc_info=True)
+                # A mensagem de erro agora inclui a causa mais provável
+                messagebox.showerror("Erro Crítico", f"Não foi possível criar e vincular o produto.\nVerifique se o nome já existe no Catálogo Mestre com alguma variação.\n\nErro: {e}", parent=self.root)
     # ===================================================================
     # == ABA 4: LANÇAR CONTAGEM FÍSICA (Sem alterações) =================
     # ===================================================================
