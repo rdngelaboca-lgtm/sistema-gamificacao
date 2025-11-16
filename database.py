@@ -5082,12 +5082,13 @@ def buscar_itens_contagem(contagem_id):
 
 # ===================================================================
 # == INÍCIO DO MÓDULO DE GESTÃO DE ESTOQUE (SUGESTÃO DE COMPRA) =====
+# == (VERSÃO 2 - LÓGICA DE PERFIL DE CONSUMO TOTAL) =================
 # ===================================================================
 
-def _buscar_ultimas_duas_contagens(cursor, produto_id):
-    """Função auxiliar para buscar as duas contagens mais recentes de um produto."""
+def _buscar_ultima_contagem(cursor, produto_id):
+    """Função auxiliar para buscar a contagem mais recente de um produto."""
     sql = """
-        SELECT TOP 2
+        SELECT TOP 1
             C.DataContagem, IC.QuantidadeContada
         FROM ContagensEstoque C
         JOIN ItensContagemEstoque IC ON C.ContagemID = IC.ContagemID
@@ -5095,27 +5096,43 @@ def _buscar_ultimas_duas_contagens(cursor, produto_id):
         ORDER BY C.DataContagem DESC
     """
     cursor.execute(sql, produto_id)
-    return cursor.fetchall()
+    return cursor.fetchone()
 
-def _somar_compras_no_periodo(cursor, produto_id_mestre, data_inicio, data_fim):
-    """Função auxiliar para somar todas as compras de XMLs num período."""
+def _buscar_primeira_compra(cursor, produto_id_mestre):
+    """Função auxiliar para buscar a data da primeira compra de um produto."""
+    sql = """
+        SELECT TOP 1
+            NF.DataEmissao
+        FROM ItensNotaFiscalEntrada INI
+        JOIN NotasFiscaisEntrada NF ON INI.NotaID = NF.NotaID
+        JOIN ProdutosFornecedor PF ON INI.ProdutoFornecedorID = PF.ProdutoFornecedorID
+        WHERE PF.ProdutoID = ?
+        ORDER BY NF.DataEmissao ASC
+    """
+    cursor.execute(sql, produto_id_mestre)
+    resultado = cursor.fetchone()
+    return resultado.DataEmissao if resultado else None
+
+def _somar_todas_compras_ate_data(cursor, produto_id_mestre, data_limite):
+    """Função auxiliar para somar TODAS as compras (XMLs) até uma data limite."""
     sql = """
         SELECT SUM(INI.Quantidade) as TotalComprado
         FROM ItensNotaFiscalEntrada INI
         JOIN NotasFiscaisEntrada NF ON INI.NotaID = NF.NotaID
         JOIN ProdutosFornecedor PF ON INI.ProdutoFornecedorID = PF.ProdutoFornecedorID
         WHERE PF.ProdutoID = ?
-          AND NF.DataEmissao BETWEEN ? AND ?
+          AND NF.DataEmissao <= ?
     """
-    cursor.execute(sql, produto_id_mestre, data_inicio, data_fim)
+    cursor.execute(sql, produto_id_mestre, data_limite)
     resultado = cursor.fetchone()
+    # CORREÇÃO: Garante que o retorno seja Decimal
     return resultado.TotalComprado if resultado and resultado.TotalComprado else Decimal('0.0')
+
 
 def gerar_relatorio_posicao_estoque():
     """
     Função principal que calcula o Perfil de Consumo (UMD) e o Estoque Atual
-    para TODOS os produtos, baseado nas duas últimas contagens.
-    (VERSÃO CORRIGIDA COM TIPAGEM DECIMAL)
+    para TODOS os produtos, baseado na sua lógica de (Total Comprado - Estoque Atual).
     """
     conn = get_db_connection()
     if not conn:
@@ -5130,60 +5147,75 @@ def gerar_relatorio_posicao_estoque():
         produtos_mestre = listar_produtos_estoque()
         
         for produto in produtos_mestre:
-            # 2. Busca as duas últimas contagens para este produto
-            contagens = _buscar_ultimas_duas_contagens(cursor, produto.ProdutoID)
+            # 2. Busca a ÚLTIMA contagem (Estoque Atual)
+            ultima_contagem = _buscar_ultima_contagem(cursor, produto.ProdutoID)
             
-            if len(contagens) < 2:
-                # Se não temos 2 contagens, não podemos calcular o UMD
+            if not ultima_contagem:
+                # Se NUNCA foi contado, não podemos calcular nada
                 relatorio_final.append({
                     "ProdutoID": produto.ProdutoID,
                     "NomeProduto": produto.NomeProduto,
                     "Unidade": produto.UnidadeMedida,
-                    # CORREÇÃO: Converte para Decimal ou usa Decimal('0.0')
-                    "EstoqueAtual": contagens[0].QuantidadeContada if len(contagens) == 1 else Decimal('0.0'),
-                    "UsoMedioDiario": Decimal('0.0'), # CORREÇÃO: Usa Decimal
+                    "EstoqueAtual": Decimal('0.0'),
+                    "UsoMedioDiario": Decimal('0.0'),
                     "EstoqueMinimo": produto.EstoqueMinimo,
-                    "Status": "Falta 2ª contagem"
+                    "Status": "Produto nunca contado"
                 })
                 continue
 
-            # 3. Temos 2 contagens, vamos organizar (os valores aqui JÁ SÃO Decimal)
-            contagem_final = contagens[0]
-            data_final = contagem_final.DataContagem
-            estoque_final = contagem_final.QuantidadeContada # É Decimal
+            data_contagem_final = ultima_contagem.DataContagem
+            estoque_atual = ultima_contagem.QuantidadeContada # É Decimal
             
-            contagem_inicial = contagens[1]
-            data_inicial = contagem_inicial.DataContagem
-            estoque_inicial = contagem_inicial.QuantidadeContada # É Decimal
+            # 3. Busca a PRIMEIRA compra (Início do Período)
+            data_primeira_compra = _buscar_primeira_compra(cursor, produto.ProdutoID)
 
-            # 4. Calcula o período em dias
-            dias_periodo = (data_final - data_inicial).days
-            if dias_periodo <= 0:
+            if not data_primeira_compra:
+                # Se foi contado mas NUNCA foi comprado (ex: cadastro inicial), não podemos calcular
                 relatorio_final.append({
                     "ProdutoID": produto.ProdutoID,
                     "NomeProduto": produto.NomeProduto,
                     "Unidade": produto.UnidadeMedida,
-                    "EstoqueAtual": estoque_final, # É Decimal
-                    "UsoMedioDiario": Decimal('0.0'), # CORREÇÃO: Usa Decimal
+                    "EstoqueAtual": estoque_atual,
+                    "UsoMedioDiario": Decimal('0.0'),
                     "EstoqueMinimo": produto.EstoqueMinimo,
-                    "Status": "Contagens no mesmo dia"
+                    "Status": "Produto sem compras (XML)"
                 })
                 continue
                 
-            # 5. Soma as compras (XMLs) feitas ENTRE as duas contagens
-            total_comprado = _somar_compras_no_periodo(cursor, produto.ProdutoID, data_inicial, data_final) # Agora retorna Decimal
+            # 4. Calcula o período em dias
+            dias_periodo = (data_contagem_final - data_primeira_compra).days
+            if dias_periodo <= 0:
+                # Se a contagem foi antes da primeira compra, não podemos calcular
+                relatorio_final.append({
+                    "ProdutoID": produto.ProdutoID,
+                    "NomeProduto": produto.NomeProduto,
+                    "Unidade": produto.UnidadeMedida,
+                    "EstoqueAtual": estoque_atual,
+                    "UsoMedioDiario": Decimal('0.0'),
+                    "EstoqueMinimo": produto.EstoqueMinimo,
+                    "Status": "Contagem anterior à 1ª compra"
+                })
+                continue
+                
+            # 5. Soma TODAS as compras (XMLs) feitas até a data da contagem
+            total_comprado = _somar_todas_compras_ate_data(cursor, produto.ProdutoID, data_contagem_final)
             
-            # 6. Aplica a FÓRMULA (Agora é Decimal + Decimal - Decimal, o que funciona)
-            uso_total_periodo = (estoque_inicial + total_comprado) - estoque_final
+            # 6. Aplica a SUA FÓRMULA
+            # (Assumindo Estoque Inicial = 0 na primeira compra)
+            uso_total_periodo = total_comprado - estoque_atual
             
-            # 7. Calcula o Uso Médio Diário (UMD) (Decimal / int = Decimal)
+            # 7. Calcula o Uso Médio Diário (UMD)
             uso_medio_diario = uso_total_periodo / dias_periodo if dias_periodo > 0 else Decimal('0.0')
+            
+            # Garante que UMD não seja negativo (caso o estoque contado seja maior que as compras)
+            if uso_medio_diario < 0:
+                uso_medio_diario = Decimal('0.0')
             
             relatorio_final.append({
                 "ProdutoID": produto.ProdutoID,
                 "NomeProduto": produto.NomeProduto,
                 "Unidade": produto.UnidadeMedida,
-                "EstoqueAtual": estoque_final,
+                "EstoqueAtual": estoque_atual,
                 "UsoMedioDiario": uso_medio_diario,
                 "EstoqueMinimo": produto.EstoqueMinimo,
                 "Status": "OK"
@@ -5192,7 +5224,7 @@ def gerar_relatorio_posicao_estoque():
         return relatorio_final
 
     except Exception as e:
-        logger.error(f"ERRO CRÍTICO ao gerar relatório de posição de estoque: {e}", exc_info=True)
+        logger.error(f"ERRO CRÍTICO ao gerar relatório de posição de estoque (V2): {e}", exc_info=True)
         return []
     finally:
         if conn:
