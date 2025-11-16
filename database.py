@@ -5235,3 +5235,21 @@ def gerar_relatorio_posicao_estoque():
 # ===================================================================
 # == FIM DO MÓDULO DE GESTÃO DE ESTOQUE (SUGESTÃO DE COMPRA) ========
 # ===================================================================
+
+def buscar_produto_mestre_por_nome(nome_produto):
+    """Busca um produto mestre pelo seu nome exato e retorna o ID."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT ProdutoID FROM ProdutosEstoque WHERE NomeProduto = ?"
+            cursor.execute(sql, nome_produto)
+            resultado = cursor.fetchone()
+            return resultado[0] if resultado else None # Retorna o ID ou None
+        except Exception as e:
+            logger.error(f"ERRO ao buscar produto mestre por nome ({nome_produto}): {e}", exc_info=True)
+            return None
+        finally:
+            if conn:
+                conn.close()
+    return None
