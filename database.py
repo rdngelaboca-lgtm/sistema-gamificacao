@@ -4889,18 +4889,20 @@ def buscar_vinculo_produto_fornecedor(fornecedor_id, descricao_xml):
                 conn.close()
     return None
 
-def criar_vinculo_produto_fornecedor(produto_id_mestre, fornecedor_id, descricao_xml):
-    """Cria um novo vínculo 'DE/PARA' na tabela ProdutosFornecedor."""
+def criar_vinculo_produto_fornecedor(produto_id_mestre, fornecedor_id, descricao_xml, cProd, cEAN, NCM):
+    """Cria um novo vínculo 'DE/PARA' na tabela ProdutosFornecedor,
+       AGORA INCLUINDO cProd, cEAN e NCM."""
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
             sql = """
-                INSERT INTO ProdutosFornecedor (ProdutoID, FornecedorID, DescricaoXML)
-                VALUES (?, ?, ?);
+                INSERT INTO ProdutosFornecedor 
+                (ProdutoID, FornecedorID, DescricaoXML, CodigoFornecedor, EAN, NCM)
+                VALUES (?, ?, ?, ?, ?, ?);
                 SELECT SCOPE_IDENTITY();
             """
-            cursor.execute(sql, produto_id_mestre, fornecedor_id, descricao_xml)
+            cursor.execute(sql, produto_id_mestre, fornecedor_id, descricao_xml, cProd, cEAN, NCM)
             cursor.nextset()
             novo_id = cursor.fetchone()[0]
             conn.commit()
