@@ -42,18 +42,18 @@ logger.info(f"*** Logging configurado para o módulo: {__name__} ***")
 # ==============================================================================
 
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog, simpledialog
+from tkinter import ttk, messagebox, filedialog, simpledialog, Toplevel
 import database # Importa nosso arquivo de banco de dados
 from lxml import etree as ET 
 from datetime import datetime
 from tkcalendar import DateEntry 
-from decimal import Decimal # Importa Decimal para a Aba 5
+from decimal import Decimal 
 
 class AppGestaoEstoque:
     def __init__(self, root):
         self.root = root
         self.root.title("Módulo de Gestão de Estoque")
-        self.root.geometry("1100x700") 
+        self.root.geometry("1200x700") # Aumentei a largura
         
         self.notebook = ttk.Notebook(root)
         self.notebook.pack(pady=10, padx=10, fill="both", expand=True)
@@ -76,9 +76,14 @@ class AppGestaoEstoque:
         self.itens_xml_nao_vinculados = []
         self.dados_notas_processadas = []
         self.mapa_produtos_mestre = {}
+        self.lista_mestre_produtos_nomes = [] 
 
         self.mapa_produtos_mestre_contagem = {}
         self.lista_itens_para_salvar_contagem = []
+        self.lista_mestre_contagem_nomes = []
+        
+        # NOVO: Cache para os dados da Aba 5
+        self.cache_relatorio_posicao = {}
 
         self.criar_aba_catalogo_produtos()
         self.criar_aba_fornecedores()
@@ -92,6 +97,7 @@ class AppGestaoEstoque:
     # == ABA 1: CATÁLOGO MESTRE (Sem alterações) ========================
     # ===================================================================
     def criar_aba_catalogo_produtos(self):
+        # ... (código idêntico ao anterior) ...
         main_frame = ttk.Frame(self.frame_produtos)
         main_frame.pack(fill=tk.BOTH, expand=True)
         form_frame = ttk.LabelFrame(main_frame, text="Cadastrar/Editar Produto Mestre", padding="10")
@@ -134,6 +140,7 @@ class AppGestaoEstoque:
         self.atualizar_lista_produtos()
 
     def limpar_formulario_produto(self):
+        # ... (código idêntico ao anterior) ...
         self.entry_prod_nome.delete(0, tk.END)
         self.entry_prod_unidade.delete(0, tk.END)
         self.entry_prod_estoque_min.delete(0, tk.END); self.entry_prod_estoque_min.insert(0, "0.0")
@@ -144,6 +151,7 @@ class AppGestaoEstoque:
             self.tree_produtos.selection_remove(self.tree_produtos.selection()[0])
 
     def salvar_produto(self):
+        # ... (código idêntico ao anterior) ...
         nome = self.entry_prod_nome.get()
         unidade = self.entry_prod_unidade.get().upper()
         estoque_min_str = self.entry_prod_estoque_min.get().replace(",", ".")
@@ -171,6 +179,7 @@ class AppGestaoEstoque:
             messagebox.showerror("Erro de Banco", f"Não foi possível salvar o produto.\nErro: {e}", parent=self.root)
 
     def atualizar_lista_produtos(self):
+        # ... (código idêntico ao anterior) ...
         for i in self.tree_produtos.get_children():
             self.tree_produtos.delete(i)
         try:
@@ -183,6 +192,7 @@ class AppGestaoEstoque:
             logger.error(f"Erro ao atualizar lista de produtos: {e}", exc_info=True)
 
     def selecionar_produto_para_edicao(self, event=None):
+        # ... (código idêntico ao anterior) ...
         selecionado = self.tree_produtos.focus()
         if not selecionado: return
         dados = self.tree_produtos.item(selecionado, 'values')
@@ -195,6 +205,7 @@ class AppGestaoEstoque:
         self.btn_prod_salvar.config(text="Atualizar Produto")
 
     def excluir_produto_selecionado(self):
+        # ... (código idêntico ao anterior) ...
         if not self.produto_selecionado_id:
             messagebox.showwarning("Aviso", "Selecione um produto da lista para excluir.", parent=self.root)
             return
@@ -215,6 +226,7 @@ class AppGestaoEstoque:
     # == ABA 2: FORNECEDORES (Sem alterações) ===========================
     # ===================================================================
     def criar_aba_fornecedores(self):
+        # ... (código idêntico ao anterior) ...
         main_frame = ttk.Frame(self.frame_fornecedores)
         main_frame.pack(fill=tk.BOTH, expand=True)
         form_frame = ttk.LabelFrame(main_frame, text="Cadastrar/Editar Fornecedor", padding="10")
@@ -252,6 +264,7 @@ class AppGestaoEstoque:
         self.atualizar_lista_fornecedores()
 
     def limpar_formulario_fornecedor(self):
+        # ... (código idêntico ao anterior) ...
         self.entry_forn_nome.delete(0, tk.END)
         self.entry_forn_cnpj.delete(0, tk.END)
         self.fornecedor_selecionado_id = None
@@ -261,6 +274,7 @@ class AppGestaoEstoque:
             self.tree_fornecedores.selection_remove(self.tree_fornecedores.selection()[0])
 
     def salvar_fornecedor(self):
+        # ... (código idêntico ao anterior) ...
         nome = self.entry_forn_nome.get()
         cnpj = self.entry_forn_cnpj.get()
         if not nome or not cnpj:
@@ -280,6 +294,7 @@ class AppGestaoEstoque:
             messagebox.showerror("Erro de Banco", f"Não foi possível salvar o fornecedor.\nVerifique se o CNPJ já não está cadastrado.\nErro: {e}", parent=self.root)
 
     def atualizar_lista_fornecedores(self):
+        # ... (código idêntico ao anterior) ...
         for i in self.tree_fornecedores.get_children():
             self.tree_fornecedores.delete(i)
         try:
@@ -290,6 +305,7 @@ class AppGestaoEstoque:
             logger.error(f"Erro ao atualizar lista de fornecedores: {e}", exc_info=True)
 
     def selecionar_fornecedor_para_edicao(self, event=None):
+        # ... (código idêntico ao anterior) ...
         selecionado = self.tree_fornecedores.focus()
         if not selecionado: return
         dados = self.tree_fornecedores.item(selecionado, 'values')
@@ -301,6 +317,7 @@ class AppGestaoEstoque:
         self.btn_forn_salvar.config(text="Atualizar Fornecedor")
 
     def excluir_fornecedor_selecionado(self):
+        # ... (código idêntico ao anterior) ...
         if not self.fornecedor_selecionado_id:
             messagebox.showwarning("Aviso", "Selecione um fornecedor da lista para excluir.", parent=self.root)
             return
@@ -317,28 +334,23 @@ class AppGestaoEstoque:
             messagebox.showerror("Erro de Banco", "Não foi possível excluir o fornecedor.\nVerifique se ele já está vinculado a notas fiscais.", parent=self.root)
 
     # ===================================================================
-    # == ABA 3: IMPORTAÇÃO XML (Sem alterações) =========================
+    # == ABA 3: IMPORTAÇÃO XML (ATUALIZADA com Filtro) ==================
     # ===================================================================
     def criar_aba_importacao_xml(self):
+        # ... (código idêntico ao anterior) ...
         main_frame = ttk.Frame(self.frame_importacao)
         main_frame.pack(fill=tk.BOTH, expand=True)
         main_frame.columnconfigure(0, weight=1)
         main_frame.rowconfigure(1, weight=1) 
         main_frame.rowconfigure(3, weight=1) 
-
-        # --- Frame 1: Botão de Importação ---
         frame_botoes = ttk.Frame(main_frame)
         frame_botoes.grid(row=0, column=0, sticky="ew", pady=5)
-        
         btn_selecionar_pasta = ttk.Button(frame_botoes, text="1. Selecionar Pasta com XMLs de Compra", command=self.abrir_seletor_pasta_xml)
         btn_selecionar_pasta.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=10)
-
-        # --- Frame 2: Lista de Itens Não Vinculados (DE/PARA) ---
         frame_vincular = ttk.LabelFrame(main_frame, text="2. Itens Pendentes de Vinculação (DE/PARA)", padding="10")
         frame_vincular.grid(row=1, column=0, sticky="nsew", pady=5)
         frame_vincular.rowconfigure(0, weight=1)
         frame_vincular.columnconfigure(0, weight=1)
-        
         cols_vinc = ('Fornecedor', 'Produto no XML', 'Cod. Forn.', 'EAN', 'NCM')
         self.tree_vincular = ttk.Treeview(frame_vincular, columns=cols_vinc, show='headings', selectmode='browse')
         self.tree_vincular.heading('Fornecedor', text='Fornecedor'); self.tree_vincular.column('Fornecedor', width=150)
@@ -346,30 +358,25 @@ class AppGestaoEstoque:
         self.tree_vincular.heading('Cod. Forn.', text='Cód. Forn.'); self.tree_vincular.column('Cod. Forn.', width=100)
         self.tree_vincular.heading('EAN', text='Cód. Barras'); self.tree_vincular.column('EAN', width=100)
         self.tree_vincular.heading('NCM', text='NCM'); self.tree_vincular.column('NCM', width=80)
-        
         self.tree_vincular.grid(row=0, column=0, sticky="nsew")
-
-        # --- Frame 3: Ferramenta de Vinculação ---
         frame_ferramenta = ttk.Frame(main_frame)
         frame_ferramenta.grid(row=2, column=0, sticky="ew", pady=10)
-        
-        ttk.Label(frame_ferramenta, text="Vincular item selecionado ao Produto Mestre:").pack(side=tk.LEFT)
-        
+        frame_ferramenta.columnconfigure(1, weight=1)
+        ttk.Label(frame_ferramenta, text="Filtrar Lista:").grid(row=0, column=0, sticky="w", padx=(0,5))
+        self.entry_filtro_importacao = ttk.Entry(frame_ferramenta, width=25)
+        self.entry_filtro_importacao.grid(row=0, column=1, sticky="ew", padx=(0,10))
+        self.entry_filtro_importacao.bind("<KeyRelease>", self.filtrar_combo_importacao)
+        ttk.Label(frame_ferramenta, text="Vincular ao Mestre:").grid(row=0, column=2, sticky="w", padx=(10,5))
         self.combo_produtos_mestre = ttk.Combobox(frame_ferramenta, state="readonly", width=40)
-        self.combo_produtos_mestre.pack(side=tk.LEFT, padx=10, fill=tk.X, expand=True)
-        
+        self.combo_produtos_mestre.grid(row=0, column=3, sticky="ew", padx=(0,10))
         btn_vincular = ttk.Button(frame_ferramenta, text="Vincular", command=self.vincular_produto_selecionado)
-        btn_vincular.pack(side=tk.LEFT, padx=5)
-        
+        btn_vincular.grid(row=0, column=4, sticky="w", padx=5)
         btn_criar_vincular = ttk.Button(frame_ferramenta, text="Criar Mestre e Vincular", command=self.criar_mestre_e_vincular)
-        btn_criar_vincular.pack(side=tk.LEFT, padx=5)
-
-        # --- Frame 4: Lista de Itens Prontos para Salvar ---
+        btn_criar_vincular.grid(row=0, column=5, sticky="w", padx=5)
         frame_prontos = ttk.LabelFrame(main_frame, text="3. Itens Prontos para Salvar (Já Vinculados)", padding="10")
         frame_prontos.grid(row=3, column=0, sticky="nsew", pady=5)
         frame_prontos.rowconfigure(0, weight=1)
         frame_prontos.columnconfigure(0, weight=1)
-
         cols_prontos = ('NF', 'Fornecedor', 'Produto Mestre', 'Qtd', 'Custo Unit.', 'Custo Total')
         self.tree_prontos = ttk.Treeview(frame_prontos, columns=cols_prontos, show='headings', selectmode='none')
         for col in cols_prontos: self.tree_prontos.heading(col, text=col)
@@ -379,32 +386,49 @@ class AppGestaoEstoque:
         self.tree_prontos.column('Qtd', width=60, anchor='e')
         self.tree_prontos.column('Custo Unit.', width=80, anchor='e')
         self.tree_prontos.column('Custo Total', width=80, anchor='e')
-        
         self.tree_prontos.grid(row=0, column=0, sticky="nsew")
-
-        # --- Frame 5: Botão de Salvar ---
         btn_salvar_tudo = ttk.Button(main_frame, text="4. Salvar Todas as Notas Processadas no Banco", command=self.salvar_notas_processadas)
         btn_salvar_tudo.grid(row=4, column=0, sticky="ew", pady=10, ipady=10)
 
     def popular_combobox_produtos_mestre(self):
+        # ... (código idêntico ao anterior) ...
         try:
             produtos = database.listar_produtos_estoque()
             self.mapa_produtos_mestre.clear()
-            nomes_produtos = []
+            self.lista_mestre_produtos_nomes.clear() # Limpa a lista mestra
+            nomes_produtos_mestre = []
             for p in produtos:
                 nome_display = f"{p.NomeProduto} (ID: {p.ProdutoID})"
-                nomes_produtos.append(nome_display)
+                nomes_produtos_mestre.append(nome_display)
                 self.mapa_produtos_mestre[nome_display] = p.ProdutoID
             
-            self.combo_produtos_mestre['values'] = nomes_produtos
+            self.lista_mestre_produtos_nomes = sorted(nomes_produtos_mestre) # Salva a lista mestra
+            self.combo_produtos_mestre['values'] = self.lista_mestre_produtos_nomes
+            
+            # Atualiza a lista mestra para o filtro da Aba 4
+            self.lista_mestre_contagem_nomes = sorted(list(self.mapa_produtos_mestre_contagem.keys()))
             if hasattr(self, 'combo_contagem_produtos'):
-                nomes_produtos_contagem = list(self.mapa_produtos_mestre_contagem.keys())
-                self.combo_contagem_produtos['values'] = sorted(nomes_produtos_contagem)
+                self.combo_contagem_produtos['values'] = self.lista_mestre_contagem_nomes
                 
         except Exception as e:
             logger.error(f"Erro ao carregar produtos mestre no combobox: {e}", exc_info=True)
 
+    def filtrar_combo_importacao(self, event=None):
+        # ... (código idêntico ao anterior) ...
+        texto = self.entry_filtro_importacao.get().lower()
+        if not texto:
+            self.combo_produtos_mestre['values'] = self.lista_mestre_produtos_nomes
+            self.combo_produtos_mestre.set('')
+        else:
+            filtrados = [nome for nome in self.lista_mestre_produtos_nomes if texto in nome.lower()]
+            self.combo_produtos_mestre['values'] = filtrados
+            if filtrados:
+                self.combo_produtos_mestre.set(filtrados[0])
+            else:
+                self.combo_produtos_mestre.set('')
+
     def abrir_seletor_pasta_xml(self):
+        # ... (código idêntico ao anterior) ...
         pasta_selecionada = filedialog.askdirectory(title="Selecione a pasta contendo os XMLs")
         if not pasta_selecionada:
             return
@@ -423,25 +447,18 @@ class AppGestaoEstoque:
             logger.error(f"Erro GERAL ao processar pasta XML: {e}", exc_info=True)
             messagebox.showerror("Erro Crítico no Processamento", f"Ocorreu um erro ao ler os arquivos:\n{e}", parent=self.root)
 
-    # --- FUNÇÃO ATUALIZADA (v2) ---
     def ler_xml_nota_fiscal(self, caminho_arquivo_xml):
-        """Lê um único arquivo XML e extrai os dados do cabeçalho e dos itens."""
+        # ... (código idêntico ao anterior) ...
         try:
             parser = ET.XMLParser(remove_blank_text=True)
             tree = ET.parse(caminho_arquivo_xml, parser)
             root = tree.getroot()
-            
-            # Namespace (essencial para XML de NF-e)
             ns = {'nfe': 'http://www.portalfiscal.inf.br/nfe'}
-
-            # --- Dados do Cabeçalho (Usando findtext) ---
             ide = root.find('.//nfe:ide', ns)
             emit = root.find('.//nfe:emit', ns)
             total = root.find('.//nfe:total/nfe:ICMSTot', ns)
-            
             if ide is None or emit is None or total is None:
                 raise Exception("Estrutura do XML inválida (tags <ide>, <emit> or <total> não encontradas).")
-
             dados_nf = {
                 'NumeroNF': ide.findtext('nfe:nNF', default='', namespaces=ns),
                 'DataEmissao': ide.findtext('nfe:dhEmi', default='T', namespaces=ns).split('T')[0],
@@ -449,14 +466,11 @@ class AppGestaoEstoque:
                 'FornecedorCNPJ': emit.findtext('nfe:CNPJ', default='', namespaces=ns),
                 'FornecedorNome': emit.findtext('nfe:xNome', default='', namespaces=ns)
             }
-            
-            # --- Dados dos Itens (Usando findtext) ---
             itens = []
             produtos_xml = root.findall('.//nfe:det', ns)
             for prod in produtos_xml:
                 item_data = prod.find('nfe:prod', ns)
-                if item_data is None: continue # Pula se não houver tag <prod>
-
+                if item_data is None: continue
                 itens.append({
                     'cProd': item_data.findtext('nfe:cProd', default='', namespaces=ns),
                     'cEAN': item_data.findtext('nfe:cEAN', default='', namespaces=ns),
@@ -465,43 +479,36 @@ class AppGestaoEstoque:
                     'Quantidade': float(item_data.findtext('nfe:qCom', default='0.0', namespaces=ns)),
                     'PrecoCustoUnitario': float(item_data.findtext('nfe:vUnCom', default='0.0', namespaces=ns))
                 })
-                
             return dados_nf, itens
-            
         except Exception as e:
             logger.error(f"Erro ao ler o arquivo XML '{caminho_arquivo_xml}': {e}", exc_info=True)
             raise Exception(f"Falha ao ler o arquivo: {os.path.basename(caminho_arquivo_xml)}\n{e}")
 
     def processar_arquivos_xml(self, pasta_selecionada):
+        # ... (código idêntico ao anterior) ...
         extensoes_permitidas = ('.xml', '.txt')
         arquivos_xml = [os.path.join(pasta_selecionada, f) for f in os.listdir(pasta_selecionada) if f.lower().endswith(extensoes_permitidas)]
         notas_processadas_nesta_sessao = {}
-        
         for caminho_xml in arquivos_xml:
             try:
                 cabecalho_nf, itens_nf = self.ler_xml_nota_fiscal(caminho_xml)
                 cnpj = cabecalho_nf['FornecedorCNPJ']
                 nome_fornecedor = cabecalho_nf['FornecedorNome']
                 num_nf = cabecalho_nf['NumeroNF']
-
                 fornecedor_id = database.buscar_fornecedor_por_cnpj(cnpj)
                 if not fornecedor_id:
                     database.criar_fornecedor(cnpj, nome_fornecedor)
                     fornecedor_id = database.buscar_fornecedor_por_cnpj(cnpj)
                     self.atualizar_lista_fornecedores()
-                
                 cabecalho_nf['FornecedorID'] = fornecedor_id
-                
                 if num_nf not in notas_processadas_nesta_sessao:
                      notas_processadas_nesta_sessao[num_nf] = {
                         'cabecalho': cabecalho_nf,
                         'itens_vinculados': []
                     }
-
                 for item in itens_nf:
                     desc_xml = item['DescricaoXML']
                     vinculo_existente = database.buscar_vinculo_produto_fornecedor(fornecedor_id, desc_xml)
-                    
                     if vinculo_existente:
                         produto_fornecedor_id, produto_mestre_id = vinculo_existente
                         item_pronto = item.copy()
@@ -509,7 +516,6 @@ class AppGestaoEstoque:
                         notas_processadas_nesta_sessao[num_nf]['itens_vinculados'].append(item_pronto)
                         nome_mestre = [k for k, v in self.mapa_produtos_mestre.items() if v == produto_mestre_id][0]
                         custo_total = item['Quantidade'] * item['PrecoCustoUnitario']
-                        
                         self.tree_prontos.insert("", "end", values=(
                             num_nf, nome_fornecedor, nome_mestre, 
                             f"{item['Quantidade']:.2f}", f"{item['PrecoCustoUnitario']:.4f}", f"{custo_total:.2f}"
@@ -530,10 +536,10 @@ class AppGestaoEstoque:
                             ))
             except Exception as e:
                 logger.warning(f"Falha ao processar o arquivo {caminho_xml}: {e}")
-        
         self.dados_notas_processadas = list(notas_processadas_nesta_sessao.values())
 
     def vincular_produto_selecionado(self):
+        # ... (código idêntico ao anterior) ...
         selecionado_tree = self.tree_vincular.focus()
         produto_mestre_selecionado = self.combo_produtos_mestre.get()
         if not selecionado_tree:
@@ -542,11 +548,9 @@ class AppGestaoEstoque:
         if not produto_mestre_selecionado:
             messagebox.showwarning("Aviso", "Selecione um 'Produto Mestre' no menu dropdown para vincular.", parent=self.root)
             return
-        
         indice_item = self.tree_vincular.index(selecionado_tree)
         item_pendente = self.itens_xml_nao_vinculados[indice_item]
         produto_mestre_id = self.mapa_produtos_mestre[produto_mestre_selecionado]
-        
         try:
             database.criar_vinculo_produto_fornecedor(
                 produto_id_mestre=produto_mestre_id,
@@ -556,19 +560,17 @@ class AppGestaoEstoque:
                 cEAN=item_pendente['cEAN'],
                 NCM=item_pendente['NCM']
             )
-            
             self.itens_xml_nao_vinculados.pop(indice_item)
             self.tree_vincular.delete(selecionado_tree)
-            
             messagebox.showinfo("Sucesso", 
                                 "Vínculo criado!\n\nPor favor, re-importe a pasta de XMLs para processar este item.",
                                 parent=self.root)
-            
         except Exception as e:
             logger.error(f"Erro ao criar vínculo: {e}", exc_info=True)
             messagebox.showerror("Erro de Banco", f"Não foi possível criar o vínculo.\n{e}", parent=self.root)
 
     def salvar_notas_processadas(self):
+        # ... (código idêntico ao anterior) ...
         if not self.dados_notas_processadas:
             messagebox.showwarning("Aviso", "Nenhuma nota fiscal foi processada ou não há itens vinculados para salvar.", parent=self.root)
             return
@@ -604,101 +606,81 @@ class AppGestaoEstoque:
         self.dados_notas_processadas.clear()
 
     def criar_mestre_e_vincular(self):
-            """
-            Pega o item pendente selecionado.
-            VERIFICA se o produto mestre já existe. Se sim, apenas vincula.
-            Se não, pergunta ao usuário se quer criar o mestre e então vincula.
-            """
-            selecionado_tree = self.tree_vincular.focus()
-            if not selecionado_tree:
-                messagebox.showwarning("Aviso", "Selecione um item pendente na lista 'Itens Pendentes' (Passo 2).", parent=self.root)
-                return
-
-            indice_item = self.tree_vincular.index(selecionado_tree)
-            item_pendente = self.itens_xml_nao_vinculados[indice_item]
-            
-            nome_produto_xml = item_pendente['DescricaoXML']
-            fornecedor_id = item_pendente['FornecedorID']
-            
-            try:
-                # 1. VERIFICA SE O PRODUTO MESTRE JÁ EXISTE
-                produto_id_mestre = database.buscar_produto_mestre_por_nome(nome_produto_xml)
-                
-                produto_foi_criado = False # Flag para sabermos se precisamos atualizar as listas
-
-                # 2. SE NÃO EXISTE, CRIA
-                if not produto_id_mestre:
-                    if not messagebox.askyesno("Confirmar Auto-Criação",
-                                            f"O produto mestre '{nome_produto_xml}' não existe no Catálogo (Aba 1).\n\n"
-                                            f"Deseja criá-lo automaticamente agora?\n"
-                                            f"(Unidade: 'UN', Est. Mínimo: 0.0)",
-                                            parent=self.root):
-                        return # Usuário cancelou
-                    
-                    # Cria o Produto Mestre
-                    produto_id_mestre = database.criar_produto_estoque(
-                        nome=nome_produto_xml,
-                        unidade="UN", 
-                        estoque_min=0.0
-                    )
-                    
-                    if not produto_id_mestre:
-                        raise Exception("Falha ao criar o produto mestre, não retornou ID.")
-                    
-                    produto_foi_criado = True # Marca que precisamos atualizar a GUI
-                
-                # 3. (Agora temos um produto_id_mestre, seja novo ou existente)
-                # Cria o Vínculo (DE/PARA)
-                database.criar_vinculo_produto_fornecedor(
-                    produto_id_mestre=produto_id_mestre,
-                    fornecedor_id=item_pendente['FornecedorID'],
-                    descricao_xml=item_pendente['DescricaoXML'],
-                    cProd=item_pendente['cProd'],
-                    cEAN=item_pendente['cEAN'],
-                    NCM=item_pendente['NCM']
+        # ... (código idêntico ao anterior) ...
+        selecionado_tree = self.tree_vincular.focus()
+        if not selecionado_tree:
+            messagebox.showwarning("Aviso", "Selecione um item pendente na lista 'Itens Pendentes' (Passo 2).", parent=self.root)
+            return
+        indice_item = self.tree_vincular.index(selecionado_tree)
+        item_pendente = self.itens_xml_nao_vinculados[indice_item]
+        nome_novo_produto = item_pendente['DescricaoXML']
+        try:
+            produto_id_mestre = database.buscar_produto_mestre_por_nome(nome_novo_produto)
+            produto_foi_criado = False
+            if not produto_id_mestre:
+                if not messagebox.askyesno("Confirmar Auto-Criação",
+                                          f"O produto mestre '{nome_novo_produto}' não existe no Catálogo (Aba 1).\n\n"
+                                          f"Deseja criá-lo automaticamente agora?\n"
+                                          f"(Unidade: 'UN', Est. Mínimo: 0.0)",
+                                          parent=self.root):
+                    return
+                produto_id_mestre = database.criar_produto_estoque(
+                    nome=nome_novo_produto,
+                    unidade="UN", 
+                    estoque_min=0.0
                 )
-                
-                # 4. Limpa da interface
-                self.itens_xml_nao_vinculados.pop(indice_item)
-                self.tree_vincular.delete(selecionado_tree)
-                
-                # 5. Atualiza as listas (Aba 1 e combos) APENAS se um novo produto foi criado
-                if produto_foi_criado:
-                    self.atualizar_lista_produtos()
-                    self.popular_combobox_produtos_mestre()
-                
-                messagebox.showinfo("Sucesso", 
-                                    f"Produto vinculado com sucesso!\n\n"
-                                    "Por favor, re-importe a pasta de XMLs para que este item apareça na lista 'Prontos para Salvar'.",
-                                    parent=self.root)
+                if not produto_id_mestre:
+                    raise Exception("Falha ao criar o produto mestre, não retornou ID.")
+                produto_foi_criado = True
+            database.criar_vinculo_produto_fornecedor(
+                produto_id_mestre=produto_id_mestre,
+                fornecedor_id=item_pendente['FornecedorID'],
+                descricao_xml=item_pendente['DescricaoXML'],
+                cProd=item_pendente['cProd'],
+                cEAN=item_pendente['cEAN'],
+                NCM=item_pendente['NCM']
+            )
+            self.itens_xml_nao_vinculados.pop(indice_item)
+            self.tree_vincular.delete(selecionado_tree)
+            if produto_foi_criado:
+                self.atualizar_lista_produtos()
+                self.popular_combobox_produtos_mestre()
+            messagebox.showinfo("Sucesso", 
+                                f"Produto vinculado com sucesso!\n\n"
+                                "Por favor, re-importe a pasta de XMLs para que este item apareça na lista 'Prontos para Salvar'.",
+                                parent=self.root)
+        except Exception as e:
+            logger.error(f"Erro ao auto-criar e vincular: {e}", exc_info=True)
+            messagebox.showerror("Erro Crítico", f"Não foi possível criar e vincular o produto.\nVerifique se o nome já existe no Catálogo Mestre com alguma variação.\n\nErro: {e}", parent=self.root)
 
-            except Exception as e:
-                logger.error(f"Erro ao auto-criar e vincular: {e}", exc_info=True)
-                # A mensagem de erro agora inclui a causa mais provável
-                messagebox.showerror("Erro Crítico", f"Não foi possível criar e vincular o produto.\nVerifique se o nome já existe no Catálogo Mestre com alguma variação.\n\nErro: {e}", parent=self.root)
     # ===================================================================
-    # == ABA 4: LANÇAR CONTAGEM FÍSICA (Sem alterações) =================
+    # == ABA 4: LANÇAR CONTAGEM FÍSICA (ATUALIZADA com Filtro) ==========
     # ===================================================================
     def criar_aba_contagem_estoque(self):
+        # ... (código idêntico ao anterior) ...
         main_frame = ttk.Frame(self.frame_contagem)
         main_frame.pack(fill=tk.BOTH, expand=True)
         main_frame.columnconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(1, weight=1)
+        main_frame.rowconfigure(1, weight=1) 
         frame_lancamento = ttk.LabelFrame(main_frame, text="1. Lançar Itens Contados", padding="10")
         frame_lancamento.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
         frame_lancamento.columnconfigure(0, weight=1)
-        ttk.Label(frame_lancamento, text="Produto do Catálogo Mestre:").grid(row=0, column=0, sticky="w")
+        ttk.Label(frame_lancamento, text="Filtrar Produto:").grid(row=0, column=0, sticky="w")
+        self.entry_filtro_contagem = ttk.Entry(frame_lancamento)
+        self.entry_filtro_contagem.grid(row=1, column=0, sticky="ew", padx=(0, 5))
+        self.entry_filtro_contagem.bind("<KeyRelease>", self.filtrar_combo_contagem)
+        ttk.Label(frame_lancamento, text="Produto do Catálogo Mestre:").grid(row=2, column=0, sticky="w", pady=(5,0))
         self.combo_contagem_produtos = ttk.Combobox(frame_lancamento, state="readonly")
-        self.combo_contagem_produtos.grid(row=1, column=0, sticky="ew", padx=(0, 5))
+        self.combo_contagem_produtos.grid(row=3, column=0, sticky="ew", padx=(0, 5))
         self.combo_contagem_produtos.bind("<<ComboboxSelected>>", self.atualizar_label_unidade_contagem)
-        ttk.Label(frame_lancamento, text="Quantidade:").grid(row=0, column=1, sticky="w")
+        ttk.Label(frame_lancamento, text="Quantidade:").grid(row=2, column=1, sticky="w", pady=(5,0))
         self.entry_contagem_qtd = ttk.Entry(frame_lancamento, width=10)
-        self.entry_contagem_qtd.grid(row=1, column=1, sticky="w", padx=5)
+        self.entry_contagem_qtd.grid(row=3, column=1, sticky="w", padx=5)
         self.lbl_contagem_unidade = ttk.Label(frame_lancamento, text="UN", font=("Arial", 10, "italic"))
-        self.lbl_contagem_unidade.grid(row=1, column=2, sticky="w", padx=5)
+        self.lbl_contagem_unidade.grid(row=3, column=2, sticky="w", padx=5)
         btn_adicionar_item = ttk.Button(frame_lancamento, text="Adicionar à Lista", command=self.adicionar_item_contagem)
-        btn_adicionar_item.grid(row=1, column=3, sticky="w", padx=10)
+        btn_adicionar_item.grid(row=3, column=3, sticky="w", padx=10)
         frame_lista_lancar = ttk.LabelFrame(main_frame, text="2. Itens nesta Contagem", padding="10")
         frame_lista_lancar.grid(row=1, column=0, sticky="nsew", padx=(0, 5), pady=10)
         frame_lista_lancar.rowconfigure(0, weight=1)
@@ -740,7 +722,25 @@ class AppGestaoEstoque:
         self.tree_hist_itens.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
         self.atualizar_lista_contagens_historico()
 
+    def filtrar_combo_contagem(self, event=None):
+        # ... (código idêntico ao anterior) ...
+        texto = self.entry_filtro_contagem.get().lower()
+        if not texto:
+            self.combo_contagem_produtos['values'] = self.lista_mestre_contagem_nomes
+            self.combo_contagem_produtos.set('')
+            self.lbl_contagem_unidade.config(text="UN")
+        else:
+            filtrados = [nome for nome in self.lista_mestre_contagem_nomes if texto in nome.lower()]
+            self.combo_contagem_produtos['values'] = filtrados
+            if filtrados:
+                self.combo_contagem_produtos.set(filtrados[0])
+                self.atualizar_label_unidade_contagem()
+            else:
+                self.combo_contagem_produtos.set('')
+                self.lbl_contagem_unidade.config(text="UN")
+
     def atualizar_label_unidade_contagem(self, event=None):
+        # ... (código idêntico ao anterior) ...
         produto_selecionado = self.combo_contagem_produtos.get()
         if produto_selecionado:
             unidade = self.mapa_produtos_mestre_contagem[produto_selecionado]['un']
@@ -749,6 +749,7 @@ class AppGestaoEstoque:
             self.lbl_contagem_unidade.config(text="UN")
 
     def adicionar_item_contagem(self):
+        # ... (código idêntico ao anterior) ...
         produto_nome = self.combo_contagem_produtos.get()
         qtd_str = self.entry_contagem_qtd.get().replace(",", ".")
         if not produto_nome or not qtd_str:
@@ -776,9 +777,12 @@ class AppGestaoEstoque:
         self.combo_contagem_produtos.set('')
         self.entry_contagem_qtd.delete(0, tk.END)
         self.lbl_contagem_unidade.config(text="UN")
-        self.combo_contagem_produtos.focus()
+        self.entry_filtro_contagem.delete(0, tk.END)
+        self.combo_contagem_produtos['values'] = self.lista_mestre_contagem_nomes
+        self.entry_filtro_contagem.focus()
         
     def remover_item_contagem(self):
+        # ... (código idêntico ao anterior) ...
         selecionado = self.tree_contagem_atual.focus()
         if not selecionado:
             messagebox.showwarning("Aviso", "Selecione um item da lista 'Itens nesta Contagem' para remover.", parent=self.root)
@@ -792,6 +796,7 @@ class AppGestaoEstoque:
         self.tree_contagem_atual.delete(selecionado)
 
     def salvar_contagem_completa(self):
+        # ... (código idêntico ao anterior) ...
         if not self.lista_itens_para_salvar_contagem:
             messagebox.showwarning("Aviso", "Adicione pelo menos um item à lista de contagem antes de salvar.", parent=self.root)
             return
@@ -815,6 +820,7 @@ class AppGestaoEstoque:
             messagebox.showerror("Erro Crítico", f"Ocorreu um erro inesperado: {e}", parent=self.root)
 
     def atualizar_lista_contagens_historico(self):
+        # ... (código idêntico ao anterior) ...
         for i in self.tree_hist_contagens.get_children():
             self.tree_hist_contagens.delete(i)
         try:
@@ -826,6 +832,7 @@ class AppGestaoEstoque:
             logger.error(f"Erro ao atualizar histórico de contagens: {e}", exc_info=True)
 
     def carregar_itens_contagem_historico(self, event=None):
+        # ... (código idêntico ao anterior) ...
         for i in self.tree_hist_itens.get_children():
             self.tree_hist_itens.delete(i)
         selecionado = self.tree_hist_contagens.focus()
@@ -840,80 +847,177 @@ class AppGestaoEstoque:
             logger.error(f"Erro ao carregar itens do histórico (ContagemID {contagem_id}): {e}", exc_info=True)
 
     # ===================================================================
-    # == ABA 5: SUGESTÃO DE COMPRA (Sem alterações) =====================
+    # == ABA 5: SUGESTÃO DE COMPRA (ATUALIZADA) =========================
     # ===================================================================
     def criar_aba_sugestao_compra(self):
         main_frame = ttk.Frame(self.frame_sugestao)
         main_frame.pack(fill=tk.BOTH, expand=True)
         main_frame.rowconfigure(1, weight=1)
         main_frame.columnconfigure(0, weight=1)
+
+        # --- Frame 1: Filtros ---
         frame_filtros = ttk.LabelFrame(main_frame, text="Parâmetros da Sugestão", padding="10")
         frame_filtros.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+
         ttk.Label(frame_filtros, text="Calcular sugestão para cobrir os próximos:").pack(side=tk.LEFT, padx=5)
+        
         self.spin_meses_cobertura = ttk.Spinbox(frame_filtros, from_=1, to=12, width=5)
-        self.spin_meses_cobertura.set("1")
+        self.spin_meses_cobertura.set("1") 
         self.spin_meses_cobertura.pack(side=tk.LEFT, padx=5)
+        
         ttk.Label(frame_filtros, text="meses.").pack(side=tk.LEFT)
+        
         btn_gerar_sugestao = ttk.Button(frame_filtros, text="Gerar Sugestão de Compra", command=self.gerar_sugestao_compra)
         btn_gerar_sugestao.pack(side=tk.RIGHT, padx=20)
-        frame_resultado = ttk.LabelFrame(main_frame, text="Relatório de Posição de Estoque e Sugestão", padding="10")
+
+        # --- Frame 2: Tabela de Sugestões (ATUALIZADA) ---
+        frame_resultado = ttk.LabelFrame(main_frame, text="Relatório de Posição de Estoque e Sugestão (Duplo-clique para ver histórico de compras)", padding="10")
         frame_resultado.grid(row=1, column=0, sticky="nsew")
         frame_resultado.rowconfigure(0, weight=1)
         frame_resultado.columnconfigure(0, weight=1)
-        cols = ('Produto', 'UN', 'Estoque Atual', 'Consumo Médio/Dia', 'Sugestão Compra', 'Status')
+        
+        # --- NOVAS COLUNAS ---
+        cols = ('Produto', 'UN', 'Estoque Atual', 'Total Comprado', 'Consumo Médio/Mês', 'Consumo Médio/Dia', 'Sugestão Compra', 'Status')
         self.tree_sugestao = ttk.Treeview(frame_resultado, columns=cols, show='headings')
         for col in cols: self.tree_sugestao.heading(col, text=col)
+        
         self.tree_sugestao.column('Produto', width=250)
-        self.tree_sugestao.column('UN', width=50, anchor='center')
+        self.tree_sugestao.column('UN', width=40, anchor='center')
         self.tree_sugestao.column('Estoque Atual', width=100, anchor='e')
+        self.tree_sugestao.column('Total Comprado', width=100, anchor='e')
+        self.tree_sugestao.column('Consumo Médio/Mês', width=120, anchor='e')
         self.tree_sugestao.column('Consumo Médio/Dia', width=120, anchor='e')
         self.tree_sugestao.column('Sugestão Compra', width=120, anchor='e')
         self.tree_sugestao.column('Status', width=150)
+        
         scrollbar = ttk.Scrollbar(frame_resultado, orient="vertical", command=self.tree_sugestao.yview)
         self.tree_sugestao.configure(yscrollcommand=scrollbar.set)
+        
         self.tree_sugestao.grid(row=0, column=0, sticky="nsew")
         scrollbar.grid(row=0, column=1, sticky="ns")
+        
+        # --- NOVO EVENTO DE DUPLO-CLIQUE ---
+        self.tree_sugestao.bind("<Double-1>", self.abrir_popup_historico_compras)
 
+    # --- FUNÇÃO ATUALIZADA ---
     def gerar_sugestao_compra(self):
+        """Busca o relatório do banco e calcula a sugestão de compra."""
         try:
             meses_cobertura = int(self.spin_meses_cobertura.get())
             dias_cobertura = meses_cobertura * 30
         except ValueError:
             messagebox.showerror("Erro", "O número de meses deve ser um inteiro.", parent=self.root)
             return
+
         for i in self.tree_sugestao.get_children():
             self.tree_sugestao.delete(i)
+            
         try:
             relatorio_posicao = database.gerar_relatorio_posicao_estoque()
+            self.cache_relatorio_posicao.clear() # Limpa o cache
+            
             if not relatorio_posicao:
                 messagebox.showinfo("Aviso", "Nenhum dado de estoque encontrado. Lance contagens para calcular.", parent=self.root)
                 return
+
             for item in relatorio_posicao:
+                # Armazena o item completo no cache para o duplo-clique
+                self.cache_relatorio_posicao[item['ProdutoID']] = item
+                
                 nome = item['NomeProduto']
                 un = item['Unidade']
                 atual = item['EstoqueAtual']
                 umd = item['UsoMedioDiario']
                 minimo = item['EstoqueMinimo']
                 status = item['Status']
+                total_comprado = item['TotalComprado']
+                
+                # --- NOVOS CÁLCULOS ---
+                consumo_mes = umd * 30
                 
                 if umd > 0:
                     estoque_ideal = (umd * dias_cobertura) + minimo
                     sugestao_compra = estoque_ideal - atual
-                    if sugestao_compra < 0:
-                        sugestao_compra = Decimal('0.0')
+                    # NÃO FAZEMOS MAIS O FILTRO DE < 0
                 else:
                     sugestao_compra = Decimal('0.0')
                     
+                # Formatação para exibição
                 atual_f = f"{atual:.3f}"
+                total_comprado_f = f"{total_comprado:.3f}"
+                consumo_mes_f = f"{consumo_mes:.3f}"
                 umd_f = f"{umd:.3f}"
-                sugestao_f = f"{sugestao_compra:.3f}"
+                sugestao_f = f"{sugestao_compra:.3f}" # Agora pode ser negativa
                 
+                # Insere nas colunas corretas
                 self.tree_sugestao.insert("", "end", values=(
-                    nome, un, atual_f, umd_f, sugestao_f, status
-                ))
+                    nome, un, atual_f, total_comprado_f, consumo_mes_f, umd_f, sugestao_f, status
+                ), iid=item['ProdutoID']) # Usa o ProdutoID como ID da linha
+
         except Exception as e:
             logger.error(f"Erro ao gerar sugestão de compra: {e}", exc_info=True)
             messagebox.showerror("Erro de Banco", f"Falha ao gerar relatório: {e}", parent=self.root)
+
+    # --- NOVA FUNÇÃO DE POPUP (DRILL-DOWN) ---
+    def abrir_popup_historico_compras(self, event):
+        """Abre um popup Toplevel mostrando o histórico de compras do item selecionado."""
+        selecionado = self.tree_sugestao.focus()
+        if not selecionado:
+            return
+            
+        # O 'selecionado' é o IID da linha, que definimos como sendo o ProdutoID
+        produto_id = int(selecionado)
+        
+        # Pega os dados do cache que salvamos
+        dados_produto = self.cache_relatorio_posicao.get(produto_id)
+        if not dados_produto:
+            return
+
+        nome_produto = dados_produto['NomeProduto']
+
+        # Cria a janela popup
+        popup = Toplevel(self.root)
+        popup.title(f"Histórico de Compras - {nome_produto}")
+        popup.geometry("800x500")
+        popup.transient(self.root) # Mantém na frente
+        popup.grab_set() # Foca nesta janela
+
+        frame = ttk.Frame(popup, padding="10")
+        frame.pack(fill=tk.BOTH, expand=True)
+        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+
+        cols_hist = ('Data Compra', 'NF', 'Fornecedor', 'Qtd', 'Custo Unit.')
+        tree_hist = ttk.Treeview(frame, columns=cols_hist, show='headings')
+        for col in cols_hist: tree_hist.heading(col, text=col)
+        
+        tree_hist.column('Data Compra', width=100, anchor='center')
+        tree_hist.column('NF', width=80, anchor='center')
+        tree_hist.column('Fornecedor', width=250)
+        tree_hist.column('Qtd', width=80, anchor='e')
+        tree_hist.column('Custo Unit.', width=100, anchor='e')
+        
+        scrollbar = ttk.Scrollbar(frame, orient="vertical", command=tree_hist.yview)
+        tree_hist.configure(yscrollcommand=scrollbar.set)
+        
+        tree_hist.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+
+        # Busca os dados no banco
+        try:
+            historico = database.buscar_historico_compras_produto(produto_id)
+            if not historico:
+                tree_hist.insert("", "end", values=("Nenhuma compra encontrada.", "", "", "", ""))
+            
+            for compra in historico:
+                data_f = compra.DataEmissao.strftime('%d/%m/%Y')
+                qtd_f = f"{compra.Quantidade:.3f}"
+                custo_f = f"R$ {compra.PrecoCustoUnitario:.4f}"
+                tree_hist.insert("", "end", values=(
+                    data_f, compra.NumeroNF, compra.NomeFantasia, qtd_f, custo_f
+                ))
+        except Exception as e:
+            messagebox.showerror("Erro de Banco", f"Não foi possível buscar o histórico: {e}", parent=popup)
 
 
 # --- Bloco de Execução Principal ---
