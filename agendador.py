@@ -68,30 +68,48 @@ import requests
 import urllib.parse
 
 
-# Em agendador.py, SUBSTITUA a função verificar_e_enviar_tarefas_de_grupo por esta:
 def verificar_e_enviar_tarefas_de_grupo():
     """
-    (VERSÃO FINAL - SUPORTA DIARIA/SEMANAL/MENSAL)
-    Verifica e envia tarefas recorrentes agendadas para grupos,
-    considerando a frequência correta.
+    (VERSÃO DIAGNÓSTICO) Verifica e envia tarefas de grupo com logs detalhados.
     """
     agora_dt = datetime.now()
     agora_hm = agora_dt.strftime('%H:%M')
-    # Obter dia da semana no formato SQL: Domingo=1, Segunda=2, ..., Sábado=7
-    dia_semana_sql = (agora_dt.weekday() + 1) % 7 + 1
-    # Obter dia do mês
+    
+    # Lógica padrão do Python: 0=Segunda, 6=Domingo
+    dia_python = agora_dt.weekday()
+    
+    # Tentativa de conversão para padrão SQL (Domingo=1 ... Sábado=7)
+    # Se hoje é Segunda (0): (0 + 1) % 7 + 1 = 2
+    # Se hoje é Domingo (6): (6 + 1) % 7 + 1 = 1
+    dia_semana_sql = (dia_python + 1) % 7 + 1
+    
     dia_mes = agora_dt.day
 
+    # LOG PARA DEBUG (Vai aparecer no terminal)
+    print(f"--- [DEBUG AGENDADOR] Buscando tarefas ---")
+    print(f"Hora Atual: {agora_hm}")
+    print(f"Dia Semana (Calculado p/ SQL): {dia_semana_sql} (Onde 1=Dom, 2=Seg...)")
+    print(f"Dia Mês: {dia_mes}")
 
-    # Passamos os novos parâmetros para a função do banco
-    tarefas_para_disparar = database.buscar_tarefas_de_grupo_para_disparar(agora_hm, str(dia_semana_sql), str(dia_mes))
+    # Passamos os parâmetros para o banco
+    tarefas_para_disparar = database.buscar_tarefas_de_grupo_para_disparar(
+        agora_hm, 
+        str(dia_semana_sql), 
+        str(dia_mes)
+    )
 
     if not tarefas_para_disparar:
+        print("--> Nenhuma tarefa de grupo encontrada para este minuto exato.")
         return
 
-    logger.info(f"[{agora_hm}] Encontradas {len(tarefas_para_disparar)} tarefas de GRUPO para disparar!")
+    logger.info(f"[{agora_hm}] ENCONTRADAS {len(tarefas_para_disparar)} TAREFAS PARA DISPARAR!")
+    
     for tarefa in tarefas_para_disparar:
         atribuicao_id, titulo, pontos, nome_grupo, chat_id, *_ = tarefa
+
+        if not chat_id:
+            logger.error(f"ERRO: O grupo '{nome_grupo}' não tem Chat ID cadastrado!")
+            continue
 
         mensagem = (
             f"🚨 **Nova Missão para a Equipe!** 🚨\n\n"
@@ -103,8 +121,11 @@ def verificar_e_enviar_tarefas_de_grupo():
         keyboard = [[InlineKeyboardButton("✅ Eu aceito o desafio!", callback_data=f"aceitar_tarefa_{atribuicao_id}")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        notificador_telegram.enviar_mensagem_com_botao(chat_id, mensagem, reply_markup)
-        print(f"--> Missão de grupo '{titulo}' (ID Origem: {atribuicao_id}) enviada para '{nome_grupo}'.")
+        try:
+            notificador_telegram.enviar_mensagem_com_botao(chat_id, mensagem, reply_markup)
+            print(f"--> SUCESSO: Missão '{titulo}' enviada para '{nome_grupo}' (ChatID: {chat_id}).")
+        except Exception as e:
+            print(f"--> ERRO AO ENVIAR no Telegram: {e}")
 
 # --- MÓDULO 2: INÍCIO DA JORNADA (Lógica antiga, agora focada) ---
 def verificar_inicio_jornada():
@@ -612,7 +633,7 @@ if __name__ == "__main__":
     schedule.every(1).minutes.do(verificar_inicio_jornada)
     schedule.every(1).minutes.do(verificar_lembretes_intermediarios)
     schedule.every(1).minutes.do(verificar_fim_jornada)
-    schedule.every(1).minutes.do(verificar_e_enviar_tarefas_de_grupo)
+    schedule.every(30).seconds.do(verificar_e_enviar_tarefas_de_grupo)
     
     schedule.every().day.at("08:00").do(verificar_e_executar_fechamento)
     schedule.every().day.at("09:05").do(verificar_e_delegar_tarefas_de_folga)
