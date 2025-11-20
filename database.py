@@ -5412,15 +5412,15 @@ def buscar_funcionarios_com_posicao_padrao(posicao_id):
 
 def buscar_horarios_ocupacao_hoje(data_str, dia_semana_int):
     """
-    Busca horários APENAS de quem foi explicitamente escalado (Bolinhas Verdes).
-    Ignora funcionários fixos automáticos.
+    Busca horários APENAS de quem foi explicitamente escalado no dia (Bolinhas Verdes).
+    Ignora completamente funcionários fixos ou padrões.
     """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            # Lógica Estrita: Só conta quem está na tabela EscalaDiaria
-            # Usamos 'AS' para manter compatibilidade com o api_server.py
+            
+            # Lógica Estrita: Olha SOMENTE para a tabela onde salvamos a escala manual
             sql = """
                 SELECT 
                     HorarioEntrada AS Entrada, 
@@ -5431,7 +5431,14 @@ def buscar_horarios_ocupacao_hoje(data_str, dia_semana_int):
                 WHERE DataEscala = ?
             """
             cursor.execute(sql, data_str)
-            return cursor.fetchall()
+            resultados = cursor.fetchall()
+            
+            # --- DEBUG NO TERMINAL (Para você conferir) ---
+            print(f"\n--- DEBUG GRÁFICO ({data_str}) ---")
+            print(f"Pessoas escaladas manualmente (Verdes): {len(resultados)}")
+            print("------------------------------------\n")
+            
+            return resultados
         except Exception as e:
             logging.error(f"Erro ao buscar horários de ocupação: {e}")
             return []
