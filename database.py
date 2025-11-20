@@ -5415,15 +5415,13 @@ def buscar_horarios_ocupacao_hoje(data_str, dia_semana_int):
     if conn:
         try:
             cursor = conn.cursor()
-            # Agora buscamos:
-            # 1. Quem foi escalado manualmente no dia.
-            # 2. Quem é FIXO (PosicaoPadraoID), não está de folga e não foi substituído na escala manual.
-            # Obs: Para os fixos, assumimos horário padrão 08:00 as 18:00 pois não temos esse dado na tabela Funcionarios.
+            # CORREÇÃO CRÍTICA: Usamos 'AS Entrada', 'AS Saida' para alinhar
+            # com o que o api_server.py espera ler (row.Entrada, row.Saida).
             sql = """
-                -- 1. Pessoas da Escala Manual (Prioridade)
+                -- 1. Pessoas da Escala Manual (EscalaDiaria)
                 SELECT 
-                    HorarioEntrada, 
-                    HorarioSaida, 
+                    HorarioEntrada AS Entrada, 
+                    HorarioSaida AS Saida, 
                     InicioIntervalo, 
                     FimIntervalo 
                 FROM EscalaDiaria 
@@ -5433,22 +5431,19 @@ def buscar_horarios_ocupacao_hoje(data_str, dia_semana_int):
 
                 -- 2. Funcionários Fixos (Fallback)
                 SELECT 
-                    CAST('08:00' AS TIME) as HorarioEntrada,
-                    CAST('18:00' AS TIME) as HorarioSaida,
-                    CAST('12:00' AS TIME) as InicioIntervalo,
-                    CAST('13:00' AS TIME) as FimIntervalo
+                    CAST('08:00' AS TIME) AS Entrada,
+                    CAST('18:00' AS TIME) AS Saida,
+                    CAST('12:00' AS TIME) AS InicioIntervalo,
+                    CAST('13:00' AS TIME) AS FimIntervalo
                 FROM Funcionarios F
                 WHERE F.PosicaoPadraoID IS NOT NULL
-                  -- Verifica se hoje não é a folga dele
                   AND (F.DiaDeFolga IS NULL OR F.DiaDeFolga != ?)
-                  -- Garante que não vamos duplicar se já houver uma escala manual para essa posição hoje
                   AND NOT EXISTS (
                       SELECT 1 FROM EscalaDiaria ED 
                       WHERE ED.PosicaoID = F.PosicaoPadraoID 
                       AND ED.DataEscala = ?
                   )
             """
-            # Passamos os parâmetros na ordem dos ? (data, dia_semana, data)
             cursor.execute(sql, data_str, dia_semana_int, data_str)
             return cursor.fetchall()
         except Exception as e:
