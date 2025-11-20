@@ -412,28 +412,39 @@ def buscar_funcionarios_por_horario(horario_atual):
 # Em database.py, SUBSTITUA a função listar_tarefas_do_dia_por_funcionario:
 def listar_tarefas_do_dia_por_funcionario(funcionario_id):
     """
-    (VERSÃO 8 - COM DISTINCT)
-    Busca todas as tarefas do dia, garantindo que não haja duplicatas visuais.
+    (VERSÃO 9 - COM GROUP BY PARA REMOVER DUPLICATAS VISUAIS E FILTRO DE DATA)
+    Busca tarefas do dia. Se houver múltiplas atribuições para a mesma tarefa,
+    retorna apenas uma (a mais recente), limpando a poluição visual.
     """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            # ADICIONADO 'DISTINCT' LOGO APÓS O SELECT
+            
             sql = """
-                SELECT DISTINCT
-                    TA.AtribuicaoID, T.TarefaID, T.Titulo, T.Pontos, TA.TipoFrequencia AS Tipo,
-                    ISNULL(TA.DescricaoOverride, T.Descricao) AS Descricao
+                SELECT 
+                    MAX(TA.AtribuicaoID) as AtribuicaoID, -- Pega o ID mais recente
+                    T.TarefaID, 
+                    T.Titulo, 
+                    T.Pontos, 
+                    TA.TipoFrequencia AS Tipo,
+                    ISNULL(MAX(TA.DescricaoOverride), MAX(T.Descricao)) AS Descricao
                 FROM TarefasAtribuidas TA
                 JOIN Tarefas T ON TA.TarefaID = T.TarefaID
                 WHERE
-                    TA.FuncionarioID = ? AND TA.DataFimVigencia IS NULL
+                    TA.FuncionarioID = ? 
+                    AND TA.DataFimVigencia IS NULL
+                    -- Garante que a tarefa já começou (não é futuro)
+                    AND CONVERT(date, TA.DataInicioVigencia) <= CONVERT(date, GETDATE())
+                    
+                    -- Verifica se NÃO foi entregue hoje (para não mostrar tarefas já feitas)
                     AND NOT EXISTS (
                         SELECT 1 FROM Entregas E
                         WHERE E.AtribuicaoID = TA.AtribuicaoID
                         AND CONVERT(date, E.DataEnvio) = CONVERT(date, GETDATE())
                         AND E.StatusValidacao IN ('Aprovada', 'Pendente')
                     )
+                    -- Filtros de Frequência (Dia Certo)
                     AND (
                         TA.TipoFrequencia = 'Diaria'
                         OR (
@@ -442,8 +453,10 @@ def listar_tarefas_do_dia_por_funcionario(funcionario_id):
                         )
                         OR (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, GETDATE()))
                         OR (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = CONVERT(date, GETDATE()))
-                        OR (TA.TipoFrequencia = 'Unica')
+                        OR (TA.TipoFrequencia = 'Unica') -- 'Unica' assume data de hoje via DataInicioVigencia acima
                     )
+                -- O GROUP BY faz a mágica de fundir as duplicatas
+                GROUP BY T.TarefaID, T.Titulo, T.Pontos, TA.TipoFrequencia
             """
             cursor.execute(sql, funcionario_id)
             return cursor.fetchall()
