@@ -171,14 +171,15 @@ document.addEventListener('DOMContentLoaded', function() {
         return cardDiv;
     }
 
-    function renderizarMetaPrincipal(meta) {
+function renderizarMetaPrincipal(meta) {
         const containerEl = document.getElementById('container-meta-mensal');
         if (!containerEl) return;
+        
         const tituloEl = document.getElementById('meta-titulo');
         const barraEl = document.getElementById('meta-progresso-barra');
         const textoEl = document.getElementById('meta-progresso-texto');
-        const atingidoEl = document.getElementById('meta-valor-atingido');
-        const totalEl = document.getElementById('meta-valor-total');
+        
+        // Não buscamos mais os elementos de valor (atingido/total) para escrita
 
         if (meta && meta.valor_meta > 0) {
             containerEl.style.display = 'flex';
@@ -186,63 +187,45 @@ document.addEventListener('DOMContentLoaded', function() {
             tituloEl.textContent = meta.nome_meta;
             barraEl.style.width = `${Math.min(percentual, 100)}%`;
             textoEl.textContent = `${percentual.toFixed(1)}%`;
-            atingidoEl.textContent = `R$ ${meta.valor_atingido.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
-            totalEl.textContent = `R$ ${meta.valor_meta.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
+            
+            // REMOVIDO: Escrita dos valores monetários
         } else {
             containerEl.style.display = 'none';
-            // Se não há meta ou ela é 0, reseta a flag (caso a meta seja removida/zerada durante o dia)
-            // Não reseta aqui para permitir que a animação ocorra apenas uma vez por dia. O reset é feito no atualizarPainel.
-            // metaDiariaAnimacaoExibida = false; // Linha removida/comentada
         }
     }
 
     function renderizarMetaDiaria(meta) {
-    const containerEl = document.getElementById('container-meta-diaria');
-    if (!containerEl) return;
-    const barraEl = document.getElementById('meta-diaria-progresso-barra');
-    const textoEl = document.getElementById('meta-diaria-progresso-texto');
+        const containerEl = document.getElementById('container-meta-diaria');
+        if (!containerEl) return;
+        
+        const barraEl = document.getElementById('meta-diaria-progresso-barra');
+        const textoEl = document.getElementById('meta-diaria-progresso-texto');
+        
+        // Não buscamos mais os elementos de valor para escrita
 
-    // --- CORREÇÃO APLICADA AQUI ---
-    // Buscamos o container dos valores (que tem o ID)
-    const valoresContainerEl = document.getElementById('meta-diaria-valores');
-    if (!valoresContainerEl) {
-        console.error("Elemento #meta-diaria-valores não encontrado.");
-        return; 
-    }
-
-    // Buscamos os spans PELA CLASSE, dentro do container
-    // .valor-ocultavel:first-child -> Pega o primeiro span (Atingido)
-    // .valor-ocultavel:nth-child(2) -> Pega o segundo span (Total)
-    const atingidoEl = valoresContainerEl.querySelector('.valor-ocultavel:first-child');
-    const totalEl = valoresContainerEl.querySelector('.valor-ocultavel:nth-child(2)');
-    // --- FIM DA CORREÇÃO ---
-
-    // Adicionamos uma verificação de segurança para os novos seletores
-        if (meta && meta.valor_meta_diaria > 0 && atingidoEl && totalEl) {
+        if (meta && meta.valor_meta_diaria > 0) {
             containerEl.style.display = 'flex';
             const percentual = (meta.valor_atingido_hoje / meta.valor_meta_diaria) * 100;
+            
             barraEl.style.width = `${Math.min(percentual, 100)}%`;
             textoEl.textContent = `${percentual.toFixed(1)}%`;
-            atingidoEl.textContent = `R$ ${meta.valor_atingido_hoje.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
-            totalEl.textContent = `R$ ${meta.valor_meta_diaria.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
-            // --- INÍCIO: Lógica para Animação de Meta Diária Batida ---
-        const valorAtingido = meta.valor_atingido_hoje || 0;
-        const valorMeta = meta.valor_meta_diaria || 0;
+            
+            // REMOVIDO: Escrita dos valores monetários e toggle
+            
+            // --- Lógica de Animação (Mantida) ---
+            const valorAtingido = meta.valor_atingido_hoje || 0;
+            const valorMeta = meta.valor_meta_diaria || 0;
 
-        // --- INÍCIO: Lógica para Animação de Meta Diária Batida ---
-        // Verifica se a meta foi atingida E se a animação AINDA NÃO foi exibida
-        if (valorMeta > 0 && valorAtingido >= valorMeta && !metaDiariaAnimacaoExibida) {
-            console.log("Meta diária ATINGIDA pela primeira vez! Acionando animação..."); // Log para depuração
-            dispararFogos(); // Chama a função que dispara a animação
-            metaDiariaAnimacaoExibida = true; // Define a flag para true para não exibir de novo
-        }
-        // Opcional: Resetar a flag em um novo dia (requer lógica adicional, talvez no atualizarPainel)
-        // --- FIM: Lógica para Animação ---
+            if (valorMeta > 0 && valorAtingido >= valorMeta && !metaDiariaAnimacaoExibida) {
+                console.log("Meta diária ATINGIDA! Disparando animação...");
+                dispararFogos();
+                metaDiariaAnimacaoExibida = true;
+            }
         } else {
             containerEl.style.display = 'none';
         }
     }
-    
+
 function renderizarFeed(eventos) {
     // REQ 3: Alvo da renderização atualizado para a lista dentro do Kanban
     const feedLista = document.getElementById('feed-lista-kanban'); 
