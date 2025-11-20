@@ -66,32 +66,25 @@ from datetime import datetime, date, timedelta
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 import requests
 import urllib.parse
+from collections import deque
 
 
 def verificar_e_enviar_tarefas_de_grupo():
     """
-    (VERSÃO DIAGNÓSTICO) Verifica e envia tarefas de grupo com logs detalhados.
+    (VERSÃO CORRIGIDA COM CACHE ANTI-DUPLICAÇÃO)
+    Verifica e envia tarefas de grupo, evitando envios repetidos no mesmo minuto.
     """
     agora_dt = datetime.now()
     agora_hm = agora_dt.strftime('%H:%M')
     
-    # Lógica padrão do Python: 0=Segunda, 6=Domingo
+    # Chave de tempo para o cache (Dia + Hora + Minuto)
+    chave_tempo_atual = agora_dt.strftime('%Y-%m-%d %H:%M')
+
     dia_python = agora_dt.weekday()
-    
-    # Tentativa de conversão para padrão SQL (Domingo=1 ... Sábado=7)
-    # Se hoje é Segunda (0): (0 + 1) % 7 + 1 = 2
-    # Se hoje é Domingo (6): (6 + 1) % 7 + 1 = 1
     dia_semana_sql = (dia_python + 1) % 7 + 1
-    
     dia_mes = agora_dt.day
 
-    # LOG PARA DEBUG (Vai aparecer no terminal)
-    print(f"--- [DEBUG AGENDADOR] Buscando tarefas ---")
-    print(f"Hora Atual: {agora_hm}")
-    print(f"Dia Semana (Calculado p/ SQL): {dia_semana_sql} (Onde 1=Dom, 2=Seg...)")
-    print(f"Dia Mês: {dia_mes}")
-
-    # Passamos os parâmetros para o banco
+    # Busca tarefas no banco
     tarefas_para_disparar = database.buscar_tarefas_de_grupo_para_disparar(
         agora_hm, 
         str(dia_semana_sql), 
@@ -99,13 +92,24 @@ def verificar_e_enviar_tarefas_de_grupo():
     )
 
     if not tarefas_para_disparar:
-        print("--> Nenhuma tarefa de grupo encontrada para este minuto exato.")
         return
 
-    logger.info(f"[{agora_hm}] ENCONTRADAS {len(tarefas_para_disparar)} TAREFAS PARA DISPARAR!")
+    logger.info(f"[{agora_hm}] Encontradas {len(tarefas_para_disparar)} potenciais tarefas de grupo.")
     
     for tarefa in tarefas_para_disparar:
         atribuicao_id, titulo, pontos, nome_grupo, chat_id, *_ = tarefa
+
+        # --- LÓGICA ANTI-DUPLICAÇÃO ---
+        # Cria uma assinatura única para este envio: (ID da Atribuição, Minuto Atual)
+        assinatura_envio = (atribuicao_id, chave_tempo_atual)
+
+        if assinatura_envio in cache_tarefas_enviadas:
+            print(f"--> [ANTI-FLOOD] Tarefa '{titulo}' (ID {atribuicao_id}) já enviada neste minuto. Ignorando.")
+            continue
+        
+        # Se não está no cache, adiciona
+        cache_tarefas_enviadas.append(assinatura_envio)
+        # -----------------------------
 
         if not chat_id:
             logger.error(f"ERRO: O grupo '{nome_grupo}' não tem Chat ID cadastrado!")
@@ -123,10 +127,10 @@ def verificar_e_enviar_tarefas_de_grupo():
 
         try:
             notificador_telegram.enviar_mensagem_com_botao(chat_id, mensagem, reply_markup)
-            print(f"--> SUCESSO: Missão '{titulo}' enviada para '{nome_grupo}' (ChatID: {chat_id}).")
+            print(f"--> SUCESSO: Missão '{titulo}' enviada para '{nome_grupo}'.")
         except Exception as e:
             print(f"--> ERRO AO ENVIAR no Telegram: {e}")
-
+            
 # --- MÓDULO 2: INÍCIO DA JORNADA (Lógica antiga, agora focada) ---
 def verificar_inicio_jornada():
     """Verifica e notifica funcionários que estão começando a jornada AGORA."""
