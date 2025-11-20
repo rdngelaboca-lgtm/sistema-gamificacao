@@ -583,7 +583,57 @@ def rota_resgates_recentes():
         return jsonify(resgates), 200
     except Exception as e:
         logger.exception(f"!!! ERRO no endpoint /api/resgates/recentes: {e}")
-        return jsonify({"status": "erro", "mensagem": "Erro ao buscar resgates recentes."}), 500    
+        return jsonify({"status": "erro", "mensagem": "Erro ao buscar resgates recentes."}), 500   
+
+
+@app.route('/api/escala/hoje', methods=['GET'])
+def rota_escala_hoje():
+    """Retorna a imagem de fundo e as posições com quem está escalado HOJE."""
+    try:
+        # 1. Pega a data de hoje
+        hoje_str = datetime.now().strftime('%Y-%m-%d')
+        
+        # 2. Busca as posições (onde desenhar)
+        posicoes = database.listar_posicoes_loja()
+        
+        # 3. Busca a escalação (quem está onde)
+        escala_do_dia = database.buscar_escala_do_dia(hoje_str)
+        
+        # 4. Monta o JSON
+        dados_mapa = []
+        for pos in posicoes:
+            pos_id, nome, x, y, ativo = pos
+            
+            # Dados padrão (Vazio)
+            ocupante = "Vazio"
+            cor = "red"
+            detalhes = ""
+            
+            # Verifica se tem alguém escalado
+            if pos_id in escala_do_dia:
+                dados = escala_do_dia[pos_id]
+                ocupante = dados.NomePessoa
+                cor = "#28a745" # Verde
+                
+                # Formata horários se existirem
+                entrada = dados.HorarioEntrada.strftime('%H:%M') if dados.HorarioEntrada else "--"
+                saida = dados.HorarioSaida.strftime('%H:%M') if dados.HorarioSaida else "--"
+                detalhes = f"{entrada} - {saida}"
+
+            dados_mapa.append({
+                "id": pos_id,
+                "nome_posicao": nome,
+                "x": x,
+                "y": y,
+                "ocupante": ocupante,
+                "cor": cor,
+                "detalhes": detalhes
+            })
+            
+        return jsonify(dados_mapa), 200
+    except Exception as e:
+        logger.error(f"Erro na rota /api/escala/hoje: {e}", exc_info=True)
+        return jsonify([]), 500 
 
     
 if __name__ == '__main__':
