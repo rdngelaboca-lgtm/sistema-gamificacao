@@ -15,11 +15,10 @@ class AppEscalaLoja:
         self.root.geometry("1100x700")
 
         # Variáveis de Estado
-        self.modo_edicao = False # False = Modo Escalar / True = Modo Criar Bolinhas
+        self.modo_edicao = False
         self.data_selecionada = None
         self.escala_atual = {} 
         self.posicoes = [] 
-        self.mapa_img = None
         self.tk_img = None
         
         # --- Layout Principal ---
@@ -51,41 +50,44 @@ class AppEscalaLoja:
         self.canvas.bind("<Button-1>", self.clique_no_mapa) 
         self.canvas.bind("<Button-3>", self.clique_direito_mapa) 
 
-        # Carrega imagem e dados iniciais
-        self.root.after(100, self.inicializar)
+        # Inicialização atrasada para garantir carregamento da UI
+        self.root.after(200, self.inicializar)
 
     def inicializar(self):
         self.carregar_imagem_mapa()
         self.carregar_escala_do_dia()
 
     def carregar_imagem_mapa(self):
-        """Carrega a imagem de fundo uma única vez ou quando necessário."""
+        """Carrega a imagem de fundo."""
         caminho_img = "layout_loja.png"
         if not os.path.exists(caminho_img):
-            self.canvas.create_text(400, 300, text="ERRO: layout_loja.png não encontrada!", fill="red")
+            self.canvas.create_text(500, 300, text=f"ERRO: Imagem '{caminho_img}' não encontrada!", fill="red", font=("Arial", 16))
             return
 
-        pil_img = Image.open(caminho_img)
-        largura_display = 1080
-        altura_display = 600
-        pil_img.thumbnail((largura_display, altura_display), Image.Resampling.LANCZOS)
-        
-        self.tk_img = ImageTk.PhotoImage(pil_img)
-        # Desenha a imagem com a tag 'fundo' para podermos manipular a ordem
-        self.canvas.create_image(largura_display/2, altura_display/2, image=self.tk_img, anchor=tk.CENTER, tags="fundo")
+        try:
+            pil_img = Image.open(caminho_img)
+            largura_display = 1080
+            altura_display = 600
+            pil_img.thumbnail((largura_display, altura_display), Image.Resampling.LANCZOS)
+            
+            self.tk_img = ImageTk.PhotoImage(pil_img)
+            # Tag 'fundo' é crucial para o ordenamento
+            self.canvas.create_image(largura_display/2, altura_display/2, image=self.tk_img, anchor=tk.CENTER, tags="fundo")
+        except Exception as e:
+            messagebox.showerror("Erro Imagem", f"Falha ao carregar imagem: {e}")
 
     def carregar_escala_do_dia(self, event=None):
-        """Recarrega os dados do banco e redesenha SOMENTE os marcadores."""
+        """Recarrega dados e redesenha."""
         self.data_selecionada = self.date_entry.get_date().strftime('%Y-%m-%d')
-        
-        # Busca dados do banco
-        self.posicoes = database.listar_posicoes_loja()
-        self.escala_atual = database.buscar_escala_do_dia(self.data_selecionada)
-        
-        self.redesenhar_marcadores()
+        try:
+            self.posicoes = database.listar_posicoes_loja()
+            self.escala_atual = database.buscar_escala_do_dia(self.data_selecionada)
+            self.redesenhar_marcadores()
+        except Exception as e:
+            print(f"Erro ao carregar dados do banco: {e}")
 
     def redesenhar_marcadores(self):
-        """Limpa apenas os marcadores antigos e desenha os novos por cima da imagem."""
+        """Desenha as bolinhas. Blindado contra erros de dados."""
         self.canvas.delete("marcador")
         self.canvas.delete("texto_marcador")
 
@@ -93,43 +95,55 @@ class AppEscalaLoja:
         if dia_semana_hoje == 8: dia_semana_hoje = 1
 
         for pos in self.posicoes:
-            pos_id, nome, x, y, ativo = pos
-            
-            ocupado = False
-            nome_pessoa = "Vazio"
-            cor = "#ff4444" # Vermelho
+            try:
+                # Desempacotamento seguro (pega pelo índice para evitar erro se vierem colunas extras)
+                pos_id = pos[0]
+                nome = pos[1]
+                # CONVERSÃO FORÇADA PARA FLOAT (Corrige o problema silencioso)
+                x = float(pos[2])
+                y = float(pos[3])
+                
+                ocupado = False
+                nome_pessoa = "Vazio"
+                cor = "#ff4444" # Vermelho
 
-            if pos_id in self.escala_atual:
-                dados = self.escala_atual[pos_id]
-                nome_pessoa = dados.NomePessoa if dados.NomePessoa else "Erro Nome"
-                ocupado = True
-                cor = "#00C851" # Verde
-            
-            elif not self.modo_edicao:
-                func_padrao = database.buscar_funcionarios_com_posicao_padrao(pos_id)
-                if func_padrao:
-                    f_id, f_nome, f_folga = func_padrao
-                    if f_folga != dia_semana_hoje:
-                        nome_pessoa = f"{f_nome} (Fixo)"
-                        cor = "#33b5e5" # Azul
+                if pos_id in self.escala_atual:
+                    dados = self.escala_atual[pos_id]
+                    nome_pessoa = dados.NomePessoa if dados.NomePessoa else "Erro Nome"
+                    ocupado = True
+                    cor = "#00C851" # Verde
+                
+                elif not self.modo_edicao:
+                    func_padrao = database.buscar_funcionarios_com_posicao_padrao(pos_id)
+                    if func_padrao:
+                        f_id, f_nome, f_folga = func_padrao
+                        if str(f_folga) != str(dia_semana_hoje):
+                            nome_pessoa = f"{f_nome} (Fixo)"
+                            cor = "#33b5e5" # Azul
 
-            # Desenha a bolinha
-            raio = 15
-            self.canvas.create_oval(x-raio, y-raio, x+raio, y+raio, fill=cor, outline="white", width=2, tags=("marcador", f"pos_{pos_id}"))
+                # Desenha a bolinha
+                raio = 15
+                self.canvas.create_oval(x-raio, y-raio, x+raio, y+raio, fill=cor, outline="white", width=2, tags=("marcador", f"pos_{pos_id}"))
+                
+                # Desenha o texto
+                label_texto = f"{nome}\n{nome_pessoa}"
+                self.canvas.create_text(x, y+25, text=label_texto, fill="black", font=("Arial", 8, "bold"), justify=tk.CENTER, tags=("texto_marcador"))
             
-            # Desenha o texto
-            label_texto = f"{nome}\n{nome_pessoa}"
-            self.canvas.create_text(x, y+25, text=label_texto, fill="black", font=("Arial", 8, "bold"), justify=tk.CENTER, tags=("texto_marcador"))
+            except Exception as e:
+                print(f"Erro ao desenhar posição {pos}: {e}")
+                # Se der erro em uma, continua tentando desenhar as outras
+                continue
         
-        # Garante que marcadores fiquem acima do fundo
-        self.canvas.tag_raise("marcador")
-        self.canvas.tag_raise("texto_marcador")
+        # REFORÇA A ORDEM DAS CAMADAS
+        self.canvas.tag_lower("fundo")      # Manda a imagem para o fundo
+        self.canvas.tag_raise("marcador")   # Traz as bolinhas para frente
+        self.canvas.tag_raise("texto_marcador") # Traz o texto para frente de tudo
 
     def clique_no_mapa(self, event):
         x, y = event.x, event.y
         
         if self.modo_edicao:
-            # Verifica se clicou muito perto de um existente para evitar sobreposição
+            # Verifica sobreposição
             itens = self.canvas.find_overlapping(x-10, y-10, x+10, y+10)
             for item in itens:
                 tags = self.canvas.gettags(item)
@@ -139,12 +153,17 @@ class AppEscalaLoja:
 
             nome = simpledialog.askstring("Nova Posição", "Nome do local (ex: Caixa 1):")
             if nome:
-                if database.criar_posicao_loja(nome, x, y):
-                    self.carregar_escala_do_dia() # Atualiza visualmente
+                # Salva no banco
+                sucesso = database.criar_posicao_loja(nome, x, y)
+                if sucesso:
+                    # Recarrega imediatamente para mostrar a bolinha nova
+                    self.carregar_escala_do_dia()
+                    # Feedback visual forçado
+                    self.canvas.update_idletasks()
                 else:
                     messagebox.showerror("Erro", "Falha ao salvar no banco de dados.")
         else:
-            # Modo Escalar
+            # Modo Escalar (Click na bolinha)
             itens = self.canvas.find_overlapping(x-10, y-10, x+10, y+10)
             for item in itens:
                 tags = self.canvas.gettags(item)
@@ -187,11 +206,13 @@ class AppEscalaLoja:
                 messagebox.showinfo("Sucesso", "Freelancer cadastrado!")
 
     def abrir_janela_escalacao(self, pos_id):
-        # Busca nome da posição com segurança
         try:
-            nome_pos = next((p[1] for p in self.posicoes if p[0] == pos_id), "Posição")
+            # Busca nome de forma segura
+            dados_pos = next((p for p in self.posicoes if p[0] == pos_id), None)
+            if not dados_pos: return
+            nome_pos = dados_pos[1]
         except StopIteration:
-            return # Erro de sincronia, recarrega
+            return 
         
         popup = Toplevel(self.root)
         popup.title(f"Escalar: {nome_pos} - {self.data_selecionada}")
@@ -206,7 +227,6 @@ class AppEscalaLoja:
         mapa_ids = {} 
         lista_nomes = ["(Vazio)"]
         
-        # Carrega listas
         for f in database.listar_funcionarios():
             label = f"[Fixo] {f.NomeCompleto}"
             lista_nomes.append(label)
@@ -219,7 +239,6 @@ class AppEscalaLoja:
 
         combo_pessoas['values'] = lista_nomes
         
-        # Seleciona valor atual
         pessoa_selecionada_tel = None
         if dados_atuais:
             if dados_atuais.FuncionarioID:
@@ -230,7 +249,6 @@ class AppEscalaLoja:
                 combo_pessoas.set(match)
                 pessoa_selecionada_tel = dados_atuais.TelefonePessoa
 
-        # Horários
         frame_hor = ttk.LabelFrame(popup, text="Horários", padding=10)
         frame_hor.pack(fill=tk.X, padx=10, pady=10)
         
