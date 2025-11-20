@@ -5420,13 +5420,11 @@ def buscar_horarios_ocupacao_hoje(data_str, dia_semana_int):
         try:
             cursor = conn.cursor()
             
-            # Essa query une:
-            # 1. Quem está na tabela EscalaDiaria (prioridade)
-            # 2. Quem é fixo (PosicaoPadraoID) e NÃO está na EscalaDiaria e NÃO é folga
-            
+            # CORREÇÃO: O NOT EXISTS agora verifica pelo FUNCIONARIO_ID, não pela Posição.
+            # Se o funcionário já está na escala manual (em qualquer lugar), não gera fallback.
             sql = """
                 SELECT 
-                    ISNULL(E.HorarioEntrada, F.HorarioNotificacao) as Entrada, -- Fallback simples, ideal é ter horario padrao
+                    ISNULL(E.HorarioEntrada, F.HorarioNotificacao) as Entrada,
                     ISNULL(E.HorarioSaida, DATEADD(HOUR, 8, F.HorarioNotificacao)) as Saida,
                     E.InicioIntervalo,
                     E.FimIntervalo
@@ -5436,29 +5434,21 @@ def buscar_horarios_ocupacao_hoje(data_str, dia_semana_int):
                 UNION ALL
                 
                 SELECT 
-                    -- Para fixos, vamos assumir um horário padrão se não tiver escala manual
-                    -- AQUI É UMA SIMPLIFICAÇÃO. O ideal seria ter 'HorarioPadrao' no cadastro.
-                    -- Vou usar o HorarioNotificacao como base de entrada e +9h como saída
                     F.HorarioNotificacao as Entrada,
                     DATEADD(HOUR, 9, F.HorarioNotificacao) as Saida,
-                    DATEADD(HOUR, 4, F.HorarioNotificacao) as InicioIntervalo, -- Chute: 4h após entrar
-                    DATEADD(HOUR, 5, F.HorarioNotificacao) as FimIntervalo    -- Chute: 1h de almoço
+                    DATEADD(HOUR, 4, F.HorarioNotificacao) as InicioIntervalo,
+                    DATEADD(HOUR, 5, F.HorarioNotificacao) as FimIntervalo
                 FROM Funcionarios F
                 WHERE F.PosicaoPadraoID IS NOT NULL
-                  AND F.DiaDeFolga != ?
-                  AND NOT EXISTS (SELECT 1 FROM EscalaDiaria E2 WHERE E2.PosicaoID = F.PosicaoPadraoID AND E2.DataEscala = ?)
+                  AND (F.DiaDeFolga IS NULL OR F.DiaDeFolga != ?)
+                  AND NOT EXISTS (
+                      SELECT 1 FROM EscalaDiaria E2 
+                      WHERE E2.FuncionarioID = F.FuncionarioID 
+                      AND E2.DataEscala = ?
+                  )
             """
-            # Nota: A parte do UNION acima é um "fallback" para funcionários fixos sem escala manual.
-            # Se você sempre lança a escala manual para todo mundo, a primeira parte do SELECT basta.
-            # Vou deixar focado na ESCALA DIÁRIA REAL para ser preciso com os intervalos.
-            
-            sql_preciso = """
-                SELECT HorarioEntrada, HorarioSaida, InicioIntervalo, FimIntervalo
-                FROM EscalaDiaria
-                WHERE DataEscala = ?
-            """
-            
-            cursor.execute(sql_preciso, data_str)
+            # Passamos os parâmetros na ordem correta: Data, DiaSemana, Data
+            cursor.execute(sql, data_str, dia_semana_int, data_str)
             return cursor.fetchall()
         finally:
             conn.close()
