@@ -324,6 +324,45 @@ function renderizarProgressoGeral(progresso) {
         // console.warn("Dados de progresso ausentes ou inválidos:", progresso);
     }
 }
+
+async function atualizarMapaLoja() {
+        const container = document.getElementById('marcadores-mapa');
+        // Se o container não existir (estiver na aba errada ou carregando), para aqui.
+        if (!container) return;
+        
+        try {
+            // Faz a chamada para a API
+            const response = await fetch(`${API_BASE_URL}/api/escala/hoje`);
+            if (!response.ok) return;
+            
+            const posicoes = await response.json();
+            
+            container.innerHTML = ''; // Limpa marcadores antigos para não duplicar
+            
+            posicoes.forEach(pos => {
+                const el = document.createElement('div');
+                el.className = 'marcador-mapa';
+                // Usa as coordenadas que vieram do banco
+                el.style.left = `${pos.x}px`; 
+                el.style.top = `${pos.y}px`;
+                el.style.backgroundColor = pos.cor; // Verde (ocupado) ou Vermelho (vazio)
+                
+                // Cria o balãozinho com as informações
+                el.innerHTML = `
+                    <div class="info-box">
+                        <strong>${pos.nome_posicao}</strong><br>
+                        ${pos.ocupante}<br>
+                        <small>${pos.detalhes}</small>
+                    </div>
+                `;
+                
+                container.appendChild(el);
+            });
+        } catch (error) {
+            console.error("Erro ao atualizar mapa:", error);
+        }
+    }
+
     
 async function atualizarPainel() {
     // Reseta a flag da animação se o dia mudou (usando localStorage)
@@ -385,7 +424,9 @@ async function atualizarPainel() {
         renderizarMetaDiaria(dadosMetaDiaria);
         renderizarProximosAgendamentos(dadosAgendamentos);
         renderizarHistoricoLucro(dadosHistoricoLucro);
-        renderizarResgatesRecentes(dadosResgates); // <<< CHAMA A NOVA FUNÇÃO DE RENDERIZAÇÃO
+        renderizarResgatesRecentes(dadosResgates); 
+
+         atualizarMapaLoja();
 
         statusElement.textContent = `Última atualização: ${new Date().toLocaleTimeString('pt-BR')}`;
         statusElement.style.color = 'inherit'; // Volta para a cor padrão
