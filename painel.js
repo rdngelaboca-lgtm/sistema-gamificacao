@@ -363,6 +363,43 @@ async function atualizarMapaLoja() {
         }
     }
 
+
+function renderizarGraficoOcupacao(dados) {
+        const container = document.getElementById('grafico-barras-container');
+        if (!container) return;
+        container.innerHTML = '';
+
+        if (!dados || dados.length === 0) {
+            container.innerHTML = '<p style="width:100%; text-align:center;">Sem dados de escala.</p>';
+            return;
+        }
+
+        // Encontra o valor máximo para calcular a altura proporcional (regra de 3)
+        // Se o máximo for muito baixo (ex: 2 pessoas), definimos um mínimo de 5 para o gráfico não ficar gigante
+        const maxPessoas = Math.max(...dados.map(d => d.qtd), 5); 
+
+        dados.forEach(d => {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'barra-wrapper';
+
+            const alturaPercentual = (d.qtd / maxPessoas) * 100;
+
+            // Define cor baseada na quantidade (opcional)
+            // Ex: Pouca gente (<=2) vermelho, Normal azul
+            let corBarra = '#33b5e5'; // Azul padrão
+            if (d.qtd > 0 && d.qtd <= 2) corBarra = '#ffbb33'; // Amarelo alerta
+
+            wrapper.innerHTML = `
+                <div class="barra-visual" style="height: ${alturaPercentual}%; background-color: ${corBarra};">
+                    <span class="barra-valor">${d.qtd > 0 ? d.qtd : ''}</span>
+                </div>
+                <span class="barra-hora">${d.hora}</span>
+            `;
+
+            container.appendChild(wrapper);
+        });
+    }
+
     
 async function atualizarPainel() {
     // Reseta a flag da animação se o dia mudou (usando localStorage)
@@ -389,6 +426,7 @@ async function atualizarPainel() {
             `${API_BASE_URL}/api/agendamentos/proximos`,    // Indice 5
             `${API_BASE_URL}/api/historico_lucro`,          // Indice 6
             `${API_BASE_URL}/api/resgates/recentes`         // Indice 7
+            `${API_BASE_URL}/api/escala/ocupacao`           // Indice 8 (NOVO)
         ];
 
         // Promise.allSettled: Tenta buscar todos. Se um falhar, ele NÃO trava os outros.
@@ -431,6 +469,8 @@ async function atualizarPainel() {
         const dadosResgates = resultados[7].status === 'fulfilled' && resultados[7].value 
             ? resultados[7].value 
             : [];
+
+        const dadosOcupacao = resultados[8].status === 'fulfilled' && resultados[8].value ? resultados[8].value : [];
         // --- FIM DA CORRECAO ---
 
 
@@ -445,6 +485,7 @@ async function atualizarPainel() {
         renderizarResgatesRecentes(dadosResgates); 
 
          atualizarMapaLoja();
+         renderizarGraficoOcupacao(dadosOcupacao);
 
         statusElement.textContent = `Última atualização: ${new Date().toLocaleTimeString('pt-BR')}`;
         statusElement.style.color = 'inherit'; // Volta para a cor padrão
