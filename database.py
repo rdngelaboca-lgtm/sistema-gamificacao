@@ -5252,3 +5252,155 @@ def buscar_historico_compras_produto(produto_id_mestre):
 # ===================================================================
 # == FIM DO MÓDULO DE GESTÃO DE ESTOQUE (SUGESTÃO DE COMPRA) ========
 # ===================================================================
+
+# ===================================================================
+# == INÍCIO DO MÓDULO DE ESCALAÇÃO E MAPA DE LOJA ===================
+# ===================================================================
+
+def criar_posicao_loja(nome, x, y):
+    """Cria um ponto clicável no mapa da loja."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "INSERT INTO PosicoesLoja (NomePosicao, CoordX, CoordY) VALUES (?, ?, ?)"
+            cursor.execute(sql, nome, x, y)
+            conn.commit()
+            return True
+        except Exception as e:
+            logging.error(f"Erro ao criar posição: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
+
+def listar_posicoes_loja():
+    """Lista todas as posições cadastradas no mapa."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM PosicoesLoja WHERE Ativo = 1")
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def excluir_posicao_loja(posicao_id):
+    """Desativa uma posição no mapa."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE PosicoesLoja SET Ativo = 0 WHERE PosicaoID = ?", posicao_id)
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+    return False
+
+def salvar_escala_dia(data, posicao_id, func_id, free_id, h_ent, h_sai, h_int_ini, h_int_fim, foco):
+    """Salva ou atualiza a escala de uma pessoa em uma posição para um dia."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Verifica se já existe escala para essa posição nesse dia
+            check_sql = "SELECT EscalaID FROM EscalaDiaria WHERE DataEscala = ? AND PosicaoID = ?"
+            cursor.execute(check_sql, data, posicao_id)
+            existente = cursor.fetchone()
+
+            if existente:
+                # Atualiza
+                sql = """
+                    UPDATE EscalaDiaria SET 
+                        FuncionarioID = ?, FreelancerID = ?, 
+                        HorarioEntrada = ?, HorarioSaida = ?, 
+                        InicioIntervalo = ?, FimIntervalo = ?, FocoDoDia = ?
+                    WHERE EscalaID = ?
+                """
+                cursor.execute(sql, func_id, free_id, h_ent, h_sai, h_int_ini, h_int_fim, foco, existente[0])
+            else:
+                # Insere Novo
+                sql = """
+                    INSERT INTO EscalaDiaria 
+                    (DataEscala, PosicaoID, FuncionarioID, FreelancerID, HorarioEntrada, HorarioSaida, InicioIntervalo, FimIntervalo, FocoDoDia)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """
+                cursor.execute(sql, data, posicao_id, func_id, free_id, h_ent, h_sai, h_int_ini, h_int_fim, foco)
+            
+            conn.commit()
+            return True
+        except Exception as e:
+            logging.error(f"Erro ao salvar escala: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
+
+def buscar_escala_do_dia(data_str):
+    """
+    Busca toda a escala de um dia específico.
+    Retorna um dicionário onde a CHAVE é o PosicaoID.
+    """
+    conn = get_db_connection()
+    escala_map = {}
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT 
+                    E.*, 
+                    ISNULL(F.NomeCompleto, FR.Nome) as NomePessoa,
+                    ISNULL(F.Telefone, FR.Telefone) as TelefonePessoa
+                FROM EscalaDiaria E
+                LEFT JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID
+                LEFT JOIN Freelancers FR ON E.FreelancerID = FR.FreelancerID
+                WHERE E.DataEscala = ?
+            """
+            cursor.execute(sql, data_str)
+            resultados = cursor.fetchall()
+            for row in resultados:
+                escala_map[row.PosicaoID] = row
+            return escala_map
+        finally:
+            conn.close()
+    return {}
+
+def listar_freelancers():
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM Freelancers ORDER BY Nome")
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def criar_freelancer(nome, telefone):
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO Freelancers (Nome, Telefone) VALUES (?, ?)", nome, telefone)
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+    return False
+
+def buscar_funcionarios_com_posicao_padrao(posicao_id):
+    """Busca funcionário que tem esta posição como padrão (para auto-preenchimento)."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Retorna o funcionário apenas se ele NÃO estiver de folga no dia (Lógica tratada no Python ou aqui)
+            # Por enquanto, trazemos quem é o dono da posição
+            sql = "SELECT FuncionarioID, NomeCompleto, DiaDeFolga FROM Funcionarios WHERE PosicaoPadraoID = ?"
+            cursor.execute(sql, posicao_id)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
