@@ -68,9 +68,14 @@ class AppEscalaLoja:
             pil_img = Image.open(caminho_img)
             largura_display = 1080
             altura_display = 600
-            pil_img.thumbnail((largura_display, altura_display), Image.Resampling.LANCZOS)
+            
+            # CORREÇÃO: Usamos .resize para ESTICAR a imagem exatamente para 1080x600
+            # Isso garante que as coordenadas batam 100% com o 'background-size: 100% 100%' do HTML
+            pil_img = pil_img.resize((largura_display, altura_display), Image.Resampling.LANCZOS)
             
             self.tk_img = ImageTk.PhotoImage(pil_img)
+
+
             # Tag 'fundo' é crucial para o ordenamento
             self.canvas.create_image(largura_display/2, altura_display/2, image=self.tk_img, anchor=tk.CENTER, tags="fundo")
         except Exception as e:
