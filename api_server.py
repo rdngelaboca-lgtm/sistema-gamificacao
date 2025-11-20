@@ -651,44 +651,45 @@ def rota_escala_hoje():
 def rota_escala_ocupacao():
     try:
         hoje_str = datetime.now().strftime('%Y-%m-%d')
-        # Dia da semana para lógica futura se precisar
         dia_semana = datetime.now().isoweekday() + 1
         if dia_semana == 8: dia_semana = 1
 
-        # Busca os horários brutos do banco
         horarios = database.buscar_horarios_ocupacao_hoje(hoje_str, dia_semana)
         
-        # Define as horas que queremos mostrar no gráfico (07h às 23h)
         horas_grafico = range(7, 24) 
         dados_grafico = []
 
         for hora in horas_grafico:
-            # Cria um objeto datetime para essa hora exata hoje (ex: 07:00:00)
-            # Usamos uma data arbitraria para comparação de tempo apenas
             momento_analise = datetime.strptime(f"{hora}:00", "%H:%M").time()
-            
             qtd_pessoas = 0
             
             for row in horarios:
-                ent = row.HorarioEntrada
-                sai = row.HorarioSaida
-                int_ini = row.InicioIntervalo
-                int_fim = row.FimIntervalo
+                # --- CORREÇÃO DE TIPAGEM ---
+                # Extrai apenas a parte 'time' se vier como 'datetime' do banco
+                def extrair_tempo(val):
+                    if val is None: return None
+                    if isinstance(val, datetime): return val.time()
+                    return val # Já é time ou outro tipo compatível
+
+                ent = extrair_tempo(row.Entrada)
+                sai = extrair_tempo(row.Saida)
+                int_ini = extrair_tempo(row.InicioIntervalo)
+                int_fim = extrair_tempo(row.FimIntervalo)
+                # ---------------------------
                 
-                # Se não tem horário de entrada/saida definido, pula
                 if not ent or not sai:
                     continue
                 
-                # Lógica 1: A pessoa está na loja? (Hora >= Entrada E Hora < Saida)
+                # Lógica 1: Turno
                 esta_no_turno = False
-                if ent <= sai: # Turno normal (ex: 08:00 as 18:00)
+                if ent <= sai:
                     if ent <= momento_analise < sai:
                         esta_no_turno = True
-                else: # Turno que vira a noite (ex: 18:00 as 02:00) - Raro na loja mas possível
+                else: # Turno vira a noite
                     if momento_analise >= ent or momento_analise < sai:
                         esta_no_turno = True
                 
-                # Lógica 2: A pessoa está no intervalo?
+                # Lógica 2: Intervalo
                 esta_no_intervalo = False
                 if int_ini and int_fim:
                     if int_ini <= int_fim:
@@ -698,11 +699,9 @@ def rota_escala_ocupacao():
                         if momento_analise >= int_ini or momento_analise < int_fim:
                             esta_no_intervalo = True
                 
-                # Contagem Final: Está no turno E NÃO está no intervalo
                 if esta_no_turno and not esta_no_intervalo:
                     qtd_pessoas += 1
             
-            # Adiciona ao resultado
             dados_grafico.append({
                 "hora": f"{hora:02d}:00",
                 "qtd": qtd_pessoas
@@ -713,7 +712,6 @@ def rota_escala_ocupacao():
     except Exception as e:
         logger.error(f"Erro na rota ocupacao: {e}", exc_info=True)
         return jsonify([]), 500
-
     
 if __name__ == '__main__':
     # O debug=False é essencial para rodar como serviço
