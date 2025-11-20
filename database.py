@@ -449,7 +449,7 @@ def listar_tarefas_do_dia_por_funcionario(funcionario_id):
 
                         -- --- A CORREÇÃO ESTÁ AQUI ---
                         -- Adicionamos a condição para incluir tarefas do tipo 'Unica' que foram criadas HOJE.
-                        OR (TA.TipoFrequencia = 'Unica' AND CONVERT(date, TA.DataInicioVigencia) = CONVERT(date, GETDATE()))
+                        OR (TA.TipoFrequencia = 'Unica')
                         -- --- FIM DA CORREÇÃO ---
                     )
             """
