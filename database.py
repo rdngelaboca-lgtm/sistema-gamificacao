@@ -5415,10 +5415,11 @@ def buscar_horarios_ocupacao_hoje(data_str, dia_semana_int):
     if conn:
         try:
             cursor = conn.cursor()
-            # CORREÇÃO CRÍTICA: Usamos 'AS Entrada', 'AS Saida' para alinhar
-            # com o que o api_server.py espera ler (row.Entrada, row.Saida).
+            # CORREÇÃO: Adicionamos um JOIN com PosicoesLoja na segunda parte.
+            # Isso garante que só contamos funcionários fixos se a posição deles
+            # for uma das "bolinhas" ativas no mapa visual.
             sql = """
-                -- 1. Pessoas da Escala Manual (EscalaDiaria)
+                -- 1. Pessoas da Escala Manual (Quem você escalou explicitamente)
                 SELECT 
                     HorarioEntrada AS Entrada, 
                     HorarioSaida AS Saida, 
@@ -5429,14 +5430,17 @@ def buscar_horarios_ocupacao_hoje(data_str, dia_semana_int):
 
                 UNION ALL
 
-                -- 2. Funcionários Fixos (Fallback)
+                -- 2. Funcionários Fixos (Apenas se a posição estiver ATIVA no mapa)
                 SELECT 
                     CAST('08:00' AS TIME) AS Entrada,
                     CAST('18:00' AS TIME) AS Saida,
                     CAST('12:00' AS TIME) AS InicioIntervalo,
                     CAST('13:00' AS TIME) AS FimIntervalo
                 FROM Funcionarios F
+                -- O JOIN abaixo é o filtro novo:
+                INNER JOIN PosicoesLoja PL ON F.PosicaoPadraoID = PL.PosicaoID
                 WHERE F.PosicaoPadraoID IS NOT NULL
+                  AND PL.Ativo = 1 -- SÓ CONTA SE A POSIÇÃO EXISTIR NO MAPA
                   AND (F.DiaDeFolga IS NULL OR F.DiaDeFolga != ?)
                   AND NOT EXISTS (
                       SELECT 1 FROM EscalaDiaria ED 
