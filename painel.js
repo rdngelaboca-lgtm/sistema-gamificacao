@@ -425,7 +425,7 @@ async function atualizarPainel() {
             `${API_BASE_URL}/api/meta_diaria_do_dia`,       // Indice 4
             `${API_BASE_URL}/api/agendamentos/proximos`,    // Indice 5
             `${API_BASE_URL}/api/historico_lucro`,          // Indice 6
-            `${API_BASE_URL}/api/resgates/recentes`         // Indice 7
+            `${API_BASE_URL}/api/resgates/recentes`,         // Indice 7
             `${API_BASE_URL}/api/escala/ocupacao`           // Indice 8 (NOVO)
         ];
 
