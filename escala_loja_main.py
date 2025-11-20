@@ -96,10 +96,8 @@ class AppEscalaLoja:
 
         for pos in self.posicoes:
             try:
-                # Desempacotamento seguro (pega pelo índice para evitar erro se vierem colunas extras)
                 pos_id = pos[0]
                 nome = pos[1]
-                # CONVERSÃO FORÇADA PARA FLOAT (Corrige o problema silencioso)
                 x = float(pos[2])
                 y = float(pos[3])
                 
@@ -121,31 +119,27 @@ class AppEscalaLoja:
                             nome_pessoa = f"{f_nome} (Fixo)"
                             cor = "#33b5e5" # Azul
 
-                # ... (código anterior mantido igual) ...
+                # --- A MÁGICA ACONTECE AQUI ---
+                tag_unica = f"pos_{pos_id}" # Cria uma ID única para este grupo
 
-                # Cria uma variável com a tag para usar nos dois lugares
-                tag_id = f"pos_{pos_id}" 
-
-                # Desenha a bolinha
+                # Desenha a bolinha com a tag
                 raio = 15
                 self.canvas.create_oval(x-raio, y-raio, x+raio, y+raio, 
                                       fill=cor, outline="white", width=2, 
-                                      tags=("marcador", tag_id)) # <--- Usa a tag aqui
+                                      tags=("marcador", tag_unica)) 
                 
-                # Desenha o texto
+                # Desenha o texto COM A MESMA TAG (Isso conserta o clique no nome)
                 label_texto = f"{nome}\n{nome_pessoa}"
-                
-                # CORREÇÃO 3: Adiciona a tag_id também no texto!
                 self.canvas.create_text(x, y+25, text=label_texto, 
                                       fill="black", font=("Arial", 8, "bold"), 
                                       justify=tk.CENTER, 
-                                      tags=("texto_marcador", tag_id)) # <--- Tag ADICIONADA AQUI
+                                      tags=("texto_marcador", tag_unica)) 
             
             except Exception as e:
                 print(f"Erro ao desenhar posição {pos}: {e}")
-                # Se der erro em uma, continua tentando desenhar as outras
                 continue
-        
+
+
         # REFORÇA A ORDEM DAS CAMADAS
         self.canvas.tag_lower("fundo")      # Manda a imagem para o fundo
         self.canvas.tag_raise("marcador")   # Traz as bolinhas para frente
@@ -154,28 +148,34 @@ class AppEscalaLoja:
     def clique_no_mapa(self, event):
         x, y = event.x, event.y
         
+        # --- MODO DE EDIÇÃO / CONFIGURAÇÃO ---
         if self.modo_edicao:
-            # Verifica sobreposição
+            # 1. Verifica se clicou em cima de algo existente
             itens = self.canvas.find_overlapping(x-10, y-10, x+10, y+10)
             for item in itens:
                 tags = self.canvas.gettags(item)
-                if "marcador" in tags:
-                    messagebox.showinfo("Aviso", "Já existe uma posição aqui.")
-                    return
+                # Procura por tags que indicam uma posição (marcador ou texto)
+                for tag in tags:
+                    if tag.startswith("pos_"):
+                        pos_id = int(tag.split("_")[1])
+                        # EM VEZ DE ERRO, OFERECE EXCLUSÃO
+                        if messagebox.askyesno("Gerenciar Posição", "Você clicou em uma posição existente.\n\nDeseja EXCLUIR esta posição?"):
+                            database.excluir_posicao_loja(pos_id)
+                            self.carregar_escala_do_dia()
+                        return # Para por aqui, não cria nada novo
 
+            # 2. Se não clicou em nada, CRIA UMA NOVA
             nome = simpledialog.askstring("Nova Posição", "Nome do local (ex: Caixa 1):")
             if nome:
-                # Salva no banco
                 sucesso = database.criar_posicao_loja(nome, x, y)
                 if sucesso:
-                    # Recarrega imediatamente para mostrar a bolinha nova
                     self.carregar_escala_do_dia()
-                    # Feedback visual forçado
                     self.canvas.update_idletasks()
                 else:
                     messagebox.showerror("Erro", "Falha ao salvar no banco de dados.")
+
+        # --- MODO DE ESCALAÇÃO (PADRÃO) ---
         else:
-            # Modo Escalar (Click na bolinha)
             itens = self.canvas.find_overlapping(x-10, y-10, x+10, y+10)
             for item in itens:
                 tags = self.canvas.gettags(item)
@@ -185,23 +185,26 @@ class AppEscalaLoja:
                         self.abrir_janela_escalacao(pos_id)
                         return
 
+
     def clique_direito_mapa(self, event):
-        # CORREÇÃO 1: Avisa o usuário se ele tentar excluir no modo errado
-        if not self.modo_edicao:
-            messagebox.showinfo("Ação Inválida", "Para excluir posições, clique no botão 'Ativar Modo Configuração' no topo da tela.")
-            return
+            # Proteção: Só deixa excluir se estiver no modo Configuração
+            if not self.modo_edicao:
+                messagebox.showinfo("Modo Escalação", "Para excluir posições, ative o botão 'Ativar Modo Configuração' no topo.")
+                return
 
-        itens = self.canvas.find_overlapping(event.x-10, event.y-10, event.x+10, event.y+10)
-        for item in itens:
-            tags = self.canvas.gettags(item)
-            for tag in tags:
-                if tag.startswith("pos_"):
-                    pos_id = int(tag.split("_")[1])
-                    if messagebox.askyesno("Excluir", "Remover esta posição do mapa?"):
-                        database.excluir_posicao_loja(pos_id)
-                        self.carregar_escala_do_dia()
-                        return # CORREÇÃO 2: Para a função imediatamente após excluir
-
+            # Procura o item clicado
+            itens = self.canvas.find_overlapping(event.x-10, event.y-10, event.x+10, event.y+10)
+            for item in itens:
+                tags = self.canvas.gettags(item)
+                for tag in tags:
+                    if tag.startswith("pos_"): # Detecta a tag de ID (funciona na bolinha E no texto)
+                        pos_id = int(tag.split("_")[1])
+                        
+                        # Confirmação rápida
+                        if messagebox.askyesno("Excluir", "Tem certeza que deseja remover esta posição?"):
+                            database.excluir_posicao_loja(pos_id)
+                            self.carregar_escala_do_dia() # Atualiza a tela sumindo com a bolinha
+                            return # Importante: para de procurar após encontrar e excluir
 
     def alternar_modo(self):
         self.modo_edicao = not self.modo_edicao
