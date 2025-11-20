@@ -5411,44 +5411,21 @@ def buscar_funcionarios_com_posicao_padrao(posicao_id):
     return None
 
 def buscar_horarios_ocupacao_hoje(data_str, dia_semana_int):
-    """
-    Busca horários de Entrada, Saída, Início Intervalo e Fim Intervalo
-    de todas as pessoas ativas no dia (Escalados manualmente + Fixos não folguistas).
-    """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            
-            # CORREÇÃO: O NOT EXISTS agora verifica pelo FUNCIONARIO_ID, não pela Posição.
-            # Se o funcionário já está na escala manual (em qualquer lugar), não gera fallback.
+            # Focamos APENAS na EscalaDiaria para garantir que o gráfico reflita EXATAMENTE o mapa
             sql = """
                 SELECT 
-                    ISNULL(E.HorarioEntrada, F.HorarioNotificacao) as Entrada,
-                    ISNULL(E.HorarioSaida, DATEADD(HOUR, 8, F.HorarioNotificacao)) as Saida,
-                    E.InicioIntervalo,
-                    E.FimIntervalo
-                FROM EscalaDiaria E
-                WHERE E.DataEscala = ?
-                
-                UNION ALL
-                
-                SELECT 
-                    F.HorarioNotificacao as Entrada,
-                    DATEADD(HOUR, 9, F.HorarioNotificacao) as Saida,
-                    DATEADD(HOUR, 4, F.HorarioNotificacao) as InicioIntervalo,
-                    DATEADD(HOUR, 5, F.HorarioNotificacao) as FimIntervalo
-                FROM Funcionarios F
-                WHERE F.PosicaoPadraoID IS NOT NULL
-                  AND (F.DiaDeFolga IS NULL OR F.DiaDeFolga != ?)
-                  AND NOT EXISTS (
-                      SELECT 1 FROM EscalaDiaria E2 
-                      WHERE E2.FuncionarioID = F.FuncionarioID 
-                      AND E2.DataEscala = ?
-                  )
+                    HorarioEntrada, 
+                    HorarioSaida, 
+                    InicioIntervalo, 
+                    FimIntervalo 
+                FROM EscalaDiaria 
+                WHERE DataEscala = ?
             """
-            # Passamos os parâmetros na ordem correta: Data, DiaSemana, Data
-            cursor.execute(sql, data_str, dia_semana_int, data_str)
+            cursor.execute(sql, data_str)
             return cursor.fetchall()
         finally:
             conn.close()
