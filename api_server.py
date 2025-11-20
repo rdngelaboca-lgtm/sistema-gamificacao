@@ -586,39 +586,50 @@ def rota_resgates_recentes():
         return jsonify({"status": "erro", "mensagem": "Erro ao buscar resgates recentes."}), 500   
 
 
+# Substitua a função rota_escala_hoje por esta versão corrigida
 @app.route('/api/escala/hoje', methods=['GET'])
 def rota_escala_hoje():
-    """Retorna a imagem de fundo e as posições com quem está escalado HOJE."""
+    """Retorna a escala visual, INCLUINDO a lógica de ocupantes fixos (Padrão)."""
     try:
-        # 1. Pega a data de hoje
         hoje_str = datetime.now().strftime('%Y-%m-%d')
-        
-        # 2. Busca as posições (onde desenhar)
+        # Para lógica de folga, precisamos do dia da semana (1=Dom, ..., 7=Sab)
+        # Python weekday(): 0=Seg, 6=Dom. 
+        # SQL Server: Config dependente, mas vamos alinhar a lógica com o app Desktop:
+        # App Desktop usa: datetime.isoweekday() + 1 (Se 8 vira 1).
+        dia_semana_hoje = datetime.now().isoweekday() + 1
+        if dia_semana_hoje == 8: dia_semana_hoje = 1
+
         posicoes = database.listar_posicoes_loja()
-        
-        # 3. Busca a escalação (quem está onde)
         escala_do_dia = database.buscar_escala_do_dia(hoje_str)
         
-        # 4. Monta o JSON
         dados_mapa = []
         for pos in posicoes:
             pos_id, nome, x, y, ativo = pos
             
-            # Dados padrão (Vazio)
             ocupante = "Vazio"
-            cor = "red"
+            cor = "#ff4444" # Vermelho (Padrão)
             detalhes = ""
             
-            # Verifica se tem alguém escalado
+            # 1. Verifica Escala Explícita (Prioridade Alta)
             if pos_id in escala_do_dia:
                 dados = escala_do_dia[pos_id]
                 ocupante = dados.NomePessoa
-                cor = "#28a745" # Verde
-                
-                # Formata horários se existirem
+                cor = "#00C851" # Verde (Confirmado)
                 entrada = dados.HorarioEntrada.strftime('%H:%M') if dados.HorarioEntrada else "--"
                 saida = dados.HorarioSaida.strftime('%H:%M') if dados.HorarioSaida else "--"
                 detalhes = f"{entrada} - {saida}"
+            
+            # 2. Verifica Ocupante Padrão/Fixo (Prioridade Baixa - Fallback)
+            else:
+                # Chama a função do DB que já existe
+                func_padrao = database.buscar_funcionarios_com_posicao_padrao(pos_id)
+                if func_padrao:
+                    f_id, f_nome, f_folga = func_padrao
+                    # Só mostra se NÃO for dia de folga do fixo
+                    if str(f_folga) != str(dia_semana_hoje):
+                        ocupante = f"{f_nome} (Fixo)"
+                        cor = "#33b5e5" # Azul (Fixo)
+                        detalhes = "Horário Padrão"
 
             dados_mapa.append({
                 "id": pos_id,
