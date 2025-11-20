@@ -377,44 +377,62 @@ async function atualizarPainel() {
         statusElement.textContent = 'Atualizando dados...';
         statusElement.style.color = '#888';
 
-        // REQ 4: Adicionado fetch para o novo endpoint de resgates
-        const [resTarefas, resRanking, resFeed, resMeta, resMetaDiaria, resProximosAgendamentos, resHistoricoLucro, resResgates] = await Promise.all([
-            fetch(`${API_BASE_URL}/api/painel/tarefas`),
-            fetch(`${API_BASE_URL}/api/ranking/diario`),
-            fetch(`${API_BASE_URL}/api/feed`),
-            fetch(`${API_BASE_URL}/api/meta_principal_do_dia`),
-            fetch(`${API_BASE_URL}/api/meta_diaria_do_dia`),
-            fetch(`${API_BASE_URL}/api/agendamentos/proximos`),
-            fetch(`${API_BASE_URL}/api/historico_lucro`),
-            fetch(`${API_BASE_URL}/api/resgates/recentes`) // <<< NOVO FETCH
-        ]);
 
-        // REQ 4: Adicionado check para o novo fetch
-        if (!resTarefas.ok || !resRanking.ok || !resFeed.ok || !resMeta.ok || !resMetaDiaria.ok || !resProximosAgendamentos.ok || !resHistoricoLucro.ok || !resResgates.ok) {
-             const errorDetails = await Promise.all([
-                resTarefas.ok ? null : { url: resTarefas.url, status: resTarefas.status, text: await resTarefas.text() },
-                resRanking.ok ? null : { url: resRanking.url, status: resRanking.status, text: await resRanking.text() },
-                resFeed.ok ? null : { url: resFeed.url, status: resFeed.status, text: await resFeed.text() },
-                resMeta.ok ? null : { url: resMeta.url, status: resMeta.status, text: await resMeta.text() },
-                resMetaDiaria.ok ? null : { url: resMetaDiaria.url, status: resMetaDiaria.status, text: await resMetaDiaria.text() },
-                resProximosAgendamentos.ok ? null : { url: resProximosAgendamentos.url, status: resProximosAgendamentos.status, text: await resProximosAgendamentos.text() },
-                resHistoricoLucro.ok ? null : { url: resHistoricoLucro.url, status: resHistoricoLucro.status, text: await resHistoricoLucro.text() },
-                resResgates.ok ? null : { url: resResgates.url, status: resResgates.status, text: await resResgates.text() }, // <<< NOVO CHECK
-             ]);
-             const errorsFound = errorDetails.filter(d => d);
-             console.error("Pelo menos uma resposta da API falhou:", errorsFound);
-             const errorSummary = errorsFound.map(e => `${new URL(e.url).pathname}: ${e.status}`).join(', ');
-             throw new Error(`Erro na API. Falhas em: ${errorSummary}. Verifique o console.`);
-         }
+        // --- INICIO DA CORRECAO ---
+        // Lista de URLs que vamos buscar
+        const endpoints = [
+            `${API_BASE_URL}/api/painel/tarefas`,           // Indice 0
+            `${API_BASE_URL}/api/ranking/diario`,           // Indice 1
+            `${API_BASE_URL}/api/feed`,                     // Indice 2
+            `${API_BASE_URL}/api/meta_principal_do_dia`,    // Indice 3
+            `${API_BASE_URL}/api/meta_diaria_do_dia`,       // Indice 4
+            `${API_BASE_URL}/api/agendamentos/proximos`,    // Indice 5
+            `${API_BASE_URL}/api/historico_lucro`,          // Indice 6
+            `${API_BASE_URL}/api/resgates/recentes`         // Indice 7
+        ];
 
-        const dadosTarefas = await resTarefas.json();
-        const dadosRanking = await resRanking.json();
-        const dadosFeed = await resFeed.json();
-        const dadosMeta = await resMeta.json();
-        const dadosMetaDiaria = await resMetaDiaria.json();
-        const dadosAgendamentos = await resProximosAgendamentos.json();
-        const dadosHistoricoLucro = await resHistoricoLucro.json();
-        const dadosResgates = await resResgates.json(); // <<< OBTÉM OS DADOS DOS RESGATES
+        // Promise.allSettled: Tenta buscar todos. Se um falhar, ele NÃO trava os outros.
+        // Cada resultado terá status 'fulfilled' (sucesso) ou 'rejected' (erro).
+        const resultados = await Promise.allSettled(
+            endpoints.map(url => fetch(url).then(r => r.ok ? r.json() : null))
+        );
+
+        // Agora extraímos os dados. Se deu erro ou veio null, colocamos um valor vazio padrão
+        // para que o painel continue funcionando com as partes que deram certo.
+        
+        const dadosTarefas = resultados[0].status === 'fulfilled' && resultados[0].value 
+            ? resultados[0].value 
+            : { para_fazer: [], validacao: [], progresso: {} };
+
+        const dadosRanking = resultados[1].status === 'fulfilled' && resultados[1].value 
+            ? resultados[1].value 
+            : [];
+
+        const dadosFeed = resultados[2].status === 'fulfilled' && resultados[2].value 
+            ? resultados[2].value 
+            : [];
+
+        const dadosMeta = resultados[3].status === 'fulfilled' && resultados[3].value 
+            ? resultados[3].value 
+            : null;
+
+        const dadosMetaDiaria = resultados[4].status === 'fulfilled' && resultados[4].value 
+            ? resultados[4].value 
+            : null;
+
+        const dadosAgendamentos = resultados[5].status === 'fulfilled' && resultados[5].value 
+            ? resultados[5].value 
+            : [];
+
+        const dadosHistoricoLucro = resultados[6].status === 'fulfilled' && resultados[6].value 
+            ? resultados[6].value 
+            : [];
+
+        const dadosResgates = resultados[7].status === 'fulfilled' && resultados[7].value 
+            ? resultados[7].value 
+            : [];
+        // --- FIM DA CORRECAO ---
+
 
         renderizarColunas(dadosTarefas);
         renderizarProgressoGeral(dadosTarefas.progresso);
