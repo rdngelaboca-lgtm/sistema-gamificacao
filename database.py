@@ -5411,15 +5411,17 @@ def buscar_funcionarios_com_posicao_padrao(posicao_id):
     return None
 
 def buscar_horarios_ocupacao_hoje(data_str, dia_semana_int):
+    """
+    Busca horários APENAS de quem foi explicitamente escalado (Bolinhas Verdes).
+    Ignora funcionários fixos automáticos.
+    """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            # CORREÇÃO: Adicionamos um JOIN com PosicoesLoja na segunda parte.
-            # Isso garante que só contamos funcionários fixos se a posição deles
-            # for uma das "bolinhas" ativas no mapa visual.
+            # Lógica Estrita: Só conta quem está na tabela EscalaDiaria
+            # Usamos 'AS' para manter compatibilidade com o api_server.py
             sql = """
-                -- 1. Pessoas da Escala Manual (Quem você escalou explicitamente)
                 SELECT 
                     HorarioEntrada AS Entrada, 
                     HorarioSaida AS Saida, 
@@ -5427,28 +5429,8 @@ def buscar_horarios_ocupacao_hoje(data_str, dia_semana_int):
                     FimIntervalo 
                 FROM EscalaDiaria 
                 WHERE DataEscala = ?
-
-                UNION ALL
-
-                -- 2. Funcionários Fixos (Apenas se a posição estiver ATIVA no mapa)
-                SELECT 
-                    CAST('08:00' AS TIME) AS Entrada,
-                    CAST('18:00' AS TIME) AS Saida,
-                    CAST('12:00' AS TIME) AS InicioIntervalo,
-                    CAST('13:00' AS TIME) AS FimIntervalo
-                FROM Funcionarios F
-                -- O JOIN abaixo é o filtro novo:
-                INNER JOIN PosicoesLoja PL ON F.PosicaoPadraoID = PL.PosicaoID
-                WHERE F.PosicaoPadraoID IS NOT NULL
-                  AND PL.Ativo = 1 -- SÓ CONTA SE A POSIÇÃO EXISTIR NO MAPA
-                  AND (F.DiaDeFolga IS NULL OR F.DiaDeFolga != ?)
-                  AND NOT EXISTS (
-                      SELECT 1 FROM EscalaDiaria ED 
-                      WHERE ED.PosicaoID = F.PosicaoPadraoID 
-                      AND ED.DataEscala = ?
-                  )
             """
-            cursor.execute(sql, data_str, dia_semana_int, data_str)
+            cursor.execute(sql, data_str)
             return cursor.fetchall()
         except Exception as e:
             logging.error(f"Erro ao buscar horários de ocupação: {e}")
