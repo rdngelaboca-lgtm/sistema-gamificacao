@@ -67,6 +67,7 @@ import logging
 import random
 from decimal import Decimal
 
+from collections import deque
 
 # Cache para armazenar (ID_Atribuicao, Data_Hora_Minuto) das tarefas já enviadas
 # Isso evita que a mesma tarefa seja enviada mais de uma vez no mesmo minuto
