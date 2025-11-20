@@ -448,3 +448,53 @@ body {
 }
 
 /* Estilos .lucro-detalhes e .toggle-detalhes (antigos) removidos */
+
+/* ===== ESTILOS DAS ABAS ===== */
+.tabs-nav {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    margin-bottom: 20px;
+    background-color: #e9ecef;
+    padding: 10px;
+    border-radius: 8px;
+}
+
+.tab-btn {
+    padding: 10px 25px;
+    border: none;
+    background-color: transparent;
+    font-size: 1.1em;
+    font-weight: bold;
+    color: #555;
+    cursor: pointer;
+    border-radius: 5px;
+    transition: all 0.3s ease;
+}
+
+.tab-btn:hover {
+    background-color: #dde2e6;
+    color: #333;
+}
+
+.tab-btn.active {
+    background-color: #007bff;
+    color: white;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+/* Ajustes para a aba Financeiro ocupar largura total */
+.financeiro-wrapper {
+    max-width: 800px;
+    margin: 0 auto; /* Centraliza */
+}
+
+.metas-coluna-esquerda.full-width {
+    width: 100%;
+    margin-bottom: 20px;
+}
+
+/* Garante que o container principal não fique com buracos */
+.top-info-wrapper {
+    justify-content: center; /* Centraliza o pódio e agendamentos */
+}
