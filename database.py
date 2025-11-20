@@ -68,6 +68,10 @@ import random
 from decimal import Decimal
 
 
+# Cache para armazenar (ID_Atribuicao, Data_Hora_Minuto) das tarefas já enviadas
+# Isso evita que a mesma tarefa seja enviada mais de uma vez no mesmo minuto
+cache_tarefas_enviadas = deque(maxlen=50)
+
 CONNECTION_STRING = (
     f"DRIVER={{ODBC Driver 18 for SQL Server}};"  
     f"SERVER={config.DB_SERVER};"
@@ -407,15 +411,16 @@ def buscar_funcionarios_por_horario(horario_atual):
 # Em database.py, SUBSTITUA a função listar_tarefas_do_dia_por_funcionario:
 def listar_tarefas_do_dia_por_funcionario(funcionario_id):
     """
-    (VERSÃO 7 - COM CORREÇÃO PARA TAREFAS 'Unica')
-    Busca todas as tarefas do dia, agora incluindo as tarefas únicas aceitas de folgas.
+    (VERSÃO 8 - COM DISTINCT)
+    Busca todas as tarefas do dia, garantindo que não haja duplicatas visuais.
     """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
+            # ADICIONADO 'DISTINCT' LOGO APÓS O SELECT
             sql = """
-                SELECT
+                SELECT DISTINCT
                     TA.AtribuicaoID, T.TarefaID, T.Titulo, T.Pontos, TA.TipoFrequencia AS Tipo,
                     ISNULL(TA.DescricaoOverride, T.Descricao) AS Descricao
                 FROM TarefasAtribuidas TA
@@ -426,37 +431,22 @@ def listar_tarefas_do_dia_por_funcionario(funcionario_id):
                         SELECT 1 FROM Entregas E
                         WHERE E.AtribuicaoID = TA.AtribuicaoID
                         AND CONVERT(date, E.DataEnvio) = CONVERT(date, GETDATE())
-                        AND E.StatusValidacao IN ('Aprovada', 'Pendente') -- Exclui Aprovada ou Pendente HOJE
+                        AND E.StatusValidacao IN ('Aprovada', 'Pendente')
                     )
                     AND (
-                        -- Condições existentes para Diaria, Semanal, Mensal, Agendada
                         TA.TipoFrequencia = 'Diaria'
                         OR (
                             TA.TipoFrequencia = 'Semanal' AND
-                            CAST(TA.ValorFrequencia AS INT) =
-                                CASE DATENAME(weekday, GETDATE())
-                                    WHEN 'Sunday' THEN 1 WHEN 'Domingo' THEN 1
-                                    WHEN 'Monday' THEN 2 WHEN 'Segunda-feira' THEN 2
-                                    WHEN 'Tuesday' THEN 3 WHEN 'Terça-feira' THEN 3
-                                    WHEN 'Wednesday' THEN 4 WHEN 'Quarta-feira' THEN 4
-                                    WHEN 'Thursday' THEN 5 WHEN 'Quinta-feira' THEN 5
-                                    WHEN 'Friday' THEN 6 WHEN 'Sexta-feira' THEN 6
-                                    WHEN 'Saturday' THEN 7 WHEN 'Sábado' THEN 7
-                                END
+                            CAST(TA.ValorFrequencia AS INT) = DATEPART(weekday, GETDATE())
                         )
                         OR (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, GETDATE()))
                         OR (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = CONVERT(date, GETDATE()))
-
-                        -- --- A CORREÇÃO ESTÁ AQUI ---
-                        -- Adicionamos a condição para incluir tarefas do tipo 'Unica' que foram criadas HOJE.
                         OR (TA.TipoFrequencia = 'Unica')
-                        -- --- FIM DA CORREÇÃO ---
                     )
             """
             cursor.execute(sql, funcionario_id)
             return cursor.fetchall()
         except Exception as e:
-            # Log aprimorado
             logger.exception(f"!!! ERRO CRÍTICO em listar_tarefas_do_dia_por_funcionario para ID {funcionario_id}: {e}")
             return []
         finally:
