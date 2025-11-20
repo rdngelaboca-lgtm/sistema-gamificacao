@@ -409,21 +409,29 @@ def buscar_funcionarios_por_horario(horario_atual):
             conn.close()
     return []         
 
-# Em database.py, SUBSTITUA a função listar_tarefas_do_dia_por_funcionario:
 def listar_tarefas_do_dia_por_funcionario(funcionario_id):
     """
-    (VERSÃO 9 - COM GROUP BY PARA REMOVER DUPLICATAS VISUAIS E FILTRO DE DATA)
-    Busca tarefas do dia. Se houver múltiplas atribuições para a mesma tarefa,
-    retorna apenas uma (a mais recente), limpando a poluição visual.
+    (VERSÃO 10 - DEFINITIVA)
+    Calcula datas no Python para evitar erro de configuração do SQL Server.
+    Filtra tarefas futuras, mas mantém pendências antigas do tipo 'Unica'.
     """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
             
+            # --- CÁLCULO DE DATAS NO PYTHON (Mais seguro que no SQL) ---
+            hoje = datetime.now()
+            # Lógica de dia da semana idêntica ao agendador (1=Dom ... 7=Sab)
+            # Python: 0=Seg, 6=Dom.
+            # Formula: (wd + 1) % 7 + 1  --> Seg(0)->2, Dom(6)->1
+            dia_semana_python = (hoje.weekday() + 1) % 7 + 1
+            dia_mes_python = hoje.day
+            data_hoje_str = hoje.strftime('%Y-%m-%d')
+            
             sql = """
                 SELECT 
-                    MAX(TA.AtribuicaoID) as AtribuicaoID, -- Pega o ID mais recente
+                    MAX(TA.AtribuicaoID) as AtribuicaoID,
                     T.TarefaID, 
                     T.Titulo, 
                     T.Pontos, 
@@ -434,32 +442,56 @@ def listar_tarefas_do_dia_por_funcionario(funcionario_id):
                 WHERE
                     TA.FuncionarioID = ? 
                     AND TA.DataFimVigencia IS NULL
-                    -- Garante que a tarefa já começou (não é futuro)
-                    AND CONVERT(date, TA.DataInicioVigencia) <= CONVERT(date, GETDATE())
                     
-                    -- Verifica se NÃO foi entregue hoje (para não mostrar tarefas já feitas)
+                    -- Filtro 1: A tarefa já deve ter começado (Esconde tarefas futuras)
+                    AND CONVERT(date, TA.DataInicioVigencia) <= ?
+                    
+                    -- Filtro 2: Não foi entregue/concluída HOJE
                     AND NOT EXISTS (
                         SELECT 1 FROM Entregas E
                         WHERE E.AtribuicaoID = TA.AtribuicaoID
-                        AND CONVERT(date, E.DataEnvio) = CONVERT(date, GETDATE())
+                        AND CONVERT(date, E.DataEnvio) = ?
                         AND E.StatusValidacao IN ('Aprovada', 'Pendente')
                     )
-                    -- Filtros de Frequência (Dia Certo)
+                    
+                    -- Filtro 3: Regras de Frequência (Usando os dados do Python)
                     AND (
+                        -- 1. Tarefas Diárias (Sempre aparecem)
                         TA.TipoFrequencia = 'Diaria'
+                        
+                        -- 2. Semanais (Bate com o dia da semana calculado no Python)
+                        OR (TA.TipoFrequencia = 'Semanal' AND TA.ValorFrequencia = ?)
+                        
+                        -- 3. Mensais (Bate com o dia do mês calculado no Python)
+                        OR (TA.TipoFrequencia = 'Mensal' AND TA.ValorFrequencia = ?)
+                        
+                        -- 4. Agendamento Específico (Data exata bate com hoje)
+                        OR (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = ?)
+                        
+                        -- 5. Tarefas Únicas (Sem data agendada OU agendadas para o passado/hoje)
                         OR (
-                            TA.TipoFrequencia = 'Semanal' AND
-                            CAST(TA.ValorFrequencia AS INT) = DATEPART(weekday, GETDATE())
+                            TA.TipoFrequencia = 'Unica' 
+                            AND (TA.DataAgendamento IS NULL OR CONVERT(date, TA.DataAgendamento) <= ?)
                         )
-                        OR (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, GETDATE()))
-                        OR (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = CONVERT(date, GETDATE()))
-                        OR (TA.TipoFrequencia = 'Unica') -- 'Unica' assume data de hoje via DataInicioVigencia acima
                     )
-                -- O GROUP BY faz a mágica de fundir as duplicatas
                 GROUP BY T.TarefaID, T.Titulo, T.Pontos, TA.TipoFrequencia
             """
-            cursor.execute(sql, funcionario_id)
+            
+            # Passamos os parâmetros calculados no Python
+            # Ordem: FuncID, DataHoje, DataHoje, DiaSemana, DiaMes, DataHoje, DataHoje
+            params = (
+                funcionario_id, 
+                data_hoje_str, 
+                data_hoje_str, 
+                str(dia_semana_python), 
+                str(dia_mes_python), 
+                data_hoje_str, 
+                data_hoje_str
+            )
+            
+            cursor.execute(sql, params)
             return cursor.fetchall()
+            
         except Exception as e:
             logger.exception(f"!!! ERRO CRÍTICO em listar_tarefas_do_dia_por_funcionario para ID {funcionario_id}: {e}")
             return []
