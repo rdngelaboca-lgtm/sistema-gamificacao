@@ -5348,16 +5348,21 @@ def buscar_escala_do_dia(data_str):
     if conn:
         try:
             cursor = conn.cursor()
+            # --- CORREÇÃO APLICADA AQUI ---
+            # Removemos 'F.Telefone' pois essa coluna não existe na tabela Funcionarios.
+            # Agora pegamos o telefone apenas se for Freelancer (FR.Telefone).
+            # Se for funcionário, virá como None (NULL).
             sql = """
                 SELECT 
                     E.*, 
                     ISNULL(F.NomeCompleto, FR.Nome) as NomePessoa,
-                    ISNULL(F.Telefone, FR.Telefone) as TelefonePessoa
+                    FR.Telefone as TelefonePessoa
                 FROM EscalaDiaria E
                 LEFT JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID
                 LEFT JOIN Freelancers FR ON E.FreelancerID = FR.FreelancerID
                 WHERE E.DataEscala = ?
             """
+            # --- FIM DA CORREÇÃO ---
             cursor.execute(sql, data_str)
             resultados = cursor.fetchall()
             for row in resultados:
