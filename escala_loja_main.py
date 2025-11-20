@@ -121,13 +121,25 @@ class AppEscalaLoja:
                             nome_pessoa = f"{f_nome} (Fixo)"
                             cor = "#33b5e5" # Azul
 
+                # ... (código anterior mantido igual) ...
+
+                # Cria uma variável com a tag para usar nos dois lugares
+                tag_id = f"pos_{pos_id}" 
+
                 # Desenha a bolinha
                 raio = 15
-                self.canvas.create_oval(x-raio, y-raio, x+raio, y+raio, fill=cor, outline="white", width=2, tags=("marcador", f"pos_{pos_id}"))
+                self.canvas.create_oval(x-raio, y-raio, x+raio, y+raio, 
+                                      fill=cor, outline="white", width=2, 
+                                      tags=("marcador", tag_id)) # <--- Usa a tag aqui
                 
                 # Desenha o texto
                 label_texto = f"{nome}\n{nome_pessoa}"
-                self.canvas.create_text(x, y+25, text=label_texto, fill="black", font=("Arial", 8, "bold"), justify=tk.CENTER, tags=("texto_marcador"))
+                
+                # CORREÇÃO 3: Adiciona a tag_id também no texto!
+                self.canvas.create_text(x, y+25, text=label_texto, 
+                                      fill="black", font=("Arial", 8, "bold"), 
+                                      justify=tk.CENTER, 
+                                      tags=("texto_marcador", tag_id)) # <--- Tag ADICIONADA AQUI
             
             except Exception as e:
                 print(f"Erro ao desenhar posição {pos}: {e}")
@@ -174,7 +186,11 @@ class AppEscalaLoja:
                         return
 
     def clique_direito_mapa(self, event):
-        if not self.modo_edicao: return
+        # CORREÇÃO 1: Avisa o usuário se ele tentar excluir no modo errado
+        if not self.modo_edicao:
+            messagebox.showinfo("Ação Inválida", "Para excluir posições, clique no botão 'Ativar Modo Configuração' no topo da tela.")
+            return
+
         itens = self.canvas.find_overlapping(event.x-10, event.y-10, event.x+10, event.y+10)
         for item in itens:
             tags = self.canvas.gettags(item)
@@ -184,6 +200,8 @@ class AppEscalaLoja:
                     if messagebox.askyesno("Excluir", "Remover esta posição do mapa?"):
                         database.excluir_posicao_loja(pos_id)
                         self.carregar_escala_do_dia()
+                        return # CORREÇÃO 2: Para a função imediatamente após excluir
+
 
     def alternar_modo(self):
         self.modo_edicao = not self.modo_edicao
