@@ -72,6 +72,7 @@ import file_utils
 import urllib.parse
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from database import adicionar_pontos_ao_saldo
+import threading
 
 
 class App:
@@ -3005,10 +3006,12 @@ class App:
                 self.entry_valor_dia.delete(0, tk.END)
                 self.on_meta_principal_selecionada(None) # Atualiza a lista de detalhes
 
-                # --- CHAMADA DA FUNÇÃO AUXILIAR ---
-                # Chama a função que verifica e premia, passando os dados necessários
-                database.verificar_e_premiar_meta_diaria(apuracao_id, data_apuracao_str, valor_dia, meta_id) 
-                # --- FIM DA CHAMADA ---
+                # [CORREÇÃO] Executa a verificação e envio de notificações em Thread separada
+                # Isso evita que a interface do Tkinter congele enquanto o bot envia mensagens.
+                def tarefa_background():
+                    database.verificar_e_premiar_meta_diaria(apuracao_id, data_apuracao_str, valor_dia, meta_id)
+
+                threading.Thread(target=tarefa_background, daemon=True).start()
 
             else:
                  print(f">>> DEBUG: Lançamento no DB falhou. Não vai verificar premiação.") # <-- Mantém o print de teste
