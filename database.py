@@ -529,11 +529,55 @@ def buscar_funcionario_por_id(funcionario_id):
     return None
 
 def excluir_funcionario(funcionario_id):
+    """
+    Exclui um funcionário e TODOS os seus dados relacionados (Cascata Manual)
+    para evitar erro de Integridade Referencial (FK).
+    """
     conn = get_db_connection()
     if conn:
         try:
-            cursor = conn.cursor(); sql = "DELETE FROM Funcionarios WHERE FuncionarioID = ?"; cursor.execute(sql, funcionario_id); conn.commit()
-        finally: conn.close()
+            cursor = conn.cursor()
+
+            # 1. Limpeza de Dependências (Tabelas Filhas)
+            # Removemos registros onde o FuncionarioID aparece antes de remover o pai.
+
+            # Gamificação e Histórico
+            cursor.execute("DELETE FROM HistoricoRanking WHERE FuncionarioID = ?", funcionario_id)
+            cursor.execute("DELETE FROM Entregas WHERE FuncionarioID = ?", funcionario_id)
+            cursor.execute("DELETE FROM TarefasAtribuidas WHERE FuncionarioID = ?", funcionario_id)
+            cursor.execute("DELETE FROM ConquistasFuncionarios WHERE FuncionarioID = ?", funcionario_id)
+
+            # Financeiro e Feedback
+            cursor.execute("DELETE FROM Resgates WHERE FuncionarioID = ?", funcionario_id)
+            cursor.execute("DELETE FROM Feedbacks WHERE FuncionarioID = ?", funcionario_id)
+            cursor.execute("DELETE FROM FeedbackSolicitacoes WHERE FuncionarioID = ?", funcionario_id)
+
+            # Documentos e Assinaturas
+            cursor.execute("DELETE FROM DocumentosAssinaturas WHERE FuncionarioID = ?", funcionario_id)
+            cursor.execute("DELETE FROM DocumentosPessoaisCiencia WHERE FuncionarioID = ?", funcionario_id)
+            cursor.execute("DELETE FROM DocumentosPessoais WHERE FuncionarioID = ?", funcionario_id)
+
+            # Grupos e Metas
+            cursor.execute("DELETE FROM FuncionariosGrupos WHERE FuncionarioID = ?", funcionario_id)
+
+            # Outros (Notas Fiscais, Escalas)
+            cursor.execute("DELETE FROM NotasFiscais WHERE FuncionarioID = ?", funcionario_id)
+            # Para escalas, definimos como NULL (Vazio) em vez de deletar o dia inteiro, preservando o histórico da posição
+            cursor.execute("UPDATE EscalaDiaria SET FuncionarioID = NULL WHERE FuncionarioID = ?", funcionario_id)
+
+            # 2. Exclusão do Registro Principal
+            sql = "DELETE FROM Funcionarios WHERE FuncionarioID = ?"
+            cursor.execute(sql, funcionario_id)
+
+            conn.commit()
+            print(f"--> [DATABASE] Funcionário {funcionario_id} e todos os seus dados vinculados foram excluídos.")
+        except Exception as e:
+            print(f"ERRO ao excluir funcionário {funcionario_id}: {e}")
+            conn.rollback()
+            raise e # Repassa o erro para a interface mostrar o alerta
+        finally: 
+            conn.close()
+
 def obter_historico_funcionario(funcionario_id):
     conn = get_db_connection()
     if conn:
