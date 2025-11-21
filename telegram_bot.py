@@ -663,6 +663,13 @@ async def handler_foto_tarefa(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def receber_motivo_recusa(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id_grupo = update.effective_chat.id
+    # [CORREÇÃO] Validação de Reply: Só aceita se for resposta à mensagem do bot
+    # Isso impede que mensagens aleatórias no grupo sejam capturadas como motivo.
+    is_reply = update.message.reply_to_message is not None
+    is_reply_to_bot = is_reply and update.message.reply_to_message.from_user.id == context.bot.id
+
+    if not (is_reply and is_reply_to_bot):
+        return # Ignora mensagens soltas, processa apenas respostas diretas ao bot
     gestor_id = update.effective_user.id
     gestor_nome = update.effective_user.first_name
     motivo = update.message.text
