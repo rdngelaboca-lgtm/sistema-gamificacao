@@ -1257,13 +1257,14 @@ class App:
                 for item_alvo in alvos_selecionados_items:
                     funcionario_id = self.tree_atr_selecao.item(item_alvo, 'values')[0]
 
-                    # <<< --- CORREÇÃO ESTÁ AQUI --- >>>
-                    # Mova a verificação para ANTES do loop de 'valores_freq'
-                    if database.verificar_atribuicao_existente(tarefa_id, funcionario_id):
-                        ignorados += 1
-                        logger.warning(f"--> Atribuição ignorada (check ANTES do loop): Tarefa {tarefa_id} já está ativa para Funcionário {funcionario_id}.")
-                        continue # Pula para o próximo funcionário
-                    # <<< --- FIM DA CORREÇÃO --- >>>
+                    # [CORREÇÃO] Lógica refinada: Só bloqueia duplicidade se NÃO for tarefa Única.
+                    # Tarefas Únicas podem ser atribuídas múltiplas vezes (ex: reforço esporádico),
+                    # pois o histórico deve ser preservado.
+                    if tipo_freq_selecionada != 'Unica':
+                        if database.verificar_atribuicao_existente(tarefa_id, funcionario_id):
+                            ignorados += 1
+                            logger.warning(f"--> Atribuição Recorrente ignorada: Tarefa {tarefa_id} já ativa para Funcionario {funcionario_id}.")
+                            continue
 
                     # Agora, itera pelos valores (dias da semana/mês ou None)
                     for valor in valores_freq:
@@ -1821,6 +1822,13 @@ class App:
 
             messagebox.showerror("Erro", "Todos os campos, exceto a folga, são obrigatórios!")
             return
+        
+        # [CORREÇÃO] Validação de Chat ID numérico
+        # Remove espaços e traços (para grupos) e verifica se o resto são dígitos.
+        # Isso previne erros na API do Telegram que exige inteiros.
+        if not chat_id.lstrip('-').isdigit():
+            messagebox.showerror("Erro de Formato", "O Chat ID deve conter apenas números (ex: 123456789 ou -100...).")
+            return
 
         # --- NOVA VALIDAÇÃO DE HORÁRIO ---
         try:
@@ -2313,10 +2321,19 @@ class App:
             self.lbl_titulo_tarefa.config(text=f"Tarefa: {entrega_atual.Titulo} ({entrega_atual.Pontos} pts)")
 
             if entrega_atual.PathFotoEvidencia and os.path.exists(entrega_atual.PathFotoEvidencia):
-                img = Image.open(entrega_atual.PathFotoEvidencia) # Pode falhar (arquivo corrompido, etc.)
-                img.thumbnail((500, 400))
-                self.photo_img = ImageTk.PhotoImage(img) # Pode falhar
-                self.lbl_imagem.config(image=self.photo_img)
+                # [CORREÇÃO] Usa 'with' e 'copy' para liberar o arquivo imediatamente após carregar.
+                # Isso evita o erro de "Arquivo em uso" no Windows ao tentar excluir a entrega.
+                try:
+                    with Image.open(entrega_atual.PathFotoEvidencia) as img_temp:
+                        img_copy = img_temp.copy()
+
+                    img_copy.thumbnail((500, 400))
+                    self.photo_img = ImageTk.PhotoImage(img_copy)
+                    self.lbl_imagem.config(image=self.photo_img)
+                except Exception as e_img:
+                    logger.error(f"Erro ao processar imagem: {e_img}")
+                    self.lbl_imagem.config(image='', text="Erro ao carregar imagem.")
+
             else:
                 self.lbl_imagem.config(image='', text="Foto ainda não processada pelo servidor ou não encontrada!")
         except (ValueError, KeyError) as e_parse: # <--- ADICIONADO EXCEPT ESPECÍFICO
@@ -2867,6 +2884,12 @@ class App:
 
 
     def abrir_janela_edicao_apuracao(self, event):
+        # [CORREÇÃO] Captura o contexto da Meta Principal ANTES de abrir a janela e criar dependências.
+        # Isso garante que editaremos a meta correta mesmo se a seleção mudar no fundo.
+        selecao_meta_principal = self.tree_metas_principais.selection()
+        if not selecao_meta_principal:
+            return
+        meta_id_contexto = self.tree_metas_principais.item(selecao_meta_principal[0], 'values')[0]
         """Abre um pop-up para editar o valor de um lançamento diário selecionado."""
         selecionado = self.tree_detalhes_apuracoes.focus()
         if not selecionado:
@@ -2900,18 +2923,9 @@ class App:
                 novo_valor = float(nova_valor_str)
                 data_db_format = datetime.strptime(data_lancamento_str, '%d/%m/%Y').strftime('%Y-%m-%d')
 
-                # --- INÍCIO DA CORREÇÃO (Validação de Seleção) ---
-                # Verifica se a meta principal ainda está selecionada
-                selecao_meta = self.tree_metas_principais.selection()
-                if not selecao_meta:
-                    messagebox.showerror("Erro de Contexto", 
-                                         "A seleção da Meta Principal foi perdida. Por favor, feche este pop-up e tente editar novamente.", 
-                                         parent=popup)
-                    return
-                # --- FIM DA CORREÇÃO ---
-
-                meta_selecionada_item = selecao_meta[0] # Agora é seguro acessar o índice [0]
-                meta_id = self.tree_metas_principais.item(meta_selecionada_item, 'values')[0]
+                # [CORREÇÃO] Usa o ID capturado no início da função (closure),
+                # ignorando a seleção atual da GUI que pode ter mudado.
+                meta_id = meta_id_contexto
 
                 id_funcionario_logado = 2 # Ajuste se necessário
 
@@ -2932,14 +2946,6 @@ class App:
                 messagebox.showerror("Erro de Formato", f"O valor '{nova_valor_str}' não é um número válido.", parent=popup)
             except Exception as e: # Captura outros erros inesperados
                 messagebox.showerror("Erro Inesperado", f"Ocorreu um erro: {e}", parent=popup)
-
-
-
-
-
-
-
-
 
         btn_salvar = ttk.Button(frame, text="Salvar Alterações", command=salvar_edicao)
         btn_salvar.pack(pady=15)
