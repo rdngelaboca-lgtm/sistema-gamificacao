@@ -411,16 +411,16 @@ def buscar_funcionarios_por_horario(horario_atual):
 
 def listar_tarefas_do_dia_por_funcionario(funcionario_id):
     """
-    (VERSÃO 11 - DUPLA SEGURANÇA)
-    1. Usa ROW_NUMBER para esconder visualmente as duplicatas criadas pelo bug anterior.
-    2. Usa GETDATE() do banco para garantir que as tarefas de hoje apareçam.
+    (VERSÃO 13 - ESTRITAMENTE HOJE)
+    Correções:
+    1. O bug das 'Tarefas Zumbis' continua resolvido.
+    2. ALTERAÇÃO: Tarefas 'Unica' atrasadas NÃO aparecem mais. Mostra apenas o que é para HOJE.
     """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
             
-            # Esta Query usa uma "CTE" (Tabela Temporária em Memória) para limpar a sujeira
             sql = """
                 WITH TarefasFiltradas AS (
                     SELECT 
@@ -430,7 +430,6 @@ def listar_tarefas_do_dia_por_funcionario(funcionario_id):
                         T.Pontos, 
                         TA.TipoFrequencia,
                         ISNULL(TA.DescricaoOverride, T.Descricao) as Descricao,
-                        -- AQUI ESTÁ A MÁGICA: Numeramos as repetidas (1, 2, 3...)
                         ROW_NUMBER() OVER(
                             PARTITION BY T.TarefaID, TA.TipoFrequencia 
                             ORDER BY TA.AtribuicaoID DESC
@@ -441,33 +440,38 @@ def listar_tarefas_do_dia_por_funcionario(funcionario_id):
                         TA.FuncionarioID = ? 
                         AND TA.DataFimVigencia IS NULL
                         
-                        -- Filtro de Frequência (Direto no Banco)
+                        -- 1. FILTRO DE AGENDAMENTO (QUANDO MOSTRAR)
                         AND (
-                            -- 1. Diárias: Sempre aparecem
+                            -- Recorrentes: Aparecem nos dias corretos
                             TA.TipoFrequencia = 'Diaria'
-                            
-                            -- 2. Semanais: Se o dia da semana bater (SQL Padrão: Dom=1, Seg=2...)
                             OR (TA.TipoFrequencia = 'Semanal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(weekday, GETDATE()))
-                            
-                            -- 3. Mensais: Se o dia do mês bater
                             OR (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, GETDATE()))
                             
-                            -- 4. Únicas/Agendadas: Se a data for hoje ou passado (pendência)
+                            -- Únicas: Aparecem APENAS SE A DATA FOR HOJE (Mudança de <= para =)
                             OR (
                                 TA.TipoFrequencia = 'Unica' 
-                                AND (TA.DataAgendamento IS NULL OR CONVERT(date, TA.DataAgendamento) <= CONVERT(date, GETDATE()))
+                                AND (
+                                    TA.DataAgendamento IS NULL -- Se não tiver data, mostra (opcional)
+                                    OR 
+                                    CONVERT(date, TA.DataAgendamento) = CONVERT(date, GETDATE()) -- ESTRITAMENTE HOJE
+                                )
                             )
                         )
                         
-                        -- Filtro de Entrega: Esconde se já fez hoje
+                        -- 2. FILTRO DE CONCLUSÃO (SE JÁ FEZ, ESCONDE)
                         AND NOT EXISTS (
                             SELECT 1 FROM Entregas E
                             WHERE E.AtribuicaoID = TA.AtribuicaoID
-                            AND CONVERT(date, E.DataEnvio) = CONVERT(date, GETDATE())
                             AND E.StatusValidacao IN ('Aprovada', 'Pendente')
+                            AND (
+                                -- Regra A: Se for recorrente, esconde se fez HOJE
+                                (TA.TipoFrequencia IN ('Diaria', 'Semanal', 'Mensal') AND CONVERT(date, E.DataEnvio) = CONVERT(date, GETDATE()))
+                                OR
+                                -- Regra B: Se for Única, esconde se fez EM QUALQUER DIA
+                                (TA.TipoFrequencia = 'Unica')
+                            )
                         )
                 )
-                -- Selecionamos apenas a linha número 1 de cada grupo de duplicatas
                 SELECT AtribuicaoID, TarefaID, Titulo, Pontos, TipoFrequencia as Tipo, Descricao
                 FROM TarefasFiltradas
                 WHERE NumeroDaLinha = 1
@@ -478,13 +482,12 @@ def listar_tarefas_do_dia_por_funcionario(funcionario_id):
             return cursor.fetchall()
             
         except Exception as e:
-            logger.exception(f"!!! ERRO CRÍTICO em listar_tarefas (v11) para ID {funcionario_id}: {e}")
+            logger.exception(f"!!! ERRO CRÍTICO em listar_tarefas (v13) para ID {funcionario_id}: {e}")
             return []
         finally:
             if conn:
                 conn.close()
     return []
-
 
 def adicionar_funcionario(nome, chat_id, cargo, horario_notificacao, dia_folga):
     conn = get_db_connection()
