@@ -63,18 +63,24 @@ document.addEventListener('DOMContentLoaded', function() {
             const progressoBarra = document.createElement('div');
             progressoBarra.className = 'progresso-lucro-barra';
 
-            // Calcula a largura da barra
+            // [CORREÇÃO] Lógica para tratar Lucro vs Prejuízo
             let larguraBarra = 0;
-            if (item.percentual > 0) {
+
+            // Remove classes de estado anteriores para evitar conflitos
+            progressoBarra.classList.remove('meta-lucro-batida', 'meta-prejuizo');
+
+            if (item.percentual < 0) {
+                // Se for prejuízo, fixa um tamanho visual mínimo para mostrar que existe algo, mas pinta de vermelho
+                larguraBarra = Math.min(Math.abs(item.percentual) * 2, 100); // *2 para dar ênfase visual ao prejuízo
+                progressoBarra.classList.add('meta-prejuizo'); 
+            } else {
+                // Lucro positivo
                 larguraBarra = Math.max(1, Math.min((item.percentual / MAX_BARRA_PERCENTUAL) * 100, 100));
+                if (item.percentual >= META_LUCRO) {
+                    progressoBarra.classList.add('meta-lucro-batida');
+                }
             }
             progressoBarra.style.width = `${larguraBarra}%`;
-
-            // Adiciona classe se a meta foi batida para mudar a cor
-            if (item.percentual >= META_LUCRO) {
-                progressoBarra.classList.add('meta-lucro-batida');
-            }
-
             progressoContainer.appendChild(progressoBarra);
             mesItemDiv.appendChild(progressoContainer);
 
@@ -203,12 +209,15 @@ function renderizarMetaPrincipal(meta) {
         
         // Não buscamos mais os elementos de valor para escrita
 
+    // [CORREÇÃO] Verifica se valor_meta_diaria > 0 para evitar divisão por zero
         if (meta && meta.valor_meta_diaria > 0) {
             containerEl.style.display = 'flex';
-            const percentual = (meta.valor_atingido_hoje / meta.valor_meta_diaria) * 100;
-            
-            barraEl.style.width = `${Math.min(percentual, 100)}%`;
-            textoEl.textContent = `${percentual.toFixed(1)}%`;
+            // Garante cálculo seguro: se meta for 0 (por erro de dado), percentual é 0
+            const percentual = meta.valor_meta_diaria > 0 
+                ? (meta.valor_atingido_hoje / meta.valor_meta_diaria) * 100 
+                : 0;
+
+            barraEl.style.width = `${Math.min(percentual, 100)}%`;            textoEl.textContent = `${percentual.toFixed(1)}%`;
             
             // REMOVIDO: Escrita dos valores monetários e toggle
             
