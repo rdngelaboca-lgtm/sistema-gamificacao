@@ -870,18 +870,19 @@ def aprovar_entrega(entrega_id, funcionario_id, pontos):
     try:
         cursor = conn.cursor()
 
-        # --- CORREÇÃO APLICADA AQUI ---
-        # Removemos a atualização do DataEnvio. Agora, apenas o status e os pontos são definidos.
-        # O DataEnvio original (do momento da submissão) é preservado.
-        # (Opcional: Adicionar "DataValidacao = GETDATE()" se a coluna existir)
+        # [CORREÇÃO DE FLUXO] Atualizamos DataEnvio para GETDATE() no momento da aprovação.
+        # Isso garante que os pontos contem para o Ranking Diário do dia em que o esforço
+        # foi reconhecido/validado, evitando que entregas noturnas fiquem sem pontuar no painel.
         sql_update_entrega = """
             UPDATE Entregas 
-            SET StatusValidacao = 'Aprovada', PontosGanhos = ?
+            SET StatusValidacao = 'Aprovada', 
+                PontosGanhos = ?,
+                DataEnvio = GETDATE() 
             WHERE EntregaID = ?
         """
-        # --- FIM DA CORREÇÃO ---
 
         cursor.execute(sql_update_entrega, pontos, entrega_id)
+
         logger.debug(f"UPDATE Entregas executado para EntregaID {entrega_id}.")
 
 
@@ -4406,13 +4407,9 @@ def verificar_e_premiar_meta_diaria(apuracao_id, data_apuracao_str, valor_dia, m
 
                     for funcionario in funcionarios_do_setor:
                         try:
-
-
-
-                                # Em database.py, dentro de verificar_e_premiar_meta_diaria
+                             # Em database.py, dentro de verificar_e_premiar_meta_diaria
                             adicionar_pontos_ao_saldo(funcionario.FuncionarioID, pontos_premio_diario)
                             motivo_log = f"Meta Diária Atingida ({data_apuracao_str}) - Setor: {setor_alvo_diario}"
-
                             # --- CORREÇÃO APLICADA AQUI ---
                             # Passamos o ApuracaoID como o quinto parâmetro (vinculo_id)
                             registrar_pontos_de_bonus(
@@ -4423,11 +4420,7 @@ def verificar_e_premiar_meta_diaria(apuracao_id, data_apuracao_str, valor_dia, m
                                 vinculo_id=apuracao_id
                             )
                             # --- FIM DA CORREÇÃO ---
-
                             if funcionario.ChatIDTelegram:
-
-
-
                                 notificador_telegram.enviar_mensagem(funcionario.ChatIDTelegram, mensagem_telegram)
                         except Exception as e_func:
                             logger.error(f"Erro ao processar prêmio/notificação para {funcionario.NomeCompleto} (ID: {funcionario.FuncionarioID}): {e_func}", exc_info=True)
