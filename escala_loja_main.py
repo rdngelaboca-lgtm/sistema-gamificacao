@@ -6,6 +6,7 @@ import database
 import os
 import webbrowser
 import urllib.parse
+import re
 from datetime import datetime
 
 class AppEscalaLoja:
@@ -59,7 +60,9 @@ class AppEscalaLoja:
 
     def carregar_imagem_mapa(self):
         """Carrega a imagem de fundo."""
-        caminho_img = "layout_loja.png"
+        # [CORREÇÃO] Caminho absoluto para garantir que ache a imagem independente de onde rodar
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        caminho_img = os.path.join(base_dir, "layout_loja.png")
         if not os.path.exists(caminho_img):
             self.canvas.create_text(500, 300, text=f"ERRO: Imagem '{caminho_img}' não encontrada!", fill="red", font=("Arial", 16))
             return
@@ -284,10 +287,14 @@ class AppEscalaLoja:
         ttk.Label(frame_hor, text="Intervalo Fim:").grid(row=1, column=2); e_int_fim = ttk.Entry(frame_hor, width=8); e_int_fim.grid(row=1, column=3)
 
         if dados_atuais:
-            if dados_atuais.HorarioEntrada: e_ent.insert(0, dados_atuais.HorarioEntrada.strftime('%H:%M'))
-            if dados_atuais.HorarioSaida: e_sai.insert(0, dados_atuais.HorarioSaida.strftime('%H:%M'))
-            if dados_atuais.InicioIntervalo: e_int_ini.insert(0, dados_atuais.InicioIntervalo.strftime('%H:%M'))
-            if dados_atuais.FimIntervalo: e_int_fim.insert(0, dados_atuais.FimIntervalo.strftime('%H:%M'))
+            # [CORREÇÃO] Verifica se o objeto não é None antes de chamar strftime
+            # Usa getattr para segurança extra caso o objeto venha incompleto do banco
+            if getattr(dados_atuais, 'HorarioEntrada', None): e_ent.insert(0, dados_atuais.HorarioEntrada.strftime('%H:%M'))
+            if getattr(dados_atuais, 'HorarioSaida', None): e_sai.insert(0, dados_atuais.HorarioSaida.strftime('%H:%M'))
+
+            # Intervalos podem ser nulos legitimamente
+            if getattr(dados_atuais, 'InicioIntervalo', None): e_int_ini.insert(0, dados_atuais.InicioIntervalo.strftime('%H:%M'))
+            if getattr(dados_atuais, 'FimIntervalo', None): e_int_fim.insert(0, dados_atuais.FimIntervalo.strftime('%H:%M'))
         else:
             e_ent.insert(0, "08:00"); e_sai.insert(0, "18:00")
 
@@ -298,6 +305,15 @@ class AppEscalaLoja:
             txt_foco.insert("1.0", dados_atuais.FocoDoDia)
 
         def salvar():
+            # [CORREÇÃO] Validação rigorosa de horários para evitar crash do banco
+            horarios_validar = [e_ent.get(), e_sai.get(), e_int_ini.get(), e_int_fim.get()]
+            for h in horarios_validar:
+                if h and h.strip(): # Se tiver texto, verifica o formato
+                    try:
+                        datetime.strptime(h, '%H:%M')
+                    except ValueError:
+                        messagebox.showerror("Erro de Formato", f"O horário '{h}' é inválido.\nUse o formato HH:MM (ex: 08:00).", parent=popup)
+                        return
             selecao = combo_pessoas.get()
             if not selecao or selecao == "(Vazio)": return 
             
@@ -338,7 +354,9 @@ class AppEscalaLoja:
                 "Por favor, confirme o recebimento. Bom trabalho! 🍦"
             )
             
-            link = f"https://wa.me/55{telefone.replace(' ', '').replace('-', '')}?text={urllib.parse.quote(texto_msg)}"
+            # [CORREÇÃO] Remove tudo que NÃO for número (parênteses, espaços, letras)
+            numeros_limpos = re.sub(r'\D', '', telefone) 
+            link = f"https://wa.me/55{numeros_limpos}?text={urllib.parse.quote(texto_msg)}"
             webbrowser.open(link)
 
         btn_frame = ttk.Frame(popup)
