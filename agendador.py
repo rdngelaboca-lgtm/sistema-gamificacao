@@ -68,6 +68,7 @@ import requests
 import urllib.parse
 from collections import deque
 
+cache_tarefas_enviadas = deque(maxlen=500)
 
 def verificar_e_enviar_tarefas_de_grupo():
     """
@@ -76,9 +77,9 @@ def verificar_e_enviar_tarefas_de_grupo():
     """
     agora_dt = datetime.now()
     agora_hm = agora_dt.strftime('%H:%M')
+
+    chave_dia_atual = agora_dt.strftime('%Y-%m-%d')
     
-    # Chave de tempo para o cache (Dia + Hora + Minuto)
-    chave_tempo_atual = agora_dt.strftime('%Y-%m-%d %H:%M')
 
     dia_python = agora_dt.weekday()
     dia_semana_sql = (dia_python + 1) % 7 + 1
@@ -101,7 +102,7 @@ def verificar_e_enviar_tarefas_de_grupo():
 
         # --- LÓGICA ANTI-DUPLICAÇÃO ---
         # Cria uma assinatura única para este envio: (ID da Atribuição, Minuto Atual)
-        assinatura_envio = (atribuicao_id, chave_tempo_atual)
+        assinatura_envio = (atribuicao_id, chave_dia_atual)
 
         if assinatura_envio in cache_tarefas_enviadas:
             print(f"--> [ANTI-FLOOD] Tarefa '{titulo}' (ID {atribuicao_id}) já enviada neste minuto. Ignorando.")
@@ -130,7 +131,7 @@ def verificar_e_enviar_tarefas_de_grupo():
             print(f"--> SUCESSO: Missão '{titulo}' enviada para '{nome_grupo}'.")
         except Exception as e:
             print(f"--> ERRO AO ENVIAR no Telegram: {e}")
-            
+
 # --- MÓDULO 2: INÍCIO DA JORNADA (Lógica antiga, agora focada) ---
 def verificar_inicio_jornada():
     """Verifica e notifica funcionários que estão começando a jornada AGORA."""
