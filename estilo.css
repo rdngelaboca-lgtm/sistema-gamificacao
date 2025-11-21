@@ -594,3 +594,8 @@ body {
     transform: rotate(-45deg); /* Inclina a hora para caber melhor */
     transform-origin: center;
 }
+
+/* [CORREÇÃO] Estilo para barra de prejuízo */
+.progresso-lucro-barra.meta-prejuizo {
+    background: #dc3545 !important; /* Vermelho alerta */
+}
