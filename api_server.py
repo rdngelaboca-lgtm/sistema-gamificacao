@@ -531,8 +531,12 @@ def rota_meta_principal_do_dia():
         if dados_meta:
             return jsonify(dados_meta), 200
         else:
-            # Se não houver meta ativa, retorna um objeto vazio para não quebrar o painel
-            return jsonify({}), 200 
+            # [CORREÇÃO] Retorna estrutura zerada para evitar erro de "undefined" no JS do painel
+            return jsonify({
+            "nome_meta": "Sem Meta Ativa",
+            "valor_meta": 0.0,
+            "valor_atingido": 0.0
+        }), 200 
     except Exception as e:
         logger.exception(f"!!! ERRO no endpoint /api/meta_principal_do_dia: {e}")
         return jsonify({"status": "erro", "mensagem": "Ocorreu um erro interno no servidor. Tente novamente mais tarde ou contate o suporte."}), 500
