@@ -52,6 +52,30 @@ logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT, handlers=[file_handler, 
 logger = logging.getLogger(__name__)
 
 logger.info(f"*** Logging configurado para o módulo: {__name__} ***")
+
+# --- MIGRAÇÃO AUTOMÁTICA DE BANCO ---
+def verificar_migracao_banco():
+    """Verifica se a tabela PosicoesLoja tem a coluna Setor. Se não, cria."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Tenta selecionar a coluna Setor
+            try:
+                cursor.execute("SELECT TOP 1 Setor FROM PosicoesLoja")
+            except Exception:
+                logger.info("Coluna 'Setor' não encontrada. Iniciando migração da tabela...")
+                cursor.execute("ALTER TABLE PosicoesLoja ADD Setor VARCHAR(50)")
+                conn.commit()
+                logger.info("Migração concluída: Coluna 'Setor' adicionada com sucesso.")
+        except Exception as e:
+            logger.error(f"Erro na migração de banco: {e}")
+        finally:
+            conn.close()
+
+# Executa a verificação ao importar o módulo
+verificar_migracao_banco()
+
 # ==============================================================================
 # == FIM BLOCO DE CONFIGURAÇÃO DE LOGGING ======================================
 # ==============================================================================
@@ -5319,30 +5343,48 @@ def buscar_historico_compras_produto(produto_id_mestre):
 # == INÍCIO DO MÓDULO DE ESCALAÇÃO E MAPA DE LOJA ===================
 # ===================================================================
 
-def criar_posicao_loja(nome, x, y):
-    """Cria um ponto clicável no mapa da loja."""
+def criar_posicao_loja(nome, x, y, setor=None):
+    """Cria um ponto clicável no mapa da loja, agora com Setor opcional."""
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            sql = "INSERT INTO PosicoesLoja (NomePosicao, CoordX, CoordY) VALUES (?, ?, ?)"
-            cursor.execute(sql, nome, x, y)
+            sql = "INSERT INTO PosicoesLoja (NomePosicao, CoordX, CoordY, Setor, Ativo) VALUES (?, ?, ?, ?, 1)"
+            cursor.execute(sql, nome, x, y, setor)
             conn.commit()
             return True
         except Exception as e:
-            logging.error(f"Erro ao criar posição: {e}")
+            logger.error(f"Erro ao criar posição: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
+
+def atualizar_dados_posicao(posicao_id, novo_nome, novo_setor):
+    """Atualiza nome e setor de uma posição existente."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE PosicoesLoja SET NomePosicao = ?, Setor = ? WHERE PosicaoID = ?"
+            cursor.execute(sql, novo_nome, novo_setor, posicao_id)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Erro ao atualizar posição: {e}")
             return False
         finally:
             conn.close()
     return False
 
 def listar_posicoes_loja():
-    """Lista todas as posições cadastradas no mapa."""
+    """Lista todas as posições cadastradas, incluindo a nova coluna Setor."""
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM PosicoesLoja WHERE Ativo = 1")
+            # Retorna explicitamente: PosicaoID, NomePosicao, CoordX, CoordY, Ativo, Setor
+            cursor.execute("SELECT PosicaoID, NomePosicao, CoordX, CoordY, Ativo, Setor FROM PosicoesLoja WHERE Ativo = 1")
             return cursor.fetchall()
         finally:
             conn.close()
