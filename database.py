@@ -5507,38 +5507,29 @@ def buscar_funcionarios_com_posicao_padrao(posicao_id):
 
 def buscar_horarios_ocupacao_hoje(data_str, dia_semana_int):
     """
-    Busca horários da escala manual, MAS FILTRA para contar apenas
-    posições que ainda existem e estão ativas no mapa (Ativo = 1).
-    Isso remove 'dados fantasmas' de posições excluídas.
+    Busca horários da escala manual filtrando por posições ativas.
+    Retorna também o SETOR para permitir filtros no gráfico.
     """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            
-            # CORREÇÃO FINAL:
-            # Fazemos JOIN com PosicoesLoja e exigimos PL.Ativo = 1.
-            # Assim, se você excluiu a bolinha do mapa, a escala dela para de contar.
+
+            # CORREÇÃO: Adicionado PL.Setor na seleção
             sql = """
                 SELECT 
                     ED.HorarioEntrada AS Entrada, 
                     ED.HorarioSaida AS Saida, 
                     ED.InicioIntervalo, 
-                    ED.FimIntervalo 
+                    ED.FimIntervalo,
+                    PL.Setor -- Nova coluna
                 FROM EscalaDiaria ED
                 INNER JOIN PosicoesLoja PL ON ED.PosicaoID = PL.PosicaoID
                 WHERE ED.DataEscala = ?
                   AND PL.Ativo = 1
             """
             cursor.execute(sql, data_str)
-            resultados = cursor.fetchall()
-            
-            # --- DEBUG NO TERMINAL ---
-            print(f"\n--- DEBUG GRÁFICO FILTRADO ({data_str}) ---")
-            print(f"Total no Banco: {len(resultados)}")
-            print("------------------------------------\n")
-            
-            return resultados
+            return cursor.fetchall()
         except Exception as e:
             logging.error(f"Erro ao buscar horários de ocupação: {e}")
             return []
