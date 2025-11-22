@@ -177,7 +177,8 @@ class AppEscalaLoja:
         entry_nome.pack(pady=5)
 
         ttk.Label(popup, text="Setor (Para Intervalo Automático):").pack(pady=5)
-        setores = ["Varanda", "Frente Loja", "Salão", "Caixa", "Buffet", "Cozinha"]
+        # Adicionados: Limpeza e Camara Fria
+        setores = ["Varanda", "Frente Loja", "Salão", "Caixa", "Buffet", "Cozinha", "Limpeza", "Camara Fria"]
         combo_setor = ttk.Combobox(popup, values=setores, state="readonly")
         combo_setor.pack(pady=5)
 
@@ -211,7 +212,8 @@ class AppEscalaLoja:
         entry_nome.pack()
 
         ttk.Label(popup, text="Setor:").pack()
-        combo_setor = ttk.Combobox(popup, values=["Varanda", "Frente Loja", "Salão", "Caixa", "Buffet", "Cozinha"])
+        # Lista atualizada
+        combo_setor = ttk.Combobox(popup, values=["Varanda", "Frente Loja", "Salão", "Caixa", "Buffet", "Cozinha", "Limpeza", "Camara Fria"])
         combo_setor.pack()
 
         def confirmar():
