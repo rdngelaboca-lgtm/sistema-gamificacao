@@ -30,10 +30,10 @@ class AppEscalaLoja:
         self.frame_mapa = ttk.Frame(root)
         self.frame_mapa.pack(fill=tk.BOTH, expand=True)
 
-        # --- Painel Inferior (Fluxo & Alertas) ---
         self.frame_inferior = ttk.LabelFrame(root, text="Fluxo de Equipe & Alertas do Sistema", padding="10", height=150)
         self.frame_inferior.pack(fill=tk.X, side=tk.BOTTOM)
-        self.lbl_alertas = tk.Label(self.frame_inferior, text="Sistema pronto. Nenhuma ação pendente.", fg="gray", justify=tk.LEFT, font=("Consolas", 10))
+        # Adicionado wraplength=1150 para quebrar linhas em mensagens longas de erro
+        self.lbl_alertas = tk.Label(self.frame_inferior, text="Sistema pronto. Nenhuma ação pendente.", fg="gray", justify=tk.LEFT, font=("Consolas", 10), wraplength=1150)
         self.lbl_alertas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         # --- Controles do Topo ---
@@ -225,6 +225,10 @@ class AppEscalaLoja:
 
     # --- INTEGRAÇÃO COM O CÉREBRO (CALCULADORA) ---
     def gerar_intervalos(self):
+        # Função auxiliar para evitar erro se o banco retornar 'time' em vez de 'datetime'
+        def extrair_tempo(val):
+            if hasattr(val, 'time'): return val.time() # É datetime
+            return val # Já é time
         # 1. Coleta dados da tela e do banco
         pessoas_para_calcular = []
 
@@ -238,9 +242,12 @@ class AppEscalaLoja:
                 dados = self.escala_atual[pos_id]
                 # Só calcula para quem tem horário de entrada e saída E nome definido
                 if dados.HorarioEntrada and dados.HorarioSaida and dados.NomePessoa:
-                    # Combina a data selecionada com a hora do banco para ter um datetime completo
-                    dt_entrada = datetime.combine(dia_obj, dados.HorarioEntrada.time())
-                    dt_saida = datetime.combine(dia_obj, dados.HorarioSaida.time())
+                    # Combina a data selecionada com a hora do banco de forma segura
+                    t_ent = extrair_tempo(dados.HorarioEntrada)
+                    t_sai = extrair_tempo(dados.HorarioSaida)
+
+                    dt_entrada = datetime.combine(dia_obj, t_ent)
+                    dt_saida = datetime.combine(dia_obj, t_sai)
 
                     pessoas_para_calcular.append({
                         'id_posicao': pos_id,
@@ -391,7 +398,9 @@ class AppEscalaLoja:
             if not tel and pessoa_tel: tel = pessoa_tel
             if tel:
                 msg = f"Escala {self.data_selecionada}: {nome_pos} ({e_ent.get()}-{e_sai.get()}). Intervalo: {e_int_ini.get()}-{e_int_fim.get()}"
-                webbrowser.open(f"https://wa.me/55{re.sub(r'\D', '', tel)}?text={urllib.parse.quote(msg)}")
+                # Correção: Executa o regex fora da f-string para evitar SyntaxError com a barra invertida
+                numeros_limpos = re.sub(r'\D', '', tel)
+                webbrowser.open(f"https://wa.me/55{numeros_limpos}?text={urllib.parse.quote(msg)}")
 
         ttk.Button(popup, text="💾 Salvar", command=salvar).pack(pady=10)
         ttk.Button(popup, text="📱 WhatsApp", command=enviar_zap).pack(pady=5)
