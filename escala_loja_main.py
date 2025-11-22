@@ -117,9 +117,11 @@ class AppEscalaLoja:
 
                 if pos_id in self.escala_atual:
                     dados = self.escala_atual[pos_id]
-                    nome_pessoa = dados.NomePessoa if dados.NomePessoa else "Erro Nome"
+                    # Se existe o registro mas sem nome, está livre/vazio
+                    nome_pessoa = dados.NomePessoa if dados.NomePessoa else "(Livre)"
                     ocupado = True
-                    cor = "#00C851" # Verde
+                    # Pinta de amarelo se tiver horário definido mas sem ninguém, ou verde se tiver gente
+                    cor = "#00C851" if dados.NomePessoa else "#FFBB33"
                 
                 elif not self.modo_edicao:
                     func_padrao = database.buscar_funcionarios_com_posicao_padrao(pos_id)
@@ -325,11 +327,16 @@ class AppEscalaLoja:
                         return
 
             selecao = combo_pessoas.get()
-            if not selecao or selecao == "(Vazio)": return 
-            
-            dados_pessoa = mapa_ids[selecao]
-            func_id = dados_pessoa['id'] if dados_pessoa['tipo'] == 'func' else None
-            free_id = dados_pessoa['id'] if dados_pessoa['tipo'] == 'free' else None
+            if not selecao: return 
+
+            # Lógica corrigida para permitir limpar a escala (Vazio)
+            if selecao == "(Vazio)":
+                func_id = None
+                free_id = None
+            else:
+                dados_pessoa = mapa_ids[selecao]
+                func_id = dados_pessoa['id'] if dados_pessoa['tipo'] == 'func' else None
+                free_id = dados_pessoa['id'] if dados_pessoa['tipo'] == 'free' else None
             
             # [CORREÇÃO] 2. Tratamento de Nulos: Converte string vazia para None antes do DB
             def tratar_vazio(valor):
@@ -350,10 +357,14 @@ class AppEscalaLoja:
 
         def enviar_zap():
             selecao = combo_pessoas.get()
-            if not selecao: return
+            if not selecao or selecao == "(Vazio)":
+                messagebox.showwarning("Aviso", "Selecione uma pessoa para enviar mensagem.")
+                return
+
             dados_pessoa = mapa_ids.get(selecao)
-            
-            telefone = dados_pessoa.get('tel')
+            if not dados_pessoa: return # Segurança extra
+
+            telefone = dados_pessoa.get('tel')     
             if not telefone and pessoa_selecionada_tel: telefone = pessoa_selecionada_tel
             
             if not telefone:
