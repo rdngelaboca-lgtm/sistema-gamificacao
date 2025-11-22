@@ -33,9 +33,11 @@ def calcular_intervalos_automaticos(dados_escala, dia_semana_iso):
     # 2. Processar cada Setor individualmente
     for setor, pessoas in por_setor.items():
         if setor == "Sem Setor": 
+            if pessoas:
+                log_erros.append(f"⚠️ {len(pessoas)} funcionário(s) ignorado(s) pois a posição não tem 'Setor' definido no mapa.")
             continue
 
-        # Regra: Setor não pode ficar sozinho (exceto se só houver 1 pessoa escalada no total)
+    # Regra: Setor não pode ficar sozinho (exceto se só houver 1 pessoa escalada no total)
         if len(pessoas) < 2:
             log_erros.append(f"⚠️ Setor '{setor}' tem apenas 1 pessoa. Intervalo automático não agendado (risco de ficar sozinho).")
             continue
