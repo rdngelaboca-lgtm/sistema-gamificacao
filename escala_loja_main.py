@@ -59,30 +59,32 @@ class AppEscalaLoja:
         self.carregar_escala_do_dia()
 
     def carregar_imagem_mapa(self):
-        """Carrega a imagem de fundo."""
-        # [CORREÇÃO] Caminho absoluto para garantir que ache a imagem independente de onde rodar
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        caminho_img = os.path.join(base_dir, "layout_loja.png")
-        if not os.path.exists(caminho_img):
-            self.canvas.create_text(500, 300, text=f"ERRO: Imagem '{caminho_img}' não encontrada!", fill="red", font=("Arial", 16))
-            return
-
-        try:
-            pil_img = Image.open(caminho_img)
-            largura_display = 1080
-            altura_display = 600
+            """Carrega a imagem de fundo."""
             
-            # CORREÇÃO: Usamos .resize para ESTICAR a imagem exatamente para 1080x600
-            # Isso garante que as coordenadas batam 100% com o 'background-size: 100% 100%' do HTML
-            pil_img = pil_img.resize((largura_display, altura_display), Image.Resampling.LANCZOS)
+            # [CORREÇÃO 1] Evita recarregar a imagem se já estiver em memória (Performance)
+            if self.tk_img is not None:
+                return
+
+            # [CORREÇÃO 2] Caminho absoluto para garantir que ache a imagem independente de onde rodar
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            caminho_img = os.path.join(base_dir, "layout_loja.png")
             
-            self.tk_img = ImageTk.PhotoImage(pil_img)
+            if not os.path.exists(caminho_img):
+                self.canvas.create_text(500, 300, text=f"ERRO: Imagem '{caminho_img}' não encontrada!", fill="red", font=("Arial", 16))
+                return
 
+            try:
+                pil_img = Image.open(caminho_img)
+                largura_display = 1080
+                altura_display = 600
+                
+                pil_img = pil_img.resize((largura_display, altura_display), Image.Resampling.LANCZOS)
+                self.tk_img = ImageTk.PhotoImage(pil_img)
 
-            # Tag 'fundo' é crucial para o ordenamento
-            self.canvas.create_image(largura_display/2, altura_display/2, image=self.tk_img, anchor=tk.CENTER, tags="fundo")
-        except Exception as e:
-            messagebox.showerror("Erro Imagem", f"Falha ao carregar imagem: {e}")
+                # Tag 'fundo' é crucial para o ordenamento
+                self.canvas.create_image(largura_display/2, altura_display/2, image=self.tk_img, anchor=tk.CENTER, tags="fundo")
+            except Exception as e:
+                messagebox.showerror("Erro Imagem", f"Falha ao carregar imagem: {e}")
 
     def carregar_escala_do_dia(self, event=None):
         """Recarrega dados e redesenha."""
@@ -229,8 +231,15 @@ class AppEscalaLoja:
     def cadastrar_freelancer(self):
         nome = simpledialog.askstring("Novo Freelancer", "Nome Completo:")
         if nome:
-            tel = simpledialog.askstring("Contato", "Telefone (WhatsApp):")
+            tel = simpledialog.askstring("Contato", "Telefone (WhatsApp) com DDD:")
+            
+            # [CORREÇÃO] Validação básica de telefone (apenas dígitos, min 8 caracteres)
             if tel:
+                digitos = re.sub(r'\D', '', tel) # Remove tudo que não é número
+                if len(digitos) < 8:
+                    messagebox.showerror("Erro", "Número de telefone inválido. Digite o DDD + Número.")
+                    return
+                
                 database.criar_freelancer(nome, tel)
                 messagebox.showinfo("Sucesso", "Freelancer cadastrado!")
 
@@ -305,15 +314,16 @@ class AppEscalaLoja:
             txt_foco.insert("1.0", dados_atuais.FocoDoDia)
 
         def salvar():
-            # [CORREÇÃO] Validação rigorosa de horários para evitar crash do banco
-            horarios_validar = [e_ent.get(), e_sai.get(), e_int_ini.get(), e_int_fim.get()]
-            for h in horarios_validar:
-                if h and h.strip(): # Se tiver texto, verifica o formato
+            # [CORREÇÃO] 1. Validação: Só verifica formato se houver texto
+            horarios_brutos = [e_ent.get(), e_sai.get(), e_int_ini.get(), e_int_fim.get()]
+            for h in horarios_brutos:
+                if h and h.strip(): 
                     try:
                         datetime.strptime(h, '%H:%M')
                     except ValueError:
                         messagebox.showerror("Erro de Formato", f"O horário '{h}' é inválido.\nUse o formato HH:MM (ex: 08:00).", parent=popup)
                         return
+
             selecao = combo_pessoas.get()
             if not selecao or selecao == "(Vazio)": return 
             
@@ -321,9 +331,14 @@ class AppEscalaLoja:
             func_id = dados_pessoa['id'] if dados_pessoa['tipo'] == 'func' else None
             free_id = dados_pessoa['id'] if dados_pessoa['tipo'] == 'free' else None
             
+            # [CORREÇÃO] 2. Tratamento de Nulos: Converte string vazia para None antes do DB
+            def tratar_vazio(valor):
+                return valor if valor and valor.strip() else None
+
             sucesso = database.salvar_escala_dia(
                 self.data_selecionada, pos_id, func_id, free_id,
-                e_ent.get(), e_sai.get(), e_int_ini.get(), e_int_fim.get(),
+                tratar_vazio(e_ent.get()), tratar_vazio(e_sai.get()), 
+                tratar_vazio(e_int_ini.get()), tratar_vazio(e_int_fim.get()),
                 txt_foco.get("1.0", tk.END).strip()
             )
             
@@ -331,7 +346,7 @@ class AppEscalaLoja:
                 popup.destroy()
                 self.carregar_escala_do_dia()
             else:
-                messagebox.showerror("Erro", "Erro ao salvar.")
+                messagebox.showerror("Erro", "Erro ao salvar no banco de dados.")
 
         def enviar_zap():
             selecao = combo_pessoas.get()
