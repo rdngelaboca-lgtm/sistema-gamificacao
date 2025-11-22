@@ -2,6 +2,8 @@ import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog, Toplevel
 from tkcalendar import DateEntry
 from PIL import Image, ImageTk
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import database
 import calculadora_logica # Importa o novo módulo lógico
 import os
@@ -30,11 +32,27 @@ class AppEscalaLoja:
         self.frame_mapa = ttk.Frame(root)
         self.frame_mapa.pack(fill=tk.BOTH, expand=True)
 
-        self.frame_inferior = ttk.LabelFrame(root, text="Fluxo de Equipe & Alertas do Sistema", padding="10", height=150)
-        self.frame_inferior.pack(fill=tk.X, side=tk.BOTTOM)
-        # Adicionado wraplength=1150 para quebrar linhas em mensagens longas de erro
-        self.lbl_alertas = tk.Label(self.frame_inferior, text="Sistema pronto. Nenhuma ação pendente.", fg="gray", justify=tk.LEFT, font=("Consolas", 10), wraplength=1150)
-        self.lbl_alertas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        # --- Painel Inferior (Dividido: Alertas | Gráfico) ---
+        self.frame_inferior = ttk.LabelFrame(root, text="Painel de Controle Operacional", padding="5", height=200)
+        self.frame_inferior.pack(fill=tk.BOTH, side=tk.BOTTOM, expand=False)
+
+        # Coluna Esquerda: Alertas
+        self.frame_alertas = ttk.Frame(self.frame_inferior)
+        self.frame_alertas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        ttk.Label(self.frame_alertas, text="⚠️ Alertas de Regras e Conflitos:", font=("Arial", 9, "bold")).pack(anchor="w")
+
+        self.lbl_alertas = tk.Label(self.frame_alertas, text="Sistema pronto.", fg="gray", justify=tk.LEFT, font=("Consolas", 9), wraplength=600, anchor="nw")
+        self.lbl_alertas.pack(fill=tk.BOTH, expand=True)
+
+        # Coluna Direita: Gráfico de Fluxo
+        self.frame_grafico = ttk.Frame(self.frame_inferior, width=600)
+        self.frame_grafico.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+
+        # Inicializa o objeto do gráfico (Vazio por enquanto)
+        self.fig = Figure(figsize=(6, 2), dpi=100)
+        self.ax = self.fig.add_subplot(111)
+        self.canvas_grafico = FigureCanvasTkAgg(self.fig, master=self.frame_grafico)
+        self.canvas_grafico.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
         # --- Controles do Topo ---
         ttk.Label(self.frame_topo, text="Data:").pack(side=tk.LEFT)
@@ -86,6 +104,8 @@ class AppEscalaLoja:
         self.posicoes = database.listar_posicoes_loja()
         self.escala_atual = database.buscar_escala_do_dia(self.data_selecionada)
         self.redesenhar_marcadores()
+        # Atualiza o gráfico de fluxo sempre que os dados mudam
+        self.atualizar_grafico_fluxo()
 
     def redesenhar_marcadores(self):
         self.canvas.delete("marcador")
@@ -140,6 +160,71 @@ class AppEscalaLoja:
                 self.canvas.create_text(x, y-25, text=txt_setor, fill=cor_setor, font=("Arial", 7), tags=("setor_tag", tag))
 
         self.canvas.tag_lower("fundo")
+
+    def atualizar_grafico_fluxo(self):
+        """Calcula a ocupação hora a hora, descontando quem está em intervalo."""
+        self.ax.clear()
+
+        # Busca dados brutos do banco (apenas horários de quem está ativo)
+        # Nota: database.buscar_horarios_ocupacao_hoje já filtra posições ativas
+        horarios = database.buscar_horarios_ocupacao_hoje(self.data_selecionada, 0)
+
+        horas_eixo = range(7, 24) # 07:00 as 23:00
+        contagem_por_hora = []
+
+        def para_time(val):
+            """Converte datetime ou string para time object"""
+            if val is None: return None
+            if hasattr(val, 'time'): return val.time()
+            return val # Já é time
+
+        for h in horas_eixo:
+            momento = datetime.strptime(f"{h}:00", "%H:%M").time()
+            qtd_pessoas = 0
+
+            for row in horarios:
+                # Desempacota (A ordem vem do SQL: Ent, Sai, IntIni, IntFim)
+                ent = para_time(row[0])
+                sai = para_time(row[1])
+                int_ini = para_time(row[2])
+                int_fim = para_time(row[3])
+
+                if not ent or not sai: continue
+
+                # 1. Verifica se está no turno de trabalho
+                no_turno = False
+                if ent <= sai:
+                    if ent <= momento < sai: no_turno = True
+                else: # Turno vira a noite
+                    if momento >= ent or momento < sai: no_turno = True
+
+                if no_turno:
+                    # 2. Verifica se ESTÁ NO INTERVALO (Se sim, não conta!)
+                    no_intervalo = False
+                    if int_ini and int_fim:
+                        if int_ini <= int_fim:
+                            if int_ini <= momento < int_fim: no_intervalo = True
+                        else: # Intervalo vira noite
+                            if momento >= int_ini or momento < int_fim: no_intervalo = True
+
+                    if not no_intervalo:
+                        qtd_pessoas += 1
+
+            contagem_por_hora.append(qtd_pessoas)
+
+        # Desenha o gráfico
+        cores = ['#d9534f' if c < 3 else '#5cb85c' for c in contagem_por_hora] # Vermelho se < 3, Verde se >= 3
+        self.ax.bar(horas_eixo, contagem_por_hora, color=cores)
+        self.ax.set_title("Fluxo de Equipe (Pessoas Ativas por Hora)", fontsize=9)
+        self.ax.set_xticks(horas_eixo)
+        self.ax.set_xticklabels([f"{h}h" for h in horas_eixo], fontsize=7, rotation=45)
+        self.ax.tick_params(axis='y', labelsize=7)
+        self.ax.grid(axis='y', linestyle='--', alpha=0.5)
+
+        # Ajusta margens para caber no painel pequeno
+        self.fig.tight_layout()
+        self.canvas_grafico.draw()
+
 
     def clique_no_mapa(self, event):
         x, y = event.x, event.y
