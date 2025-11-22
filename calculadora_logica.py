@@ -1,10 +1,13 @@
 from datetime import datetime, timedelta
 
 # --- Regras de Negócio Configuráveis ---
-HORA_BLOQUEIO_INICIO = "16:30"
+HORA_BLOQUEIO_INICIO = "17:00" # <-- ALTERADO
 HORA_BLOQUEIO_FIM = "18:30"
 MAX_HORAS_SEM_PAUSA = 5
 DURACAO_INTERVALO = 1 # horas
+
+# Setores que NÃO precisam de cobertura (podem sair para intervalo mesmo estando sozinhos)
+SETORES_SOLO_PERMITIDO = ["Buffet", "Limpeza", "Camara Fria"]
 
 def calcular_intervalos_automaticos(dados_escala, dia_semana_iso):
     """
@@ -37,8 +40,9 @@ def calcular_intervalos_automaticos(dados_escala, dia_semana_iso):
                 log_erros.append(f"⚠️ {len(pessoas)} funcionário(s) ignorado(s) pois a posição não tem 'Setor' definido no mapa.")
             continue
 
-    # Regra: Setor não pode ficar sozinho (exceto se só houver 1 pessoa escalada no total)
-        if len(pessoas) < 2:
+        # Regra: Setor não pode ficar sozinho
+        # EXCEÇÃO: Se o setor estiver na lista de permitidos (ex: Buffet, Limpeza), ignora essa regra.
+        if len(pessoas) < 2 and setor not in SETORES_SOLO_PERMITIDO:
             log_erros.append(f"⚠️ Setor '{setor}' tem apenas 1 pessoa. Intervalo automático não agendado (risco de ficar sozinho).")
             continue
 
