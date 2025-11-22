@@ -53,34 +53,9 @@ logger = logging.getLogger(__name__)
 
 logger.info(f"*** Logging configurado para o módulo: {__name__} ***")
 
-# --- MIGRAÇÃO AUTOMÁTICA DE BANCO ---
-def verificar_migracao_banco():
-    """Verifica se a tabela PosicoesLoja tem a coluna Setor. Se não, cria."""
-    conn = get_db_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            # Tenta selecionar a coluna Setor
-            try:
-                cursor.execute("SELECT TOP 1 Setor FROM PosicoesLoja")
-            except Exception:
-                logger.info("Coluna 'Setor' não encontrada. Iniciando migração da tabela...")
-                cursor.execute("ALTER TABLE PosicoesLoja ADD Setor VARCHAR(50)")
-                conn.commit()
-                logger.info("Migração concluída: Coluna 'Setor' adicionada com sucesso.")
-        except Exception as e:
-            logger.error(f"Erro na migração de banco: {e}")
-        finally:
-            conn.close()
-
-# Executa a verificação ao importar o módulo
-verificar_migracao_banco()
-
 # ==============================================================================
 # == FIM BLOCO DE CONFIGURAÇÃO DE LOGGING ======================================
 # ==============================================================================
-
-
 import pyodbc
 from datetime import datetime, date, timedelta 
 import calendar 
@@ -114,6 +89,29 @@ def get_db_connection():
     except pyodbc.Error as ex:
         logger.critical(f"FALHA CRÍTICA na conexão com o banco de dados: {ex}", exc_info=True) # Usamos critical e exc_info para detalhes
         return None
+
+# --- MIGRAÇÃO AUTOMÁTICA DE BANCO ---
+def verificar_migracao_banco():
+    """Verifica se a tabela PosicoesLoja tem a coluna Setor. Se não, cria."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Tenta selecionar a coluna Setor
+            try:
+                cursor.execute("SELECT TOP 1 Setor FROM PosicoesLoja")
+            except Exception:
+                logger.info("Coluna 'Setor' não encontrada. Iniciando migração da tabela...")
+                cursor.execute("ALTER TABLE PosicoesLoja ADD Setor VARCHAR(50)")
+                conn.commit()
+                logger.info("Migração concluída: Coluna 'Setor' adicionada com sucesso.")
+        except Exception as e:
+            logger.error(f"Erro na migração de banco: {e}")
+        finally:
+            conn.close()
+
+# Executa a verificação ao importar o módulo
+verificar_migracao_banco()
 
 def buscar_proximos_agendamentos(limite=5):
     """Busca os próximos 'limite' agendamentos a partir de hoje."""
@@ -618,25 +616,24 @@ def obter_historico_funcionario(funcionario_id):
         finally: conn.close()
     return []
 
-def criar_tarefa(titulo, descricao, pontos, setor): # Adicionamos 'setor'
+# CORREÇÃO: setor=None permite que códigos antigos chamem esta função sem quebrar
+def criar_tarefa(titulo, descricao, pontos, setor=None): 
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            # Adicionamos a coluna Setor ao INSERT
             sql = "INSERT INTO Tarefas (Titulo, Descricao, Pontos, Setor) VALUES (?, ?, ?, ?)"
-            cursor.execute(sql, titulo, descricao, pontos, setor) # Adicionamos 'setor' aos parâmetros
+            cursor.execute(sql, titulo, descricao, pontos, setor)
             conn.commit()
         finally: conn.close()
 
-def atualizar_tarefa(tarefa_id, titulo, descricao, pontos, setor): # 1. Adicionado 'setor' aqui
+# CORREÇÃO: setor=None para compatibilidade
+def atualizar_tarefa(tarefa_id, titulo, descricao, pontos, setor=None): 
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            # 2. Adicionado 'Setor = ?' ao comando SQL
             sql = "UPDATE Tarefas SET Titulo = ?, Descricao = ?, Pontos = ?, Setor = ? WHERE TarefaID = ?"
-            # 3. Adicionado 'setor' na lista de parâmetros a serem executados
             cursor.execute(sql, titulo, descricao, pontos, setor, tarefa_id)
             conn.commit()
         finally: conn.close()
@@ -993,13 +990,13 @@ def aprovar_entrega(entrega_id, funcionario_id, pontos):
 
     return novas_conquistas # Retorna a lista (vazia ou não)
 
-
 def recusar_entrega(entrega_id, motivo):
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor(); sql = "UPDATE Entregas SET StatusValidacao = 'Recusada', MotivoRecusa = ? WHERE EntregaID = ?"; cursor.execute(sql, motivo, entrega_id); conn.commit()
         finally: conn.close()
+
 def obter_ranking():
     conn = get_db_connection()
     if conn:
@@ -1007,6 +1004,7 @@ def obter_ranking():
             cursor = conn.cursor(); sql = "SELECT NomeCompleto, PontosTotal FROM Funcionarios ORDER BY PontosTotal DESC"; cursor.execute(sql); return cursor.fetchall()
         finally: conn.close()
     return []
+
 def relatorio_pendencias(funcionario_id, data):
     conn = get_db_connection()
     if conn:
@@ -1027,7 +1025,9 @@ def relatorio_pendencias(funcionario_id, data):
                     WHERE E.AtribuicaoID = TA.AtribuicaoID AND CONVERT(date, E.DataEnvio) = ?
                 )
             """
-            cursor.execute(sql, funcionario_id, data, data, data, data, data, data); return cursor.fetchall()
+            # CORREÇÃO: Havia 8 variáveis 'data' para 7 '?', removido um excesso.
+            cursor.execute(sql, funcionario_id, data, data, data, data, data, data) 
+            return cursor.fetchall()
         finally: conn.close()
     return []
 
@@ -2488,7 +2488,7 @@ def solicitar_resgate(funcionario_id, produto_id):
             # 1. Pega os detalhes do produto e o saldo do funcionário de uma vez
             sql_check = """
                 SELECT P.CustoEmPontos, P.Nome, F.SaldoPontos 
-                FROM ProdutosLoja P, Funcionarios F
+                FROM ProdutosLoja P, Funcionarios F WITH (UPDLOCK)
                 WHERE P.ProdutoID = ? AND F.FuncionarioID = ? AND P.Ativo = 1
             """
             cursor.execute(sql_check, produto_id, funcionario_id)
@@ -3041,18 +3041,9 @@ def buscar_dados_para_painel_kanban():
                 SELECT
                     GETDATE() as DataHoje,
                     DATEADD(day, -1, GETDATE()) as DataOntem,
-                    CASE DATENAME(weekday, GETDATE())
-                        WHEN 'Sunday' THEN 1 WHEN 'Domingo' THEN 1 WHEN 'Monday' THEN 2 WHEN 'Segunda-feira' THEN 2
-                        WHEN 'Tuesday' THEN 3 WHEN 'Terça-feira' THEN 3 WHEN 'Wednesday' THEN 4 WHEN 'Quarta-feira' THEN 4
-                        WHEN 'Thursday' THEN 5 WHEN 'Quinta-feira' THEN 5 WHEN 'Friday' THEN 6 WHEN 'Sexta-feira' THEN 6
-                        WHEN 'Saturday' THEN 7 WHEN 'Sábado' THEN 7
-                    END as DiaSemanaID_Hoje,
-                    CASE DATENAME(weekday, DATEADD(day, -1, GETDATE()))
-                        WHEN 'Sunday' THEN 1 WHEN 'Domingo' THEN 1 WHEN 'Monday' THEN 2 WHEN 'Segunda-feira' THEN 2
-                        WHEN 'Tuesday' THEN 3 WHEN 'Terça-feira' THEN 3 WHEN 'Wednesday' THEN 4 WHEN 'Quarta-feira' THEN 4
-                        WHEN 'Thursday' THEN 5 WHEN 'Quinta-feira' THEN 5 WHEN 'Friday' THEN 6 WHEN 'Sexta-feira' THEN 6
-                        WHEN 'Saturday' THEN 7 WHEN 'Sábado' THEN 7
-                    END as DiaSemanaID_Ontem
+                    -- Cálculo agnóstico ao idioma: Normaliza para 1=Domingo ... 7=Sábado
+                    ((DATEPART(dw, GETDATE()) + @@DATEFIRST - 1) % 7) + 1 as DiaSemanaID_Hoje,
+                    ((DATEPART(dw, DATEADD(day, -1, GETDATE())) + @@DATEFIRST - 1) % 7) + 1 as DiaSemanaID_Ontem
             )
 
             -- Parte 1: Tarefas Individuais de HOJE (FuncionarioID IS NOT NULL)
@@ -5344,7 +5335,7 @@ def buscar_historico_compras_produto(produto_id_mestre):
 # ===================================================================
 
 def criar_posicao_loja(nome, x, y, setor=None):
-    """Cria um ponto clicável no mapa da loja, agora com Setor opcional."""
+    """Cria um ponto clicável no mapa da loja, com compatibilidade para chamadas antigas."""
     conn = get_db_connection()
     if conn:
         try:
