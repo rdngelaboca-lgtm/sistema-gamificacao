@@ -44,13 +44,26 @@ class AppEscalaLoja:
         self.lbl_alertas = tk.Label(self.frame_alertas, text="Sistema pronto.", fg="gray", justify=tk.LEFT, font=("Consolas", 9), wraplength=600, anchor="nw")
         self.lbl_alertas.pack(fill=tk.BOTH, expand=True)
 
-        # Coluna Direita: Gráfico de Fluxo
+       # Coluna Direita: Gráfico de Fluxo
         self.frame_grafico = ttk.Frame(self.frame_inferior, width=600)
         self.frame_grafico.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
-        # Inicializa o objeto do gráfico (Vazio por enquanto)
-        self.fig = Figure(figsize=(6, 2), dpi=100)
+        # --- Controle do Gráfico (Seletor de Setor) ---
+        self.frame_combo_grafico = ttk.Frame(self.frame_grafico)
+        self.frame_combo_grafico.pack(fill=tk.X, side=tk.TOP)
+
+        ttk.Label(self.frame_combo_grafico, text="Visualizar Fluxo do Setor:", font=("Arial", 8)).pack(side=tk.LEFT, padx=5)
+
+        self.combo_setor_grafico = ttk.Combobox(self.frame_combo_grafico, state="readonly", height=10, width=20)
+        self.combo_setor_grafico.pack(side=tk.LEFT)
+        self.combo_setor_grafico['values'] = ["Geral (Todos)", "Varanda", "Frente Loja", "Salão", "Caixa", "Buffet", "Cozinha", "Limpeza", "Camara Fria"]
+        self.combo_setor_grafico.set("Geral (Todos)")
+        self.combo_setor_grafico.bind("<<ComboboxSelected>>", lambda e: self.atualizar_grafico_fluxo())
+
+        # Inicializa o objeto do gráfico
+        self.fig = Figure(figsize=(6, 1.8), dpi=100) # Ajuste de altura para caber o combo
         self.ax = self.fig.add_subplot(111)
+        self.fig.subplots_adjust(bottom=0.2, top=0.85) # Margens para os textos não cortarem
         self.canvas_grafico = FigureCanvasTkAgg(self.fig, master=self.frame_grafico)
         self.canvas_grafico.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
@@ -162,69 +175,95 @@ class AppEscalaLoja:
         self.canvas.tag_lower("fundo")
 
     def atualizar_grafico_fluxo(self):
-        """Calcula a ocupação hora a hora, descontando quem está em intervalo."""
-        self.ax.clear()
+            """Calcula a ocupação hora a hora, filtrando por setor e descontando intervalos."""
+            self.ax.clear()
 
-        # Busca dados brutos do banco (apenas horários de quem está ativo)
-        # Nota: database.buscar_horarios_ocupacao_hoje já filtra posições ativas
-        horarios = database.buscar_horarios_ocupacao_hoje(self.data_selecionada, 0)
+            # 1. Captura o setor selecionado no filtro
+            setor_filtro = self.combo_setor_grafico.get()
+            if not setor_filtro: setor_filtro = "Geral (Todos)"
 
-        horas_eixo = range(7, 24) # 07:00 as 23:00
-        contagem_por_hora = []
+            # Busca dados brutos (Ent, Sai, IntIni, IntFim, Setor)
+            horarios = database.buscar_horarios_ocupacao_hoje(self.data_selecionada, 0)
 
-        def para_time(val):
-            """Converte datetime ou string para time object"""
-            if val is None: return None
-            if hasattr(val, 'time'): return val.time()
-            return val # Já é time
+            horas_eixo = range(7, 24) # 07:00 as 23:00
+            contagem_por_hora = []
 
-        for h in horas_eixo:
-            momento = datetime.strptime(f"{h}:00", "%H:%M").time()
-            qtd_pessoas = 0
+            def para_time(val):
+                if val is None: return None
+                if hasattr(val, 'time'): return val.time()
+                return val
 
-            for row in horarios:
-                # Desempacota (A ordem vem do SQL: Ent, Sai, IntIni, IntFim)
-                ent = para_time(row[0])
-                sai = para_time(row[1])
-                int_ini = para_time(row[2])
-                int_fim = para_time(row[3])
+            for h in horas_eixo:
+                momento = datetime.strptime(f"{h}:00", "%H:%M").time()
+                qtd_pessoas = 0
 
-                if not ent or not sai: continue
+                for row in horarios:
+                    ent = para_time(row[0])
+                    sai = para_time(row[1])
+                    int_ini = para_time(row[2])
+                    int_fim = para_time(row[3])
+                    setor_bd = row[4] # Nova coluna Setor
 
-                # 1. Verifica se está no turno de trabalho
-                no_turno = False
-                if ent <= sai:
-                    if ent <= momento < sai: no_turno = True
-                else: # Turno vira a noite
-                    if momento >= ent or momento < sai: no_turno = True
+                    # --- FILTRO DE SETOR ---
+                    if setor_filtro != "Geral (Todos)":
+                        # Se o setor do funcionário for diferente do filtro, ignora
+                        if setor_bd != setor_filtro:
+                            continue
 
-                if no_turno:
-                    # 2. Verifica se ESTÁ NO INTERVALO (Se sim, não conta!)
-                    no_intervalo = False
-                    if int_ini and int_fim:
-                        if int_ini <= int_fim:
-                            if int_ini <= momento < int_fim: no_intervalo = True
-                        else: # Intervalo vira noite
-                            if momento >= int_ini or momento < int_fim: no_intervalo = True
+                    if not ent or not sai: continue
 
-                    if not no_intervalo:
-                        qtd_pessoas += 1
+                    # 1. Verifica Turno
+                    no_turno = False
+                    if ent <= sai:
+                        if ent <= momento < sai: no_turno = True
+                    else:
+                        if momento >= ent or momento < sai: no_turno = True
 
-            contagem_por_hora.append(qtd_pessoas)
+                    if no_turno:
+                        # 2. Verifica Intervalo (Desconto)
+                        no_intervalo = False
+                        if int_ini and int_fim:
+                            if int_ini <= int_fim:
+                                if int_ini <= momento < int_fim: no_intervalo = True
+                            else:
+                                if momento >= int_ini or momento < int_fim: no_intervalo = True
 
-        # Desenha o gráfico
-        cores = ['#d9534f' if c < 3 else '#5cb85c' for c in contagem_por_hora] # Vermelho se < 3, Verde se >= 3
-        self.ax.bar(horas_eixo, contagem_por_hora, color=cores)
-        self.ax.set_title("Fluxo de Equipe (Pessoas Ativas por Hora)", fontsize=9)
-        self.ax.set_xticks(horas_eixo)
-        self.ax.set_xticklabels([f"{h}h" for h in horas_eixo], fontsize=7, rotation=45)
-        self.ax.tick_params(axis='y', labelsize=7)
-        self.ax.grid(axis='y', linestyle='--', alpha=0.5)
+                        if not no_intervalo:
+                            qtd_pessoas += 1
 
-        # Ajusta margens para caber no painel pequeno
-        self.fig.tight_layout()
-        self.canvas_grafico.draw()
+                contagem_por_hora.append(qtd_pessoas)
 
+            # Desenha o gráfico
+            # Cores dinâmicas: Se selecionar um setor específico, usa azul. Se for Geral, usa a lógica verde/vermelho.
+            if setor_filtro == "Geral (Todos)":
+                cores = ['#d9534f' if c < 3 else '#5cb85c' for c in contagem_por_hora]
+            else:
+                cores = '#33b5e5' # Azul padrão para setores específicos
+
+            barras = self.ax.bar(horas_eixo, contagem_por_hora, color=cores)
+
+            # Título Dinâmico
+            titulo = f"Fluxo: {setor_filtro} (Pessoas Ativas)"
+            self.ax.set_title(titulo, fontsize=9, fontweight='bold')
+
+            self.ax.set_xticks(horas_eixo)
+            self.ax.set_xticklabels([f"{h}h" for h in horas_eixo], fontsize=7, rotation=0)
+            self.ax.tick_params(axis='y', labelsize=7)
+            self.ax.grid(axis='y', linestyle='--', alpha=0.3)
+
+            # --- NOVO: Números em cima das colunas ---
+            for i, rect in enumerate(barras):
+                altura = rect.get_height()
+                if altura > 0:
+                    self.ax.text(rect.get_x() + rect.get_width()/2.0, altura, 
+                                f'{int(altura)}', 
+                                ha='center', va='bottom', fontsize=8, fontweight='bold')
+
+            # Remove bordas desnecessárias para limpar o visual
+            self.ax.spines['top'].set_visible(False)
+            self.ax.spines['right'].set_visible(False)
+
+            self.canvas_grafico.draw()
 
     def clique_no_mapa(self, event):
         x, y = event.x, event.y
