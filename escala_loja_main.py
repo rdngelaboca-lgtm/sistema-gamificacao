@@ -13,6 +13,7 @@ import webbrowser
 import urllib.parse
 import re
 from datetime import datetime, date
+import threading
 
 class AppEscalaLoja:
     def __init__(self, root):
@@ -156,8 +157,11 @@ class AppEscalaLoja:
 
                 # Exibe o intervalo se estiver agendado
                 if dados.InicioIntervalo and dados.FimIntervalo:
-                    i_ini = dados.InicioIntervalo.strftime('%H:%M')
-                    i_fim = dados.FimIntervalo.strftime('%H:%M')
+                    # Função segura para formatar independente se é objeto ou string
+                    fmt_hora = lambda v: v.strftime('%H:%M') if hasattr(v, 'strftime') else str(v)[:5]
+
+                    i_ini = fmt_hora(dados.InicioIntervalo)
+                    i_fim = fmt_hora(dados.FimIntervalo)
                     info_intervalo = f"\n☕ {i_ini}-{i_fim}"
 
             elif not self.modo_edicao:
@@ -454,7 +458,7 @@ class AppEscalaLoja:
             messagebox.showinfo("Sucesso", f"{count_aplicados} intervalos agendados com sucesso!")
 
 
-    # Melhoria 4: Função para enviar escala no Telegram
+    # Melhoria 4: Função para enviar escala no Telegram (Assíncrona)
     def enviar_escala_telegram(self):
         if not self.data_selecionada: return
 
@@ -462,13 +466,17 @@ class AppEscalaLoja:
             f"Deseja enviar a escala do dia {self.data_selecionada} para o grupo TODOS OS FUNCIONÁRIOS no Telegram?")
 
         if resposta:
-            texto_escala = database.gerar_relatorio_escala_texto(self.data_selecionada)
-            # Usa o ID do grupo geral definido no config
-            try:
-                notificador_telegram.enviar_mensagem(config.TODOS_FUNCIONARIOS_GROUP_ID, texto_escala)
-                messagebox.showinfo("Sucesso", "Escala enviada para o grupo do Telegram!")
-            except Exception as e:
-                messagebox.showerror("Erro", f"Falha ao enviar Telegram: {e}")
+            # Função interna para rodar em thread separada
+            def tarefa_background():
+                try:
+                    texto_escala = database.gerar_relatorio_escala_texto(self.data_selecionada)
+                    notificador_telegram.enviar_mensagem(config.TODOS_FUNCIONARIOS_GROUP_ID, texto_escala)
+                    self.root.after(0, lambda: messagebox.showinfo("Sucesso", "Escala enviada para o grupo do Telegram!"))
+                except Exception as e:
+                    self.root.after(0, lambda: messagebox.showerror("Erro", f"Falha ao enviar Telegram: {e}"))
+
+            # Inicia a thread para não travar a interface
+            threading.Thread(target=tarefa_background, daemon=True).start()
 
     # --- Funções Auxiliares Originais (Mantidas) ---
     def alternar_modo(self):
@@ -577,12 +585,26 @@ class AppEscalaLoja:
             txt_foco.insert("1.0", msg_foco_padrao)
 
         def salvar():
+            # Validação de Formato de Hora
+            def validar_hora(texto):
+                if not texto or texto.strip() == "": return True
+                try:
+                    datetime.strptime(texto, '%H:%M')
+                    return True
+                except ValueError:
+                    return False
+
+            horarios = [e_ent.get(), e_sai.get(), e_int_ini.get(), e_int_fim.get()]
+            for h in horarios:
+                if not validar_hora(h):
+                    messagebox.showerror("Erro de Formato", f"Horário inválido: '{h}'.\nUse o formato HH:MM (ex: 08:00).")
+                    return
+
             def tratar_vazio(valor): return valor if valor and valor.strip() else None
             selecao = combo_pessoas.get()
             if not selecao: return 
 
             func_id = None
-            free_id = None
 
             if selecao != "(Vazio)":
                 d = mapa_ids[selecao]
@@ -615,8 +637,9 @@ class AppEscalaLoja:
             d = mapa_ids.get(selecao)
             tel = d.get('tel') if d else None
             if not tel and pessoa_tel: tel = pessoa_tel
+
             if tel:
-                # Melhoria 3: Formatação da Data (DD/MM/AA) com proteção
+                # Limpeza do telefone e formatação da data
                 try:
                     if not self.data_selecionada: raise ValueError("Data não selecionada")
                     data_obj = datetime.strptime(self.data_selecionada, '%Y-%m-%d')
@@ -624,7 +647,18 @@ class AppEscalaLoja:
                 except ValueError:
                     data_fmt = self.data_selecionada or "Data Indefinida"
 
-                msg = f"Escala {data_fmt}: {nome_pos} ({e_ent.get()}-{e_sai.get()}). Intervalo: {e_int_ini.get()}-{e_int_fim.get()}"
+                # Construção da mensagem
+                texto_msg = f"Escala {data_fmt}: {nome_pos}\nHorário: {e_ent.get()} às {e_sai.get()}"
+                if e_int_ini.get() and e_int_fim.get():
+                    texto_msg += f"\nIntervalo: {e_int_ini.get()} às {e_int_fim.get()}"
+
+                # Codificação e abertura do navegador
+                tel_limpo = re.sub(r'\D', '', tel)
+                texto_encoded = urllib.parse.quote(texto_msg)
+                url = f"https://wa.me/{tel_limpo}?text={texto_encoded}"
+                webbrowser.open(url)
+            else:
+                messagebox.showwarning("Aviso", "Nenhum telefone encontrado para a pessoa selecionada.")
 
 if __name__ == "__main__":
     root = tk.Tk()
