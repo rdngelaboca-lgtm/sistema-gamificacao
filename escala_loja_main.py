@@ -337,8 +337,15 @@ class AppEscalaLoja:
                 self.carregar_escala_do_dia()
                 popup.destroy()
 
-        ttk.Button(popup, text="💾 Salvar Alterações", command=salvar_cfg).pack(pady=15, fill=tk.X, padx=20)
-        ttk.Button(popup, text="🗑️ Excluir Posição", command=excluir_cfg).pack(pady=5, fill=tk.X, padx=20)
+        # --- Frame de Botões (Fixo no Rodapé) ---
+        frame_btns = ttk.Frame(popup, padding="10")
+        frame_btns.pack(side=tk.BOTTOM, fill=tk.X)
+
+        btn_salvar = ttk.Button(frame_btns, text="💾 Salvar Alterações", command=salvar)
+        btn_salvar.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+
+        btn_zap = ttk.Button(frame_btns, text="📱 WhatsApp", command=enviar_zap)
+        btn_zap.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
 
     def criar_nova_posicao(self, x, y):
         popup = Toplevel(self.root)
@@ -495,7 +502,13 @@ class AppEscalaLoja:
 
         popup = Toplevel(self.root)
         popup.title(f"Escalar: {nome_pos}")
-        popup.geometry("450x550")
+        # Ajuste para um tamanho mais vertical e centralizado
+        popup.geometry("500x450")
+        # Centraliza a janela na tela
+        popup.update_idletasks()
+        x_c = self.root.winfo_x() + (self.root.winfo_width() // 2) - (500 // 2)
+        y_c = self.root.winfo_y() + (self.root.winfo_height() // 2) - (450 // 2)
+        popup.geometry(f"+{x_c}+{y_c}")
 
         dados_atuais = self.escala_atual.get(pos_id)
 
