@@ -1,9 +1,116 @@
-// Variável global para armazenar os dados brutos do gráfico
-let dadosOcupacaoCache = []; 
+// Variável para guardar os dados na memória do navegador
+let dadosOcupacaoCache = [];
 
-function atualizarGraficoComFiltro() {
-    // Chama a função de renderização usando os dados que já estão na memória
-    renderizarGraficoOcupacao(dadosOcupacaoCache);
+// Configura o ouvinte do Dropdown assim que o JS carregar
+const filtroSetorEl = document.getElementById('filtro-setor-grafico');
+if (filtroSetorEl) {
+    filtroSetorEl.addEventListener('change', function() {
+        console.log("Mudança de setor detectada:", this.value);
+        // Chama a função sem passar novos dados, forçando o uso do cache
+        renderizarGraficoOcupacao(null);
+    });
+}
+
+function renderizarGraficoOcupacao(novosDados) {
+    const container = document.getElementById('grafico-barras-container');
+    const selectFiltro = document.getElementById('filtro-setor-grafico');
+
+    if (!container) return;
+
+    // --- LÓGICA DE CACHE ---
+    // 1. Se a API mandou dados novos, atualizamos o cache
+    if (novosDados && novosDados.length > 0) {
+        dadosOcupacaoCache = novosDados;
+    }
+
+    // 2. Se não temos dados nem novos e nem no cache, paramos
+    if (!dadosOcupacaoCache || dadosOcupacaoCache.length === 0) {
+        container.innerHTML = '<p style="width:100%; text-align:center; color: #666;">Aguardando dados da escala...</p>';
+        return;
+    }
+
+    // 3. Usamos sempre os dados do Cache para desenhar/redesenhar
+    const dadosParaProcessar = dadosOcupacaoCache;
+    // -----------------------
+
+    container.innerHTML = '';
+
+    // Pega o setor selecionado no momento
+    const setorSelecionado = selectFiltro ? selectFiltro.value : "Geral (Todos)";
+
+    // Processa os dados hora a hora (07:00 as 23:00)
+    const horasEixo = [7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23];
+    const dadosGrafico = [];
+
+    const paraMinutos = (strHora) => {
+        if (!strHora) return null;
+        const [h, m] = strHora.split(':').map(Number);
+        return h * 60 + m;
+    };
+
+    horasEixo.forEach(hora => {
+        const momentoAnalise = hora * 60; 
+        let qtdPessoas = 0;
+
+        dadosParaProcessar.forEach(item => {
+            // --- FILTRO: A mágica acontece aqui ---
+            if (setorSelecionado !== "Geral (Todos)" && item.setor !== setorSelecionado) {
+                return; // Pula este funcionário se não for do setor escolhido
+            }
+
+            const ent = paraMinutos(item.entrada);
+            const sai = paraMinutos(item.saida);
+            const intIni = paraMinutos(item.int_ini);
+            const intFim = paraMinutos(item.int_fim);
+
+            if (ent === null || sai === null) return;
+
+            let noTurno = false;
+            if (ent <= sai) {
+                if (ent <= momentoAnalise && momentoAnalise < sai) noTurno = true;
+            } else { 
+                if (momentoAnalise >= ent || momentoAnalise < sai) noTurno = true;
+            }
+
+            if (noTurno) {
+                let noIntervalo = false;
+                if (intIni !== null && intFim !== null) {
+                    if (intIni <= intFim) {
+                        if (intIni <= momentoAnalise && momentoAnalise < intFim) noIntervalo = true;
+                    } else { 
+                        if (momentoAnalise >= intIni || momentoAnalise < intFim) noIntervalo = true;
+                    }
+                }
+                if (!noIntervalo) qtdPessoas++;
+            }
+        });
+
+        dadosGrafico.push({ hora: `${hora}:00`, qtd: qtdPessoas });
+    });
+
+    // Renderiza as barras
+    const maxPessoas = Math.max(...dadosGrafico.map(d => d.qtd), 5); 
+
+    dadosGrafico.forEach(d => {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'barra-wrapper';
+
+        const alturaPercentual = (d.qtd / maxPessoas) * 100;
+
+        let corBarra = '#33b5e5'; // Azul padrão para setores
+        if (setorSelecionado === "Geral (Todos)") {
+            if (d.qtd < 3) corBarra = '#d9534f'; // Vermelho alerta
+            else corBarra = '#5cb85c'; // Verde ok
+        }
+
+        wrapper.innerHTML = `
+            <div class="barra-visual" style="height: ${alturaPercentual}%; background-color: ${corBarra};">
+                <span class="barra-valor">${d.qtd > 0 ? d.qtd : ''}</span>
+            </div>
+            <span class="barra-hora">${d.hora}</span>
+        `;
+        container.appendChild(wrapper);
+    });
 }
 
 document.addEventListener('DOMContentLoaded', function() {
