@@ -78,12 +78,13 @@ class AppEscalaLoja:
 
         ttk.Separator(self.frame_topo, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=10)
 
+        # [CORREÇÃO] Botão restaurado
+        self.btn_free = ttk.Button(self.frame_topo, text="👤 Novo Freelancer", command=self.cadastrar_freelancer)
+        self.btn_free.pack(side=tk.LEFT, padx=5)
         self.btn_modo = ttk.Button(self.frame_topo, text="🔧 Configurar Mapa (Setores)", command=self.alternar_modo)
         self.btn_modo.pack(side=tk.LEFT, padx=5)
-
         self.lbl_legenda = ttk.Label(self.frame_topo, text="Modo: ESCALAÇÃO", foreground="green", font=("Arial", 10, "bold"))
         self.lbl_legenda.pack(side=tk.LEFT, padx=10)
-
         # Botão Mágico de Automação
         self.btn_magic = ttk.Button(self.frame_topo, text="🪄 Gerar Intervalos Automáticos", command=self.gerar_intervalos)
         self.btn_magic.pack(side=tk.LEFT, padx=20)
