@@ -347,9 +347,13 @@ class AppEscalaLoja:
         combo_setor.pack()
 
         def confirmar():
-            if entry_nome.get():
-                # Passa o setor para a função de criação
-                database.criar_posicao_loja(entry_nome.get(), x, y, combo_setor.get())
+            nome = entry_nome.get()
+            setor = combo_setor.get()
+            # Garante que setor vazio vire None para o banco
+            if not setor: setor = None
+
+            if nome:
+                database.criar_posicao_loja(nome, x, y, setor)
                 self.carregar_escala_do_dia()
                 popup.destroy()
 
@@ -357,18 +361,18 @@ class AppEscalaLoja:
 
     # --- INTEGRAÇÃO COM O CÉREBRO (CALCULADORA) ---
     def gerar_intervalos(self):
-            # [CORREÇÃO] Função auxiliar robusta para converter qualquer formato em time object
+        # [CORREÇÃO] Função auxiliar robusta para converter qualquer formato em time object
         def extrair_tempo(val):
             if val is None: return None
             if isinstance(val, str):
                 try:
-                    # Tenta converter string "HH:MM:SS" ou "HH:MM" para objeto time
                     formato = "%H:%M:%S" if len(val.split(':')) == 3 else "%H:%M"
                     return datetime.strptime(val, formato).time()
                 except ValueError:
-                    return None # Formato inválido
-            if hasattr(val, 'time'): return val.time() # É datetime
-            return val # Assume que já é objeto time
+                    print(f"ERRO DE FORMATO DE HORA: {val}") # Log para debug
+                    return None
+            if hasattr(val, 'time'): return val.time()
+            return val
         # 1. Coleta dados da tela e do banco
         pessoas_para_calcular = []
 
@@ -530,9 +534,9 @@ class AppEscalaLoja:
         ttk.Label(popup, text="Foco do Dia:").pack(anchor=tk.W, padx=10)
         txt_foco = tk.Text(popup, height=5, width=40); txt_foco.pack(padx=10, pady=5)
 
-        # Melhoria 2: Pré-preenchimento por Setor
-        # Busca o setor da posição atual (está na tupla self.posicoes)
-        setor_atual = next((p[5] for p in self.posicoes if p[0] == pos_id), None)
+        # Melhoria 2: Pré-preenchimento por Setor (Com proteção de índice)
+        # Verifica se a tupla tem tamanho suficiente (6 itens) antes de acessar o índice 5
+        setor_atual = next((p[5] for p in self.posicoes if p[0] == pos_id and len(p) > 5), None)
 
         msg_foco_padrao = ""
         if setor_atual:
@@ -592,14 +596,15 @@ class AppEscalaLoja:
             tel = d.get('tel') if d else None
             if not tel and pessoa_tel: tel = pessoa_tel
             if tel:
-                # Melhoria 3: Formatação da Data (DD/MM/AA)
-                data_obj = datetime.strptime(self.data_selecionada, '%Y-%m-%d')
-                data_fmt = data_obj.strftime('%d/%m/%y')
+                # Melhoria 3: Formatação da Data (DD/MM/AA) com proteção
+                try:
+                    if not self.data_selecionada: raise ValueError("Data não selecionada")
+                    data_obj = datetime.strptime(self.data_selecionada, '%Y-%m-%d')
+                    data_fmt = data_obj.strftime('%d/%m/%y')
+                except ValueError:
+                    data_fmt = self.data_selecionada or "Data Indefinida"
 
                 msg = f"Escala {data_fmt}: {nome_pos} ({e_ent.get()}-{e_sai.get()}). Intervalo: {e_int_ini.get()}-{e_int_fim.get()}"
-                # Correção: Executa o regex fora da f-string para evitar SyntaxError com a barra invertida
-                numeros_limpos = re.sub(r'\D', '', tel)
-                webbrowser.open(f"https://wa.me/55{numeros_limpos}?text={urllib.parse.quote(msg)}")
 
 if __name__ == "__main__":
     root = tk.Tk()
