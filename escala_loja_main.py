@@ -91,7 +91,14 @@ class AppEscalaLoja:
         self.btn_telegram = ttk.Button(self.frame_topo, text="📢 Enviar Escala Telegram", command=self.enviar_escala_telegram)
         self.btn_telegram.pack(side=tk.LEFT, padx=5)
 
-        ttk.Button(self.frame_topo, text="👤 Novo Freelancer", command=self.cadastrar_freelancer).pack(side=tk.RIGHT, padx=5)
+        # [CORREÇÃO] Botões recolocados no layout
+        # Botão Mágico de Automação
+        self.btn_magic = ttk.Button(self.frame_topo, text="🪄 Gerar Intervalos Automáticos", command=self.gerar_intervalos)
+        self.btn_magic.pack(side=tk.LEFT, padx=20)
+
+        # Botão Telegram (Nova Melhoria)
+        self.btn_telegram = ttk.Button(self.frame_topo, text="📢 Enviar Escala Telegram", command=self.enviar_escala_telegram)
+        self.btn_telegram.pack(side=tk.LEFT, padx=5)
 
         # --- Canvas do Mapa ---
         self.canvas = tk.Canvas(self.frame_mapa, bg="#e0e0e0", cursor="hand2")
