@@ -143,8 +143,13 @@ class AppEscalaLoja:
         if dia_semana_hoje == 8: dia_semana_hoje = 1
 
         for pos in self.posicoes:
-            # Desempacota os dados (agora incluindo Setor no índice 5)
-            pos_id, nome, x, y, ativo, setor = pos 
+            # Desempacotamento seguro (trata casos onde 'setor' pode não vir do banco)
+            pos_id = pos[0]
+            nome = pos[1]
+            x = pos[2]
+            y = pos[3]
+            # ativo = pos[4] (não usado aqui)
+            setor = pos[5] if len(pos) > 5 else None
 
             nome_pessoa = "Vazio"
             cor = "#ff4444" # Vermelho (Vazio)
@@ -208,6 +213,13 @@ class AppEscalaLoja:
             def para_time(val):
                 if val is None: return None
                 if hasattr(val, 'time'): return val.time()
+                if isinstance(val, str):
+                    try:
+                        # Tenta converter string HH:MM ou HH:MM:SS para time
+                        fmt = "%H:%M:%S" if len(val.split(':')) == 3 else "%H:%M"
+                        return datetime.strptime(val, fmt).time()
+                    except ValueError:
+                        return None
                 return val
 
             for h in horas_eixo:
@@ -341,15 +353,17 @@ class AppEscalaLoja:
                 self.carregar_escala_do_dia()
                 popup.destroy()
 
-        # --- Frame de Botões (Fixo no Rodapé) ---
+    # --- Frame de Botões (Fixo no Rodapé) ---
         frame_btns = ttk.Frame(popup, padding="10")
         frame_btns.pack(side=tk.BOTTOM, fill=tk.X)
 
-        btn_salvar = ttk.Button(frame_btns, text="💾 Salvar Alterações", command=salvar)
+        # Correção: Aponta para a função local salvar_cfg
+        btn_salvar = ttk.Button(frame_btns, text="💾 Salvar Alterações", command=salvar_cfg)
         btn_salvar.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
 
-        btn_zap = ttk.Button(frame_btns, text="📱 WhatsApp", command=enviar_zap)
-        btn_zap.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        # Correção: Adicionado botão de Excluir que estava faltando
+        btn_excluir = ttk.Button(frame_btns, text="🗑️ Excluir Posição", command=excluir_cfg)
+        btn_excluir.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
 
     def criar_nova_posicao(self, x, y):
         popup = Toplevel(self.root)
@@ -381,6 +395,13 @@ class AppEscalaLoja:
     def gerar_intervalos(self):
         # [CORREÇÃO] Função auxiliar robusta para converter qualquer formato em time object
         def extrair_tempo(val):
+            from datetime import timedelta # Garante importação local
+            if isinstance(val, timedelta):
+                # Converte timedelta (ex: 8:00:00) para time
+                segundos = val.total_seconds()
+                horas = int(segundos // 3600)
+                minutos = int((segundos % 3600) // 60)
+                return (datetime.min + timedelta(hours=horas, minutes=minutos)).time()
             if val is None: return None
             if isinstance(val, str):
                 try:
@@ -552,10 +573,16 @@ class AppEscalaLoja:
         ttk.Label(frame_hor, text="Intervalo Fim:").grid(row=1, column=2); e_int_fim = ttk.Entry(frame_hor, width=8); e_int_fim.grid(row=1, column=3)
 
         if dados_atuais:
-            if getattr(dados_atuais, 'HorarioEntrada', None): e_ent.insert(0, dados_atuais.HorarioEntrada.strftime('%H:%M'))
-            if getattr(dados_atuais, 'HorarioSaida', None): e_sai.insert(0, dados_atuais.HorarioSaida.strftime('%H:%M'))
-            if getattr(dados_atuais, 'InicioIntervalo', None): e_int_ini.insert(0, dados_atuais.InicioIntervalo.strftime('%H:%M'))
-            if getattr(dados_atuais, 'FimIntervalo', None): e_int_fim.insert(0, dados_atuais.FimIntervalo.strftime('%H:%M'))
+            # Helper seguro para formatar (objeto time ou string)
+            def safe_fmt(val):
+                if not val: return ""
+                if hasattr(val, 'strftime'): return val.strftime('%H:%M')
+                return str(val)[:5] # Se for string, pega os 5 primeiros chars (HH:MM)
+
+            if getattr(dados_atuais, 'HorarioEntrada', None): e_ent.insert(0, safe_fmt(dados_atuais.HorarioEntrada))
+            if getattr(dados_atuais, 'HorarioSaida', None): e_sai.insert(0, safe_fmt(dados_atuais.HorarioSaida))
+            if getattr(dados_atuais, 'InicioIntervalo', None): e_int_ini.insert(0, safe_fmt(dados_atuais.InicioIntervalo))
+            if getattr(dados_atuais, 'FimIntervalo', None): e_int_fim.insert(0, safe_fmt(dados_atuais.FimIntervalo))
         else:
             e_ent.insert(0, "08:00"); e_sai.insert(0, "18:00")
 
@@ -604,14 +631,16 @@ class AppEscalaLoja:
             selecao = combo_pessoas.get()
             if not selecao: return 
 
+            # Inicialização segura de ambas as variáveis
             func_id = None
+            free_id = None
 
             if selecao != "(Vazio)":
                 d = mapa_ids[selecao]
                 func_id = d['id'] if d['tipo'] == 'func' else None
                 free_id = d['id'] if d['tipo'] == 'free' else None
 
-            # Salva a escala do dia
+        # Salva a escala do dia
             database.salvar_escala_dia(self.data_selecionada, pos_id, func_id, free_id,
                 tratar_vazio(e_ent.get()), tratar_vazio(e_sai.get()), 
                 tratar_vazio(e_int_ini.get()), tratar_vazio(e_int_fim.get()),
