@@ -78,9 +78,10 @@ class AppEscalaLoja:
 
         ttk.Separator(self.frame_topo, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=10)
 
-        # [CORREÇÃO] Botão restaurado
-        self.btn_free = ttk.Button(self.frame_topo, text="👤 Novo Freelancer", command=self.cadastrar_freelancer)
+        # [ATUALIZAÇÃO] Botão de Gestão de Freelancers
+        self.btn_free = ttk.Button(self.frame_topo, text="👤 Gerenciar Freelancers", command=self.abrir_gestao_freelancers)
         self.btn_free.pack(side=tk.LEFT, padx=5)
+
         self.btn_modo = ttk.Button(self.frame_topo, text="🔧 Configurar Mapa (Setores)", command=self.alternar_modo)
         self.btn_modo.pack(side=tk.LEFT, padx=5)
         self.lbl_legenda = ttk.Label(self.frame_topo, text="Modo: ESCALAÇÃO", foreground="green", font=("Arial", 10, "bold"))
@@ -502,17 +503,74 @@ class AppEscalaLoja:
             self.lbl_legenda.config(text="Modo: ESCALAÇÃO", foreground="green")
             self.carregar_escala_do_dia()
 
-    def cadastrar_freelancer(self):
-        nome = simpledialog.askstring("Novo Freelancer", "Nome Completo:")
-        if nome:
-            tel = simpledialog.askstring("Contato", "Telefone (WhatsApp) com DDD:")
-            if tel:
-                digitos = re.sub(r'\D', '', tel)
-                if len(digitos) < 8:
-                    messagebox.showerror("Erro", "Telefone inválido.")
-                    return
-                database.criar_freelancer(nome, tel)
-                messagebox.showinfo("Sucesso", "Freelancer cadastrado!")
+    def abrir_gestao_freelancers(self):
+        """Abre uma janela para listar, criar e editar freelancers."""
+        popup = Toplevel(self.root)
+        popup.title("Gerenciar Freelancers")
+        popup.geometry("550x450")
+        popup.transient(self.root)
+
+        # --- Área de Lista ---
+        frame_lista = ttk.Frame(popup, padding="10")
+        frame_lista.pack(fill=tk.BOTH, expand=True)
+
+        cols = ('ID', 'Nome', 'Telefone')
+        tree = ttk.Treeview(frame_lista, columns=cols, show='headings', selectmode='browse')
+        tree.heading('ID', text='ID'); tree.column('ID', width=40, anchor='center')
+        tree.heading('Nome', text='Nome'); tree.column('Nome', width=200)
+        tree.heading('Telefone', text='Telefone'); tree.column('Telefone', width=150, anchor='center')
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        sb = ttk.Scrollbar(frame_lista, orient="vertical", command=tree.yview)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        tree.configure(yscrollcommand=sb.set)
+
+        def carregar_lista():
+            for i in tree.get_children(): tree.delete(i)
+            frees = database.listar_freelancers() # Reusa função existente
+            for f in frees:
+                # Ajuste dependendo de como o banco retorna (Objeto ou Tupla)
+                # O código existente sugere Objeto (f.Nome), mas drivers as vezes retornam Tupla.
+                # Assumindo Objeto baseado no padrão do projeto:
+                tree.insert("", "end", values=(f.FreelancerID, f.Nome, f.Telefone))
+
+        def novo():
+            nome = simpledialog.askstring("Novo", "Nome Completo:", parent=popup)
+            if nome:
+                tel = simpledialog.askstring("Contato", "Telefone (WhatsApp) com DDD:", parent=popup)
+                if tel:
+                    if database.criar_freelancer(nome, tel):
+                        carregar_lista()
+                        messagebox.showinfo("Sucesso", "Freelancer cadastrado!", parent=popup)
+
+        def editar():
+            selecionado = tree.focus()
+            if not selecionado: 
+                messagebox.showwarning("Aviso", "Selecione um freelancer na lista para editar.", parent=popup)
+                return
+
+            dados = tree.item(selecionado, 'values')
+            f_id, f_nome, f_tel = dados
+
+            novo_nome = simpledialog.askstring("Editar", "Nome Completo:", initialvalue=f_nome, parent=popup)
+            if novo_nome:
+                novo_tel = simpledialog.askstring("Editar", "Telefone:", initialvalue=f_tel, parent=popup)
+                if novo_tel:
+                    if database.atualizar_freelancer(f_id, novo_nome, novo_tel):
+                        carregar_lista()
+                        messagebox.showinfo("Sucesso", "Dados atualizados!", parent=popup)
+                    else:
+                        messagebox.showerror("Erro", "Falha ao atualizar no banco.", parent=popup)
+
+        # --- Área de Botões ---
+        frame_btns = ttk.Frame(popup, padding="10")
+        frame_btns.pack(fill=tk.X, side=tk.BOTTOM)
+
+        ttk.Button(frame_btns, text="➕ Novo Cadastro", command=novo).pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
+        ttk.Button(frame_btns, text="✏️ Editar Selecionado", command=editar).pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
+
+        # Carrega dados iniciais
+        carregar_lista()
 
     def abrir_janela_escalacao(self, pos_id):
         try:
