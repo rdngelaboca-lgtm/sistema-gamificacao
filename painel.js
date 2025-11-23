@@ -1,3 +1,11 @@
+// Variável global para armazenar os dados brutos do gráfico
+let dadosOcupacaoCache = []; 
+
+function atualizarGraficoComFiltro() {
+    // Chama a função de renderização usando os dados que já estão na memória
+    renderizarGraficoOcupacao(dadosOcupacaoCache);
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     let metaDiariaAnimacaoExibida = false; // Flag para controlar a animação
     const API_BASE_URL = 'http://192.168.18.17:5000';
@@ -373,42 +381,105 @@ async function atualizarMapaLoja() {
     }
 
 
-function renderizarGraficoOcupacao(dados) {
-        const container = document.getElementById('grafico-barras-container');
-        if (!container) return;
-        container.innerHTML = '';
+function renderizarGraficoOcupacao(dadosBrutos) {
+    // Atualiza o cache global
+    dadosOcupacaoCache = dadosBrutos;
 
-        if (!dados || dados.length === 0) {
-            container.innerHTML = '<p style="width:100%; text-align:center;">Sem dados de escala.</p>';
-            return;
-        }
+    const container = document.getElementById('grafico-barras-container');
+    const selectFiltro = document.getElementById('filtro-setor-grafico');
 
-        // Encontra o valor máximo para calcular a altura proporcional (regra de 3)
-        // Se o máximo for muito baixo (ex: 2 pessoas), definimos um mínimo de 5 para o gráfico não ficar gigante
-        const maxPessoas = Math.max(...dados.map(d => d.qtd), 5); 
+    if (!container) return;
+    container.innerHTML = '';
 
-        dados.forEach(d => {
-            const wrapper = document.createElement('div');
-            wrapper.className = 'barra-wrapper';
-
-            const alturaPercentual = (d.qtd / maxPessoas) * 100;
-
-            // Define cor baseada na quantidade (opcional)
-            // Ex: Pouca gente (<=2) vermelho, Normal azul
-            let corBarra = '#33b5e5'; // Azul padrão
-            if (d.qtd > 0 && d.qtd <= 2) corBarra = '#ffbb33'; // Amarelo alerta
-
-            wrapper.innerHTML = `
-                <div class="barra-visual" style="height: ${alturaPercentual}%; background-color: ${corBarra};">
-                    <span class="barra-valor">${d.qtd > 0 ? d.qtd : ''}</span>
-                </div>
-                <span class="barra-hora">${d.hora}</span>
-            `;
-
-            container.appendChild(wrapper);
-        });
+    if (!dadosBrutos || dadosBrutos.length === 0) {
+        container.innerHTML = '<p style="width:100%; text-align:center;">Sem dados de escala.</p>';
+        return;
     }
 
+    // 1. Pega o setor selecionado
+    const setorSelecionado = selectFiltro ? selectFiltro.value : "Geral (Todos)";
+
+    // 2. Processa os dados hora a hora (07:00 as 23:00)
+    const horasEixo = [7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23];
+    const dadosGrafico = [];
+
+    // Função auxiliar para converter "HH:MM" em minutos desde 00:00
+    const paraMinutos = (strHora) => {
+        if (!strHora) return null;
+        const [h, m] = strHora.split(':').map(Number);
+        return h * 60 + m;
+    };
+
+    horasEixo.forEach(hora => {
+        const momentoAnalise = hora * 60; // Minutos (ex: 08:00 = 480)
+        let qtdPessoas = 0;
+
+        dadosBrutos.forEach(item => {
+            // Filtro de Setor
+            if (setorSelecionado !== "Geral (Todos)" && item.setor !== setorSelecionado) {
+                return;
+            }
+
+            const ent = paraMinutos(item.entrada);
+            const sai = paraMinutos(item.saida);
+            const intIni = paraMinutos(item.int_ini);
+            const intFim = paraMinutos(item.int_fim);
+
+            if (ent === null || sai === null) return;
+
+            // Lógica de Turno
+            let noTurno = false;
+            if (ent <= sai) {
+                if (ent <= momentoAnalise && momentoAnalise < sai) noTurno = true;
+            } else { // Turno vira a noite
+                if (momentoAnalise >= ent || momentoAnalise < sai) noTurno = true;
+            }
+
+            if (noTurno) {
+                // Lógica de Intervalo (Desconto)
+                let noIntervalo = false;
+                if (intIni !== null && intFim !== null) {
+                    if (intIni <= intFim) {
+                        if (intIni <= momentoAnalise && momentoAnalise < intFim) noIntervalo = true;
+                    } else { // Intervalo vira noite
+                        if (momentoAnalise >= intIni || momentoAnalise < intFim) noIntervalo = true;
+                    }
+                }
+
+                if (!noIntervalo) {
+                    qtdPessoas++;
+                }
+            }
+        });
+
+        dadosGrafico.push({ hora: `${hora}:00`, qtd: qtdPessoas });
+    });
+
+    // 3. Renderiza as barras (Lógica Visual)
+    const maxPessoas = Math.max(...dadosGrafico.map(d => d.qtd), 5); // Escala mínima de 5
+
+    dadosGrafico.forEach(d => {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'barra-wrapper';
+
+        const alturaPercentual = (d.qtd / maxPessoas) * 100;
+
+        // Cores: Se tem filtro específico = Azul. Se Geral: Vermelho (poucos) / Verde (ok)
+        let corBarra = '#33b5e5'; // Azul
+        if (setorSelecionado === "Geral (Todos)") {
+            if (d.qtd < 3) corBarra = '#d9534f'; // Vermelho
+            else corBarra = '#5cb85c'; // Verde
+        }
+
+        wrapper.innerHTML = `
+            <div class="barra-visual" style="height: ${alturaPercentual}%; background-color: ${corBarra};">
+                <span class="barra-valor">${d.qtd > 0 ? d.qtd : ''}</span>
+            </div>
+            <span class="barra-hora">${d.hora}</span>
+        `;
+        container.appendChild(wrapper);
+    });
+}
     
 async function atualizarPainel() {
     // Reseta a flag da animação se o dia mudou (usando localStorage)
