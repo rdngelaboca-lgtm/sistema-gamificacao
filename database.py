@@ -5505,6 +5505,89 @@ def buscar_funcionarios_com_posicao_padrao(posicao_id):
             conn.close()
     return None
 
+def definir_posicao_padrao_funcionario(funcionario_id, posicao_id):
+    """Define uma posição fixa para o funcionário e remove de outros que possam ter a mesma."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # 1. Limpa quem quer que tivesse essa posição padrão antes
+            cursor.execute("UPDATE Funcionarios SET PosicaoPadraoID = NULL WHERE PosicaoPadraoID = ?", posicao_id)
+            # 2. Define para o novo funcionário
+            cursor.execute("UPDATE Funcionarios SET PosicaoPadraoID = ? WHERE FuncionarioID = ?", posicao_id, funcionario_id)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Erro ao definir posição padrão: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
+
+def gerar_relatorio_escala_texto(data_str):
+    """Gera um texto formatado com a escala do dia para envio no Telegram."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Busca dados ordenados por Setor e Nome da Posição
+            sql = """
+                SELECT 
+                    PL.Setor,
+                    PL.NomePosicao,
+                    ISNULL(F.NomeCompleto, FR.Nome) as NomePessoa,
+                    ED.HorarioEntrada,
+                    ED.HorarioSaida,
+                    ED.InicioIntervalo,
+                    ED.FimIntervalo
+                FROM EscalaDiaria ED
+                JOIN PosicoesLoja PL ON ED.PosicaoID = PL.PosicaoID
+                LEFT JOIN Funcionarios F ON ED.FuncionarioID = F.FuncionarioID
+                LEFT JOIN Freelancers FR ON ED.FreelancerID = FR.FreelancerID
+                WHERE ED.DataEscala = ? AND (ED.FuncionarioID IS NOT NULL OR ED.FreelancerID IS NOT NULL)
+                ORDER BY CASE 
+                    WHEN PL.Setor = 'Frente Loja' THEN 1 
+                    WHEN PL.Setor = 'Caixa' THEN 2
+                    WHEN PL.Setor = 'Salão' THEN 3
+                    WHEN PL.Setor = 'Buffet' THEN 4
+                    WHEN PL.Setor = 'Cozinha' THEN 5
+                    ELSE 99 END, PL.NomePosicao
+            """
+            cursor.execute(sql, data_str)
+            resultados = cursor.fetchall()
+
+            if not resultados:
+                return "Nenhuma escala definida para este dia."
+
+            texto = f"📅 **ESCALA DE TRABALHO - {datetime.strptime(data_str, '%Y-%m-%d').strftime('%d/%m/%Y')}**\n"
+            setor_atual = ""
+
+            for row in resultados:
+                setor, pos, nome, ent, sai, ini, fim = row
+                setor = setor if setor else "Geral"
+
+                if setor != setor_atual:
+                    texto += f"\n🔹 **{setor.upper()}**\n"
+                    setor_atual = setor
+
+                horario = ""
+                if ent and sai:
+                    horario = f"({ent.strftime('%H:%M')} - {sai.strftime('%H:%M')})"
+
+                intervalo = ""
+                if ini and fim:
+                    intervalo = f"\n   ☕ Intervalo: {ini.strftime('%H:%M')} às {fim.strftime('%H:%M')}"
+
+                texto += f"▪️ {pos}: <b>{nome}</b> {horario}{intervalo}\n"
+
+            return texto
+        except Exception as e:
+            logger.error(f"Erro ao gerar relatório texto: {e}")
+            return "Erro ao gerar relatório."
+        finally:
+            conn.close()
+    return "Erro de conexão."
+
 def buscar_horarios_ocupacao_hoje(data_str, dia_semana_int):
     """
     Busca horários da escala manual filtrando por posições ativas.
