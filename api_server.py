@@ -590,49 +590,50 @@ def rota_resgates_recentes():
         return jsonify({"status": "erro", "mensagem": "Erro ao buscar resgates recentes."}), 500   
 
 
-# Substitua a função rota_escala_hoje por esta versão corrigida
 @app.route('/api/escala/hoje', methods=['GET'])
 def rota_escala_hoje():
-    """Retorna a escala visual, INCLUINDO a lógica de ocupantes fixos (Padrão)."""
+    """Retorna a escala visual, com suporte a SETORES e INTERVALOS."""
     try:
         hoje_str = datetime.now().strftime('%Y-%m-%d')
-        # Para lógica de folga, precisamos do dia da semana (1=Dom, ..., 7=Sab)
-        # Python weekday(): 0=Seg, 6=Dom. 
-        # SQL Server: Config dependente, mas vamos alinhar a lógica com o app Desktop:
-        # App Desktop usa: datetime.isoweekday() + 1 (Se 8 vira 1).
         dia_semana_hoje = datetime.now().isoweekday() + 1
         if dia_semana_hoje == 8: dia_semana_hoje = 1
 
         posicoes = database.listar_posicoes_loja()
         escala_do_dia = database.buscar_escala_do_dia(hoje_str)
-        
+
         dados_mapa = []
         for pos in posicoes:
-            pos_id, nome, x, y, ativo = pos
-            
+            # CORREÇÃO: Agora desempacotamos 6 valores (incluindo setor)
+            pos_id, nome, x, y, ativo, setor = pos
+
             ocupante = "Vazio"
-            cor = "#ff4444" # Vermelho (Padrão)
+            cor = "#ff4444" # Vermelho
             detalhes = ""
-            
-            # 1. Verifica Escala Explícita (Prioridade Alta)
+
             if pos_id in escala_do_dia:
                 dados = escala_do_dia[pos_id]
-                ocupante = dados.NomePessoa
-                cor = "#00C851" # Verde (Confirmado)
+                nome_pessoa = dados.NomePessoa if dados.NomePessoa else "(Livre)"
+                ocupante = nome_pessoa
+                # Amarelo se tem horário mas não tem nome, Verde se tem nome
+                cor = "#00C851" if dados.NomePessoa else "#FFBB33" 
+
                 entrada = dados.HorarioEntrada.strftime('%H:%M') if dados.HorarioEntrada else "--"
                 saida = dados.HorarioSaida.strftime('%H:%M') if dados.HorarioSaida else "--"
                 detalhes = f"{entrada} - {saida}"
-            
-            # 2. Verifica Ocupante Padrão/Fixo (Prioridade Baixa - Fallback)
+
+                # ADIÇÃO: Mostrar intervalo se houver
+                if dados.InicioIntervalo and dados.FimIntervalo:
+                    int_ini = dados.InicioIntervalo.strftime('%H:%M')
+                    int_fim = dados.FimIntervalo.strftime('%H:%M')
+                    detalhes += f" (☕ {int_ini}-{int_fim})"
+
             else:
-                # Chama a função do DB que já existe
                 func_padrao = database.buscar_funcionarios_com_posicao_padrao(pos_id)
                 if func_padrao:
                     f_id, f_nome, f_folga = func_padrao
-                    # Só mostra se NÃO for dia de folga do fixo
                     if str(f_folga) != str(dia_semana_hoje):
                         ocupante = f"{f_nome} (Fixo)"
-                        cor = "#33b5e5" # Azul (Fixo)
+                        cor = "#33b5e5" # Azul
                         detalhes = "Horário Padrão"
 
             dados_mapa.append({
@@ -642,76 +643,45 @@ def rota_escala_hoje():
                 "y": y,
                 "ocupante": ocupante,
                 "cor": cor,
-                "detalhes": detalhes
+                "detalhes": detalhes,
+                "setor": setor # Enviamos o setor também, caso o front precise
             })
-            
+
         return jsonify(dados_mapa), 200
     except Exception as e:
         logger.error(f"Erro na rota /api/escala/hoje: {e}", exc_info=True)
-        return jsonify([]), 500 
-    
+        return jsonify([]), 500    
 
 @app.route('/api/escala/ocupacao', methods=['GET'])
 def rota_escala_ocupacao():
+    """
+    Retorna os DADOS BRUTOS de horários para o frontend calcular o gráfico.
+    Isso permite filtrar por setor dinamicamente no Javascript.
+    """
     try:
         hoje_str = datetime.now().strftime('%Y-%m-%d')
-        dia_semana = datetime.now().isoweekday() + 1
-        if dia_semana == 8: dia_semana = 1
+        # Reutiliza a função do banco que já traz (Entrada, Saida, IntIni, IntFim, Setor)
+        horarios = database.buscar_horarios_ocupacao_hoje(hoje_str, 0)
 
-        horarios = database.buscar_horarios_ocupacao_hoje(hoje_str, dia_semana)
-        
-        horas_grafico = range(7, 24) 
-        dados_grafico = []
+        dados_formatados = []
 
-        for hora in horas_grafico:
-            momento_analise = datetime.strptime(f"{hora}:00", "%H:%M").time()
-            qtd_pessoas = 0
-            
-            for row in horarios:
-                # --- CORREÇÃO DE TIPAGEM ---
-                # Extrai apenas a parte 'time' se vier como 'datetime' do banco
-                def extrair_tempo(val):
-                    if val is None: return None
-                    if isinstance(val, datetime): return val.time()
-                    return val # Já é time ou outro tipo compatível
+        def formatar_hora(val):
+            if val is None: return None
+            # Se for datetime/time, converte para string "HH:MM"
+            if hasattr(val, 'strftime'): return val.strftime('%H:%M')
+            return str(val)
 
-                ent = extrair_tempo(row.Entrada)
-                sai = extrair_tempo(row.Saida)
-                int_ini = extrair_tempo(row.InicioIntervalo)
-                int_fim = extrair_tempo(row.FimIntervalo)
-                # ---------------------------
-                
-                if not ent or not sai:
-                    continue
-                
-                # Lógica 1: Turno
-                esta_no_turno = False
-                if ent <= sai:
-                    if ent <= momento_analise < sai:
-                        esta_no_turno = True
-                else: # Turno vira a noite
-                    if momento_analise >= ent or momento_analise < sai:
-                        esta_no_turno = True
-                
-                # Lógica 2: Intervalo
-                esta_no_intervalo = False
-                if int_ini and int_fim:
-                    if int_ini <= int_fim:
-                        if int_ini <= momento_analise < int_fim:
-                            esta_no_intervalo = True
-                    else: # Intervalo vira a noite
-                        if momento_analise >= int_ini or momento_analise < int_fim:
-                            esta_no_intervalo = True
-                
-                if esta_no_turno and not esta_no_intervalo:
-                    qtd_pessoas += 1
-            
-            dados_grafico.append({
-                "hora": f"{hora:02d}:00",
-                "qtd": qtd_pessoas
+        for row in horarios:
+            # row = (Entrada, Saida, InicioIntervalo, FimIntervalo, Setor)
+            dados_formatados.append({
+                "entrada": formatar_hora(row[0]),
+                "saida": formatar_hora(row[1]),
+                "int_ini": formatar_hora(row[2]),
+                "int_fim": formatar_hora(row[3]),
+                "setor": row[4]
             })
 
-        return jsonify(dados_grafico), 200
+        return jsonify(dados_formatados), 200
 
     except Exception as e:
         logger.error(f"Erro na rota ocupacao: {e}", exc_info=True)
