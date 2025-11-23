@@ -5619,3 +5619,29 @@ def buscar_horarios_ocupacao_hoje(data_str, dia_semana_int):
         finally:
             conn.close()
     return []
+
+def buscar_ultimo_foco_posicao(pos_id):
+    """
+    Busca o último 'Foco do Dia' registrado para esta posição em escalas passadas.
+    Isso permite o pré-preenchimento inteligente.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Pega o último foco não vazio ordenado pela data mais recente
+            sql = """
+                SELECT TOP 1 FocoDoDia 
+                FROM EscalaDiaria 
+                WHERE PosicaoID = ? AND FocoDoDia IS NOT NULL AND FocoDoDia <> '' 
+                ORDER BY DataEscala DESC
+            """
+            cursor.execute(sql, pos_id)
+            res = cursor.fetchone()
+            return res[0] if res else None
+        except Exception as e:
+            logger.error(f"Erro ao buscar último foco: {e}")
+            return None
+        finally:
+            conn.close()
+    return None
