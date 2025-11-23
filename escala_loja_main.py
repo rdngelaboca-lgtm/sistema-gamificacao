@@ -667,10 +667,17 @@ class AppEscalaLoja:
                 except ValueError:
                     data_fmt = self.data_selecionada or "Data Indefinida"
 
-                # Construção da mensagem
+                # Construção da mensagem BÁSICA
                 texto_msg = f"Escala {data_fmt}: {nome_pos}\nHorário: {e_ent.get()} às {e_sai.get()}"
+                
+                # Adiciona Intervalo se houver
                 if e_int_ini.get() and e_int_fim.get():
                     texto_msg += f"\nIntervalo: {e_int_ini.get()} às {e_int_fim.get()}"
+
+                # [CORREÇÃO] Adiciona o Foco do Dia se houver texto
+                foco_texto = txt_foco.get("1.0", "end-1c").strip()
+                if foco_texto:
+                    texto_msg += f"\n\n🎯 Foco do Dia:\n{foco_texto}"
 
                 # Codificação e abertura do navegador
                 tel_limpo = re.sub(r'\D', '', tel)
