@@ -597,10 +597,22 @@ class AppEscalaLoja:
             }
             msg_foco_padrao = msgs_padrao.get(setor_atual, "")
 
-        if dados_atuais and dados_atuais.FocoDoDia: 
-            txt_foco.insert("1.0", dados_atuais.FocoDoDia)
-        elif msg_foco_padrao:
-            txt_foco.insert("1.0", msg_foco_padrao)
+        # Lógica Inteligente de Preenchimento do Foco
+        foco_para_exibir = ""
+
+        if dados_atuais and dados_atuais.FocoDoDia:
+            # 1. Prioridade Máxima: O que já está salvo para hoje
+            foco_para_exibir = dados_atuais.FocoDoDia
+        else:
+            # 2. Tentativa de Histórico: O último usado nesta posição
+            ultimo_usado = database.buscar_ultimo_foco_posicao(pos_id)
+            if ultimo_usado:
+                foco_para_exibir = ultimo_usado
+            else:
+                # 3. Fallback: Padrão do Setor
+                foco_para_exibir = msg_foco_padrao
+
+        txt_foco.insert("1.0", foco_para_exibir)
 
         def salvar():
             # Validação de Formato de Hora
@@ -667,17 +679,31 @@ class AppEscalaLoja:
                 except ValueError:
                     data_fmt = self.data_selecionada or "Data Indefinida"
 
-                # Construção da mensagem BÁSICA
-                texto_msg = f"Escala {data_fmt}: {nome_pos}\nHorário: {e_ent.get()} às {e_sai.get()}"
+                # --- LÓGICA DE MENSAGEM PERSONALIZADA ---
+                
+                # 1. Extrai o nome limpo (remove o prefixo [Tipo])
+                # Ex: De "[Free] Rose W." para "Rose W."
+                nome_pessoa = selecao.split('] ')[1] if ']' in selecao else selecao
+
+                # 2. Monta o Cabeçalho e o Corpo
+                texto_msg = (
+                    f"Olá, *{nome_pessoa}*! 👋\n"
+                    f"Por favor, *confirme sua presença*.\n"
+                    f"⚠️ *AS ORIENTAÇÕES ABAIXO SÃO MUITO IMPORTANTES:*\n\n"
+                    f"━━━━━━━━━━━━━━━━━━\n"
+                    f"📅 *Data:* {data_fmt}\n"
+                    f"📍 *Posição:* {nome_pos}\n"
+                    f"⏰ *Horário:* {e_ent.get()} às {e_sai.get()}"
+                )
                 
                 # Adiciona Intervalo se houver
                 if e_int_ini.get() and e_int_fim.get():
-                    texto_msg += f"\nIntervalo: {e_int_ini.get()} às {e_int_fim.get()}"
+                    texto_msg += f"\n☕ *Intervalo:* {e_int_ini.get()} às {e_int_fim.get()}"
 
-                # [CORREÇÃO] Adiciona o Foco do Dia se houver texto
+                # Adiciona o Foco do Dia se houver texto
                 foco_texto = txt_foco.get("1.0", "end-1c").strip()
                 if foco_texto:
-                    texto_msg += f"\n\n🎯 Foco do Dia:\n{foco_texto}"
+                    texto_msg += f"\n\n🎯 *FOCO DO DIA:*\n{foco_texto}"
 
                 # Codificação e abertura do navegador
                 tel_limpo = re.sub(r'\D', '', tel)
