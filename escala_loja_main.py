@@ -5,6 +5,8 @@ from PIL import Image, ImageTk
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import database
+import config # Importar config para pegar o ID do grupo
+import notificador_telegram # Importar notificador para enviar a escala
 import calculadora_logica # Importa o novo módulo lógico
 import os
 import webbrowser
@@ -85,6 +87,10 @@ class AppEscalaLoja:
         self.btn_magic = ttk.Button(self.frame_topo, text="🪄 Gerar Intervalos Automáticos", command=self.gerar_intervalos)
         self.btn_magic.pack(side=tk.LEFT, padx=20)
 
+        # Melhoria 4: Botão Telegram
+        self.btn_telegram = ttk.Button(self.frame_topo, text="📢 Enviar Escala Telegram", command=self.enviar_escala_telegram)
+        self.btn_telegram.pack(side=tk.LEFT, padx=5)
+
         ttk.Button(self.frame_topo, text="👤 Novo Freelancer", command=self.cadastrar_freelancer).pack(side=tk.RIGHT, padx=5)
 
         # --- Canvas do Mapa ---
@@ -117,7 +123,7 @@ class AppEscalaLoja:
         self.posicoes = database.listar_posicoes_loja()
         self.escala_atual = database.buscar_escala_do_dia(self.data_selecionada)
         self.redesenhar_marcadores()
-        # Atualiza o gráfico de fluxo sempre que os dados mudam
+        # [CORREÇÃO] Garante que o gráfico seja redesenhado junto com o mapa
         self.atualizar_grafico_fluxo()
 
     def redesenhar_marcadores(self):
@@ -351,10 +357,18 @@ class AppEscalaLoja:
 
     # --- INTEGRAÇÃO COM O CÉREBRO (CALCULADORA) ---
     def gerar_intervalos(self):
-        # Função auxiliar para evitar erro se o banco retornar 'time' em vez de 'datetime'
+            # [CORREÇÃO] Função auxiliar robusta para converter qualquer formato em time object
         def extrair_tempo(val):
+            if val is None: return None
+            if isinstance(val, str):
+                try:
+                    # Tenta converter string "HH:MM:SS" ou "HH:MM" para objeto time
+                    formato = "%H:%M:%S" if len(val.split(':')) == 3 else "%H:%M"
+                    return datetime.strptime(val, formato).time()
+                except ValueError:
+                    return None # Formato inválido
             if hasattr(val, 'time'): return val.time() # É datetime
-            return val # Já é time
+            return val # Assume que já é objeto time
         # 1. Coleta dados da tela e do banco
         pessoas_para_calcular = []
 
@@ -420,6 +434,23 @@ class AppEscalaLoja:
             messagebox.showwarning("Atenção", f"{count_aplicados} intervalos agendados, mas houve conflitos!\nVerifique os alertas no rodapé.")
         else:
             messagebox.showinfo("Sucesso", f"{count_aplicados} intervalos agendados com sucesso!")
+
+
+    # Melhoria 4: Função para enviar escala no Telegram
+    def enviar_escala_telegram(self):
+        if not self.data_selecionada: return
+
+        resposta = messagebox.askyesno("Confirmar Envio", 
+            f"Deseja enviar a escala do dia {self.data_selecionada} para o grupo TODOS OS FUNCIONÁRIOS no Telegram?")
+
+        if resposta:
+            texto_escala = database.gerar_relatorio_escala_texto(self.data_selecionada)
+            # Usa o ID do grupo geral definido no config
+            try:
+                notificador_telegram.enviar_mensagem(config.TODOS_FUNCIONARIOS_GROUP_ID, texto_escala)
+                messagebox.showinfo("Sucesso", "Escala enviada para o grupo do Telegram!")
+            except Exception as e:
+                messagebox.showerror("Erro", f"Falha ao enviar Telegram: {e}")
 
     # --- Funções Auxiliares Originais (Mantidas) ---
     def alternar_modo(self):
@@ -498,23 +529,61 @@ class AppEscalaLoja:
 
         ttk.Label(popup, text="Foco do Dia:").pack(anchor=tk.W, padx=10)
         txt_foco = tk.Text(popup, height=5, width=40); txt_foco.pack(padx=10, pady=5)
-        if dados_atuais and dados_atuais.FocoDoDia: txt_foco.insert("1.0", dados_atuais.FocoDoDia)
+
+        # Melhoria 2: Pré-preenchimento por Setor
+        # Busca o setor da posição atual (está na tupla self.posicoes)
+        setor_atual = next((p[5] for p in self.posicoes if p[0] == pos_id), None)
+
+        msg_foco_padrao = ""
+        if setor_atual:
+            msgs_padrao = {
+                "Cozinha": "Foco: Agilidade nos pedidos e organização da praça.",
+                "Caixa": "Foco: Simpatia, oferta de adicionais e conferência.",
+                "Salão": "Foco: Limpeza das mesas e atenção aos clientes.",
+                "Frente Loja": "Foco: Abordagem convidativa e reposição.",
+                "Buffet": "Foco: Reposição constante e limpeza das bordas.",
+                "Limpeza": "Foco: Banheiros e chão sempre limpos.",
+                "Camara Fria": "Foco: Organização PVPS e contagem."
+            }
+            msg_foco_padrao = msgs_padrao.get(setor_atual, "")
+
+        if dados_atuais and dados_atuais.FocoDoDia: 
+            txt_foco.insert("1.0", dados_atuais.FocoDoDia)
+        elif msg_foco_padrao:
+            txt_foco.insert("1.0", msg_foco_padrao)
 
         def salvar():
             def tratar_vazio(valor): return valor if valor and valor.strip() else None
             selecao = combo_pessoas.get()
             if not selecao: return 
-            if selecao == "(Vazio)": func_id = None; free_id = None
-            else:
+
+            func_id = None
+            free_id = None
+
+            if selecao != "(Vazio)":
                 d = mapa_ids[selecao]
                 func_id = d['id'] if d['tipo'] == 'func' else None
                 free_id = d['id'] if d['tipo'] == 'free' else None
 
+            # Salva a escala do dia
             database.salvar_escala_dia(self.data_selecionada, pos_id, func_id, free_id,
                 tratar_vazio(e_ent.get()), tratar_vazio(e_sai.get()), 
                 tratar_vazio(e_int_ini.get()), tratar_vazio(e_int_fim.get()),
                 txt_foco.get("1.0", tk.END).strip())
-            popup.destroy(); self.carregar_escala_do_dia()
+
+            # Melhoria 1: Perguntar se é fixo (Apenas para Funcionários)
+            if func_id:
+                # Verifica se já é o fixo atual para não perguntar à toa
+                fixo_atual = database.buscar_funcionarios_com_posicao_padrao(pos_id)
+                id_fixo_atual = fixo_atual[0] if fixo_atual else None
+
+                if func_id != id_fixo_atual:
+                    if messagebox.askyesno("Posição Fixa", "Deseja definir este funcionário como FIXO nesta posição para todos os dias futuros?"):
+                        database.definir_posicao_padrao_funcionario(func_id, pos_id)
+                        messagebox.showinfo("Atualizado", "Funcionário definido como fixo nesta posição.")
+
+            popup.destroy()
+            self.carregar_escala_do_dia()
 
         def enviar_zap():
             selecao = combo_pessoas.get()
@@ -523,13 +592,14 @@ class AppEscalaLoja:
             tel = d.get('tel') if d else None
             if not tel and pessoa_tel: tel = pessoa_tel
             if tel:
-                msg = f"Escala {self.data_selecionada}: {nome_pos} ({e_ent.get()}-{e_sai.get()}). Intervalo: {e_int_ini.get()}-{e_int_fim.get()}"
+                # Melhoria 3: Formatação da Data (DD/MM/AA)
+                data_obj = datetime.strptime(self.data_selecionada, '%Y-%m-%d')
+                data_fmt = data_obj.strftime('%d/%m/%y')
+
+                msg = f"Escala {data_fmt}: {nome_pos} ({e_ent.get()}-{e_sai.get()}). Intervalo: {e_int_ini.get()}-{e_int_fim.get()}"
                 # Correção: Executa o regex fora da f-string para evitar SyntaxError com a barra invertida
                 numeros_limpos = re.sub(r'\D', '', tel)
                 webbrowser.open(f"https://wa.me/55{numeros_limpos}?text={urllib.parse.quote(msg)}")
-
-        ttk.Button(popup, text="💾 Salvar", command=salvar).pack(pady=10)
-        ttk.Button(popup, text="📱 WhatsApp", command=enviar_zap).pack(pady=5)
 
 if __name__ == "__main__":
     root = tk.Tk()
