@@ -13,6 +13,10 @@ FOLGA_GROUP_CHAT_ID = -1003142022069
 ATENDIMENTO_GROUP_CHAT_ID = -1003142022069
 COZINHA_GROUP_CHAT_ID = -4902264106
 
+# ID do grupo onde estão TODOS os funcionários para receber a escala diária
+# (Substitua pelo ID correto do seu grupo "Geral")
+TODOS_FUNCIONARIOS_GROUP_ID = -5030960080
+
 # --- CONFIGURAÇÕES DO BANCO DE DADOS ---
 # Endereço do seu servidor SQL Server.
 DB_SERVER = '192.168.18.17'
