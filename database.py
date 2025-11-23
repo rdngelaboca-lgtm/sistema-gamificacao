@@ -5645,3 +5645,20 @@ def buscar_ultimo_foco_posicao(pos_id):
         finally:
             conn.close()
     return None
+
+def atualizar_freelancer(freelancer_id, nome, telefone):
+    """Atualiza os dados de um freelancer existente."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE Freelancers SET Nome = ?, Telefone = ? WHERE FreelancerID = ?"
+            cursor.execute(sql, nome, telefone, freelancer_id)
+            conn.commit()
+            return True
+        except Exception as e:
+            logging.error(f"Erro ao atualizar freelancer: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
