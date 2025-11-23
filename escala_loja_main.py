@@ -88,16 +88,7 @@ class AppEscalaLoja:
         self.btn_magic = ttk.Button(self.frame_topo, text="🪄 Gerar Intervalos Automáticos", command=self.gerar_intervalos)
         self.btn_magic.pack(side=tk.LEFT, padx=20)
 
-        # Melhoria 4: Botão Telegram
-        self.btn_telegram = ttk.Button(self.frame_topo, text="📢 Enviar Escala Telegram", command=self.enviar_escala_telegram)
-        self.btn_telegram.pack(side=tk.LEFT, padx=5)
-
-        # [CORREÇÃO] Botões recolocados no layout
-        # Botão Mágico de Automação
-        self.btn_magic = ttk.Button(self.frame_topo, text="🪄 Gerar Intervalos Automáticos", command=self.gerar_intervalos)
-        self.btn_magic.pack(side=tk.LEFT, padx=20)
-
-        # Botão Telegram (Nova Melhoria)
+        # Botão Telegram
         self.btn_telegram = ttk.Button(self.frame_topo, text="📢 Enviar Escala Telegram", command=self.enviar_escala_telegram)
         self.btn_telegram.pack(side=tk.LEFT, padx=5)
 
@@ -688,6 +679,17 @@ class AppEscalaLoja:
                 webbrowser.open(url)
             else:
                 messagebox.showwarning("Aviso", "Nenhum telefone encontrado para a pessoa selecionada.")
+
+        # --- Recriação dos Botões de Ação (Faltavam no código) ---
+        frame_botoes = ttk.Frame(popup, padding="10")
+        frame_botoes.pack(fill=tk.X, side=tk.BOTTOM)
+
+        btn_salvar = ttk.Button(frame_botoes, text="✅ Salvar Escala", command=salvar)
+        btn_salvar.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+
+        btn_zap = ttk.Button(frame_botoes, text="📱 Enviar WhatsApp", command=enviar_zap)
+        btn_zap.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+                
 
 if __name__ == "__main__":
     root = tk.Tk()
