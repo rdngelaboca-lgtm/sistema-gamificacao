@@ -1381,90 +1381,49 @@ class AppGestaoEstoque:
         messagebox.showinfo("Resultado", f"{sucessos} contagem(ns) excluída(s) com sucesso.")
         self.atualizar_lista_contagens_admin()
 
-def resetar_sistema_estoque(self):
-        """Executa o reset completo após dupla confirmação."""
-        # Confirmação 1
-        if not messagebox.askyesno("PERIGO - Reset Total", 
-                                   "Tem certeza absoluta que deseja APAGAR TODO O ESTOQUE?\n\n"
-                                   "Isso excluirá:\n"
-                                   "- Todos os Produtos Mestre\n"
-                                   "- Todos os Vínculos criados\n"
-                                   "- Todo o histórico de Notas Fiscais\n"
-                                   "- Todo o histórico de Contagens\n\n"
-                                   "Essa ação NÃO PODE ser desfeita.", 
-                                   icon='warning', default='no', parent=self.root):
-            return
+    def resetar_sistema_estoque(self):
+            """Executa o reset completo após dupla confirmação."""
+            # Confirmação 1
+            if not messagebox.askyesno("PERIGO - Reset Total", 
+                                    "Tem certeza absoluta que deseja APAGAR TODO O ESTOQUE?\n\n"
+                                    "Isso excluirá:\n"
+                                    "- Todos os Produtos Mestre\n"
+                                    "- Todos os Vínculos criados\n"
+                                    "- Todo o histórico de Notas Fiscais\n"
+                                    "- Todo o histórico de Contagens\n\n"
+                                    "Essa ação NÃO PODE ser desfeita.", 
+                                    icon='warning', default='no', parent=self.root):
+                return
 
-        # Confirmação 2 (Segurança extra)
-        codigo_seguranca = simpledialog.askstring("Confirmação Final", "Para confirmar, digite 'DELETAR' (em maiúsculo) abaixo:", parent=self.root)
-        
-        if codigo_seguranca == "DELETAR":
-            # Chama a função do banco de dados
-            sucesso = database.resetar_dados_estoque_completo()
+            # Confirmação 2 (Segurança extra)
+            codigo_seguranca = simpledialog.askstring("Confirmação Final", "Para confirmar, digite 'DELETAR' (em maiúsculo) abaixo:", parent=self.root)
             
-            if sucesso:
-                messagebox.showinfo("Sistema Resetado", "O banco de dados de estoque foi limpo com sucesso.\n\nVocê pode começar a cadastrar e vincular novamente.", parent=self.root)
+            if codigo_seguranca == "DELETAR":
+                # Chama a função do banco de dados
+                sucesso = database.resetar_dados_estoque_completo()
                 
-                # Atualiza todas as listas para refletir o vazio
-                self.atualizar_lista_produtos()
-                self.atualizar_lista_fornecedores() 
-                self.popular_combobox_produtos_mestre()
-                self.atualizar_lista_contagens_historico()
-                self.popular_combos_contagem_sugestao()
-                self.atualizar_lista_nfs_admin()
-                self.atualizar_lista_contagens_admin()
-                
-                # Limpa as árvores de importação
-                for i in self.tree_vincular.get_children(): self.tree_vincular.delete(i)
-                for i in self.tree_prontos.get_children(): self.tree_prontos.delete(i)
-                self.itens_xml_nao_vinculados.clear()
-                self.dados_notas_processadas.clear()
-                
+                if sucesso:
+                    messagebox.showinfo("Sistema Resetado", "O banco de dados de estoque foi limpo com sucesso.\n\nVocê pode começar a cadastrar e vincular novamente.", parent=self.root)
+                    
+                    # Atualiza todas as listas para refletir o vazio
+                    self.atualizar_lista_produtos()
+                    self.atualizar_lista_fornecedores() 
+                    self.popular_combobox_produtos_mestre()
+                    self.atualizar_lista_contagens_historico()
+                    self.popular_combos_contagem_sugestao()
+                    self.atualizar_lista_nfs_admin()
+                    self.atualizar_lista_contagens_admin()
+                    
+                    # Limpa as árvores de importação
+                    for i in self.tree_vincular.get_children(): self.tree_vincular.delete(i)
+                    for i in self.tree_prontos.get_children(): self.tree_prontos.delete(i)
+                    self.itens_xml_nao_vinculados.clear()
+                    self.dados_notas_processadas.clear()
+                    
+                else:
+                    messagebox.showerror("Erro", "Falha ao resetar o banco. Verifique os logs.", parent=self.root)
             else:
-                messagebox.showerror("Erro", "Falha ao resetar o banco. Verifique os logs.", parent=self.root)
-        else:
-            messagebox.showinfo("Cancelado", "Ação cancelada. O código de confirmação estava incorreto.", parent=self.root)
-
-def resetar_sistema_estoque(self):
-        """Executa o reset completo após dupla confirmação."""
-        # Confirmação 1
-        if not messagebox.askyesno("PERIGO - Reset Total", 
-                                   "Tem certeza absoluta que deseja APAGAR TODO O ESTOQUE?\n\n"
-                                   "Isso excluirá:\n"
-                                   "- Todos os Produtos Mestre\n"
-                                   "- Todos os Vínculos criados\n"
-                                   "- Todo o histórico de Notas Fiscais\n"
-                                   "- Todo o histórico de Contagens\n\n"
-                                   "Essa ação NÃO PODE ser desfeita.", 
-                                   icon='warning', default='no', parent=self.root):
-            return
-
-        # Confirmação 2 (Segurança extra)
-        codigo_seguranca = simpledialog.askstring("Confirmação Final", "Para confirmar, digite 'DELETAR' (em maiúsculo) abaixo:", parent=self.root)
-        
-        if codigo_seguranca == "DELETAR":
-            sucesso = database.resetar_dados_estoque_completo()
-            if sucesso:
-                messagebox.showinfo("Sistema Resetado", "O banco de dados de estoque foi limpo com sucesso.\n\nVocê pode começar a cadastrar e vincular novamente.", parent=self.root)
-                # Atualiza todas as listas para refletir o vazio
-                self.atualizar_lista_produtos()
-                self.atualizar_lista_fornecedores() # Fornecedores ficam, mas atualizamos por garantia
-                self.popular_combobox_produtos_mestre()
-                self.atualizar_lista_contagens_historico()
-                self.popular_combos_contagem_sugestao()
-                self.atualizar_lista_nfs_admin()
-                self.atualizar_lista_contagens_admin()
-                
-                # Limpa as árvores de importação
-                for i in self.tree_vincular.get_children(): self.tree_vincular.delete(i)
-                for i in self.tree_prontos.get_children(): self.tree_prontos.delete(i)
-                self.itens_xml_nao_vinculados.clear()
-                self.dados_notas_processadas.clear()
-                
-            else:
-                messagebox.showerror("Erro", "Falha ao resetar o banco. Verifique os logs.", parent=self.root)
-        else:
-            messagebox.showinfo("Cancelado", "Ação cancelada. O código de confirmação estava incorreto.", parent=self.root)
+                messagebox.showinfo("Cancelado", "Ação cancelada. O código de confirmação estava incorreto.", parent=self.root)
 
 # --- Bloco de Execução Principal ---
 if __name__ == "__main__":
