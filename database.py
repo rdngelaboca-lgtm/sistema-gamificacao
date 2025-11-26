@@ -5794,3 +5794,47 @@ def resetar_dados_estoque_completo():
         finally:
             conn.close()
     return False
+
+def resetar_sistema_estoque(self):
+        """Executa o reset completo após dupla confirmação."""
+        # Confirmação 1
+        if not messagebox.askyesno("PERIGO - Reset Total", 
+                                   "Tem certeza absoluta que deseja APAGAR TODO O ESTOQUE?\n\n"
+                                   "Isso excluirá:\n"
+                                   "- Todos os Produtos Mestre\n"
+                                   "- Todos os Vínculos criados\n"
+                                   "- Todo o histórico de Notas Fiscais\n"
+                                   "- Todo o histórico de Contagens\n\n"
+                                   "Essa ação NÃO PODE ser desfeita.", 
+                                   icon='warning', default='no', parent=self.root):
+            return
+
+        # Confirmação 2 (Segurança extra)
+        codigo_seguranca = simpledialog.askstring("Confirmação Final", "Para confirmar, digite 'DELETAR' (em maiúsculo) abaixo:", parent=self.root)
+        
+        if codigo_seguranca == "DELETAR":
+            # Chama a função do banco de dados (verifique se ela foi adicionada no database.py)
+            sucesso = database.resetar_dados_estoque_completo()
+            
+            if sucesso:
+                messagebox.showinfo("Sistema Resetado", "O banco de dados de estoque foi limpo com sucesso.\n\nVocê pode começar a cadastrar e vincular novamente.", parent=self.root)
+                
+                # Atualiza todas as listas para refletir o vazio
+                self.atualizar_lista_produtos()
+                self.atualizar_lista_fornecedores() 
+                self.popular_combobox_produtos_mestre()
+                self.atualizar_lista_contagens_historico()
+                self.popular_combos_contagem_sugestao()
+                self.atualizar_lista_nfs_admin()
+                self.atualizar_lista_contagens_admin()
+                
+                # Limpa as árvores de importação
+                for i in self.tree_vincular.get_children(): self.tree_vincular.delete(i)
+                for i in self.tree_prontos.get_children(): self.tree_prontos.delete(i)
+                self.itens_xml_nao_vinculados.clear()
+                self.dados_notas_processadas.clear()
+                
+            else:
+                messagebox.showerror("Erro", "Falha ao resetar o banco. Verifique se a função 'resetar_dados_estoque_completo' existe no database.py e veja os logs.", parent=self.root)
+        else:
+            messagebox.showinfo("Cancelado", "Ação cancelada. O código de confirmação estava incorreto.", parent=self.root)
