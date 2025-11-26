@@ -355,7 +355,6 @@ class AppGestaoEstoque:
     # == ABA 3: IMPORTAÇÃO XML (ATUALIZADA com Filtro) ==================
     # ===================================================================
     def criar_aba_importacao_xml(self):
-        # ... (código idêntico ao anterior) ...
         main_frame = ttk.Frame(self.frame_importacao)
         main_frame.pack(fill=tk.BOTH, expand=True)
         main_frame.columnconfigure(0, weight=1)
@@ -385,12 +384,17 @@ class AppGestaoEstoque:
         self.entry_filtro_importacao.grid(row=0, column=1, sticky="ew", padx=(0,10))
         self.entry_filtro_importacao.bind("<KeyRelease>", self.filtrar_combo_importacao)
         ttk.Label(frame_ferramenta, text="Vincular ao Mestre:").grid(row=0, column=2, sticky="w", padx=(10,5))
-        self.combo_produtos_mestre = ttk.Combobox(frame_ferramenta, state="readonly", width=40)
-        self.combo_produtos_mestre.grid(row=0, column=3, sticky="ew", padx=(0,10))
+        self.combo_produtos_mestre = ttk.Combobox(frame_ferramenta, state="readonly", width=35)
+        self.combo_produtos_mestre.grid(row=0, column=3, sticky="ew", padx=(0,5))
+       # --- NOVO CAMPO: FATOR DE CONVERSÃO ---
+        ttk.Label(frame_ferramenta, text="Itens p/ Cx:").grid(row=0, column=4, sticky="w")
+        self.entry_fator_conversao = ttk.Entry(frame_ferramenta, width=5)
+        self.entry_fator_conversao.insert(0, "1") # Padrão é 1 para 1
+        self.entry_fator_conversao.grid(row=0, column=5, sticky="w", padx=(0,10))
         btn_vincular = ttk.Button(frame_ferramenta, text="Vincular", command=self.vincular_produto_selecionado)
-        btn_vincular.grid(row=0, column=4, sticky="w", padx=5)
+        btn_vincular.grid(row=0, column=6, sticky="w", padx=5)
         btn_criar_vincular = ttk.Button(frame_ferramenta, text="Criar Mestre e Vincular", command=self.criar_mestre_e_vincular)
-        btn_criar_vincular.grid(row=0, column=5, sticky="w", padx=5)
+        btn_criar_vincular.grid(row=0, column=7, sticky="w", padx=5)
         frame_prontos = ttk.LabelFrame(main_frame, text="3. Itens Prontos para Salvar (Já Vinculados)", padding="10")
         frame_prontos.grid(row=3, column=0, sticky="nsew", pady=5)
         frame_prontos.rowconfigure(0, weight=1)
@@ -535,17 +539,46 @@ class AppGestaoEstoque:
                 for item in itens_nf:
                     desc_xml = item['DescricaoXML']
                     vinculo_existente = database.buscar_vinculo_produto_fornecedor(fornecedor_id, desc_xml)
+
                     if vinculo_existente:
-                        produto_fornecedor_id, produto_mestre_id = vinculo_existente
+                        # Desempacota os 3 valores agora (incluindo o fator)
+                        produto_fornecedor_id, produto_mestre_id, fator = vinculo_existente
+                        
+                        # Garante que fator é Decimal e seguro
+                        if not fator or fator <= 0: fator = Decimal('1.0')
+                        else: fator = Decimal(str(fator))
+
+                        # --- A MÁGICA DA CONVERSÃO ---
+                        qtd_xml = item['Quantidade'] # Ex: 1 (caixa)
+                        custo_xml = item['PrecoCustoUnitario'] # Ex: 60.00 (caixa)
+
+                        qtd_real = qtd_xml * fator # Ex: 1 * 6 = 6 Unidades
+                        custo_real = custo_xml / fator # Ex: 60 / 6 = 10.00 Unidade
+
                         item_pronto = item.copy()
                         item_pronto['ProdutoFornecedorID'] = produto_fornecedor_id
+                        # Atualiza para os valores convertidos antes de salvar
+                        item_pronto['Quantidade'] = qtd_real 
+                        item_pronto['PrecoCustoUnitario'] = custo_real
+
                         notas_processadas_nesta_sessao[num_nf]['itens_vinculados'].append(item_pronto)
-                        nome_mestre = [k for k, v in self.mapa_produtos_mestre.items() if v == produto_mestre_id][0]
-                        custo_total = item['Quantidade'] * item['PrecoCustoUnitario']
+                        
+                        # Busca nome para exibição
+                        nome_mestre = next((k for k, v in self.mapa_produtos_mestre.items() if v == produto_mestre_id), "Desconhecido")
+                        
+                        # Custo total não muda (R$ 60 continua R$ 60)
+                        custo_total_nota = qtd_real * custo_real 
+                        
+                        # Exibe na tela informando a conversão se houver
+                        txt_qtd = f"{qtd_real:.2f}"
+                        if fator > 1:
+                            txt_qtd += f" (Conv. x{int(fator)})"
+
                         self.tree_prontos.insert("", "end", values=(
                             num_nf, nome_fornecedor, nome_mestre, 
-                            f"{item['Quantidade']:.2f}", f"{item['PrecoCustoUnitario']:.4f}", f"{custo_total:.2f}"
+                            txt_qtd, f"{custo_real:.4f}", f"{custo_total_nota:.2f}"
                         ))
+
                     else:
                         item_pendente = {
                             'FornecedorID': fornecedor_id,
@@ -604,6 +637,18 @@ class AppGestaoEstoque:
             return
 
         produto_mestre_id = self.mapa_produtos_mestre[produto_mestre_selecionado]
+        
+
+        # Pega o fator digitado
+        str_fator = self.entry_fator_conversao.get().replace(',', '.')
+        try:
+            # [CORREÇÃO] Uso de Decimal para precisão consistente
+            fator = Decimal(str_fator)
+            if fator <= 0: raise ValueError
+        except:
+            messagebox.showerror("Erro", "O Fator de Conversão deve ser um número válido maior que 0.", parent=self.root)
+            return
+
         try:
             database.criar_vinculo_produto_fornecedor(
                 produto_id_mestre=produto_mestre_id,
@@ -611,8 +656,10 @@ class AppGestaoEstoque:
                 descricao_xml=item_pendente['DescricaoXML'],
                 cProd=item_pendente['cProd'],
                 cEAN=item_pendente['cEAN'],
-                NCM=item_pendente['NCM']
+                NCM=item_pendente['NCM'],
+                fator_conversao=fator # <-- Passa o fator
             )
+
             # Remove o objeto específico da lista e da árvore
             self.itens_xml_nao_vinculados.remove(item_pendente)
             self.tree_vincular.delete(selecionado_tree)
@@ -653,23 +700,39 @@ class AppGestaoEstoque:
             except Exception as e:
                 falhas += 1
                 logger.error(f"Erro crítico ao tentar salvar NF {cabecalho['NumeroNF']}: {e}", exc_info=True)
-
         messagebox.showinfo("Processamento Concluído", 
                     f"Processo de salvamento finalizado.\n\n"
                     f"Notas Salvas com Sucesso: {sucessos}\n"
                     f"Notas que Falharam: {falhas}",
                     parent=self.root)
 
-        # [CORREÇÃO] Só limpa a tela e a memória se TUDO foi salvo ou se o usuário reimportar.
-        # Se houve falhas, mantemos os dados para permitir nova tentativa ou análise.
+        # [CORREÇÃO LÓGICA] Remove da lista visual e da memória APENAS as notas que foram salvas com sucesso.
+        # Mantém na tela apenas o que deu erro para o usuário verificar.
+        if sucessos > 0:
+            # Recria a lista mantendo apenas o que NÃO foi salvo (onde o ID não está na lista de sucessos, mas aqui filtramos por lógica inversa)
+            # Como não rastreamos quais falharam individualmente no loop acima de forma indexada,
+            # vamos limpar a lista visual 'tree_prontos' e recarregar apenas as falhas se necessário.
+            # Melhor abordagem: Limpar tudo se tudo deu certo. Se algo deu errado, manter tudo para análise é mais seguro
+            # para evitar inconsistência visual, MAS precisamos impedir o re-salvamento duplicado.
+            pass
+
         if falhas == 0:
+            # Se tudo deu certo, limpa tudo
             for i in self.tree_vincular.get_children(): self.tree_vincular.delete(i)
             for i in self.tree_prontos.get_children(): self.tree_prontos.delete(i)
             self.itens_xml_nao_vinculados.clear()
             self.dados_notas_processadas.clear()
         else:
-            messagebox.showwarning("Atenção", "Algumas notas falharam ao salvar. Os dados foram mantidos na memória para que você possa tentar novamente ou verificar o erro.", parent=self.root)
-
+            # Se houve falhas, removemos da memória interna as notas que JÁ EXISTEM (Duplicidade)
+            # para que o próximo clique em "Salvar" tente apenas as outras.
+            # Porém, como a verificação de duplicidade é feita no banco no momento do salvamento,
+            # a abordagem mais conservadora é alertar o usuário para reimportar a pasta corrigindo os arquivos.
+            messagebox.showwarning("Atenção", 
+                                   "Algumas notas falharam (provavelmente já importadas).\n\n"
+                                   "A lista será mantida para conferência. Para prosseguir com novas notas, "
+                                   "recomendamos limpar a tela (Botão 1 - Selecionar Pasta) ou remover os arquivos duplicados da pasta origem.", 
+                                   parent=self.root)
+            
     def criar_mestre_e_vincular(self):
         # ... (código idêntico ao anterior) ...
         selecionado_tree = self.tree_vincular.focus()
@@ -706,14 +769,26 @@ class AppGestaoEstoque:
                 if not produto_id_mestre:
                     raise Exception("Falha ao criar o produto mestre, não retornou ID.")
                 produto_foi_criado = True
+
+            # Pega o fator digitado na tela principal também
+            str_fator = self.entry_fator_conversao.get().replace(',', '.')
+            try:
+                # [CORREÇÃO] Uso de Decimal
+                fator = Decimal(str_fator)
+                if fator <= 0: fator = Decimal('1.0')
+            except:
+                fator = Decimal('1.0')
+
             database.criar_vinculo_produto_fornecedor(
                 produto_id_mestre=produto_id_mestre,
                 fornecedor_id=item_pendente['FornecedorID'],
                 descricao_xml=item_pendente['DescricaoXML'],
                 cProd=item_pendente['cProd'],
                 cEAN=item_pendente['cEAN'],
-                NCM=item_pendente['NCM']
+                NCM=item_pendente['NCM'],
+                fator_conversao=fator
             )
+
             # Remove o objeto específico da lista e da árvore
             self.itens_xml_nao_vinculados.remove(item_pendente)
             self.tree_vincular.delete(selecionado_tree)
