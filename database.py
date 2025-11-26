@@ -105,6 +105,14 @@ def verificar_migracao_banco():
                 cursor.execute("ALTER TABLE PosicoesLoja ADD Setor VARCHAR(50)")
                 conn.commit()
                 logger.info("Migração concluída: Coluna 'Setor' adicionada com sucesso.")
+                # --- NOVA MIGRAÇÃO: FATOR DE CONVERSÃO ---
+            try:
+                cursor.execute("SELECT TOP 1 FatorConversao FROM ProdutosFornecedor")
+            except Exception:
+                logger.info("Coluna 'FatorConversao' não encontrada. Criando...")
+                cursor.execute("ALTER TABLE ProdutosFornecedor ADD FatorConversao DECIMAL(10,4) DEFAULT 1.0")
+                conn.commit()
+                logger.info("Migração concluída: Coluna 'FatorConversao' adicionada.")
         except Exception as e:
             logger.error(f"Erro na migração de banco: {e}")
         finally:
@@ -4950,14 +4958,15 @@ def buscar_fornecedor_por_cnpj(cnpj):
     return None
 
 def buscar_vinculo_produto_fornecedor(fornecedor_id, descricao_xml):
-    """Verifica se um vínculo 'DE/PARA' já existe para um produto de um fornecedor."""
+    """Verifica se um vínculo já existe e RETORNA O FATOR também."""
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            sql = "SELECT ProdutoFornecedorID, ProdutoID FROM ProdutosFornecedor WHERE FornecedorID = ? AND DescricaoXML = ?"
+            # Agora retorna 3 valores: ID do Vinculo, ID do Produto Mestre, Fator
+            sql = "SELECT ProdutoFornecedorID, ProdutoID, FatorConversao FROM ProdutosFornecedor WHERE FornecedorID = ? AND DescricaoXML = ?"
             cursor.execute(sql, fornecedor_id, descricao_xml)
-            return cursor.fetchone() # Retorna o ID do vínculo e o ID do produto mestre
+            return cursor.fetchone() 
         except Exception as e:
             logger.error(f"ERRO ao buscar vínculo DE/PARA: {e}", exc_info=True)
             return None
@@ -4966,24 +4975,23 @@ def buscar_vinculo_produto_fornecedor(fornecedor_id, descricao_xml):
                 conn.close()
     return None
 
-def criar_vinculo_produto_fornecedor(produto_id_mestre, fornecedor_id, descricao_xml, cProd, cEAN, NCM):
-    """Cria um novo vínculo 'DE/PARA' na tabela ProdutosFornecedor,
-       AGORA INCLUINDO cProd, cEAN e NCM."""
+def criar_vinculo_produto_fornecedor(produto_id_mestre, fornecedor_id, descricao_xml, cProd, cEAN, NCM, fator_conversao=1.0):
+    """Cria um novo vínculo 'DE/PARA' incluindo o Fator de Conversão."""
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
             sql = """
                 INSERT INTO ProdutosFornecedor 
-                (ProdutoID, FornecedorID, DescricaoXML, CodigoFornecedor, EAN, NCM)
-                VALUES (?, ?, ?, ?, ?, ?);
+                (ProdutoID, FornecedorID, DescricaoXML, CodigoFornecedor, EAN, NCM, FatorConversao)
+                VALUES (?, ?, ?, ?, ?, ?, ?);
                 SELECT SCOPE_IDENTITY();
             """
-            cursor.execute(sql, produto_id_mestre, fornecedor_id, descricao_xml, cProd, cEAN, NCM)
+            cursor.execute(sql, produto_id_mestre, fornecedor_id, descricao_xml, cProd, cEAN, NCM, fator_conversao)
             cursor.nextset()
             novo_id = cursor.fetchone()[0]
             conn.commit()
-            logger.info(f"Novo vínculo DE/PARA criado (ID: {novo_id}) para {descricao_xml}")
+            logger.info(f"Vínculo criado (ID: {novo_id}) Fator: {fator_conversao}")
             return novo_id
         except Exception as e:
             logger.error(f"ERRO ao criar vínculo DE/PARA: {e}", exc_info=True)
