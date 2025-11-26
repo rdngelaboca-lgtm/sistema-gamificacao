@@ -5759,3 +5759,38 @@ def atualizar_freelancer(freelancer_id, nome, telefone):
         finally:
             conn.close()
     return False
+
+def resetar_dados_estoque_completo():
+    """
+    AÇÃO DESTRUTIVA: Apaga TODO o histórico de estoque, vínculos e produtos.
+    Mantém apenas os Fornecedores e os Funcionários.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            
+            # 1. Limpar Histórico de Movimentação (Filhos primeiro)
+            cursor.execute("DELETE FROM ItensNotaFiscalEntrada")
+            cursor.execute("DELETE FROM NotasFiscaisEntrada")
+            
+            # 2. Limpar Histórico de Contagens (Filhos primeiro)
+            cursor.execute("DELETE FROM ItensContagemEstoque")
+            cursor.execute("DELETE FROM ContagensEstoque")
+            
+            # 3. Limpar Vínculos e Produtos
+            cursor.execute("DELETE FROM ProdutosFornecedor") # Vínculos DE/PARA
+            cursor.execute("DELETE FROM ProdutosEstoque")    # Catálogo Mestre
+            
+            # Nota: NÃO apagamos a tabela Fornecedores para facilitar o recomeço.
+            
+            conn.commit()
+            logger.info("RESET COMPLETO do módulo de estoque executado com sucesso.")
+            return True
+        except Exception as e:
+            logger.error(f"ERRO CRÍTICO ao resetar estoque: {e}", exc_info=True)
+            conn.rollback()
+            return False
+        finally:
+            conn.close()
+    return False
