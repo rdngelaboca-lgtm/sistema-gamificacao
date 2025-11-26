@@ -5004,6 +5004,13 @@ def salvar_nota_fiscal_completa(dados_nf_cabecalho, lista_itens_nf):
     if not conn:
         return False, "Falha de conexão com o banco."
     
+    # 0. IMPLEMENTAÇÃO DO BLOQUEIO DE DUPLICIDADE
+    numero_nf = dados_nf_cabecalho['NumeroNF']
+    fornecedor_id = dados_nf_cabecalho['FornecedorID']
+
+    if verificar_nota_fiscal_existente(numero_nf, fornecedor_id):
+        return False, f"Nota Fiscal {numero_nf} já foi importada anteriormente para este fornecedor."
+        
     try:
         cursor = conn.cursor()
         
@@ -5051,13 +5058,49 @@ def salvar_nota_fiscal_completa(dados_nf_cabecalho, lista_itens_nf):
         if conn:
             conn.close()
 
-# ===================================================================
-# == FIM DO MÓDULO DE GESTÃO DE ESTOQUE (IMPORTAÇÃO XML) ===========
-# ===================================================================
 
-# ===================================================================
-# == INÍCIO DO MÓDULO DE GESTÃO DE ESTOQUE (CONTAGEM) ===============
-# ===================================================================
+def listar_notas_fiscais_entrada_completa():
+    """Lista todas as notas fiscais de entrada salvas no banco para gestão."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT NF.NotaID, NF.NumeroNF, F.NomeFantasia, NF.DataEmissao, NF.ValorTotalNF,
+                       (SELECT COUNT(*) FROM ItensNotaFiscalEntrada WHERE NotaID = NF.NotaID) as QtdItens
+                FROM NotasFiscaisEntrada NF
+                JOIN Fornecedores F ON NF.FornecedorID = F.FornecedorID
+                ORDER BY NF.DataEmissao DESC
+            """
+            cursor.execute(sql)
+            return cursor.fetchall()
+        except Exception as e:
+            logger.error(f"Erro ao listar notas fiscais: {e}", exc_info=True)
+            return []
+        finally:
+            conn.close()
+    return []
+
+def excluir_nota_fiscal_entrada(nota_id):
+    """Exclui uma Nota Fiscal de entrada e seus itens."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # 1. Excluir Itens
+            cursor.execute("DELETE FROM ItensNotaFiscalEntrada WHERE NotaID = ?", nota_id)
+            # 2. Excluir Cabeçalho
+            cursor.execute("DELETE FROM NotasFiscaisEntrada WHERE NotaID = ?", nota_id)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Erro ao excluir Nota Fiscal ID {nota_id}: {e}", exc_info=True)
+            conn.rollback()
+            return False
+        finally:
+            conn.close()
+    return False        
+            
 
 def salvar_contagem_estoque(data_contagem, funcionario_id, lista_itens_contados):
     """
@@ -5155,6 +5198,26 @@ def buscar_itens_contagem(contagem_id):
                 conn.close()
     return []
 
+def excluir_contagem_estoque(contagem_id):
+    """Exclui uma Contagem de Estoque e seus itens."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # 1. Excluir Itens
+            cursor.execute("DELETE FROM ItensContagemEstoque WHERE ContagemID = ?", contagem_id)
+            # 2. Excluir Cabeçalho
+            cursor.execute("DELETE FROM ContagensEstoque WHERE ContagemID = ?", contagem_id)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Erro ao excluir Contagem ID {contagem_id}: {e}", exc_info=True)
+            conn.rollback()
+            return False
+        finally:
+            conn.close()
+    return False
+
 # ===================================================================
 # == FIM DO MÓDULO DE GESTÃO DE ESTOQUE (CONTAGEM) ==================
 # ===================================================================
@@ -5213,7 +5276,11 @@ def gerar_sugestao_por_periodo(contagem_id_inicio, contagem_id_fim):
         # 3. Valida as datas
         dias_periodo = (data_final - data_inicial).days
         if dias_periodo <= 0:
-            raise Exception("A Data da Contagem Final deve ser posterior à Data da Contagem Inicial.")
+            # CORREÇÃO: Permite cálculo no mesmo dia (assumindo 1 dia) para evitar crash, ou erro se negativo
+            if dias_periodo == 0:
+                dias_periodo = 1 
+            else:
+                raise Exception("A Data da Contagem Final deve ser posterior à Data da Contagem Inicial.")
 
         # 4. Busca os ITENS da Contagem FINAL (só queremos sugestão para o que foi contado)
         sql_itens_fim = """
@@ -5231,7 +5298,9 @@ def gerar_sugestao_por_periodo(contagem_id_inicio, contagem_id_fim):
         # 5. Para cada item da Contagem Final, busca os dados da Contagem Inicial e Compras
         for item in itens_contagem_final:
             produto_id = item.ProdutoID
-            estoque_final = item.QuantidadeContada # Já é Decimal
+            # CORREÇÃO: Força conversão para Decimal para evitar erro com float do banco
+            estoque_final = Decimal(str(item.QuantidadeContada)) if item.QuantidadeContada is not None else Decimal('0.0')
+            estoque_minimo = Decimal(str(item.EstoqueMinimo)) if item.EstoqueMinimo is not None else Decimal('0.0')
             
             # 6. Busca o estoque desse item na Contagem INICIAL
             sql_item_inicio = "SELECT QuantidadeContada FROM ItensContagemEstoque WHERE ContagemID = ? AND ProdutoID = ?"
@@ -5239,9 +5308,11 @@ def gerar_sugestao_por_periodo(contagem_id_inicio, contagem_id_fim):
             resultado_inicio = cursor.fetchone()
             
             # Se o produto não foi contado no Ponto A, assumimos 0
-            estoque_inicial = resultado_inicio.QuantidadeContada if resultado_inicio else Decimal('0.0')
+            qtd_inicial_raw = resultado_inicio.QuantidadeContada if resultado_inicio else 0
+            estoque_inicial = Decimal(str(qtd_inicial_raw))
 
             # 7. Soma as compras (XMLs) feitas ENTRE as duas contagens
+            # (A função auxiliar já garante o retorno de Decimal)
             total_comprado = _somar_compras_no_periodo(cursor, produto_id, data_inicial, data_final)
             
             # 8. Aplica a FÓRMULA (Cálculo por Período)
@@ -5259,9 +5330,9 @@ def gerar_sugestao_por_periodo(contagem_id_inicio, contagem_id_fim):
                 "Unidade": item.UnidadeMedida,
                 "EstoqueAtual": estoque_final,
                 "UsoMedioDiario": uso_medio_diario,
-                "EstoqueMinimo": item.EstoqueMinimo,
+                "EstoqueMinimo": estoque_minimo, # CORREÇÃO: Usa a variável convertida para Decimal
                 "Status": "OK",
-                "TotalComprado": total_comprado, # Total comprado NO PERÍODO
+                "TotalComprado": total_comprado,
                 "DiasPeriodo": dias_periodo
             })
 
@@ -5276,6 +5347,7 @@ def gerar_sugestao_por_periodo(contagem_id_inicio, contagem_id_fim):
             conn.close()
 
 def buscar_produto_mestre_por_nome(nome_produto):
+    
     """Busca um produto mestre pelo seu nome exato e retorna o ID."""
     conn = get_db_connection()
     if conn:
@@ -5292,6 +5364,23 @@ def buscar_produto_mestre_por_nome(nome_produto):
             if conn:
                 conn.close()
     return None
+
+def verificar_nota_fiscal_existente(numero_nf, fornecedor_id):
+    """Verifica se uma Nota Fiscal com o mesmo número e fornecedor já foi registrada."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT COUNT(1) FROM NotasFiscaisEntrada WHERE NumeroNF = ? AND FornecedorID = ?"
+            cursor.execute(sql, numero_nf, fornecedor_id)
+            return cursor.fetchone()[0] > 0
+        except Exception as e:
+            logger.error(f"ERRO ao verificar duplicidade de NF: {e}", exc_info=True)
+            return True # Assume que existe para evitar duplicidade em caso de falha
+        finally:
+            if conn:
+                conn.close()
+    return True # Assume que existe para evitar duplicidade se a conexão falhar
 
 def buscar_historico_compras_produto(produto_id_mestre):
     """
