@@ -47,7 +47,7 @@ import database # Importa nosso arquivo de banco de dados
 from lxml import etree as ET 
 from datetime import datetime
 from tkcalendar import DateEntry 
-from decimal import Decimal 
+from decimal import Decimal, InvalidOperation # <-- Adicionado InvalidOperation
 
 class AppGestaoEstoque:
     def __init__(self, root):
@@ -63,12 +63,14 @@ class AppGestaoEstoque:
         self.frame_importacao = ttk.Frame(self.notebook, padding="10") 
         self.frame_contagem = ttk.Frame(self.notebook, padding="10")
         self.frame_sugestao = ttk.Frame(self.notebook, padding="10") 
+        self.frame_admin = ttk.Frame(self.notebook, padding="10") # Nova Aba Admin
 
         self.notebook.add(self.frame_produtos, text='1. Catálogo Mestre')
         self.notebook.add(self.frame_fornecedores, text='2. Fornecedores')
         self.notebook.add(self.frame_importacao, text='3. Importar XMLs (DE/PARA)')
         self.notebook.add(self.frame_contagem, text='4. Lançar Contagem Física')
         self.notebook.add(self.frame_sugestao, text='5. Sugestão de Compra') 
+        self.notebook.add(self.frame_admin, text='6. Administração / Reset')
 
         self.produto_selecionado_id = None
         self.fornecedor_selecionado_id = None
@@ -92,12 +94,14 @@ class AppGestaoEstoque:
         self.criar_aba_importacao_xml() 
         self.criar_aba_contagem_estoque()
         self.criar_aba_sugestao_compra() 
+        self.criar_aba_administracao()
         
         # Carregamento inicial
         self.atualizar_lista_produtos() 
         self.atualizar_lista_fornecedores() 
         self.popular_combobox_produtos_mestre() 
         self.atualizar_lista_contagens_historico() 
+        self.popular_combos_contagem_sugestao() # <-- CORREÇÃO: Inicializa os combos da aba 5
 
     def on_tab_changed(self, event):
         """Atualiza os dados das abas quando elas são selecionadas."""
@@ -111,6 +115,9 @@ class AppGestaoEstoque:
             self.atualizar_lista_produtos()
         elif tab_selecionada == '2. Fornecedores':
             self.atualizar_lista_fornecedores()
+        elif tab_selecionada == '6. Administração / Reset':
+            self.atualizar_lista_nfs_admin()
+            self.atualizar_lista_contagens_admin()
 
     # ===================================================================
     # == ABA 1: CATÁLOGO MESTRE (Sem alterações) ========================
@@ -174,8 +181,8 @@ class AppGestaoEstoque:
             messagebox.showerror("Erro", "Nome e Unidade são obrigatórios.", parent=self.root)
             return
         try:
-            estoque_min = Decimal(estoque_min_str) # <-- CORRIGIDO
-        except Exception: 
+            estoque_min = Decimal(estoque_min_str)
+        except InvalidOperation: # <-- CORREÇÃO: Exceção específica
             messagebox.showerror("Erro", "Estoque Mínimo deve ser um número.", parent=self.root)
             return
         try:
@@ -638,7 +645,11 @@ class AppGestaoEstoque:
                     sucessos += 1
                 else:
                     falhas += 1
+                    # CORREÇÃO: Registra a mensagem específica de erro/aviso do banco (msg_db)
                     logger.error(f"Falha ao salvar NF {cabecalho['NumeroNF']} no banco: {msg_db}")
+                    # [ADICIONAL] Se for um erro de duplicidade, adiciona um aviso mais visível.
+                    if "já foi importada" in msg_db:
+                        messagebox.showwarning("Aviso de Duplicidade", f"Nota Fiscal {cabecalho['NumeroNF']} não foi salva: já existe no sistema.", parent=self.root)
             except Exception as e:
                 falhas += 1
                 logger.error(f"Erro crítico ao tentar salvar NF {cabecalho['NumeroNF']}: {e}", exc_info=True)
@@ -820,8 +831,8 @@ class AppGestaoEstoque:
             messagebox.showwarning("Aviso", "Selecione um produto e digite a quantidade.", parent=self.root)
             return
         try:
-            quantidade = Decimal(qtd_str) # <-- CORRIGIDO
-        except Exception:
+            quantidade = Decimal(qtd_str)
+        except InvalidOperation: # <-- CORREÇÃO: Exceção específica
             messagebox.showerror("Erro", "Quantidade deve ser um número.", parent=self.root)
             # Limpa o campo para evitar reenvio de dados inválidos e foca
             self.entry_contagem_qtd.delete(0, tk.END)
@@ -997,7 +1008,8 @@ class AppGestaoEstoque:
         try:
             # Validação robusta do Spinbox (evita erro se estiver vazio)
             valor_spin = self.spin_meses_cobertura.get().strip()
-            if not valor_spin:
+            # CORREÇÃO: Garante que, se o valor for vazio, ele seja tratado como 1
+            if not valor_spin.isdigit(): # Verifica se é vazio ou não numérico
                 meses_cobertura = 1
                 self.spin_meses_cobertura.set("1")
             else:
@@ -1037,9 +1049,10 @@ class AppGestaoEstoque:
                 
                 nome = item['NomeProduto']
                 un = item['Unidade']
-                atual = item['EstoqueAtual']
-                umd = item['UsoMedioDiario']
-                minimo = item['EstoqueMinimo']
+                # CORREÇÃO: Garantia final de tipos para cálculo seguro na UI
+                atual = Decimal(str(item['EstoqueAtual']))
+                umd = Decimal(str(item['UsoMedioDiario']))
+                minimo = Decimal(str(item['EstoqueMinimo']))
                 status = item['Status']
                 total_comprado = item['TotalComprado']
                 consumo_mes = umd * 30
@@ -1159,6 +1172,121 @@ class AppGestaoEstoque:
                 ))
         except Exception as e:
             messagebox.showerror("Erro de Banco", f"Não foi possível buscar o histórico: {e}", parent=popup)
+
+
+
+# ===================================================================
+    # == ABA 6: ADMINISTRAÇÃO / RESET ===================================
+    # ===================================================================
+    def criar_aba_administracao(self):
+        main_frame = ttk.Frame(self.frame_admin)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # --- Título ---
+        ttk.Label(main_frame, text="⚠️ Área de Gestão de Dados - Ações Destrutivas", font=("Arial", 12, "bold"), foreground="red").pack(pady=10)
+
+        # --- Painel Dividido ---
+        paned = ttk.PanedWindow(main_frame, orient=tk.HORIZONTAL)
+        paned.pack(fill=tk.BOTH, expand=True)
+
+        # --- Esquerda: Gestão de Notas Fiscais ---
+        frame_nfs = ttk.LabelFrame(paned, text="Gerenciar Notas Fiscais Importadas", padding="10")
+        paned.add(frame_nfs, weight=1)
+
+        cols_nf = ('ID', 'Número', 'Fornecedor', 'Data', 'Valor', 'Itens')
+        self.tree_admin_nfs = ttk.Treeview(frame_nfs, columns=cols_nf, show='headings', selectmode='extended')
+        self.tree_admin_nfs.heading('ID', text='ID'); self.tree_admin_nfs.column('ID', width=30, anchor='center')
+        self.tree_admin_nfs.heading('Número', text='Número'); self.tree_admin_nfs.column('Número', width=80)
+        self.tree_admin_nfs.heading('Fornecedor', text='Fornecedor'); self.tree_admin_nfs.column('Fornecedor', width=120)
+        self.tree_admin_nfs.heading('Data', text='Data'); self.tree_admin_nfs.column('Data', width=80, anchor='center')
+        self.tree_admin_nfs.heading('Valor', text='Valor (R$)'); self.tree_admin_nfs.column('Valor', width=80, anchor='e')
+        self.tree_admin_nfs.heading('Itens', text='Qtd. Itens'); self.tree_admin_nfs.column('Itens', width=60, anchor='center')
+        
+        sb_nf = ttk.Scrollbar(frame_nfs, orient="vertical", command=self.tree_admin_nfs.yview)
+        self.tree_admin_nfs.configure(yscrollcommand=sb_nf.set)
+        self.tree_admin_nfs.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb_nf.pack(side=tk.RIGHT, fill=tk.Y)
+
+        btn_del_nf = ttk.Button(frame_nfs, text="🗑️ Excluir Nota(s) Selecionada(s)", command=self.excluir_nfs_selecionadas)
+        btn_del_nf.pack(side=tk.BOTTOM, fill=tk.X, pady=5)
+
+        # --- Direita: Gestão de Contagens ---
+        frame_cont = ttk.LabelFrame(paned, text="Gerenciar Contagens de Estoque", padding="10")
+        paned.add(frame_cont, weight=1)
+
+        cols_cont = ('ID', 'Data', 'Responsável')
+        self.tree_admin_cont = ttk.Treeview(frame_cont, columns=cols_cont, show='headings', selectmode='extended')
+        self.tree_admin_cont.heading('ID', text='ID'); self.tree_admin_cont.column('ID', width=40, anchor='center')
+        self.tree_admin_cont.heading('Data', text='Data'); self.tree_admin_cont.column('Data', width=100, anchor='center')
+        self.tree_admin_cont.heading('Responsável', text='Responsável'); self.tree_admin_cont.column('Responsável', width=150)
+
+        sb_cont = ttk.Scrollbar(frame_cont, orient="vertical", command=self.tree_admin_cont.yview)
+        self.tree_admin_cont.configure(yscrollcommand=sb_cont.set)
+        self.tree_admin_cont.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb_cont.pack(side=tk.RIGHT, fill=tk.Y)
+
+        btn_del_cont = ttk.Button(frame_cont, text="🗑️ Excluir Contagem(s) Selecionada(s)", command=self.excluir_contagens_selecionadas)
+        btn_del_cont.pack(side=tk.BOTTOM, fill=tk.X, pady=5)
+
+    def atualizar_lista_nfs_admin(self):
+        for i in self.tree_admin_nfs.get_children(): self.tree_admin_nfs.delete(i)
+        try:
+            nfs = database.listar_notas_fiscais_entrada_completa()
+            for nf in nfs:
+                # nf = (NotaID, NumeroNF, NomeFantasia, DataEmissao, ValorTotalNF, QtdItens)
+                data_fmt = nf[3].strftime('%d/%m/%Y') if nf[3] else "--"
+                valor_fmt = f"{float(nf[4]):.2f}"
+                self.tree_admin_nfs.insert("", "end", values=(nf[0], nf[1], nf[2], data_fmt, valor_fmt, nf[5]))
+        except Exception as e:
+            print(f"Erro lista admin NF: {e}")
+
+    def atualizar_lista_contagens_admin(self):
+        for i in self.tree_admin_cont.get_children(): self.tree_admin_cont.delete(i)
+        try:
+            contagens = database.listar_contagens_cabecalho()
+            for c in contagens:
+                data_fmt = c.DataContagem.strftime('%d/%m/%Y')
+                self.tree_admin_cont.insert("", "end", values=(c.ContagemID, data_fmt, c.NomeCompleto))
+        except Exception as e:
+            print(f"Erro lista admin Contagem: {e}")
+
+    def excluir_nfs_selecionadas(self):
+        selecionados = self.tree_admin_nfs.selection()
+        if not selecionados:
+            messagebox.showwarning("Aviso", "Selecione pelo menos uma Nota Fiscal para excluir.")
+            return
+        
+        if not messagebox.askyesno("Confirmar Exclusão", f"Você selecionou {len(selecionados)} notas fiscais.\n\nEsta ação apagará o registro da nota e todo o histórico de entrada de estoque associado a ela.\n\nDeseja continuar?", icon='warning'):
+            return
+
+        sucessos = 0
+        for item in selecionados:
+            dados = self.tree_admin_nfs.item(item, 'values')
+            nota_id = dados[0]
+            if database.excluir_nota_fiscal_entrada(nota_id):
+                sucessos += 1
+        
+        messagebox.showinfo("Resultado", f"{sucessos} nota(s) excluída(s) com sucesso.")
+        self.atualizar_lista_nfs_admin()
+
+    def excluir_contagens_selecionadas(self):
+        selecionados = self.tree_admin_cont.selection()
+        if not selecionados:
+            messagebox.showwarning("Aviso", "Selecione pelo menos uma Contagem para excluir.")
+            return
+        
+        if not messagebox.askyesno("Confirmar Exclusão", f"Você selecionou {len(selecionados)} contagens.\n\nEsta ação apagará o registro histórico dessa contagem de estoque.\n\nDeseja continuar?", icon='warning'):
+            return
+
+        sucessos = 0
+        for item in selecionados:
+            dados = self.tree_admin_cont.item(item, 'values')
+            cont_id = dados[0]
+            if database.excluir_contagem_estoque(cont_id):
+                sucessos += 1
+        
+        messagebox.showinfo("Resultado", f"{sucessos} contagem(ns) excluída(s) com sucesso.")
+        self.atualizar_lista_contagens_admin()
 
 # --- Bloco de Execução Principal ---
 if __name__ == "__main__":
