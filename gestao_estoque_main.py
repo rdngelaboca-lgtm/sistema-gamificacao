@@ -1064,19 +1064,21 @@ class AppGestaoEstoque:
         frame_resultado.rowconfigure(0, weight=1)
         frame_resultado.columnconfigure(0, weight=1)
         
-        cols = ('Produto', 'UN', 'Estoque Atual', 'Total Comprado', 'Consumo Médio/Mês', 'Consumo Médio/Dia', 'Sugestão Compra', 'Status')
+    # [ATUALIZAÇÃO] Adicionada coluna 'Duração (Meses)'
+        cols = ('Produto', 'UN', 'Estoque Atual', 'Total Comprado', 'Consumo Médio/Mês', 'Consumo Médio/Dia', 'Duração (Meses)', 'Sugestão Compra', 'Status')
         self.tree_sugestao = ttk.Treeview(frame_resultado, columns=cols, show='headings')
         for col in cols: self.tree_sugestao.heading(col, text=col)
-        
+
         self.tree_sugestao.column('Produto', width=250)
         self.tree_sugestao.column('UN', width=40, anchor='center')
-        self.tree_sugestao.column('Estoque Atual', width=100, anchor='e')
-        self.tree_sugestao.column('Total Comprado', width=100, anchor='e')
-        self.tree_sugestao.column('Consumo Médio/Mês', width=120, anchor='e')
-        self.tree_sugestao.column('Consumo Médio/Dia', width=120, anchor='e')
-        self.tree_sugestao.column('Sugestão Compra', width=120, anchor='e')
-        self.tree_sugestao.column('Status', width=150)
-        
+        self.tree_sugestao.column('Estoque Atual', width=90, anchor='e')
+        self.tree_sugestao.column('Total Comprado', width=90, anchor='e')
+        self.tree_sugestao.column('Consumo Médio/Mês', width=110, anchor='e')
+        self.tree_sugestao.column('Consumo Médio/Dia', width=110, anchor='e')
+        self.tree_sugestao.column('Duração (Meses)', width=100, anchor='center') # Nova Coluna
+        self.tree_sugestao.column('Sugestão Compra', width=110, anchor='e')
+        self.tree_sugestao.column('Status', width=100)
+
         scrollbar = ttk.Scrollbar(frame_resultado, orient="vertical", command=self.tree_sugestao.yview)
         self.tree_sugestao.configure(yscrollcommand=scrollbar.set)
         
@@ -1148,17 +1150,31 @@ class AppGestaoEstoque:
                 sugestao_calc = estoque_ideal - atual
 
                 # Garante que a sugestão nunca seja negativa (usando max)
-                sugestao_compra = max(sugestao_calc, Decimal('0.0'))
-                
-                atual_f = f"{atual:.3f}"
-                total_comprado_f = f"{total_comprado:.3f}"
-                consumo_mes_f = f"{consumo_mes:.3f}"
-                umd_f = f"{umd:.3f}"
-                sugestao_f = f"{sugestao_compra:.3f}"
-                
-                self.tree_sugestao.insert("", "end", values=(
-                    nome, un, atual_f, total_comprado_f, consumo_mes_f, umd_f, sugestao_f, status
-                ), iid=item['ProdutoID'])
+            sugestao_compra = max(sugestao_calc, Decimal('0.0'))
+
+            # --- CÁLCULO DA DURAÇÃO DE ESTOQUE ---
+            if consumo_mes > 0:
+                duracao_val = atual / consumo_mes
+                if duracao_val > 120: # Se durar mais de 10 anos, mostra infinito
+                    duracao_f = "> 120 meses"
+                else:
+                    duracao_f = f"{duracao_val:.1f} meses"
+            else:
+                if atual > 0:
+                    duracao_f = "Sem Giro" # Tem estoque mas não vendeu
+                else:
+                    duracao_f = "---" # Zerado e sem venda
+
+            atual_f = f"{atual:.3f}"
+            total_comprado_f = f"{total_comprado:.3f}"
+            consumo_mes_f = f"{consumo_mes:.3f}"
+            umd_f = f"{umd:.3f}"
+            sugestao_f = f"{sugestao_compra:.3f}"
+
+            # Insere na tabela com a nova coluna
+            self.tree_sugestao.insert("", "end", values=(
+                nome, un, atual_f, total_comprado_f, consumo_mes_f, umd_f, duracao_f, sugestao_f, status
+            ), iid=item['ProdutoID'])
 
         except Exception as e:
             logger.error(f"Erro ao gerar sugestão de compra por período: {e}", exc_info=True)
