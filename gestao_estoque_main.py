@@ -1233,48 +1233,74 @@ class AppGestaoEstoque:
             # O IID foi definido como ProdutoID na inserção, mas protegemos a conversão
             produto_id = int(selecionado)
         except ValueError:
-            logger.warning(f"IID selecionado '{selecionado}' não é um número válido.")
+            # Se clicou em algo que não tem ID numérico
             return
 
         dados_produto = self.cache_relatorio_posicao.get(produto_id)
 
-        # Proteção contra Cache Desatualizado (ex: troca de abas sem regerar relatório)
+        # Proteção contra Cache Desatualizado
         if not dados_produto:
             messagebox.showwarning("Dados Desatualizados", "As informações deste produto não estão mais na memória.\nPor favor, clique em 'Gerar Sugestão' novamente.", parent=self.root)
             return
+
         nome_produto = dados_produto['NomeProduto']
         popup = Toplevel(self.root)
         popup.title(f"Histórico de Compras - {nome_produto}")
         popup.geometry("800x500")
         popup.transient(self.root)
-        popup.grab_set()
+
         frame = ttk.Frame(popup, padding="10")
         frame.pack(fill=tk.BOTH, expand=True)
         frame.rowconfigure(0, weight=1)
         frame.columnconfigure(0, weight=1)
+
         cols_hist = ('Data Compra', 'NF', 'Fornecedor', 'Qtd', 'Custo Unit.')
         tree_hist = ttk.Treeview(frame, columns=cols_hist, show='headings')
-        for col in cols_hist: tree_hist.heading(col, text=col)
+
+        for col in cols_hist: 
+            tree_hist.heading(col, text=col)
+
         tree_hist.column('Data Compra', width=100, anchor='center')
         tree_hist.column('NF', width=80, anchor='center')
         tree_hist.column('Fornecedor', width=250)
         tree_hist.column('Qtd', width=80, anchor='e')
         tree_hist.column('Custo Unit.', width=100, anchor='e')
+
         scrollbar = ttk.Scrollbar(frame, orient="vertical", command=tree_hist.yview)
         tree_hist.configure(yscrollcommand=scrollbar.set)
         tree_hist.grid(row=0, column=0, sticky="nsew")
         scrollbar.grid(row=0, column=1, sticky="ns")
+
         try:
             historico = database.buscar_historico_compras_produto(produto_id)
             if not historico:
                 tree_hist.insert("", "end", values=("Nenhuma compra encontrada.", "", "", "", ""))
+
             for compra in historico:
-                data_f = compra.DataEmissao.strftime('%d/%m/%Y')
+                # --- CORREÇÃO DE FORMATAÇÃO DE DATA ---
+                raw_date = compra.DataEmissao
+                data_f = "--/--/----"
+
+                if raw_date:
+                    if hasattr(raw_date, 'strftime'):
+                        data_f = raw_date.strftime('%d/%m/%Y')
+                    else:
+                        # Tenta converter string YYYY-MM-DD para BR
+                        try:
+                            # Pega os primeiros 10 chars (caso venha com hora)
+                            data_str = str(raw_date)[:10] 
+                            dt_obj = datetime.strptime(data_str, '%Y-%m-%d')
+                            data_f = dt_obj.strftime('%d/%m/%Y')
+                        except:
+                            data_f = str(raw_date) # Fallback: mostra como veio
+
                 qtd_f = f"{compra.Quantidade:.3f}"
                 custo_f = f"R$ {compra.PrecoCustoUnitario:.4f}"
+
                 tree_hist.insert("", "end", values=(
                     data_f, compra.NumeroNF, compra.NomeFantasia, qtd_f, custo_f
                 ))
+
         except Exception as e:
             messagebox.showerror("Erro de Banco", f"Não foi possível buscar o histórico: {e}", parent=popup)
 
