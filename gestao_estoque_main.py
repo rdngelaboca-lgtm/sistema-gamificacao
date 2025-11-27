@@ -411,6 +411,9 @@ class AppGestaoEstoque:
         self.tree_prontos.grid(row=0, column=0, sticky="nsew")
         btn_salvar_tudo = ttk.Button(main_frame, text="4. Salvar Todas as Notas Processadas no Banco", command=self.salvar_notas_processadas)
         btn_salvar_tudo.grid(row=4, column=0, sticky="ew", pady=10, ipady=10)
+        # Botão de Gerenciamento de Vínculos (Correção)
+        btn_gerir_vinculos = ttk.Button(main_frame, text="🛠️ Gerenciar / Corrigir Vínculos Salvos", command=self.abrir_gestor_vinculos)
+        btn_gerir_vinculos.grid(row=5, column=0, sticky="ew", pady=(0, 10))
 
     def popular_combobox_produtos_mestre(self):
         # ... (código idêntico ao anterior) ...
@@ -1424,6 +1427,131 @@ class AppGestaoEstoque:
                     messagebox.showerror("Erro", "Falha ao resetar o banco. Verifique os logs.", parent=self.root)
             else:
                 messagebox.showinfo("Cancelado", "Ação cancelada. O código de confirmação estava incorreto.", parent=self.root)
+
+    def abrir_gestor_vinculos(self):
+        """Abre uma janela para editar/excluir vínculos DE/PARA existentes."""
+        popup = Toplevel(self.root)
+        popup.title("Gerenciador de Vínculos de Produtos")
+        popup.geometry("900x600")
+        popup.transient(self.root)
+
+        # --- Filtro ---
+        frame_topo = ttk.Frame(popup, padding="10")
+        frame_topo.pack(fill=tk.X)
+        ttk.Label(frame_topo, text="Filtrar (XML ou Mestre):").pack(side=tk.LEFT)
+        entry_filtro = ttk.Entry(frame_topo, width=30)
+        entry_filtro.pack(side=tk.LEFT, padx=5)
+
+        # --- Lista ---
+        frame_lista = ttk.Frame(popup, padding="10")
+        frame_lista.pack(fill=tk.BOTH, expand=True)
+
+        cols = ('ID', 'Fornecedor', 'Descrição no XML', 'Produto Mestre Atual', 'Fator (Cx)')
+        tree_vinculos = ttk.Treeview(frame_lista, columns=cols, show='headings', selectmode='browse')
+
+        tree_vinculos.heading('ID', text='ID'); tree_vinculos.column('ID', width=40)
+        tree_vinculos.heading('Fornecedor', text='Fornecedor'); tree_vinculos.column('Fornecedor', width=200)
+        tree_vinculos.heading('Descrição no XML', text='Descrição no XML'); tree_vinculos.column('Descrição no XML', width=250)
+        tree_vinculos.heading('Produto Mestre Atual', text='Produto Mestre (Seu Estoque)'); tree_vinculos.column('Produto Mestre Atual', width=250)
+        tree_vinculos.heading('Fator (Cx)', text='Qtd/Cx'); tree_vinculos.column('Fator (Cx)', width=60, anchor='center')
+
+        sb = ttk.Scrollbar(frame_lista, orient="vertical", command=tree_vinculos.yview)
+        tree_vinculos.configure(yscrollcommand=sb.set)
+        tree_vinculos.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+
+        def carregar_lista(filtro=""):
+            for i in tree_vinculos.get_children(): tree_vinculos.delete(i)
+            dados = database.listar_todos_vinculos_detalhado()
+
+            for item in dados:
+                # item = (ID, Fornecedor, DescXML, NomeMestre, Fator)
+                texto_busca = f"{item[2]} {item[3]}".lower()
+                if not filtro or filtro.lower() in texto_busca:
+                    fator_val = item[4] if item[4] else 1.0
+                    fator_fmt = f"{fator_val:.2f}".replace('.', ',')
+                    tree_vinculos.insert("", "end", values=(item[0], item[1], item[2], item[3], fator_fmt))
+
+        entry_filtro.bind("<KeyRelease>", lambda e: carregar_lista(entry_filtro.get()))
+
+        # --- Área de Edição ---
+        frame_edit = ttk.LabelFrame(popup, text="Editar Vínculo Selecionado", padding="10")
+        frame_edit.pack(fill=tk.X, padx=10, pady=10)
+
+        ttk.Label(frame_edit, text="Alterar Produto Mestre para:").grid(row=0, column=0, sticky="w")
+        combo_mestre_edit = ttk.Combobox(frame_edit, values=self.lista_mestre_produtos_nomes, width=40, state="readonly")
+        combo_mestre_edit.grid(row=1, column=0, sticky="ew", padx=(0,10))
+
+        ttk.Label(frame_edit, text="Alterar Qtd por Caixa (Fator):").grid(row=0, column=1, sticky="w")
+        entry_fator_edit = ttk.Entry(frame_edit, width=10)
+        entry_fator_edit.grid(row=1, column=1, sticky="w")
+
+        def preencher_edicao(event):
+            selecionado = tree_vinculos.focus()
+            if not selecionado: return
+            vals = tree_vinculos.item(selecionado, 'values')
+            # vals = (ID, Fornecedor, DescXML, NomeMestre, Fator)
+
+            # Tenta selecionar o mestre atual no combo
+            nome_mestre_atual = vals[3]
+            # Busca na lista do combo algo que contenha o nome
+            for item in self.lista_mestre_produtos_nomes:
+                if nome_mestre_atual in item: 
+                    combo_mestre_edit.set(item)
+                    break
+
+            entry_fator_edit.delete(0, tk.END)
+            entry_fator_edit.insert(0, vals[4])
+
+        tree_vinculos.bind("<<TreeviewSelect>>", preencher_edicao)
+
+        def salvar_alteracao():
+            selecionado = tree_vinculos.focus()
+            if not selecionado: return
+            vinculo_id = tree_vinculos.item(selecionado, 'values')[0]
+
+            novo_mestre_nome = combo_mestre_edit.get()
+            if not novo_mestre_nome:
+                messagebox.showerror("Erro", "Selecione um produto mestre.", parent=popup)
+                return
+
+            novo_mestre_id = self.mapa_produtos_mestre.get(novo_mestre_nome)
+
+            try:
+                novo_fator = Decimal(entry_fator_edit.get().replace(',', '.'))
+                if novo_fator <= 0: raise ValueError
+            except:
+                messagebox.showerror("Erro", "Fator inválido. Use um número maior que 0.", parent=popup)
+                return
+
+            if database.atualizar_vinculo_existente(vinculo_id, novo_mestre_id, novo_fator):
+                messagebox.showinfo("Sucesso", "Vínculo atualizado!", parent=popup)
+                carregar_lista(entry_filtro.get())
+            else:
+                messagebox.showerror("Erro", "Falha ao atualizar.", parent=popup)
+
+        def excluir_vinculo():
+            selecionado = tree_vinculos.focus()
+            if not selecionado: return
+            vinculo_id = tree_vinculos.item(selecionado, 'values')[0]
+            desc = tree_vinculos.item(selecionado, 'values')[2]
+
+            if messagebox.askyesno("Excluir", f"Deseja excluir o vínculo para '{desc}'?\n\nNa próxima importação, o sistema pedirá para vincular novamente.", parent=popup):
+                if database.excluir_vinculo_existente(vinculo_id):
+                    messagebox.showinfo("Sucesso", "Vínculo excluído.", parent=popup)
+                    carregar_lista(entry_filtro.get())
+                else:
+                    messagebox.showerror("Erro", "Falha ao excluir.", parent=popup)
+
+        btn_salvar = ttk.Button(frame_edit, text="💾 Salvar Alterações", command=salvar_alteracao)
+        btn_salvar.grid(row=1, column=2, padx=10)
+
+        btn_excluir = ttk.Button(frame_edit, text="🗑️ Excluir Vínculo", command=excluir_vinculo)
+        btn_excluir.grid(row=1, column=3, padx=10)
+
+        carregar_lista()
+
+    
 
 # --- Bloco de Execução Principal ---
 if __name__ == "__main__":
