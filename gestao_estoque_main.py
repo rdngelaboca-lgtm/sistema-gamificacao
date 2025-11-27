@@ -1164,40 +1164,42 @@ class AppGestaoEstoque:
             logger.error(f"Erro ao gerar sugestão de compra por período: {e}", exc_info=True)
             messagebox.showerror("Erro de Banco", f"Falha ao gerar relatório:\n{e}", parent=self.root)
 
-                                                                        # --- NOVA FUNÇÃO ---
     def popular_combos_contagem_sugestao(self):
         """Atualiza os combos da Aba 5 com os dados mais recentes da Aba 4."""
         try:
             contagens = database.listar_contagens_cabecalho()
             self.mapa_contagens_historico.clear()
 
-            # [CORREÇÃO] Limpa os combos preventivamente
+            # Limpa os combos preventivamente
             self.combo_contagem_inicio.set('')
             self.combo_contagem_fim.set('')
             self.combo_contagem_inicio['values'] = []
             self.combo_contagem_fim['values'] = []
 
-            if not contagens:
-                return
-
+            # --- NOVA OPÇÃO ESPECIAL ---
+            opcao_primeira_compra = "⏮️ DESDE A PRIMEIRA COMPRA (Histórico Completo)"
+            self.mapa_contagens_historico[opcao_primeira_compra] = -1 # Código especial -1
+            
             nomes_contagens = []
+            
+            # Adiciona as contagens físicas reais
             for c in contagens:
                 data_f = c.DataContagem.strftime('%d/%m/%Y')
                 nome_display = f"ID: {c.ContagemID} - {data_f} ({c.NomeCompleto})"
                 nomes_contagens.append(nome_display)
                 self.mapa_contagens_historico[nome_display] = c.ContagemID
 
-            # A lista do banco já vem ordenada (Mais recente -> Mais antiga)
-            # Usamos ela diretamente para evitar erros de chave de ordenação
-            self.combo_contagem_inicio['values'] = nomes_contagens
+            # Configura Combo Final (Apenas contagens reais, pois "Hoje" é sempre uma contagem física)
             self.combo_contagem_fim['values'] = nomes_contagens
+            
+            # Configura Combo Inicial (Contagens Reais + Opção Especial no topo)
+            self.combo_contagem_inicio['values'] = [opcao_primeira_compra] + nomes_contagens
 
             # Lógica inteligente de seleção padrão
-            if len(nomes_contagens) >= 2:
+            if nomes_contagens:
                 self.combo_contagem_fim.set(nomes_contagens[0])   # A mais recente (Ponto B)
-                self.combo_contagem_inicio.set(nomes_contagens[1]) # A penúltima (Ponto A)
-            elif len(nomes_contagens) == 1:
-                self.combo_contagem_fim.set(nomes_contagens[0])
+                # Por padrão, sugere a opção especial se houver poucas contagens
+                self.combo_contagem_inicio.set(opcao_primeira_compra)
 
         except Exception as e:
             logger.error(f"Erro ao popular combos de contagem (Aba 5): {e}", exc_info=True)
