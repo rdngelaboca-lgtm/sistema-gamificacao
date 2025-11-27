@@ -5796,3 +5796,34 @@ def resetar_dados_estoque_completo():
     return False
 
 # (Função removida - código vazio)
+
+def listar_todos_vinculos_detalhado():
+    """
+    Lista todos os vínculos DE/PARA cadastrados para edição.
+    Usa LEFT JOIN para mostrar vínculos órfãos (onde o produto ou fornecedor foi deletado).
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # ISNULL substitui valores vazios por texto de alerta
+            sql = """
+                SELECT 
+                    PF.ProdutoFornecedorID,
+                    ISNULL(F.NomeFantasia, 'FORNECEDOR DELETADO'),
+                    PF.DescricaoXML,
+                    ISNULL(P.NomeProduto, 'PRODUTO DELETADO (ÓRFÃO)'),
+                    PF.FatorConversao
+                FROM ProdutosFornecedor PF
+                LEFT JOIN Fornecedores F ON PF.FornecedorID = F.FornecedorID
+                LEFT JOIN ProdutosEstoque P ON PF.ProdutoID = P.ProdutoID
+                ORDER BY F.NomeFantasia, PF.DescricaoXML
+            """
+            cursor.execute(sql)
+            return cursor.fetchall()
+        except Exception as e:
+            logger.error(f"Erro ao listar vínculos detalhados: {e}", exc_info=True)
+            return []
+        finally:
+            conn.close()
+    return []
