@@ -5313,21 +5313,21 @@ def gerar_sugestao_por_periodo(contagem_id_inicio, contagem_id_fim):
         
         if not itens_contagem_final:
             raise Exception("A Contagem Final selecionada não possui itens.")
-
-        # 4. Processamento Item a Item
+        # 4. Processamento Item a Item - LÓGICA CORRIGIDA
         for item in itens_contagem_final:
             produto_id = item.ProdutoID
-            # Tipagem segura
+
+            # [CORREÇÃO] Acesso direto às colunas retornadas pela query sql_itens_fim
+            # A query retorna: ProdutoID, NomeProduto, UnidadeMedida, EstoqueMinimo, QuantidadeContada
             estoque_final = Decimal(str(item.QuantidadeContada)) if item.QuantidadeContada is not None else Decimal('0.0')
             estoque_minimo = Decimal(str(item.EstoqueMinimo)) if item.EstoqueMinimo is not None else Decimal('0.0')
-            
+
             # VARIÁVEIS DINÂMICAS
             data_ini_calc = None
             estoque_inicial = Decimal('0.0')
-            
+
             if modo_primeira_compra:
                 # --- MODO HISTÓRICO COMPLETO ---
-                # Busca a data da primeira nota fiscal de entrada deste produto
                 sql_primeira_compra = """
                     SELECT MIN(NF.DataEmissao) as PrimeiraData
                     FROM ItensNotaFiscalEntrada INI
@@ -5337,46 +5337,41 @@ def gerar_sugestao_por_periodo(contagem_id_inicio, contagem_id_fim):
                 """
                 cursor.execute(sql_primeira_compra, produto_id)
                 res_data = cursor.fetchone()
-                
+
                 if res_data and res_data.PrimeiraData:
                     data_ini_calc = res_data.PrimeiraData
-                    # Se é desde a primeira compra, assumimos que o estoque ANTES dela era 0
-                    estoque_inicial = Decimal('0.0')
+                    estoque_inicial = Decimal('0.0') # Antes da primeira compra, estoque era zero
                 else:
-                    # Se nunca comprou (produto cadastrado manualmente ou sem nota), 
-                    # assumimos um período padrão de 30 dias para não quebrar a divisão
-                    data_ini_calc = data_final - timedelta(days=30)
-            
+                    data_ini_calc = data_final - timedelta(days=30) # Fallback
+
             else:
                 # --- MODO ENTRE CONTAGENS ---
                 data_ini_calc = data_inicial_fixa
-                
-                # Busca o estoque físico que havia na contagem A
+
+                # Busca o estoque que havia na Contagem INICIAL
                 sql_item_inicio = "SELECT QuantidadeContada FROM ItensContagemEstoque WHERE ContagemID = ? AND ProdutoID = ?"
                 cursor.execute(sql_item_inicio, contagem_id_inicio, produto_id)
                 resultado_inicio = cursor.fetchone()
-                
+
                 qtd_inicial_raw = resultado_inicio.QuantidadeContada if resultado_inicio else 0
                 estoque_inicial = Decimal(str(qtd_inicial_raw))
 
-            # Validação de Datas Individual (para evitar erro se a compra for futura por engano)
+            # Validação de Datas
             dias_periodo = (data_final - data_ini_calc).days
             if dias_periodo <= 0: dias_periodo = 1
 
-            # 5. Soma as compras no período calculado
+            # 5. Soma compras no período (Função Auxiliar já existente)
             total_comprado = _somar_compras_no_periodo(cursor, produto_id, data_ini_calc, data_final)
-            
-            # 6. Matemática de Consumo
-            # (Estoque que eu tinha + Tudo que comprei) - (O que sobrou hoje) = O que foi consumido
+            if total_comprado is None: total_comprado = Decimal('0.0')
+
+            # 6. Cálculo de Consumo: (O que tinha + O que entrou) - O que tem agora = O que saiu
             uso_total_periodo = (estoque_inicial + total_comprado) - estoque_final
-            
-            # 7. Média Diária
+
+            # 7. Média Diária (UMD)
             uso_medio_diario = uso_total_periodo / dias_periodo
-            # Consumo não pode ser negativo (significaria ganho mágico de estoque ou erro de contagem)
-            # Mas mantemos negativo se for auditoria, porém para sugestão travamos em 0
-            if uso_medio_diario < 0: uso_medio_diario = Decimal('0.0')
-            
-            # 8. Monta Relatório
+            if uso_medio_diario < 0: uso_medio_diario = Decimal('0.0') # Evita consumo negativo
+
+            # 8. Monta Relatório com Chaves que o Frontend espera
             relatorio_final.append({
                 "ProdutoID": item.ProdutoID,
                 "NomeProduto": item.NomeProduto,
@@ -5388,7 +5383,6 @@ def gerar_sugestao_por_periodo(contagem_id_inicio, contagem_id_fim):
                 "TotalComprado": total_comprado,
                 "DiasPeriodo": dias_periodo
             })
-
         return relatorio_final
 
     except Exception as e:
