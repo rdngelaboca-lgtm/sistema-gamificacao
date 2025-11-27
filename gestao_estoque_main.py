@@ -544,12 +544,14 @@ class AppGestaoEstoque:
                     vinculo_existente = database.buscar_vinculo_produto_fornecedor(fornecedor_id, desc_xml)
 
                     if vinculo_existente:
-                        # Desempacota os 3 valores agora (incluindo o fator)
-                        produto_fornecedor_id, produto_mestre_id, fator = vinculo_existente
-                        
-                        # Garante que fator é Decimal e seguro
-                        if not fator or fator <= 0: fator = Decimal('1.0')
-                        else: fator = Decimal(str(fator))
+                        # Desempacota os 3 valores. Se fator vier None do banco, trata aqui.
+                        produto_fornecedor_id, produto_mestre_id, fator_db = vinculo_existente
+
+                        # Tratamento defensivo: se for None ou <= 0, assume 1.0
+                        if fator_db is None or fator_db <= 0:
+                            fator = Decimal('1.0')
+                        else:
+                            fator = Decimal(str(fator_db))
 
                         # --- A MÁGICA DA CONVERSÃO ---
                         qtd_xml = item['Quantidade'] # Ex: 1 (caixa)
@@ -1121,69 +1123,66 @@ class AppGestaoEstoque:
             self.tree_sugestao.delete(i)
             
         try:
-            # Chama a NOVA função do database
+            # Chama a função corrigida do database, que já retorna Decimals prontos
             relatorio_posicao = database.gerar_sugestao_por_periodo(contagem_id_inicio, contagem_id_fim)
             self.cache_relatorio_posicao.clear()
-            
+
             if not relatorio_posicao:
-                messagebox.showinfo("Aviso", "Nenhum produto encontrado na Contagem Final selecionada.", parent=self.root)
+                messagebox.showinfo("Aviso", "Nenhum produto encontrado ou erro de processamento.", parent=self.root)
                 return
 
             for item in relatorio_posicao:
+                # Armazena no cache para o recurso de duplo-clique (histórico)
                 self.cache_relatorio_posicao[item['ProdutoID']] = item
-                
+
+                # Extração direta dos dados já calculados no database.py
                 nome = item['NomeProduto']
                 un = item['Unidade']
-                # CORREÇÃO: Tratamento robusto para evitar erro com valores Nulos/None vindos de produtos deletados
-                # Se o valor for None, assume 0 para permitir o cálculo sem travar o sistema.
-                val_atual = item['EstoqueAtual'] if item['EstoqueAtual'] is not None else 0
-                val_umd = item['UsoMedioDiario'] if item['UsoMedioDiario'] is not None else 0
-                val_min = item['EstoqueMinimo'] if item['EstoqueMinimo'] is not None else 0
-
-                atual = Decimal(str(val_atual))
-                umd = Decimal(str(val_umd))
-                minimo = Decimal(str(val_min))
-                status = item['Status']
+                atual = item['EstoqueAtual']       # Já é Decimal
+                umd = item['UsoMedioDiario']       # Já é Decimal
+                minimo = item['EstoqueMinimo']     # Já é Decimal
                 total_comprado = item['TotalComprado']
+                status = item['Status']
+
+                # Cálculo de apresentação: Consumo Mensal
                 consumo_mes = umd * 30
-                
-                # Cálculo Seguro com Decimal
+
+                # Cálculo da Sugestão de Compra
                 # Estoque Ideal = (Consumo Diário * Dias a Cobrir) + Estoque de Segurança
                 estoque_ideal = (umd * dias_cobertura) + minimo
-
-                # A sugestão é o que falta para atingir o ideal
                 sugestao_calc = estoque_ideal - atual
 
-                # Garante que a sugestão nunca seja negativa (usando max)
-            sugestao_compra = max(sugestao_calc, Decimal('0.0'))
+                # A sugestão não pode ser negativa
+                sugestao_compra = max(sugestao_calc, Decimal('0.0'))
 
-            # --- CÁLCULO DA DURAÇÃO DE ESTOQUE ---
-            if consumo_mes > 0:
-                duracao_val = atual / consumo_mes
-                if duracao_val > 120: # Se durar mais de 10 anos, mostra infinito
-                    duracao_f = "> 120 meses"
+                # --- CÁLCULO DA DURAÇÃO DE ESTOQUE (Visual) ---
+                if consumo_mes > 0:
+                    duracao_val = atual / consumo_mes
+                    if duracao_val > 120: 
+                        duracao_f = "> 120 meses"
+                    else:
+                        duracao_f = f"{duracao_val:.1f} meses"
                 else:
-                    duracao_f = f"{duracao_val:.1f} meses"
-            else:
-                if atual > 0:
-                    duracao_f = "Sem Giro" # Tem estoque mas não vendeu
-                else:
-                    duracao_f = "---" # Zerado e sem venda
+                    if atual > 0:
+                        duracao_f = "Sem Giro" # Tem estoque mas não vendeu no período
+                    else:
+                        duracao_f = "---" # Zerado e sem venda
 
-            atual_f = f"{atual:.3f}"
-            total_comprado_f = f"{total_comprado:.3f}"
-            consumo_mes_f = f"{consumo_mes:.3f}"
-            umd_f = f"{umd:.3f}"
-            sugestao_f = f"{sugestao_compra:.3f}"
+                # Formatação para string (3 casas decimais)
+                atual_f = f"{atual:.3f}"
+                total_comprado_f = f"{total_comprado:.3f}"
+                consumo_mes_f = f"{consumo_mes:.3f}"
+                umd_f = f"{umd:.3f}"
+                sugestao_f = f"{sugestao_compra:.3f}"
 
-            # Insere na tabela com a nova coluna
-            self.tree_sugestao.insert("", "end", values=(
-                nome, un, atual_f, total_comprado_f, consumo_mes_f, umd_f, duracao_f, sugestao_f, status
-            ), iid=item['ProdutoID'])
+                # Insere na Treeview
+                self.tree_sugestao.insert("", "end", values=(
+                    nome, un, atual_f, total_comprado_f, consumo_mes_f, umd_f, duracao_f, sugestao_f, status
+                ), iid=item['ProdutoID'])
 
         except Exception as e:
-            logger.error(f"Erro ao gerar sugestão de compra por período: {e}", exc_info=True)
-            messagebox.showerror("Erro de Banco", f"Falha ao gerar relatório:\n{e}", parent=self.root)
+            logger.error(f"Erro ao gerar sugestão de compra (Frontend): {e}", exc_info=True)
+            messagebox.showerror("Erro de Processamento", f"Falha ao exibir relatório:\n{e}", parent=self.root)
 
     def popular_combos_contagem_sugestao(self):
         """Atualiza os combos da Aba 5 com os dados mais recentes da Aba 4."""
