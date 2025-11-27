@@ -5795,7 +5795,9 @@ def resetar_dados_estoque_completo():
             conn.close()
     return False
 
-# (Função removida - código vazio)
+# ===================================================================
+# == MÓDULO DE GERENCIAMENTO DE VÍNCULOS (DE/PARA) ==================
+# ===================================================================
 
 def listar_todos_vinculos_detalhado():
     """
@@ -5827,3 +5829,41 @@ def listar_todos_vinculos_detalhado():
         finally:
             conn.close()
     return []
+
+def atualizar_vinculo_existente(vinculo_id, novo_produto_id, novo_fator):
+    """Atualiza o Produto Mestre e o Fator de um vínculo existente."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                UPDATE ProdutosFornecedor 
+                SET ProdutoID = ?, FatorConversao = ? 
+                WHERE ProdutoFornecedorID = ?
+            """
+            cursor.execute(sql, novo_produto_id, novo_fator, vinculo_id)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Erro ao atualizar vínculo ID {vinculo_id}: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
+
+def excluir_vinculo_existente(vinculo_id):
+    """Exclui um vínculo DE/PARA."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "DELETE FROM ProdutosFornecedor WHERE ProdutoFornecedorID = ?"
+            cursor.execute(sql, vinculo_id)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Erro ao excluir vínculo ID {vinculo_id}: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
