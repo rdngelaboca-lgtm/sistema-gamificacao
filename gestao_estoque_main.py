@@ -1462,15 +1462,31 @@ class AppGestaoEstoque:
 
         def carregar_lista(filtro=""):
             for i in tree_vinculos.get_children(): tree_vinculos.delete(i)
-            dados = database.listar_todos_vinculos_detalhado()
+            
+            try:
+                dados = database.listar_todos_vinculos_detalhado()
+                if not dados:
+                    # Se não houver dados, não faz nada (lista fica vazia mas sem erro)
+                    print("Nenhum vínculo encontrado no banco.")
+                    return
 
-            for item in dados:
-                # item = (ID, Fornecedor, DescXML, NomeMestre, Fator)
-                texto_busca = f"{item[2]} {item[3]}".lower()
-                if not filtro or filtro.lower() in texto_busca:
-                    fator_val = item[4] if item[4] else 1.0
-                    fator_fmt = f"{fator_val:.2f}".replace('.', ',')
-                    tree_vinculos.insert("", "end", values=(item[0], item[1], item[2], item[3], fator_fmt))
+                for item in dados:
+                    # item = (ID, Fornecedor, DescXML, NomeMestre, Fator)
+                    
+                    # Proteção para campos nulos
+                    desc_xml = item[2] if item[2] else "Sem Descrição"
+                    nome_mestre = item[3] if item[3] else "Sem Nome"
+                    
+                    texto_busca = f"{desc_xml} {nome_mestre}".lower()
+                    
+                    if not filtro or filtro.lower() in texto_busca:
+                        # Tratamento seguro para o fator
+                        fator_val = item[4] if item[4] is not None else 1.0
+                        fator_fmt = f"{fator_val:.2f}".replace('.', ',')
+                        
+                        tree_vinculos.insert("", "end", values=(item[0], item[1], desc_xml, nome_mestre, fator_fmt))
+            except Exception as e:
+                messagebox.showerror("Erro de Carregamento", f"Falha ao ler os vínculos: {e}", parent=popup)
 
         entry_filtro.bind("<KeyRelease>", lambda e: carregar_lista(entry_filtro.get()))
 
