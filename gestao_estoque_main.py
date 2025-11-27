@@ -1134,10 +1134,15 @@ class AppGestaoEstoque:
                 
                 nome = item['NomeProduto']
                 un = item['Unidade']
-                # CORREÇÃO: Garantia final de tipos para cálculo seguro na UI
-                atual = Decimal(str(item['EstoqueAtual']))
-                umd = Decimal(str(item['UsoMedioDiario']))
-                minimo = Decimal(str(item['EstoqueMinimo']))
+                # CORREÇÃO: Tratamento robusto para evitar erro com valores Nulos/None vindos de produtos deletados
+                # Se o valor for None, assume 0 para permitir o cálculo sem travar o sistema.
+                val_atual = item['EstoqueAtual'] if item['EstoqueAtual'] is not None else 0
+                val_umd = item['UsoMedioDiario'] if item['UsoMedioDiario'] is not None else 0
+                val_min = item['EstoqueMinimo'] if item['EstoqueMinimo'] is not None else 0
+
+                atual = Decimal(str(val_atual))
+                umd = Decimal(str(val_umd))
+                minimo = Decimal(str(val_min))
                 status = item['Status']
                 total_comprado = item['TotalComprado']
                 consumo_mes = umd * 30
