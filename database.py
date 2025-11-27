@@ -5294,12 +5294,18 @@ def gerar_sugestao_por_periodo(contagem_id_inicio, contagem_id_fim):
                      pass # Aceita mesmo dia
                  else:
                     raise Exception("A Data da Contagem Final deve ser posterior à Inicial.")
-
         # 3. Busca os ITENS da Contagem FINAL (Estoque Atual Real)
+        # CORREÇÃO: Uso de LEFT JOIN para trazer itens mesmo se o Produto Mestre tiver sido deletado.
+        # ISNULL garante que o sistema não quebre ao tentar ler o nome ou unidade.
         sql_itens_fim = """
-            SELECT P.ProdutoID, P.NomeProduto, P.UnidadeMedida, P.EstoqueMinimo, IC.QuantidadeContada
+            SELECT 
+                IC.ProdutoID, 
+                ISNULL(P.NomeProduto, 'PRODUTO DELETADO (ID: ' + CAST(IC.ProdutoID AS VARCHAR) + ')') as NomeProduto, 
+                ISNULL(P.UnidadeMedida, 'UN') as UnidadeMedida, 
+                ISNULL(P.EstoqueMinimo, 0) as EstoqueMinimo, 
+                IC.QuantidadeContada
             FROM ItensContagemEstoque IC
-            JOIN ProdutosEstoque P ON IC.ProdutoID = P.ProdutoID
+            LEFT JOIN ProdutosEstoque P ON IC.ProdutoID = P.ProdutoID
             WHERE IC.ContagemID = ?
         """
         cursor.execute(sql_itens_fim, contagem_id_fim)
@@ -5391,7 +5397,7 @@ def gerar_sugestao_por_periodo(contagem_id_inicio, contagem_id_fim):
     finally:
         if conn:
             conn.close()
-            
+
 def buscar_produto_mestre_por_nome(nome_produto):
     
     """Busca um produto mestre pelo seu nome exato e retorna o ID."""
