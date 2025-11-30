@@ -1367,8 +1367,6 @@ def _get_date_part(dt_object):
         return dt_object.date()
     return dt_object # Se já for um objeto date
 
-# Em database.py, SUBSTITUA a função calcular_ranking_desempenho por esta versão com filtro:
-
 def calcular_ranking_desempenho(data_final_calculo=None, setor_filtro=None): # <<< NOVO PARÂMETRO
     """
     Calcula o ranking com SCORE HÍBRIDO, filtrado opcionalmente por setor.
@@ -1377,11 +1375,12 @@ def calcular_ranking_desempenho(data_final_calculo=None, setor_filtro=None): # <
     conn = get_db_connection()
     if not conn: return []
 
-    PESO_A_DESEMPENHO = 0.7
-    PESO_B_PONTOS_BRUTOS = 0.3
+    PESO_A_DESEMPENHO = 0.5
+    PESO_B_PONTOS_BRUTOS = 0.5
 
     try:
         cursor = conn.cursor()
+        # Busca todas as atribuições, incluindo dados do funcionário
         sql_tarefas_atribuidas = """
             SELECT F.FuncionarioID, F.NomeCompleto, F.Cargo, F.DiaDeFolga, -- <<< Adicionado F.Cargo
                    TA.AtribuicaoID, TA.TipoFrequencia, TA.ValorFrequencia,
@@ -1392,24 +1391,28 @@ def calcular_ranking_desempenho(data_final_calculo=None, setor_filtro=None): # <
             LEFT JOIN Tarefas T ON TA.TarefaID = T.TarefaID
             WHERE TA.AtribuicaoID IS NOT NULL
             ORDER BY F.FuncionarioID
-        """ #
-        cursor.execute(sql_tarefas_atribuidas) #
-        todas_as_atribuicoes = cursor.fetchall() #
+        """ 
+        cursor.execute(sql_tarefas_atribuidas) 
+        todas_as_atribuicoes = cursor.fetchall() 
 
-        data_final = data_final_calculo if data_final_calculo else date.today() #
-        inicio_mes = data_final.replace(day=1) #
+        data_final = data_final_calculo if data_final_calculo else date.today() 
+        inicio_mes = data_final.replace(day=1) 
 
-        ranking_parcial = [] #
+        ranking_parcial = [] 
 
         # --- FILTRAGEM INICIAL POR SETOR ---
-        funcionarios_todos = listar_funcionarios() #
+        funcionarios_todos = listar_funcionarios() 
         funcionarios_filtrados = []
-        if setor_filtro == 'Cozinha':
+
+        # Normaliza o filtro para minúsculas para comparação segura
+        filtro_norm = setor_filtro.lower() if setor_filtro else None
+
+        if filtro_norm == 'cozinha':
             # Filtro 1: Apenas quem tem 'Cozinha' no cargo
-            funcionarios_filtrados = [f for f in funcionarios_todos if f.Cargo and 'Cozinha' in f.Cargo]
-        elif setor_filtro == 'Loja':
+            funcionarios_filtrados = [f for f in funcionarios_todos if f.Cargo and 'cozinha' in f.Cargo.lower()]
+        elif filtro_norm == 'loja':
             # Filtro 2: Apenas quem tem 'Loja' OU 'Atendimento' no cargo
-            funcionarios_filtrados = [f for f in funcionarios_todos if f.Cargo and ('Loja' in f.Cargo or 'Atendimento' in f.Cargo)]
+            funcionarios_filtrados = [f for f in funcionarios_todos if f.Cargo and ('loja' in f.Cargo.lower() or 'atendimento' in f.Cargo.lower())]
         else: # Nenhum filtro ou filtro 'Geral'
             funcionarios_filtrados = funcionarios_todos
 
@@ -1417,93 +1420,119 @@ def calcular_ranking_desempenho(data_final_calculo=None, setor_filtro=None): # <
 
         if not funcionarios_filtrados: return [] # Retorna vazio se o setor não tiver funcionários
 
-        atribuicoes_por_funcionario = {} #
-        # Cria a estrutura apenas para os funcionários filtrados
+        # Cria mapa de dados apenas para os funcionários filtrados
+        atribuicoes_por_funcionario = {} 
         for func in funcionarios_filtrados:
              atribuicoes_por_funcionario[func.FuncionarioID] = {
                 'NomeCompleto': func.NomeCompleto,
-                'Cargo': func.Cargo, # Guarda o cargo
+                'Cargo': func.Cargo, 
                 'DiaDeFolga': func.DiaDeFolga,
                 'tarefas': []
-            } #
+            } 
 
         # Preenche com as atribuições apenas dos funcionários filtrados
         for atribuicao in todas_as_atribuicoes:
             if atribuicao.FuncionarioID in atribuicoes_por_funcionario:
-                atribuicoes_por_funcionario[atribuicao.FuncionarioID]['tarefas'].append(atribuicao) #
+                atribuicoes_por_funcionario[atribuicao.FuncionarioID]['tarefas'].append(atribuicao) 
 
-                # O cálculo de pontos possíveis e ganhos agora só roda para os funcionários filtrados
+        # Loop de Cálculo
         for func_id, dados in atribuicoes_por_funcionario.items():
-            pontos_possiveis_total = 0 #
-            # --- Início da Lógica de Cálculo de Pontos Possíveis (EXISTENTE, SEM ALTERAÇÃO) ---
-            # (Itera sobre tarefas, verifica frequência, datas, folga, etc.)
+            pontos_possiveis_total = 0 
+
+            # --- Lógica de Cálculo de Pontos Possíveis (REVISADA) ---
             for tarefa in dados['tarefas']:
+                # 1. Tarefas Pontuais (Única ou GrupoCompetitiva)
                 if tarefa.TipoFrequencia in ('GrupoCompetitiva', 'Unica'):
                     data_ref = tarefa.DataAceite if tarefa.TipoFrequencia == 'GrupoCompetitiva' else tarefa.DataInicioVigencia
-                    if data_ref and inicio_mes <= _get_date_part(data_ref) <= data_final:
-                        # Considera apenas se a atribuição estava ativa no período
-                        data_fim_vigencia = _get_date_part(tarefa.DataFimVigencia) if tarefa.DataFimVigencia else data_final # Usa data_fim se for nulo
-                        if data_fim_vigencia >= inicio_mes: # Garante que não encerrou antes do período começar
+                    # Verifica se a data de referência existe e está dentro do mês
+                    if data_ref:
+                        dt_ref_date = _get_date_part(data_ref)
+                        if inicio_mes <= dt_ref_date <= data_final:
                             pontos_possiveis_total += tarefa.Pontos
                     continue
+
+                # 2. Tarefas Recorrentes (Diária, Semanal, Mensal)
                 dias_ocorrencia = 0
+
+                # Define vigência da tarefa
                 start_date_tarefa = _get_date_part(tarefa.DataInicioVigencia) if tarefa.DataInicioVigencia else inicio_mes
                 end_date_tarefa = _get_date_part(tarefa.DataFimVigencia) if tarefa.DataFimVigencia else data_final
+
+                # Intersecção: O período válido é a sobreposição entre (Vigência da Tarefa) e (Mês Atual)
                 start_date_calc = max(start_date_tarefa, inicio_mes)
                 end_date_calc = min(end_date_tarefa, data_final)
+
+                # Se a tarefa começou depois do fim do mês ou acabou antes do início, ignora
                 if end_date_calc < start_date_calc: continue
-                for dia_atual in (start_date_calc + timedelta(days=n) for n in range((end_date_calc - start_date_calc).days + 1)):
+
+                # Itera dia a dia no período válido
+                for n in range((end_date_calc - start_date_calc).days + 1):
+                    dia_atual = start_date_calc + timedelta(days=n)
+
+                    # Verifica Folga (SQL: 1=Dom ... 7=Sab)
                     dia_da_semana_sql = (dia_atual.weekday() + 1) % 7 + 1
-                    if str(dia_da_semana_sql) == str(dados['DiaDeFolga']): continue # PULA O DIA SE FOR FOLGA!
-                    if tarefa.TipoFrequencia == 'Diaria': dias_ocorrencia += 1
+                    if str(dia_da_semana_sql) == str(dados['DiaDeFolga']): 
+                        continue # PULA O DIA SE FOR FOLGA!
+
+                    # Verifica Frequência
+                    if tarefa.TipoFrequencia == 'Diaria': 
+                        dias_ocorrencia += 1
                     elif tarefa.TipoFrequencia == 'Semanal':
-                        if str(dia_da_semana_sql) == str(tarefa.ValorFrequencia): dias_ocorrencia += 1
+                        if str(dia_da_semana_sql) == str(tarefa.ValorFrequencia): 
+                            dias_ocorrencia += 1
                     elif tarefa.TipoFrequencia == 'Mensal':
-                        if dia_atual.day == int(tarefa.ValorFrequencia): dias_ocorrencia += 1
+                        if dia_atual.day == int(tarefa.ValorFrequencia): 
+                            dias_ocorrencia += 1
+
                 pontos_possiveis_total += dias_ocorrencia * tarefa.Pontos
-            # --- Fim da Lógica de Cálculo de Pontos Possíveis ---
+            # --- Fim da Lógica Revisada ---
 
-            # --- CORREÇÃO APLICADA AQUI ---
             # 1. Calcula os pontos ganhos APENAS de tarefas regulares para o PERCENTUAL
-            pontos_ganhos_regulares = calcular_pontos_ganhos_tarefas_regulares(func_id, inicio_mes, data_final) # <<< USA A NOVA FUNÇÃO
+            pontos_ganhos_regulares = calcular_pontos_ganhos_tarefas_regulares(func_id, inicio_mes, data_final) 
 
-            # 2. Calcula o percentual usando os pontos regulares
-            percentual_desempenho = (pontos_ganhos_regulares / pontos_possiveis_total) * 100 if pontos_possiveis_total > 0 else 0
+            # 2. Calcula o percentual (Proteção contra divisão por zero)
+            if pontos_possiveis_total > 0:
+                # Trava em 100% caso haja bônus extras não mapeados que excedam o possível
+                percentual_desempenho = min((pontos_ganhos_regulares / pontos_possiveis_total) * 100, 100.0)
+            else:
+                percentual_desempenho = 0.0
 
             # 3. Calcula os pontos ganhos TOTAIS (incluindo bônus) para a COLUNA "Pontos (Esforço)"
-            pontos_ganhos_totais = calcular_pontos_ganhos_no_periodo(func_id, inicio_mes, data_final) # <<< USA A FUNÇÃO ORIGINAL
-            # --- FIM DA CORREÇÃO ---
+            pontos_ganhos_totais = calcular_pontos_ganhos_no_periodo(func_id, inicio_mes, data_final) 
 
             ranking_parcial.append({
-                'FuncionarioID': func_id, 'NomeCompleto': dados['NomeCompleto'],
-                'PontosGanhos': pontos_ganhos_totais, # <<< Exibe o total (com bônus)
+                'FuncionarioID': func_id, 
+                'NomeCompleto': dados['NomeCompleto'],
+                'PontosGanhos': pontos_ganhos_totais, 
                 'PontosPossiveis': pontos_possiveis_total,
-                'Desempenho': round(percentual_desempenho, 2) # <<< Exibe o percentual (sem bônus, <= 100%)
+                'Desempenho': round(percentual_desempenho, 2)
             })
 
-        if not ranking_parcial: return [] #
+        if not ranking_parcial: return [] 
 
-        # --- AJUSTE NO CÁLCULO DO MAX ---
-        # Calcula o máximo de pontos ganhos APENAS DENTRO DO GRUPO FILTRADO
-        max_pontos_ganhos_no_setor = max(p['PontosGanhos'] for p in ranking_parcial) if any(p['PontosGanhos'] for p in ranking_parcial) else 1
-        # --------------------------------
+        # Calcula o máximo de pontos ganhos APENAS DENTRO DO GRUPO FILTRADO para normalização
+        max_pontos_ganhos_no_setor = max((p['PontosGanhos'] for p in ranking_parcial), default=1)
+        if max_pontos_ganhos_no_setor == 0: max_pontos_ganhos_no_setor = 1
 
-        ranking_final = [] #
+        ranking_final = [] 
         for dados_func in ranking_parcial:
-            # Usa o máximo do setor para normalizar o esforço
-            percentual_pontos_brutos = (dados_func['PontosGanhos'] / max_pontos_ganhos_no_setor) * 100 #
-            score_hibrido = (dados_func['Desempenho'] * PESO_A_DESEMPENHO) + (percentual_pontos_brutos * PESO_B_PONTOS_BRUTOS) #
-            dados_func['ScoreHibrido'] = round(score_hibrido, 2) #
-            ranking_final.append(dados_func) #
+            # Normaliza o esforço (0 a 100 baseado no líder do setor)
+            percentual_pontos_brutos = (dados_func['PontosGanhos'] / max_pontos_ganhos_no_setor) * 100 
 
-        ranking_ordenado = sorted(ranking_final, key=lambda x: x['ScoreHibrido'], reverse=True) #
-        return ranking_ordenado #
+            # Fórmula Híbrida
+            score_hibrido = (dados_func['Desempenho'] * PESO_A_DESEMPENHO) + (percentual_pontos_brutos * PESO_B_PONTOS_BRUTOS) 
+
+            dados_func['ScoreHibrido'] = round(score_hibrido, 2) 
+            ranking_final.append(dados_func) 
+
+        ranking_ordenado = sorted(ranking_final, key=lambda x: x['ScoreHibrido'], reverse=True) 
+        return ranking_ordenado 
 
     except Exception as e:
-        logger.error(f"ERRO ao calcular ranking de desempenho HÍBRIDO com filtro '{setor_filtro}': {e}") #
-        return [] #
+        logger.error(f"ERRO ao calcular ranking de desempenho HÍBRIDO com filtro '{setor_filtro}': {e}", exc_info=True) 
+        return [] 
     finally:
-        if conn: conn.close() #
+        if conn: conn.close()
 
 def salvar_historico_ranking(ranking_do_mes):
     """Salva os resultados finais do ranking de um mês na tabela de histórico."""
