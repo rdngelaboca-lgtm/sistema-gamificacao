@@ -1518,6 +1518,7 @@ class App:
 
         self.lista_relatorios.insert(tk.END, "Pendências Recorrentes")
         self.lista_relatorios.insert(tk.END, "Análise de Tarefas")
+        self.lista_relatorios.insert(tk.END, "Resgates do Mês (Consolidado)")
         self.lista_relatorios.bind('<<ListboxSelect>>', self.on_report_select)
 
         self.lista_relatorios.select_set(0)
@@ -1545,6 +1546,8 @@ class App:
             self.construir_ui_relatorio_pendencias()
         elif nome_relatorio == "Análise de Tarefas":
             self.construir_ui_relatorio_analise_tarefas()
+        elif nome_relatorio == "Resgates do Mês (Consolidado)":
+            self.construir_ui_relatorio_resgates()
 
     def criar_aba_feedbacks(self):
         """Cria todos os widgets para a aba de visualização de feedbacks."""
@@ -2463,6 +2466,72 @@ class App:
             motivo_limpo = just.MotivoRecusa.replace("Não aplicável: ", "", 1)
             data_formatada = just.DataEnvio.strftime('%d/%m/%Y %H:%M')
             tree_justificativas.insert("", "end", values=(data_formatada, just.NomeCompleto, motivo_limpo))
+
+    def construir_ui_relatorio_resgates(self):
+        """Constrói a interface para o relatório de gastos na loja."""
+        container = self.frame_conteudo_relatorio
+
+        # Título
+        lbl_titulo = ttk.Label(container, text="Relatório de Resgates - Mês Atual", font=("Arial", 16))
+        lbl_titulo.pack(pady=(10, 5))
+
+        # Subtítulo explicativo
+        mes_atual_str = datetime.now().strftime("%B/%Y")
+        lbl_sub = ttk.Label(container, text=f"Total de pontos gastos por funcionário em {mes_atual_str}", foreground="gray")
+        lbl_sub.pack(pady=(0, 15))
+
+        # Botão de Atualizar (caso alguém faça um resgate enquanto a tela está aberta)
+        btn_atualizar = ttk.Button(container, text="🔄 Atualizar Dados", command=self.executar_relatorio_resgates)
+        btn_atualizar.pack(anchor='w', padx=10, pady=5)
+
+        # Tabela
+        cols = ('Funcionário', 'Qtd. Itens Resgatados', 'Total Gasto (Pontos)')
+        self.tree_relatorio_resgates = ttk.Treeview(container, columns=cols, show='headings')
+
+        self.tree_relatorio_resgates.heading('Funcionário', text='Funcionário')
+        self.tree_relatorio_resgates.column('Funcionário', width=300)
+
+        self.tree_relatorio_resgates.heading('Qtd. Itens Resgatados', text='Qtd. Itens')
+        self.tree_relatorio_resgates.column('Qtd. Itens Resgatados', width=100, anchor='center')
+
+        self.tree_relatorio_resgates.heading('Total Gasto (Pontos)', text='Total Gasto (Pontos)')
+        self.tree_relatorio_resgates.column('Total Gasto (Pontos)', width=150, anchor='center')
+
+        scrollbar = ttk.Scrollbar(container, orient="vertical", command=self.tree_relatorio_resgates.yview)
+        self.tree_relatorio_resgates.configure(yscrollcommand=scrollbar.set)
+
+        self.tree_relatorio_resgates.pack(side="left", fill="both", expand=True, padx=(10, 0), pady=10)
+        scrollbar.pack(side="right", fill="y", padx=(0, 10), pady=10)
+
+        # Carrega os dados automaticamente ao abrir
+        self.executar_relatorio_resgates()
+
+    def executar_relatorio_resgates(self):
+        """Busca os dados no banco e preenche a tabela de resgates."""
+        # Limpa a tabela
+        for i in self.tree_relatorio_resgates.get_children():
+            self.tree_relatorio_resgates.delete(i)
+
+        # Busca dados
+        resultados = database.relatorio_resgates_consolidado_mes()
+
+        total_geral_pontos = 0
+
+        if not resultados:
+            self.tree_relatorio_resgates.insert("", "end", values=("Nenhum resgate aprovado neste mês.", "", ""))
+        else:
+            for row in resultados:
+                # row = (Nome, Qtd, TotalPontos)
+                self.tree_relatorio_resgates.insert("", "end", values=tuple(row))
+                total_geral_pontos += row[2] # Soma o total da coluna pontos
+
+            # Adiciona uma linha final de totais
+            self.tree_relatorio_resgates.insert("", "end", values=("", "", "")) # Linha vazia separadora
+            self.tree_relatorio_resgates.insert("", "end", values=("TOTAL GERAL DO MÊS", "", f"{total_geral_pontos}"), tags=('total',))
+
+            # Destaca a linha de total (configuração visual básica)
+            # Nota: para tags funcionarem perfeitamente no Treeview padrão do Windows, às vezes a cor de fundo não aplica, mas a fonte sim.
+            self.tree_relatorio_resgates.tag_configure('total', font=('Arial', 10, 'bold'))
     
     def construir_ui_relatorio_analise_tarefas(self):
         """Cria os widgets para o relatório de Análise de Tarefas."""
