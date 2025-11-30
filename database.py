@@ -5934,3 +5934,34 @@ def excluir_vinculo_existente(vinculo_id):
         finally:
             conn.close()
     return False
+
+def relatorio_resgates_consolidado_mes():
+    """
+    Retorna o total de pontos gastos por funcionário em resgates aprovados no mês corrente.
+    Colunas: NomeCompleto, QtdItens, TotalPontos
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT 
+                    F.NomeCompleto,
+                    COUNT(R.ResgateID) as QtdItens,
+                    SUM(R.PontosGastos) as TotalPontos
+                FROM Resgates R
+                JOIN Funcionarios F ON R.FuncionarioID = F.FuncionarioID
+                WHERE R.Status = 'Aprovado'
+                  AND MONTH(R.DataAprovacao) = MONTH(GETDATE())
+                  AND YEAR(R.DataAprovacao) = YEAR(GETDATE())
+                GROUP BY F.NomeCompleto
+                ORDER BY TotalPontos DESC
+            """
+            cursor.execute(sql)
+            return cursor.fetchall()
+        except Exception as e:
+            logger.error(f"ERRO ao gerar relatório de resgates do mês: {e}", exc_info=True)
+            return []
+        finally:
+            conn.close()
+    return []
