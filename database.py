@@ -1370,7 +1370,7 @@ def _get_date_part(dt_object):
 def calcular_ranking_desempenho(data_final_calculo=None, setor_filtro=None): # <<< NOVO PARÂMETRO
     """
     Calcula o ranking com SCORE HÍBRIDO, filtrado opcionalmente por setor.
-    PESOS: 70% Desempenho (Confiabilidade), 30% Pontos Brutos (Esforço).
+    PESOS: 50% Desempenho (Confiabilidade), 50% Pontos Brutos (Esforço).
     """
     conn = get_db_connection()
     if not conn: return []
