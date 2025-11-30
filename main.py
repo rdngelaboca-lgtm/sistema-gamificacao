@@ -1464,40 +1464,41 @@ class App:
         self.atualizar_ranking() # - Chama ao iniciar a aba
 
 
-    def atualizar_ranking(self, event=None):
-        # Limpa a tabela antes de tentar buscar novos dados
-        for i in self.tree_ranking.get_children(): self.tree_ranking.delete(i)
+def atualizar_ranking(self, event=None): # <<< CORREÇÃO: Adicionado event=None para suportar o bind do Combobox
+    # Limpa a tabela antes de tentar buscar novos dados
+    for i in self.tree_ranking.get_children(): self.tree_ranking.delete(i)
 
-        try: # <<< ADICIONADO TRY >>>
-            setor_selecionado = self.combo_filtro_setor_ranking.get()
-            filtro_db = None
-            if setor_selecionado == 'Cozinha':
-                filtro_db = 'Cozinha'
-            elif setor_selecionado == 'Loja':
-                filtro_db = 'Loja'
-            # (O resto da função continua exatamente o mesmo...)
-            # --- Chamada ao banco DENTRO do try ---
-            ranking_data = database.calcular_ranking_desempenho(setor_filtro=filtro_db)
+    try:
+        # Captura o valor do filtro selecionado na interface
+        setor_selecionado = self.combo_filtro_setor_ranking.get()
 
-            if not ranking_data: # Adiciona feedback se não houver dados
-                self.tree_ranking.insert("", "end", values=("Sem dados para este filtro.", "", "", "", "", ""))
-            else:
-                for i, row in enumerate(ranking_data):
-                    posicao = f"{i+1}º"
-                    nome = row['NomeCompleto']
-                    score_final = f"{row['ScoreHibrido']}"
-                    desempenho = f"{row['Desempenho']}%"
-                    ganhos = row['PontosGanhos']
-                    possiveis = row['PontosPossiveis']
-                    self.tree_ranking.insert("", "end", values=(posicao, nome, score_final, desempenho, ganhos, possiveis))
+        # Converte o nome do combo para o parâmetro que o banco espera
+        filtro_db = None
+        if setor_selecionado == 'Cozinha':
+            filtro_db = 'Cozinha'
+        elif setor_selecionado == 'Loja':
+            filtro_db = 'Loja'
 
-        except Exception as e: # <<< ADICIONADO EXCEPT >>>
-            logger.exception(f"Erro ao atualizar o ranking na interface gráfica: {e}")
-            # Insere uma linha na tabela indicando o erro
-            self.tree_ranking.insert("", "end", values=("Erro ao carregar dados.", "", "", "", "", ""))
-            # Mostra uma messagebox para o usuário
-            messagebox.showerror("Erro de Ranking", f"Não foi possível carregar os dados do ranking:\n{e}", parent=self.root)
+        # Busca os dados filtrados
+        ranking_data = database.calcular_ranking_desempenho(setor_filtro=filtro_db)
 
+        if not ranking_data:
+            self.tree_ranking.insert("", "end", values=("Sem dados para este filtro.", "", "", "", "", ""))
+        else:
+            for i, row in enumerate(ranking_data):
+                posicao = f"{i+1}º"
+                nome = row['NomeCompleto']
+                score_final = f"{row['ScoreHibrido']}"
+                desempenho = f"{row['Desempenho']}%"
+                ganhos = row['PontosGanhos']
+                possiveis = row['PontosPossiveis']
+                self.tree_ranking.insert("", "end", values=(posicao, nome, score_final, desempenho, ganhos, possiveis))
+
+    except Exception as e:
+        logger.exception(f"Erro ao atualizar o ranking na interface gráfica: {e}")
+        self.tree_ranking.insert("", "end", values=("Erro ao carregar dados.", "", "", "", "", ""))
+        messagebox.showerror("Erro de Ranking", f"Não foi possível carregar os dados do ranking:\n{e}", parent=self.root)
+        
     def criar_aba_relatorios(self):
         frame_principal = ttk.Frame(self.frame_relatorios, padding="10")
         frame_principal.pack(fill=tk.BOTH, expand=True)
