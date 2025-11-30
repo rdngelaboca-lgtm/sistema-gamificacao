@@ -1844,15 +1844,31 @@ class App:
             messagebox.showerror("Erro de Formato", "O Horário de Notificação deve estar no formato HH:MM (ex: 08:30).")
             return # Impede o salvamento se o formato for inválido
         # --- FIM DA VALIDAÇÃO ---
-
+        # 1. Cria o funcionário (Insert padrão)
         database.adicionar_funcionario(nome, chat_id, cargo, horario, dia_folga_valor)
+        # 2. Atualiza o Verificador de Segurança (Se fornecido)
+        # Abordagem conservadora: Busca o ID recém-criado pelo ChatID (único) e faz update
+        verificador = self.entry_verificador_novo.get() if hasattr(self, 'entry_verificador_novo') else None
+
+        if verificador:
+            if len(verificador) == 3 and verificador.isdigit():
+                novo_func = database.buscar_funcionario_por_chat_id(chat_id)
+                if novo_func:
+                    database.atualizar_verificador_cpf(novo_func.FuncionarioID, verificador)
+            else:
+                messagebox.showwarning("Aviso", "Funcionário criado, mas o Verificador de CPF foi ignorado (deve ter 3 dígitos). Edite o cadastro depois.")
         messagebox.showinfo("Sucesso", f"Funcionário {nome} adicionado com sucesso!")
-        
+        # Limpeza dos campos
         self.entry_nome.delete(0, tk.END)
         self.entry_chat_id.delete(0, tk.END)
         self.entry_cargo.delete(0, tk.END)
         self.entry_horario.delete(0, tk.END); self.entry_horario.insert(0, "08:00")
         self.combo_folga.set('Sem Folga Definida')
+        if hasattr(self, 'entry_verificador_novo'): self.entry_verificador_novo.delete(0, tk.END)        # --- Campo Novo: Verificador CPF ---
+        ttk.Label(frame_direita_add, text="Verificador CPF (3 primeiros dígitos):").pack(pady=(10, 2))
+        self.entry_verificador_novo = ttk.Entry(frame_direita_add, width=10)
+        self.entry_verificador_novo.pack()
+        # -----------------------------------
         
         self.atualizar_todas_as_listas()
 
@@ -2167,13 +2183,11 @@ class App:
                         f"Você ganhou um bônus de <b>{conquista.PontosBonus}</b> pontos!"
                     )
 
-            # --- CORREÇÃO ADICIONADA AQUI ---
-                # Adiciona os pontos bônus da conquista ao saldo geral do funcionário.
-                # Esta linha estava faltando (comparado ao telegram_bot.py).
-                if conquista.PontosBonus > 0:
-                    database.adicionar_pontos_ao_saldo(entrega_atual.FuncionarioID, conquista.PontosBonus)
-                # --- FIM DA CORREÇÃO ---
-
+                    # --- CORREÇÃO: Lógica movida para DENTRO do loop ---
+                    # Agora cada conquista soma seus pontos ao saldo individualmente.
+                    if conquista.PontosBonus > 0:
+                        database.adicionar_pontos_ao_saldo(entrega_atual.FuncionarioID, conquista.PontosBonus)
+                    # ---------------------------------------------------
             notificador_telegram.enviar_mensagem(entrega_atual.ChatIDTelegram, texto_notificacao) # Pode falhar
             messagebox.showinfo("Sucesso", "Entrega aprovada e pontuação atribuída!", parent=self.root) # Adicionado parent
             self.atualizar_todas_as_listas() # Pode falhar
@@ -2950,40 +2964,6 @@ class App:
             btn_salvar = ttk.Button(frame, text="Salvar Alterações", command=salvar_edicao)
             btn_salvar.pack(pady=15)
             entry_novo_valor.bind("<Return>", lambda e: salvar_edicao())
-
-    def salvar_edicao(meta_id_fixo=meta_id_contexto):
-        # Define a string de valor ANTES do try para que esteja disponível no except
-        nova_valor_str = entry_novo_valor.get().replace(",", ".")
-
-        try:
-            novo_valor = float(nova_valor_str)
-            data_db_format = datetime.strptime(data_lancamento_str, '%d/%m/%Y').strftime('%Y-%m-%d')
-
-            # Usa o ID fixo recebido como argumento
-            id_funcionario_logado = 2 
-
-            sucesso, resultado = database.lancar_apuracao_diaria(meta_id_fixo, data_db_format, novo_valor, id_funcionario_logado)
-
-            if sucesso:
-                apuracao_id = resultado
-                messagebox.showinfo("Sucesso", "Apuração atualizada com sucesso!", parent=popup)
-                popup.destroy()
-                # Recarrega a lista principal
-                self.on_meta_principal_selecionada(None) 
-
-                # Thread para não travar a UI enquanto o bot envia mensagens
-                def tarefa_background():
-                    database.verificar_e_premiar_meta_diaria(apuracao_id, data_db_format, novo_valor, meta_id_fixo)
-                threading.Thread(target=tarefa_background, daemon=True).start()
-            else:
-                messagebox.showerror("Erro", f"Não foi possível atualizar a apuração no banco.\nDetalhe: {resultado}", parent=popup)
-
-        except ValueError:
-            messagebox.showerror("Erro de Formato", f"O valor '{nova_valor_str}' não é um número válido.", parent=popup)
-        except Exception as e:
-            messagebox.showerror("Erro Inesperado", f"Ocorreu um erro: {e}", parent=popup)
-
-    btn_salvar = ttk.Button(frame, text="Salvar Alterações", command=salvar_edicao)
 
     def excluir_apuracao_selecionada(self):
         """Exclui o registro de apuração diária selecionado na lista de detalhes."""
