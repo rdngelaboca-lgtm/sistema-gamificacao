@@ -2879,40 +2879,78 @@ class App:
 
         ttk.Button(frame, text="Salvar", command=salvar).pack(pady=10)
 
-
     def abrir_janela_edicao_apuracao(self, event):
-        # [CORREÇÃO] Captura o contexto da Meta Principal ANTES de abrir a janela e criar dependências.
-        # Isso garante que editaremos a meta correta mesmo se a seleção mudar no fundo.
-        selecao_meta_principal = self.tree_metas_principais.selection()
-        if not selecao_meta_principal:
-            return
-        meta_id_contexto = self.tree_metas_principais.item(selecao_meta_principal[0], 'values')[0]
-        """Abre um pop-up para editar o valor de um lançamento diário selecionado."""
-        selecionado = self.tree_detalhes_apuracoes.focus()
-        if not selecionado:
-            return
+            """Abre um pop-up para editar o valor de um lançamento diário selecionado."""
+            
+            # 1. [CRÍTICO] Captura o contexto da Meta Principal ANTES de tudo.
+            # Isso garante que a variável exista antes de definirmos a função interna.
+            selecao_meta_principal = self.tree_metas_principais.selection()
+            if not selecao_meta_principal:
+                return
+            # Pega o ID da meta (coluna 0) e guarda na variável
+            meta_id_contexto = self.tree_metas_principais.item(selecao_meta_principal[0], 'values')[0]
 
-        dados_apuracao = self.tree_detalhes_apuracoes.item(selecionado, 'values')
-        data_lancamento_str = dados_apuracao[0]
-        valor_antigo_str = dados_apuracao[1].replace(".", "").replace(",", ".")
+            # 2. Valida a seleção da apuração
+            selecionado = self.tree_detalhes_apuracoes.focus()
+            if not selecionado:
+                return
 
-        popup = Toplevel(self.root)
-        popup.title(f"Editar Lançamento de {data_lancamento_str}")
-        popup.geometry("350x200")
-        popup.transient(self.root) # Mantém na frente da janela principal
-        frame = ttk.Frame(popup, padding="15")
-        frame.pack(fill="both", expand=True)
+            dados_apuracao = self.tree_detalhes_apuracoes.item(selecionado, 'values')
+            data_lancamento_str = dados_apuracao[0]
+            valor_antigo_str = dados_apuracao[1].replace(".", "").replace(",", ".")
 
-        ttk.Label(frame, text=f"Data da Apuração: {data_lancamento_str}", font=("Arial", 10, "bold")).pack(pady=5)
+            # 3. Cria a Janela
+            popup = Toplevel(self.root)
+            popup.title(f"Editar Lançamento de {data_lancamento_str}")
+            popup.geometry("350x200")
+            popup.transient(self.root)
+            frame = ttk.Frame(popup, padding="15")
+            frame.pack(fill="both", expand=True)
 
-        ttk.Label(frame, text="Novo Valor Lançado (R$):").pack(pady=5)
-        entry_novo_valor = ttk.Entry(frame, justify="center")
-        entry_novo_valor.pack(pady=5, ipady=4)
-        entry_novo_valor.insert(0, valor_antigo_str)
-        entry_novo_valor.focus() # Foca no campo de texto
+            ttk.Label(frame, text=f"Data da Apuração: {data_lancamento_str}", font=("Arial", 10, "bold")).pack(pady=5)
 
-        
-        # [CORREÇÃO] Passamos meta_id_fixo como argumento padrão para 'congelar' o valor de meta_id_contexto neste momento
+            ttk.Label(frame, text="Novo Valor Lançado (R$):").pack(pady=5)
+            entry_novo_valor = ttk.Entry(frame, justify="center")
+            entry_novo_valor.pack(pady=5, ipady=4)
+            entry_novo_valor.insert(0, valor_antigo_str)
+            entry_novo_valor.focus()
+
+            # 4. Função Interna (Closure)
+            # Agora 'meta_id_contexto' JÁ EXISTE (foi criada no passo 1), então não dará erro.
+            def salvar_edicao(meta_id_fixo=meta_id_contexto):
+                nova_valor_str = entry_novo_valor.get().replace(",", ".")
+
+                try:
+                    novo_valor = float(nova_valor_str)
+                    data_db_format = datetime.strptime(data_lancamento_str, '%d/%m/%Y').strftime('%Y-%m-%d')
+
+                    # Usa o ID fixo que congelamos no argumento
+                    id_funcionario_logado = 2 
+
+                    sucesso, resultado = database.lancar_apuracao_diaria(meta_id_fixo, data_db_format, novo_valor, id_funcionario_logado)
+
+                    if sucesso:
+                        apuracao_id = resultado
+                        messagebox.showinfo("Sucesso", "Apuração atualizada com sucesso!", parent=popup)
+                        popup.destroy()
+                        self.on_meta_principal_selecionada(None) 
+                        
+                        # Thread para não travar a UI
+                        def tarefa_background():
+                            database.verificar_e_premiar_meta_diaria(apuracao_id, data_db_format, novo_valor, meta_id_fixo)
+                        threading.Thread(target=tarefa_background, daemon=True).start()
+                    else:
+                        messagebox.showerror("Erro", f"Não foi possível atualizar a apuração no banco.\nDetalhe: {resultado}", parent=popup)
+
+                except ValueError:
+                    messagebox.showerror("Erro de Formato", f"O valor '{nova_valor_str}' não é um número válido.", parent=popup)
+                except Exception as e:
+                    messagebox.showerror("Erro Inesperado", f"Ocorreu um erro: {e}", parent=popup)
+
+            btn_salvar = ttk.Button(frame, text="Salvar Alterações", command=salvar_edicao)
+            btn_salvar.pack(pady=15)
+            entry_novo_valor.bind("<Return>", lambda e: salvar_edicao())
+
     def salvar_edicao(meta_id_fixo=meta_id_contexto):
         # Define a string de valor ANTES do try para que esteja disponível no except
         nova_valor_str = entry_novo_valor.get().replace(",", ".")
