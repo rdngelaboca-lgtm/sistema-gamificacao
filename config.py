@@ -36,7 +36,7 @@ PASTA_DOCUMENTOS_RH = "documentos_rh_seguros"
 
 # --- CONFIGURAÇÕES DE REGRAS DE NEGÓCIO (GAMIFICAÇÃO) ---
 # Taxa para converter o saldo de pontos em valor monetário na loja.
-TAXA_CONVERSAO_PONTO_REAL = 0.02 # Ex: 1 ponto = R$ 0.02
+TAXA_CONVERSAO_PONTO_REAL = 0.03 # Ex: 1 ponto = R$ 0.02
 
 # ID do funcionário responsável por receber as tarefas geradas a partir de novos agendamentos.
 RESPONSAVEL_AGENDAMENTOS_ID = 3
