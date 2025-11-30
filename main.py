@@ -745,18 +745,16 @@ class App:
             funcionario_id = funcionario_selecionado.FuncionarioID
 
             tarefas_ativas = database.listar_atribuicoes_ativas_por_funcionario(funcionario_id) # Pode falhar
-
             for tarefa in tarefas_ativas:
                 self.tree_tarefas_funcionario.insert("", "end", values=tuple(tarefa))
-
-            self.notebook_funcionarios.select(self.notebook_funcionarios.tabs()[1])
+            # [CORREÇÃO] Removida a mudança forçada de aba para não interromper o fluxo do gestor
+            # self.notebook_funcionarios.select(self.notebook_funcionarios.tabs()[1])
         except KeyError as e: # <--- ADICIONADO EXCEPT ESPECÍFICO
              logger.error(f"Erro ao buscar dados do funcionário selecionado: {e}")
              messagebox.showerror("Erro Interno", f"Não foi possível encontrar os dados do funcionário selecionado na memória:\n{e}", parent=self.root)
         except Exception as e: # <--- ADICIONADO EXCEPT GENÉRICO
             logger.exception(f"Erro em on_funcionario_selecionado: {e}")
             messagebox.showerror("Erro", f"Não foi possível carregar as tarefas ativas do funcionário:\n{e}", parent=self.root)
-
 
     def criar_aba_funcionarios(self):
         main_frame = ttk.Frame(self.frame_funcionarios, padding="10")
@@ -1031,9 +1029,16 @@ class App:
 
         for i in self.tree_atr_tarefas.get_children():
             self.tree_atr_tarefas.delete(i)
+        # [CORREÇÃO] Captura o setor selecionado para manter a consistência do filtro
+        setor_selecionado = self.combo_filtro_setor.get()
+        filtro_db = setor_selecionado if setor_selecionado else None
+
         setores_nodes = {}
-        tarefas = database.listar_tarefas_para_atribuicao()
+        # Passa o filtro de setor para o banco junto com a busca textual local
+        tarefas = database.listar_tarefas_para_atribuicao(filtro_setor=filtro_db)
+
         for tarefa in tarefas:
+          
             if termo_busca not in tarefa.Titulo.lower():
                 continue # Pula para a próxima tarefa
 
@@ -1348,6 +1353,7 @@ class App:
         
         self.combo_filtro_setor = ttk.Combobox(frame_filtro_setor, state="readonly")
         self.combo_filtro_setor.grid(row=0, column=0, sticky="ew")
+        self.combo_filtro_setor.bind("<<ComboboxSelected>>", self.filtrar_tarefas_por_setor)
         
         btn_limpar_filtro = ttk.Button(frame_filtro_setor, text="Limpar Filtro", command=self.limpar_filtro_tarefas)
         btn_limpar_filtro.grid(row=0, column=1, padx=(5,0))
@@ -1464,63 +1470,63 @@ class App:
         self.atualizar_ranking() # - Chama ao iniciar a aba
 
 
-def atualizar_ranking(self, event=None): # <<< CORREÇÃO: Adicionado event=None para suportar o bind do Combobox
-    # Limpa a tabela antes de tentar buscar novos dados
-    for i in self.tree_ranking.get_children(): self.tree_ranking.delete(i)
+    def atualizar_ranking(self, event=None): # <<< CORREÇÃO: Adicionado event=None para suportar o bind do Combobox
+        # Limpa a tabela antes de tentar buscar novos dados
+        for i in self.tree_ranking.get_children(): self.tree_ranking.delete(i)
 
-    try:
-        # Captura o valor do filtro selecionado na interface
-        setor_selecionado = self.combo_filtro_setor_ranking.get()
+        try:
+            # Captura o valor do filtro selecionado na interface
+            setor_selecionado = self.combo_filtro_setor_ranking.get()
 
-        # Converte o nome do combo para o parâmetro que o banco espera
-        filtro_db = None
-        if setor_selecionado == 'Cozinha':
-            filtro_db = 'Cozinha'
-        elif setor_selecionado == 'Loja':
-            filtro_db = 'Loja'
+            # Converte o nome do combo para o parâmetro que o banco espera
+            filtro_db = None
+            if setor_selecionado == 'Cozinha':
+                filtro_db = 'Cozinha'
+            elif setor_selecionado == 'Loja':
+                filtro_db = 'Loja'
 
-        # Busca os dados filtrados
-        ranking_data = database.calcular_ranking_desempenho(setor_filtro=filtro_db)
+            # Busca os dados filtrados
+            ranking_data = database.calcular_ranking_desempenho(setor_filtro=filtro_db)
 
-        if not ranking_data:
-            self.tree_ranking.insert("", "end", values=("Sem dados para este filtro.", "", "", "", "", ""))
-        else:
-            for i, row in enumerate(ranking_data):
-                posicao = f"{i+1}º"
-                nome = row['NomeCompleto']
-                score_final = f"{row['ScoreHibrido']}"
-                desempenho = f"{row['Desempenho']}%"
-                ganhos = row['PontosGanhos']
-                possiveis = row['PontosPossiveis']
-                self.tree_ranking.insert("", "end", values=(posicao, nome, score_final, desempenho, ganhos, possiveis))
+            if not ranking_data:
+                self.tree_ranking.insert("", "end", values=("Sem dados para este filtro.", "", "", "", "", ""))
+            else:
+                for i, row in enumerate(ranking_data):
+                    posicao = f"{i+1}º"
+                    nome = row['NomeCompleto']
+                    score_final = f"{row['ScoreHibrido']}"
+                    desempenho = f"{row['Desempenho']}%"
+                    ganhos = row['PontosGanhos']
+                    possiveis = row['PontosPossiveis']
+                    self.tree_ranking.insert("", "end", values=(posicao, nome, score_final, desempenho, ganhos, possiveis))
 
-    except Exception as e:
-        logger.exception(f"Erro ao atualizar o ranking na interface gráfica: {e}")
-        self.tree_ranking.insert("", "end", values=("Erro ao carregar dados.", "", "", "", "", ""))
-        messagebox.showerror("Erro de Ranking", f"Não foi possível carregar os dados do ranking:\n{e}", parent=self.root)
-        
-    def criar_aba_relatorios(self):
-        frame_principal = ttk.Frame(self.frame_relatorios, padding="10")
-        frame_principal.pack(fill=tk.BOTH, expand=True)
-        frame_principal.columnconfigure(1, weight=1) # Coluna da direita (resultados) cresce
-        frame_principal.rowconfigure(0, weight=1)    # A linha inteira cresce
+        except Exception as e:
+            logger.exception(f"Erro ao atualizar o ranking na interface gráfica: {e}")
+            self.tree_ranking.insert("", "end", values=("Erro ao carregar dados.", "", "", "", "", ""))
+            messagebox.showerror("Erro de Ranking", f"Não foi possível carregar os dados do ranking:\n{e}", parent=self.root)
+            
+        def criar_aba_relatorios(self):
+            frame_principal = ttk.Frame(self.frame_relatorios, padding="10")
+            frame_principal.pack(fill=tk.BOTH, expand=True)
+            frame_principal.columnconfigure(1, weight=1) # Coluna da direita (resultados) cresce
+            frame_principal.rowconfigure(0, weight=1)    # A linha inteira cresce
 
-        frame_selecao = ttk.LabelFrame(frame_principal, text="Tipos de Relatório", padding="10")
-        frame_selecao.grid(row=0, column=0, sticky="ns", padx=(0, 10))
+            frame_selecao = ttk.LabelFrame(frame_principal, text="Tipos de Relatório", padding="10")
+            frame_selecao.grid(row=0, column=0, sticky="ns", padx=(0, 10))
 
-        self.lista_relatorios = tk.Listbox(frame_selecao, exportselection=False)
-        self.lista_relatorios.pack(fill=tk.Y, expand=True)
+            self.lista_relatorios = tk.Listbox(frame_selecao, exportselection=False)
+            self.lista_relatorios.pack(fill=tk.Y, expand=True)
 
-        self.lista_relatorios.insert(tk.END, "Pendências Recorrentes")
-        self.lista_relatorios.insert(tk.END, "Análise de Tarefas")
-        self.lista_relatorios.bind('<<ListboxSelect>>', self.on_report_select)
+            self.lista_relatorios.insert(tk.END, "Pendências Recorrentes")
+            self.lista_relatorios.insert(tk.END, "Análise de Tarefas")
+            self.lista_relatorios.bind('<<ListboxSelect>>', self.on_report_select)
 
-        self.lista_relatorios.select_set(0)
+            self.lista_relatorios.select_set(0)
 
-        self.frame_conteudo_relatorio = ttk.Frame(frame_principal)
-        self.frame_conteudo_relatorio.grid(row=0, column=1, sticky="nsew")
+            self.frame_conteudo_relatorio = ttk.Frame(frame_principal)
+            self.frame_conteudo_relatorio.grid(row=0, column=1, sticky="nsew")
 
-        self.on_report_select(None)
+            self.on_report_select(None)
 
     def on_report_select(self, event):
         """
@@ -2206,20 +2212,7 @@ def atualizar_ranking(self, event=None): # <<< CORREÇÃO: Adicionado event=None
     def limpar_detalhes_validacao(self):
         self.lbl_nome_funcionario.config(text="Funcionário: "); self.lbl_titulo_tarefa.config(text="Tarefa: "); self.lbl_imagem.config(image='')
         
-    def atualizar_ranking(self):
-        for i in self.tree_ranking.get_children(): self.tree_ranking.delete(i)
-        
-        ranking_data = database.calcular_ranking_desempenho()
-        
-        for i, row in enumerate(ranking_data):
-            posicao = f"{i+1}º"
-            nome = row['NomeCompleto']
-            score_final = f"{row['ScoreHibrido']}" # <<< NOVO DADO
-            desempenho = f"{row['Desempenho']}%"
-            ganhos = row['PontosGanhos']
-            possiveis = row['PontosPossiveis']
-            
-            self.tree_ranking.insert("", "end", values=(posicao, nome, score_final, desempenho, ganhos, possiveis))
+    # (Função duplicada removida. A versão correta com filtro já existe na linha ~1100 deste arquivo)
 
     def carregar_funcionarios_relatorio(self):
         funcionarios = database.listar_funcionarios(); self.dados_funcionarios_relatorio = {f"{f.NomeCompleto} (ID: {f.FuncionarioID})": f.FuncionarioID for f in funcionarios}
@@ -2731,6 +2724,9 @@ def atualizar_ranking(self, event=None): # <<< CORREÇÃO: Adicionado event=None
         self.lbl_progresso_percentual.pack(anchor="w", pady=5)
         self.lbl_projecao_vendas = ttk.Label(frame_resumo, text="Projeção Final: R$ 0,00", font=("Arial", 12, "italic"))
         self.lbl_projecao_vendas.pack(anchor="w", pady=(15, 5))
+        # Inicialização automática dos dados da aba
+        self.carregar_dados_metas()
+        self.atualizar_lista_lucros()
 
     def on_meta_principal_selecionada(self, event):
         """(VERSÃO V2 FINAL) Carrega o histórico, o resumo, a projeção E VERIFICA SE A META MENSAL FOI ATINGIDA."""
@@ -2916,41 +2912,40 @@ def atualizar_ranking(self, event=None): # <<< CORREÇÃO: Adicionado event=None
         entry_novo_valor.focus() # Foca no campo de texto
 
         
-        def salvar_edicao():
-            # Define a string de valor ANTES do try para que esteja disponível no except
-            nova_valor_str = entry_novo_valor.get().replace(",", ".")
+        # [CORREÇÃO] Passamos meta_id_fixo como argumento padrão para 'congelar' o valor de meta_id_contexto neste momento
+    def salvar_edicao(meta_id_fixo=meta_id_contexto):
+        # Define a string de valor ANTES do try para que esteja disponível no except
+        nova_valor_str = entry_novo_valor.get().replace(",", ".")
 
-            try:
-                novo_valor = float(nova_valor_str)
-                data_db_format = datetime.strptime(data_lancamento_str, '%d/%m/%Y').strftime('%Y-%m-%d')
+        try:
+            novo_valor = float(nova_valor_str)
+            data_db_format = datetime.strptime(data_lancamento_str, '%d/%m/%Y').strftime('%Y-%m-%d')
 
-                # [CORREÇÃO] Usa o ID capturado no início da função (closure),
-                # ignorando a seleção atual da GUI que pode ter mudado.
-                meta_id = meta_id_contexto
+            # Usa o ID fixo recebido como argumento
+            id_funcionario_logado = 2 
 
-                id_funcionario_logado = 2 # Ajuste se necessário
+            sucesso, resultado = database.lancar_apuracao_diaria(meta_id_fixo, data_db_format, novo_valor, id_funcionario_logado)
 
-                sucesso, resultado = database.lancar_apuracao_diaria(meta_id, data_db_format, novo_valor, id_funcionario_logado)
-                print(f">>> DEBUG (EDIÇÃO): Resultado do salvamento no DB - Sucesso: {sucesso}, Resultado: {resultado}")
+            if sucesso:
+                apuracao_id = resultado
+                messagebox.showinfo("Sucesso", "Apuração atualizada com sucesso!", parent=popup)
+                popup.destroy()
+                # Recarrega a lista principal
+                self.on_meta_principal_selecionada(None) 
 
-                if sucesso:
-                    apuracao_id = resultado
-                    messagebox.showinfo("Sucesso", "Apuração atualizada com sucesso!", parent=popup)
-                    popup.destroy()
-                    self.on_meta_principal_selecionada(None) 
-                    database.verificar_e_premiar_meta_diaria(apuracao_id, data_db_format, novo_valor, meta_id)
-                else:
-                    print(f">>> DEBUG (EDIÇÃO): Lançamento no DB falhou. Não vai verificar premiação.")
-                    messagebox.showerror("Erro", f"Não foi possível atualizar a apuração no banco.\nDetalhe: {resultado}", parent=popup)
+                # Thread para não travar a UI enquanto o bot envia mensagens
+                def tarefa_background():
+                    database.verificar_e_premiar_meta_diaria(apuracao_id, data_db_format, novo_valor, meta_id_fixo)
+                threading.Thread(target=tarefa_background, daemon=True).start()
+            else:
+                messagebox.showerror("Erro", f"Não foi possível atualizar a apuração no banco.\nDetalhe: {resultado}", parent=popup)
 
-            except ValueError: # Captura apenas o erro de conversão de 'float()'
-                messagebox.showerror("Erro de Formato", f"O valor '{nova_valor_str}' não é um número válido.", parent=popup)
-            except Exception as e: # Captura outros erros inesperados
-                messagebox.showerror("Erro Inesperado", f"Ocorreu um erro: {e}", parent=popup)
+        except ValueError:
+            messagebox.showerror("Erro de Formato", f"O valor '{nova_valor_str}' não é um número válido.", parent=popup)
+        except Exception as e:
+            messagebox.showerror("Erro Inesperado", f"Ocorreu um erro: {e}", parent=popup)
 
-        btn_salvar = ttk.Button(frame, text="Salvar Alterações", command=salvar_edicao)
-        btn_salvar.pack(pady=15)
-        entry_novo_valor.bind("<Return>", lambda e: salvar_edicao())
+    btn_salvar = ttk.Button(frame, text="Salvar Alterações", command=salvar_edicao)
 
     def excluir_apuracao_selecionada(self):
         """Exclui o registro de apuração diária selecionado na lista de detalhes."""
