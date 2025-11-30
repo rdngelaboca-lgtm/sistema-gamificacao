@@ -326,62 +326,82 @@ def verificar_e_delegar_tarefas_de_folga():
                 
                 logger.info(f"--> Notificações individuais enviadas para os membros do grupo {nome_grupo}.")
 
-# Em agendador.py, SUBSTITUA a função antiga por esta versão mais segura:
 def executar_fechamento_mensal():
     """
-    Executa toda a lógica de finalização do mês, agora com verificação
-    para não rodar duas vezes.
+    Executa o fechamento separado por setores (Cozinha e Loja).
     """
     print(f"\n[{datetime.now().strftime('%H:%M:%S')}] 🏆 INICIANDO ROTINA DE FECHAMENTO MENSAL! 🏆")
-    
+
     hoje = date.today()
     fim_mes_passado = hoje.replace(day=1) - timedelta(days=1)
     ano_fechamento = fim_mes_passado.year
     mes_fechamento = fim_mes_passado.month
 
-    # --- NOVA ETAPA DE SEGURANÇA ---
+    # Verificação de segurança
     if database.verificar_se_fechamento_ja_rodou(ano_fechamento, mes_fechamento):
-        print(f"--> ATENÇÃO: O fechamento para o mês {mes_fechamento}/{ano_fechamento} já foi executado. Ação abortada.")
-        return
-    # --------------------------------
-
-    ranking_final = database.calcular_ranking_desempenho(data_final_calculo=fim_mes_passado)
-    
-    if not ranking_final:
-        print("--> Nenhum dado de ranking para o mês passado. Fechamento abortado.")
+        print(f"--> ATENÇÃO: O fechamento para {mes_fechamento}/{ano_fechamento} já foi executado.")
         return
 
-    database.salvar_historico_ranking(ranking_final)
-    
-    # ... O resto da função continua exatamente igual ...
-    prizes = [
-        "🏆 1 dia de folga + R$50 para ir ao cinema",
-        "🥈 Meio dia de folga + 1 Pote Pop da Gela Boca",
-        "🥉 1 Taça do nosso cardápio",
-        "🏅 1 sacolada com 10 picolés"
+    # ==============================================================================
+    # DEFINIÇÃO DOS PRÊMIOS (Você pode alterar aqui)
+    # ==============================================================================
+    # Sugestão 2: Foco em Produtos (Baixo custo para a empresa)
+    premios_cozinha = [
+        "🏆 1 Pote 2L + Cobertura + Casquinhas (Kit Família)",
+        "🥈 1 Taça Especial do Cardápio (Para comer na loja)",
+        "🥉 1 Milkshake Grande ou Açaí 500ml"
     ]
-    texto_gestores = "🎉 **Fechamento do Mês: Pódio Final!** 🎉\n\n"
-    vencedores_para_notificar = []
-    
-    for i, vencedor in enumerate(ranking_final[:len(prizes)]):
-        premio = prizes[i]
-        texto_gestores += f"{i+1}º: {vencedor['NomeCompleto']} ({vencedor['Desempenho']}%)\n   - Prêmio: {premio}\n"
-        vencedores_para_notificar.append({'dados': vencedor, 'premio': premio, 'posicao': i+1})
 
-    notificador_telegram.enviar_mensagem(config.GESTOR_GROUP_CHAT_ID, texto_gestores)
-    
-    for vencedor in vencedores_para_notificar:
-        dados = vencedor['dados']
-        chat_id = database.buscar_funcionario_por_id(dados['FuncionarioID']).ChatIDTelegram
-        texto_vencedor = (f"🎉🎊 **PARABÉNS, {dados['NomeCompleto']}!** 🎊🎉\n\n"
-                          f"Você foi um dos campeões do mês no nosso jogo de gamificação!\n\n"
-                          f"Sua Posição: **{vencedor['posicao']}º Lugar** com **{dados['Desempenho']}%** de desempenho.\n"
-                          f"Sua Recompensa: **{vencedor['premio']}**\n\n"
-                          "Procure o seu gestor para combinar o recebimento. Continue com o trabalho incrível!")
-        notificador_telegram.enviar_mensagem(chat_id, texto_vencedor)
+    premios_loja = [
+        "🏆 1 Torta de Sorvete inteira (ou Pote Especial)",
+        "🥈 1 Fondue ou Taça Especial",
+        "🥉 1 Pote Pop para levar para casa"
+]
+    # ==============================================================================
+
+    def processar_setor(nome_setor, filtro_db, lista_premios):
+        print(f"--> Processando ranking: {nome_setor}...")
+        # Calcula ranking filtrado
+        ranking = database.calcular_ranking_desempenho(data_final_calculo=fim_mes_passado, setor_filtro=filtro_db)
+
+        if not ranking:
+            print(f"   -> Sem dados para {nome_setor}.")
+            return
+
+        # Salva no histórico
+        database.salvar_historico_ranking(ranking)
+
+        # Monta mensagem para os Gestores
+        texto_gestores = f"🎉 **Fechamento {nome_setor}: Pódio Final!** 🎉\n\n"
+        vencedores_para_notificar = []
+
+        for i, vencedor in enumerate(ranking[:len(lista_premios)]):
+            premio = lista_premios[i]
+            texto_gestores += f"{i+1}º: {vencedor['NomeCompleto']} ({vencedor['Desempenho']}%)\n   - Prêmio: {premio}\n"
+            vencedores_para_notificar.append({'dados': vencedor, 'premio': premio, 'posicao': i+1})
+
+        # Envia para o Grupo de Gestão
+        notificador_telegram.enviar_mensagem(config.GESTOR_GROUP_CHAT_ID, texto_gestores)
+
+        # Envia Mensagem Privada para os Vencedores
+        for vencedor in vencedores_para_notificar:
+            dados = vencedor['dados']
+            # Busca o ChatID atualizado
+            chat_id = database.buscar_funcionario_por_id(dados['FuncionarioID']).ChatIDTelegram
+            if chat_id:
+                texto_vencedor = (f"🎉🎊 **PARABÉNS, {dados['NomeCompleto']}!** 🎊🎉\n\n"
+                                  f"Você foi destaque no ranking de **{nome_setor}**!\n\n"
+                                  f"Sua Posição: **{vencedor['posicao']}º Lugar**\n"
+                                  f"Sua Recompensa: **{vencedor['premio']}**\n\n"
+                                  "Procure a gestão para retirar seu prêmio!")
+                notificador_telegram.enviar_mensagem(chat_id, texto_vencedor)
+
+    # --- EXECUTA PARA OS DOIS SETORES ---
+    processar_setor("Cozinha", "Cozinha", premios_cozinha)
+    processar_setor("Atendimento/Loja", "Loja", premios_loja)
 
     print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ FECHAMENTO MENSAL CONCLUÍDO! ✅")
-
+    
 def verificar_e_executar_fechamento():
     """
     Função que o agendador chama todo dia. Ela verifica se hoje é o dia
