@@ -1499,34 +1499,33 @@ class App:
                     ganhos = row['PontosGanhos']
                     possiveis = row['PontosPossiveis']
                     self.tree_ranking.insert("", "end", values=(posicao, nome, score_final, desempenho, ganhos, possiveis))
-
         except Exception as e:
             logger.exception(f"Erro ao atualizar o ranking na interface gráfica: {e}")
             self.tree_ranking.insert("", "end", values=("Erro ao carregar dados.", "", "", "", "", ""))
             messagebox.showerror("Erro de Ranking", f"Não foi possível carregar os dados do ranking:\n{e}", parent=self.root)
-            
-        def criar_aba_relatorios(self):
-            frame_principal = ttk.Frame(self.frame_relatorios, padding="10")
-            frame_principal.pack(fill=tk.BOTH, expand=True)
-            frame_principal.columnconfigure(1, weight=1) # Coluna da direita (resultados) cresce
-            frame_principal.rowconfigure(0, weight=1)    # A linha inteira cresce
 
-            frame_selecao = ttk.LabelFrame(frame_principal, text="Tipos de Relatório", padding="10")
-            frame_selecao.grid(row=0, column=0, sticky="ns", padx=(0, 10))
+    def criar_aba_relatorios(self):
+        frame_principal = ttk.Frame(self.frame_relatorios, padding="10")
+        frame_principal.pack(fill=tk.BOTH, expand=True)
+        frame_principal.columnconfigure(1, weight=1) # Coluna da direita (resultados) cresce
+        frame_principal.rowconfigure(0, weight=1)    # A linha inteira cresce
 
-            self.lista_relatorios = tk.Listbox(frame_selecao, exportselection=False)
-            self.lista_relatorios.pack(fill=tk.Y, expand=True)
+        frame_selecao = ttk.LabelFrame(frame_principal, text="Tipos de Relatório", padding="10")
+        frame_selecao.grid(row=0, column=0, sticky="ns", padx=(0, 10))
 
-            self.lista_relatorios.insert(tk.END, "Pendências Recorrentes")
-            self.lista_relatorios.insert(tk.END, "Análise de Tarefas")
-            self.lista_relatorios.bind('<<ListboxSelect>>', self.on_report_select)
+        self.lista_relatorios = tk.Listbox(frame_selecao, exportselection=False)
+        self.lista_relatorios.pack(fill=tk.Y, expand=True)
 
-            self.lista_relatorios.select_set(0)
+        self.lista_relatorios.insert(tk.END, "Pendências Recorrentes")
+        self.lista_relatorios.insert(tk.END, "Análise de Tarefas")
+        self.lista_relatorios.bind('<<ListboxSelect>>', self.on_report_select)
 
-            self.frame_conteudo_relatorio = ttk.Frame(frame_principal)
-            self.frame_conteudo_relatorio.grid(row=0, column=1, sticky="nsew")
+        self.lista_relatorios.select_set(0)
 
-            self.on_report_select(None)
+        self.frame_conteudo_relatorio = ttk.Frame(frame_principal)
+        self.frame_conteudo_relatorio.grid(row=0, column=1, sticky="nsew")
+
+        self.on_report_select(None)
 
     def on_report_select(self, event):
         """
