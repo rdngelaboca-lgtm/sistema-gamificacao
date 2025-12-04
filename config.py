@@ -72,9 +72,15 @@ TAREFA_ID_NOTA_FISCAL = 156 # <--- SUBSTITUA O 0 PELO ID CORRETO
 # ID da Tarefa "Guardar Mercadoria (NF)" que você criou no Passo 0.2 (Regra 4)
 TAREFA_ID_GUARDAR_MERCADORIA_MODELO = 157 # <--- SUBSTITUA O 0 PELO ID CORRETO
 
-# Número de WhatsApp do financeiro/contato para encaminhar a NF (Regra 3)
-# Formato: 55 (País) + DDD (Cidade) + Número (sem 9 extra se for SP)
-WHATSAPP_CONTATO_FINANCEIRO = "5544997408569" # <--- SUBSTITUA PELO NÚMERO CORRETO
+# --- CONFIGURAÇÕES DE API WHATSAPP (Z-API - PAGO) ---
+# Seus dados obtidos no painel do z-api.io
+ZAPI_INSTANCE_ID = "3EB36324A185017B5FF226D356DD90A9" 
+ZAPI_TOKEN = "2E1C0A469DC7263738C0F096"
+ZAPI_CLIENT_TOKEN = "SEU_CLIENT_TOKEN_AQUI" # (Opcional, deixe vazio se não configurou segurança extra)
+
+# URL Base padrão da Z-API
+WPP_API_URL = f"https://api.z-api.io/instances/{ZAPI_INSTANCE_ID}/token/{ZAPI_TOKEN}/send-text"
+
 
 # --- MENSAGENS PARA META DIÁRIA ATINGIDA ---
 MENSAGENS_META_DIARIA_CUMPRIDA = [
