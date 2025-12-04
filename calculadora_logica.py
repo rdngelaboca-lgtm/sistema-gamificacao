@@ -71,9 +71,9 @@ def calcular_intervalos_automaticos(dados_escala, dia_semana_iso):
             saida = pessoa['saida']
 
             # Definição da Janela Válida para sair:
-            # Mínimo: Entrada + 2h (evita sair logo que chega)
-            # Máximo: Entrada + 5h (Limite legal para início do descanso)
-            janela_inicio = entrada + timedelta(hours=2)
+            # Mínimo: Entrada + 4h (Ajuste de preferência: trabalhar pelo menos 4h antes do intervalo)
+            # Máximo: Entrada + 5h (Limite legal para início do descanso - Configuração Global)
+            janela_inicio = entrada + timedelta(hours=4)
             janela_fim_limite = entrada + timedelta(hours=MAX_HORAS_SEM_PAUSA)
 
             # Define o início proposto
