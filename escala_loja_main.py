@@ -424,6 +424,11 @@ class AppEscalaLoja:
                     t_ent = extrair_tempo(dados.HorarioEntrada)
                     t_sai = extrair_tempo(dados.HorarioSaida)
 
+                    # CORREÇÃO: Validação de segurança para evitar crash se horário for inválido
+                    if t_ent is None or t_sai is None:
+                        print(f"Aviso: Ignorando posição {pos_id} ({dados.NomePessoa}) por horário incompleto.")
+                        continue
+
                     dt_entrada = datetime.combine(dia_obj, t_ent)
                     dt_saida = datetime.combine(dia_obj, t_sai)
 
@@ -488,14 +493,14 @@ class AppEscalaLoja:
                 try:
                     texto_escala = database.gerar_relatorio_escala_texto(self.data_selecionada)
                     notificador_telegram.enviar_mensagem(config.TODOS_FUNCIONARIOS_GROUP_ID, texto_escala)
+                    # CORREÇÃO: Usa .after para manipular a UI na thread principal
                     self.root.after(0, lambda: messagebox.showinfo("Sucesso", "Escala enviada para o grupo do Telegram!"))
                 except Exception as e:
+                    # CORREÇÃO: Usa .after para manipular a UI na thread principal
                     self.root.after(0, lambda: messagebox.showerror("Erro", f"Falha ao enviar Telegram: {e}"))
 
             # Inicia a thread para não travar a interface
             threading.Thread(target=tarefa_background, daemon=True).start()
-
-    # --- Funções Auxiliares Originais (Mantidas) ---
 
     # --- Janela de Configurações de Automação (Nova Aba) ---
     def abrir_janela_configuracoes(self):
