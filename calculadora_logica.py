@@ -1,25 +1,33 @@
 from datetime import datetime, timedelta
 
-# --- Regras de Negócio Configuráveis ---
-HORA_BLOQUEIO_INICIO = "17:00" # <-- ALTERADO
-HORA_BLOQUEIO_FIM = "18:30"
-MAX_HORAS_SEM_PAUSA = 5
-DURACAO_INTERVALO = 1 # horas
+import database
+from datetime import datetime, timedelta
+
+# --- Regras de Negócio Configuráveis (agora dinâmicas) ---
 
 # Setores que NÃO precisam de cobertura (podem sair para intervalo mesmo estando sozinhos)
 SETORES_SOLO_PERMITIDO = ["Buffet", "Limpeza", "Camara Fria"]
 
 def calcular_intervalos_automaticos(dados_escala, dia_semana_iso):
     """
-    Calcula os horários de intervalo baseados nas regras de fluxo e CLT.
-
-    Args:
-        dados_escala: Lista de dicionários contendo dados dos funcionários escalados.
-        dia_semana_iso: Inteiro (1=Segunda ... 7=Domingo).
-
-    Returns:
-        tuple: (sugestoes, log_erros)
+    Calcula os horários de intervalo baseados nas regras de fluxo e CLT,
+    lendo os parâmetros dinamicamente do banco de dados.
     """
+    # 1. Carregar Configurações Dinâmicas
+    config = database.buscar_configuracoes_escala()
+    if not config:
+        # Fallback se o banco não estiver disponível (usa valores padrão)
+        HORA_BLOQUEIO_INICIO = "17:00"
+        HORA_BLOQUEIO_FIM = "18:30"
+        MAX_HORAS_SEM_PAUSA = 5
+        DURACAO_INTERVALO = 1 
+    else:
+        # Nota: O objeto config.HoraBloqueioInicio é um objeto datetime.time ou string 'HH:MM:SS'
+        HORA_BLOQUEIO_INICIO = str(config.HoraBloqueioInicio)[:5]
+        HORA_BLOQUEIO_FIM = str(config.HoraBloqueioFim)[:5]
+        MAX_HORAS_SEM_PAUSA = config.MaxHorasSemPausa
+        DURACAO_INTERVALO = config.DuracaoIntervalo # horas (assumindo que vem como int/float)
+
     log_erros = []
     sugestoes = {} # {posicao_id: (inicio_intervalo, fim_intervalo)}
 
@@ -72,6 +80,7 @@ def calcular_intervalos_automaticos(dados_escala, dia_semana_iso):
 
             # Regra: Bloqueio de Pico (Apenas Sábado e Domingo)
             if dia_semana_iso in [6, 7]: # 6=Sábado, 7=Domingo
+                # Usamos os parâmetros lidos dinamicamente (ou o fallback)
                 bloqueio_ini = datetime.combine(entrada.date(), datetime.strptime(HORA_BLOQUEIO_INICIO, "%H:%M").time())
                 bloqueio_fim = datetime.combine(entrada.date(), datetime.strptime(HORA_BLOQUEIO_FIM, "%H:%M").time())
 
@@ -79,6 +88,7 @@ def calcular_intervalos_automaticos(dados_escala, dia_semana_iso):
                 if (proposta_inicio < bloqueio_fim) and (proposta_fim > bloqueio_ini):
                     # Se colidir, empurra o intervalo para DEPOIS do pico
                     proposta_inicio = bloqueio_fim
+                    # Usamos o parâmetro dinâmico DURACAO_INTERVALO
                     proposta_fim = proposta_inicio + timedelta(hours=DURACAO_INTERVALO)
 
             # Validação Final: Estouro das 5h
