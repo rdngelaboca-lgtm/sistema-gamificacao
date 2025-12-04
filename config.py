@@ -73,15 +73,12 @@ TAREFA_ID_NOTA_FISCAL = 156 # <--- SUBSTITUA O 0 PELO ID CORRETO
 TAREFA_ID_GUARDAR_MERCADORIA_MODELO = 157 # <--- SUBSTITUA O 0 PELO ID CORRETO
 
 # --- CONFIGURAÇÕES DE API WHATSAPP (Z-API - PAGO) ---
-# Seus dados obtidos no painel do z-api.io (Baseados no seu print)
+# Seus dados obtidos no painel do z-api.io (Conforme print enviado)
 ZAPI_INSTANCE_ID = "3EB36324A185017B5FF226D356DD90A9" 
 ZAPI_TOKEN = "2E1C0A469DC7263738C0F096"
 
-# REMOVIDO: ZAPI_CLIENT_TOKEN (Sua instância não usa segurança extra de Client Token)
-
 # URL Base padrão da Z-API
 WPP_API_URL = f"https://api.z-api.io/instances/{ZAPI_INSTANCE_ID}/token/{ZAPI_TOKEN}/send-text"
-
 
 # --- MENSAGENS PARA META DIÁRIA ATINGIDA ---
 MENSAGENS_META_DIARIA_CUMPRIDA = [
