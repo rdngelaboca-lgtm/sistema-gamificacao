@@ -411,7 +411,10 @@ class AppEscalaLoja:
         pessoas_para_calcular = []
 
         dia_obj = self.date_entry.get_date()
-        dia_iso = dia_obj.isoweekday() # 1-7
+
+        # CORREÇÃO: Converter isoweekday (Seg=1...Dom=7) para o padrão do Banco (Dom=1...Sab=7)
+        # Domingo (7) vira 1. Segunda (1) vira 2. Sábado (6) vira 7.
+        dia_iso = (dia_obj.isoweekday() % 7) + 1
 
         for pos in self.posicoes:
             pos_id, nome, x, y, ativo, setor = pos
