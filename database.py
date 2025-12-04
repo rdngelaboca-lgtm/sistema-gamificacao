@@ -166,7 +166,7 @@ def verificar_migracao_banco():
                     cursor.execute("""
                         IF NOT EXISTS (SELECT 1 FROM PicoDiario WHERE DiaSemanaID = ?)
                         INSERT INTO PicoDiario (DiaSemanaID, NomeDia, HoraBloqueioInicio, HoraBloqueioFim)
-                        VALUES (?, ?, ?)
+                        VALUES (?, ?, ?, ?)
                         ELSE
                         UPDATE PicoDiario SET NomeDia = ? WHERE DiaSemanaID = ?
                     """, dia_id, dia_id, nome, h_ini, h_fim, nome, dia_id)
