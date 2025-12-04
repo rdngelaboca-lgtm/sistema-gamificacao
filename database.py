@@ -151,13 +151,14 @@ def verificar_migracao_banco():
                 """)
                 
                 # 3.3. Garante que os 7 dias existam com valores padrão (Pico só Sáb/Dom)
+                # CORREÇÃO: Usar None (Python) no lugar de NULL (SQL)
                 dias_padrao = [
                     (1, 'Domingo', '17:00:00', '18:30:00'),
-                    (2, 'Segunda', NULL, NULL),
-                    (3, 'Terça', NULL, NULL),
-                    (4, 'Quarta', NULL, NULL),
-                    (5, 'Quinta', NULL, NULL),
-                    (6, 'Sexta', NULL, NULL),
+                    (2, 'Segunda', None, None),
+                    (3, 'Terça', None, None),
+                    (4, 'Quarta', None, None),
+                    (5, 'Quinta', None, None),
+                    (6, 'Sexta', None, None),
                     (7, 'Sábado', '17:00:00', '18:30:00'),
                 ]
                 
