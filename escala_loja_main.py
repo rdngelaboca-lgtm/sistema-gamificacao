@@ -5,13 +5,13 @@ from PIL import Image, ImageTk
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import database
+import re
 import config # Importar config para pegar o ID do grupo
 import notificador_telegram # Importar notificador para enviar a escala
 import calculadora_logica # Importa o novo módulo lógico
 import os
 import webbrowser
 import urllib.parse
-import re
 from datetime import datetime, date
 import threading
 
@@ -562,8 +562,7 @@ class AppEscalaLoja:
 
         # 5. Botão Salvar
         btn_salvar = ttk.Button(frame, text="💾 Salvar Configurações", command=salvar_config)
-        btn_salvar.grid(row=4, column=0, columnspan=2, pady=20, sticky=tk.EW)
-
+        btn_salvar.grid(row=5, column=0, columnspan=2, pady=20, sticky=tk.EW)
 
     def abrir_janela_pico_diario(self, parent_popup):
         """Abre a janela Toplevel para editar o horário de pico por dia da semana."""
@@ -754,15 +753,19 @@ class AppEscalaLoja:
             mapa_ids[label] = {'tipo': 'free', 'id': fr.FreelancerID, 'tel': fr.Telefone}
         combo_pessoas['values'] = lista_nomes
 
+        # Inicialização do campo selecionado e telefone
         pessoa_tel = None
+        selecao_inicial = ""
+
         if dados_atuais:
             if dados_atuais.FuncionarioID:
-                match = next((k for k, v in mapa_ids.items() if v['tipo'] == 'func' and v['id'] == dados_atuais.FuncionarioID), "")
-                combo_pessoas.set(match)
+                selecao_inicial = next((k for k, v in mapa_ids.items() if v['tipo'] == 'func' and v['id'] == dados_atuais.FuncionarioID), "")
             elif dados_atuais.FreelancerID:
-                match = next((k for k, v in mapa_ids.items() if v['tipo'] == 'free' and v['id'] == dados_atuais.FreelancerID), "")
-                combo_pessoas.set(match)
+                selecao_inicial = next((k for k, v in mapa_ids.items() if v['tipo'] == 'free' and v['id'] == dados_atuais.FreelancerID), "")
+                # Se for Freelancer, o telefone está disponível diretamente nos dados da escala
                 pessoa_tel = dados_atuais.TelefonePessoa
+        
+        combo_pessoas.set(selecao_inicial)
 
         frame_hor = ttk.LabelFrame(popup, text="Horários", padding=10)
         frame_hor.pack(fill=tk.X, padx=10, pady=10)
@@ -807,18 +810,35 @@ class AppEscalaLoja:
 
         # Lógica Inteligente de Preenchimento do Foco
         foco_para_exibir = ""
+        msg_foco_padrao = "" # Inicialização no escopo correto
+
+        # 1. Tenta definir o padrão do setor
+        if setor_atual:
+            msgs_padrao = {
+                "Cozinha": "Foco: Agilidade nos pedidos e organização da praça.",
+                "Caixa": "Foco: Simpatia, oferta de adicionais e conferência.",
+                "Salão": "Foco: Limpeza das mesas e atenção aos clientes.",
+                "Frente Loja": "Foco: Abordagem convidativa e reposição.",
+                "Buffet": "Foco: Reposição constante e limpeza das bordas.",
+                "Limpeza": "Foco: Banheiros e chão sempre limpos.",
+                "Camara Fria": "Foco: Organização PVPS e contagem."
+            }
+            msg_foco_padrao = msgs_padrao.get(setor_atual, "")
 
         if dados_atuais and dados_atuais.FocoDoDia:
-            # 1. Prioridade Máxima: O que já está salvo para hoje
+            # 2. Prioridade Máxima: O que já está salvo para hoje
             foco_para_exibir = dados_atuais.FocoDoDia
         else:
-            # 2. Tentativa de Histórico: O último usado nesta posição
-            ultimo_usado = database.buscar_ultimo_foco_posicao(pos_id)
-            if ultimo_usado:
-                foco_para_exibir = ultimo_usado
-            else:
-                # 3. Fallback: Padrão do Setor
-                foco_para_exibir = msg_foco_padrao
+            # 3. Tentativa de Histórico: O último usado nesta posição
+            try:
+                ultimo_usado = database.buscar_ultimo_foco_posicao(pos_id)
+                if ultimo_usado:
+                    foco_para_exibir = ultimo_usado
+                else:
+                    # 4. Fallback: Padrão do Setor
+                    foco_para_exibir = msg_foco_padrao
+            except Exception:
+                 foco_para_exibir = msg_foco_padrao
 
         txt_foco.insert("1.0", foco_para_exibir)
 
@@ -840,18 +860,20 @@ class AppEscalaLoja:
 
             def tratar_vazio(valor): return valor if valor and valor.strip() else None
             selecao = combo_pessoas.get()
-            if not selecao: return 
-
-            # Inicialização segura de ambas as variáveis
+            
+            # Inicialização segura de ambas as variáveis (NULL se Vazio)
             func_id = None
             free_id = None
 
-            if selecao != "(Vazio)":
-                d = mapa_ids[selecao]
-                func_id = d['id'] if d['tipo'] == 'func' else None
-                free_id = d['id'] if d['tipo'] == 'free' else None
+            if selecao != "(Vazio)" and selecao:
+                d = mapa_ids.get(selecao)
+                if d:
+                    func_id = d['id'] if d['tipo'] == 'func' else None
+                    free_id = d['id'] if d['tipo'] == 'free' else None
+                else:
+                     messagebox.showerror("Erro Interno", "Seleção inválida no mapa de IDs.", parent=popup); return
 
-        # Salva a escala do dia
+            # Salva a escala do dia, permitindo que func_id/free_id sejam NULL
             database.salvar_escala_dia(self.data_selecionada, pos_id, func_id, free_id,
                 tratar_vazio(e_ent.get()), tratar_vazio(e_sai.get()), 
                 tratar_vazio(e_int_ini.get()), tratar_vazio(e_int_fim.get()),
@@ -882,18 +904,20 @@ class AppEscalaLoja:
             tel = None
             nome_pessoa_limpo = selecao.split('] ')[1] if ']' in selecao else selecao
             
-            if d['tipo'] == 'free':
+            # Prioriza o telefone carregado do banco (pessoa_tel) se a escala já existia
+            if pessoa_tel:
+                tel = pessoa_tel
+            
+            # Se não, busca no mapa para freelancers ou pede para funcionários
+            elif d['tipo'] == 'free':
                 # Freelancer: usa o telefone salvo no mapa
                 tel = d.get('tel')
             elif d['tipo'] == 'func':
-                # Funcionário: o mapa só tem ChatID. Pede o telefone para o WhatsApp.
-                # Usa o telefone de contato do Freelancer, se tiver sido carregado, como valor padrão.
-                valor_inicial = next((fr.Telefone for fr in database.listar_freelancers() if fr.FreelancerID == d.get('id')), '')
-                
+                # Funcionário: Pede o telefone, pois só temos o ChatID.
                 tel_dialog = simpledialog.askstring(
                     "Telefone WhatsApp", 
                     f"Digite o telefone celular para {nome_pessoa_limpo} (apenas números, DDD+Número):",
-                    initialvalue=valor_inicial,
+                    initialvalue="", # Não podemos preencher com dado de freelancer, removemos valor_inicial
                     parent=popup
                 )
                 if tel_dialog:
@@ -901,6 +925,11 @@ class AppEscalaLoja:
                 else:
                     messagebox.showwarning("Aviso", "Envio via WhatsApp cancelado (telefone não fornecido).")
                     return
+            
+            # Garante que tel seja uma string limpa antes do re.sub
+            if not tel:
+                messagebox.showwarning("Aviso", "Nenhum telefone encontrado para a pessoa selecionada.")
+                return
             
             if tel:
                 try:
