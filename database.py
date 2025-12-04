@@ -1864,32 +1864,56 @@ def registrar_pontos_por_leitura(funcionario_id, pontos, titulo_documento):
         finally:
             conn.close()
 
+def registrar_pontos_de_bonus(funcionario_id, pontos, motivo_log, tarefa_id_bonus, vinculo_id=None, cursor=None):
+    """
+    Insere um registro na tabela Entregas para contabilizar pontos de bônus.
+    
+    Argumentos:
+        cursor (opcional): Se fornecido, usa a transação existente. 
+                           Se None, abre uma nova conexão independente.
+    """
+    conn = None
+    close_conn = False # Flag para saber se devemos fechar a conexão ao final
 
-# Em database.py
-def registrar_pontos_de_bonus(funcionario_id, pontos, motivo_log, tarefa_id_bonus, vinculo_id=None):
-    """
-    Insere um registro na tabela Entregas para contabilizar pontos de bônus
-    contra um TAREFA_ID específico (ex: Meta, Feedback, Conquista).
-    Opcionalmente, salva um 'vinculo_id' (como um ApuracaoID) no campo AtribuicaoID.
-    """
-    conn = get_db_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            sql = """
-                INSERT INTO Entregas
-                (TarefaID, FuncionarioID, StatusValidacao, PontosGanhos, DataEnvio, MotivoRecusa, AtribuicaoID)
-                VALUES (?, ?, 'Aprovada', ?, GETDATE(), ?, ?)
-            """
-            cursor.execute(sql, tarefa_id_bonus, funcionario_id, pontos, motivo_log, vinculo_id)
-            # A chamada a adicionar_pontos_ao_saldo é feita pelo módulo chamador (UI/Agendador)
+    # Lógica de Seleção de Conexão
+    if cursor is None:
+        conn = get_db_connection()
+        if not conn: 
+            return # Falha silenciosa ou logar erro de conexão
+        cursor = conn.cursor()
+        close_conn = True # Nós abrimos, nós fechamos e commitamos
+    
+    try:
+        sql = """
+            INSERT INTO Entregas
+            (TarefaID, FuncionarioID, StatusValidacao, PontosGanhos, DataEnvio, MotivoRecusa, AtribuicaoID)
+            VALUES (?, ?, 'Aprovada', ?, GETDATE(), ?, ?)
+        """
+        cursor.execute(sql, tarefa_id_bonus, funcionario_id, pontos, motivo_log, vinculo_id)
+        
+        # Só faz commit se a conexão for "nossa" (isolada)
+        # Se o cursor veio de fora, o pai fará o commit.
+        if close_conn:
             conn.commit()
-            logger.info(f"--> [BÔNUS] {pontos} pts (TarefaID: {tarefa_id_bonus}, Vínculo: {vinculo_id}) registrados para FuncID {funcionario_id}. Motivo: {motivo_log}")
-        except Exception as e:
-            logger.error(f"ERRO ao registrar pontos de bônus (TarefaID: {tarefa_id_bonus}): {e}", exc_info=True)
-        finally:
-            conn.close()
+        
+        logger.info(f"--> [BÔNUS] {pontos} pts (TarefaID: {tarefa_id_bonus}, Vínculo: {vinculo_id}) registrados para FuncID {funcionario_id}. Motivo: {motivo_log}")
 
+    except Exception as e:
+        logger.error(f"ERRO ao registrar pontos de bônus (TarefaID: {tarefa_id_bonus}): {e}", exc_info=True)
+        
+        # Rollback apenas se a conexão for nossa
+        if close_conn and conn:
+            conn.rollback()
+        
+        # Se estamos numa transação externa (cursor injetado), RELANÇAMOS o erro
+        # para que a função pai saiba que deve fazer rollback de tudo.
+        if not close_conn:
+            raise e
+
+    finally:
+        # Fecha apenas se abrimos
+        if close_conn and conn:
+            conn.close()
 
 def listar_comunicados_com_status(filtro_titulo=None):
     """
@@ -4512,7 +4536,6 @@ def buscar_resgates_recentes(limite=5):
     finally:
         if conn: conn.close()
 
-# Em database.py, SUBSTITUA a função verificar_e_premiar_meta_diaria por esta:
 
 def verificar_e_premiar_meta_diaria(apuracao_id, data_apuracao_str, valor_dia, meta_principal_id):
     """
@@ -4589,16 +4612,14 @@ def verificar_e_premiar_meta_diaria(apuracao_id, data_apuracao_str, valor_dia, m
                              # Em database.py, dentro de verificar_e_premiar_meta_diaria
                             adicionar_pontos_ao_saldo(funcionario.FuncionarioID, pontos_premio_diario)
                             motivo_log = f"Meta Diária Atingida ({data_apuracao_str}) - Setor: {setor_alvo_diario}"
-                            # --- CORREÇÃO APLICADA AQUI ---
-                            # Passamos o ApuracaoID como o quinto parâmetro (vinculo_id)
                             registrar_pontos_de_bonus(
                                 funcionario.FuncionarioID,
                                 pontos_premio_diario,
                                 motivo_log,
                                 config.TAREFA_ID_PONTOS_META,
-                                vinculo_id=apuracao_id
+                                vinculo_id=apuracao_id,
+                                cursor=cursor_interno
                             )
-                            # --- FIM DA CORREÇÃO ---
                             if funcionario.ChatIDTelegram:
                                 notificador_telegram.enviar_mensagem(funcionario.ChatIDTelegram, mensagem_telegram)
                         except Exception as e_func:
@@ -6022,20 +6043,18 @@ def resetar_dados_estoque_completo():
         try:
             cursor = conn.cursor()
             
-            # 1. Limpar Histórico de Movimentação (Filhos primeiro)
             cursor.execute("DELETE FROM ItensNotaFiscalEntrada")
+            cursor.execute("DBCC CHECKIDENT ('ItensNotaFiscalEntrada', RESEED, 0)")
             cursor.execute("DELETE FROM NotasFiscaisEntrada")
-            
-            # 2. Limpar Histórico de Contagens (Filhos primeiro)
+            cursor.execute("DBCC CHECKIDENT ('NotasFiscaisEntrada', RESEED, 0)")
             cursor.execute("DELETE FROM ItensContagemEstoque")
+            cursor.execute("DBCC CHECKIDENT ('ItensContagemEstoque', RESEED, 0)")
             cursor.execute("DELETE FROM ContagensEstoque")
-            
-            # 3. Limpar Vínculos e Produtos
-            cursor.execute("DELETE FROM ProdutosFornecedor") # Vínculos DE/PARA
-            cursor.execute("DELETE FROM ProdutosEstoque")    # Catálogo Mestre
-            
-            # Nota: NÃO apagamos a tabela Fornecedores para facilitar o recomeço.
-            
+            cursor.execute("DBCC CHECKIDENT ('ContagensEstoque', RESEED, 0)")
+            cursor.execute("DELETE FROM ProdutosFornecedor")
+            cursor.execute("DBCC CHECKIDENT ('ProdutosFornecedor', RESEED, 0)")
+            cursor.execute("DELETE FROM ProdutosEstoque")
+            cursor.execute("DBCC CHECKIDENT ('ProdutosEstoque', RESEED, 0)")
             conn.commit()
             logger.info("RESET COMPLETO do módulo de estoque executado com sucesso.")
             return True
