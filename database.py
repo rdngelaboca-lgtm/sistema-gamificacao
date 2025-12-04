@@ -90,22 +90,22 @@ def get_db_connection():
         logger.critical(f"FALHA CRÍTICA na conexão com o banco de dados: {ex}", exc_info=True) # Usamos critical e exc_info para detalhes
         return None
 
-# --- MIGRAÇÃO AUTOMÁTICA DE BANCO ---
 def verificar_migracao_banco():
-    """Verifica se a tabela PosicoesLoja tem a coluna Setor. Se não, cria."""
+    """Verifica se as tabelas de migração estão no banco. Se não, cria."""
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            # Tenta selecionar a coluna Setor
+            # 1. Migração de PosicoesLoja (Setor)
             try:
                 cursor.execute("SELECT TOP 1 Setor FROM PosicoesLoja")
             except Exception:
-                logger.info("Coluna 'Setor' não encontrada. Iniciando migração da tabela...")
+                logger.info("Coluna 'Setor' não encontrada. Iniciando migração da tabela PosicoesLoja...")
                 cursor.execute("ALTER TABLE PosicoesLoja ADD Setor VARCHAR(50)")
                 conn.commit()
                 logger.info("Migração concluída: Coluna 'Setor' adicionada com sucesso.")
-                # --- NOVA MIGRAÇÃO: FATOR DE CONVERSÃO ---
+                
+            # 2. Migração de ProdutosFornecedor (FatorConversao)
             try:
                 cursor.execute("SELECT TOP 1 FatorConversao FROM ProdutosFornecedor")
             except Exception:
@@ -113,6 +113,35 @@ def verificar_migracao_banco():
                 cursor.execute("ALTER TABLE ProdutosFornecedor ADD FatorConversao DECIMAL(10,4) DEFAULT 1.0")
                 conn.commit()
                 logger.info("Migração concluída: Coluna 'FatorConversao' adicionada.")
+                
+            # 3. Migração para nova tabela de Configurações de Escala
+            try:
+                # Tenta criar a nova tabela (ignora se já existir)
+                cursor.execute("""
+                    IF NOT EXISTS (SELECT * FROM SYSOBJECTS WHERE ID = OBJECT_ID('ConfiguracoesEscala') AND XTIPO = 'U')
+                    CREATE TABLE ConfiguracoesEscala (
+                        ConfigID INT PRIMARY KEY IDENTITY(1,1),
+                        HoraBloqueioInicio TIME NOT NULL,
+                        HoraBloqueioFim TIME NOT NULL,
+                        MaxHorasSemPausa INT NOT NULL,
+                        DuracaoIntervalo INT NOT NULL,
+                        DataAtualizacao DATETIME DEFAULT GETDATE()
+                    )
+                """)
+                # Garante que sempre haja 1 registro (ou insere o padrão)
+                cursor.execute("""
+                    IF (SELECT COUNT(*) FROM ConfiguracoesEscala) = 0
+                    BEGIN
+                        INSERT INTO ConfiguracoesEscala (HoraBloqueioInicio, HoraBloqueioFim, MaxHorasSemPausa, DuracaoIntervalo)
+                        VALUES ('17:00:00', '18:30:00', 5, 1);
+                    END
+                """)
+                conn.commit()
+                logger.info("Tabela ConfiguracoesEscala verificada/criada com sucesso.")
+
+            except Exception as e:
+                logger.error(f"Erro na migração da ConfiguracoesEscala: {e}")
+
         except Exception as e:
             logger.error(f"Erro na migração de banco: {e}")
         finally:
@@ -5497,6 +5526,48 @@ def buscar_historico_compras_produto(produto_id_mestre):
 # ===================================================================
 # == INÍCIO DO MÓDULO DE ESCALAÇÃO E MAPA DE LOJA ===================
 # ===================================================================
+
+def buscar_configuracoes_escala():
+    """Busca o único registro de configurações de escala."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT TOP 1 * FROM ConfiguracoesEscala"
+            cursor.execute(sql)
+            return cursor.fetchone()
+        except Exception as e:
+            logger.error(f"Erro ao buscar configurações de escala: {e}")
+            return None
+        finally:
+            conn.close()
+    return None
+
+def atualizar_configuracoes_escala(h_ini, h_fim, max_horas, duracao_int):
+    """Atualiza as configurações de escala no banco (MERGE/UPDATE no único registro)."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Usa UPDATE, pois garantimos que o registro inicial exista na migração
+            sql = """
+                UPDATE ConfiguracoesEscala SET 
+                    HoraBloqueioInicio = ?, 
+                    HoraBloqueioFim = ?, 
+                    MaxHorasSemPausa = ?, 
+                    DuracaoIntervalo = ?,
+                    DataAtualizacao = GETDATE()
+            """
+            cursor.execute(sql, h_ini, h_fim, max_horas, duracao_int)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Erro ao atualizar configurações de escala: {e}")
+            conn.rollback()
+            return False
+        finally:
+            conn.close()
+    return False
 
 def criar_posicao_loja(nome, x, y, setor=None):
     """Cria um ponto clicável no mapa da loja, com compatibilidade para chamadas antigas."""
