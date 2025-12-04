@@ -637,8 +637,9 @@ class AppEscalaLoja:
                 popup.destroy()
 
         # 4. Botão Salvar
+        # CORREÇÃO: Posiciona o botão Salvar IMEDIATAMENTE após a última linha populada (row_num + 1)
         btn_salvar = ttk.Button(frame, text="💾 Salvar Regras de Pico", command=salvar_picos)
-        btn_salvar.grid(row=8, column=0, columnspan=3, pady=20, sticky=tk.EW)
+        btn_salvar.grid(row=len(picos_atuais) + 1, column=0, columnspan=3, pady=20, sticky=tk.EW)
 
 
     def alternar_modo(self):
