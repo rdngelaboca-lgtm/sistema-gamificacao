@@ -966,15 +966,34 @@ class AppEscalaLoja:
                 foco_texto = txt_foco.get("1.0", "end-1c").strip()
                 if foco_texto:
                     texto_msg += f"\n\n🎯 *FOCO DO DIA:*\n{foco_texto}"
+                # --- INTEGRAÇÃO BOT WHATSAPP ---
+                # Importação local para evitar ciclo
+                import notificador_whatsapp
 
-                # Codificação e abertura do navegador
-                tel_limpo = re.sub(r'\D', '', tel)
-                texto_encoded = urllib.parse.quote(texto_msg)
-                url = f"https://wa.me/{tel_limpo}?text={texto_encoded}"
-                webbrowser.open(url)
+                # Pergunta ao gestor como deseja enviar (opcional, ou pode ser direto)
+                modo_envio = messagebox.askyesno(
+                    "Enviar Mensagem", 
+                    f"Confirma o envio automático da mensagem para {nome_pessoa_limpo} via BOT?\n\n"
+                    "(Clique em 'Sim' para enviar pelo sistema ou 'Não' para abrir o WhatsApp Web)"
+                )
+
+                if modo_envio:
+                    # Envio Automático via API
+                    sucesso, msg_retorno = notificador_whatsapp.enviar_mensagem_whatsapp(tel, texto_msg)
+                    if sucesso:
+                        messagebox.showinfo("Sucesso", f"Bot: {msg_retorno}")
+                        popup.destroy() # Fecha a janela se deu certo
+                    else:
+                        messagebox.showerror("Erro no Bot", f"Falha ao enviar via sistema:\n{msg_retorno}\n\nTente via Navegador.")
+                else:
+                    # Fallback: Abertura do Navegador (Método Antigo)
+                    tel_limpo = re.sub(r'\D', '', tel)
+                    texto_encoded = urllib.parse.quote(texto_msg)
+                    url = f"https://wa.me/{tel_limpo}?text={texto_encoded}"
+                    webbrowser.open(url)
+                    popup.destroy()
             else:
                 messagebox.showwarning("Aviso", "Nenhum telefone encontrado para a pessoa selecionada.")
-
         # --- Recriação dos Botões de Ação (Faltavam no código) ---
         frame_botoes = ttk.Frame(popup, padding="10")
         frame_botoes.pack(fill=tk.X, side=tk.BOTTOM)
