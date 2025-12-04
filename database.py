@@ -118,7 +118,7 @@ def verificar_migracao_banco():
             try:
                 # 3.1. Cria ou Ajusta a Tabela Global de Configurações (Remove HoraBloqueio se existir)
                 cursor.execute("""
-                    IF NOT EXISTS (SELECT * FROM SYSOBJECTS WHERE ID = OBJECT_ID('ConfiguracoesEscala') AND XTIPO = 'U')
+                    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ConfiguracoesEscala')
                     BEGIN
                         CREATE TABLE ConfiguracoesEscala (
                             ConfigID INT PRIMARY KEY IDENTITY(1,1),
@@ -141,7 +141,7 @@ def verificar_migracao_banco():
 
                 # 3.2. Cria a Tabela de Bloqueio Diário
                 cursor.execute("""
-                    IF NOT EXISTS (SELECT * FROM SYSOBJECTS WHERE ID = OBJECT_ID('PicoDiario') AND XTIPO = 'U')
+                    IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'PicoDiario')
                     CREATE TABLE PicoDiario (
                         DiaSemanaID INT PRIMARY KEY, -- 1=Dom, 2=Seg, ..., 7=Sab
                         NomeDia VARCHAR(20) NOT NULL,
