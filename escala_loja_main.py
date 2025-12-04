@@ -93,6 +93,8 @@ class AppEscalaLoja:
         # Botão Telegram
         self.btn_telegram = ttk.Button(self.frame_topo, text="📢 Enviar Escala Telegram", command=self.enviar_escala_telegram)
         self.btn_telegram.pack(side=tk.LEFT, padx=5)
+        self.btn_config = ttk.Button(self.frame_topo, text="⚙️ Configurações Automação", command=self.abrir_janela_configuracoes)
+        self.btn_config.pack(side=tk.LEFT, padx=5)
 
         # --- Canvas do Mapa ---
         self.canvas = tk.Canvas(self.frame_mapa, bg="#e0e0e0", cursor="hand2")
@@ -455,11 +457,12 @@ class AppEscalaLoja:
             dados_antigos = self.escala_atual[pos_id]
 
             # Preserva os dados antigos, atualizando apenas o intervalo
+            # O objeto datetime.datetime é passado e o driver pyodbc extrai corretamente o time.
             database.salvar_escala_dia(
                 self.data_selecionada, pos_id, 
                 dados_antigos.FuncionarioID, dados_antigos.FreelancerID,
                 dados_antigos.HorarioEntrada, dados_antigos.HorarioSaida,
-                ini.strftime('%H:%M'), fim.strftime('%H:%M'), # Novos Intervalos
+                ini, fim, # Novos Intervalos (Passando objetos datetime.datetime)
                 dados_antigos.FocoDoDia
             )
             count_aplicados += 1
@@ -493,6 +496,85 @@ class AppEscalaLoja:
             threading.Thread(target=tarefa_background, daemon=True).start()
 
     # --- Funções Auxiliares Originais (Mantidas) ---
+
+    # --- Janela de Configurações de Automação (Nova Aba) ---
+    def abrir_janela_configuracoes(self):
+        """Abre a janela Toplevel para editar os parâmetros da automação de escala."""
+        popup = Toplevel(self.root)
+        popup.title("Configurações de Automação de Escala")
+        popup.geometry("450x300")
+        popup.transient(self.root)
+        frame = ttk.Frame(popup, padding="15")
+        frame.pack(fill="both", expand=True)
+        frame.columnconfigure(1, weight=1)
+
+        # 1. Carregar valores atuais
+        config_atual = database.buscar_configuracoes_escala()
+        if not config_atual:
+            messagebox.showerror("Erro", "Não foi possível carregar as configurações do banco. Usando padrões.", parent=popup)
+            h_ini_val, h_fim_val, max_h_val, dur_int_val = "17:00", "18:30", 5, 1
+        else:
+            h_ini_val = str(config_atual.HoraBloqueioInicio)[:5]
+            h_fim_val = str(config_atual.HoraBloqueioFim)[:5]
+            max_h_val = config_atual.MaxHorasSemPausa
+            dur_int_val = config_atual.DuracaoIntervalo
+
+        # 2. Campos de Input (Hora Bloqueio)
+        ttk.Label(frame, text="Hora Bloqueio Início (HH:MM):").grid(row=0, column=0, sticky=tk.W, pady=5)
+        entry_h_ini = ttk.Entry(frame, width=10)
+        entry_h_ini.insert(0, h_ini_val)
+        entry_h_ini.grid(row=0, column=1, sticky=tk.E, pady=5)
+
+        ttk.Label(frame, text="Hora Bloqueio Fim (HH:MM):").grid(row=1, column=0, sticky=tk.W, pady=5)
+        entry_h_fim = ttk.Entry(frame, width=10)
+        entry_h_fim.insert(0, h_fim_val)
+        entry_h_fim.grid(row=1, column=1, sticky=tk.E, pady=5)
+
+        # 3. Campos de Input (Regras CLT)
+        ttk.Label(frame, text="Max. Horas sem Pausa (CLT):").grid(row=2, column=0, sticky=tk.W, pady=5)
+        entry_max_horas = ttk.Entry(frame, width=10)
+        entry_max_horas.insert(0, str(max_h_val))
+        entry_max_horas.grid(row=2, column=1, sticky=tk.E, pady=5)
+
+        ttk.Label(frame, text="Duração do Intervalo (Horas):").grid(row=3, column=0, sticky=tk.W, pady=5)
+        entry_duracao = ttk.Entry(frame, width=10)
+        entry_duracao.insert(0, str(dur_int_val))
+        entry_duracao.grid(row=3, column=1, sticky=tk.E, pady=5)
+
+        # 4. Função de Salvar
+        def salvar_config():
+            h_ini = entry_h_ini.get().strip()
+            h_fim = entry_h_fim.get().strip()
+            max_horas_str = entry_max_horas.get().strip()
+            duracao_str = entry_duracao.get().strip()
+
+            try:
+                # Validação de formato de hora
+                datetime.strptime(h_ini, '%H:%M')
+                datetime.strptime(h_fim, '%H:%M')
+                
+                max_horas = int(max_horas_str)
+                duracao = int(duracao_str)
+                
+                if max_horas <= 0 or duracao <= 0:
+                     raise ValueError("Valores numéricos devem ser positivos.")
+
+                # O banco aceita HH:MM, mas internamente usa TIME. Passamos a string formatada.
+                if database.atualizar_configuracoes_escala(h_ini, h_fim, max_horas, duracao):
+                    messagebox.showinfo("Sucesso", "Configurações de automação salvas! Atualize a escala.", parent=popup)
+                    popup.destroy()
+                else:
+                    messagebox.showerror("Erro", "Falha ao salvar no banco de dados.", parent=popup)
+
+            except ValueError as e:
+                messagebox.showerror("Erro de Formato", f"Verifique o formato: Horários devem ser HH:MM. Valores numéricos devem ser inteiros e positivos.\nDetalhe: {e}", parent=popup)
+            except Exception as e:
+                messagebox.showerror("Erro", f"Ocorreu um erro inesperado: {e}", parent=popup)
+
+        # 5. Botão Salvar
+        btn_salvar = ttk.Button(frame, text="💾 Salvar Configurações", command=salvar_config)
+        btn_salvar.grid(row=4, column=0, columnspan=2, pady=20, sticky=tk.EW)
+
     def alternar_modo(self):
         self.modo_edicao = not self.modo_edicao
         if self.modo_edicao:
@@ -722,31 +804,47 @@ class AppEscalaLoja:
             popup.destroy()
             self.carregar_escala_do_dia()
 
+
         def enviar_zap():
             selecao = combo_pessoas.get()
             if not selecao or selecao == "(Vazio)": return
+            
             d = mapa_ids.get(selecao)
-            tel = d.get('tel') if d else None
-            if not tel and pessoa_tel: tel = pessoa_tel
+            if not d: return
 
+            tel = None
+            nome_pessoa_limpo = selecao.split('] ')[1] if ']' in selecao else selecao
+            
+            if d['tipo'] == 'free':
+                # Freelancer: usa o telefone salvo no mapa
+                tel = d.get('tel')
+            elif d['tipo'] == 'func':
+                # Funcionário: o mapa só tem ChatID. Pede o telefone para o WhatsApp.
+                # Usa o telefone de contato do Freelancer, se tiver sido carregado, como valor padrão.
+                valor_inicial = next((fr.Telefone for fr in database.listar_freelancers() if fr.FreelancerID == d.get('id')), '')
+                
+                tel_dialog = simpledialog.askstring(
+                    "Telefone WhatsApp", 
+                    f"Digite o telefone celular para {nome_pessoa_limpo} (apenas números, DDD+Número):",
+                    initialvalue=valor_inicial,
+                    parent=popup
+                )
+                if tel_dialog:
+                    tel = tel_dialog
+                else:
+                    messagebox.showwarning("Aviso", "Envio via WhatsApp cancelado (telefone não fornecido).")
+                    return
+            
             if tel:
-                # Limpeza do telefone e formatação da data
                 try:
-                    if not self.data_selecionada: raise ValueError("Data não selecionada")
                     data_obj = datetime.strptime(self.data_selecionada, '%Y-%m-%d')
                     data_fmt = data_obj.strftime('%d/%m/%y')
                 except ValueError:
                     data_fmt = self.data_selecionada or "Data Indefinida"
 
-                # --- LÓGICA DE MENSAGEM PERSONALIZADA ---
-                
-                # 1. Extrai o nome limpo (remove o prefixo [Tipo])
-                # Ex: De "[Free] Rose W." para "Rose W."
-                nome_pessoa = selecao.split('] ')[1] if ']' in selecao else selecao
-
-                # 2. Monta o Cabeçalho e o Corpo
+                # Montagem da Mensagem (usando nome_pessoa_limpo)
                 texto_msg = (
-                    f"Olá, *{nome_pessoa}*! 👋\n"
+                    f"Olá, *{nome_pessoa_limpo}*! 👋\n"
                     f"Por favor, *confirme sua presença*.\n"
                     f"⚠️ *AS ORIENTAÇÕES ABAIXO SÃO MUITO IMPORTANTES:*\n\n"
                     f"━━━━━━━━━━━━━━━━━━\n"
@@ -755,11 +853,9 @@ class AppEscalaLoja:
                     f"⏰ *Horário:* {e_ent.get()} às {e_sai.get()}"
                 )
                 
-                # Adiciona Intervalo se houver
                 if e_int_ini.get() and e_int_fim.get():
                     texto_msg += f"\n☕ *Intervalo:* {e_int_ini.get()} às {e_int_fim.get()}"
 
-                # Adiciona o Foco do Dia se houver texto
                 foco_texto = txt_foco.get("1.0", "end-1c").strip()
                 if foco_texto:
                     texto_msg += f"\n\n🎯 *FOCO DO DIA:*\n{foco_texto}"
