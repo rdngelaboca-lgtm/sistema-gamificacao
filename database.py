@@ -114,34 +114,67 @@ def verificar_migracao_banco():
                 conn.commit()
                 logger.info("Migração concluída: Coluna 'FatorConversao' adicionada.")
                 
-            # 3. Migração para nova tabela de Configurações de Escala
+            # 3. Migração para nova tabela de Configurações de Escala (AGORA SEM O BLOQUEIO GERAL)
             try:
-                # Tenta criar a nova tabela (ignora se já existir)
+                # 3.1. Cria ou Ajusta a Tabela Global de Configurações (Remove HoraBloqueio se existir)
                 cursor.execute("""
                     IF NOT EXISTS (SELECT * FROM SYSOBJECTS WHERE ID = OBJECT_ID('ConfiguracoesEscala') AND XTIPO = 'U')
-                    CREATE TABLE ConfiguracoesEscala (
-                        ConfigID INT PRIMARY KEY IDENTITY(1,1),
-                        HoraBloqueioInicio TIME NOT NULL,
-                        HoraBloqueioFim TIME NOT NULL,
-                        MaxHorasSemPausa INT NOT NULL,
-                        DuracaoIntervalo INT NOT NULL,
-                        DataAtualizacao DATETIME DEFAULT GETDATE()
-                    )
-                """)
-                # Garante que sempre haja 1 registro (ou insere o padrão)
-                cursor.execute("""
-                    IF (SELECT COUNT(*) FROM ConfiguracoesEscala) = 0
                     BEGIN
-                        INSERT INTO ConfiguracoesEscala (HoraBloqueioInicio, HoraBloqueioFim, MaxHorasSemPausa, DuracaoIntervalo)
-                        VALUES ('17:00:00', '18:30:00', 5, 1);
+                        CREATE TABLE ConfiguracoesEscala (
+                            ConfigID INT PRIMARY KEY IDENTITY(1,1),
+                            MaxHorasSemPausa INT NOT NULL,
+                            DuracaoIntervalo INT NOT NULL,
+                            DataAtualizacao DATETIME DEFAULT GETDATE()
+                        );
+                        INSERT INTO ConfiguracoesEscala (MaxHorasSemPausa, DuracaoIntervalo) VALUES (5, 1);
+                    END
+                    ELSE IF EXISTS (SELECT * FROM syscolumns WHERE id=OBJECT_ID('ConfiguracoesEscala') AND name='HoraBloqueioInicio')
+                    BEGIN
+                        ALTER TABLE ConfiguracoesEscala DROP COLUMN HoraBloqueioInicio;
+                        ALTER TABLE ConfiguracoesEscala DROP COLUMN HoraBloqueioFim;
+                        -- Se já existia, garante o valor padrão para os novos campos
+                        IF (SELECT COUNT(*) FROM ConfiguracoesEscala) = 0 BEGIN
+                            INSERT INTO ConfiguracoesEscala (MaxHorasSemPausa, DuracaoIntervalo) VALUES (5, 1);
+                        END
                     END
                 """)
+
+                # 3.2. Cria a Tabela de Bloqueio Diário
+                cursor.execute("""
+                    IF NOT EXISTS (SELECT * FROM SYSOBJECTS WHERE ID = OBJECT_ID('PicoDiario') AND XTIPO = 'U')
+                    CREATE TABLE PicoDiario (
+                        DiaSemanaID INT PRIMARY KEY, -- 1=Dom, 2=Seg, ..., 7=Sab
+                        NomeDia VARCHAR(20) NOT NULL,
+                        HoraBloqueioInicio TIME,
+                        HoraBloqueioFim TIME,
+                    )
+                """)
+                
+                # 3.3. Garante que os 7 dias existam com valores padrão (Pico só Sáb/Dom)
+                dias_padrao = [
+                    (1, 'Domingo', '17:00:00', '18:30:00'),
+                    (2, 'Segunda', NULL, NULL),
+                    (3, 'Terça', NULL, NULL),
+                    (4, 'Quarta', NULL, NULL),
+                    (5, 'Quinta', NULL, NULL),
+                    (6, 'Sexta', NULL, NULL),
+                    (7, 'Sábado', '17:00:00', '18:30:00'),
+                ]
+                
+                for dia_id, nome, h_ini, h_fim in dias_padrao:
+                    cursor.execute("""
+                        IF NOT EXISTS (SELECT 1 FROM PicoDiario WHERE DiaSemanaID = ?)
+                        INSERT INTO PicoDiario (DiaSemanaID, NomeDia, HoraBloqueioInicio, HoraBloqueioFim)
+                        VALUES (?, ?, ?)
+                        ELSE
+                        UPDATE PicoDiario SET NomeDia = ? WHERE DiaSemanaID = ?
+                    """, dia_id, dia_id, nome, h_ini, h_fim, nome, dia_id)
+
                 conn.commit()
-                logger.info("Tabela ConfiguracoesEscala verificada/criada com sucesso.")
+                logger.info("Tabelas ConfiguracoesEscala e PicoDiario verificadas/criadas com sucesso.")
 
             except Exception as e:
-                logger.error(f"Erro na migração da ConfiguracoesEscala: {e}")
-
+                logger.error(f"Erro na migração das tabelas de Escala Dinâmica: {e}")
         except Exception as e:
             logger.error(f"Erro na migração de banco: {e}")
         finally:
@@ -5533,7 +5566,8 @@ def buscar_configuracoes_escala():
     if conn:
         try:
             cursor = conn.cursor()
-            sql = "SELECT TOP 1 * FROM ConfiguracoesEscala"
+            # Retorna apenas os campos que restaram na tabela global
+            sql = "SELECT TOP 1 MaxHorasSemPausa, DuracaoIntervalo FROM ConfiguracoesEscala ORDER BY ConfigID ASC"
             cursor.execute(sql)
             return cursor.fetchone()
         except Exception as e:
@@ -5544,7 +5578,7 @@ def buscar_configuracoes_escala():
     return None
 
 def atualizar_configuracoes_escala(h_ini, h_fim, max_horas, duracao_int):
-    """Atualiza as configurações de escala no banco (MERGE/UPDATE no único registro)."""
+    """Atualiza as configurações de escala no banco (AGORA SÓ MaxHoras e Duracao)."""
     conn = get_db_connection()
     if conn:
         try:
@@ -5552,17 +5586,51 @@ def atualizar_configuracoes_escala(h_ini, h_fim, max_horas, duracao_int):
             # Usa UPDATE, pois garantimos que o registro inicial exista na migração
             sql = """
                 UPDATE ConfiguracoesEscala SET 
-                    HoraBloqueioInicio = ?, 
-                    HoraBloqueioFim = ?, 
                     MaxHorasSemPausa = ?, 
                     DuracaoIntervalo = ?,
                     DataAtualizacao = GETDATE()
             """
-            cursor.execute(sql, h_ini, h_fim, max_horas, duracao_int)
+            # Os parâmetros h_ini e h_fim são ignorados nesta função (mas mantidos na chamada para o futuro)
+            cursor.execute(sql, max_horas, duracao_int)
             conn.commit()
             return True
         except Exception as e:
             logger.error(f"Erro ao atualizar configurações de escala: {e}")
+            conn.rollback()
+            return False
+        finally:
+            conn.close()
+    return False
+
+def listar_configuracoes_pico_diario():
+    """Lista as configurações de horário de pico para todos os 7 dias da semana."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT DiaSemanaID, NomeDia, HoraBloqueioInicio, HoraBloqueioFim FROM PicoDiario ORDER BY DiaSemanaID"
+            cursor.execute(sql)
+            return cursor.fetchall()
+        except Exception as e:
+            logger.error(f"Erro ao listar configurações de pico diário: {e}")
+            return []
+        finally:
+            conn.close()
+    return []
+
+def atualizar_pico_diario(dia_id, h_ini, h_fim):
+    """Atualiza o horário de pico para um dia da semana específico."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Se h_ini e h_fim forem vazios (None), o UPDATE usa NULL no banco.
+            sql = "UPDATE PicoDiario SET HoraBloqueioInicio = ?, HoraBloqueioFim = ? WHERE DiaSemanaID = ?"
+            cursor.execute(sql, h_ini, h_fim, dia_id)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Erro ao atualizar pico diário para DiaID {dia_id}: {e}")
             conn.rollback()
             return False
         finally:
