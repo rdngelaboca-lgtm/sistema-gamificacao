@@ -687,6 +687,32 @@ def rota_escala_ocupacao():
         logger.error(f"Erro na rota ocupacao: {e}", exc_info=True)
         return jsonify([]), 500
     
+
+@app.route('/webhook/whatsapp', methods=['POST'])
+def webhook_whatsapp():
+    """
+    Recebe notificações de mensagens recebidas via API do WhatsApp.
+    Aqui você implementará a lógica para processar o 'Confirmado' do freelancer.
+    """
+    try:
+        dados = request.get_json()
+
+        # Log genérico para depuração (ver o que a API manda)
+        # logger.info(f"Webhook WPP Recebido: {dados}")
+
+        # Exemplo de lógica futura (Depende do formato da sua API):
+        # 1. Extrair telefone do remetente
+        # 2. Extrair texto da mensagem
+        # 3. Se texto == "CONFIRMO":
+        #    Buscar na tabela EscalaDiaria quem tem esse telefone na data de hoje/amanhã
+        #    e atualizar status visual (cor verde, etc).
+
+        return jsonify({"status": "recebido"}), 200
+    except Exception as e:
+        logger.error(f"Erro no Webhook WPP: {e}")
+        return jsonify({"status": "erro"}), 500
+
+
 if __name__ == '__main__':
     # O debug=False é essencial para rodar como serviço
     app.run(host='0.0.0.0', port=5000, debug=False)
