@@ -511,69 +511,136 @@ class AppEscalaLoja:
         # 1. Carregar valores atuais
         config_atual = database.buscar_configuracoes_escala()
         if not config_atual:
-            messagebox.showerror("Erro", "Não foi possível carregar as configurações do banco. Usando padrões.", parent=popup)
-            h_ini_val, h_fim_val, max_h_val, dur_int_val = "17:00", "18:30", 5, 1
+            messagebox.showerror("Erro", "Não foi possível carregar as configurações globais do banco. Usando padrões.", parent=popup)
+            max_h_val, dur_int_val = 5, 1
         else:
-            h_ini_val = str(config_atual.HoraBloqueioInicio)[:5]
-            h_fim_val = str(config_atual.HoraBloqueioFim)[:5]
+            # Configs Globais (apenas MaxHoras e Duração)
             max_h_val = config_atual.MaxHorasSemPausa
             dur_int_val = config_atual.DuracaoIntervalo
 
-        # 2. Campos de Input (Hora Bloqueio)
-        ttk.Label(frame, text="Hora Bloqueio Início (HH:MM):").grid(row=0, column=0, sticky=tk.W, pady=5)
-        entry_h_ini = ttk.Entry(frame, width=10)
-        entry_h_ini.insert(0, h_ini_val)
-        entry_h_ini.grid(row=0, column=1, sticky=tk.E, pady=5)
-
-        ttk.Label(frame, text="Hora Bloqueio Fim (HH:MM):").grid(row=1, column=0, sticky=tk.W, pady=5)
-        entry_h_fim = ttk.Entry(frame, width=10)
-        entry_h_fim.insert(0, h_fim_val)
-        entry_h_fim.grid(row=1, column=1, sticky=tk.E, pady=5)
-
-        # 3. Campos de Input (Regras CLT)
-        ttk.Label(frame, text="Max. Horas sem Pausa (CLT):").grid(row=2, column=0, sticky=tk.W, pady=5)
+        # 2. Campos de Input (Regras CLT)
+        ttk.Label(frame, text="Max. Horas sem Pausa (CLT):").grid(row=0, column=0, sticky=tk.W, pady=5)
         entry_max_horas = ttk.Entry(frame, width=10)
         entry_max_horas.insert(0, str(max_h_val))
-        entry_max_horas.grid(row=2, column=1, sticky=tk.E, pady=5)
+        entry_max_horas.grid(row=0, column=1, sticky=tk.E, pady=5)
 
-        ttk.Label(frame, text="Duração do Intervalo (Horas):").grid(row=3, column=0, sticky=tk.W, pady=5)
+        ttk.Label(frame, text="Duração do Intervalo (Horas):").grid(row=1, column=0, sticky=tk.W, pady=5)
         entry_duracao = ttk.Entry(frame, width=10)
         entry_duracao.insert(0, str(dur_int_val))
-        entry_duracao.grid(row=3, column=1, sticky=tk.E, pady=5)
+        entry_duracao.grid(row=1, column=1, sticky=tk.E, pady=5)
 
-        # 4. Função de Salvar
+        # Separador para Pico Diário
+        ttk.Separator(frame, orient=tk.HORIZONTAL).grid(row=2, column=0, columnspan=2, sticky=tk.EW, pady=10)
+        ttk.Label(frame, text="Gerenciar Horário de Pico por Dia:").grid(row=3, column=0, columnspan=2, sticky=tk.W, pady=(0, 5))
+
+        # 3. Botão para Abrir Configurações de Pico
+        btn_abrir_pico = ttk.Button(frame, text="Abrir Gerenciador de Pico Diário", command=lambda: self.abrir_janela_pico_diario(popup))
+        btn_abrir_pico.grid(row=4, column=0, columnspan=2, pady=10, sticky=tk.EW)
+
         def salvar_config():
-            h_ini = entry_h_ini.get().strip()
-            h_fim = entry_h_fim.get().strip()
             max_horas_str = entry_max_horas.get().strip()
             duracao_str = entry_duracao.get().strip()
 
             try:
-                # Validação de formato de hora
-                datetime.strptime(h_ini, '%H:%M')
-                datetime.strptime(h_fim, '%H:%M')
-                
                 max_horas = int(max_horas_str)
                 duracao = int(duracao_str)
                 
                 if max_horas <= 0 or duracao <= 0:
                      raise ValueError("Valores numéricos devem ser positivos.")
 
-                # O banco aceita HH:MM, mas internamente usa TIME. Passamos a string formatada.
-                if database.atualizar_configuracoes_escala(h_ini, h_fim, max_horas, duracao):
-                    messagebox.showinfo("Sucesso", "Configurações de automação salvas! Atualize a escala.", parent=popup)
+                # Atualiza apenas as configurações globais (Max Horas, Duração)
+                if database.atualizar_configuracoes_escala(None, None, max_horas, duracao): # H_INI e H_FIM são nulos no global
+                    messagebox.showinfo("Sucesso", "Configurações globais salvas! Atualize a escala.", parent=popup)
                     popup.destroy()
                 else:
                     messagebox.showerror("Erro", "Falha ao salvar no banco de dados.", parent=popup)
 
             except ValueError as e:
-                messagebox.showerror("Erro de Formato", f"Verifique o formato: Horários devem ser HH:MM. Valores numéricos devem ser inteiros e positivos.\nDetalhe: {e}", parent=popup)
+                messagebox.showerror("Erro de Formato", f"Verifique o formato: Valores numéricos devem ser inteiros e positivos.\nDetalhe: {e}", parent=popup)
             except Exception as e:
                 messagebox.showerror("Erro", f"Ocorreu um erro inesperado: {e}", parent=popup)
 
         # 5. Botão Salvar
         btn_salvar = ttk.Button(frame, text="💾 Salvar Configurações", command=salvar_config)
         btn_salvar.grid(row=4, column=0, columnspan=2, pady=20, sticky=tk.EW)
+
+
+    def abrir_janela_pico_diario(self, parent_popup):
+        """Abre a janela Toplevel para editar o horário de pico por dia da semana."""
+        popup = Toplevel(self.root)
+        popup.title("Gerenciar Horários de Pico Diário")
+        popup.geometry("400x350")
+        popup.transient(self.root)
+        frame = ttk.Frame(popup, padding="15")
+        frame.pack(fill="both", expand=True)
+        
+        # Mapa para armazenar os campos de entrada (DiaID: (Entry_Ini, Entry_Fim))
+        campos_pico = {}
+        
+        # 1. Carregar valores atuais
+        picos_atuais = database.listar_configuracoes_pico_diario()
+        
+        # 2. Criação da Tabela/Grid de Edição
+        
+        ttk.Label(frame, text="Dia").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
+        ttk.Label(frame, text="Início (HH:MM)").grid(row=0, column=1, sticky=tk.W, padx=5, pady=5)
+        ttk.Label(frame, text="Fim (HH:MM)").grid(row=0, column=2, sticky=tk.W, padx=5, pady=5)
+        
+        for i, pico in enumerate(picos_atuais):
+            row_num = i + 1
+            dia_id, nome_dia, h_ini, h_fim = pico
+            
+            ttk.Label(frame, text=f"{nome_dia}:").grid(row=row_num, column=0, sticky=tk.W, padx=5, pady=2)
+            
+            # Campo de Início
+            entry_ini = ttk.Entry(frame, width=8, justify="center")
+            # Fatiamento seguro, se for None, insere vazio
+            entry_ini.insert(0, str(h_ini)[:5] if h_ini else "")
+            entry_ini.grid(row=row_num, column=1, sticky=tk.W, padx=5, pady=2)
+            
+            # Campo de Fim
+            entry_fim = ttk.Entry(frame, width=8, justify="center")
+            entry_fim.insert(0, str(h_fim)[:5] if h_fim else "")
+            entry_fim.grid(row=row_num, column=2, sticky=tk.W, padx=5, pady=2)
+            
+            campos_pico[dia_id] = (entry_ini, entry_fim)
+
+        # 3. Função de Salvamento
+        def salvar_picos():
+            erros = []
+            sucessos = 0
+            
+            for dia_id, (entry_ini, entry_fim) in campos_pico.items():
+                h_ini_str = entry_ini.get().strip()
+                h_fim_str = entry_fim.get().strip()
+                
+                # Trata string vazia como NULL para o banco
+                h_ini = h_ini_str if h_ini_str else None
+                h_fim = h_fim_str if h_fim_str else None
+
+                # Validação de formato HH:MM (só se o campo não estiver vazio)
+                if h_ini and not re.match(r'^\d{2}:\d{2}$', h_ini):
+                    erros.append(f"Dia {dia_id} (Início): Formato inválido.")
+                    continue
+                if h_fim and not re.match(r'^\d{2}:\d{2}$', h_fim):
+                    erros.append(f"Dia {dia_id} (Fim): Formato inválido.")
+                    continue
+
+                if database.atualizar_pico_diario(dia_id, h_ini, h_fim):
+                    sucessos += 1
+                else:
+                    erros.append(f"Dia {dia_id}: Falha de escrita no banco.")
+            
+            if erros:
+                messagebox.showerror("Erros de Salva.", "\n".join(erros) + f"\n\n{sucessos} dia(s) salvo(s) com sucesso.", parent=popup)
+            else:
+                messagebox.showinfo("Sucesso", "Horários de pico diários salvos com sucesso! A automação agora usará estas regras.", parent=popup)
+                popup.destroy()
+
+        # 4. Botão Salvar
+        btn_salvar = ttk.Button(frame, text="💾 Salvar Regras de Pico", command=salvar_picos)
+        btn_salvar.grid(row=8, column=0, columnspan=3, pady=20, sticky=tk.EW)
+
 
     def alternar_modo(self):
         self.modo_edicao = not self.modo_edicao
