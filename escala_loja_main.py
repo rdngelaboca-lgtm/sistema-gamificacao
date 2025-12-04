@@ -865,12 +865,14 @@ class AppEscalaLoja:
             func_id = None
             free_id = None
 
-            if selecao != "(Vazio)" and selecao:
+            if selecao and selecao != "(Vazio)":
+                # Verifica se a chave existe antes de tentar acessar
                 d = mapa_ids.get(selecao)
                 if d:
                     func_id = d['id'] if d['tipo'] == 'func' else None
                     free_id = d['id'] if d['tipo'] == 'free' else None
                 else:
+                     # Se não encontrou no mapa (erro interno), assume vazio
                      messagebox.showerror("Erro Interno", "Seleção inválida no mapa de IDs.", parent=popup); return
 
             # Salva a escala do dia, permitindo que func_id/free_id sejam NULL
