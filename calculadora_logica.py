@@ -14,24 +14,28 @@ def calcular_intervalos_automaticos(dados_escala, dia_semana_iso):
     lendo os parâmetros dinamicamente do banco de dados.
     """
     # 1. Carregar Configurações Dinâmicas
-    config = database.buscar_configuracoes_escala()
-    if not config:
+    config_global = database.buscar_configuracoes_escala()
+    config_pico = database.listar_configuracoes_pico_diario() # Busca o pico para todos os 7 dias
+    
+    # 1.1. Busca o pico específico para o dia de hoje
+    pico_hoje = next((p for p in config_pico if p.DiaSemanaID == dia_semana_iso), None)
+
+    if not config_global:
         # Fallback se o banco não estiver disponível (usa valores padrão)
-        HORA_BLOQUEIO_INICIO = "17:00"
-        HORA_BLOQUEIO_FIM = "18:30"
         MAX_HORAS_SEM_PAUSA = 5
         DURACAO_INTERVALO = 1 
     else:
-        # Nota: O objeto config.HoraBloqueioInicio é um objeto datetime.time ou string 'HH:MM:SS'
-        HORA_BLOQUEIO_INICIO = str(config.HoraBloqueioInicio)[:5]
-        HORA_BLOQUEIO_FIM = str(config.HoraBloqueioFim)[:5]
-        MAX_HORAS_SEM_PAUSA = config.MaxHorasSemPausa
-        DURACAO_INTERVALO = config.DuracaoIntervalo # horas (assumindo que vem como int/float)
+        MAX_HORAS_SEM_PAUSA = config_global.MaxHorasSemPausa
+        DURACAO_INTERVALO = config_global.DuracaoIntervalo # horas (assumindo que vem como int/float)
+        
+    # 1.2. Define o pico de hoje (usando None se não houver)
+    HORA_BLOQUEIO_INICIO = str(pico_hoje.HoraBloqueioInicio)[:5] if pico_hoje and pico_hoje.HoraBloqueioInicio else None
+    HORA_BLOQUEIO_FIM = str(pico_hoje.HoraBloqueioFim)[:5] if pico_hoje and pico_hoje.HoraBloqueioFim else None
 
     log_erros = []
     sugestoes = {} # {posicao_id: (inicio_intervalo, fim_intervalo)}
 
-    # 1. Agrupar funcionários por Setor
+    # 2. Agrupar funcionários por Setor
     por_setor = {}
     for p in dados_escala:
         setor = p['setor']
@@ -78,18 +82,21 @@ def calcular_intervalos_automaticos(dados_escala, dia_semana_iso):
 
             proposta_fim = proposta_inicio + timedelta(hours=DURACAO_INTERVALO)
 
-            # Regra: Bloqueio de Pico (Apenas Sábado e Domingo)
-            if dia_semana_iso in [6, 7]: # 6=Sábado, 7=Domingo
-                # Usamos os parâmetros lidos dinamicamente (ou o fallback)
-                bloqueio_ini = datetime.combine(entrada.date(), datetime.strptime(HORA_BLOQUEIO_INICIO, "%H:%M").time())
-                bloqueio_fim = datetime.combine(entrada.date(), datetime.strptime(HORA_BLOQUEIO_FIM, "%H:%M").time())
+            # Regra: Bloqueio de Pico (AGORA DINÂMICO POR DIA)
+            if HORA_BLOQUEIO_INICIO and HORA_BLOQUEIO_FIM: 
+                # Se há horários definidos para HOJE, aplica o bloqueio.
+                try:
+                    bloqueio_ini = datetime.combine(entrada.date(), datetime.strptime(HORA_BLOQUEIO_INICIO, "%H:%M").time())
+                    bloqueio_fim = datetime.combine(entrada.date(), datetime.strptime(HORA_BLOQUEIO_FIM, "%H:%M").time())
 
-                # Verifica se o intervalo proposto colide com o horário de pico
-                if (proposta_inicio < bloqueio_fim) and (proposta_fim > bloqueio_ini):
-                    # Se colidir, empurra o intervalo para DEPOIS do pico
-                    proposta_inicio = bloqueio_fim
-                    # Usamos o parâmetro dinâmico DURACAO_INTERVALO
-                    proposta_fim = proposta_inicio + timedelta(hours=DURACAO_INTERVALO)
+                    # Verifica se o intervalo proposto colide com o horário de pico
+                    if (proposta_inicio < bloqueio_fim) and (proposta_fim > bloqueio_ini):
+                        # Se colidir, empurra o intervalo para DEPOIS do pico
+                        proposta_inicio = bloqueio_fim
+                        # Usamos o parâmetro dinâmico DURACAO_INTERVALO
+                        proposta_fim = proposta_inicio + timedelta(hours=DURACAO_INTERVALO)
+                except ValueError:
+                    log_erros.append(f"❌ Erro de formato nos horários de pico (Conf. Dia {dia_semana_iso}). Verifique as configurações.")
 
             # Validação Final: Estouro das 5h
             if proposta_inicio > janela_fim_limite:
