@@ -71,9 +71,9 @@ def calcular_intervalos_automaticos(dados_escala, dia_semana_iso):
             saida = pessoa['saida']
 
             # Definição da Janela Válida para sair:
-            # Mínimo: Entrada + 4h (Ajuste de preferência: trabalhar pelo menos 4h antes do intervalo)
-            # Máximo: Entrada + 5h (Limite legal para início do descanso - Configuração Global)
-            janela_inicio = entrada + timedelta(hours=4)
+            # Mínimo: Entrada + 3h (Ajuste de preferência: trabalhar pelo menos 3h antes do intervalo)
+            # Máximo: Entrada + 5h (Limite legal para início do descanso)
+            janela_inicio = entrada + timedelta(hours=3)
             janela_fim_limite = entrada + timedelta(hours=MAX_HORAS_SEM_PAUSA)
 
             # Define o início proposto
@@ -86,23 +86,40 @@ def calcular_intervalos_automaticos(dados_escala, dia_semana_iso):
             proposta_fim = proposta_inicio + timedelta(hours=DURACAO_INTERVALO)
 
             # Regra: Bloqueio de Pico (AGORA DINÂMICO POR DIA)
-            # HORA_BLOQUEIO_INICIO e FIM agora são objetos datetime.time ou None
             if HORA_BLOQUEIO_INICIO and HORA_BLOQUEIO_FIM: 
-                # Se há horários definidos para HOJE, aplica o bloqueio.
                 try:
-                    # Combina o objeto date da entrada com o objeto time do banco
                     bloqueio_ini = datetime.combine(entrada.date(), HORA_BLOQUEIO_INICIO)
                     bloqueio_fim = datetime.combine(entrada.date(), HORA_BLOQUEIO_FIM)
 
-                    # Verifica se o intervalo proposto colide com o horário de pico
                     if (proposta_inicio < bloqueio_fim) and (proposta_fim > bloqueio_ini):
-                        # Se colidir, empurra o intervalo para DEPOIS do pico
                         proposta_inicio = bloqueio_fim
-                        # Usamos o parâmetro dinâmico DURACAO_INTERVALO
                         proposta_fim = proposta_inicio + timedelta(hours=DURACAO_INTERVALO)
                 except Exception as e:
-                    # Captura qualquer erro de conversão/combinação
-                    log_erros.append(f"❌ Erro ao aplicar pico (Conf. Dia {dia_semana_iso}). Detalhe: {e}")
+                    log_erros.append(f"❌ Erro ao aplicar pico. Detalhe: {e}")
+
+            # --- NOVA REGRA: VERIFICAÇÃO DE COBERTURA REAL ---
+            tem_cobertura = False
+            
+            # Se o setor permite ficar sozinho (ex: Limpeza), tem cobertura automática
+            if setor in SETORES_SOLO_PERMITIDO:
+                tem_cobertura = True
+            else:
+                # Verifica se existe ALGUM colega presente durante todo o intervalo proposto
+                for colega in pessoas:
+                    if colega['id_posicao'] == pessoa['id_posicao']:
+                        continue # Não conta a si mesmo
+
+                    # O colega precisa ter chegado ANTES do início do intervalo
+                    # E precisa sair DEPOIS do fim do intervalo
+                    if colega['entrada'] <= proposta_inicio and colega['saida'] >= proposta_fim:
+                        tem_cobertura = True
+                        break # Achou um, já basta
+            
+            if not tem_cobertura:
+                hora_formatada = proposta_inicio.strftime('%H:%M')
+                log_erros.append(f"⚠️ Intervalo de {pessoa['nome']} ({hora_formatada}) cancelado: O setor '{setor}' ficaria vazio neste horário (sem cobertura).")
+                continue # Pula este agendamento
+            # ------------------------------------------------
 
             # Validação Final: Estouro das 5h
             if proposta_inicio > janela_fim_limite:
