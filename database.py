@@ -489,11 +489,17 @@ def buscar_funcionarios_por_horario(horario_atual):
     if conn:
         try:
             cursor = conn.cursor()
-            # A NOVA REGRA: AND (DiaDeFolga = 0 OR DiaDeFolga != DATEPART(weekday, GETDATE()))
+            # Lógica corrigida para Folga: Usa DATENAME para ser agnóstico à configuração @@DATEFIRST
             sql = """
-                SELECT * FROM Funcionarios 
-                WHERE CONVERT(VARCHAR(5), HorarioNotificacao, 108) = ?
-                AND (DiaDeFolga = 0 OR DiaDeFolga != DATEPART(weekday, GETDATE()))
+                SELECT * FROM Funcionarios F
+                WHERE CONVERT(VARCHAR(5), F.HorarioNotificacao, 108) = ?
+                -- Lógica da Folga: Se DiaDeFolga for 0 (sem folga) OU o DiaDeFolga for diferente do dia da semana atual
+                AND (
+                    F.DiaDeFolga = 0 OR 
+                    F.DiaDeFolga IS NULL OR
+                    -- Converte o dia da semana SQL para o nosso padrão (1=Dom, 2=Seg... 7=Sáb)
+                    F.DiaDeFolga != (((DATEPART(dw, GETDATE()) + @@DATEFIRST - 1) % 7) + 1)
+                )
             """
             cursor.execute(sql, horario_atual)
             return cursor.fetchall()
@@ -1543,7 +1549,9 @@ def calcular_ranking_desempenho(data_final_calculo=None, setor_filtro=None): # <
                         if str(dia_da_semana_sql) == str(tarefa.ValorFrequencia): 
                             dias_ocorrencia += 1
                     elif tarefa.TipoFrequencia == 'Mensal':
-                        if dia_atual.day == int(tarefa.ValorFrequencia): 
+                        # CORREÇÃO: Compara o dia atual (int) com a frequência (string) de forma segura.
+                        # Convertendo dia_atual.day para str e ValorFrequencia para str.
+                        if str(dia_atual.day) == str(tarefa.ValorFrequencia): 
                             dias_ocorrencia += 1
 
                 pontos_possiveis_total += dias_ocorrencia * tarefa.Pontos
@@ -1873,6 +1881,7 @@ def registrar_pontos_de_bonus(funcionario_id, pontos, motivo_log, tarefa_id_bonu
                 VALUES (?, ?, 'Aprovada', ?, GETDATE(), ?, ?)
             """
             cursor.execute(sql, tarefa_id_bonus, funcionario_id, pontos, motivo_log, vinculo_id)
+            # A chamada a adicionar_pontos_ao_saldo é feita pelo módulo chamador (UI/Agendador)
             conn.commit()
             logger.info(f"--> [BÔNUS] {pontos} pts (TarefaID: {tarefa_id_bonus}, Vínculo: {vinculo_id}) registrados para FuncID {funcionario_id}. Motivo: {motivo_log}")
         except Exception as e:
@@ -2506,17 +2515,25 @@ def listar_setores_unicos():
             conn.close()
     return []
 
-def adicionar_pontos_ao_saldo(funcionario_id, pontos_a_adicionar):
-    """Adiciona pontos ao saldo cumulativo de um funcionário."""
+def adicionar_pontos_ao_saldo(funcionario_id, pontos_a_adicionar, cursor=None):
+    """Adiciona pontos ao saldo cumulativo de um funcionário (usa cursor se fornecido)."""
+    if cursor:
+        sql = "UPDATE Funcionarios SET SaldoPontos = SaldoPontos + ? WHERE FuncionarioID = ?"
+        cursor.execute(sql, pontos_a_adicionar, funcionario_id)
+        return True
+    
+    # Fallback se chamada sem cursor (comportamento original)
     conn = get_db_connection()
     if conn:
         try:
-            cursor = conn.cursor()
+            cursor_fallback = conn.cursor()
             sql = "UPDATE Funcionarios SET SaldoPontos = SaldoPontos + ? WHERE FuncionarioID = ?"
-            cursor.execute(sql, pontos_a_adicionar, funcionario_id)
+            cursor_fallback.execute(sql, pontos_a_adicionar, funcionario_id)
             conn.commit()
+            return True
         finally:
             conn.close()
+    return False
 
 def buscar_saldo_funcionario(funcionario_id):
     """Busca o saldo de pontos atual de um funcionário."""
@@ -3734,8 +3751,11 @@ def registrar_pontos_meta_diaria(apuracao_id, pontos_ganhos, setor):
             print(f"IDs dos funcionários encontrados: {[f.FuncionarioID for f in funcionarios_do_setor]}")
 
         for funcionario in funcionarios_do_setor:
-            cursor.execute(sql_entrega, TAREFA_ID_META, funcionario.FuncionarioID, pontos_ganhos, motivo)
-            adicionar_pontos_ao_saldo(funcionario.FuncionarioID, pontos_ganhos)
+            # 1. Insere o registro de Entrega/Bônus (usa o cursor principal)
+            cursor.execute(sql_entrega, TAREFA_ID_META, funcionario.FuncionarioID, pontos_premio_diario, motivo)
+            
+            # 2. Adiciona os pontos ao saldo (usa o cursor principal)
+            adicionar_pontos_ao_saldo(funcionario.FuncionarioID, pontos_premio_diario, cursor=cursor)
 
         conn.commit()
         print(f"--> [METAS DIÁRIAS] {pontos_ganhos} pts registrados para {len(funcionarios_do_setor)} funcionário(s) do setor '{setor}'.")
@@ -3790,7 +3810,7 @@ def distribuir_premio_meta_principal(meta_id):
         
         for funcionario in funcionarios_do_setor:
             cursor.execute(sql_entrega, TAREFA_ID_META, funcionario.FuncionarioID, pontos_premio, motivo)
-            adicionar_pontos_ao_saldo(funcionario.FuncionarioID, pontos_premio)
+            adicionar_pontos_ao_saldo(funcionario.FuncionarioID, pontos_premio, cursor=cursor) # Mantendo para consistência com A e B
 
         # Etapa 4: Marcar a meta como concluída para não premiar de novo
         marcar_meta_principal_como_concluida(meta_id)
@@ -5577,31 +5597,6 @@ def buscar_configuracoes_escala():
             conn.close()
     return None
 
-def atualizar_configuracoes_escala(h_ini, h_fim, max_horas, duracao_int):
-    """Atualiza as configurações de escala no banco (AGORA SÓ MaxHoras e Duracao)."""
-    conn = get_db_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            # Usa UPDATE, pois garantimos que o registro inicial exista na migração
-            sql = """
-                UPDATE ConfiguracoesEscala SET 
-                    MaxHorasSemPausa = ?, 
-                    DuracaoIntervalo = ?,
-                    DataAtualizacao = GETDATE()
-            """
-            # Os parâmetros h_ini e h_fim são ignorados nesta função (mas mantidos na chamada para o futuro)
-            cursor.execute(sql, max_horas, duracao_int)
-            conn.commit()
-            return True
-        except Exception as e:
-            logger.error(f"Erro ao atualizar configurações de escala: {e}")
-            conn.rollback()
-            return False
-        finally:
-            conn.close()
-    return False
-
 def listar_configuracoes_pico_diario():
     """Lista as configurações de horário de pico para todos os 7 dias da semana."""
     conn = get_db_connection()
@@ -5631,6 +5626,56 @@ def atualizar_pico_diario(dia_id, h_ini, h_fim):
             return True
         except Exception as e:
             logger.error(f"Erro ao atualizar pico diário para DiaID {dia_id}: {e}")
+            conn.rollback()
+            return False
+        finally:
+            conn.close()
+    return False
+
+def garantir_registro_configuracao_global():
+    """Garante que haja um registro na tabela ConfiguracoesEscala (ID=1)."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Verifica se o registro padrão existe. Se não, insere.
+            sql = """
+                IF NOT EXISTS (SELECT 1 FROM ConfiguracoesEscala)
+                BEGIN
+                    INSERT INTO ConfiguracoesEscala (MaxHorasSemPausa, DuracaoIntervalo)
+                    VALUES (5, 1);
+                END
+            """
+            cursor.execute(sql)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Erro ao garantir registro global de configuração: {e}")
+            conn.rollback()
+            return False
+        finally:
+            conn.close()
+    return False
+
+def atualizar_configuracoes_escala(h_ini, h_fim, max_horas, duracao_int):
+    """Atualiza as configurações de escala no banco (AGORA SÓ MaxHoras e Duracao)."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Usa UPDATE, pois garantimos que o registro inicial exista na migração
+            sql = """
+                UPDATE ConfiguracoesEscala SET 
+                    MaxHorasSemPausa = ?, 
+                    DuracaoIntervalo = ?,
+                    DataAtualizacao = GETDATE()
+            """
+            # Os parâmetros h_ini e h_fim são ignorados nesta função (mas mantidos na chamada para o futuro)
+            cursor.execute(sql, max_horas, duracao_int)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Erro ao atualizar configurações de escala: {e}")
             conn.rollback()
             return False
         finally:
