@@ -8,16 +8,17 @@ logger = logging.getLogger(__name__)
 
 def enviar_mensagem_whatsapp(numero, texto):
     """
-    Envia uma mensagem de texto via Z-API.
+    Envia uma mensagem de texto via Z-API (Versão Limpa).
     Retorna (True, msg) se sucesso, ou (False, erro) se falha.
     """
-    if not config.WPP_API_URL or "SEU_ID" in config.WPP_API_URL:
-        return False, "Credenciais da Z-API não configuradas no config.py"
+    # Validação básica da URL
+    if not config.WPP_API_URL:
+        return False, "URL da API não configurada no config.py"
 
     # 1. Limpeza do número
     # A Z-API exige o formato: 5544999998888 (DDI + DDD + Numero)
     numero_limpo = re.sub(r'\D', '', str(numero))
-    
+
     # Garante o código do país (Brasil 55) se não tiver
     if len(numero_limpo) <= 11:
         numero_limpo = '55' + numero_limpo
@@ -27,23 +28,22 @@ def enviar_mensagem_whatsapp(numero, texto):
         "phone": numero_limpo,
         "message": texto
     }
-    
-    headers = {
-    "Content-Type": "application/json"
-    }
 
-    # (Client-Token removido pois sua instância não utiliza essa configuração de segurança)
+    # --- CORREÇÃO FINAL: Apenas Content-Type, sem tokens de segurança extras ---
+    headers = {
+        "Content-Type": "application/json"
+    }
 
     try:
         logger.info(f"Tentando enviar WhatsApp via Z-API para {numero_limpo}...")
-        
+
         response = requests.post(
             config.WPP_API_URL, 
             json=payload, 
             headers=headers, 
             timeout=15
         )
-        
+
         # Z-API geralmente retorna 200 OK
         if response.status_code == 200:
             logger.info("WhatsApp enviado com sucesso (Z-API).")
