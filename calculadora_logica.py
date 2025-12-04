@@ -14,23 +14,26 @@ def calcular_intervalos_automaticos(dados_escala, dia_semana_iso):
     lendo os parâmetros dinamicamente do banco de dados.
     """
     # 1. Carregar Configurações Dinâmicas
+    
+    # Tenta buscar as configurações globais ou usa fallback
     config_global = database.buscar_configuracoes_escala()
-    config_pico = database.listar_configuracoes_pico_diario() # Busca o pico para todos os 7 dias
+    MAX_HORAS_SEM_PAUSA = getattr(config_global, 'MaxHorasSemPausa', 5)
+    DURACAO_INTERVALO = getattr(config_global, 'DuracaoIntervalo', 1) 
+    
+    # Busca as configurações de pico diário
+    config_pico = database.listar_configuracoes_pico_diario() 
     
     # 1.1. Busca o pico específico para o dia de hoje
     pico_hoje = next((p for p in config_pico if p.DiaSemanaID == dia_semana_iso), None)
-
-    if not config_global:
-        # Fallback se o banco não estiver disponível (usa valores padrão)
-        MAX_HORAS_SEM_PAUSA = 5
-        DURACAO_INTERVALO = 1 
-    else:
-        MAX_HORAS_SEM_PAUSA = config_global.MaxHorasSemPausa
-        DURACAO_INTERVALO = config_global.DuracaoIntervalo # horas (assumindo que vem como int/float)
         
     # 1.2. Define o pico de hoje (usando None se não houver)
-    HORA_BLOQUEIO_INICIO = str(pico_hoje.HoraBloqueioInicio)[:5] if pico_hoje and pico_hoje.HoraBloqueioInicio else None
-    HORA_BLOQUEIO_FIM = str(pico_hoje.HoraBloqueioFim)[:5] if pico_hoje and pico_hoje.HoraBloqueioFim else None
+    # Garante que, se for objeto de tempo, use o formato HH:MM
+    h_ini_obj = pico_hoje.HoraBloqueioInicio if pico_hoje else None
+    h_fim_obj = pico_hoje.HoraBloqueioFim if pico_hoje else None
+
+    # HORA_BLOQUEIO_INICIO agora armazena o objeto de tempo (ou None)
+    HORA_BLOQUEIO_INICIO = h_ini_obj
+    HORA_BLOQUEIO_FIM = h_fim_obj
 
     log_erros = []
     sugestoes = {} # {posicao_id: (inicio_intervalo, fim_intervalo)}
@@ -83,11 +86,13 @@ def calcular_intervalos_automaticos(dados_escala, dia_semana_iso):
             proposta_fim = proposta_inicio + timedelta(hours=DURACAO_INTERVALO)
 
             # Regra: Bloqueio de Pico (AGORA DINÂMICO POR DIA)
+            # HORA_BLOQUEIO_INICIO e FIM agora são objetos datetime.time ou None
             if HORA_BLOQUEIO_INICIO and HORA_BLOQUEIO_FIM: 
                 # Se há horários definidos para HOJE, aplica o bloqueio.
                 try:
-                    bloqueio_ini = datetime.combine(entrada.date(), datetime.strptime(HORA_BLOQUEIO_INICIO, "%H:%M").time())
-                    bloqueio_fim = datetime.combine(entrada.date(), datetime.strptime(HORA_BLOQUEIO_FIM, "%H:%M").time())
+                    # Combina o objeto date da entrada com o objeto time do banco
+                    bloqueio_ini = datetime.combine(entrada.date(), HORA_BLOQUEIO_INICIO)
+                    bloqueio_fim = datetime.combine(entrada.date(), HORA_BLOQUEIO_FIM)
 
                     # Verifica se o intervalo proposto colide com o horário de pico
                     if (proposta_inicio < bloqueio_fim) and (proposta_fim > bloqueio_ini):
@@ -95,8 +100,9 @@ def calcular_intervalos_automaticos(dados_escala, dia_semana_iso):
                         proposta_inicio = bloqueio_fim
                         # Usamos o parâmetro dinâmico DURACAO_INTERVALO
                         proposta_fim = proposta_inicio + timedelta(hours=DURACAO_INTERVALO)
-                except ValueError:
-                    log_erros.append(f"❌ Erro de formato nos horários de pico (Conf. Dia {dia_semana_iso}). Verifique as configurações.")
+                except Exception as e:
+                    # Captura qualquer erro de conversão/combinação
+                    log_erros.append(f"❌ Erro ao aplicar pico (Conf. Dia {dia_semana_iso}). Detalhe: {e}")
 
             # Validação Final: Estouro das 5h
             if proposta_inicio > janela_fim_limite:
