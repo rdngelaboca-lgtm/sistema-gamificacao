@@ -29,12 +29,10 @@ def enviar_mensagem_whatsapp(numero, texto):
     }
     
     headers = {
-        "Content-Type": "application/json"
+    "Content-Type": "application/json"
     }
-    
-    # Adiciona Client-Token se estiver configurado (segurança extra)
-    if hasattr(config, 'ZAPI_CLIENT_TOKEN') and config.ZAPI_CLIENT_TOKEN:
-        headers["Client-Token"] = config.ZAPI_CLIENT_TOKEN
+
+    # (Client-Token removido pois sua instância não utiliza essa configuração de segurança)
 
     try:
         logger.info(f"Tentando enviar WhatsApp via Z-API para {numero_limpo}...")
