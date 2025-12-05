@@ -600,12 +600,25 @@ def adicionar_funcionario(nome, chat_id, cargo, horario_notificacao, dia_folga):
             conn.close()
 
 def listar_funcionarios():
+    """Retorna a lista completa de funcionários com todos os campos necessários para a GUI."""
     conn = get_db_connection()
     if conn:
         try:
-            cursor = conn.cursor(); sql = "SELECT * FROM Funcionarios ORDER BY NomeCompleto"; cursor.execute(sql); return cursor.fetchall()
-        finally: conn.close()
+            cursor = conn.cursor()
+            # ⚠️ A query deve retornar exatamente a ordem esperada pela GUI:
+            # 0:ID, 1:CPF, 2:Nome, 3:ChatID, 4:Cargo, 5:Setor, 6:Whatsapp, 7:Saldo, 8:NivelAcesso, 9:VerificadorCPF
+            sql = """
+                SELECT 
+                    FuncionarioID, CPF, NomeCompleto, ChatIDTelegram, Cargo, Setor, TelefoneWhatsApp, SaldoPontos, NivelAcesso, VerificadorCPF
+                FROM Funcionarios 
+                ORDER BY NomeCompleto
+            """
+            cursor.execute(sql)
+            return cursor.fetchall()
+        finally:
+            conn.close()
     return []
+
 def buscar_funcionario_por_chat_id(chat_id):
     conn = get_db_connection()
     if conn:
@@ -2135,22 +2148,27 @@ def listar_funcionarios_nao_destinatarios(documento_id):
             conn.close()
     return []
 
-def salvar_feedback_do_dia(funcionario_id, nota):
-    """Salva a nota de feedback do funcionário para a data atual."""
+def salvar_feedback_do_dia_com_data(funcionario_id, nota, data_registro):
+    """Salva a nota de feedback do funcionário para a data de registro fornecida."""
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            sql_check = "SELECT 1 FROM Feedbacks WHERE FuncionarioID = ? AND DataFeedback = CONVERT(date, GETDATE())"
-            cursor.execute(sql_check, funcionario_id)
+            # 1. Checa se já existe para a data fornecida
+            sql_check = "SELECT 1 FROM Feedbacks WHERE FuncionarioID = ? AND CONVERT(DATE, DataFeedback) = ?"
+            cursor.execute(sql_check, funcionario_id, data_registro)
             if cursor.fetchone():
-                print(f"--> [FEEDBACK] Feedback já recebido hoje para o funcionário {funcionario_id}.")
+                print(f"--> [FEEDBACK] Feedback já recebido para a data {data_registro} (ID: {funcionario_id}).")
                 return False
 
-            sql_insert = "INSERT INTO Feedbacks (FuncionarioID, DataFeedback, NotaDia) VALUES (?, GETDATE(), ?)"
-            cursor.execute(sql_insert, funcionario_id, nota)
+            # 2. Insere na data fornecida
+            sql_insert = "INSERT INTO Feedbacks (FuncionarioID, DataFeedback, NotaDia) VALUES (?, ?, ?)"
+            cursor.execute(sql_insert, funcionario_id, data_registro, nota)
             conn.commit()
             return True
+        except Exception as e:
+            logger.error(f"ERRO ao salvar feedback para a data {data_registro}: {e}", exc_info=True)
+            return False
         finally:
             conn.close()
     return False
@@ -4913,9 +4931,85 @@ def registrar_denuncia_anonima(mensagem):
                 conn.close()
     return None
 
-# Em database.py, adicione esta nova função (pode ser perto de 'aceitar_tarefa_de_grupo')
+def buscar_pendencias_criticas(funcionario_id):
+    """
+    Busca todas as pendências que exigem ação imediata (Ciência de Comunicado/Documento).
+    Retorna uma lista de tuplas: (ID, Tipo, DataEnvio)
+    """
+    conn = get_db_connection()
+    pendencias = []
+    if conn:
+        try:
+            cursor = conn.cursor()
+            
+            # Pendências de COMUNICADO GERAL
+            sql_comunicados = """
+                SELECT 
+                    DA.AssinaturaID, 'Comunicado' as Tipo, D.Titulo as Titulo, D.DataCriacao as DataEnvio
+                FROM DocumentosAssinaturas DA
+                JOIN Documentos D ON DA.DocumentoID = D.DocumentoID
+                WHERE DA.FuncionarioID = ? AND DA.StatusAssinatura = 'Pendente'
+            """
+            cursor.execute(sql_comunicados, funcionario_id)
+            pendencias.extend(cursor.fetchall())
+            
+            # Pendências de DOCUMENTO PESSOAL/RH
+            sql_pessoais = """
+                SELECT 
+                    DPC.CienciaID, DP.TipoDocumento as Tipo, 
+                    DP.TipoDocumento + ' ref. ' + CONVERT(VARCHAR, DP.MesAno, 103) as Titulo,
+                    DP.DataUpload as DataEnvio
+                FROM DocumentosPessoaisCiencia DPC
+                JOIN DocumentosPessoais DP ON DPC.DocumentoID = DP.DocumentoID
+                WHERE DPC.FuncionarioID = ? AND DPC.Status = 'Pendente'
+            """
+            cursor.execute(sql_pessoais, funcionario_id)
+            # Para manter a consistência, mapeamos CienciaID para o primeiro campo (AssinaturaID)
+            for row in cursor.fetchall():
+                 pendencias.append((row.CienciaID, row.Tipo, row.Titulo, row.DataEnvio))
+            
+            return pendencias
+        except Exception as e:
+            logger.error(f"ERRO ao buscar pendências críticas de ciência: {e}", exc_info=True)
+            return []
+        finally:
+            if conn:
+                conn.close()
+    return []
 
-# Em database.py
+def verificar_feedback_dia_anterior(funcionario_id):
+    """
+    Verifica se o funcionário deu o feedback (nota) referente ao dia anterior.
+    Retorna True se o feedback foi dado, False caso contrário.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Calcula a data de ontem
+            data_ontem = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+            
+            # 1. Checa se o feedback de ONTEM já existe
+            sql_check = "SELECT 1 FROM Feedbacks WHERE FuncionarioID = ? AND CONVERT(DATE, DataFeedback) = ?"
+            cursor.execute(sql_check, funcionario_id, data_ontem)
+            if cursor.fetchone():
+                return True # Feedback já dado
+            
+            # 2. Se o dia anterior for Domingo (Folga Padrão), consideramos como dado
+            # O dia da semana no Python (0=Seg, 6=Dom). Queremos bloquear na Segunda (ontem foi Domingo)
+            # Ou seja, só bloqueamos se HOJE for Terça-feira a Sábado (ontem foi Seg a Sex).
+            if datetime.now().weekday() == 0: # Se hoje é Segunda (0)
+                 return True # Não exigimos feedback de Domingo
+                
+            return False # Feedback NÃO dado
+        except Exception as e:
+            logger.error(f"ERRO ao verificar feedback do dia anterior: {e}", exc_info=True)
+            return True # Assume True para não bloquear em caso de erro no banco
+        finally:
+            if conn:
+                conn.close()
+    return True # Assume True para não bloquear em caso de erro na conexão
+
 def verificar_e_aceitar_tarefa_de_folga(tarefa_id, funcionario_id):
     """
     (VERSÃO CORRIGIDA COM TRANSAÇÃO E LOCK)
