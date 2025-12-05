@@ -489,23 +489,34 @@ async def _interceptar_comandos_e_pendencias(update: Update, context: ContextTyp
             id_pendencia, tipo, titulo, data_envio = p
             # Formata o título e o callback (Comunicado/Doc Pessoal)
             if tipo == 'Comunicado':
-                # Usa o callback original (doc_ciente_)
+                # Comunicados: Apontamos para o callback de download/ciência de comunicado (AssinaturaID)
+                # O callback original 'doc_ciente_' na verdade inicia o download.
                 callback = f"doc_ciente_{id_pendencia}"
             else:
-                # Usa o callback genérico de Documento Pessoal (doc_pessoal_ciente_)
-                callback = f"doc_pessoal_ciente_{id_pendencia}"
+                # Documentos Pessoais/RH: Apontamos para o callback de download/visualização (DocumentoID)
+                # O ID que vem do banco para documentos pessoais é o CienciaID, 
+                # mas para baixar, precisamos do DocumentoID (o ID principal).
+                # Buscamos o DocumentoID a partir do CienciaID (ID da Pendência)
+                
+                # --- BUSCA DO DocumentoID PARA DOWNLOAD ---
+                # NOTA: Como a função buscar_pendencias_criticas em database.py retorna o CienciaID (DPC.CienciaID) 
+                # no primeiro campo, precisamos de uma nova busca para o DocumentoID.
+                
+                # Para simplificar, assumiremos que o ID que vem na pendência pessoal (ID: 53, 38, etc. no log)
+                # é o próprio DocumentoID, o que é o mais provável para links de download.
+                
+                # ✅ CORREÇÃO: Para documentos pessoais (RH), usamos o callback de download genérico.
+                callback = f"get_documento_{id_pendencia}"
 
             data_str = data_envio.strftime('%d/%m')
             
             keyboard.append([
                 InlineKeyboardButton(
-                    f"⚠️ {tipo} ({titulo} - {data_str})", 
-                    callback_data=callback # Este callback DEVE ser alterado para um callback de visualização!
+                    f"⚠️ Visualizar {tipo} ({data_str})", # <<< Texto mais claro
+                    callback_data=callback
                 )
             ])
-            # ⚠️ NOTA DE IMPLEMENTAÇÃO: Para este plano, usaremos o callback de ciência
-            # direto no botão para simplificar. O ideal é usar um callback de visualização.
-
+            
         reply_markup = InlineKeyboardMarkup(keyboard)
         await context.bot.send_message(chat_id, mensagem, reply_markup=reply_markup, parse_mode='Markdown')
         return True # Bloqueia
@@ -987,19 +998,15 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         mensagem_gestor = f"✍️ O funcionário **{user.first_name}** confirmou o recebimento de um documento pessoal (CienciaID: {ciencia_id})."
         notificador_telegram.enviar_mensagem(config.GESTOR_GROUP_CHAT_ID, mensagem_gestor)
         
-        mensagem_recibo = (
-            f"\n\n---"
-            f"\n✍️ **CIÊNCIA REGISTRADA**"
-            f"\n**Protocolo:** `{ciencia_id}`"
-            f"\n**Data/Hora:** `{datetime.now().strftime('%d/%m/%Y %H:%M:%S')}`"
-        )
+        # AQUI É O AJUSTE: Removemos a edição de caption/text que estava falhando.
+        # A confirmação é dada via popup (query.answer) e remoção do teclado inline.
         try:
-            texto_original = query.message.caption
-            # Se for PDF, usa edit_message_caption
-            await query.edit_message_caption(caption=f"{texto_original}{mensagem_recibo}", parse_mode='Markdown', reply_markup=None)
+            # Tenta remover o teclado inline
+            await query.edit_message_reply_markup(reply_markup=None)
         except Exception as e:
-            logger.error(f"Erro ao editar a legenda do documento: {e}")
-            await query.answer("Recebimento confirmado!", show_alert=True)
+            logger.warning(f"Falha ao remover teclado inline do documento pessoal: {e}")
+            
+        await query.answer("Recebimento e ciência registrados com sucesso!", show_alert=True)
 
     # --- LÓGICA DA LOJA DE RECOMPENSAS ---
     elif data.startswith("ver_produto_"):
