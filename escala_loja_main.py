@@ -8,6 +8,7 @@ import database
 import re
 import config # Importar config para pegar o ID do grupo
 import notificador_telegram # Importar notificador para enviar a escala
+import notificador_whatsapp # Importar notificador para envio via API/Link
 import calculadora_logica # Importa o novo módulo lógico
 import os
 import webbrowser
@@ -699,7 +700,23 @@ class AppEscalaLoja:
                     if database.criar_freelancer(nome, tel):
                         carregar_lista()
                         messagebox.showinfo("Sucesso", "Freelancer cadastrado!", parent=popup)
+        # --- NOVA FUNÇÃO: Excluir Freelancer ---
+        def excluir():
+            selecionado = tree.focus()
+            if not selecionado: 
+                messagebox.showwarning("Aviso", "Selecione um freelancer na lista para excluir.", parent=popup)
+                return
+            
+            f_id = tree.item(selecionado, 'values')[0]
+            f_nome = tree.item(selecionado, 'values')[1]
 
+            if messagebox.askyesno("Confirmar Exclusão", f"Tem certeza que deseja excluir o freelancer {f_nome}?\n\nIsso limpará todas as escalas onde ele estiver.", parent=popup):
+                 # Chama a função de exclusão do banco
+                 if database.excluir_freelancer(f_id):
+                    carregar_lista()
+                    messagebox.showinfo("Sucesso", "Freelancer excluído!", parent=popup)
+                 else:
+                    messagebox.showerror("Erro", "Falha ao excluir no banco.", parent=popup)
         def editar():
             selecionado = tree.focus()
             if not selecionado: 
