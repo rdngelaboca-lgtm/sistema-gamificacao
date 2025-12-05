@@ -416,8 +416,8 @@ async def loja_recompensas(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     reply_markup = InlineKeyboardMarkup(keyboard)
     await context.bot.send_message(chat_id, texto, reply_markup=reply_markup)
 
-async def solicitar_holerite_inicio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Inicia o fluxo de solicitação de holerite com verificação de segurança."""
+async def solicitar_documentos_inicio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Inicia o fluxo de solicitação de DOCUMENTOS PESSOAIS com verificação de segurança."""
     chat_id = update.effective_chat.id
     funcionario = database.buscar_funcionario_por_chat_id(chat_id)
 
@@ -454,30 +454,35 @@ async def roteador_de_texto_privado(update: Update, context: ContextTypes.DEFAUL
         verificador_correto = database.buscar_verificador_cpf(funcionario.FuncionarioID)
 
         if verificador_correto and texto_recebido.strip() == verificador_correto: # Adiciona verificação se verificador_correto existe
-            await update.message.reply_text("✅ Verificação bem-sucedida! Buscando seus documentos...")
+            await update.message.reply_text("✅ Verificação bem-sucedida! Buscando seus documentos pendentes de ciência...")
 
-            holerites_disponiveis = database.buscar_holerites_disponiveis(funcionario.FuncionarioID)
+            # <<< A CORREÇÃO ESTÁ AQUI: Busca todos os documentos
+            documentos_disponiveis = database.buscar_documentos_disponiveis(funcionario.FuncionarioID)
 
-            if not holerites_disponiveis:
-                await update.message.reply_text("Você não possui novos holerites para visualizar no momento.")
+            if not documentos_disponiveis:
+                await update.message.reply_text("Você não possui novos documentos pendentes de ciência no momento.")
                 return
 
             keyboard = []
-            for holerite in holerites_disponiveis:
-                # Formata a data para ex: "Setembro/2025"
-                mes_ano_str = holerite.MesAno.strftime('%B/%Y').capitalize()
-                # Guarda a data no formato do banco para o callback
-                data_callback = holerite.MesAno.strftime('%Y-%m-%d')
+            for doc in documentos_disponiveis:
+                doc_id = doc.DocumentoID
+                tipo = doc.TipoDocumento
+                # Se for Holerite ou Cartão Ponto, usa a data, senão, usa a data de upload
+                if tipo in ['Holerite', 'Cartão Ponto']:
+                    mes_ano_str = f"({doc.MesAno.strftime('%m/%Y')})"
+                else:
+                    mes_ano_str = "" # O tipo já é autoexplicativo
 
+                # O CALLBACK AGORA USA O DocumentoID
                 keyboard.append([
                     InlineKeyboardButton(
-                        f"📄 {mes_ano_str}",
-                        callback_data=f"get_holerite_{data_callback}"
+                        f"📄 {tipo} {mes_ano_str}",
+                        callback_data=f"get_documento_{doc_id}" # <<< CALLBACK POR DocumentoID
                     )
                 ])
 
             reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text("Selecione o holerite que deseja visualizar:", reply_markup=reply_markup)
+            await update.message.reply_text("Selecione o documento que deseja visualizar:", reply_markup=reply_markup)
 
         else:
             await update.message.reply_text("❌ Código de verificação incorreto ou não cadastrado. Por favor, inicie o processo novamente ou contate o RH.")
@@ -836,24 +841,45 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
     data = query.data
     user = update.effective_user
 
-    # --- LÓGICA DE DOCUMENTOS PESSOAIS (HOLERITE) ---
-    if data.startswith("get_holerite_"):
+    # --- LÓGICA DE DOCUMENTOS PESSOAIS ---
+    if data.startswith("get_documento_"):
         await query.edit_message_text("Processando sua solicitação...")
-        mes_ano_iso = data.split('_')[-1]
-        funcionario = database.buscar_funcionario_por_chat_id(user.id)
-        dados_holerite = database.buscar_dados_holerite_para_envio(funcionario.FuncionarioID, mes_ano_iso)
-        if not dados_holerite:
-            await query.edit_message_text("Erro: Não foi possível encontrar este documento.")
+        documento_id = int(data.split('_')[-1]) # <<< AGORA USA DocumentoID
+        
+        dados_documento = database.buscar_dados_documento_para_envio(documento_id)
+        
+        if not dados_documento:
+            await query.edit_message_text("Erro: Não foi possível encontrar este documento ou ele já foi processado.")
             return
-        caminho_arquivo, ciencia_id = dados_holerite
-        keyboard = [[InlineKeyboardButton("✅ Recebi e estou ciente", callback_data=f"holerite_ciente_{ciencia_id}")]]
+
+        caminho_arquivo, ciencia_id, funcionario_id_db, mes_ano_obj = dados_documento
+        
+        # Validação extra de segurança: Garante que o usuário do Telegram é o dono do documento
+        funcionario = database.buscar_funcionario_por_chat_id(user.id)
+        if not funcionario or funcionario.FuncionarioID != funcionario_id_db:
+             await query.edit_message_text("Erro de Acesso: Este documento não pertence ao seu usuário.")
+             return
+
+        # Ajuste o callback de ciência para ser genérico
+        keyboard = [[InlineKeyboardButton("✅ Recebi e estou ciente", callback_data=f"doc_pessoal_ciente_{ciencia_id}")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
+
+        # Prepara a legenda
+        tipo_doc = dados_documento[2] # MesAno
+        if mes_ano_obj:
+             caption_text = f"Aqui está seu documento ({tipo_doc}) referente a {mes_ano_obj.strftime('%B de %Y').capitalize()}.\n\nPor favor, confirme o recebimento."
+        else:
+             caption_text = f"Aqui está seu documento ({tipo_doc}).\n\nPor favor, confirme o recebimento."
+
         try:
+            # O `notificador_telegram.py` agora tem uma função para enviar documento com botões
+            # Mas como não temos essa função no contexto, vamos usar a mais próxima
+            # (send_document do python-telegram-bot)
             with open(caminho_arquivo, 'rb') as documento:
                 await context.bot.send_document(
                     chat_id=user.id,
                     document=documento,
-                    caption=f"Aqui está seu documento referente a {datetime.strptime(mes_ano_iso, '%Y-%m-%d').strftime('%B de %Y').capitalize()}.\n\nPor favor, confirme o recebimento.",
+                    caption=caption_text,
                     reply_markup=reply_markup
                 )
             await query.edit_message_text("✔️ Seu documento foi enviado. Por favor, verifique a nova mensagem e confirme a ciência.")
@@ -862,7 +888,33 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         except Exception as e:
             await query.edit_message_text(f"❌ Ocorreu um erro inesperado ao enviar seu documento: {e}")
 
-    elif data.startswith("holerite_ciente_"):
+    elif data.startswith("doc_pessoal_ciente_"): # <<< NOVO CALLBACK DE CIÊNCIA
+        ciencia_id = int(data.split('_')[-1])
+        sucesso = database.marcar_holerite_como_ciente(ciencia_id) # A função no database é genérica o suficiente
+        
+        if not sucesso:
+            await query.answer("Este documento já foi assinado.", show_alert=True)
+            return
+            
+        mensagem_gestor = f"✍️ O funcionário **{user.first_name}** confirmou o recebimento de um documento pessoal (CienciaID: {ciencia_id})."
+        notificador_telegram.enviar_mensagem(config.GESTOR_GROUP_CHAT_ID, mensagem_gestor)
+        
+        mensagem_recibo = (
+            f"\n\n---"
+            f"\n✍️ **CIÊNCIA REGISTRADA**"
+            f"\n**Protocolo:** `{ciencia_id}`"
+            f"\n**Data/Hora:** `{datetime.now().strftime('%d/%m/%Y %H:%M:%S')}`"
+        )
+        try:
+            texto_original = query.message.caption
+            # Se for PDF, usa edit_message_caption
+            await query.edit_message_caption(caption=f"{texto_original}{mensagem_recibo}", parse_mode='Markdown', reply_markup=None)
+        except Exception as e:
+            logger.error(f"Erro ao editar a legenda do documento: {e}")
+            await query.answer("Recebimento confirmado!", show_alert=True)
+
+    # --- LÓGICA DA LOJA DE RECOMPENSAS ---
+    elif data.startswith("ver_produto_"):
         ciencia_id = int(data.split('_')[-1])
         sucesso = database.marcar_holerite_como_ciente(ciencia_id)
         if not sucesso:
@@ -1386,8 +1438,8 @@ def main() -> None:
     application.add_handler(CommandHandler("ajuda", ajuda))
     application.add_handler(CommandHandler("meusaldo", meu_saldo))
     application.add_handler(CommandHandler("loja", loja_recompensas))
-    application.add_handler(CommandHandler("holerite", solicitar_holerite_inicio)) 
-    application.add_handler(CommandHandler("conquistas", minhas_conquistas)) # <<< NOVO COMANDO
+    application.add_handler(CommandHandler("documentos", solicitar_documentos_inicio)) # <<< COMANDO RENOMEADO
+    application.add_handler(CommandHandler("conquistas", minhas_conquistas))
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🏅 Minhas Conquistas$'), minhas_conquistas)) # <<< NOVO BOTÃO
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🧾 Enviar Nota Fiscal$'), solicitar_foto_nf))
     application.add_handler(CallbackQueryHandler(button_callback_handler))
