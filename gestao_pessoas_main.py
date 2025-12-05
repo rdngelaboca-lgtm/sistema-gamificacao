@@ -173,8 +173,17 @@ class AppGestaoPessoas:
         frame_botoes_docs.grid(row=1, column=0, sticky="ew", pady=(10,0))
         btn_add = ttk.Button(frame_botoes_docs, text="Adicionar Novo Documento...", command=self.abrir_janela_add_documento)
         btn_add.pack(side="left")
+        
+        # --- NOVOS BOTÕES ---
+        btn_edit = ttk.Button(frame_botoes_docs, text="Editar Metadados", command=self.abrir_janela_edicao_documento)
+        btn_edit.pack(side="left", padx=10)
+        
+        btn_del = ttk.Button(frame_botoes_docs, text="Excluir Documento", command=self.excluir_documento_selecionado)
+        btn_del.pack(side="left", padx=10)
+        # --- FIM NOVOS BOTÕES ---
+
         btn_vis = ttk.Button(frame_botoes_docs, text="Visualizar/Baixar Documento", command=self.visualizar_documento_selecionado)
-        btn_vis.pack(side="left", padx=10)
+        btn_vis.pack(side="right")
 
     def visualizar_documento_selecionado(self):
         """Baixa o documento selecionado da API e o abre."""
@@ -270,10 +279,114 @@ class AppGestaoPessoas:
             self.tree_rh_documentos.insert("", "end", values=(
                 doc.DocumentoID, doc.TipoDocumento, mes_ano_ref, data_upload, status_ciencia, data_ciencia
             ))
+    def excluir_documento_selecionado(self):
+        """Exclui o documento selecionado da lista e o arquivo físico."""
+        selecionado = self.tree_rh_documentos.focus()
+        if not selecionado:
+            messagebox.showwarning("Aviso", "Por favor, selecione um documento na lista para excluir.")
+            return
 
-# Em gestao_pessoas_main.py, SUBSTITUA a função inteira pelo código abaixo:
+        dados_doc = self.tree_rh_documentos.item(selecionado, 'values')
+        documento_id = dados_doc[0]
+        tipo_doc = dados_doc[1]
+        mes_ano_ref = dados_doc[2]
 
-# Em gestao_pessoas_main.py, SUBSTITUA a função inteira pelo código abaixo:
+        confirmado = messagebox.askyesno(
+            "Confirmar Exclusão", 
+            f"Tem certeza que deseja excluir o documento:\n\nTipo: {tipo_doc}\nReferência: {mes_ano_ref}\n\n"
+            f"Esta ação removerá o registro do banco e o arquivo físico. NÃO PODE SER DESFEITA.", 
+            icon='warning'
+        )
+
+        if confirmado:
+            try:
+                sucesso_db, caminho_arquivo = database.excluir_documento_pessoal_completo(documento_id)
+
+                if sucesso_db:
+                    # Regra 1: Tenta remover o arquivo físico
+                    if caminho_arquivo and os.path.exists(caminho_arquivo):
+                        sucesso_arquivo = file_utils.excluir_arquivo_seguro(caminho_arquivo)
+                        if not sucesso_arquivo:
+                            messagebox.showwarning("Atenção", "Registro excluído do banco, mas a exclusão do arquivo físico falhou! Verifique os logs e remova-o manualmente.")
+                    
+                    messagebox.showinfo("Sucesso", "Documento excluído com sucesso!")
+                    self.on_rh_funcionario_selecionado(None) # Recarrega a lista
+                else:
+                    messagebox.showerror("Erro de Banco", "Falha ao excluir o registro do documento.")
+
+            except Exception as e:
+                logger.error(f"Erro inesperado ao excluir documento: {e}", exc_info=True)
+                messagebox.showerror("Erro", f"Ocorreu um erro inesperado: {e}")
+
+    def abrir_janela_edicao_documento(self):
+        """Abre a janela Toplevel para editar os metadados do documento selecionado."""
+        selecionado = self.tree_rh_documentos.focus()
+        if not selecionado:
+            messagebox.showwarning("Aviso", "Por favor, selecione um documento na lista para editar.")
+            return
+
+        dados_doc = self.tree_rh_documentos.item(selecionado, 'values')
+        documento_id = dados_doc[0]
+        tipo_atual = dados_doc[1]
+        mes_ano_ref_atual = dados_doc[2] # dd/mm/yyyy
+
+        # Converte para objeto datetime para o DateEntry usar
+        try:
+            data_ref_obj = datetime.strptime(f"01/{mes_ano_ref_atual}", "%d/%m/%Y").date()
+        except ValueError:
+            data_ref_obj = datetime.now().date() # Fallback
+
+        # --- Criação da Janela Pop-up ---
+        popup = Toplevel(self.root)
+        popup.title(f"Editar Documento ID: {documento_id}")
+        popup.geometry("350x250")
+        popup.transient(self.root)
+
+        frame = ttk.Frame(popup, padding="15")
+        frame.pack(fill="both", expand=True)
+
+        # --- Widgets do Formulário ---
+        ttk.Label(frame, text="Tipo de Documento:").grid(row=0, column=0, sticky="w", pady=5)
+        combo_tipo = ttk.Combobox(frame, values=['Holerite', 'Cartão Ponto', 'Comprovante de Consumo', 'Contrato', 'Atestado', 'Advertência', 'Outro'])
+        combo_tipo.grid(row=0, column=1, sticky="ew", pady=5)
+        combo_tipo.set(tipo_atual)
+
+        ttk.Label(frame, text="Mês/Ano de Referência:").grid(row=1, column=0, sticky="w", pady=5)
+        entry_data_ref = DateEntry(frame, date_pattern='dd/mm/yyyy', width=18)
+        entry_data_ref.grid(row=1, column=1, sticky="w", pady=5)
+        entry_data_ref.set_date(data_ref_obj)
+
+        ttk.Label(frame, text=f"Arquivo atual: {dados_doc[3].split()[0]}").grid(row=2, column=0, columnspan=2, sticky="w", pady=(10, 5))
+        ttk.Label(frame, text="*Não é possível alterar o arquivo físico.", font=("Arial", 8, "italic")).grid(row=3, column=0, columnspan=2, sticky="w")
+
+
+        def salvar_edicao():
+            novo_tipo = combo_tipo.get()
+            nova_data_ref_obj = entry_data_ref.get_date()
+            nova_data_ref_db = nova_data_ref_obj.strftime('%Y-%m-%d') # Formato que o banco espera
+
+            if not novo_tipo:
+                messagebox.showerror("Erro", "O Tipo de Documento é obrigatório.", parent=popup)
+                return
+
+            try:
+                sucesso = database.atualizar_documento_pessoal_metadados(documento_id, novo_tipo, nova_data_ref_db)
+
+                if sucesso:
+                    messagebox.showinfo("Sucesso", "Metadados do documento atualizados!", parent=popup)
+                    popup.destroy()
+                    self.on_rh_funcionario_selecionado(None) # Recarrega a lista
+                else:
+                    messagebox.showwarning("Aviso", "Nenhuma alteração detectada ou falha na atualização.")
+
+            except Exception as e:
+                messagebox.showerror("Erro", f"Ocorreu um erro ao salvar: {e}", parent=popup)
+
+        # Botão de Envio
+        btn_salvar = ttk.Button(frame, text="Salvar Metadados", command=salvar_edicao)
+        btn_salvar.grid(row=4, column=0, columnspan=2, pady=20, ipady=5)
+
+        frame.columnconfigure(1, weight=1)
 
     def abrir_janela_add_documento(self):
         """Abre a janela (Toplevel) para adicionar um novo documento pessoal."""
