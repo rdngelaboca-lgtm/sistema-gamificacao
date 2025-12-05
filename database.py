@@ -3073,21 +3073,23 @@ def buscar_caminho_documento(documento_id):
             conn.close()
     return None
 
-def buscar_holerites_disponiveis(funcionario_id):
+def buscar_documentos_disponiveis(funcionario_id):
     """
-    Busca os holerites que um funcionário ainda não deu ciência
-    e retorna o MesAno para exibição nos botões do Telegram.
+    (REFATORADA) Busca TODOS os documentos que o funcionário ainda não deu ciência.
+    Retorna DocumentoID, TipoDocumento, MesAno e DataUpload para a interface.
     """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
+            # Retorna todos os campos necessários para montar o botão e o callback
             sql = """
-                SELECT DP.MesAno
+                SELECT 
+                    DP.DocumentoID, DP.TipoDocumento, DP.MesAno, DP.DataUpload
                 FROM DocumentosPessoais DP
                 JOIN DocumentosPessoaisCiencia DPC ON DP.DocumentoID = DPC.DocumentoID
-                WHERE DP.FuncionarioID = ? AND DP.TipoDocumento = 'Holerite' AND DPC.Status = 'Pendente'
-                ORDER BY DP.MesAno DESC;
+                WHERE DP.FuncionarioID = ? AND DPC.Status = 'Pendente'
+                ORDER BY DP.DataUpload DESC;
             """
             cursor.execute(sql, funcionario_id)
             return cursor.fetchall()
@@ -3095,22 +3097,23 @@ def buscar_holerites_disponiveis(funcionario_id):
             conn.close()
     return []
 
-def buscar_dados_holerite_para_envio(funcionario_id, mes_ano):
+def buscar_dados_documento_para_envio(documento_id):
     """
-    Busca o caminho do arquivo do holerite e o ID da pendência de ciência
-    para um funcionário e mês específicos.
+    (REFATORADA) Busca o caminho do arquivo e o ID da pendência de ciência
+    a partir de um DocumentoID único.
     """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
+            # A query precisa do FuncionarioID para o JOIN com a tabela de ciência
             sql = """
-                SELECT DP.CaminhoArquivo, DPC.CienciaID
+                SELECT DP.CaminhoArquivo, DPC.CienciaID, DP.FuncionarioID, DP.MesAno
                 FROM DocumentosPessoais DP
                 JOIN DocumentosPessoaisCiencia DPC ON DP.DocumentoID = DPC.DocumentoID
-                WHERE DP.FuncionarioID = ? AND DP.MesAno = ? AND DP.TipoDocumento = 'Holerite'
+                WHERE DP.DocumentoID = ?
             """
-            cursor.execute(sql, funcionario_id, mes_ano)
+            cursor.execute(sql, documento_id)
             return cursor.fetchone()
         finally:
             conn.close()
