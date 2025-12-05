@@ -600,19 +600,16 @@ def adicionar_funcionario(nome, chat_id, cargo, horario_notificacao, dia_folga):
             conn.close()
 
 def listar_funcionarios():
-    """Retorna a lista completa de funcionários com todos os campos necessários para a GUI."""
+    """
+    (CORREÇÃO DE SCHEMA) Retorna a lista completa de funcionários usando SELECT * para garantir que todos os atributos sejam mapeados para funções legadas (ranking, main.py).
+    """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            # ⚠️ A query deve retornar exatamente a ordem esperada pela GUI:
-            # 0:ID, 1:CPF, 2:Nome, 3:ChatID, 4:Cargo, 5:Setor, 6:Whatsapp, 7:Saldo, 8:NivelAcesso, 9:VerificadorCPF
-            sql = """
-                SELECT 
-                    FuncionarioID, CPF, NomeCompleto, ChatIDTelegram, Cargo, Setor, TelefoneWhatsApp, SaldoPontos, NivelAcesso, VerificadorCPF
-                FROM Funcionarios 
-                ORDER BY NomeCompleto
-            """
+            # Usamos SELECT * para garantir que campos essenciais como DiaDeFolga, 
+            # HorarioNotificacao, etc., quebram o código legado sejam incluídos.
+            sql = "SELECT * FROM Funcionarios ORDER BY NomeCompleto"
             cursor.execute(sql)
             return cursor.fetchall()
         finally:
@@ -623,8 +620,10 @@ def buscar_funcionario_por_chat_id(chat_id):
     conn = get_db_connection()
     if conn:
         try:
-            # ⚠️ Incluímos TODOS os campos necessários para o Bot e o Interceptador.
-            sql = "SELECT FuncionarioID, NomeCompleto, ChatIDTelegram, NivelAcesso, VerificadorCPF, DiaDeFolga, Cargo FROM Funcionarios WHERE ChatIDTelegram = ?"
+            # CORREÇÃO: Usamos SELECT * para garantir que todos os atributos 
+            # (como HorarioNotificacao, DiaDeFolga, NivelAcesso) existam 
+            # no objeto pyodbc.Row para evitar AttributeError em main.py e ranking.
+            sql = "SELECT * FROM Funcionarios WHERE ChatIDTelegram = ?"
             cursor = conn.cursor()
             cursor.execute(sql, str(chat_id))
             return cursor.fetchone()
@@ -1469,7 +1468,9 @@ def calcular_ranking_desempenho(data_final_calculo=None, setor_filtro=None): # <
         cursor = conn.cursor()
         # Busca todas as atribuições, incluindo dados do funcionário
         sql_tarefas_atribuidas = """
-            SELECT F.FuncionarioID, F.NomeCompleto, F.Cargo, F.DiaDeFolga, -- <<< Adicionado F.Cargo
+            -- CORREÇÃO: Selecionamos todos os campos do Funcionarios (F.*) para garantir 
+            -- a inclusão de DiaDeFolga e Cargo para a lógica posterior.
+            SELECT F.*, 
                    TA.AtribuicaoID, TA.TipoFrequencia, TA.ValorFrequencia,
                    T.Pontos, TA.DataInicioVigencia, TA.DataFimVigencia,
                    TA.DataAceite
