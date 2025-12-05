@@ -3159,6 +3159,71 @@ def listar_documentos_por_funcionario(funcionario_id):
             conn.close()
     return []
 
+# ===================================================================
+# == FUNÇÕES CRUD DOCUMENTOS PESSOAIS (RH) ==========================
+# ===================================================================
+
+def buscar_caminho_e_dados_documento(documento_id):
+    """Busca o caminho físico e os metadados de um documento."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT CaminhoArquivo, TipoDocumento, MesAno FROM DocumentosPessoais WHERE DocumentoID = ?"
+            cursor.execute(sql, documento_id)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None
+
+def atualizar_documento_pessoal_metadados(documento_id, novo_tipo, novo_mes_ano):
+    """Atualiza o Tipo e Mês/Ano de Referência de um documento pessoal."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE DocumentosPessoais SET TipoDocumento = ?, MesAno = ? WHERE DocumentoID = ?"
+            cursor.execute(sql, novo_tipo, novo_mes_ano, documento_id)
+            conn.commit()
+            return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"ERRO ao atualizar metadados do documento ID {documento_id}: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
+
+def excluir_documento_pessoal_completo(documento_id):
+    """
+    Exclui o registro de um documento pessoal e suas pendências de ciência.
+    Retorna (True/False, CaminhoArquivo)
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            
+            # 1. Buscar o caminho do arquivo ANTES de excluir (para excluir do disco depois)
+            caminho_dados = buscar_caminho_e_dados_documento(documento_id)
+            caminho_arquivo = caminho_dados.CaminhoArquivo if caminho_dados else None
+
+            # 2. Excluir Pendências de Ciência
+            cursor.execute("DELETE FROM DocumentosPessoaisCiencia WHERE DocumentoID = ?", documento_id)
+            
+            # 3. Excluir o Registro Principal
+            cursor.execute("DELETE FROM DocumentosPessoais WHERE DocumentoID = ?", documento_id)
+            
+            conn.commit()
+            
+            return True, caminho_arquivo # Retorna o caminho para exclusão do disco
+        except Exception as e:
+            logger.error(f"ERRO CRÍTICO ao excluir documento pessoal ID {documento_id}: {e}")
+            conn.rollback()
+            return False, None
+        finally:
+            conn.close()
+    return False, None
+
 
 def buscar_dados_para_painel_kanban():
     """
