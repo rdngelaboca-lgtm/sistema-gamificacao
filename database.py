@@ -5988,7 +5988,7 @@ def buscar_escala_do_dia(data_str):
                 SELECT 
                     E.*, 
                     ISNULL(F.NomeCompleto, FR.Nome) as NomePessoa,
-                    FR.Telefone as TelefonePessoa
+                    ISNULL(FR.Telefone, F.TelefoneWhatsApp) as TelefonePessoa -- ✅ Inclui telefone de Funcionario (se existir)
                 FROM EscalaDiaria E
                 LEFT JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID
                 LEFT JOIN Freelancers FR ON E.FreelancerID = FR.FreelancerID
@@ -6195,6 +6195,26 @@ def atualizar_freelancer(freelancer_id, nome, telefone):
             return True
         except Exception as e:
             logging.error(f"Erro ao atualizar freelancer: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
+
+def excluir_freelancer(freelancer_id):
+    """Exclui um freelancer e limpa suas referências na escala."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # 1. Limpa referências na escala (seta para NULL)
+            cursor.execute("UPDATE EscalaDiaria SET FreelancerID = NULL WHERE FreelancerID = ?", freelancer_id)
+            # 2. Exclui o freelancer
+            cursor.execute("DELETE FROM Freelancers WHERE FreelancerID = ?", freelancer_id)
+            conn.commit()
+            return True
+        except Exception as e:
+            logging.error(f"Erro ao excluir freelancer: {e}")
+            conn.rollback()
             return False
         finally:
             conn.close()
