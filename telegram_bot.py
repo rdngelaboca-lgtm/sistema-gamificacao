@@ -454,8 +454,11 @@ async def _interceptar_comandos_e_pendencias(update: Update, context: ContextTyp
     funcionario = database.buscar_funcionario_por_chat_id(chat_id)
 
     # 1. Bypass para Comandos de Suporte e Gestores
+    # Usamos getattr() para definir 'Funcionario' como fallback se o atributo não existir ou for None.
+    nivel_acesso_seguro = getattr(funcionario, 'NivelAcesso', 'Funcionario') if funcionario else None
+    
     if (update.message and update.message.text and update.message.text.lower().startswith(('/start', '/ajuda'))) or \
-       (funcionario and funcionario.NivelAcesso in ('Gestor', 'RH')):
+       (nivel_acesso_seguro in ('Gestor', 'RH')):
         return False # Não bloqueia
 
     if not funcionario:
