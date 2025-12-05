@@ -623,9 +623,8 @@ def buscar_funcionario_por_chat_id(chat_id):
     conn = get_db_connection()
     if conn:
         try:
-            # ⚠️ Incluímos NivelAcesso e VerificadorCPF explicitamente para garantir que
-            # pyodbc possa mapear corretamente para atributos, evitando AttributeError.
-            sql = "SELECT FuncionarioID, NomeCompleto, ChatIDTelegram, NivelAcesso, VerificadorCPF FROM Funcionarios WHERE ChatIDTelegram = ?"
+            # ⚠️ Incluímos TODOS os campos necessários para o Bot e o Interceptador.
+            sql = "SELECT FuncionarioID, NomeCompleto, ChatIDTelegram, NivelAcesso, VerificadorCPF, DiaDeFolga, Cargo FROM Funcionarios WHERE ChatIDTelegram = ?"
             cursor = conn.cursor()
             cursor.execute(sql, str(chat_id))
             return cursor.fetchone()
