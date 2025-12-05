@@ -261,6 +261,12 @@ async def pendencias_gestor(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 async def tarefas(update: Update, context: ContextTypes.DEFAULT_TYPE, query=None) -> None:
     chat_id = update.effective_chat.id; funcionario = database.buscar_funcionario_por_chat_id(chat_id)
     if not funcionario: return
+    
+    # 🛑 Interceptador de Pendências
+    if await _interceptar_comandos_e_pendencias(update, context):
+        return # Bloqueia o comando
+    # 🛑 Fim do Interceptador
+    
     tarefas_do_dia = database.listar_tarefas_do_dia_por_funcionario(funcionario.FuncionarioID)
     if not tarefas_do_dia:
         texto = "Você não tem nenhuma tarefa pendente para hoje. Bom trabalho! ✨"
@@ -277,6 +283,11 @@ async def ranking(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     ranking_cozinha = []
     ranking_loja = []
     erro_db = None
+    
+    # 🛑 Interceptador de Pendências
+    if await _interceptar_comandos_e_pendencias(update, context):
+        return # Bloqueia o comando
+    # 🛑 Fim do Interceptador
 
     try: # <<< ADICIONADO TRY >>>
         # Tenta buscar ambos os rankings
@@ -331,6 +342,11 @@ async def ranking(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def meu_historico(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Envia ao usuário um resumo de suas últimas 10 atividades."""
     chat_id = update.effective_chat.id
+    
+    # 🛑 Interceptador de Pendências
+    if await _interceptar_comandos_e_pendencias(update, context):
+        return # Bloqueia o comando
+    # 🛑 Fim do Interceptador
     
     # 1. Identifica o funcionário pelo Chat ID do Telegram
     funcionario = database.buscar_funcionario_por_chat_id(chat_id)
@@ -428,6 +444,71 @@ async def solicitar_documentos_inicio(update: Update, context: ContextTypes.DEFA
     context.user_data['aguardando_verificador_cpf'] = True
     await update.message.reply_text("Para sua segurança, por favor, digite os 3 primeiros dígitos do seu CPF.")
 
+async def _interceptar_comandos_e_pendencias(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """
+    Intercepta comandos e verifica se o usuário tem pendências críticas (ciência ou feedback).
+    Retorna True se houver bloqueio (e já tiver enviado a mensagem), False se o comando deve prosseguir.
+    """
+    user = update.effective_user
+    chat_id = update.effective_chat.id
+    funcionario = database.buscar_funcionario_por_chat_id(chat_id)
+
+    # 1. Bypass para Comandos de Suporte e Gestores
+    if (update.message and update.message.text and update.message.text.lower().startswith(('/start', '/ajuda'))) or \
+       (funcionario and funcionario.NivelAcesso in ('Gestor', 'RH')):
+        return False # Não bloqueia
+
+    if not funcionario:
+        await context.bot.send_message(chat_id, "Desculpe, não consegui encontrar seu cadastro no sistema.")
+        return True # Bloqueia
+
+    # --- VERIFICAÇÃO 1: FEEDBACK DO DIA ANTERIOR ---
+    if not database.verificar_feedback_dia_anterior(funcionario.FuncionarioID):
+        # Bloqueia e envia o botão de avaliação para ontem
+        data_ontem_str = (datetime.now() - timedelta(days=1)).strftime('%d/%m')
+        mensagem = f"⚠️ **Ação Obrigatória:** Antes de prosseguir, por favor, avalie seu dia de trabalho referente a **{data_ontem_str}**."
+        
+        keyboard = [[InlineKeyboardButton("⭐ Avaliar meu dia de ontem", callback_data="avaliar_dia_ontem")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        # Usamos send_message para garantir que a mensagem de bloqueio apareça
+        await context.bot.send_message(chat_id, mensagem, reply_markup=reply_markup, parse_mode='Markdown')
+        return True # Bloqueia
+
+    # --- VERIFICAÇÃO 2: PENDÊNCIAS DE CIÊNCIA (COMUNICADOS/DOCUMENTOS) ---
+    pendencias_criticas = database.buscar_pendencias_criticas(funcionario.FuncionarioID)
+    
+    if pendencias_criticas:
+        mensagem = f"🛑 **Ação Obrigatória:** Você possui **{len(pendencias_criticas)}** pendência(s) de ciência. Clique abaixo para visualizar e confirmar a leitura."
+        keyboard = []
+
+        for p in pendencias_criticas:
+            id_pendencia, tipo, titulo, data_envio = p
+            # Formata o título e o callback (Comunicado/Doc Pessoal)
+            if tipo == 'Comunicado':
+                # Usa o callback original (doc_ciente_)
+                callback = f"doc_ciente_{id_pendencia}"
+            else:
+                # Usa o callback genérico de Documento Pessoal (doc_pessoal_ciente_)
+                callback = f"doc_pessoal_ciente_{id_pendencia}"
+
+            data_str = data_envio.strftime('%d/%m')
+            
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"⚠️ {tipo} ({titulo} - {data_str})", 
+                    callback_data=callback # Este callback DEVE ser alterado para um callback de visualização!
+                )
+            ])
+            # ⚠️ NOTA DE IMPLEMENTAÇÃO: Para este plano, usaremos o callback de ciência
+            # direto no botão para simplificar. O ideal é usar um callback de visualização.
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await context.bot.send_message(chat_id, mensagem, reply_markup=reply_markup, parse_mode='Markdown')
+        return True # Bloqueia
+
+    return False # Comando pode prosseguir
+
 
 async def roteador_de_texto_privado(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
@@ -448,7 +529,11 @@ async def roteador_de_texto_privado(update: Update, context: ContextTypes.DEFAUL
         await update.message.reply_text("Ação cancelada. Use os botões do menu.")
         return
 
-    # Verifica estados específicos PRIMEIRO
+    # 🛑 Interceptador de Pendências: Bloqueia comandos do menu
+    if await _interceptar_comandos_e_pendencias(update, context):
+        return # Bloqueia o processamento
+    # 🛑 Fim do Interceptador
+
     if user_data.get('aguardando_verificador_cpf'): # Usar .get() é mais seguro
         user_data.pop('aguardando_verificador_cpf', None) # Limpa mesmo se falhar
         verificador_correto = database.buscar_verificador_cpf(funcionario.FuncionarioID)
@@ -976,36 +1061,58 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         await query.edit_message_text(text=texto, reply_markup=reply_markup, parse_mode='Markdown')
 
     # --- LÓGICA DE FEEDBACK DE FIM DE JORNADA ---
-    elif data == "avaliar_dia":
+    elif data == "avaliar_dia" or data == "avaliar_dia_ontem":
         keyboard = []; row = []
         for i in range(11):
-            row.append(InlineKeyboardButton(str(i), callback_data=f"nota_dia_{i}"))
+            # O callback é ajustado para saber que é a nota do dia anterior, que é a pendência
+            callback_data = f"nota_dia_ontem_{i}" if data == "avaliar_dia_ontem" else f"nota_dia_{i}"
+            row.append(InlineKeyboardButton(str(i), callback_data=callback_data))
             if len(row) == 5 or i == 10: keyboard.append(row); row = []
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(text=(f"{query.message.text}\n\nComo você classificaria seu dia de 0 a 10?\n(0 = Muito Ruim / 10 = Excelente)"), reply_markup=reply_markup)
+        
+        texto_base = "Como você classificaria seu dia de 0 a 10?\n(0 = Muito Ruim / 10 = Excelente)"
+        if data == "avaliar_dia_ontem":
+            texto_base = "Por favor, avalie o dia de ontem (pendência obrigatória):"
+            
+        await query.edit_message_text(text=(f"{query.message.text}\n\n{texto_base}"), reply_markup=reply_markup)
 
-    elif data.startswith("nota_dia_"):
-        nota = int(data.split('_')[-1])
+    elif data.startswith("nota_dia_") or data.startswith("nota_dia_ontem_"):
+        # Determina a nota e se é referente ao dia anterior (para ajuste da data de registro)
+        if data.startswith("nota_dia_ontem_"):
+            nota = int(data.split('_')[-1])
+            data_registro = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+            msg_pendencia = "Sua pendência de feedback foi resolvida."
+        else:
+            nota = int(data.split('_')[-1])
+            data_registro = datetime.now().strftime('%Y-%m-%d')
+            msg_pendencia = "Seu feedback foi salvo com sucesso."
+
         funcionario_db = database.buscar_funcionario_por_chat_id(user.id)
         if funcionario_db:
-            sucesso = database.salvar_feedback_do_dia(funcionario_db.FuncionarioID, nota)
+            # Chama a função de salvar com a data correta
+            sucesso = database.salvar_feedback_do_dia_com_data(funcionario_db.FuncionarioID, nota, data_registro)
+
             if sucesso:
+                # O restante da lógica de premiação permanece a mesma
+                # ... (Lógica de premiação existente) ...
                 
                 # --- CORREÇÃO APLICADA AQUI ---
                 # Usamos a nova função genérica de bônus, especificando o ID correto da tarefa de feedback.
                 database.registrar_pontos_de_bonus(
                     funcionario_db.FuncionarioID, 
                     config.PONTOS_BONUS_FEEDBACK_DIARIO, 
-                    "Feedback Diário (Bônus)",
-                    config.TAREFA_ID_FEEDBACK_DIARIO # <-- Usa o ID correto (ex: 5)
+                    f"Feedback Diário ({data_registro})",
+                    config.TAREFA_ID_FEEDBACK_DIARIO
                 )
                 # --- FIM DA CORREÇÃO ---
                 
                 database.adicionar_pontos_ao_saldo(funcionario_db.FuncionarioID, config.PONTOS_BONUS_FEEDBACK_DIARIO)
-                texto_final = (f"Obrigado pelo seu feedback! Sua nota foi **{nota}**.\n\nVocê ganhou **{config.PONTOS_BONUS_FEEDBACK_DIARIO}** pontos por sua participação. Sua opinião nos ajuda a melhorar sempre! 💪")
+                texto_final = (f"Obrigado pelo seu feedback! Sua nota foi **{nota}**.\n\nVocê ganhou **{config.PONTOS_BONUS_FEEDBACK_DIARIO}** pontos por sua participação. Sua opinião nos ajuda a melhorar sempre! 💪\n\n{msg_pendencia}")
                 await query.edit_message_text(texto_final, parse_mode='Markdown')
-            else: await query.edit_message_text("Você já enviou seu feedback hoje. Obrigado!")
-        else: await query.edit_message_text("Erro: não foi possível identificar seu usuário.")
+            else: 
+                await query.edit_message_text("Você já enviou seu feedback para esta data. Obrigado!")
+        else: 
+            await query.edit_message_text("Erro: não foi possível identificar seu usuário.")
 
     elif data.startswith("aceitar_tarefa_"):
         origem_atribuicao_id = int(data.split('_')[-1])
