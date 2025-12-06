@@ -5141,7 +5141,8 @@ def finalizar_onboarding_e_notificar_gestor(funcionario_id):
     Marca o StatusWorkflow como 'Completo', define StatusAdmissional como 'Pendente' 
     (o novo bloqueio) e notifica o gestor do RH.
     """
-    conn = database.get_db_connection()
+    # CORREÇÃO: Chamada direta da função (estamos dentro do módulo database)
+    conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
