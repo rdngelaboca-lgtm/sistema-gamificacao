@@ -1408,9 +1408,25 @@ async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    await query.answer()
+    # Não damos answer() aqui imediatamente para permitir alertas de bloqueio
+    
     data = query.data
     user = update.effective_user
+
+    # --- CORREÇÃO FALTANTE: VERIFICAÇÃO DE BLOQUEIO (FEEDBACK PENDENTE) ---
+    # Impede uso de botões antigos se houver pendência de feedback
+    if data not in ["avaliar_dia", "avaliar_dia_ontem"] and not data.startswith("nota_dia"):
+        func_check = database.buscar_funcionario_por_chat_id(user.id)
+        # Se funcionário existe E não fez o feedback de ontem
+        if func_check and not database.verificar_feedback_dia_anterior(func_check.FuncionarioID):
+             await query.answer("⚠️ Ação bloqueada! Você tem feedback pendente do dia anterior.", show_alert=True)
+             return # <--- IMPEDE A EXECUÇÃO DO RESTO DA FUNÇÃO
+    # ---------------------------------------------------
+
+    # Se passou pelo bloqueio, confirma o clique
+    await query.answer()
+
+    # --- LÓGICA DE DOCUMENTOS PESSOAIS ---
 
     # --- LÓGICA DE DOCUMENTOS PESSOAIS ---
     if data.startswith("get_documento_"):
