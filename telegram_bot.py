@@ -557,7 +557,7 @@ async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         elif texto_recebido:
             valor_recebido = texto_recebido.strip()
             
-            # 2a. VALIDAÇÃO E RAMIFICAÇÃO: ESTADO CIVIL
+            # 2a. RAMIFICAÇÃO: ESTADO CIVIL
             if ultima_etapa == 'ESTADO_CIVIL':
                 database.atualizar_onboarding_etapa(funcionario.FuncionarioID, 'ESTADO_CIVIL', ('EstadoCivil', valor_recebido))
                 if 'CASADO' in valor_recebido.upper():
@@ -569,10 +569,9 @@ async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa)
                 return
 
-            # 2e. VALIDAÇÃO: DATA DE CASAMENTO
+            # 2b. VALIDAÇÃO E AVANÇO: DADOS CÔNJUGE
             if ultima_etapa == 'DATA_CASAMENTO':
                 try:
-                    # Tenta converter para validar o formato (o banco aceita YYYY-MM-DD)
                     datetime.strptime(valor_recebido, '%d/%m/%Y')
                     proxima_etapa = WORKFLOW['DATA_CASAMENTO']['proxima_etapa'] # NOME_CONJUGUE
                     database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa, ('DataCasamento', valor_recebido))
@@ -581,8 +580,7 @@ async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 except ValueError:
                     await context.bot.send_message(chat_id, "⚠️ Data inválida. Por favor, digite no formato **dd/mm/aaaa**.")
                     return
-
-            # 2f. VALIDAÇÃO: CPF DO CÔNJUGE (apenas números)
+            
             if ultima_etapa == 'CPF_CONJUGUE':
                 cpf_limpo = ''.join(filter(str.isdigit, valor_recebido))
                 if len(cpf_limpo) != 11:
@@ -593,6 +591,21 @@ async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa, ('CPFConjugue', cpf_limpo))
                 await context.bot.send_message(chat_id, WORKFLOW[proxima_etapa]['pergunta'])
                 return
+            
+            # 2c. VALIDAÇÃO E RAMIFICAÇÃO: FILHOS_QTD
+            if ultima_etapa == 'FILHOS_QTD':
+                # (Lógica de Filhos...)
+                return
+
+            # 2d. COLETA DE DADOS DE FILHOS EM LOOP
+            if ultima_etapa.startswith('DADOS_FILHO_'):
+                 # (Lógica de Filhos em Loop...)
+                 return
+
+            # 2e. SALVAMENTO PADRÃO DE DADO TEXTO (Escolaridade, Nome Cônjuge)
+            proxima_etapa = etapa_anterior_config['proxima_etapa']
+            campo_db = etapa_anterior_config['campo_db'][0]
+            database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa, (campo_db, valor_recebido))
 
             # 2b. VALIDAÇÃO E RAMIFICAÇÃO: FILHOS_QTD
             if ultima_etapa == 'FILHOS_QTD':
@@ -643,10 +656,17 @@ async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     # --- Envio da Primeira Pergunta (Etapa INICIO) ---
     elif ultima_etapa == 'INICIO':
-        database.iniciar_onboarding_funcionario(funcionario.FuncionarioID) # Seta o status para Em Progresso
-        await context.bot.send_message(chat_id, WORKFLOW['INICIO']['pergunta'])
-        context.user_data['onboarding_foto'] = True
-        database.atualizar_onboarding_etapa(funcionario.FuncionarioID, 'RG') # Avança para RG
+        # O disparo externo já enviou a primeira mensagem. Agora forçamos o avanço para RG
+        # e enviamos a pergunta de RG para quem está no estado INICIO.
+        if texto_recebido: # Processa a resposta do usuário à mensagem de boas-vindas
+            database.iniciar_onboarding_funcionario(funcionario.FuncionarioID) # Garante que o status seja 'Em Progresso'
+            proxima_etapa = 'RG'
+            
+            # Envia a primeira pergunta de foto
+            await context.bot.send_message(chat_id, WORKFLOW[proxima_etapa]['pergunta'])
+            context.user_data['onboarding_foto'] = True
+            database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa) # Avança para RG
+            return
 
 async def _coletar_dados_filhos_e_avancar(update: Update, context: ContextTypes.DEFAULT_TYPE, funcionario, valor_recebido, ultima_etapa):
     """
