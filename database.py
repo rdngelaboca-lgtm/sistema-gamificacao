@@ -4937,6 +4937,305 @@ def registrar_denuncia_anonima(mensagem):
                 conn.close()
     return None
 
+
+def buscar_documentos_onboarding_para_download(funcionario_id):
+    """Busca todos os FileIDs e o nome dos campos para download pelo gestor."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT 
+                    RG_FileID, CPF_FileID, CTPS_FileID, TituloEleitor_FileID
+                FROM OnboardingStatus
+                WHERE FuncionarioID = ?
+            """
+            cursor.execute(sql, funcionario_id)
+            resultado = cursor.fetchone()
+            
+            if resultado:
+                # Mapeia as colunas para o nome do documento
+                documentos = {
+                    'RG': resultado.RG_FileID,
+                    'CPF': resultado.CPF_FileID,
+                    'CTPS': resultado.CTPS_FileID,
+                    'TituloEleitor': resultado.TituloEleitor_FileID
+                }
+                # Filtra apenas FileIDs válidos
+                return {doc: file_id for doc, file_id in documentos.items() if file_id}
+            
+            return {}
+        except Exception as e:
+            logger.error(f"ERRO ao buscar FileIDs de onboarding para download: {e}", exc_info=True)
+            return {}
+        finally:
+            if conn:
+                conn.close()
+    return {}
+
+# ===================================================================
+# == FUNÇÕES DE ONBOARDING E GESTÃO DE DOCUMENTOS DE ADMISSÃO =======
+# ===================================================================
+
+def criar_tabela_onboarding():
+    """Cria a tabela OnboardingStatus para rastrear o progresso do funcionário."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Esta tabela precisa de muitos campos para armazenar os dados e o status de cada documento
+            sql = """
+                IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'OnboardingStatus')
+                CREATE TABLE OnboardingStatus (
+                    FuncionarioID INT PRIMARY KEY REFERENCES Funcionarios(FuncionarioID),
+                    StatusWorkflow VARCHAR(50) NOT NULL DEFAULT 'Pendente', -- Pendente, Em Progresso, Completo
+                    UltimaEtapa VARCHAR(100), -- Rastreia o item que está sendo pedido (ex: 'RG', 'Escolaridade', etc.)
+                    Escolaridade VARCHAR(50),
+                    EstadoCivil VARCHAR(50),
+                    DataCasamento DATE,
+                    NomeConjugue VARCHAR(100),
+                    CPFConjugue VARCHAR(14),
+                    QtdFilhos INT DEFAULT 0,
+                    DadosFilhos JSON, -- JSON para armazenar Nome/Nasc/CPF dos filhos
+                    
+                    -- Caminhos dos documentos (File ID do Telegram ou Path Local após download)
+                    RG_FileID VARCHAR(255),
+                    CPF_FileID VARCHAR(255),
+                    CTPS_FileID VARCHAR(255),
+                    TituloEleitor_FileID VARCHAR(255)
+                )
+            """
+            cursor.execute(sql)
+            conn.commit()
+            logger.info("Tabela OnboardingStatus verificada/criada.")
+        except Exception as e:
+            logger.error(f"ERRO CRÍTICO ao criar OnboardingStatus: {e}", exc_info=True)
+        finally:
+            if conn:
+                conn.close()
+
+criar_tabela_onboarding() # Executa a criação da tabela no startup do módulo database
+
+def adicionar_colunas_admissional_onboarding():
+    """Adiciona a coluna DataAdmissional e StatusAdmissional ao OnboardingStatus."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            
+            # --- Adicionar DataAdmissional ---
+            try:
+                # Tentativa de SELECT * para garantir que a coluna RG_FileID existe
+                # (Assumimos que o OnboardingStatus já existe aqui)
+                cursor.execute("SELECT DataAdmissional FROM OnboardingStatus WHERE 1=0")
+                logger.info("Coluna DataAdmissional já existe.")
+            except Exception:
+                cursor.execute("ALTER TABLE OnboardingStatus ADD DataAdmissional DATETIME NULL")
+                logger.info("SUCESSO: Coluna DataAdmissional adicionada.")
+
+            # --- Adicionar StatusAdmissional ---
+            try:
+                cursor.execute("SELECT StatusAdmissional FROM OnboardingStatus WHERE 1=0")
+                logger.info("Coluna StatusAdmissional já existe.")
+            except Exception:
+                # O valor padrão é 'Pendente' (Bloqueado até aprovação)
+                cursor.execute("ALTER TABLE OnboardingStatus ADD StatusAdmissional VARCHAR(50) NOT NULL DEFAULT 'Pendente'")
+                logger.info("SUCESSO: Coluna StatusAdmissional adicionada.")
+                
+            conn.commit()
+        except Exception as e:
+            # Em caso de falha, tenta comitar a parte que deu certo e loga o erro
+            if conn:
+                conn.rollback() # Rollback de segurança se falhar no meio
+            logger.error(f"ERRO ao adicionar colunas de Admissional: {e}", exc_info=True)
+        finally:
+            if conn:
+                conn.close()
+
+adicionar_colunas_admissional_onboarding() # Executa a verificação ao iniciar o database
+
+def iniciar_onboarding_funcionario(funcionario_id):
+    """Cria ou reseta o registro de onboarding para 'Pendente'."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Usa MERGE para inserir ou atualizar para 'Pendente'
+            sql = """
+                MERGE INTO OnboardingStatus AS target
+                USING (SELECT ? AS FuncionarioID) AS source
+                ON (target.FuncionarioID = source.FuncionarioID)
+                WHEN MATCHED THEN
+                    UPDATE SET StatusWorkflow = 'Pendente', UltimaEtapa = NULL, DadosFilhos = NULL 
+                WHEN NOT MATCHED THEN
+                    INSERT (FuncionarioID, StatusWorkflow)
+                    VALUES (?, 'Pendente');
+            """
+            cursor.execute(sql, funcionario_id, funcionario_id)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"ERRO ao iniciar/resetar onboarding para ID {funcionario_id}: {e}", exc_info=True)
+            return False
+        finally:
+            if conn:
+                conn.close()
+    return False
+
+def buscar_onboarding_status(funcionario_id):
+    """Retorna o status completo e a última etapa de um funcionário."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "SELECT * FROM OnboardingStatus WHERE FuncionarioID = ?"
+            cursor.execute(sql, funcionario_id)
+            return cursor.fetchone()
+        except Exception as e:
+            logger.error(f"ERRO ao buscar status de onboarding para ID {funcionario_id}: {e}", exc_info=True)
+            return None
+        finally:
+            if conn:
+                conn.close()
+    return None
+
+def atualizar_onboarding_etapa(funcionario_id, nova_etapa, campo_valor=None):
+    """
+    Atualiza o status do workflow e um campo específico (ex: RG_FileID ou Escolaridade).
+    Retorna True se atualizar.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            
+            # Divide o campo e o valor
+            if isinstance(campo_valor, tuple) and len(campo_valor) == 2:
+                campo, valor = campo_valor
+                sql = f"UPDATE OnboardingStatus SET StatusWorkflow = 'Em Progresso', UltimaEtapa = ?, {campo} = ? WHERE FuncionarioID = ?"
+                cursor.execute(sql, nova_etapa, valor, funcionario_id)
+            else:
+                sql = "UPDATE OnboardingStatus SET StatusWorkflow = 'Em Progresso', UltimaEtapa = ? WHERE FuncionarioID = ?"
+                cursor.execute(sql, nova_etapa, funcionario_id)
+
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"ERRO ao atualizar etapa '{nova_etapa}' para ID {funcionario_id}: {e}", exc_info=True)
+            if conn:
+                conn.rollback()
+            return False
+        finally:
+            if conn:
+                conn.close()
+    return False
+
+def finalizar_onboarding_e_notificar_gestor(funcionario_id):
+    """
+    Marca o StatusWorkflow como 'Completo', define StatusAdmissional como 'Pendente' 
+    (o novo bloqueio) e notifica o gestor do RH.
+    """
+    conn = database.get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # 🛑 CORREÇÃO SINTAXE: O SQL deve atualizar StatusWorkflow E StatusAdmissional
+            sql = "UPDATE OnboardingStatus SET StatusWorkflow = 'Completo', StatusAdmissional = 'Pendente', UltimaEtapa = 'Finalizado' WHERE FuncionarioID = ?"
+            cursor.execute(sql, funcionario_id)
+            conn.commit()
+            
+            # --- Notificação para o Gestor RH ---
+            funcionario = database.buscar_funcionario_por_id(funcionario_id)
+            if funcionario:
+                mensagem_gestor = (
+                    f"🟢 **NOVO ONBOARDING DE DOCUMENTOS CONCLUÍDO!** 🟢\n\n"
+                    f"O funcionário **{funcionario.NomeCompleto}** finalizou o envio de todos os documentos e informações de registro.\n"
+                    f"➡️ **Ação:** O funcionário foi liberado para fazer o exame admissional. Por favor, libere o acesso total após a aprovação no painel RH."
+                )
+                notificador_telegram.enviar_mensagem(config.GESTOR_GROUP_CHAT_ID, mensagem_gestor)
+
+            return True
+        except Exception as e:
+            logger.error(f"ERRO ao finalizar onboarding para ID {funcionario_id}: {e}", exc_info=True)
+            if conn:
+                conn.rollback()
+            return False
+        finally:
+            if conn:
+                conn.close()
+    return False
+
+def salvar_dados_filhos(funcionario_id, dados_filhos_json):
+    """Salva a string JSON dos dados dos filhos."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE OnboardingStatus SET DadosFilhos = ? WHERE FuncionarioID = ?"
+            cursor.execute(sql, dados_filhos_json, funcionario_id)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"ERRO ao salvar dados de filhos para ID {funcionario_id}: {e}", exc_info=True)
+            return False
+        finally:
+            if conn:
+                conn.close()
+    return False
+
+
+def aprovar_exame_admissional(funcionario_id, data_admissional):
+    """
+    Atualiza o status final e a data do exame admissional, removendo o bloqueio.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                UPDATE OnboardingStatus 
+                SET StatusAdmissional = 'Aprovado', DataAdmissional = ?
+                WHERE FuncionarioID = ?
+            """
+            cursor.execute(sql, data_admissional, funcionario_id)
+            conn.commit()
+            return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"ERRO ao aprovar exame admissional para ID {funcionario_id}: {e}", exc_info=True)
+            return False
+        finally:
+            if conn:
+                conn.close()
+    return False
+
+def buscar_onboarding_lista_rh():
+    """
+    Busca lista de funcionários com onboarding completo (prontos para admissional)
+    ou com admissional pendente (prontos para liberação).
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT 
+                    F.FuncionarioID, F.NomeCompleto, 
+                    OS.StatusWorkflow, OS.StatusAdmissional, OS.UltimaEtapa, OS.DataAdmissional
+                FROM Funcionarios F
+                JOIN OnboardingStatus OS ON F.FuncionarioID = OS.FuncionarioID
+                WHERE OS.StatusWorkflow = 'Completo' AND OS.StatusAdmissional IN ('Pendente', 'Aprovado')
+                ORDER BY OS.StatusAdmissional, F.NomeCompleto
+            """
+            cursor.execute(sql)
+            return cursor.fetchall()
+        except Exception as e:
+            logger.error(f"ERRO ao listar onboarding para RH: {e}", exc_info=True)
+            return []
+        finally:
+            if conn:
+                conn.close()
+    return []
+
 def buscar_pendencias_criticas(funcionario_id):
     """
     Busca todas as pendências que exigem ação imediata (Ciência de Comunicado/Documento).
