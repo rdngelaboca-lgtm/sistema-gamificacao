@@ -1141,8 +1141,22 @@ async def handler_foto_tarefa(update: Update, context: ContextTypes.DEFAULT_TYPE
             if temp_photo_path and os.path.exists(temp_photo_path): os.remove(temp_photo_path)
             return
 
-        photo_size = update.message.photo[-1]
-        file_id = photo_size.file_id
+        # --- LÓGICA DE EXTRAÇÃO DE FILE_ID (HÍBRIDA) ---
+        file_id = None
+
+        # Caso 1: É uma Foto (Galeria)
+        if update.message.photo:
+            file_id = update.message.photo[-1].file_id
+
+        # Caso 2: É um Documento (PDF, Arquivo)
+        elif update.message.document:
+            file_id = update.message.document.file_id
+
+        else:
+            await update.message.reply_text("❌ Formato de arquivo não reconhecido. Envie Foto ou PDF.")
+            return
+        # ------------------------------------------------
+
         # Registra preliminarmente com file_id
         entrega_id = database.registrar_entrega_preliminar(tarefa.TarefaID, funcionario.FuncionarioID, atribuicao_id, file_id) #
 
@@ -2021,9 +2035,11 @@ def main() -> None:
     application.add_handler(CommandHandler("ajuda", ajuda))
     application.add_handler(CommandHandler("meusaldo", meu_saldo))
     application.add_handler(CommandHandler("loja", loja_recompensas))
-    application.add_handler(CommandHandler("documentos", solicitar_documentos_inicio)) # <<< COMANDO RENOMEADO
+    application.add_handler(CommandHandler("documentos", solicitar_documentos_inicio))
     application.add_handler(CommandHandler("conquistas", minhas_conquistas))
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🏅 Minhas Conquistas$'), minhas_conquistas)) # <<< NOVO BOTÃO
+    
+    # --- Botões de Texto ---
+    application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🏅 Minhas Conquistas$'), minhas_conquistas))
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🧾 Enviar Nota Fiscal$'), solicitar_foto_nf))
     application.add_handler(CallbackQueryHandler(button_callback_handler))
 
@@ -2037,17 +2053,20 @@ def main() -> None:
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🏪 Loja de Recompensas$'), loja_recompensas))
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^💬 Canal Confidencial$'), solicitar_feedback_start)) 
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^📄 Meus Documentos$'), solicitar_documentos_inicio)) 
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🏅 Minhas Conquistas$'), minhas_conquistas)) # <<< NOVO BOTÃO
-    # CORREÇÃO: Handler Híbrido (Aceita FOTO ou DOCUMENTO no privado)
-    # O uso de parênteses (A | B) & C é obrigatório para combinar OR e AND corretamente.
-    application.add_handler(MessageHandler((filters.PHOTO | filters.Document.ALL) & filters.ChatType.PRIVATE, receber_foto))
+    
+    # --- CORREÇÃO FINAL: HANDLERS DE ARQUIVO SEPARADOS ---
+    # 1. Aceita FOTOS (comprimidas, padrão do celular)
+    application.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, receber_foto))
+    
+    # 2. Aceita DOCUMENTOS (PDFs, Arquivos sem compressão)
+    application.add_handler(MessageHandler(filters.Document.ALL & filters.ChatType.PRIVATE, receber_foto))
 
     # Handler de TEXTO genérico (para justificativas, cpf, etc.)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, roteador_de_texto_privado))
-    # --- CORREÇÃO ADICIONADA AQUI ---
-    # Adiciona o handler para capturar o "motivo da recusa" digitado pelo gestor no GRUPO.
+    
+    # Handler de TEXTO em GRUPO (para motivo de recusa do gestor)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUP, receber_motivo_recusa))
-    # --- FIM DA CORREÇÃO ---
+    
     logger.info("--- BOT INICIADO COM SUCESSO ---")
     application.run_polling()
 
