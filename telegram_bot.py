@@ -74,6 +74,7 @@ from telegram.helpers import escape_markdown
 import urllib.parse
 from database import adicionar_pontos_ao_saldo
 import locale
+import json # <<< IMPORT FALTANDO!
 try:
     locale.setlocale(locale.LC_TIME, 'pt_BR.UTF-8')
 except locale.Error:
@@ -444,6 +445,291 @@ async def solicitar_documentos_inicio(update: Update, context: ContextTypes.DEFA
     context.user_data['aguardando_verificador_cpf'] = True
     await update.message.reply_text("Para sua segurança, por favor, digite os 3 primeiros dígitos do seu CPF.")
 
+
+async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Gerencia a máquina de estados para o onboarding inicial (coleta de documentos e dados).
+    """
+    user = update.effective_user
+    chat_id = update.effective_chat.id
+    funcionario = database.buscar_funcionario_por_chat_id(chat_id)
+    
+    if not funcionario:
+        await context.bot.send_message(chat_id, "Desculpe, não consegui encontrar seu cadastro no sistema.")
+        return
+
+    status_onboarding = database.buscar_onboarding_status(funcionario.FuncionarioID)
+    ultima_etapa = getattr(status_onboarding, 'UltimaEtapa', 'INICIO')
+
+    # Se a última mensagem foi uma foto, tentamos processar o File ID
+    texto_recebido = update.message.text
+    foto_recebida = update.message.photo and context.user_data.get('onboarding_foto')
+    
+    # Dicionário de Configuração do Workflow
+    WORKFLOW = {
+        'INICIO': { 
+            'pergunta': "Olá! Para finalizar seu registro, preciso de alguns documentos. \n\n"
+                        "Vamos começar. Por favor, envie a **FOTO ou PDF do seu RG** (Frente e Verso).",
+            'proxima_etapa': 'RG', 'espera_tipo': 'FOTO_OU_PDF' 
+        },
+        'RG': { 
+            'proxima_etapa': 'CPF', 'campo_db': ('RG_FileID', 'FileID'),
+            'pergunta': "Ótimo. Agora envie a **FOTO ou PDF do seu CPF**."
+        },
+        'CPF': { 
+            'proxima_etapa': 'CTPS', 'campo_db': ('CPF_FileID', 'FileID'),
+            'pergunta': "Perfeito. Envie a **FOTO da sua Carteira de Trabalho** (página da foto) ou o **PDF** exportado se for digital."
+        },
+        'CTPS': { 
+            'proxima_etapa': 'TITULO_ELEITOR', 'campo_db': ('CTPS_FileID', 'FileID'),
+            'pergunta': "Quase lá nos documentos. Envie a **FOTO ou PDF do Título de Eleitor**."
+        },
+        'TITULO_ELEITOR': { 
+            'proxima_etapa': 'ESCOLARIDADE', 'campo_db': ('TituloEleitor_FileID', 'FileID'),
+            'pergunta': "Documentos salvos! Agora, digite sua **Escolaridade** (Ex: Ensino Médio Completo)."
+        },
+        'ESCOLARIDADE': { 
+            'proxima_etapa': 'ESTADO_CIVIL', 'campo_db': ('Escolaridade', texto_recebido),
+            'pergunta': "Qual seu **Estado Civil**? (Ex: Solteiro, Casado, etc.)"
+        },
+        'ESTADO_CIVIL': { 
+            'proxima_etapa': 'ESTADO_CIVIL_CASADO_OPCIONAL', 'campo_db': ('EstadoCivil', texto_recebido),
+            'pergunta': "Qual seu **Estado Civil**? (Ex: Solteiro, Casado, etc.)" # Esta pergunta será sobrescrita pela lógica abaixo
+        },
+        # --- CAMPOS OBRIGATÓRIOS SE CASADO ---
+        'DATA_CASAMENTO': { 
+            'proxima_etapa': 'NOME_CONJUGUE', 'campo_db': ('DataCasamento', texto_recebido),
+            'pergunta': "Qual o nome completo do seu **Cônjuge**?"
+        },
+        'NOME_CONJUGUE': { 
+            'proxima_etapa': 'CPF_CONJUGUE', 'campo_db': ('NomeConjugue', texto_recebido),
+            'pergunta': "Qual o **CPF do seu Cônjuge**? (Apenas números)"
+        },
+        'CPF_CONJUGUE': { 
+            'proxima_etapa': 'FILHOS_QTD', 'campo_db': ('CPFConjugue', texto_recebido),
+            'pergunta': "Quantos filhos menores de idade você tem? (Digite o NÚMERO)"
+        },
+        # --- COLETA DE FILHOS (Estados de Coleta em Loop) ---
+        'FILHOS_QTD': { 
+            'proxima_etapa': 'CONCLUIR', # Esta será ajustada pela lógica
+            'campo_db': ('QtdFilhos', texto_recebido),
+            'pergunta': "Quantos filhos menores de idade você tem? (Digite o NÚMERO)"
+        },
+        'DADOS_FILHO_1_NOME': {
+             'proxima_etapa': 'DADOS_FILHO_1_NASC', 'campo_db': ('Filho{numero}_Nome', texto_recebido),
+             'pergunta': "Digite a **Data de Nascimento** (dd/mm/aaaa) do(a) {numero}º filho(a):"
+        },
+        'DADOS_FILHO_1_NASC': {
+             'proxima_etapa': 'DADOS_FILHO_1_CPF', 'campo_db': ('Filho{numero}_Nasc', texto_recebido),
+             'pergunta': "Digite o **CPF** (apenas números) do(a) {numero}º filho(a):"
+        },
+        'DADOS_FILHO_1_CPF': {
+             'proxima_etapa': 'DADOS_FILHO_2_NOME', 'campo_db': ('Filho{numero}_CPF', texto_recebido),
+             'pergunta': "Qual o nome completo do(a) {numero}º filho(a)?"
+        },
+    }
+    
+# --- Lógica de Processamento da Etapa Anterior ---
+    if ultima_etapa != 'INICIO':
+        etapa_anterior_config = WORKFLOW.get(ultima_etapa)
+        
+        # Se recebemos texto e a etapa anterior esperava foto, ou vice-versa, é um erro.
+        esperava_foto = etapa_anterior_config.get('espera_tipo') in ['FOTO_OU_PDF']
+        recebeu_texto_nao_esperado = not esperava_foto and update.message.text and 'campo_db' not in etapa_anterior_config
+        
+        if (esperava_foto and not foto_recebida) or recebeu_texto_nao_esperado:
+            # Se esperava FOTO e não veio, ou veio texto em etapa que não espera campo_db, repete a pergunta.
+            espera_tipo = etapa_anterior_config.get('espera_tipo', 'TEXTO')
+            await context.bot.send_message(chat_id, f"⚠️ Formato inválido. Por favor, envie o {espera_tipo} ou digite o texto solicitado.")
+            return
+
+        # 1. PROCESSAMENTO DE FOTO/ARQUIVO
+        if foto_recebida:
+            proxima_etapa = etapa_anterior_config['proxima_etapa']
+            # Salva o File ID do documento
+            file_id_a_salvar = context.user_data.pop('file_id_documento_onboarding')
+            campo_db = etapa_anterior_config['campo_db'][0]
+            
+            database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa, (campo_db, file_id_a_salvar))
+            context.user_data.pop('onboarding_foto', None) # Limpa o estado
+        
+        # 2. PROCESSAMENTO DE TEXTO/DADOS
+        elif texto_recebido:
+            valor_recebido = texto_recebido.strip()
+            
+            # 2a. VALIDAÇÃO E RAMIFICAÇÃO: ESTADO CIVIL
+            if ultima_etapa == 'ESTADO_CIVIL':
+                database.atualizar_onboarding_etapa(funcionario.FuncionarioID, 'ESTADO_CIVIL', ('EstadoCivil', valor_recebido))
+                if 'CASADO' in valor_recebido.upper():
+                    proxima_etapa = 'DATA_CASAMENTO'
+                    await context.bot.send_message(chat_id, "Ok. Agora, digite a **Data de Casamento** (dd/mm/aaaa).")
+                else:
+                    proxima_etapa = 'FILHOS_QTD'
+                    await context.bot.send_message(chat_id, WORKFLOW[proxima_etapa]['pergunta'])
+                database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa)
+                return
+
+            # 2e. VALIDAÇÃO: DATA DE CASAMENTO
+            if ultima_etapa == 'DATA_CASAMENTO':
+                try:
+                    # Tenta converter para validar o formato (o banco aceita YYYY-MM-DD)
+                    datetime.strptime(valor_recebido, '%d/%m/%Y')
+                    proxima_etapa = WORKFLOW['DATA_CASAMENTO']['proxima_etapa'] # NOME_CONJUGUE
+                    database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa, ('DataCasamento', valor_recebido))
+                    await context.bot.send_message(chat_id, WORKFLOW['DATA_CASAMENTO']['pergunta'])
+                    return
+                except ValueError:
+                    await context.bot.send_message(chat_id, "⚠️ Data inválida. Por favor, digite no formato **dd/mm/aaaa**.")
+                    return
+
+            # 2f. VALIDAÇÃO: CPF DO CÔNJUGE (apenas números)
+            if ultima_etapa == 'CPF_CONJUGUE':
+                cpf_limpo = ''.join(filter(str.isdigit, valor_recebido))
+                if len(cpf_limpo) != 11:
+                    await context.bot.send_message(chat_id, "⚠️ CPF inválido (deve ter 11 dígitos). Digite novamente.")
+                    return
+                
+                proxima_etapa = WORKFLOW['CPF_CONJUGUE']['proxima_etapa'] # FILHOS_QTD
+                database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa, ('CPFConjugue', cpf_limpo))
+                await context.bot.send_message(chat_id, WORKFLOW[proxima_etapa]['pergunta'])
+                return
+
+            # 2b. VALIDAÇÃO E RAMIFICAÇÃO: FILHOS_QTD
+            if ultima_etapa == 'FILHOS_QTD':
+                try:
+                    qtd = int(valor_recebido)
+                    if qtd < 0: raise ValueError
+                    database.atualizar_onboarding_etapa(funcionario.FuncionarioID, 'FILHOS_QTD', ('QtdFilhos', qtd))
+                    
+                    if qtd > 0:
+                        proxima_etapa = 'DADOS_FILHO_1_NOME' # Inicia o loop de filhos
+                        context.user_data['qtd_filhos_onboarding'] = qtd
+                        context.user_data['filho_atual_onboarding'] = 1
+                        await context.bot.send_message(chat_id, f"Ok, vamos coletar os dados de **{qtd} filho(s)**.")
+                        await context.bot.send_message(chat_id, "Qual o nome completo do(a) 1º filho(a)?")
+                    else:
+                        proxima_etapa = 'CONCLUIR' # Pula para o final
+                    
+                    database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa)
+                    if proxima_etapa == 'CONCLUIR':
+                        await _finalizar_onboarding_e_redirecionar(update, context, funcionario)
+                    return
+                except ValueError:
+                    await context.bot.send_message(chat_id, "⚠️ Por favor, digite apenas um NÚMERO válido para a quantidade de filhos.")
+                    return
+
+            # 2c. COLETA DE DADOS DE FILHOS EM LOOP
+            if ultima_etapa.startswith('DADOS_FILHO_'):
+                 await _coletar_dados_filhos_e_avancar(update, context, funcionario, valor_recebido, ultima_etapa)
+                 return
+
+            # 2d. SALVAMENTO PADRÃO DE DADO TEXTO (Escolaridade, Casamento, Cônjuge, etc.)
+            proxima_etapa = etapa_anterior_config['proxima_etapa']
+            campo_db = etapa_anterior_config['campo_db'][0]
+            database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa, (campo_db, valor_recebido))
+        
+        # --- VERIFICAÇÃO DE FINALIZAÇÃO E PRÓXIMA PERGUNTA ---
+        if proxima_etapa == 'CONCLUIR':
+            await _finalizar_onboarding_e_redirecionar(update, context, funcionario)
+            return
+
+        if proxima_etapa in WORKFLOW:
+            await context.bot.send_message(chat_id, WORKFLOW[proxima_etapa]['pergunta'])
+            if WORKFLOW[proxima_etapa].get('espera_tipo') in ['FOTO_OU_PDF']:
+                context.user_data['onboarding_foto'] = True
+        
+        # Finaliza o handler
+        return
+    
+    # --- Envio da Primeira Pergunta (Etapa INICIO) ---
+    elif ultima_etapa == 'INICIO':
+        database.iniciar_onboarding_funcionario(funcionario.FuncionarioID) # Seta o status para Em Progresso
+        await context.bot.send_message(chat_id, WORKFLOW['INICIO']['pergunta'])
+        context.user_data['onboarding_foto'] = True
+        database.atualizar_onboarding_etapa(funcionario.FuncionarioID, 'RG') # Avança para RG
+
+async def _coletar_dados_filhos_e_avancar(update: Update, context: ContextTypes.DEFAULT_TYPE, funcionario, valor_recebido, ultima_etapa):
+    """
+    Função auxiliar que gerencia a coleta sequencial de dados dos filhos e salva em JSON.
+    """
+    chat_id = update.effective_chat.id
+    filho_atual = context.user_data.get('filho_atual_onboarding', 1)
+    qtd_filhos = context.user_data.get('qtd_filhos_onboarding', 0)
+    
+    # Mapeia o campo atual (Nome, Nasc, CPF)
+    _, _, campo_tipo = ultima_etapa.rpartition('_') # ex: DADOS_FILHO_1_NOME -> NOME
+
+    # 1. Lê os dados JSON existentes ou inicializa
+    status_onboarding = database.buscar_onboarding_status(funcionario.FuncionarioID)
+    dados_filhos_json = getattr(status_onboarding, 'DadosFilhos', None)
+    dados_filhos = json.loads(dados_filhos_json) if dados_filhos_json else []
+    
+    # Se ainda não tivermos o objeto para o filho atual, criamos
+    if len(dados_filhos) < filho_atual:
+         dados_filhos.append({})
+
+    # 2. Salva o dado recebido
+    if campo_tipo == 'NOME':
+         dados_filhos[filho_atual - 1]['Nome'] = valor_recebido
+         proxima_pergunta = "Data de Nascimento (dd/mm/aaaa)"
+         proxima_etapa_nome = 'DADOS_FILHO_' + str(filho_atual) + '_NASC'
+    elif campo_tipo == 'NASC':
+         dados_filhos[filho_atual - 1]['Nasc'] = valor_recebido
+         proxima_pergunta = "CPF (apenas números)"
+         proxima_etapa_nome = 'DADOS_FILHO_' + str(filho_atual) + '_CPF'
+    elif campo_tipo == 'CPF':
+         dados_filhos[filho_atual - 1]['CPF'] = valor_recebido
+         
+         # 3. Verifica se finalizou o loop de filhos
+         if filho_atual < qtd_filhos:
+             # Próximo filho
+             context.user_data['filho_atual_onboarding'] = filho_atual + 1
+             proxima_pergunta = f"Qual o nome completo do(a) {filho_atual + 1}º filho(a)?"
+             proxima_etapa_nome = 'DADOS_FILHO_' + str(filho_atual + 1) + '_NOME'
+         else:
+             # FIM DO LOOP
+             proxima_etapa_nome = 'CONCLUIR'
+
+    else:
+        await context.bot.send_message(chat_id, "Erro interno de campo. Tente /cancelar e comece novamente.")
+        return
+        
+    # 4. Salva o JSON atualizado e avança o estado
+    database.salvar_dados_filhos(funcionario.FuncionarioID, json.dumps(dados_filhos))
+    
+    if proxima_etapa_nome == 'CONCLUIR':
+         database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa_nome)
+         await _finalizar_onboarding_e_redirecionar(update, context, funcionario)
+    else:
+         database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa_nome)
+         await context.bot.send_message(chat_id, proxima_pergunta)
+
+# OBS: Adicione 'import json' e 'from telegram import Update' no topo do arquivo.
+
+
+async def _finalizar_onboarding_e_redirecionar(update: Update, context: ContextTypes.DEFAULT_TYPE, funcionario):
+    """
+    Função finaliza o onboarding, notifica o gestor, define o status 'Admissional Pendente'
+    e redireciona para o exame.
+    """
+    # 1. Marca o status Workflow como 'Completo' e Admissional como 'Pendente'
+    # Esta função está em database.py e deve ser ajustada para o novo schema
+    database.finalizar_onboarding_e_notificar_gestor(funcionario.FuncionarioID)
+    
+    mensagem_final = (
+        "🥳 **Parabéns! Registro Quase Concluído!** 🥳\n\n"
+        "Você enviou todos os documentos e informações de registro! Seu gestor já foi notificado.\n\n"
+        "⚠️ **Acesso Bloqueado:** O sistema só será liberado após a aprovação do seu exame admissional.\n\n"
+        "➡️ **Próxima Ação Obrigatória:** Por favor, agende imediatamente seu exame admissional no local indicado abaixo:\n\n"
+        "🏥 **Clínica/Local:** [Gera Medicina e Segurança do Trabalho]\n"
+        "📍 **Endereço:** [R. Afonso Pena, 809 - Centro, Rondonópolis - MT, 78700-070]\n"
+        "📞 **Telefone:** [(66) 3424-0035]\n\n"
+        "Qualquer dúvida, contate o RH. Aguarde a notificação de liberação! 🔒"
+    )
+    await context.bot.send_message(update.effective_chat.id, mensagem_final, parse_mode='Markdown')
+    context.user_data.clear() # Limpa todos os estados
+
+
 async def _interceptar_comandos_e_pendencias(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """
     Intercepta comandos e verifica se o usuário tem pendências críticas (ciência ou feedback).
@@ -464,6 +750,26 @@ async def _interceptar_comandos_e_pendencias(update: Update, context: ContextTyp
     if not funcionario:
         await context.bot.send_message(chat_id, "Desculpe, não consegui encontrar seu cadastro no sistema.")
         return True # Bloqueia
+
+    # --- VERIFICAÇÃO 0: ONBOARDING OBRIGATÓRIO ---
+    status_onboarding = database.buscar_onboarding_status(funcionario.FuncionarioID)
+
+    if status_onboarding:
+        # Bloqueio 0A: Se o Workflow de Documentos está incompleto (força a continuar o fluxo)
+        if status_onboarding.StatusWorkflow != 'Completo':
+             await context.bot.send_message(chat_id, 
+                                       f"🛑 **Ação Obrigatória (Onboarding):** Seu registro de documentos e informações de registro está **{status_onboarding.StatusWorkflow}**.\n\n"
+                                       "Você deve finalizar este processo antes de usar o sistema de Gamificação.",
+                                       parse_mode='Markdown')
+             await onboarding_handler(update, context)
+             return True # Bloqueia
+
+        # Bloqueio 0B: Se o Workflow de Documentos está completo, mas o Admissional está Pendente
+        if status_onboarding.StatusWorkflow == 'Completo' and status_onboarding.StatusAdmissional == 'Pendente':
+             await context.bot.send_message(chat_id, 
+                                       "🔒 **Acesso Bloqueado:** Seu registro de documentos está completo, mas o sistema só será liberado após a **aprovação do seu exame admissional** pelo RH.",
+                                       parse_mode='Markdown')
+             return True # Bloqueia o uso do sistema
 
     # --- VERIFICAÇÃO 1: FEEDBACK DO DIA ANTERIOR ---
     if not database.verificar_feedback_dia_anterior(funcionario.FuncionarioID):
@@ -631,9 +937,18 @@ async def roteador_de_texto_privado(update: Update, context: ContextTypes.DEFAUL
 
     # Se não caiu em nenhum estado específico, é uma mensagem normal não esperada
     else:
-         # Limpa qualquer estado residual por segurança
-         user_data.clear()
-         await update.message.reply_text("Não entendi o que você quis dizer. Use os botões do menu para interagir comigo. Se precisar, use o comando /ajuda ou digite /cancelar para recomeçar.")
+        funcionario = database.buscar_funcionario_por_chat_id(chat_id)
+        status_onboarding = database.buscar_onboarding_status(funcionario.FuncionarioID)
+
+        # --- ROTEAMENTO DE TEXTO PARA ONBOARDING (Se estiver no meio do processo) ---
+        if status_onboarding and status_onboarding.StatusWorkflow == 'Em Progresso' and texto_recebido:
+            await onboarding_handler(update, context)
+            return
+
+        # --- SE NÃO FOI ONBOARDING, É UMA MENSAGEM NÃO ESPERADA ---
+        # Limpa qualquer estado residual por segurança
+        user_data.clear()
+        await update.message.reply_text("Não entendi o que você quis dizer. Use os botões do menu para interagir comigo. Se precisar, use o comando /ajuda ou digite /cancelar para recomeçar.")
          
 
 async def solicitar_feedback_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -657,6 +972,33 @@ async def solicitar_feedback_start(update: Update, context: ContextTypes.DEFAULT
 async def handler_foto_tarefa(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     MAX_SECONDS_DIFFERENCE = config.MAX_DIFERENCA_FOTO_SEGUNDOS # Usa valor do config.py
     temp_photo_path = None
+    
+    # --- ROTEAMENTO DE FOTO PARA ONBOARDING ---
+    if context.user_data.get('onboarding_foto', False):
+        try:
+            # Extrai o File ID do Telegram (para evitar o download completo agora)
+            if update.message.photo:
+                 file_id = update.message.photo[-1].file_id
+            elif update.message.document and 'pdf' in update.message.document.mime_type:
+                 file_id = update.message.document.file_id
+            else:
+                 raise ValueError("Tipo de arquivo inválido.")
+                 
+            # Armazena o File ID para o Onboarding Handler usar
+            context.user_data['file_id_documento_onboarding'] = file_id
+            
+            # Chama o Onboarding Handler para processar a etapa
+            await onboarding_handler(update, context)
+            return
+        except ValueError:
+             await context.bot.send_message(update.effective_chat.id, "⚠️ Por favor, envie o documento como FOTO ou PDF.")
+             return
+        except Exception as e:
+             logger.error(f"Erro no roteador de foto de onboarding: {e}", exc_info=True)
+             await context.bot.send_message(update.effective_chat.id, "Ocorreu um erro ao processar sua foto. Tente novamente.")
+             return
+
+    # --- FIM ROTEAMENTO DE ONBOARDING ---
 
     try:
         # Camada 1 de Verificação (sem alteração)
