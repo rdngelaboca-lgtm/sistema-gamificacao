@@ -75,6 +75,7 @@ import urllib.parse
 from database import adicionar_pontos_ao_saldo
 import locale
 import json # <<< IMPORT FALTANDO!
+import html # Necessário para escapar strings em modo HTML
 try:
     locale.setlocale(locale.LC_TIME, 'pt_BR.UTF-8')
 except locale.Error:
@@ -324,10 +325,9 @@ async def ranking(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             detalhes = f"(Desemp: {dados['Desempenho']}%, Pts: {dados['PontosGanhos']})"
             texto_final += f"{posicao_icone} {nome} - **Score: {score}**\n   {detalhes}\n"
 
-    # --- Ranking Atendimento/Loja ---
-    texto_final += "\n🛒 **--- Ranking Atendimento/Loja ---** 🛒\n"
+    texto_final += "\n🛒 <b>--- Ranking Atendimento/Loja ---</b> 🛒\n"
     if not ranking_loja:
-        texto_final += "_Sem dados para este setor no momento._\n"
+        texto_final += "<i>Sem dados para este setor no momento.</i>\n"
     else:
         icones = ["🥇", "🥈", "🥉"]
         for i, dados in enumerate(ranking_loja):
@@ -335,10 +335,13 @@ async def ranking(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             nome = dados['NomeCompleto']
             score = dados['ScoreHibrido']
             detalhes = f"(Desemp: {dados['Desempenho']}%, Pts: {dados['PontosGanhos']})"
-            texto_final += f"{posicao_icone} {nome} - **Score: {score}**\n   {detalhes}\n"
+            # Usando HTML Tags
+            # Sanitização do nome
+            nome_esc = html.escape(nome or "Desconhecido")
+            texto_final += f"{posicao_icone} {nome_esc} - <b>Score: {score}</b>\n   {detalhes}\n"
 
-    # Envia a mensagem formatada (usando Markdown para compatibilidade anterior)
-    await update.message.reply_text(texto_final, parse_mode='Markdown')
+    # CORREÇÃO: Envia usando HTML para evitar erros com caracteres especiais em nomes
+    await update.message.reply_html(texto_final)
 
 async def meu_historico(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Envia ao usuário um resumo de suas últimas 10 atividades."""
@@ -378,13 +381,18 @@ async def meu_historico(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         data_envio = item.DataEnvio.strftime("%d/%m/%Y") if item.DataEnvio else "N/A"
         pontos = item.PontosGanhos if item.PontosGanhos is not None else 0
         
-        texto_historico += f"{status_icone} <b>{item.Titulo}</b>\n"
-        texto_historico += f"    - Status: {item.Status}\n"
+        # Sanitização para evitar erros de HTML
+        titulo_esc = html.escape(item.Titulo or "Sem Título")
+        status_esc = html.escape(item.Status or "")
+
+        texto_historico += f"{status_icone} <b>{titulo_esc}</b>\n"
+        texto_historico += f"    - Status: {status_esc}\n"
         texto_historico += f"    - Pontos: {pontos}\n"
-        
+
         # Adiciona o motivo da recusa, se houver
         if item.MotivoRecusa:
-            texto_historico += f"    - Motivo: <i>{item.MotivoRecusa}</i>\n"
+            motivo_esc = html.escape(item.MotivoRecusa)
+            texto_historico += f"    - Motivo: <i>{motivo_esc}</i>\n"
         
         texto_historico += "\n"
 
@@ -528,12 +536,22 @@ async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
              'pergunta': "Qual o nome completo do(a) {numero}º filho(a)?"
         },
     }
-    
-# --- Lógica de Processamento da Etapa Anterior ---
+  
+    # --- Lógica de Processamento da Etapa Anterior ---
     if ultima_etapa != 'INICIO':
-        etapa_anterior_config = WORKFLOW.get(ultima_etapa)
-        
-        # Se recebemos texto e a etapa anterior esperava foto, ou vice-versa, é um erro.
+        # CORREÇÃO: Normaliza chaves dinâmicas de filhos (ex: FILHO_2 -> FILHO_1) para buscar no WORKFLOW
+        chave_config = ultima_etapa
+        if ultima_etapa.startswith('DADOS_FILHO_'):
+            chave_config = re.sub(r'DADOS_FILHO_\d+_', 'DADOS_FILHO_1_', ultima_etapa)
+
+        etapa_anterior_config = WORKFLOW.get(chave_config)
+
+        if not etapa_anterior_config:
+            # Fallback de segurança para evitar crash se a chave não existir
+            await context.bot.send_message(chat_id, "Erro de estado no cadastro. Digite /cancelar para reiniciar.")
+            return
+
+    # Se recebemos texto e a etapa anterior esperava foto, ou vice-versa, é um erro.
         esperava_foto = etapa_anterior_config.get('espera_tipo') in ['FOTO_OU_PDF']
         recebeu_texto_nao_esperado = not esperava_foto and update.message.text and 'campo_db' not in etapa_anterior_config
         
@@ -553,9 +571,11 @@ async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa, (campo_db, file_id_a_salvar))
             context.user_data.pop('onboarding_foto', None) # Limpa o estado
         
-        # 2. PROCESSAMENTO DE TEXTO/DADOS
+# 2. PROCESSAMENTO DE TEXTO/DADOS
         elif texto_recebido:
             valor_recebido = texto_recebido.strip()
+            
+            # --- FLUXO DE RAMIFICAÇÃO E VALIDAÇÃO ---
             
             # 2a. RAMIFICAÇÃO: ESTADO CIVIL
             if ultima_etapa == 'ESTADO_CIVIL':
@@ -573,9 +593,10 @@ async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             if ultima_etapa == 'DATA_CASAMENTO':
                 try:
                     datetime.strptime(valor_recebido, '%d/%m/%Y')
-                    proxima_etapa = WORKFLOW['DATA_CASAMENTO']['proxima_etapa'] # NOME_CONJUGUE
+                    proxima_etapa = WORKFLOW['DATA_CASAMENTO']['proxima_etapa']
                     database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa, ('DataCasamento', valor_recebido))
-                    await context.bot.send_message(chat_id, WORKFLOW['DATA_CASAMENTO']['pergunta'])
+                    # CORREÇÃO: Usa 'proxima_etapa' para buscar a pergunta correta
+                    await context.bot.send_message(chat_id, WORKFLOW[proxima_etapa]['pergunta'])
                     return
                 except ValueError:
                     await context.bot.send_message(chat_id, "⚠️ Data inválida. Por favor, digite no formato **dd/mm/aaaa**.")
@@ -586,26 +607,12 @@ async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 if len(cpf_limpo) != 11:
                     await context.bot.send_message(chat_id, "⚠️ CPF inválido (deve ter 11 dígitos). Digite novamente.")
                     return
-                
-                proxima_etapa = WORKFLOW['CPF_CONJUGUE']['proxima_etapa'] # FILHOS_QTD
+                proxima_etapa = WORKFLOW['CPF_CONJUGUE']['proxima_etapa']
                 database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa, ('CPFConjugue', cpf_limpo))
                 await context.bot.send_message(chat_id, WORKFLOW[proxima_etapa]['pergunta'])
                 return
-            
-            # 2c. VALIDAÇÃO E RAMIFICAÇÃO: FILHOS_QTD
-            if ultima_etapa == 'FILHOS_QTD':
-                # (Lógica de Filhos...)
-                return
 
-            # 2d. COLETA DE DADOS DE FILHOS EM LOOP
-            if ultima_etapa.startswith('DADOS_FILHO_'):
-                 # (Lógica de Filhos em Loop...)
-                 return
-
-            # 2e. SALVAMENTO PADRÃO DE DADO TEXTO (Escolaridade, Nome Cônjuge)
-            proxima_etapa = etapa_anterior_config['proxima_etapa']
-            campo_db = etapa_anterior_config['campo_db'][0]
-            database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa, (campo_db, valor_recebido))
+            # [BLOCO DUPLICADO REMOVIDO] - A lógica correta segue abaixo.
 
             # 2b. VALIDAÇÃO E RAMIFICAÇÃO: FILHOS_QTD
             if ultima_etapa == 'FILHOS_QTD':
@@ -656,9 +663,8 @@ async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     # --- Envio da Primeira Pergunta (Etapa INICIO) ---
     elif ultima_etapa == 'INICIO':
-        # O disparo externo já enviou a primeira mensagem. Agora forçamos o avanço para RG
-        # e enviamos a pergunta de RG para quem está no estado INICIO.
-        if texto_recebido: # Processa a resposta do usuário à mensagem de boas-vindas
+        # Esta lógica só é chamada se o Bot recebeu uma mensagem enquanto o estado era INICIO.
+        if texto_recebido: 
             database.iniciar_onboarding_funcionario(funcionario.FuncionarioID) # Garante que o status seja 'Em Progresso'
             proxima_etapa = 'RG'
             
@@ -667,6 +673,12 @@ async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             context.user_data['onboarding_foto'] = True
             database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa) # Avança para RG
             return
+        
+        # Se for chamado sem texto (via start sem interagir), repete a mensagem.
+        # Isto é uma medida de segurança caso o disparo inicial falhe.
+        await context.bot.send_message(chat_id, WORKFLOW['INICIO']['pergunta'])
+        database.atualizar_onboarding_etapa(funcionario.FuncionarioID, 'RG') # Prepara o próximo estado
+        return
 
 async def _coletar_dados_filhos_e_avancar(update: Update, context: ContextTypes.DEFAULT_TYPE, funcionario, valor_recebido, ultima_etapa):
     """
@@ -804,45 +816,29 @@ async def _interceptar_comandos_e_pendencias(update: Update, context: ContextTyp
         await context.bot.send_message(chat_id, mensagem, reply_markup=reply_markup, parse_mode='Markdown')
         return True # Bloqueia
 
-    # --- VERIFICAÇÃO 2: PENDÊNCIAS DE CIÊNCIA (COMUNICADOS/DOCUMENTOS) ---
-    pendencias_criticas = database.buscar_pendencias_criticas(funcionario.FuncionarioID)
-    
-    if pendencias_criticas:
-        mensagem = f"🛑 **Ação Obrigatória:** Você possui **{len(pendencias_criticas)}** pendência(s) de ciência. Clique abaixo para visualizar e confirmar a leitura."
-        keyboard = []
+    # --- VERIFICAÇÃO 2: PENDÊNCIAS DE CIÊNCIA ---
+    keyboard = []
 
-        for p in pendencias_criticas:
-            id_pendencia, tipo, titulo, data_envio = p
-            # Formata o título e o callback (Comunicado/Doc Pessoal)
-            if tipo == 'Comunicado':
-                # Comunicados: Apontamos para o callback de download/ciência de comunicado (AssinaturaID)
-                # O callback original 'doc_ciente_' na verdade inicia o download.
-                callback = f"doc_ciente_{id_pendencia}"
-            else:
-                # Documentos Pessoais/RH: Apontamos para o callback de download/visualização (DocumentoID)
-                # O ID que vem do banco para documentos pessoais é o CienciaID, 
-                # mas para baixar, precisamos do DocumentoID (o ID principal).
-                # Buscamos o DocumentoID a partir do CienciaID (ID da Pendência)
-                
-                # --- BUSCA DO DocumentoID PARA DOWNLOAD ---
-                # NOTA: Como a função buscar_pendencias_criticas em database.py retorna o CienciaID (DPC.CienciaID) 
-                # no primeiro campo, precisamos de uma nova busca para o DocumentoID.
-                
-                # Para simplificar, assumiremos que o ID que vem na pendência pessoal (ID: 53, 38, etc. no log)
-                # é o próprio DocumentoID, o que é o mais provável para links de download.
-                
-                # ✅ CORREÇÃO: Para documentos pessoais (RH), usamos o callback de download genérico.
-                callback = f"get_documento_{id_pendencia}"
-
+    # 2a. Comunicados Gerais (Usa CienciaID/AssinaturaID)
+    pendencias_gerais = database.buscar_pendencias_criticas(funcionario.FuncionarioID)
+    for p in pendencias_gerais:
+        id_pendencia, tipo, titulo, data_envio = p
+        if tipo == 'Comunicado':
             data_str = data_envio.strftime('%d/%m')
-            
-            keyboard.append([
-                InlineKeyboardButton(
-                    f"⚠️ Visualizar {tipo} ({data_str})", # <<< Texto mais claro
-                    callback_data=callback
-                )
-            ])
-            
+            # Para comunicados, o ID já é a assinatura, correto para 'doc_ciente_'
+            keyboard.append([InlineKeyboardButton(f"⚠️ Ler Comunicado ({data_str})", callback_data=f"doc_ciente_{id_pendencia}")])
+
+    # 2b. Documentos Pessoais (Usa DocumentoID correto para download)
+    docs_pessoais_pendentes = database.buscar_documentos_disponiveis(funcionario.FuncionarioID)
+    for doc in docs_pessoais_pendentes:
+        doc_id = doc.DocumentoID
+        tipo = doc.TipoDocumento
+        mes_ref = doc.MesAno.strftime('%m/%Y') if doc.MesAno else ""
+        # Para documentos, usamos o ID do documento para 'get_documento_'
+        keyboard.append([InlineKeyboardButton(f"⚠️ Ver {tipo} {mes_ref}", callback_data=f"get_documento_{doc_id}")])
+
+    if keyboard:
+        mensagem = f"🛑 **Ação Obrigatória:** Você possui **{len(keyboard)}** documento(s) pendente(s) de leitura/ciência. Clique abaixo para resolver."
         reply_markup = InlineKeyboardMarkup(keyboard)
         await context.bot.send_message(chat_id, mensagem, reply_markup=reply_markup, parse_mode='Markdown')
         return True # Bloqueia
@@ -992,7 +988,19 @@ async def solicitar_feedback_start(update: Update, context: ContextTypes.DEFAULT
 async def handler_foto_tarefa(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     MAX_SECONDS_DIFFERENCE = config.MAX_DIFERENCA_FOTO_SEGUNDOS # Usa valor do config.py
     temp_photo_path = None
-    
+    # --- CORREÇÃO: Recuperação de Estado de Onboarding ---
+    # Se a memória RAM foi limpa (ex: restart), verifica no banco se o usuário está em admissão.
+    if not context.user_data.get('onboarding_foto'):
+        user_id = update.effective_user.id
+        # Busca rápida apenas para verificar status
+        func_temp = database.buscar_funcionario_por_chat_id(user_id)
+        if func_temp:
+            status_db = database.buscar_onboarding_status(func_temp.FuncionarioID)
+            # Se o banco diz que está 'Em Progresso', restauramos a flag na memória
+            if status_db and status_db.StatusWorkflow == 'Em Progresso':
+                context.user_data['onboarding_foto'] = True
+                logger.info(f"Estado de onboarding restaurado via banco para {user_id}")
+    # -----------------------------------------------------
     # --- ROTEAMENTO DE FOTO PARA ONBOARDING ---
     if context.user_data.get('onboarding_foto', False):
         try:
@@ -1029,22 +1037,12 @@ async def handler_foto_tarefa(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text("❌ Por favor, envie a imagem como 'Foto', e não como 'Arquivo'.")
             return
 
-        # Camada 2 de Verificação (LÓGICA AJUSTADA)
-        photo_file = await update.message.photo[-1].get_file()
-        message_timestamp_utc = update.message.date # Timestamp do Telegram (já em UTC)
+        # Camada 2 de Verificação
+        # [OTIMIZAÇÃO] Download local removido pois a validação EXIF foi desativada.
 
-        temp_photo_path = f"temp_{photo_file.file_id}.jpg"
-        await photo_file.download_to_drive(temp_photo_path)
-
-        # <<< VALIDAÇÃO DE DATA/HORA DA FOTO (EXIF) REMOVIDA COMPLETAMENTE >>>
-        # A foto será aceita independentemente dos metadados de data/hora ou da idade da foto.
-        pass # Usamos 'pass' como um placeholder explícito indicando que a lógica foi removida intencionalmente.
-
-        # Se chegou até aqui, a foto é considerada válida (ou sem EXIF confiável)
+        # Verifica se o usuário selecionou uma tarefa antes de enviar a foto
         if 'identificador_tarefa' not in context.user_data:
             await update.message.reply_text("Parece que você enviou uma foto sem antes selecionar uma tarefa. Por favor, use o comando /tarefas primeiro.")
-            # Limpa o caminho temporário antes de retornar
-            if temp_photo_path and os.path.exists(temp_photo_path): os.remove(temp_photo_path)
             return
 
         # Continua com o registro da entrega...
@@ -1154,7 +1152,14 @@ async def receber_motivo_recusa(update: Update, context: ContextTypes.DEFAULT_TY
     # --- Fim do Bloco de leitura ---
 
     if not dados_recusa:
-        logger.debug(f"Mensagem de GestorID {gestor_id} no ChatID {chat_id_grupo} ignorada (sem pendência).")
+        # Se for uma resposta direta ao bot, mas sem dados na memória, avisa o gestor.
+        # Isso acontece se o bot reiniciou ou se o cache expirou.
+        if update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id:
+            await update.message.reply_text(
+                "⚠️ **Sessão Expirada:** Não consegui vincular sua resposta à tarefa.\n"
+                "Por favor, clique no botão **❌ Reprovar** novamente na mensagem original da tarefa.",
+                parse_mode='Markdown'
+            )
         return
 
     # --- CORREÇÃO APLICADA AQUI ---
@@ -1369,28 +1374,6 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             logger.warning(f"Falha ao remover teclado inline do documento pessoal: {e}")
             
         await query.answer("Recebimento e ciência registrados com sucesso!", show_alert=True)
-
-    # --- LÓGICA DA LOJA DE RECOMPENSAS ---
-    elif data.startswith("ver_produto_"):
-        ciencia_id = int(data.split('_')[-1])
-        sucesso = database.marcar_holerite_como_ciente(ciencia_id)
-        if not sucesso:
-            await query.answer("Este documento já foi assinado.", show_alert=True)
-            return
-        mensagem_gestor = f"✍️ O funcionário **{user.first_name}** confirmou o recebimento de um documento pessoal (Holerite)."
-        notificador_telegram.enviar_mensagem(config.GESTOR_GROUP_CHAT_ID, mensagem_gestor)
-        mensagem_recibo = (
-            f"\n\n---"
-            f"\n✍️ **CIÊNCIA REGISTRADA**"
-            f"\n**Protocolo:** `{ciencia_id}`"
-            f"\n**Data/Hora:** `{datetime.now().strftime('%d/%m/%Y %H:%M:%S')}`"
-        )
-        try:
-            texto_original = query.message.caption
-            await query.edit_message_caption(caption=f"{texto_original}{mensagem_recibo}", parse_mode='Markdown', reply_markup=None)
-        except Exception as e:
-            logger.error(f"Erro ao editar a legenda do holerite: {e}")
-            await query.answer("Recebimento confirmado!", show_alert=True)
 
     # --- LÓGICA DA LOJA DE RECOMPENSAS ---
     elif data.startswith("ver_produto_"):
