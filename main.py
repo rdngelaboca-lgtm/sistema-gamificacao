@@ -2190,7 +2190,16 @@ class App:
                     if conquista.PontosBonus > 0:
                         database.adicionar_pontos_ao_saldo(entrega_atual.FuncionarioID, conquista.PontosBonus)
                     # ---------------------------------------------------
-            notificador_telegram.enviar_mensagem(entrega_atual.ChatIDTelegram, texto_notificacao) # Pode falhar
+
+            # Executa notificação em thread para não travar a UI
+            def enviar_notificacao_bg():
+                try:
+                    notificador_telegram.enviar_mensagem(entrega_atual.ChatIDTelegram, texto_notificacao)
+                except Exception as e:
+                    logger.error(f"Falha ao enviar notificação em background: {e}")
+
+            threading.Thread(target=enviar_notificacao_bg, daemon=True).start()
+
             messagebox.showinfo("Sucesso", "Entrega aprovada e pontuação atribuída!", parent=self.root) # Adicionado parent
             self.atualizar_todas_as_listas() # Pode falhar
         except (ValueError, KeyError) as e_parse: # <--- ADICIONADO EXCEPT ESPECÍFICO
