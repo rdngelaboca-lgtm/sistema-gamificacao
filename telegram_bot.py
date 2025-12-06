@@ -499,7 +499,11 @@ async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     # Se a última mensagem foi uma foto, tentamos processar o File ID
     texto_recebido = update.message.text
-    foto_recebida = update.message.photo and context.user_data.get('onboarding_foto')
+    
+    # CORREÇÃO: Aceita Foto OU Documento (PDF) se estiver no fluxo de onboarding
+    # Isso permite que a CTPS Digital (PDF) seja processada corretamente
+    tem_arquivo = (update.message.photo or update.message.document)
+    foto_recebida = tem_arquivo and context.user_data.get('onboarding_foto')
     
     # Dicionário de Configuração do Workflow
     WORKFLOW = {
