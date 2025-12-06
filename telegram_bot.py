@@ -596,8 +596,18 @@ async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             file_id_a_salvar = context.user_data.pop('file_id_documento_onboarding')
             campo_db = etapa_anterior_config['campo_db'][0]
             
+            # Salva no banco e avança a etapa
             database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa, (campo_db, file_id_a_salvar))
             context.user_data.pop('onboarding_foto', None) # Limpa o estado
+
+            # --- CORREÇÃO DO BUG: Envia a pergunta da próxima etapa ---
+            if proxima_etapa in WORKFLOW:
+                await context.bot.send_message(chat_id, WORKFLOW[proxima_etapa]['pergunta'])
+                
+                # Se a próxima etapa TAMBÉM espera foto (ex: do RG para o CPF), reativa o modo foto
+                if WORKFLOW[proxima_etapa].get('espera_tipo') in ['FOTO_OU_PDF']:
+                    context.user_data['onboarding_foto'] = True
+            # ----------------------------------------------------------
 
         # 2. PROCESSAMENTO DE TEXTO/DADOS
         elif texto_recebido:
