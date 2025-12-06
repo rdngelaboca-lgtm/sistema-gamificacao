@@ -604,6 +604,12 @@ async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             valor_recebido = texto_recebido.strip()
             
             # --- FLUXO DE RAMIFICAÇÃO E VALIDAÇÃO ---
+
+        # 3. TRATAMENTO DE INPUT INVÁLIDO (Não é Texto nem Foto esperada)
+        else:
+            if ultima_etapa != 'INICIO':
+                await context.bot.send_message(chat_id, "⚠️ Eu não entendi isso. Por favor, envie uma **FOTO** (se for documento) ou **TEXTO** para responder.")
+            return
             
             # 2a. RAMIFICAÇÃO: ESTADO CIVIL
             if ultima_etapa == 'ESTADO_CIVIL':
@@ -735,34 +741,59 @@ async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def _coletar_dados_filhos_e_avancar(update: Update, context: ContextTypes.DEFAULT_TYPE, funcionario, valor_recebido, ultima_etapa):
     """
     Função auxiliar que gerencia a coleta sequencial de dados dos filhos e salva em JSON.
+    CORRIGIDA: Recuperação de estado em caso de reinício do bot.
     """
     chat_id = update.effective_chat.id
+    
+    # Recupera o status atual do banco para consistência
+    status_onboarding = database.buscar_onboarding_status(funcionario.FuncionarioID)
+    dados_filhos_json = getattr(status_onboarding, 'DadosFilhos', None)
+    dados_filhos = json.loads(dados_filhos_json) if dados_filhos_json else []
+    
+    # RECUPERAÇÃO DE ESTADO (MEMÓRIA VS BANCO)
+    # Se não houver dados na RAM (ex: bot reiniciou), tentamos inferir pelo banco/etapa
+    if 'qtd_filhos_onboarding' not in context.user_data:
+        # Recupera a quantidade total salva na etapa anterior do banco
+        context.user_data['qtd_filhos_onboarding'] = getattr(status_onboarding, 'QtdFilhos', 0)
+        
+        # Infere qual filho estamos editando com base na string da etapa atual
+        try:
+            # Extrai o número do filho da string (ex: DADOS_FILHO_2_NOME -> 2)
+            match = re.search(r'DADOS_FILHO_(\d+)_', ultima_etapa)
+            if match:
+                context.user_data['filho_atual_onboarding'] = int(match.group(1))
+            else:
+                context.user_data['filho_atual_onboarding'] = len(dados_filhos) + 1
+        except Exception:
+            context.user_data['filho_atual_onboarding'] = 1
+
     filho_atual = context.user_data.get('filho_atual_onboarding', 1)
     qtd_filhos = context.user_data.get('qtd_filhos_onboarding', 0)
     
     # Mapeia o campo atual (Nome, Nasc, CPF)
     _, _, campo_tipo = ultima_etapa.rpartition('_') # ex: DADOS_FILHO_1_NOME -> NOME
 
-    # 1. Lê os dados JSON existentes ou inicializa
-    status_onboarding = database.buscar_onboarding_status(funcionario.FuncionarioID)
-    dados_filhos_json = getattr(status_onboarding, 'DadosFilhos', None)
-    dados_filhos = json.loads(dados_filhos_json) if dados_filhos_json else []
-    
     # Se ainda não tivermos o objeto para o filho atual, criamos
-    if len(dados_filhos) < filho_atual:
+    while len(dados_filhos) < filho_atual:
          dados_filhos.append({})
 
-    # 2. Salva o dado recebido
+    # 2. Salva o dado recebido no índice correto (filho_atual - 1)
+    idx = filho_atual - 1
+    
+    # Definição da próxima etapa
+    proxima_pergunta = ""
+    proxima_etapa_nome = ""
+
     if campo_tipo == 'NOME':
-         dados_filhos[filho_atual - 1]['Nome'] = valor_recebido
-         proxima_pergunta = "Data de Nascimento (dd/mm/aaaa)"
+         dados_filhos[idx]['Nome'] = valor_recebido
+         proxima_pergunta = "Digite a **Data de Nascimento** (dd/mm/aaaa) deste filho(a):"
          proxima_etapa_nome = 'DADOS_FILHO_' + str(filho_atual) + '_NASC'
     elif campo_tipo == 'NASC':
-         dados_filhos[filho_atual - 1]['Nasc'] = valor_recebido
-         proxima_pergunta = "CPF (apenas números)"
+         dados_filhos[idx]['Nasc'] = valor_recebido
+         proxima_pergunta = "Digite o **CPF** (apenas números) deste filho(a):"
          proxima_etapa_nome = 'DADOS_FILHO_' + str(filho_atual) + '_CPF'
     elif campo_tipo == 'CPF':
-         dados_filhos[filho_atual - 1]['CPF'] = valor_recebido
+         dados_filhos[idx]['CPF'] = valor_recebido
          
          # 3. Verifica se finalizou o loop de filhos
          if filho_atual < qtd_filhos:
@@ -787,9 +818,6 @@ async def _coletar_dados_filhos_e_avancar(update: Update, context: ContextTypes.
     else:
          database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa_nome)
          await context.bot.send_message(chat_id, proxima_pergunta)
-
-# OBS: Adicione 'import json' e 'from telegram import Update' no topo do arquivo.
-
 
 async def _finalizar_onboarding_e_redirecionar(update: Update, context: ContextTypes.DEFAULT_TYPE, funcionario):
     """
@@ -820,6 +848,14 @@ async def _interceptar_comandos_e_pendencias(update: Update, context: ContextTyp
     Retorna True se houver bloqueio (e já tiver enviado a mensagem), False se o comando deve prosseguir.
     """
     user = update.effective_user
+    # --- VERIFICAÇÃO DE BLOQUEIO (FEEDBACK PENDENTE) ---
+    # Impede uso de botões antigos se houver pendência de feedback
+    if data not in ["avaliar_dia", "avaliar_dia_ontem"] and not data.startswith("nota_dia"):
+        func_check = database.buscar_funcionario_por_chat_id(user.id)
+        if func_check and not database.verificar_feedback_dia_anterior(func_check.FuncionarioID):
+             await query.answer("⚠️ Ação bloqueada! Você tem feedback pendente do dia anterior.", show_alert=True)
+             return
+    # ---------------------------------------------------
     chat_id = update.effective_chat.id
     funcionario = database.buscar_funcionario_por_chat_id(chat_id)
 
@@ -1188,7 +1224,9 @@ async def receber_motivo_recusa(update: Update, context: ContextTypes.DEFAULT_TY
         return # Ignora mensagens soltas, processa apenas respostas diretas ao bot
     gestor_id = update.effective_user.id
     gestor_nome = update.effective_user.first_name
-    motivo = update.message.text
+    # Sanitização HTML para evitar erro "Unclosed tag" no Telegram
+    motivo_raw = update.message.text
+    motivo = html.escape(motivo_raw) if motivo_raw else "Sem motivo especificado"
 
     # --- Bloco de leitura (sem alteração) ---
     dados_recusa = None
@@ -1346,35 +1384,31 @@ async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     """
     user_id = update.effective_user.id
     
-    # 1. Prioridade Máxima: Nota Fiscal (Fluxo explícito iniciado pelo usuário)
+    # 1. Prioridade Máxima: Nota Fiscal (Fluxo explícito iniciado pelo usuário na memória)
     if context.user_data.get('aguardando_nota_fiscal', False):
         await receber_nota_fiscal(update, context)
         return
 
     # 2. Prioridade Alta: Onboarding (Fluxo Obrigatório)
-    # Verifica memória E banco de dados para garantir que não percamos o estado
-    esta_em_onboarding = context.user_data.get('onboarding_foto', False)
-    
-    if not esta_em_onboarding:
-        # Fallback: Se não está na memória, checa o banco (caso de reinício)
+    # RECUPERAÇÃO DE ESTADO: Se a flag não está na memória, consultamos o banco.
+    if not context.user_data.get('onboarding_foto'):
         funcionario = database.buscar_funcionario_por_chat_id(user_id)
         if funcionario:
             status_db = database.buscar_onboarding_status(funcionario.FuncionarioID)
-            # Se o status é 'Em Progresso' e a última etapa salva espera foto...
+            # Se o status é 'Em Progresso', definimos a flag na memória para direcionar corretamente
             if status_db and status_db.StatusWorkflow == 'Em Progresso':
-                # Precisamos saber se a etapa ATUAL espera foto. 
-                # (Isso é uma simplificação segura: se está em progresso, assumimos que pode ser foto)
-                esta_em_onboarding = True
-                context.user_data['onboarding_foto'] = True # Restaura memória
+                context.user_data['onboarding_foto'] = True
+                # Opcional: Log para debug
+                # logger.info(f"Estado de onboarding recuperado via banco para {user_id}")
     
-    if esta_em_onboarding:
-        # Força o handler de tarefa a tratar como onboarding (ele tem a lógica interna)
+    if context.user_data.get('onboarding_foto', False):
+        # Força o handler de tarefa a tratar como onboarding (ele tem a lógica interna de desvio)
         await handler_foto_tarefa(update, context)
         return
 
     # 3. Prioridade Padrão: Evidência de Tarefa
     await handler_foto_tarefa(update, context)
-
+    
 async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
