@@ -2038,10 +2038,9 @@ def main() -> None:
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^💬 Canal Confidencial$'), solicitar_feedback_start)) 
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^📄 Meus Documentos$'), solicitar_documentos_inicio)) 
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🏅 Minhas Conquistas$'), minhas_conquistas)) # <<< NOVO BOTÃO
-    # Handler de FOTO para Nota Fiscal (verifica o estado 'aguardando_nota_fiscal')
-    # CORREÇÃO ERRO 2: Handler para DOCUMENTOS (PDF)
-    # Redireciona PDFs também para a função de receber foto/arquivo, permitindo o onboarding com PDF.
-    application.add_handler(MessageHandler(filters.Document.ALL & filters.ChatType.PRIVATE, receber_foto))
+    # CORREÇÃO: Handler Híbrido (Aceita FOTO ou DOCUMENTO no privado)
+    # O uso de parênteses (A | B) & C é obrigatório para combinar OR e AND corretamente.
+    application.add_handler(MessageHandler((filters.PHOTO | filters.Document.ALL) & filters.ChatType.PRIVATE, receber_foto))
 
     # Handler de TEXTO genérico (para justificativas, cpf, etc.)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, roteador_de_texto_privado))
