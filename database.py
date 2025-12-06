@@ -113,7 +113,39 @@ def verificar_migracao_banco():
                 cursor.execute("ALTER TABLE ProdutosFornecedor ADD FatorConversao DECIMAL(10,4) DEFAULT 1.0")
                 conn.commit()
                 logger.info("Migração concluída: Coluna 'FatorConversao' adicionada.")
-                
+
+                # 2.1. GARANTIA DE TAREFAS DE SISTEMA (Auto-Reparo de FK)
+                # Verifica se a tarefa de Feedback (ID 5) existe. Se não, cria forçadamente.
+                try:
+                    # TAREFA ID 5: Feedback Diário
+                    cursor.execute("SELECT 1 FROM Tarefas WHERE TarefaID = 5")
+                    if not cursor.fetchone():
+                        logger.warning("Tarefa de Sistema ID 5 (Feedback) não encontrada. Recriando...")
+                        cursor.execute("""
+                            SET IDENTITY_INSERT Tarefas ON;
+                            INSERT INTO Tarefas (TarefaID, Titulo, Descricao, Pontos, Setor)
+                            VALUES (5, 'Feedback Diário', 'Pontos automáticos por responder o feedback', 5, 'Geral');
+                            SET IDENTITY_INSERT Tarefas OFF;
+                        """)
+                        conn.commit()
+                        logger.info("Tarefa de Sistema ID 5 recriada com sucesso.")
+
+                    # TAREFA ID 38: Leitura de Comunicado (Preventivo)
+                    cursor.execute("SELECT 1 FROM Tarefas WHERE TarefaID = 38")
+                    if not cursor.fetchone():
+                        logger.warning("Tarefa de Sistema ID 38 (Leitura) não encontrada. Recriando...")
+                        cursor.execute("""
+                            SET IDENTITY_INSERT Tarefas ON;
+                            INSERT INTO Tarefas (TarefaID, Titulo, Descricao, Pontos, Setor)
+                            VALUES (38, 'Leitura de Comunicado', 'Pontos por confirmar leitura de documento', 10, 'Geral');
+                            SET IDENTITY_INSERT Tarefas OFF;
+                        """)
+                        conn.commit()
+                        logger.info("Tarefa de Sistema ID 38 recriada com sucesso.")
+
+                except Exception as e_sys_task:
+                    logger.error(f"Erro ao garantir tarefas de sistema (Auto-Reparo): {e_sys_task}")
+
             # 3. Migração para nova tabela de Configurações de Escala (AGORA SEM O BLOQUEIO GERAL)
             try:
                 # 3.1. Cria ou Ajusta a Tabela Global de Configurações (Remove HoraBloqueio se existir)
