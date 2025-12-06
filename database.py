@@ -583,11 +583,11 @@ def listar_tarefas_do_dia_por_funcionario(funcionario_id):
                                 TA.TipoFrequencia = 'Unica' 
                                 AND (
                                     TA.DataAgendamento IS NULL -- Se não tiver data, mostra (opcional)
-                                    OR 
-                                    CONVERT(date, TA.DataAgendamento) = CONVERT(date, GETDATE()) -- ESTRITAMENTE HOJE
-                                )
+                                OR 
+                                CONVERT(date, TA.DataAgendamento) <= CONVERT(date, GETDATE()) -- CORREÇÃO: Acumula pendências antigas
                             )
                         )
+                    )
                         
                         -- 2. FILTRO DE CONCLUSÃO (SE JÁ FEZ, ESCONDE)
                         AND NOT EXISTS (
@@ -3780,12 +3780,12 @@ def buscar_meta_principal_do_dia():
             # Esta query faz tudo: encontra a meta ativa e já calcula a soma do "extrato"
             sql = """
                 SELECT TOP 1
-                    MP.MetaPrincipalID,
-                    MP.NomeMeta,
-                    MP.ValorMetaTotal,
-                    (SELECT SUM(ValorDia) FROM MetasDiariasApuracoes MDA WHERE MDA.MetaPrincipalID = MP.MetaPrincipalID) as ValorAtingidoTotal
-                FROM MetasPrincipais MP
-                WHERE GETDATE() BETWEEN MP.DataInicio AND MP.DataFim AND MP.Status = 'Ativa'
+                MP.MetaPrincipalID,
+                MP.NomeMeta,
+                MP.ValorMetaTotal,
+                (SELECT SUM(ValorDia) FROM MetasDiariasApuracoes MDA WHERE MDA.MetaPrincipalID = MP.MetaPrincipalID) as ValorAtingidoTotal
+            FROM MetasPrincipais MP
+            WHERE CONVERT(DATE, GETDATE()) BETWEEN MP.DataInicio AND MP.DataFim AND MP.Status = 'Ativa'
             """
             cursor.execute(sql)
             meta_ativa = cursor.fetchone()
@@ -3979,10 +3979,6 @@ def distribuir_premio_meta_principal(meta_id):
         return []
     finally:
         if conn: conn.close()
-
-# Em database.py, SUBSTITUA a função buscar_meta_ativa_id_hoje por esta:
-
-# Em database.py, SUBSTITUA a função buscar_meta_ativa_id_hoje por esta:
 
 def buscar_meta_ativa_id_hoje():
     """Busca apenas o ID da meta principal ativa na data de hoje."""
