@@ -4983,22 +4983,20 @@ def criar_tabela_onboarding():
     if conn:
         try:
             cursor = conn.cursor()
-            # Esta tabela precisa de muitos campos para armazenar os dados e o status de cada documento
+            # 🛑 CORREÇÃO FINAL: Usamos NVARCHAR(MAX) no lugar de JSON
             sql = """
                 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'OnboardingStatus')
                 CREATE TABLE OnboardingStatus (
                     FuncionarioID INT PRIMARY KEY REFERENCES Funcionarios(FuncionarioID),
-                    StatusWorkflow VARCHAR(50) NOT NULL DEFAULT 'Pendente', -- Pendente, Em Progresso, Completo
-                    UltimaEtapa VARCHAR(100), -- Rastreia o item que está sendo pedido (ex: 'RG', 'Escolaridade', etc.)
+                    StatusWorkflow VARCHAR(50) NOT NULL DEFAULT 'Pendente',
+                    UltimaEtapa VARCHAR(100),
                     Escolaridade VARCHAR(50),
                     EstadoCivil VARCHAR(50),
-                    DataCasamento DATE,
+                    DataCasamento VARCHAR(10),
                     NomeConjugue VARCHAR(100),
                     CPFConjugue VARCHAR(14),
                     QtdFilhos INT DEFAULT 0,
-                    DadosFilhos JSON, -- JSON para armazenar Nome/Nasc/CPF dos filhos
-                    
-                    -- Caminhos dos documentos (File ID do Telegram ou Path Local após download)
+                    DadosFilhos NVARCHAR(MAX), 
                     RG_FileID VARCHAR(255),
                     CPF_FileID VARCHAR(255),
                     CTPS_FileID VARCHAR(255),
@@ -5013,6 +5011,8 @@ def criar_tabela_onboarding():
         finally:
             if conn:
                 conn.close()
+
+criar_tabela_onboarding() # Executa a criação da tabela no startup do módulo database
 
 criar_tabela_onboarding() # Executa a criação da tabela no startup do módulo database
 
