@@ -2301,9 +2301,14 @@ class App:
     def atualizar_lista_funcionarios(self):
         self.lista_funcionarios.delete(0, tk.END); self.dados_funcionarios.clear()
         funcionarios = database.listar_funcionarios()
+        
+        # Mapeamento do SELECT (Ordem garantida no database.py: 0:ID, 1:Nome, 8:HorarioNotificacao)
+        
         for func in funcionarios:
-            horario_str = func.HorarioNotificacao if func.HorarioNotificacao else "N/D"
-            texto = f"ID: {func.FuncionarioID} | {func.NomeCompleto} | Notificar às: {horario_str}"
+            # Acessamos por índice para garantir a compatibilidade com pyodbc.Row
+            # func[8] é HorarioNotificacao
+            horario_str = func[8].strftime('%H:%M') if func[8] else "N/D"
+            texto = f"ID: {func[0]} | {func[1]} | Notificar às: {horario_str}"
             self.lista_funcionarios.insert(tk.END, texto); self.dados_funcionarios[texto] = func
 
     def atualizar_catalogo_tarefas(self):
