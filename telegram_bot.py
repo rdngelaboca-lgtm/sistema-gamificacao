@@ -75,6 +75,7 @@ import urllib.parse
 from database import adicionar_pontos_ao_saldo
 import locale
 import json # <<< IMPORT FALTANDO!
+import re # Necessário para regex na normalização de chaves
 import html # Necessário para escapar strings em modo HTML
 try:
     locale.setlocale(locale.LC_TIME, 'pt_BR.UTF-8')
@@ -574,13 +575,96 @@ async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa, (campo_db, file_id_a_salvar))
             context.user_data.pop('onboarding_foto', None) # Limpa o estado
         
-# 2. PROCESSAMENTO DE TEXTO/DADOS
+        # 2. PROCESSAMENTO DE TEXTO/DADOS
         elif texto_recebido:
             valor_recebido = texto_recebido.strip()
-            
+
             # --- FLUXO DE RAMIFICAÇÃO E VALIDAÇÃO ---
-            
+
             # 2a. RAMIFICAÇÃO: ESTADO CIVIL
+            if ultima_etapa == 'ESTADO_CIVIL':
+                database.atualizar_onboarding_etapa(funcionario.FuncionarioID, 'ESTADO_CIVIL', ('EstadoCivil', valor_recebido))
+                if 'CASADO' in valor_recebido.upper():
+                    proxima_etapa = 'DATA_CASAMENTO'
+                    await context.bot.send_message(chat_id, "Ok. Agora, digite a **Data de Casamento** (dd/mm/aaaa).")
+                    database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa)
+                else:
+                    proxima_etapa = 'FILHOS_QTD'
+                    await context.bot.send_message(chat_id, WORKFLOW[proxima_etapa]['pergunta'])
+                    database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa)
+                return # <--- IMPEDE VAZAMENTO DE FLUXO
+
+            # 2b. VALIDAÇÃO E AVANÇO: DATA CASAMENTO
+            if ultima_etapa == 'DATA_CASAMENTO':
+                try:
+                    datetime.strptime(valor_recebido, '%d/%m/%Y')
+                    proxima_etapa = WORKFLOW['DATA_CASAMENTO']['proxima_etapa']
+                    database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa, ('DataCasamento', valor_recebido))
+                    # CORREÇÃO: Usa a chave da próxima etapa para pegar a pergunta correta
+                    await context.bot.send_message(chat_id, WORKFLOW[proxima_etapa]['pergunta'])
+                except ValueError:
+                    await context.bot.send_message(chat_id, "⚠️ Data inválida. Por favor, digite no formato **dd/mm/aaaa**.")
+                return
+
+            if ultima_etapa == 'CPF_CONJUGUE':
+                cpf_limpo = ''.join(filter(str.isdigit, valor_recebido))
+                if len(cpf_limpo) != 11:
+                    await context.bot.send_message(chat_id, "⚠️ CPF inválido (deve ter 11 dígitos). Digite novamente.")
+                    return
+                proxima_etapa = WORKFLOW['CPF_CONJUGUE']['proxima_etapa']
+                database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa, ('CPFConjugue', cpf_limpo))
+                await context.bot.send_message(chat_id, WORKFLOW[proxima_etapa]['pergunta'])
+                return
+
+            # 2c. VALIDAÇÃO E RAMIFICAÇÃO: FILHOS_QTD
+            if ultima_etapa == 'FILHOS_QTD':
+                try:
+                    qtd = int(valor_recebido)
+                    if qtd < 0: raise ValueError
+                    database.atualizar_onboarding_etapa(funcionario.FuncionarioID, 'FILHOS_QTD', ('QtdFilhos', qtd))
+
+                    if qtd > 0:
+                        proxima_etapa = 'DADOS_FILHO_1_NOME' # Inicia o loop de filhos
+                        context.user_data['qtd_filhos_onboarding'] = qtd
+                        context.user_data['filho_atual_onboarding'] = 1
+                        await context.bot.send_message(chat_id, f"Ok, vamos coletar os dados de **{qtd} filho(s)**.")
+                        await context.bot.send_message(chat_id, "Qual o nome completo do(a) 1º filho(a)?")
+                        database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa)
+                    else:
+                        proxima_etapa = 'CONCLUIR' # Pula para o final
+                        database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa)
+                        await _finalizar_onboarding_e_redirecionar(update, context, funcionario)
+                    return
+                except ValueError:
+                    await context.bot.send_message(chat_id, "⚠️ Por favor, digite apenas um NÚMERO válido para a quantidade de filhos.")
+                    return
+
+            # 2d. COLETA DE DADOS DE FILHOS EM LOOP
+            if ultima_etapa.startswith('DADOS_FILHO_'):
+                await _coletar_dados_filhos_e_avancar(update, context, funcionario, valor_recebido, ultima_etapa)
+                return
+
+            # 2e. SALVAMENTO PADRÃO DE DADO TEXTO (Genérico - ex: Escolaridade, Nome Cônjuge)
+            if etapa_anterior_config and 'proxima_etapa' in etapa_anterior_config:
+                proxima_etapa = etapa_anterior_config['proxima_etapa']
+
+                if 'campo_db' in etapa_anterior_config:
+                    campo_db = etapa_anterior_config['campo_db'][0]
+                    database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa, (campo_db, valor_recebido))
+                else:
+                    database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa)
+
+                # Verifica finalização ou envia próxima pergunta
+                if proxima_etapa == 'CONCLUIR':
+                    await _finalizar_onboarding_e_redirecionar(update, context, funcionario)
+                elif proxima_etapa in WORKFLOW:
+                    await context.bot.send_message(chat_id, WORKFLOW[proxima_etapa]['pergunta'])
+                    if WORKFLOW[proxima_etapa].get('espera_tipo') in ['FOTO_OU_PDF']:
+                        context.user_data['onboarding_foto'] = True
+                return
+
+            # Fallback para estados desconhecidos
+            await context.bot.send_message(chat_id, "Erro no fluxo. Não sei qual a próxima etapa. Digite /cancelar e tente novamente.")
             if ultima_etapa == 'ESTADO_CIVIL':
                 database.atualizar_onboarding_etapa(funcionario.FuncionarioID, 'ESTADO_CIVIL', ('EstadoCivil', valor_recebido))
                 if 'CASADO' in valor_recebido.upper():
