@@ -844,21 +844,18 @@ async def _finalizar_onboarding_e_redirecionar(update: Update, context: ContextT
 
 async def _interceptar_comandos_e_pendencias(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """
-    Intercepta comandos e verifica se o usuário tem pendências críticas (ciência ou feedback).
-    Retorna True se houver bloqueio (e já tiver enviado a mensagem), False se o comando deve prosseguir.
+    Intercepta comandos e verifica se o usuário tem pendências críticas.
+    Retorna True se houver bloqueio, False se o comando pode prosseguir.
     """
     user = update.effective_user
-    # --- VERIFICAÇÃO DE BLOQUEIO (FEEDBACK PENDENTE) ---
-    # Impede uso de botões antigos se houver pendência de feedback
-    if data not in ["avaliar_dia", "avaliar_dia_ontem"] and not data.startswith("nota_dia"):
-        func_check = database.buscar_funcionario_por_chat_id(user.id)
-        if func_check and not database.verificar_feedback_dia_anterior(func_check.FuncionarioID):
-             await query.answer("⚠️ Ação bloqueada! Você tem feedback pendente do dia anterior.", show_alert=True)
-             return
-    # ---------------------------------------------------
     chat_id = update.effective_chat.id
-    funcionario = database.buscar_funcionario_por_chat_id(chat_id)
 
+    # --- CORREÇÃO: Inicialização segura da variável data ---
+    query = update.callback_query
+    data = query.data if query else None
+    # -------------------------------------------------------
+
+    funcionario = database.buscar_funcionario_por_chat_id(chat_id)
     # 1. Bypass para Comandos de Suporte e Gestores
     # Usamos getattr() para definir 'Funcionario' como fallback se o atributo não existir ou for None.
     nivel_acesso_seguro = getattr(funcionario, 'NivelAcesso', 'Funcionario') if funcionario else None
@@ -1408,7 +1405,7 @@ async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     # 3. Prioridade Padrão: Evidência de Tarefa
     await handler_foto_tarefa(update, context)
-    
+
 async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
