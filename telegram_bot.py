@@ -1341,17 +1341,39 @@ async def receber_nota_fiscal(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
-    Roteador principal para fotos privadas.
-    Verifica o estado do usuário e decide qual handler de foto chamar.
+    Roteador Mestre para fotos e documentos privados.
+    Decide o destino com base na prioridade: NF > Onboarding > Tarefa.
     """
-    # Verifica primeiro se o usuário está no estado de enviar NF
+    user_id = update.effective_user.id
+    
+    # 1. Prioridade Máxima: Nota Fiscal (Fluxo explícito iniciado pelo usuário)
     if context.user_data.get('aguardando_nota_fiscal', False):
         await receber_nota_fiscal(update, context)
+        return
 
-    # Se não, chama o handler padrão de envio de fotos de tarefas
-    else:
+    # 2. Prioridade Alta: Onboarding (Fluxo Obrigatório)
+    # Verifica memória E banco de dados para garantir que não percamos o estado
+    esta_em_onboarding = context.user_data.get('onboarding_foto', False)
+    
+    if not esta_em_onboarding:
+        # Fallback: Se não está na memória, checa o banco (caso de reinício)
+        funcionario = database.buscar_funcionario_por_chat_id(user_id)
+        if funcionario:
+            status_db = database.buscar_onboarding_status(funcionario.FuncionarioID)
+            # Se o status é 'Em Progresso' e a última etapa salva espera foto...
+            if status_db and status_db.StatusWorkflow == 'Em Progresso':
+                # Precisamos saber se a etapa ATUAL espera foto. 
+                # (Isso é uma simplificação segura: se está em progresso, assumimos que pode ser foto)
+                esta_em_onboarding = True
+                context.user_data['onboarding_foto'] = True # Restaura memória
+    
+    if esta_em_onboarding:
+        # Força o handler de tarefa a tratar como onboarding (ele tem a lógica interna)
         await handler_foto_tarefa(update, context)
+        return
 
+    # 3. Prioridade Padrão: Evidência de Tarefa
+    await handler_foto_tarefa(update, context)
 
 async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
