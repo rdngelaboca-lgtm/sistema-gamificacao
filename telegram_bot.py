@@ -467,7 +467,10 @@ async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     status_onboarding = database.buscar_onboarding_status(funcionario.FuncionarioID)
-    ultima_etapa = getattr(status_onboarding, 'UltimaEtapa', 'INICIO')
+
+    # CORREÇÃO CRÍTICA: Se o registro existe mas o campo é NULL, força 'INICIO'
+    # getattr retorna None se o campo existir e for None. O 'or' corrige isso.
+    ultima_etapa = getattr(status_onboarding, 'UltimaEtapa', 'INICIO') or 'INICIO'
 
     # Se a última mensagem foi uma foto, tentamos processar o File ID
     texto_recebido = update.message.text
