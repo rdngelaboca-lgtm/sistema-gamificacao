@@ -618,12 +618,6 @@ async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             valor_recebido = texto_recebido.strip()
             
             # --- FLUXO DE RAMIFICAÇÃO E VALIDAÇÃO ---
-
-        # 3. TRATAMENTO DE INPUT INVÁLIDO (Não é Texto nem Foto esperada)
-        else:
-            if ultima_etapa != 'INICIO':
-                await context.bot.send_message(chat_id, "⚠️ Eu não entendi isso. Por favor, envie uma **FOTO** (se for documento) ou **TEXTO** para responder.")
-            return
             
             # 2a. RAMIFICAÇÃO: ESTADO CIVIL
             if ultima_etapa == 'ESTADO_CIVIL':
@@ -732,6 +726,12 @@ async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             
             # Fallback para estados desconhecidos
             await context.bot.send_message(chat_id, "Erro no fluxo. Não sei qual a próxima etapa. Digite /cancelar e tente novamente.")
+
+        # 3. TRATAMENTO DE INPUT INVÁLIDO (Não é Texto nem Foto esperada)
+        else:
+            if ultima_etapa != 'INICIO':
+                await context.bot.send_message(chat_id, "⚠️ Eu não entendi isso. Por favor, envie uma **FOTO** (se for documento) ou **TEXTO** para responder.")
+            return
 
     # --- Envio da Primeira Pergunta (Etapa INICIO) ---
     elif ultima_etapa == 'INICIO':
