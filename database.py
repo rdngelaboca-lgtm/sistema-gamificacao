@@ -601,15 +601,21 @@ def adicionar_funcionario(nome, chat_id, cargo, horario_notificacao, dia_folga):
 
 def listar_funcionarios():
     """
-    (CORREÇÃO DE SCHEMA) Retorna a lista completa de funcionários usando SELECT * para garantir que todos os atributos sejam mapeados para funções legadas (ranking, main.py).
+    (CORREÇÃO FINAL DE SCHEMA) Lista TODOS os campos essenciais de Funcionarios
+    para evitar AttributeErrors em todos os módulos (main.py, gestao_pessoas_main.py).
     """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            # Usamos SELECT * para garantir que campos essenciais como DiaDeFolga, 
-            # HorarioNotificacao, etc., quebram o código legado sejam incluídos.
-            sql = "SELECT * FROM Funcionarios ORDER BY NomeCompleto"
+            sql = """
+                SELECT 
+                    FuncionarioID, NomeCompleto, CPF, ChatIDTelegram, TelefoneWhatsApp, 
+                    Cargo, Setor, SaldoPontos, HorarioNotificacao, DiaDeFolga, 
+                    VerificadorCPF, NivelAcesso, PosicaoPadraoID
+                FROM Funcionarios 
+                ORDER BY NomeCompleto
+            """
             cursor.execute(sql)
             return cursor.fetchall()
         finally:
