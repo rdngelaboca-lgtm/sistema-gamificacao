@@ -1141,24 +1141,24 @@ async def handler_foto_tarefa(update: Update, context: ContextTypes.DEFAULT_TYPE
             if temp_photo_path and os.path.exists(temp_photo_path): os.remove(temp_photo_path)
             return
 
-        # --- LÓGICA DE EXTRAÇÃO DE FILE_ID (HÍBRIDA) ---
+        # --- CORREÇÃO DEFINITIVA: LÓGICA HÍBRIDA (FOTO OU DOCUMENTO) ---
         file_id = None
-
+        
         # Caso 1: É uma Foto (Galeria)
         if update.message.photo:
             file_id = update.message.photo[-1].file_id
-
+            
         # Caso 2: É um Documento (PDF, Arquivo)
         elif update.message.document:
             file_id = update.message.document.file_id
-
+            
         else:
             await update.message.reply_text("❌ Formato de arquivo não reconhecido. Envie Foto ou PDF.")
             return
         # ------------------------------------------------
 
-        # Registra preliminarmente com file_id
-        entrega_id = database.registrar_entrega_preliminar(tarefa.TarefaID, funcionario.FuncionarioID, atribuicao_id, file_id) #
+        # Registra preliminarmente com file_id detectado
+        entrega_id = database.registrar_entrega_preliminar(tarefa.TarefaID, funcionario.FuncionarioID, atribuicao_id, file_id)
 
         if entrega_id and config.GESTOR_GROUP_CHAT_ID: #
             # Prepara notificação para gestor
