@@ -1248,9 +1248,13 @@ async def receber_motivo_recusa(update: Update, context: ContextTypes.DEFAULT_TY
         logger.info(f"Dados de recusa encontrados em bot_data para GestorID {gestor_id} no ChatID {chat_id_grupo}.")
         if not context.bot_data['pendencias_recusa'][chat_id_grupo]:
             context.bot_data['pendencias_recusa'].pop(chat_id_grupo)
-        if not context.bot_data['pendencias_recusa']:
-            context.bot_data.pop('pendencias_recusa')
-    # --- Fim do Bloco de leitura ---
+        if not dados_recusa:
+            await update.message.reply_text(
+                "⚠️ **Sessão Expirada:** Não consegui vincular sua resposta à tarefa.\n"
+                "Por favor, localize a mensagem original e clique no botão **❌ Reprovar** novamente.",
+                parse_mode='Markdown'
+            )
+            return
 
     if not dados_recusa:
         # Se for uma resposta direta ao bot, mas sem dados na memória, avisa o gestor.
