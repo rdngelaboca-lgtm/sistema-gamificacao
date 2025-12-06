@@ -85,6 +85,11 @@ class AppGestaoPessoas:
 
         self.frame_comunicados = ttk.Frame(self.notebook, padding="10")
         self.frame_documentos = ttk.Frame(self.notebook, padding="10")
+        # --- Variáveis de Login para Simulação de Acesso (Gestor ID 2) ---
+        # Defina self.USUARIO_LOGADO_ID e self.nivel_usuario AQUI
+        self.USUARIO_LOGADO_ID = 2 
+        # Esta chamada requer que _buscar_nivel_acesso exista, o que faremos acima.
+        self.nivel_usuario = self._buscar_nivel_acesso(self.USUARIO_LOGADO_ID)
         self.frame_onboarding = ttk.Frame(self.notebook, padding="10") # <<< NOVA ABA
 
         self.notebook.add(self.frame_onboarding, text='📝 Onboarding/Admissional') # <<< NOVA ABA
@@ -476,6 +481,23 @@ class AppGestaoPessoas:
             except Exception as e:
                 logger.error(f"Erro inesperado ao excluir documento: {e}", exc_info=True)
                 messagebox.showerror("Erro", f"Ocorreu um erro inesperado: {e}")
+
+    def _buscar_nivel_acesso(self, funcionario_id):
+        """Busca o NivelAcesso de um funcionário pelo ID (função auxiliar)."""
+        conn = database.get_db_connection()
+        if conn:
+            try:
+                cursor = conn.cursor()
+                sql = "SELECT NivelAcesso FROM Funcionarios WHERE FuncionarioID = ?"
+                cursor.execute(sql, funcionario_id)
+                resultado = cursor.fetchone()
+                return resultado[0] if resultado else 'Funcionario' # Retorna o primeiro campo
+            except Exception as e:
+                logger.error(f"Falha ao buscar NivelAcesso para ID {funcionario_id}: {e}")
+                return 'Funcionario' # Default seguro
+            finally:
+                conn.close()
+        return 'Funcionario'
 
     def abrir_janela_edicao_documento(self):
         """Abre a janela Toplevel para editar os metadados do documento selecionado."""
