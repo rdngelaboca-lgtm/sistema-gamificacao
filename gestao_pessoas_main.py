@@ -233,6 +233,7 @@ class AppGestaoPessoas:
         ttk.Button(frame_botoes, text="📂 Ver Documentos Enviados", command=self.abrir_janela_documentos_onboarding).pack(side="left", padx=5)
         ttk.Button(frame_botoes, text="📋 Ver Dados Cadastrais", command=self.ver_dados_cadastrais_selecionado).pack(side="left", padx=5)
         ttk.Button(frame_botoes, text="🗑️ Excluir Cadastro", command=self.excluir_candidato_onboarding).pack(side="left", padx=5)
+        ttk.Button(frame_botoes, text="🔄 Reiniciar Processo", command=self.reiniciar_processo_onboarding).pack(side="left", padx=5)
         self.btn_aprovar_admissional = ttk.Button(frame_botoes, text="✅ Aprovar Exame Admissional", command=self.aprovar_exame_admissional_rh)
         self.btn_aprovar_admissional.pack(side="right", padx=5)
 
@@ -1166,6 +1167,43 @@ class AppGestaoPessoas:
         else:
             if hasattr(self, 'caminho_imagem_selecionada'): del self.caminho_imagem_selecionada
             label_caminho.config(text="Nenhuma imagem selecionada.")
+
+    def reiniciar_processo_onboarding(self):
+        """Limpa os dados de onboarding do funcionário para que ele faça de novo."""
+        selecionado = self.tree_onboarding.focus()
+        if not selecionado:
+            messagebox.showwarning("Aviso", "Selecione um funcionário na lista.")
+            return
+
+        dados = self.tree_onboarding.item(selecionado, 'values')
+        funcionario_id = dados[0]
+        nome = dados[1]
+
+        confirmacao = messagebox.askyesno(
+            "Reiniciar Onboarding",
+            f"Deseja reiniciar o processo de admissão para '{nome}'?\n\n"
+            "Isso apagará os documentos e dados preenchidos (Escolaridade, Filhos, etc), "
+            "permitindo que ele comece do zero pelo Telegram.\n\n"
+            "O funcionário NÃO será excluído do sistema.",
+            parent=self.root
+        )
+
+        if confirmacao:
+            if database.resetar_onboarding_completo(funcionario_id):
+                # Opcional: Notificar o funcionário que o processo foi reiniciado
+                func_obj = database.buscar_funcionario_por_id(funcionario_id)
+                if func_obj and func_obj.ChatIDTelegram:
+                    notificador_telegram.enviar_mensagem(
+                        func_obj.ChatIDTelegram,
+                        "🔄 **Processo de Admissão Reiniciado**\n\n"
+                        "O RH solicitou o preenchimento novamente dos seus dados.\n"
+                        "Por favor, digite 'Começar' para enviar as informações corretas."
+                    )
+
+                messagebox.showinfo("Sucesso", "Processo reiniciado! O funcionário pode preencher os dados novamente.", parent=self.root)
+                self.carregar_onboarding_lista()
+            else:
+                messagebox.showerror("Erro", "Falha ao reiniciar o processo no banco de dados.", parent=self.root)        
         
 if __name__ == "__main__":
     root = tk.Tk()
