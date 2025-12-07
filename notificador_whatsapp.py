@@ -9,37 +9,35 @@ logger = logging.getLogger(__name__)
 def enviar_mensagem_whatsapp(numero, texto):
     """
     Envia uma mensagem de texto via Z-API.
-    Retorna (True, msg) se sucesso, ou (False, erro) se falha.
+    VERSÃO DEBUG: Token fixado manualmente para garantir autenticação.
     """
-    # Validação básica da URL
-    if not config.WPP_API_URL:
-        return False, "URL da API não configurada no config.py"
-
     # 1. Limpeza do número
-    # A Z-API exige o formato: 5544999998888 (DDI + DDD + Numero)
     numero_limpo = re.sub(r'\D', '', str(numero))
 
     # Garante o código do país (Brasil 55) se não tiver
     if len(numero_limpo) <= 11:
         numero_limpo = '55' + numero_limpo
 
-    # 2. Monta o Payload específico da Z-API
+    # 2. Monta o Payload
     payload = {
         "phone": numero_limpo,
         "message": texto
     }
 
-    # --- CORREÇÃO DE AUTENTICAÇÃO ---
-    # A Z-API exige o 'Client-Token' no cabeçalho para validar a requisição.
-    # Puxamos o valor direto do seu arquivo config.py
+    # --- CORREÇÃO DEFINITIVA ---
+    # Fixamos o token aqui para eliminar erro de importação do config.py
+    TOKEN_FIXO = "2E1C0A469DC7263738C0F096"
+    
     headers = {
         "Content-Type": "application/json",
-        "Client-Token": config.ZAPI_TOKEN  # <--- OBRIGATÓRIO PARA CORRIGIR O ERRO 400
+        "Client-Token": TOKEN_FIXO
     }
 
-    try:
-        logger.info(f"Tentando enviar WhatsApp via Z-API para {numero_limpo}...")
+    # Log de Debug para confirmar o que está sendo enviado
+    logger.info(f"Disparando WPP para {numero_limpo}. Headers: {headers}")
 
+    try:
+        # Usa a URL do config, mas garante os headers de segurança
         response = requests.post(
             config.WPP_API_URL, 
             json=payload, 
@@ -47,14 +45,12 @@ def enviar_mensagem_whatsapp(numero, texto):
             timeout=15
         )
 
-        # Z-API geralmente retorna 200 OK em caso de sucesso
         if response.status_code == 200:
             logger.info("WhatsApp enviado com sucesso (Z-API).")
             return True, "Mensagem enviada!"
         else:
             erro_msg = f"Erro Z-API: {response.status_code} - {response.text}"
             logger.error(erro_msg)
-            # Retorna o texto do erro para aparecer no pop-up do Tkinter
             return False, f"Falha no envio: {response.text}"
 
     except Exception as e:
