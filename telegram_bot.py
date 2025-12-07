@@ -493,15 +493,17 @@ async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     status_onboarding = database.buscar_onboarding_status(funcionario.FuncionarioID)
 
-    # CORREÇÃO CRÍTICA: Se o registro existe mas o campo é NULL, força 'INICIO'
-    # getattr retorna None se o campo existir e for None. O 'or' corrige isso.
-    ultima_etapa_raw = getattr(status_onboarding, 'UltimaEtapa', 'INICIO') or 'INICIO'
+    # 1. Recuperação e Sanitização de Estado Robusta
+    raw_etapa = getattr(status_onboarding, 'UltimaEtapa', 'INICIO')
+    # Garante que seja string e trata None
+    if raw_etapa is None:
+        raw_etapa = 'INICIO'
+    
+    # Remove tudo que não for letra, número ou underline (limpa caracteres ocultos)
+    # Ex: 'ESTADO_CIVIL ' vira 'ESTADO_CIVIL'
+    ultima_etapa = "".join(char for char in str(raw_etapa) if char.isalnum() or char == '_').upper()
 
-    # Normalização TOTAL: Remove espaços e FORÇA MAIÚSCULAS para garantir que o 'if' funcione
-    ultima_etapa = ultima_etapa_raw.strip().upper() 
-
-    # Log para sabermos exatamente o que o bot está "vendo" (aparecerá no terminal/log)
-    logger.info(f"--> ONBOARDING: Etapa Atual no Banco: '{ultima_etapa}' (Original: '{ultima_etapa_raw}')")
+    logger.info(f"--> ONBOARDING DEBUG: Raw='{raw_etapa}' | Processada='{ultima_etapa}'")
 
     # Se a última mensagem foi uma foto, tentamos processar o File ID
     texto_recebido = update.message.text
@@ -628,28 +630,28 @@ async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             # --- FLUXO DE RAMIFICAÇÃO E VALIDAÇÃO ---
             
             # 2a. RAMIFICAÇÃO: ESTADO CIVIL
-            if ultima_etapa == 'ESTADO_CIVIL':
+            # Usa 'in' para ser mais tolerante caso venha 'ESTADO_CIVIL_XYZ' ou similar
+            if 'ESTADO_CIVIL' in ultima_etapa:
                 valor_recebido = texto_recebido.strip().upper()
-
-                # 1. Decide o próximo passo ANTES de salvar no banco
+                
+                # Lógica de Decisão
                 if 'CASADO' in valor_recebido:
                     proxima_etapa = 'DATA_CASAMENTO'
                     mensagem_proxima = "Ok. Agora, digite a **Data de Casamento** (dd/mm/aaaa)."
                 else:
+                    # Qualquer outra coisa (Solteiro, Divorciado, Viúvo) vai para Filhos
                     proxima_etapa = 'FILHOS_QTD'
                     mensagem_proxima = WORKFLOW['FILHOS_QTD']['pergunta']
-
-                # 2. Atualiza o dado 'EstadoCivil' E já muda a 'UltimaEtapa' num único comando atômico
+                
+                # ATUALIZAÇÃO ATÔMICA
                 database.atualizar_onboarding_etapa(
                     funcionario.FuncionarioID, 
-                    proxima_etapa, # Já define a nova etapa para evitar repetição
-                    ('EstadoCivil', texto_recebido.strip()) # Salva o valor da resposta atual
+                    proxima_etapa, 
+                    ('EstadoCivil', texto_recebido.strip())
                 )
-
-                # 3. Envia a próxima pergunta
+                
                 await context.bot.send_message(chat_id, mensagem_proxima)
-
-                return # <--- OBRIGATÓRIO: Impede que caia no bloco genérico abaixo
+                return # Encerra aqui para evitar loop
 
             # 2b. VALIDAÇÃO E AVANÇO: DATA CASAMENTO
             if ultima_etapa == 'DATA_CASAMENTO':
