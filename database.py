@@ -720,6 +720,9 @@ def excluir_funcionario(funcionario_id):
             cursor.execute("DELETE FROM NotasFiscais WHERE FuncionarioID = ?", funcionario_id)
             # Para escalas, definimos como NULL (Vazio) em vez de deletar o dia inteiro, preservando o histórico da posição
             cursor.execute("UPDATE EscalaDiaria SET FuncionarioID = NULL WHERE FuncionarioID = ?", funcionario_id)
+            # Estoque (Contagens Realizadas) - Limpa itens das contagens deste funcionário, depois as contagens
+            cursor.execute("DELETE FROM ItensContagemEstoque WHERE ContagemID IN (SELECT ContagemID FROM ContagensEstoque WHERE FuncionarioID = ?)", funcionario_id)
+            cursor.execute("DELETE FROM ContagensEstoque WHERE FuncionarioID = ?", funcionario_id)
 
             # 2. Exclusão do Registro Principal
             sql = "DELETE FROM Funcionarios WHERE FuncionarioID = ?"
