@@ -391,12 +391,12 @@ class AppGestaoPessoas:
             messagebox.showinfo("Aviso", "Sem dados de onboarding encontrados.", parent=self.root)
             return
 
-        # --- 1. Preparação da Janela com Scroll ---
+        # --- 1. Preparação da Janela com Scroll (Necessário para muitas fotos) ---
         popup = Toplevel(self.root)
         popup.title(f"Prontuário Digital - {nome}")
-        popup.geometry("600x750")
+        popup.geometry("650x800")
 
-        # Container principal para Scrollbar
+        # Container principal
         main_container = ttk.Frame(popup)
         main_container.pack(fill="both", expand=True)
 
@@ -415,21 +415,22 @@ class AppGestaoPessoas:
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        # --- 2. Botão de Exportação ---
-        frame_topo = ttk.Frame(scrollable_frame, padding="10")
-        frame_topo.pack(fill="x")
-
-        # Dicionário para guardar caminhos locais das imagens baixadas
+        # --- 2. Preparação dos Dados ---
+        # Dicionário para guardar caminhos locais das imagens baixadas (para o PDF)
         cache_imagens = {} 
 
+        # Função interna para o botão de PDF
         def acao_gerar_pdf():
             self.gerar_pdf_prontuario(nome, status, cache_imagens)
 
-        btn_pdf = ttk.Button(frame_topo, text="🖨️ Gerar PDF Profissional (Dados + Fotos)", command=acao_gerar_pdf)
-        btn_pdf.pack(fill="x", ipady=5)
+        # Botão de Exportação no Topo
+        frame_topo = ttk.Frame(scrollable_frame, padding="10")
+        frame_topo.pack(fill="x")
+        btn_pdf = ttk.Button(frame_topo, text="🖨️ Gerar PDF Completo (Dados + Fotos)", command=acao_gerar_pdf)
+        btn_pdf.pack(fill="x", ipady=8)
 
         # --- 3. Exibição dos Dados (Texto) ---
-        lbl_dados = tk.Label(scrollable_frame, text="DADOS CADASTRAIS", font=("Arial", 12, "bold"), bg="#ddd", anchor="w")
+        lbl_dados = tk.Label(scrollable_frame, text="DADOS CADASTRAIS", font=("Arial", 12, "bold"), bg="#e0e0e0", anchor="w", padx=5)
         lbl_dados.pack(fill="x", pady=(10, 5))
 
         texto_dados = f"Funcionário: {nome} (ID: {funcionario_id})\n"
@@ -447,23 +448,24 @@ class AppGestaoPessoas:
                 filhos = json.loads(status.DadosFilhos)
                 for i, f in enumerate(filhos, 1):
                     texto_dados += f"- {f.get('Nome', '')} ({f.get('Nasc', '')}) CPF: {f.get('CPF', '')}\n"
-            except: texto_dados += "(Erro ao ler dependentes)"
+            except: texto_dados += "(Erro na leitura dos dependentes)"
+        else:
+            texto_dados += "- Nenhum dependente declarado."
 
-        tk.Label(scrollable_frame, text=texto_dados, justify="left", font=("Consolas", 10)).pack(anchor="w", padx=10)
+        tk.Label(scrollable_frame, text=texto_dados, justify="left", font=("Consolas", 10), bg="white", relief="solid", bd=1, padx=10, pady=10).pack(fill="x", padx=10)
 
         # --- 4. Exibição das Imagens (Visualização) ---
-        lbl_docs = tk.Label(scrollable_frame, text="DOCUMENTOS ANEXADOS", font=("Arial", 12, "bold"), bg="#ddd", anchor="w")
-        lbl_docs.pack(fill="x", pady=(15, 5))
+        lbl_docs = tk.Label(scrollable_frame, text="DOCUMENTOS DIGITALIZADOS", font=("Arial", 12, "bold"), bg="#e0e0e0", anchor="w", padx=5)
+        lbl_docs.pack(fill="x", pady=(20, 5))
 
-        # Lista de documentos para buscar
         docs_map = {
-            "RG (Frente/Verso)": status.RG_FileID,
+            "RG (Identidade)": status.RG_FileID,
             "CPF": status.CPF_FileID,
-            "CTPS (Carteira de Trabalho)": status.CTPS_FileID,
+            "Carteira de Trabalho (CTPS)": status.CTPS_FileID,
             "Título de Eleitor": status.TituloEleitor_FileID
         }
 
-        # Cria diretório temporário para baixar as imagens
+        # Diretório temporário para cache de visualização
         temp_dir = os.path.join(os.getcwd(), "temp_view")
         if not os.path.exists(temp_dir): os.makedirs(temp_dir)
 
@@ -472,16 +474,16 @@ class AppGestaoPessoas:
             frame_doc.pack(fill="x", padx=10, pady=5)
 
             if file_id:
-                try:
-                    # Baixa a imagem (Lógica síncrona simplificada para UI)
-                    caminho_local = self._baixar_imagem_cache(file_id, temp_dir)
+                # Baixa a imagem para exibir
+                caminho_local = self._baixar_imagem_cache(file_id, temp_dir)
 
-                    if caminho_local:
-                        cache_imagens[titulo] = caminho_local # Guarda para o PDF
+                if caminho_local:
+                    cache_imagens[titulo] = caminho_local # Guarda referência para o PDF
 
-                        # Carrega e Redimensiona para o Painel
+                    try:
+                        # Carrega e Redimensiona para o Painel (Thumbnail)
                         pil_img = Image.open(caminho_local)
-                        # Redimensiona mantendo proporção (max width 400)
+                        # Redimensiona mantendo proporção (largura max 400px)
                         base_width = 400
                         w_percent = (base_width / float(pil_img.size[0]))
                         h_size = int((float(pil_img.size[1]) * float(w_percent)))
@@ -490,22 +492,22 @@ class AppGestaoPessoas:
                         tk_img = ImageTk.PhotoImage(pil_img)
 
                         lbl_img = tk.Label(frame_doc, image=tk_img)
-                        lbl_img.image = tk_img # Mantém referência
+                        lbl_img.image = tk_img # Mantém referência na memória para não sumir
                         lbl_img.pack()
-                    else:
-                        tk.Label(frame_doc, text="Erro ao baixar imagem.", fg="red").pack()
-                except Exception as e:
-                    tk.Label(frame_doc, text=f"Erro visualização: {str(e)}", fg="red").pack()
+                    except Exception:
+                        tk.Label(frame_doc, text="[Arquivo PDF ou Formato não suportado para prévia]", fg="blue").pack()
+                else:
+                    tk.Label(frame_doc, text="Erro ao baixar arquivo do servidor.", fg="red").pack()
             else:
-                tk.Label(frame_doc, text="Pendente / Não enviado", fg="gray", font=("Arial", 9, "italic")).pack()
+                tk.Label(frame_doc, text="Pendente / Não enviado", fg="gray").pack()
 
     def _baixar_imagem_cache(self, file_id, pasta_destino):
-        """Helper para baixar imagem do Telegram para pasta temporária."""
+        """Baixa arquivo do Telegram para cache local."""
         try:
             token = config.TELEGRAM_TOKEN
+            # 1. Pega o caminho
             url_info = f"https://api.telegram.org/bot{token}/getFile?file_id={file_id}"
             r = requests.get(url_info, timeout=5).json()
-
             if not r.get('ok'): return None
 
             file_path = r['result']['file_path']
@@ -515,23 +517,22 @@ class AppGestaoPessoas:
             nome_arquivo = f"{file_id}{ext}"
             caminho_completo = os.path.join(pasta_destino, nome_arquivo)
 
-            # Se já existe no cache, não baixa de novo
-            if os.path.exists(caminho_completo):
-                return caminho_completo
+            # Cache: Se já baixou, usa o local
+            if os.path.exists(caminho_completo): return caminho_completo
 
+            # 2. Baixa o conteúdo
             url_download = f"https://api.telegram.org/file/bot{token}/{file_path}"
-            r_img = requests.get(url_download, timeout=10)
+            r_img = requests.get(url_download, timeout=20)
 
             if r_img.status_code == 200:
                 with open(caminho_completo, 'wb') as f:
                     f.write(r_img.content)
                 return caminho_completo
-        except:
-            return None
+        except: return None
         return None
 
     def gerar_pdf_prontuario(self, nome_funcionario, status, cache_imagens):
-        """Gera um PDF profissional com os dados e as fotos."""
+        """Gera PDF profissional com dados e imagens anexadas."""
         try:
             dest = filedialog.asksaveasfilename(
                 title="Salvar Prontuário PDF",
@@ -551,78 +552,62 @@ class AppGestaoPessoas:
             pdf.cell(0, 10, f"Gerado em: {datetime.now().strftime('%d/%m/%Y %H:%M')}", ln=True, align="C")
             pdf.ln(10)
 
-            # --- Dados Pessoais (Tabela Simples) ---
+            # --- Tabela de Dados ---
             pdf.set_fill_color(240, 240, 240)
             pdf.set_font("Arial", "B", 12)
             pdf.cell(0, 10, "1. DADOS PESSOAIS", ln=True, fill=True)
             pdf.ln(2)
 
             pdf.set_font("Arial", "", 11)
-
-            def add_line(label, value):
-                pdf.set_font("Arial", "B", 11)
-                pdf.cell(50, 8, label, 0)
-                pdf.set_font("Arial", "", 11)
-                pdf.cell(0, 8, str(value), 0, 1)
-
-            add_line("Nome Completo:", nome_funcionario)
-            add_line("Escolaridade:", status.Escolaridade or "---")
-            add_line("Estado Civil:", status.EstadoCivil or "---")
+            pdf.multi_cell(0, 8, f"Nome: {nome_funcionario}\nEscolaridade: {status.Escolaridade}\nEstado Civil: {status.EstadoCivil}")
 
             if status.EstadoCivil and 'CASADO' in status.EstadoCivil.upper():
-                pdf.ln(2)
-                add_line("Data Casamento:", status.DataCasamento or "---")
-                add_line("Cônjuge:", status.NomeConjugue or "---")
-                add_line("CPF Cônjuge:", status.CPFConjugue or "---")
+                pdf.multi_cell(0, 8, f"Cônjuge: {status.NomeConjugue}\nCPF Cônjuge: {status.CPFConjugue}")
 
-            # --- Dependentes ---
             pdf.ln(5)
             pdf.set_font("Arial", "B", 12)
             pdf.cell(0, 10, f"2. DEPENDENTES ({status.QtdFilhos or 0})", ln=True, fill=True)
-            pdf.ln(2)
 
             if status.DadosFilhos:
                 try:
                     filhos = json.loads(status.DadosFilhos)
                     pdf.set_font("Arial", "", 10)
                     for i, f in enumerate(filhos, 1):
-                        texto = f"{i}. {f.get('Nome','')} | Nasc: {f.get('Nasc','')} | CPF: {f.get('CPF','')}"
-                        pdf.cell(0, 8, texto, ln=True)
-                except:
-                    pdf.cell(0, 8, "Erro na leitura dos dados.", ln=True)
+                        pdf.cell(0, 8, f"{i}. {f.get('Nome','')} - CPF: {f.get('CPF','')}", ln=True)
+                except: pass
             else:
                 pdf.set_font("Arial", "I", 10)
-                pdf.cell(0, 8, "Não há dependentes declarados.", ln=True)
+                pdf.cell(0, 8, "Nenhum dependente declarado.", ln=True)
 
-            # --- Documentos (Imagens) ---
+            # --- Imagens (Uma por página ou ajustada) ---
             pdf.add_page()
             pdf.set_font("Arial", "B", 12)
-            pdf.cell(0, 10, "3. CÓPIAS DOS DOCUMENTOS (ANEXOS)", ln=True, fill=True)
+            pdf.cell(0, 10, "3. DOCUMENTOS DIGITALIZADOS", ln=True, fill=True)
             pdf.ln(5)
 
             for titulo, caminho_img in cache_imagens.items():
-                if caminho_img and os.path.exists(caminho_img):
+                if caminho_img and os.path.exists(caminho_img) and caminho_img.endswith(('.jpg', '.png', '.jpeg')):
                     pdf.set_font("Arial", "B", 11)
                     pdf.cell(0, 10, titulo, ln=True)
 
-                    # Lógica para centralizar e ajustar imagem
+                    # Centraliza imagem na página A4 (largura aprox 190mm útil)
                     try:
-                        # Limite de largura da página A4 (aprox 210mm - margens = 190mm)
-                        # Coloca a imagem com largura 100mm para caber bem, ou 180mm se for paisagem
-                        pdf.image(caminho_img, w=150) 
-                    except Exception as e:
-                        pdf.set_font("Arial", "I", 10)
-                        pdf.cell(0, 10, f"[Erro ao renderizar imagem: {e}]", ln=True)
+                        pdf.image(caminho_img, w=170) 
+                    except:
+                        pdf.cell(0, 10, "[Erro ao renderizar imagem no PDF]", ln=True)
 
-                    pdf.ln(10) # Espaço entre documentos
+                    pdf.ln(10)
+                elif caminho_img and ".pdf" in caminho_img:
+                    pdf.set_font("Arial", "I", 10)
+                    pdf.cell(0, 10, f"{titulo}: Arquivo PDF anexado original não pode ser mesclado aqui.", ln=True)
 
             pdf.output(dest)
-            messagebox.showinfo("Sucesso", f"PDF Gerado com sucesso!\nSalvo em: {dest}", parent=self.root)
+            messagebox.showinfo("Sucesso", "Prontuário PDF gerado com sucesso!", parent=self.root)
             file_utils.abrir_arquivo(dest)
 
         except Exception as e:
-            logger.error(f"Erro ao gerar PDF: {e}", exc_info=True)
-            messagebox.showerror("Erro", f"Falha na geração do PDF: {e}", parent=self.root)
+            logger.error(f"Erro PDF: {e}", exc_info=True)
+            messagebox.showerror("Erro", f"Falha ao criar PDF: {e}", parent=self.root)
 
     def disparar_download_documento(self, file_id, doc_name, parent_popup):
         """Baixa o arquivo real da API do Telegram e salva onde o usuário escolher."""
