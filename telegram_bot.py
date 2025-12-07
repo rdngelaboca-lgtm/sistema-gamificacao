@@ -495,8 +495,13 @@ async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     # CORREÇÃO CRÍTICA: Se o registro existe mas o campo é NULL, força 'INICIO'
     # getattr retorna None se o campo existir e for None. O 'or' corrige isso.
-    ultima_etapa = getattr(status_onboarding, 'UltimaEtapa', 'INICIO') or 'INICIO'
-    ultima_etapa = ultima_etapa.strip() # Remove espaços que impedem o 'if' de funcionar
+    ultima_etapa_raw = getattr(status_onboarding, 'UltimaEtapa', 'INICIO') or 'INICIO'
+
+    # Normalização TOTAL: Remove espaços e FORÇA MAIÚSCULAS para garantir que o 'if' funcione
+    ultima_etapa = ultima_etapa_raw.strip().upper() 
+
+    # Log para sabermos exatamente o que o bot está "vendo" (aparecerá no terminal/log)
+    logger.info(f"--> ONBOARDING: Etapa Atual no Banco: '{ultima_etapa}' (Original: '{ultima_etapa_raw}')")
 
     # Se a última mensagem foi uma foto, tentamos processar o File ID
     texto_recebido = update.message.text
