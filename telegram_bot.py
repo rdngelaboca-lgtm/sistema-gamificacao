@@ -495,12 +495,10 @@ async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     # 1. Recuperação e Sanitização de Estado Robusta
     raw_etapa = getattr(status_onboarding, 'UltimaEtapa', 'INICIO')
-    # Garante que seja string e trata None
-    if raw_etapa is None:
-        raw_etapa = 'INICIO'
-    
-    # Remove tudo que não for letra, número ou underline (limpa caracteres ocultos)
-    # Ex: 'ESTADO_CIVIL ' vira 'ESTADO_CIVIL'
+    if raw_etapa is None: raw_etapa = 'INICIO'
+
+    # REMOVE TUDO que não for letra ou número (limpa caracteres ocultos/fantasmas)
+    # Ex: 'ESTADO_CIVIL ' (com espaço oculto) vira 'ESTADOCIVIL'
     ultima_etapa = "".join(char for char in str(raw_etapa) if char.isalnum() or char == '_').upper()
 
     logger.info(f"--> ONBOARDING DEBUG: Raw='{raw_etapa}' | Processada='{ultima_etapa}'")
@@ -628,30 +626,29 @@ async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             valor_recebido = texto_recebido.strip()
             
             # --- FLUXO DE RAMIFICAÇÃO E VALIDAÇÃO ---
-            
+           
             # 2a. RAMIFICAÇÃO: ESTADO CIVIL
-            # Usa 'in' para ser mais tolerante caso venha 'ESTADO_CIVIL_XYZ' ou similar
-            if 'ESTADO_CIVIL' in ultima_etapa:
+            # Usa 'in' e remove underscore da comparação para garantir match com 'ESTADOCIVIL'
+            if 'ESTADOCIVIL' in ultima_etapa.replace('_', ''):
                 valor_recebido = texto_recebido.strip().upper()
-                
+
                 # Lógica de Decisão
                 if 'CASADO' in valor_recebido:
                     proxima_etapa = 'DATA_CASAMENTO'
                     mensagem_proxima = "Ok. Agora, digite a **Data de Casamento** (dd/mm/aaaa)."
                 else:
-                    # Qualquer outra coisa (Solteiro, Divorciado, Viúvo) vai para Filhos
                     proxima_etapa = 'FILHOS_QTD'
                     mensagem_proxima = WORKFLOW['FILHOS_QTD']['pergunta']
-                
-                # ATUALIZAÇÃO ATÔMICA
+
+                # Atualização Atômica no Banco
                 database.atualizar_onboarding_etapa(
                     funcionario.FuncionarioID, 
                     proxima_etapa, 
                     ('EstadoCivil', texto_recebido.strip())
                 )
-                
+
                 await context.bot.send_message(chat_id, mensagem_proxima)
-                return # Encerra aqui para evitar loop
+                return # Encerra execução para evitar loop
 
             # 2b. VALIDAÇÃO E AVANÇO: DATA CASAMENTO
             if ultima_etapa == 'DATA_CASAMENTO':
