@@ -547,15 +547,18 @@ async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         # --- CAMPOS OBRIGATÓRIOS SE CASADO ---
         'DATA_CASAMENTO': { 
             'proxima_etapa': 'NOME_CONJUGUE', 'campo_db': ('DataCasamento', texto_recebido),
-            'pergunta': "Qual o nome completo do seu **Cônjuge**?"
+            # Esta pergunta é usada se o fluxo retornar para cá, mas o fluxo normal usa hardcode no bloco anterior
+            'pergunta': "Ok. Agora, digite a **Data de Casamento** (dd/mm/aaaa)."
         },
         'NOME_CONJUGUE': { 
             'proxima_etapa': 'CPF_CONJUGUE', 'campo_db': ('NomeConjugue', texto_recebido),
-            'pergunta': "Qual o **CPF do seu Cônjuge**? (Apenas números)"
+            # CORREÇÃO: Aqui deve ser a pergunta do NOME, pois é a próxima etapa
+            'pergunta': "Qual o nome completo do seu **Cônjuge**?"
         },
         'CPF_CONJUGUE': { 
             'proxima_etapa': 'FILHOS_QTD', 'campo_db': ('CPFConjugue', texto_recebido),
-            'pergunta': "Quantos filhos menores de idade você tem? (Digite o NÚMERO)"
+            # CORREÇÃO: Aqui deve ser a pergunta do CPF
+            'pergunta': "Qual o **CPF do seu Cônjuge**? (Apenas números)"
         },
         # --- COLETA DE FILHOS (Estados de Coleta em Loop) ---
         'FILHOS_QTD': { 
@@ -628,27 +631,30 @@ async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             # --- FLUXO DE RAMIFICAÇÃO E VALIDAÇÃO ---
            
             # 2a. RAMIFICAÇÃO: ESTADO CIVIL
-            # Usa 'in' e remove underscore da comparação para garantir match com 'ESTADOCIVIL'
-            if 'ESTADOCIVIL' in ultima_etapa.replace('_', ''):
-                valor_recebido = texto_recebido.strip().upper()
-
-                # Lógica de Decisão
-                if 'CASADO' in valor_recebido:
+            # CORREÇÃO: Verifica se estamos na etapa OU se a resposta é claramente um estado civil (Destrava Loop)
+            texto_upper = texto_recebido.strip().upper()
+            respostas_validas_civil = ['SOLTEIRO', 'SOLTEIRA', 'CASADO', 'CASADA', 'DIVORCIADO', 'DIVORCIADA', 'VIUVO', 'VIUVA', 'SEPARADO', 'SEPARADA']
+            
+            # Usa 'in' para tolerância a erros no nome da etapa E verifica o conteúdo da resposta
+            if ('ESTADOCIVIL' in ultima_etapa.replace('_', '')) or (texto_upper in respostas_validas_civil):
+                
+                # Lógica de Decisão do Próximo Passo
+                if 'CASADO' in texto_upper:
                     proxima_etapa = 'DATA_CASAMENTO'
                     mensagem_proxima = "Ok. Agora, digite a **Data de Casamento** (dd/mm/aaaa)."
                 else:
                     proxima_etapa = 'FILHOS_QTD'
                     mensagem_proxima = WORKFLOW['FILHOS_QTD']['pergunta']
-
-                # Atualização Atômica no Banco
+                
+                # ATUALIZAÇÃO FORÇADA: Corrige o estado no banco e salva o dado
                 database.atualizar_onboarding_etapa(
                     funcionario.FuncionarioID, 
                     proxima_etapa, 
-                    ('EstadoCivil', texto_recebido.strip())
+                    ('EstadoCivil', texto_upper)
                 )
-
+                
                 await context.bot.send_message(chat_id, mensagem_proxima)
-                return # Encerra execução para evitar loop
+                return # Encerra aqui para garantir que o loop quebre
 
             # 2b. VALIDAÇÃO E AVANÇO: DATA CASAMENTO
             if ultima_etapa == 'DATA_CASAMENTO':
