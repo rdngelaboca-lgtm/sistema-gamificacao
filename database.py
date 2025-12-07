@@ -5122,6 +5122,44 @@ def iniciar_onboarding_funcionario(funcionario_id):
                 conn.close()
     return False
 
+def resetar_onboarding_completo(funcionario_id):
+    """
+    Limpa TODOS os dados de onboarding do funcionário para permitir um reinício limpo,
+    mas mantém o funcionário no sistema.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                UPDATE OnboardingStatus
+                SET StatusWorkflow = 'Pendente',
+                    StatusAdmissional = 'Pendente',
+                    UltimaEtapa = NULL,
+                    Escolaridade = NULL,
+                    EstadoCivil = NULL,
+                    DataCasamento = NULL,
+                    NomeConjugue = NULL,
+                    CPFConjugue = NULL,
+                    QtdFilhos = 0,
+                    DadosFilhos = NULL,
+                    RG_FileID = NULL,
+                    CPF_FileID = NULL,
+                    CTPS_FileID = NULL,
+                    TituloEleitor_FileID = NULL
+                WHERE FuncionarioID = ?
+            """
+            cursor.execute(sql, funcionario_id)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"ERRO ao resetar onboarding para ID {funcionario_id}: {e}", exc_info=True)
+            return False
+        finally:
+            if conn:
+                conn.close()
+    return False
+
 def buscar_onboarding_status(funcionario_id):
     """Retorna o status completo e a última etapa de um funcionário."""
     conn = get_db_connection()
