@@ -533,8 +533,12 @@ async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             'pergunta': "Qual seu **Estado Civil**? (Ex: Solteiro, Casado, etc.)"
         },
         'ESTADO_CIVIL': { 
-            'proxima_etapa': 'ESTADO_CIVIL_CASADO_OPCIONAL', 'campo_db': ('EstadoCivil', texto_recebido),
-            'pergunta': "Qual seu **Estado Civil**? (Ex: Solteiro, Casado, etc.)" # Esta pergunta será sobrescrita pela lógica abaixo
+            # A próxima etapa é definida dinamicamente na lógica de ramificação (2a),
+            # mas deixamos 'FILHOS_QTD' como padrão de segurança.
+            'proxima_etapa': 'FILHOS_QTD', 
+            'campo_db': ('EstadoCivil', texto_recebido),
+            # Removemos a pergunta daqui pois ela já foi feita na etapa anterior
+            'pergunta': "Aguardando processamento do estado civil..." 
         },
         # --- CAMPOS OBRIGATÓRIOS SE CASADO ---
         'DATA_CASAMENTO': { 
