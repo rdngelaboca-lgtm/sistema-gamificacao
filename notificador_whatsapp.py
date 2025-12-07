@@ -31,9 +31,10 @@ def enviar_mensagem_whatsapp(numero, texto):
 
     # --- CORREÇÃO DE AUTENTICAÇÃO ---
     # A Z-API exige o 'Client-Token' no cabeçalho para validar a requisição.
+    # Puxamos o valor direto do seu arquivo config.py
     headers = {
         "Content-Type": "application/json",
-        "Client-Token": config.ZAPI_TOKEN  # <-- ADICIONADO: O Token obrigatório
+        "Client-Token": config.ZAPI_TOKEN  # <--- OBRIGATÓRIO PARA CORRIGIR O ERRO 400
     }
 
     try:
@@ -46,13 +47,14 @@ def enviar_mensagem_whatsapp(numero, texto):
             timeout=15
         )
 
-        # Z-API geralmente retorna 200 OK
+        # Z-API geralmente retorna 200 OK em caso de sucesso
         if response.status_code == 200:
             logger.info("WhatsApp enviado com sucesso (Z-API).")
             return True, "Mensagem enviada!"
         else:
             erro_msg = f"Erro Z-API: {response.status_code} - {response.text}"
             logger.error(erro_msg)
+            # Retorna o texto do erro para aparecer no pop-up do Tkinter
             return False, f"Falha no envio: {response.text}"
 
     except Exception as e:
