@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 def enviar_mensagem_whatsapp(numero, texto):
     """
-    Envia uma mensagem de texto via Z-API (Versão Limpa).
+    Envia uma mensagem de texto via Z-API.
     Retorna (True, msg) se sucesso, ou (False, erro) se falha.
     """
     # Validação básica da URL
@@ -29,9 +29,11 @@ def enviar_mensagem_whatsapp(numero, texto):
         "message": texto
     }
 
-    # --- CORREÇÃO FINAL: Apenas Content-Type, sem tokens de segurança extras ---
+    # --- CORREÇÃO DE AUTENTICAÇÃO ---
+    # A Z-API exige o 'Client-Token' no cabeçalho para validar a requisição.
     headers = {
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "Client-Token": config.ZAPI_TOKEN  # <-- ADICIONADO: O Token obrigatório
     }
 
     try:
