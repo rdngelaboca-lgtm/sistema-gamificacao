@@ -713,6 +713,8 @@ def excluir_funcionario(funcionario_id):
 
             # Grupos e Metas
             cursor.execute("DELETE FROM FuncionariosGrupos WHERE FuncionarioID = ?", funcionario_id)
+            # Onboarding (Correção do Erro FK)
+            cursor.execute("DELETE FROM OnboardingStatus WHERE FuncionarioID = ?", funcionario_id)
 
             # Outros (Notas Fiscais, Escalas)
             cursor.execute("DELETE FROM NotasFiscais WHERE FuncionarioID = ?", funcionario_id)
