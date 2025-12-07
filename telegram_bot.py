@@ -623,10 +623,10 @@ async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             
             # 2a. RAMIFICAÇÃO: ESTADO CIVIL
             if ultima_etapa == 'ESTADO_CIVIL':
-                valor_recebido = texto_recebido.strip().upper()
+                valor_recebido = texto_recebido.strip()
 
                 # 1. Decide o próximo passo ANTES de salvar no banco
-                if 'CASADO' in valor_recebido:
+                if 'CASADO' in valor_recebido.upper():
                     proxima_etapa = 'DATA_CASAMENTO'
                     mensagem_proxima = "Ok. Agora, digite a **Data de Casamento** (dd/mm/aaaa)."
                 else:
@@ -637,7 +637,7 @@ async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 database.atualizar_onboarding_etapa(
                     funcionario.FuncionarioID, 
                     proxima_etapa, # Já define a nova etapa para evitar repetição
-                    ('EstadoCivil', texto_recebido.strip()) # Salva o valor da resposta atual
+                    ('EstadoCivil', valor_recebido) # Salva o valor da resposta atual
                 )
 
                 # 3. Envia a próxima pergunta
