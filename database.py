@@ -723,7 +723,8 @@ def excluir_funcionario(funcionario_id):
             # Estoque (Contagens Realizadas) - Limpa itens das contagens deste funcionário, depois as contagens
             cursor.execute("DELETE FROM ItensContagemEstoque WHERE ContagemID IN (SELECT ContagemID FROM ContagensEstoque WHERE FuncionarioID = ?)", funcionario_id)
             cursor.execute("DELETE FROM ContagensEstoque WHERE FuncionarioID = ?", funcionario_id)
-
+            # Agendamentos (Eventos/Festas)
+            cursor.execute("DELETE FROM Agendamentos WHERE FuncionarioID = ?", funcionario_id)
             # 2. Exclusão do Registro Principal
             sql = "DELETE FROM Funcionarios WHERE FuncionarioID = ?"
             cursor.execute(sql, funcionario_id)
