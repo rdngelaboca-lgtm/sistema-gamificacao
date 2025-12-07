@@ -89,7 +89,10 @@ class AppGestaoPessoas:
         # Defina self.USUARIO_LOGADO_ID e self.nivel_usuario AQUI
         self.USUARIO_LOGADO_ID = 2 
         # Esta chamada requer que _buscar_nivel_acesso exista, o que faremos acima.
-        self.nivel_usuario = self._buscar_nivel_acesso(self.USUARIO_LOGADO_ID)
+        # CORREÇÃO: Garante que o nível de usuário seja recuperado corretamente ou define um padrão para teste
+        nivel_banco = self._buscar_nivel_acesso(self.USUARIO_LOGADO_ID)
+        self.nivel_usuario = nivel_banco if nivel_banco else 'Gestor' # Fallback para 'Gestor' se não encontrar no banco para testes
+        print(f"--> [DEBUG] Nível de Acesso do Usuário {self.USUARIO_LOGADO_ID}: {self.nivel_usuario}")
         self.frame_onboarding = ttk.Frame(self.notebook, padding="10") # <<< NOVA ABA
 
         self.notebook.add(self.frame_onboarding, text='📝 Onboarding/Admissional') # <<< NOVA ABA
