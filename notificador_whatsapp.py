@@ -9,8 +9,12 @@ logger = logging.getLogger(__name__)
 def enviar_mensagem_whatsapp(numero, texto):
     """
     Envia uma mensagem de texto via Z-API.
-    VERSÃO DEBUG: Token fixado manualmente para garantir autenticação.
+    VERSÃO PADRÃO: Sem Client-Token (pois está desativado no painel).
     """
+    # Validação básica da URL
+    if not config.WPP_API_URL:
+        return False, "URL da API não configurada no config.py"
+
     # 1. Limpeza do número
     numero_limpo = re.sub(r'\D', '', str(numero))
 
@@ -24,20 +28,21 @@ def enviar_mensagem_whatsapp(numero, texto):
         "message": texto
     }
 
-    # --- CORREÇÃO DEFINITIVA ---
-    # Fixamos o token aqui para eliminar erro de importação do config.py
-    TOKEN_FIXO = "2E1C0A469DC7263738C0F096"
+    # ==============================================================================
+    # 🛑 CORREÇÃO FINAL: REMOÇÃO DO CLIENT-TOKEN 🛑
+    # Como o item 3 do seu painel de segurança está "Não habilitado",
+    # nós NÃO devemos enviar o cabeçalho 'Client-Token'.
+    # A autenticação será feita apenas pelo Token que já está na URL (config.py).
+    # ==============================================================================
     
     headers = {
-        "Content-Type": "application/json",
-        "Client-Token": TOKEN_FIXO
+        "Content-Type": "application/json"
     }
 
-    # Log de Debug para confirmar o que está sendo enviado
-    logger.info(f"Disparando WPP para {numero_limpo}. Headers: {headers}")
-
     try:
-        # Usa a URL do config, mas garante os headers de segurança
+        logger.info(f"Tentando enviar WhatsApp via Z-API para {numero_limpo}...")
+
+        # A URL já contém o Instance ID e o Instance Token. Isso basta.
         response = requests.post(
             config.WPP_API_URL, 
             json=payload, 
