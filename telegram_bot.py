@@ -533,12 +533,10 @@ async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             'pergunta': "Qual seu **Estado Civil**? (Ex: Solteiro, Casado, etc.)"
         },
         'ESTADO_CIVIL': { 
-            # A próxima etapa é definida dinamicamente na lógica de ramificação (2a),
-            # mas deixamos 'FILHOS_QTD' como padrão de segurança.
-            'proxima_etapa': 'FILHOS_QTD', 
+            'proxima_etapa': 'FILHOS_QTD',  # Default seguro
             'campo_db': ('EstadoCivil', texto_recebido),
-            # Removemos a pergunta daqui pois ela já foi feita na etapa anterior
-            'pergunta': "Aguardando processamento do estado civil..." 
+            # Pergunta padrão caso o fluxo precise repetir
+            'pergunta': "Qual seu **Estado Civil**? (Ex: Solteiro, Casado, etc.)"
         },
         # --- CAMPOS OBRIGATÓRIOS SE CASADO ---
         'DATA_CASAMENTO': { 
@@ -626,20 +624,26 @@ async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             # 2a. RAMIFICAÇÃO: ESTADO CIVIL
             if ultima_etapa == 'ESTADO_CIVIL':
                 # Salva a resposta do estado civil
+                valor_recebido = texto_recebido.strip() # Garante que valor_recebido está definido
+                
+                # Salva no banco
                 database.atualizar_onboarding_etapa(funcionario.FuncionarioID, 'ESTADO_CIVIL', ('EstadoCivil', valor_recebido))
                 
                 # Decide o próximo passo
                 if 'CASADO' in valor_recebido.upper():
                     proxima_etapa = 'DATA_CASAMENTO'
+                    # Mensagem de sucesso + próxima instrução
                     await context.bot.send_message(chat_id, "Ok. Agora, digite a **Data de Casamento** (dd/mm/aaaa).")
+                    # Atualiza o estado para a próxima
                     database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa)
                 else:
                     proxima_etapa = 'FILHOS_QTD'
-                    # Pula direto para pergunta de filhos se não for casado
+                    # Mensagem da próxima instrução (usando a do dicionário para consistência)
                     await context.bot.send_message(chat_id, WORKFLOW[proxima_etapa]['pergunta'])
+                    # Atualiza o estado
                     database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa)
                 
-                return # <--- OBRIGATÓRIO: Para a execução aqui e espera o usuário responder de novo.
+                return # <--- OBRIGATÓRIO: Impede que caia no bloco genérico abaixo
 
             # 2b. VALIDAÇÃO E AVANÇO: DATA CASAMENTO
             if ultima_etapa == 'DATA_CASAMENTO':
@@ -706,8 +710,8 @@ async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 return # <--- OBRIGATÓRIO
 
             # 2f. SALVAMENTO PADRÃO DE DADO TEXTO (Genérico - ex: Escolaridade, Nome Cônjuge)
-            # Este bloco pega qualquer etapa que não tenha lógica especial acima
-            if etapa_anterior_config and 'proxima_etapa' in etapa_anterior_config:
+            # ADICIONADO: 'ESTADO_CIVIL' na lista de exclusão para garantir que só o bloco 2a processe ele.
+            if etapa_anterior_config and 'proxima_etapa' in etapa_anterior_config and ultima_etapa != 'ESTADO_CIVIL':
                 proxima_etapa = etapa_anterior_config['proxima_etapa']
                 
                 # Salva no banco se tiver campo definido
