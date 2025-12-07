@@ -66,12 +66,12 @@ import time
 import os
 from tkinter import filedialog
 from tkcalendar import DateEntry
-import requests
 import comunicado_generator
 import file_utils
 import recibo_generator
 import config
-
+import requests
+import json
 
 class AppGestaoPessoas:
     def __init__(self, root):
@@ -231,6 +231,7 @@ class AppGestaoPessoas:
         
         ttk.Button(frame_botoes, text="🔄 Atualizar Lista", command=self.carregar_onboarding_lista).pack(side="left", padx=5)
         ttk.Button(frame_botoes, text="📂 Ver Documentos Enviados", command=self.abrir_janela_documentos_onboarding).pack(side="left", padx=5)
+        ttk.Button(frame_botoes, text="📋 Ver Dados Cadastrais", command=self.ver_dados_cadastrais_selecionado).pack(side="left", padx=5)
         self.btn_aprovar_admissional = ttk.Button(frame_botoes, text="✅ Aprovar Exame Admissional", command=self.aprovar_exame_admissional_rh)
         self.btn_aprovar_admissional.pack(side="right", padx=5)
 
@@ -336,20 +337,104 @@ class AppGestaoPessoas:
             else:
                  ttk.Label(frame, text=f"❌ {doc_name}: Não enviado ou File ID inválido.").pack(anchor='w', pady=2)
 
+    def ver_dados_cadastrais_selecionado(self):
+        """Exibe os dados textuais (Escolaridade, Família) salvos no banco."""
+        selecionado = self.tree_onboarding.focus()
+        if not selecionado: return
+
+        # Recupera dados da Treeview
+        vals = self.tree_onboarding.item(selecionado, 'values')
+        funcionario_id, nome = vals[0], vals[1]
+
+        # Busca dados brutos no banco
+        status = database.buscar_onboarding_status(funcionario_id)
+        if not status: 
+            messagebox.showinfo("Aviso", "Sem dados de onboarding encontrados.", parent=self.root)
+            return
+
+        # Cria Popup
+        popup = Toplevel(self.root)
+        popup.title(f"Ficha Cadastral - {nome}")
+        popup.geometry("500x600")
+
+        txt = tk.Text(popup, font=("Consolas", 10), padx=10, pady=10)
+        txt.pack(fill="both", expand=True)
+
+        # Monta o relatório
+        relatorio = f"=== DADOS PESSOAIS ===\n"
+        relatorio += f"Funcionário: {nome} (ID: {funcionario_id})\n"
+        relatorio += f"Escolaridade: {status.Escolaridade or '---'}\n"
+        relatorio += f"Estado Civil: {status.EstadoCivil or '---'}\n"
+
+        if status.EstadoCivil and 'CASADO' in status.EstadoCivil.upper():
+            relatorio += f"Data Casamento: {status.DataCasamento or '---'}\n"
+            relatorio += f"Cônjuge: {status.NomeConjugue or '---'}\n"
+            relatorio += f"CPF Cônjuge: {status.CPFConjugue or '---'}\n"
+
+        relatorio += f"\n=== DEPENDENTES ({status.QtdFilhos or 0}) ===\n"
+        if status.DadosFilhos:
+            try:
+                filhos = json.loads(status.DadosFilhos)
+                for i, f in enumerate(filhos, 1):
+                    relatorio += f"\n[Filho {i}]\n"
+                    relatorio += f"Nome: {f.get('Nome', '---')}\n"
+                    relatorio += f"Nasc: {f.get('Nasc', '---')}\n"
+                    relatorio += f"CPF:  {f.get('CPF', '---')}\n"
+            except json.JSONDecodeError:
+                relatorio += "\n[Erro ao ler dados dos filhos - Formato inválido]\n"
+        else:
+            relatorio += "Nenhum filho cadastrado.\n"
+
+        txt.insert("1.0", relatorio)
+        txt.config(state="disabled") # Apenas leitura
 
     def disparar_download_documento(self, file_id, doc_name, parent_popup):
-        """Dispara a lógica de download de um File ID do Telegram (similar ao agendador)."""
-        
-        # A lógica de download é complexa (getFile, download_url, salvar no disco).
-        # Vamos simular o processo e enviar o aviso.
+        """Baixa o arquivo real da API do Telegram e salva onde o usuário escolher."""
+        try:
+            # 1. Define extensão provável
+            ext = ".jpg" # Padrão fotos Telegram
+            if "pdf" in doc_name.lower(): ext = ".pdf"
 
-        messagebox.showinfo("Aviso", 
-                            f"Processo de download do arquivo '{doc_name}' (ID: {file_id[:10]}...) iniciado.\n"
-                            "O arquivo será salvo na pasta 'downloads' e aberto automaticamente.", 
-                            parent=parent_popup)
-        # ⚠️ Implementação real requer a lógica do Agendador (getFile, download_url, save) ⚠️
-        # E precisaria ser feito em uma thread para não travar a UI.
-        # Por hora, a função de busca do database cumpre a Regra 4.
+            # 2. Pede ao usuário onde salvar
+            caminho_destino = filedialog.asksaveasfilename(
+                title=f"Salvar {doc_name}",
+                defaultextension=ext,
+                initialfile=f"{doc_name}_{file_id[:5]}{ext}",
+                parent=parent_popup
+            )
+
+            if not caminho_destino: return # Cancelado pelo usuário
+
+            # 3. Obtém o caminho do arquivo na API Telegram
+            token = config.TELEGRAM_TOKEN
+            url_info = f"https://api.telegram.org/bot{token}/getFile?file_id={file_id}"
+
+            r_info = requests.get(url_info, timeout=10)
+            if r_info.status_code != 200:
+                messagebox.showerror("Erro API", "Falha ao localizar arquivo no Telegram.", parent=parent_popup)
+                return
+
+            file_path_remoto = r_info.json().get('result', {}).get('file_path')
+            if not file_path_remoto:
+                messagebox.showerror("Erro API", "Caminho remoto não encontrado.", parent=parent_popup)
+                return
+
+            # 4. Baixa o conteúdo binário
+            url_download = f"https://api.telegram.org/file/bot{token}/{file_path_remoto}"
+            r_content = requests.get(url_download, timeout=30)
+
+            if r_content.status_code == 200:
+                with open(caminho_destino, 'wb') as f:
+                    f.write(r_content.content)
+
+                messagebox.showinfo("Sucesso", f"Download concluído!\nSalvo em: {caminho_destino}", parent=parent_popup)
+                file_utils.abrir_arquivo(caminho_destino)
+            else:
+                messagebox.showerror("Erro Download", f"Falha ao baixar bytes: {r_content.status_code}", parent=parent_popup)
+
+        except Exception as e:
+            logger.error(f"Erro no download manual: {e}", exc_info=True)
+            messagebox.showerror("Erro Crítico", f"Falha no download: {e}", parent=parent_popup)
 
 
     def visualizar_documento_selecionado(self):
