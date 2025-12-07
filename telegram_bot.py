@@ -623,26 +623,26 @@ async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             
             # 2a. RAMIFICAÇÃO: ESTADO CIVIL
             if ultima_etapa == 'ESTADO_CIVIL':
-                # Salva a resposta do estado civil
-                valor_recebido = texto_recebido.strip() # Garante que valor_recebido está definido
-                
-                # Salva no banco
-                database.atualizar_onboarding_etapa(funcionario.FuncionarioID, 'ESTADO_CIVIL', ('EstadoCivil', valor_recebido))
-                
-                # Decide o próximo passo
-                if 'CASADO' in valor_recebido.upper():
+                valor_recebido = texto_recebido.strip().upper()
+
+                # 1. Decide o próximo passo ANTES de salvar no banco
+                if 'CASADO' in valor_recebido:
                     proxima_etapa = 'DATA_CASAMENTO'
-                    # Mensagem de sucesso + próxima instrução
-                    await context.bot.send_message(chat_id, "Ok. Agora, digite a **Data de Casamento** (dd/mm/aaaa).")
-                    # Atualiza o estado para a próxima
-                    database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa)
+                    mensagem_proxima = "Ok. Agora, digite a **Data de Casamento** (dd/mm/aaaa)."
                 else:
                     proxima_etapa = 'FILHOS_QTD'
-                    # Mensagem da próxima instrução (usando a do dicionário para consistência)
-                    await context.bot.send_message(chat_id, WORKFLOW[proxima_etapa]['pergunta'])
-                    # Atualiza o estado
-                    database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa)
-                
+                    mensagem_proxima = WORKFLOW['FILHOS_QTD']['pergunta']
+
+                # 2. Atualiza o dado 'EstadoCivil' E já muda a 'UltimaEtapa' num único comando atômico
+                database.atualizar_onboarding_etapa(
+                    funcionario.FuncionarioID, 
+                    proxima_etapa, # Já define a nova etapa para evitar repetição
+                    ('EstadoCivil', texto_recebido.strip()) # Salva o valor da resposta atual
+                )
+
+                # 3. Envia a próxima pergunta
+                await context.bot.send_message(chat_id, mensagem_proxima)
+
                 return # <--- OBRIGATÓRIO: Impede que caia no bloco genérico abaixo
 
             # 2b. VALIDAÇÃO E AVANÇO: DATA CASAMENTO
@@ -896,12 +896,18 @@ async def _interceptar_comandos_e_pendencias(update: Update, context: ContextTyp
     if status_onboarding:
         # Bloqueio 0A: Se o Workflow de Documentos está incompleto (força a continuar o fluxo)
         if status_onboarding.StatusWorkflow != 'Completo':
-             await context.bot.send_message(chat_id, 
-                                       f"🛑 **Ação Obrigatória (Onboarding):** Seu registro de documentos e informações de registro está **{status_onboarding.StatusWorkflow}**.\n\n"
-                                       "Você deve finalizar este processo antes de usar o sistema de Gamificação.",
-                                       parse_mode='Markdown')
-             await onboarding_handler(update, context)
-             return True # Bloqueia
+            # Se já está 'Em Progresso', apenas repassa para o handler SEM mandar mensagem de bloqueio (evita spam)
+            if status_onboarding.StatusWorkflow == 'Em Progresso':
+                await onboarding_handler(update, context)
+                return True 
+
+            # Se está 'Pendente' (ainda não começou ou parou), manda o aviso
+            await context.bot.send_message(chat_id, 
+                                    f"🛑 **Ação Obrigatória (Onboarding):** Seu registro de documentos está pendente.\n"
+                                    "Você deve finalizar este processo antes de usar o sistema.",
+                                    parse_mode='Markdown')
+            await onboarding_handler(update, context)
+            return True # Bloqueia
 
         # Bloqueio 0B: Se o Workflow de Documentos está completo, mas o Admissional está Pendente
         if status_onboarding.StatusWorkflow == 'Completo' and status_onboarding.StatusAdmissional == 'Pendente':
