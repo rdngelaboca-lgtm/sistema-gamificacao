@@ -232,6 +232,7 @@ class AppGestaoPessoas:
         ttk.Button(frame_botoes, text="🔄 Atualizar Lista", command=self.carregar_onboarding_lista).pack(side="left", padx=5)
         ttk.Button(frame_botoes, text="📂 Ver Documentos Enviados", command=self.abrir_janela_documentos_onboarding).pack(side="left", padx=5)
         ttk.Button(frame_botoes, text="📋 Ver Dados Cadastrais", command=self.ver_dados_cadastrais_selecionado).pack(side="left", padx=5)
+        ttk.Button(frame_botoes, text="🗑️ Excluir Cadastro", command=self.excluir_candidato_onboarding).pack(side="left", padx=5)
         self.btn_aprovar_admissional = ttk.Button(frame_botoes, text="✅ Aprovar Exame Admissional", command=self.aprovar_exame_admissional_rh)
         self.btn_aprovar_admissional.pack(side="right", padx=5)
 
@@ -297,6 +298,39 @@ class AppGestaoPessoas:
                 messagebox.showinfo("Sucesso", "Admissional Aprovado! Acesso liberado no sistema.")
             else:
                 messagebox.showerror("Erro", "Falha ao atualizar o status no banco de dados.")
+
+    def excluir_candidato_onboarding(self):
+        """Exclui permanentemente o cadastro do candidato selecionado."""
+        selecionado = self.tree_onboarding.focus()
+        if not selecionado:
+            messagebox.showwarning("Aviso", "Selecione um funcionário na lista para excluir.")
+            return
+
+        # Recupera dados da linha selecionada
+        dados = self.tree_onboarding.item(selecionado, 'values')
+        funcionario_id = dados[0]
+        nome = dados[1]
+
+        # Confirmação de Segurança
+        confirmacao = messagebox.askyesno(
+            "Confirmar Exclusão",
+            f"Tem certeza que deseja excluir o cadastro de '{nome}'?\n\n"
+            "⚠️ ATENÇÃO: Esta ação apagará TODOS os dados, documentos e histórico deste funcionário permanentemente.\n"
+            "Não será possível desfazer.",
+            icon='warning',
+            default='no',
+            parent=self.root
+        )
+
+        if confirmacao:
+            try:
+                # Usa a função do database que já faz a limpeza em cascata
+                database.excluir_funcionario(funcionario_id)
+                messagebox.showinfo("Sucesso", "Cadastro excluído com sucesso!", parent=self.root)
+                self.carregar_onboarding_lista() # Atualiza a lista
+            except Exception as e:
+                logger.error(f"Erro ao excluir candidato {funcionario_id}: {e}", exc_info=True)
+                messagebox.showerror("Erro", f"Falha ao excluir cadastro:\n{e}", parent=self.root)
 
     def abrir_janela_documentos_onboarding(self):
         """Abre uma janela para visualizar os File IDs dos documentos enviados."""
