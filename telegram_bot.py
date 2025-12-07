@@ -496,6 +496,7 @@ async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # CORREÇÃO CRÍTICA: Se o registro existe mas o campo é NULL, força 'INICIO'
     # getattr retorna None se o campo existir e for None. O 'or' corrige isso.
     ultima_etapa = getattr(status_onboarding, 'UltimaEtapa', 'INICIO') or 'INICIO'
+    ultima_etapa = ultima_etapa.strip() # Remove espaços que impedem o 'if' de funcionar
 
     # Se a última mensagem foi uma foto, tentamos processar o File ID
     texto_recebido = update.message.text
@@ -623,10 +624,10 @@ async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             
             # 2a. RAMIFICAÇÃO: ESTADO CIVIL
             if ultima_etapa == 'ESTADO_CIVIL':
-                valor_recebido = texto_recebido.strip()
+                valor_recebido = texto_recebido.strip().upper()
 
                 # 1. Decide o próximo passo ANTES de salvar no banco
-                if 'CASADO' in valor_recebido.upper():
+                if 'CASADO' in valor_recebido:
                     proxima_etapa = 'DATA_CASAMENTO'
                     mensagem_proxima = "Ok. Agora, digite a **Data de Casamento** (dd/mm/aaaa)."
                 else:
@@ -637,7 +638,7 @@ async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 database.atualizar_onboarding_etapa(
                     funcionario.FuncionarioID, 
                     proxima_etapa, # Já define a nova etapa para evitar repetição
-                    ('EstadoCivil', valor_recebido) # Salva o valor da resposta atual
+                    ('EstadoCivil', texto_recebido.strip()) # Salva o valor da resposta atual
                 )
 
                 # 3. Envia a próxima pergunta
@@ -894,10 +895,13 @@ async def _interceptar_comandos_e_pendencias(update: Update, context: ContextTyp
     status_onboarding = database.buscar_onboarding_status(funcionario.FuncionarioID)
 
     if status_onboarding:
-        # Bloqueio 0A: Se o Workflow de Documentos está incompleto (força a continuar o fluxo)
-        if status_onboarding.StatusWorkflow != 'Completo':
-            # Se já está 'Em Progresso', apenas repassa para o handler SEM mandar mensagem de bloqueio (evita spam)
-            if status_onboarding.StatusWorkflow == 'Em Progresso':
+        # Normaliza a string removendo espaços extras que causam erro na comparação
+        status_atual = status_onboarding.StatusWorkflow.strip()
+
+        # Bloqueio 0A: Se o Workflow de Documentos está incompleto
+        if status_atual != 'Completo':
+            # Se já está 'Em Progresso', apenas repassa para o handler (silencioso)
+            if status_atual == 'Em Progresso':
                 await onboarding_handler(update, context)
                 return True 
 
