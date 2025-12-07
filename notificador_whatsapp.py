@@ -9,54 +9,51 @@ logger = logging.getLogger(__name__)
 def enviar_mensagem_whatsapp(numero, texto):
     """
     Envia uma mensagem de texto via Z-API.
-    VERSÃO PADRÃO: Sem Client-Token (pois está desativado no painel).
+    VERSÃO DEBUG LIMPA: Deixa o 'requests' gerenciar os cabeçalhos.
     """
-    # Validação básica da URL
+    # 1. Validação básica
     if not config.WPP_API_URL:
         return False, "URL da API não configurada no config.py"
 
-    # 1. Limpeza do número
+    # 2. Limpeza do número
     numero_limpo = re.sub(r'\D', '', str(numero))
-
-    # Garante o código do país (Brasil 55) se não tiver
+    
+    # Se o número for curto (ex: 4499998888), adiciona 55. 
+    # Se for longo (ex: 554499998888), mantém.
     if len(numero_limpo) <= 11:
         numero_limpo = '55' + numero_limpo
 
-    # 2. Monta o Payload
+    # 3. Payload
     payload = {
         "phone": numero_limpo,
         "message": texto
     }
 
-    # ==============================================================================
-    # 🛑 CORREÇÃO FINAL: REMOÇÃO DO CLIENT-TOKEN 🛑
-    # Como o item 3 do seu painel de segurança está "Não habilitado",
-    # nós NÃO devemos enviar o cabeçalho 'Client-Token'.
-    # A autenticação será feita apenas pelo Token que já está na URL (config.py).
-    # ==============================================================================
-    
-    headers = {
-        "Content-Type": "application/json"
-    }
+    # --- DEBUG: Mostra exatamente o que será enviado ---
+    # (Isso aparecerá no seu terminal quando você clicar em enviar)
+    logger.info(f"--- INICIANDO ENVIO Z-API ---")
+    logger.info(f"URL: {config.WPP_API_URL}")
+    logger.info(f"Telefone Processado: {numero_limpo}")
+    # Não definimos headers manualmente. O requests fará isso.
 
     try:
-        logger.info(f"Tentando enviar WhatsApp via Z-API para {numero_limpo}...")
-
-        # A URL já contém o Instance ID e o Instance Token. Isso basta.
+        # Usamos json=payload. O requests cria o Content-Type automaticamente.
+        # Removemos qualquer parâmetro 'headers=' para garantir pureza.
         response = requests.post(
             config.WPP_API_URL, 
             json=payload, 
-            headers=headers, 
-            timeout=15
+            timeout=20
         )
 
+        # Loga a resposta completa para análise em caso de erro
         if response.status_code == 200:
-            logger.info("WhatsApp enviado com sucesso (Z-API).")
+            logger.info("✅ Sucesso Z-API: Mensagem enviada!")
             return True, "Mensagem enviada!"
         else:
-            erro_msg = f"Erro Z-API: {response.status_code} - {response.text}"
+            erro_msg = f"❌ Erro Z-API ({response.status_code}): {response.text}"
             logger.error(erro_msg)
-            return False, f"Falha no envio: {response.text}"
+            # Retorna o erro detalhado para o pop-up
+            return False, f"Z-API recusou: {response.text}"
 
     except Exception as e:
         erro_critico = f"Erro de conexão: {str(e)}"
