@@ -6806,12 +6806,13 @@ def listar_pendencias_gerais_hoje():
                 WHERE 
                     TA.DataFimVigencia IS NULL
                     AND TA.FuncionarioID IS NOT NULL
-                    -- Regras de Agendamento (Igual ao Painel Kanban)
+                    -- Regras de Agendamento (CORRIGIDO: Única apenas HOJE)
                     AND (
                         TA.TipoFrequencia = 'Diaria'
                         OR (TA.TipoFrequencia = 'Semanal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(weekday, GETDATE()))
                         OR (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, GETDATE()))
-                        OR (TA.TipoFrequencia = 'Unica' AND CONVERT(date, TA.DataInicioVigencia) <= CONVERT(date, GETDATE()))
+                        -- Alteração aqui: Mudado de <= para =. Só mostra tarefas únicas agendadas estritamente para hoje.
+                        OR (TA.TipoFrequencia = 'Unica' AND CONVERT(date, TA.DataInicioVigencia) = CONVERT(date, GETDATE()))
                     )
                     -- Ignora quem está de folga hoje
                     AND (F.DiaDeFolga IS NULL OR F.DiaDeFolga = 0 OR F.DiaDeFolga != DATEPART(weekday, GETDATE()))
