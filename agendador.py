@@ -67,6 +67,14 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 import requests
 import urllib.parse
 from collections import deque
+import threading # Adicionado para concorrência
+
+def run_threaded(job_func):
+    """Executa uma função agendada em uma nova thread para não bloquear o loop principal."""
+    job_thread = threading.Thread(target=job_func)
+    job_thread.start()
+
+
 
 cache_tarefas_enviadas = deque(maxlen=500)
 
@@ -253,20 +261,40 @@ def verificar_e_delegar_tarefas_de_folga():
         if not tarefas_do_dia: continue
 
         for tarefa in tarefas_do_dia:
-            # --- Lógica de Roteamento (Cozinha vs Atendimento) ---
-            destinos = []
-            setor_tarefa = tarefa.Setor.lower() if tarefa.Setor else ""
-            cargo_func = funcionario.Cargo.lower() if funcionario.Cargo else ""
+            # --- Lógica de Roteamento (Mapeamento Robusto) ---
+            destinos = set()
 
-            if 'cozinha' in setor_tarefa or 'produção' in setor_tarefa:
-                destinos.append(config.COZINHA_GROUP_CHAT_ID)
-            elif 'atendimento' in setor_tarefa or 'loja' in setor_tarefa:
-                destinos.append(config.ATENDIMENTO_GROUP_CHAT_ID)
-            else:
-                # Fallback pelo Cargo
-                if 'cozinha' in cargo_func: destinos.append(config.COZINHA_GROUP_CHAT_ID)
-                elif 'atendimento' in cargo_func: destinos.append(config.ATENDIMENTO_GROUP_CHAT_ID)
-                else: destinos.append(config.FOLGA_GROUP_CHAT_ID)
+            # Definição de Palavras-Chave e seus destinos (Fácil manutenção)
+            # Ordem de prioridade: Setor da Tarefa > Cargo do Funcionário
+            MAPA_ROTEAMENTO = {
+                'cozinha': config.COZINHA_GROUP_CHAT_ID,
+                'produção': config.COZINHA_GROUP_CHAT_ID,
+                'atendimento': config.ATENDIMENTO_GROUP_CHAT_ID,
+                'loja': config.ATENDIMENTO_GROUP_CHAT_ID,
+                # Adicione novos mapeamentos aqui (ex: 'estoque': ID_DO_GRUPO)
+            }
+
+            # 1. Tenta rotear pelo Setor da Tarefa
+            texto_analise_primaria = (tarefa.Setor or "").lower()
+            encontrou_destino = False
+            for chave, chat_id in MAPA_ROTEAMENTO.items():
+                if chave in texto_analise_primaria:
+                    destinos.add(chat_id)
+                    encontrou_destino = True
+                    break # Prioridade encontrada
+
+            # 2. Se não achou pelo setor, tenta pelo Cargo do Funcionário (Fallback 1)
+            if not encontrou_destino:
+                texto_analise_secundaria = (funcionario.Cargo or "").lower()
+                for chave, chat_id in MAPA_ROTEAMENTO.items():
+                    if chave in texto_analise_secundaria:
+                        destinos.add(chat_id)
+                        encontrou_destino = True
+                        break
+
+            # 3. Fallback Final (Grupo de Folga Geral)
+            if not encontrou_destino:
+                destinos.add(config.FOLGA_GROUP_CHAT_ID)
             
             # Adiciona a tarefa à lista de cada grupo destino
             for chat_id in set(destinos):
@@ -311,7 +339,7 @@ def verificar_e_delegar_tarefas_de_folga():
             print(f"--> Drop com {qtd} missões enviado para o grupo {chat_id}.")
         except Exception as e:
             print(f"--> Erro ao enviar Drop: {e}")
-            
+
 def executar_fechamento_mensal():
     """
     Executa o fechamento separado por setores (Cozinha e Loja).
@@ -622,16 +650,21 @@ def processar_downloads_notas_fiscais():
             download_sucesso = True
             logger.info(f"--> Download SUCESSO! Foto da NotaFiscalID {nf_id} salva em {local_file_path}")
 
+        except requests.exceptions.RequestException as req_err:
+            logger.warning(f"--> Erro de REDE ao baixar NF {nf_id}: {req_err}")
+            continue # Tenta na próxima execução
         except Exception as e:
-            logger.error(f"--> FALHA GERAL ao baixar foto da NotaFiscalID {nf_id}. Erro: {e}. Tentaremos novamente.", exc_info=True)
-            continue
+            logger.error(f"--> ERRO DE LÓGICA/ARQUIVO ao baixar NF {nf_id}: {e}", exc_info=True)
+            continue # Pula para a próxima NF para não travar o loop
 
+        # Bloco de Persistência (Separado para clareza)
         if download_sucesso and local_file_path:
             try:
                 database.finalizar_download_nota_fiscal(nf_id, local_file_path)
-                logger.info(f"--> Registro da NotaFiscalID {nf_id} finalizado no banco com path: {local_file_path}")
-            except Exception as db_update_err:
-                 logger.error(f"--> FALHA GERAL ao finalizar registro da NotaFiscalID {nf_id}. Erro: {db_update_err}. Tentaremos novamente.", exc_info=True)
+                logger.info(f"--> Registro da NotaFiscalID {nf_id} finalizado no banco.")
+            except Exception as db_err:
+                logger.error(f"--> ERRO DE BANCO ao salvar caminho da NF {nf_id}: {db_err}", exc_info=True)
+                # Não removemos o arquivo, pois o download foi sucesso. O próximo loop tentará baixar e sobrescrever, ou podemos implementar lógica de retry.
 
 if __name__ == "__main__":
     print("--- 🤖 Robô Agendador 2.0 Iniciado 🤖 ---")
@@ -641,12 +674,14 @@ if __name__ == "__main__":
     schedule.every(1).minutes.do(verificar_lembretes_intermediarios)
     schedule.every(1).minutes.do(verificar_fim_jornada)
     schedule.every(30).seconds.do(verificar_e_enviar_tarefas_de_grupo)
-    
+
     schedule.every().day.at("08:00").do(verificar_e_executar_fechamento)
     schedule.every().day.at("09:05").do(verificar_e_delegar_tarefas_de_folga)
     schedule.every().day.at("09:00").do(verificar_e_enviar_lembretes_comunicados)
-    schedule.every(1).minutes.do(processar_downloads_pendentes_sync)
-    schedule.every(1).minutes.do(processar_downloads_notas_fiscais)
+
+    # CORREÇÃO: Downloads agora rodam em threads separadas para não bloquear o agendador
+    schedule.every(1).minutes.do(run_threaded, processar_downloads_pendentes_sync)
+    schedule.every(1).minutes.do(run_threaded, processar_downloads_notas_fiscais)
 
 
     while True:
