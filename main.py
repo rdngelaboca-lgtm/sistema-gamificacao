@@ -98,7 +98,6 @@ class App:
         self.frame_ranking = ttk.Frame(self.notebook)
         self.frame_relatorios = ttk.Frame(self.notebook)
         self.frame_feedbacks = ttk.Frame(self.notebook)
-        self.frame_solicitacoes = ttk.Frame(self.notebook)
         self.frame_agenda = ttk.Frame(self.notebook)
         self.frame_loja = ttk.Frame(self.notebook)
         self.frame_metas = ttk.Frame(self.notebook, padding="10")
@@ -114,7 +113,6 @@ class App:
         self.notebook.add(self.frame_ranking, text='Ranking')
         self.notebook.add(self.frame_relatorios, text='Relatórios')
         self.notebook.add(self.frame_feedbacks, text='Feedbacks')
-        self.notebook.add(self.frame_solicitacoes, text='Feedbacks Pendentes')
         self.notebook.add(self.frame_agenda, text='Agenda Semanal')
         self.notebook.add(self.frame_loja, text='Loja e Resgates')
         self.notebook.add(self.frame_metas, text='Gestão de Metas')
@@ -130,7 +128,6 @@ class App:
         self.criar_aba_ranking()
         self.criar_aba_relatorios()
         self.criar_aba_feedbacks()
-        self.criar_aba_solicitacoes()
         self.criar_aba_agenda()
         self.criar_aba_loja()
         self.criar_aba_metas()
@@ -1619,7 +1616,6 @@ class App:
                     "Ranking": self.atualizar_ranking,
                     "Gerenciar Funcionários": self.atualizar_lista_funcionarios,
                     "Catálogo de Tarefas": self.atualizar_catalogo_tarefas,
-                    "Feedbacks Pendentes": self.atualizar_lista_solicitacoes,
                     "Loja e Resgates": self.carregar_dados_loja,
                     # "Gestão de Metas" é tratado abaixo
                     "Gerenciar Conquistas": self.atualizar_lista_conquistas,
@@ -2604,114 +2600,6 @@ class App:
         self.tree_analise_tarefas.column('Total Problemático', anchor='center')
         
         self.tree_analise_tarefas.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-
-    def criar_aba_solicitacoes(self):
-        """Cria a interface da aba de solicitações de feedback."""
-        # Layout principal com dois painéis
-        main_frame = ttk.Frame(self.frame_solicitacoes, padding="10")
-        main_frame.pack(fill=tk.BOTH, expand=True)
-        main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(0, weight=1)
-
-        # Painel da Esquerda: Lista de Solicitações
-        frame_lista = ttk.LabelFrame(main_frame, text="Solicitações Pendentes", padding="10")
-        frame_lista.grid(row=0, column=0, sticky="ns", padx=(0, 10))
-
-        cols = ('ID', 'Funcionário', 'Data')
-        self.tree_solicitacoes = ttk.Treeview(frame_lista, columns=cols, show='headings', selectmode='browse')
-        self.tree_solicitacoes.heading('ID', text='ID')
-        self.tree_solicitacoes.column('ID', width=40)
-        self.tree_solicitacoes.heading('Funcionário', text='Funcionário')
-        self.tree_solicitacoes.column('Funcionário', width=200)
-        self.tree_solicitacoes.heading('Data', text='Data')
-        self.tree_solicitacoes.column('Data', width=120)
-        self.tree_solicitacoes.pack(fill=tk.BOTH, expand=True)
-        self.tree_solicitacoes.bind('<<ListboxSelect>>', self.on_solicitacao_select)
-        
-        # Adicionamos um dicionário para guardar os dados completos
-        self.dados_solicitacoes = {}
-
-        # Painel da Direita: Detalhes e Resposta
-        frame_detalhes = ttk.LabelFrame(main_frame, text="Responder Solicitação", padding="10")
-        frame_detalhes.grid(row=0, column=1, sticky="nsew")
-        frame_detalhes.rowconfigure(1, weight=1)
-        frame_detalhes.columnconfigure(0, weight=1)
-        
-        ttk.Label(frame_detalhes, text="Assunto Solicitado:").grid(row=0, column=0, sticky="w")
-        self.lbl_assunto_feedback = ttk.Label(frame_detalhes, text="...", wraplength=400, font=("Arial", 10, "italic"))
-        self.lbl_assunto_feedback.grid(row=1, column=0, sticky="new", pady=5)
-        
-        ttk.Label(frame_detalhes, text="Escreva seu Feedback Abaixo:").grid(row=2, column=0, sticky="w", pady=(10, 0))
-        self.txt_resposta_feedback = tk.Text(frame_detalhes, height=10)
-        self.txt_resposta_feedback.grid(row=3, column=0, sticky="nsew", pady=5)
-        frame_detalhes.rowconfigure(3, weight=1)
-
-        btn_enviar_resposta = ttk.Button(frame_detalhes, text="Enviar Resposta e Notificar Funcionário", command=self.enviar_resposta_feedback)
-        btn_enviar_resposta.grid(row=4, column=0, sticky="e", pady=10)
-
-        # Carrega os dados na lista
-        self.atualizar_lista_solicitacoes()
-
-    def atualizar_lista_solicitacoes(self):
-        """Limpa e recarrega a lista de solicitações de feedback pendentes."""
-        for i in self.tree_solicitacoes.get_children():
-            self.tree_solicitacoes.delete(i)
-        
-        self.dados_solicitacoes.clear()
-        solicitacoes = database.listar_solicitacoes_pendentes()
-        for sol in solicitacoes:
-            self.tree_solicitacoes.insert("", "end", values=(sol.SolicitacaoID, sol.NomeCompleto, sol.DataSolicitacao.strftime("%d/%m/%Y %H:%M")))
-            # Guarda o objeto completo para uso posterior
-            self.dados_solicitacoes[sol.SolicitacaoID] = sol
-
-    def on_solicitacao_select(self, event):
-        """Mostra o assunto da solicitação selecionada."""
-        selecionado = self.tree_solicitacoes.focus()
-        if not selecionado:
-            return
-
-        solicitacao_id = self.tree_solicitacoes.item(selecionado, 'values')[0]
-        dados_completos = self.dados_solicitacoes.get(int(solicitacao_id))
-
-        if dados_completos:
-            self.lbl_assunto_feedback.config(text=dados_completos.TextoAssunto)
-            self.txt_resposta_feedback.delete("1.0", tk.END) # Limpa a caixa de texto
-
-    def enviar_resposta_feedback(self):
-        """Salva a resposta do gestor no banco e notifica o funcionário."""
-        selecionado = self.tree_solicitacoes.focus()
-        if not selecionado:
-            messagebox.showwarning("Aviso", "Por favor, selecione uma solicitação na lista para responder.")
-            return
-
-        solicitacao_id = self.tree_solicitacoes.item(selecionado, 'values')[0]
-        texto_resposta = self.txt_resposta_feedback.get("1.0", tk.END).strip()
-
-        if not texto_resposta:
-            messagebox.showwarning("Aviso", "O campo de feedback não pode estar vazio.")
-            return
-
-        sucesso_db = database.responder_solicitacao_feedback(solicitacao_id, texto_resposta)
-
-        if sucesso_db:
-            # Busca os dados do funcionário para notificar
-            dados_notificacao = database.buscar_dados_para_notificacao_feedback(solicitacao_id)
-            if dados_notificacao:
-                mensagem_telegram = (
-                f"Olá, <b>{dados_notificacao.NomeCompleto}</b>! 👋\n\n"
-                "Você recebeu um novo feedback do seu gestor:\n\n"
-                f"<i>\"{texto_resposta}\"</i>\n\n"
-                "Continue com o bom trabalho!"
-            )
-                notificador_telegram.enviar_mensagem(dados_notificacao.ChatIDTelegram, mensagem_telegram)
-            
-            messagebox.showinfo("Sucesso", "Feedback enviado e funcionário notificado com sucesso!")
-            
-            self.lbl_assunto_feedback.config(text="...")
-            self.txt_resposta_feedback.delete("1.0", tk.END)
-            self.atualizar_lista_solicitacoes()
-        else:
-            messagebox.showerror("Erro", "Ocorreu um erro ao salvar o feedback no banco de dados.")
 
     def criar_aba_metas(self):
         """(VERSÃO V6) Cria a interface para Gestão de Metas, com histórico de lucro ao lado."""
