@@ -944,31 +944,44 @@ def verificar_atribuicao_especifica_existente(tarefa_id, funcionario_id, tipo_fr
             conn.close()
     return True # Assume que existe para evitar falha
 
-def verificar_atribuicao_existente(tarefa_id, funcionario_id):
+def verificar_atribuicao_existente(tarefa_id, funcionario_id, tipo_frequencia=None):
     """
-    Verifica se já existe uma atribuição ATIVA (sem data de fim)
-    para uma combinação de tarefa e funcionário.
-    Retorna True se existir, False caso contrário.
+    (VERSÃO CORRIGIDA)
+    Verifica se já existe uma atribuição ATIVA.
+    Se 'tipo_frequencia' for passado, verifica se existe EXATAMENTE aquele tipo.
+    Se não, verifica qualquer uma.
     """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            sql = """
-                SELECT COUNT(1) 
-                FROM TarefasAtribuidas 
-                WHERE TarefaID = ? 
-                  AND FuncionarioID = ? 
-                  AND DataFimVigencia IS NULL
-            """
-            cursor.execute(sql, tarefa_id, funcionario_id)
-            # Se a contagem for maior que 0, significa que já existe.
+            
+            if tipo_frequencia:
+                # Verificação Específica (Permite ter uma 'Mensal' e uma 'Unica' da mesma tarefa, por exemplo)
+                sql = """
+                    SELECT COUNT(1) 
+                    FROM TarefasAtribuidas 
+                    WHERE TarefaID = ? 
+                      AND FuncionarioID = ? 
+                      AND TipoFrequencia = ?
+                      AND DataFimVigencia IS NULL
+                """
+                cursor.execute(sql, tarefa_id, funcionario_id, tipo_frequencia)
+            else:
+                # Verificação Genérica (Bloqueia qualquer duplicidade)
+                sql = """
+                    SELECT COUNT(1) 
+                    FROM TarefasAtribuidas 
+                    WHERE TarefaID = ? 
+                      AND FuncionarioID = ? 
+                      AND DataFimVigencia IS NULL
+                """
+                cursor.execute(sql, tarefa_id, funcionario_id)
+                
             return cursor.fetchone()[0] > 0
         finally:
             conn.close()
     return False
-
-# Em database.py, SUBSTITUA a função registrar_entrega pela versão abaixo:
 
 def registrar_entrega(tarefa_id, funcionario_id, path_foto, atribuicao_id=None):
     conn = get_db_connection()
@@ -1276,24 +1289,34 @@ def remover_membro_do_grupo(funcionario_id, grupo_id):
         finally:
             conn.close()
 
-# Em database.py, ADICIONE esta nova função (pode remover a antiga 'agendar_tarefa_competitiva_para_grupo' se quiser)
 def agendar_tarefa_recorrente_para_grupo(tarefa_id, grupo_id, tipo_frequencia_grupo, valor_frequencia, horario_disparo):
     """
-    Agenda uma nova tarefa recorrente ('GrupoDiaria', 'GrupoSemanal', 'GrupoMensal')
-    para um grupo em um horário específico, com o valor de frequência apropriado.
+    (VERSÃO CORRIGIDA - PREVINE DUPLICIDADES)
+    Encerra qualquer agendamento anterior ATIVO para esta mesma combinação (Tarefa + Grupo)
+    antes de criar o novo agendamento.
     """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            # Usamos as colunas existentes TipoFrequencia e ValorFrequencia
-            sql = """
-                INSERT INTO TarefasAtribuidas
-                (TarefaID, GrupoID, TipoFrequencia, ValorFrequencia, HorarioDisparo, StatusTarefaGrupo)
-                VALUES (?, ?, ?, ?, ?, 'Disponivel')
+
+            # 1. Limpeza Preventiva: Encerra agendamentos ativos idênticos (mesma tarefa e grupo)
+            # Isso impede que tenhamos a mesma tarefa agendada para 19:00 e 20:00 simultaneamente.
+            sql_limpeza = """
+                UPDATE TarefasAtribuidas 
+                SET DataFimVigencia = GETDATE() 
+                WHERE TarefaID = ? AND GrupoID = ? AND DataFimVigencia IS NULL
             """
-            # Para 'GrupoDiaria', o valor_frequencia pode ser None
-            cursor.execute(sql, tarefa_id, grupo_id, tipo_frequencia_grupo, valor_frequencia, horario_disparo)
+            cursor.execute(sql_limpeza, tarefa_id, grupo_id)
+
+            # 2. Cria o novo agendamento
+            sql_insert = """
+                INSERT INTO TarefasAtribuidas
+                (TarefaID, GrupoID, TipoFrequencia, ValorFrequencia, HorarioDisparo, StatusTarefaGrupo, DataInicioVigencia)
+                VALUES (?, ?, ?, ?, ?, 'Disponivel', GETDATE())
+            """
+            cursor.execute(sql_insert, tarefa_id, grupo_id, tipo_frequencia_grupo, valor_frequencia, horario_disparo)
+
             conn.commit()
             return True
         except Exception as e:
