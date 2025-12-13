@@ -559,7 +559,7 @@ class App:
             self.atualizar_lista_tarefas_atribuicao(filtro_setor=setor_selecionado)
 
     def criar_aba_dashboard(self):
-        """Constrói o Dashboard Híbrido: Gráfico no Topo, Tabelas Operacionais na Base."""
+        """Constrói o Dashboard Operacional (Sem gráfico, com filtros)."""
         # --- Título e Botão de Atualização Geral ---
         frame_topo = ttk.Frame(self.frame_dashboard)
         frame_topo.pack(fill=tk.X, padx=10, pady=5)
@@ -567,79 +567,96 @@ class App:
         ttk.Label(frame_topo, text="Dashboard & Controle Operacional", font=("Arial", 16, "bold")).pack(side=tk.LEFT)
         ttk.Button(frame_topo, text="🔄 Atualizar Tudo", command=self.atualizar_dashboard_completo).pack(side=tk.RIGHT)
 
-        # --- Área Superior: Gráfico de Performance ---
-        frame_grafico = ttk.LabelFrame(self.frame_dashboard, text="Performance da Equipe (Ranking)", padding="5")
-        frame_grafico.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
-
-        fig = Figure(figsize=(8, 3), dpi=100, tight_layout=True) # Altura reduzida para caber as tabelas
-        self.ax_ranking = fig.add_subplot(111)
-        self.canvas_grafico = FigureCanvasTkAgg(fig, master=frame_grafico)
-        self.canvas_grafico.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-
-        # --- Área Inferior: Painéis Operacionais (3 Colunas) ---
+        # --- Área Principal: Painéis Operacionais (3 Colunas) ---
+        # Agora expande para ocupar a tela toda, já que o gráfico saiu
         frame_operacional = ttk.Frame(self.frame_dashboard)
         frame_operacional.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
-        # 1. Cronograma de Grupos
-        frame_grupos = ttk.LabelFrame(frame_operacional, text="📅 Agendamentos de Grupo", padding="5")
-        frame_grupos.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
+        # === COLUNA 1: Agendamentos de Grupo (COM FILTROS) ===
+        frame_col1 = ttk.Frame(frame_operacional)
+        frame_col1.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
+
+        frame_grupos = ttk.LabelFrame(frame_col1, text="📅 Agendamentos de Grupo", padding="5")
+        frame_grupos.pack(fill=tk.BOTH, expand=True)
+
+        # Filtros de Grupo
+        frame_filtros_grupo = ttk.Frame(frame_grupos)
+        frame_filtros_grupo.pack(fill=tk.X, pady=(0, 5))
+
+        ttk.Label(frame_filtros_grupo, text="Filtrar Grupo:").pack(side=tk.LEFT)
+        self.entry_filtro_grupo_nome = ttk.Entry(frame_filtros_grupo, width=15)
+        self.entry_filtro_grupo_nome.pack(side=tk.LEFT, padx=5)
+        # Bind para atualizar ao digitar (Enter ou KeyRelease)
+        self.entry_filtro_grupo_nome.bind("<KeyRelease>", lambda e: self.atualizar_dashboard_completo())
 
         cols_g = ('Grupo', 'Tarefa', 'Horário')
-        self.tree_audit_grupos = ttk.Treeview(frame_grupos, columns=cols_g, show='headings', height=8)
-        self.tree_audit_grupos.heading('Grupo', text='Grupo'); self.tree_audit_grupos.column('Grupo', width=80)
-        self.tree_audit_grupos.heading('Tarefa', text='Tarefa'); self.tree_audit_grupos.column('Tarefa', width=120)
-        self.tree_audit_grupos.heading('Horário', text='Hora'); self.tree_audit_grupos.column('Horário', width=50, anchor='center')
+        self.tree_audit_grupos = ttk.Treeview(frame_grupos, columns=cols_g, show='headings')
+        self.tree_audit_grupos.heading('Grupo', text='Grupo'); self.tree_audit_grupos.column('Grupo', width=100)
+        self.tree_audit_grupos.heading('Tarefa', text='Tarefa'); self.tree_audit_grupos.column('Tarefa', width=150)
+        self.tree_audit_grupos.heading('Horário', text='Hora'); self.tree_audit_grupos.column('Horário', width=60, anchor='center')
         self.tree_audit_grupos.pack(fill=tk.BOTH, expand=True)
 
-        # 2. Tarefas Órfãs (Dinheiro na Mesa)
+        # === COLUNA 2: Tarefas Órfãs ===
         frame_orfas = ttk.LabelFrame(frame_operacional, text="⚠️ Tarefas Sem Dono (Órfãs)", padding="5")
         frame_orfas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
 
         cols_o = ('Setor', 'Tarefa', 'Pts')
-        self.tree_audit_orfas = ttk.Treeview(frame_orfas, columns=cols_o, show='headings', height=8)
-        self.tree_audit_orfas.heading('Setor', text='Setor'); self.tree_audit_orfas.column('Setor', width=70)
-        self.tree_audit_orfas.heading('Tarefa', text='Tarefa'); self.tree_audit_orfas.column('Tarefa', width=120)
+        self.tree_audit_orfas = ttk.Treeview(frame_orfas, columns=cols_o, show='headings')
+        self.tree_audit_orfas.heading('Setor', text='Setor'); self.tree_audit_orfas.column('Setor', width=80)
+        self.tree_audit_orfas.heading('Tarefa', text='Tarefa'); self.tree_audit_orfas.column('Tarefa', width=150)
         self.tree_audit_orfas.heading('Pts', text='Pts'); self.tree_audit_orfas.column('Pts', width=40, anchor='center')
         self.tree_audit_orfas.pack(fill=tk.BOTH, expand=True)
 
-        # 3. Pendências do Dia (Quem furou?)
+        # === COLUNA 3: Pendências de Hoje ===
         frame_pendencias = ttk.LabelFrame(frame_operacional, text="🚨 Pendências de HOJE", padding="5")
         frame_pendencias.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(5, 0))
 
-        cols_p = ('Func.', 'Tarefa', 'Freq')
-        self.tree_audit_pendencias = ttk.Treeview(frame_pendencias, columns=cols_p, show='headings', height=8)
+        cols_p = ('Func.', 'Tarefa', 'Tipo')
+        self.tree_audit_pendencias = ttk.Treeview(frame_pendencias, columns=cols_p, show='headings')
         self.tree_audit_pendencias.heading('Func.', text='Nome'); self.tree_audit_pendencias.column('Func.', width=100)
-        self.tree_audit_pendencias.heading('Tarefa', text='Tarefa Pendente'); self.tree_audit_pendencias.column('Tarefa', width=120)
-        self.tree_audit_pendencias.heading('Freq', text='Tipo'); self.tree_audit_pendencias.column('Freq', width=60, anchor='center')
+        self.tree_audit_pendencias.heading('Tarefa', text='Tarefa Pendente'); self.tree_audit_pendencias.column('Tarefa', width=150)
+        self.tree_audit_pendencias.heading('Tipo', text='Tipo'); self.tree_audit_pendencias.column('Tipo', width=60, anchor='center')
         self.tree_audit_pendencias.pack(fill=tk.BOTH, expand=True)
 
         # Inicializa os dados
         self.atualizar_dashboard_completo()
 
     def atualizar_dashboard_completo(self):
-        """Atualiza o gráfico e as 3 tabelas operacionais simultaneamente."""
-        # 1. Atualiza o Gráfico (função existente)
-        self.desenhar_grafico_ranking()
+        """Atualiza as 3 tabelas operacionais. (Gráfico Removido)."""
 
-        # 2. Limpa as tabelas
+        # 1. Limpar as tabelas
         for i in self.tree_audit_grupos.get_children(): self.tree_audit_grupos.delete(i)
         for i in self.tree_audit_orfas.get_children(): self.tree_audit_orfas.delete(i)
         for i in self.tree_audit_pendencias.get_children(): self.tree_audit_pendencias.delete(i)
 
         try:
-            # 3. Carregar Grupos
+            # 2. Carregar Grupos (COM FILTRO)
             dados_grupos = database.listar_cronograma_agendado_grupos()
+
+            # Captura o texto do filtro (se o widget já existir)
+            filtro_texto = ""
+            if hasattr(self, 'entry_filtro_grupo_nome'):
+                filtro_texto = self.entry_filtro_grupo_nome.get().lower()
+
             for row in dados_grupos:
                 # row = (NomeGrupo, Titulo, TipoFreq, Horario)
-                self.tree_audit_grupos.insert("", "end", values=(row[0], row[1], row[3]))
+                nome_grupo = row[0]
+                nome_tarefa = row[1]
 
-            # 4. Carregar Órfãs
+                # Aplica o filtro: Se tiver texto, verifica se está no nome do grupo ou da tarefa
+                if filtro_texto:
+                    if (filtro_texto not in nome_grupo.lower()) and (filtro_texto not in nome_tarefa.lower()):
+                        continue # Pula este registro
+
+                self.tree_audit_grupos.insert("", "end", values=(nome_grupo, nome_tarefa, row[3]))
+
+            # 3. Carregar Órfãs
             dados_orfas = database.listar_tarefas_sem_atribuicao_ativa()
             for row in dados_orfas:
                 # row = (ID, Titulo, Pontos, Setor)
-                self.tree_audit_orfas.insert("", "end", values=(row[3], row[1], row[2]))
+                self.tree_audit_orfas.insert("", "end", values=(row[3] or "Geral", row[1], row[2]))
 
-            # 5. Carregar Pendências do Dia
+            # 4. Carregar Pendências do Dia (Agora com a query corrigida no database)
             dados_pendencias = database.listar_pendencias_gerais_hoje()
             for row in dados_pendencias:
                 # row = (NomeFuncionario, TituloTarefa, TipoFreq)
@@ -647,7 +664,6 @@ class App:
 
         except Exception as e:
             logger.error(f"Erro ao atualizar dashboard operacional: {e}")
-            # Não mostramos messagebox aqui para não interromper o fluxo visual se falhar um detalhe
 
     def atualizar_combobox_setores(self):
         """Busca os setores únicos do banco e atualiza a lista do combobox."""
