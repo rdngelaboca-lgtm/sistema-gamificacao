@@ -6735,3 +6735,97 @@ def relatorio_resgates_consolidado_mes():
         finally:
             conn.close()
     return []
+
+# ===================================================================
+# == FUNÇÕES PARA O DASHBOARD OPERACIONAL ===========================
+# ===================================================================
+
+def listar_cronograma_agendado_grupos():
+    """Retorna todas as tarefas atribuídas a GRUPOS e seus horários."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT 
+                    G.NomeGrupo,
+                    T.Titulo,
+                    TA.TipoFrequencia,
+                    ISNULL(CONVERT(VARCHAR(5), TA.HorarioDisparo, 108), 'Auto') as Horario
+                FROM TarefasAtribuidas TA
+                JOIN Grupos G ON TA.GrupoID = G.GrupoID
+                JOIN Tarefas T ON TA.TarefaID = T.TarefaID
+                WHERE TA.DataFimVigencia IS NULL
+                ORDER BY TA.HorarioDisparo, G.NomeGrupo
+            """
+            cursor.execute(sql)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def listar_tarefas_sem_atribuicao_ativa():
+    """Retorna tarefas do catálogo que NÃO estão atribuídas a ninguém."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT T.TarefaID, T.Titulo, T.Pontos, ISNULL(T.Setor, 'Geral')
+                FROM Tarefas T
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM TarefasAtribuidas TA
+                    WHERE TA.TarefaID = T.TarefaID
+                    AND TA.DataFimVigencia IS NULL
+                )
+                ORDER BY T.Setor, T.Titulo
+            """
+            cursor.execute(sql)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def listar_pendencias_gerais_hoje():
+    """
+    Retorna quem tinha que entregar algo HOJE e não entregou.
+    Filtra apenas tarefas individuais agendadas para a data atual.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT 
+                    F.NomeCompleto,
+                    T.Titulo,
+                    TA.TipoFrequencia
+                FROM TarefasAtribuidas TA
+                JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID
+                JOIN Tarefas T ON TA.TarefaID = T.TarefaID
+                WHERE 
+                    TA.DataFimVigencia IS NULL
+                    AND TA.FuncionarioID IS NOT NULL
+                    -- Regras de Agendamento (Igual ao Painel Kanban)
+                    AND (
+                        TA.TipoFrequencia = 'Diaria'
+                        OR (TA.TipoFrequencia = 'Semanal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(weekday, GETDATE()))
+                        OR (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, GETDATE()))
+                        OR (TA.TipoFrequencia = 'Unica' AND CONVERT(date, TA.DataInicioVigencia) <= CONVERT(date, GETDATE()))
+                    )
+                    -- Ignora quem está de folga hoje
+                    AND (F.DiaDeFolga IS NULL OR F.DiaDeFolga = 0 OR F.DiaDeFolga != DATEPART(weekday, GETDATE()))
+                    -- Filtra quem NÃO entregou (Pendência)
+                    AND NOT EXISTS (
+                        SELECT 1 FROM Entregas E
+                        WHERE E.AtribuicaoID = TA.AtribuicaoID 
+                        AND CONVERT(date, E.DataEnvio) = CONVERT(date, GETDATE())
+                        AND E.StatusValidacao != 'Recusada'
+                    )
+                ORDER BY F.NomeCompleto
+            """
+            cursor.execute(sql)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
