@@ -178,10 +178,17 @@ class App:
         self.text_conquista_descricao.grid(row=2, column=1, sticky=tk.EW, padx=5, pady=3)
 
         ttk.Label(frame_formulario, text="Tipo de Critério:").grid(row=3, column=0, sticky=tk.W, padx=5, pady=3)
-        # Adicione outros tipos aqui conforme forem implementados em database.py
+        # [CORREÇÃO] Expondo todos os critérios suportados pelo database.py
         self.combo_conquista_criterio_tipo = ttk.Combobox(frame_formulario,
-                                                          values=['total_tarefas_aprovadas'], # Único critério implementado
-                                                          state="readonly")
+                                                        values=[
+                                                            'total_tarefas_aprovadas',
+                                                            'tarefas_aprovadas_periodo',
+                                                            'sequencia_dias_tarefas',
+                                                            'tarefas_grupo_competitivo_aceitas',
+                                                            'total_comunicados_cientes',
+                                                            'sequencia_feedback_diario'
+                                                        ],
+                                                        state="readonly")
         self.combo_conquista_criterio_tipo.grid(row=3, column=1, sticky=tk.EW, padx=5, pady=3)
         self.combo_conquista_criterio_tipo.set('total_tarefas_aprovadas') # Padrão
 
@@ -544,6 +551,8 @@ class App:
         self.atualizar_lista_tarefas_atribuicao() # Chama a função principal sem filtro
 
     def filtrar_tarefas_por_setor(self, event=None):
+        # [CORREÇÃO] Limpa o campo de busca textual para evitar ambiguidade visual
+        self.entry_filtro_atr_tarefas.delete(0, tk.END)
         """Pega o setor selecionado e chama a função de atualização com o filtro."""
         setor_selecionado = self.combo_filtro_setor.get()
         if setor_selecionado:
@@ -1851,8 +1860,12 @@ class App:
         if verificador:
             if len(verificador) == 3 and verificador.isdigit():
                 novo_func = database.buscar_funcionario_por_chat_id(chat_id)
-                if novo_func:
+                # [CORREÇÃO] Validação defensiva: só tenta atualizar se o funcionário foi realmente encontrado/criado
+                if novo_func and hasattr(novo_func, 'FuncionarioID'):
                     database.atualizar_verificador_cpf(novo_func.FuncionarioID, verificador)
+                else:
+                    logger.error(f"Erro: Funcionário com ChatID {chat_id} não encontrado após tentativa de criação.")
+                    messagebox.showwarning("Aviso", "Funcionário criado, mas houve erro ao vincular o Verificador CPF (Retorno Nulo). Tente editar depois.")
             else:
                 messagebox.showwarning("Aviso", "Funcionário criado, mas o Verificador de CPF foi ignorado (deve ter 3 dígitos). Edite o cadastro depois.")
         messagebox.showinfo("Sucesso", f"Funcionário {nome} adicionado com sucesso!")
@@ -2330,12 +2343,21 @@ class App:
                 self.lista_entregas.insert(tk.END, texto); self.dados_entregas[entrega.EntregaID] = entrega
     
     def mostrar_detalhes_entrega(self, event):
-        try: # <--- ADICIONADO TRY
+        try: 
             indices = self.lista_entregas.curselection()
             if not indices: return
             texto = self.lista_entregas.get(indices[0])
-            entrega_id = int(texto.split(" | ")[0].split(": ")[1]) # int() pode falhar
-            entrega_atual = self.dados_entregas[entrega_id] # Pode dar KeyError
+
+            # [CORREÇÃO] Parsing seguro do ID e acesso seguro ao dicionário
+            try:
+                entrega_id = int(texto.split(" | ")[0].split(": ")[1])
+            except (IndexError, ValueError):
+                return
+
+            entrega_atual = self.dados_entregas.get(entrega_id)
+            if not entrega_atual:
+                self.lbl_imagem.config(image='', text="Dados desatualizados. Atualize a lista.")
+                return
 
             self.lbl_nome_funcionario.config(text=f"Funcionário: {entrega_atual.NomeCompleto}")
             self.lbl_titulo_tarefa.config(text=f"Tarefa: {entrega_atual.Titulo} ({entrega_atual.Pontos} pts)")
@@ -2768,8 +2790,12 @@ class App:
             projecao_f = f"R$ {projecao:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
             self.lbl_projecao_vendas.config(text=f"Projeção Final: {projecao_f}")
 
-        if total_atingido >= valor_meta_total and status_meta == 'Ativa':
-            meta_detalhes = next((m for m in database.listar_metas_principais() if m.MetaPrincipalID == meta_id), None)
+        # [CORREÇÃO] Recarrega metas do banco para garantir status atualizado (Atomicidade)
+        metas_banco = database.listar_metas_principais()
+        meta_detalhes = next((m for m in metas_banco if m.MetaPrincipalID == meta_id), None)
+
+        # Verifica o status REAL do banco, ignorando o cache visual da Treeview
+        if meta_detalhes and total_atingido >= valor_meta_total and meta_detalhes.Status == 'Ativa':
             if meta_detalhes:
                 confirmado = messagebox.askyesno(
                     "🎉 META MENSAL ATINGIDA! 🎉",
@@ -2794,8 +2820,12 @@ class App:
     def salvar_lucro_interface(self):
         """Lê os dados da interface e salva o lucro mensal no banco."""
         try:
-            ano = int(self.entry_lucro_ano.get())
-            mes = int(self.combo_lucro_mes.current() + 1) # Pega o índice (0-11) e soma 1
+            # [CORREÇÃO] Validação do índice do combobox para evitar mês 0
+            idx_mes = self.combo_lucro_mes.current()
+            if idx_mes == -1:
+                raise ValueError("Selecione um mês válido na lista.")
+
+            mes = int(idx_mes + 1)
             percentual_str = self.entry_lucro_percentual.get().replace(',', '.')
             percentual = float(percentual_str)
 
@@ -2938,9 +2968,13 @@ class App:
                         popup.destroy()
                         self.on_meta_principal_selecionada(None) 
                         
-                        # Thread para não travar a UI
+                        # [CORREÇÃO] Tratamento de erro dentro da thread para evitar falhas silenciosas
                         def tarefa_background():
-                            database.verificar_e_premiar_meta_diaria(apuracao_id, data_db_format, novo_valor, meta_id_fixo)
+                            try:
+                                database.verificar_e_premiar_meta_diaria(apuracao_id, data_db_format, novo_valor, meta_id_fixo)
+                            except Exception as e_bg:
+                                logger.error(f"FALHA CRÍTICA na thread de premiação de meta (ApuracaoID {apuracao_id}): {e_bg}", exc_info=True)
+
                         threading.Thread(target=tarefa_background, daemon=True).start()
                     else:
                         messagebox.showerror("Erro", f"Não foi possível atualizar a apuração no banco.\nDetalhe: {resultado}", parent=popup)
