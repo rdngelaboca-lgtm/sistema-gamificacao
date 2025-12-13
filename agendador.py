@@ -227,79 +227,91 @@ def verificar_fim_jornada():
 
 def verificar_e_delegar_tarefas_de_folga():
     """
-    (VERSÃO CORRIGIDA V2 - ROTEAMENTO POR SETOR)
-    Verifica folgas e delega tarefas baseando-se PRIMEIRO no SETOR DA TAREFA,
-    garantindo que tarefas de cozinha vão para cozinha e atendimento para atendimento.
+    (VERSÃO V3 - DROP DIÁRIO / BOLETIM)
+    Agrega todas as tarefas de folga do dia e envia um único 'Drop' (Boletim)
+    para cada grupo, com botões individuais para resgate.
     """
-    print(f"\n[{datetime.now().strftime('%H:%M:%S')}]  Verificando tarefas de funcionários de folga...")
-
+    print(f"\n[{datetime.now().strftime('%H:%M:%S')}] 🎲 Preparando o DROP DIÁRIO de missões...")
+    
     hoje = datetime.now()
     dia_da_semana_hoje = hoje.isoweekday() + 1
-    if dia_da_semana_hoje == 8:
-        dia_da_semana_hoje = 1
-
+    if dia_da_semana_hoje == 8: dia_da_semana_hoje = 1
+    
     funcionarios_de_folga = database.buscar_funcionarios_de_folga_hoje(dia_da_semana_hoje)
-
+    
     if not funcionarios_de_folga:
+        print("--> Nenhuma folga hoje. Drop cancelado.")
         return
 
+    # Dicionário para agrupar tarefas por ChatID de destino
+    # Estrutura: { chat_id: [ {tarefa, nome_origem}, ... ] }
+    drop_por_grupo = {}
+
     for funcionario in funcionarios_de_folga:
-        # Busca tarefas, agora trazendo o campo 'Setor'
         tarefas_do_dia = database.buscar_tarefas_recorrentes_agendadas_para_hoje(funcionario.FuncionarioID, dia_da_semana_hoje)
-
-        if not tarefas_do_dia:
-            continue
-
-        print(f"--> Processando folga de: {funcionario.NomeCompleto}")
+        
+        if not tarefas_do_dia: continue
 
         for tarefa in tarefas_do_dia:
-            lista_de_destinos = []
-
-            # --- LÓGICA DE ROTEAMENTO: SETOR DA TAREFA (PRIORIDADE ALTA) ---
+            # --- Lógica de Roteamento (Cozinha vs Atendimento) ---
+            destinos = []
             setor_tarefa = tarefa.Setor.lower() if tarefa.Setor else ""
+            cargo_func = funcionario.Cargo.lower() if funcionario.Cargo else ""
 
-            # Verifica Cozinha/Produção
-            if 'cozinha' in setor_tarefa or 'produção' in setor_tarefa or 'producao' in setor_tarefa:
-                lista_de_destinos.append(config.COZINHA_GROUP_CHAT_ID)
-
-            # Verifica Atendimento/Loja/Caixa
-            elif 'atendimento' in setor_tarefa or 'loja' in setor_tarefa or 'caixa' in setor_tarefa:
-                lista_de_destinos.append(config.ATENDIMENTO_GROUP_CHAT_ID)
-
+            if 'cozinha' in setor_tarefa or 'produção' in setor_tarefa:
+                destinos.append(config.COZINHA_GROUP_CHAT_ID)
+            elif 'atendimento' in setor_tarefa or 'loja' in setor_tarefa:
+                destinos.append(config.ATENDIMENTO_GROUP_CHAT_ID)
             else:
-                # --- FALLBACK: CARGO DO FUNCIONÁRIO (Se tarefa não tem setor definido) ---
-                cargo_func = funcionario.Cargo.lower() if funcionario.Cargo else ""
-                if 'cozinha' in cargo_func:
-                    lista_de_destinos.append(config.COZINHA_GROUP_CHAT_ID)
-                elif 'atendimento' in cargo_func:
-                    lista_de_destinos.append(config.ATENDIMENTO_GROUP_CHAT_ID)
-                else:
-                    # Último caso: Grupo Geral de Folgas
-                    lista_de_destinos.append(config.FOLGA_GROUP_CHAT_ID)
+                # Fallback pelo Cargo
+                if 'cozinha' in cargo_func: destinos.append(config.COZINHA_GROUP_CHAT_ID)
+                elif 'atendimento' in cargo_func: destinos.append(config.ATENDIMENTO_GROUP_CHAT_ID)
+                else: destinos.append(config.FOLGA_GROUP_CHAT_ID)
+            
+            # Adiciona a tarefa à lista de cada grupo destino
+            for chat_id in set(destinos):
+                if chat_id not in drop_por_grupo:
+                    drop_por_grupo[chat_id] = []
+                
+                drop_por_grupo[chat_id].append({
+                    'tarefa': tarefa,
+                    'origem': funcionario.NomeCompleto
+                })
 
-            # Remove duplicatas e IDs nulos
-            lista_de_destinos = list(set([d for d in lista_de_destinos if d]))
+    # --- Envio dos Drops Consolidados ---
+    for chat_id, itens in drop_por_grupo.items():
+        if not itens: continue
 
-            mensagem_grupo = (
-                f"📢 **Missão Extra Disponível!** 📢\n\n"
-                f"O(a) colega **{funcionario.NomeCompleto}** está de folga hoje.\n\n"
-                f"📍 **Setor:** {tarefa.Setor or 'Geral'}\n"
-                f"📝 **Tarefa:** {tarefa.Titulo}\n"
-                f"🏆 **Recompensa:** {tarefa.Pontos} pontos\n\n"
-                "Quem pode assumir essa missão?"
-            )
+        # 1. Monta a Mensagem Visual
+        qtd = len(itens)
+        mensagem = (
+            f"⚡ **DROP DIÁRIO LIBERADO!** ⚡\n\n"
+            f"Temos **{qtd} missões extras** disponíveis hoje. Quem clicar primeiro, leva os pontos!\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+        )
 
-            callback_data = f"aceitar_folga_{tarefa.TarefaID}"
-            keyboard = [[InlineKeyboardButton("✅ Eu aceito!", callback_data=callback_data)]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
+        keyboard = []
+        for i, item in enumerate(itens):
+            t = item['tarefa']
+            origem = item['origem'].split()[0] # Só o primeiro nome
+            
+            # Adiciona linha no texto
+            mensagem += f"{i+1}️⃣ **{t.Titulo}**\n     └ 👤 *{origem}* |  💰 *{t.Pontos} pts*\n\n"
+            
+            # Adiciona botão
+            texto_botao = f"🚀 Pegar Missão {i+1} ({t.Pontos} pts)"
+            callback = f"aceitar_folga_{t.TarefaID}"
+            keyboard.append([InlineKeyboardButton(texto_botao, callback_data=callback)])
 
-            for chat_id_destino in lista_de_destinos:
-                try:
-                    notificador_telegram.enviar_mensagem_com_botao(chat_id_destino, mensagem_grupo, reply_markup)
-                    print(f"   -> Tarefa '{tarefa.Titulo}' (Setor: {tarefa.Setor}) enviada para grupo {chat_id_destino}")
-                except Exception as e:
-                    print(f"   -> Erro ao enviar para grupo {chat_id_destino}: {e}")
+        mensagem += "👇 **Toque abaixo para resgatar sua missão:**"
+        reply_markup = InlineKeyboardMarkup(keyboard)
 
+        try:
+            notificador_telegram.enviar_mensagem_com_botao(chat_id, mensagem, reply_markup)
+            print(f"--> Drop com {qtd} missões enviado para o grupo {chat_id}.")
+        except Exception as e:
+            print(f"--> Erro ao enviar Drop: {e}")
+            
 def executar_fechamento_mensal():
     """
     Executa o fechamento separado por setores (Cozinha e Loja).
