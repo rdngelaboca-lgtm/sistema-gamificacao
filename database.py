@@ -3323,11 +3323,10 @@ def excluir_documento_pessoal_completo(documento_id):
             conn.close()
     return False, None
 
-
 def buscar_dados_para_painel_kanban():
     """
     Busca e organiza todas as tarefas para o painel de ação diária.
-    (VERSÃO TEMPO REAL - Só mostra tarefas de grupo se o horário já chegou e se ninguém pegou)
+    (VERSÃO FINAL - Com HorarioDisparo para o Front-end)
     """
     conn = get_db_connection()
     if not conn:
@@ -3336,26 +3335,29 @@ def buscar_dados_para_painel_kanban():
     try:
         cursor = conn.cursor()
 
-        # A Query foi ajustada para filtrar por HorarioDisparo e checar se já houve aceite
         sql_para_fazer = """
             WITH Datas AS (
                 SELECT
                     GETDATE() as DataHoje,
                     DATEADD(day, -1, GETDATE()) as DataOntem,
-                    -- Cálculo agnóstico ao idioma: Normaliza para 1=Domingo ... 7=Sábado
                     ((DATEPART(dw, GETDATE()) + @@DATEFIRST - 1) % 7) + 1 as DiaSemanaID_Hoje,
-                    CAST(GETDATE() AS TIME) as HoraAtual -- Hora atual para comparação de disparo
+                    CAST(GETDATE() AS TIME) as HoraAtual
             )
 
             -- Parte 1: Tarefas Individuais de HOJE (FuncionarioID IS NOT NULL)
-            -- (Inclui as tarefas que acabaram de ser aceitas dos grupos, pois elas ganham FuncionarioID)
-            SELECT T.Titulo, F.NomeCompleto, T.Pontos, 'Hoje' as Categoria, TA.DataAtribuicao, D.DataHoje as DataReferencia
+            SELECT 
+                T.Titulo, 
+                F.NomeCompleto, 
+                T.Pontos, 
+                'Hoje' as Categoria, 
+                TA.DataAtribuicao, 
+                D.DataHoje as DataReferencia,
+                NULL as HorarioDisparo -- Tarefas individuais não usam disparo fixo visual
             FROM TarefasAtribuidas TA 
             JOIN Tarefas T ON TA.TarefaID = T.TarefaID 
             JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID 
             JOIN Datas D ON 1=1
             WHERE TA.FuncionarioID IS NOT NULL AND TA.DataFimVigencia IS NULL
-            -- Filtro de conclusão (Não mostrar se já foi entregue/validada)
             AND NOT EXISTS (
                 SELECT 1 FROM Entregas E 
                 WHERE E.AtribuicaoID = TA.AtribuicaoID 
@@ -3374,15 +3376,20 @@ def buscar_dados_para_painel_kanban():
             UNION ALL
 
             -- Parte 2: Tarefas de GRUPO de HOJE (GrupoID IS NOT NULL)
-            -- (MODIFICADO PARA TEMPO REAL)
-            SELECT T.Titulo, G.NomeGrupo AS NomeCompleto, T.Pontos, 'Hoje' as Categoria, TA.DataAtribuicao, D.DataHoje as DataReferencia
+            SELECT 
+                T.Titulo, 
+                G.NomeGrupo AS NomeCompleto, 
+                T.Pontos, 
+                'Hoje' as Categoria, 
+                TA.DataAtribuicao, 
+                D.DataHoje as DataReferencia,
+                TA.HorarioDisparo -- << CAMPO IMPORTANTE ADICIONADO
             FROM TarefasAtribuidas TA 
             JOIN Tarefas T ON TA.TarefaID = T.TarefaID 
             JOIN Grupos G ON TA.GrupoID = G.GrupoID 
             JOIN Datas D ON 1=1
             WHERE TA.GrupoID IS NOT NULL AND TA.DataFimVigencia IS NULL
             
-            -- FILTRO 1: Só mostra se NINGUÉM aceitou ainda hoje (não existe filha criada hoje)
             AND NOT EXISTS (
                 SELECT 1 FROM TarefasAtribuidas TA_Aceita
                 WHERE TA_Aceita.OrigemAtribuicaoID = TA.AtribuicaoID
@@ -3390,15 +3397,12 @@ def buscar_dados_para_painel_kanban():
                 AND TA_Aceita.StatusTarefaGrupo = 'Aceita'
             )
             
-            -- FILTRO 2: Verifica o dia correto da recorrência
             AND (
                 (TA.TipoFrequencia = 'GrupoDiaria') OR
                 (TA.TipoFrequencia = 'GrupoSemanal' AND TA.ValorFrequencia = D.DiaSemanaID_Hoje) OR
                 (TA.TipoFrequencia = 'GrupoMensal' AND TA.ValorFrequencia = DATEPART(day, D.DataHoje))
             )
 
-            -- FILTRO 3 (NOVO): Só mostra se a hora atual for MAIOR ou IGUAL ao horário de disparo
-            -- Isso esconde as tarefas das 21:00 se ainda for 18:00.
             AND (
                 TA.HorarioDisparo IS NULL 
                 OR 
@@ -3443,7 +3447,7 @@ def buscar_dados_para_painel_kanban():
     finally:
         if conn:
             conn.close()
-
+            
 def buscar_ranking_do_dia():
     """
     Calcula o ranking dos 3 funcionários com mais pontos APROVADOS HOJE.
