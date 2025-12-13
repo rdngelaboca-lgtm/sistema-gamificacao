@@ -3326,7 +3326,7 @@ def excluir_documento_pessoal_completo(documento_id):
 def buscar_dados_para_painel_kanban():
     """
     Busca e organiza todas as tarefas para o painel de ação diária.
-    (VERSÃO FINAL CORRIGIDA - Tempo Real + Horário Formatado)
+    (VERSÃO CORRIGIDA - Correção do erro 500 no UNION)
     """
     conn = get_db_connection()
     if not conn:
@@ -3335,12 +3335,11 @@ def buscar_dados_para_painel_kanban():
     try:
         cursor = conn.cursor()
 
-        # Query otimizada e unificada
+        # Query unificada
         sql_para_fazer = """
             WITH Datas AS (
                 SELECT
                     GETDATE() as DataHoje,
-                    -- Pega a hora atual do servidor (formato HH:MM:SS)
                     CONVERT(VARCHAR(8), GETDATE(), 108) as HoraAtualTexto,
                     ((DATEPART(dw, GETDATE()) + @@DATEFIRST - 1) % 7) + 1 as DiaSemanaID_Hoje
             )
@@ -3353,21 +3352,19 @@ def buscar_dados_para_painel_kanban():
                 'Hoje' as Categoria, 
                 TA.DataAtribuicao, 
                 D.DataHoje as DataReferencia,
-                NULL as HorarioDisparo -- Tarefas individuais não mostram horário de disparo
+                NULL as HorarioDisparo -- <== CORREÇÃO: Adicionado NULL para alinhar com a parte de baixo
             FROM TarefasAtribuidas TA 
             JOIN Tarefas T ON TA.TarefaID = T.TarefaID 
             JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID 
             JOIN Datas D ON 1=1
             WHERE TA.FuncionarioID IS NOT NULL 
               AND TA.DataFimVigencia IS NULL
-              -- Não mostra se já foi concluída/entregue hoje
               AND NOT EXISTS (
                   SELECT 1 FROM Entregas E 
                   WHERE E.AtribuicaoID = TA.AtribuicaoID 
                   AND CONVERT(date, E.DataEnvio) = CONVERT(date, D.DataHoje) 
                   AND E.StatusValidacao != 'Recusada'
               )
-              -- Regras de recorrência para aparecer hoje
               AND ( 
                   TA.TipoFrequencia = 'Diaria'
                   OR (TA.TipoFrequencia = 'Semanal' AND CAST(TA.ValorFrequencia AS INT) = D.DiaSemanaID_Hoje)
@@ -3375,7 +3372,6 @@ def buscar_dados_para_painel_kanban():
                   OR (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = CONVERT(date, D.DataHoje))
                   OR (TA.TipoFrequencia = 'Unica' AND CONVERT(date, TA.DataInicioVigencia) = CONVERT(date, D.DataHoje))
               )
-              -- Não mostra se o funcionário está de folga hoje
               AND (F.DiaDeFolga IS NULL OR F.DiaDeFolga = 0 OR F.DiaDeFolga != D.DiaSemanaID_Hoje)
 
             UNION ALL
@@ -3388,8 +3384,7 @@ def buscar_dados_para_painel_kanban():
                 'Hoje' as Categoria, 
                 TA.DataAtribuicao, 
                 D.DataHoje as DataReferencia,
-                -- Formata o horário para HH:MM garantido (ex: 18:00)
-                ISNULL(CONVERT(VARCHAR(5), TA.HorarioDisparo, 108), '') as HorarioDisparo
+                ISNULL(CONVERT(VARCHAR(5), TA.HorarioDisparo, 108), '') as HorarioDisparo -- <== O dado real vem aqui
             FROM TarefasAtribuidas TA 
             JOIN Tarefas T ON TA.TarefaID = T.TarefaID 
             JOIN Grupos G ON TA.GrupoID = G.GrupoID 
@@ -3397,7 +3392,6 @@ def buscar_dados_para_painel_kanban():
             WHERE TA.GrupoID IS NOT NULL 
               AND TA.DataFimVigencia IS NULL
             
-            -- Filtro 1: Não mostra se alguém JÁ PEGOU hoje (existe uma tarefa filha aceita)
             AND NOT EXISTS (
                 SELECT 1 FROM TarefasAtribuidas TA_Aceita
                 WHERE TA_Aceita.OrigemAtribuicaoID = TA.AtribuicaoID
@@ -3405,15 +3399,13 @@ def buscar_dados_para_painel_kanban():
                 AND TA_Aceita.StatusTarefaGrupo = 'Aceita'
             )
             
-            -- Filtro 2: Regras de recorrência de grupo
             AND (
                 (TA.TipoFrequencia = 'GrupoDiaria') OR
                 (TA.TipoFrequencia = 'GrupoSemanal' AND TA.ValorFrequencia = D.DiaSemanaID_Hoje) OR
                 (TA.TipoFrequencia = 'GrupoMensal' AND TA.ValorFrequencia = DATEPART(day, D.DataHoje))
             )
 
-            -- Filtro 3 (TEMPO REAL): Só mostra se o horário de disparo já passou ou é agora
-            -- Comparamos string HH:MM:SS para garantir funcionamento independente de tipos complexos
+            -- Filtro de Tempo Real
             AND (
                 TA.HorarioDisparo IS NULL 
                 OR 
@@ -3424,11 +3416,10 @@ def buscar_dados_para_painel_kanban():
         """
 
         cursor.execute(sql_para_fazer)
-        # Mapeamento dinâmico das colunas para evitar erros de índice
         columns = [column[0] for column in cursor.description]
         para_fazer_lista = [dict(zip(columns, row)) for row in cursor.fetchall()]
 
-        # (Consultas de validação e concluídas permanecem iguais, mantidas por segurança)
+        # Queries auxiliares (Mantidas iguais)
         sql_validacao = "SELECT T.Titulo, F.NomeCompleto, E.DataEnvio, T.Pontos FROM Entregas E JOIN Tarefas T ON E.TarefaID = T.TarefaID JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID WHERE E.StatusValidacao = 'Pendente' ORDER BY E.DataEnvio;"
         cursor.execute(sql_validacao)
         cols_val = [column[0] for column in cursor.description]
@@ -3458,7 +3449,7 @@ def buscar_dados_para_painel_kanban():
     finally:
         if conn:
             conn.close()
-                                    
+                                                
 def buscar_ranking_do_dia():
     """
     Calcula o ranking dos 3 funcionários com mais pontos APROVADOS HOJE.
