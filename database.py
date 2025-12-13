@@ -1291,7 +1291,7 @@ def remover_membro_do_grupo(funcionario_id, grupo_id):
 
 def agendar_tarefa_recorrente_para_grupo(tarefa_id, grupo_id, tipo_frequencia_grupo, valor_frequencia, horario_disparo):
     """
-    (VERSÃO CORRIGIDA - PREVINE DUPLICIDADES)
+    (VERSÃO CORRIGIDA - ANTI-DUPLICIDADE)
     Encerra qualquer agendamento anterior ATIVO para esta mesma combinação (Tarefa + Grupo)
     antes de criar o novo agendamento.
     """
@@ -1300,8 +1300,7 @@ def agendar_tarefa_recorrente_para_grupo(tarefa_id, grupo_id, tipo_frequencia_gr
         try:
             cursor = conn.cursor()
 
-            # 1. Limpeza Preventiva: Encerra agendamentos ativos idênticos (mesma tarefa e grupo)
-            # Isso impede que tenhamos a mesma tarefa agendada para 19:00 e 20:00 simultaneamente.
+            # 1. LIMPEZA PREVENTIVA: Encerra agendamentos ativos idênticos (mesma tarefa e grupo)
             sql_limpeza = """
                 UPDATE TarefasAtribuidas 
                 SET DataFimVigencia = GETDATE() 
