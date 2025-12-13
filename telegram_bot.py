@@ -1696,41 +1696,76 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
     elif data.startswith("aceitar_folga_"):
         tarefa_id = int(data.split('_')[-1])
         funcionario_aceitou = database.buscar_funcionario_por_chat_id(user.id)
+        
         if not funcionario_aceitou:
-            await context.bot.send_message(chat_id=user.id, text="Seu usuário do Telegram não foi encontrado.")
+            await query.answer("Seu usuário não foi encontrado.", show_alert=True)
             return
 
-        # --- LÓGICA CORRIGIDA E ROBUSTA ---
-        # 1. Chama a nova função transacional do banco
+        # 1. Tenta Aceitar no Banco (Transacional)
         novo_atribuicao_id = database.verificar_e_aceitar_tarefa_de_folga(tarefa_id, funcionario_aceitou.FuncionarioID)
-
-        # 2. Busca os detalhes da tarefa (apenas para a mensagem de confirmação)
         tarefa_info = database.buscar_tarefa_por_atribuicao(novo_atribuicao_id) if novo_atribuicao_id else None
 
-        # 3. Verifica o resultado da transação
-        if novo_atribuicao_id:
-            # SUCESSO! A pessoa pegou a tarefa.
-            nova_mensagem_grupo = (
-                f"{query.message.text}\n\n"
-                f"--- MISSÃO REIVINDICADA! ---\n"
-                f"✅ **{funcionario_aceitou.NomeCompleto}** assumiu a tarefa."
-            )
-            # Tenta editar a mensagem do grupo para "travar" (remover o botão)
+        if novo_atribuicao_id and tarefa_info:
+            # SUCESSO!
+            await query.answer("Missão aceita com sucesso! Ganhe esses pontos! 🚀", show_alert=True)
+            
+            # --- LÓGICA INTELIGENTE DE ATUALIZAÇÃO DO DROP ---
+            # Objetivo: Remover APENAS o botão clicado e atualizar o texto
             try:
-                await query.edit_message_text(text=nova_mensagem_grupo, reply_markup=None)
-            except Exception as e:
-                logger.warning(f"Não foi possível editar a msg de 'aceitar_folga_' (provavelmente já editada): {e}")
+                # 1. Recupera o teclado atual
+                current_markup = query.message.reply_markup
+                new_keyboard = []
+                
+                # 2. Reconstrói o teclado EXCLUINDO o botão clicado
+                if current_markup and current_markup.inline_keyboard:
+                    for row in current_markup.inline_keyboard:
+                        new_row = []
+                        for button in row:
+                            # Se o callback do botão for diferente do atual, mantém ele
+                            if button.callback_data != data:
+                                new_row.append(button)
+                        if new_row:
+                            new_keyboard.append(new_row)
+                
+                # 3. Atualiza o texto adicionando quem pegou
+                # Tenta pegar HTML, senão texto puro
+                texto_atual = query.message.text_html if hasattr(query.message, 'text_html') and query.message.text_html else query.message.text
+                
+                # Adiciona log de quem pegou (Usamos HTML para negrito)
+                novo_texto = texto_atual + f"\n\n✅ <b>{tarefa_info.Titulo}</b> resgatada por <b>{user.first_name}</b>!"
 
-            # Envia a confirmação privada
-            await context.bot.send_message(
-                chat_id=user.id,
-                text=f"🚀 Você assumiu a missão extra '{tarefa_info.Titulo}'! Ela já está na sua lista de /tarefas. Bom trabalho!"
-            )
+                # 4. Edita a mensagem (Texto atualizado + Teclado sem o botão clicado)
+                await query.edit_message_text(
+                    text=novo_texto, 
+                    reply_markup=InlineKeyboardMarkup(new_keyboard), 
+                    parse_mode='HTML'
+                )
+                
+                # 5. Confirmação Privada
+                await context.bot.send_message(
+                    chat_id=user.id,
+                    text=f"🚀 Você assumiu a missão '{tarefa_info.Titulo}'! Ela já está na sua lista de /tarefas."
+                )
+
+            except Exception as e:
+                logger.warning(f"Erro ao atualizar visual do Drop (mas a tarefa foi aceita): {e}")
+        
         else:
-            # FALHA! (Função retornou False ou None)
-            # Avisa o usuário que clicou (mas não conseguiu) via popup
-            await query.answer("Que pena! Parece que outro colega já pegou esta missão.", show_alert=True)
-        # --- FIM DA CORREÇÃO ---
+            # FALHA (Já pegaram)
+            # Tenta remover o botão clicado visualmente para evitar novos cliques frustrados
+            try:
+                current_markup = query.message.reply_markup
+                new_keyboard = []
+                if current_markup and current_markup.inline_keyboard:
+                    for row in current_markup.inline_keyboard:
+                        new_row = [btn for btn in row if btn.callback_data != data]
+                        if new_row: new_keyboard.append(new_row)
+                
+                await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(new_keyboard))
+            except:
+                pass
+                
+            await query.answer("Que pena! Outro colega foi mais rápido e já pegou essa missão.", show_alert=True)
 
 
 
