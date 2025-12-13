@@ -1370,7 +1370,8 @@ class App:
                     # Tarefas Únicas podem ser atribuídas múltiplas vezes (ex: reforço esporádico),
                     # pois o histórico deve ser preservado.
                     if tipo_freq_selecionada != 'Unica':
-                        if database.verificar_atribuicao_existente(tarefa_id, funcionario_id):
+                        # Passamos o tipo de frequência para ser mais específico
+                        if database.verificar_atribuicao_existente(tarefa_id, funcionario_id, tipo_freq_selecionada):
                             ignorados += 1
                             logger.warning(f"--> Atribuição Recorrente ignorada: Tarefa {tarefa_id} já ativa para Funcionario {funcionario_id}.")
                             continue
