@@ -264,8 +264,15 @@ document.addEventListener('DOMContentLoaded', function() {
 
         // --- LÓGICA DE HORÁRIO E ALERTA (GRUPOS) ---
         if (tipo === 'para_fazer') {
-            // Verifica se a tarefa tem um horário de disparo definido (vem do Python como string HH:MM:SS)
-            if (tarefa.HorarioDisparo) {
+            
+            // [DEBUG] Imprime no console o que está chegando do banco de dados para diagnóstico
+            // Pressione F12 -> Console para ver esses logs
+            if (tarefa.HorarioDisparo !== undefined) {
+                // console.log(`Tarefa: "${tarefa.Titulo}" | HorarioDisparo: [${tarefa.HorarioDisparo}]`);
+            }
+
+            // Verifica se a tarefa tem um horário de disparo definido e não é vazio
+            if (tarefa.HorarioDisparo && tarefa.HorarioDisparo.trim() !== '') {
                 // Formata para mostrar apenas HH:MM
                 const horaFormatada = tarefa.HorarioDisparo.substring(0, 5);
                 
@@ -280,16 +287,24 @@ document.addEventListener('DOMContentLoaded', function() {
                     
                     // Divide a string "18:00:00" em partes
                     const partes = tarefa.HorarioDisparo.split(':');
-                    dataDisparo.setHours(parseInt(partes[0]), parseInt(partes[1]), 0, 0);
+                    if (partes.length >= 2) {
+                        dataDisparo.setHours(parseInt(partes[0]), parseInt(partes[1]), 0, 0);
 
-                    // Calcula diferença em minutos
-                    // (agora - dataDisparo) dá milissegundos. Dividir por 60000 para minutos.
-                    const diferencaMinutos = (agora - dataDisparo) / 60000;
+                        // Correção para virada do dia (Ex: Tarefa 23:00, Agora 00:10)
+                        // Se o horário de disparo for maior que agora, assumimos que foi ontem
+                        if (dataDisparo > agora) {
+                            dataDisparo.setDate(dataDisparo.getDate() - 1);
+                        }
 
-                    // Se passou de 30 minutos, ativa o alerta
-                    if (diferencaMinutos > 30) {
-                        cardDiv.classList.add('alerta-atraso');
-                        tituloHtml = `<span>⚠️</span> ${tituloHtml}`; // Adiciona ícone de alerta no título
+                        // Calcula diferença em minutos
+                        const diferencaMs = agora - dataDisparo;
+                        const diferencaMinutos = diferencaMs / 1000 / 60;
+
+                        // Se passou de 30 minutos, ativa o alerta
+                        if (diferencaMinutos > 30) {
+                            cardDiv.classList.add('alerta-atraso');
+                            tituloHtml = `<span>⚠️</span> ${tituloHtml}`; // Adiciona ícone de alerta no título
+                        }
                     }
                 } catch (e) {
                     console.error("Erro ao calcular data do alerta:", e);
