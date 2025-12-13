@@ -225,106 +225,80 @@ def verificar_fim_jornada():
         notificador_telegram.enviar_mensagem_com_botao(funcionario.ChatIDTelegram, mensagem, reply_markup)
         print(f"--> Resumo de fim de jornada com convite de feedback enviado para {funcionario.NomeCompleto}.")
 
-# Em agendador.py, SUBSTITUA a função antiga por esta versão com suporte a múltiplos cargos:
-
-# Em agendador.py, SUBSTITUA a função antiga por esta versão com notificações individuais:
-
 def verificar_e_delegar_tarefas_de_folga():
     """
-    (VERSÃO FINAL COM NOTIFICAÇÕES INDIVIDUAIS)
-    Verifica folgas, envia a oferta para os grupos corretos e notifica
-    cada membro do grupo no privado.
+    (VERSÃO CORRIGIDA V2 - ROTEAMENTO POR SETOR)
+    Verifica folgas e delega tarefas baseando-se PRIMEIRO no SETOR DA TAREFA,
+    garantindo que tarefas de cozinha vão para cozinha e atendimento para atendimento.
     """
     print(f"\n[{datetime.now().strftime('%H:%M:%S')}]  Verificando tarefas de funcionários de folga...")
-    
+
     hoje = datetime.now()
     dia_da_semana_hoje = hoje.isoweekday() + 1
     if dia_da_semana_hoje == 8:
         dia_da_semana_hoje = 1
-    
+
     funcionarios_de_folga = database.buscar_funcionarios_de_folga_hoje(dia_da_semana_hoje)
-    
+
     if not funcionarios_de_folga:
-        print("--> Nenhum funcionário de folga hoje. Nenhuma tarefa a ser delegada.")
         return
 
-    print(f"--> Encontrados {len(funcionarios_de_folga)} funcionário(s) de folga hoje.")
     for funcionario in funcionarios_de_folga:
+        # Busca tarefas, agora trazendo o campo 'Setor'
         tarefas_do_dia = database.buscar_tarefas_recorrentes_agendadas_para_hoje(funcionario.FuncionarioID, dia_da_semana_hoje)
-        
+
         if not tarefas_do_dia:
             continue
 
-        lista_de_destinos = []
-        if 'Atendimento' in funcionario.Cargo:
-            lista_de_destinos.append(config.ATENDIMENTO_GROUP_CHAT_ID)
-            print(f"--> Funcionário '{funcionario.NomeCompleto}' tem cargo de Atendimento. Adicionando grupo de Atendimento.")
-        if 'Cozinha' in funcionario.Cargo:
-            lista_de_destinos.append(config.COZINHA_GROUP_CHAT_ID)
-            print(f"--> Funcionário '{funcionario.NomeCompleto}' tem cargo de Cozinha. Adicionando grupo de Cozinha.")
-
-        cargo_funcionario = funcionario.Cargo if funcionario.Cargo else "" # Garante que não seja None
-
-        # Verifica se contém as palavras-chave, independentemente de outros termos
-        if 'Atendimento' in cargo_funcionario:
-            lista_de_destinos.append(config.ATENDIMENTO_GROUP_CHAT_ID)
-            print(f"--> Funcionário '{funcionario.NomeCompleto}' (Cargo: '{cargo_funcionario}') tem cargo de Atendimento. Adicionando grupo de Atendimento.")
-        if 'Cozinha' in cargo_funcionario:
-            lista_de_destinos.append(config.COZINHA_GROUP_CHAT_ID)
-            print(f"--> Funcionário '{funcionario.NomeCompleto}' (Cargo: '{cargo_funcionario}') tem cargo de Cozinha. Adicionando grupo de Cozinha.")
-
-        # Se NENHUM grupo específico foi adicionado, usa o grupo geral de FOLGA como fallback
-        if not lista_de_destinos:
-            lista_de_destinos.append(config.FOLGA_GROUP_CHAT_ID) # <--- ALTERAÇÃO AQUI
-            print(f"--> AVISO: Cargo '{cargo_funcionario}' não mapeado ou vazio. Usando o grupo geral de folgas ID: {config.FOLGA_GROUP_CHAT_ID}.")
-            # Opcional: Notificar gestores também neste caso
-            # notificador_telegram.enviar_mensagem(config.GESTOR_GROUP_CHAT_ID, f"Tarefa de {funcionario.NomeCompleto} (folga, cargo '{cargo_funcionario}') enviada para o grupo geral de folgas.")
+        print(f"--> Processando folga de: {funcionario.NomeCompleto}")
 
         for tarefa in tarefas_do_dia:
+            lista_de_destinos = []
+
+            # --- LÓGICA DE ROTEAMENTO: SETOR DA TAREFA (PRIORIDADE ALTA) ---
+            setor_tarefa = tarefa.Setor.lower() if tarefa.Setor else ""
+
+            # Verifica Cozinha/Produção
+            if 'cozinha' in setor_tarefa or 'produção' in setor_tarefa or 'producao' in setor_tarefa:
+                lista_de_destinos.append(config.COZINHA_GROUP_CHAT_ID)
+
+            # Verifica Atendimento/Loja/Caixa
+            elif 'atendimento' in setor_tarefa or 'loja' in setor_tarefa or 'caixa' in setor_tarefa:
+                lista_de_destinos.append(config.ATENDIMENTO_GROUP_CHAT_ID)
+
+            else:
+                # --- FALLBACK: CARGO DO FUNCIONÁRIO (Se tarefa não tem setor definido) ---
+                cargo_func = funcionario.Cargo.lower() if funcionario.Cargo else ""
+                if 'cozinha' in cargo_func:
+                    lista_de_destinos.append(config.COZINHA_GROUP_CHAT_ID)
+                elif 'atendimento' in cargo_func:
+                    lista_de_destinos.append(config.ATENDIMENTO_GROUP_CHAT_ID)
+                else:
+                    # Último caso: Grupo Geral de Folgas
+                    lista_de_destinos.append(config.FOLGA_GROUP_CHAT_ID)
+
+            # Remove duplicatas e IDs nulos
+            lista_de_destinos = list(set([d for d in lista_de_destinos if d]))
+
             mensagem_grupo = (
                 f"📢 **Missão Extra Disponível!** 📢\n\n"
-                f"O(a) colega **{funcionario.NomeCompleto}** está de folga hoje, mas a tarefa abaixo precisa ser feita:\n\n"
-                f"**Setor:** {tarefa.Setor or 'Geral'}\n"
-                f"**Tarefa:** {tarefa.Titulo}\n"
-                f"**Recompensa:** {tarefa.Pontos} pontos\n\n"
-                "Quem pode assumir essa missão e garantir os pontos?"
+                f"O(a) colega **{funcionario.NomeCompleto}** está de folga hoje.\n\n"
+                f"📍 **Setor:** {tarefa.Setor or 'Geral'}\n"
+                f"📝 **Tarefa:** {tarefa.Titulo}\n"
+                f"🏆 **Recompensa:** {tarefa.Pontos} pontos\n\n"
+                "Quem pode assumir essa missão?"
             )
+
             callback_data = f"aceitar_folga_{tarefa.TarefaID}"
             keyboard = [[InlineKeyboardButton("✅ Eu aceito!", callback_data=callback_data)]]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            
+
             for chat_id_destino in lista_de_destinos:
-                # 1. Envia a mensagem principal para o grupo
-                notificador_telegram.enviar_mensagem_com_botao(chat_id_destino, mensagem_grupo, reply_markup)
-                print(f"--> Tarefa '{tarefa.Titulo}' delegada com sucesso para o grupo ID: {chat_id_destino}.")
-
-                # --- NOVA LÓGICA DE NOTIFICAÇÃO INDIVIDUAL ---
-                membros_do_grupo = database.listar_membros_por_chat_id_grupo(chat_id_destino)
-                if not membros_do_grupo:
-                    print(f"--> AVISO: Nenhum membro encontrado para o grupo {chat_id_destino}. Notificações individuais não enviadas.")
-                    continue
-
-                print(f"--> Encontrados {len(membros_do_grupo)} membros no grupo. Enviando notificações individuais...")
-                
-                grupo_info = database.buscar_grupo_por_chat_id(chat_id_destino)
-                nome_grupo = grupo_info.NomeGrupo if grupo_info else "do seu time"
-
-                mensagem_privada = (
-                    f"🚀 **Oportunidade de Pontos Extras!** 🚀\n\n"
-                    f"Uma nova 'Missão Extra' foi postada no grupo **{nome_grupo}**.\n\n"
-                    f"É a tarefa *'{tarefa.Titulo}'* que vale **{tarefa.Pontos} pontos**!\n\n"
-                    "Seja o primeiro(a) a aceitar no grupo e garanta a pontuação. Boa sorte! 💪"
-                )
-
-                for membro in membros_do_grupo:
-                    # Regra de segurança: não notifica a pessoa que já está de folga.
-                    if membro.FuncionarioID == funcionario.FuncionarioID:
-                        continue
-                        
-                    notificador_telegram.enviar_mensagem(membro.ChatIDTelegram, mensagem_privada)
-                    time.sleep(0.1) # Pausa de 0.1s para não sobrecarregar a API do Telegram
-                
-                logger.info(f"--> Notificações individuais enviadas para os membros do grupo {nome_grupo}.")
+                try:
+                    notificador_telegram.enviar_mensagem_com_botao(chat_id_destino, mensagem_grupo, reply_markup)
+                    print(f"   -> Tarefa '{tarefa.Titulo}' (Setor: {tarefa.Setor}) enviada para grupo {chat_id_destino}")
+                except Exception as e:
+                    print(f"   -> Erro ao enviar para grupo {chat_id_destino}: {e}")
 
 def executar_fechamento_mensal():
     """
@@ -342,10 +316,6 @@ def executar_fechamento_mensal():
         print(f"--> ATENÇÃO: O fechamento para {mes_fechamento}/{ano_fechamento} já foi executado.")
         return
 
-    # ==============================================================================
-    # DEFINIÇÃO DOS PRÊMIOS (Você pode alterar aqui)
-    # ==============================================================================
-    # Sugestão 2: Foco em Produtos (Baixo custo para a empresa)
     premios_cozinha = [
         "🏆 1 Pote 2L + Cobertura + Casquinhas (Kit Família)",
         "🥈 1 Taça Especial do Cardápio (Para comer na loja)",
