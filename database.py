@@ -3327,7 +3327,7 @@ def excluir_documento_pessoal_completo(documento_id):
 def buscar_dados_para_painel_kanban():
     """
     Busca e organiza todas as tarefas para o painel de ação diária.
-    (VERSÃO CORRIGIDA - Inclui Tarefas de Grupo no 'PARA FAZER' e na contagem)
+    (VERSÃO TEMPO REAL - Só mostra tarefas de grupo se o horário já chegou e se ninguém pegou)
     """
     conn = get_db_connection()
     if not conn:
@@ -3336,11 +3336,7 @@ def buscar_dados_para_painel_kanban():
     try:
         cursor = conn.cursor()
 
-        # --- SQL CORRIGIDA ---
-        # A query agora tem 3 PARTES:
-        # 1. Tarefas Individuais de Hoje
-        # 2. Tarefas Individuais Atrasadas
-        # 3. Tarefas de Grupo (Competitivas) de Hoje
+        # A Query foi ajustada para filtrar por HorarioDisparo e checar se já houve aceite
         sql_para_fazer = """
             WITH Datas AS (
                 SELECT
@@ -3348,52 +3344,74 @@ def buscar_dados_para_painel_kanban():
                     DATEADD(day, -1, GETDATE()) as DataOntem,
                     -- Cálculo agnóstico ao idioma: Normaliza para 1=Domingo ... 7=Sábado
                     ((DATEPART(dw, GETDATE()) + @@DATEFIRST - 1) % 7) + 1 as DiaSemanaID_Hoje,
-                    ((DATEPART(dw, DATEADD(day, -1, GETDATE())) + @@DATEFIRST - 1) % 7) + 1 as DiaSemanaID_Ontem
+                    CAST(GETDATE() AS TIME) as HoraAtual -- Hora atual para comparação de disparo
             )
 
             -- Parte 1: Tarefas Individuais de HOJE (FuncionarioID IS NOT NULL)
+            -- (Inclui as tarefas que acabaram de ser aceitas dos grupos, pois elas ganham FuncionarioID)
             SELECT T.Titulo, F.NomeCompleto, T.Pontos, 'Hoje' as Categoria, TA.DataAtribuicao, D.DataHoje as DataReferencia
-            FROM TarefasAtribuidas TA JOIN Tarefas T ON TA.TarefaID = T.TarefaID JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID JOIN Datas D ON 1=1
+            FROM TarefasAtribuidas TA 
+            JOIN Tarefas T ON TA.TarefaID = T.TarefaID 
+            JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID 
+            JOIN Datas D ON 1=1
             WHERE TA.FuncionarioID IS NOT NULL AND TA.DataFimVigencia IS NULL
-            AND NOT EXISTS (SELECT 1 FROM Entregas E WHERE E.AtribuicaoID = TA.AtribuicaoID AND CONVERT(date, E.DataEnvio) = CONVERT(date, D.DataHoje) AND E.StatusValidacao != 'Recusada')
-            AND ( TA.TipoFrequencia = 'Diaria' OR
-                    (TA.TipoFrequencia = 'Semanal' AND CAST(TA.ValorFrequencia AS INT) = D.DiaSemanaID_Hoje) OR
-                    (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, D.DataHoje)) OR
-                    (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = CONVERT(date, D.DataHoje)) OR
-                    (TA.TipoFrequencia = 'Unica' AND CONVERT(date, TA.DataInicioVigencia) = CONVERT(date, D.DataHoje))
-                )
+            -- Filtro de conclusão (Não mostrar se já foi entregue/validada)
+            AND NOT EXISTS (
+                SELECT 1 FROM Entregas E 
+                WHERE E.AtribuicaoID = TA.AtribuicaoID 
+                AND CONVERT(date, E.DataEnvio) = CONVERT(date, D.DataHoje) 
+                AND E.StatusValidacao != 'Recusada'
+            )
+            AND ( 
+                TA.TipoFrequencia = 'Diaria'
+                OR (TA.TipoFrequencia = 'Semanal' AND CAST(TA.ValorFrequencia AS INT) = D.DiaSemanaID_Hoje)
+                OR (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, D.DataHoje))
+                OR (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = CONVERT(date, D.DataHoje))
+                OR (TA.TipoFrequencia = 'Unica' AND CONVERT(date, TA.DataInicioVigencia) = CONVERT(date, D.DataHoje))
+            )
             AND (F.DiaDeFolga IS NULL OR F.DiaDeFolga = 0 OR F.DiaDeFolga != D.DiaSemanaID_Hoje)
-
 
             UNION ALL
 
-            -- Parte 3: Tarefas de GRUPO de HOJE (GrupoID IS NOT NULL)
+            -- Parte 2: Tarefas de GRUPO de HOJE (GrupoID IS NOT NULL)
+            -- (MODIFICADO PARA TEMPO REAL)
             SELECT T.Titulo, G.NomeGrupo AS NomeCompleto, T.Pontos, 'Hoje' as Categoria, TA.DataAtribuicao, D.DataHoje as DataReferencia
-            FROM TarefasAtribuidas TA JOIN Tarefas T ON TA.TarefaID = T.TarefaID JOIN Grupos G ON TA.GrupoID = G.GrupoID JOIN Datas D ON 1=1
+            FROM TarefasAtribuidas TA 
+            JOIN Tarefas T ON TA.TarefaID = T.TarefaID 
+            JOIN Grupos G ON TA.GrupoID = G.GrupoID 
+            JOIN Datas D ON 1=1
             WHERE TA.GrupoID IS NOT NULL AND TA.DataFimVigencia IS NULL
-            -- Verifica se NÃO existe uma 'Unica' ACEITA para esta origem HOJE
+            
+            -- FILTRO 1: Só mostra se NINGUÉM aceitou ainda hoje (não existe filha criada hoje)
             AND NOT EXISTS (
                 SELECT 1 FROM TarefasAtribuidas TA_Aceita
                 WHERE TA_Aceita.OrigemAtribuicaoID = TA.AtribuicaoID
                 AND CONVERT(date, TA_Aceita.DataAgendamento) = CONVERT(date, D.DataHoje)
                 AND TA_Aceita.StatusTarefaGrupo = 'Aceita'
             )
-            -- Verifica se o horário de disparo é HOJE
+            
+            -- FILTRO 2: Verifica o dia correto da recorrência
             AND (
                 (TA.TipoFrequencia = 'GrupoDiaria') OR
                 (TA.TipoFrequencia = 'GrupoSemanal' AND TA.ValorFrequencia = D.DiaSemanaID_Hoje) OR
                 (TA.TipoFrequencia = 'GrupoMensal' AND TA.ValorFrequencia = DATEPART(day, D.DataHoje))
             )
 
+            -- FILTRO 3 (NOVO): Só mostra se a hora atual for MAIOR ou IGUAL ao horário de disparo
+            -- Isso esconde as tarefas das 21:00 se ainda for 18:00.
+            AND (
+                TA.HorarioDisparo IS NULL 
+                OR 
+                CAST(TA.HorarioDisparo AS TIME) <= D.HoraAtual
+            )
+
             ORDER BY NomeCompleto, Categoria DESC;
         """
-        # --- FIM DA SQL CORRIGIDA ---
 
         cursor.execute(sql_para_fazer)
         para_fazer_cols = [column[0] for column in cursor.description]
         para_fazer_rows = cursor.fetchall()
 
-        # O restante do código permanece o MESMO
         sql_validacao = "SELECT T.Titulo, F.NomeCompleto, E.DataEnvio, T.Pontos FROM Entregas E JOIN Tarefas T ON E.TarefaID = T.TarefaID JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID WHERE E.StatusValidacao = 'Pendente' ORDER BY E.DataEnvio;"
         cursor.execute(sql_validacao)
         validacao_cols = [column[0] for column in cursor.description]
@@ -3407,13 +3425,11 @@ def buscar_dados_para_painel_kanban():
         para_fazer_lista = [dict(zip(para_fazer_cols, row)) for row in para_fazer_rows]
         concluidas_lista = [dict(zip(concluidas_cols, row)) for row in concluidas_rows]
 
-        # Esta lógica agora está CORRETA, pois 'para_fazer_lista' inclui tarefas de grupo e individuais
         tarefas_hoje_e_atrasadas_pendentes = len(para_fazer_lista)
         total_concluidas_hoje = len(concluidas_lista)
         total_tarefas_do_dia_ou_atrasadas = tarefas_hoje_e_atrasadas_pendentes + total_concluidas_hoje
 
         progresso = { "concluidas": total_concluidas_hoje, "total": total_tarefas_do_dia_ou_atrasadas }
-
 
         return {
             'para_fazer': para_fazer_lista,
@@ -3422,13 +3438,11 @@ def buscar_dados_para_painel_kanban():
             'progresso': progresso
         }
     except Exception as e:
-        logger.exception(f"ERRO ao buscar dados para o painel Kanban: {e}") # Use logger.exception
+        logger.exception(f"ERRO ao buscar dados para o painel Kanban: {e}")
         return {'para_fazer': [], 'validacao': [], 'concluidas': [], 'progresso': {}}
     finally:
         if conn:
             conn.close()
-
-
 
 def buscar_ranking_do_dia():
     """
