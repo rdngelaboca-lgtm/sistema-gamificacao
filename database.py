@@ -3326,7 +3326,7 @@ def excluir_documento_pessoal_completo(documento_id):
 def buscar_dados_para_painel_kanban():
     """
     Busca e organiza todas as tarefas para o painel de ação diária.
-    (VERSÃO CORRIGIDA - Tratamento de Erros e Colunas)
+    (VERSÃO FINAL CORRIGIDA - Tempo Real + Horário Formatado)
     """
     conn = get_db_connection()
     if not conn:
@@ -3335,14 +3335,17 @@ def buscar_dados_para_painel_kanban():
     try:
         cursor = conn.cursor()
 
-        # Query principal para tarefas "PARA FAZER"
+        # Query otimizada e unificada
         sql_para_fazer = """
             WITH Datas AS (
                 SELECT
                     GETDATE() as DataHoje,
-                    CAST(GETDATE() AS TIME) as HoraAtual
+                    -- Pega a hora atual do servidor (formato HH:MM:SS)
+                    CONVERT(VARCHAR(8), GETDATE(), 108) as HoraAtualTexto,
+                    ((DATEPART(dw, GETDATE()) + @@DATEFIRST - 1) % 7) + 1 as DiaSemanaID_Hoje
             )
-            -- Parte 1: Tarefas Individuais
+
+            -- Parte 1: Tarefas Individuais (Já atribuídas a uma pessoa)
             SELECT 
                 T.Titulo, 
                 F.NomeCompleto, 
@@ -3350,30 +3353,34 @@ def buscar_dados_para_painel_kanban():
                 'Hoje' as Categoria, 
                 TA.DataAtribuicao, 
                 D.DataHoje as DataReferencia,
-                NULL as HorarioDisparo
+                NULL as HorarioDisparo -- Tarefas individuais não mostram horário de disparo
             FROM TarefasAtribuidas TA 
             JOIN Tarefas T ON TA.TarefaID = T.TarefaID 
             JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID 
             JOIN Datas D ON 1=1
-            WHERE TA.FuncionarioID IS NOT NULL AND TA.DataFimVigencia IS NULL
-            AND NOT EXISTS (
-                SELECT 1 FROM Entregas E 
-                WHERE E.AtribuicaoID = TA.AtribuicaoID 
-                AND CONVERT(date, E.DataEnvio) = CONVERT(date, D.DataHoje) 
-                AND E.StatusValidacao != 'Recusada'
-            )
-            AND ( 
-                TA.TipoFrequencia = 'Diaria'
-                OR (TA.TipoFrequencia = 'Semanal' AND CAST(TA.ValorFrequencia AS INT) = ((DATEPART(dw, GETDATE()) + @@DATEFIRST - 1) % 7) + 1)
-                OR (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, D.DataHoje))
-                OR (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = CONVERT(date, D.DataHoje))
-                OR (TA.TipoFrequencia = 'Unica' AND CONVERT(date, TA.DataInicioVigencia) = CONVERT(date, D.DataHoje))
-            )
-            AND (F.DiaDeFolga IS NULL OR F.DiaDeFolga = 0 OR F.DiaDeFolga != ((DATEPART(dw, GETDATE()) + @@DATEFIRST - 1) % 7) + 1)
+            WHERE TA.FuncionarioID IS NOT NULL 
+              AND TA.DataFimVigencia IS NULL
+              -- Não mostra se já foi concluída/entregue hoje
+              AND NOT EXISTS (
+                  SELECT 1 FROM Entregas E 
+                  WHERE E.AtribuicaoID = TA.AtribuicaoID 
+                  AND CONVERT(date, E.DataEnvio) = CONVERT(date, D.DataHoje) 
+                  AND E.StatusValidacao != 'Recusada'
+              )
+              -- Regras de recorrência para aparecer hoje
+              AND ( 
+                  TA.TipoFrequencia = 'Diaria'
+                  OR (TA.TipoFrequencia = 'Semanal' AND CAST(TA.ValorFrequencia AS INT) = D.DiaSemanaID_Hoje)
+                  OR (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, D.DataHoje))
+                  OR (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = CONVERT(date, D.DataHoje))
+                  OR (TA.TipoFrequencia = 'Unica' AND CONVERT(date, TA.DataInicioVigencia) = CONVERT(date, D.DataHoje))
+              )
+              -- Não mostra se o funcionário está de folga hoje
+              AND (F.DiaDeFolga IS NULL OR F.DiaDeFolga = 0 OR F.DiaDeFolga != D.DiaSemanaID_Hoje)
 
             UNION ALL
 
-            -- Parte 2: Tarefas de GRUPO
+            -- Parte 2: Tarefas de GRUPO (Disponíveis para pegar)
             SELECT 
                 T.Titulo, 
                 G.NomeGrupo AS NomeCompleto, 
@@ -3381,13 +3388,16 @@ def buscar_dados_para_painel_kanban():
                 'Hoje' as Categoria, 
                 TA.DataAtribuicao, 
                 D.DataHoje as DataReferencia,
-                CONVERT(VARCHAR(5), TA.HorarioDisparo, 108) as HorarioDisparo -- Converte para string HH:MM
+                -- Formata o horário para HH:MM garantido (ex: 18:00)
+                ISNULL(CONVERT(VARCHAR(5), TA.HorarioDisparo, 108), '') as HorarioDisparo
             FROM TarefasAtribuidas TA 
             JOIN Tarefas T ON TA.TarefaID = T.TarefaID 
             JOIN Grupos G ON TA.GrupoID = G.GrupoID 
             JOIN Datas D ON 1=1
-            WHERE TA.GrupoID IS NOT NULL AND TA.DataFimVigencia IS NULL
+            WHERE TA.GrupoID IS NOT NULL 
+              AND TA.DataFimVigencia IS NULL
             
+            -- Filtro 1: Não mostra se alguém JÁ PEGOU hoje (existe uma tarefa filha aceita)
             AND NOT EXISTS (
                 SELECT 1 FROM TarefasAtribuidas TA_Aceita
                 WHERE TA_Aceita.OrigemAtribuicaoID = TA.AtribuicaoID
@@ -3395,54 +3405,40 @@ def buscar_dados_para_painel_kanban():
                 AND TA_Aceita.StatusTarefaGrupo = 'Aceita'
             )
             
+            -- Filtro 2: Regras de recorrência de grupo
             AND (
                 (TA.TipoFrequencia = 'GrupoDiaria') OR
-                (TA.TipoFrequencia = 'GrupoSemanal' AND TA.ValorFrequencia = ((DATEPART(dw, GETDATE()) + @@DATEFIRST - 1) % 7) + 1) OR
+                (TA.TipoFrequencia = 'GrupoSemanal' AND TA.ValorFrequencia = D.DiaSemanaID_Hoje) OR
                 (TA.TipoFrequencia = 'GrupoMensal' AND TA.ValorFrequencia = DATEPART(day, D.DataHoje))
             )
 
+            -- Filtro 3 (TEMPO REAL): Só mostra se o horário de disparo já passou ou é agora
+            -- Comparamos string HH:MM:SS para garantir funcionamento independente de tipos complexos
             AND (
                 TA.HorarioDisparo IS NULL 
                 OR 
-                CAST(TA.HorarioDisparo AS TIME) <= D.HoraAtual
+                CONVERT(VARCHAR(8), TA.HorarioDisparo, 108) <= D.HoraAtualTexto
             )
 
             ORDER BY NomeCompleto, Categoria DESC;
         """
 
         cursor.execute(sql_para_fazer)
-        # Use description to dynamically get column names
+        # Mapeamento dinâmico das colunas para evitar erros de índice
         columns = [column[0] for column in cursor.description]
         para_fazer_lista = [dict(zip(columns, row)) for row in cursor.fetchall()]
 
-        # Query para tarefas EM VALIDAÇÃO
-        sql_validacao = """
-            SELECT T.Titulo, F.NomeCompleto, E.DataEnvio, T.Pontos 
-            FROM Entregas E 
-            JOIN Tarefas T ON E.TarefaID = T.TarefaID 
-            JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID 
-            WHERE E.StatusValidacao = 'Pendente' 
-            ORDER BY E.DataEnvio;
-        """
+        # (Consultas de validação e concluídas permanecem iguais, mantidas por segurança)
+        sql_validacao = "SELECT T.Titulo, F.NomeCompleto, E.DataEnvio, T.Pontos FROM Entregas E JOIN Tarefas T ON E.TarefaID = T.TarefaID JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID WHERE E.StatusValidacao = 'Pendente' ORDER BY E.DataEnvio;"
         cursor.execute(sql_validacao)
-        columns_val = [column[0] for column in cursor.description]
-        validacao_lista = [dict(zip(columns_val, row)) for row in cursor.fetchall()]
+        cols_val = [column[0] for column in cursor.description]
+        validacao_lista = [dict(zip(cols_val, row)) for row in cursor.fetchall()]
 
-        # Query para tarefas CONCLUÍDAS HOJE
-        sql_concluidas = """
-            SELECT T.Titulo, F.NomeCompleto, E.DataEnvio, E.PontosGanhos as Pontos 
-            FROM Entregas E 
-            JOIN Tarefas T ON E.TarefaID = T.TarefaID 
-            JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID 
-            WHERE E.StatusValidacao = 'Aprovada' 
-            AND CONVERT(date, E.DataEnvio) = CONVERT(date, GETDATE()) 
-            ORDER BY E.DataEnvio DESC;
-        """
+        sql_concluidas = "SELECT T.Titulo, F.NomeCompleto, E.DataEnvio, E.PontosGanhos as Pontos FROM Entregas E JOIN Tarefas T ON E.TarefaID = T.TarefaID JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID WHERE E.StatusValidacao = 'Aprovada' AND CONVERT(date, E.DataEnvio) = CONVERT(date, GETDATE()) ORDER BY E.DataEnvio DESC;"
         cursor.execute(sql_concluidas)
-        columns_conc = [column[0] for column in cursor.description]
-        concluidas_lista = [dict(zip(columns_conc, row)) for row in cursor.fetchall()]
+        cols_conc = [column[0] for column in cursor.description]
+        concluidas_lista = [dict(zip(cols_conc, row)) for row in cursor.fetchall()]
 
-        # Cálculo do progresso
         total_pendentes = len(para_fazer_lista)
         total_concluidas = len(concluidas_lista)
         total_geral = total_pendentes + total_concluidas
@@ -3462,7 +3458,7 @@ def buscar_dados_para_painel_kanban():
     finally:
         if conn:
             conn.close()
-                        
+                                    
 def buscar_ranking_do_dia():
     """
     Calcula o ranking dos 3 funcionários com mais pontos APROVADOS HOJE.
