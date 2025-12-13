@@ -30,15 +30,13 @@ def enviar_mensagem_whatsapp(numero, texto):
 
     # ==============================================================================
     # 🔒 CONFIGURAÇÃO DE SEGURANÇA (CLIENT TOKEN) 🔒
-    # Este token foi gerado na aba "Segurança" do painel Z-API.
+    # Token movido para config.py para segurança.
     # ==============================================================================
-    
-    CLIENT_TOKEN_SECRETO = "F7880a7b372194b21b5ca96fb4360cde1S" 
-    
+
     # Cabeçalhos obrigatórios para autenticação segura
     headers = {
         "Content-Type": "application/json",
-        "Client-Token": CLIENT_TOKEN_SECRETO
+        "Client-Token": config.ZAPI_CLIENT_TOKEN
     }
 
     logger.info(f"Disparando WPP para {numero_limpo} via Z-API Segura...")
