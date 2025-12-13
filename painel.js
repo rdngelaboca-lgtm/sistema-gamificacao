@@ -262,15 +262,46 @@ document.addEventListener('DOMContentLoaded', function() {
         let tituloHtml = `<span>${tarefa.Titulo}</span>`;
         let infoExtra = '';
 
+        // --- LÓGICA DE HORÁRIO E ALERTA (GRUPOS) ---
         if (tipo === 'para_fazer') {
-            // Formata a data de referência que vem da API
-            const dataRef = new Date(tarefa.DataReferencia);
-            const dataRefFormatada = dataRef.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+            // Verifica se a tarefa tem um horário de disparo definido (vem do Python como string HH:MM:SS)
+            if (tarefa.HorarioDisparo) {
+                // Formata para mostrar apenas HH:MM
+                const horaFormatada = tarefa.HorarioDisparo.substring(0, 5);
+                
+                // Adiciona o horário visualmente no card
+                infoExtra += `<span class="card-hora-grupo">🕒 Disparado às ${horaFormatada}</span>`;
 
-            // Adiciona a data no card
-            infoExtra = `<p class="card-info">Referente a: ${dataRefFormatada}</p>`; 
+                // --- CÁLCULO DE ATRASO ---
+                try {
+                    // Cria datas para comparação
+                    const agora = new Date();
+                    const dataDisparo = new Date();
+                    
+                    // Divide a string "18:00:00" em partes
+                    const partes = tarefa.HorarioDisparo.split(':');
+                    dataDisparo.setHours(parseInt(partes[0]), parseInt(partes[1]), 0, 0);
 
-            // Adiciona a tag "ATRASADA" se for o caso
+                    // Calcula diferença em minutos
+                    // (agora - dataDisparo) dá milissegundos. Dividir por 60000 para minutos.
+                    const diferencaMinutos = (agora - dataDisparo) / 60000;
+
+                    // Se passou de 30 minutos, ativa o alerta
+                    if (diferencaMinutos > 30) {
+                        cardDiv.classList.add('alerta-atraso');
+                        tituloHtml = `<span>⚠️</span> ${tituloHtml}`; // Adiciona ícone de alerta no título
+                    }
+                } catch (e) {
+                    console.error("Erro ao calcular data do alerta:", e);
+                }
+            } else if (tarefa.DataReferencia) {
+                // Fallback para tarefas individuais: mostra apenas a data simples
+                const dataRef = new Date(tarefa.DataReferencia);
+                const dataRefFormatada = dataRef.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+                infoExtra = `<p class="card-info">Data: ${dataRefFormatada}</p>`;
+            }
+            
+            // Tag de Atrasada (para tarefas individuais antigas)
             if (tarefa.Categoria === 'Atrasada') {
                 tituloHtml += `<span class="card-tag-atrasada">ATRASADA</span>`;
             }
@@ -285,8 +316,7 @@ document.addEventListener('DOMContentLoaded', function() {
             infoExtra = `<p class="card-info">Concluída em: ${formatarHora(tarefa.DataEnvio)}</p>`;
         }
 
-        // A linha abaixo foi ajustada para não mostrar "Funcionário: undefined"
-        const infoFuncionario = tarefa.NomeCompleto ? `<p class="card-info">Funcionário: ${tarefa.NomeCompleto}</p>` : '';
+        const infoFuncionario = tarefa.NomeCompleto ? `<p class="card-info">Responsável: ${tarefa.NomeCompleto}</p>` : '';
 
         cardDiv.innerHTML = `<div class="card-titulo">${tituloHtml}</div>${infoFuncionario}${infoExtra}<p class="card-pontos">+ ${tarefa.Pontos || tarefa.PontosGanhos} pts</p>`;
         return cardDiv;
