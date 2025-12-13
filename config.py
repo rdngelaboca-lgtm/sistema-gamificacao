@@ -76,6 +76,8 @@ TAREFA_ID_GUARDAR_MERCADORIA_MODELO = 157 # <--- SUBSTITUA O 0 PELO ID CORRETO
 # Seus dados obtidos no painel do z-api.io (Conforme print enviado)
 ZAPI_INSTANCE_ID = "3EB36324A185017B5FF226D356DD90A9" 
 ZAPI_TOKEN = "0A46EB01B39DF4EA213B5F3F"
+# Token de Segurança (Client-Token) para autenticação na Z-API
+ZAPI_CLIENT_TOKEN = "F7880a7b372194b21b5ca96fb4360cde1S"
 
 # URL Base padrão da Z-API
 WPP_API_URL = f"https://api.z-api.io/instances/{ZAPI_INSTANCE_ID}/token/{ZAPI_TOKEN}/send-text"
