@@ -599,3 +599,28 @@ body {
 .progresso-lucro-barra.meta-prejuizo {
     background: #dc3545 !important; /* Vermelho alerta */
 }
+
+/* --- NOVOS ESTILOS: Alerta de Tarefas de Grupo --- */
+
+/* Animação de pulsar em vermelho */
+@keyframes piscarAlerta {
+    0% { background-color: #fff; border-left-color: #007bff; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    50% { background-color: #fff0f0; border-left-color: #dc3545; box-shadow: 0 0 8px rgba(220, 53, 69, 0.4); }
+    100% { background-color: #fff; border-left-color: #007bff; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+}
+
+.card.alerta-atraso {
+    animation: piscarAlerta 2s infinite; /* Executa a animação infinitamente a cada 2s */
+    border: 1px solid #dc3545 !important; /* Borda vermelha forçada */
+}
+
+/* Estilo para o horário no card */
+.card-hora-grupo {
+    font-size: 0.85em;
+    font-weight: bold;
+    color: #6c757d;
+    margin-top: 5px;
+    display: block;
+    padding-top: 3px;
+    border-top: 1px dashed #e9ecef;
+}
