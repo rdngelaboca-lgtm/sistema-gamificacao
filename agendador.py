@@ -108,12 +108,14 @@ def verificar_e_enviar_tarefas_de_grupo():
     for tarefa in tarefas_para_disparar:
         atribuicao_id, titulo, pontos, nome_grupo, chat_id, *_ = tarefa
 
-        # --- LÓGICA ANTI-DUPLICAÇÃO ---
-        # Cria uma assinatura única para este envio: (ID da Atribuição, Minuto Atual)
-        assinatura_envio = (atribuicao_id, chave_dia_atual)
+        # --- LÓGICA ANTI-DUPLICAÇÃO (CORRIGIDA) ---
+        # Alteramos a chave para usar Título + Chat + Horário. 
+        # Isso impede que tarefas duplicadas no banco (IDs diferentes, mesmo conteúdo) sejam enviadas duas vezes.
+        assinatura_envio = (chat_id, titulo, agora_hm, chave_dia_atual)
 
         if assinatura_envio in cache_tarefas_enviadas:
-            print(f"--> [ANTI-FLOOD] Tarefa '{titulo}' (ID {atribuicao_id}) já enviada neste minuto. Ignorando.")
+            # Log silencioso para não poluir o terminal se houver muitas duplicatas
+            # print(f"--> [ANTI-FLOOD] Tarefa '{titulo}' já enviada para este grupo neste horário. Ignorando.")
             continue
         
         # Se não está no cache, adiciona
@@ -136,7 +138,7 @@ def verificar_e_enviar_tarefas_de_grupo():
 
         try:
             notificador_telegram.enviar_mensagem_com_botao(chat_id, mensagem, reply_markup)
-            print(f"--> SUCESSO: Missão '{titulo}' enviada para '{nome_grupo}'.")
+            print(f"--> SUCESSO: Missão '{titulo}' enviada para '{nome_grupo}' às {agora_hm}.")
         except Exception as e:
             print(f"--> ERRO AO ENVIAR no Telegram: {e}")
 
