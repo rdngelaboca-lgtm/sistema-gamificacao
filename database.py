@@ -1291,23 +1291,29 @@ def remover_membro_do_grupo(funcionario_id, grupo_id):
 
 def agendar_tarefa_recorrente_para_grupo(tarefa_id, grupo_id, tipo_frequencia_grupo, valor_frequencia, horario_disparo):
     """
-    (VERSÃO CORRIGIDA - ANTI-DUPLICIDADE)
-    Encerra qualquer agendamento anterior ATIVO para esta mesma combinação (Tarefa + Grupo)
-    antes de criar o novo agendamento.
+    (VERSÃO CORRIGIDA V3 - PERMITE MÚLTIPLOS HORÁRIOS)
+    Agenda uma tarefa recorrente.
+    IMPORTANTE: Só remove agendamentos anteriores se forem para o MESMO GRUPO e MESMO HORÁRIO.
+    Isso permite ter a mesma tarefa às 18:00 e às 20:00, mas evita duplicidade no mesmo horário.
     """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-
-            # 1. LIMPEZA PREVENTIVA: Encerra agendamentos ativos idênticos (mesma tarefa e grupo)
+            
+            # 1. LIMPEZA ESPECÍFICA: Encerra agendamentos ativos idênticos (mesma tarefa, grupo E HORÁRIO)
+            # A mudança está aqui: adicionamos "AND HorarioDisparo = ?"
             sql_limpeza = """
                 UPDATE TarefasAtribuidas 
                 SET DataFimVigencia = GETDATE() 
-                WHERE TarefaID = ? AND GrupoID = ? AND DataFimVigencia IS NULL
+                WHERE TarefaID = ? 
+                  AND GrupoID = ? 
+                  AND DataFimVigencia IS NULL
+                  -- Converte para string HH:MM para garantir comparação correta independente de data
+                  AND CONVERT(VARCHAR(5), HorarioDisparo, 108) = ?
             """
-            cursor.execute(sql_limpeza, tarefa_id, grupo_id)
-
+            cursor.execute(sql_limpeza, tarefa_id, grupo_id, horario_disparo)
+            
             # 2. Cria o novo agendamento
             sql_insert = """
                 INSERT INTO TarefasAtribuidas
@@ -1315,7 +1321,7 @@ def agendar_tarefa_recorrente_para_grupo(tarefa_id, grupo_id, tipo_frequencia_gr
                 VALUES (?, ?, ?, ?, ?, 'Disponivel', GETDATE())
             """
             cursor.execute(sql_insert, tarefa_id, grupo_id, tipo_frequencia_grupo, valor_frequencia, horario_disparo)
-
+            
             conn.commit()
             return True
         except Exception as e:
