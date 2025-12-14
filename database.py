@@ -1351,7 +1351,6 @@ def agendar_tarefa_recorrente_para_grupo(tarefa_id, grupo_id, tipo_frequencia_gr
             conn.close()
     return False
 
-# Em database.py, SUBSTITUA a função buscar_tarefas_de_grupo_para_disparar por esta versão inteligente:
 def buscar_tarefas_de_grupo_para_disparar(horario_atual, dia_semana_hoje, dia_mes_hoje):
     """
     (VERSÃO FINAL - SUPORTA DIARIA/SEMANAL/MENSAL)
@@ -1370,8 +1369,12 @@ def buscar_tarefas_de_grupo_para_disparar(horario_atual, dia_semana_hoje, dia_me
                 JOIN Tarefas T ON TA.TarefaID = T.TarefaID
                 JOIN Grupos G ON TA.GrupoID = G.GrupoID
                 WHERE
+                    -- Condição 0: A tarefa deve estar ATIVA (não excluída)
+                    TA.DataFimVigencia IS NULL
+
                     -- Condição 1: O horário deve bater
-                    CONVERT(VARCHAR(5), TA.HorarioDisparo, 108) = ?
+                    AND CONVERT(VARCHAR(5), TA.HorarioDisparo, 108) = ?
+
                     -- Condição 2: E a frequência deve corresponder ao dia de hoje
                     AND (
                         -- Se for Diaria, sempre dispara
