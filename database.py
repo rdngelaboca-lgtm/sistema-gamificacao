@@ -53,6 +53,44 @@ logger = logging.getLogger(__name__)
 
 logger.info(f"*** Logging configurado para o módulo: {__name__} ***")
 
+# --- MIGRAÇÃO DE SCHEMA (RH AVANÇADO) ---
+def verificar_migracao_rh_avancado():
+    """Garante que as colunas de Telefone, Folga Domingo e Afastamento existam."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # 1. Telefone
+            try:
+                cursor.execute("SELECT TelefoneWhatsApp FROM Funcionarios WHERE 1=0")
+            except:
+                cursor.execute("ALTER TABLE Funcionarios ADD TelefoneWhatsApp VARCHAR(20)")
+                logger.info("Migração: Coluna TelefoneWhatsApp adicionada.")
+            
+            # 2. Domingo de Folga (1=1º dom, 2=2º dom, etc. 0=Não usa)
+            try:
+                cursor.execute("SELECT DomingoFolgaMensal FROM Funcionarios WHERE 1=0")
+            except:
+                cursor.execute("ALTER TABLE Funcionarios ADD DomingoFolgaMensal INT DEFAULT 0")
+                logger.info("Migração: Coluna DomingoFolgaMensal adicionada.")
+
+            # 3. Afastamento (Datas)
+            try:
+                cursor.execute("SELECT DataInicioAfastamento FROM Funcionarios WHERE 1=0")
+            except:
+                cursor.execute("ALTER TABLE Funcionarios ADD DataInicioAfastamento DATE NULL")
+                cursor.execute("ALTER TABLE Funcionarios ADD DataFimAfastamento DATE NULL")
+                logger.info("Migração: Colunas de Afastamento adicionadas.")
+                
+            conn.commit()
+        except Exception as e:
+            logger.error(f"Erro na migração RH Avançado: {e}")
+        finally:
+            conn.close()
+
+# Executa ao importar
+verificar_migracao_rh_avancado()
+
 # ==============================================================================
 # == FIM BLOCO DE CONFIGURAÇÃO DE LOGGING ======================================
 # ==============================================================================
@@ -445,76 +483,60 @@ def registrar_tarefa_nao_aplicavel(atribuicao_id, justificativa):
         finally:
             conn.close()
 
-def atualizar_funcionario(funcionario_id, nome, chat_id, cargo, horario_notificacao, dia_folga, verificador_cpf): # 1. Novo parâmetro
+def atualizar_funcionario(funcionario_id, nome, chat_id, cargo, horario_notificacao, dia_folga, verificador_cpf, telefone=None, domingo_folga=0, inicio_afastamento=None, fim_afastamento=None):
+    """Atualiza dados do funcionário, incluindo novos campos de RH (Telefone, Escala 6x1, Férias)."""
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
+            # Trata datas vazias ou strings vazias como None para o banco
+            inicio = inicio_afastamento if (inicio_afastamento and str(inicio_afastamento).strip()) else None
+            fim = fim_afastamento if (fim_afastamento and str(fim_afastamento).strip()) else None
+            domingo = int(domingo_folga) if domingo_folga else 0
+
             sql = """
                 UPDATE Funcionarios 
-                SET NomeCompleto = ?, ChatIDTelegram = ?, Cargo = ?, HorarioNotificacao = ?, DiaDeFolga = ?, VerificadorCPF = ? -- 2. Nova coluna
+                SET NomeCompleto = ?, ChatIDTelegram = ?, Cargo = ?, 
+                    HorarioNotificacao = ?, DiaDeFolga = ?, VerificadorCPF = ?,
+                    TelefoneWhatsApp = ?, DomingoFolgaMensal = ?,
+                    DataInicioAfastamento = ?, DataFimAfastamento = ?
                 WHERE FuncionarioID = ?
             """
-            cursor.execute(sql, nome, chat_id, cargo, horario_notificacao, dia_folga, verificador_cpf, funcionario_id) # 3. Novo valor
+            cursor.execute(sql, nome, chat_id, cargo, horario_notificacao, dia_folga, verificador_cpf, 
+                           telefone, domingo, inicio, fim, funcionario_id)
             conn.commit()
+        except Exception as e:
+            logger.error(f"Erro ao atualizar funcionário completo: {e}", exc_info=True)
+            raise e # Relança para a interface mostrar o erro
         finally:
             conn.close()
 
 # Em database.py, esta é a ÚNICA versão da função que deve existir no seu código.
 
-def listar_funcionarios_por_tarefa(tarefa_id):
+def listar_funcionarios():
     """
-    Retorna duas listas de funcionários: os que JÁ ESTÃO atribuídos a uma tarefa ATIVA
-    e os que AINDA NÃO ESTÃO. (VERSÃO FINAL E CORRETA)
+    (CORREÇÃO FINAL DE SCHEMA) Lista TODOS os campos de Funcionarios, incluindo RH Avançado,
+    para garantir que o agendador veja as folgas e férias.
     """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            
-            # Pergunta 1: Quem JÁ tem essa tarefa ATIVA?
-            # A query verifica se a tarefa não foi encerrada (DataFimVigencia IS NULL).
-            sql_atribuidos = """
+            # ADICIONADOS: DomingoFolgaMensal, DataInicioAfastamento, DataFimAfastamento
+            sql = """
                 SELECT 
-                    TA.AtribuicaoID, F.NomeCompleto, 
-                    TA.TipoFrequencia + 
-                    CASE 
-                        WHEN TA.TipoFrequencia = 'Semanal' THEN ' (' + 
-                            CASE TA.ValorFrequencia 
-                                WHEN '1' THEN 'Dom' WHEN '2' THEN 'Seg' WHEN '3' THEN 'Ter'
-                                WHEN '4' THEN 'Qua' WHEN '5' THEN 'Qui' WHEN '6' THEN 'Sex'
-                                WHEN '7' THEN 'Sab'
-                            END + ')'
-                        WHEN TA.TipoFrequencia = 'Mensal' THEN ' (Dia ' + CAST(TA.ValorFrequencia AS VARCHAR) + ')'
-                        ELSE '' 
-                    END AS FrequenciaCompleta
-                FROM Funcionarios F
-                JOIN TarefasAtribuidaS TA ON F.FuncionarioID = TA.FuncionarioID
-                WHERE TA.TarefaID = ? AND TA.DataFimVigencia IS NULL
-                ORDER BY F.NomeCompleto
+                    FuncionarioID, NomeCompleto, CPF, ChatIDTelegram, TelefoneWhatsApp, 
+                    Cargo, Setor, SaldoPontos, HorarioNotificacao, DiaDeFolga, 
+                    VerificadorCPF, NivelAcesso, PosicaoPadraoID,
+                    DomingoFolgaMensal, DataInicioAfastamento, DataFimAfastamento
+                FROM Funcionarios 
+                ORDER BY NomeCompleto
             """
-            cursor.execute(sql_atribuidos, tarefa_id)
-            atribuidos = cursor.fetchall()
-            
-            # Pergunta 2: Quem AINDA NÃO tem essa tarefa ATIVA?
-            # A subquery ignora tarefas que já foram encerradas.
-            sql_disponiveis = """
-                SELECT * FROM Funcionarios F
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM TarefasAtribuidas TA
-                    WHERE TA.TarefaID = ? AND TA.FuncionarioID = F.FuncionarioID AND TA.DataFimVigencia IS NULL
-                )
-                ORDER BY F.NomeCompleto
-            """
-            cursor.execute(sql_disponiveis, tarefa_id)
-            disponiveis = cursor.fetchall()
-            
-            return atribuidos, disponiveis
+            cursor.execute(sql)
+            return cursor.fetchall()
         finally:
             conn.close()
-    return [], []    
-
- ### ADICIONE ESTA FUNÇÃO AO SEU ARQUIVO database.py ###
+    return []
 
 def buscar_funcionarios_por_horario(horario_atual):
     """Busca funcionários para notificação de início, RESPEITANDO O DIA DE FOLGA."""
@@ -3462,7 +3484,7 @@ def buscar_dados_para_painel_kanban():
     finally:
         if conn:
             conn.close()
-                                                            
+
 def buscar_ranking_do_dia():
     """
     Calcula o ranking dos 3 funcionários com mais pontos APROVADOS HOJE.
