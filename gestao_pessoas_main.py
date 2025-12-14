@@ -285,7 +285,7 @@ class AppGestaoPessoas:
         confirmado = messagebox.askyesno("Confirmar Aprovação", f"Tem certeza que deseja aprovar o exame admissional para {nome_funcionario}?\n\nIsso liberará o acesso TOTAL dele ao Bot Telegram.")
 
         if confirmado:
-            hoje = datetime.now().strftime('%Y-%m-%d')
+            hoje = datetime.now()
             if database.aprovar_exame_admissional(funcionario_id, hoje):
                 
                 # 1. Notificação de Liberação Total
