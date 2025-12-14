@@ -843,7 +843,8 @@ class AppEscalaLoja:
                     dt_ent = datetime.strptime(entrada, '%H:%M')
                     # Adiciona Jornada + Intervalo
                     total_horas = JORNADA_PADRAO + INTERVALO_PADRAO
-                    dt_sai = dt_ent + timedelta(hours=total_horas)
+                    # CORREÇÃO: Converter Decimal para float, pois timedelta não aceita Decimal
+                    dt_sai = dt_ent + timedelta(hours=float(total_horas))
                     var_sai.set(dt_sai.strftime('%H:%M'))
                 except ValueError:
                     pass
