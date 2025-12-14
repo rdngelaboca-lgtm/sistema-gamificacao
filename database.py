@@ -3389,7 +3389,12 @@ def buscar_dados_para_painel_kanban():
                 OR (TA.TipoFrequencia = 'Unica' AND CONVERT(date, TA.DataInicioVigencia) = CONVERT(date, D.DataHoje))
             )
             AND (F.DiaDeFolga IS NULL OR F.DiaDeFolga = 0 OR F.DiaDeFolga != ((DATEPART(dw, GETDATE()) + @@DATEFIRST - 1) % 7) + 1)
-
+            -- NOVO FILTRO: Oculta tarefas se o funcionário estiver em Férias/Atestado hoje
+            AND (
+                F.DataInicioAfastamento IS NULL 
+                OR CONVERT(date, GETDATE()) < F.DataInicioAfastamento 
+                OR CONVERT(date, GETDATE()) > F.DataFimAfastamento
+            )
             UNION ALL
 
             -- Parte 2: Tarefas de GRUPO
