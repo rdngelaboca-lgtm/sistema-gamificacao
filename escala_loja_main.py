@@ -13,7 +13,7 @@ import calculadora_logica # Importa o novo módulo lógico
 import os
 import webbrowser
 import urllib.parse
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import threading
 
 class AppEscalaLoja:
