@@ -195,6 +195,13 @@ def verificar_migracao_banco():
                         );
                         INSERT INTO ConfiguracoesEscala (MaxHorasSemPausa, DuracaoIntervalo) VALUES (5, 1);
                     END
+                    -- Migração Req 1: Adicionar Duração Jornada Padrão
+                    IF NOT EXISTS (SELECT * FROM syscolumns WHERE id=OBJECT_ID('ConfiguracoesEscala') AND name='DuracaoJornadaPadrao')
+                    BEGIN
+                        ALTER TABLE ConfiguracoesEscala ADD DuracaoJornadaPadrao INT DEFAULT 8;
+                        -- Atualiza registro existente se houver
+                        UPDATE ConfiguracoesEscala SET DuracaoJornadaPadrao = 8 WHERE DuracaoJornadaPadrao IS NULL;
+                    END
                     ELSE IF EXISTS (SELECT * FROM syscolumns WHERE id=OBJECT_ID('ConfiguracoesEscala') AND name='HoraBloqueioInicio')
                     BEGIN
                         ALTER TABLE ConfiguracoesEscala DROP COLUMN HoraBloqueioInicio;
@@ -1369,7 +1376,7 @@ def buscar_tarefas_de_grupo_para_disparar(horario_atual, dia_semana_hoje, dia_me
                 JOIN Tarefas T ON TA.TarefaID = T.TarefaID
                 JOIN Grupos G ON TA.GrupoID = G.GrupoID
                 WHERE
-                    -- Condição 0: A tarefa deve estar ATIVA (não excluída)
+                    -- Condição 0: A tarefa deve estar ATIVA (não excluída) - CORREÇÃO CRÍTICA
                     TA.DataFimVigencia IS NULL
 
                     -- Condição 1: O horário deve bater
@@ -1390,7 +1397,6 @@ def buscar_tarefas_de_grupo_para_disparar(horario_atual, dia_semana_hoje, dia_me
         finally:
             conn.close()
     return []
-
 
 # Em database.py
 def aceitar_tarefa_de_grupo(origem_atribuicao_id, funcionario_id):
@@ -2619,6 +2625,60 @@ def buscar_funcionarios_de_folga_hoje(dia_da_semana):
         finally:
             conn.close()
     return []
+
+def verificar_status_disponibilidade(funcionario_id, data_verificacao):
+    """
+    Req 3: Verifica se o funcionário está de folga ou férias na data especificada.
+    Retorna uma string com o motivo do alerta ou None se estiver disponível.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+
+            # Pega dados de folga e afastamento
+            sql = """
+                SELECT DiaDeFolga, DomingoFolgaMensal, DataInicioAfastamento, DataFimAfastamento 
+                FROM Funcionarios WHERE FuncionarioID = ?
+            """
+            cursor.execute(sql, funcionario_id)
+            row = cursor.fetchone()
+
+            if not row: return None
+
+            dia_folga_semanal, dom_folga_mensal, inicio_afast, fim_afast = row
+
+            # Conversão da data de verificação
+            if isinstance(data_verificacao, str):
+                dt_check = datetime.strptime(data_verificacao, '%Y-%m-%d').date()
+            else:
+                dt_check = data_verificacao
+
+            # 1. Verifica Afastamento (Férias/Atestado)
+            if inicio_afast and fim_afast:
+                if inicio_afast <= dt_check <= fim_afast:
+                    return "⚠️ Funcionário em Férias/Afastamento!"
+
+            # 2. Verifica Folga Semanal Fixa
+            # Python weekday: 0=Seg ... 6=Dom. SQL (nosso padrão): 1=Dom ... 7=Sab
+            dia_semana_sql = (dt_check.weekday() + 1) % 7 + 1
+            if dia_semana_sql == dia_folga_semanal:
+                return "⚠️ Dia de Folga Fixa Semanal!"
+
+            # 3. Verifica Domingo de Folga (6x1)
+            if dia_semana_sql == 1 and dom_folga_mensal and dom_folga_mensal > 0:
+                # Calcula qual ocorrência de domingo é este no mês
+                ocorrencia = (dt_check.day - 1) // 7 + 1
+                if ocorrencia == dom_folga_mensal:
+                    return f"⚠️ Domingo de Folga ({dom_folga_mensal}º do mês)!"
+
+            return None # Disponível
+        except Exception as e:
+            logger.error(f"Erro ao verificar disponibilidade: {e}")
+            return None
+        finally:
+            conn.close()
+    return None
 
 def buscar_tarefas_recorrentes_agendadas_para_hoje(funcionario_id, dia_da_semana):
     """
@@ -6229,22 +6289,14 @@ def buscar_historico_compras_produto(produto_id_mestre):
                 conn.close()
     return []
 
-# ===================================================================
-# == FIM DO MÓDULO DE GESTÃO DE ESTOQUE (SUGESTÃO DE COMPRA) ========
-# ===================================================================
-
-# ===================================================================
-# == INÍCIO DO MÓDULO DE ESCALAÇÃO E MAPA DE LOJA ===================
-# ===================================================================
-
 def buscar_configuracoes_escala():
-    """Busca o único registro de configurações de escala."""
+    """Busca o único registro de configurações de escala, incluindo Jornada Padrão."""
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            # Retorna apenas os campos que restaram na tabela global
-            sql = "SELECT TOP 1 MaxHorasSemPausa, DuracaoIntervalo FROM ConfiguracoesEscala ORDER BY ConfigID ASC"
+            # Req 1: Adicionado DuracaoJornadaPadrao
+            sql = "SELECT TOP 1 MaxHorasSemPausa, DuracaoIntervalo, DuracaoJornadaPadrao FROM ConfiguracoesEscala ORDER BY ConfigID ASC"
             cursor.execute(sql)
             return cursor.fetchone()
         except Exception as e:
@@ -6314,21 +6366,21 @@ def garantir_registro_configuracao_global():
             conn.close()
     return False
 
-def atualizar_configuracoes_escala(h_ini, h_fim, max_horas, duracao_int):
-    """Atualiza as configurações de escala no banco (AGORA SÓ MaxHoras e Duracao)."""
+def atualizar_configuracoes_escala(h_ini, h_fim, max_horas, duracao_int, jornada_padrao=8):
+    """Atualiza as configurações de escala no banco (Incluindo Jornada Padrão)."""
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            # Usa UPDATE, pois garantimos que o registro inicial exista na migração
             sql = """
                 UPDATE ConfiguracoesEscala SET 
                     MaxHorasSemPausa = ?, 
                     DuracaoIntervalo = ?,
+                    DuracaoJornadaPadrao = ?,
                     DataAtualizacao = GETDATE()
             """
-            # Os parâmetros h_ini e h_fim são ignorados nesta função (mas mantidos na chamada para o futuro)
-            cursor.execute(sql, max_horas, duracao_int)
+            # h_ini e h_fim ignorados (legado), jornada_padrao adicionado
+            cursor.execute(sql, max_horas, duracao_int, jornada_padrao)
             conn.commit()
             return True
         except Exception as e:
