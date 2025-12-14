@@ -237,111 +237,135 @@ def verificar_fim_jornada():
 
 def verificar_e_delegar_tarefas_de_folga():
     """
-    (VERSÃO V3 - DROP DIÁRIO / BOLETIM)
-    Agrega todas as tarefas de folga do dia e envia um único 'Drop' (Boletim)
-    para cada grupo, com botões individuais para resgate.
+    (VERSÃO V4 - COM SUPORTE A 6x1 E AFASTAMENTOS)
+    Verifica folgas fixas, domingos de folga e afastamentos (férias/atestado).
+    Agrega todas as tarefas desses ausentes e envia o 'Drop' (Boletim).
     """
-    print(f"\n[{datetime.now().strftime('%H:%M:%S')}] 🎲 Preparando o DROP DIÁRIO de missões...")
+    print(f"\n[{datetime.now().strftime('%H:%M:%S')}] 🎲 Verificando Ausências (Folgas/Férias) para Drop...")
     
-    hoje = datetime.now()
-    dia_da_semana_hoje = hoje.isoweekday() + 1
-    if dia_da_semana_hoje == 8: dia_da_semana_hoje = 1
+    hoje_dt = datetime.now()
+    hoje_date = hoje_dt.date()
     
-    funcionarios_de_folga = database.buscar_funcionarios_de_folga_hoje(dia_da_semana_hoje)
+    # 1. Determina Dia da Semana (SQL Padrão: 1=Dom ... 7=Sab)
+    dia_semana_sql = (hoje_dt.weekday() + 1) % 7 + 1
     
-    if not funcionarios_de_folga:
-        print("--> Nenhuma folga hoje. Drop cancelado.")
+    # 2. Determina qual Domingo do Mês é hoje (se for domingo)
+    ocorrencia_domingo = 0
+    if dia_semana_sql == 1: # É Domingo
+        # Divisão inteira do dia por 7 arredondada para cima dá a ocorrência (1º, 2º...)
+        ocorrencia_domingo = (hoje_dt.day - 1) // 7 + 1
+
+    funcionarios_ausentes = []
+    
+    # Busca TODOS os funcionários para checar as 3 condições
+    todos_funcionarios = database.listar_funcionarios()
+    
+    for f in todos_funcionarios:
+        motivo_ausencia = None
+        
+        # A. Folga Fixa Semanal (Ex: Toda Segunda)
+        if f.DiaDeFolga == dia_semana_sql:
+            motivo_ausencia = "Folga Semanal"
+            
+        # B. Folga de Domingo Específico (Escala 6x1)
+        # Verifica se hoje é domingo E se o funcionário folga neste número de domingo (1, 2, etc)
+        elif dia_semana_sql == 1 and hasattr(f, 'DomingoFolgaMensal') and f.DomingoFolgaMensal == ocorrencia_domingo:
+            motivo_ausencia = f"Folga de Domingo ({ocorrencia_domingo}º)"
+            
+        # C. Período de Afastamento (Férias/Atestado)
+        # Verifica se hoje está entre Inicio e Fim (inclusive)
+        elif hasattr(f, 'DataInicioAfastamento') and f.DataInicioAfastamento and f.DataFimAfastamento:
+            # Garante comparação segura de datas
+            ini = f.DataInicioAfastamento
+            fim = f.DataFimAfastamento
+            if isinstance(ini, datetime): ini = ini.date()
+            if isinstance(fim, datetime): fim = fim.date()
+                
+            if ini <= hoje_date <= fim:
+                motivo_ausencia = "Férias/Atestado"
+
+        if motivo_ausencia:
+            # Adiciona atributo temporário para usar na mensagem
+            f.MotivoLog = motivo_ausencia
+            funcionarios_ausentes.append(f)
+
+    if not funcionarios_ausentes:
+        print("--> Ninguém de folga ou afastado hoje. Drop cancelado.")
         return
 
     # Dicionário para agrupar tarefas por ChatID de destino
-    # Estrutura: { chat_id: [ {tarefa, nome_origem}, ... ] }
     drop_por_grupo = {}
 
-    for funcionario in funcionarios_de_folga:
-        tarefas_do_dia = database.buscar_tarefas_recorrentes_agendadas_para_hoje(funcionario.FuncionarioID, dia_da_semana_hoje)
+    for funcionario in funcionarios_ausentes:
+        # Busca tarefas recorrentes agendadas para HOJE (dia da semana atual)
+        # Nota: Mesmo em férias, pegamos o que ele faria 'hoje' se estivesse trabalhando
+        tarefas_do_dia = database.buscar_tarefas_recorrentes_agendadas_para_hoje(funcionario.FuncionarioID, dia_semana_sql)
         
         if not tarefas_do_dia: continue
+        
+        print(f"--> Processando ausência de {funcionario.NomeCompleto} ({funcionario.MotivoLog})...")
 
         for tarefa in tarefas_do_dia:
-            # --- Lógica de Roteamento (Mapeamento Robusto) ---
+            # --- Lógica de Roteamento ---
             destinos = set()
-
-            # Definição de Palavras-Chave e seus destinos (Fácil manutenção)
-            # Ordem de prioridade: Setor da Tarefa > Cargo do Funcionário
             MAPA_ROTEAMENTO = {
                 'cozinha': config.COZINHA_GROUP_CHAT_ID,
                 'produção': config.COZINHA_GROUP_CHAT_ID,
                 'atendimento': config.ATENDIMENTO_GROUP_CHAT_ID,
                 'loja': config.ATENDIMENTO_GROUP_CHAT_ID,
-                # Adicione novos mapeamentos aqui (ex: 'estoque': ID_DO_GRUPO)
             }
 
-            # 1. Tenta rotear pelo Setor da Tarefa
-            texto_analise_primaria = (tarefa.Setor or "").lower()
-            encontrou_destino = False
-            for chave, chat_id in MAPA_ROTEAMENTO.items():
-                if chave in texto_analise_primaria:
-                    destinos.add(chat_id)
-                    encontrou_destino = True
-                    break # Prioridade encontrada
-
-            # 2. Se não achou pelo setor, tenta pelo Cargo do Funcionário (Fallback 1)
-            if not encontrou_destino:
-                texto_analise_secundaria = (funcionario.Cargo or "").lower()
-                for chave, chat_id in MAPA_ROTEAMENTO.items():
-                    if chave in texto_analise_secundaria:
-                        destinos.add(chat_id)
-                        encontrou_destino = True
-                        break
-
-            # 3. Fallback Final (Grupo de Folga Geral)
-            if not encontrou_destino:
-                destinos.add(config.FOLGA_GROUP_CHAT_ID)
+            # 1. Por Setor
+            texto_primario = (tarefa.Setor or "").lower()
+            encontrou = False
+            for k, v in MAPA_ROTEAMENTO.items():
+                if k in texto_primario:
+                    destinos.add(v); encontrou = True; break
             
-            # Adiciona a tarefa à lista de cada grupo destino
-            for chat_id in set(destinos):
-                if chat_id not in drop_por_grupo:
-                    drop_por_grupo[chat_id] = []
-                
-                drop_por_grupo[chat_id].append({
-                    'tarefa': tarefa,
-                    'origem': funcionario.NomeCompleto
-                })
+            # 2. Por Cargo
+            if not encontrou:
+                texto_secundario = (funcionario.Cargo or "").lower()
+                for k, v in MAPA_ROTEAMENTO.items():
+                    if k in texto_secundario:
+                        destinos.add(v); encontrou = True; break
+            
+            # 3. Fallback
+            if not encontrou: destinos.add(config.FOLGA_GROUP_CHAT_ID)
+            
+            # Adiciona ao Drop
+            for chat_id in destinos:
+                if chat_id not in drop_por_grupo: drop_por_grupo[chat_id] = []
+                drop_por_grupo[chat_id].append({'tarefa': tarefa, 'origem': funcionario.NomeCompleto, 'motivo': funcionario.MotivoLog})
 
-    # --- Envio dos Drops Consolidados ---
+    # --- Envio dos Drops ---
     for chat_id, itens in drop_por_grupo.items():
         if not itens: continue
-
-        # 1. Monta a Mensagem Visual
+        
         qtd = len(itens)
         mensagem = (
-            f"⚡ **DROP DIÁRIO LIBERADO!** ⚡\n\n"
-            f"Temos **{qtd} missões extras** disponíveis hoje. Quem clicar primeiro, leva os pontos!\n"
+            f"⚡ **DROP DE TAREFAS LIBERADO!** ⚡\n\n"
+            f"Equipe reduzida hoje (Folgas/Férias). Temos **{qtd} missões extras** disponíveis!\n"
             f"━━━━━━━━━━━━━━━━━━\n"
         )
-
         keyboard = []
         for i, item in enumerate(itens):
             t = item['tarefa']
-            origem = item['origem'].split()[0] # Só o primeiro nome
+            origem = item['origem'].split()[0]
+            # Adiciona motivo curto na mensagem (ex: Ana (Férias))
+            tag_motivo = "🌴" if "Férias" in item['motivo'] else "🏠"
             
-            # Adiciona linha no texto
-            mensagem += f"{i+1}️⃣ **{t.Titulo}**\n     └ 👤 *{origem}* |  💰 *{t.Pontos} pts*\n\n"
+            mensagem += f"{i+1}️⃣ **{t.Titulo}**\n     └ {tag_motivo} *{origem}* |  💰 *{t.Pontos} pts*\n\n"
             
-            # Adiciona botão
-            texto_botao = f"🚀 Pegar Missão {i+1} ({t.Pontos} pts)"
             callback = f"aceitar_folga_{t.TarefaID}"
-            keyboard.append([InlineKeyboardButton(texto_botao, callback_data=callback)])
+            keyboard.append([InlineKeyboardButton(f"🚀 Pegar Missão {i+1}", callback_data=callback)])
 
-        mensagem += "👇 **Toque abaixo para resgatar sua missão:**"
-        reply_markup = InlineKeyboardMarkup(keyboard)
-
+        mensagem += "👇 **Ajude a equipe e ganhe pontos extras:**"
         try:
-            notificador_telegram.enviar_mensagem_com_botao(chat_id, mensagem, reply_markup)
-            print(f"--> Drop com {qtd} missões enviado para o grupo {chat_id}.")
+            notificador_telegram.enviar_mensagem_com_botao(chat_id, mensagem, InlineKeyboardMarkup(keyboard))
+            print(f"--> Drop enviado para grupo {chat_id}.")
         except Exception as e:
-            print(f"--> Erro ao enviar Drop: {e}")
-
+            print(f"--> Erro envio Drop: {e}")
+                        
 def executar_fechamento_mensal():
     """
     Executa o fechamento separado por setores (Cozinha e Loja).
