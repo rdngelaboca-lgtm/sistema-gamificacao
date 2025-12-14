@@ -69,6 +69,32 @@ import urllib.parse
 from collections import deque
 import threading # Adicionado para concorrência
 
+import unicodedata
+
+# --- CONTROLE DE CONCORRÊNCIA ---
+# Semáforo para limitar downloads simultâneos (máx 3 threads baixando ao mesmo tempo)
+download_semaphore = threading.BoundedSemaphore(value=3)
+
+# --- MAPA DE ROTEAMENTO ROBUSTO ---
+# Centraliza a lógica de para onde vai cada drop
+MAPA_SETOR_GRUPO = {
+    'cozinha': config.COZINHA_GROUP_CHAT_ID,
+    'producao': config.COZINHA_GROUP_CHAT_ID,
+    'produção': config.COZINHA_GROUP_CHAT_ID,
+    'estoque': config.COZINHA_GROUP_CHAT_ID,
+
+    'atendimento': config.ATENDIMENTO_GROUP_CHAT_ID,
+    'loja': config.ATENDIMENTO_GROUP_CHAT_ID,
+    'caixa': config.ATENDIMENTO_GROUP_CHAT_ID,
+    'salao': config.ATENDIMENTO_GROUP_CHAT_ID,
+    'salão': config.ATENDIMENTO_GROUP_CHAT_ID,
+}
+
+def normalizar_texto(texto):
+    """Remove acentos e coloca em minúsculas para comparação segura."""
+    if not texto: return ""
+    return unicodedata.normalize('NFKD', texto).encode('ASCII', 'ignore').decode('ASCII').lower()
+
 def run_threaded(job_func):
     """Executa uma função agendada em uma nova thread para não bloquear o loop principal."""
     job_thread = threading.Thread(target=job_func)
@@ -306,36 +332,29 @@ def verificar_e_delegar_tarefas_de_folga():
         print(f"--> Processando ausência de {funcionario.NomeCompleto} ({funcionario.MotivoLog})...")
 
         for tarefa in tarefas_do_dia:
-            # --- Lógica de Roteamento ---
-            destinos = set()
-            MAPA_ROTEAMENTO = {
-                'cozinha': config.COZINHA_GROUP_CHAT_ID,
-                'produção': config.COZINHA_GROUP_CHAT_ID,
-                'atendimento': config.ATENDIMENTO_GROUP_CHAT_ID,
-                'loja': config.ATENDIMENTO_GROUP_CHAT_ID,
-            }
+            # --- LÓGICA DE ROTEAMENTO ROBUSTA ---
+            chat_destino = config.FOLGA_GROUP_CHAT_ID # Padrão (Fallback)
 
-            # 1. Por Setor
-            texto_primario = (tarefa.Setor or "").lower()
+            # Normaliza strings para busca (remove acentos, minúsculas)
+            setor_t = normalizar_texto(t.Setor or "")
+            cargo_f = normalizar_texto(func.Cargo or "")
+
             encontrou = False
-            for k, v in MAPA_ROTEAMENTO.items():
-                if k in texto_primario:
-                    destinos.add(v); encontrou = True; break
-            
-            # 2. Por Cargo
+
+            # 1. Tenta casar chaves do mapa com o SETOR da tarefa
+            for chave, chat_id in MAPA_SETOR_GRUPO.items():
+                if chave in setor_t:
+                    chat_destino = chat_id; encontrou = True; break
+
+            # 2. Se não achou, tenta pelo CARGO do funcionário
             if not encontrou:
-                texto_secundario = (funcionario.Cargo or "").lower()
-                for k, v in MAPA_ROTEAMENTO.items():
-                    if k in texto_secundario:
-                        destinos.add(v); encontrou = True; break
-            
-            # 3. Fallback
-            if not encontrou: destinos.add(config.FOLGA_GROUP_CHAT_ID)
-            
-            # Adiciona ao Drop
-            for chat_id in destinos:
-                if chat_id not in drop_por_grupo: drop_por_grupo[chat_id] = []
-                drop_por_grupo[chat_id].append({'tarefa': tarefa, 'origem': funcionario.NomeCompleto, 'motivo': funcionario.MotivoLog})
+                for chave, chat_id in MAPA_SETOR_GRUPO.items():
+                    if chave in cargo_f:
+                        chat_destino = chat_id; encontrou = True; break
+
+            # Adiciona ao Drop do grupo identificado
+            if chat_destino not in drop_por_grupo: drop_por_grupo[chat_destino] = []
+            drop_por_grupo[chat_destino].append({'tarefa': t, 'origem': func.NomeCompleto, 'motivo': func.MotivoLog})
 
     # --- Envio dos Drops ---
     for chat_id, itens in drop_por_grupo.items():
@@ -475,223 +494,112 @@ def verificar_e_enviar_lembretes_comunicados():
         print(f"--> Lembrete sobre '{pendencia.Titulo}' enviado para {pendencia.NomeCompleto}.")
 
 def processar_downloads_pendentes_sync():
-    """Busca por entregas sem foto baixada, tenta fazer o download e envia notificação ao gestor se necessário."""
-    logger.info(f"[{datetime.now().strftime('%H:%M:%S')}] Verificando downloads de fotos pendentes...")
-
-    try: # Adiciona um try geral para buscar_entregas_para_download
-        entregas_para_baixar = database.buscar_entregas_para_download()
-    except Exception as db_err:
-        logger.error(f"Erro ao buscar entregas para download: {db_err}", exc_info=True)
-        return # Interrompe a execução desta vez se não conseguir buscar
-
-    if not entregas_para_baixar:
-        logger.debug("--> Nenhuma foto pendente para download.")
+    """
+    (VERSÃO CORRIGIDA: SEMÁFORO E ATOMICIDADE)
+    Baixa evidências com controle de concorrência e limpeza em caso de falha.
+    """
+    # 1. Tenta adquirir o semáforo. Se estiver cheio, retorna imediatamente (não bloqueia a thread).
+    if not download_semaphore.acquire(blocking=False):
+        logger.warning("--> Limite de downloads simultâneos atingido. Tentando na próxima rodada.")
         return
-
-    logger.info(f"--> Encontradas {len(entregas_para_baixar)} fotos para baixar.")
-
-    token = config.TELEGRAM_TOKEN
-
-    for entrega in entregas_para_baixar:
-        local_file_path = None
-        download_sucesso = False # Flag para controlar se o download funcionou
-
-        # --- Bloco de Download da Foto ---
-        try:
-            logger.info(f"--> Baixando foto para EntregaID: {entrega.EntregaID} (FileID: {entrega.FileIDTelegram})...")
-
-            get_file_url = f"https://api.telegram.org/bot{token}/getFile"
-            params = {'file_id': entrega.FileIDTelegram}
-            response_file_info = requests.get(get_file_url, params=params, timeout=30)
-            response_file_info.raise_for_status()
-            file_info = response_file_info.json()
-
-            if not file_info.get('ok'):
-                logger.error(f"--> FALHA API getFile para EntregaID {entrega.EntregaID}: {file_info.get('description')}")
-                continue
-
-            telegram_file_path = file_info['result']['file_path']
-            download_url = f"https://api.telegram.org/file/bot{token}/{telegram_file_path}"
-            response_download = requests.get(download_url, stream=True, timeout=60)
-            response_download.raise_for_status()
-
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            pasta_entregas = 'entregas'
-            if not os.path.exists(pasta_entregas):
-                try:
-                    os.makedirs(pasta_entregas)
-                    logger.info(f"Pasta '{pasta_entregas}' criada.")
-                except OSError as e:
-                    logger.error(f"Erro ao criar pasta '{pasta_entregas}': {e}", exc_info=True)
-                    continue
-
-            local_file_path = os.path.join(pasta_entregas, f'{timestamp}_{entrega.EntregaID}.jpg')
-
-            with open(local_file_path, 'wb') as f:
-                for chunk in response_download.iter_content(chunk_size=8192):
-                    f.write(chunk)
-
-            # Marca que o download foi bem-sucedido
-            download_sucesso = True
-            logger.info(f"--> Download SUCESSO! Foto da EntregaID {entrega.EntregaID} salva temporariamente em {local_file_path}")
-
-        except requests.exceptions.Timeout:
-            logger.warning(f"--> TIMEOUT ao tentar baixar foto da EntregaID {entrega.EntregaID}. Tentaremos novamente.")
-            continue # Pula para a próxima entrega nesta iteração
-        except requests.exceptions.RequestException as req_err:
-            logger.error(f"--> FALHA DE REDE ao baixar foto da EntregaID {entrega.EntregaID}. Erro: {req_err}. Tentaremos novamente.")
-            continue # Pula para a próxima entrega nesta iteração
-        except Exception as e:
-            logger.error(f"--> FALHA GERAL ao baixar foto da EntregaID {entrega.EntregaID}. Erro: {e}. Tentaremos novamente.", exc_info=True)
-            continue # Pula para a próxima entrega nesta iteração
-
-        # --- Bloco de Atualização do Banco e Notificação (Só executa se o download funcionou) ---
-        if download_sucesso and local_file_path:
-            try:
-                # 1. Finaliza o registro no banco com o caminho da foto
-                database.finalizar_registro_entrega(entrega.EntregaID, local_file_path)
-                logger.info(f"--> Registro da EntregaID {entrega.EntregaID} finalizado no banco com path: {local_file_path}")
-
-                # 2. Verifica e Reenvia Notificação ao Gestor (Lógica com Dupla Verificação)
-                try:
-                    # Primeira verificação da flag
-                    notificacao_ja_enviada = database.verificar_status_notificacao_gestor(entrega.EntregaID)
-
-                    if not notificacao_ja_enviada:
-                        # Segunda verificação da flag (imediatamente antes de enviar)
-                        logger.debug(f"--> Primeira verificação indicou notificação pendente para EntregaID {entrega.EntregaID}. Verificando novamente...")
-                        notificacao_ainda_pendente = not database.verificar_status_notificacao_gestor(entrega.EntregaID)
-
-                        if notificacao_ainda_pendente:
-                            logger.info(f"--> Notificação para Gestor da EntregaID {entrega.EntregaID} AINDA pendente. Tentando enviar via agendador...")
-
-                            detalhes_entrega_para_notif = database.buscar_detalhes_da_entrega(entrega.EntregaID)
-
-                            if detalhes_entrega_para_notif and config.GESTOR_GROUP_CHAT_ID:
-
-                            # --- CORREÇÃO APLICADA AQUI ---
-                            # Verifica se o campo DataEnvio (adicionado na Correção A) existe e o formata
-                                if detalhes_entrega_para_notif.DataEnvio:
-                                    data_envio_original_str = detalhes_entrega_para_notif.DataEnvio.strftime('%d/%m/%Y %H:%M:%S')
-                                else:
-                                    data_envio_original_str = "(data indisponível)"
-                                # --- FIM DA CORREÇÃO ---
-
-                                legenda = (f"<b>Nova Entrega para Validação (Via Agendador)</b>\n\n"
-                                        f"👤 <b>Funcionário:</b> {detalhes_entrega_para_notif.NomeCompleto}\n"
-                                        f"📝 <b>Tarefa:</b> {detalhes_entrega_para_notif.Titulo} ({detalhes_entrega_para_notif.Pontos} pts)\n"
-                                        f"🗓️ <b>Data Envio Original:</b> {data_envio_original_str}\n"
-                                        f"📦 <b>Entrega ID:</b> {entrega.EntregaID}")
-                            
-                                keyboard = [[
-                                    InlineKeyboardButton("✅ Aprovar", callback_data=f"aprovar_gestor_{entrega.EntregaID}"),
-                                    InlineKeyboardButton("❌ Reprovar", callback_data=f"reprovar_gestor_{entrega.EntregaID}")
-                                ]]
-                                reply_markup = InlineKeyboardMarkup(keyboard)
-
-                                # Envia a foto recém-baixada
-                                resposta_api = notificador_telegram.enviar_foto_com_botoes(
-                                    config.GESTOR_GROUP_CHAT_ID,
-                                    local_file_path, # Usa o caminho da foto baixada
-                                    legenda,
-                                    reply_markup,
-                                    parse_mode='HTML'
-                                )
-
-                                # Se o envio pelo agendador funcionou, marca a flag
-                                if resposta_api and resposta_api.get('ok'):
-                                    database.marcar_notificacao_gestor_enviada(entrega.EntregaID)
-                                    logger.info(f"--> Notificação para Gestor da EntregaID {entrega.EntregaID} enviada com sucesso pelo agendador.")
-                                else:
-                                    logger.error(f"--> Falha ao enviar notificação para Gestor (EntregaID {entrega.EntregaID}) pelo agendador. Resposta API: {resposta_api}")
-                            else:
-                                logger.warning(f"--> Não foi possível obter detalhes completos ou GESTOR_GROUP_CHAT_ID para notificar sobre EntregaID {entrega.EntregaID}.")
-                        else:
-                            logger.info(f"--> Segunda verificação: Notificação para Gestor da EntregaID {entrega.EntregaID} já foi enviada. Fallback NÃO enviado.")
-                    else:
-                        logger.debug(f"--> Notificação para Gestor da EntregaID {entrega.EntregaID} já havia sido enviada anteriormente (verificado na primeira checagem).")
-
-                except Exception as check_notify_err:
-                    logger.error(f"--> Erro ao verificar/reenviar notificação gestor para EntregaID {entrega.EntregaID}: {check_notify_err}", exc_info=True)
-
-            except Exception as db_update_err:
-                 logger.error(f"--> FALHA GERAL ao finalizar registro ou notificar para EntregaID {entrega.EntregaID}. Erro: {db_update_err}. Tentaremos novamente.", exc_info=True)
-
-def processar_downloads_notas_fiscais():
-    """Busca por NFs sem foto baixada, tenta fazer o download e salva o caminho."""
-    logger.info(f"[{datetime.now().strftime('%H:%M:%S')}] Verificando downloads de NOTAS FISCAIS pendentes...")
 
     try:
-        notas_para_baixar = database.buscar_notas_para_download()
-    except Exception as db_err:
-        logger.error(f"Erro ao buscar Notas Fiscais para download: {db_err}", exc_info=True)
-        return
+        entregas = database.buscar_entregas_para_download()
+        if not entregas: return
 
-    if not notas_para_baixar:
-        logger.debug("--> Nenhuma Nota Fiscal pendente para download.")
-        return
+        logger.info(f"--> Baixando {len(entregas)} evidências pendentes...")
+        token = config.TELEGRAM_TOKEN
+        pasta = 'entregas'
+        if not os.path.exists(pasta): os.makedirs(pasta)
 
-    logger.info(f"--> Encontradas {len(notas_para_baixar)} Notas Fiscais para baixar.")
-    token = config.TELEGRAM_TOKEN
-    pasta_notas_fiscais = 'notas_fiscais' # Pasta para salvar as NFs
-
-    if not os.path.exists(pasta_notas_fiscais):
-        try:
-            os.makedirs(pasta_notas_fiscais)
-            logger.info(f"Pasta '{pasta_notas_fiscais}' criada.")
-        except OSError as e:
-            logger.error(f"Erro ao criar pasta '{pasta_notas_fiscais}': {e}", exc_info=True)
-            return
-
-    for nf in notas_para_baixar:
-        local_file_path = None
-        download_sucesso = False
-        nf_id = nf.NotaFiscalID
-        file_id = nf.FileIDTelegram
-
-        try:
-            logger.info(f"--> Baixando foto para NotaFiscalID: {nf_id} (FileID: {file_id})...")
-            get_file_url = f"https://api.telegram.org/bot{token}/getFile"
-            params = {'file_id': file_id}
-            response_file_info = requests.get(get_file_url, params=params, timeout=30)
-            response_file_info.raise_for_status()
-            file_info = response_file_info.json()
-
-            if not file_info.get('ok'):
-                logger.error(f"--> FALHA API getFile para NotaFiscalID {nf_id}: {file_info.get('description')}")
-                continue
-
-            telegram_file_path = file_info['result']['file_path']
-            download_url = f"https://api.telegram.org/file/bot{token}/{telegram_file_path}"
-            response_download = requests.get(download_url, stream=True, timeout=60)
-            response_download.raise_for_status()
-
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            local_file_path = os.path.join(pasta_notas_fiscais, f'NF_{timestamp}_{nf_id}.jpg')
-
-            with open(local_file_path, 'wb') as f:
-                for chunk in response_download.iter_content(chunk_size=8192):
-                    f.write(chunk)
-
-            download_sucesso = True
-            logger.info(f"--> Download SUCESSO! Foto da NotaFiscalID {nf_id} salva em {local_file_path}")
-
-        except requests.exceptions.RequestException as req_err:
-            logger.warning(f"--> Erro de REDE ao baixar NF {nf_id}: {req_err}")
-            continue # Tenta na próxima execução
-        except Exception as e:
-            logger.error(f"--> ERRO DE LÓGICA/ARQUIVO ao baixar NF {nf_id}: {e}", exc_info=True)
-            continue # Pula para a próxima NF para não travar o loop
-
-        # Bloco de Persistência (Separado para clareza)
-        if download_sucesso and local_file_path:
+        for entrega in entregas:
+            # --- CORREÇÃO 4: PREVENÇÃO DE ZOMBIE FILES ---
+            local_path = None
             try:
-                database.finalizar_download_nota_fiscal(nf_id, local_file_path)
-                logger.info(f"--> Registro da NotaFiscalID {nf_id} finalizado no banco.")
-            except Exception as db_err:
-                logger.error(f"--> ERRO DE BANCO ao salvar caminho da NF {nf_id}: {db_err}", exc_info=True)
-                # Não removemos o arquivo, pois o download foi sucesso. O próximo loop tentará baixar e sobrescrever, ou podemos implementar lógica de retry.
+                # Busca info do arquivo
+                r_info = requests.get(f"https://api.telegram.org/bot{token}/getFile?file_id={entrega.FileIDTelegram}", timeout=10)
+                if not r_info.json().get('ok'): continue
 
+                remoto_path = r_info.json()['result']['file_path']
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                local_path = os.path.join(pasta, f'{ts}_{entrega.EntregaID}.jpg')
+
+                # Baixa conteúdo
+                r_file = requests.get(f"https://api.telegram.org/file/bot{token}/{remoto_path}", stream=True, timeout=30)
+                if r_file.status_code == 200:
+                    with open(local_path, 'wb') as f:
+                        for chunk in r_file.iter_content(8192): f.write(chunk)
+
+                    # TENTA atualizar o banco
+                    try:
+                        database.finalizar_registro_entrega(entrega.EntregaID, local_path)
+                        logger.info(f"--> Sucesso: Entrega {entrega.EntregaID} salva em {local_path}")
+
+                        # Notificação ao Gestor (apenas se salvou no banco)
+                        if not database.verificar_status_notificacao_gestor(entrega.EntregaID):
+                            detalhes = database.buscar_detalhes_da_entrega(entrega.EntregaID)
+                            if detalhes and config.GESTOR_GROUP_CHAT_ID:
+                                caption = (f"<b>Nova Entrega</b>\n👤 {detalhes.NomeCompleto}\n📝 {detalhes.Titulo}\n📦 ID: {entrega.EntregaID}")
+                                kb = [[InlineKeyboardButton("✅ Aprovar", callback_data=f"aprovar_gestor_{entrega.EntregaID}"),
+                                       InlineKeyboardButton("❌ Reprovar", callback_data=f"reprovar_gestor_{entrega.EntregaID}")]]
+                                resp = notificador_telegram.enviar_foto_com_botoes(config.GESTOR_GROUP_CHAT_ID, local_path, caption, InlineKeyboardMarkup(kb), 'HTML')
+                                if resp and resp.get('ok'): database.marcar_notificacao_gestor_enviada(entrega.EntregaID)
+
+                    except Exception as e_db:
+                        # FALHA NO BANCO: Apaga o arquivo para não virar zumbi
+                        logger.error(f"Erro BD ao salvar entrega {entrega.EntregaID}. Removendo arquivo.")
+                        if os.path.exists(local_path): os.remove(local_path)
+                        raise e_db # Relança para o log externo
+
+            except Exception as e:
+                logger.error(f"Erro download entrega {entrega.EntregaID}: {e}")
+                # Limpeza de segurança final
+                if local_path and os.path.exists(local_path) and not database.buscar_detalhes_da_entrega(entrega.EntregaID).PathFotoEvidencia:
+                     os.remove(local_path)
+
+    finally:
+        # Sempre libera o semáforo
+        download_semaphore.release()
+
+def processar_downloads_notas_fiscais():
+    """Baixa NFs com controle de concorrência."""
+    if not download_semaphore.acquire(blocking=False): return
+
+    try:
+        nfs = database.buscar_notas_para_download()
+        if not nfs: return
+
+        token = config.TELEGRAM_TOKEN
+        pasta = 'notas_fiscais'
+        if not os.path.exists(pasta): os.makedirs(pasta)
+
+        for nf in nfs:
+            local_path = None
+            try:
+                r_info = requests.get(f"https://api.telegram.org/bot{token}/getFile?file_id={nf.FileIDTelegram}", timeout=10)
+                if not r_info.json().get('ok'): continue
+
+                remoto = r_info.json()['result']['file_path']
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                local_path = os.path.join(pasta, f'NF_{ts}_{nf.NotaFiscalID}.jpg')
+
+                r_file = requests.get(f"https://api.telegram.org/file/bot{token}/{remoto}", stream=True, timeout=30)
+                if r_file.status_code == 200:
+                    with open(local_path, 'wb') as f:
+                        for chunk in r_file.iter_content(8192): f.write(chunk)
+
+                    try:
+                        database.finalizar_download_nota_fiscal(nf.NotaFiscalID, local_path)
+                    except Exception:
+                        if os.path.exists(local_path): os.remove(local_path)
+                        raise
+
+            except Exception as e:
+                logger.error(f"Erro download NF {nf.NotaFiscalID}: {e}")
+                if local_path and os.path.exists(local_path): os.remove(local_path)
+    finally:
+        download_semaphore.release()
+        
 if __name__ == "__main__":
     print("--- 🤖 Robô Agendador 2.0 Iniciado 🤖 ---")
     print("O sistema verificará a cada minuto e o fechamento mensal às 08:00.")
