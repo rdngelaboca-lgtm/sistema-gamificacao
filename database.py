@@ -52,8 +52,42 @@ logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT, handlers=[file_handler, 
 logger = logging.getLogger(__name__)
 
 logger.info(f"*** Logging configurado para o módulo: {__name__} ***")
+# ==============================================================================
+# == FIM BLOCO DE CONFIGURAÇÃO DE LOGGING ======================================
+# ==============================================================================
 
-# --- MIGRAÇÃO DE SCHEMA (RH AVANÇADO) ---
+import pyodbc
+from datetime import datetime, date, timedelta 
+import calendar 
+import hashlib
+import config 
+import notificador_telegram
+import logging
+import random
+from decimal import Decimal
+from collections import deque
+
+# Cache para armazenar (ID_Atribuicao, Data_Hora_Minuto) das tarefas já enviadas
+cache_tarefas_enviadas = deque(maxlen=50)
+
+CONNECTION_STRING = (
+    f"DRIVER={{ODBC Driver 18 for SQL Server}};"  
+    f"SERVER={config.DB_SERVER};"
+    f"DATABASE={config.DB_DATABASE};"
+    f"UID={config.DB_UID};"
+    f"PWD={config.DB_PWD};"
+    f"TrustServerCertificate=yes;"
+)
+
+def get_db_connection():
+    try:
+        conn = pyodbc.connect(CONNECTION_STRING)
+        return conn
+    except pyodbc.Error as ex:
+        logger.critical(f"FALHA CRÍTICA na conexão com o banco de dados: {ex}", exc_info=True)
+        return None
+
+# --- MIGRAÇÃO DE SCHEMA (RH AVANÇADO) - MOVIDO PARA LOCAL SEGURO ---
 def verificar_migracao_rh_avancado():
     """Garante que as colunas de Telefone, Folga Domingo e Afastamento existam."""
     conn = get_db_connection()
@@ -88,45 +122,8 @@ def verificar_migracao_rh_avancado():
         finally:
             conn.close()
 
-# Executa ao importar
+# Executa ao importar (AGORA NO LUGAR CERTO, APÓS get_db_connection EXISTIR)
 verificar_migracao_rh_avancado()
-
-# ==============================================================================
-# == FIM BLOCO DE CONFIGURAÇÃO DE LOGGING ======================================
-# ==============================================================================
-import pyodbc
-from datetime import datetime, date, timedelta 
-import calendar 
-import hashlib
-import config 
-import notificador_telegram
-import logging
-import random
-from decimal import Decimal
-
-from collections import deque
-
-# Cache para armazenar (ID_Atribuicao, Data_Hora_Minuto) das tarefas já enviadas
-# Isso evita que a mesma tarefa seja enviada mais de uma vez no mesmo minuto
-cache_tarefas_enviadas = deque(maxlen=50)
-
-CONNECTION_STRING = (
-    f"DRIVER={{ODBC Driver 18 for SQL Server}};"  
-    f"SERVER={config.DB_SERVER};"
-    f"DATABASE={config.DB_DATABASE};"
-    f"UID={config.DB_UID};"
-    f"PWD={config.DB_PWD};"
-    f"TrustServerCertificate=yes;"
-)
-
-
-def get_db_connection():
-    try:
-        conn = pyodbc.connect(CONNECTION_STRING)
-        return conn
-    except pyodbc.Error as ex:
-        logger.critical(f"FALHA CRÍTICA na conexão com o banco de dados: {ex}", exc_info=True) # Usamos critical e exc_info para detalhes
-        return None
 
 def verificar_migracao_banco():
     """Verifica se as tabelas de migração estão no banco. Se não, cria."""
