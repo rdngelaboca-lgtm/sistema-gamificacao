@@ -5298,18 +5298,19 @@ def finalizar_onboarding_e_notificar_gestor(funcionario_id):
     Marca o StatusWorkflow como 'Completo', define StatusAdmissional como 'Pendente' 
     (o novo bloqueio) e notifica o gestor do RH.
     """
-    # CORREÇÃO: Chamada direta da função (estamos dentro do módulo database)
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            # 🛑 CORREÇÃO SINTAXE: O SQL deve atualizar StatusWorkflow E StatusAdmissional
+            # Atualiza StatusWorkflow E StatusAdmissional
             sql = "UPDATE OnboardingStatus SET StatusWorkflow = 'Completo', StatusAdmissional = 'Pendente', UltimaEtapa = 'Finalizado' WHERE FuncionarioID = ?"
             cursor.execute(sql, funcionario_id)
             conn.commit()
             
             # --- Notificação para o Gestor RH ---
-            funcionario = database.buscar_funcionario_por_id(funcionario_id)
+            # CORREÇÃO AQUI: Chamamos a função diretamente, sem 'database.' antes
+            funcionario = buscar_funcionario_por_id(funcionario_id)
+            
             if funcionario:
                 mensagem_gestor = (
                     f"🟢 **NOVO ONBOARDING DE DOCUMENTOS CONCLUÍDO!** 🟢\n\n"
