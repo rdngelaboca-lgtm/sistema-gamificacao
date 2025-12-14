@@ -506,12 +506,11 @@ class AppEscalaLoja:
             # Inicia a thread para não travar a interface
             threading.Thread(target=tarefa_background, daemon=True).start()
 
-    # --- Janela de Configurações de Automação (Nova Aba) ---
     def abrir_janela_configuracoes(self):
         """Abre a janela Toplevel para editar os parâmetros da automação de escala."""
         popup = Toplevel(self.root)
         popup.title("Configurações de Automação de Escala")
-        popup.geometry("450x300")
+        popup.geometry("450x380") # Aumentado altura
         popup.transient(self.root)
         frame = ttk.Frame(popup, padding="15")
         frame.pack(fill="both", expand=True)
@@ -521,11 +520,13 @@ class AppEscalaLoja:
         config_atual = database.buscar_configuracoes_escala()
         if not config_atual:
             messagebox.showerror("Erro", "Não foi possível carregar as configurações globais do banco. Usando padrões.", parent=popup)
-            max_h_val, dur_int_val = 5, 1
+            max_h_val, dur_int_val, jornada_val = 5, 1, 8
         else:
-            # Configs Globais (apenas MaxHoras e Duração)
+            # Configs Globais (MaxHoras, Duração Intervalo, Jornada Padrão)
             max_h_val = config_atual.MaxHorasSemPausa
             dur_int_val = config_atual.DuracaoIntervalo
+            # Req 1: Carrega jornada padrão (default 8 se nulo)
+            jornada_val = getattr(config_atual, 'DuracaoJornadaPadrao', 8) or 8
 
         # 2. Campos de Input (Regras CLT)
         ttk.Label(frame, text="Max. Horas sem Pausa (CLT):").grid(row=0, column=0, sticky=tk.W, pady=5)
@@ -538,27 +539,36 @@ class AppEscalaLoja:
         entry_duracao.insert(0, str(dur_int_val))
         entry_duracao.grid(row=1, column=1, sticky=tk.E, pady=5)
 
+        # Req 1: Novo campo Jornada
+        ttk.Label(frame, text="Jornada de Trabalho Padrão (Horas):").grid(row=2, column=0, sticky=tk.W, pady=5)
+        entry_jornada = ttk.Entry(frame, width=10)
+        entry_jornada.insert(0, str(jornada_val))
+        entry_jornada.grid(row=2, column=1, sticky=tk.E, pady=5)
+        ttk.Label(frame, text="(Usado para calcular saída automática)", font=("Arial", 8, "italic"), foreground="gray").grid(row=3, column=0, columnspan=2, sticky=tk.W)
+
         # Separador para Pico Diário
-        ttk.Separator(frame, orient=tk.HORIZONTAL).grid(row=2, column=0, columnspan=2, sticky=tk.EW, pady=10)
-        ttk.Label(frame, text="Gerenciar Horário de Pico por Dia:").grid(row=3, column=0, columnspan=2, sticky=tk.W, pady=(0, 5))
+        ttk.Separator(frame, orient=tk.HORIZONTAL).grid(row=4, column=0, columnspan=2, sticky=tk.EW, pady=10)
+        ttk.Label(frame, text="Gerenciar Horário de Pico por Dia:").grid(row=5, column=0, columnspan=2, sticky=tk.W, pady=(0, 5))
 
         # 3. Botão para Abrir Configurações de Pico
         btn_abrir_pico = ttk.Button(frame, text="Abrir Gerenciador de Pico Diário", command=lambda: self.abrir_janela_pico_diario(popup))
-        btn_abrir_pico.grid(row=4, column=0, columnspan=2, pady=10, sticky=tk.EW)
+        btn_abrir_pico.grid(row=6, column=0, columnspan=2, pady=10, sticky=tk.EW)
 
         def salvar_config():
             max_horas_str = entry_max_horas.get().strip()
             duracao_str = entry_duracao.get().strip()
+            jornada_str = entry_jornada.get().strip()
 
             try:
                 max_horas = int(max_horas_str)
                 duracao = int(duracao_str)
-                
-                if max_horas <= 0 or duracao <= 0:
-                     raise ValueError("Valores numéricos devem ser positivos.")
+                jornada = int(jornada_str)
 
-                # Atualiza apenas as configurações globais (Max Horas, Duração)
-                if database.atualizar_configuracoes_escala(None, None, max_horas, duracao): # H_INI e H_FIM são nulos no global
+                if max_horas <= 0 or duracao <= 0 or jornada <= 0:
+                    raise ValueError("Valores numéricos devem ser positivos.")
+
+                # Atualiza configurações globais
+                if database.atualizar_configuracoes_escala(None, None, max_horas, duracao, jornada):
                     messagebox.showinfo("Sucesso", "Configurações globais salvas! Atualize a escala.", parent=popup)
                     popup.destroy()
                 else:
@@ -571,7 +581,7 @@ class AppEscalaLoja:
 
         # 5. Botão Salvar
         btn_salvar = ttk.Button(frame, text="💾 Salvar Configurações", command=salvar_config)
-        btn_salvar.grid(row=5, column=0, columnspan=2, pady=20, sticky=tk.EW)
+        btn_salvar.grid(row=7, column=0, columnspan=2, pady=20, sticky=tk.EW)
 
     def abrir_janela_pico_diario(self, parent_popup):
         """Abre a janela Toplevel para editar o horário de pico por dia da semana."""
@@ -746,6 +756,7 @@ class AppEscalaLoja:
         # Carrega dados iniciais
         carregar_lista()
 
+
     def abrir_janela_escalacao(self, pos_id):
         try:
             dados_pos = next((p for p in self.posicoes if p[0] == pos_id), None)
@@ -755,72 +766,117 @@ class AppEscalaLoja:
 
         popup = Toplevel(self.root)
         popup.title(f"Escalar: {nome_pos}")
-        # Ajuste para um tamanho mais vertical e centralizado
-        popup.geometry("500x450")
-        # Centraliza a janela na tela
+        popup.geometry("500x500") # Aumentado para caber alertas
         popup.update_idletasks()
         x_c = self.root.winfo_x() + (self.root.winfo_width() // 2) - (500 // 2)
-        y_c = self.root.winfo_y() + (self.root.winfo_height() // 2) - (450 // 2)
+        y_c = self.root.winfo_y() + (self.root.winfo_height() // 2) - (500 // 2)
         popup.geometry(f"+{x_c}+{y_c}")
 
         dados_atuais = self.escala_atual.get(pos_id)
+
+        # --- Carregar Configurações para Cálculo Automático ---
+        config_db = database.buscar_configuracoes_escala()
+        JORNADA_PADRAO = getattr(config_db, 'DuracaoJornadaPadrao', 8) or 8
+        INTERVALO_PADRAO = getattr(config_db, 'DuracaoIntervalo', 1) or 1
 
         ttk.Label(popup, text="Quem vai trabalhar aqui?").pack(pady=5)
         combo_pessoas = ttk.Combobox(popup, width=40)
         combo_pessoas.pack()
 
+        # Req 2: Mapa agora inclui Telefone também para funcionários
         mapa_ids = {} 
         lista_nomes = ["(Vazio)"]
         for f in database.listar_funcionarios():
+            # f[4] é TelefoneWhatsApp na query do database.py
             label = f"[Fixo] {f.NomeCompleto}"; lista_nomes.append(label)
-            mapa_ids[label] = {'tipo': 'func', 'id': f.FuncionarioID, 'tel': f.ChatIDTelegram}
+            mapa_ids[label] = {'tipo': 'func', 'id': f.FuncionarioID, 'tel': f.TelefoneWhatsApp} 
         for fr in database.listar_freelancers():
             label = f"[Free] {fr.Nome}"; lista_nomes.append(label)
             mapa_ids[label] = {'tipo': 'free', 'id': fr.FreelancerID, 'tel': fr.Telefone}
         combo_pessoas['values'] = lista_nomes
 
-        # Inicialização do campo selecionado e telefone
-        pessoa_tel = None
-        selecao_inicial = ""
+        # Label de Alerta (Req 3)
+        lbl_alerta = tk.Label(popup, text="", fg="red", font=("Arial", 9, "bold"), wraplength=450)
+        lbl_alerta.pack(pady=5)
 
+        # Variável para armazenar telefone atual para o botão WhatsApp
+        self.telefone_atual_para_envio = None 
+
+        selecao_inicial = ""
         if dados_atuais:
             if dados_atuais.FuncionarioID:
                 selecao_inicial = next((k for k, v in mapa_ids.items() if v['tipo'] == 'func' and v['id'] == dados_atuais.FuncionarioID), "")
             elif dados_atuais.FreelancerID:
                 selecao_inicial = next((k for k, v in mapa_ids.items() if v['tipo'] == 'free' and v['id'] == dados_atuais.FreelancerID), "")
-                # Se for Freelancer, o telefone está disponível diretamente nos dados da escala
-                pessoa_tel = dados_atuais.TelefonePessoa
-        
+
         combo_pessoas.set(selecao_inicial)
 
         frame_hor = ttk.LabelFrame(popup, text="Horários", padding=10)
         frame_hor.pack(fill=tk.X, padx=10, pady=10)
-        ttk.Label(frame_hor, text="Entrada:").grid(row=0, column=0); e_ent = ttk.Entry(frame_hor, width=8); e_ent.grid(row=0, column=1)
-        ttk.Label(frame_hor, text="Saída:").grid(row=0, column=2); e_sai = ttk.Entry(frame_hor, width=8); e_sai.grid(row=0, column=3)
+
+        # Variáveis de controle para auto-cálculo
+        var_ent = tk.StringVar()
+        var_sai = tk.StringVar()
+
+        ttk.Label(frame_hor, text="Entrada:").grid(row=0, column=0); e_ent = ttk.Entry(frame_hor, textvariable=var_ent, width=8); e_ent.grid(row=0, column=1)
+        ttk.Label(frame_hor, text="Saída:").grid(row=0, column=2); e_sai = ttk.Entry(frame_hor, textvariable=var_sai, width=8); e_sai.grid(row=0, column=3)
         ttk.Label(frame_hor, text="Intervalo Início:").grid(row=1, column=0); e_int_ini = ttk.Entry(frame_hor, width=8); e_int_ini.grid(row=1, column=1)
         ttk.Label(frame_hor, text="Intervalo Fim:").grid(row=1, column=2); e_int_fim = ttk.Entry(frame_hor, width=8); e_int_fim.grid(row=1, column=3)
 
-        if dados_atuais:
-            # Helper seguro para formatar (objeto time ou string)
-            def safe_fmt(val):
-                if not val: return ""
-                if hasattr(val, 'strftime'): return val.strftime('%H:%M')
-                return str(val)[:5] # Se for string, pega os 5 primeiros chars (HH:MM)
+        # --- Lógica Req 1: Auto-Cálculo de Saída ---
+        def calcular_saida(*args):
+            entrada = var_ent.get()
+            if len(entrada) == 5 and re.match(r'^\d{2}:\d{2}$', entrada):
+                try:
+                    dt_ent = datetime.strptime(entrada, '%H:%M')
+                    # Adiciona Jornada + Intervalo
+                    total_horas = JORNADA_PADRAO + INTERVALO_PADRAO
+                    dt_sai = dt_ent + timedelta(hours=total_horas)
+                    var_sai.set(dt_sai.strftime('%H:%M'))
+                except ValueError:
+                    pass
 
-            if getattr(dados_atuais, 'HorarioEntrada', None): e_ent.insert(0, safe_fmt(dados_atuais.HorarioEntrada))
-            if getattr(dados_atuais, 'HorarioSaida', None): e_sai.insert(0, safe_fmt(dados_atuais.HorarioSaida))
+        # O trace dispara sempre que a variável muda (digitação)
+        var_ent.trace_add("write", calcular_saida)
+
+        # --- Lógica Req 2 e 3: Ao selecionar pessoa ---
+        def ao_selecionar_pessoa(event):
+            nome_sel = combo_pessoas.get()
+            lbl_alerta.config(text="") # Limpa alertas
+            self.telefone_atual_para_envio = None # Reseta telefone
+
+            if nome_sel and nome_sel != "(Vazio)":
+                dados = mapa_ids.get(nome_sel)
+                if dados:
+                    # Req 2: Puxa o telefone (já carregado no mapa)
+                    self.telefone_atual_para_envio = dados.get('tel')
+
+                    # Req 3: Se for funcionário fixo, verifica conflitos
+                    if dados['tipo'] == 'func':
+                        msg_conflito = database.verificar_status_disponibilidade(dados['id'], self.data_selecionada)
+                        if msg_conflito:
+                            lbl_alerta.config(text=msg_conflito)
+
+        combo_pessoas.bind("<<ComboboxSelected>>", ao_selecionar_pessoa)
+
+        # Preenchimento inicial de valores
+        if dados_atuais:
+            safe_fmt = lambda v: v.strftime('%H:%M') if hasattr(v, 'strftime') else str(v)[:5] if v else ""
+            var_ent.set(safe_fmt(dados_atuais.HorarioEntrada))
+            var_sai.set(safe_fmt(dados_atuais.HorarioSaida))
             if getattr(dados_atuais, 'InicioIntervalo', None): e_int_ini.insert(0, safe_fmt(dados_atuais.InicioIntervalo))
             if getattr(dados_atuais, 'FimIntervalo', None): e_int_fim.insert(0, safe_fmt(dados_atuais.FimIntervalo))
+
+            # Dispara a lógica de seleção para carregar telefone/alertas do atual
+            ao_selecionar_pessoa(None)
         else:
-            e_ent.insert(0, "08:00"); e_sai.insert(0, "18:00")
+            var_ent.set("08:00") # Dispara o auto-cálculo para saída padrão
 
         ttk.Label(popup, text="Foco do Dia:").pack(anchor=tk.W, padx=10)
         txt_foco = tk.Text(popup, height=5, width=40); txt_foco.pack(padx=10, pady=5)
 
-        # Melhoria 2: Pré-preenchimento por Setor (Com proteção de índice)
-        # Verifica se a tupla tem tamanho suficiente (6 itens) antes de acessar o índice 5
+        # Lógica de Foco (Mantida original)
         setor_atual = next((p[5] for p in self.posicoes if p[0] == pos_id and len(p) > 5), None)
-
         msg_foco_padrao = ""
         if setor_atual:
             msgs_padrao = {
@@ -834,193 +890,92 @@ class AppEscalaLoja:
             }
             msg_foco_padrao = msgs_padrao.get(setor_atual, "")
 
-        # Lógica Inteligente de Preenchimento do Foco
-        foco_para_exibir = ""
-        msg_foco_padrao = "" # Inicialização no escopo correto
-
-        # 1. Tenta definir o padrão do setor
-        if setor_atual:
-            msgs_padrao = {
-                "Cozinha": "Foco: Agilidade nos pedidos e organização da praça.",
-                "Caixa": "Foco: Simpatia, oferta de adicionais e conferência.",
-                "Salão": "Foco: Limpeza das mesas e atenção aos clientes.",
-                "Frente Loja": "Foco: Abordagem convidativa e reposição.",
-                "Buffet": "Foco: Reposição constante e limpeza das bordas.",
-                "Limpeza": "Foco: Banheiros e chão sempre limpos.",
-                "Camara Fria": "Foco: Organização PVPS e contagem."
-            }
-            msg_foco_padrao = msgs_padrao.get(setor_atual, "")
-
-        if dados_atuais and dados_atuais.FocoDoDia:
-            # 2. Prioridade Máxima: O que já está salvo para hoje
-            foco_para_exibir = dados_atuais.FocoDoDia
-        else:
-            # 3. Tentativa de Histórico: O último usado nesta posição
+        foco_para_exibir = dados_atuais.FocoDoDia if (dados_atuais and dados_atuais.FocoDoDia) else ""
+        if not foco_para_exibir:
             try:
-                ultimo_usado = database.buscar_ultimo_foco_posicao(pos_id)
-                if ultimo_usado:
-                    foco_para_exibir = ultimo_usado
-                else:
-                    # 4. Fallback: Padrão do Setor
-                    foco_para_exibir = msg_foco_padrao
-            except Exception:
-                 foco_para_exibir = msg_foco_padrao
+                ultimo = database.buscar_ultimo_foco_posicao(pos_id)
+                foco_para_exibir = ultimo if ultimo else msg_foco_padrao
+            except: foco_para_exibir = msg_foco_padrao
 
         txt_foco.insert("1.0", foco_para_exibir)
 
         def salvar():
-            # Validação de Formato de Hora
             def validar_hora(texto):
                 if not texto or texto.strip() == "": return True
-                try:
-                    datetime.strptime(texto, '%H:%M')
-                    return True
-                except ValueError:
-                    return False
+                try: datetime.strptime(texto, '%H:%M'); return True
+                except ValueError: return False
 
-            horarios = [e_ent.get(), e_sai.get(), e_int_ini.get(), e_int_fim.get()]
+            horarios = [var_ent.get(), var_sai.get(), e_int_ini.get(), e_int_fim.get()]
             for h in horarios:
                 if not validar_hora(h):
-                    messagebox.showerror("Erro de Formato", f"Horário inválido: '{h}'.\nUse o formato HH:MM (ex: 08:00).")
+                    messagebox.showerror("Erro", f"Horário inválido: '{h}'. Use HH:MM.")
                     return
 
             def tratar_vazio(valor): return valor if valor and valor.strip() else None
             selecao = combo_pessoas.get()
-            
-            # Inicialização segura de ambas as variáveis (NULL se Vazio)
-            func_id = None
-            free_id = None
 
+            func_id = None; free_id = None
             if selecao and selecao != "(Vazio)":
-                # Verifica se a chave existe antes de tentar acessar
                 d = mapa_ids.get(selecao)
                 if d:
-                    func_id = d['id'] if d['tipo'] == 'func' else None
-                    free_id = d['id'] if d['tipo'] == 'free' else None
-                else:
-                     # Se não encontrou no mapa (erro interno), assume vazio
-                     messagebox.showerror("Erro Interno", "Seleção inválida no mapa de IDs.", parent=popup); return
+                    if d['tipo'] == 'func': func_id = d['id']
+                    else: free_id = d['id']
 
-            # Salva a escala do dia, permitindo que func_id/free_id sejam NULL
             database.salvar_escala_dia(self.data_selecionada, pos_id, func_id, free_id,
-                tratar_vazio(e_ent.get()), tratar_vazio(e_sai.get()), 
+                tratar_vazio(var_ent.get()), tratar_vazio(var_sai.get()), 
                 tratar_vazio(e_int_ini.get()), tratar_vazio(e_int_fim.get()),
                 txt_foco.get("1.0", tk.END).strip())
 
-            # Melhoria 1: Perguntar se é fixo (Apenas para Funcionários)
             if func_id:
-                # Verifica se já é o fixo atual para não perguntar à toa
                 fixo_atual = database.buscar_funcionarios_com_posicao_padrao(pos_id)
                 id_fixo_atual = fixo_atual[0] if fixo_atual else None
-
                 if func_id != id_fixo_atual:
-                    if messagebox.askyesno("Posição Fixa", "Deseja definir este funcionário como FIXO nesta posição para todos os dias futuros?"):
+                    if messagebox.askyesno("Posição Fixa", "Definir este funcionário como FIXO nesta posição?"):
                         database.definir_posicao_padrao_funcionario(func_id, pos_id)
-                        messagebox.showinfo("Atualizado", "Funcionário definido como fixo nesta posição.")
 
             popup.destroy()
             self.carregar_escala_do_dia()
 
-
         def enviar_zap():
             selecao = combo_pessoas.get()
             if not selecao or selecao == "(Vazio)": return
-            
-            d = mapa_ids.get(selecao)
-            if not d: return
 
-            tel = None
+            # Req 2: Usa o telefone recuperado e armazenado na seleção
+            tel = self.telefone_atual_para_envio
             nome_pessoa_limpo = selecao.split('] ')[1] if ']' in selecao else selecao
-            
-            # Prioriza o telefone carregado do banco (pessoa_tel) se a escala já existia
-            if pessoa_tel:
-                tel = pessoa_tel
-            
-            # Se não, busca no mapa para freelancers ou pede para funcionários
-            elif d['tipo'] == 'free':
-                # Freelancer: usa o telefone salvo no mapa
-                tel = d.get('tel')
-            elif d['tipo'] == 'func':
-                # Funcionário: Pede o telefone, pois só temos o ChatID.
-                tel_dialog = simpledialog.askstring(
-                    "Telefone WhatsApp", 
-                    f"Digite o telefone celular para {nome_pessoa_limpo} (apenas números, DDD+Número):",
-                    initialvalue="", # Não podemos preencher com dado de freelancer, removemos valor_inicial
-                    parent=popup
-                )
-                if tel_dialog:
-                    tel = tel_dialog
-                else:
-                    messagebox.showwarning("Aviso", "Envio via WhatsApp cancelado (telefone não fornecido).")
-                    return
-            
-            # Garante que tel seja uma string limpa antes do re.sub
+
             if not tel:
-                messagebox.showwarning("Aviso", "Nenhum telefone encontrado para a pessoa selecionada.")
-                return
-            
-            if tel:
-                try:
-                    data_obj = datetime.strptime(self.data_selecionada, '%Y-%m-%d')
-                    data_fmt = data_obj.strftime('%d/%m/%y')
-                except ValueError:
-                    data_fmt = self.data_selecionada or "Data Indefinida"
+                # Fallback: Pede manual se não achou no banco
+                tel = simpledialog.askstring("Telefone", f"Telefone não encontrado para {nome_pessoa_limpo}. Digite (DDD+Num):", parent=popup)
+                if not tel: return
 
-                # Montagem da Mensagem (usando nome_pessoa_limpo)
-                texto_msg = (
-                    f"Olá, *{nome_pessoa_limpo}*! 👋\n"
-                    f"Por favor, *confirme sua presença*.\n"
-                    f"⚠️ *AS ORIENTAÇÕES ABAIXO SÃO MUITO IMPORTANTES:*\n\n"
-                    f"━━━━━━━━━━━━━━━━━━\n"
-                    f"📅 *Data:* {data_fmt}\n"
-                    f"📍 *Posição:* {nome_pos}\n"
-                    f"⏰ *Horário:* {e_ent.get()} às {e_sai.get()}"
-                )
-                
-                if e_int_ini.get() and e_int_fim.get():
-                    texto_msg += f"\n☕ *Intervalo:* {e_int_ini.get()} às {e_int_fim.get()}"
+            try:
+                data_obj = datetime.strptime(self.data_selecionada, '%Y-%m-%d')
+                data_fmt = data_obj.strftime('%d/%m/%y')
+            except ValueError: data_fmt = self.data_selecionada
 
-                foco_texto = txt_foco.get("1.0", "end-1c").strip()
-                if foco_texto:
-                    texto_msg += f"\n\n🎯 *FOCO DO DIA:*\n{foco_texto}"
-                # --- INTEGRAÇÃO BOT WHATSAPP ---
-                # Importação local para evitar ciclo
-                import notificador_whatsapp
+            texto_msg = (
+                f"Olá, *{nome_pessoa_limpo}*! 👋\nPor favor, *confirme sua presença*.\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"📅 *Data:* {data_fmt}\n📍 *Posição:* {nome_pos}\n⏰ *Horário:* {var_ent.get()} às {var_sai.get()}"
+            )
+            if e_int_ini.get() and e_int_fim.get(): texto_msg += f"\n☕ *Intervalo:* {e_int_ini.get()} às {e_int_fim.get()}"
+            if txt_foco.get("1.0", "end-1c").strip(): texto_msg += f"\n\n🎯 *FOCO:* {txt_foco.get('1.0', 'end-1c').strip()}"
 
-                # Pergunta ao gestor como deseja enviar (opcional, ou pode ser direto)
-                modo_envio = messagebox.askyesno(
-                    "Enviar Mensagem", 
-                    f"Confirma o envio automático da mensagem para {nome_pessoa_limpo} via BOT?\n\n"
-                    "(Clique em 'Sim' para enviar pelo sistema ou 'Não' para abrir o WhatsApp Web)"
-                )
-
-                if modo_envio:
-                    # Envio Automático via API
-                    sucesso, msg_retorno = notificador_whatsapp.enviar_mensagem_whatsapp(tel, texto_msg)
-                    if sucesso:
-                        messagebox.showinfo("Sucesso", f"Bot: {msg_retorno}")
-                        popup.destroy() # Fecha a janela se deu certo
-                    else:
-                        messagebox.showerror("Erro no Bot", f"Falha ao enviar via sistema:\n{msg_retorno}\n\nTente via Navegador.")
-                else:
-                    # Fallback: Abertura do Navegador (Método Antigo)
-                    tel_limpo = re.sub(r'\D', '', tel)
-                    texto_encoded = urllib.parse.quote(texto_msg)
-                    url = f"https://wa.me/{tel_limpo}?text={texto_encoded}"
-                    webbrowser.open(url)
-                    popup.destroy()
+            import notificador_whatsapp
+            if messagebox.askyesno("Enviar", "Enviar via BOT automático? (Não = Web)"):
+                ok, res = notificador_whatsapp.enviar_mensagem_whatsapp(tel, texto_msg)
+                if ok: messagebox.showinfo("Sucesso", res); popup.destroy()
+                else: messagebox.showerror("Erro", res)
             else:
-                messagebox.showwarning("Aviso", "Nenhum telefone encontrado para a pessoa selecionada.")
-        # --- Recriação dos Botões de Ação (Faltavam no código) ---
+                tel_limpo = re.sub(r'\D', '', tel)
+                url = f"https://wa.me/{tel_limpo}?text={urllib.parse.quote(texto_msg)}"
+                webbrowser.open(url); popup.destroy()
+
         frame_botoes = ttk.Frame(popup, padding="10")
         frame_botoes.pack(fill=tk.X, side=tk.BOTTOM)
-
-        btn_salvar = ttk.Button(frame_botoes, text="✅ Salvar Escala", command=salvar)
-        btn_salvar.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-
-        btn_zap = ttk.Button(frame_botoes, text="📱 Enviar WhatsApp", command=enviar_zap)
-        btn_zap.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-                
+        ttk.Button(frame_botoes, text="✅ Salvar", command=salvar).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        ttk.Button(frame_botoes, text="📱 WhatsApp", command=enviar_zap).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)                
 
 if __name__ == "__main__":
     root = tk.Tk()
