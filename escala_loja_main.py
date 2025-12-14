@@ -60,7 +60,9 @@ class AppEscalaLoja:
 
         self.combo_setor_grafico = ttk.Combobox(self.frame_combo_grafico, state="readonly", height=10, width=20)
         self.combo_setor_grafico.pack(side=tk.LEFT)
-        self.combo_setor_grafico['values'] = ["Geral (Todos)", "Varanda", "Frente Loja", "Salão", "Caixa", "Buffet", "Cozinha", "Limpeza", "Camara Fria"]
+        # Carrega setores do banco dinamicamente + opção Geral
+        setores_db = database.listar_setores_unicos()
+        self.combo_setor_grafico['values'] = ["Geral (Todos)"] + setores_db
         self.combo_setor_grafico.set("Geral (Todos)")
         self.combo_setor_grafico.bind("<<ComboboxSelected>>", lambda e: self.atualizar_grafico_fluxo())
 
@@ -117,10 +119,14 @@ class AppEscalaLoja:
             self.canvas.create_text(500, 300, text=f"ERRO: Imagem '{caminho_img}' não encontrada!", fill="red")
             return
 
-        pil_img = Image.open(caminho_img)
-        # Redimensiona para caber na tela confortavelmente
-        self.tk_img = ImageTk.PhotoImage(pil_img.resize((1180, 600), Image.Resampling.LANCZOS))
-        self.canvas.create_image(590, 300, image=self.tk_img, anchor=tk.CENTER, tags="fundo")
+        try:
+            pil_img = Image.open(caminho_img)
+            # Redimensiona para caber na tela confortavelmente
+            self.tk_img = ImageTk.PhotoImage(pil_img.resize((1180, 600), Image.Resampling.LANCZOS))
+            self.canvas.create_image(590, 300, image=self.tk_img, anchor=tk.CENTER, tags="fundo")
+        except Exception as e:
+            print(f"Erro ao carregar imagem do mapa: {e}")
+            self.canvas.create_text(590, 300, text=f"Erro ao carregar 'layout_loja.png':\n{e}\nO sistema continua funcional sem o mapa de fundo.", fill="red", font=("Arial", 12, "bold"))
 
     def carregar_escala_do_dia(self, event=None):
         self.data_selecionada = self.date_entry.get_date().strftime('%Y-%m-%d')
@@ -192,6 +198,20 @@ class AppEscalaLoja:
 
         self.canvas.tag_lower("fundo")
 
+    @staticmethod
+    def _parse_horario_seguro(valor):
+        """Converte string, datetime ou time para time object de forma segura."""
+        if valor is None: return None
+        if hasattr(valor, 'time'): return valor.time() # Já é datetime
+        if isinstance(valor, str):
+            try:
+                # Tenta HH:MM:SS ou HH:MM
+                fmt = "%H:%M:%S" if len(valor.split(':')) == 3 else "%H:%M"
+                return datetime.strptime(valor, fmt).time()
+            except ValueError:
+                return None
+        return valor # Já é time ou desconhecido
+
     def atualizar_grafico_fluxo(self):
             """Calcula a ocupação hora a hora, filtrando por setor e descontando intervalos."""
             self.ax.clear()
@@ -206,28 +226,19 @@ class AppEscalaLoja:
             horas_eixo = range(7, 24) # 07:00 as 23:00
             contagem_por_hora = []
 
-            def para_time(val):
-                if val is None: return None
-                if hasattr(val, 'time'): return val.time()
-                if isinstance(val, str):
-                    try:
-                        # Tenta converter string HH:MM ou HH:MM:SS para time
-                        fmt = "%H:%M:%S" if len(val.split(':')) == 3 else "%H:%M"
-                        return datetime.strptime(val, fmt).time()
-                    except ValueError:
-                        return None
-                return val
+            # (A função para_time foi removida daqui pois agora usamos self._parse_horario_seguro)
 
             for h in horas_eixo:
                 momento = datetime.strptime(f"{h}:00", "%H:%M").time()
                 qtd_pessoas = 0
 
                 for row in horarios:
-                    ent = para_time(row[0])
-                    sai = para_time(row[1])
-                    int_ini = para_time(row[2])
-                    int_fim = para_time(row[3])
-                    setor_bd = row[4] # Nova coluna Setor
+                    # Usa a nova ferramenta universal criada na Etapa 1
+                    ent = self._parse_horario_seguro(row[0])
+                    sai = self._parse_horario_seguro(row[1])
+                    int_ini = self._parse_horario_seguro(row[2])
+                    int_fim = self._parse_horario_seguro(row[3])
+                    setor_bd = row[4]
 
                     # --- FILTRO DE SETOR ---
                     if setor_filtro != "Geral (Todos)":
@@ -389,32 +400,14 @@ class AppEscalaLoja:
 
     # --- INTEGRAÇÃO COM O CÉREBRO (CALCULADORA) ---
     def gerar_intervalos(self):
-        # [CORREÇÃO] Função auxiliar robusta para converter qualquer formato em time object
-        def extrair_tempo(val):
-            from datetime import timedelta # Garante importação local
-            if isinstance(val, timedelta):
-                # Converte timedelta (ex: 8:00:00) para time
-                segundos = val.total_seconds()
-                horas = int(segundos // 3600)
-                minutos = int((segundos % 3600) // 60)
-                return (datetime.min + timedelta(hours=horas, minutes=minutos)).time()
-            if val is None: return None
-            if isinstance(val, str):
-                try:
-                    formato = "%H:%M:%S" if len(val.split(':')) == 3 else "%H:%M"
-                    return datetime.strptime(val, formato).time()
-                except ValueError:
-                    print(f"ERRO DE FORMATO DE HORA: {val}") # Log para debug
-                    return None
-            if hasattr(val, 'time'): return val.time()
-            return val
+        # (A função extrair_tempo foi removida pois agora usamos self._parse_horario_seguro)
+        
         # 1. Coleta dados da tela e do banco
         pessoas_para_calcular = []
 
         dia_obj = self.date_entry.get_date()
 
         # CORREÇÃO: Converter isoweekday (Seg=1...Dom=7) para o padrão do Banco (Dom=1...Sab=7)
-        # Domingo (7) vira 1. Segunda (1) vira 2. Sábado (6) vira 7.
         dia_iso = (dia_obj.isoweekday() % 7) + 1
 
         for pos in self.posicoes:
@@ -425,8 +418,9 @@ class AppEscalaLoja:
                 # Só calcula para quem tem horário de entrada e saída E nome definido
                 if dados.HorarioEntrada and dados.HorarioSaida and dados.NomePessoa:
                     # Combina a data selecionada com a hora do banco de forma segura
-                    t_ent = extrair_tempo(dados.HorarioEntrada)
-                    t_sai = extrair_tempo(dados.HorarioSaida)
+                    # USA A NOVA FERRAMENTA AQUI:
+                    t_ent = self._parse_horario_seguro(dados.HorarioEntrada)
+                    t_sai = self._parse_horario_seguro(dados.HorarioSaida)
 
                     # CORREÇÃO: Validação de segurança para evitar crash se horário for inválido
                     if t_ent is None or t_sai is None:
@@ -484,7 +478,6 @@ class AppEscalaLoja:
             messagebox.showinfo("Sucesso", f"{count_aplicados} intervalos agendados com sucesso!")
 
 
-    # Melhoria 4: Função para enviar escala no Telegram (Assíncrona)
     def enviar_escala_telegram(self):
         if not self.data_selecionada: return
 
@@ -492,19 +485,28 @@ class AppEscalaLoja:
             f"Deseja enviar a escala do dia {self.data_selecionada} para o grupo TODOS OS FUNCIONÁRIOS no Telegram?")
 
         if resposta:
-            # Função interna para rodar em thread separada
+            # Desabilita o botão para evitar cliques múltiplos
+            self.btn_telegram.config(state='disabled', text="Enviando...")
+
             def tarefa_background():
                 try:
                     texto_escala = database.gerar_relatorio_escala_texto(self.data_selecionada)
                     notificador_telegram.enviar_mensagem(config.TODOS_FUNCIONARIOS_GROUP_ID, texto_escala)
-                    # CORREÇÃO: Usa .after para manipular a UI na thread principal
-                    self.root.after(0, lambda: messagebox.showinfo("Sucesso", "Escala enviada para o grupo do Telegram!"))
-                except Exception as e:
-                    # CORREÇÃO: Usa .after para manipular a UI na thread principal
-                    self.root.after(0, lambda: messagebox.showerror("Erro", f"Falha ao enviar Telegram: {e}"))
 
-            # Inicia a thread para não travar a interface
+                    # Sucesso: Reabilita botão e avisa
+                    self.root.after(0, lambda: self._finalizar_envio_telegram(True))
+                except Exception as e:
+                    # Erro: Reabilita botão e avisa erro
+                    self.root.after(0, lambda: self._finalizar_envio_telegram(False, str(e)))
+
             threading.Thread(target=tarefa_background, daemon=True).start()
+
+    def _finalizar_envio_telegram(self, sucesso, erro_msg=None):
+        self.btn_telegram.config(state='normal', text="📢 Enviar Escala Telegram")
+        if sucesso:
+            messagebox.showinfo("Sucesso", "Escala enviada para o grupo do Telegram!")
+        else:
+            messagebox.showerror("Erro", f"Falha ao enviar Telegram: {erro_msg}")
 
     def abrir_janela_configuracoes(self):
         """Abre a janela Toplevel para editar os parâmetros da automação de escala."""
