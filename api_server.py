@@ -303,6 +303,36 @@ def rota_download_documento(documento_id):
         logger.exception(f"!!! ERRO CRÍTICO em /documentos/download: {e}")
         return jsonify({"status": "erro", "mensagem": "Ocorreu um erro interno no servidor. Tente novamente mais tarde ou contate o suporte."}), 500
     
+@app.route('/documentos/excluir/<int:documento_id>', methods=['DELETE'])
+def rota_excluir_documento_fisico(documento_id):
+    """
+    Endpoint para excluir o arquivo físico e o registro do banco.
+    """
+    try:
+        # 1. Busca o caminho antes de excluir do banco
+        caminho_completo = database.buscar_caminho_documento(documento_id)
+        
+        # 2. Exclui do banco (Cascata)
+        sucesso_db, _ = database.excluir_documento_pessoal_completo(documento_id)
+        
+        if not sucesso_db:
+            return jsonify({"status": "erro", "mensagem": "Falha ao excluir registro do banco."}), 500
+
+        # 3. Exclui o arquivo físico
+        if caminho_completo and os.path.exists(caminho_completo):
+            try:
+                os.remove(caminho_completo)
+                logger.info(f"Arquivo físico excluído: {caminho_completo}")
+            except OSError as e:
+                logger.error(f"Erro ao excluir arquivo físico: {e}")
+                # Não retorna erro 500 pois o registro já saiu do banco
+                return jsonify({"status": "alerta", "mensagem": "Registro excluído, mas erro ao apagar arquivo físico."}), 200
+
+        return jsonify({"status": "sucesso", "mensagem": "Documento excluído com sucesso."}), 200
+
+    except Exception as e:
+        logger.error(f"Erro crítico em /documentos/excluir: {e}", exc_info=True)
+        return jsonify({"status": "erro", "mensagem": "Erro interno no servidor."}), 500
 
 @app.route('/agendamentos/<int:agendamento_id>', methods=['PUT'])
 def rota_atualizar_agendamento(agendamento_id):
