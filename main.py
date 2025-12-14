@@ -1985,94 +1985,152 @@ class App:
     def abrir_janela_edicao_funcionario(self):
         indices = self.lista_funcionarios.curselection()
         if not indices:
-            messagebox.showwarning("Aviso", "Por favor, selecione um funcionário da lista para editar.")
+            messagebox.showwarning("Aviso", "Selecione um funcionário da lista para editar.")
             return
         
         texto_selecionado = self.lista_funcionarios.get(indices[0])
         funcionario_selecionado = self.dados_funcionarios[texto_selecionado]
 
+        # Busca dados atualizados do banco para garantir que temos os novos campos
+        f_dados = database.buscar_funcionario_por_id(funcionario_selecionado.FuncionarioID)
+
         self.edit_window = tk.Toplevel(self.root)
-        self.edit_window.title("Editar Funcionário")
+        self.edit_window.title("Editar Funcionário (Dados Completos)")
+        self.edit_window.geometry("550x650") # Aumentado para caber novos campos
         
         frame_edicao = ttk.Frame(self.edit_window, padding="20")
         frame_edicao.pack(fill="both", expand=True)
 
-        ttk.Label(frame_edicao, text="Nome Completo:").grid(row=0, column=0, sticky="w", pady=5)
+        # Campos Básicos
+        ttk.Label(frame_edicao, text="Nome Completo:").grid(row=0, column=0, sticky="w", pady=2)
         edit_entry_nome = ttk.Entry(frame_edicao, width=40)
-        edit_entry_nome.grid(row=0, column=1, pady=5)
-        edit_entry_nome.insert(0, funcionario_selecionado.NomeCompleto)
+        edit_entry_nome.grid(row=0, column=1, pady=2)
+        edit_entry_nome.insert(0, f_dados.NomeCompleto)
 
-        ttk.Label(frame_edicao, text="ID do Chat Telegram:").grid(row=1, column=0, sticky="w", pady=5)
+        ttk.Label(frame_edicao, text="ID Telegram:").grid(row=1, column=0, sticky="w", pady=2)
         edit_entry_chat_id = ttk.Entry(frame_edicao, width=40)
-        edit_entry_chat_id.grid(row=1, column=1, pady=5)
-        edit_entry_chat_id.insert(0, funcionario_selecionado.ChatIDTelegram)
+        edit_entry_chat_id.grid(row=1, column=1, pady=2)
+        edit_entry_chat_id.insert(0, f_dados.ChatIDTelegram or "")
 
-        ttk.Label(frame_edicao, text="Cargo:").grid(row=2, column=0, sticky="w", pady=5)
+        ttk.Label(frame_edicao, text="Telefone WhatsApp:").grid(row=2, column=0, sticky="w", pady=2)
+        edit_entry_telefone = ttk.Entry(frame_edicao, width=40)
+        edit_entry_telefone.grid(row=2, column=1, pady=2)
+        edit_entry_telefone.insert(0, getattr(f_dados, 'TelefoneWhatsApp', '') or "")
+
+        ttk.Label(frame_edicao, text="Cargo:").grid(row=3, column=0, sticky="w", pady=2)
         edit_entry_cargo = ttk.Entry(frame_edicao, width=40)
-        edit_entry_cargo.grid(row=2, column=1, pady=5)
-        edit_entry_cargo.insert(0, funcionario_selecionado.Cargo)
+        edit_entry_cargo.grid(row=3, column=1, pady=2)
+        edit_entry_cargo.insert(0, f_dados.Cargo or "")
 
-        ttk.Label(frame_edicao, text="Horário de Notificação (HH:MM):").grid(row=3, column=0, sticky="w", pady=5)
+        ttk.Label(frame_edicao, text="Horário Notificação:").grid(row=4, column=0, sticky="w", pady=2)
         edit_entry_horario = ttk.Entry(frame_edicao, width=40)
-        edit_entry_horario.grid(row=3, column=1, pady=5)
-        horario = funcionario_selecionado.HorarioNotificacao if funcionario_selecionado.HorarioNotificacao else ""
-        edit_entry_horario.insert(0, horario)
-        ttk.Label(frame_edicao, text="Folga Semanal:").grid(row=4, column=0, sticky="w", pady=5)
-        dias_semana_lista = list(self.dias_semana_mapa.keys())
-        edit_combo_folga = ttk.Combobox(frame_edicao, state="readonly", values=dias_semana_lista)
-        edit_combo_folga.grid(row=4, column=1, pady=5)
+        edit_entry_horario.grid(row=4, column=1, pady=2)
+        # Formatação segura de horário
+        horario_str = ""
+        if f_dados.HorarioNotificacao:
+            horario_str = f_dados.HorarioNotificacao.strftime('%H:%M') if hasattr(f_dados.HorarioNotificacao, 'strftime') else str(f_dados.HorarioNotificacao)[:5]
+        edit_entry_horario.insert(0, horario_str)
 
-        ttk.Label(frame_edicao, text="Verificador de Segurança (3 dígitos CPF):").grid(row=5, column=0, sticky="w", pady=5)
-        edit_entry_verificador = ttk.Entry(frame_edicao, width=10)
-        edit_entry_verificador.grid(row=5, column=1, sticky="w", pady=5)
-        verificador_atual = getattr(funcionario_selecionado, 'VerificadorCPF', '')
-        edit_entry_verificador.insert(0, verificador_atual or "")
+        # Configuração de Folgas
+        ttk.Separator(frame_edicao, orient='horizontal').grid(row=5, column=0, columnspan=2, sticky='ew', pady=10)
+        ttk.Label(frame_edicao, text="-- Configuração de Folgas --", font=("Arial", 9, "bold")).grid(row=6, column=0, columnspan=2, pady=5)
 
-        folga_atual_num = getattr(funcionario_selecionado, 'DiaDeFolga', 0)
+        ttk.Label(frame_edicao, text="Folga Fixa Semanal:").grid(row=7, column=0, sticky="w", pady=2)
+        edit_combo_folga = ttk.Combobox(frame_edicao, state="readonly", values=list(self.dias_semana_mapa.keys()))
+        edit_combo_folga.grid(row=7, column=1, pady=2)
+        
+        folga_atual_num = getattr(f_dados, 'DiaDeFolga', 0)
         folga_atual_texto = next((nome for nome, num in self.dias_semana_mapa.items() if num == folga_atual_num), 'Sem Folga Definida')
         edit_combo_folga.set(folga_atual_texto)
 
-        btn_salvar = ttk.Button(frame_edicao, text="Salvar Alterações", 
-                        command=lambda: self.salvar_edicao_funcionario(
-                            funcionario_selecionado.FuncionarioID, 
-                            edit_entry_nome.get(), 
-                            edit_entry_chat_id.get(), 
-                            edit_entry_cargo.get(), 
-                            edit_entry_horario.get(),
-                            edit_combo_folga.get(),
-                            edit_entry_verificador.get() # Passa o novo valor
-                        ))
-        btn_salvar.grid(row=6, columnspan=2, pady=20)
+        ttk.Label(frame_edicao, text="Domingo de Folga (6x1):").grid(row=8, column=0, sticky="w", pady=2)
+        domingos_mapa = {'Nenhum/Fixo': 0, '1º Domingo': 1, '2º Domingo': 2, '3º Domingo': 3, '4º Domingo': 4, '5º Domingo': 5}
+        edit_combo_domingo = ttk.Combobox(frame_edicao, state="readonly", values=list(domingos_mapa.keys()))
+        edit_combo_domingo.grid(row=8, column=1, pady=2)
+        
+        dom_atual = getattr(f_dados, 'DomingoFolgaMensal', 0) or 0
+        dom_texto = next((k for k, v in domingos_mapa.items() if v == dom_atual), 'Nenhum/Fixo')
+        edit_combo_domingo.set(dom_texto)
 
-    def salvar_edicao_funcionario(self, func_id, nome, chat_id, cargo, horario, dia_folga_texto, verificador_cpf): # 1. Novo parâmetro
+        # Configuração de Afastamento
+        ttk.Separator(frame_edicao, orient='horizontal').grid(row=9, column=0, columnspan=2, sticky='ew', pady=10)
+        ttk.Label(frame_edicao, text="-- Férias / Afastamento --", font=("Arial", 9, "bold")).grid(row=10, column=0, columnspan=2, pady=5)
+
+        ttk.Label(frame_edicao, text="Data Início:").grid(row=11, column=0, sticky="w", pady=2)
+        entry_afast_ini = DateEntry(frame_edicao, width=12, date_pattern='dd/mm/yyyy', locale='pt_BR')
+        entry_afast_ini.grid(row=11, column=1, sticky="w", pady=2)
+        # Limpa o default (hoje) para mostrar vazio se não tiver data
+        entry_afast_ini.delete(0, "end") 
+        if getattr(f_dados, 'DataInicioAfastamento', None):
+            entry_afast_ini.set_date(f_dados.DataInicioAfastamento)
+
+        ttk.Label(frame_edicao, text="Data Fim:").grid(row=12, column=0, sticky="w", pady=2)
+        entry_afast_fim = DateEntry(frame_edicao, width=12, date_pattern='dd/mm/yyyy', locale='pt_BR')
+        entry_afast_fim.grid(row=12, column=1, sticky="w", pady=2)
+        entry_afast_fim.delete(0, "end")
+        if getattr(f_dados, 'DataFimAfastamento', None):
+            entry_afast_fim.set_date(f_dados.DataFimAfastamento)
+
+        # Segurança
+        ttk.Separator(frame_edicao, orient='horizontal').grid(row=13, column=0, columnspan=2, sticky='ew', pady=10)
+        ttk.Label(frame_edicao, text="Verificador (3 dígitos CPF):").grid(row=14, column=0, sticky="w", pady=2)
+        edit_entry_verificador = ttk.Entry(frame_edicao, width=10)
+        edit_entry_verificador.grid(row=14, column=1, sticky="w", pady=2)
+        edit_entry_verificador.insert(0, getattr(f_dados, 'VerificadorCPF', '') or "")
+
+        def preparar_salvamento():
+            # Lógica para converter inputs em dados para o banco
+            dom_val = domingos_mapa.get(edit_combo_domingo.get(), 0)
+            
+            # Pega datas apenas se o campo não estiver vazio
+            ini_val = entry_afast_ini.get_date() if entry_afast_ini.get() else None
+            fim_val = entry_afast_fim.get_date() if entry_afast_fim.get() else None
+
+            self.salvar_edicao_funcionario(
+                f_dados.FuncionarioID,
+                edit_entry_nome.get(),
+                edit_entry_chat_id.get(),
+                edit_entry_cargo.get(),
+                edit_entry_horario.get(),
+                edit_combo_folga.get(),
+                edit_entry_verificador.get(),
+                edit_entry_telefone.get(), # Telefone
+                dom_val,                   # Domingo Folga
+                ini_val,                   # Inicio Afast.
+                fim_val                    # Fim Afast.
+            )
+
+        btn_salvar = ttk.Button(frame_edicao, text="💾 Salvar Alterações Completas", command=preparar_salvamento)
+        btn_salvar.grid(row=15, columnspan=2, pady=20)
+
+    def salvar_edicao_funcionario(self, func_id, nome, chat_id, cargo, horario, dia_folga_texto, verificador_cpf, telefone, dom_folga, ini_afast, fim_afast):
         dia_folga_valor = self.dias_semana_mapa.get(dia_folga_texto, 0)
         
         if verificador_cpf and len(verificador_cpf) != 3:
             messagebox.showerror("Erro", "O Verificador de Segurança deve ter exatamente 3 dígitos.")
             return
-                    # --- NOVA VALIDAÇÃO DE HORÁRIO ---
+
         try:
-            # Adiciona um check extra para permitir horário vazio (se for o caso)
-            if horario and horario.strip(): # Só valida se não estiver vazio
-                datetime.strptime(horario, '%H:%M') # Tenta converter para validar o formato
-            # Se estiver vazio, assume que é válido (ou ajuste a regra se horário for obrigatório)
+            if horario and horario.strip():
+                datetime.strptime(horario, '%H:%M')
         except ValueError:
-            messagebox.showerror("Erro de Formato", "O Horário de Notificação deve estar no formato HH:MM (ex: 08:30) ou vazio.")
-            # Garante que a janela de edição não seja fechada
-            if hasattr(self, 'edit_window') and self.edit_window.winfo_exists():
-                self.edit_window.focus_force() # Traz a janela de edição para frente
-            return # Impede o salvamento se o formato for inválido
-        # --- FIM DA VALIDAÇÃO ---
+            messagebox.showerror("Erro de Formato", "O Horário de Notificação deve estar no formato HH:MM (ex: 08:30).")
+            return
 
-        # Se passou nas validações, continua com o salvamento
-        # (A linha abaixo já existe, apenas continue a partir daqui)
-        # database.atualizar_funcionario(func_id, nome, chat_id, cargo, horario, dia_folga_valor, verificador_cpf)
-
-        database.atualizar_funcionario(func_id, nome, chat_id, cargo, horario, dia_folga_valor, verificador_cpf)
-        
-        messagebox.showinfo("Sucesso", "Funcionário atualizado com sucesso.")
-        self.edit_window.destroy()
-        self.atualizar_todas_as_listas()
+        # Chama a nova versão da função no banco de dados com todos os argumentos
+        try:
+            database.atualizar_funcionario(
+                func_id, nome, chat_id, cargo, horario, dia_folga_valor, verificador_cpf,
+                telefone=telefone,
+                domingo_folga=dom_folga,
+                inicio_afastamento=ini_afast,
+                fim_afastamento=fim_afast
+            )
+            messagebox.showinfo("Sucesso", "Dados do funcionário (incluindo RH) atualizados com sucesso.")
+            self.edit_window.destroy()
+            self.atualizar_todas_as_listas()
+        except Exception as e:
+            messagebox.showerror("Erro de Banco", f"Falha ao salvar dados: {e}")
 
     def excluir_funcionario_selecionado(self):
         indices = self.lista_funcionarios.curselection()
