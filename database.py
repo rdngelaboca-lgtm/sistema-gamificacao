@@ -6916,3 +6916,49 @@ def listar_pendencias_gerais_hoje():
         finally:
             conn.close()
     return []
+
+def listar_funcionarios_por_tarefa(tarefa_id):
+    """
+    Retorna duas listas: 
+    1. Funcionários que JÁ possuem a tarefa ativa (Atribuídos).
+    2. Funcionários que NÃO possuem a tarefa ativa (Disponíveis).
+    Usado para filtrar a lista de seleção no Desktop.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+
+            # 1. Quem já tem a tarefa ativa (Ignorado pelo main.py mas mantido para consistência)
+            sql_assigned = """
+                SELECT F.FuncionarioID, F.NomeCompleto
+                FROM Funcionarios F
+                JOIN TarefasAtribuidas TA ON F.FuncionarioID = TA.FuncionarioID
+                WHERE TA.TarefaID = ? AND TA.DataFimVigencia IS NULL
+                ORDER BY F.NomeCompleto
+            """
+            cursor.execute(sql_assigned, tarefa_id)
+            atribuidos = cursor.fetchall()
+
+            # 2. Quem NÃO tem a tarefa ativa (Disponíveis para seleção)
+            sql_available = """
+                SELECT F.FuncionarioID, F.NomeCompleto
+                FROM Funcionarios F
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM TarefasAtribuidas TA
+                    WHERE TA.FuncionarioID = F.FuncionarioID
+                    AND TA.TarefaID = ?
+                    AND TA.DataFimVigencia IS NULL
+                )
+                ORDER BY F.NomeCompleto
+            """
+            cursor.execute(sql_available, tarefa_id)
+            disponiveis = cursor.fetchall()
+
+            return atribuidos, disponiveis
+        except Exception as e:
+            logger.error(f"Erro em listar_funcionarios_por_tarefa: {e}", exc_info=True)
+            return [], []
+        finally:
+            conn.close()
+    return [], []
