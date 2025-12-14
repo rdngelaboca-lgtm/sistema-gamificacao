@@ -675,24 +675,42 @@ class AppGestaoPessoas:
             response = requests.get(url_download, stream=True)
 
             if response.status_code == 200:
-                # --- CORREÇÃO LÓGICA: Extrair nome e extensão reais do Header ---
-                import re
+                # --- CORREÇÃO DE PARSE DE HEADER ---
+                import cgi
                 nome_remoto = ""
-                # Tenta pegar o nome real do arquivo enviado pelo servidor
-                if "Content-Disposition" in response.headers:
-                    fname = re.findall('filename="?([^"]+)"?', response.headers["Content-Disposition"])
-                    if fname:
-                        nome_remoto = fname[0]
+                
+                header_content = response.headers.get("Content-Disposition")
+                if header_content:
+                    try:
+                        # Tenta usar cgi para parsear corretamente (lida com aspas, utf-8, etc)
+                        _, params = cgi.parse_header(header_content)
+                        if 'filename' in params:
+                            nome_remoto = params['filename']
+                        elif 'filename*' in params:
+                            # Tratamento básico para filename* (UTF-8)
+                            encoding, _, filename = params['filename*'].split("'", 2)
+                            nome_remoto = urllib.parse.unquote(filename)
+                    except Exception:
+                        # Fallback para regex simples se cgi falhar
+                        import re
+                        fname = re.findall('filename="?([^"]+)"?', header_content)
+                        if fname:
+                            nome_remoto = fname[0]
 
-                # Fallback se o header falhar: usa PDF padrão, mas tenta detectar imagem pelo Content-Type
+                # Fallback final se o header falhar ou não existir
                 if not nome_remoto:
-                    ext = ".pdf" # Padrão seguro
+                    ext = ".pdf" 
                     content_type = response.headers.get("Content-Type", "")
                     if "image/jpeg" in content_type: ext = ".jpg"
                     elif "image/png" in content_type: ext = ".png"
                     
-                    # CORREÇÃO: Adiciona ID do documento para garantir unicidade local e evitar PermissionError
-                    nome_remoto = f"{dados_doc[1]}_{dados_doc[2].replace('/', '-')}_{documento_id}{ext}"
+                    # Nome seguro baseado nos dados da lista
+                    safe_tipo = "".join(x for x in dados_doc[1] if x.isalnum())
+                    nome_remoto = f"{safe_tipo}_{documento_id}{ext}"
+
+                # Limpeza de caracteres inválidos no nome do arquivo (segurança extra)
+                nome_remoto = os.path.basename(nome_remoto) 
+                # -----------------------------------
 
                 pasta_downloads = "downloads"
                 if not os.path.exists(pasta_downloads):
@@ -705,8 +723,6 @@ class AppGestaoPessoas:
                         f.write(chunk)
 
                 print(f"--> Download concluído! Arquivo salvo em: {caminho_local}")
-
-                # Abre o arquivo com o programa padrão do Windows
                 file_utils.abrir_arquivo(caminho_local)
             else:
                 # --- CORREÇÃO: Tratamento seguro de resposta de erro ---
@@ -753,7 +769,7 @@ class AppGestaoPessoas:
                 doc.DocumentoID, doc.TipoDocumento, mes_ano_ref, data_upload, status_ciencia, data_ciencia
             ))
     def excluir_documento_selecionado(self):
-        """Exclui o documento selecionado da lista e o arquivo físico."""
+        """Chama a API para excluir o documento selecionado (banco + arquivo)."""
         selecionado = self.tree_rh_documentos.focus()
         if not selecionado:
             messagebox.showwarning("Aviso", "Por favor, selecione um documento na lista para excluir.")
@@ -767,30 +783,27 @@ class AppGestaoPessoas:
         confirmado = messagebox.askyesno(
             "Confirmar Exclusão", 
             f"Tem certeza que deseja excluir o documento:\n\nTipo: {tipo_doc}\nReferência: {mes_ano_ref}\n\n"
-            f"Esta ação removerá o registro do banco e o arquivo físico. NÃO PODE SER DESFEITA.", 
+            f"Esta ação removerá o registro do banco e o arquivo físico no servidor. NÃO PODE SER DESFEITA.", 
             icon='warning'
         )
 
         if confirmado:
             try:
-                sucesso_db, caminho_arquivo = database.excluir_documento_pessoal_completo(documento_id)
+                # Chamada DELETE para a API
+                url = f"{config.API_BASE_URL}/documentos/excluir/{documento_id}"
+                response = requests.delete(url)
 
-                if sucesso_db:
-                    # Regra 1: Tenta remover o arquivo físico
-                    if caminho_arquivo and os.path.exists(caminho_arquivo):
-                        sucesso_arquivo = file_utils.excluir_arquivo_seguro(caminho_arquivo)
-                        if not sucesso_arquivo:
-                            messagebox.showwarning("Atenção", "Registro excluído do banco, mas a exclusão do arquivo físico falhou! Verifique os logs e remova-o manualmente.")
-                    
+                if response.status_code == 200:
                     messagebox.showinfo("Sucesso", "Documento excluído com sucesso!")
                     self.on_rh_funcionario_selecionado(None) # Recarrega a lista
                 else:
-                    messagebox.showerror("Erro de Banco", "Falha ao excluir o registro do documento.")
+                    msg_erro = response.json().get('mensagem', 'Erro desconhecido')
+                    messagebox.showerror("Erro da API", f"Falha ao excluir: {msg_erro}")
 
-            except Exception as e:
-                logger.error(f"Erro inesperado ao excluir documento: {e}", exc_info=True)
-                messagebox.showerror("Erro", f"Ocorreu um erro inesperado: {e}")
-
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Erro de conexão ao excluir documento: {e}", exc_info=True)
+                messagebox.showerror("Erro de Conexão", f"Não foi possível conectar ao servidor: {e}")
+                
     def _buscar_nivel_acesso(self, funcionario_id):
         """Busca o NivelAcesso de um funcionário pelo ID (função auxiliar)."""
         conn = database.get_db_connection()
@@ -1108,87 +1121,96 @@ class AppGestaoPessoas:
                 messagebox.showerror("Erro", "A pontuação deve ser um número inteiro positivo.", parent=self.popup_criacao)
                 return
 
-        try:
-            destinatarios_nomes = [listbox.get(i) for i in indices_selecionados]
-            destinatarios_objs = [self.dados_funcionarios[nome] for nome in destinatarios_nomes]
+        # Prepara dados iniciais na Thread principal para evitar erros de GUI
+        destinatarios_nomes = [listbox.get(i) for i in indices_selecionados]
+        destinatarios_objs = [self.dados_funcionarios[nome] for nome in destinatarios_nomes]
+        imagem_anexada = hasattr(self, 'caminho_imagem_selecionada') and self.caminho_imagem_selecionada
+        caminho_imagem = self.caminho_imagem_selecionada if imagem_anexada else None
 
-            GESTOR_ID = 2  # Assumindo ID 2 para o gestor
-            documento_id = database.criar_documento(titulo, conteudo.strip(), GESTOR_ID, pontos)
-            if not documento_id:
-                messagebox.showerror("Erro de BD", "Não foi possível criar o registro do documento.", parent=self.popup_criacao)
-                return
+        # Desabilita botão para evitar múltiplos cliques
+        btn_enviar = self.popup_criacao.nametowidget(listbox.master.master.winfo_children()[-1]) # Pega o botão enviar (último widget)
+        if btn_enviar: btn_enviar.config(state="disabled", text="Enviando... Aguarde")
 
-            imagem_anexada = hasattr(self, 'caminho_imagem_selecionada') and self.caminho_imagem_selecionada
-            telegram_file_id = None
-            enviados_com_sucesso = 0
-
-            # --- LÓGICA DE ENVIO EM DUAS ETAPAS ---
-            
-            # 1. Prepara as mensagens
-            legenda_imagem_curta = f"🚨 **NOVO COMUNICADO** 🚨\n\n**Título:** {titulo}"
-            texto_principal = f"**Conteúdo:**\n{conteudo.strip()}\n\nSua confirmação de leitura é obrigatória e será registrada."
-
-            # 2. Envia para o primeiro funcionário para obter o file_id da imagem (se houver)
-            # 2. Envia para o GRUPO DE GESTORES para obter o file_id da imagem (se houver)
-            if imagem_anexada:
-                # ENVIAMOS PARA O GRUPO DE GESTÃO (um ID seguro) EM VEZ DO PRIMEIRO USUÁRIO
-                logger.info(f"Enviando foto para GESTOR_GROUP_CHAT_ID ({config.GESTOR_GROUP_CHAT_ID}) para obter file_id...")
-                resposta_api_foto = notificador_telegram.enviar_foto_com_botoes(
-                    config.GESTOR_GROUP_CHAT_ID, 
-                    self.caminho_imagem_selecionada, 
-                    f"(Log de Envio: {titulo})" # Legenda curta para o log do gestor
-                ) # Envia a foto SÓ com a legenda curta, sem botões
-
-                if resposta_api_foto and resposta_api_foto.get('ok'):
-                    telegram_file_id = resposta_api_foto['result']['photo'][-1]['file_id']
-                    database.atualizar_documento_com_file_id(documento_id, telegram_file_id)
-                else:
-                    messagebox.showerror("Erro Telegram", "Não foi possível enviar a imagem inicial.", parent=self.popup_criacao)
-                    database.excluir_documento(documento_id)
+        def tarefa_envio_background():
+            try:
+                GESTOR_ID = 2  # Assumindo ID 2 para o gestor
+                documento_id = database.criar_documento(titulo, conteudo.strip(), GESTOR_ID, pontos)
+                if not documento_id:
+                    self.root.after(0, lambda: messagebox.showerror("Erro de BD", "Não foi possível criar o registro do documento.", parent=self.popup_criacao))
                     return
 
-            # 3. Itera sobre TODOS os funcionários para enviar o conteúdo e o botão
-            for func in destinatarios_objs:
-                assinatura_id = database.registrar_pendencia_assinatura(documento_id, func.FuncionarioID)
-                if not assinatura_id:
-                    logger.warning(f"!!! Falha ao registrar pendência para {func.NomeCompleto}")
-                    continue
+                telegram_file_id = None
+                enviados_com_sucesso = 0
 
-                keyboard = [[InlineKeyboardButton("✅ Li e estou ciente", callback_data=f"doc_ciente_{assinatura_id}")]]
-                reply_markup = InlineKeyboardMarkup(keyboard)
+                # 1. Prepara as mensagens
+                legenda_imagem_curta = f"🚨 **NOVO COMUNICADO** 🚨\n\n**Título:** {titulo}"
+                texto_principal = f"**Conteúdo:**\n{conteudo.strip()}\n\nSua confirmação de leitura é obrigatória e será registrada."
 
-                # Se tivermos um file_id (de uma imagem), enviamos a foto primeiro
-                if telegram_file_id:
-                    notificador_telegram.enviar_foto_com_botoes(
+                # 2. Envio da imagem inicial (se houver) com Fallback
+                telegram_file_id = None
+                if caminho_imagem:
+                    try:
+                        logger.info(f"Tentando obter file_id via Grupo Gestor ({config.GESTOR_GROUP_CHAT_ID})...")
+                        resposta_api_foto = notificador_telegram.enviar_foto_com_botoes(
+                            config.GESTOR_GROUP_CHAT_ID, 
+                            caminho_imagem, 
+                            f"(Log de Envio: {titulo})" 
+                        )
+
+                        if resposta_api_foto and resposta_api_foto.get('ok'):
+                            telegram_file_id = resposta_api_foto['result']['photo'][-1]['file_id']
+                            database.atualizar_documento_com_file_id(documento_id, telegram_file_id)
+                        else:
+                            logger.warning(f"Falha ao enviar imagem para grupo de controle: {resposta_api_foto}")
+                            # Não aborta, apenas segue sem imagem
+                    except Exception as e_img:
+                        logger.error(f"Erro de conexão ao enviar imagem de controle: {e_img}")
+                        # Não aborta
+
+                # 3. Itera sobre TODOS os funcionários
+                for func in destinatarios_objs:
+                    assinatura_id = database.registrar_pendencia_assinatura(documento_id, func.FuncionarioID)
+                    if not assinatura_id:
+                        logger.warning(f"!!! Falha ao registrar pendência para {func.NomeCompleto}")
+                        continue
+
+                    keyboard = [[InlineKeyboardButton("✅ Li e estou ciente", callback_data=f"doc_ciente_{assinatura_id}")]]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+
+                    if telegram_file_id:
+                        notificador_telegram.enviar_foto_com_botoes(
+                            func.ChatIDTelegram,
+                            telegram_file_id, 
+                            legenda_imagem_curta
+                        )
+                        time.sleep(0.2) 
+
+                    notificador_telegram.enviar_mensagem_com_botao(
                         func.ChatIDTelegram,
-                        telegram_file_id, # Reutiliza o file_id
-                        legenda_imagem_curta
+                        texto_principal,
+                        reply_markup
                     )
-                    time.sleep(0.2) # Pequena pausa entre as mensagens
+                    enviados_com_sucesso += 1
+                    time.sleep(0.1)
 
-                # Envia a mensagem de texto com o conteúdo completo e o botão
-                notificador_telegram.enviar_mensagem_com_botao(
-                    func.ChatIDTelegram,
-                    texto_principal,
-                    reply_markup
-                )
-                enviados_com_sucesso += 1
-                # Atualiza a interface gráfica para evitar congelamento ("Não Respondendo")
-                self.root.update()
-                time.sleep(0.1)
+                # Finalização na Thread Principal
+                def finalizar_ui():
+                    messagebox.showinfo("Sucesso", f"{enviados_com_sucesso} de {len(destinatarios_objs)} comunicados foram enviados.", parent=self.popup_criacao)
+                    if hasattr(self, 'caminho_imagem_selecionada'):
+                        del self.caminho_imagem_selecionada
+                    self.popup_criacao.destroy()
+                    self.atualizar_lista_comunicados()
+                
+                self.root.after(0, finalizar_ui)
 
-            messagebox.showinfo("Sucesso", f"{enviados_com_sucesso} de {len(destinatarios_objs)} comunicados foram enviados.", parent=self.popup_criacao)
-            if imagem_anexada:
-                del self.caminho_imagem_selecionada
-            self.popup_criacao.destroy()
-            self.atualizar_lista_comunicados()
+            except Exception as e:
+                self.root.after(0, lambda: messagebox.showerror("Erro Inesperado", f"O processo foi interrompido:\n{e}", parent=self.popup_criacao))
+                # Reabilita botão em caso de erro
+                self.root.after(0, lambda: btn_enviar.config(state="normal", text="ENVIAR COMUNICADO"))
 
-        except Exception as e:
-            # CORREÇÃO: Removemos a exclusão automática do documento aqui.
-            # Se o erro ocorrer no meio do loop, não podemos apagar o documento,
-            # pois alguns funcionários já podem ter recebido a notificação.
-            messagebox.showerror("Erro Inesperado", f"O processo foi interrompido:\n{e}\n\nVerifique a lista para ver quem recebeu.", parent=self.popup_criacao)
-
+        # Inicia a thread
+        import threading
+        threading.Thread(target=tarefa_envio_background, daemon=True).start()
 
     def abrir_janela_detalhes(self):
         selecionado = self.tree_comunicados.focus()
