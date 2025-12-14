@@ -562,14 +562,24 @@ class AppEscalaLoja:
             jornada_str = entry_jornada.get().strip()
 
             try:
+                # 1. Converte Max Horas e Duração Intervalo (Inteiros simples)
                 max_horas = int(max_horas_str)
                 duracao = int(duracao_str)
-                jornada = int(jornada_str)
+
+                # 2. Lógica Inteligente para Jornada (Aceita "8:20" ou "8.33")
+                if ":" in jornada_str:
+                    horas, minutos = map(int, jornada_str.split(':'))
+                    # Converte minutos em fração de hora (ex: 20 min / 60 = 0.33)
+                    jornada = horas + (minutos / 60.0)
+                else:
+                    # Aceita número inteiro ou com ponto (8 ou 8.5)
+                    jornada = float(jornada_str.replace(',', '.'))
 
                 if max_horas <= 0 or duracao <= 0 or jornada <= 0:
                     raise ValueError("Valores numéricos devem ser positivos.")
 
                 # Atualiza configurações globais
+                # Nota: O banco precisa aceitar FLOAT/DECIMAL na coluna DuracaoJornadaPadrao
                 if database.atualizar_configuracoes_escala(None, None, max_horas, duracao, jornada):
                     messagebox.showinfo("Sucesso", "Configurações globais salvas! Atualize a escala.", parent=popup)
                     popup.destroy()
@@ -577,7 +587,7 @@ class AppEscalaLoja:
                     messagebox.showerror("Erro", "Falha ao salvar no banco de dados.", parent=popup)
 
             except ValueError as e:
-                messagebox.showerror("Erro de Formato", f"Verifique o formato: Valores numéricos devem ser inteiros e positivos.\nDetalhe: {e}", parent=popup)
+                messagebox.showerror("Erro de Formato", f"Verifique o formato.\nPara 8h e 20min, digite '8:20' ou '8.33'.\nDetalhe: {e}", parent=popup)
             except Exception as e:
                 messagebox.showerror("Erro", f"Ocorreu um erro inesperado: {e}", parent=popup)
 
