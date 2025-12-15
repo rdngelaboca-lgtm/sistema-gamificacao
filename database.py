@@ -2682,12 +2682,14 @@ def verificar_status_disponibilidade(funcionario_id, data_verificacao):
 
 def buscar_tarefas_recorrentes_agendadas_para_hoje(funcionario_id, dia_da_semana):
     """
-    (VERSÃO CORRIGIDA) Busca tarefas recorrentes, AGORA INCLUINDO O SETOR.
+    (VERSÃO CORRIGIDA) Busca tarefas (Diária, Semanal, Mensal, Única) agendadas para HOJE.
     """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
+            
+            # CORREÇÃO: SQL expandido para incluir Mensal e Única baseada na data atual do servidor
             sql = """
                 SELECT T.TarefaID, T.Titulo, T.Pontos, T.Setor
                 FROM TarefasAtribuidas TA
@@ -2695,8 +2697,17 @@ def buscar_tarefas_recorrentes_agendadas_para_hoje(funcionario_id, dia_da_semana
                 WHERE TA.FuncionarioID = ? 
                   AND TA.DataFimVigencia IS NULL
                   AND (
-                    TA.TipoFrequencia = 'Diaria' OR
-                    (TA.TipoFrequencia = 'Semanal' AND TA.ValorFrequencia = ?)
+                    -- 1. Diária
+                    TA.TipoFrequencia = 'Diaria' 
+                    
+                    -- 2. Semanal: Bate com o dia da semana passado (1-7)
+                    OR (TA.TipoFrequencia = 'Semanal' AND TA.ValorFrequencia = ?)
+                    
+                    -- 3. Mensal: Bate com o dia do mês atual
+                    OR (TA.TipoFrequencia = 'Mensal' AND TA.ValorFrequencia = CAST(DATEPART(day, GETDATE()) AS VARCHAR))
+                    
+                    -- 4. Única: Agendada especificamente para a data de hoje
+                    OR (TA.TipoFrequencia = 'Unica' AND CONVERT(date, TA.DataInicioVigencia) = CONVERT(date, GETDATE()))
                   )
             """
             cursor.execute(sql, funcionario_id, dia_da_semana)
