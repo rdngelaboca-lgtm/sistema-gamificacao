@@ -288,30 +288,29 @@ def verificar_e_delegar_tarefas_de_folga():
     
     for f in todos_funcionarios:
         motivo_ausencia = None
-        
-        # A. Folga Fixa Semanal (Ex: Toda Segunda)
-        if f.DiaDeFolga == dia_semana_sql:
-            motivo_ausencia = "Folga Semanal"
-            
-        # B. Folga de Domingo Específico (Escala 6x1)
-        # Verifica se hoje é domingo E se o funcionário folga neste número de domingo (1, 2, etc)
-        elif dia_semana_sql == 1 and hasattr(f, 'DomingoFolgaMensal') and f.DomingoFolgaMensal == ocorrencia_domingo:
-            motivo_ausencia = f"Folga de Domingo ({ocorrencia_domingo}º)"
-            
-        # C. Período de Afastamento (Férias/Atestado)
-        # Verifica se hoje está entre Inicio e Fim (inclusive)
-        elif hasattr(f, 'DataInicioAfastamento') and f.DataInicioAfastamento and f.DataFimAfastamento:
+
+        # A. Período de Afastamento (Férias/Atestado) - PRIORIDADE ALTA
+        # Verifica primeiro, pois Férias sobrepõem a folga comum
+        if hasattr(f, 'DataInicioAfastamento') and f.DataInicioAfastamento and f.DataFimAfastamento:
             # Garante comparação segura de datas
             ini = f.DataInicioAfastamento
             fim = f.DataFimAfastamento
             if isinstance(ini, datetime): ini = ini.date()
             if isinstance(fim, datetime): fim = fim.date()
-                
+
             if ini <= hoje_date <= fim:
                 motivo_ausencia = "Férias/Atestado"
 
-        if motivo_ausencia:
-            # Adiciona atributo temporário para usar na mensagem
+        # B. Folga Fixa Semanal (Ex: Toda Segunda)
+        # Só verifica se não caiu na condição de férias (elif)
+        elif f.DiaDeFolga == dia_semana_sql:
+            motivo_ausencia = "Folga Semanal"
+
+        # C. Folga de Domingo Específico (Escala 6x1)
+        elif dia_semana_sql == 1 and hasattr(f, 'DomingoFolgaMensal') and f.DomingoFolgaMensal == ocorrencia_domingo:
+            motivo_ausencia = f"Folga de Domingo ({ocorrencia_domingo}º)"
+
+        if motivo_ausencia:            
             f.MotivoLog = motivo_ausencia
             funcionarios_ausentes.append(f)
 
@@ -336,8 +335,9 @@ def verificar_e_delegar_tarefas_de_folga():
             chat_destino = config.FOLGA_GROUP_CHAT_ID # Padrão (Fallback)
 
             # Normaliza strings para busca (remove acentos, minúsculas)
-            setor_t = normalizar_texto(t.Setor or "")
-            cargo_f = normalizar_texto(func.Cargo or "")
+            # CORREÇÃO: Usando 'tarefa' e 'funcionario' (nomes corretos dos iteradores)
+            setor_t = normalizar_texto(tarefa.Setor or "")
+            cargo_f = normalizar_texto(funcionario.Cargo or "")
 
             encontrou = False
 
@@ -354,7 +354,7 @@ def verificar_e_delegar_tarefas_de_folga():
 
             # Adiciona ao Drop do grupo identificado
             if chat_destino not in drop_por_grupo: drop_por_grupo[chat_destino] = []
-            drop_por_grupo[chat_destino].append({'tarefa': t, 'origem': func.NomeCompleto, 'motivo': func.MotivoLog})
+            drop_por_grupo[chat_destino].append({'tarefa': tarefa, 'origem': funcionario.NomeCompleto, 'motivo': funcionario.MotivoLog})
 
     # --- Envio dos Drops ---
     for chat_id, itens in drop_por_grupo.items():
