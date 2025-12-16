@@ -7042,4 +7042,59 @@ def listar_funcionarios_por_tarefa(tarefa_id):
             return [], []
         finally:
             conn.close()
-    return [], []
+    return [],
+
+def salvar_escala_dia_v3(escala_id, data, pos_id, func_id, free_id, h_ent, h_sai, h_int_ini, h_int_fim, foco):
+    """
+    (VERSÃO V3 - CRUD EXPLÍCITO)
+    Se escala_id for fornecido, faz UPDATE. Se não, faz INSERT.
+    Valida conflitos de horário na mesma posição antes de salvar.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            
+            # Validação de Conflito (Ignora o próprio ID se for edição)
+            sql_check = """
+                SELECT EscalaID FROM EscalaDiaria 
+                WHERE DataEscala = ? AND PosicaoID = ? 
+                AND EscalaID != ? -- Ignora a si mesmo
+                AND (
+                    (CAST(? AS TIME) < HorarioSaida) AND (CAST(? AS TIME) > HorarioEntrada)
+                )
+            """
+            # Trata escala_id nulo para a query
+            id_check = escala_id if escala_id else -1
+            cursor.execute(sql_check, data, pos_id, id_check, h_ent, h_sai)
+            
+            if cursor.fetchone():
+                return False # Conflito detectado!
+
+            if escala_id:
+                # UPDATE
+                sql = """
+                    UPDATE EscalaDiaria SET 
+                        FuncionarioID = ?, FreelancerID = ?, 
+                        HorarioEntrada = ?, HorarioSaida = ?, 
+                        InicioIntervalo = ?, FimIntervalo = ?, FocoDoDia = ?
+                    WHERE EscalaID = ?
+                """
+                cursor.execute(sql, func_id, free_id, h_ent, h_sai, h_int_ini, h_int_fim, foco, escala_id)
+            else:
+                # INSERT
+                sql = """
+                    INSERT INTO EscalaDiaria 
+                    (DataEscala, PosicaoID, FuncionarioID, FreelancerID, HorarioEntrada, HorarioSaida, InicioIntervalo, FimIntervalo, FocoDoDia)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """
+                cursor.execute(sql, data, pos_id, func_id, free_id, h_ent, h_sai, h_int_ini, h_int_fim, foco)
+            
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Erro salvar v3: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
