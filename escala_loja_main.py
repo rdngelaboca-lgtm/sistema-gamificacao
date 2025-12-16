@@ -149,62 +149,61 @@ class AppEscalaLoja:
         if dia_semana_hoje == 8: dia_semana_hoje = 1
 
         for pos in self.posicoes:
-            # Desempacotamento seguro (trata casos onde 'setor' pode não vir do banco)
-            pos_id = pos[0]
-            nome = pos[1]
-            x = pos[2]
-            y = pos[3]
-            # ativo = pos[4] (não usado aqui)
-            setor = pos[5] if len(pos) > 5 else None
+            pos_id, nome, x, y, _, setor = pos # Desempacotamento
 
-            nome_pessoa = "Vazio"
-            cor = "#ff4444" # Vermelho (Vazio)
-            info_intervalo = ""
-
-            if pos_id in self.escala_atual:
-                dados = self.escala_atual[pos_id]
-                nome_pessoa = dados.NomePessoa if dados.NomePessoa else "(Livre)"
-                cor = "#00C851" if dados.NomePessoa else "#FFBB33" # Verde ou Amarelo
-
-                # Exibe o intervalo se estiver agendado
-                if dados.InicioIntervalo and dados.FimIntervalo:
-                    # Função segura para formatar independente se é objeto ou string
-                    fmt_hora = lambda v: v.strftime('%H:%M') if hasattr(v, 'strftime') else str(v)[:5]
-
-                    i_ini = fmt_hora(dados.InicioIntervalo)
-                    i_fim = fmt_hora(dados.FimIntervalo)
-                    info_intervalo = f"\n☕ {i_ini}-{i_fim}"
+            label_final = f"{nome}\n"
+            cor = "#ff4444" # Vermelho (Vazio) padrão
+            
+            # --- LÓGICA MULTI-TURNO ---
+            lista_turnos = self.escala_atual.get(pos_id, [])
+            
+            if lista_turnos:
+                # Se tem alguém escalado (um ou mais)
+                cor = "#00C851" # Verde
+                
+                # Monta a lista de nomes e horários
+                nomes_formatados = []
+                for dados in lista_turnos:
+                    nome_p = dados.NomePessoa if dados.NomePessoa else "?"
+                    
+                    # Formata horário curto (Ex: 13-18)
+                    h_ent = str(dados.HorarioEntrada)[:5] if dados.HorarioEntrada else ""
+                    h_sai = str(dados.HorarioSaida)[:5] if dados.HorarioSaida else ""
+                    
+                    # Se não tiver nome, muda cor para amarelo (alerta)
+                    if not dados.NomePessoa: cor = "#FFBB33"
+                        
+                    nomes_formatados.append(f"{nome_p} ({h_ent}-{h_sai})")
+                
+                label_final += "\n".join(nomes_formatados)
 
             elif not self.modo_edicao:
-                # Verifica ocupante fixo (padrão)
+                # Lógica de Sugestão (Azul) - Se estiver vazio
                 func_padrao = database.buscar_funcionarios_com_posicao_padrao(pos_id)
                 if func_padrao:
                     f_id, f_nome, f_folga = func_padrao
-
-                    # [CORREÇÃO] Verifica disponibilidade completa (Férias, 6x1, Folga Fixa)
                     status_indisponivel = database.verificar_status_disponibilidade(f_id, self.data_selecionada)
 
-                    # Só sugere como fixo (Azul) se NÃO tiver restrição de disponibilidade
-                    # E se não for a folga fixa semanal (verificação redundante de segurança)
                     if not status_indisponivel and str(f_folga) != str(dia_semana_hoje):
-                        nome_pessoa = f"{f_nome} (Fixo)"
+                        label_final += f"{f_nome} (Fixo)"
                         cor = "#33b5e5" # Azul
-                    # Caso contrário, mantém Vermelho (Vazio) para forçar escalação manual
+                    else:
+                        label_final += "(Vazio)"
+            else:
+                label_final += "(Vazio)"
 
             tag = f"pos_{pos_id}"
 
             # Desenha Marcador (Bolinha)
             self.canvas.create_oval(x-15, y-15, x+15, y+15, fill=cor, outline="white", width=2, tags=("marcador", tag))
 
-            # Desenha Texto (Nome + Intervalo)
-            label = f"{nome}\n{nome_pessoa}{info_intervalo}"
-            self.canvas.create_text(x, y+30, text=label, fill="black", font=("Arial", 8, "bold"), justify=tk.CENTER, tags=("texto_marcador", tag))
+            # Desenha Texto (Nome + Horários)
+            self.canvas.create_text(x, y+35, text=label_final, fill="black", font=("Arial", 7, "bold"), justify=tk.CENTER, tags=("texto_marcador", tag))
 
-            # Desenha Tag do Setor (Visível no modo edição ou se existir)
+            # Desenha Tag do Setor
             if self.modo_edicao or setor:
                 cor_setor = "blue" if setor else "gray"
                 txt_setor = f"[{setor}]" if setor else "[Sem Setor]"
-                # Exibe acima da bolinha
                 self.canvas.create_text(x, y-25, text=txt_setor, fill=cor_setor, font=("Arial", 7), tags=("setor_tag", tag))
 
         self.canvas.tag_lower("fundo")
@@ -955,8 +954,11 @@ class AppEscalaLoja:
             if len(entrada) == 5 and re.match(r'^\d{2}:\d{2}$', entrada):
                 try:
                     dt_ent = datetime.strptime(entrada, '%H:%M')
-                    # Adiciona Jornada + Intervalo
-                    total_horas = JORNADA_PADRAO + INTERVALO_PADRAO
+                    
+                    # [AJUSTE] Usa apenas a jornada configurada (ex: 8:20), sem somar o intervalo na saída
+                    # Se você quiser que o intervalo conte, reverta para: JORNADA_PADRAO + INTERVALO_PADRAO
+                    total_horas = JORNADA_PADRAO
+                    
                     # CORREÇÃO: Converter Decimal para float, pois timedelta não aceita Decimal
                     dt_sai = dt_ent + timedelta(hours=float(total_horas))
                     var_sai.set(dt_sai.strftime('%H:%M'))
