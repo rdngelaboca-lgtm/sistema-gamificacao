@@ -525,6 +525,13 @@ class AppEscalaLoja:
             threading.Thread(target=tarefa_background, daemon=True).start()
 
     def _finalizar_envio_telegram(self, sucesso, erro_msg=None):
+        # [CORREÇÃO FORENSICS] Verifica se a janela ainda existe antes de tentar modificar widgets
+        try:
+            if not self.root.winfo_exists():
+                return
+        except Exception:
+            return
+
         self.btn_telegram.config(state='normal', text="📢 Enviar Escala Telegram")
         if sucesso:
             messagebox.showinfo("Sucesso", "Escala enviada para o grupo do Telegram!")
