@@ -659,23 +659,28 @@ def adicionar_funcionario(nome, chat_id, cargo, horario_notificacao, dia_folga):
 
 def listar_funcionarios():
     """
-    (CORREÇÃO FINAL DE SCHEMA) Lista TODOS os campos essenciais de Funcionarios
-    para evitar AttributeErrors em todos os módulos (main.py, gestao_pessoas_main.py).
+    (VERSÃO CORRIGIDA V2 - COM AFASTAMENTOS)
+    Lista todos os campos, incluindo dados de Férias/Afastamento e Domingo de Folga.
     """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
+            # ADICIONADOS: DomingoFolgaMensal, DataInicioAfastamento, DataFimAfastamento
             sql = """
                 SELECT 
                     FuncionarioID, NomeCompleto, CPF, ChatIDTelegram, TelefoneWhatsApp, 
                     Cargo, Setor, SaldoPontos, HorarioNotificacao, DiaDeFolga, 
-                    VerificadorCPF, NivelAcesso, PosicaoPadraoID
+                    VerificadorCPF, NivelAcesso, PosicaoPadraoID,
+                    DomingoFolgaMensal, DataInicioAfastamento, DataFimAfastamento
                 FROM Funcionarios 
                 ORDER BY NomeCompleto
             """
             cursor.execute(sql)
             return cursor.fetchall()
+        except Exception as e:
+            logger.error(f"Erro ao listar funcionários (V2): {e}")
+            return []
         finally:
             conn.close()
     return []
