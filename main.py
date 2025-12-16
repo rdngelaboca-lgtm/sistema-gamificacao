@@ -6,6 +6,7 @@ import logging.handlers
 import sys
 import os # Necessário para criar a pasta de logs
 
+
 # --- Configurações ---
 LOG_FILENAME = 'gamificacao_sistema.log'
 LOG_FOLDER = 'logs' # Nome da pasta onde os logs serão salvos
@@ -73,6 +74,7 @@ import urllib.parse
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from database import adicionar_pontos_ao_saldo
 import threading
+import agendador # Importa o módulo para usar a função manual
 
 
 class App:
@@ -922,6 +924,14 @@ class App:
         btn_zerar_pontos = ttk.Button(frame_direita_acoes, text="Zerar Pontos do Mês", command=self.zerar_pontos_do_funcionario_selecionado); btn_zerar_pontos.pack(pady=10, fill='x', ipady=5)
         btn_excluir_func = ttk.Button(frame_direita_acoes, text="Excluir Funcionário", command=self.excluir_funcionario_selecionado, style="Danger.TButton"); btn_excluir_func.pack(pady=10, fill='x', ipady=5)
         
+        # Botão de Emergência para Ausência
+        ttk.Separator(frame_direita_acoes, orient='horizontal').pack(fill='x', pady=15)
+        lbl_emergencia = ttk.Label(frame_direita_acoes, text="🚨 Área de Emergência", foreground="red", font=("Arial", 9, "bold"))
+        lbl_emergencia.pack(pady=(0, 5))
+
+        btn_forcar_drop = ttk.Button(frame_direita_acoes, text="📢 Lançar Tarefas no Grupo (Falta/Atestado)", command=self.forcar_drop_selecionado)
+        btn_forcar_drop.pack(pady=5, fill='x', ipady=5)
+
         style = ttk.Style()
         style.configure("Danger.TButton", foreground="red")
         
@@ -2145,6 +2155,33 @@ class App:
             database.excluir_funcionario(funcionario.FuncionarioID)
             messagebox.showinfo("Sucesso", "Funcionário excluído.")
             self.atualizar_todas_as_listas()
+
+    def forcar_drop_selecionado(self):
+        """Aciona o agendador para enviar as tarefas do funcionário selecionado para o grupo AGORA."""
+        indices = self.lista_funcionarios.curselection()
+        if not indices:
+            messagebox.showwarning("Aviso", "Por favor, selecione o funcionário que faltou.")
+            return
+
+        texto_selecionado = self.lista_funcionarios.get(indices[0])
+        funcionario = self.dados_funcionarios[texto_selecionado]
+
+        confirmacao = messagebox.askyesno(
+            "Confirmar Drop Manual",
+            f"Você confirma que **{funcionario.NomeCompleto}** não virá hoje?\n\n"
+            "Isso irá pegar TODAS as tarefas agendadas para ele HOJE e enviar imediatamente no grupo do Telegram para que outros peguem.\n\n"
+            "Deseja continuar?",
+            icon='warning'
+        )
+
+        if confirmacao:
+            # Chama a função que criamos no agendador.py
+            sucesso, mensagem = agendador.forcar_drop_funcionario_especifico(funcionario.FuncionarioID)
+
+            if sucesso:
+                messagebox.showinfo("Sucesso", mensagem)
+            else:
+                messagebox.showerror("Erro / Aviso", mensagem)
 
     def abrir_janela_historico(self):
         """
