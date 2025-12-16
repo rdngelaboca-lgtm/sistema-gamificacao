@@ -6942,6 +6942,7 @@ def listar_pendencias_gerais_hoje():
     """
     Retorna quem tinha que entregar algo HOJE e não entregou.
     Filtra apenas tarefas individuais agendadas para a data atual.
+    AGORA CONSIDERA O PERÍODO DE AFASTAMENTO/FÉRIAS.
     """
     conn = get_db_connection()
     if conn:
@@ -6958,16 +6959,23 @@ def listar_pendencias_gerais_hoje():
                 WHERE 
                     TA.DataFimVigencia IS NULL
                     AND TA.FuncionarioID IS NOT NULL
-                    -- Regras de Agendamento (CORRIGIDO: Única apenas HOJE)
+                    -- Regras de Agendamento
                     AND (
                         TA.TipoFrequencia = 'Diaria'
-                        OR (TA.TipoFrequencia = 'Semanal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(weekday, GETDATE()))
+                        OR (TA.TipoFrequencia = 'Semanal' AND CAST(TA.ValorFrequencia AS INT) = ((DATEPART(dw, GETDATE()) + @@DATEFIRST - 1) % 7) + 1)
                         OR (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, GETDATE()))
-                        -- Alteração aqui: Mudado de <= para =. Só mostra tarefas únicas agendadas estritamente para hoje.
                         OR (TA.TipoFrequencia = 'Unica' AND CONVERT(date, TA.DataInicioVigencia) = CONVERT(date, GETDATE()))
                     )
-                    -- Ignora quem está de folga hoje
-                    AND (F.DiaDeFolga IS NULL OR F.DiaDeFolga = 0 OR F.DiaDeFolga != DATEPART(weekday, GETDATE()))
+                    -- Ignora quem está de folga semanal hoje
+                    AND (F.DiaDeFolga IS NULL OR F.DiaDeFolga = 0 OR F.DiaDeFolga != ((DATEPART(dw, GETDATE()) + @@DATEFIRST - 1) % 7) + 1)
+                    
+                    -- [CORREÇÃO] Ignora quem está em Férias/Afastamento hoje
+                    AND (
+                        F.DataInicioAfastamento IS NULL 
+                        OR CONVERT(date, GETDATE()) < F.DataInicioAfastamento 
+                        OR CONVERT(date, GETDATE()) > F.DataFimAfastamento
+                    )
+
                     -- Filtra quem NÃO entregou (Pendência)
                     AND NOT EXISTS (
                         SELECT 1 FROM Entregas E
