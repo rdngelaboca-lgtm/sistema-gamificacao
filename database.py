@@ -6455,18 +6455,35 @@ def excluir_posicao_loja(posicao_id):
     return False
 
 def salvar_escala_dia(data, posicao_id, func_id, free_id, h_ent, h_sai, h_int_ini, h_int_fim, foco):
-    """Salva ou atualiza a escala de uma pessoa em uma posição para um dia."""
+    """
+    (VERSÃO V2 - MULTI-TURNO)
+    Salva escala permitindo várias pessoas na mesma posição, desde que horários não batam.
+    """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            # Verifica se já existe escala para essa posição nesse dia
-            check_sql = "SELECT EscalaID FROM EscalaDiaria WHERE DataEscala = ? AND PosicaoID = ?"
-            cursor.execute(check_sql, data, posicao_id)
-            existente = cursor.fetchone()
+            
+            # 1. Verifica se existe conflito de horário para esta posição nesta data
+            # Lógica de Overlap: (InicioA < FimB) e (FimA > InicioB)
+            # Excluímos da checagem se for o mesmo funcionário/freelancer tentando editar o próprio turno (opcional, aqui simplificado)
+            
+            sql_conflito = """
+                SELECT EscalaID FROM EscalaDiaria 
+                WHERE DataEscala = ? AND PosicaoID = ?
+                AND (
+                    (CAST(? AS TIME) < HorarioSaida) AND (CAST(? AS TIME) > HorarioEntrada)
+                )
+            """
+            # Se h_ent ou h_sai forem None (limpeza), não checa conflito
+            conflito_id = None
+            if h_ent and h_sai:
+                cursor.execute(sql_conflito, data, posicao_id, h_ent, h_sai)
+                res = cursor.fetchone()
+                if res: conflito_id = res[0]
 
-            if existente:
-                # Atualiza
+            if conflito_id:
+                # Se conflita, ATUALIZA o registro existente (Assume edição do turno)
                 sql = """
                     UPDATE EscalaDiaria SET 
                         FuncionarioID = ?, FreelancerID = ?, 
@@ -6474,9 +6491,9 @@ def salvar_escala_dia(data, posicao_id, func_id, free_id, h_ent, h_sai, h_int_in
                         InicioIntervalo = ?, FimIntervalo = ?, FocoDoDia = ?
                     WHERE EscalaID = ?
                 """
-                cursor.execute(sql, func_id, free_id, h_ent, h_sai, h_int_ini, h_int_fim, foco, existente[0])
+                cursor.execute(sql, func_id, free_id, h_ent, h_sai, h_int_ini, h_int_fim, foco, conflito_id)
             else:
-                # Insere Novo
+                # Se não conflita (horário livre), INSERE novo turno
                 sql = """
                     INSERT INTO EscalaDiaria 
                     (DataEscala, PosicaoID, FuncionarioID, FreelancerID, HorarioEntrada, HorarioSaida, InicioIntervalo, FimIntervalo, FocoDoDia)
@@ -6487,7 +6504,7 @@ def salvar_escala_dia(data, posicao_id, func_id, free_id, h_ent, h_sai, h_int_in
             conn.commit()
             return True
         except Exception as e:
-            logging.error(f"Erro ao salvar escala: {e}")
+            logging.error(f"Erro ao salvar escala multi-turno: {e}")
             return False
         finally:
             conn.close()
@@ -6495,33 +6512,31 @@ def salvar_escala_dia(data, posicao_id, func_id, free_id, h_ent, h_sai, h_int_in
 
 def buscar_escala_do_dia(data_str):
     """
-    Busca toda a escala de um dia específico.
-    Retorna um dicionário onde a CHAVE é o PosicaoID.
+    (VERSÃO V2 - MULTI-TURNO)
+    Retorna um dicionário onde a CHAVE é o PosicaoID e o VALOR é uma LISTA de registros.
     """
     conn = get_db_connection()
     escala_map = {}
     if conn:
         try:
             cursor = conn.cursor()
-            # --- CORREÇÃO APLICADA AQUI ---
-            # Removemos 'F.Telefone' pois essa coluna não existe na tabela Funcionarios.
-            # Agora pegamos o telefone apenas se for Freelancer (FR.Telefone).
-            # Se for funcionário, virá como None (NULL).
             sql = """
                 SELECT 
                     E.*, 
                     ISNULL(F.NomeCompleto, FR.Nome) as NomePessoa,
-                    ISNULL(FR.Telefone, F.TelefoneWhatsApp) as TelefonePessoa -- ✅ Inclui telefone de Funcionario (se existir)
+                    ISNULL(FR.Telefone, F.TelefoneWhatsApp) as TelefonePessoa
                 FROM EscalaDiaria E
                 LEFT JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID
                 LEFT JOIN Freelancers FR ON E.FreelancerID = FR.FreelancerID
                 WHERE E.DataEscala = ?
+                ORDER BY E.HorarioEntrada ASC
             """
-            # --- FIM DA CORREÇÃO ---
             cursor.execute(sql, data_str)
             resultados = cursor.fetchall()
             for row in resultados:
-                escala_map[row.PosicaoID] = row
+                if row.PosicaoID not in escala_map:
+                    escala_map[row.PosicaoID] = []
+                escala_map[row.PosicaoID].append(row)
             return escala_map
         finally:
             conn.close()
