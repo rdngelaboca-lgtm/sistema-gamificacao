@@ -290,16 +290,25 @@ def verificar_e_delegar_tarefas_de_folga():
         motivo_ausencia = None
 
         # A. Período de Afastamento (Férias/Atestado) - PRIORIDADE ALTA
-        # Verifica primeiro, pois Férias sobrepõem a folga comum
-        if hasattr(f, 'DataInicioAfastamento') and f.DataInicioAfastamento and f.DataFimAfastamento:
-            # Garante comparação segura de datas
-            ini = f.DataInicioAfastamento
-            fim = f.DataFimAfastamento
-            if isinstance(ini, datetime): ini = ini.date()
-            if isinstance(fim, datetime): fim = fim.date()
+        # Verifica se os atributos existem e não são nulos
+        data_ini_raw = getattr(f, 'DataInicioAfastamento', None)
+        data_fim_raw = getattr(f, 'DataFimAfastamento', None)
 
-            if ini <= hoje_date <= fim:
-                motivo_ausencia = "Férias/Atestado"
+        if data_ini_raw and data_fim_raw:
+            try:
+                # Normaliza para objeto date do Python
+                ini = data_ini_raw.date() if isinstance(data_ini_raw, datetime) else data_ini_raw
+                fim = data_fim_raw.date() if isinstance(data_fim_raw, datetime) else data_fim_raw
+
+                # Conversão extra caso venha como string do banco (YYYY-MM-DD)
+                if isinstance(ini, str): ini = datetime.strptime(ini, '%Y-%m-%d').date()
+                if isinstance(fim, str): fim = datetime.strptime(fim, '%Y-%m-%d').date()
+
+                if ini <= hoje_date <= fim:
+                    motivo_ausencia = "Férias/Atestado"
+                    print(f"--> [DEBUG] {f.NomeCompleto} detectado em FÉRIAS ({ini} a {fim}).")
+            except Exception as e_date:
+                print(f"--> [ERRO DATA] Falha ao processar datas de {f.NomeCompleto}: {e_date}")
 
         # B. Folga Fixa Semanal (Ex: Toda Segunda)
         # Só verifica se não caiu na condição de férias (elif)
@@ -599,6 +608,75 @@ def processar_downloads_notas_fiscais():
                 if local_path and os.path.exists(local_path): os.remove(local_path)
     finally:
         download_semaphore.release()
+
+
+def forcar_drop_funcionario_especifico(funcionario_id):
+    """
+    Função manual para gestores dispararem o Drop de um funcionário específico
+    que faltou de última hora (fora do horário automático).
+    """
+    print(f"--> Iniciando Drop Manual para FuncionarioID: {funcionario_id}...")
+    
+    # 1. Busca dados do funcionário
+    funcionario = database.buscar_funcionario_por_id(funcionario_id)
+    if not funcionario:
+        return False, "Funcionário não encontrado."
+
+    hoje_dt = datetime.now()
+    # SQL Padrão: 1=Dom ... 7=Sab
+    dia_semana_sql = (hoje_dt.weekday() + 1) % 7 + 1
+
+    # 2. Busca tarefas de hoje
+    tarefas_do_dia = database.buscar_tarefas_recorrentes_agendadas_para_hoje(funcionario_id, dia_semana_sql)
+    
+    if not tarefas_do_dia:
+        return False, f"O funcionário {funcionario.NomeCompleto} não tem tarefas agendadas para hoje ({hoje_dt.strftime('%d/%m')})."
+
+    # 3. Define o Grupo de Destino (Lógica de Roteamento)
+    chat_destino = config.FOLGA_GROUP_CHAT_ID # Padrão
+    
+    # Tenta rotear pelo Cargo
+    cargo_f = normalizar_texto(funcionario.Cargo or "")
+    encontrou_grupo = False
+    
+    for chave, chat_id in MAPA_SETOR_GRUPO.items():
+        if chave in cargo_f:
+            chat_destino = chat_id
+            encontrou_grupo = True
+            break
+            
+    # Se não achou pelo cargo, tenta pelo setor da primeira tarefa (heurística)
+    if not encontrou_grupo and tarefas_do_dia:
+        setor_t = normalizar_texto(tarefas_do_dia[0].Setor or "")
+        for chave, chat_id in MAPA_SETOR_GRUPO.items():
+            if chave in setor_t:
+                chat_destino = chat_id
+                break
+
+    # 4. Monta e Envia a Mensagem
+    qtd = len(tarefas_do_dia)
+    mensagem = (
+        f"🚨 **DROP DE TAREFAS (AUSÊNCIA IMPREVISTA)** 🚨\n\n"
+        f"O colaborador **{funcionario.NomeCompleto}** não poderá comparecer/continuar hoje.\n"
+        f"Temos **{qtd} missões** que precisam ser cobertas!\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+    )
+    
+    keyboard = []
+    for i, t in enumerate(tarefas_do_dia):
+        mensagem += f"{i+1}️⃣ **{t.Titulo}**\n     └ 💰 *{t.Pontos} pts*\n\n"
+        callback = f"aceitar_folga_{t.TarefaID}"
+        keyboard.append([InlineKeyboardButton(f"🚀 Assumir Missão {i+1}", callback_data=callback)])
+
+    mensagem += "👇 **Quem pode cobrir e ganhar esses pontos?**"
+
+    try:
+        notificador_telegram.enviar_mensagem_com_botao(chat_destino, mensagem, InlineKeyboardMarkup(keyboard))
+        print(f"--> Drop manual enviado para grupo {chat_destino}.")
+        return True, f"Drop enviado com sucesso para o grupo (ChatID: {chat_destino})!"
+    except Exception as e:
+        print(f"--> Erro envio Drop Manual: {e}")
+        return False, f"Erro ao enviar para o Telegram: {e}"
         
 if __name__ == "__main__":
     print("--- 🤖 Robô Agendador 2.0 Iniciado 🤖 ---")
