@@ -176,9 +176,16 @@ class AppEscalaLoja:
                 func_padrao = database.buscar_funcionarios_com_posicao_padrao(pos_id)
                 if func_padrao:
                     f_id, f_nome, f_folga = func_padrao
-                    if str(f_folga) != str(dia_semana_hoje):
+
+                    # [CORREÇÃO] Verifica disponibilidade completa (Férias, 6x1, Folga Fixa)
+                    status_indisponivel = database.verificar_status_disponibilidade(f_id, self.data_selecionada)
+
+                    # Só sugere como fixo (Azul) se NÃO tiver restrição de disponibilidade
+                    # E se não for a folga fixa semanal (verificação redundante de segurança)
+                    if not status_indisponivel and str(f_folga) != str(dia_semana_hoje):
                         nome_pessoa = f"{f_nome} (Fixo)"
                         cor = "#33b5e5" # Azul
+                    # Caso contrário, mantém Vermelho (Vazio) para forçar escalação manual
 
             tag = f"pos_{pos_id}"
 
@@ -200,9 +207,19 @@ class AppEscalaLoja:
 
     @staticmethod
     def _parse_horario_seguro(valor):
-        """Converte string, datetime ou time para time object de forma segura."""
+        """Converte string, datetime, time ou timedelta para time object de forma segura."""
         if valor is None: return None
+
+        # [CORREÇÃO] Tratamento para timedelta (comum em retornos SQL TIME via ODBC)
+        if isinstance(valor, timedelta):
+            total_seconds = int(valor.total_seconds())
+            hours = total_seconds // 3600
+            minutes = (total_seconds % 3600) // 60
+            # Cria um tempo dummy para extrair o objeto .time()
+            return (datetime.min + timedelta(hours=hours, minutes=minutes)).time()
+
         if hasattr(valor, 'time'): return valor.time() # Já é datetime
+
         if isinstance(valor, str):
             try:
                 # Tenta HH:MM:SS ou HH:MM
@@ -210,7 +227,13 @@ class AppEscalaLoja:
                 return datetime.strptime(valor, fmt).time()
             except ValueError:
                 return None
-        return valor # Já é time ou desconhecido
+
+        # Se já for objeto time puro (importação local para evitar erro de referência se não estiver no topo)
+        from datetime import time as dt_time
+        if isinstance(valor, dt_time):
+            return valor
+
+        return None # Tipo desconhecido
 
     def atualizar_grafico_fluxo(self):
             """Calcula a ocupação hora a hora, filtrando por setor e descontando intervalos."""
