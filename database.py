@@ -7098,3 +7098,43 @@ def salvar_escala_dia_v3(escala_id, data, pos_id, func_id, free_id, h_ent, h_sai
         finally:
             conn.close()
     return False
+
+def buscar_escala_tempo_real(data_str, hora_str):
+    """
+    (VERSÃO V2 - TIMEZONE FIX)
+    Busca a escala filtrando pelo horário fornecido pelo Python (Sistema),
+    ignorando o horário interno do SQL Server para evitar erros de fuso.
+    """
+    conn = get_db_connection()
+    escala_map = {}
+    if conn:
+        try:
+            cursor = conn.cursor()
+            
+            # A query agora compara a coluna com os parâmetros ? passados pelo Python
+            sql = """
+                SELECT 
+                    E.*, 
+                    ISNULL(F.NomeCompleto, FR.Nome) as NomePessoa
+                FROM EscalaDiaria E
+                LEFT JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID
+                LEFT JOIN Freelancers FR ON E.FreelancerID = FR.FreelancerID
+                WHERE E.DataEscala = ?
+                  -- Verifica se a HORA FORNECIDA está dentro do turno
+                  AND CAST(? AS TIME) >= E.HorarioEntrada 
+                  AND CAST(? AS TIME) <= E.HorarioSaida
+            """
+            # Passamos hora_str duas vezes (para >= Entrada e <= Saida)
+            cursor.execute(sql, data_str, hora_str, hora_str)
+            
+            resultados = cursor.fetchall()
+            for row in resultados:
+                # No tempo real, assumimos apenas uma pessoa por posição no momento exato
+                escala_map[row.PosicaoID] = row 
+            return escala_map
+        except Exception as e:
+            logger.error(f"Erro ao buscar escala tempo real: {e}")
+            return {}
+        finally:
+            conn.close()
+    return {}
