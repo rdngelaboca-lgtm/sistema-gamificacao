@@ -15,6 +15,7 @@ import webbrowser
 import urllib.parse
 from datetime import datetime, date, timedelta
 import threading
+import time
 
 class AppEscalaLoja:
     def __init__(self, root):
@@ -96,6 +97,9 @@ class AppEscalaLoja:
         # Botão Telegram
         self.btn_telegram = ttk.Button(self.frame_topo, text="📢 Enviar Escala Telegram", command=self.enviar_escala_telegram)
         self.btn_telegram.pack(side=tk.LEFT, padx=5)
+        # Botão de Envio em Massa WhatsApp
+        self.btn_wpp_mass = ttk.Button(self.frame_topo, text="📱 Confirmar Escala (WhatsApp)", command=self.enviar_confirmacoes_em_massa)
+        self.btn_wpp_mass.pack(side=tk.LEFT, padx=5)
         self.btn_config = ttk.Button(self.frame_topo, text="⚙️ Configurações Automação", command=self.abrir_janela_configuracoes)
         self.btn_config.pack(side=tk.LEFT, padx=5)
 
@@ -537,6 +541,86 @@ class AppEscalaLoja:
             messagebox.showinfo("Sucesso", "Escala enviada para o grupo do Telegram!")
         else:
             messagebox.showerror("Erro", f"Falha ao enviar Telegram: {erro_msg}")
+
+    # --- NOVO: Envio em Massa WhatsApp ---
+    def enviar_confirmacoes_em_massa(self):
+        if not self.data_selecionada: return
+
+        # 1. Prepara os dados
+        escala_dia = database.buscar_escala_do_dia(self.data_selecionada)
+        lista_envio = []
+
+        # Cruzamento de dados: Escala + Nome da Posição
+        for pos_id, dados in escala_dia.items():
+            # Verifica se tem pessoa e telefone
+            if dados.NomePessoa and dados.TelefonePessoa:
+                # Busca o nome da posição na lista carregada em memória
+                nome_posicao = next((p[1] for p in self.posicoes if p[0] == pos_id), "Posição")
+
+                lista_envio.append({
+                    'nome': dados.NomePessoa,
+                    'telefone': dados.TelefonePessoa,
+                    'posicao': nome_posicao,
+                    'entrada': dados.HorarioEntrada,
+                    'saida': dados.HorarioSaida
+                })
+
+        if not lista_envio:
+            messagebox.showwarning("Aviso", "Nenhuma pessoa com telefone encontrado na escala de hoje.")
+            return
+
+        # 2. Confirmação
+        if not messagebox.askyesno("Confirmação em Massa", 
+            f"Encontradas {len(lista_envio)} pessoas com telefone na escala.\n\n"
+            "Deseja enviar a confirmação de horário individual para o WhatsApp de cada um via BOT?\n\n"
+            "⚠️ Isso pode levar alguns segundos."):
+            return
+
+        # 3. Execução em Thread (Background)
+        self.btn_wpp_mass.config(state='disabled', text="Enviando...")
+
+        def run_envio():
+            enviados = 0
+            erros = 0
+
+            for item in lista_envio:
+                try:
+                    # Formatação de Horário Segura
+                    fmt = lambda v: v.strftime('%H:%M') if hasattr(v, 'strftime') else str(v)[:5]
+                    horario_str = f"{fmt(item['entrada'])} às {fmt(item['saida'])}"
+                    data_fmt = datetime.strptime(self.data_selecionada, '%Y-%m-%d').strftime('%d/%m')
+
+                    mensagem = (
+                        f"Olá, *{item['nome']}*! 👋\n"
+                        f"Confirmação de Escala:\n"
+                        f"📅 Data: *{data_fmt}*\n"
+                        f"📍 Posição: *{item['posicao']}*\n"
+                        f"⏰ Horário: *{horario_str}*\n\n"
+                        f"Bom trabalho!"
+                    )
+
+                    ok, _ = notificador_whatsapp.enviar_mensagem_whatsapp(item['telefone'], mensagem)
+                    if ok: enviados += 1
+                    else: erros += 1
+
+                    time.sleep(1.5) # Delay de segurança para a API (Anti-Spam)
+
+                except Exception as e:
+                    print(f"Erro ao enviar para {item['nome']}: {e}")
+                    erros += 1
+
+            # Callback para UI
+            self.root.after(0, lambda: self._finalizar_envio_wpp(enviados, erros))
+
+        threading.Thread(target=run_envio, daemon=True).start()
+
+    def _finalizar_envio_wpp(self, enviados, erros):
+        self.btn_wpp_mass.config(state='normal', text="📱 Confirmar Escala (WhatsApp)")
+        msg = f"Processo finalizado!\n\n✅ Enviados: {enviados}\n❌ Falhas: {erros}"
+        if erros > 0:
+            messagebox.showwarning("Relatório de Envio", msg)
+        else:
+            messagebox.showinfo("Sucesso", msg)
 
     def abrir_janela_configuracoes(self):
         """Abre a janela Toplevel para editar os parâmetros da automação de escala."""
