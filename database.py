@@ -4831,7 +4831,7 @@ def buscar_resgates_recentes(limite=5):
 def verificar_e_premiar_meta_diaria(apuracao_id, data_apuracao_str, valor_dia, meta_principal_id):
     """
     Função auxiliar para verificar se a meta diária foi atingida e premiar a equipe DO SETOR CORRETO.
-    (VERSÃO CORRIGIDA COM LÓGICA DE CLAWBACK)
+    (VERSÃO CORRIGIDA - CONEXÃO MANTIDA ABERTA)
     """
     try:
         modelo_meta_diaria = buscar_modelo_meta_para_data(data_apuracao_str) # Chamada interna
@@ -4839,30 +4839,26 @@ def verificar_e_premiar_meta_diaria(apuracao_id, data_apuracao_str, valor_dia, m
         # Buscar o status de premiação ANTES de qualquer ação
         conn_check = get_db_connection()
         ja_premiada = False
-        pontos_premiados_anteriormente = 0 # << NOVO
+        pontos_premiados_anteriormente = 0
         if conn_check:
             try:
                 cursor_check = conn_check.cursor()
                 cursor_check.execute("SELECT PontosMetaDiariaGanhos FROM MetasDiariasApuracoes WHERE ApuracaoID = ?", apuracao_id)
                 res_check = cursor_check.fetchone()
-                # Verifica se res_check não é None e se o valor é maior que 0
                 if res_check and res_check[0] is not None and res_check[0] > 0:
                     ja_premiada = True
-                    pontos_premiados_anteriormente = res_check[0] # << NOVO
+                    pontos_premiados_anteriormente = res_check[0]
             except Exception as e_check:
                  logger.error(f"Erro ao verificar se ApuracaoID {apuracao_id} já foi premiada: {e_check}")
             finally:
                 if conn_check: conn_check.close()
 
-        # --- INÍCIO DA NOVA LÓGICA DE DECISÃO ---
-
         meta_foi_batida = modelo_meta_diaria and valor_dia >= modelo_meta_diaria.ValorMeta and modelo_meta_diaria.PontosPremio > 0
 
         if meta_foi_batida and not ja_premiada:
-            # Cenário 1: Meta batida, ainda não premiada (Lançamento Original ou Edição para Cima)
+            # Cenário 1: Meta batida, ainda não premiada
             logger.info(f"Meta diária ATINGIDA (ApuracaoID: {apuracao_id}). Valor: {valor_dia} >= {modelo_meta_diaria.ValorMeta}. Premiando...")
 
-            # (Lógica de premiação existente)
             meta_principal = None
             conn_meta = get_db_connection()
             if conn_meta:
@@ -4877,58 +4873,65 @@ def verificar_e_premiar_meta_diaria(apuracao_id, data_apuracao_str, valor_dia, m
                 setor_alvo_diario = meta_principal.SetorAlvo
                 pontos_premio_diario = modelo_meta_diaria.PontosPremio
 
-                # Marca a apuração como premiada
+                # --- CORREÇÃO AQUI: Abrimos a conexão UMA VEZ e mantemos até o final ---
                 conn_interno = get_db_connection()
                 if conn_interno:
                     try:
                         cursor_interno = conn_interno.cursor()
+                        
+                        # 1. Marca a apuração como premiada
                         sql_marcar = "UPDATE MetasDiariasApuracoes SET PontosMetaDiariaGanhos = ? WHERE ApuracaoID = ?"
                         cursor_interno.execute(sql_marcar, pontos_premio_diario, apuracao_id)
+                        
+                        funcionarios_do_setor = listar_funcionarios_por_setor(setor_alvo_diario)
+
+                        if funcionarios_do_setor:
+                            logger.info(f"--> Meta diária atingida! Distribuindo {pontos_premio_diario} pontos para {len(funcionarios_do_setor)} funcionários do setor '{setor_alvo_diario}'.")
+                            
+                            # 2. Distribui os pontos (USANDO O MESMO CURSOR ABERTO)
+                            for funcionario in funcionarios_do_setor:
+                                try:
+                                    # Adiciona ao saldo (função segura, abre própria conexão)
+                                    adicionar_pontos_ao_saldo(funcionario.FuncionarioID, pontos_premio_diario)
+                                    
+                                    # Registra histórico (USA O CURSOR INTERNO JÁ ABERTO)
+                                    motivo_log = f"Meta Diária Atingida ({data_apuracao_str}) - Setor: {setor_alvo_diario}"
+                                    registrar_pontos_de_bonus(
+                                        funcionario.FuncionarioID,
+                                        pontos_premio_diario,
+                                        motivo_log,
+                                        config.TAREFA_ID_PONTOS_META,
+                                        vinculo_id=apuracao_id,
+                                        cursor=cursor_interno # <--- AQUI ESTAVA O ERRO ANTES
+                                    )
+                                    
+                                    # Notifica (Opcional, fora da transação de banco)
+                                    if funcionario.ChatIDTelegram:
+                                        mensagem_base = random.choice(config.MENSAGENS_META_DIARIA_CUMPRIDA)
+                                        mensagem_telegram = mensagem_base.format(pontos=pontos_premio_diario)
+                                        notificador_telegram.enviar_mensagem(funcionario.ChatIDTelegram, mensagem_telegram)
+                                except Exception as e_func:
+                                    logger.error(f"Erro ao processar prêmio para {funcionario.NomeCompleto}: {e_func}")
+
+                        # 3. Commita tudo de uma vez no final
                         conn_interno.commit()
-                    except Exception as e_marcar:
-                        logger.error(f"Erro ao marcar ApuracaoID {apuracao_id} como premiada: {e_marcar}")
+                        
+                    except Exception as e_proc:
+                        logger.error(f"Erro durante o processo de premiação: {e_proc}")
                         if conn_interno: conn_interno.rollback()
                     finally:
+                        # 4. SÓ AGORA FECHA A CONEXÃO
                         if conn_interno: conn_interno.close()
-
-                funcionarios_do_setor = listar_funcionarios_por_setor(setor_alvo_diario)
-
-                if funcionarios_do_setor:
-                    logger.info(f"--> Meta diária atingida! Distribuindo {pontos_premio_diario} pontos para {len(funcionarios_do_setor)} funcionários do setor '{setor_alvo_diario}'.")
-                    mensagem_base = random.choice(config.MENSAGENS_META_DIARIA_CUMPRIDA)
-                    mensagem_telegram = mensagem_base.format(pontos=pontos_premio_diario)
-
-                    for funcionario in funcionarios_do_setor:
-                        try:
-                             # Em database.py, dentro de verificar_e_premiar_meta_diaria
-                            adicionar_pontos_ao_saldo(funcionario.FuncionarioID, pontos_premio_diario)
-                            motivo_log = f"Meta Diária Atingida ({data_apuracao_str}) - Setor: {setor_alvo_diario}"
-                            registrar_pontos_de_bonus(
-                                funcionario.FuncionarioID,
-                                pontos_premio_diario,
-                                motivo_log,
-                                config.TAREFA_ID_PONTOS_META,
-                                vinculo_id=apuracao_id,
-                                cursor=cursor_interno
-                            )
-                            if funcionario.ChatIDTelegram:
-                                notificador_telegram.enviar_mensagem(funcionario.ChatIDTelegram, mensagem_telegram)
-                        except Exception as e_func:
-                            logger.error(f"Erro ao processar prêmio/notificação para {funcionario.NomeCompleto} (ID: {funcionario.FuncionarioID}): {e_func}", exc_info=True)
-                else:
-                     logger.warning(f"--> Nenhum funcionário encontrado no setor '{setor_alvo_diario}' para premiar pela meta diária.")
+                
             else:
-                logger.warning(f"Meta diária ({data_apuracao_str}) atingida, mas a Meta Principal ID {meta_principal_id} não foi encontrada ou não tem SetorAlvo definido. Prêmio diário NÃO distribuído.")
+                logger.warning(f"Meta diária atingida, mas falha ao identificar SetorAlvo.")
 
         elif not meta_foi_batida and ja_premiada:
-            # Cenário 2: Meta NÃO batida, mas JÁ ESTAVA premiada (Edição para Baixo - CLAWBACK!)
-            logger.warning(f"Meta diária NÃO ATINGIDA (ApuracaoID: {apuracao_id}). Valor: {valor_dia}. REVERTENDO {pontos_premiados_anteriormente} pontos...")
-
-            # 1. Reverter os pontos dos funcionários
+            # Cenário 2: Clawback (Reversão)
+            logger.warning(f"Meta diária NÃO ATINGIDA (ApuracaoID: {apuracao_id}). REVERTENDO {pontos_premiados_anteriormente} pontos...")
             reversao_ok = _reverter_pontos_meta_diaria(apuracao_id, pontos_premiados_anteriormente, meta_principal_id)
 
             if reversao_ok:
-                # 2. Zerar os pontos no registro da apuração
                 conn_zero = get_db_connection()
                 if conn_zero:
                     try:
@@ -4936,28 +4939,12 @@ def verificar_e_premiar_meta_diaria(apuracao_id, data_apuracao_str, valor_dia, m
                         sql_zero = "UPDATE MetasDiariasApuracoes SET PontosMetaDiariaGanhos = 0 WHERE ApuracaoID = ?"
                         cursor_zero.execute(sql_zero, apuracao_id)
                         conn_zero.commit()
-                        logger.info(f"Clawback concluído. ApuracaoID {apuracao_id} zerada.")
-                    except Exception as e_zero:
-                        logger.error(f"Erro ao zerar pontos (ApuracaoID {apuracao_id}): {e_zero}")
-                        if conn_zero: conn_zero.rollback()
+                        logger.info("Clawback concluído com sucesso.")
                     finally:
-                        if conn_zero: conn_zero.close()
-            else:
-                logger.error(f"FALHA CRÍTICA NO CLAWBACK para ApuracaoID {apuracao_id}. Os pontos não foram revertidos, mas a apuração foi editada.")
-
-        elif meta_foi_batida and ja_premiada:
-            # Cenário 3: Meta batida e já premiada (Ex: Editar 1200 para 1100). Nenhuma ação necessária.
-            logger.info(f"Meta diária (ApuracaoID: {apuracao_id}) permanece atingida. Nenhuma alteração nos pontos.")
-
-        else: # not meta_foi_batida and not ja_premiada
-            # Cenário 4: Meta não batida e não premiada (Ex: Editar 900 para 800). Nenhuma ação necessária.
-            logger.info(f"Meta diária (ApuracaoID: {apuracao_id}) permanece não atingida.")
-
-        # --- FIM DA NOVA LÓGICA DE DECISÃO ---
+                        conn_zero.close()
 
     except Exception as e:
-        logger.exception(f"!!! ERRO GERAL durante a verificação/premiação da meta diária (ApuracaoID: {apuracao_id}): {e}")
-
+        logger.exception(f"!!! ERRO GERAL na verificação de meta diária: {e}")
 
 def registrar_nota_fiscal(funcionario_id, file_id):
     """
@@ -7003,7 +6990,7 @@ def listar_funcionarios_por_tarefa(tarefa_id):
         try:
             cursor = conn.cursor()
 
-            # 1. Quem já tem a tarefa ativa (Ignorado pelo main.py mas mantido para consistência)
+            # 1. Quem já tem a tarefa ativa
             sql_assigned = """
                 SELECT F.FuncionarioID, F.NomeCompleto
                 FROM Funcionarios F
