@@ -623,12 +623,18 @@ def rota_resgates_recentes():
 @app.route('/api/escala/hoje', methods=['GET'])
 def rota_escala_hoje():
     """
-    Retorna a escala visual TEMPO REAL para o Painel Web.
-    Mostra apenas quem está trabalhando no momento da requisição.
+    (VERSÃO V2) Retorna a escala visual filtrada pela HORA DO SERVIDOR PYTHON.
     """
     try:
-        # Usa a nova função de tempo real
-        escala_do_momento = database.buscar_escala_tempo_real()
+        # Pega data e hora do Sistema Operacional (que está correto)
+        hoje_str = datetime.now().strftime('%Y-%m-%d')
+        agora_str = datetime.now().strftime('%H:%M:%S')
+        
+        # Log para debug (verifique no terminal se a hora está certa)
+        logger.info(f"Buscando escala para Painel Web: Data={hoje_str}, Hora={agora_str}")
+
+        # Passa os parâmetros para o banco
+        escala_do_momento = database.buscar_escala_tempo_real(hoje_str, agora_str)
         posicoes = database.listar_posicoes_loja()
 
         dados_mapa = []
@@ -646,22 +652,38 @@ def rota_escala_hoje():
                 ocupante = nome_pessoa
                 cor = "#00C851" if dados.NomePessoa else "#FFBB33" 
 
-                entrada = dados.HorarioEntrada.strftime('%H:%M') if dados.HorarioEntrada else "--"
-                saida = dados.HorarioSaida.strftime('%H:%M') if dados.HorarioSaida else "--"
-                detalhes = f"Até {saida}" # Foco na saída para quem olha o painel
+                # Formatação segura de hora
+                fmt = lambda v: v.strftime('%H:%M') if hasattr(v, 'strftime') else str(v)[:5]
+                
+                entrada = fmt(dados.HorarioEntrada) if dados.HorarioEntrada else "--"
+                saida = fmt(dados.HorarioSaida) if dados.HorarioSaida else "--"
+                detalhes = f"Até {saida}" 
 
+                # Checagem visual de intervalo
                 if dados.InicioIntervalo and dados.FimIntervalo:
-                    # Lógica extra: Se estiver NO HORÁRIO de intervalo AGORA, muda a cor/status
-                    agora = datetime.now().time()
-                    # Conversão segura para comparação
-                    if isinstance(dados.InicioIntervalo, timedelta): # Fix ODBC
-                        # ... (lógica de conversão se necessário, mas o banco já filtra entrada/saida)
-                        pass
-                    
-                    # Simples visualização do intervalo
-                    int_ini = dados.InicioIntervalo.strftime('%H:%M')
-                    int_fim = dados.FimIntervalo.strftime('%H:%M')
-                    detalhes += f" (☕ {int_ini})"
+                    try:
+                        # Converte strings para comparação simples no Python também
+                        agora_dt = datetime.strptime(agora_str, '%H:%M:%S').time()
+                        
+                        # Função auxiliar para garantir objeto time
+                        def to_time(val):
+                            if isinstance(val, timedelta): return (datetime.min + val).time()
+                            if hasattr(val, 'strftime'): return val.time() # datetime
+                            if isinstance(val, str): return datetime.strptime(val[:5], '%H:%M').time()
+                            return val
+
+                        ini_t = to_time(dados.InicioIntervalo)
+                        fim_t = to_time(dados.FimIntervalo)
+
+                        # Se agora estiver dentro do intervalo, muda o status visual
+                        if ini_t <= agora_dt <= fim_t:
+                            detalhes = "EM INTERVALO ☕"
+                            cor = "#FFBB33" # Amarelo
+                        else:
+                            detalhes += f" (☕ {fmt(dados.InicioIntervalo)})"
+                    except Exception as e_int:
+                        # Se falhar calculo de intervalo, apenas mostra texto
+                        detalhes += f" (Intervalo)"
 
             dados_mapa.append({
                 "id": pos_id,
@@ -677,8 +699,8 @@ def rota_escala_hoje():
         return jsonify(dados_mapa), 200
     except Exception as e:
         logger.error(f"Erro na rota /api/escala/hoje: {e}", exc_info=True)
-        return jsonify([]), 500    
-
+        return jsonify([]), 500
+    
 @app.route('/api/escala/ocupacao', methods=['GET'])
 def rota_escala_ocupacao():
     """
