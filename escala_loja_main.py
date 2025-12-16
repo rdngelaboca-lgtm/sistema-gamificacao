@@ -891,28 +891,60 @@ class AppEscalaLoja:
 
         popup = Toplevel(self.root)
         popup.title(f"Escalar: {nome_pos}")
-        popup.geometry("500x500") # Aumentado para caber alertas
+        popup.geometry("600x650") # Aumentado
         popup.update_idletasks()
-        x_c = self.root.winfo_x() + (self.root.winfo_width() // 2) - (500 // 2)
-        y_c = self.root.winfo_y() + (self.root.winfo_height() // 2) - (500 // 2)
+        
+        # Centraliza
+        x_c = self.root.winfo_x() + (self.root.winfo_width() // 2) - (600 // 2)
+        y_c = self.root.winfo_y() + (self.root.winfo_height() // 2) - (650 // 2)
         popup.geometry(f"+{x_c}+{y_c}")
 
-        dados_atuais = self.escala_atual.get(pos_id)
+        # --- Parte 1: Lista de Turnos Existentes ---
+        frame_lista = ttk.LabelFrame(popup, text=f"Quem já está em '{nome_pos}' hoje?", padding=10)
+        frame_lista.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
-        # --- Carregar Configurações para Cálculo Automático ---
+        cols = ('ID', 'Nome', 'Entrada', 'Saída')
+        tree = ttk.Treeview(frame_lista, columns=cols, show='headings', height=4)
+        tree.heading('ID', text='ID'); tree.column('ID', width=30)
+        tree.heading('Nome', text='Nome'); tree.column('Nome', width=180)
+        tree.heading('Entrada', text='Entrada'); tree.column('Entrada', width=70)
+        tree.heading('Saída', text='Saída'); tree.column('Saída', width=70)
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        scrollbar = ttk.Scrollbar(frame_lista, orient="vertical", command=tree.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        tree.configure(yscrollcommand=scrollbar.set)
+
+        # Carrega dados atuais (Lista)
+        lista_turnos = self.escala_atual.get(pos_id, [])
+        for t in lista_turnos:
+            # Formatação segura
+            fmt = lambda v: v.strftime('%H:%M') if hasattr(v, 'strftime') else str(v)[:5]
+            tree.insert("", "end", values=(t.EscalaID, t.NomePessoa, fmt(t.HorarioEntrada), fmt(t.HorarioSaida)))
+
+        # --- Parte 2: Formulário de Adição/Edição ---
+        frame_form = ttk.LabelFrame(popup, text="Adicionar / Editar Turno", padding=10)
+        frame_form.pack(fill=tk.X, padx=10, pady=10)
+
+        # Variáveis de Controle
+        var_ent = tk.StringVar(value="08:00")
+        var_sai = tk.StringVar()
+        var_escala_id_edit = tk.StringVar(value="") # Vazio = Novo, Com Valor = Edição
+
+        # Carregar Configurações
         config_db = database.buscar_configuracoes_escala()
         JORNADA_PADRAO = getattr(config_db, 'DuracaoJornadaPadrao', 8) or 8
         INTERVALO_PADRAO = getattr(config_db, 'DuracaoIntervalo', 1) or 1
 
-        ttk.Label(popup, text="Quem vai trabalhar aqui?").pack(pady=5)
-        combo_pessoas = ttk.Combobox(popup, width=40)
-        combo_pessoas.pack()
+        # Combobox de Pessoas
+        ttk.Label(frame_form, text="Funcionário / Freelancer:").pack(anchor="w")
+        combo_pessoas = ttk.Combobox(frame_form, width=40)
+        combo_pessoas.pack(fill="x", pady=5)
 
-        # Req 2: Mapa agora inclui Telefone também para funcionários
+        # Mapa de IDs e Telefones
         mapa_ids = {} 
         lista_nomes = ["(Vazio)"]
         for f in database.listar_funcionarios():
-            # f[4] é TelefoneWhatsApp na query do database.py
             label = f"[Fixo] {f.NomeCompleto}"; lista_nomes.append(label)
             mapa_ids[label] = {'tipo': 'func', 'id': f.FuncionarioID, 'tel': f.TelefoneWhatsApp} 
         for fr in database.listar_freelancers():
@@ -920,191 +952,120 @@ class AppEscalaLoja:
             mapa_ids[label] = {'tipo': 'free', 'id': fr.FreelancerID, 'tel': fr.Telefone}
         combo_pessoas['values'] = lista_nomes
 
-        # Label de Alerta (Req 3)
-        lbl_alerta = tk.Label(popup, text="", fg="red", font=("Arial", 9, "bold"), wraplength=450)
-        lbl_alerta.pack(pady=5)
+        # Horários
+        frame_h = ttk.Frame(frame_form)
+        frame_h.pack(fill="x", pady=5)
+        ttk.Label(frame_h, text="Entrada:").pack(side=tk.LEFT)
+        e_ent = ttk.Entry(frame_h, textvariable=var_ent, width=8); e_ent.pack(side=tk.LEFT, padx=5)
+        ttk.Label(frame_h, text="Saída:").pack(side=tk.LEFT)
+        e_sai = ttk.Entry(frame_h, textvariable=var_sai, width=8); e_sai.pack(side=tk.LEFT, padx=5)
+        
+        ttk.Label(frame_form, text="Intervalo (Início - Fim):").pack(anchor="w")
+        frame_int = ttk.Frame(frame_form)
+        frame_int.pack(fill="x", pady=5)
+        e_int_ini = ttk.Entry(frame_int, width=8); e_int_ini.pack(side=tk.LEFT, padx=(0,5))
+        e_int_fim = ttk.Entry(frame_int, width=8); e_int_fim.pack(side=tk.LEFT)
 
-        # Variável para armazenar telefone atual para o botão WhatsApp
-        self.telefone_atual_para_envio = None 
+        # Foco
+        ttk.Label(frame_form, text="Foco do Dia:").pack(anchor="w")
+        txt_foco = tk.Text(frame_form, height=3, width=40); txt_foco.pack(fill="x", pady=5)
 
-        selecao_inicial = ""
-        if dados_atuais:
-            if dados_atuais.FuncionarioID:
-                selecao_inicial = next((k for k, v in mapa_ids.items() if v['tipo'] == 'func' and v['id'] == dados_atuais.FuncionarioID), "")
-            elif dados_atuais.FreelancerID:
-                selecao_inicial = next((k for k, v in mapa_ids.items() if v['tipo'] == 'free' and v['id'] == dados_atuais.FreelancerID), "")
-
-        combo_pessoas.set(selecao_inicial)
-
-        frame_hor = ttk.LabelFrame(popup, text="Horários", padding=10)
-        frame_hor.pack(fill=tk.X, padx=10, pady=10)
-
-        # Variáveis de controle para auto-cálculo
-        var_ent = tk.StringVar()
-        var_sai = tk.StringVar()
-
-        ttk.Label(frame_hor, text="Entrada:").grid(row=0, column=0); e_ent = ttk.Entry(frame_hor, textvariable=var_ent, width=8); e_ent.grid(row=0, column=1)
-        ttk.Label(frame_hor, text="Saída:").grid(row=0, column=2); e_sai = ttk.Entry(frame_hor, textvariable=var_sai, width=8); e_sai.grid(row=0, column=3)
-        ttk.Label(frame_hor, text="Intervalo Início:").grid(row=1, column=0); e_int_ini = ttk.Entry(frame_hor, width=8); e_int_ini.grid(row=1, column=1)
-        ttk.Label(frame_hor, text="Intervalo Fim:").grid(row=1, column=2); e_int_fim = ttk.Entry(frame_hor, width=8); e_int_fim.grid(row=1, column=3)
-
-        # --- Lógica Req 1: Auto-Cálculo de Saída ---
+        # --- Lógica de Auto-Cálculo ---
         def calcular_saida(*args):
             entrada = var_ent.get()
             if len(entrada) == 5 and re.match(r'^\d{2}:\d{2}$', entrada):
                 try:
                     dt_ent = datetime.strptime(entrada, '%H:%M')
-                    
-                    # [AJUSTE] Usa apenas a jornada configurada (ex: 8:20), sem somar o intervalo na saída
-                    # Se você quiser que o intervalo conte, reverta para: JORNADA_PADRAO + INTERVALO_PADRAO
-                    total_horas = JORNADA_PADRAO
-                    
-                    # CORREÇÃO: Converter Decimal para float, pois timedelta não aceita Decimal
+                    total_horas = JORNADA_PADRAO # Sem somar intervalo (conforme seu pedido anterior)
                     dt_sai = dt_ent + timedelta(hours=float(total_horas))
                     var_sai.set(dt_sai.strftime('%H:%M'))
-                except ValueError:
-                    pass
-
-        # O trace dispara sempre que a variável muda (digitação)
+                except ValueError: pass
         var_ent.trace_add("write", calcular_saida)
 
-        # --- Lógica Req 2 e 3: Ao selecionar pessoa ---
-        def ao_selecionar_pessoa(event):
-            nome_sel = combo_pessoas.get()
-            lbl_alerta.config(text="") # Limpa alertas
-            self.telefone_atual_para_envio = None # Reseta telefone
+        # --- Função para Carregar Edição ao Clicar na Lista ---
+        def carregar_para_edicao(event):
+            sel = tree.focus()
+            if not sel: return
+            item = tree.item(sel, 'values')
+            escala_id = int(item[0])
+            
+            # Busca dados completos do objeto na lista original
+            turno = next((t for t in lista_turnos if t.EscalaID == escala_id), None)
+            if not turno: return
 
-            if nome_sel and nome_sel != "(Vazio)":
-                dados = mapa_ids.get(nome_sel)
-                if dados:
-                    # Req 2: Puxa o telefone (já carregado no mapa)
-                    self.telefone_atual_para_envio = dados.get('tel')
+            # Preenche Form
+            var_escala_id_edit.set(escala_id)
+            
+            # Seleciona no Combo
+            nome_combo = ""
+            if turno.FuncionarioID:
+                nome_combo = next((k for k, v in mapa_ids.items() if v['tipo'] == 'func' and v['id'] == turno.FuncionarioID), "")
+            elif turno.FreelancerID:
+                nome_combo = next((k for k, v in mapa_ids.items() if v['tipo'] == 'free' and v['id'] == turno.FreelancerID), "")
+            combo_pessoas.set(nome_combo)
 
-                    # Req 3: Se for funcionário fixo, verifica conflitos
-                    if dados['tipo'] == 'func':
-                        msg_conflito = database.verificar_status_disponibilidade(dados['id'], self.data_selecionada)
-                        if msg_conflito:
-                            lbl_alerta.config(text=msg_conflito)
+            # Horários
+            fmt = lambda v: v.strftime('%H:%M') if hasattr(v, 'strftime') else str(v)[:5] if v else ""
+            var_ent.set(fmt(turno.HorarioEntrada))
+            var_sai.set(fmt(turno.HorarioSaida))
+            e_int_ini.delete(0, tk.END); e_int_ini.insert(0, fmt(turno.InicioIntervalo))
+            e_int_fim.delete(0, tk.END); e_int_fim.insert(0, fmt(turno.FimIntervalo))
+            txt_foco.delete("1.0", tk.END); txt_foco.insert("1.0", turno.FocoDoDia or "")
 
-        combo_pessoas.bind("<<ComboboxSelected>>", ao_selecionar_pessoa)
+            btn_salvar.config(text="🔄 Atualizar Turno")
+            btn_novo.config(state="normal") # Habilita botão de limpar
 
-        # Preenchimento inicial de valores
-        if dados_atuais:
-            safe_fmt = lambda v: v.strftime('%H:%M') if hasattr(v, 'strftime') else str(v)[:5] if v else ""
-            var_ent.set(safe_fmt(dados_atuais.HorarioEntrada))
-            var_sai.set(safe_fmt(dados_atuais.HorarioSaida))
-            if getattr(dados_atuais, 'InicioIntervalo', None): e_int_ini.insert(0, safe_fmt(dados_atuais.InicioIntervalo))
-            if getattr(dados_atuais, 'FimIntervalo', None): e_int_fim.insert(0, safe_fmt(dados_atuais.FimIntervalo))
+        tree.bind("<<TreeviewSelect>>", carregar_para_edicao)
 
-            # Dispara a lógica de seleção para carregar telefone/alertas do atual
-            ao_selecionar_pessoa(None)
-        else:
-            var_ent.set("08:00") # Dispara o auto-cálculo para saída padrão
-
-        ttk.Label(popup, text="Foco do Dia:").pack(anchor=tk.W, padx=10)
-        txt_foco = tk.Text(popup, height=5, width=40); txt_foco.pack(padx=10, pady=5)
-
-        # Lógica de Foco (Mantida original)
-        setor_atual = next((p[5] for p in self.posicoes if p[0] == pos_id and len(p) > 5), None)
-        msg_foco_padrao = ""
-        if setor_atual:
-            msgs_padrao = {
-                "Cozinha": "Foco: Agilidade nos pedidos e organização da praça.",
-                "Caixa": "Foco: Simpatia, oferta de adicionais e conferência.",
-                "Salão": "Foco: Limpeza das mesas e atenção aos clientes.",
-                "Frente Loja": "Foco: Abordagem convidativa e reposição.",
-                "Buffet": "Foco: Reposição constante e limpeza das bordas.",
-                "Limpeza": "Foco: Banheiros e chão sempre limpos.",
-                "Camara Fria": "Foco: Organização PVPS e contagem."
-            }
-            msg_foco_padrao = msgs_padrao.get(setor_atual, "")
-
-        foco_para_exibir = dados_atuais.FocoDoDia if (dados_atuais and dados_atuais.FocoDoDia) else ""
-        if not foco_para_exibir:
-            try:
-                ultimo = database.buscar_ultimo_foco_posicao(pos_id)
-                foco_para_exibir = ultimo if ultimo else msg_foco_padrao
-            except: foco_para_exibir = msg_foco_padrao
-
-        txt_foco.insert("1.0", foco_para_exibir)
+        def limpar_form():
+            var_escala_id_edit.set("")
+            combo_pessoas.set("")
+            var_ent.set("08:00")
+            e_int_ini.delete(0, tk.END); e_int_fim.delete(0, tk.END)
+            txt_foco.delete("1.0", tk.END)
+            btn_salvar.config(text="✅ Adicionar Turno")
+            tree.selection_remove(tree.selection())
 
         def salvar():
-            def validar_hora(texto):
-                if not texto or texto.strip() == "": return True
-                try: datetime.strptime(texto, '%H:%M'); return True
-                except ValueError: return False
+            # 1. Validação Básica
+            if not combo_pessoas.get():
+                messagebox.showwarning("Aviso", "Selecione uma pessoa.")
+                return
 
-            horarios = [var_ent.get(), var_sai.get(), e_int_ini.get(), e_int_fim.get()]
-            for h in horarios:
-                if not validar_hora(h):
-                    messagebox.showerror("Erro", f"Horário inválido: '{h}'. Use HH:MM.")
-                    return
-
-            def tratar_vazio(valor): return valor if valor and valor.strip() else None
+            # 2. Prepara Dados
             selecao = combo_pessoas.get()
-
             func_id = None; free_id = None
-            if selecao and selecao != "(Vazio)":
-                d = mapa_ids.get(selecao)
-                if d:
-                    if d['tipo'] == 'func': func_id = d['id']
-                    else: free_id = d['id']
+            d = mapa_ids.get(selecao)
+            if d:
+                if d['tipo'] == 'func': func_id = d['id']
+                else: free_id = d['id']
 
-            database.salvar_escala_dia(self.data_selecionada, pos_id, func_id, free_id,
-                tratar_vazio(var_ent.get()), tratar_vazio(var_sai.get()), 
-                tratar_vazio(e_int_ini.get()), tratar_vazio(e_int_fim.get()),
-                txt_foco.get("1.0", tk.END).strip())
+            escala_id = var_escala_id_edit.get() # Se tiver ID, é update. Se vazio, insert.
 
-            if func_id:
-                fixo_atual = database.buscar_funcionarios_com_posicao_padrao(pos_id)
-                id_fixo_atual = fixo_atual[0] if fixo_atual else None
-                if func_id != id_fixo_atual:
-                    if messagebox.askyesno("Posição Fixa", "Definir este funcionário como FIXO nesta posição?"):
-                        database.definir_posicao_padrao_funcionario(func_id, pos_id)
-
-            popup.destroy()
-            self.carregar_escala_do_dia()
-
-        def enviar_zap():
-            selecao = combo_pessoas.get()
-            if not selecao or selecao == "(Vazio)": return
-
-            # Req 2: Usa o telefone recuperado e armazenado na seleção
-            tel = self.telefone_atual_para_envio
-            nome_pessoa_limpo = selecao.split('] ')[1] if ']' in selecao else selecao
-
-            if not tel:
-                # Fallback: Pede manual se não achou no banco
-                tel = simpledialog.askstring("Telefone", f"Telefone não encontrado para {nome_pessoa_limpo}. Digite (DDD+Num):", parent=popup)
-                if not tel: return
-
-            try:
-                data_obj = datetime.strptime(self.data_selecionada, '%Y-%m-%d')
-                data_fmt = data_obj.strftime('%d/%m/%y')
-            except ValueError: data_fmt = self.data_selecionada
-
-            texto_msg = (
-                f"Olá, *{nome_pessoa_limpo}*! 👋\nPor favor, *confirme sua presença*.\n"
-                f"━━━━━━━━━━━━━━━━━━\n"
-                f"📅 *Data:* {data_fmt}\n📍 *Posição:* {nome_pos}\n⏰ *Horário:* {var_ent.get()} às {var_sai.get()}"
-            )
-            if e_int_ini.get() and e_int_fim.get(): texto_msg += f"\n☕ *Intervalo:* {e_int_ini.get()} às {e_int_fim.get()}"
-            if txt_foco.get("1.0", "end-1c").strip(): texto_msg += f"\n\n🎯 *FOCO:* {txt_foco.get('1.0', 'end-1c').strip()}"
-
-            import notificador_whatsapp
-            if messagebox.askyesno("Enviar", "Enviar via BOT automático? (Não = Web)"):
-                ok, res = notificador_whatsapp.enviar_mensagem_whatsapp(tel, texto_msg)
-                if ok: messagebox.showinfo("Sucesso", res); popup.destroy()
-                else: messagebox.showerror("Erro", res)
+            # 3. Chama Database (Lógica Inteligente)
+            # Precisamos atualizar a função no database para aceitar EscalaID explícito para UPDATE
+            # Por enquanto, usamos a lógica de conflito que já criamos, mas vamos refinar no passo 2 abaixo
+            if database.salvar_escala_dia_v3(
+                escala_id if escala_id else None, # Passa ID se for edição
+                self.data_selecionada, pos_id, func_id, free_id,
+                var_ent.get(), var_sai.get(), 
+                e_int_ini.get(), e_int_fim.get(),
+                txt_foco.get("1.0", tk.END).strip()
+            ):
+                popup.destroy()
+                self.carregar_escala_do_dia()
             else:
-                tel_limpo = re.sub(r'\D', '', tel)
-                url = f"https://wa.me/{tel_limpo}?text={urllib.parse.quote(texto_msg)}"
-                webbrowser.open(url); popup.destroy()
+                messagebox.showerror("Erro", "Conflito de horário! Essa pessoa já está trabalhando neste horário ou a posição está ocupada.")
 
-        frame_botoes = ttk.Frame(popup, padding="10")
-        frame_botoes.pack(fill=tk.X, side=tk.BOTTOM)
-        ttk.Button(frame_botoes, text="✅ Salvar", command=salvar).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        ttk.Button(frame_botoes, text="📱 WhatsApp", command=enviar_zap).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)                
+        # Botões
+        frame_btns = ttk.Frame(popup, padding=10)
+        frame_btns.pack(fill=tk.X, side=tk.BOTTOM)
+        
+        btn_novo = ttk.Button(frame_btns, text="✨ Novo Turno (Limpar)", command=limpar_form, state="disabled")
+        btn_novo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        
+        btn_salvar = ttk.Button(frame_btns, text="✅ Adicionar Turno", command=salvar)
+        btn_salvar.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)                
 
 if __name__ == "__main__":
     root = tk.Tk()
