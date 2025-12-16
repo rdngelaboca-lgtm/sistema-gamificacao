@@ -628,34 +628,37 @@ async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         elif texto_recebido:
             valor_recebido = texto_recebido.strip()
             
-            # --- FLUXO DE RAMIFICAÇÃO E VALIDAÇÃO ---
-           
-            # 2a. RAMIFICAÇÃO: ESTADO CIVIL
-            # CORREÇÃO: Verifica se estamos na etapa OU se a resposta é claramente um estado civil (Destrava Loop)
+            # 2a. RAMIFICAÇÃO: ESTADO CIVIL (CORREÇÃO DE BUG DOUBLE PROMPT)
             texto_upper = texto_recebido.strip().upper()
             respostas_validas_civil = ['SOLTEIRO', 'SOLTEIRA', 'CASADO', 'CASADA', 'DIVORCIADO', 'DIVORCIADA', 'VIUVO', 'VIUVA', 'SEPARADO', 'SEPARADA']
-            
-            # Usa 'in' para tolerância a erros no nome da etapa E verifica o conteúdo da resposta
-            if ('ESTADOCIVIL' in ultima_etapa.replace('_', '')) or (texto_upper in respostas_validas_civil):
-                
+
+            # [CORREÇÃO] Verificação ESTRITA da etapa para evitar disparos falsos
+            # Normaliza removendo _ para garantir match com 'ESTADOCIVIL' ou 'ESTADO_CIVIL'
+            etapa_normalizada = ultima_etapa.replace('_', '')
+
+            if 'ESTADOCIVIL' in etapa_normalizada:
                 # Lógica de Decisão do Próximo Passo
                 if 'CASADO' in texto_upper:
                     proxima_etapa = 'DATA_CASAMENTO'
-                    mensagem_proxima = "Ok. Agora, digite a **Data de Casamento** (dd/mm/aaaa)."
-                else:
+                    # Mensagem específica para casado
+                    await context.bot.send_message(chat_id, "Ok. Agora, digite a **Data de Casamento** (dd/mm/aaaa).")
+                elif texto_upper in respostas_validas_civil:
+                    # Qualquer outro estado civil válido
                     proxima_etapa = 'FILHOS_QTD'
-                    mensagem_proxima = WORKFLOW['FILHOS_QTD']['pergunta']
-                
-                # ATUALIZAÇÃO FORÇADA: Corrige o estado no banco e salva o dado
+                    await context.bot.send_message(chat_id, WORKFLOW['FILHOS_QTD']['pergunta'])
+                else:
+                    # Se caiu aqui, está na etapa certa mas digitou algo inválido
+                    await context.bot.send_message(chat_id, "⚠️ Estado Civil inválido. Escolha: Solteiro, Casado, Viúvo, Divorciado...")
+                    return
+
+                # ATUALIZAÇÃO FORÇADA E RETORNO IMEDIATO
                 database.atualizar_onboarding_etapa(
                     funcionario.FuncionarioID, 
                     proxima_etapa, 
                     ('EstadoCivil', texto_upper)
                 )
+                return # [IMPORTANTE] Encerra aqui para não cair no bloco genérico
                 
-                await context.bot.send_message(chat_id, mensagem_proxima)
-                return # Encerra aqui para garantir que o loop quebre
-
             # 2b. VALIDAÇÃO E AVANÇO: DATA CASAMENTO
             if ultima_etapa == 'DATA_CASAMENTO':
                 try:
@@ -720,9 +723,11 @@ async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 await _coletar_dados_filhos_e_avancar(update, context, funcionario, valor_recebido, ultima_etapa)
                 return # <--- OBRIGATÓRIO
 
-            # 2f. SALVAMENTO PADRÃO DE DADO TEXTO (Genérico - ex: Escolaridade, Nome Cônjuge)
-            # ADICIONADO: 'ESTADO_CIVIL' na lista de exclusão para garantir que só o bloco 2a processe ele.
-            if etapa_anterior_config and 'proxima_etapa' in etapa_anterior_config and ultima_etapa != 'ESTADO_CIVIL':
+            # 2f. SALVAMENTO PADRÃO DE DADO TEXTO (Genérico)
+            # [CORREÇÃO] A exclusão agora verifica a string normalizada para garantir que 'ESTADOCIVIL' também seja ignorado aqui
+            etapa_norm_check = ultima_etapa.replace('_', '')
+
+            if etapa_anterior_config and 'proxima_etapa' in etapa_anterior_config and 'ESTADOCIVIL' not in etapa_norm_check:
                 proxima_etapa = etapa_anterior_config['proxima_etapa']
                 
                 # Salva no banco se tiver campo definido
