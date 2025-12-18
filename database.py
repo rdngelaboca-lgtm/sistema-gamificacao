@@ -3615,7 +3615,8 @@ def buscar_feed_de_atividades(limite=5):
                     'tarefa_concluida' as TipoEvento,
                     F.NomeCompleto as TextoPrincipal,
                     T.Titulo as TextoSecundario,
-                    E.PontosGanhos as Pontos
+                    E.PontosGanhos as Pontos,
+                    E.PathFotoEvidencia as CaminhoFoto -- Adicionado
                 FROM Entregas E
                 JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID
                 JOIN Tarefas T ON E.TarefaID = T.TarefaID
@@ -3629,7 +3630,8 @@ def buscar_feed_de_atividades(limite=5):
                     'conquista' as TipoEvento,
                     F.NomeCompleto as TextoPrincipal,
                     C.Nome as TextoSecundario,
-                    C.PontosBonus as Pontos
+                    C.PontosBonus as Pontos,
+                    NULL as CaminhoFoto -- Conquistas nao tem foto
                 FROM ConquistasFuncionarios CF
                 JOIN Funcionarios F ON CF.FuncionarioID = F.FuncionarioID
                 JOIN Conquistas C ON CF.ConquistaID = C.ConquistaID
