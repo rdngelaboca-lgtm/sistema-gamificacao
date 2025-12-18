@@ -761,6 +761,12 @@ def webhook_whatsapp():
         logger.error(f"Erro no Webhook WPP: {e}")
         return jsonify({"status": "erro"}), 500
 
+@app.route('/imagens/entregas/<path:filename>', methods=['GET'])
+def servir_imagem_entrega(filename):
+    """Serve as imagens de evidência salvas na pasta entregas."""
+    # Define o caminho absoluto da pasta de entregas
+    pasta_entregas = os.path.join(os.path.dirname(__file__), 'entregas')
+    return send_from_directory(pasta_entregas, filename)
 
 if __name__ == '__main__':
     # O debug=False é essencial para rodar como serviço
