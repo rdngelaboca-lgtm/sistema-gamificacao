@@ -405,13 +405,40 @@ function renderizarFeed(eventos) {
     }
     eventos.forEach(evento => {
         const item = document.createElement('li');
+        item.className = 'feed-item-instagram'; // Nova classe para estilização
         const tempoAtras = formatarHora(evento.Timestamp);
-        // Ícone atualizado para economizar espaço
+        
+        // Cabeçalho: Ícone + Texto
         const icone = evento.TipoEvento === 'tarefa_concluida' ? '✅' : '⭐'; 
-        const texto = `<b>${evento.TextoPrincipal}</b> ${evento.TipoEvento === 'tarefa_concluida' ? 'concluiu' : 'desbloqueou'} <i>"${evento.TextoSecundario}"</i> (+${evento.Pontos} pts)`;
+        const texto = `<b>${evento.TextoPrincipal}</b> ${evento.TipoEvento === 'tarefa_concluida' ? 'concluiu' : 'desbloqueou'} <i>"${evento.TextoSecundario}"</i> <span class="feed-pontos">(+${evento.Pontos} pts)</span>`;
+        
+        let htmlImagem = '';
+        
+        // Se houver caminho de foto e for tarefa, monta a imagem
+        if (evento.CaminhoFoto && evento.TipoEvento === 'tarefa_concluida') {
+            // Extrai apenas o nome do arquivo do caminho completo (compatível com barras Windows/Linux)
+            const nomeArquivo = evento.CaminhoFoto.split(/[\\/]/).pop();
+            // Monta a URL apontando para a nova rota da API
+            const urlImagem = `${API_BASE_URL}/imagens/entregas/${nomeArquivo}`;
+            
+            htmlImagem = `
+                <div class="feed-imagem-wrapper">
+                    <img src="${urlImagem}" alt="Evidência" class="feed-foto" onerror="this.style.display='none'">
+                </div>
+            `;
+        }
 
-        // Texto formatado para o feed
-        item.innerHTML = `<span class="feed-icone">${icone}</span> <div>${texto} <small style="color: #888;">às ${tempoAtras}</small></div>`;
+        // Montagem do HTML Final do Card
+        item.innerHTML = `
+            <div class="feed-header">
+                <span class="feed-icone">${icone}</span> 
+                <div class="feed-texto">${texto}</div>
+            </div>
+            ${htmlImagem}
+            <div class="feed-footer">
+                <small>🕒 ${tempoAtras}</small>
+            </div>
+        `;
         feedLista.appendChild(item);
     });
 }
