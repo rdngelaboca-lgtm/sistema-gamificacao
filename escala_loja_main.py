@@ -154,13 +154,26 @@ class AppEscalaLoja:
         if dia_semana_hoje == 8: dia_semana_hoje = 1
 
         for pos in self.posicoes:
-            pos_id, nome, rel_x, rel_y, _, setor = pos 
+            pos_id, nome, coord_x_db, coord_y_db, _, setor = pos 
 
-            # Converte coordenadas relativas (0-1) em pixels baseados no tamanho atual do canvas
+            # Captura o tamanho atual do canvas para renderização responsiva
             W = self.canvas.winfo_width() if self.canvas.winfo_width() > 1 else 1180
             H = self.canvas.winfo_height() if self.canvas.winfo_height() > 1 else 600
-            x = float(rel_x) * W
-            y = float(rel_y) * H
+
+            # --- LÓGICA HÍBRIDA DE SEGURANÇA (PIXELS VS PERCENTUAL) ---
+            # Se o valor no banco for maior que 1, tratamos como pixel fixo (legado).
+            # Se for menor ou igual a 1, aplicamos a escala responsiva (novo).
+            try:
+                val_x = float(coord_x_db)
+                val_y = float(coord_y_db)
+
+                if val_x > 1.0:
+                    x, y = val_x, val_y
+                else:
+                    x, y = val_x * W, val_y * H
+            except (ValueError, TypeError):
+                continue # Pula se as coordenadas estiverem corrompidas no banco
+            # ----------------------------------------------------------
 
             label_final = f"{nome}\n"
             cor = "#ff4444" # Vermelho (Vazio) padrão
