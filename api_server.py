@@ -623,12 +623,14 @@ def rota_resgates_recentes():
 @app.route('/api/escala/hoje', methods=['GET'])
 def rota_escala_hoje():
     """
-    (VERSÃO V2) Retorna a escala visual filtrada pela HORA DO SERVIDOR PYTHON.
+    (CORREÇÃO TIMEZONE) Utiliza fuso horário fixo (São Paulo) para consistência entre API e DB.
     """
     try:
-        # Pega data e hora do Sistema Operacional (que está correto)
-        hoje_str = datetime.now().strftime('%Y-%m-%d')
-        agora_str = datetime.now().strftime('%H:%M:%S')
+        import zoneinfo
+        tz = zoneinfo.ZoneInfo("America/Sao_Paulo")
+        agora_tz = datetime.now(tz)
+        hoje_str = agora_tz.strftime('%Y-%m-%d')
+        agora_str = agora_tz.strftime('%H:%M:%S')
         
         # Log para debug (verifique no terminal se a hora está certa)
         logger.info(f"Buscando escala para Painel Web: Data={hoje_str}, Hora={agora_str}")
