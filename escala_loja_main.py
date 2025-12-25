@@ -1,4 +1,5 @@
 import tkinter as tk
+import logging
 from tkinter import ttk, messagebox, simpledialog, Toplevel
 from tkcalendar import DateEntry
 from PIL import Image, ImageTk
@@ -16,6 +17,8 @@ import urllib.parse
 from datetime import datetime, date, timedelta
 import threading
 import time
+
+logger = logging.getLogger(__name__)
 
 class AppEscalaLoja:
     def __init__(self, root):
@@ -107,6 +110,8 @@ class AppEscalaLoja:
         self.canvas = tk.Canvas(self.frame_mapa, bg="#e0e0e0", cursor="hand2")
         self.canvas.pack(fill=tk.BOTH, expand=True)
         self.canvas.bind("<Button-1>", self.clique_no_mapa) 
+        # Garante que os marcadores acompanhem o mapa em caso de redimensionamento da janela
+        self.canvas.bind("<Configure>", lambda e: self.redesenhar_marcadores())
 
         self.root.after(200, self.inicializar)
 
@@ -149,7 +154,13 @@ class AppEscalaLoja:
         if dia_semana_hoje == 8: dia_semana_hoje = 1
 
         for pos in self.posicoes:
-            pos_id, nome, x, y, _, setor = pos # Desempacotamento
+            pos_id, nome, rel_x, rel_y, _, setor = pos 
+
+            # Converte coordenadas relativas (0-1) em pixels baseados no tamanho atual do canvas
+            W = self.canvas.winfo_width() if self.canvas.winfo_width() > 1 else 1180
+            H = self.canvas.winfo_height() if self.canvas.winfo_height() > 1 else 600
+            x = float(rel_x) * W
+            y = float(rel_y) * H
 
             label_final = f"{nome}\n"
             cor = "#ff4444" # Vermelho (Vazio) padrão
@@ -414,11 +425,17 @@ class AppEscalaLoja:
         def confirmar():
             nome = entry_nome.get()
             setor = combo_setor.get()
+            # Converte clique em pixel para coordenada relativa (0.0 a 1.0) para o banco
+            W = self.canvas.winfo_width()
+            H = self.canvas.winfo_height()
+            rel_x = x / W
+            rel_y = y / H
             # Garante que setor vazio vire None para o banco
             if not setor: setor = None
 
             if nome:
-                database.criar_posicao_loja(nome, x, y, setor)
+                # CORREÇÃO: Envia as coordenadas relativas (rel_x, rel_y) para o banco
+                database.criar_posicao_loja(nome, rel_x, rel_y, setor)
                 self.carregar_escala_do_dia()
                 popup.destroy()
 
@@ -436,33 +453,30 @@ class AppEscalaLoja:
         # CORREÇÃO: Converter isoweekday (Seg=1...Dom=7) para o padrão do Banco (Dom=1...Sab=7)
         dia_iso = (dia_obj.isoweekday() % 7) + 1
 
-        for pos in self.posicoes:
-            pos_id, nome, x, y, ativo, setor = pos
+        # Coleta turnos considerando que escala_atual agora é um dicionário de listas (v2)
+        for pos_id, turnos in self.escala_atual.items():
+            # Busca o setor da posição correspondente
+            setor = next((p[5] for p in self.posicoes if p[0] == pos_id), "Geral")
 
-            if pos_id in self.escala_atual:
-                dados = self.escala_atual[pos_id]
-                # Só calcula para quem tem horário de entrada e saída E nome definido
+            for dados in turnos:
+                # Validação rigorosa para evitar falhas na calculadora lógica
                 if dados.HorarioEntrada and dados.HorarioSaida and dados.NomePessoa:
-                    # Combina a data selecionada com a hora do banco de forma segura
-                    # USA A NOVA FERRAMENTA AQUI:
                     t_ent = self._parse_horario_seguro(dados.HorarioEntrada)
                     t_sai = self._parse_horario_seguro(dados.HorarioSaida)
 
-                    # CORREÇÃO: Validação de segurança para evitar crash se horário for inválido
-                    if t_ent is None or t_sai is None:
-                        print(f"Aviso: Ignorando posição {pos_id} ({dados.NomePessoa}) por horário incompleto.")
-                        continue
+                    if t_ent and t_sai:
+                        dt_entrada = datetime.combine(dia_obj, t_ent)
+                        dt_saida = datetime.combine(dia_obj, t_sai)
 
-                    dt_entrada = datetime.combine(dia_obj, t_ent)
-                    dt_saida = datetime.combine(dia_obj, t_sai)
-
-                    pessoas_para_calcular.append({
-                        'id_posicao': pos_id,
-                        'nome': dados.NomePessoa,
-                        'setor': setor,
-                        'entrada': dt_entrada,
-                        'saida': dt_saida
-                    })
+                        pessoas_para_calcular.append({
+                            'id_posicao': pos_id,
+                            'nome': dados.NomePessoa,
+                            'setor': setor,
+                            'entrada': dt_entrada,
+                            'saida': dt_saida
+                        })
+                    else:
+                        logger.warning(f"Horário inválido ignorado na posição {pos_id}: {dados.NomePessoa}")
 
         if not pessoas_para_calcular:
             messagebox.showwarning("Vazio", "Não há funcionários escalados com horário de entrada/saída para calcular.")
@@ -480,21 +494,21 @@ class AppEscalaLoja:
         color = "red" if erros else "green"
         self.lbl_alertas.config(text=texto_erros, fg=color)
 
-        # 4. Aplica Sugestões no Banco
-        count_aplicados = 0
+        # 4. Acumula sugestões e aplica em Lote (Atômico)
+        lote_para_salvar = []
         for pos_id, (ini, fim) in sugestoes.items():
-            dados_antigos = self.escala_atual[pos_id]
+            lote_para_salvar.append({
+                'pos_id': pos_id,
+                'ini': ini,
+                'fim': fim
+            })
 
-            # Preserva os dados antigos, atualizando apenas o intervalo
-            # O objeto datetime.datetime é passado e o driver pyodbc extrai corretamente o time.
-            database.salvar_escala_dia(
-                self.data_selecionada, pos_id, 
-                dados_antigos.FuncionarioID, dados_antigos.FreelancerID,
-                dados_antigos.HorarioEntrada, dados_antigos.HorarioSaida,
-                ini, fim, # Novos Intervalos (Passando objetos datetime.datetime)
-                dados_antigos.FocoDoDia
-            )
-            count_aplicados += 1
+        if lote_para_salvar:
+            if database.salvar_escalas_em_lote(self.data_selecionada, lote_para_salvar):
+                count_aplicados = len(lote_para_salvar)
+            else:
+                messagebox.showerror("Erro Crítico", "Falha ao persistir lote de intervalos. Nenhuma alteração foi salva.")
+                return
 
         self.carregar_escala_do_dia()
 
@@ -545,24 +559,27 @@ class AppEscalaLoja:
     def enviar_confirmacoes_em_massa(self):
         if not self.data_selecionada: return
 
-        # 1. Prepara os dados
-        escala_dia = database.buscar_escala_do_dia(self.data_selecionada)
+        # Snapshot (Cópia de segurança) para evitar conflito se o usuário mudar a data na tela
+        data_snapshot = self.data_selecionada
+        escala_dia = database.buscar_escala_do_dia(data_snapshot)
         lista_envio = []
 
         # Cruzamento de dados: Escala + Nome da Posição
-        for pos_id, dados in escala_dia.items():
-            # Verifica se tem pessoa e telefone
-            if dados.NomePessoa and dados.TelefonePessoa:
-                # Busca o nome da posição na lista carregada em memória
-                nome_posicao = next((p[1] for p in self.posicoes if p[0] == pos_id), "Posição")
+        for pos_id, turnos in escala_dia.items():
+            # CORREÇÃO: 'turnos' é uma lista (v2 Multi-Turno), precisamos iterar sobre ela
+            for dados in turnos:
+                # Verifica se tem pessoa e telefone cadastrado no banco
+                if dados.NomePessoa and dados.TelefonePessoa:
+                    # Busca o nome amigável da posição na lista em memória
+                    nome_posicao = next((p[1] for p in self.posicoes if p[0] == pos_id), "Posição")
 
-                lista_envio.append({
-                    'nome': dados.NomePessoa,
-                    'telefone': dados.TelefonePessoa,
-                    'posicao': nome_posicao,
-                    'entrada': dados.HorarioEntrada,
-                    'saida': dados.HorarioSaida
-                })
+                    lista_envio.append({
+                        'nome': dados.NomePessoa,
+                        'telefone': dados.TelefonePessoa,
+                        'posicao': nome_posicao,
+                        'entrada': dados.HorarioEntrada,
+                        'saida': dados.HorarioSaida
+                    })
 
         if not lista_envio:
             messagebox.showwarning("Aviso", "Nenhuma pessoa com telefone encontrado na escala de hoje.")
@@ -1027,9 +1044,10 @@ class AppEscalaLoja:
             tree.selection_remove(tree.selection())
 
         def salvar():
-            # 1. Validação Básica
-            if not combo_pessoas.get():
-                messagebox.showwarning("Aviso", "Selecione uma pessoa.")
+            # 1. Validação Básica Robusta
+            selecao = combo_pessoas.get()
+            if not selecao or selecao == "(Vazio)":
+                messagebox.showwarning("Aviso", "Por favor, selecione um funcionário ou freelancer válido para esta posição.")
                 return
 
             # 2. Prepara Dados
