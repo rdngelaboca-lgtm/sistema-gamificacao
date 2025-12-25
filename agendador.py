@@ -331,9 +331,11 @@ def verificar_e_delegar_tarefas_de_folga():
     drop_por_grupo = {}
 
     for funcionario in funcionarios_ausentes:
+        # Garante que o dia da semana seja tratado como string para busca no banco
+        dia_semana_str = str(dia_semana_sql)
         # Busca tarefas recorrentes agendadas para HOJE (dia da semana atual)
         # Nota: Mesmo em férias, pegamos o que ele faria 'hoje' se estivesse trabalhando
-        tarefas_do_dia = database.buscar_tarefas_recorrentes_agendadas_para_hoje(funcionario.FuncionarioID, dia_semana_sql)
+        tarefas_do_dia = database.buscar_tarefas_recorrentes_agendadas_para_hoje(funcionario.FuncionarioID, dia_semana_str)
         
         if not tarefas_do_dia: continue
         
