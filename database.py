@@ -2631,11 +2631,18 @@ def buscar_funcionarios_de_folga_hoje(dia_da_semana):
             conn.close()
     return []
 
-def verificar_status_disponibilidade(funcionario_id, data_verificacao):
+def verificar_status_disponibilidade(pessoa_id, data_verificacao, tipo='func'):
     """
-    Req 3: Verifica se o funcionário está de folga ou férias na data especificada.
-    Retorna uma string com o motivo do alerta ou None se estiver disponível.
+    Verifica disponibilidade para Funcionários (Folgas/Férias) ou Freelancers (Conflitos).
     """
+    if tipo == 'free':
+        # Implementação conservadora: Verifica apenas se já está na escala desta data
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1 FROM EscalaDiaria WHERE FreelancerID = ? AND DataEscala = ?", pessoa_id, data_verificacao)
+        return "⚠️ Freelancer já alocado hoje!" if cursor.fetchone() else None
+
+    # Lógica original para funcionários mantida abaixo
     conn = get_db_connection()
     if conn:
         try:
@@ -7087,6 +7094,37 @@ def salvar_escala_dia_v3(escala_id, data, pos_id, func_id, free_id, h_ent, h_sai
             return True
         except Exception as e:
             logger.error(f"Erro salvar v3: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
+
+def salvar_escalas_em_lote(data, lista_sugestoes):
+    """
+    Salva múltiplos intervalos de uma vez de forma atômica (Transação Única).
+    lista_sugestoes: [(pos_id, ini, fim, dados_antigos), ...]
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # SQL focado apenas na atualização de intervalos sugeridos pela calculadora
+            sql = """
+                UPDATE EscalaDiaria 
+                SET InicioIntervalo = ?, FimIntervalo = ? 
+                WHERE DataEscala = ? AND PosicaoID = ?
+            """
+            for item in lista_sugestoes:
+                # Executa cada update sem commitar individualmente
+                cursor.execute(sql, item['ini'], item['fim'], data, item['pos_id'])
+
+            # Comita todos os registros de uma só vez
+            conn.commit()
+            logger.info(f"Lote de {len(lista_sugestoes)} intervalos salvos com sucesso.")
+            return True
+        except Exception as e:
+            conn.rollback() # Reverte TUDO se houver falha em qualquer item
+            logger.error(f"ERRO ATÔMICO no lote de escalas: {e}")
             return False
         finally:
             conn.close()
