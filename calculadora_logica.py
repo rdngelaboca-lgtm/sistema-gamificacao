@@ -70,32 +70,45 @@ def calcular_intervalos_automaticos(dados_escala, dia_semana_iso):
             entrada = pessoa['entrada']
             saida = pessoa['saida']
 
+            # --- CORREÇÃO 3: DIFERENCIAÇÃO DE JORNADA ---
+            # Calcula a duração total do turno em horas decimais
+            duracao_jornada = (saida - entrada).total_seconds() / 3600
+
+            # Se o turno for de 4 horas ou menos, não sugerimos intervalo automático
+            if duracao_jornada <= 4.0:
+                continue 
+            # --------------------------------------------
+
             # Definição da Janela Válida para sair:
             # Mínimo: Entrada + 3h (Ajuste de preferência: trabalhar pelo menos 3h antes do intervalo)
             # Máximo: Entrada + 5h (Limite legal para início do descanso)
             janela_inicio = entrada + timedelta(hours=3)
             janela_fim_limite = entrada + timedelta(hours=MAX_HORAS_SEM_PAUSA)
 
-            # Define o início proposto
-            # Tenta o mais cedo possível (janela_inicio), mas respeitando a fila (ultimo_fim_intervalo)
+            # --- LÓGICA DE ESCADA (SEQUENCIAL) ---
+            # O início proposto deve ser o maior valor entre a janela ideal (3h de trabalho)
+            # e o fim do intervalo do colega anterior, para evitar pausas simultâneas no setor.
             proposta_inicio = janela_inicio
 
             if ultimo_fim_intervalo and ultimo_fim_intervalo > proposta_inicio:
-                proposta_inicio = ultimo_fim_intervalo
+                # Adiciona um pequeno "buffer" de 2 minutos para troca de posto se necessário
+                proposta_inicio = ultimo_fim_intervalo + timedelta(minutes=2)
 
             proposta_fim = proposta_inicio + timedelta(hours=DURACAO_INTERVALO)
 
-            # Regra: Bloqueio de Pico (AGORA DINÂMICO POR DIA)
+            # Regra: Bloqueio de Pico (SUPORTE A TURNOS NOTURNOS)
             if HORA_BLOQUEIO_INICIO and HORA_BLOQUEIO_FIM: 
                 try:
-                    bloqueio_ini = datetime.combine(entrada.date(), HORA_BLOQUEIO_INICIO)
-                    bloqueio_fim = datetime.combine(entrada.date(), HORA_BLOQUEIO_FIM)
+                    # CORREÇÃO: Utiliza a data da proposta de intervalo para criar o bloqueio.
+                    # Isso garante que turnos que cruzam a meia-noite validem o pico do dia correto.
+                    bloqueio_ini = datetime.combine(proposta_inicio.date(), HORA_BLOQUEIO_INICIO)
+                    bloqueio_fim = datetime.combine(proposta_inicio.date(), HORA_BLOQUEIO_FIM)
 
                     if (proposta_inicio < bloqueio_fim) and (proposta_fim > bloqueio_ini):
                         proposta_inicio = bloqueio_fim
                         proposta_fim = proposta_inicio + timedelta(hours=DURACAO_INTERVALO)
                 except Exception as e:
-                    log_erros.append(f"❌ Erro ao aplicar pico. Detalhe: {e}")
+                    log_erros.append(f"❌ Erro ao aplicar bloqueio de pico: {e}")
 
             # --- NOVA REGRA: VERIFICAÇÃO DE COBERTURA REAL ---
             tem_cobertura = False
@@ -104,16 +117,22 @@ def calcular_intervalos_automaticos(dados_escala, dia_semana_iso):
             if setor in SETORES_SOLO_PERMITIDO:
                 tem_cobertura = True
             else:
-                # Verifica se existe ALGUM colega presente durante todo o intervalo proposto
-                for colega in pessoas:
-                    if colega['id_posicao'] == pessoa['id_posicao']:
-                        continue # Não conta a si mesmo
+                # LÓGICA DE COBERTURA FRAGMENTADA: Verifica se há pelo menos 1 colega ativo 
+                # em cada minuto do intervalo proposto (permite cobertura por múltiplos funcionários).
+                minutos_cobertos = 0
+                duracao_segundos = int((proposta_fim - proposta_inicio).total_seconds())
+                passo_minutos = 60
 
-                    # O colega precisa ter chegado ANTES do início do intervalo
-                    # E precisa sair DEPOIS do fim do intervalo
-                    if colega['entrada'] <= proposta_inicio and colega['saida'] >= proposta_fim:
-                        tem_cobertura = True
-                        break # Achou um, já basta
+                for sec in range(0, duracao_segundos, passo_minutos):
+                    momento_check = proposta_inicio + timedelta(seconds=sec)
+                    for colega in pessoas:
+                        if colega['id_posicao'] != pessoa['id_posicao'] and \
+                        colega['entrada'] <= momento_check < colega['saida']:
+                            minutos_cobertos += passo_minutos
+                            break 
+
+                if minutos_cobertos >= duracao_segundos:
+                    tem_cobertura = True
             
             if not tem_cobertura:
                 hora_formatada = proposta_inicio.strftime('%H:%M')
