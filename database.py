@@ -2653,7 +2653,7 @@ def verificar_status_disponibilidade(pessoa_id, data_verificacao, tipo='func'):
                 SELECT DiaDeFolga, DomingoFolgaMensal, DataInicioAfastamento, DataFimAfastamento 
                 FROM Funcionarios WHERE FuncionarioID = ?
             """
-            cursor.execute(sql, funcionario_id)
+            cursor.execute(sql, pessoa_id)
             row = cursor.fetchone()
 
             if not row: return None
@@ -7169,3 +7169,20 @@ def buscar_escala_tempo_real(data_str, hora_str):
         finally:
             conn.close()
     return {}
+
+def excluir_turno_escala(escala_id):
+    """Deleta uma escalação específica do banco de dados pelo ID."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "DELETE FROM EscalaDiaria WHERE EscalaID = ?"
+            cursor.execute(sql, escala_id)
+            conn.commit()
+            return True
+        except Exception as e:
+            print(f"Erro ao excluir escala: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
