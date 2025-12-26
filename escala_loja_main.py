@@ -146,6 +146,8 @@ class AppEscalaLoja:
         self.atualizar_grafico_fluxo()
 
     def redesenhar_marcadores(self):
+        if not self.data_selecionada:
+            return
         self.canvas.delete("marcador")
         self.canvas.delete("texto_marcador")
         self.canvas.delete("setor_tag")
@@ -438,17 +440,22 @@ class AppEscalaLoja:
         def confirmar():
             nome = entry_nome.get()
             setor = combo_setor.get()
-            # Converte clique em pixel para coordenada relativa (0.0 a 1.0) para o banco
-            W = self.canvas.winfo_width()
-            H = self.canvas.winfo_height()
+            
+            # Captura o tamanho atual do mapa para converter o clique em percentagem
+            # Fallback de segurança para 1180x600 se o canvas reportar dimensão inválida
+            W = self.canvas.winfo_width() if self.canvas.winfo_width() > 1 else 1180
+            H = self.canvas.winfo_height() if self.canvas.winfo_height() > 1 else 600
+            
+            # Cálculo da coordenada relativa (0.0 a 1.0)
             rel_x = x / W
             rel_y = y / H
-            # Garante que setor vazio vire None para o banco
-            if not setor: setor = None
+            
+            # Normalização do setor para o SQL
+            setor_limpo = setor if setor else None
 
             if nome:
-                # CORREÇÃO: Envia as coordenadas relativas (rel_x, rel_y) para o banco
-                database.criar_posicao_loja(nome, rel_x, rel_y, setor)
+                # PERSISTÊNCIA: Agora guardamos o valor relativo (EX: 0.4567) em vez de pixels (EX: 540)
+                database.criar_posicao_loja(nome, rel_x, rel_y, setor_limpo)
                 self.carregar_escala_do_dia()
                 popup.destroy()
 
@@ -921,10 +928,10 @@ class AppEscalaLoja:
 
         popup = Toplevel(self.root)
         popup.title(f"Escalar: {nome_pos}")
-        popup.geometry("600x650") # Aumentado
+        popup.geometry("600x650") 
         popup.update_idletasks()
         
-        # Centraliza
+        # Centraliza a janela em relação à tela principal
         x_c = self.root.winfo_x() + (self.root.winfo_width() // 2) - (600 // 2)
         y_c = self.root.winfo_y() + (self.root.winfo_height() // 2) - (650 // 2)
         popup.geometry(f"+{x_c}+{y_c}")
@@ -945,10 +952,9 @@ class AppEscalaLoja:
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         tree.configure(yscrollcommand=scrollbar.set)
 
-        # Carrega dados atuais (Lista)
+        # Carrega dados atuais da escala para a lista
         lista_turnos = self.escala_atual.get(pos_id, [])
         for t in lista_turnos:
-            # Formatação segura
             fmt = lambda v: v.strftime('%H:%M') if hasattr(v, 'strftime') else str(v)[:5]
             tree.insert("", "end", values=(t.EscalaID, t.NomePessoa, fmt(t.HorarioEntrada), fmt(t.HorarioSaida)))
 
@@ -956,22 +962,18 @@ class AppEscalaLoja:
         frame_form = ttk.LabelFrame(popup, text="Adicionar / Editar Turno", padding=10)
         frame_form.pack(fill=tk.X, padx=10, pady=10)
 
-        # Variáveis de Controle
         var_ent = tk.StringVar(value="08:00")
         var_sai = tk.StringVar()
         var_escala_id_edit = tk.StringVar(value="") # Vazio = Novo, Com Valor = Edição
 
-        # Carregar Configurações
+        # Carregar Configurações de jornada
         config_db = database.buscar_configuracoes_escala()
         JORNADA_PADRAO = getattr(config_db, 'DuracaoJornadaPadrao', 8) or 8
-        INTERVALO_PADRAO = getattr(config_db, 'DuracaoIntervalo', 1) or 1
 
-        # Combobox de Pessoas
         ttk.Label(frame_form, text="Funcionário / Freelancer:").pack(anchor="w")
         combo_pessoas = ttk.Combobox(frame_form, width=40)
         combo_pessoas.pack(fill="x", pady=5)
 
-        # Mapa de IDs e Telefones
         mapa_ids = {} 
         lista_nomes = ["(Vazio)"]
         for f in database.listar_funcionarios():
@@ -982,7 +984,6 @@ class AppEscalaLoja:
             mapa_ids[label] = {'tipo': 'free', 'id': fr.FreelancerID, 'tel': fr.Telefone}
         combo_pessoas['values'] = lista_nomes
 
-        # Horários
         frame_h = ttk.Frame(frame_form)
         frame_h.pack(fill="x", pady=5)
         ttk.Label(frame_h, text="Entrada:").pack(side=tk.LEFT)
@@ -996,18 +997,16 @@ class AppEscalaLoja:
         e_int_ini = ttk.Entry(frame_int, width=8); e_int_ini.pack(side=tk.LEFT, padx=(0,5))
         e_int_fim = ttk.Entry(frame_int, width=8); e_int_fim.pack(side=tk.LEFT)
 
-        # Foco
         ttk.Label(frame_form, text="Foco do Dia:").pack(anchor="w")
         txt_foco = tk.Text(frame_form, height=3, width=40); txt_foco.pack(fill="x", pady=5)
 
-        # --- Lógica de Auto-Cálculo ---
+        # --- Lógica de Auto-Cálculo de Saída ---
         def calcular_saida(*args):
             entrada = var_ent.get()
             if len(entrada) == 5 and re.match(r'^\d{2}:\d{2}$', entrada):
                 try:
                     dt_ent = datetime.strptime(entrada, '%H:%M')
-                    total_horas = JORNADA_PADRAO # Sem somar intervalo (conforme seu pedido anterior)
-                    dt_sai = dt_ent + timedelta(hours=float(total_horas))
+                    dt_sai = dt_ent + timedelta(hours=float(JORNADA_PADRAO))
                     var_sai.set(dt_sai.strftime('%H:%M'))
                 except ValueError: pass
         var_ent.trace_add("write", calcular_saida)
@@ -1019,14 +1018,11 @@ class AppEscalaLoja:
             item = tree.item(sel, 'values')
             escala_id = int(item[0])
             
-            # Busca dados completos do objeto na lista original
             turno = next((t for t in lista_turnos if t.EscalaID == escala_id), None)
             if not turno: return
 
-            # Preenche Form
             var_escala_id_edit.set(escala_id)
             
-            # Seleciona no Combo
             nome_combo = ""
             if turno.FuncionarioID:
                 nome_combo = next((k for k, v in mapa_ids.items() if v['tipo'] == 'func' and v['id'] == turno.FuncionarioID), "")
@@ -1034,7 +1030,6 @@ class AppEscalaLoja:
                 nome_combo = next((k for k, v in mapa_ids.items() if v['tipo'] == 'free' and v['id'] == turno.FreelancerID), "")
             combo_pessoas.set(nome_combo)
 
-            # Horários
             fmt = lambda v: v.strftime('%H:%M') if hasattr(v, 'strftime') else str(v)[:5] if v else ""
             var_ent.set(fmt(turno.HorarioEntrada))
             var_sai.set(fmt(turno.HorarioSaida))
@@ -1043,7 +1038,7 @@ class AppEscalaLoja:
             txt_foco.delete("1.0", tk.END); txt_foco.insert("1.0", turno.FocoDoDia or "")
 
             btn_salvar.config(text="🔄 Atualizar Turno")
-            btn_novo.config(state="normal") # Habilita botão de limpar
+            btn_novo.config(state="normal")
 
         tree.bind("<<TreeviewSelect>>", carregar_para_edicao)
 
@@ -1057,27 +1052,21 @@ class AppEscalaLoja:
             tree.selection_remove(tree.selection())
 
         def salvar():
-            # 1. Validação Básica Robusta
             selecao = combo_pessoas.get()
             if not selecao or selecao == "(Vazio)":
-                messagebox.showwarning("Aviso", "Por favor, selecione um funcionário ou freelancer válido para esta posição.")
+                messagebox.showwarning("Aviso", "Selecione um funcionário ou freelancer.", parent=popup)
                 return
 
-            # 2. Prepara Dados
-            selecao = combo_pessoas.get()
             func_id = None; free_id = None
             d = mapa_ids.get(selecao)
             if d:
                 if d['tipo'] == 'func': func_id = d['id']
                 else: free_id = d['id']
 
-            escala_id = var_escala_id_edit.get() # Se tiver ID, é update. Se vazio, insert.
+            escala_id = var_escala_id_edit.get()
 
-            # 3. Chama Database (Lógica Inteligente)
-            # Precisamos atualizar a função no database para aceitar EscalaID explícito para UPDATE
-            # Por enquanto, usamos a lógica de conflito que já criamos, mas vamos refinar no passo 2 abaixo
             if database.salvar_escala_dia_v3(
-                escala_id if escala_id else None, # Passa ID se for edição
+                escala_id if escala_id else None,
                 self.data_selecionada, pos_id, func_id, free_id,
                 var_ent.get(), var_sai.get(), 
                 e_int_ini.get(), e_int_fim.get(),
@@ -1086,17 +1075,44 @@ class AppEscalaLoja:
                 popup.destroy()
                 self.carregar_escala_do_dia()
             else:
-                messagebox.showerror("Erro", "Conflito de horário! Essa pessoa já está trabalhando neste horário ou a posição está ocupada.")
+                messagebox.showerror("Erro", "Conflito de horário detectado!", parent=popup)
 
-        # Botões
+        # --- NOVA FUNÇÃO DE EXCLUSÃO ---
+        def excluir_selecionado():
+            sel = tree.focus()
+            if not sel:
+                messagebox.showwarning("Aviso", "Selecione um turno na lista acima para excluir.", parent=popup)
+                return
+            
+            item = tree.item(sel, 'values')
+            escala_id = item[0]
+            nome_pessoa = item[1]
+
+            confirmar = messagebox.askyesno("Confirmar Exclusão", 
+                                            f"Deseja realmente remover a escalação de {nome_pessoa}?", 
+                                            parent=popup)
+            
+            if confirmar:
+                if database.excluir_turno_escala(escala_id):
+                    messagebox.showinfo("Sucesso", "Escalação removida.", parent=popup)
+                    popup.destroy()
+                    self.carregar_escala_do_dia()
+                else:
+                    messagebox.showerror("Erro", "Falha ao excluir o registro.", parent=popup)
+
+        # --- Frame de Botões (Rodapé) ---
         frame_btns = ttk.Frame(popup, padding=10)
         frame_btns.pack(fill=tk.X, side=tk.BOTTOM)
         
-        btn_novo = ttk.Button(frame_btns, text="✨ Novo Turno (Limpar)", command=limpar_form, state="disabled")
-        btn_novo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        btn_novo = ttk.Button(frame_btns, text="✨ Novo (Limpar)", command=limpar_form, state="disabled")
+        btn_novo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)
+
+        # Botão de Exclusão integrado
+        btn_excluir = ttk.Button(frame_btns, text="🗑️ Excluir Turno", command=excluir_selecionado)
+        btn_excluir.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)
         
         btn_salvar = ttk.Button(frame_btns, text="✅ Adicionar Turno", command=salvar)
-        btn_salvar.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)                
+        btn_salvar.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)                
 
 if __name__ == "__main__":
     root = tk.Tk()
