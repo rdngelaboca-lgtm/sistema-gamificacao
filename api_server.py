@@ -619,11 +619,11 @@ def rota_resgates_recentes():
         logger.exception(f"!!! ERRO no endpoint /api/resgates/recentes: {e}")
         return jsonify({"status": "erro", "mensagem": "Erro ao buscar resgates recentes."}), 500   
 
-
 @app.route('/api/escala/hoje', methods=['GET'])
 def rota_escala_hoje():
     """
-    (CORREÇÃO TIMEZONE) Utiliza fuso horário fixo (São Paulo) para consistência entre API e DB.
+    (VERSÃO DINÂMICA) Retorna APENAS as posições que têm alguém trabalhando AGORA.
+    Se o turno não começou ou já acabou, a posição não é enviada e não aparece no mapa.
     """
     try:
         import zoneinfo
@@ -632,10 +632,10 @@ def rota_escala_hoje():
         hoje_str = agora_tz.strftime('%Y-%m-%d')
         agora_str = agora_tz.strftime('%H:%M:%S')
         
-        # Log para debug (verifique no terminal se a hora está certa)
-        logger.info(f"Buscando escala para Painel Web: Data={hoje_str}, Hora={agora_str}")
+        # Log para debug
+        # logger.info(f"Buscando escala TEMPO REAL: Data={hoje_str}, Hora={agora_str}")
 
-        # Passa os parâmetros para o banco
+        # Busca quem está escalado EXATAMENTE neste minuto
         escala_do_momento = database.buscar_escala_tempo_real(hoje_str, agora_str)
         posicoes = database.listar_posicoes_loja()
 
@@ -643,17 +643,18 @@ def rota_escala_hoje():
         for pos in posicoes:
             pos_id, nome, x, y, ativo, setor = pos
 
-            ocupante = "Vazio"
-            cor = "#ff4444" # Vermelho
-            detalhes = ""
-
-            # Verifica se tem alguém NESTA posição AGORA
+            # --- MUDANÇA PRINCIPAL AQUI ---
+            # Só processamos e adicionamos na lista se houver alguém na escala DO MOMENTO
             if pos_id in escala_do_momento:
                 dados = escala_do_momento[pos_id]
-                nome_pessoa = dados.NomePessoa if dados.NomePessoa else "(Livre)"
-                ocupante = nome_pessoa
-                cor = "#00C851" if dados.NomePessoa else "#FFBB33" 
+                
+                # Se por algum motivo o nome vier vazio (raro), ignoramos
+                if not dados.NomePessoa:
+                    continue
 
+                nome_pessoa = dados.NomePessoa
+                cor = "#00C851" # Verde (Padrão: Trabalhando)
+                
                 # Formatação segura de hora
                 fmt = lambda v: v.strftime('%H:%M') if hasattr(v, 'strftime') else str(v)[:5]
                 
@@ -664,13 +665,12 @@ def rota_escala_hoje():
                 # Checagem visual de intervalo
                 if dados.InicioIntervalo and dados.FimIntervalo:
                     try:
-                        # Converte strings para comparação simples no Python também
+                        # Converte strings para comparação simples
                         agora_dt = datetime.strptime(agora_str, '%H:%M:%S').time()
                         
-                        # Função auxiliar para garantir objeto time
                         def to_time(val):
                             if isinstance(val, timedelta): return (datetime.min + val).time()
-                            if hasattr(val, 'strftime'): return val.time() # datetime
+                            if hasattr(val, 'strftime'): return val.time() 
                             if isinstance(val, str): return datetime.strptime(val[:5], '%H:%M').time()
                             return val
 
@@ -684,25 +684,26 @@ def rota_escala_hoje():
                         else:
                             detalhes += f" (☕ {fmt(dados.InicioIntervalo)})"
                     except Exception as e_int:
-                        # Se falhar calculo de intervalo, apenas mostra texto
                         detalhes += f" (Intervalo)"
 
-            dados_mapa.append({
-                "id": pos_id,
-                "nome_posicao": nome,
-                "x": x,
-                "y": y,
-                "ocupante": ocupante,
-                "cor": cor,
-                "detalhes": detalhes,
-                "setor": setor
-            })
+                # Adiciona à lista final APENAS se estiver ocupado
+                dados_mapa.append({
+                    "id": pos_id,
+                    "nome_posicao": nome,
+                    "x": x,
+                    "y": y,
+                    "ocupante": nome_pessoa,
+                    "cor": cor,
+                    "detalhes": detalhes,
+                    "setor": setor
+                })
+            # O 'else' (Vazio) foi removido, então não enviamos nada se ninguém estiver lá.
 
         return jsonify(dados_mapa), 200
     except Exception as e:
         logger.error(f"Erro na rota /api/escala/hoje: {e}", exc_info=True)
         return jsonify([]), 500
-    
+        
 @app.route('/api/escala/ocupacao', methods=['GET'])
 def rota_escala_ocupacao():
     """
