@@ -822,3 +822,8 @@ def rota_escala_tabela():
         logger.error(f"Erro Rota Tabela: {e}")
         # Retorna JSON vazio em vez de erro 500 para o front não travar
         return jsonify({}), 200
+    
+if __name__ == "__main__":
+    # O '0.0.0.0' é o segredo. Ele libera o acesso para a rede inteira.
+    logger.info("Iniciando servidor API acessível na rede...")
+    app.run(host='0.0.0.0', port=5000, debug=True)
