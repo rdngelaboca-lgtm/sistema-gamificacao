@@ -660,6 +660,106 @@ function renderizarGraficoOcupacao(dadosBrutos) {
     });
 }
     
+// === NOVA FUNCIONALIDADE: CRONOGRAMA DE PAUSAS ===
+
+function timeToMinutes(timeStr) {
+    if (!timeStr) return -1;
+    const [h, m] = timeStr.split(':').map(Number);
+    return h * 60 + m;
+}
+
+async function atualizarCronogramaPausas() {
+    const container = document.getElementById('lista-pausas-content');
+    const relogio = document.getElementById('relogio-tempo-real');
+
+    if (!container) return; 
+
+    try {
+        // 1. Relógio Visual
+        const agora = new Date();
+        const horaStr = agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+        if (relogio) relogio.textContent = horaStr;
+
+        const minutosAgora = timeToMinutes(horaStr);
+
+        // 2. Busca dados
+        const response = await fetch(`${API_BASE_URL}/api/escala/tabela`);
+        if (!response.ok) return;
+        const dadosAgrupados = await response.json();
+
+        container.innerHTML = '';
+
+        // 3. Ordem de Setores
+        const ordem = ['Cozinha', 'Buffet', 'Caixa', 'Atendimento', 'Salão', 'Frente Loja', 'Varanda', 'Limpeza', 'Camara Fria'];
+
+        const setores = Object.keys(dadosAgrupados).sort((a, b) => {
+            const idxA = ordem.indexOf(a);
+            const idxB = ordem.indexOf(b);
+            return (idxA === -1 ? 99 : idxA) - (idxB === -1 ? 99 : idxB);
+        });
+
+        if (setores.length === 0) {
+            container.innerHTML = '<p style="text-align:center; padding:20px; color:#888;">Sem escala hoje.</p>';
+            return;
+        }
+
+        // 4. Renderização
+        setores.forEach(setor => {
+            const funcs = dadosAgrupados[setor];
+            if (!funcs || funcs.length === 0) return;
+
+            const bloco = document.createElement('div');
+            bloco.className = 'setor-bloco';
+
+            const titulo = document.createElement('div');
+            titulo.className = 'setor-titulo';
+            titulo.textContent = setor;
+            bloco.appendChild(titulo);
+
+            funcs.forEach(f => {
+                const card = document.createElement('div');
+                card.className = 'pausa-card';
+
+                let statusClass = 'status-futuro';
+                let icone = '';
+                let textoHorario = 'Sem intervalo';
+
+                if (f.int_ini && f.int_fim) {
+                    textoHorario = `${f.int_ini} - ${f.int_fim}`;
+                    const mIni = timeToMinutes(f.int_ini);
+                    const mFim = timeToMinutes(f.int_fim);
+
+                    if (minutosAgora >= mFim) {
+                        statusClass = 'status-concluido';
+                        icone = '🏁';
+                    } else if (minutosAgora >= mIni && minutosAgora < mFim) {
+                        statusClass = 'status-em-pausa';
+                        icone = '☕';
+                    } else {
+                        icone = '⏳'; // Futuro
+                    }
+                }
+
+                card.classList.add(statusClass);
+
+                card.innerHTML = `
+                    <div class="pausa-info">
+                        <span class="pausa-nome">${f.nome}</span>
+                        <span class="pausa-horario">${textoHorario}</span>
+                    </div>
+                    <div class="pausa-status-icon">${icone}</div>
+                `;
+                bloco.appendChild(card);
+            });
+
+            container.appendChild(bloco);
+        });
+
+    } catch (error) {
+        console.error("Erro cronograma:", error);
+    }
+}
+
 async function atualizarPainel() {
     // Reseta a flag da animação se o dia mudou (usando localStorage)
     const hoje = new Date().toDateString();
@@ -745,6 +845,7 @@ async function atualizarPainel() {
 
          atualizarMapaLoja();
          renderizarGraficoOcupacao(dadosOcupacao);
+         atualizarCronogramaPausas(); // Atualiza a lista lateral
 
         statusElement.textContent = `Última atualização: ${new Date().toLocaleTimeString('pt-BR')}`;
         statusElement.style.color = 'inherit'; // Volta para a cor padrão
