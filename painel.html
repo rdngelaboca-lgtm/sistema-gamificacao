@@ -95,32 +95,46 @@
         </div>
 
         <div id="tab-mapa" class="tab-content" style="display: none;">
-            <div class="mapa-container" style="position: relative; width: 1080px; height: 600px; margin: 0 auto; background: url('static/layout_loja.png') no-repeat center center; background-size: 100% 100%;">
-                <div id="marcadores-mapa"></div>
-            </div>
-            
-            <div class="ocupacao-wrapper">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                <h3>Fluxo de Equipe (Pessoas Ativas por Hora)</h3>
 
-                <select id="filtro-setor-grafico" style="padding: 5px; font-size: 16px; border-radius: 5px;">
-                    <option value="Geral (Todos)">Geral (Todos)</option>
-                    <option value="Varanda">Varanda</option>
-                    <option value="Frente Loja">Frente Loja</option>
-                    <option value="Salão">Salão</option>
-                    <option value="Caixa">Caixa</option>
-                    <option value="Buffet">Buffet</option>
-                    <option value="Cozinha">Cozinha</option>
-                    <option value="Limpeza">Limpeza</option>
-                    <option value="Camara Fria">Camara Fria</option>
-                </select>
-            </div>
+            <div class="mapa-layout-container">
 
-            <div id="grafico-barras-container" class="grafico-container">
+                <div class="coluna-mapa-visual">
+                    <div class="mapa-container" style="position: relative; width: 100%; height: 600px; background: url('static/layout_loja.png') no-repeat center center; background-size: contain;">
+                        <div id="marcadores-mapa"></div>
+                    </div>
+
+                    <div class="ocupacao-wrapper" style="width: 100%; margin-top: 20px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                            <h3>Fluxo de Equipe</h3>
+                            <select id="filtro-setor-grafico" style="padding: 5px; font-size: 16px; border-radius: 5px;">
+                                <option value="Geral (Todos)">Geral (Todos)</option>
+                                <option value="Varanda">Varanda</option>
+                                <option value="Frente Loja">Frente Loja</option>
+                                <option value="Salão">Salão</option>
+                                <option value="Caixa">Caixa</option>
+                                <option value="Buffet">Buffet</option>
+                                <option value="Cozinha">Cozinha</option>
+                                <option value="Limpeza">Limpeza</option>
+                                <option value="Camara Fria">Camara Fria</option>
+                            </select>
+                        </div>
+                        <div id="grafico-barras-container" class="grafico-container"></div>
+                    </div>
                 </div>
-        </div>
-            
-            <p style="text-align: center; margin-top: 10px; color: #666;">Atualizado em tempo real conforme a escala do dia.</p>
+
+                <div class="coluna-cronograma">
+                    <div class="cronograma-header">
+                        <h2>⏸️ Escala & Pausas</h2>
+                        <div id="relogio-tempo-real" style="font-weight: bold; color: #0056b3;">--:--</div>
+                    </div>
+                    <div id="lista-pausas-content" class="lista-pausas-scroll">
+                        <p style="text-align: center; color: #888; padding: 20px;">Carregando...</p>
+                    </div>
+                </div>
+
+            </div>
+
+            <p style="text-align: center; margin-top: 10px; color: #666;">Atualizado em tempo real.</p>
         </div>
 
 
