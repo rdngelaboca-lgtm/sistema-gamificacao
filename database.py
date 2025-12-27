@@ -7212,3 +7212,50 @@ def excluir_turno_escala(escala_id):
         finally:
             conn.close()
     return False
+
+def listar_escala_detalhada_ordenada(data_str):
+    """
+    Retorna a escala do dia ordenada por Setor (Alfabetico) e depois por Horário de Entrada.
+    Usado para a tabela visual e o gerenciador de intervalos.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT 
+                    E.EscalaID,
+                    E.PosicaoID,
+                    ISNULL(PL.Setor, 'Geral') as Setor,
+                    PL.NomePosicao,
+                    ISNULL(F.NomeCompleto, FR.Nome) as NomePessoa,
+                    E.HorarioEntrada,
+                    E.HorarioSaida,
+                    E.InicioIntervalo,
+                    E.FimIntervalo,
+                    E.FuncionarioID,
+                    E.FreelancerID,
+                    E.FocoDoDia
+                FROM EscalaDiaria E
+                JOIN PosicoesLoja PL ON E.PosicaoID = PL.PosicaoID
+                LEFT JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID
+                LEFT JOIN Freelancers FR ON E.FreelancerID = FR.FreelancerID
+                WHERE E.DataEscala = ?
+                ORDER BY 
+                    CASE 
+                        -- Ordem Personalizada de Setores (Opcional, pode ajustar conforme necessidade)
+                        WHEN PL.Setor = 'Frente Loja' THEN 1 
+                        WHEN PL.Setor = 'Caixa' THEN 2
+                        WHEN PL.Setor = 'Salão' THEN 3
+                        WHEN PL.Setor = 'Buffet' THEN 4
+                        WHEN PL.Setor = 'Cozinha' THEN 5
+                        ELSE 99 
+                    END,
+                    PL.Setor, -- Desempate alfabético
+                    E.HorarioEntrada -- Ordem de chegada
+            """
+            cursor.execute(sql, data_str)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
