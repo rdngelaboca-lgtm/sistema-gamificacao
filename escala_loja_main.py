@@ -105,6 +105,9 @@ class AppEscalaLoja:
         self.btn_wpp_mass.pack(side=tk.LEFT, padx=5)
         self.btn_config = ttk.Button(self.frame_topo, text="⚙️ Configurações Automação", command=self.abrir_janela_configuracoes)
         self.btn_config.pack(side=tk.LEFT, padx=5)
+        # Botão Gerenciador de Intervalos
+        self.btn_intervalos = ttk.Button(self.frame_topo, text="⏱️ Gerenciar Intervalos", command=self.abrir_gerenciador_intervalos)
+        self.btn_intervalos.pack(side=tk.LEFT, padx=5)
 
         # --- Canvas do Mapa ---
         self.canvas = tk.Canvas(self.frame_mapa, bg="#e0e0e0", cursor="hand2")
@@ -1112,7 +1115,191 @@ class AppEscalaLoja:
         btn_excluir.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)
         
         btn_salvar = ttk.Button(frame_btns, text="✅ Adicionar Turno", command=salvar)
-        btn_salvar.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)                
+        btn_salvar.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)    
+
+    def abrir_gerenciador_intervalos(self):
+        """
+        Abre uma janela focada em lista para edição rápida de intervalos (Opção B).
+        Agrupada visualmente por setor e ordenada por horário.
+        """
+        if not self.data_selecionada:
+            messagebox.showwarning("Aviso", "Selecione uma data primeiro.")
+            return
+
+        popup = Toplevel(self.root)
+        popup.title(f"Gerenciador de Intervalos - {datetime.strptime(self.data_selecionada, '%Y-%m-%d').strftime('%d/%m/%Y')}")
+        popup.geometry("900x600")
+        popup.transient(self.root)
+
+        # --- Layout Principal ---
+        frame_lista = ttk.Frame(popup)
+        frame_lista.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        frame_editor = ttk.LabelFrame(popup, text="Edição Rápida (Selecione acima)", padding="10")
+        frame_editor.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=10)
+
+        # --- Tabela (Treeview) ---
+        cols = ('ID', 'Setor', 'Posição', 'Nome', 'Entrada', 'Saída', 'Início Int.', 'Fim Int.')
+        tree = ttk.Treeview(frame_lista, columns=cols, show='headings', selectmode='browse')
+
+        # Configuração das Colunas
+        tree.heading('ID', text='ID'); tree.column('ID', width=0, stretch=tk.NO) # Oculto
+        tree.heading('Setor', text='Setor'); tree.column('Setor', width=120)
+        tree.heading('Posição', text='Posição'); tree.column('Posição', width=150)
+        tree.heading('Nome', text='Funcionário'); tree.column('Nome', width=200)
+        tree.heading('Entrada', text='Entrada'); tree.column('Entrada', width=80, anchor='center')
+        tree.heading('Saída', text='Saída'); tree.column('Saída', width=80, anchor='center')
+        tree.heading('Início Int.', text='Início Int.'); tree.column('Início Int.', width=100, anchor='center')
+        tree.heading('Fim Int.', text='Fim Int.'); tree.column('Fim Int.', width=100, anchor='center')
+
+        # Scrollbar
+        sb = ttk.Scrollbar(frame_lista, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=sb.set)
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Tags para cores
+        tree.tag_configure('definido', foreground='green')
+        tree.tag_configure('pendente', foreground='red')
+        tree.tag_configure('impar', background='#f0f0f0')
+
+        # --- Controles do Rodapé (Editor) ---
+        # Variáveis de controle
+        var_id_escala = tk.StringVar()
+        var_nome = tk.StringVar(value="Selecione alguém...")
+        var_int_ini = tk.StringVar()
+        var_int_fim = tk.StringVar()
+
+        # Dados ocultos necessários para salvar (Ids, Horarios originais, etc)
+        dados_ocultos = {} 
+
+        # Layout do Editor
+        frame_info = ttk.Frame(frame_editor)
+        frame_info.pack(fill=tk.X, pady=(0, 10))
+
+        lbl_info = ttk.Label(frame_info, textvariable=var_nome, font=("Arial", 11, "bold"), foreground="#0056b3")
+        lbl_info.pack(anchor='w')
+
+        frame_inputs = ttk.Frame(frame_editor)
+        frame_inputs.pack(fill=tk.X)
+
+        ttk.Label(frame_inputs, text="Início Intervalo (HH:MM):").pack(side=tk.LEFT)
+        entry_ini = ttk.Entry(frame_inputs, textvariable=var_int_ini, width=10, font=("Arial", 11))
+        entry_ini.pack(side=tk.LEFT, padx=5)
+
+        ttk.Label(frame_inputs, text="Fim Intervalo (HH:MM):").pack(side=tk.LEFT, padx=(20, 0))
+        entry_fim = ttk.Entry(frame_inputs, textvariable=var_int_fim, width=10, font=("Arial", 11))
+        entry_fim.pack(side=tk.LEFT, padx=5)
+
+        btn_salvar = ttk.Button(frame_inputs, text="✅ SALVAR (Enter)", command=lambda: salvar_alteracao())
+        btn_salvar.pack(side=tk.LEFT, padx=20)
+
+        # --- Funções Internas ---
+        def carregar_dados():
+            # Limpa e recarrega
+            for i in tree.get_children(): tree.delete(i)
+
+            dados = database.listar_escala_detalhada_ordenada(self.data_selecionada)
+
+            for i, row in enumerate(dados):
+                # Row: 0:EscalaID, 1:PosID, 2:Setor, 3:NomePos, 4:NomePessoa, 5:Ent, 6:Sai, 7:IniInt, 8:FimInt...
+                escala_id = row[0]
+
+                fmt = lambda v: v.strftime('%H:%M') if hasattr(v, 'strftime') else str(v)[:5] if v else ""
+
+                ini_int = fmt(row[7])
+                fim_int = fmt(row[8])
+
+                tag_status = 'definido' if (ini_int and fim_int) else 'pendente'
+                tag_bg = 'impar' if i % 2 else 'par'
+
+                tree.insert("", "end", iid=str(escala_id), values=(
+                    escala_id,
+                    row[2], # Setor
+                    row[3], # Posicao
+                    row[4], # Nome
+                    fmt(row[5]), # Ent
+                    fmt(row[6]), # Sai
+                    ini_int,
+                    fim_int
+                ), tags=(tag_status, tag_bg))
+
+                # Guarda dados extras para o save
+                dados_ocultos[str(escala_id)] = {
+                    'pos_id': row[1],
+                    'func_id': row[9],
+                    'free_id': row[10],
+                    'h_ent': fmt(row[5]),
+                    'h_sai': fmt(row[6]),
+                    'foco': row[11]
+                }
+
+        def ao_selecionar(event):
+            sel = tree.focus()
+            if not sel: return
+
+            vals = tree.item(sel, 'values')
+            # vals: 0:ID, 1:Setor, 2:Pos, 3:Nome, 4:Ent, 5:Sai, 6:Ini, 7:Fim
+
+            var_id_escala.set(vals[0])
+            var_nome.set(f"{vals[3]} ({vals[1]} - {vals[2]}) | Turno: {vals[4]} às {vals[5]}")
+            var_int_ini.set(vals[6])
+            var_int_fim.set(vals[7])
+
+            entry_ini.focus_set()
+            entry_ini.select_range(0, tk.END)
+
+        def salvar_alteracao(event=None):
+            escala_id = var_id_escala.get()
+            if not escala_id: return
+
+            meta_dados = dados_ocultos.get(escala_id)
+            if not meta_dados: return
+
+            # Chama a função de salvar existente (v3)
+            # Note que passamos os mesmos dados antigos para campos que não mudaram (entrada, saida, etc)
+            sucesso = database.salvar_escala_dia_v3(
+                escala_id,
+                self.data_selecionada,
+                meta_dados['pos_id'],
+                meta_dados['func_id'],
+                meta_dados['free_id'],
+                meta_dados['h_ent'],
+                meta_dados['h_sai'],
+                var_int_ini.get(), # Novo Valor
+                var_int_fim.get(), # Novo Valor
+                meta_dados['foco']
+            )
+
+            if sucesso:
+                # Atualiza visualmente a linha (sem recarregar tudo do banco para ser rápido)
+                tree.set(escala_id, column='Início Int.', value=var_int_ini.get())
+                tree.set(escala_id, column='Fim Int.', value=var_int_fim.get())
+
+                # Muda a cor para verde
+                tags_atuais = list(tree.item(escala_id, 'tags'))
+                if 'pendente' in tags_atuais: tags_atuais.remove('pendente')
+                if 'definido' not in tags_atuais: tags_atuais.append('definido')
+                tree.item(escala_id, tags=tags_atuais)
+
+                # Seleciona o próximo
+                proximo = tree.next(escala_id)
+                if proximo:
+                    tree.selection_set(proximo)
+                    tree.focus(proximo)
+                    tree.see(proximo) # Garante que está visível no scroll
+                else:
+                    messagebox.showinfo("Fim", "Último da lista editado!", parent=popup)
+            else:
+                messagebox.showerror("Erro", "Falha ao salvar. Verifique conflitos.", parent=popup)
+
+        # Binds
+        tree.bind("<<TreeviewSelect>>", ao_selecionar)
+        entry_ini.bind("<Return>", lambda e: entry_fim.focus_set())
+        entry_fim.bind("<Return>", salvar_alteracao)
+
+        # Inicializa
+        carregar_dados()                   
 
 if __name__ == "__main__":
     root = tk.Tk()
