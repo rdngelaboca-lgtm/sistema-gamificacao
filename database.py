@@ -7222,6 +7222,10 @@ def listar_escala_detalhada_ordenada(data_str):
     if conn:
         try:
             cursor = conn.cursor()
+
+            # Log de Debug para ver o que está chegando
+            # print(f"--> [DB DEBUG] Buscando escala ordenada para data: '{data_str}'")
+
             sql = """
                 SELECT 
                     E.EscalaID,
@@ -7243,7 +7247,6 @@ def listar_escala_detalhada_ordenada(data_str):
                 WHERE E.DataEscala = ?
                 ORDER BY 
                     CASE 
-                        -- Ordem Personalizada de Setores (Opcional, pode ajustar conforme necessidade)
                         WHEN PL.Setor = 'Frente Loja' THEN 1 
                         WHEN PL.Setor = 'Caixa' THEN 2
                         WHEN PL.Setor = 'Salão' THEN 3
@@ -7251,11 +7254,17 @@ def listar_escala_detalhada_ordenada(data_str):
                         WHEN PL.Setor = 'Cozinha' THEN 5
                         ELSE 99 
                     END,
-                    PL.Setor, -- Desempate alfabético
-                    E.HorarioEntrada -- Ordem de chegada
+                    PL.Setor, 
+                    E.HorarioEntrada
             """
             cursor.execute(sql, data_str)
-            return cursor.fetchall()
+            resultados = cursor.fetchall()
+
+            # print(f"--> [DB DEBUG] Encontrados {len(resultados)} registros.")
+            return resultados
+        except Exception as e:
+            logging.error(f"Erro na query listar_escala_detalhada_ordenada: {e}")
+            return []
         finally:
             conn.close()
     return []
