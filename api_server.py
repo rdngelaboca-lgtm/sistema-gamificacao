@@ -552,6 +552,15 @@ def rota_feed():
         logger.exception(f"!!! ERRO no endpoint /api/feed: {e}")
         return jsonify({"status": "erro", "mensagem": "Ocorreu um erro interno no servidor. Tente novamente mais tarde ou contate o suporte."}), 500
     
+@app.route('/imagens/entregas/<path:filename>')
+def servir_imagem_entrega(filename):
+    """
+    Rota para servir as imagens de evidência salvas na pasta 'entregas'.
+    """
+    pasta_entregas = os.path.join(BASE_DIR, 'entregas') # Assume que a pasta 'entregas' está na raiz do projeto
+    return send_from_directory(pasta_entregas, filename)
+
+    
 # Adicione esta nova rota ao final de api_server.py
 @app.route('/api/meta_principal_do_dia', methods=['GET'])
 def rota_meta_principal_do_dia():
