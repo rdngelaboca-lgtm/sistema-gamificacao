@@ -774,32 +774,24 @@ def rota_escala_tabela():
         # 1. Tenta pegar a data da URL (ex: .../tabela?data=2025-12-26)
         data_url = request.args.get('data')
         
+        # Define 'hoje_str' e 'agora_time'
         if data_url:
             hoje_str = data_url
-            # Define um horário padrão para checagem de intervalo se for data manual
-            agora_time = datetime.now().time() 
+            agora = datetime.now()
+            agora_time = agora.time()
         else:
-            # Se não passar data, usa a lógica de Fuso Horário SP
-            import zoneinfo
-            try:
-                tz = zoneinfo.ZoneInfo("America/Sao_Paulo")
-            except:
-                # Fallback se não tiver zoneinfo instalado
-                tz = None
-            
-            agora = datetime.now(tz)
+            # Sem zoneinfo: usa o horário do servidor mesmo (simples e seguro)
+            agora = datetime.now()
             hoje_str = agora.strftime('%Y-%m-%d')
             agora_time = agora.time()
 
-        # Log para debug no terminal
-        print(f"--> [API] Buscando tabela de escala para a data: {hoje_str}")
+        # Log para debug
+        # print(f"--> [API] Buscando tabela para: {hoje_str}")
 
         # 2. Busca dados brutos ordenados
         dados_brutos = database.listar_escala_detalhada_ordenada(hoje_str)
         
-        # Se não vier nada, retorna vazio mas loga aviso
         if not dados_brutos:
-            print(f"--> [API] Nenhum dado encontrado no banco para {hoje_str}.")
             return jsonify({}), 200
         
         # 3. Processa e Agrupa
@@ -807,20 +799,30 @@ def rota_escala_tabela():
         
         def fmt_hora(val):
             if not val: return "--:--"
-            if isinstance(val, timedelta): return (datetime.min + val).time().strftime('%H:%M')
+            if isinstance(val, timedelta): 
+                # Converte timedelta para HH:MM
+                total_seconds = int(val.total_seconds())
+                hours = total_seconds // 3600
+                minutes = (total_seconds % 3600) // 60
+                return f"{hours:02d}:{minutes:02d}"
             if hasattr(val, 'strftime'): return val.strftime('%H:%M')
             return str(val)[:5]
 
         def to_time_obj(val):
             if not val: return None
-            if isinstance(val, timedelta): return (datetime.min + val).time()
+            if isinstance(val, timedelta): 
+                total_seconds = int(val.total_seconds())
+                hours = total_seconds // 3600
+                minutes = (total_seconds % 3600) // 60
+                return (datetime.min + timedelta(hours=hours, minutes=minutes)).time()
             if hasattr(val, 'time'): return val.time()
             try: return datetime.strptime(str(val)[:5], '%H:%M').time()
             except: return None
 
         for row in dados_brutos:
             # Row: 0:ID, 1:PosID, 2:Setor, 3:NomePos, 4:NomePessoa, 5:Ent, 6:Sai, 7:IniInt, 8:FimInt
-            setor = row[2] if row[2] else "Geral" # Garante que não seja None
+            # IMPORTANTE: Acessar por índice numérico pois pyodbc.Row pode não ter dict
+            setor = row[2] if row[2] else "Geral"
             
             status_visual = "normal"
             
@@ -830,7 +832,7 @@ def rota_escala_tabela():
             fim_int_t = to_time_obj(row[8])
             
             if ent_t and sai_t:
-                # Se estiver testando outra data, não calcula status "ao vivo" para não confundir
+                # Se data manual, não calcula status dinâmico
                 if data_url and data_url != datetime.now().strftime('%Y-%m-%d'):
                     status_visual = "normal"
                 else:
@@ -856,9 +858,9 @@ def rota_escala_tabela():
             
             escala_agrupada[setor].append(funcionario_obj)
 
-        print(f"--> [API] Sucesso. Retornando {len(dados_brutos)} registros agrupados.")
         return jsonify(escala_agrupada), 200
 
     except Exception as e:
+        # Se der erro, loga e não mata o servidor
         logger.error(f"Erro na rota /api/escala/tabela: {e}", exc_info=True)
         return jsonify({}), 500
