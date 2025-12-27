@@ -522,42 +522,62 @@ function renderizarProgressoGeral(progresso) {
 }
 
 async function atualizarMapaLoja() {
-        const container = document.getElementById('marcadores-mapa');
-        // Se o container não existir (estiver na aba errada ou carregando), para aqui.
-        if (!container) return;
-        
-        try {
-            // Faz a chamada para a API
-            const response = await fetch(`${API_BASE_URL}/api/escala/hoje`);
-            if (!response.ok) return;
-            
-            const posicoes = await response.json();
-            
-            container.innerHTML = ''; // Limpa marcadores antigos para não duplicar
-            
-            posicoes.forEach(pos => {
-                const el = document.createElement('div');
-                el.className = 'marcador-mapa';
-                // Usa as coordenadas que vieram do banco
-                el.style.left = `${pos.x}px`; 
-                el.style.top = `${pos.y}px`;
-                el.style.backgroundColor = pos.cor; // Verde (ocupado) ou Vermelho (vazio)
-                
-                // Cria o balãozinho com as informações
-                el.innerHTML = `
-                    <div class="info-box">
-                        <strong>${pos.nome_posicao}</strong><br>
-                        ${pos.ocupante}<br>
-                        <small>${pos.detalhes}</small>
-                    </div>
-                `;
-                
-                container.appendChild(el);
-            });
-        } catch (error) {
-            console.error("Erro ao atualizar mapa:", error);
-        }
+    const container = document.getElementById('marcadores-mapa');
+    const containerPai = document.getElementById('container-do-mapa'); 
+
+    if (!container || !containerPai) return;
+
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/escala/hoje`);
+        if (!response.ok) return;
+
+        const posicoes = await response.json();
+
+        // Pega as dimensões REAIS atuais da imagem na tela para cálculo proporcional
+        const rect = containerPai.getBoundingClientRect();
+        const larguraAtual = rect.width;
+        const alturaAtual = rect.height;
+
+        container.innerHTML = ''; 
+
+        posicoes.forEach(pos => {
+            const el = document.createElement('div');
+            el.className = 'marcador-mapa';
+
+            // --- LÓGICA DE POSICIONAMENTO HÍBRIDA ---
+            let posX, posY;
+
+            // Se valores forem pequenos (<= 2), assume que são porcentagem (0.5 = 50%)
+            // Se forem grandes, assume pixels legado e converte
+            if (pos.x <= 2 && pos.y <= 2) {
+                posX = pos.x * larguraAtual;
+                posY = pos.y * alturaAtual;
+            } else {
+                // Conversão de legado: Assume base original 1180x600
+                const pctX = pos.x / 1180;
+                const pctY = pos.y / 600;
+                posX = pctX * larguraAtual;
+                posY = pctY * alturaAtual;
+            }
+
+            el.style.left = `${posX}px`; 
+            el.style.top = `${posY}px`;
+            el.style.backgroundColor = pos.cor;
+
+            el.innerHTML = `
+                <div class="info-box">
+                    <strong>${pos.nome_posicao}</strong><br>
+                    ${pos.ocupante}<br>
+                    <small>${pos.detalhes}</small>
+                </div>
+            `;
+
+            container.appendChild(el);
+        });
+    } catch (error) {
+        console.error("Erro ao atualizar mapa:", error);
     }
+}
 
 
 function renderizarGraficoOcupacao(dadosBrutos) {
