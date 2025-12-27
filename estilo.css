@@ -691,6 +691,25 @@ body {
     flex-direction: column;
 }
 
+/* CORREÇÃO DO MAPA RESPONSIVO */
+.mapa-container {
+    position: relative;
+    width: 100%;
+    /* Truque de Aspect Ratio: 
+       Se a imagem original é 1180x600 -> (600 / 1180) = 0.5084 = 50.85%
+       Isso garante que a altura seja sempre proporcional à largura.
+    */
+    height: 0;
+    padding-bottom: 50.85%; 
+    background-image: url('static/layout_loja.png');
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    border: 1px solid #ccc;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
 .coluna-cronograma {
     flex: 1.2; /* Ocupa ~30% */
     background-color: #fff;
