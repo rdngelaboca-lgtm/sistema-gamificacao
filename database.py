@@ -3421,33 +3421,43 @@ def excluir_documento_pessoal_completo(documento_id):
 
 def buscar_dados_para_painel_kanban():
     """
-    (VERSÃO MODO DE SEGURANÇA)
-    Query simplificada para destravar o painel.
-    Traz apenas o básico para garantir que a API não quebre.
+    (VERSÃO BLINDADA) Busca dados para o painel Kanban.
+    Se der erro, retorna estrutura vazia mas NÃO QUEBRA a aplicação.
     """
     conn = get_db_connection()
+    # Estrutura padrão de retorno
+    retorno_padrao = {'para_fazer': [], 'validacao': [], 'concluidas': [], 'progresso': {'concluidas': 0, 'total': 0}}
+
     if not conn:
-        return {'para_fazer': [], 'validacao': [], 'concluidas': [], 'progresso': {}}
+        return retorno_padrao
 
     try:
         cursor = conn.cursor()
 
-        # 1. Tarefas PARA FAZER (Simplificado)
+        # 1. Tarefas PARA FAZER
+        # Simplificada ao extremo para garantir execução
         sql_para_fazer = """
             SELECT 
                 T.Titulo, 
                 F.NomeCompleto, 
                 T.Pontos, 
-                'Hoje' as Categoria,
-                NULL as HorarioDisparo
+                TA.TipoFrequencia
             FROM TarefasAtribuidas TA
             JOIN Tarefas T ON TA.TarefaID = T.TarefaID
             JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID
             WHERE TA.DataFimVigencia IS NULL
         """
         cursor.execute(sql_para_fazer)
-        cols = [column[0] for column in cursor.description]
-        para_fazer = [dict(zip(cols, row)) for row in cursor.fetchall()]
+        
+        # Mapeamento manual seguro
+        para_fazer = []
+        for row in cursor.fetchall():
+            para_fazer.append({
+                "Titulo": row.Titulo,
+                "NomeCompleto": row.NomeCompleto,
+                "Pontos": row.Pontos,
+                "HorarioDisparo": "" # Campo dummy para o front não quebrar
+            })
 
         # 2. Tarefas EM VALIDAÇÃO
         sql_validacao = """
@@ -3458,12 +3468,18 @@ def buscar_dados_para_painel_kanban():
             WHERE E.StatusValidacao = 'Pendente'
         """
         cursor.execute(sql_validacao)
-        cols_val = [column[0] for column in cursor.description]
-        validacao = [dict(zip(cols_val, row)) for row in cursor.fetchall()]
+        validacao = []
+        for row in cursor.fetchall():
+            validacao.append({
+                "Titulo": row.Titulo,
+                "NomeCompleto": row.NomeCompleto,
+                "DataEnvio": row.DataEnvio,
+                "Pontos": row.Pontos
+            })
 
         # 3. Tarefas CONCLUÍDAS
         sql_concluidas = """
-            SELECT T.Titulo, F.NomeCompleto, E.DataEnvio, E.PontosGanhos as Pontos 
+            SELECT T.Titulo, F.NomeCompleto, E.DataEnvio, E.PontosGanhos 
             FROM Entregas E 
             JOIN Tarefas T ON E.TarefaID = T.TarefaID 
             JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID 
@@ -3471,20 +3487,25 @@ def buscar_dados_para_painel_kanban():
             AND CONVERT(date, E.DataEnvio) = CONVERT(date, GETDATE())
         """
         cursor.execute(sql_concluidas)
-        cols_conc = [column[0] for column in cursor.description]
-        concluidas = [dict(zip(cols_conc, row)) for row in cursor.fetchall()]
+        concluidas = []
+        for row in cursor.fetchall():
+            concluidas.append({
+                "Titulo": row.Titulo,
+                "NomeCompleto": row.NomeCompleto,
+                "DataEnvio": row.DataEnvio,
+                "Pontos": row.PontosGanhos
+            })
 
         progresso = {"concluidas": len(concluidas), "total": len(para_fazer) + len(concluidas)}
 
         return {'para_fazer': para_fazer, 'validacao': validacao, 'concluidas': concluidas, 'progresso': progresso}
 
     except Exception as e:
-        # Se der erro, retorna vazio mas NÃO TRAVA A API
-        logging.error(f"ERRO SEGURANÇA KANBAN: {e}") 
-        return {'para_fazer': [], 'validacao': [], 'concluidas': [], 'progresso': {}}
+        logger.error(f"ERRO BLINDADO KANBAN: {e}") 
+        return retorno_padrao
     finally:
         if conn: conn.close()
-                
+                        
 def buscar_ranking_do_dia():
     """
     Calcula o ranking dos 3 funcionários com mais pontos APROVADOS HOJE.
