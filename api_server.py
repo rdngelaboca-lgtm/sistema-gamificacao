@@ -631,18 +631,17 @@ def rota_resgates_recentes():
 @app.route('/api/escala/hoje', methods=['GET'])
 def rota_escala_hoje():
     """
-    (VERSÃO DINÂMICA) Retorna APENAS as posições que têm alguém trabalhando AGORA.
-    Se o turno não começou ou já acabou, a posição não é enviada e não aparece no mapa.
+    (VERSÃO SIMPLIFICADA) Retorna APENAS as posições que têm alguém trabalhando AGORA.
+    Usa o horário local do servidor, sem conversão de fuso forçada.
     """
     try:
-        import zoneinfo
-        tz = zoneinfo.ZoneInfo("America/Sao_Paulo")
-        agora_tz = datetime.now(tz)
-        hoje_str = agora_tz.strftime('%Y-%m-%d')
-        agora_str = agora_tz.strftime('%H:%M:%S')
+        # Pega data e hora do sistema operacional (Lubuntu)
+        agora_dt = datetime.now()
+        hoje_str = agora_dt.strftime('%Y-%m-%d')
+        agora_str = agora_dt.strftime('%H:%M:%S')
         
-        # Log para debug
-        # logger.info(f"Buscando escala TEMPO REAL: Data={hoje_str}, Hora={agora_str}")
+        # Log para debug (verifique no terminal se a hora bate com a real)
+        # logger.info(f"API Escala Tempo Real -> Data: {hoje_str} | Hora: {agora_str}")
 
         # Busca quem está escalado EXATAMENTE neste minuto
         escala_do_momento = database.buscar_escala_tempo_real(hoje_str, agora_str)
@@ -652,14 +651,11 @@ def rota_escala_hoje():
         for pos in posicoes:
             pos_id, nome, x, y, ativo, setor = pos
 
-            # --- MUDANÇA PRINCIPAL AQUI ---
-            # Só processamos e adicionamos na lista se houver alguém na escala DO MOMENTO
+            # Só processamos se houver alguém na escala DO MOMENTO
             if pos_id in escala_do_momento:
                 dados = escala_do_momento[pos_id]
                 
-                # Se por algum motivo o nome vier vazio (raro), ignoramos
-                if not dados.NomePessoa:
-                    continue
+                if not dados.NomePessoa: continue
 
                 nome_pessoa = dados.NomePessoa
                 cor = "#00C851" # Verde (Padrão: Trabalhando)
@@ -674,28 +670,35 @@ def rota_escala_hoje():
                 # Checagem visual de intervalo
                 if dados.InicioIntervalo and dados.FimIntervalo:
                     try:
-                        # Converte strings para comparação simples
-                        agora_dt = datetime.strptime(agora_str, '%H:%M:%S').time()
+                        # Converte para objeto time para comparar
+                        # Truque: converte a string HH:MM:SS para time
+                        agora_time = agora_dt.time()
                         
                         def to_time(val):
                             if isinstance(val, timedelta): return (datetime.min + val).time()
-                            if hasattr(val, 'strftime'): return val.time() 
-                            if isinstance(val, str): return datetime.strptime(val[:5], '%H:%M').time()
-                            return val
+                            if hasattr(val, 'time'): return val.time()
+                            if hasattr(val, 'strftime'): return val.time()
+                            # Se for string, tenta parsear
+                            if isinstance(val, str):
+                                try: return datetime.strptime(val[:5], '%H:%M').time()
+                                except: return None
+                            return None
 
                         ini_t = to_time(dados.InicioIntervalo)
                         fim_t = to_time(dados.FimIntervalo)
 
-                        # Se agora estiver dentro do intervalo, muda o status visual
-                        if ini_t <= agora_dt <= fim_t:
-                            detalhes = "EM INTERVALO ☕"
-                            cor = "#FFBB33" # Amarelo
-                        else:
-                            detalhes += f" (☕ {fmt(dados.InicioIntervalo)})"
+                        if ini_t and fim_t:
+                            # Se agora estiver dentro do intervalo
+                            if ini_t <= agora_time <= fim_t:
+                                detalhes = "EM INTERVALO ☕"
+                                cor = "#FFBB33" # Amarelo
+                            else:
+                                detalhes += f" (☕ {fmt(dados.InicioIntervalo)})"
                     except Exception as e_int:
-                        detalhes += f" (Intervalo)"
+                        # Em caso de erro no cálculo de hora, segue normal
+                        detalhes += " (Intervalo)"
 
-                # Adiciona à lista final APENAS se estiver ocupado
+                # Adiciona à lista final
                 dados_mapa.append({
                     "id": pos_id,
                     "nome_posicao": nome,
@@ -706,7 +709,6 @@ def rota_escala_hoje():
                     "detalhes": detalhes,
                     "setor": setor
                 })
-            # O 'else' (Vazio) foi removido, então não enviamos nada se ninguém estiver lá.
 
         return jsonify(dados_mapa), 200
     except Exception as e:
