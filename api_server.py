@@ -767,24 +767,44 @@ def webhook_whatsapp():
 @app.route('/api/escala/tabela', methods=['GET'])
 def rota_escala_tabela():
     """
-    Retorna a escala de HOJE agrupada por SETORES para a tabela visual da TV.
-    Estrutura: { "Setor A": [ {func1}, {func2} ], "Setor B": ... }
+    Retorna a escala agrupada por SETORES.
+    Permite passar ?data=AAAA-MM-DD para testar dias específicos.
     """
     try:
-        # 1. Define a data de hoje (Timezone Fixo SP para garantir consistência)
-        import zoneinfo
-        tz = zoneinfo.ZoneInfo("America/Sao_Paulo")
-        agora = datetime.now(tz)
-        hoje_str = agora.strftime('%Y-%m-%d')
-        agora_time = agora.time() # Para verificar status 'Em Intervalo'
+        # 1. Tenta pegar a data da URL (ex: .../tabela?data=2025-12-26)
+        data_url = request.args.get('data')
+        
+        if data_url:
+            hoje_str = data_url
+            # Define um horário padrão para checagem de intervalo se for data manual
+            agora_time = datetime.now().time() 
+        else:
+            # Se não passar data, usa a lógica de Fuso Horário SP
+            import zoneinfo
+            try:
+                tz = zoneinfo.ZoneInfo("America/Sao_Paulo")
+            except:
+                # Fallback se não tiver zoneinfo instalado
+                tz = None
+            
+            agora = datetime.now(tz)
+            hoje_str = agora.strftime('%Y-%m-%d')
+            agora_time = agora.time()
+
+        # Log para debug no terminal
+        print(f"--> [API] Buscando tabela de escala para a data: {hoje_str}")
 
         # 2. Busca dados brutos ordenados
         dados_brutos = database.listar_escala_detalhada_ordenada(hoje_str)
-
+        
+        # Se não vier nada, retorna vazio mas loga aviso
+        if not dados_brutos:
+            print(f"--> [API] Nenhum dado encontrado no banco para {hoje_str}.")
+            return jsonify({}), 200
+        
         # 3. Processa e Agrupa
         escala_agrupada = {}
-
-        # Função auxiliar de formatação
+        
         def fmt_hora(val):
             if not val: return "--:--"
             if isinstance(val, timedelta): return (datetime.min + val).time().strftime('%H:%M')
@@ -800,25 +820,26 @@ def rota_escala_tabela():
 
         for row in dados_brutos:
             # Row: 0:ID, 1:PosID, 2:Setor, 3:NomePos, 4:NomePessoa, 5:Ent, 6:Sai, 7:IniInt, 8:FimInt
-            setor = row[2]
-
-            # Definição de Status Visual
-            status_visual = "normal" # normal, intervalo, encerrado, futuro
-
+            setor = row[2] if row[2] else "Geral" # Garante que não seja None
+            
+            status_visual = "normal"
+            
             ent_t = to_time_obj(row[5])
             sai_t = to_time_obj(row[6])
             ini_int_t = to_time_obj(row[7])
             fim_int_t = to_time_obj(row[8])
-
-            # Lógica de Destaque
+            
             if ent_t and sai_t:
-                if agora_time < ent_t: status_visual = "futuro"
-                elif agora_time > sai_t: status_visual = "encerrado"
+                # Se estiver testando outra data, não calcula status "ao vivo" para não confundir
+                if data_url and data_url != datetime.now().strftime('%Y-%m-%d'):
+                    status_visual = "normal"
                 else:
-                    # Está no turno, verifica intervalo
-                    if ini_int_t and fim_int_t:
-                        if ini_int_t <= agora_time <= fim_int_t:
-                            status_visual = "intervalo" # ☕ EM PAUSA AGORA
+                    if agora_time < ent_t: status_visual = "futuro"
+                    elif agora_time > sai_t: status_visual = "encerrado"
+                    else:
+                        if ini_int_t and fim_int_t:
+                            if ini_int_t <= agora_time <= fim_int_t:
+                                status_visual = "intervalo"
 
             funcionario_obj = {
                 "nome": row[4],
@@ -832,22 +853,12 @@ def rota_escala_tabela():
 
             if setor not in escala_agrupada:
                 escala_agrupada[setor] = []
-
+            
             escala_agrupada[setor].append(funcionario_obj)
 
+        print(f"--> [API] Sucesso. Retornando {len(dados_brutos)} registros agrupados.")
         return jsonify(escala_agrupada), 200
 
     except Exception as e:
         logger.error(f"Erro na rota /api/escala/tabela: {e}", exc_info=True)
         return jsonify({}), 500
-
-@app.route('/imagens/entregas/<path:filename>', methods=['GET'])
-def servir_imagem_entrega(filename):
-    """Serve as imagens de evidência salvas na pasta entregas."""
-    # Define o caminho absoluto da pasta de entregas
-    pasta_entregas = os.path.join(os.path.dirname(__file__), 'entregas')
-    return send_from_directory(pasta_entregas, filename)
-
-if __name__ == '__main__':
-    # O debug=False é essencial para rodar como serviço
-    app.run(host='0.0.0.0', port=5000, debug=False)
