@@ -7105,19 +7105,29 @@ def salvar_escalas_em_lote(data, lista_sugestoes):
 
 def buscar_escala_tempo_real(data_str, hora_str):
     """
-    (VERSÃO V3 - CORREÇÃO MADRUGADA)
-    Busca quem está trabalhando AGORA, considerando:
-    1. Turnos normais do dia de HOJE.
-    2. Turnos que começaram ONTEM e cruzam a meia-noite (terminam hoje de madrugada).
+    (VERSÃO V4 - DEBUG + SQL ROBUSTO)
+    Busca quem está trabalhando AGORA com lógica explícita para turnos noturnos.
     """
     conn = get_db_connection()
     escala_map = {}
+    
+    # Logs para ajudar a encontrar o erro
+    print(f"--> [DB] Consultando Tempo Real. Data: {data_str} | Hora: {hora_str}")
+    
     if conn:
         try:
             cursor = conn.cursor()
             
-            # Calcula a data de ontem para buscar turnos que viraram a noite
+            # Data de ontem para buscar turnos que começaram ontem e terminam hoje
             data_ontem = (datetime.strptime(data_str, '%Y-%m-%d') - timedelta(days=1)).strftime('%Y-%m-%d')
+
+            # SQL Explicado:
+            # PARTE A: Escala de HOJE
+            #   1. Turno Normal (Inicio < Fim): Hora deve estar entre eles.
+            #   2. Turno Noturno (Inicio > Fim): Hora deve ser MAIOR que inicio (até 23:59) OU MENOR que fim (00:00 em diante).
+            
+            # PARTE B: Escala de ONTEM
+            #   1. Turno Noturno de Ontem: Hora deve ser MENOR que o fim (madrugada de hoje).
 
             sql = """
                 SELECT 
@@ -7127,43 +7137,56 @@ def buscar_escala_tempo_real(data_str, hora_str):
                 LEFT JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID
                 LEFT JOIN Freelancers FR ON E.FreelancerID = FR.FreelancerID
                 WHERE 
-                    -- CASO 1: Turno Normal de HOJE (Começa e termina hoje, ou vira a noite hoje->amanhã)
+                    -- CENÁRIO 1: O registro é de HOJE
                     (
                         E.DataEscala = ? 
                         AND (
-                            -- Turno normal (08:00 as 18:00): Hora atual deve estar entre eles
-                            (E.HorarioEntrada <= E.HorarioSaida AND CAST(? AS TIME) >= E.HorarioEntrada AND CAST(? AS TIME) <= E.HorarioSaida)
+                            -- Turno Simples (ex: 08:00 as 18:00)
+                            (E.HorarioEntrada <= E.HorarioSaida 
+                             AND CAST(? AS TIME) >= E.HorarioEntrada 
+                             AND CAST(? AS TIME) <= E.HorarioSaida)
                             OR
-                            -- Turno que vira (22:00 as 05:00): Hora atual deve ser maior que entrada (ex: 23:00)
-                            (E.HorarioEntrada > E.HorarioSaida AND CAST(? AS TIME) >= E.HorarioEntrada)
+                            -- Turno Virada (ex: 15:00 as 02:00)
+                            (E.HorarioEntrada > E.HorarioSaida 
+                             AND (
+                                CAST(? AS TIME) >= E.HorarioEntrada -- Parte da noite (ex: 23:00)
+                                OR 
+                                CAST(? AS TIME) <= E.HorarioSaida   -- Parte da manhã (ex: 01:00)
+                             )
+                            )
                         )
                     )
                     OR
-                    -- CASO 2: Turno de ONTEM que invadiu a madrugada de HOJE
+                    -- CENÁRIO 2: O registro é de ONTEM (mas invade hoje)
                     (
                         E.DataEscala = ?
-                        AND E.HorarioEntrada > E.HorarioSaida -- Garante que é um turno que vira
-                        AND CAST(? AS TIME) <= E.HorarioSaida -- Hora atual (madrugada) deve ser menor que a saída
+                        AND E.HorarioEntrada > E.HorarioSaida -- Tem que ser turno de virada
+                        AND CAST(? AS TIME) <= E.HorarioSaida -- Hora atual deve ser antes do fim
                     )
             """
             
-            # Parâmetros:
-            # 1. Data Hoje
-            # 2. Hora Agora (para turno normal)
-            # 3. Hora Agora (para turno normal)
-            # 4. Hora Agora (para início de turno noturno hoje)
-            # 5. Data Ontem
-            # 6. Hora Agora (para fim de turno noturno de ontem)
+            # Parâmetros na ordem exata dos ?
+            params = (
+                data_str,   # Data Hoje
+                hora_str,   # Hora (Turno Simples - Inicio)
+                hora_str,   # Hora (Turno Simples - Fim)
+                hora_str,   # Hora (Turno Virada - Noite)
+                hora_str,   # Hora (Turno Virada - Manhã) <-- ADICIONADO QUE FALTAVA
+                data_ontem, # Data Ontem
+                hora_str    # Hora (Turno Ontem - Fim)
+            )
             
-            cursor.execute(sql, data_str, hora_str, hora_str, hora_str, data_ontem, hora_str)
+            cursor.execute(sql, params)
             
             resultados = cursor.fetchall()
+            print(f"--> [DB] Registros encontrados: {len(resultados)}")
+            
             for row in resultados:
-                # Se houver duplicidade (raro), o último sobrescreve, mas a lógica filtra pelo horário exato
                 escala_map[row.PosicaoID] = row 
+                
             return escala_map
         except Exception as e:
-            logger.error(f"Erro ao buscar escala tempo real (madrugada): {e}")
+            logger.error(f"Erro ao buscar escala tempo real (V4): {e}")
             return {}
         finally:
             conn.close()
