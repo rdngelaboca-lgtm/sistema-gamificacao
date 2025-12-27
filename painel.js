@@ -523,47 +523,71 @@ function renderizarProgressoGeral(progresso) {
 
 async function atualizarMapaLoja() {
     const container = document.getElementById('marcadores-mapa');
-    const containerPai = document.getElementById('container-do-mapa'); 
-
+    const containerPai = document.getElementById('container-do-mapa');
+    
     if (!container || !containerPai) return;
-
+    
     try {
         const response = await fetch(`${API_BASE_URL}/api/escala/hoje`);
         if (!response.ok) return;
-
+        
         const posicoes = await response.json();
+        
+        // --- CÁLCULO DA ÁREA REAL DA IMAGEM ---
+        // Dimensões originais da imagem (Baseado no seu Desktop App)
+        const imgOriginalW = 1180;
+        const imgOriginalH = 600;
+        const ratioOriginal = imgOriginalW / imgOriginalH;
 
-        // Pega as dimensões REAIS atuais da imagem na tela para cálculo proporcional
+        // Dimensões do container na tela
         const rect = containerPai.getBoundingClientRect();
-        const larguraAtual = rect.width;
-        const alturaAtual = rect.height;
+        const containerW = rect.width;
+        const containerH = rect.height;
+        const containerRatio = containerW / containerH;
+
+        let renderW, renderH, offsetX, offsetY;
+
+        // Lógica do 'background-size: contain'
+        if (containerRatio > ratioOriginal) {
+            // Container é mais largo que a imagem -> Altura limita
+            renderH = containerH;
+            renderW = containerH * ratioOriginal;
+            offsetX = (containerW - renderW) / 2; // Centralizado horizontalmente
+            offsetY = 0; // Topo
+        } else {
+            // Container é mais alto que a imagem -> Largura limita
+            renderW = containerW;
+            renderH = containerW / ratioOriginal;
+            offsetX = 0;
+            offsetY = 0; // Topo (definido no CSS como 'center top')
+            // Se fosse 'center center', o offsetY seria (containerH - renderH) / 2
+        }
 
         container.innerHTML = ''; 
-
+        
         posicoes.forEach(pos => {
             const el = document.createElement('div');
             el.className = 'marcador-mapa';
-
-            // --- LÓGICA DE POSICIONAMENTO HÍBRIDA ---
+            
             let posX, posY;
 
-            // Se valores forem pequenos (<= 2), assume que são porcentagem (0.5 = 50%)
-            // Se forem grandes, assume pixels legado e converte
+            // Lógica Híbrida (Percentual vs Pixel)
             if (pos.x <= 2 && pos.y <= 2) {
-                posX = pos.x * larguraAtual;
-                posY = pos.y * alturaAtual;
+                // Percentual (0.0 a 1.0)
+                posX = offsetX + (pos.x * renderW);
+                posY = offsetY + (pos.y * renderH);
             } else {
-                // Conversão de legado: Assume base original 1180x600
+                // Legado (Pixels fixos baseados em 1180x600)
                 const pctX = pos.x / 1180;
                 const pctY = pos.y / 600;
-                posX = pctX * larguraAtual;
-                posY = pctY * alturaAtual;
+                posX = offsetX + (pctX * renderW);
+                posY = offsetY + (pctY * renderH);
             }
 
             el.style.left = `${posX}px`; 
             el.style.top = `${posY}px`;
             el.style.backgroundColor = pos.cor;
-
+            
             el.innerHTML = `
                 <div class="info-box">
                     <strong>${pos.nome_posicao}</strong><br>
@@ -571,7 +595,7 @@ async function atualizarMapaLoja() {
                     <small>${pos.detalhes}</small>
                 </div>
             `;
-
+            
             container.appendChild(el);
         });
     } catch (error) {
