@@ -3421,7 +3421,9 @@ def excluir_documento_pessoal_completo(documento_id):
 
 def buscar_dados_para_painel_kanban():
     """
-    Busca dados para o painel Kanban de forma otimizada e segura.
+    (VERSÃO MODO DE SEGURANÇA)
+    Query simplificada para destravar o painel.
+    Traz apenas o básico para garantir que a API não quebre.
     """
     conn = get_db_connection()
     if not conn:
@@ -3430,42 +3432,18 @@ def buscar_dados_para_painel_kanban():
     try:
         cursor = conn.cursor()
 
-        # 1. Tarefas PARA FAZER (Pendentes Hoje)
+        # 1. Tarefas PARA FAZER (Simplificado)
         sql_para_fazer = """
             SELECT 
                 T.Titulo, 
-                ISNULL(F.NomeCompleto, G.NomeGrupo) as NomeCompleto, 
+                F.NomeCompleto, 
                 T.Pontos, 
-                TA.TipoFrequencia,
-                ISNULL(CONVERT(VARCHAR(5), TA.HorarioDisparo, 108), '') as HorarioDisparo
+                'Hoje' as Categoria,
+                NULL as HorarioDisparo
             FROM TarefasAtribuidas TA
             JOIN Tarefas T ON TA.TarefaID = T.TarefaID
-            LEFT JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID
-            LEFT JOIN Grupos G ON TA.GrupoID = G.GrupoID
+            JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID
             WHERE TA.DataFimVigencia IS NULL
-            
-            -- Filtro de Data (Hoje)
-            AND (
-                TA.TipoFrequencia = 'Diaria' OR TA.TipoFrequencia = 'GrupoDiaria'
-                OR (TA.TipoFrequencia IN ('Semanal', 'GrupoSemanal') AND CAST(TA.ValorFrequencia AS INT) = ((DATEPART(dw, GETDATE()) + @@DATEFIRST - 1) % 7) + 1)
-                OR (TA.TipoFrequencia IN ('Mensal', 'GrupoMensal') AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, GETDATE()))
-                OR (TA.TipoFrequencia = 'Unica' AND CONVERT(date, TA.DataInicioVigencia) <= CONVERT(date, GETDATE()))
-            )
-            
-            -- Exclui se já foi feita hoje
-            AND NOT EXISTS (
-                SELECT 1 FROM Entregas E 
-                WHERE E.AtribuicaoID = TA.AtribuicaoID 
-                AND CONVERT(date, E.DataEnvio) = CONVERT(date, GETDATE())
-                AND E.StatusValidacao != 'Recusada'
-            )
-            -- Exclui se for tarefa de grupo já aceita hoje
-            AND NOT EXISTS (
-                SELECT 1 FROM TarefasAtribuidas TA_Filha
-                WHERE TA_Filha.OrigemAtribuicaoID = TA.AtribuicaoID
-                AND CONVERT(date, TA_Filha.DataAgendamento) = CONVERT(date, GETDATE())
-            )
-            ORDER BY NomeCompleto
         """
         cursor.execute(sql_para_fazer)
         cols = [column[0] for column in cursor.description]
@@ -3477,14 +3455,13 @@ def buscar_dados_para_painel_kanban():
             FROM Entregas E 
             JOIN Tarefas T ON E.TarefaID = T.TarefaID 
             JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID 
-            WHERE E.StatusValidacao = 'Pendente' 
-            ORDER BY E.DataEnvio
+            WHERE E.StatusValidacao = 'Pendente'
         """
         cursor.execute(sql_validacao)
         cols_val = [column[0] for column in cursor.description]
         validacao = [dict(zip(cols_val, row)) for row in cursor.fetchall()]
 
-        # 3. Tarefas CONCLUÍDAS (Hoje)
+        # 3. Tarefas CONCLUÍDAS
         sql_concluidas = """
             SELECT T.Titulo, F.NomeCompleto, E.DataEnvio, E.PontosGanhos as Pontos 
             FROM Entregas E 
@@ -3497,18 +3474,17 @@ def buscar_dados_para_painel_kanban():
         cols_conc = [column[0] for column in cursor.description]
         concluidas = [dict(zip(cols_conc, row)) for row in cursor.fetchall()]
 
-        # Progresso
-        total = len(para_fazer) + len(concluidas)
-        progresso = {"concluidas": len(concluidas), "total": total}
+        progresso = {"concluidas": len(concluidas), "total": len(para_fazer) + len(concluidas)}
 
         return {'para_fazer': para_fazer, 'validacao': validacao, 'concluidas': concluidas, 'progresso': progresso}
 
     except Exception as e:
-        logger.error(f"ERRO CRÍTICO no Kanban: {e}", exc_info=True)
+        # Se der erro, retorna vazio mas NÃO TRAVA A API
+        logging.error(f"ERRO SEGURANÇA KANBAN: {e}") 
         return {'para_fazer': [], 'validacao': [], 'concluidas': [], 'progresso': {}}
     finally:
         if conn: conn.close()
-        
+                
 def buscar_ranking_do_dia():
     """
     Calcula o ranking dos 3 funcionários com mais pontos APROVADOS HOJE.
