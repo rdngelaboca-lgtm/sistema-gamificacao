@@ -3503,7 +3503,7 @@ def buscar_dados_para_painel_kanban():
             validacao.append({
                 "Titulo": row.Titulo,
                 "NomeCompleto": row.NomeCompleto,
-                "DataEnvio": row.DataEnvio, # O Flask jsonify trata datas, mas idealmente formataríamos strftime aqui
+                "DataEnvio": row.DataEnvio, 
                 "Pontos": row.Pontos
             })
 
@@ -3536,7 +3536,7 @@ def buscar_dados_para_painel_kanban():
         return retorno_padrao
     finally:
         if conn: conn.close()
-                                
+                                        
 def buscar_ranking_do_dia():
     """
     Calcula o ranking dos 3 funcionários com mais pontos APROVADOS HOJE.
