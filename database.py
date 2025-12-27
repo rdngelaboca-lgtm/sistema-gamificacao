@@ -3421,8 +3421,7 @@ def excluir_documento_pessoal_completo(documento_id):
 
 def buscar_dados_para_painel_kanban():
     """
-    Busca e organiza todas as tarefas para o painel de ação diária.
-    (VERSÃO CORRIGIDA - Tratamento de Erros e Colunas)
+    Busca dados para o painel Kanban de forma otimizada e segura.
     """
     conn = get_db_connection()
     if not conn:
@@ -3431,139 +3430,85 @@ def buscar_dados_para_painel_kanban():
     try:
         cursor = conn.cursor()
 
-        # Query principal para tarefas "PARA FAZER"
+        # 1. Tarefas PARA FAZER (Pendentes Hoje)
         sql_para_fazer = """
-            WITH Datas AS (
-                SELECT
-                    GETDATE() as DataHoje,
-                    CAST(GETDATE() AS TIME) as HoraAtual
-            )
-            -- Parte 1: Tarefas Individuais
             SELECT 
                 T.Titulo, 
-                F.NomeCompleto, 
+                ISNULL(F.NomeCompleto, G.NomeGrupo) as NomeCompleto, 
                 T.Pontos, 
-                'Hoje' as Categoria, 
-                TA.DataAtribuicao, 
-                D.DataHoje as DataReferencia,
-                NULL as HorarioDisparo
-            FROM TarefasAtribuidas TA 
-            JOIN Tarefas T ON TA.TarefaID = T.TarefaID 
-            JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID 
-            JOIN Datas D ON 1=1
-            WHERE TA.FuncionarioID IS NOT NULL AND TA.DataFimVigencia IS NULL
+                TA.TipoFrequencia,
+                ISNULL(CONVERT(VARCHAR(5), TA.HorarioDisparo, 108), '') as HorarioDisparo
+            FROM TarefasAtribuidas TA
+            JOIN Tarefas T ON TA.TarefaID = T.TarefaID
+            LEFT JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID
+            LEFT JOIN Grupos G ON TA.GrupoID = G.GrupoID
+            WHERE TA.DataFimVigencia IS NULL
+            
+            -- Filtro de Data (Hoje)
+            AND (
+                TA.TipoFrequencia = 'Diaria' OR TA.TipoFrequencia = 'GrupoDiaria'
+                OR (TA.TipoFrequencia IN ('Semanal', 'GrupoSemanal') AND CAST(TA.ValorFrequencia AS INT) = ((DATEPART(dw, GETDATE()) + @@DATEFIRST - 1) % 7) + 1)
+                OR (TA.TipoFrequencia IN ('Mensal', 'GrupoMensal') AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, GETDATE()))
+                OR (TA.TipoFrequencia = 'Unica' AND CONVERT(date, TA.DataInicioVigencia) <= CONVERT(date, GETDATE()))
+            )
+            
+            -- Exclui se já foi feita hoje
             AND NOT EXISTS (
                 SELECT 1 FROM Entregas E 
                 WHERE E.AtribuicaoID = TA.AtribuicaoID 
-                AND CONVERT(date, E.DataEnvio) = CONVERT(date, D.DataHoje) 
+                AND CONVERT(date, E.DataEnvio) = CONVERT(date, GETDATE())
                 AND E.StatusValidacao != 'Recusada'
             )
-            AND ( 
-                TA.TipoFrequencia = 'Diaria'
-                OR (TA.TipoFrequencia = 'Semanal' AND CAST(TA.ValorFrequencia AS INT) = ((DATEPART(dw, GETDATE()) + @@DATEFIRST - 1) % 7) + 1)
-                OR (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, D.DataHoje))
-                OR (TA.DataAgendamento IS NOT NULL AND CONVERT(date, TA.DataAgendamento) = CONVERT(date, D.DataHoje))
-                OR (TA.TipoFrequencia = 'Unica' AND CONVERT(date, TA.DataInicioVigencia) = CONVERT(date, D.DataHoje))
-            )
-            AND (F.DiaDeFolga IS NULL OR F.DiaDeFolga = 0 OR F.DiaDeFolga != ((DATEPART(dw, GETDATE()) + @@DATEFIRST - 1) % 7) + 1)
-            -- NOVO FILTRO: Oculta tarefas se o funcionário estiver em Férias/Atestado hoje
-            AND (
-                F.DataInicioAfastamento IS NULL 
-                OR CONVERT(date, GETDATE()) < F.DataInicioAfastamento 
-                OR CONVERT(date, GETDATE()) > F.DataFimAfastamento
-            )
-            UNION ALL
-
-            -- Parte 2: Tarefas de GRUPO
-            SELECT 
-                T.Titulo, 
-                G.NomeGrupo AS NomeCompleto, 
-                T.Pontos, 
-                'Hoje' as Categoria, 
-                TA.DataAtribuicao, 
-                D.DataHoje as DataReferencia,
-                CONVERT(VARCHAR(5), TA.HorarioDisparo, 108) as HorarioDisparo -- Converte para string HH:MM
-            FROM TarefasAtribuidas TA 
-            JOIN Tarefas T ON TA.TarefaID = T.TarefaID 
-            JOIN Grupos G ON TA.GrupoID = G.GrupoID 
-            JOIN Datas D ON 1=1
-            WHERE TA.GrupoID IS NOT NULL AND TA.DataFimVigencia IS NULL
-            
+            -- Exclui se for tarefa de grupo já aceita hoje
             AND NOT EXISTS (
-                SELECT 1 FROM TarefasAtribuidas TA_Aceita
-                WHERE TA_Aceita.OrigemAtribuicaoID = TA.AtribuicaoID
-                AND CONVERT(date, TA_Aceita.DataAgendamento) = CONVERT(date, D.DataHoje)
-                AND TA_Aceita.StatusTarefaGrupo = 'Aceita'
+                SELECT 1 FROM TarefasAtribuidas TA_Filha
+                WHERE TA_Filha.OrigemAtribuicaoID = TA.AtribuicaoID
+                AND CONVERT(date, TA_Filha.DataAgendamento) = CONVERT(date, GETDATE())
             )
-            
-            AND (
-                (TA.TipoFrequencia = 'GrupoDiaria') OR
-                (TA.TipoFrequencia = 'GrupoSemanal' AND TA.ValorFrequencia = ((DATEPART(dw, GETDATE()) + @@DATEFIRST - 1) % 7) + 1) OR
-                (TA.TipoFrequencia = 'GrupoMensal' AND TA.ValorFrequencia = DATEPART(day, D.DataHoje))
-            )
-
-            AND (
-                TA.HorarioDisparo IS NULL 
-                OR 
-                CAST(TA.HorarioDisparo AS TIME) <= D.HoraAtual
-            )
-
-            ORDER BY NomeCompleto, Categoria DESC;
+            ORDER BY NomeCompleto
         """
-
         cursor.execute(sql_para_fazer)
-        # Use description to dynamically get column names
-        columns = [column[0] for column in cursor.description]
-        para_fazer_lista = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        cols = [column[0] for column in cursor.description]
+        para_fazer = [dict(zip(cols, row)) for row in cursor.fetchall()]
 
-        # Query para tarefas EM VALIDAÇÃO
+        # 2. Tarefas EM VALIDAÇÃO
         sql_validacao = """
             SELECT T.Titulo, F.NomeCompleto, E.DataEnvio, T.Pontos 
             FROM Entregas E 
             JOIN Tarefas T ON E.TarefaID = T.TarefaID 
             JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID 
             WHERE E.StatusValidacao = 'Pendente' 
-            ORDER BY E.DataEnvio;
+            ORDER BY E.DataEnvio
         """
         cursor.execute(sql_validacao)
-        columns_val = [column[0] for column in cursor.description]
-        validacao_lista = [dict(zip(columns_val, row)) for row in cursor.fetchall()]
+        cols_val = [column[0] for column in cursor.description]
+        validacao = [dict(zip(cols_val, row)) for row in cursor.fetchall()]
 
-        # Query para tarefas CONCLUÍDAS HOJE
+        # 3. Tarefas CONCLUÍDAS (Hoje)
         sql_concluidas = """
             SELECT T.Titulo, F.NomeCompleto, E.DataEnvio, E.PontosGanhos as Pontos 
             FROM Entregas E 
             JOIN Tarefas T ON E.TarefaID = T.TarefaID 
             JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID 
             WHERE E.StatusValidacao = 'Aprovada' 
-            AND CONVERT(date, E.DataEnvio) = CONVERT(date, GETDATE()) 
-            ORDER BY E.DataEnvio DESC;
+            AND CONVERT(date, E.DataEnvio) = CONVERT(date, GETDATE())
         """
         cursor.execute(sql_concluidas)
-        columns_conc = [column[0] for column in cursor.description]
-        concluidas_lista = [dict(zip(columns_conc, row)) for row in cursor.fetchall()]
+        cols_conc = [column[0] for column in cursor.description]
+        concluidas = [dict(zip(cols_conc, row)) for row in cursor.fetchall()]
 
-        # Cálculo do progresso
-        total_pendentes = len(para_fazer_lista)
-        total_concluidas = len(concluidas_lista)
-        total_geral = total_pendentes + total_concluidas
+        # Progresso
+        total = len(para_fazer) + len(concluidas)
+        progresso = {"concluidas": len(concluidas), "total": total}
 
-        progresso = { "concluidas": total_concluidas, "total": total_geral }
-
-        return {
-            'para_fazer': para_fazer_lista,
-            'validacao': validacao_lista,
-            'concluidas': concluidas_lista,
-            'progresso': progresso
-        }
+        return {'para_fazer': para_fazer, 'validacao': validacao, 'concluidas': concluidas, 'progresso': progresso}
 
     except Exception as e:
-        logger.exception(f"ERRO CRÍTICO ao buscar dados para o painel Kanban: {e}")
+        logger.error(f"ERRO CRÍTICO no Kanban: {e}", exc_info=True)
         return {'para_fazer': [], 'validacao': [], 'concluidas': [], 'progresso': {}}
     finally:
-        if conn:
-            conn.close()
-
+        if conn: conn.close()
+        
 def buscar_ranking_do_dia():
     """
     Calcula o ranking dos 3 funcionários com mais pontos APROVADOS HOJE.
