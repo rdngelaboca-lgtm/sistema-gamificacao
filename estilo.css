@@ -691,22 +691,27 @@ body {
     flex-direction: column;
 }
 
-/* CORREÇÃO DO MAPA RESPONSIVO */
+/* CORREÇÃO DO MAPA - VERSÃO V2 */
 .mapa-container {
     position: relative;
     width: 100%;
-    /* Truque de Aspect Ratio: 
-       Se a imagem original é 1180x600 -> (600 / 1180) = 0.5084 = 50.85%
-       Isso garante que a altura seja sempre proporcional à largura.
-    */
-    height: 0;
-    padding-bottom: 50.85%; 
+    /* Altura fixa suficiente para mostrar o mapa sem scroll na maioria das telas */
+    height: 650px; 
+    
+    /* Configuração da Imagem de Fundo */
     background-image: url('static/layout_loja.png');
-    background-size: cover;
-    background-position: center;
+    
+    /* 'contain' garante que a imagem inteira apareça, sem cortes */
+    background-size: contain; 
+    
+    /* Centraliza a imagem no espaço disponível */
+    background-position: center top; 
     background-repeat: no-repeat;
-    border: 1px solid #ccc;
+    
+    /* Borda para visualização (opcional) */
+    border: 1px solid #ddd;
     border-radius: 8px;
+    background-color: #f9f9f9; /* Cor de fundo caso sobre espaço nas laterais */
     overflow: hidden;
 }
 
