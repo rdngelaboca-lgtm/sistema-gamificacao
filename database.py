@@ -3421,8 +3421,11 @@ def excluir_documento_pessoal_completo(documento_id):
 
 def buscar_dados_para_painel_kanban():
     """
-    (VERSÃO BLINDADA) Busca dados para o painel Kanban.
-    Se der erro, retorna estrutura vazia mas NÃO QUEBRA a aplicação.
+    (VERSÃO CORRIGIDA E ROBUSTA)
+    Busca dados para o painel Kanban aplicando as regras de negócio:
+    1. Filtra tarefas por dia da semana/mês (não mostra tarefas de sexta na segunda).
+    2. Remove tarefas da coluna 'Para Fazer' se já estiverem em 'Validação' ou 'Concluídas'.
+    3. Retorna o HorárioDisparo correto para os alertas visuais.
     """
     conn = get_db_connection()
     # Estrutura padrão de retorno
@@ -3434,38 +3437,65 @@ def buscar_dados_para_painel_kanban():
     try:
         cursor = conn.cursor()
 
-        # 1. Tarefas PARA FAZER
-        # Simplificada ao extremo para garantir execução
+        # 1. Tarefas PARA FAZER (A Query Inteligente)
+        # Esta query filtra o que é para HOJE e remove o que já tem entrega registrada
         sql_para_fazer = """
             SELECT 
                 T.Titulo, 
                 F.NomeCompleto, 
                 T.Pontos, 
-                TA.TipoFrequencia
+                TA.TipoFrequencia,
+                -- Formata o horário para HH:MM, ou retorna vazio se nulo
+                ISNULL(CONVERT(VARCHAR(5), TA.HorarioDisparo, 108), '') AS HorarioDisparo
             FROM TarefasAtribuidas TA
             JOIN Tarefas T ON TA.TarefaID = T.TarefaID
             JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID
-            WHERE TA.DataFimVigencia IS NULL
+            WHERE 
+                TA.DataFimVigencia IS NULL
+                
+                -- REGRA 1: É PARA HOJE?
+                AND (
+                    TA.TipoFrequencia = 'Diaria'
+                    OR (TA.TipoFrequencia = 'Semanal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(weekday, GETDATE()))
+                    OR (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, GETDATE()))
+                    OR (TA.TipoFrequencia = 'Unica' AND CONVERT(date, TA.DataInicioVigencia) <= CONVERT(date, GETDATE()))
+                    OR (TA.TipoFrequencia = 'GrupoCompetitiva') -- Tarefas de grupo aparecem até alguém pegar
+                )
+
+                -- REGRA 2: JÁ FOI FEITA/ENVIADA? (Anti-Duplicidade)
+                AND NOT EXISTS (
+                    SELECT 1 FROM Entregas E
+                    WHERE E.AtribuicaoID = TA.AtribuicaoID
+                    AND E.StatusValidacao IN ('Aprovada', 'Pendente')
+                    AND (
+                        -- Se for recorrente, verifica se já foi feita HOJE
+                        (TA.TipoFrequencia IN ('Diaria', 'Semanal', 'Mensal', 'GrupoCompetitiva') AND CONVERT(date, E.DataEnvio) = CONVERT(date, GETDATE()))
+                        OR
+                        -- Se for Única, verifica se já foi feita ALGUM DIA
+                        (TA.TipoFrequencia = 'Unica')
+                    )
+                )
+            ORDER BY TA.HorarioDisparo ASC, F.NomeCompleto
         """
         cursor.execute(sql_para_fazer)
         
-        # Mapeamento manual seguro
         para_fazer = []
         for row in cursor.fetchall():
             para_fazer.append({
                 "Titulo": row.Titulo,
                 "NomeCompleto": row.NomeCompleto,
                 "Pontos": row.Pontos,
-                "HorarioDisparo": "" # Campo dummy para o front não quebrar
+                "HorarioDisparo": row.HorarioDisparo # Agora traz o dado real do banco
             })
 
-        # 2. Tarefas EM VALIDAÇÃO
+        # 2. Tarefas EM VALIDAÇÃO (Sem alterações na lógica, apenas formatação)
         sql_validacao = """
             SELECT T.Titulo, F.NomeCompleto, E.DataEnvio, T.Pontos 
             FROM Entregas E 
             JOIN Tarefas T ON E.TarefaID = T.TarefaID 
             JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID 
             WHERE E.StatusValidacao = 'Pendente'
+            ORDER BY E.DataEnvio DESC
         """
         cursor.execute(sql_validacao)
         validacao = []
@@ -3473,11 +3503,11 @@ def buscar_dados_para_painel_kanban():
             validacao.append({
                 "Titulo": row.Titulo,
                 "NomeCompleto": row.NomeCompleto,
-                "DataEnvio": row.DataEnvio,
+                "DataEnvio": row.DataEnvio, # O Flask jsonify trata datas, mas idealmente formataríamos strftime aqui
                 "Pontos": row.Pontos
             })
 
-        # 3. Tarefas CONCLUÍDAS
+        # 3. Tarefas CONCLUÍDAS (Apenas de hoje)
         sql_concluidas = """
             SELECT T.Titulo, F.NomeCompleto, E.DataEnvio, E.PontosGanhos 
             FROM Entregas E 
@@ -3485,6 +3515,7 @@ def buscar_dados_para_painel_kanban():
             JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID 
             WHERE E.StatusValidacao = 'Aprovada' 
             AND CONVERT(date, E.DataEnvio) = CONVERT(date, GETDATE())
+            ORDER BY E.DataEnvio DESC
         """
         cursor.execute(sql_concluidas)
         concluidas = []
@@ -3496,16 +3527,16 @@ def buscar_dados_para_painel_kanban():
                 "Pontos": row.PontosGanhos
             })
 
-        progresso = {"concluidas": len(concluidas), "total": len(para_fazer) + len(concluidas)}
+        progresso = {"concluidas": len(concluidas), "total": len(para_fazer) + len(validacao) + len(concluidas)}
 
         return {'para_fazer': para_fazer, 'validacao': validacao, 'concluidas': concluidas, 'progresso': progresso}
 
     except Exception as e:
-        logger.error(f"ERRO BLINDADO KANBAN: {e}") 
+        logger.error(f"ERRO CRÍTICO KANBAN: {e}", exc_info=True) 
         return retorno_padrao
     finally:
         if conn: conn.close()
-                        
+                                
 def buscar_ranking_do_dia():
     """
     Calcula o ranking dos 3 funcionários com mais pontos APROVADOS HOJE.
