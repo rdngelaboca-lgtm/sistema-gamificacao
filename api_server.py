@@ -763,6 +763,83 @@ def webhook_whatsapp():
     except Exception as e:
         logger.error(f"Erro no Webhook WPP: {e}")
         return jsonify({"status": "erro"}), 500
+    
+@app.route('/api/escala/tabela', methods=['GET'])
+def rota_escala_tabela():
+    """
+    Retorna a escala de HOJE agrupada por SETORES para a tabela visual da TV.
+    Estrutura: { "Setor A": [ {func1}, {func2} ], "Setor B": ... }
+    """
+    try:
+        # 1. Define a data de hoje (Timezone Fixo SP para garantir consistência)
+        import zoneinfo
+        tz = zoneinfo.ZoneInfo("America/Sao_Paulo")
+        agora = datetime.now(tz)
+        hoje_str = agora.strftime('%Y-%m-%d')
+        agora_time = agora.time() # Para verificar status 'Em Intervalo'
+
+        # 2. Busca dados brutos ordenados
+        dados_brutos = database.listar_escala_detalhada_ordenada(hoje_str)
+
+        # 3. Processa e Agrupa
+        escala_agrupada = {}
+
+        # Função auxiliar de formatação
+        def fmt_hora(val):
+            if not val: return "--:--"
+            if isinstance(val, timedelta): return (datetime.min + val).time().strftime('%H:%M')
+            if hasattr(val, 'strftime'): return val.strftime('%H:%M')
+            return str(val)[:5]
+
+        def to_time_obj(val):
+            if not val: return None
+            if isinstance(val, timedelta): return (datetime.min + val).time()
+            if hasattr(val, 'time'): return val.time()
+            try: return datetime.strptime(str(val)[:5], '%H:%M').time()
+            except: return None
+
+        for row in dados_brutos:
+            # Row: 0:ID, 1:PosID, 2:Setor, 3:NomePos, 4:NomePessoa, 5:Ent, 6:Sai, 7:IniInt, 8:FimInt
+            setor = row[2]
+
+            # Definição de Status Visual
+            status_visual = "normal" # normal, intervalo, encerrado, futuro
+
+            ent_t = to_time_obj(row[5])
+            sai_t = to_time_obj(row[6])
+            ini_int_t = to_time_obj(row[7])
+            fim_int_t = to_time_obj(row[8])
+
+            # Lógica de Destaque
+            if ent_t and sai_t:
+                if agora_time < ent_t: status_visual = "futuro"
+                elif agora_time > sai_t: status_visual = "encerrado"
+                else:
+                    # Está no turno, verifica intervalo
+                    if ini_int_t and fim_int_t:
+                        if ini_int_t <= agora_time <= fim_int_t:
+                            status_visual = "intervalo" # ☕ EM PAUSA AGORA
+
+            funcionario_obj = {
+                "nome": row[4],
+                "posicao": row[3],
+                "entrada": fmt_hora(row[5]),
+                "saida": fmt_hora(row[6]),
+                "int_ini": fmt_hora(row[7]),
+                "int_fim": fmt_hora(row[8]),
+                "status": status_visual
+            }
+
+            if setor not in escala_agrupada:
+                escala_agrupada[setor] = []
+
+            escala_agrupada[setor].append(funcionario_obj)
+
+        return jsonify(escala_agrupada), 200
+
+    except Exception as e:
+        logger.error(f"Erro na rota /api/escala/tabela: {e}", exc_info=True)
+        return jsonify({}), 500
 
 @app.route('/imagens/entregas/<path:filename>', methods=['GET'])
 def servir_imagem_entrega(filename):
