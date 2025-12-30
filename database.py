@@ -258,6 +258,98 @@ def verificar_migracao_banco():
 # Executa a verificação ao importar o módulo
 verificar_migracao_banco()
 
+def garantir_tabela_descricoes_setores():
+    """Cria tabela de descrições por setor e insere padrões se não existirem."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql_create = """
+                IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ConfiguracoesSetores')
+                CREATE TABLE ConfiguracoesSetores (
+                    Setor VARCHAR(50) PRIMARY KEY,
+                    DescricaoPadrao NVARCHAR(MAX)
+                )
+            """
+            cursor.execute(sql_create)
+            
+            # Insere padrões básicos (apenas se não existir)
+            setores_padrao = [
+                ("Cozinha", "👨‍🍳 *Foco do Setor:* Manter a higiene, seguir as fichas técnicas rigorosamente e garantir a saída rápida dos pedidos."),
+                ("Caixa", "💰 *Foco do Setor:* Atenção no fechamento, oferecer produtos adicionais e sorriso no rosto ao receber o cliente."),
+                ("Atendimento", "👋 *Foco do Setor:* Agilidade na entrega, verificar satisfação do cliente e manter as mesas limpas."),
+                ("Limpeza", "✨ *Foco do Setor:* Manter o salão impecável, verificar banheiros a cada 30min e repor insumos."),
+                ("Varanda", "🍃 *Foco do Setor:* Organização das mesas externas e suporte rápido aos clientes da área externa."),
+                ("Buffet", "🍦 *Foco do Setor:* Reposição constante, limpeza da pista e verificação de temperatura."),
+                ("Camara Fria", "❄️ *Foco do Setor:* Organização FIFO (Primeiro que entra, primeiro que sai) e controle de validade.")
+            ]
+            
+            for setor, desc in setores_padrao:
+                cursor.execute("""
+                    IF NOT EXISTS (SELECT 1 FROM ConfiguracoesSetores WHERE Setor = ?)
+                    INSERT INTO ConfiguracoesSetores (Setor, DescricaoPadrao) VALUES (?, ?)
+                """, setor, setor, desc)
+                
+            conn.commit()
+            logger.info("Tabela ConfiguracoesSetores verificada.")
+        except Exception as e:
+            logger.error(f"Erro na migração de setores: {e}")
+        finally:
+            conn.close()
+
+# Executa imediatamente
+garantir_tabela_descricoes_setores()
+
+def buscar_descricao_setor(nome_setor):
+    """Busca a descrição padrão de um setor."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT DescricaoPadrao FROM ConfiguracoesSetores WHERE Setor = ?", nome_setor)
+            res = cursor.fetchone()
+            return res[0] if res else None
+        finally:
+            conn.close()
+    return None
+
+def listar_todas_diretrizes_setores():
+    """Retorna lista de (Setor, Descricao) para o editor."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT Setor, DescricaoPadrao FROM ConfiguracoesSetores ORDER BY Setor")
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def atualizar_diretriz_setor(setor, nova_descricao):
+    """Atualiza o texto padrão de um setor."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                MERGE INTO ConfiguracoesSetores AS target
+                USING (SELECT ? AS Setor) AS source
+                ON (target.Setor = source.Setor)
+                WHEN MATCHED THEN
+                    UPDATE SET DescricaoPadrao = ?
+                WHEN NOT MATCHED THEN
+                    INSERT (Setor, DescricaoPadrao) VALUES (?, ?);
+            """
+            cursor.execute(sql, setor, nova_descricao, setor, nova_descricao)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Erro ao atualizar diretriz do setor {setor}: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
+
 def buscar_proximos_agendamentos(limite=5):
     """Busca os próximos 'limite' agendamentos a partir de hoje."""
     conn = get_db_connection()
@@ -7241,6 +7333,7 @@ def listar_escala_detalhada_ordenada(data_str):
                 LEFT JOIN Funcionarios F ON E.FuncionarioID = F.FuncionarioID
                 LEFT JOIN Freelancers FR ON E.FreelancerID = FR.FreelancerID
                 WHERE E.DataEscala = ?
+                    AND PL.Ativo = 1
                 ORDER BY 
                     CASE 
                         WHEN PL.Setor = 'Frente Loja' THEN 1 
