@@ -105,6 +105,9 @@ class AppEscalaLoja:
         self.btn_wpp_mass.pack(side=tk.LEFT, padx=5)
         self.btn_config = ttk.Button(self.frame_topo, text="⚙️ Configurações Automação", command=self.abrir_janela_configuracoes)
         self.btn_config.pack(side=tk.LEFT, padx=5)
+        # Botão Editor de Diretrizes
+        self.btn_diretrizes = ttk.Button(self.frame_topo, text="📝 Editar Diretrizes", command=self.abrir_editor_diretrizes)
+        self.btn_diretrizes.pack(side=tk.LEFT, padx=5)
         # Botão Gerenciador de Intervalos
         self.btn_intervalos = ttk.Button(self.frame_topo, text="⏱️ Gerenciar Intervalos", command=self.abrir_gerenciador_intervalos)
         self.btn_intervalos.pack(side=tk.LEFT, padx=5)
@@ -593,15 +596,20 @@ class AppEscalaLoja:
             for dados in turnos:
                 # Verifica se tem pessoa e telefone cadastrado no banco
                 if dados.NomePessoa and dados.TelefonePessoa:
-                    # Busca o nome amigável da posição na lista em memória
-                    nome_posicao = next((p[1] for p in self.posicoes if p[0] == pos_id), "Posição")
+                    # Busca dados da posição na memória (p[1]=Nome, p[5]=Setor)
+                    dados_pos_memoria = next((p for p in self.posicoes if p[0] == pos_id), None)
+                    nome_posicao = dados_pos_memoria[1] if dados_pos_memoria else "Posição"
+                    setor_posicao = dados_pos_memoria[5] if dados_pos_memoria else None
 
                     lista_envio.append({
                         'nome': dados.NomePessoa,
                         'telefone': dados.TelefonePessoa,
                         'posicao': nome_posicao,
+                        'setor': setor_posicao, # <--- NOVO CAMPO
                         'entrada': dados.HorarioEntrada,
-                        'saida': dados.HorarioSaida
+                        'saida': dados.HorarioSaida,
+                        'int_ini': dados.InicioIntervalo,
+                        'int_fim': dados.FimIntervalo
                     })
 
         if not lista_envio:
@@ -629,16 +637,38 @@ class AppEscalaLoja:
                     horario_str = f"{fmt(item['entrada'])} às {fmt(item['saida'])}"
                     data_fmt = datetime.strptime(self.data_selecionada, '%Y-%m-%d').strftime('%d/%m')
 
+                    # Lógica para adicionar o intervalo se ele existir
+                    intervalo_str = ""
+                    if item['int_ini'] and item['int_fim']:
+                        intervalo_str = f"\n☕ Intervalo: *{fmt(item['int_ini'])} às {fmt(item['int_fim'])}*"
+
                     mensagem = (
                         f"Olá, *{item['nome']}*! 👋\n"
                         f"Confirmação de Escala:\n"
                         f"📅 Data: *{data_fmt}*\n"
                         f"📍 Posição: *{item['posicao']}*\n"
-                        f"⏰ Horário: *{horario_str}*\n\n"
+                        f"⏰ Horário: *{horario_str}*{intervalo_str}\n\n"
                         f"Bom trabalho!"
                     )
 
                     ok, _ = notificador_whatsapp.enviar_mensagem_whatsapp(item['telefone'], mensagem)
+                    # --- LÓGICA DA SEGUNDA MENSAGEM (FOCO DO SETOR) ---
+                    if ok and item['setor']:
+                        try:
+                            # Busca a descrição no banco
+                            descricao_setor = database.buscar_descricao_setor(item['setor'])
+                            
+                            if descricao_setor:
+                                time.sleep(1) # Pausa curta para garantir a ordem das mensagens no WhatsApp
+                                
+                                msg_foco = f"🎯 *Diretrizes do Setor ({item['setor']}):*\n\n{descricao_setor}"
+                                
+                                # Envia a segunda mensagem
+                                notificador_whatsapp.enviar_mensagem_whatsapp(item['telefone'], msg_foco)
+                                
+                        except Exception as e_foco:
+                            print(f"Erro ao enviar foco do setor para {item['nome']}: {e_foco}")
+                    # --------------------------------------------------
                     if ok: enviados += 1
                     else: erros += 1
 
@@ -1300,6 +1330,74 @@ class AppEscalaLoja:
 
         # Inicializa
         carregar_dados()                   
+
+    def abrir_editor_diretrizes(self):
+        """Abre uma janela para editar as mensagens padrão de cada setor."""
+        popup = Toplevel(self.root)
+        popup.title("Editor de Diretrizes por Setor")
+        popup.geometry("700x500")
+        popup.transient(self.root)
+
+        # Layout: Painel Esquerdo (Lista) e Direito (Texto)
+        paned = ttk.PanedWindow(popup, orient=tk.HORIZONTAL)
+        paned.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # --- Esquerda: Lista de Setores ---
+        frame_lista = ttk.LabelFrame(paned, text="Selecione o Setor", padding=5)
+        paned.add(frame_lista, weight=1)
+
+        listbox = tk.Listbox(frame_lista, font=("Arial", 11))
+        listbox.pack(fill=tk.BOTH, expand=True)
+        
+        # --- Direita: Editor de Texto ---
+        frame_editor = ttk.LabelFrame(paned, text="Mensagem de Foco (WhatsApp)", padding=5)
+        paned.add(frame_editor, weight=3)
+
+        txt_msg = tk.Text(frame_editor, font=("Arial", 10), wrap=tk.WORD, height=15)
+        txt_msg.pack(fill=tk.BOTH, expand=True, pady=(0, 5))
+        
+        lbl_info = ttk.Label(frame_editor, text="* Dica: Use asteriscos para negrito (ex: *Foco*)", foreground="gray")
+        lbl_info.pack(anchor="w")
+
+        # --- Dados e Eventos ---
+        mapa_descricoes = {} # Cache local
+
+        def carregar_lista():
+            listbox.delete(0, tk.END)
+            mapa_descricoes.clear()
+            dados = database.listar_todas_diretrizes_setores()
+            for setor, desc in dados:
+                listbox.insert(tk.END, setor)
+                mapa_descricoes[setor] = desc
+
+        def ao_selecionar(event):
+            sel = listbox.curselection()
+            if not sel: return
+            setor = listbox.get(sel[0])
+            texto_atual = mapa_descricoes.get(setor, "")
+            
+            txt_msg.delete("1.0", tk.END)
+            txt_msg.insert("1.0", texto_atual)
+
+        def salvar():
+            sel = listbox.curselection()
+            if not sel: return
+            setor = listbox.get(sel[0])
+            novo_texto = txt_msg.get("1.0", tk.END).strip()
+            
+            if database.atualizar_diretriz_setor(setor, novo_texto):
+                mapa_descricoes[setor] = novo_texto # Atualiza cache local
+                messagebox.showinfo("Sucesso", f"Diretriz do setor '{setor}' salva!", parent=popup)
+            else:
+                messagebox.showerror("Erro", "Falha ao salvar no banco.", parent=popup)
+
+        listbox.bind("<<ListboxSelect>>", ao_selecionar)
+        
+        btn_salvar = ttk.Button(frame_editor, text="💾 Salvar Alterações", command=salvar)
+        btn_salvar.pack(fill=tk.X, pady=10)
+
+        carregar_lista()
+
 
 if __name__ == "__main__":
     root = tk.Tk()
