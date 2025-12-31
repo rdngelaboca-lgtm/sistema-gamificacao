@@ -630,6 +630,14 @@ class AppEscalaLoja:
             enviados = 0
             erros = 0
 
+            # MAPA DE TRADUÇÃO ESPECÍFICO
+            # Define apenas as exceções. Se não estiver aqui, o sistema busca pelo nome original.
+            MAPA_FUNCAO_DIRETRIZ = {
+                'Frente Loja': 'Atendimento',  # Quem está na Frente Loja recebe diretriz de Atendimento
+                'Recepção': 'Atendimento',     # Quem está na Recepção recebe diretriz de Atendimento
+                # 'Caixa' NÃO ESTÁ AQUI, então Caixa buscará diretriz de "Caixa" (comportamento padrão)
+            }
+
             for item in lista_envio:
                 try:
                     # Formatação de Horário Segura
@@ -658,29 +666,36 @@ class AppEscalaLoja:
                         enviados += 1
                         # --- LÓGICA DA SEGUNDA MENSAGEM (FOCO DO SETOR) ---
                         # Verifica se o setor existe e não é vazio
-                        if item['setor']:
+                        setor_origem = item['setor']
+                        
+                        if setor_origem:
+                            # APLICA A TRADUÇÃO AQUI
+                            # Se estiver no dicionário, traduz. Se não, usa o original.
+                            setor_para_buscar = MAPA_FUNCAO_DIRETRIZ.get(setor_origem, setor_origem)
+                            
                             try:
-                                # Busca a descrição no banco de dados
-                                descricao_setor = database.buscar_descricao_setor(item['setor'])
+                                # Busca a descrição no banco usando o NOME (TRADUZIDO OU ORIGINAL)
+                                descricao_setor = database.buscar_descricao_setor(setor_para_buscar)
                                 
                                 if descricao_setor and descricao_setor.strip():
                                     time.sleep(2) # Pausa aumentada para 2s para garantir a ordem de chegada
                                     
-                                    msg_foco = f"🎯 *Diretrizes do Setor ({item['setor']}):*\n\n{descricao_setor}"
+                                    # Usa o nome do setor (traduzido ou original) no título da mensagem
+                                    msg_foco = f"🎯 *Diretrizes do Setor ({setor_para_buscar}):*\n\n{descricao_setor}"
                                     
                                     # Envia a segunda mensagem (Diretriz)
                                     ok_foco, resp_foco = notificador_whatsapp.enviar_mensagem_whatsapp(item['telefone'], msg_foco)
                                     
                                     if ok_foco:
-                                        print(f"--> [WPP] Diretriz de {item['setor']} enviada com sucesso para {item['nome']}.")
+                                        print(f"--> [WPP] Diretriz de '{setor_para_buscar}' (origem: {setor_origem}) enviada para {item['nome']}.")
                                     else:
                                         print(f"--> [ERRO WPP] Falha ao enviar diretriz para {item['nome']}: {resp_foco}")
                                 else:
-                                    print(f"--> [AVISO] Sem diretriz cadastrada para o setor '{item['setor']}' no banco.")
+                                    print(f"--> [AVISO] Sem diretriz cadastrada para '{setor_para_buscar}' (origem: {setor_origem}) no banco.")
                             except Exception as e_foco:
                                 print(f"--> [ERRO CRÍTICO] Erro ao processar foco do setor para {item['nome']}: {e_foco}")
                         else:
-                            print(f"--> [AVISO] {item['nome']} não tem setor definido na posição (Setor vazio ou nulo).")
+                            print(f"--> [AVISO] {item['nome']} não tem setor definido na posição.")
                     else:
                         print(f"--> [ERRO WPP] Falha ao enviar mensagem principal para {item['nome']}: {resp_msg}")
                         erros += 1
