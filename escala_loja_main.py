@@ -651,31 +651,44 @@ class AppEscalaLoja:
                         f"Bom trabalho!"
                     )
 
-                    ok, _ = notificador_whatsapp.enviar_mensagem_whatsapp(item['telefone'], mensagem)
-                    # --- LÓGICA DA SEGUNDA MENSAGEM (FOCO DO SETOR) ---
-                    if ok and item['setor']:
-                        try:
-                            # Busca a descrição no banco
-                            descricao_setor = database.buscar_descricao_setor(item['setor'])
-                            
-                            if descricao_setor:
-                                time.sleep(1) # Pausa curta para garantir a ordem das mensagens no WhatsApp
+                    # Envia a mensagem principal (Horário)
+                    ok, resp_msg = notificador_whatsapp.enviar_mensagem_whatsapp(item['telefone'], mensagem)
+                    
+                    if ok:
+                        enviados += 1
+                        # --- LÓGICA DA SEGUNDA MENSAGEM (FOCO DO SETOR) ---
+                        # Verifica se o setor existe e não é vazio
+                        if item['setor']:
+                            try:
+                                # Busca a descrição no banco de dados
+                                descricao_setor = database.buscar_descricao_setor(item['setor'])
                                 
-                                msg_foco = f"🎯 *Diretrizes do Setor ({item['setor']}):*\n\n{descricao_setor}"
-                                
-                                # Envia a segunda mensagem
-                                notificador_whatsapp.enviar_mensagem_whatsapp(item['telefone'], msg_foco)
-                                
-                        except Exception as e_foco:
-                            print(f"Erro ao enviar foco do setor para {item['nome']}: {e_foco}")
-                    # --------------------------------------------------
-                    if ok: enviados += 1
-                    else: erros += 1
+                                if descricao_setor and descricao_setor.strip():
+                                    time.sleep(2) # Pausa aumentada para 2s para garantir a ordem de chegada
+                                    
+                                    msg_foco = f"🎯 *Diretrizes do Setor ({item['setor']}):*\n\n{descricao_setor}"
+                                    
+                                    # Envia a segunda mensagem (Diretriz)
+                                    ok_foco, resp_foco = notificador_whatsapp.enviar_mensagem_whatsapp(item['telefone'], msg_foco)
+                                    
+                                    if ok_foco:
+                                        print(f"--> [WPP] Diretriz de {item['setor']} enviada com sucesso para {item['nome']}.")
+                                    else:
+                                        print(f"--> [ERRO WPP] Falha ao enviar diretriz para {item['nome']}: {resp_foco}")
+                                else:
+                                    print(f"--> [AVISO] Sem diretriz cadastrada para o setor '{item['setor']}' no banco.")
+                            except Exception as e_foco:
+                                print(f"--> [ERRO CRÍTICO] Erro ao processar foco do setor para {item['nome']}: {e_foco}")
+                        else:
+                            print(f"--> [AVISO] {item['nome']} não tem setor definido na posição (Setor vazio ou nulo).")
+                    else:
+                        print(f"--> [ERRO WPP] Falha ao enviar mensagem principal para {item['nome']}: {resp_msg}")
+                        erros += 1
 
                     time.sleep(1.5) # Delay de segurança para a API (Anti-Spam)
 
                 except Exception as e:
-                    print(f"Erro ao enviar para {item['nome']}: {e}")
+                    print(f"--> [ERRO GENÉRICO] Erro ao processar envio para {item['nome']}: {e}")
                     erros += 1
 
             # Callback para UI
