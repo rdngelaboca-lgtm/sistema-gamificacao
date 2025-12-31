@@ -326,25 +326,25 @@ def listar_todas_diretrizes_setores():
     return []
 
 def atualizar_diretriz_setor(setor, nova_descricao):
-    """Atualiza o texto padrão de um setor."""
+    """Atualiza o texto padrão de um setor (Versão Robusta: UPDATE/INSERT)."""
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            sql = """
-                MERGE INTO ConfiguracoesSetores AS target
-                USING (SELECT ? AS Setor) AS source
-                ON (target.Setor = source.Setor)
-                WHEN MATCHED THEN
-                    UPDATE SET DescricaoPadrao = ?
-                WHEN NOT MATCHED THEN
-                    INSERT (Setor, DescricaoPadrao) VALUES (?, ?);
-            """
-            cursor.execute(sql, setor, nova_descricao, setor, nova_descricao)
+
+            # 1. Tenta atualizar o registro existente
+            sql_update = "UPDATE ConfiguracoesSetores SET DescricaoPadrao = ? WHERE Setor = ?"
+            cursor.execute(sql_update, nova_descricao, setor)
+
+            # 2. Se nenhuma linha foi afetada (rowcount == 0), o registro não existe: faz INSERT
+            if cursor.rowcount == 0:
+                sql_insert = "INSERT INTO ConfiguracoesSetores (Setor, DescricaoPadrao) VALUES (?, ?)"
+                cursor.execute(sql_insert, setor, nova_descricao)
+
             conn.commit()
             return True
         except Exception as e:
-            logger.error(f"Erro ao atualizar diretriz do setor {setor}: {e}")
+            logger.error(f"Erro ao atualizar diretriz do setor {setor}: {e}", exc_info=True)
             return False
         finally:
             conn.close()
