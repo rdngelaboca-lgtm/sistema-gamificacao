@@ -328,33 +328,31 @@ def listar_todas_diretrizes_setores():
     return []
 
 def atualizar_diretriz_setor(setor, nova_descricao):
-    """Atualiza o texto padrão de um setor (Versão Determinística: SELECT -> INSERT/UPDATE)."""
+    """
+    Atualiza a diretriz de um setor usando a estratégia DELETE/INSERT.
+    Isso elimina problemas de atualização de campos TEXT/NVARCHAR(MAX) via ODBC.
+    """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-
-            # 1. Verificação EXPLÍCITA de existência (Elimina ambiguidade do driver)
-            cursor.execute("SELECT 1 FROM ConfiguracoesSetores WHERE Setor = ?", setor)
-            existe = cursor.fetchone()
-
-            if existe:
-                # 2. UPDATE (Se já existe)
-                # Forçamos o cast do parâmetro Setor para garantir match de tipos
-                sql = "UPDATE ConfiguracoesSetores SET DescricaoPadrao = ? WHERE Setor = CAST(? AS VARCHAR(50))"
-                cursor.execute(sql, nova_descricao, setor)
-            else:
-                # 3. INSERT (Se não existe)
-                sql = "INSERT INTO ConfiguracoesSetores (Setor, DescricaoPadrao) VALUES (?, ?)"
-                cursor.execute(sql, setor, nova_descricao)
-
+            
+            # 1. Remove qualquer registro existente para este setor
+            cursor.execute("DELETE FROM ConfiguracoesSetores WHERE Setor = ?", setor)
+            
+            # 2. Insere o novo registro limpo
+            sql_insert = "INSERT INTO ConfiguracoesSetores (Setor, DescricaoPadrao) VALUES (?, ?)"
+            cursor.execute(sql_insert, setor, nova_descricao)
+            
             conn.commit()
+            print(f"--> [DB] Diretriz do setor '{setor}' salva com sucesso (Mode: DELETE/INSERT).")
             return True
         except Exception as e:
             logger.error(f"Erro ao atualizar diretriz do setor {setor}: {e}", exc_info=True)
+            if conn: conn.rollback()
             return False
         finally:
-            conn.close()
+            if conn: conn.close()
     return False
 
 def buscar_proximos_agendamentos(limite=5):
