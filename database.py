@@ -331,16 +331,18 @@ def atualizar_diretriz_setor(setor, nova_descricao):
     if conn:
         try:
             cursor = conn.cursor()
-
+            
             # 1. Tenta atualizar o registro existente
+            # Esta abordagem remove a complexidade do MERGE e evita erros de tipagem do driver ODBC
             sql_update = "UPDATE ConfiguracoesSetores SET DescricaoPadrao = ? WHERE Setor = ?"
             cursor.execute(sql_update, nova_descricao, setor)
-
-            # 2. Se nenhuma linha foi afetada (rowcount == 0), o registro não existe: faz INSERT
+            
+            # 2. Verifica se alguma linha foi alterada. Se rowcount for 0, o registro não existe.
             if cursor.rowcount == 0:
+                # Se não existe, faz o INSERT
                 sql_insert = "INSERT INTO ConfiguracoesSetores (Setor, DescricaoPadrao) VALUES (?, ?)"
                 cursor.execute(sql_insert, setor, nova_descricao)
-
+            
             conn.commit()
             return True
         except Exception as e:
