@@ -285,10 +285,12 @@ def garantir_tabela_descricoes_setores():
             ]
             
             for setor, desc in setores_padrao:
-                cursor.execute("""
-                    IF NOT EXISTS (SELECT 1 FROM ConfiguracoesSetores WHERE Setor = ?)
-                    INSERT INTO ConfiguracoesSetores (Setor, DescricaoPadrao) VALUES (?, ?)
-                """, setor, setor, desc)
+                # Usa a mesma lógica determinística da função de atualização:
+                # Verifica explicitamente se já existe antes de tentar inserir.
+                cursor.execute("SELECT 1 FROM ConfiguracoesSetores WHERE Setor = ?", setor)
+                if not cursor.fetchone():
+                    # Se não existe, insere.
+                    cursor.execute("INSERT INTO ConfiguracoesSetores (Setor, DescricaoPadrao) VALUES (?, ?)", setor, desc)
                 
             conn.commit()
             logger.info("Tabela ConfiguracoesSetores verificada.")
@@ -326,23 +328,26 @@ def listar_todas_diretrizes_setores():
     return []
 
 def atualizar_diretriz_setor(setor, nova_descricao):
-    """Atualiza o texto padrão de um setor (Versão Robusta: UPDATE/INSERT)."""
+    """Atualiza o texto padrão de um setor (Versão Determinística: SELECT -> INSERT/UPDATE)."""
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            
-            # 1. Tenta atualizar o registro existente
-            # Esta abordagem remove a complexidade do MERGE e evita erros de tipagem do driver ODBC
-            sql_update = "UPDATE ConfiguracoesSetores SET DescricaoPadrao = ? WHERE Setor = ?"
-            cursor.execute(sql_update, nova_descricao, setor)
-            
-            # 2. Verifica se alguma linha foi alterada. Se rowcount for 0, o registro não existe.
-            if cursor.rowcount == 0:
-                # Se não existe, faz o INSERT
-                sql_insert = "INSERT INTO ConfiguracoesSetores (Setor, DescricaoPadrao) VALUES (?, ?)"
-                cursor.execute(sql_insert, setor, nova_descricao)
-            
+
+            # 1. Verificação EXPLÍCITA de existência (Elimina ambiguidade do driver)
+            cursor.execute("SELECT 1 FROM ConfiguracoesSetores WHERE Setor = ?", setor)
+            existe = cursor.fetchone()
+
+            if existe:
+                # 2. UPDATE (Se já existe)
+                # Forçamos o cast do parâmetro Setor para garantir match de tipos
+                sql = "UPDATE ConfiguracoesSetores SET DescricaoPadrao = ? WHERE Setor = CAST(? AS VARCHAR(50))"
+                cursor.execute(sql, nova_descricao, setor)
+            else:
+                # 3. INSERT (Se não existe)
+                sql = "INSERT INTO ConfiguracoesSetores (Setor, DescricaoPadrao) VALUES (?, ?)"
+                cursor.execute(sql, setor, nova_descricao)
+
             conn.commit()
             return True
         except Exception as e:
