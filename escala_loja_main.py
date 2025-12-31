@@ -1381,15 +1381,22 @@ class AppEscalaLoja:
 
         def salvar():
             sel = listbox.curselection()
-            if not sel: return
+            if not sel:
+                messagebox.showwarning("Aviso", "Selecione um setor na lista à esquerda antes de salvar.", parent=popup)
+                return
+
             setor = listbox.get(sel[0])
-            novo_texto = txt_msg.get("1.0", tk.END).strip()
-            
+            # Captura o texto do widget, garantindo que pegamos tudo
+            novo_texto = txt_msg.get("1.0", "end-1c").strip() 
+
+            print(f"--> [DEBUG GUI] Tentando salvar diretriz para '{setor}': {novo_texto[:30]}...") 
+
             if database.atualizar_diretriz_setor(setor, novo_texto):
-                mapa_descricoes[setor] = novo_texto # Atualiza cache local
-                messagebox.showinfo("Sucesso", f"Diretriz do setor '{setor}' salva!", parent=popup)
+                # ATUALIZAÇÃO CRÍTICA: Força a atualização do cache local com o valor salvo
+                mapa_descricoes[setor] = novo_texto 
+                messagebox.showinfo("Sucesso", f"Diretriz do setor '{setor}' salva com sucesso!", parent=popup)
             else:
-                messagebox.showerror("Erro", "Falha ao salvar no banco.", parent=popup)
+                messagebox.showerror("Erro", "Falha ao salvar no banco de dados. Verifique o log.", parent=popup)
 
         listbox.bind("<<ListboxSelect>>", ao_selecionar)
         
