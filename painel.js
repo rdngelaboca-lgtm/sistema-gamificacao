@@ -115,7 +115,7 @@ function renderizarGraficoOcupacao(novosDados) {
 
 document.addEventListener('DOMContentLoaded', function() {
     let metaDiariaAnimacaoExibida = false; // Flag para controlar a animação
-    const API_BASE_URL = 'http://192.168.2.43:5000'; // <--- NOVO IP
+    const API_BASE_URL = 'http://192.168.18.44:5000'; // <--- NOVO IP
 
     function formatarHora(dataString) {
         if (!dataString) return '';
