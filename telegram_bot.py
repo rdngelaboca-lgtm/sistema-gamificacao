@@ -234,6 +234,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             ["💰 Meu Saldo", "🏪 Loja de Recompensas", "🧾 Enviar Nota Fiscal"],
             ["📜 Meu Histórico", "💬 Canal Confidencial"],
             ["🏅 Minhas Conquistas", "📄 Meus Documentos"],
+            ["📦 Solicitar Compras/Manutenção"], # <--- NOVO BOTÃO AQUI
             ["❓ Ajuda"]
         ]
         reply_markup = ReplyKeyboardMarkup(REPLY_KEYBOARD, resize_keyboard=True)
@@ -1040,7 +1041,31 @@ async def roteador_de_texto_privado(update: Update, context: ContextTypes.DEFAUL
         else:
             await update.message.reply_text("❌ Código de verificação incorreto ou não cadastrado. Por favor, inicie o processo novamente ou contate o RH.")
         return # Importante retornar após tratar um estado
+    elif user_data.get('aguardando_dados_compra'):
+        # Usuário digitou os dados da compra
+        texto = texto_recebido.strip()
+        categoria = user_data.get('temp_categoria_compra', 'Geral')
+        
+        if database.criar_solicitacao_interna(funcionario.FuncionarioID, 'Compra', categoria, texto, None, None):
+            user_data.pop('aguardando_dados_compra', None)
+            user_data.pop('temp_categoria_compra', None)
+            await update.message.reply_text("✅ Pedido de Compra registrado! Aguarde aprovação.")
+            
+            # Notifica Gestor
+            notificador_telegram.enviar_mensagem(config.GESTOR_GROUP_CHAT_ID, f"🛒 **Novo Pedido de Compra**\n👤 {funcionario.NomeCompleto}\n📂 {categoria}\n📦 {texto}")
+        else:
+            await update.message.reply_text("Erro ao salvar pedido.")
+        return
 
+    elif user_data.get('aguardando_desc_manutencao'):
+        # Usuário digitou a descrição do problema, agora pede a foto
+        user_data.pop('aguardando_desc_manutencao', None)
+        user_data['temp_desc_manutencao'] = texto_recebido
+        user_data['aguardando_foto_manutencao'] = True
+        
+        await update.message.reply_text("📸 Agora, envie uma **FOTO** obrigatória do problema para registrarmos.")
+        return
+    
     elif user_data.get('tarefa_nao_aplicavel'):
         atribuicao_id = user_data.pop('tarefa_nao_aplicavel', None)
         if atribuicao_id: # Só prossegue se conseguiu pegar o ID
@@ -1445,6 +1470,10 @@ async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     Decide o destino com base na prioridade: NF > Onboarding > Tarefa.
     """
     user_id = update.effective_user.id
+    # 0. Prioridade Absoluta: Manutenção
+    if context.user_data.get('aguardando_foto_manutencao', False):
+        await receber_foto_manutencao(update, context)
+        return
     
     # 1. Prioridade Máxima: Nota Fiscal (Fluxo explícito iniciado pelo usuário na memória)
     if context.user_data.get('aguardando_nota_fiscal', False):
@@ -1471,6 +1500,58 @@ async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     # 3. Prioridade Padrão: Evidência de Tarefa
     await handler_foto_tarefa(update, context)
 
+async def receber_foto_manutencao(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handler exclusivo para receber fotos de manutenção."""
+    # Limpa o estado
+    context.user_data.pop('aguardando_foto_manutencao', None)
+    
+    user = update.effective_user
+    funcionario = database.buscar_funcionario_por_chat_id(user.id)
+    descricao_problema = context.user_data.get('temp_desc_manutencao')
+    
+    if not funcionario:
+        await update.message.reply_text("Erro de identificação.")
+        return
+
+    # Processa a foto
+    file_id = update.message.photo[-1].file_id
+    
+    # Salva preliminarmente no banco ou baixa direto (vamos baixar direto para simplificar o fluxo de gestão)
+    # Reutiliza lógica de download do notificador se possível, ou faz manual aqui para garantir path local
+    import requests
+    token = config.TELEGRAM_TOKEN
+    
+    try:
+        # Pega info do arquivo
+        r_info = requests.get(f"https://api.telegram.org/bot{token}/getFile?file_id={file_id}")
+        file_path_remoto = r_info.json()['result']['file_path']
+        
+        # Cria pasta se não existir
+        pasta_manut = os.path.join(os.getcwd(), 'fotos_manutencao')
+        if not os.path.exists(pasta_manut): os.makedirs(pasta_manut)
+        
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        nome_arquivo = f"manut_{funcionario.FuncionarioID}_{ts}.jpg"
+        caminho_local = os.path.join(pasta_manut, nome_arquivo)
+        
+        # Baixa
+        r_content = requests.get(f"https://api.telegram.org/file/bot{token}/{file_path_remoto}")
+        with open(caminho_local, 'wb') as f:
+            f.write(r_content.content)
+            
+        # Salva no banco
+        if database.criar_solicitacao_interna(funcionario.FuncionarioID, 'Manutencao', 'Predial', descricao_problema, None, caminho_local):
+            await update.message.reply_text("✅ Solicitação de Manutenção registrada com foto! A gestão foi notificada.")
+            # Notifica gestão
+            msg_gestor = f"🔧 **Nova Solicitação de Manutenção**\n👤 {funcionario.NomeCompleto}\n📝 {descricao_problema}"
+            notificador_telegram.enviar_foto_com_botoes(config.GESTOR_GROUP_CHAT_ID, caminho_local, msg_gestor)
+        else:
+            await update.message.reply_text("Erro ao salvar no banco de dados.")
+            
+    except Exception as e:
+        logger.error(f"Erro ao baixar foto manutenção: {e}")
+        await update.message.reply_text("Erro ao processar a foto.")
+
 async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     # Não damos answer() aqui imediatamente para permitir alertas de bloqueio
@@ -1491,7 +1572,46 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
     # Se passou pelo bloqueio, confirma o clique
     await query.answer()
 
-    # --- LÓGICA DE DOCUMENTOS PESSOAIS ---
+    # --- FLUXO DE SOLICITAÇÕES ---
+    if data == "menu_solicitacoes":
+        func_db = database.buscar_funcionario_por_chat_id(user.id)
+        # Verifica permissão (Adapte conforme a string exata do seu banco)
+        pode_acessar = False
+        if func_db:
+            cargo = func_db.Cargo.upper() if func_db.Cargo else ""
+            nivel = getattr(func_db, 'NivelAcesso', '')
+            if nivel == 'Gestor' or 'LÍDER' in cargo or 'LIDER' in cargo or 'GERENTE' in cargo:
+                pode_acessar = True
+        
+        if pode_acessar:
+            keyboard = [
+                [InlineKeyboardButton("🛒 Compra de Insumos", callback_data="solic_compra")],
+                [InlineKeyboardButton("🔧 Manutenção Predial", callback_data="solic_manut")]
+            ]
+            await query.edit_message_text("Selecione o tipo de solicitação:", reply_markup=InlineKeyboardMarkup(keyboard))
+        else:
+            await query.edit_message_text("🚫 Acesso restrito a Líderes e Gerentes.")
+        return
+
+    elif data == "solic_compra":
+        keyboard = [
+            [InlineKeyboardButton("🧹 Limpeza", callback_data="cat_limpeza"), InlineKeyboardButton("📠 Escritório", callback_data="cat_escritorio")],
+            [InlineKeyboardButton("🍳 Cozinha", callback_data="cat_cozinha"), InlineKeyboardButton("📦 Outros", callback_data="cat_outros")]
+        ]
+        await query.edit_message_text("Selecione a categoria do produto:", reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+
+    elif data.startswith("cat_"):
+        categoria = data.split("_")[1].capitalize()
+        context.user_data['temp_categoria_compra'] = categoria
+        context.user_data['aguardando_dados_compra'] = True
+        await query.edit_message_text(f"Categoria: {categoria}.\n\nDigite o **Nome do Item e a Quantidade** (Ex: 'Detergente 5 litros'):")
+        return
+
+    elif data == "solic_manut":
+        context.user_data['aguardando_desc_manutencao'] = True
+        await query.edit_message_text("🔧 Descreva brevemente o problema de manutenção:")
+        return
 
     # --- LÓGICA DE DOCUMENTOS PESSOAIS ---
     if data.startswith("get_documento_"):
@@ -2139,6 +2259,7 @@ def main() -> None:
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🏪 Loja de Recompensas$'), loja_recompensas))
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^💬 Canal Confidencial$'), solicitar_feedback_start)) 
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^📄 Meus Documentos$'), solicitar_documentos_inicio)) 
+    application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^📦 Solicitar Compras/Manutenção$'), lambda u,c: u.message.reply_text("Acessando Central...", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Abrir Menu", callback_data="menu_solicitacoes")]]))))
     
     # --- CORREÇÃO FINAL: HANDLERS DE ARQUIVO SEPARADOS ---
     # 1. Aceita FOTOS (comprimidas, padrão do celular)
