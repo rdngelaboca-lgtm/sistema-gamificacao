@@ -258,6 +258,39 @@ def verificar_migracao_banco():
 # Executa a verificação ao importar o módulo
 verificar_migracao_banco()
 
+def verificar_migracao_solicitacoes():
+    """Cria a tabela de Solicitações Internas se não existir."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'SolicitacoesInternas')
+                CREATE TABLE SolicitacoesInternas (
+                    SolicitacaoID INT PRIMARY KEY IDENTITY(1,1),
+                    FuncionarioID INT REFERENCES Funcionarios(FuncionarioID),
+                    DataSolicitacao DATETIME DEFAULT GETDATE(),
+                    Tipo VARCHAR(20) NOT NULL, -- 'Compra' ou 'Manutencao'
+                    Categoria VARCHAR(50),
+                    Descricao NVARCHAR(MAX),
+                    Quantidade DECIMAL(10,2),
+                    CaminhoFoto VARCHAR(255),
+                    Status VARCHAR(20) DEFAULT 'Pendente', -- Pendente, Aprovado, Recusado
+                    MotivoRecusa NVARCHAR(MAX),
+                    DataConclusao DATETIME
+                )
+            """
+            cursor.execute(sql)
+            conn.commit()
+            logger.info("Tabela SolicitacoesInternas verificada/criada.")
+        except Exception as e:
+            logger.error(f"Erro na migração de solicitações: {e}")
+        finally:
+            conn.close()
+
+# Executa a verificação
+verificar_migracao_solicitacoes()
+
 def garantir_tabela_descricoes_setores():
     """Cria tabela de descrições por setor e insere padrões se não existirem."""
     conn = get_db_connection()
@@ -7362,4 +7395,59 @@ def listar_escala_detalhada_ordenada(data_str):
         finally:
             conn.close()
     return []
+
+# ===================================================================
+# == MÓDULO DE SOLICITAÇÕES (COMPRAS E MANUTENÇÃO) ==================
+# ===================================================================
+
+def criar_solicitacao_interna(func_id, tipo, categoria, descricao, qtd=None, path_foto=None):
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                INSERT INTO SolicitacoesInternas 
+                (FuncionarioID, Tipo, Categoria, Descricao, Quantidade, CaminhoFoto, Status)
+                VALUES (?, ?, ?, ?, ?, ?, 'Pendente')
+            """
+            cursor.execute(sql, func_id, tipo, categoria, descricao, qtd, path_foto)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Erro ao criar solicitação: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
+
+def listar_solicitacoes_pendentes():
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT S.SolicitacaoID, F.NomeCompleto, S.Tipo, S.Categoria, S.Descricao, S.Quantidade, S.CaminhoFoto, S.DataSolicitacao
+                FROM SolicitacoesInternas S
+                JOIN Funcionarios F ON S.FuncionarioID = F.FuncionarioID
+                WHERE S.Status = 'Pendente'
+                ORDER BY S.DataSolicitacao ASC
+            """
+            cursor.execute(sql)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def atualizar_status_solicitacao(solicitacao_id, novo_status, motivo=None):
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE SolicitacoesInternas SET Status = ?, MotivoRecusa = ?, DataConclusao = GETDATE() WHERE SolicitacaoID = ?"
+            cursor.execute(sql, novo_status, motivo, solicitacao_id)
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+    return False
 
