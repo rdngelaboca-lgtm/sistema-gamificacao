@@ -1,1419 +1,1735 @@
 # ==============================================================================
-# == INÍCIO BLOCO DE CONFIGURAÇÃO DE LOGGING ===================================
+# == INÍCIO BLOCO DE CONFIGURAÇÃO DE LOGGING (Igual ao anterior) ================
 # ==============================================================================
 import logging
 import logging.handlers
 import sys
-import os # Necessário para criar a pasta de logs
+import os
 
-# --- Configurações ---
 LOG_FILENAME = 'gamificacao_sistema.log'
-LOG_FOLDER = 'logs' # Nome da pasta onde os logs serão salvos
-LOG_LEVEL = logging.INFO # Nível mínimo para registrar (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+LOG_FOLDER = 'logs'
+LOG_LEVEL = logging.INFO
 LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
-LOG_MAX_BYTES = 10 * 1024 * 1024 # Tamanho máximo de cada arquivo de log (10 MB)
-LOG_BACKUP_COUNT = 5 # Quantos arquivos de log antigos manter
+LOG_MAX_BYTES = 10 * 1024 * 1024
+LOG_BACKUP_COUNT = 5
 
-# --- Cria a pasta de logs se não existir ---
 log_dir = os.path.join(os.path.dirname(__file__), LOG_FOLDER)
 if not os.path.exists(log_dir):
     try:
         os.makedirs(log_dir)
-        print(f"Pasta de logs criada em: {log_dir}") # Print inicial para confirmar criação
+        print(f"Pasta de logs criada em: {log_dir}")
     except OSError as e:
         print(f"Erro ao criar pasta de logs '{log_dir}': {e}", file=sys.stderr)
-        # Se não conseguir criar a pasta, tenta logar no diretório atual
         log_dir = os.path.dirname(__file__)
 
 log_filepath = os.path.join(log_dir, LOG_FILENAME)
-
-# --- Configuração do Handler de Arquivo Rotativo ---
-# Rotaciona o log quando atinge LOG_MAX_BYTES, mantendo LOG_BACKUP_COUNT arquivos antigos
 file_handler = logging.handlers.RotatingFileHandler(
     log_filepath, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT, encoding='utf-8'
 )
 file_handler.setLevel(LOG_LEVEL)
 file_formatter = logging.Formatter(LOG_FORMAT)
 file_handler.setFormatter(file_formatter)
-
-# --- Configuração do Handler do Console ---
 console_handler = logging.StreamHandler(sys.stdout)
-console_handler.setLevel(LOG_LEVEL) # Pode ser diferente do arquivo se quiser (ex: logging.DEBUG)
+console_handler.setLevel(LOG_LEVEL)
 console_formatter = logging.Formatter(LOG_FORMAT)
 console_handler.setFormatter(console_formatter)
-
-# --- Configuração do Logger Raiz ---
-# Limpa handlers existentes para evitar duplicação em recargas
 logging.getLogger('').handlers = []
-# Adiciona os novos handlers
 logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT, handlers=[file_handler, console_handler])
-
-# Obtém um logger específico para este módulo
 logger = logging.getLogger(__name__)
-
 logger.info(f"*** Logging configurado para o módulo: {__name__} ***")
 # ==============================================================================
 # == FIM BLOCO DE CONFIGURAÇÃO DE LOGGING ======================================
 # ==============================================================================
 
 import tkinter as tk
-from tkinter import ttk, messagebox, Toplevel, Listbox, Checkbutton, Text, Entry, Scrollbar, Frame, Label, Button
+from tkinter import ttk, messagebox, filedialog, simpledialog, Toplevel
+import database # Importa nosso arquivo de banco de dados
+from lxml import etree as ET 
 from datetime import datetime
-import database
-import notificador_telegram
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-import time
-import os
-from tkinter import filedialog
-from tkcalendar import DateEntry
-import comunicado_generator
-import file_utils
-import recibo_generator
-import config
-import requests
-import json
-from PIL import Image, ImageTk
-from fpdf import FPDF
-import tempfile
-import shutil
+from tkcalendar import DateEntry 
+from decimal import Decimal, InvalidOperation # <-- Adicionado InvalidOperation
 
-class AppGestaoPessoas:
+class AppGestaoEstoque:
     def __init__(self, root):
         self.root = root
-        self.root.title("Módulo de Gestão de Pessoas (RH)")
-        self.root.geometry("900x600")
-        self.root.minsize(700, 400)
+        self.root.title("Módulo de Gestão de Estoque")
+        self.root.geometry("1200x700") 
         
         self.notebook = ttk.Notebook(root)
         self.notebook.pack(pady=10, padx=10, fill="both", expand=True)
 
-        self.frame_comunicados = ttk.Frame(self.notebook, padding="10")
-        self.frame_documentos = ttk.Frame(self.notebook, padding="10")
-        # --- Variáveis de Login para Simulação de Acesso (Gestor ID 2) ---
-        # Defina self.USUARIO_LOGADO_ID e self.nivel_usuario AQUI
-        self.USUARIO_LOGADO_ID = 2 
-        # Esta chamada requer que _buscar_nivel_acesso exista, o que faremos acima.
-        # CORREÇÃO: Garante que o nível de usuário seja recuperado corretamente ou define um padrão para teste
-        nivel_banco = self._buscar_nivel_acesso(self.USUARIO_LOGADO_ID)
-        self.nivel_usuario = nivel_banco if nivel_banco else 'Gestor' # Fallback para 'Gestor' se não encontrar no banco para testes
-        print(f"--> [DEBUG] Nível de Acesso do Usuário {self.USUARIO_LOGADO_ID}: {self.nivel_usuario}")
-        self.frame_onboarding = ttk.Frame(self.notebook, padding="10") # <<< NOVA ABA
+        self.frame_produtos = ttk.Frame(self.notebook, padding="10")
+        self.frame_fornecedores = ttk.Frame(self.notebook, padding="10")
+        self.frame_importacao = ttk.Frame(self.notebook, padding="10") 
+        self.frame_contagem = ttk.Frame(self.notebook, padding="10")
+        self.frame_sugestao = ttk.Frame(self.notebook, padding="10") 
+        self.frame_admin = ttk.Frame(self.notebook, padding="10") # Nova Aba Admin
 
-        self.notebook.add(self.frame_onboarding, text='📝 Onboarding/Admissional') # <<< NOVA ABA
-        self.notebook.add(self.frame_comunicados, text='Comunicados')
-        self.notebook.add(self.frame_documentos, text='Documentos Pessoais (RH)')
+        self.notebook.add(self.frame_produtos, text='1. Catálogo Mestre')
+        self.notebook.add(self.frame_fornecedores, text='2. Fornecedores')
+        self.notebook.add(self.frame_importacao, text='3. Importar XMLs (DE/PARA)')
+        self.notebook.add(self.frame_contagem, text='4. Lançar Contagem Física')
+        self.notebook.add(self.frame_sugestao, text='5. Sugestão de Compra') 
+        self.notebook.add(self.frame_admin, text='6. Administração / Reset')
+        self.frame_solicitacoes = ttk.Frame(self.notebook, padding="10")
+        self.notebook.add(self.frame_solicitacoes, text='7. Solicitações (Líderes)')
+        self.criar_aba_solicitacoes()
+
+        self.produto_selecionado_id = None
+        self.fornecedor_selecionado_id = None
         
-        self.dados_funcionarios = {}
-        self.popup_criacao = None
+        self.itens_xml_nao_vinculados = []
+        self.dados_notas_processadas = []
+        self.mapa_produtos_mestre = {}
+        self.lista_mestre_produtos_nomes = [] 
 
-        self.criar_aba_comunicados()
-        self.criar_aba_documentos()
-        self.criar_aba_onboarding() # <<< CHAMA A NOVA ABA
+        self.mapa_produtos_mestre_contagem = {}
+        self.lista_itens_para_salvar_contagem = []
+        self.lista_mestre_contagem_nomes = []
         
-        self.atualizar_lista_comunicados()
-        self.carregar_rh_funcionarios() # Carrega funcionários para a nova aba
+        self.cache_relatorio_posicao = {}
+        self.mapa_contagens_historico = {} 
 
-    # --- ABA 1: COMUNICADOS ---
-    def criar_aba_comunicados(self):
-        self.frame_comunicados.grid_rowconfigure(2, weight=1)
-        self.frame_comunicados.grid_columnconfigure(0, weight=1)
-        # ... (código da interface da aba comunicados que já tínhamos)
-        frame_botoes = ttk.Frame(self.frame_comunicados)
-        frame_botoes.grid(row=0, column=0, sticky="ew")
-        btn_novo = ttk.Button(frame_botoes, text="Criar Novo Comunicado", command=self.abrir_janela_criacao)
-        btn_novo.pack(side="left")
-        btn_atualizar = ttk.Button(frame_botoes, text="Atualizar Lista", command=self.atualizar_lista_comunicados)
-        btn_atualizar.pack(side="left", padx=10)
-        btn_detalhes = ttk.Button(frame_botoes, text="Ver Detalhes do Selecionado", command=self.abrir_janela_detalhes)
-        btn_detalhes.pack(side="left", padx=10)
-        btn_excluir = ttk.Button(frame_botoes, text="Excluir Comunicado", command=self.excluir_comunicado_selecionado)
-        btn_excluir.pack(side="left", padx=10)
-        frame_filtro = ttk.Frame(self.frame_comunicados)
-        frame_filtro.grid(row=1, column=0, sticky="ew", pady=(5,0))
-        lbl_filtro = ttk.Label(frame_filtro, text="Filtrar por Título:")
-        lbl_filtro.pack(side="left")
-        self.entry_filtro = ttk.Entry(frame_filtro, width=40)
-        self.entry_filtro.pack(side="left", padx=5, fill="x", expand=True)
-        btn_buscar = ttk.Button(frame_filtro, text="Buscar", command=self.filtrar_lista_comunicados)
-        btn_buscar.pack(side="left", padx=(0, 5))
-        btn_limpar = ttk.Button(frame_filtro, text="Limpar", command=self.limpar_filtro)
-        btn_limpar.pack(side="left")
-        frame_lista = ttk.Frame(self.frame_comunicados)
-        frame_lista.grid(row=2, column=0, sticky="nsew", pady=(5,0))
-        frame_lista.grid_rowconfigure(0, weight=1)
-        frame_lista.grid_columnconfigure(0, weight=1)
-        cols = ('ID', 'Título', 'Data de Criação', 'Status')
-        self.tree_comunicados = ttk.Treeview(frame_lista, columns=cols, show='headings', selectmode='browse')
-        self.tree_comunicados.heading('ID', text='ID'); self.tree_comunicados.column('ID', width=50, anchor='center')
-        self.tree_comunicados.heading('Título', text='Título'); self.tree_comunicados.column('Título', width=350)
-        self.tree_comunicados.heading('Data de Criação', text='Enviado em'); self.tree_comunicados.column('Data de Criação', width=150, anchor='center')
-        self.tree_comunicados.heading('Status', text='Status'); self.tree_comunicados.column('Status', width=120, anchor='center')
-        scrollbar = ttk.Scrollbar(frame_lista, orient="vertical", command=self.tree_comunicados.yview)
-        self.tree_comunicados.configure(yscrollcommand=scrollbar.set)
-        self.tree_comunicados.grid(row=0, column=0, sticky="nsew")
-        scrollbar.grid(row=0, column=1, sticky="ns")
+        self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
 
-    # --- ABA 2: DOCUMENTOS PESSOAIS ---
-    def criar_aba_documentos(self):
-        main_frame = ttk.Frame(self.frame_documentos)
+        self.criar_aba_catalogo_produtos()
+        self.criar_aba_fornecedores()
+        self.criar_aba_importacao_xml() 
+        self.criar_aba_contagem_estoque()
+        self.criar_aba_sugestao_compra() 
+        self.criar_aba_administracao()
+        
+        # Carregamento inicial
+        self.atualizar_lista_produtos() 
+        self.atualizar_lista_fornecedores() 
+        self.popular_combobox_produtos_mestre() 
+        self.atualizar_lista_contagens_historico() 
+        self.popular_combos_contagem_sugestao() # <-- CORREÇÃO: Inicializa os combos da aba 5
+
+    def on_tab_changed(self, event):
+        """Atualiza os dados das abas quando elas são selecionadas."""
+        tab_selecionada = self.notebook.tab(self.notebook.select(), "text")
+        
+        if tab_selecionada == '5. Sugestão de Compra':
+            self.popular_combos_contagem_sugestao()
+        elif tab_selecionada == '4. Lançar Contagem Física':
+            self.atualizar_lista_contagens_historico()
+        elif tab_selecionada == '1. Catálogo Mestre':
+            self.atualizar_lista_produtos()
+        elif tab_selecionada == '2. Fornecedores':
+            self.atualizar_lista_fornecedores()
+        elif tab_selecionada == '6. Administração / Reset':
+            self.atualizar_lista_nfs_admin()
+            self.atualizar_lista_contagens_admin()
+        elif tab_selecionada == '7. Solicitações (Líderes)':
+            self.carregar_solicitacoes()
+
+    # ===================================================================
+    # == ABA 1: CATÁLOGO MESTRE (Sem alterações) ========================
+    # ===================================================================
+    def criar_aba_catalogo_produtos(self):
+        main_frame = ttk.Frame(self.frame_produtos)
         main_frame.pack(fill=tk.BOTH, expand=True)
-        main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(0, weight=1)
-        frame_funcionarios = ttk.LabelFrame(main_frame, text="Selecionar Funcionário", padding="10")
-        frame_funcionarios.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
-        frame_funcionarios.rowconfigure(0, weight=1)
-        frame_funcionarios.columnconfigure(0, weight=1)
-        cols_func = ('ID', 'Nome')
-        self.tree_rh_funcionarios = ttk.Treeview(frame_funcionarios, columns=cols_func, show='headings', selectmode='browse')
-        self.tree_rh_funcionarios.heading('ID', text='ID'); self.tree_rh_funcionarios.column('ID', width=40)
-        self.tree_rh_funcionarios.heading('Nome', text='Nome')
-        self.tree_rh_funcionarios.grid(row=0, column=0, sticky="nsew")
-        self.tree_rh_funcionarios.bind('<<TreeviewSelect>>', self.on_rh_funcionario_selecionado)
-        frame_docs = ttk.LabelFrame(main_frame, text="Documentos Enviados", padding="10")
-        frame_docs.grid(row=0, column=1, sticky="nsew")
-        frame_docs.rowconfigure(0, weight=1)
-        frame_docs.columnconfigure(0, weight=1)
-        cols_docs = ('ID Doc', 'Tipo', 'Referência', 'Data Upload', 'Status Ciência', 'Data da Ciência')
-        self.tree_rh_documentos = ttk.Treeview(frame_docs, columns=cols_docs, show='headings', selectmode='browse')
-        self.tree_rh_documentos.heading('ID Doc', text='ID'); self.tree_rh_documentos.column('ID Doc', width=40)
-        self.tree_rh_documentos.heading('Tipo', text='Tipo de Documento'); self.tree_rh_documentos.column('Tipo', width=150)
-        self.tree_rh_documentos.heading('Referência', text='Mês/Ano Ref.'); self.tree_rh_documentos.column('Referência', width=100, anchor='center')
-        self.tree_rh_documentos.heading('Data Upload', text='Data de Upload'); self.tree_rh_documentos.column('Data Upload', width=150, anchor='center')
-        self.tree_rh_documentos.heading('Status Ciência', text='Status')
-        self.tree_rh_documentos.column('Status Ciência', width=100, anchor='center')
-        self.tree_rh_documentos.heading('Data da Ciência', text='Data da Ciência')
-        self.tree_rh_documentos.column('Data da Ciência', width=150, anchor='center')
-        self.tree_rh_documentos.grid(row=0, column=0, sticky="nsew")
-        frame_botoes_docs = ttk.Frame(frame_docs)
-        frame_botoes_docs.grid(row=1, column=0, sticky="ew", pady=(10,0))
-        
-        btn_solicitar_onboarding = ttk.Button(frame_botoes_docs, text="🚀 Solicitar Documentos (Onboarding)", command=self.solicitar_onboarding_funcionario)
-        btn_solicitar_onboarding.pack(side="left", padx=(0, 20))
-        btn_add = ttk.Button(frame_botoes_docs, text="Adicionar Novo Documento...", command=self.abrir_janela_add_documento)
-        btn_add.pack(side="left")
-        
-        # --- NOVOS BOTÕES ---
-        btn_edit = ttk.Button(frame_botoes_docs, text="Editar Metadados", command=self.abrir_janela_edicao_documento)
-        btn_edit.pack(side="left", padx=10)
-        
-        btn_del = ttk.Button(frame_botoes_docs, text="Excluir Documento", command=self.excluir_documento_selecionado)
-        btn_del.pack(side="left", padx=10)
-        # --- FIM NOVOS BOTÕES ---
+        form_frame = ttk.LabelFrame(main_frame, text="Cadastrar/Editar Produto Mestre", padding="10")
+        form_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
+        ttk.Label(form_frame, text="Nome do Produto:").grid(row=0, column=0, sticky="w", pady=2)
+        self.entry_prod_nome = ttk.Entry(form_frame, width=40)
+        self.entry_prod_nome.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+        ttk.Label(form_frame, text="Unidade (Ex: UN, KG, L):").grid(row=2, column=0, sticky="w", pady=2)
+        self.entry_prod_unidade = ttk.Entry(form_frame, width=15)
+        self.entry_prod_unidade.grid(row=3, column=0, sticky="w", pady=(0, 10))
+        ttk.Label(form_frame, text="Estoque Mínimo:").grid(row=2, column=1, sticky="w", pady=2)
+        self.entry_prod_estoque_min = ttk.Entry(form_frame, width=15)
+        self.entry_prod_estoque_min.grid(row=3, column=1, sticky="w", pady=(0, 10))
+        self.entry_prod_estoque_min.insert(0, "0.0")
+        btn_frame = ttk.Frame(form_frame)
+        btn_frame.grid(row=4, column=0, columnspan=2, pady=10)
+        self.btn_prod_salvar = ttk.Button(btn_frame, text="Salvar Novo", command=self.salvar_produto)
+        self.btn_prod_salvar.pack(side=tk.LEFT, padx=5)
+        self.btn_prod_limpar = ttk.Button(btn_frame, text="Limpar", command=self.limpar_formulario_produto)
+        self.btn_prod_limpar.pack(side=tk.LEFT, padx=5)
+        lista_frame = ttk.LabelFrame(main_frame, text="Catálogo Mestre de Produtos", padding="10")
+        lista_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+        lista_frame.rowconfigure(0, weight=1)
+        lista_frame.columnconfigure(0, weight=1)
+        cols = ('ID', 'Nome', 'Unidade', 'Estoque Mínimo')
+        self.tree_produtos = ttk.Treeview(lista_frame, columns=cols, show='headings', selectmode='browse')
+        self.tree_produtos.heading('ID', text='ID'); self.tree_produtos.column('ID', width=40, anchor='center')
+        self.tree_produtos.heading('Nome', text='Nome'); self.tree_produtos.column('Nome', width=250)
+        self.tree_produtos.heading('Unidade', text='UN'); self.tree_produtos.column('Unidade', width=50, anchor='center')
+        self.tree_produtos.heading('Estoque Mínimo', text='Est. Mínimo'); self.tree_produtos.column('Estoque Mínimo', width=80, anchor='e')
+        scrollbar = ttk.Scrollbar(lista_frame, orient="vertical", command=self.tree_produtos.yview)
+        self.tree_produtos.configure(yscrollcommand=scrollbar.set)
+        self.tree_produtos.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        self.tree_produtos.bind('<<TreeviewSelect>>', self.selecionar_produto_para_edicao)
+        lista_btn_frame = ttk.Frame(lista_frame)
+        lista_btn_frame.grid(row=1, column=0, columnspan=2, pady=(10, 0))
+        btn_excluir = ttk.Button(lista_btn_frame, text="Excluir Selecionado", command=self.excluir_produto_selecionado)
+        btn_excluir.pack(side=tk.LEFT)
 
-        btn_vis = ttk.Button(frame_botoes_docs, text="Visualizar/Baixar Documento", command=self.visualizar_documento_selecionado)
-        btn_vis.pack(side="right")
+    def limpar_formulario_produto(self):
+        self.entry_prod_nome.delete(0, tk.END)
+        self.entry_prod_unidade.delete(0, tk.END)
+        self.entry_prod_estoque_min.delete(0, tk.END); self.entry_prod_estoque_min.insert(0, "0.0")
+        self.produto_selecionado_id = None
+        self.btn_prod_salvar.config(text="Salvar Novo")
+        self.entry_prod_nome.focus()
+        if self.tree_produtos.selection():
+            self.tree_produtos.selection_remove(self.tree_produtos.selection()[0])
 
-
-    def criar_aba_onboarding(self):
-        """Cria a interface para gerenciar a aprovação do exame admissional."""
-        # Acesso restrito apenas a Gestores e RH para evitar leaks de dados
-        if self.nivel_usuario not in ('RH', 'Gestor'):
-            ttk.Label(self.frame_onboarding, text="ACESSO NEGADO: Esta área é restrita ao RH/Gestão.", font=("Arial", 16, "bold"), foreground="red").pack(pady=50)
+    def salvar_produto(self):
+        nome = self.entry_prod_nome.get()
+        unidade = self.entry_prod_unidade.get().upper()
+        estoque_min_str = self.entry_prod_estoque_min.get().replace(",", ".")
+        if not nome or not unidade:
+            messagebox.showerror("Erro", "Nome e Unidade são obrigatórios.", parent=self.root)
             return
+        try:
+            estoque_min = Decimal(estoque_min_str)
+        except InvalidOperation: # <-- CORREÇÃO: Exceção específica
+            messagebox.showerror("Erro", "Estoque Mínimo deve ser um número.", parent=self.root)
+            return
+        try:
+            if self.produto_selecionado_id:
+                database.atualizar_produto_estoque(self.produto_selecionado_id, nome, unidade, estoque_min)
+                messagebox.showinfo("Sucesso", "Produto atualizado com sucesso!", parent=self.root)
+            else:
+                novo_id = database.criar_produto_estoque(nome, unidade, estoque_min) 
+                if not novo_id: raise Exception("Falha ao criar produto, não retornou ID.")
+                messagebox.showinfo("Sucesso", "Produto criado com sucesso!", parent=self.root)
+            self.limpar_formulario_produto()
+            self.atualizar_lista_produtos()
+            self.popular_combobox_produtos_mestre()
+        except Exception as e:
+            logger.error(f"Erro ao salvar produto: {e}", exc_info=True)
+            messagebox.showerror("Erro de Banco", f"Não foi possível salvar o produto.\nErro: {e}", parent=self.root)
 
-        main_frame = ttk.Frame(self.frame_onboarding)
+    def atualizar_lista_produtos(self):
+        for i in self.tree_produtos.get_children():
+            self.tree_produtos.delete(i)
+        try:
+            produtos = database.listar_produtos_estoque()
+            self.mapa_produtos_mestre_contagem.clear()
+            for p in produtos:
+                self.tree_produtos.insert("", "end", values=(p.ProdutoID, p.NomeProduto, p.UnidadeMedida, f"{p.EstoqueMinimo:.3f}"))
+                self.mapa_produtos_mestre_contagem[p.NomeProduto] = {'id': p.ProdutoID, 'un': p.UnidadeMedida}
+        except Exception as e:
+            logger.error(f"Erro ao atualizar lista de produtos: {e}", exc_info=True)
+
+    def selecionar_produto_para_edicao(self, event=None):
+        selecionado = self.tree_produtos.focus()
+        if not selecionado: return
+        dados = self.tree_produtos.item(selecionado, 'values')
+        produto_id, nome, unidade, estoque_min = dados
+        self.limpar_formulario_produto()
+        self.produto_selecionado_id = int(produto_id)
+        self.entry_prod_nome.insert(0, nome)
+        self.entry_prod_unidade.insert(0, unidade)
+        self.entry_prod_estoque_min.delete(0, tk.END); self.entry_prod_estoque_min.insert(0, estoque_min)
+        self.btn_prod_salvar.config(text="Atualizar Produto")
+
+    def excluir_produto_selecionado(self):
+        if not self.produto_selecionado_id:
+            messagebox.showwarning("Aviso", "Selecione um produto da lista para excluir.", parent=self.root)
+            return
+        nome_produto = self.entry_prod_nome.get()
+        if not messagebox.askyesno("Confirmar Exclusão", f"Tem certeza que deseja excluir o produto:\n\n'{nome_produto}'?", icon='warning', parent=self.root):
+            return
+        try:
+            database.excluir_produto_estoque(self.produto_selecionado_id)
+            messagebox.showinfo("Sucesso", "Produto excluído com sucesso!", parent=self.root)
+            self.limpar_formulario_produto()
+            self.atualizar_lista_produtos()
+            self.popular_combobox_produtos_mestre()
+        except Exception as e:
+            logger.error(f"Erro ao excluir produto: {e}", exc_info=True)
+            messagebox.showerror("Erro de Banco", "Não foi possível excluir o produto.\nVerifique se ele já está vinculado a notas fiscais ou contagens.", parent=self.root)
+
+    # ===================================================================
+    # == ABA 2: FORNECEDORES (Sem alterações) ===========================
+    # ===================================================================
+    def criar_aba_fornecedores(self):
+        # ... (código idêntico ao anterior) ...
+        main_frame = ttk.Frame(self.frame_fornecedores)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        form_frame = ttk.LabelFrame(main_frame, text="Cadastrar/Editar Fornecedor", padding="10")
+        form_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
+        ttk.Label(form_frame, text="Nome Fantasia:").grid(row=0, column=0, sticky="w", pady=2)
+        self.entry_forn_nome = ttk.Entry(form_frame, width=40)
+        self.entry_forn_nome.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+        ttk.Label(form_frame, text="CNPJ (apenas números):").grid(row=2, column=0, sticky="w", pady=2)
+        self.entry_forn_cnpj = ttk.Entry(form_frame, width=40)
+        self.entry_forn_cnpj.grid(row=3, column=0, columnspan=2, sticky="w", pady=(0, 10))
+        btn_frame = ttk.Frame(form_frame)
+        btn_frame.grid(row=4, column=0, columnspan=2, pady=10)
+        self.btn_forn_salvar = ttk.Button(btn_frame, text="Salvar Novo", command=self.salvar_fornecedor)
+        self.btn_forn_salvar.pack(side=tk.LEFT, padx=5)
+        self.btn_forn_limpar = ttk.Button(btn_frame, text="Limpar", command=self.limpar_formulario_fornecedor)
+        self.btn_forn_limpar.pack(side=tk.LEFT, padx=5)
+        lista_frame = ttk.LabelFrame(main_frame, text="Fornecedores Cadastrados", padding="10")
+        lista_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+        lista_frame.rowconfigure(0, weight=1)
+        lista_frame.columnconfigure(0, weight=1)
+        cols_forn = ('ID', 'Nome Fantasia', 'CNPJ')
+        self.tree_fornecedores = ttk.Treeview(lista_frame, columns=cols_forn, show='headings', selectmode='browse')
+        self.tree_fornecedores.heading('ID', text='ID'); self.tree_fornecedores.column('ID', width=40, anchor='center')
+        self.tree_fornecedores.heading('Nome Fantasia', text='Nome'); self.tree_fornecedores.column('Nome Fantasia', width=250)
+        self.tree_fornecedores.heading('CNPJ', text='CNPJ'); self.tree_fornecedores.column('CNPJ', width=150, anchor='center')
+        scrollbar_forn = ttk.Scrollbar(lista_frame, orient="vertical", command=self.tree_fornecedores.yview)
+        self.tree_fornecedores.configure(yscrollcommand=scrollbar_forn.set)
+        self.tree_fornecedores.grid(row=0, column=0, sticky="nsew")
+        scrollbar_forn.grid(row=0, column=1, sticky="ns")
+        self.tree_fornecedores.bind('<<TreeviewSelect>>', self.selecionar_fornecedor_para_edicao)
+        lista_btn_frame_forn = ttk.Frame(lista_frame)
+        lista_btn_frame_forn.grid(row=1, column=0, columnspan=2, pady=(10, 0))
+        btn_excluir_forn = ttk.Button(lista_btn_frame_forn, text="Excluir Selecionado", command=self.excluir_fornecedor_selecionado)
+        btn_excluir_forn.pack(side=tk.LEFT)
+
+    def limpar_formulario_fornecedor(self):
+        # ... (código idêntico ao anterior) ...
+        self.entry_forn_nome.delete(0, tk.END)
+        self.entry_forn_cnpj.delete(0, tk.END)
+        self.fornecedor_selecionado_id = None
+        self.btn_forn_salvar.config(text="Salvar Novo")
+        self.entry_forn_nome.focus()
+        if self.tree_fornecedores.selection():
+            self.tree_fornecedores.selection_remove(self.tree_fornecedores.selection()[0])
+
+    def salvar_fornecedor(self):
+        # ... (código idêntico ao anterior) ...
+        nome = self.entry_forn_nome.get()
+        cnpj = self.entry_forn_cnpj.get()
+        if not nome or not cnpj:
+            messagebox.showerror("Erro", "Nome Fantasia e CNPJ são obrigatórios.", parent=self.root)
+            return
+        try:
+            if self.fornecedor_selecionado_id:
+                database.atualizar_fornecedor(self.fornecedor_selecionado_id, cnpj, nome)
+                messagebox.showinfo("Sucesso", "Fornecedor atualizado com sucesso!", parent=self.root)
+            else:
+                database.criar_fornecedor(cnpj, nome)
+                messagebox.showinfo("Sucesso", "Fornecedor criado com sucesso!", parent=self.root)
+            self.limpar_formulario_fornecedor()
+            self.atualizar_lista_fornecedores()
+        except Exception as e:
+            logger.error(f"Erro ao salvar fornecedor: {e}", exc_info=True)
+            messagebox.showerror("Erro de Banco", f"Não foi possível salvar o fornecedor.\nVerifique se o CNPJ já não está cadastrado.\nErro: {e}", parent=self.root)
+
+    def atualizar_lista_fornecedores(self):
+        # ... (código idêntico ao anterior) ...
+        for i in self.tree_fornecedores.get_children():
+            self.tree_fornecedores.delete(i)
+        try:
+            fornecedores = database.listar_fornecedores()
+            for f in fornecedores:
+                self.tree_fornecedores.insert("", "end", values=(f.FornecedorID, f.NomeFantasia, f.CNPJ))
+        except Exception as e:
+            logger.error(f"Erro ao atualizar lista de fornecedores: {e}", exc_info=True)
+
+    def selecionar_fornecedor_para_edicao(self, event=None):
+        # ... (código idêntico ao anterior) ...
+        selecionado = self.tree_fornecedores.focus()
+        if not selecionado: return
+        dados = self.tree_fornecedores.item(selecionado, 'values')
+        fornecedor_id, nome, cnpj = dados
+        self.limpar_formulario_fornecedor()
+        self.fornecedor_selecionado_id = int(fornecedor_id)
+        self.entry_forn_nome.insert(0, nome)
+        self.entry_forn_cnpj.insert(0, cnpj)
+        self.btn_forn_salvar.config(text="Atualizar Fornecedor")
+
+    def excluir_fornecedor_selecionado(self):
+        # ... (código idêntico ao anterior) ...
+        if not self.fornecedor_selecionado_id:
+            messagebox.showwarning("Aviso", "Selecione um fornecedor da lista para excluir.", parent=self.root)
+            return
+        nome_fornecedor = self.entry_forn_nome.get()
+        if not messagebox.askyesno("Confirmar Exclusão", f"Tem certeza que deseja excluir o fornecedor:\n\n'{nome_fornecedor}'?", icon='warning', parent=self.root):
+            return
+        try:
+            database.excluir_fornecedor(self.fornecedor_selecionado_id)
+            messagebox.showinfo("Sucesso", "Fornecedor excluído com sucesso!", parent=self.root)
+            self.limpar_formulario_fornecedor()
+            self.atualizar_lista_fornecedores()
+        except Exception as e:
+            logger.error(f"Erro ao excluir fornecedor: {e}", exc_info=True)
+            messagebox.showerror("Erro de Banco", "Não foi possível excluir o fornecedor.\nVerifique se ele já está vinculado a notas fiscais.", parent=self.root)
+
+    # ===================================================================
+    # == ABA 3: IMPORTAÇÃO XML (ATUALIZADA com Filtro) ==================
+    # ===================================================================
+    def criar_aba_importacao_xml(self):
+        main_frame = ttk.Frame(self.frame_importacao)
         main_frame.pack(fill=tk.BOTH, expand=True)
         main_frame.columnconfigure(0, weight=1)
-        main_frame.rowconfigure(0, weight=1)
-
-        # Treeview de Funcionários Prontos
-        cols = ('ID', 'Nome', 'Status Documentos', 'Status Admissional', 'Última Etapa', 'Data Admissional')
-        self.tree_onboarding = ttk.Treeview(main_frame, columns=cols, show='headings', selectmode='browse')
-        for col in cols: self.tree_onboarding.heading(col, text=col)
-
-        self.tree_onboarding.column('ID', width=40)
-        self.tree_onboarding.column('Status Documentos', width=120, anchor='center')
-        self.tree_onboarding.column('Status Admissional', width=120, anchor='center')
-        self.tree_onboarding.column('Data Admissional', width=120, anchor='center')
-
-        self.tree_onboarding.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
-        self.tree_onboarding.bind('<<TreeviewSelect>>', self.on_onboarding_selecionado)
-
-        # Botões de Ação
+        main_frame.rowconfigure(1, weight=1) 
+        main_frame.rowconfigure(3, weight=1) 
         frame_botoes = ttk.Frame(main_frame)
-        frame_botoes.grid(row=1, column=0, sticky="ew", padx=10, pady=5)
-        
-        ttk.Button(frame_botoes, text="🔄 Atualizar Lista", command=self.carregar_onboarding_lista).pack(side="left", padx=5)
-        ttk.Button(frame_botoes, text="📂 Ver Documentos Enviados", command=self.abrir_janela_documentos_onboarding).pack(side="left", padx=5)
-        ttk.Button(frame_botoes, text="📋 Ver Dados Cadastrais", command=self.ver_dados_cadastrais_selecionado).pack(side="left", padx=5)
-        ttk.Button(frame_botoes, text="🗑️ Excluir Cadastro", command=self.excluir_candidato_onboarding).pack(side="left", padx=5)
-        ttk.Button(frame_botoes, text="🔄 Reiniciar Processo", command=self.reiniciar_processo_onboarding).pack(side="left", padx=5)
-        self.btn_aprovar_admissional = ttk.Button(frame_botoes, text="✅ Aprovar Exame Admissional", command=self.aprovar_exame_admissional_rh)
-        self.btn_aprovar_admissional.pack(side="right", padx=5)
+        frame_botoes.grid(row=0, column=0, sticky="ew", pady=5)
+        btn_selecionar_pasta = ttk.Button(frame_botoes, text="1. Selecionar Pasta com XMLs de Compra", command=self.abrir_seletor_pasta_xml)
+        btn_selecionar_pasta.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=10)
+        frame_vincular = ttk.LabelFrame(main_frame, text="2. Itens Pendentes de Vinculação (DE/PARA)", padding="10")
+        frame_vincular.grid(row=1, column=0, sticky="nsew", pady=5)
+        frame_vincular.rowconfigure(0, weight=1)
+        frame_vincular.columnconfigure(0, weight=1)
+        cols_vinc = ('Fornecedor', 'Produto no XML', 'Cod. Forn.', 'EAN', 'NCM')
+        self.tree_vincular = ttk.Treeview(frame_vincular, columns=cols_vinc, show='headings', selectmode='browse')
+        self.tree_vincular.heading('Fornecedor', text='Fornecedor'); self.tree_vincular.column('Fornecedor', width=150)
+        self.tree_vincular.heading('Produto no XML', text='Produto no XML'); self.tree_vincular.column('Produto no XML', width=300)
+        self.tree_vincular.heading('Cod. Forn.', text='Cód. Forn.'); self.tree_vincular.column('Cod. Forn.', width=100)
+        self.tree_vincular.heading('EAN', text='Cód. Barras'); self.tree_vincular.column('EAN', width=100)
+        self.tree_vincular.heading('NCM', text='NCM'); self.tree_vincular.column('NCM', width=80)
+        self.tree_vincular.grid(row=0, column=0, sticky="nsew")
+        frame_ferramenta = ttk.Frame(main_frame)
+        frame_ferramenta.grid(row=2, column=0, sticky="ew", pady=10)
+        frame_ferramenta.columnconfigure(1, weight=1)
+        ttk.Label(frame_ferramenta, text="Filtrar Lista:").grid(row=0, column=0, sticky="w", padx=(0,5))
+        self.entry_filtro_importacao = ttk.Entry(frame_ferramenta, width=25)
+        self.entry_filtro_importacao.grid(row=0, column=1, sticky="ew", padx=(0,10))
+        self.entry_filtro_importacao.bind("<KeyRelease>", self.filtrar_combo_importacao)
+        ttk.Label(frame_ferramenta, text="Vincular ao Mestre:").grid(row=0, column=2, sticky="w", padx=(10,5))
+        self.combo_produtos_mestre = ttk.Combobox(frame_ferramenta, state="readonly", width=35)
+        self.combo_produtos_mestre.grid(row=0, column=3, sticky="ew", padx=(0,5))
+       # --- NOVO CAMPO: FATOR DE CONVERSÃO ---
+        ttk.Label(frame_ferramenta, text="Itens p/ Cx:").grid(row=0, column=4, sticky="w")
+        self.entry_fator_conversao = ttk.Entry(frame_ferramenta, width=5)
+        self.entry_fator_conversao.insert(0, "1") # Padrão é 1 para 1
+        self.entry_fator_conversao.grid(row=0, column=5, sticky="w", padx=(0,10))
+        btn_vincular = ttk.Button(frame_ferramenta, text="Vincular", command=self.vincular_produto_selecionado)
+        btn_vincular.grid(row=0, column=6, sticky="w", padx=5)
+        btn_criar_vincular = ttk.Button(frame_ferramenta, text="Criar Mestre e Vincular", command=self.criar_mestre_e_vincular)
+        btn_criar_vincular.grid(row=0, column=7, sticky="w", padx=5)
+        frame_prontos = ttk.LabelFrame(main_frame, text="3. Itens Prontos para Salvar (Já Vinculados)", padding="10")
+        frame_prontos.grid(row=3, column=0, sticky="nsew", pady=5)
+        frame_prontos.rowconfigure(0, weight=1)
+        frame_prontos.columnconfigure(0, weight=1)
+        cols_prontos = ('NF', 'Fornecedor', 'Produto Mestre', 'Qtd', 'Custo Unit.', 'Custo Total')
+        self.tree_prontos = ttk.Treeview(frame_prontos, columns=cols_prontos, show='headings', selectmode='none')
+        for col in cols_prontos: self.tree_prontos.heading(col, text=col)
+        self.tree_prontos.column('NF', width=80, anchor='center')
+        self.tree_prontos.column('Fornecedor', width=150)
+        self.tree_prontos.column('Produto Mestre', width=200)
+        self.tree_prontos.column('Qtd', width=60, anchor='e')
+        self.tree_prontos.column('Custo Unit.', width=80, anchor='e')
+        self.tree_prontos.column('Custo Total', width=80, anchor='e')
+        self.tree_prontos.grid(row=0, column=0, sticky="nsew")
+        btn_salvar_tudo = ttk.Button(main_frame, text="4. Salvar Todas as Notas Processadas no Banco", command=self.salvar_notas_processadas)
+        btn_salvar_tudo.grid(row=4, column=0, sticky="ew", pady=10, ipady=10)
+        # Botão de Gerenciamento de Vínculos (Correção)
+        btn_gerir_vinculos = ttk.Button(main_frame, text="🛠️ Gerenciar / Corrigir Vínculos Salvos", command=self.abrir_gestor_vinculos)
+        btn_gerir_vinculos.grid(row=5, column=0, sticky="ew", pady=(0, 10))
 
-        self.carregar_onboarding_lista()
-
-    def carregar_onboarding_lista(self):
-        """Carrega a lista de funcionários com onboarding completo/pendente para a Treeview."""
-        for i in self.tree_onboarding.get_children(): self.tree_onboarding.delete(i)
-        
-        funcionarios = database.buscar_onboarding_lista_rh()
-        
-        for f in funcionarios:
-            data_admissional = f.DataAdmissional.strftime('%d/%m/%Y') if f.DataAdmissional else '---'
-            
-            self.tree_onboarding.insert("", "end", values=(
-                f.FuncionarioID, f.NomeCompleto, f.StatusWorkflow, f.StatusAdmissional, f.UltimaEtapa, data_admissional
-            ))
-
-    def on_onboarding_selecionado(self, event):
-        """Habilita/desabilita o botão de aprovação e armazena os dados de download."""
-        selecionado = self.tree_onboarding.focus()
-        if not selecionado: return
-        
-        dados = self.tree_onboarding.item(selecionado, 'values')
-        status_admissional = dados[3]
-        
-        if status_admissional == 'Pendente':
-            self.btn_aprovar_admissional.config(state="normal")
-        else:
-            self.btn_aprovar_admissional.config(state="disabled")
-
-    def aprovar_exame_admissional_rh(self):
-        """Dispara a aprovação manual do exame admissional."""
-        selecionado = self.tree_onboarding.focus()
-        if not selecionado: return
-        
-        dados = self.tree_onboarding.item(selecionado, 'values')
-        funcionario_id = dados[0]
-        nome_funcionario = dados[1]
-
-        if dados[3] != 'Pendente':
-            messagebox.showwarning("Aviso", "O exame deste funcionário já foi aprovado.")
-            return
-
-        confirmado = messagebox.askyesno("Confirmar Aprovação", f"Tem certeza que deseja aprovar o exame admissional para {nome_funcionario}?\n\nIsso liberará o acesso TOTAL dele ao Bot Telegram.")
-
-        if confirmado:
-            hoje = datetime.now()
-            if database.aprovar_exame_admissional(funcionario_id, hoje):
-                
-                # 1. Notificação de Liberação Total
-                func_obj = database.buscar_funcionario_por_id(funcionario_id)
-                if func_obj and func_obj.ChatIDTelegram:
-                     notificador_telegram.enviar_mensagem(
-                        func_obj.ChatIDTelegram,
-                        "🎉 **PARABÉNS! SEU EXAME ADMISSIONAL FOI APROVADO!** 🎉\n\n"
-                        "Seu acesso ao sistema de Gamificação está **TOTALMENTE LIBERADO**! "
-                        "Você já pode usar todos os comandos (Tarefas, Ranking, Saldo). Bom trabalho! 🚀"
-                    )
-
-                # 2. Atualiza a lista na interface
-                self.carregar_onboarding_lista()
-                messagebox.showinfo("Sucesso", "Admissional Aprovado! Acesso liberado no sistema.")
-            else:
-                messagebox.showerror("Erro", "Falha ao atualizar o status no banco de dados.")
-
-    def excluir_candidato_onboarding(self):
-        """Exclui permanentemente o cadastro do candidato selecionado."""
-        selecionado = self.tree_onboarding.focus()
-        if not selecionado:
-            messagebox.showwarning("Aviso", "Selecione um funcionário na lista para excluir.")
-            return
-
-        # Recupera dados da linha selecionada
-        dados = self.tree_onboarding.item(selecionado, 'values')
-        funcionario_id = dados[0]
-        nome = dados[1]
-
-        # Confirmação de Segurança
-        confirmacao = messagebox.askyesno(
-            "Confirmar Exclusão",
-            f"Tem certeza que deseja excluir o cadastro de '{nome}'?\n\n"
-            "⚠️ ATENÇÃO: Esta ação apagará TODOS os dados, documentos e histórico deste funcionário permanentemente.\n"
-            "Não será possível desfazer.",
-            icon='warning',
-            default='no',
-            parent=self.root
-        )
-
-        if confirmacao:
-            try:
-                # Usa a função do database que já faz a limpeza em cascata
-                database.excluir_funcionario(funcionario_id)
-                messagebox.showinfo("Sucesso", "Cadastro excluído com sucesso!", parent=self.root)
-                self.carregar_onboarding_lista() # Atualiza a lista
-            except Exception as e:
-                logger.error(f"Erro ao excluir candidato {funcionario_id}: {e}", exc_info=True)
-                messagebox.showerror("Erro", f"Falha ao excluir cadastro:\n{e}", parent=self.root)
-
-    def abrir_janela_documentos_onboarding(self):
-        """Abre uma janela para visualizar os File IDs dos documentos enviados."""
-        selecionado = self.tree_onboarding.focus()
-        if not selecionado:
-            messagebox.showwarning("Aviso", "Selecione um funcionário da lista.")
-            return
-
-        funcionario_id = self.tree_onboarding.item(selecionado, 'values')[0]
-        nome_funcionario = self.tree_onboarding.item(selecionado, 'values')[1]
-        
-        file_ids = database.buscar_documentos_onboarding_para_download(funcionario_id)
-
-        popup = Toplevel(self.root)
-        popup.title(f"Documentos de Admissão - {nome_funcionario}")
-        popup.geometry("600x400")
-        popup.transient(self.root)
-
-        # ... (Implementação do painel de download que utiliza a função buscar_documentos_onboarding_para_download) ...
-        # (O painel de download em si é complexo, mas a função de banco está no lugar certo)
-        
-        # Simplificação: Apenas mostra os botões de download
-        frame = ttk.Frame(popup, padding="15")
-        frame.pack(fill=tk.BOTH, expand=True)
-
-        ttk.Label(frame, text="Documentos Enviados (Clique para Download):", font=("Arial", 12)).pack(anchor='w', pady=(0, 10))
-        
-        if not file_ids:
-             ttk.Label(frame, text="Nenhum documento finalizado (Workflow incompleto).", foreground="gray").pack()
-             return
-
-        for doc_name, file_id in file_ids.items():
-            if file_id:
-                # O botão deve ter uma função que chama o notificador_telegram para baixar a foto/documento
-                ttk.Button(frame, text=f"📥 Baixar {doc_name}", 
-                           command=lambda fid=file_id, dn=doc_name: self.disparar_download_documento(fid, dn, popup)
-                ).pack(fill='x', pady=5)
-            else:
-                 ttk.Label(frame, text=f"❌ {doc_name}: Não enviado ou File ID inválido.").pack(anchor='w', pady=2)
-
-    def ver_dados_cadastrais_selecionado(self):
-        """
-        Exibe dados textuais E imagens dos documentos, com opção de gerar PDF profissional.
-        """
-        selecionado = self.tree_onboarding.focus()
-        if not selecionado: return
-
-        vals = self.tree_onboarding.item(selecionado, 'values')
-        funcionario_id, nome = vals[0], vals[1]
-
-        status = database.buscar_onboarding_status(funcionario_id)
-        if not status: 
-            messagebox.showinfo("Aviso", "Sem dados de onboarding encontrados.", parent=self.root)
-            return
-
-        # --- 1. Preparação da Janela com Scroll (Necessário para muitas fotos) ---
-        popup = Toplevel(self.root)
-        popup.title(f"Prontuário Digital - {nome}")
-        popup.geometry("650x800")
-
-        # Container principal
-        main_container = ttk.Frame(popup)
-        main_container.pack(fill="both", expand=True)
-
-        canvas = tk.Canvas(main_container)
-        scrollbar = ttk.Scrollbar(main_container, orient="vertical", command=canvas.yview)
-        scrollable_frame = ttk.Frame(canvas)
-
-        scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
-
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-
-        # --- 2. Preparação dos Dados ---
-        # Dicionário para guardar caminhos locais das imagens baixadas (para o PDF)
-        cache_imagens = {} 
-
-        # Função interna para o botão de PDF
-        def acao_gerar_pdf():
-            self.gerar_pdf_prontuario(nome, status, cache_imagens)
-
-        # Botão de Exportação no Topo
-        frame_topo = ttk.Frame(scrollable_frame, padding="10")
-        frame_topo.pack(fill="x")
-        btn_pdf = ttk.Button(frame_topo, text="🖨️ Gerar PDF Completo (Dados + Fotos)", command=acao_gerar_pdf)
-        btn_pdf.pack(fill="x", ipady=8)
-
-        # --- 3. Exibição dos Dados (Texto) ---
-        lbl_dados = tk.Label(scrollable_frame, text="DADOS CADASTRAIS", font=("Arial", 12, "bold"), bg="#e0e0e0", anchor="w", padx=5)
-        lbl_dados.pack(fill="x", pady=(10, 5))
-
-        texto_dados = f"Funcionário: {nome} (ID: {funcionario_id})\n"
-        texto_dados += f"Escolaridade: {status.Escolaridade or '---'}\n"
-        texto_dados += f"Estado Civil: {status.EstadoCivil or '---'}\n"
-
-        if status.EstadoCivil and 'CASADO' in status.EstadoCivil.upper():
-            texto_dados += f"Data Casamento: {status.DataCasamento or '---'}\n"
-            texto_dados += f"Cônjuge: {status.NomeConjugue or '---'}\n"
-            texto_dados += f"CPF Cônjuge: {status.CPFConjugue or '---'}\n"
-
-        texto_dados += f"\nDEPENDENTES ({status.QtdFilhos or 0}):\n"
-        if status.DadosFilhos:
-            try:
-                filhos = json.loads(status.DadosFilhos)
-                for i, f in enumerate(filhos, 1):
-                    texto_dados += f"- {f.get('Nome', '')} ({f.get('Nasc', '')}) CPF: {f.get('CPF', '')}\n"
-            except: texto_dados += "(Erro na leitura dos dependentes)"
-        else:
-            texto_dados += "- Nenhum dependente declarado."
-
-        tk.Label(scrollable_frame, text=texto_dados, justify="left", font=("Consolas", 10), bg="white", relief="solid", bd=1, padx=10, pady=10).pack(fill="x", padx=10)
-
-        # --- 4. Exibição das Imagens (Visualização) ---
-        lbl_docs = tk.Label(scrollable_frame, text="DOCUMENTOS DIGITALIZADOS", font=("Arial", 12, "bold"), bg="#e0e0e0", anchor="w", padx=5)
-        lbl_docs.pack(fill="x", pady=(20, 5))
-
-        docs_map = {
-            "RG (Identidade)": status.RG_FileID,
-            "CPF": status.CPF_FileID,
-            "Carteira de Trabalho (CTPS)": status.CTPS_FileID,
-            "Título de Eleitor": status.TituloEleitor_FileID
-        }
-
-        # Diretório temporário para cache de visualização
-        temp_dir = os.path.join(os.getcwd(), "temp_view")
-        if not os.path.exists(temp_dir): os.makedirs(temp_dir)
-
-        for titulo, file_id in docs_map.items():
-            frame_doc = ttk.LabelFrame(scrollable_frame, text=titulo, padding="5")
-            frame_doc.pack(fill="x", padx=10, pady=5)
-
-            if file_id:
-                # Baixa a imagem para exibir
-                caminho_local = self._baixar_imagem_cache(file_id, temp_dir)
-
-                if caminho_local:
-                    cache_imagens[titulo] = caminho_local # Guarda referência para o PDF
-
-                    try:
-                        # Carrega e Redimensiona para o Painel (Thumbnail)
-                        pil_img = Image.open(caminho_local)
-                        # Redimensiona mantendo proporção (largura max 400px)
-                        base_width = 400
-                        w_percent = (base_width / float(pil_img.size[0]))
-                        h_size = int((float(pil_img.size[1]) * float(w_percent)))
-                        pil_img = pil_img.resize((base_width, h_size), Image.Resampling.LANCZOS)
-
-                        tk_img = ImageTk.PhotoImage(pil_img)
-
-                        lbl_img = tk.Label(frame_doc, image=tk_img)
-                        lbl_img.image = tk_img # Mantém referência na memória para não sumir
-                        lbl_img.pack()
-                    except Exception:
-                        tk.Label(frame_doc, text="[Arquivo PDF ou Formato não suportado para prévia]", fg="blue").pack()
-                else:
-                    tk.Label(frame_doc, text="Erro ao baixar arquivo do servidor.", fg="red").pack()
-            else:
-                tk.Label(frame_doc, text="Pendente / Não enviado", fg="gray").pack()
-
-    def _baixar_imagem_cache(self, file_id, pasta_destino):
-        """Baixa arquivo do Telegram para cache local."""
+    def popular_combobox_produtos_mestre(self):
+        # ... (código idêntico ao anterior) ...
         try:
-            token = config.TELEGRAM_TOKEN
-            # 1. Pega o caminho
-            url_info = f"https://api.telegram.org/bot{token}/getFile?file_id={file_id}"
-            r = requests.get(url_info, timeout=5).json()
-            if not r.get('ok'): return None
-
-            file_path = r['result']['file_path']
-            ext = os.path.splitext(file_path)[1]
-            if not ext: ext = ".jpg"
-
-            nome_arquivo = f"{file_id}{ext}"
-            caminho_completo = os.path.join(pasta_destino, nome_arquivo)
-
-            # Cache: Se já baixou, usa o local
-            if os.path.exists(caminho_completo): return caminho_completo
-
-            # 2. Baixa o conteúdo
-            url_download = f"https://api.telegram.org/file/bot{token}/{file_path}"
-            r_img = requests.get(url_download, timeout=20)
-
-            if r_img.status_code == 200:
-                with open(caminho_completo, 'wb') as f:
-                    f.write(r_img.content)
-                return caminho_completo
-        except: return None
-        return None
-
-    def gerar_pdf_prontuario(self, nome_funcionario, status, cache_imagens):
-        """Gera PDF profissional com dados e imagens anexadas."""
-        try:
-            dest = filedialog.asksaveasfilename(
-                title="Salvar Prontuário PDF",
-                defaultextension=".pdf",
-                initialfile=f"Prontuario_{nome_funcionario.replace(' ', '_')}.pdf"
-            )
-            if not dest: return
-
-            pdf = FPDF()
-            pdf.set_auto_page_break(auto=True, margin=15)
-            pdf.add_page()
-
-            # --- Cabeçalho ---
-            pdf.set_font("Arial", "B", 16)
-            pdf.cell(0, 10, "Ficha de Registro de Colaborador", ln=True, align="C")
-            pdf.set_font("Arial", "I", 10)
-            pdf.cell(0, 10, f"Gerado em: {datetime.now().strftime('%d/%m/%Y %H:%M')}", ln=True, align="C")
-            pdf.ln(10)
-
-            # --- Tabela de Dados ---
-            pdf.set_fill_color(240, 240, 240)
-            pdf.set_font("Arial", "B", 12)
-            pdf.cell(0, 10, "1. DADOS PESSOAIS", ln=True, fill=True)
-            pdf.ln(2)
-
-            pdf.set_font("Arial", "", 11)
-            pdf.multi_cell(0, 8, f"Nome: {nome_funcionario}\nEscolaridade: {status.Escolaridade}\nEstado Civil: {status.EstadoCivil}")
-
-            if status.EstadoCivil and 'CASADO' in status.EstadoCivil.upper():
-                pdf.multi_cell(0, 8, f"Cônjuge: {status.NomeConjugue}\nCPF Cônjuge: {status.CPFConjugue}")
-
-            pdf.ln(5)
-            pdf.set_font("Arial", "B", 12)
-            pdf.cell(0, 10, f"2. DEPENDENTES ({status.QtdFilhos or 0})", ln=True, fill=True)
-
-            if status.DadosFilhos:
-                try:
-                    filhos = json.loads(status.DadosFilhos)
-                    pdf.set_font("Arial", "", 10)
-                    for i, f in enumerate(filhos, 1):
-                        pdf.cell(0, 8, f"{i}. {f.get('Nome','')} - CPF: {f.get('CPF','')}", ln=True)
-                except: pass
-            else:
-                pdf.set_font("Arial", "I", 10)
-                pdf.cell(0, 8, "Nenhum dependente declarado.", ln=True)
-
-            # --- Imagens (Uma por página ou ajustada) ---
-            pdf.add_page()
-            pdf.set_font("Arial", "B", 12)
-            pdf.cell(0, 10, "3. DOCUMENTOS DIGITALIZADOS", ln=True, fill=True)
-            pdf.ln(5)
-
-            for titulo, caminho_img in cache_imagens.items():
-                if caminho_img and os.path.exists(caminho_img) and caminho_img.endswith(('.jpg', '.png', '.jpeg')):
-                    pdf.set_font("Arial", "B", 11)
-                    pdf.cell(0, 10, titulo, ln=True)
-
-                    # Centraliza imagem na página A4 (largura aprox 190mm útil)
-                    try:
-                        pdf.image(caminho_img, w=170) 
-                    except:
-                        pdf.cell(0, 10, "[Erro ao renderizar imagem no PDF]", ln=True)
-
-                    pdf.ln(10)
-                elif caminho_img and ".pdf" in caminho_img:
-                    pdf.set_font("Arial", "I", 10)
-                    pdf.cell(0, 10, f"{titulo}: Arquivo PDF anexado original não pode ser mesclado aqui.", ln=True)
-
-            pdf.output(dest)
-            messagebox.showinfo("Sucesso", "Prontuário PDF gerado com sucesso!", parent=self.root)
-            file_utils.abrir_arquivo(dest)
-
+            produtos = database.listar_produtos_estoque()
+            self.mapa_produtos_mestre.clear()
+            self.lista_mestre_produtos_nomes.clear() 
+            nomes_produtos_mestre = []
+            for p in produtos:
+                nome_display = f"{p.NomeProduto} (ID: {p.ProdutoID})"
+                nomes_produtos_mestre.append(nome_display)
+                self.mapa_produtos_mestre[nome_display] = p.ProdutoID
+            self.lista_mestre_produtos_nomes = sorted(nomes_produtos_mestre) 
+            self.combo_produtos_mestre['values'] = self.lista_mestre_produtos_nomes
+            self.lista_mestre_contagem_nomes = sorted(list(self.mapa_produtos_mestre_contagem.keys()))
+            if hasattr(self, 'combo_contagem_produtos'):
+                self.combo_contagem_produtos['values'] = self.lista_mestre_contagem_nomes
         except Exception as e:
-            logger.error(f"Erro PDF: {e}", exc_info=True)
-            messagebox.showerror("Erro", f"Falha ao criar PDF: {e}", parent=self.root)
+            logger.error(f"Erro ao carregar produtos mestre no combobox: {e}", exc_info=True)
 
-    def disparar_download_documento(self, file_id, doc_name, parent_popup):
-        """Baixa o arquivo real da API do Telegram e salva onde o usuário escolher."""
-        try:
-            # 1. Define extensão provável
-            ext = ".jpg" # Padrão fotos Telegram
-            if "pdf" in doc_name.lower(): ext = ".pdf"
-
-            # 2. Pede ao usuário onde salvar
-            caminho_destino = filedialog.asksaveasfilename(
-                title=f"Salvar {doc_name}",
-                defaultextension=ext,
-                initialfile=f"{doc_name}_{file_id[:5]}{ext}",
-                parent=parent_popup
-            )
-
-            if not caminho_destino: return # Cancelado pelo usuário
-
-            # 3. Obtém o caminho do arquivo na API Telegram
-            token = config.TELEGRAM_TOKEN
-            url_info = f"https://api.telegram.org/bot{token}/getFile?file_id={file_id}"
-
-            r_info = requests.get(url_info, timeout=10)
-            if r_info.status_code != 200:
-                messagebox.showerror("Erro API", "Falha ao localizar arquivo no Telegram.", parent=parent_popup)
-                return
-
-            file_path_remoto = r_info.json().get('result', {}).get('file_path')
-            if not file_path_remoto:
-                messagebox.showerror("Erro API", "Caminho remoto não encontrado.", parent=parent_popup)
-                return
-
-            # 4. Baixa o conteúdo binário
-            url_download = f"https://api.telegram.org/file/bot{token}/{file_path_remoto}"
-            r_content = requests.get(url_download, timeout=30)
-
-            if r_content.status_code == 200:
-                with open(caminho_destino, 'wb') as f:
-                    f.write(r_content.content)
-
-                messagebox.showinfo("Sucesso", f"Download concluído!\nSalvo em: {caminho_destino}", parent=parent_popup)
-                file_utils.abrir_arquivo(caminho_destino)
+    def filtrar_combo_importacao(self, event=None):
+        # ... (código idêntico ao anterior) ...
+        texto = self.entry_filtro_importacao.get().lower()
+        if not texto:
+            self.combo_produtos_mestre['values'] = self.lista_mestre_produtos_nomes
+            self.combo_produtos_mestre.set('')
+        else:
+            filtrados = [nome for nome in self.lista_mestre_produtos_nomes if texto in nome.lower()]
+            self.combo_produtos_mestre['values'] = filtrados
+            if filtrados:
+                self.combo_produtos_mestre.set(filtrados[0])
             else:
-                messagebox.showerror("Erro Download", f"Falha ao baixar bytes: {r_content.status_code}", parent=parent_popup)
+                self.combo_produtos_mestre.set('')
 
+    def abrir_seletor_pasta_xml(self):
+        # ... (código idêntico ao anterior) ...
+        pasta_selecionada = filedialog.askdirectory(title="Selecione a pasta contendo os XMLs")
+        if not pasta_selecionada:
+            return
+        for i in self.tree_vincular.get_children(): self.tree_vincular.delete(i)
+        for i in self.tree_prontos.get_children(): self.tree_prontos.delete(i)
+        self.itens_xml_nao_vinculados.clear()
+        self.dados_notas_processadas.clear()
+        try:
+            self.processar_arquivos_xml(pasta_selecionada)
         except Exception as e:
-            logger.error(f"Erro no download manual: {e}", exc_info=True)
-            messagebox.showerror("Erro Crítico", f"Falha no download: {e}", parent=parent_popup)
+            logger.error(f"Erro GERAL ao processar pasta XML: {e}", exc_info=True)
+            messagebox.showerror("Erro Crítico no Processamento", f"Ocorreu um erro ao ler os arquivos:\n{e}", parent=self.root)
 
-
-    def visualizar_documento_selecionado(self):
-        """Baixa o documento selecionado da API e o abre."""
-        selecionado = self.tree_rh_documentos.focus()
-        if not selecionado:
-            messagebox.showwarning("Aviso", "Por favor, selecione um documento na lista da direita.")
-            return
-        dados_doc = self.tree_rh_documentos.item(selecionado, 'values')
-        documento_id = dados_doc[0]
-        # REMOVIDO: A linha que forçava .pdf foi substituída pela lógica abaixo
-
-        url_download = f"{config.API_BASE_URL}/documentos/download/{documento_id}"
-
+    def ler_xml_nota_fiscal(self, caminho_arquivo_xml):
         try:
-            print(f"--> Solicitando download do documento ID {documento_id}...")
-            response = requests.get(url_download, stream=True)
+            parser = ET.XMLParser(remove_blank_text=True)
+            tree = ET.parse(caminho_arquivo_xml, parser)
+            root = tree.getroot()
 
-            if response.status_code == 200:
-                # --- CORREÇÃO DE PARSE DE HEADER ---
-                import cgi
-                nome_remoto = ""
-                
-                header_content = response.headers.get("Content-Disposition")
-                if header_content:
-                    try:
-                        # Tenta usar cgi para parsear corretamente (lida com aspas, utf-8, etc)
-                        _, params = cgi.parse_header(header_content)
-                        if 'filename' in params:
-                            nome_remoto = params['filename']
-                        elif 'filename*' in params:
-                            # Tratamento básico para filename* (UTF-8)
-                            encoding, _, filename = params['filename*'].split("'", 2)
-                            nome_remoto = urllib.parse.unquote(filename)
-                    except Exception:
-                        # Fallback para regex simples se cgi falhar
-                        import re
-                        fname = re.findall('filename="?([^"]+)"?', header_content)
-                        if fname:
-                            nome_remoto = fname[0]
+            # [CORREÇÃO] Remove namespaces para facilitar a busca das tags e evitar erros de versão
+            for elem in root.getiterator():
+                if not hasattr(elem.tag, 'find'): continue
+                i = elem.tag.find('}')
+                if i >= 0:
+                    elem.tag = elem.tag[i+1:]
 
-                # Fallback final se o header falhar ou não existir
-                if not nome_remoto:
-                    ext = ".pdf" 
-                    content_type = response.headers.get("Content-Type", "")
-                    if "image/jpeg" in content_type: ext = ".jpg"
-                    elif "image/png" in content_type: ext = ".png"
-                    
-                    # Nome seguro baseado nos dados da lista
-                    safe_tipo = "".join(x for x in dados_doc[1] if x.isalnum())
-                    nome_remoto = f"{safe_tipo}_{documento_id}{ext}"
+            # Busca direta sem namespace (mais robusto)
+            ide = root.find('.//ide')
+            emit = root.find('.//emit')
+            total = root.find('.//total/ICMSTot')
 
-                # Limpeza de caracteres inválidos no nome do arquivo (segurança extra)
-                nome_remoto = os.path.basename(nome_remoto) 
-                # -----------------------------------
+            if ide is None or emit is None or total is None:
+                raise Exception("Estrutura do XML inválida (tags essenciais não encontradas após limpeza).")
 
-                pasta_downloads = "downloads"
-                if not os.path.exists(pasta_downloads):
-                    os.makedirs(pasta_downloads)
-
-                caminho_local = os.path.join(pasta_downloads, nome_remoto)
-                # Salva o arquivo recebido no disco local
-                with open(caminho_local, 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        f.write(chunk)
-
-                print(f"--> Download concluído! Arquivo salvo em: {caminho_local}")
-                file_utils.abrir_arquivo(caminho_local)
-            else:
-                # --- CORREÇÃO: Tratamento seguro de resposta de erro ---
-                try:
-                    # Tenta ler como JSON se a API retornar estrutura padrão
-                    erro_json = response.json()
-                    msg_erro = erro_json.get('mensagem', 'Erro desconhecido no servidor.')
-                except Exception:
-                    # Se falhar (ex: erro 500 HTML ou Proxy), usa o texto cru limitado
-                    texto_erro = response.text[:200] if response.text else "Sem conteúdo"
-                    msg_erro = f"Erro HTTP {response.status_code}: {texto_erro}"
-
-                messagebox.showerror("Erro da API", f"Não foi possível baixar o arquivo:\n{msg_erro}")
-
-        except requests.exceptions.RequestException as e:
-            messagebox.showerror("Erro de Conexão", f"Não foi possível conectar à API para baixar o arquivo: {e}")
-
-    def carregar_rh_funcionarios(self):
-        for i in self.tree_rh_funcionarios.get_children(): self.tree_rh_funcionarios.delete(i)
-        funcionarios = database.listar_funcionarios()
-        for func in funcionarios: self.tree_rh_funcionarios.insert("", "end", values=(func.FuncionarioID, func.NomeCompleto))
-
-    def on_rh_funcionario_selecionado(self, event):
-        """Chamada quando um funcionário é selecionado. Carrega seus documentos e status de ciência."""
-        for i in self.tree_rh_documentos.get_children():
-            self.tree_rh_documentos.delete(i)
-
-        selecionado = self.tree_rh_funcionarios.focus()
-        if not selecionado:
-            return
-
-        funcionario_id = self.tree_rh_funcionarios.item(selecionado, 'values')[0]
-        
-        documentos = database.listar_documentos_por_funcionario(funcionario_id)
-        for doc in documentos:
-            # Formata as datas para exibição
-            mes_ano_ref = doc.MesAno.strftime("%m/%Y")
-            data_upload = doc.DataUpload.strftime("%d/%m/%Y %H:%M")
-            status_ciencia = doc.Status or "N/A" # Pega o status
-            data_ciencia = doc.DataCiencia.strftime("%d/%m/%Y %H:%M") if doc.DataCiencia else "---" # Pega a data da ciência
-
-            # Insere todos os dados na tabela
-            self.tree_rh_documentos.insert("", "end", values=(
-                doc.DocumentoID, doc.TipoDocumento, mes_ano_ref, data_upload, status_ciencia, data_ciencia
-            ))
-    def excluir_documento_selecionado(self):
-        """Chama a API para excluir o documento selecionado (banco + arquivo)."""
-        selecionado = self.tree_rh_documentos.focus()
-        if not selecionado:
-            messagebox.showwarning("Aviso", "Por favor, selecione um documento na lista para excluir.")
-            return
-
-        dados_doc = self.tree_rh_documentos.item(selecionado, 'values')
-        documento_id = dados_doc[0]
-        tipo_doc = dados_doc[1]
-        mes_ano_ref = dados_doc[2]
-
-        confirmado = messagebox.askyesno(
-            "Confirmar Exclusão", 
-            f"Tem certeza que deseja excluir o documento:\n\nTipo: {tipo_doc}\nReferência: {mes_ano_ref}\n\n"
-            f"Esta ação removerá o registro do banco e o arquivo físico no servidor. NÃO PODE SER DESFEITA.", 
-            icon='warning'
-        )
-
-        if confirmado:
-            try:
-                # Chamada DELETE para a API
-                url = f"{config.API_BASE_URL}/documentos/excluir/{documento_id}"
-                response = requests.delete(url)
-
-                if response.status_code == 200:
-                    messagebox.showinfo("Sucesso", "Documento excluído com sucesso!")
-                    self.on_rh_funcionario_selecionado(None) # Recarrega a lista
-                else:
-                    msg_erro = response.json().get('mensagem', 'Erro desconhecido')
-                    messagebox.showerror("Erro da API", f"Falha ao excluir: {msg_erro}")
-
-            except requests.exceptions.RequestException as e:
-                logger.error(f"Erro de conexão ao excluir documento: {e}", exc_info=True)
-                messagebox.showerror("Erro de Conexão", f"Não foi possível conectar ao servidor: {e}")
-                
-    def _buscar_nivel_acesso(self, funcionario_id):
-        """Busca o NivelAcesso de um funcionário pelo ID (função auxiliar)."""
-        conn = database.get_db_connection()
-        if conn:
-            try:
-                cursor = conn.cursor()
-                sql = "SELECT NivelAcesso FROM Funcionarios WHERE FuncionarioID = ?"
-                cursor.execute(sql, funcionario_id)
-                resultado = cursor.fetchone()
-                return resultado[0] if resultado else 'Funcionario' # Retorna o primeiro campo
-            except Exception as e:
-                logger.error(f"Falha ao buscar NivelAcesso para ID {funcionario_id}: {e}")
-                return 'Funcionario' # Default seguro
-            finally:
-                conn.close()
-        return 'Funcionario'
-
-    def abrir_janela_edicao_documento(self):
-        """Abre a janela Toplevel para editar os metadados do documento selecionado."""
-        selecionado = self.tree_rh_documentos.focus()
-        if not selecionado:
-            messagebox.showwarning("Aviso", "Por favor, selecione um documento na lista para editar.")
-            return
-
-        dados_doc = self.tree_rh_documentos.item(selecionado, 'values')
-        documento_id = dados_doc[0]
-        tipo_atual = dados_doc[1]
-        mes_ano_ref_atual = dados_doc[2] # dd/mm/yyyy
-
-        # Converte para objeto datetime para o DateEntry usar
-        try:
-            data_ref_obj = datetime.strptime(f"01/{mes_ano_ref_atual}", "%d/%m/%Y").date()
-        except ValueError:
-            data_ref_obj = datetime.now().date() # Fallback
-
-        # --- Criação da Janela Pop-up ---
-        popup = Toplevel(self.root)
-        popup.title(f"Editar Documento ID: {documento_id}")
-        popup.geometry("350x250")
-        popup.transient(self.root)
-
-        frame = ttk.Frame(popup, padding="15")
-        frame.pack(fill="both", expand=True)
-
-        # --- Widgets do Formulário ---
-        ttk.Label(frame, text="Tipo de Documento:").grid(row=0, column=0, sticky="w", pady=5)
-        combo_tipo = ttk.Combobox(frame, values=['Holerite', 'Cartão Ponto', 'Comprovante de Consumo', 'Contrato', 'Atestado', 'Advertência', 'Outro'])
-        combo_tipo.grid(row=0, column=1, sticky="ew", pady=5)
-        combo_tipo.set(tipo_atual)
-
-        ttk.Label(frame, text="Mês/Ano de Referência:").grid(row=1, column=0, sticky="w", pady=5)
-        entry_data_ref = DateEntry(frame, date_pattern='dd/mm/yyyy', width=18)
-        entry_data_ref.grid(row=1, column=1, sticky="w", pady=5)
-        entry_data_ref.set_date(data_ref_obj)
-
-        ttk.Label(frame, text=f"Arquivo atual: {dados_doc[3].split()[0]}").grid(row=2, column=0, columnspan=2, sticky="w", pady=(10, 5))
-        ttk.Label(frame, text="*Não é possível alterar o arquivo físico.", font=("Arial", 8, "italic")).grid(row=3, column=0, columnspan=2, sticky="w")
-
-
-        def salvar_edicao():
-            novo_tipo = combo_tipo.get()
-            nova_data_ref_obj = entry_data_ref.get_date()
-            nova_data_ref_db = nova_data_ref_obj.strftime('%Y-%m-%d') # Formato que o banco espera
-
-            if not novo_tipo:
-                messagebox.showerror("Erro", "O Tipo de Documento é obrigatório.", parent=popup)
-                return
-
-            try:
-                sucesso = database.atualizar_documento_pessoal_metadados(documento_id, novo_tipo, nova_data_ref_db)
-
-                if sucesso:
-                    messagebox.showinfo("Sucesso", "Metadados do documento atualizados!", parent=popup)
-                    popup.destroy()
-                    self.on_rh_funcionario_selecionado(None) # Recarrega a lista
-                else:
-                    messagebox.showwarning("Aviso", "Nenhuma alteração detectada ou falha na atualização.")
-
-            except Exception as e:
-                messagebox.showerror("Erro", f"Ocorreu um erro ao salvar: {e}", parent=popup)
-
-        # Botão de Envio
-        btn_salvar = ttk.Button(frame, text="Salvar Metadados", command=salvar_edicao)
-        btn_salvar.grid(row=4, column=0, columnspan=2, pady=20, ipady=5)
-
-        frame.columnconfigure(1, weight=1)
-
-    def abrir_janela_add_documento(self):
-        """Abre a janela (Toplevel) para adicionar um novo documento pessoal."""
-        selecionado = self.tree_rh_funcionarios.focus()
-        if not selecionado:
-            messagebox.showwarning("Aviso", "Por favor, selecione um funcionário na lista da esquerda primeiro.")
-            return
-        
-        dados_func = self.tree_rh_funcionarios.item(selecionado, 'values')
-        funcionario_id = dados_func[0]
-        nome_funcionario = dados_func[1]
-
-        # --- Criação da Janela Pop-up ---
-        popup = Toplevel(self.root)
-        popup.title(f"Adicionar Documento para {nome_funcionario}")
-        popup.geometry("450x300")
-        popup.transient(self.root) # Mantém o pop-up na frente da janela principal
-
-        frame = ttk.Frame(popup, padding="15")
-        frame.pack(fill="both", expand=True)
-
-        # --- Widgets do Formulário ---
-        ttk.Label(frame, text="Tipo de Documento:").grid(row=0, column=0, sticky="w", pady=5)
-        combo_tipo = ttk.Combobox(frame, values=['Holerite', 'Cartão Ponto', 'Comprovante de Consumo', 'Contrato', 'Atestado', 'Advertência', 'Outro'])
-        combo_tipo.grid(row=0, column=1, sticky="ew", pady=5)
-        combo_tipo.set('Holerite')
-
-        ttk.Label(frame, text="Mês/Ano de Referência:").grid(row=1, column=0, sticky="w", pady=5)
-        # Usaremos um DateEntry para facilitar a seleção
-        from tkcalendar import DateEntry
-        entry_data_ref = DateEntry(frame, date_pattern='dd/mm/yyyy', width=18)
-        entry_data_ref.grid(row=1, column=1, sticky="w", pady=5)
-
-        ttk.Label(frame, text="Arquivo (PDF, JPG, PNG):").grid(row=2, column=0, sticky="w", pady=5) # <-- Texto alterado
-        frame_arquivo = ttk.Frame(frame)
-        frame_arquivo.grid(row=2, column=1, sticky="ew", pady=5)
-        
-        lbl_caminho_pdf = ttk.Label(frame_arquivo, text="Nenhum arquivo selecionado.")
-        lbl_caminho_pdf.pack(side="right", fill="x", expand=True)
-        
-        caminho_arquivo_selecionado = {"path": ""} # Usamos um dicionário para passar por referência
-
-        # --- CORREÇÃO 1: Adicionado suporte a .png na seleção ---
-        def selecionar_arquivo():
-            filepath = filedialog.askopenfilename(
-                title="Selecione o documento (PDF, JPG ou PNG)",
-                filetypes=[
-                    ("Documentos Suportados", "*.pdf *.jpg *.jpeg *.png"), # <-- ADICIONADO .png
-                    ("Arquivos PDF", "*.pdf"),
-                    ("Imagens JPG", "*.jpg *.jpeg"),
-                    ("Imagens PNG", "*.png") # <-- ADICIONADA NOVA LINHA
-                ]
-            )
-            if filepath:
-                caminho_arquivo_selecionado["path"] = filepath
-                lbl_caminho_pdf.config(text=os.path.basename(filepath))
-
-        btn_selecionar = ttk.Button(frame_arquivo, text="Selecionar...", command=selecionar_arquivo) # <-- Usa a nova função
-        btn_selecionar.pack(side="left")
-
-        # --- Lógica de Envio ---
-        def enviar_documento():
-            # Coleta de dados
-            tipo = combo_tipo.get()
-            data_ref = entry_data_ref.get_date()
-            caminho_arquivo = caminho_arquivo_selecionado["path"]
-
-            if not all([tipo, data_ref, caminho_arquivo]):
-                messagebox.showerror("Erro", "Todos os campos são obrigatórios.", parent=popup)
-                return
-
-            # --- CORREÇÃO 2: Adicionado suporte a .png no MIME type ---
-            nome_arquivo = os.path.basename(caminho_arquivo)
-            # Pega a extensão (ex: '.jpg' ou '.pdf')
-            extensao = os.path.splitext(nome_arquivo)[1].lower() 
-
-            if extensao == '.pdf':
-                mime_type = 'application/pdf'
-            elif extensao in ['.jpg', '.jpeg']:
-                mime_type = 'image/jpeg'
-            elif extensao == '.png': # <-- ADICIONADO ELIF
-                mime_type = 'image/png'
-            else:
-                messagebox.showerror("Erro", "Tipo de arquivo não suportado. Use PDF, JPG ou PNG.", parent=popup)
-                return
-            # --- FIM DA CORREÇÃO 2 ---
-
-            # Prepara os dados para enviar à API
-            url_upload = f"{config.API_BASE_URL}/documentos/upload" # ATENÇÃO AO IP!
-            dados_payload = {
-                'funcionario_id': funcionario_id,
-                'tipo_documento': tipo,
-                'mes_ano': data_ref.strftime('%Y-%m-%d'),
+            dados_nf = {
+                'NumeroNF': ide.findtext('nNF', default=''),
+                # Alguns XMLs usam dhEmi, outros dEmi. Tenta ambos.
+                'DataEmissao': (ide.findtext('dhEmi') or ide.findtext('dEmi') or datetime.now().strftime('%Y-%m-%dT')).split('T')[0],
+                'ValorTotalNF': Decimal(total.findtext('vNF', default='0.0')),
+                'FornecedorCNPJ': emit.findtext('CNPJ', default=''),
+                'FornecedorNome': emit.findtext('xNome', default='')
             }
+
+            itens = []
+            detalhes = root.findall('.//det')
+            for det in detalhes:
+                prod = det.find('prod')
+                if prod is None: continue
+
+                itens.append({
+                    'cProd': prod.findtext('cProd', default=''),
+                    'cEAN': prod.findtext('cEAN', default=''),
+                    'DescricaoXML': prod.findtext('xProd', default=''),
+                    'NCM': prod.findtext('NCM', default=''),
+                    'Quantidade': Decimal(prod.findtext('qCom', default='0.0')),
+                    'PrecoCustoUnitario': Decimal(prod.findtext('vUnCom', default='0.0'))
+                })
+
+            return dados_nf, itens
+
+        except Exception as e:
+            logger.error(f"Erro ao ler o arquivo XML '{caminho_arquivo_xml}': {e}", exc_info=True)
+            raise Exception(f"Falha estrutural no XML: {e}")
+
+    def processar_arquivos_xml(self, pasta_selecionada):
+        # ... (código idêntico ao anterior, agora com pop-up de erro) ...
+        extensoes_permitidas = ('.xml', '.txt')
+        arquivos_xml = [os.path.join(pasta_selecionada, f) for f in os.listdir(pasta_selecionada) if f.lower().endswith(extensoes_permitidas)]
+        notas_processadas_nesta_sessao = {}
+        arquivos_com_falha = 0
+        for caminho_xml in arquivos_xml:
+            try:
+                cabecalho_nf, itens_nf = self.ler_xml_nota_fiscal(caminho_xml)
+                cnpj = cabecalho_nf['FornecedorCNPJ']
+                nome_fornecedor = cabecalho_nf['FornecedorNome']
+                num_nf = cabecalho_nf['NumeroNF']
+                if not cnpj or not itens_nf:
+                    raise Exception("Arquivo XML não contém CNPJ ou lista de itens.")
+                fornecedor_id = database.buscar_fornecedor_por_cnpj(cnpj)
+                if not fornecedor_id:
+                    database.criar_fornecedor(cnpj, nome_fornecedor)
+                    fornecedor_id = database.buscar_fornecedor_por_cnpj(cnpj)
+                    self.atualizar_lista_fornecedores()
+                cabecalho_nf['FornecedorID'] = fornecedor_id
+                if num_nf not in notas_processadas_nesta_sessao:
+                     notas_processadas_nesta_sessao[num_nf] = {
+                        'cabecalho': cabecalho_nf,
+                        'itens_vinculados': []
+                    }
+                for item in itens_nf:
+                    desc_xml = item['DescricaoXML']
+                    vinculo_existente = database.buscar_vinculo_produto_fornecedor(fornecedor_id, desc_xml)
+
+                    if vinculo_existente:
+                        # Desempacota os 3 valores. Se fator vier None do banco, trata aqui.
+                        produto_fornecedor_id, produto_mestre_id, fator_db = vinculo_existente
+
+                        # Tratamento defensivo: se for None ou <= 0, assume 1.0
+                        if fator_db is None or fator_db <= 0:
+                            fator = Decimal('1.0')
+                        else:
+                            fator = Decimal(str(fator_db))
+
+                        # --- A MÁGICA DA CONVERSÃO ---
+                        qtd_xml = item['Quantidade'] # Ex: 1 (caixa)
+                        custo_xml = item['PrecoCustoUnitario'] # Ex: 60.00 (caixa)
+
+                        qtd_real = qtd_xml * fator # Ex: 1 * 6 = 6 Unidades
+                        custo_real = custo_xml / fator # Ex: 60 / 6 = 10.00 Unidade
+
+                        item_pronto = item.copy()
+                        item_pronto['ProdutoFornecedorID'] = produto_fornecedor_id
+                        # Atualiza para os valores convertidos antes de salvar
+                        item_pronto['Quantidade'] = qtd_real 
+                        item_pronto['PrecoCustoUnitario'] = custo_real
+
+                        notas_processadas_nesta_sessao[num_nf]['itens_vinculados'].append(item_pronto)
+                        
+                        # Busca nome para exibição
+                        nome_mestre = next((k for k, v in self.mapa_produtos_mestre.items() if v == produto_mestre_id), "Desconhecido")
+                        
+                        # Custo total não muda (R$ 60 continua R$ 60)
+                        custo_total_nota = qtd_real * custo_real 
+                        
+                        # Exibe na tela informando a conversão se houver
+                        txt_qtd = f"{qtd_real:.2f}"
+                        if fator > 1:
+                            txt_qtd += f" (Conv. x{int(fator)})"
+
+                        self.tree_prontos.insert("", "end", values=(
+                            num_nf, nome_fornecedor, nome_mestre, 
+                            txt_qtd, f"{custo_real:.4f}", f"{custo_total_nota:.2f}"
+                        ))
+
+                    else:
+                        item_pendente = {
+                            'FornecedorID': fornecedor_id,
+                            'FornecedorNome': nome_fornecedor,
+                            'DescricaoXML': desc_xml,
+                            'cProd': item['cProd'],
+                            'cEAN': item['cEAN'],
+                            'NCM': item['NCM']
+                        }
+
+                        if not any(p['DescricaoXML'] == desc_xml and p['FornecedorID'] == fornecedor_id for p in self.itens_xml_nao_vinculados):
+                            # [CORREÇÃO] Guarda o índice atual como ID único (iid) da linha na tabela
+                            idx_lista = len(self.itens_xml_nao_vinculados)
+                            self.itens_xml_nao_vinculados.append(item_pendente)
+
+                            self.tree_vincular.insert("", "end", iid=str(idx_lista), values=(
+                                nome_fornecedor, desc_xml, item['cProd'], item['cEAN'], item['NCM']
+                            ))
+
+            except Exception as e:
+                arquivos_com_falha += 1
+                logger.error(f"Falha ao processar o arquivo {caminho_xml}: {e}", exc_info=True)
+                messagebox.showwarning("Aviso de Arquivo", 
+                                       f"Não foi possível processar o arquivo:\n\n{os.path.basename(caminho_xml)}\n\n"
+                                       f"Motivo: {e}\n\nVerifique se o arquivo não está corrompido ou se é uma NF-e de Produto válida.",
+                                       parent=self.root)
+        self.dados_notas_processadas = list(notas_processadas_nesta_sessao.values())
+        messagebox.showinfo("Processamento Concluído", 
+                            f"Leitura de XMLs concluída.\n\n"
+                            f"- {len(self.itens_xml_nao_vinculados)} itens precisam de vinculação (Passo 2).\n"
+                            f"- {len(self.dados_notas_processadas)} NFs foram processadas com sucesso e estão prontas para salvar (Passo 3).\n"
+                            f"- {arquivos_com_falha} arquivos falharam ao ler (verifique os pop-ups de aviso).",
+                            parent=self.root)
+
+    def vincular_produto_selecionado(self):
+        # ... (código idêntico ao anterior) ...
+        selecionado_tree = self.tree_vincular.focus()
+        produto_mestre_selecionado = self.combo_produtos_mestre.get()
+        if not selecionado_tree:
+            messagebox.showwarning("Aviso", "Selecione um item pendente na lista 'Itens Pendentes' (Passo 2).", parent=self.root)
+            return
+        if not produto_mestre_selecionado:
+            messagebox.showwarning("Aviso", "Selecione um 'Produto Mestre' no menu dropdown para vincular.", parent=self.root)
+            return
+        # [CORREÇÃO] Busca segura pelo conteúdo visual para evitar erro de índice
+        valores_visuais = self.tree_vincular.item(selecionado_tree, 'values')
+        # valores = ('Fornecedor', 'Produto no XML', ...)
+
+        # Busca na lista interna o item que corresponde ao fornecedor e descrição visual
+        item_pendente = next((i for i in self.itens_xml_nao_vinculados 
+                            if i['DescricaoXML'] == valores_visuais[1] 
+                            and i['FornecedorNome'] == valores_visuais[0]), None)
+
+        if not item_pendente:
+            messagebox.showerror("Erro de Sincronia", "O item selecionado não foi encontrado na memória. Tente recarregar a pasta.", parent=self.root)
+            return
+
+        produto_mestre_id = self.mapa_produtos_mestre[produto_mestre_selecionado]
+        
+
+        # Pega o fator digitado
+        str_fator = self.entry_fator_conversao.get().replace(',', '.')
+        try:
+            # [CORREÇÃO] Uso de Decimal para precisão consistente e evitar erro de tipo
+            fator = Decimal(str_fator)
+            if fator <= 0: raise ValueError
+        except:
+            messagebox.showerror("Erro", "O Fator de Conversão deve ser um número válido maior que 0 (Use ponto para decimais).", parent=self.root)
+            return
+
+        try:
+            database.criar_vinculo_produto_fornecedor(
+                produto_id_mestre=produto_mestre_id,
+                fornecedor_id=item_pendente['FornecedorID'],
+                descricao_xml=item_pendente['DescricaoXML'],
+                cProd=item_pendente['cProd'],
+                cEAN=item_pendente['cEAN'],
+                NCM=item_pendente['NCM'],
+                fator_conversao=fator # <-- Passa o fator
+            )
+
+            # Remove o objeto específico da lista e da árvore
+            self.itens_xml_nao_vinculados.remove(item_pendente)
+            self.tree_vincular.delete(selecionado_tree)
+            messagebox.showinfo("Sucesso", 
+                                "Vínculo criado!\n\nPor favor, re-importe a pasta de XMLs para processar este item.",
+                                parent=self.root)
+        except Exception as e:
+            logger.error(f"Erro ao criar vínculo: {e}", exc_info=True)
+            messagebox.showerror("Erro de Banco", f"Não foi possível criar o vínculo.\n{e}", parent=self.root)
+
+    def salvar_notas_processadas(self):
+        if not self.dados_notas_processadas:
+            messagebox.showwarning("Aviso", "Nenhuma nota fiscal foi processada ou não há itens vinculados para salvar.", parent=self.root)
+            return
+        if any(self.itens_xml_nao_vinculados):
+             if not messagebox.askyesno("Aviso", "Você ainda possui itens pendentes de vinculação (na lista do Passo 2).\n\nDeseja salvar assim mesmo? (Apenas os itens já vinculados serão salvos)", parent=self.root):
+                return
+        
+        sucessos = 0
+        falhas = 0
+        
+        # Lista auxiliar para manter apenas o que falhou
+        notas_remanescentes = []
+
+        for nf in self.dados_notas_processadas:
+            cabecalho = nf['cabecalho']
+            itens_para_salvar = nf['itens_vinculados']
+            
+            if not itens_para_salvar:
+                logger.warning(f"Pulando NF {cabecalho['NumeroNF']} pois não possui itens vinculados prontos para salvar.")
+                # Se não tem itens vinculados, mantemos na lista para o usuário vincular
+                notas_remanescentes.append(nf)
+                continue
             
             try:
-                with open(caminho_arquivo, 'rb') as f:
-                    # --- CORREÇÃO 3: Usa o nome e o MIME type dinâmicos ---
-                    arquivos_payload = {'file': (nome_arquivo, f, mime_type)}
-                    # --- FIM DA CORREÇÃO 3 ---
-                    
-                    # Faz a requisição para a API
-                    response = requests.post(url_upload, data=dados_payload, files=arquivos_payload)
-
-                if response.status_code == 201:
-                    messagebox.showinfo("Sucesso", "Documento enviado com sucesso!", parent=popup)
-                    popup.destroy()
-                    self.on_rh_funcionario_selecionado(None) # Atualiza a lista de documentos
+                sucesso_db, msg_db = database.salvar_nota_fiscal_completa(cabecalho, itens_para_salvar)
+                if sucesso_db:
+                    sucessos += 1
+                    # Se salvou com sucesso, NÃO adicionamos à lista remanescente (removemos da memória)
                 else:
-                    messagebox.showerror("Erro da API", f"Falha no upload: {response.json().get('mensagem', response.text)}", parent=popup)
+                    falhas += 1
+                    notas_remanescentes.append(nf) # Mantém na memória para tentar de novo
+                    
+                    logger.error(f"Falha ao salvar NF {cabecalho['NumeroNF']} no banco: {msg_db}")
+                    if "já foi importada" in msg_db:
+                        messagebox.showwarning("Aviso de Duplicidade", f"Nota Fiscal {cabecalho['NumeroNF']} não foi salva: já existe no sistema.", parent=self.root)
             except Exception as e:
-                messagebox.showerror("Erro de Conexão", f"Não foi possível conectar à API: {e}", parent=popup)
-
-        # Botão de Envio
-        btn_salvar = ttk.Button(frame, text="Salvar e Disponibilizar", command=enviar_documento)
-        btn_salvar.grid(row=3, column=0, columnspan=2, pady=20, ipady=5)
-
-        frame.columnconfigure(1, weight=1)
-
-    def solicitar_onboarding_funcionario(self):
-        """Dispara a notificação para o funcionário iniciar o processo de onboarding."""
-        selecionado = self.tree_rh_funcionarios.focus()
-        if not selecionado:
-            messagebox.showwarning("Aviso", "Por favor, selecione um funcionário na lista da esquerda primeiro.")
-            return
+                falhas += 1
+                notas_remanescentes.append(nf)
+                logger.error(f"Erro crítico ao tentar salvar NF {cabecalho['NumeroNF']}: {e}", exc_info=True)
         
-        dados_func = self.tree_rh_funcionarios.item(selecionado, 'values')
-        funcionario_id = dados_func[0]
-        nome_funcionario = dados_func[1]
+        # Atualiza a memória principal com apenas o que sobrou
+        self.dados_notas_processadas = notas_remanescentes
+
+        messagebox.showinfo("Processamento Concluído", 
+                    f"Processo de salvamento finalizado.\n\n"
+                    f"Notas Salvas com Sucesso: {sucessos}\n"
+                    f"Notas que Falharam ou Pendentes: {len(self.dados_notas_processadas)}",
+                    parent=self.root)
+
+        # Atualiza a interface visual
+        for i in self.tree_prontos.get_children(): 
+            self.tree_prontos.delete(i)
+            
+        # Recarrega na visualização APENAS o que sobrou na memória
+        for nf in self.dados_notas_processadas:
+            cabecalho = nf['cabecalho']
+            for item in nf['itens_vinculados']:
+                # Recalcula visualmente para exibir de novo
+                nome_mestre = next((k for k, v in self.mapa_produtos_mestre.items() if v == item['ProdutoFornecedorID']), "Item Processado")
+                # Nota: A lógica de exibição original usa IDs, simplificamos aqui para reexibir
+                # Para uma recarga visual perfeita, idealmente reprocessamos, mas aqui limpamos o que já foi.
+                pass
         
-        # 1. Tenta inicializar o status no banco (seta para 'Pendente')
-        if not database.iniciar_onboarding_funcionario(funcionario_id):
-            messagebox.showerror("Erro", "Falha ao registrar o status de onboarding no banco.")
+        # Se tudo foi salvo e não há pendentes de vínculo, limpa tudo
+        if len(self.dados_notas_processadas) == 0 and len(self.itens_xml_nao_vinculados) == 0:
+             messagebox.showinfo("Limpeza", "Todas as notas e itens foram processados com sucesso! Tela limpa.", parent=self.root)
+
+    def criar_mestre_e_vincular(self):
+        # ... (código idêntico ao anterior) ...
+        selecionado_tree = self.tree_vincular.focus()
+        if not selecionado_tree:
+            messagebox.showwarning("Aviso", "Selecione um item pendente na lista 'Itens Pendentes' (Passo 2).", parent=self.root)
             return
 
-        # 2. Busca o ChatID para notificar
-        func_obj = database.buscar_funcionario_por_id(funcionario_id)
-        if not func_obj or not func_obj.ChatIDTelegram:
-             messagebox.showwarning("Aviso", "Funcionário sem ChatID Telegram cadastrado. Não é possível notificar.")
-             return
+        # [CORREÇÃO] Busca segura pelo conteúdo visual
+        valores_visuais = self.tree_vincular.item(selecionado_tree, 'values')
+        item_pendente = next((i for i in self.itens_xml_nao_vinculados 
+                            if i['DescricaoXML'] == valores_visuais[1] 
+                            and i['FornecedorNome'] == valores_visuais[0]), None)
 
-        # 3. Envia a notificação inicial que fará o fluxo de bloqueio começar
-        mensagem = (f"🎉 **Bem-vindo(a) à Gela Boca, {nome_funcionario}!** 🎉\n\n"
-                    "Para dar início ao seu registro, precisamos que você nos envie seus documentos e dados pessoais. "
-                    "Seu acesso ao sistema será bloqueado até que o processo seja concluído.\n\n"
-                    "Por favor, digite **qualquer mensagem** (ou /start) para começar o envio de documentos.")
-        
-        notificador_telegram.enviar_mensagem(func_obj.ChatIDTelegram, mensagem)
-        messagebox.showinfo("Sucesso", f"Notificação de Onboarding enviada para {nome_funcionario}!")
-    
-    def atualizar_lista_comunicados(self, filtro=None):
-        for i in self.tree_comunicados.get_children(): self.tree_comunicados.delete(i)
-        comunicados = database.listar_comunicados_com_status(filtro_titulo=filtro)
-        for doc in comunicados:
-            status = f"{doc.TotalCientes} / {doc.TotalEnviado} Cientes"
-            data_formatada = doc.DataCriacao.strftime("%d/%m/%Y %H:%M")
-            self.tree_comunicados.insert("", "end", values=(doc.DocumentoID, doc.Titulo, data_formatada, status))
+        if not item_pendente:
+            messagebox.showerror("Erro de Sincronia", "O item selecionado não foi encontrado na memória.", parent=self.root)
+            return
 
-    def abrir_janela_criacao(self): # <<< ESTA FUNÇÃO ESTAVA FALTANDO!
-            # --- CORREÇÃO: Limpa resíduos de seleções anteriores ---
-        if hasattr(self, 'caminho_imagem_selecionada'):
-            del self.caminho_imagem_selecionada
-        # -------------------------------------------------------
-        if self.popup_criacao is not None and self.popup_criacao.winfo_exists():
-            self.popup_criacao.focus()
-            return
-        self.popup_criacao = Toplevel(self.root)
-        self.popup_criacao.title("Novo Comunicado")
-        self.popup_criacao.geometry("800x600")
-        self.popup_criacao.transient(self.root)
-        Label(self.popup_criacao, text="Título:", font=("Arial", 10, "bold")).pack(padx=10, pady=(10,0), anchor='w')
-        entry_titulo = Entry(self.popup_criacao, font=("Arial", 10))
-        entry_titulo.pack(padx=10, fill='x')
-        Label(self.popup_criacao, text="Conteúdo:", font=("Arial", 10, "bold")).pack(padx=10, pady=(10,0), anchor='w')
-        text_conteudo = Text(self.popup_criacao, height=10, font=("Arial", 10))
-        text_conteudo.pack(padx=10, fill='both', expand=True)
-        frame_pontos = Frame(self.popup_criacao)
-        frame_pontos.pack(padx=10, pady=5, fill='x')
-        var_premiar = tk.BooleanVar()
-        check_premiar = Checkbutton(frame_pontos, text="Premiar com pontos pela ciência?", variable=var_premiar)
-        check_premiar.pack(side="left")
-        entry_pontos = Entry(frame_pontos, width=5)
-        entry_pontos.pack(side="left", padx=5)
-        entry_pontos.insert(0, "10")
-        frame_imagem = Frame(self.popup_criacao)
-        frame_imagem.pack(padx=10, pady=5, fill='x')
-        btn_selecionar_img = Button(frame_imagem, text="Anexar Imagem...", command=lambda: self.selecionar_imagem(lbl_caminho_imagem))
-        btn_selecionar_img.pack(side="left")
-        lbl_caminho_imagem = Label(frame_imagem, text="Nenhuma imagem selecionada.", font=("Arial", 9, "italic"))
-        lbl_caminho_imagem.pack(side="left", padx=10)
-        Label(self.popup_criacao, text="Enviar para:", font=("Arial", 10, "bold")).pack(padx=10, pady=(10,0), anchor='w')
-        frame_funcionarios = Frame(self.popup_criacao)
-        frame_funcionarios.pack(padx=10, pady=5, fill='both', expand=True)
-        listbox_funcionarios = Listbox(frame_funcionarios, selectmode=tk.EXTENDED)
-        scrollbar_func = Scrollbar(frame_funcionarios, orient="vertical", command=listbox_funcionarios.yview)
-        listbox_funcionarios.configure(yscrollcommand=scrollbar_func.set)
-        listbox_funcionarios.pack(side="left", fill="both", expand=True)
-        scrollbar_func.pack(side="left", fill="y")
-        self.dados_funcionarios.clear()
-        funcionarios = database.listar_funcionarios()
-        for func in funcionarios:
-            display_text = f"{func.NomeCompleto} (ID: {func.FuncionarioID})"
-            listbox_funcionarios.insert(tk.END, display_text)
-            self.dados_funcionarios[display_text] = func
-        btn_enviar = Button(self.popup_criacao, text="ENVIAR COMUNICADO", bg="green", fg="white", font=("Arial", 12, "bold"),
-                            command=lambda: self.enviar_comunicado(
-                                entry_titulo.get(), text_conteudo.get("1.0", tk.END),
-                                var_premiar.get(), entry_pontos.get(),
-                                listbox_funcionarios.curselection(), listbox_funcionarios
-                            ))
-        btn_enviar.pack(pady=10, padx=10, fill='x', ipady=5)
-    
-    # Em gestao_pessoas_main.py, SUBSTITUA a função antiga por esta:
+        nome_novo_produto = item_pendente['DescricaoXML']
+        try:
+            produto_id_mestre = database.buscar_produto_mestre_por_nome(nome_novo_produto)
+            produto_foi_criado = False
+            if not produto_id_mestre:
+                if not messagebox.askyesno("Confirmar Auto-Criação",
+                                          f"O produto mestre '{nome_novo_produto}' não existe no Catálogo (Aba 1).\n\n"
+                                          f"Deseja criá-lo automaticamente agora?\n"
+                                          f"(Unidade: 'UN', Est. Mínimo: 0.0)",
+                                          parent=self.root):
+                    return
+                produto_id_mestre = database.criar_produto_estoque(
+                    nome=nome_novo_produto,
+                    unidade="UN", 
+                    estoque_min=Decimal('0.0')
+                )
+                if not produto_id_mestre:
+                    raise Exception("Falha ao criar o produto mestre, não retornou ID.")
+                produto_foi_criado = True
 
-    def enviar_comunicado(self, titulo, conteudo, premiar, pontos_str, indices_selecionados, listbox):
-        if not titulo or not conteudo.strip():
-            messagebox.showerror("Erro", "Título e Conteúdo são obrigatórios.", parent=self.popup_criacao)
-            return
-        if not indices_selecionados:
-            messagebox.showerror("Erro", "Selecione pelo menos um funcionário.", parent=self.popup_criacao)
-            return
-        
-        pontos = 0
-        if premiar:
+            # Pega o fator digitado na tela principal também
+            str_fator = self.entry_fator_conversao.get().replace(',', '.')
             try:
-                pontos = int(pontos_str)
-                if pontos <= 0: raise ValueError
-            except ValueError:
-                messagebox.showerror("Erro", "A pontuação deve ser um número inteiro positivo.", parent=self.popup_criacao)
+                # [CORREÇÃO] Uso de Decimal para evitar incompatibilidade
+                fator = Decimal(str_fator)
+                if fator <= 0: fator = Decimal('1.0')
+            except:
+                fator = Decimal('1.0')
+
+            database.criar_vinculo_produto_fornecedor(
+                produto_id_mestre=produto_id_mestre,
+                fornecedor_id=item_pendente['FornecedorID'],
+                descricao_xml=item_pendente['DescricaoXML'],
+                cProd=item_pendente['cProd'],
+                cEAN=item_pendente['cEAN'],
+                NCM=item_pendente['NCM'],
+                fator_conversao=fator
+            )
+
+            # Remove o objeto específico da lista e da árvore
+            self.itens_xml_nao_vinculados.remove(item_pendente)
+            self.tree_vincular.delete(selecionado_tree)
+            if produto_foi_criado:
+                self.atualizar_lista_produtos()
+                self.popular_combobox_produtos_mestre()
+            messagebox.showinfo("Sucesso", 
+                                f"Produto vinculado com sucesso!\n\n"
+                                "Por favor, re-importe a pasta de XMLs para que este item apareça na lista 'Prontos para Salvar'.",
+                                parent=self.root)
+        except Exception as e:
+            logger.error(f"Erro ao auto-criar e vincular: {e}", exc_info=True)
+            messagebox.showerror("Erro Crítico", f"Não foi possível criar e vincular o produto.\nVerifique se o nome já existe no Catálogo Mestre com alguma variação.\n\nErro: {e}", parent=self.root)
+
+    # ===================================================================
+    # == ABA 4: LANÇAR CONTAGEM FÍSICA (Com Filtro) =====================
+    # ===================================================================
+    def criar_aba_contagem_estoque(self):
+        # ... (código idêntico ao anterior) ...
+        main_frame = ttk.Frame(self.frame_contagem)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        main_frame.columnconfigure(0, weight=1)
+        main_frame.columnconfigure(1, weight=1)
+        main_frame.rowconfigure(1, weight=1) 
+        frame_lancamento = ttk.LabelFrame(main_frame, text="1. Lançar Itens Contados", padding="10")
+        frame_lancamento.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
+        frame_lancamento.columnconfigure(0, weight=1)
+        ttk.Label(frame_lancamento, text="Filtrar Produto:").grid(row=0, column=0, sticky="w")
+        self.entry_filtro_contagem = ttk.Entry(frame_lancamento)
+        self.entry_filtro_contagem.grid(row=1, column=0, sticky="ew", padx=(0, 5))
+        self.entry_filtro_contagem.bind("<KeyRelease>", self.filtrar_combo_contagem)
+        ttk.Label(frame_lancamento, text="Produto do Catálogo Mestre:").grid(row=2, column=0, sticky="w", pady=(5,0))
+        self.combo_contagem_produtos = ttk.Combobox(frame_lancamento, state="readonly")
+        self.combo_contagem_produtos.grid(row=3, column=0, sticky="ew", padx=(0, 5))
+        self.combo_contagem_produtos.bind("<<ComboboxSelected>>", self.atualizar_label_unidade_contagem)
+        ttk.Label(frame_lancamento, text="Quantidade:").grid(row=2, column=1, sticky="w", pady=(5,0))
+        self.entry_contagem_qtd = ttk.Entry(frame_lancamento, width=10)
+        self.entry_contagem_qtd.grid(row=3, column=1, sticky="w", padx=5)
+        self.lbl_contagem_unidade = ttk.Label(frame_lancamento, text="UN", font=("Arial", 10, "italic"))
+        self.lbl_contagem_unidade.grid(row=3, column=2, sticky="w", padx=5)
+        btn_adicionar_item = ttk.Button(frame_lancamento, text="Adicionar à Lista", command=self.adicionar_item_contagem)
+        btn_adicionar_item.grid(row=3, column=3, sticky="w", padx=10)
+        frame_lista_lancar = ttk.LabelFrame(main_frame, text="2. Itens nesta Contagem", padding="10")
+        frame_lista_lancar.grid(row=1, column=0, sticky="nsew", padx=(0, 5), pady=10)
+        frame_lista_lancar.rowconfigure(0, weight=1)
+        frame_lista_lancar.columnconfigure(0, weight=1)
+        cols_cont = ('Produto Mestre', 'Qtd Contada', 'UN')
+        self.tree_contagem_atual = ttk.Treeview(frame_lista_lancar, columns=cols_cont, show='headings', selectmode='browse')
+        self.tree_contagem_atual.heading('Produto Mestre', text='Produto'); self.tree_contagem_atual.column('Produto Mestre', width=200)
+        self.tree_contagem_atual.heading('Qtd Contada', text='Qtd'); self.tree_contagem_atual.column('Qtd Contada', width=60, anchor='e')
+        self.tree_contagem_atual.heading('UN', text='UN'); self.tree_contagem_atual.column('UN', width=40, anchor='center')
+        self.tree_contagem_atual.grid(row=0, column=0, sticky="nsew")
+        btn_remover_item = ttk.Button(frame_lista_lancar, text="Remover Item Selecionado da Lista", command=self.remover_item_contagem)
+        btn_remover_item.grid(row=1, column=0, sticky="w", pady=(10, 0))
+        frame_salvar = ttk.Frame(main_frame)
+        frame_salvar.grid(row=2, column=0, sticky="nsew", padx=(0, 5))
+        frame_salvar.columnconfigure(1, weight=1)
+        ttk.Label(frame_salvar, text="Data da Contagem:").grid(row=0, column=0, sticky="w", padx=(0, 5))
+        self.date_contagem = DateEntry(frame_salvar, width=12, date_pattern='dd/mm/yyyy', locale='pt_BR')
+        self.date_contagem.grid(row=0, column=1, sticky="w")
+        self.id_funcionario_contagem = 2
+        btn_salvar_contagem = ttk.Button(frame_salvar, text="Salvar Contagem Completa", command=self.salvar_contagem_completa)
+        btn_salvar_contagem.grid(row=0, column=2, sticky="e", padx=20, ipady=5)
+        frame_historico = ttk.LabelFrame(main_frame, text="Histórico de Contagens Realizadas", padding="10")
+        frame_historico.grid(row=0, column=1, rowspan=3, sticky="nsew", pady=5)
+        frame_historico.rowconfigure(0, weight=1)
+        frame_historico.rowconfigure(1, weight=1)
+        frame_historico.columnconfigure(0, weight=1)
+        cols_hist = ('ID', 'Data Contagem', 'Responsável')
+        self.tree_hist_contagens = ttk.Treeview(frame_historico, columns=cols_hist, show='headings', selectmode='browse', height=5)
+        self.tree_hist_contagens.heading('ID', text='ID'); self.tree_hist_contagens.column('ID', width=40, anchor='center')
+        self.tree_hist_contagens.heading('Data Contagem', text='Data'); self.tree_hist_contagens.column('Data Contagem', width=100, anchor='center')
+        self.tree_hist_contagens.heading('Responsável', text='Responsável'); self.tree_hist_contagens.column('Responsável', width=150)
+        self.tree_hist_contagens.grid(row=0, column=0, sticky="nsew")
+        self.tree_hist_contagens.bind("<<TreeviewSelect>>", self.carregar_itens_contagem_historico)
+        cols_hist_itens = ('Produto', 'Qtd Contada', 'UN')
+        self.tree_hist_itens = ttk.Treeview(frame_historico, columns=cols_hist_itens, show='headings')
+        self.tree_hist_itens.heading('Produto', text='Produto'); self.tree_hist_itens.column('Produto', width=200)
+        self.tree_hist_itens.heading('Qtd Contada', text='Qtd'); self.tree_hist_itens.column('Qtd Contada', width=60, anchor='e')
+        self.tree_hist_itens.heading('UN', text='UN'); self.tree_hist_itens.column('UN', width=40, anchor='center')
+        self.tree_hist_itens.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
+
+    def filtrar_combo_contagem(self, event=None):
+        # ... (código idêntico ao anterior) ...
+        texto = self.entry_filtro_contagem.get().lower()
+        if not texto:
+            self.combo_contagem_produtos['values'] = self.lista_mestre_contagem_nomes
+            self.combo_contagem_produtos.set('')
+            self.lbl_contagem_unidade.config(text="UN")
+        else:
+            filtrados = [nome for nome in self.lista_mestre_contagem_nomes if texto in nome.lower()]
+            self.combo_contagem_produtos['values'] = filtrados
+            if filtrados:
+                self.combo_contagem_produtos.set(filtrados[0])
+                self.atualizar_label_unidade_contagem() # [CORREÇÃO] Atualiza a unidade visualmente
+                self.atualizar_label_unidade_contagem()
+            else:
+                self.combo_contagem_produtos.set('')
+                self.lbl_contagem_unidade.config(text="UN")
+
+    def atualizar_label_unidade_contagem(self, event=None):
+        # ... (código idêntico ao anterior) ...
+        produto_selecionado = self.combo_contagem_produtos.get()
+        if produto_selecionado and produto_selecionado in self.mapa_produtos_mestre_contagem:
+            unidade = self.mapa_produtos_mestre_contagem[produto_selecionado]['un']
+            self.lbl_contagem_unidade.config(text=unidade)
+        else:
+            self.lbl_contagem_unidade.config(text="UN")
+
+    def adicionar_item_contagem(self):
+        # ... (código idêntico ao anterior) ...
+        produto_nome = self.combo_contagem_produtos.get()
+        qtd_str = self.entry_contagem_qtd.get().replace(",", ".")
+        if not produto_nome or not qtd_str:
+            messagebox.showwarning("Aviso", "Selecione um produto e digite a quantidade.", parent=self.root)
+            return
+        try:
+            quantidade = Decimal(qtd_str)
+        except InvalidOperation: # <-- CORREÇÃO: Exceção específica
+            messagebox.showerror("Erro", "Quantidade deve ser um número.", parent=self.root)
+            # Limpa o campo para evitar reenvio de dados inválidos e foca
+            self.entry_contagem_qtd.delete(0, tk.END)
+            self.entry_contagem_qtd.focus()
+            return
+        dados_produto = self.mapa_produtos_mestre_contagem[produto_nome]
+        produto_id = dados_produto['id']
+        unidade = dados_produto['un']
+        for item in self.lista_itens_para_salvar_contagem:
+            if item['ProdutoID'] == produto_id:
+                messagebox.showwarning("Aviso", "Este produto já está na lista. Remova-o se quiser alterar a quantidade.", parent=self.root)
+                return
+        self.lista_itens_para_salvar_contagem.append({
+            'ProdutoID': produto_id,
+            'NomeProduto': produto_nome,
+            'QuantidadeContada': quantidade,
+            'Unidade': unidade
+        })
+        self.tree_contagem_atual.insert("", "end", values=(produto_nome, f"{quantidade:.3f}", unidade))
+        self.combo_contagem_produtos.set('')
+        self.entry_contagem_qtd.delete(0, tk.END)
+        self.lbl_contagem_unidade.config(text="UN")
+        self.entry_filtro_contagem.delete(0, tk.END) 
+        self.combo_contagem_produtos['values'] = self.lista_mestre_contagem_nomes 
+        self.entry_filtro_contagem.focus()
+        
+    def remover_item_contagem(self):
+        # ... (código idêntico ao anterior) ...
+        selecionado = self.tree_contagem_atual.focus()
+        if not selecionado:
+            messagebox.showwarning("Aviso", "Selecione um item da lista 'Itens nesta Contagem' para remover.", parent=self.root)
+            return
+        dados = self.tree_contagem_atual.item(selecionado, 'values')
+        nome_produto = dados[0]
+        self.lista_itens_para_salvar_contagem = [
+            item for item in self.lista_itens_para_salvar_contagem 
+            if item['NomeProduto'] != nome_produto
+        ]
+        self.tree_contagem_atual.delete(selecionado)
+
+    def salvar_contagem_completa(self):
+        # ... (código idêntico ao anterior) ...
+        if not self.lista_itens_para_salvar_contagem:
+            messagebox.showwarning("Aviso", "Adicione pelo menos um item à lista de contagem antes de salvar.", parent=self.root)
+            return
+        data_contagem = self.date_contagem.get_date().strftime('%Y-%m-%d')
+        funcionario_id = self.id_funcionario_contagem 
+        try:
+            sucesso, msg = database.salvar_contagem_estoque(
+                data_contagem,
+                funcionario_id,
+                self.lista_itens_para_salvar_contagem
+            )
+            if sucesso:
+                messagebox.showinfo("Sucesso", msg, parent=self.root)
+                for i in self.tree_contagem_atual.get_children(): self.tree_contagem_atual.delete(i)
+                self.lista_itens_para_salvar_contagem.clear()
+                self.atualizar_lista_contagens_historico()
+            else:
+                messagebox.showerror("Erro de Banco", msg, parent=self.root)
+        except Exception as e:
+            logger.error(f"Erro ao salvar contagem completa: {e}", exc_info=True)
+            messagebox.showerror("Erro Crítico", f"Ocorreu um erro inesperado: {e}", parent=self.root)
+
+    def atualizar_lista_contagens_historico(self):
+        # ... (código idêntico ao anterior) ...
+        for i in self.tree_hist_contagens.get_children():
+            self.tree_hist_contagens.delete(i)
+        
+        self.mapa_contagens_historico.clear()
+        nomes_contagens = []
+        
+        try:
+            contagens = database.listar_contagens_cabecalho()
+            for c in contagens:
+                data_f = c.DataContagem.strftime('%d/%m/%Y')
+                nome_display = f"ID: {c.ContagemID} - {data_f} ({c.NomeCompleto})"
+                
+                self.tree_hist_contagens.insert("", "end", values=(c.ContagemID, data_f, c.NomeCompleto))
+                
+                nomes_contagens.append(nome_display)
+                self.mapa_contagens_historico[nome_display] = c.ContagemID
+                
+        except Exception as e:
+            logger.error(f"Erro ao atualizar histórico de contagens: {e}", exc_info=True)
+
+    def carregar_itens_contagem_historico(self, event=None):
+        # ... (código idêntico ao anterior) ...
+        for i in self.tree_hist_itens.get_children():
+            self.tree_hist_itens.delete(i)
+        selecionado = self.tree_hist_contagens.focus()
+        if not selecionado:
+            return
+        contagem_id = self.tree_hist_contagens.item(selecionado, 'values')[0]
+        try:
+            itens = database.buscar_itens_contagem(contagem_id)
+            for item in itens:
+                self.tree_hist_itens.insert("", "end", values=(item.NomeProduto, f"{item.QuantidadeContada:.3f}", item.UnidadeMedida))
+        except Exception as e:
+            logger.error(f"Erro ao carregar itens do histórico (ContagemID {contagem_id}): {e}", exc_info=True)
+
+    # ===================================================================
+    # == ABA 5: SUGESTÃO DE COMPRA (ATUALIZADA) =========================
+    # ===================================================================
+    def criar_aba_sugestao_compra(self):
+        main_frame = ttk.Frame(self.frame_sugestao)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        main_frame.rowconfigure(1, weight=1)
+        main_frame.columnconfigure(0, weight=1)
+
+        # --- Frame 1: Filtros (REESCRITO) ---
+        frame_filtros = ttk.LabelFrame(main_frame, text="Parâmetros da Sugestão (Baseado em Período de Contagem)", padding="10")
+        frame_filtros.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        frame_filtros.columnconfigure(1, weight=1)
+        frame_filtros.columnconfigure(3, weight=1)
+
+        ttk.Label(frame_filtros, text="Contagem Inicial (Ponto A):").grid(row=0, column=0, sticky="w", padx=5, pady=5)
+        self.combo_contagem_inicio = ttk.Combobox(frame_filtros, state="readonly", width=40)
+        self.combo_contagem_inicio.grid(row=0, column=1, sticky="ew", padx=5, pady=5)
+
+        ttk.Label(frame_filtros, text="Contagem Final (Ponto B):").grid(row=0, column=2, sticky="w", padx=10, pady=5)
+        self.combo_contagem_fim = ttk.Combobox(frame_filtros, state="readonly", width=40)
+        self.combo_contagem_fim.grid(row=0, column=3, sticky="ew", padx=5, pady=5)
+
+        ttk.Label(frame_filtros, text="Cobrir próximos:").grid(row=1, column=0, sticky="w", padx=5, pady=5)
+        
+        # --- CORREÇÃO DO BUG .pack() ---
+        # Criamos um sub-frame para o spinbox e o label "meses."
+        frame_spin = ttk.Frame(frame_filtros)
+        frame_spin.grid(row=1, column=1, sticky="w") # .grid() para o sub-frame
+        
+        self.spin_meses_cobertura = ttk.Spinbox(frame_spin, from_=1, to=12, width=5)
+        self.spin_meses_cobertura.set("1") 
+        self.spin_meses_cobertura.pack(side=tk.LEFT, padx=5) # .pack() dentro do sub-frame
+        
+        ttk.Label(frame_spin, text="meses.").pack(side=tk.LEFT) # .pack() dentro do sub-frame
+        # --- FIM DA CORREÇÃO ---
+        
+        btn_gerar_sugestao = ttk.Button(frame_filtros, text="Gerar Sugestão de Compra", command=self.gerar_sugestao_compra)
+        btn_gerar_sugestao.grid(row=1, column=2, columnspan=2, sticky="e", padx=5, pady=5, ipady=5)
+        # --- FIM DO FRAME DE FILTROS ---
+
+        # --- Frame 2: Tabela de Sugestões (Mesma de antes, mas o bind foi movido) ---
+        frame_resultado = ttk.LabelFrame(main_frame, text="Relatório de Posição de Estoque e Sugestão (Duplo-clique para ver histórico de compras)", padding="10")
+        frame_resultado.grid(row=1, column=0, sticky="nsew")
+        frame_resultado.rowconfigure(0, weight=1)
+        frame_resultado.columnconfigure(0, weight=1)
+        
+    # [ATUALIZAÇÃO] Adicionada coluna 'Duração (Meses)'
+        cols = ('Produto', 'UN', 'Estoque Atual', 'Total Comprado', 'Consumo Médio/Mês', 'Consumo Médio/Dia', 'Duração (Meses)', 'Sugestão Compra', 'Status')
+        self.tree_sugestao = ttk.Treeview(frame_resultado, columns=cols, show='headings')
+        for col in cols: self.tree_sugestao.heading(col, text=col)
+
+        self.tree_sugestao.column('Produto', width=250)
+        self.tree_sugestao.column('UN', width=40, anchor='center')
+        self.tree_sugestao.column('Estoque Atual', width=90, anchor='e')
+        self.tree_sugestao.column('Total Comprado', width=90, anchor='e')
+        self.tree_sugestao.column('Consumo Médio/Mês', width=110, anchor='e')
+        self.tree_sugestao.column('Consumo Médio/Dia', width=110, anchor='e')
+        self.tree_sugestao.column('Duração (Meses)', width=100, anchor='center') # Nova Coluna
+        self.tree_sugestao.column('Sugestão Compra', width=110, anchor='e')
+        self.tree_sugestao.column('Status', width=100)
+
+        scrollbar = ttk.Scrollbar(frame_resultado, orient="vertical", command=self.tree_sugestao.yview)
+        self.tree_sugestao.configure(yscrollcommand=scrollbar.set)
+        
+        self.tree_sugestao.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        
+        self.tree_sugestao.bind("<Double-1>", self.abrir_popup_historico_compras)
+
+    # --- FUNÇÃO ATUALIZADA (v3 - Lógica por Período) ---
+    def gerar_sugestao_compra(self):
+        """Busca o relatório do banco baseado no período selecionado e calcula a sugestão."""
+        try:
+            # Validação robusta do Spinbox (evita erro se estiver vazio)
+            valor_spin = self.spin_meses_cobertura.get().strip()
+            # CORREÇÃO: Garante que, se o valor for vazio, ele seja tratado como 1
+            if not valor_spin.isdigit(): # Verifica se é vazio ou não numérico
+                meses_cobertura = 1
+                self.spin_meses_cobertura.set("1")
+            else:
+                meses_cobertura = int(valor_spin)
+
+            # Converte para Decimal para garantir precisão no cálculo com UMD
+            dias_cobertura = Decimal(meses_cobertura * 30)
+
+            str_contagem_inicio = self.combo_contagem_inicio.get()
+            str_contagem_fim = self.combo_contagem_fim.get()
+            
+            if not str_contagem_inicio or not str_contagem_fim:
+                messagebox.showwarning("Aviso", "Selecione uma Contagem Inicial (Ponto A) e uma Contagem Final (Ponto B).", parent=self.root)
                 return
 
-        # Prepara dados iniciais na Thread principal para evitar erros de GUI
-        destinatarios_nomes = [listbox.get(i) for i in indices_selecionados]
-        destinatarios_objs = [self.dados_funcionarios[nome] for nome in destinatarios_nomes]
-        imagem_anexada = hasattr(self, 'caminho_imagem_selecionada') and self.caminho_imagem_selecionada
-        caminho_imagem = self.caminho_imagem_selecionada if imagem_anexada else None
+            contagem_id_inicio = self.mapa_contagens_historico[str_contagem_inicio]
+            contagem_id_fim = self.mapa_contagens_historico[str_contagem_fim]
 
-        # Desabilita botão para evitar múltiplos cliques
-        btn_enviar = self.popup_criacao.nametowidget(listbox.master.master.winfo_children()[-1]) # Pega o botão enviar (último widget)
-        if btn_enviar: btn_enviar.config(state="disabled", text="Enviando... Aguarde")
+        except (ValueError, KeyError) as e:
+            messagebox.showerror("Erro de Seleção", f"Parâmetros inválidos. Verifique suas seleções.\n{e}", parent=self.root)
+            return
 
-        def tarefa_envio_background():
+        for i in self.tree_sugestao.get_children():
+            self.tree_sugestao.delete(i)
+            
+        try:
+            # Chama a função corrigida do database, que já retorna Decimals prontos
+            relatorio_posicao = database.gerar_sugestao_por_periodo(contagem_id_inicio, contagem_id_fim)
+            self.cache_relatorio_posicao.clear()
+
+            if not relatorio_posicao:
+                messagebox.showinfo("Aviso", "Nenhum produto encontrado ou erro de processamento.", parent=self.root)
+                return
+
+            for item in relatorio_posicao:
+                # Armazena no cache para o recurso de duplo-clique (histórico)
+                self.cache_relatorio_posicao[item['ProdutoID']] = item
+
+                # Extração direta dos dados já calculados no database.py
+                nome = item['NomeProduto']
+                un = item['Unidade']
+                atual = item['EstoqueAtual']       # Já é Decimal
+                umd = item['UsoMedioDiario']       # Já é Decimal
+                minimo = item['EstoqueMinimo']     # Já é Decimal
+                total_comprado = item['TotalComprado']
+                status = item['Status']
+
+                # Cálculo de apresentação: Consumo Mensal
+                consumo_mes = umd * 30
+
+                # Cálculo da Sugestão de Compra
+                # Estoque Ideal = (Consumo Diário * Dias a Cobrir) + Estoque de Segurança
+                estoque_ideal = (umd * dias_cobertura) + minimo
+                sugestao_calc = estoque_ideal - atual
+
+                # A sugestão não pode ser negativa
+                sugestao_compra = max(sugestao_calc, Decimal('0.0'))
+
+                # --- CÁLCULO DA DURAÇÃO DE ESTOQUE (Visual) ---
+                if consumo_mes > 0:
+                    duracao_val = atual / consumo_mes
+                    if duracao_val > 120: 
+                        duracao_f = "> 120 meses"
+                    else:
+                        duracao_f = f"{duracao_val:.1f} meses"
+                else:
+                    if atual > 0:
+                        duracao_f = "Sem Giro" # Tem estoque mas não vendeu no período
+                    else:
+                        duracao_f = "---" # Zerado e sem venda
+
+                # Formatação para string (3 casas decimais)
+                atual_f = f"{atual:.3f}"
+                total_comprado_f = f"{total_comprado:.3f}"
+                consumo_mes_f = f"{consumo_mes:.3f}"
+                umd_f = f"{umd:.3f}"
+                sugestao_f = f"{sugestao_compra:.3f}"
+
+                # Insere na Treeview
+                self.tree_sugestao.insert("", "end", values=(
+                    nome, un, atual_f, total_comprado_f, consumo_mes_f, umd_f, duracao_f, sugestao_f, status
+                ), iid=item['ProdutoID'])
+
+        except Exception as e:
+            logger.error(f"Erro ao gerar sugestão de compra (Frontend): {e}", exc_info=True)
+            messagebox.showerror("Erro de Processamento", f"Falha ao exibir relatório:\n{e}", parent=self.root)
+
+    def popular_combos_contagem_sugestao(self):
+        """Atualiza os combos da Aba 5 com os dados mais recentes da Aba 4."""
+        try:
+            contagens = database.listar_contagens_cabecalho()
+            self.mapa_contagens_historico.clear()
+
+            # Limpa os combos preventivamente
+            self.combo_contagem_inicio.set('')
+            self.combo_contagem_fim.set('')
+            self.combo_contagem_inicio['values'] = []
+            self.combo_contagem_fim['values'] = []
+
+            # --- NOVA OPÇÃO ESPECIAL ---
+            opcao_primeira_compra = "⏮️ DESDE A PRIMEIRA COMPRA (Histórico Completo)"
+            self.mapa_contagens_historico[opcao_primeira_compra] = -1 # Código especial -1
+            
+            nomes_contagens = []
+            
+            # Adiciona as contagens físicas reais
+            for c in contagens:
+                data_f = c.DataContagem.strftime('%d/%m/%Y')
+                nome_display = f"ID: {c.ContagemID} - {data_f} ({c.NomeCompleto})"
+                nomes_contagens.append(nome_display)
+                self.mapa_contagens_historico[nome_display] = c.ContagemID
+
+            # Configura Combo Final (Apenas contagens reais, pois "Hoje" é sempre uma contagem física)
+            self.combo_contagem_fim['values'] = nomes_contagens
+            
+            # Configura Combo Inicial (Contagens Reais + Opção Especial no topo)
+            self.combo_contagem_inicio['values'] = [opcao_primeira_compra] + nomes_contagens
+
+            # Lógica inteligente de seleção padrão
+            if nomes_contagens:
+                self.combo_contagem_fim.set(nomes_contagens[0])   # A mais recente (Ponto B)
+                # Por padrão, sugere a opção especial se houver poucas contagens
+                self.combo_contagem_inicio.set(opcao_primeira_compra)
+
+        except Exception as e:
+            logger.error(f"Erro ao popular combos de contagem (Aba 5): {e}", exc_info=True)
+
+    def abrir_popup_historico_compras(self, event):
+        selecionado = self.tree_sugestao.focus()
+        if not selecionado:
+            return
+
+        try:
+            # O IID foi definido como ProdutoID na inserção, mas protegemos a conversão
+            produto_id = int(selecionado)
+        except ValueError:
+            # Se clicou em algo que não tem ID numérico
+            return
+
+        dados_produto = self.cache_relatorio_posicao.get(produto_id)
+
+        # Proteção contra Cache Desatualizado
+        if not dados_produto:
+            messagebox.showwarning("Dados Desatualizados", "As informações deste produto não estão mais na memória.\nPor favor, clique em 'Gerar Sugestão' novamente.", parent=self.root)
+            return
+
+        nome_produto = dados_produto['NomeProduto']
+        popup = Toplevel(self.root)
+        popup.title(f"Histórico de Compras - {nome_produto}")
+        popup.geometry("800x500")
+        popup.transient(self.root)
+
+        frame = ttk.Frame(popup, padding="10")
+        frame.pack(fill=tk.BOTH, expand=True)
+        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+
+        cols_hist = ('Data Compra', 'NF', 'Fornecedor', 'Qtd', 'Custo Unit.')
+        tree_hist = ttk.Treeview(frame, columns=cols_hist, show='headings')
+
+        for col in cols_hist: 
+            tree_hist.heading(col, text=col)
+
+        tree_hist.column('Data Compra', width=100, anchor='center')
+        tree_hist.column('NF', width=80, anchor='center')
+        tree_hist.column('Fornecedor', width=250)
+        tree_hist.column('Qtd', width=80, anchor='e')
+        tree_hist.column('Custo Unit.', width=100, anchor='e')
+
+        scrollbar = ttk.Scrollbar(frame, orient="vertical", command=tree_hist.yview)
+        tree_hist.configure(yscrollcommand=scrollbar.set)
+        tree_hist.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+
+        try:
+            historico = database.buscar_historico_compras_produto(produto_id)
+            if not historico:
+                tree_hist.insert("", "end", values=("Nenhuma compra encontrada.", "", "", "", ""))
+
+            for compra in historico:
+                # --- CORREÇÃO DE FORMATAÇÃO DE DATA ---
+                raw_date = compra.DataEmissao
+                data_f = "--/--/----"
+
+                if raw_date:
+                    if hasattr(raw_date, 'strftime'):
+                        data_f = raw_date.strftime('%d/%m/%Y')
+                    else:
+                        # Tenta converter string YYYY-MM-DD para BR
+                        try:
+                            # Pega os primeiros 10 chars (caso venha com hora)
+                            data_str = str(raw_date)[:10] 
+                            dt_obj = datetime.strptime(data_str, '%Y-%m-%d')
+                            data_f = dt_obj.strftime('%d/%m/%Y')
+                        except:
+                            data_f = str(raw_date) # Fallback: mostra como veio
+
+                qtd_f = f"{compra.Quantidade:.3f}"
+                custo_f = f"R$ {compra.PrecoCustoUnitario:.4f}"
+
+                tree_hist.insert("", "end", values=(
+                    data_f, compra.NumeroNF, compra.NomeFantasia, qtd_f, custo_f
+                ))
+
+        except Exception as e:
+            messagebox.showerror("Erro de Banco", f"Não foi possível buscar o histórico: {e}", parent=popup)
+
+    # ===================================================================
+    # == ABA 7: SOLICITAÇÕES DE COMPRAS E MANUTENÇÃO ====================
+    # ===================================================================
+    def criar_aba_solicitacoes(self):
+        main_frame = ttk.Frame(self.frame_solicitacoes)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # --- ESQUERDA: LISTA ---
+        frame_lista = ttk.LabelFrame(main_frame, text="Solicitações Pendentes", padding="10")
+        frame_lista.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0,10))
+        
+        cols = ('ID', 'Solicitante', 'Tipo', 'Categoria', 'Data')
+        self.tree_solicitacoes = ttk.Treeview(frame_lista, columns=cols, show='headings', selectmode='browse')
+        self.tree_solicitacoes.heading('ID', text='ID'); self.tree_solicitacoes.column('ID', width=40)
+        self.tree_solicitacoes.heading('Solicitante', text='Solicitante'); self.tree_solicitacoes.column('Solicitante', width=150)
+        self.tree_solicitacoes.heading('Tipo', text='Tipo'); self.tree_solicitacoes.column('Tipo', width=80)
+        self.tree_solicitacoes.heading('Categoria', text='Categoria'); self.tree_solicitacoes.column('Categoria', width=100)
+        self.tree_solicitacoes.heading('Data', text='Data'); self.tree_solicitacoes.column('Data', width=120)
+        
+        self.tree_solicitacoes.pack(fill=tk.BOTH, expand=True)
+        self.tree_solicitacoes.bind('<<TreeviewSelect>>', self.on_solicitacao_selecionada)
+        
+        ttk.Button(frame_lista, text="🔄 Atualizar Lista", command=self.carregar_solicitacoes).pack(pady=5)
+        
+        # --- DIREITA: DETALHES ---
+        frame_detalhes = ttk.LabelFrame(main_frame, text="Detalhes & Ação", padding="10")
+        frame_detalhes.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+        
+        self.lbl_solic_detalhes = tk.Text(frame_detalhes, height=15, width=40, wrap=tk.WORD, state='disabled', font=("Arial", 10))
+        self.lbl_solic_detalhes.pack(fill=tk.X, pady=5)
+        
+        self.btn_ver_foto_solic = ttk.Button(frame_detalhes, text="📸 Ver Foto (Manutenção)", state='disabled', command=self.ver_foto_solicitacao)
+        self.btn_ver_foto_solic.pack(pady=5, fill=tk.X)
+        
+        frame_botoes = ttk.Frame(frame_detalhes)
+        frame_botoes.pack(pady=20, fill=tk.X)
+        
+        ttk.Button(frame_botoes, text="✅ Aprovar", command=self.aprovar_solicitacao).pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
+        ttk.Button(frame_botoes, text="❌ Recusar", command=self.recusar_solicitacao).pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
+        
+        self.solicitacao_atual_foto = None
+        self.solicitacao_atual_id = None
+        self.cache_solicitacoes = {}
+
+    def carregar_solicitacoes(self):
+        for i in self.tree_solicitacoes.get_children(): self.tree_solicitacoes.delete(i)
+        
+        dados = database.listar_solicitacoes_pendentes()
+        # Colunas SQL: 0:ID, 1:Nome, 2:Tipo, 3:Cat, 4:Desc, 5:Qtd, 6:Foto, 7:Data
+        self.cache_solicitacoes = {row[0]: row for row in dados}
+        
+        for row in dados:
+            data_fmt = row[7].strftime('%d/%m %H:%M') if row[7] else ""
+            self.tree_solicitacoes.insert("", "end", values=(row[0], row[1], row[2], row[3], data_fmt))
+
+    def on_solicitacao_selecionada(self, event):
+        sel = self.tree_solicitacoes.focus()
+        if not sel: return
+        item = self.tree_solicitacoes.item(sel, 'values')
+        s_id = int(item[0])
+        self.solicitacao_atual_id = s_id
+        
+        dados = self.cache_solicitacoes.get(s_id)
+        if not dados: return
+        
+        texto = f"Solicitante: {dados[1]}\n"
+        texto += f"Tipo: {dados[2]} - {dados[3]}\n"
+        texto += f"Data: {dados[7].strftime('%d/%m/%Y %H:%M')}\n\n"
+        texto += f"DESCRIÇÃO:\n{dados[4]}\n"
+        if dados[5]: texto += f"\nQuantidade: {dados[5]}"
+        
+        self.lbl_solic_detalhes.config(state='normal')
+        self.lbl_solic_detalhes.delete("1.0", tk.END)
+        self.lbl_solic_detalhes.insert("1.0", texto)
+        self.lbl_solic_detalhes.config(state='disabled')
+        
+        if dados[2] == 'Manutencao' and dados[6]:
+            self.solicitacao_atual_foto = dados[6]
+            self.btn_ver_foto_solic.config(state='normal')
+        else:
+            self.solicitacao_atual_foto = None
+            self.btn_ver_foto_solic.config(state='disabled')
+
+    def ver_foto_solicitacao(self):
+        if self.solicitacao_atual_foto and os.path.exists(self.solicitacao_atual_foto):
+            import file_utils
+            file_utils.abrir_arquivo(self.solicitacao_atual_foto)
+        else:
+            messagebox.showerror("Erro", "Arquivo de foto não encontrado no disco.")
+
+    def aprovar_solicitacao(self):
+        if not self.solicitacao_atual_id: return
+        if database.atualizar_status_solicitacao(self.solicitacao_atual_id, 'Aprovado'):
+            messagebox.showinfo("Sucesso", "Solicitação Aprovada!")
+            self.carregar_solicitacoes()
+            self.lbl_solic_detalhes.config(state='normal'); self.lbl_solic_detalhes.delete("1.0", tk.END); self.lbl_solic_detalhes.config(state='disabled')
+            self.solicitacao_atual_id = None
+
+    def recusar_solicitacao(self):
+        if not self.solicitacao_atual_id: return
+        motivo = simpledialog.askstring("Recusa", "Motivo da recusa:", parent=self.root)
+        if motivo:
+            if database.atualizar_status_solicitacao(self.solicitacao_atual_id, 'Recusado', motivo):
+                messagebox.showinfo("Sucesso", "Solicitação Recusada.")
+                self.carregar_solicitacoes()
+                self.solicitacao_atual_id = None
+
+
+# ===================================================================
+    # == ABA 6: ADMINISTRAÇÃO / RESET ===================================
+    # ===================================================================
+    def criar_aba_administracao(self):
+        main_frame = ttk.Frame(self.frame_admin)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # --- Título ---
+        ttk.Label(main_frame, text="⚠️ Área de Gestão de Dados - Ações Destrutivas", font=("Arial", 12, "bold"), foreground="red").pack(pady=10)
+
+        # --- Painel Dividido ---
+        paned = ttk.PanedWindow(main_frame, orient=tk.HORIZONTAL)
+        paned.pack(fill=tk.BOTH, expand=True)
+
+        # --- Esquerda: Gestão de Notas Fiscais ---
+        frame_nfs = ttk.LabelFrame(paned, text="Gerenciar Notas Fiscais Importadas", padding="10")
+        paned.add(frame_nfs, weight=1)
+
+        cols_nf = ('ID', 'Número', 'Fornecedor', 'Data', 'Valor', 'Itens')
+        self.tree_admin_nfs = ttk.Treeview(frame_nfs, columns=cols_nf, show='headings', selectmode='extended')
+        self.tree_admin_nfs.heading('ID', text='ID'); self.tree_admin_nfs.column('ID', width=30, anchor='center')
+        self.tree_admin_nfs.heading('Número', text='Número'); self.tree_admin_nfs.column('Número', width=80)
+        self.tree_admin_nfs.heading('Fornecedor', text='Fornecedor'); self.tree_admin_nfs.column('Fornecedor', width=120)
+        self.tree_admin_nfs.heading('Data', text='Data'); self.tree_admin_nfs.column('Data', width=80, anchor='center')
+        self.tree_admin_nfs.heading('Valor', text='Valor (R$)'); self.tree_admin_nfs.column('Valor', width=80, anchor='e')
+        self.tree_admin_nfs.heading('Itens', text='Qtd. Itens'); self.tree_admin_nfs.column('Itens', width=60, anchor='center')
+        
+        sb_nf = ttk.Scrollbar(frame_nfs, orient="vertical", command=self.tree_admin_nfs.yview)
+        self.tree_admin_nfs.configure(yscrollcommand=sb_nf.set)
+        self.tree_admin_nfs.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb_nf.pack(side=tk.RIGHT, fill=tk.Y)
+
+        btn_del_nf = ttk.Button(frame_nfs, text="🗑️ Excluir Nota(s) Selecionada(s)", command=self.excluir_nfs_selecionadas)
+        btn_del_nf.pack(side=tk.BOTTOM, fill=tk.X, pady=5)
+
+        # --- Direita: Gestão de Contagens ---
+        frame_cont = ttk.LabelFrame(paned, text="Gerenciar Contagens de Estoque", padding="10")
+        paned.add(frame_cont, weight=1)
+
+        cols_cont = ('ID', 'Data', 'Responsável')
+        self.tree_admin_cont = ttk.Treeview(frame_cont, columns=cols_cont, show='headings', selectmode='extended')
+        self.tree_admin_cont.heading('ID', text='ID'); self.tree_admin_cont.column('ID', width=40, anchor='center')
+        self.tree_admin_cont.heading('Data', text='Data'); self.tree_admin_cont.column('Data', width=100, anchor='center')
+        self.tree_admin_cont.heading('Responsável', text='Responsável'); self.tree_admin_cont.column('Responsável', width=150)
+
+        sb_cont = ttk.Scrollbar(frame_cont, orient="vertical", command=self.tree_admin_cont.yview)
+        self.tree_admin_cont.configure(yscrollcommand=sb_cont.set)
+        self.tree_admin_cont.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb_cont.pack(side=tk.RIGHT, fill=tk.Y)
+
+        btn_del_cont = ttk.Button(frame_cont, text="🗑️ Excluir Contagem(s) Selecionada(s)", command=self.excluir_contagens_selecionadas)
+        btn_del_cont.pack(side=tk.BOTTOM, fill=tk.X, pady=5)
+
+        # --- Área de Perigo (Reset Total) ---
+        frame_perigo = ttk.LabelFrame(main_frame, text="ZONA DE PERIGO", padding="10")
+        frame_perigo.pack(fill=tk.X, pady=20, padx=10)
+
+        lbl_aviso = ttk.Label(frame_perigo, text="Atenção: O botão abaixo apagará TODOS os Produtos, Vínculos, Notas Fiscais e Contagens.\nUse apenas se quiser recomeçar o estoque do zero. Os Fornecedores serão mantidos.", foreground="red", justify=tk.CENTER)
+        lbl_aviso.pack(pady=5)
+
+        style = ttk.Style()
+        style.configure("Danger.TButton", foreground="red", font=("Arial", 10, "bold"))
+
+        btn_reset_total = ttk.Button(frame_perigo, text="☢️ APAGAR TUDO E RECOMEÇAR ESTOQUE ☢️", style="Danger.TButton", command=self.resetar_sistema_estoque)
+        btn_reset_total.pack(ipadx=10, ipady=10)
+
+    def atualizar_lista_nfs_admin(self):
+        for i in self.tree_admin_nfs.get_children(): self.tree_admin_nfs.delete(i)
+        try:
+            nfs = database.listar_notas_fiscais_entrada_completa()
+            for nf in nfs:
+                # nf = (NotaID, NumeroNF, NomeFantasia, DataEmissao, ValorTotalNF, QtdItens)
+                data_fmt = nf[3].strftime('%d/%m/%Y') if nf[3] else "--"
+                valor_fmt = f"{float(nf[4]):.2f}"
+                self.tree_admin_nfs.insert("", "end", values=(nf[0], nf[1], nf[2], data_fmt, valor_fmt, nf[5]))
+        except Exception as e:
+            print(f"Erro lista admin NF: {e}")
+
+    def atualizar_lista_contagens_admin(self):
+        for i in self.tree_admin_cont.get_children(): self.tree_admin_cont.delete(i)
+        try:
+            contagens = database.listar_contagens_cabecalho()
+            for c in contagens:
+                data_fmt = c.DataContagem.strftime('%d/%m/%Y')
+                self.tree_admin_cont.insert("", "end", values=(c.ContagemID, data_fmt, c.NomeCompleto))
+        except Exception as e:
+            print(f"Erro lista admin Contagem: {e}")
+
+    def excluir_nfs_selecionadas(self):
+        selecionados = self.tree_admin_nfs.selection()
+        if not selecionados:
+            messagebox.showwarning("Aviso", "Selecione pelo menos uma Nota Fiscal para excluir.")
+            return
+        
+        if not messagebox.askyesno("Confirmar Exclusão", f"Você selecionou {len(selecionados)} notas fiscais.\n\nEsta ação apagará o registro da nota e todo o histórico de entrada de estoque associado a ela.\n\nDeseja continuar?", icon='warning'):
+            return
+
+        sucessos = 0
+        for item in selecionados:
+            dados = self.tree_admin_nfs.item(item, 'values')
+            nota_id = dados[0]
+            if database.excluir_nota_fiscal_entrada(nota_id):
+                sucessos += 1
+        
+        messagebox.showinfo("Resultado", f"{sucessos} nota(s) excluída(s) com sucesso.")
+        self.atualizar_lista_nfs_admin()
+
+    def excluir_contagens_selecionadas(self):
+        selecionados = self.tree_admin_cont.selection()
+        if not selecionados:
+            messagebox.showwarning("Aviso", "Selecione pelo menos uma Contagem para excluir.")
+            return
+        
+        if not messagebox.askyesno("Confirmar Exclusão", f"Você selecionou {len(selecionados)} contagens.\n\nEsta ação apagará o registro histórico dessa contagem de estoque.\n\nDeseja continuar?", icon='warning'):
+            return
+
+        sucessos = 0
+        for item in selecionados:
+            dados = self.tree_admin_cont.item(item, 'values')
+            cont_id = dados[0]
+            if database.excluir_contagem_estoque(cont_id):
+                sucessos += 1
+        
+        messagebox.showinfo("Resultado", f"{sucessos} contagem(ns) excluída(s) com sucesso.")
+        self.atualizar_lista_contagens_admin()
+
+    def resetar_sistema_estoque(self):
+            """Executa o reset completo após dupla confirmação."""
+            # Confirmação 1
+            if not messagebox.askyesno("PERIGO - Reset Total", 
+                                    "Tem certeza absoluta que deseja APAGAR TODO O ESTOQUE?\n\n"
+                                    "Isso excluirá:\n"
+                                    "- Todos os Produtos Mestre\n"
+                                    "- Todos os Vínculos criados\n"
+                                    "- Todo o histórico de Notas Fiscais\n"
+                                    "- Todo o histórico de Contagens\n\n"
+                                    "Essa ação NÃO PODE ser desfeita.", 
+                                    icon='warning', default='no', parent=self.root):
+                return
+
+            # Confirmação 2 (Segurança extra)
+            codigo_seguranca = simpledialog.askstring("Confirmação Final", "Para confirmar, digite 'DELETAR' (em maiúsculo) abaixo:", parent=self.root)
+            
+            if codigo_seguranca == "DELETAR":
+                # Chama a função do banco de dados
+                sucesso = database.resetar_dados_estoque_completo()
+                
+                if sucesso:
+                    messagebox.showinfo("Sistema Resetado", "O banco de dados de estoque foi limpo com sucesso.\n\nVocê pode começar a cadastrar e vincular novamente.", parent=self.root)
+                    
+                    # Atualiza todas as listas para refletir o vazio
+                    self.atualizar_lista_produtos()
+                    self.atualizar_lista_fornecedores() 
+                    self.popular_combobox_produtos_mestre()
+                    self.atualizar_lista_contagens_historico()
+                    self.popular_combos_contagem_sugestao()
+                    self.atualizar_lista_nfs_admin()
+                    self.atualizar_lista_contagens_admin()
+                    
+                    # Limpa as árvores de importação
+                    for i in self.tree_vincular.get_children(): self.tree_vincular.delete(i)
+                    for i in self.tree_prontos.get_children(): self.tree_prontos.delete(i)
+                    self.itens_xml_nao_vinculados.clear()
+                    self.dados_notas_processadas.clear()
+                    
+                else:
+                    messagebox.showerror("Erro", "Falha ao resetar o banco. Verifique os logs.", parent=self.root)
+            else:
+                messagebox.showinfo("Cancelado", "Ação cancelada. O código de confirmação estava incorreto.", parent=self.root)
+
+    def abrir_gestor_vinculos(self):
+        """Abre uma janela para editar/excluir vínculos DE/PARA existentes."""
+        popup = Toplevel(self.root)
+        popup.title("Gerenciador de Vínculos de Produtos")
+        popup.geometry("900x600")
+        popup.transient(self.root)
+
+        # --- Filtro ---
+        frame_topo = ttk.Frame(popup, padding="10")
+        frame_topo.pack(fill=tk.X)
+        ttk.Label(frame_topo, text="Filtrar (XML ou Mestre):").pack(side=tk.LEFT)
+        entry_filtro = ttk.Entry(frame_topo, width=30)
+        entry_filtro.pack(side=tk.LEFT, padx=5)
+
+        # --- Lista ---
+        frame_lista = ttk.Frame(popup, padding="10")
+        frame_lista.pack(fill=tk.BOTH, expand=True)
+
+        cols = ('ID', 'Fornecedor', 'Descrição no XML', 'Produto Mestre Atual', 'Fator (Cx)')
+        tree_vinculos = ttk.Treeview(frame_lista, columns=cols, show='headings', selectmode='browse')
+
+        tree_vinculos.heading('ID', text='ID'); tree_vinculos.column('ID', width=40)
+        tree_vinculos.heading('Fornecedor', text='Fornecedor'); tree_vinculos.column('Fornecedor', width=200)
+        tree_vinculos.heading('Descrição no XML', text='Descrição no XML'); tree_vinculos.column('Descrição no XML', width=250)
+        tree_vinculos.heading('Produto Mestre Atual', text='Produto Mestre (Seu Estoque)'); tree_vinculos.column('Produto Mestre Atual', width=250)
+        tree_vinculos.heading('Fator (Cx)', text='Qtd/Cx'); tree_vinculos.column('Fator (Cx)', width=60, anchor='center')
+
+        sb = ttk.Scrollbar(frame_lista, orient="vertical", command=tree_vinculos.yview)
+        tree_vinculos.configure(yscrollcommand=sb.set)
+        tree_vinculos.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+
+        def carregar_lista(filtro=""):
+            for i in tree_vinculos.get_children(): tree_vinculos.delete(i)
+            
             try:
-                GESTOR_ID = 2  # Assumindo ID 2 para o gestor
-                documento_id = database.criar_documento(titulo, conteudo.strip(), GESTOR_ID, pontos)
-                if not documento_id:
-                    self.root.after(0, lambda: messagebox.showerror("Erro de BD", "Não foi possível criar o registro do documento.", parent=self.popup_criacao))
+                dados = database.listar_todos_vinculos_detalhado()
+                if not dados:
+                    # Se não houver dados, não faz nada (lista fica vazia mas sem erro)
+                    print("Nenhum vínculo encontrado no banco.")
                     return
 
-                telegram_file_id = None
-                enviados_com_sucesso = 0
-
-                # 1. Prepara as mensagens
-                legenda_imagem_curta = f"🚨 **NOVO COMUNICADO** 🚨\n\n**Título:** {titulo}"
-                texto_principal = f"**Conteúdo:**\n{conteudo.strip()}\n\nSua confirmação de leitura é obrigatória e será registrada."
-
-                # 2. Envio da imagem inicial (se houver) com Fallback
-                telegram_file_id = None
-                if caminho_imagem:
-                    try:
-                        logger.info(f"Tentando obter file_id via Grupo Gestor ({config.GESTOR_GROUP_CHAT_ID})...")
-                        resposta_api_foto = notificador_telegram.enviar_foto_com_botoes(
-                            config.GESTOR_GROUP_CHAT_ID, 
-                            caminho_imagem, 
-                            f"(Log de Envio: {titulo})" 
-                        )
-
-                        if resposta_api_foto and resposta_api_foto.get('ok'):
-                            telegram_file_id = resposta_api_foto['result']['photo'][-1]['file_id']
-                            database.atualizar_documento_com_file_id(documento_id, telegram_file_id)
-                        else:
-                            logger.warning(f"Falha ao enviar imagem para grupo de controle: {resposta_api_foto}")
-                            # Não aborta, apenas segue sem imagem
-                    except Exception as e_img:
-                        logger.error(f"Erro de conexão ao enviar imagem de controle: {e_img}")
-                        # Não aborta
-
-                # 3. Itera sobre TODOS os funcionários
-                for func in destinatarios_objs:
-                    assinatura_id = database.registrar_pendencia_assinatura(documento_id, func.FuncionarioID)
-                    if not assinatura_id:
-                        logger.warning(f"!!! Falha ao registrar pendência para {func.NomeCompleto}")
-                        continue
-
-                    keyboard = [[InlineKeyboardButton("✅ Li e estou ciente", callback_data=f"doc_ciente_{assinatura_id}")]]
-                    reply_markup = InlineKeyboardMarkup(keyboard)
-
-                    if telegram_file_id:
-                        notificador_telegram.enviar_foto_com_botoes(
-                            func.ChatIDTelegram,
-                            telegram_file_id, 
-                            legenda_imagem_curta
-                        )
-                        time.sleep(0.2) 
-
-                    notificador_telegram.enviar_mensagem_com_botao(
-                        func.ChatIDTelegram,
-                        texto_principal,
-                        reply_markup
-                    )
-                    enviados_com_sucesso += 1
-                    time.sleep(0.1)
-
-                # Finalização na Thread Principal
-                def finalizar_ui():
-                    messagebox.showinfo("Sucesso", f"{enviados_com_sucesso} de {len(destinatarios_objs)} comunicados foram enviados.", parent=self.popup_criacao)
-                    if hasattr(self, 'caminho_imagem_selecionada'):
-                        del self.caminho_imagem_selecionada
-                    self.popup_criacao.destroy()
-                    self.atualizar_lista_comunicados()
-                
-                self.root.after(0, finalizar_ui)
-
+                for item in dados:
+                    # item = (ID, Fornecedor, DescXML, NomeMestre, Fator)
+                    
+                    # Proteção para campos nulos
+                    desc_xml = item[2] if item[2] else "Sem Descrição"
+                    nome_mestre = item[3] if item[3] else "Sem Nome"
+                    
+                    texto_busca = f"{desc_xml} {nome_mestre}".lower()
+                    
+                    if not filtro or filtro.lower() in texto_busca:
+                        # Tratamento seguro para o fator
+                        fator_val = item[4] if item[4] is not None else 1.0
+                        fator_fmt = f"{fator_val:.2f}".replace('.', ',')
+                        
+                        tree_vinculos.insert("", "end", values=(item[0], item[1], desc_xml, nome_mestre, fator_fmt))
             except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror("Erro Inesperado", f"O processo foi interrompido:\n{e}", parent=self.popup_criacao))
-                # Reabilita botão em caso de erro
-                self.root.after(0, lambda: btn_enviar.config(state="normal", text="ENVIAR COMUNICADO"))
+                messagebox.showerror("Erro de Carregamento", f"Falha ao ler os vínculos: {e}", parent=popup)
 
-        # Inicia a thread
-        import threading
-        threading.Thread(target=tarefa_envio_background, daemon=True).start()
+        entry_filtro.bind("<KeyRelease>", lambda e: carregar_lista(entry_filtro.get()))
 
-    def abrir_janela_detalhes(self):
-        selecionado = self.tree_comunicados.focus()
-        if not selecionado:
-            messagebox.showwarning("Aviso", "Por favor, selecione um comunicado na lista para ver os detalhes.")
-            return
-        dados_comunicado = self.tree_comunicados.item(selecionado, 'values')
-        documento_id = dados_comunicado[0]
-        detalhes_doc = database.buscar_detalhes_completos_documento(documento_id)
-        if not detalhes_doc:
-            messagebox.showerror("Erro", "Não foi possível encontrar os detalhes deste comunicado.")
-            return
-        titulo_comunicado = detalhes_doc.Titulo
-        conteudo_comunicado = detalhes_doc.Conteudo
-        popup_detalhes = Toplevel(self.root)
-        popup_detalhes.title(f"Detalhes: {titulo_comunicado}")
-        popup_detalhes.geometry("700x550")
-        popup_detalhes.transient(self.root)
-        frame_conteudo = ttk.LabelFrame(popup_detalhes, text="Conteúdo do Comunicado", padding="10")
-        frame_conteudo.pack(padx=10, pady=10, fill="x")
-        text_widget = Text(frame_conteudo, height=8, wrap="word", font=("Arial", 10))
-        text_widget.insert("1.0", conteudo_comunicado)
-        text_widget.config(state="disabled")
-        scrollbar_conteudo = ttk.Scrollbar(frame_conteudo, orient="vertical", command=text_widget.yview)
-        text_widget.configure(yscrollcommand=scrollbar_conteudo.set)
-        text_widget.pack(side="left", fill="both", expand=True)
-        scrollbar_conteudo.pack(side="left", fill="y")
-        frame_detalhes = ttk.LabelFrame(popup_detalhes, text="Status de Ciência dos Funcionários", padding="10")
-        frame_detalhes.pack(padx=10, pady=(0, 5), fill="both", expand=True)
-        cols_detalhes = ('ID Assinatura', 'Funcionário', 'Status', 'Data da Ciência')
-        tree_detalhes = ttk.Treeview(frame_detalhes, columns=cols_detalhes, show='headings')
-        tree_detalhes.heading('ID Assinatura', text='ID')
-        tree_detalhes.column('ID Assinatura', width=40, anchor='center')
-        tree_detalhes.heading('Funcionário', text='Funcionário')
-        tree_detalhes.column('Funcionário', width=250)
-        tree_detalhes.heading('Status', text='Status')
-        tree_detalhes.column('Status', width=100, anchor='center')
-        tree_detalhes.heading('Data da Ciência', text='Data da Ciência')
-        tree_detalhes.column('Data da Ciência', width=150, anchor='center')
-        scrollbar_dest = ttk.Scrollbar(frame_detalhes, orient="vertical", command=tree_detalhes.yview)
-        tree_detalhes.configure(yscrollcommand=scrollbar_dest.set)
-        tree_detalhes.pack(side="left", fill="both", expand=True)
-        scrollbar_dest.pack(side="left", fill="y")
-        destinatarios = database.listar_destinatarios_de_documento(documento_id)
-        for dest in destinatarios:
-            data_ciencia_formatada = dest.DataCiencia.strftime("%d/%m/%Y %H:%M:%S") if dest.DataCiencia else "---"
-            tree_detalhes.insert("", "end", values=(dest.AssinaturaID, dest.NomeCompleto, dest.StatusAssinatura, data_ciencia_formatada))
-        btn_gerar_recibo = ttk.Button(popup_detalhes, text="Gerar Recibo PDF para Selecionado", command=lambda: self.gerar_recibo_para_selecionado(tree_detalhes, popup_detalhes))
-        btn_gerar_recibo.pack(pady=(5,10), side="left", padx=10)
-        btn_adicionar_func = ttk.Button(popup_detalhes, text="Adicionar Funcionário(s)", command=lambda: self.abrir_janela_adicionar_funcionario(documento_id, popup_detalhes))
-        btn_adicionar_func.pack(pady=(5,10), side="left", padx=10)
+        # --- Área de Edição ---
+        frame_edit = ttk.LabelFrame(popup, text="Editar Vínculo Selecionado", padding="10")
+        frame_edit.pack(fill=tk.X, padx=10, pady=10)
 
-    def excluir_comunicado_selecionado(self):
-        selecionado = self.tree_comunicados.focus()
-        if not selecionado:
-            messagebox.showwarning("Aviso", "Por favor, selecione um comunicado na lista para excluir.")
-            return
-        dados_comunicado = self.tree_comunicados.item(selecionado, 'values')
-        documento_id = dados_comunicado[0]
-        titulo_comunicado = dados_comunicado[1]
-        confirmado = messagebox.askyesno("Confirmar Exclusão", f"Tem certeza que deseja excluir permanentemente o comunicado:\n\n'{titulo_comunicado}'\n\nEsta ação não pode ser desfeita.", icon='warning')
-        if confirmado:
-            database.excluir_documento(documento_id)
-            messagebox.showinfo("Sucesso", "O comunicado foi excluído com sucesso.")
-            self.atualizar_lista_comunicados()
+        ttk.Label(frame_edit, text="Alterar Produto Mestre para:").grid(row=0, column=0, sticky="w")
+        combo_mestre_edit = ttk.Combobox(frame_edit, values=self.lista_mestre_produtos_nomes, width=40, state="readonly")
+        combo_mestre_edit.grid(row=1, column=0, sticky="ew", padx=(0,10))
 
-    def gerar_recibo_para_selecionado(self, tree_detalhes, popup_pai):
-        selecionado = tree_detalhes.focus()
-        if not selecionado:
-            messagebox.showwarning("Aviso", "Selecione um funcionário na lista para gerar o recibo.", parent=popup_pai)
-            return
-        dados_assinatura = tree_detalhes.item(selecionado, 'values')
-        assinatura_id = dados_assinatura[0]
-        status = dados_assinatura[2]
-        if status != 'Ciente':
-            messagebox.showerror("Erro", "Só é possível gerar recibos para funcionários que já confirmaram a ciência.", parent=popup_pai)
-            return
-        try:
-            dados_recibo = database.buscar_dados_completos_para_recibo(assinatura_id)
-            if dados_recibo:
-                path_do_pdf = recibo_generator.gerar_recibo_pdf(
-                    assinatura_id=assinatura_id, nome_funcionario=dados_recibo.NomeCompleto,
-                    titulo_doc=dados_recibo.Titulo, conteudo_doc=dados_recibo.Conteudo,
-                    data_ciencia=dados_recibo.DataCiencia
-                )
-                file_utils.abrir_arquivo(path_do_pdf)
-                messagebox.showinfo("Sucesso", f"Recibo em PDF gerado e aberto com sucesso!\n\nSalvo em: {os.path.abspath(path_do_pdf)}", parent=popup_pai)
+        ttk.Label(frame_edit, text="Alterar Qtd por Caixa (Fator):").grid(row=0, column=1, sticky="w")
+        entry_fator_edit = ttk.Entry(frame_edit, width=10)
+        entry_fator_edit.grid(row=1, column=1, sticky="w")
+
+        def preencher_edicao(event):
+            selecionado = tree_vinculos.focus()
+            if not selecionado: return
+            vals = tree_vinculos.item(selecionado, 'values')
+            # vals = (ID, Fornecedor, DescXML, NomeMestre, Fator)
+
+            # Tenta selecionar o mestre atual no combo
+            nome_mestre_atual = vals[3]
+            # Busca na lista do combo algo que contenha o nome
+            for item in self.lista_mestre_produtos_nomes:
+                if nome_mestre_atual in item: 
+                    combo_mestre_edit.set(item)
+                    break
+
+            entry_fator_edit.delete(0, tk.END)
+            entry_fator_edit.insert(0, vals[4])
+
+        tree_vinculos.bind("<<TreeviewSelect>>", preencher_edicao)
+
+        def salvar_alteracao():
+            selecionado = tree_vinculos.focus()
+            if not selecionado: return
+            vinculo_id = tree_vinculos.item(selecionado, 'values')[0]
+
+            novo_mestre_nome = combo_mestre_edit.get()
+            if not novo_mestre_nome:
+                messagebox.showerror("Erro", "Selecione um produto mestre.", parent=popup)
+                return
+
+            novo_mestre_id = self.mapa_produtos_mestre.get(novo_mestre_nome)
+
+            try:
+                novo_fator = Decimal(entry_fator_edit.get().replace(',', '.'))
+                if novo_fator <= 0: raise ValueError
+            except:
+                messagebox.showerror("Erro", "Fator inválido. Use um número maior que 0.", parent=popup)
+                return
+
+            if database.atualizar_vinculo_existente(vinculo_id, novo_mestre_id, novo_fator):
+                messagebox.showinfo("Sucesso", "Vínculo atualizado!", parent=popup)
+                carregar_lista(entry_filtro.get())
             else:
-                messagebox.showerror("Erro de Dados", "Não foi possível encontrar os dados completos para gerar este recibo.", parent=popup_pai)
-        except Exception as e:
-            messagebox.showerror("Erro Inesperado", f"Ocorreu um erro ao gerar o PDF: {e}", parent=popup_pai)
+                messagebox.showerror("Erro", "Falha ao atualizar.", parent=popup)
 
-    def abrir_janela_adicionar_funcionario(self, documento_id, popup_pai):
-        popup_adicionar = Toplevel(popup_pai)
-        popup_adicionar.title("Adicionar Destinatários")
-        popup_adicionar.geometry("400x500")
-        popup_adicionar.transient(popup_pai)
-        funcionarios_disponiveis = database.listar_funcionarios_nao_destinatarios(documento_id)
-        if not funcionarios_disponiveis:
-            messagebox.showinfo("Informação", "Todos os funcionários já receberam este comunicado.", parent=popup_adicionar)
-            popup_adicionar.destroy()
-            return
-        Label(popup_adicionar, text="Selecione os funcionários para incluir:").pack(padx=10, pady=10)
-        frame_lista = Frame(popup_adicionar)
-        frame_lista.pack(padx=10, pady=5, fill="both", expand=True)
-        listbox_novos = Listbox(frame_lista, selectmode=tk.EXTENDED)
-        scrollbar = Scrollbar(frame_lista, orient="vertical", command=listbox_novos.yview)
-        listbox_novos.configure(yscrollcommand=scrollbar.set)
-        listbox_novos.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="left", fill="y")
-        dados_disponiveis = {}
-        for func in funcionarios_disponiveis:
-            display_text = f"{func.NomeCompleto} (ID: {func.FuncionarioID})"
-            listbox_novos.insert(tk.END, display_text)
-            dados_disponiveis[display_text] = func
-        btn_confirmar = Button(popup_adicionar, text="Confirmar e Enviar Notificação", bg="green", fg="white",
-                            command=lambda: self.confirmar_e_enviar_para_novos(
-                                documento_id, listbox_novos, dados_disponiveis, popup_adicionar
-                            ))
-        btn_confirmar.pack(pady=10, padx=10, fill='x', ipady=5)
+        def excluir_vinculo():
+            selecionado = tree_vinculos.focus()
+            if not selecionado: return
+            vinculo_id = tree_vinculos.item(selecionado, 'values')[0]
+            desc = tree_vinculos.item(selecionado, 'values')[2]
 
-    def confirmar_e_enviar_para_novos(self, documento_id, listbox, dados_funcionarios, popup):
-        indices_selecionados = listbox.curselection()
-        if not indices_selecionados:
-            messagebox.showwarning("Aviso", "Selecione pelo menos um funcionário.", parent=popup)
-            return
-        detalhes_doc = database.buscar_detalhes_completos_documento(documento_id)
-        if not detalhes_doc:
-            messagebox.showerror("Erro Crítico", "Não foi possível encontrar os dados do comunicado original.", parent=popup)
-            return
-        enviados_com_sucesso = 0
-        for i in indices_selecionados:
-            display_text = listbox.get(i)
-            funcionario = dados_funcionarios[display_text]
-            assinatura_id = database.registrar_pendencia_assinatura(documento_id, funcionario.FuncionarioID)
-            if assinatura_id:
-                texto_telegram = (f"🚨 **NOVO COMUNICADO IMPORTANTE** 🚨\n\n"
-                                f"**Título:** {detalhes_doc.Titulo}\n\n"
-                                f"**Conteúdo:**\n{detalhes_doc.Conteudo}\n\n"
-                                f"Sua confirmação de leitura é obrigatória e será registrada.")
-                keyboard = [[InlineKeyboardButton("✅ Li e estou ciente", callback_data=f"doc_ciente_{assinatura_id}")]]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                notificador_telegram.enviar_mensagem_com_botao(funcionario.ChatIDTelegram, texto_telegram, reply_markup)
-                enviados_com_sucesso += 1
-                time.sleep(0.1)
-        messagebox.showinfo("Sucesso", f"{enviados_com_sucesso} funcionário(s) foram notificados com sucesso!", parent=popup)
-        popup.destroy()
+            if messagebox.askyesno("Excluir", f"Deseja excluir o vínculo para '{desc}'?\n\nNa próxima importação, o sistema pedirá para vincular novamente.", parent=popup):
+                if database.excluir_vinculo_existente(vinculo_id):
+                    messagebox.showinfo("Sucesso", "Vínculo excluído.", parent=popup)
+                    carregar_lista(entry_filtro.get())
+                else:
+                    messagebox.showerror("Erro", "Falha ao excluir.", parent=popup)
 
-    def filtrar_lista_comunicados(self):
-        termo_busca = self.entry_filtro.get()
-        self.atualizar_lista_comunicados(filtro=termo_busca)
+        btn_salvar = ttk.Button(frame_edit, text="💾 Salvar Alterações", command=salvar_alteracao)
+        btn_salvar.grid(row=1, column=2, padx=10)
 
-    def limpar_filtro(self):
-        self.entry_filtro.delete(0, "end")
-        self.atualizar_lista_comunicados()
+        btn_excluir = ttk.Button(frame_edit, text="🗑️ Excluir Vínculo", command=excluir_vinculo)
+        btn_excluir.grid(row=1, column=3, padx=10)
 
-    def selecionar_imagem(self, label_caminho):
-        filepath = filedialog.askopenfilename(title="Selecione uma Imagem para o Comunicado", filetypes=[("Imagens", "*.jpg *.jpeg *.png *.gif"),("Todos os arquivos", "*.*")])
-        if filepath:
-            self.caminho_imagem_selecionada = filepath
-            label_caminho.config(text=os.path.basename(filepath))
-        else:
-            if hasattr(self, 'caminho_imagem_selecionada'): del self.caminho_imagem_selecionada
-            label_caminho.config(text="Nenhuma imagem selecionada.")
+        carregar_lista()
 
-    def reiniciar_processo_onboarding(self):
-        """Limpa os dados de onboarding do funcionário para que ele faça de novo."""
-        selecionado = self.tree_onboarding.focus()
-        if not selecionado:
-            messagebox.showwarning("Aviso", "Selecione um funcionário na lista.")
-            return
+    
 
-        dados = self.tree_onboarding.item(selecionado, 'values')
-        funcionario_id = dados[0]
-        nome = dados[1]
-
-        confirmacao = messagebox.askyesno(
-            "Reiniciar Onboarding",
-            f"Deseja reiniciar o processo de admissão para '{nome}'?\n\n"
-            "Isso apagará os documentos e dados preenchidos (Escolaridade, Filhos, etc), "
-            "permitindo que ele comece do zero pelo Telegram.\n\n"
-            "O funcionário NÃO será excluído do sistema.",
-            parent=self.root
-        )
-
-        if confirmacao:
-            if database.resetar_onboarding_completo(funcionario_id):
-                # Opcional: Notificar o funcionário que o processo foi reiniciado
-                func_obj = database.buscar_funcionario_por_id(funcionario_id)
-                if func_obj and func_obj.ChatIDTelegram:
-                    notificador_telegram.enviar_mensagem(
-                        func_obj.ChatIDTelegram,
-                        "🔄 **Processo de Admissão Reiniciado**\n\n"
-                        "O RH solicitou o preenchimento novamente dos seus dados.\n"
-                        "Por favor, digite 'Começar' para enviar as informações corretas."
-                    )
-
-                messagebox.showinfo("Sucesso", "Processo reiniciado! O funcionário pode preencher os dados novamente.", parent=self.root)
-                self.carregar_onboarding_lista()
-            else:
-                messagebox.showerror("Erro", "Falha ao reiniciar o processo no banco de dados.", parent=self.root)        
-        
+# --- Bloco de Execução Principal ---
 if __name__ == "__main__":
     root = tk.Tk()
-    app = AppGestaoPessoas(root) 
+    app = AppGestaoEstoque(root)
     root.mainloop()
