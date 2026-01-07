@@ -1041,20 +1041,38 @@ async def roteador_de_texto_privado(update: Update, context: ContextTypes.DEFAUL
         else:
             await update.message.reply_text("❌ Código de verificação incorreto ou não cadastrado. Por favor, inicie o processo novamente ou contate o RH.")
         return # Importante retornar após tratar um estado
+    
     elif user_data.get('aguardando_dados_compra'):
-        # Usuário digitou os dados da compra
+        # --- LÓGICA DE CARRINHO DE COMPRAS ---
         texto = texto_recebido.strip()
         categoria = user_data.get('temp_categoria_compra', 'Geral')
         
-        if database.criar_solicitacao_interna(funcionario.FuncionarioID, 'Compra', categoria, texto, None, None):
-            user_data.pop('aguardando_dados_compra', None)
-            user_data.pop('temp_categoria_compra', None)
-            await update.message.reply_text("✅ Pedido de Compra registrado! Aguarde aprovação.")
+        # 1. Inicializa o carrinho se não existir
+        if 'carrinho_compras' not in user_data:
+            user_data['carrinho_compras'] = []
             
-            # Notifica Gestor
-            notificador_telegram.enviar_mensagem(config.GESTOR_GROUP_CHAT_ID, f"🛒 **Novo Pedido de Compra**\n👤 {funcionario.NomeCompleto}\n📂 {categoria}\n📦 {texto}")
-        else:
-            await update.message.reply_text("Erro ao salvar pedido.")
+        # 2. Adiciona o item atual ao carrinho
+        user_data['carrinho_compras'].append({
+            'item': texto,
+            'categoria': categoria
+        })
+        
+        qtd_itens = len(user_data['carrinho_compras'])
+        
+        # 3. Pergunta se quer mais
+        msg = (f"✅ Item adicionado: <b>{texto}</b>\n"
+               f"📦 Itens no carrinho: {qtd_itens}\n\n"
+               f"Deseja adicionar mais itens na categoria <b>{categoria}</b> ou finalizar?")
+               
+        keyboard = [
+            [InlineKeyboardButton("➕ Adicionar Mais", callback_data="compra_add_mais")],
+            [InlineKeyboardButton("✅ Finalizar Pedido", callback_data="compra_finalizar")]
+        ]
+        
+        # Remove o estado de "aguardando texto" para não duplicar se ele clicar sem querer
+        user_data.pop('aguardando_dados_compra', None)
+        
+        await update.message.reply_html(msg, reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
     elif user_data.get('aguardando_desc_manutencao'):
@@ -1611,6 +1629,48 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
     elif data == "solic_manut":
         context.user_data['aguardando_desc_manutencao'] = True
         await query.edit_message_text("🔧 Descreva brevemente o problema de manutenção:")
+        return
+    
+    # --- FLUXO DE CARRINHO DE COMPRAS ---
+    elif data == "compra_add_mais":
+        # Reativa o estado de espera de texto
+        context.user_data['aguardando_dados_compra'] = True
+        categoria = context.user_data.get('temp_categoria_compra', 'Geral')
+        await query.edit_message_text(f"Ok, digite o próximo item e quantidade para <b>{categoria}</b>:", parse_mode='HTML')
+        return
+
+    elif data == "compra_finalizar":
+        carrinho = context.user_data.get('carrinho_compras', [])
+        if not carrinho:
+            await query.edit_message_text("Erro: Carrinho vazio.")
+            return
+            
+        funcionario_db = database.buscar_funcionario_por_chat_id(user.id)
+        erros = 0
+        sucessos = 0
+        
+        # Processa o lote
+        for item in carrinho:
+            # Salva cada item individualmente no banco
+            if database.criar_solicitacao_interna(funcionario_db.FuncionarioID, 'Compra', item['categoria'], item['item'], None, None):
+                sucessos += 1
+            else:
+                erros += 1
+        
+        # Notifica Gestão (Resumo)
+        if sucessos > 0:
+            msg_resumo = f"🛒 **Novo Pedido de Compra (Lote)**\n👤 {funcionario_db.NomeCompleto}\n"
+            for item in carrinho:
+                msg_resumo += f"▫️ {item['item']} ({item['categoria']})\n"
+            
+            notificador_telegram.enviar_mensagem(config.GESTOR_GROUP_CHAT_ID, msg_resumo)
+            
+        # Feedback ao usuário
+        await query.edit_message_text(f"✅ Pedido enviado!\n\nItens solicitados: {sucessos}\n(Aguarde a aprovação da gestão)")
+        
+        # Limpa memória
+        context.user_data.pop('carrinho_compras', None)
+        context.user_data.pop('temp_categoria_compra', None)
         return
 
     # --- LÓGICA DE DOCUMENTOS PESSOAIS ---
