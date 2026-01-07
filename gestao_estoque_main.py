@@ -4,6 +4,7 @@
 import logging
 import logging.handlers
 import sys
+import file_utils
 import os
 
 LOG_FILENAME = 'gamificacao_sistema.log'
@@ -71,6 +72,9 @@ class AppGestaoEstoque:
         self.notebook.add(self.frame_contagem, text='4. Lançar Contagem Física')
         self.notebook.add(self.frame_sugestao, text='5. Sugestão de Compra') 
         self.notebook.add(self.frame_admin, text='6. Administração / Reset')
+        self.frame_solicitacoes = ttk.Frame(self.notebook, padding="10")
+        self.notebook.add(self.frame_solicitacoes, text='7. Solicitações (Líderes)')
+        self.criar_aba_solicitacoes()
 
         self.produto_selecionado_id = None
         self.fornecedor_selecionado_id = None
@@ -118,6 +122,8 @@ class AppGestaoEstoque:
         elif tab_selecionada == '6. Administração / Reset':
             self.atualizar_lista_nfs_admin()
             self.atualizar_lista_contagens_admin()
+        elif tab_selecionada == '7. Aprovar Compras/Manutenção':
+            self.carregar_solicitacoes()
 
     # ===================================================================
     # == ABA 1: CATÁLOGO MESTRE (Sem alterações) ========================
@@ -1304,7 +1310,111 @@ class AppGestaoEstoque:
         except Exception as e:
             messagebox.showerror("Erro de Banco", f"Não foi possível buscar o histórico: {e}", parent=popup)
 
+    # ===================================================================
+    # == ABA 7: SOLICITAÇÕES (Transplantada do main.py) =================
+    # ===================================================================
+    def criar_aba_solicitacoes(self):
+        main_frame = ttk.Frame(self.frame_solicitacoes)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # --- ESQUERDA: LISTA ---
+        frame_lista = ttk.LabelFrame(main_frame, text="Solicitações Pendentes", padding="10")
+        frame_lista.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0,10))
+        
+        cols = ('ID', 'Solicitante', 'Tipo', 'Categoria', 'Data')
+        self.tree_solicitacoes = ttk.Treeview(frame_lista, columns=cols, show='headings', selectmode='browse')
+        self.tree_solicitacoes.heading('ID', text='ID'); self.tree_solicitacoes.column('ID', width=40)
+        self.tree_solicitacoes.heading('Solicitante', text='Solicitante'); self.tree_solicitacoes.column('Solicitante', width=150)
+        self.tree_solicitacoes.heading('Tipo', text='Tipo'); self.tree_solicitacoes.column('Tipo', width=80)
+        self.tree_solicitacoes.heading('Categoria', text='Categoria'); self.tree_solicitacoes.column('Categoria', width=100)
+        self.tree_solicitacoes.heading('Data', text='Data'); self.tree_solicitacoes.column('Data', width=120)
+        
+        self.tree_solicitacoes.pack(fill=tk.BOTH, expand=True)
+        self.tree_solicitacoes.bind('<<TreeviewSelect>>', self.on_solicitacao_selecionada)
+        
+        ttk.Button(frame_lista, text="🔄 Atualizar Lista", command=self.carregar_solicitacoes).pack(pady=5)
+        
+        # --- DIREITA: DETALHES ---
+        frame_detalhes = ttk.LabelFrame(main_frame, text="Detalhes & Ação", padding="10")
+        frame_detalhes.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+        
+        self.lbl_solic_detalhes = tk.Text(frame_detalhes, height=15, width=40, wrap=tk.WORD, state='disabled', font=("Arial", 10))
+        self.lbl_solic_detalhes.pack(fill=tk.X, pady=5)
+        
+        self.btn_ver_foto_solic = ttk.Button(frame_detalhes, text="📸 Ver Foto (Manutenção)", state='disabled', command=self.ver_foto_solicitacao)
+        self.btn_ver_foto_solic.pack(pady=5, fill=tk.X)
+        
+        frame_botoes = ttk.Frame(frame_detalhes)
+        frame_botoes.pack(pady=20, fill=tk.X)
+        
+        ttk.Button(frame_botoes, text="✅ Aprovar", command=self.aprovar_solicitacao).pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
+        ttk.Button(frame_botoes, text="❌ Recusar", command=self.recusar_solicitacao).pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
+        
+        self.solicitacao_atual_foto = None
+        self.solicitacao_atual_id = None
+        self.cache_solicitacoes = {}
 
+    def carregar_solicitacoes(self):
+        for i in self.tree_solicitacoes.get_children(): self.tree_solicitacoes.delete(i)
+        
+        dados = database.listar_solicitacoes_pendentes()
+        # Colunas SQL: 0:ID, 1:Nome, 2:Tipo, 3:Cat, 4:Desc, 5:Qtd, 6:Foto, 7:Data
+        self.cache_solicitacoes = {row[0]: row for row in dados}
+        
+        for row in dados:
+            data_fmt = row[7].strftime('%d/%m %H:%M') if row[7] else ""
+            self.tree_solicitacoes.insert("", "end", values=(row[0], row[1], row[2], row[3], data_fmt))
+
+    def on_solicitacao_selecionada(self, event):
+        sel = self.tree_solicitacoes.focus()
+        if not sel: return
+        item = self.tree_solicitacoes.item(sel, 'values')
+        s_id = int(item[0])
+        self.solicitacao_atual_id = s_id
+        
+        dados = self.cache_solicitacoes.get(s_id)
+        if not dados: return
+        
+        texto = f"Solicitante: {dados[1]}\n"
+        texto += f"Tipo: {dados[2]} - {dados[3]}\n"
+        texto += f"Data: {dados[7].strftime('%d/%m/%Y %H:%M')}\n\n"
+        texto += f"DESCRIÇÃO:\n{dados[4]}\n"
+        if dados[5]: texto += f"\nQuantidade: {dados[5]}"
+        
+        self.lbl_solic_detalhes.config(state='normal')
+        self.lbl_solic_detalhes.delete("1.0", tk.END)
+        self.lbl_solic_detalhes.insert("1.0", texto)
+        self.lbl_solic_detalhes.config(state='disabled')
+        
+        if dados[2] == 'Manutencao' and dados[6]:
+            self.solicitacao_atual_foto = dados[6]
+            self.btn_ver_foto_solic.config(state='normal')
+        else:
+            self.solicitacao_atual_foto = None
+            self.btn_ver_foto_solic.config(state='disabled')
+
+    def ver_foto_solicitacao(self):
+        if self.solicitacao_atual_foto and os.path.exists(self.solicitacao_atual_foto):
+            file_utils.abrir_arquivo(self.solicitacao_atual_foto)
+        else:
+            messagebox.showerror("Erro", "Arquivo de foto não encontrado no disco.")
+
+    def aprovar_solicitacao(self):
+        if not self.solicitacao_atual_id: return
+        if database.atualizar_status_solicitacao(self.solicitacao_atual_id, 'Aprovado'):
+            messagebox.showinfo("Sucesso", "Solicitação Aprovada!")
+            self.carregar_solicitacoes()
+            self.lbl_solic_detalhes.config(state='normal'); self.lbl_solic_detalhes.delete("1.0", tk.END); self.lbl_solic_detalhes.config(state='disabled')
+            self.solicitacao_atual_id = None
+
+    def recusar_solicitacao(self):
+        if not self.solicitacao_atual_id: return
+        motivo = simpledialog.askstring("Recusa", "Motivo da recusa:", parent=self.root)
+        if motivo:
+            if database.atualizar_status_solicitacao(self.solicitacao_atual_id, 'Recusado', motivo):
+                messagebox.showinfo("Sucesso", "Solicitação Recusada.")
+                self.carregar_solicitacoes()
+                self.solicitacao_atual_id = None
 
 # ===================================================================
     # == ABA 6: ADMINISTRAÇÃO / RESET ===================================
