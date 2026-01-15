@@ -67,6 +67,7 @@ import notificador_telegram
 import config
 import hashlib
 import re
+import notificador_whatsapp 
 
 app = Flask(__name__)
 CORS(app)
@@ -81,6 +82,36 @@ PASTA_DOCUMENTOS_SEGUROS = os.path.join(BASE_DIR, config.PASTA_DOCUMENTOS_RH)
 if not os.path.exists(PASTA_DOCUMENTOS_SEGUROS):
     os.makedirs(PASTA_DOCUMENTOS_SEGUROS)
     logger.info(f"--> PASTA CRIADA EM: {PASTA_DOCUMENTOS_SEGUROS}")
+
+# --- FUNÇÕES AUXILIARES DE CORREÇÃO ---
+
+def _executar_sql_auxiliar(sql, params):
+    """Executa SQLs que faltam no database.py sem alterar o arquivo original."""
+    conn = database.get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            cursor.execute(sql, params)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Erro em SQL auxiliar: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
+
+def _parse_horario_seguro(valor):
+    """Converte timedelta, datetime ou string para 'HH:MM'."""
+    if valor is None: return None
+    if isinstance(valor, timedelta):
+        total_seconds = int(valor.total_seconds())
+        hours = total_seconds // 3600
+        minutes = (total_seconds % 3600) // 60
+        return f"{hours:02d}:{minutes:02d}"
+    if hasattr(valor, 'strftime'): 
+        return valor.strftime('%H:%M')
+    return str(valor)[:5]
 
 def formatar_data_pt_br(dt_obj, formato_str):
     """Uma função 'tradutora' para garantir que as datas saiam em português."""
@@ -151,8 +182,6 @@ def rota_listar_agendamentos():
         return jsonify({"status": "erro", "mensagem": "Ocorreu um erro interno no servidor. Tente novamente mais tarde ou contate o suporte."}), 500
 
 
-# Em api_server.py, SUBSTITUA a função rota_criar_agendamento inteira por esta:
-
 @app.route('/agendamentos/novo', methods=['POST'])
 def rota_criar_agendamento():
     """Endpoint para criar um novo agendamento."""
@@ -173,7 +202,7 @@ def rota_criar_agendamento():
     if sucesso:
         novo_agendamento_id = resultado 
 
-        # --- LÓGICA DE GAMIFICAÇÃO ---
+        # --- 1. LÓGICA DE GAMIFICAÇÃO (MANTIDA) ---
         try:
             descricao_tarefa = (
                 f"Cliente: {dados['nome_cliente']}\n"
@@ -191,36 +220,61 @@ def rota_criar_agendamento():
                 data_agendamento=dados['data_evento'].date(),
                 agendamento_id=novo_agendamento_id
             )
-            logger.info(f"Tarefa de gamificação criada e vinculada ao Agendamento ID {novo_agendamento_id}")
+            logger.info(f"Tarefa de gamificação criada para Agendamento ID {novo_agendamento_id}")
         except Exception as e:
-            logger.warning(f"!!! ATENÇÃO: Agendamento criado, mas falha ao criar a tarefa de gamificação: {e}")
+            logger.warning(f"!!! Falha na gamificação: {e}")
         
-        # --- BLOCO DE NOTIFICAÇÃO QUE ESTAVA FALTANDO ---
+        # --- 2. NOTIFICAÇÃO TELEGRAM GRUPO (MANTIDA) ---
         try:
             data_formatada = dados['data_evento'].strftime('%d/%m/%Y às %H:%M')
-            
             mensagem_alerta = (
                 f"✅ **Novo Agendamento Recebido!** ✅\n\n"
                 f"**Cliente:** {dados['nome_cliente']}\n"
                 f"**Evento:** {dados['tipo_evento']}\n"
                 f"**Quando:** {data_formatada}\n"
             )
-            observacoes = dados.get('observacoes')
-            if observacoes and observacoes.strip():
-                mensagem_alerta += f"**Obs:** {observacoes.strip()}"
+            if dados.get('observacoes'):
+                mensagem_alerta += f"**Obs:** {dados['observacoes']}"
             
             notificador_telegram.enviar_mensagem(config.AGENDAMENTOS_GROUP_CHAT_ID, mensagem_alerta)
         except Exception as e:
-            logger.warning(f"!!! ATENÇÃO: Agendamento criado, mas falha ao enviar notificação no Telegram: {e}")
-        # --- FIM DO BLOCO DE NOTIFICAÇÃO ---
+            logger.warning(f"!!! Falha no Telegram: {e}")
 
-        return jsonify({"status": "sucesso", "mensagem": "Agendamento criado e equipe notificada!"}), 201
+        # --- 3. NOVA AUTOMAÇÃO WHATSAPP (CLIENTE) ---
+        telefone_cliente = dados.get('telefone_cliente')
+        if telefone_cliente:
+            try:
+                # Prepara os dados
+                nome_cliente = dados['nome_cliente'].split()[0]
+                hora_evento = dados['data_evento'].strftime('%H:%M')
+                data_evento = dados['data_evento'].strftime('%d/%m/%Y')
+                tipo_evento = dados['tipo_evento']
+
+                msg_zap = (
+                    f"Olá, *{nome_cliente}*! Tudo bem? 👋\n\n"
+                    f"Seu agendamento de *{tipo_evento}* foi confirmado com sucesso!\n"
+                    f"🗓️ Data: *{data_evento}*\n"
+                    f"⏰ Horário: *{hora_evento}*\n\n"
+                    f"Agradecemos a preferência! 🍦"
+                )
+
+                # Envia imediatamente
+                ok, resp = notificador_whatsapp.enviar_mensagem_whatsapp(telefone_cliente, msg_zap)
+                
+                if ok:
+                    # Marca no banco que já enviou a mensagem de criação
+                    database.marcar_flag_agendamento(novo_agendamento_id, 'criacao')
+                    logger.info(f"--> WhatsApp de confirmação enviado para {nome_cliente}.")
+                else:
+                    logger.error(f"--> Falha ao enviar WhatsApp para {nome_cliente}: {resp}")
+
+            except Exception as e:
+                logger.error(f"--> Erro crítico na automação WhatsApp: {e}")
+        # ---------------------------------------------
+
+        return jsonify({"status": "sucesso", "mensagem": "Agendamento criado e notificações enviadas!"}), 201
     else:
-        return jsonify({"status": "erro", "mensagem": "Ocorreu um erro interno no servidor. Tente novamente mais tarde ou contate o suporte."}), 500    
-
-# Em api_server.py, SUBSTITUA a função rota_upload_documento por esta:
-
-# Em api_server.py, SUBSTITUA a função rota_upload_documento por esta:
+        return jsonify({"status": "erro", "mensagem": "Ocorreu um erro interno no servidor."}), 500
 
 @app.route('/documentos/upload', methods=['POST'])
 def rota_upload_documento():
