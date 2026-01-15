@@ -258,6 +258,52 @@ def verificar_migracao_banco():
 # Executa a verificação ao importar o módulo
 verificar_migracao_banco()
 
+
+def verificar_migracao_agendamentos_flags():
+    """
+    Cria as colunas de controle de mensagens na tabela Agendamentos se não existirem.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            
+            # Lista de colunas a verificar/criar
+            colunas = [
+                "MsgCriacaoEnviada",      # Para mensagem imediata
+                "MsgConfirmacaoEnviada",  # Para mensagem de D-1 (Amanhã)
+                "MsgPosVendaEnviada"      # Para mensagem de D+1 (Ontem)
+            ]
+            
+            alteracoes_feitas = False
+            for col in colunas:
+                try:
+                    # Tenta selecionar a coluna para ver se existe
+                    cursor.execute(f"SELECT TOP 1 {col} FROM Agendamentos")
+                except Exception:
+                    # Se der erro, é porque não existe. Cria a coluna.
+                    logger.info(f"Coluna '{col}' não encontrada em Agendamentos. Criando...")
+                    # DEFAULT 0 significa "Não Enviada"
+                    cursor.execute(f"ALTER TABLE Agendamentos ADD {col} INT DEFAULT 0")
+                    alteracoes_feitas = True
+            
+            if alteracoes_feitas:
+                conn.commit()
+                logger.info("Migração de Flags de Agendamento concluída com sucesso.")
+            else:
+                # logger.info("Tabela Agendamentos já possui todas as flags.") # Opcional para não poluir log
+                pass
+
+        except Exception as e:
+            logger.error(f"Erro na migração de flags de agendamento: {e}")
+            if conn: conn.rollback()
+        finally:
+            conn.close()
+
+# Executa a verificação imediatamente ao iniciar
+verificar_migracao_agendamentos_flags()
+
+
 def verificar_migracao_solicitacoes():
     """Cria a tabela de Solicitações Internas se não existir."""
     conn = get_db_connection()
@@ -7451,3 +7497,101 @@ def atualizar_status_solicitacao(solicitacao_id, novo_status, motivo=None):
             conn.close()
     return False
 
+# ===================================================================
+# == NOVAS FUNÇÕES PARA AUTOMAÇÃO DE WHATSAPP (AGENDAMENTOS) ========
+# ===================================================================
+
+def buscar_agendamentos_pendentes_confirmacao(data_amanha_str):
+    """
+    Busca agendamentos para AMANHÃ que ainda NÃO receberam mensagem de confirmação.
+    Data deve vir no formato 'YYYY-MM-DD'.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT 
+                    AgendamentoID, NomeCliente, TelefoneCliente, 
+                    TipoEvento, DataEvento
+                FROM Agendamentos
+                WHERE 
+                    -- Filtra pela data (ignorando hora)
+                    CONVERT(DATE, DataEvento) = ? 
+                    -- Apenas se tiver telefone
+                    AND TelefoneCliente IS NOT NULL AND TelefoneCliente != ''
+                    -- Apenas se ainda não enviou
+                    AND (MsgConfirmacaoEnviada IS NULL OR MsgConfirmacaoEnviada = 0)
+                    -- Opcional: Apenas agendamentos confirmados (não cancelados)
+                    AND StatusAgendamento != 'Cancelado'
+            """
+            cursor.execute(sql, data_amanha_str)
+            cols = [column[0] for column in cursor.description]
+            return [dict(zip(cols, row)) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"Erro ao buscar pendências de confirmação: {e}")
+            return []
+        finally:
+            conn.close()
+    return []
+
+def buscar_agendamentos_pendentes_posvenda(data_ontem_str):
+    """
+    Busca agendamentos de ONTEM que ainda NÃO receberam mensagem de pós-venda.
+    Data deve vir no formato 'YYYY-MM-DD'.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT 
+                    AgendamentoID, NomeCliente, TelefoneCliente, 
+                    TipoEvento, DataEvento
+                FROM Agendamentos
+                WHERE 
+                    CONVERT(DATE, DataEvento) = ? 
+                    AND TelefoneCliente IS NOT NULL AND TelefoneCliente != ''
+                    AND (MsgPosVendaEnviada IS NULL OR MsgPosVendaEnviada = 0)
+                    AND StatusAgendamento != 'Cancelado'
+            """
+            cursor.execute(sql, data_ontem_str)
+            cols = [column[0] for column in cursor.description]
+            return [dict(zip(cols, row)) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"Erro ao buscar pendências de pós-venda: {e}")
+            return []
+        finally:
+            conn.close()
+    return []
+
+def marcar_flag_agendamento(agendamento_id, tipo_flag):
+    """
+    Marca uma mensagem como enviada.
+    tipo_flag deve ser: 'criacao', 'confirmacao' ou 'posvenda'.
+    """
+    mapa_colunas = {
+        'criacao': 'MsgCriacaoEnviada',
+        'confirmacao': 'MsgConfirmacaoEnviada',
+        'posvenda': 'MsgPosVendaEnviada'
+    }
+    
+    coluna = mapa_colunas.get(tipo_flag)
+    if not coluna:
+        logger.error(f"Tipo de flag inválido: {tipo_flag}")
+        return False
+
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = f"UPDATE Agendamentos SET {coluna} = 1 WHERE AgendamentoID = ?"
+            cursor.execute(sql, agendamento_id)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Erro ao marcar flag {coluna} para ID {agendamento_id}: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
