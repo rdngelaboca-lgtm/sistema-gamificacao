@@ -799,3 +799,105 @@ body {
     50% { transform: scale(1.2); }
     100% { transform: scale(1); }
 }
+
+/* ========================================= */
+/* === ESTILOS DA AGENDA E MODAL (NOVO) ==== */
+/* ========================================= */
+
+/* Estilos do Botão na Aba */
+.btn-novo-agendamento:hover { 
+    background-color: #218838 !important; 
+    transform: translateY(-2px);
+    transition: 0.2s;
+}
+
+/* Fundo Escuro do Modal */
+.modal-overlay {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    background-color: rgba(0,0,0,0.6); /* Escurece o fundo */
+    z-index: 10000; /* Fica na frente de tudo */
+    display: flex;
+    justify-content: center;
+    align-items: center; /* Centraliza na tela */
+    backdrop-filter: blur(3px); /* Desfoque leve no fundo */
+}
+
+/* Caixa Branca do Modal */
+.modal-content {
+    background-color: white;
+    padding: 25px;
+    border-radius: 12px;
+    width: 95%;
+    max-width: 500px; /* Largura máxima */
+    box-shadow: 0 10px 25px rgba(0,0,0,0.4);
+    position: relative;
+    animation: modalFadeIn 0.3s ease-out;
+}
+
+@keyframes modalFadeIn {
+    from { opacity: 0; transform: translateY(-20px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* Botão X de fechar */
+.close-modal {
+    position: absolute;
+    top: 10px; right: 15px;
+    font-size: 28px;
+    font-weight: bold;
+    color: #888;
+    cursor: pointer;
+    transition: 0.2s;
+}
+.close-modal:hover { color: #dc3545; }
+
+/* Organização do Formulário */
+.form-group { margin-bottom: 15px; }
+.form-row { display: flex; gap: 15px; }
+.form-row .form-group { flex: 1; }
+
+.modal-content label {
+    display: block;
+    margin-bottom: 6px;
+    font-weight: bold;
+    color: #555;
+    font-size: 0.9em;
+}
+
+.modal-content input, 
+.modal-content select, 
+.modal-content textarea {
+    width: 100%;
+    padding: 10px;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    font-size: 1em;
+    font-family: inherit;
+}
+
+.modal-content input:focus, 
+.modal-content select:focus, 
+.modal-content textarea:focus {
+    border-color: #007bff;
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(0,123,255,0.1);
+}
+
+/* Botão de Salvar */
+.btn-salvar-agenda {
+    width: 100%;
+    padding: 12px;
+    background-color: #007bff;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-size: 1.1em;
+    font-weight: bold;
+    cursor: pointer;
+    margin-top: 15px;
+    transition: background 0.3s;
+}
+.btn-salvar-agenda:hover { background-color: #0056b3; }
+.btn-salvar-agenda:disabled { background-color: #ccc; cursor: not-allowed; }
