@@ -901,3 +901,34 @@ body {
 }
 .btn-salvar-agenda:hover { background-color: #0056b3; }
 .btn-salvar-agenda:disabled { background-color: #ccc; cursor: not-allowed; }
+
+/* Botões extras do modal de agenda */
+.btn-excluir-agenda {
+    flex: 1;
+    padding: 12px;
+    background-color: #dc3545;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-weight: bold;
+    cursor: pointer;
+}
+.btn-excluir-agenda:hover { background-color: #c82333; }
+
+.btn-wpp-agenda {
+    flex: 1;
+    padding: 12px;
+    background-color: #25D366;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-weight: bold;
+    cursor: pointer;
+}
+.btn-wpp-agenda:hover { background-color: #1ebc57; }
+
+/* Ajuste para botões ficarem lado a lado na edição */
+#btn-container-editar {
+    display: flex;
+    justify-content: space-between;
+}
