@@ -6,6 +6,7 @@
     <title>Painel de Gestão</title>
     <link rel="stylesheet" href="estilo.css">
     <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js"></script>
+    <script src='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js'></script>
 </head>
 <body>
     <div id="fireworks-container"></div>
@@ -19,6 +20,7 @@
                 <button class="tab-btn active" onclick="abrirAba('operacional')">📋 Operacional</button>
                 <button class="tab-btn" onclick="abrirAba('financeiro')">💰 Financeiro & Metas</button>
                 <button class="tab-btn" onclick="abrirAba('mapa')">🗺️ Mapa da Loja</button>
+                <button class="tab-btn" onclick="abrirAba('agenda')">📅 Agenda & Reservas</button>
             </nav>
 
             <div class="progresso-container">
@@ -140,22 +142,75 @@
 
     </div>
     <script src="painel.js" defer></script>
-    <script>
-        // Script simples para troca de abas
-        function abrirAba(nomeAba) {
-            // Esconde todas as abas
-            document.getElementById('tab-operacional').style.display = 'none';
-            document.getElementById('tab-financeiro').style.display = 'none';
+    
+    <div id="tab-agenda" class="tab-content" style="display: none;">
+        <div class="agenda-controls" style="text-align: right; max-width: 1200px; margin: 0 auto 10px auto;">
+            <button class="btn-novo-agendamento" onclick="abrirModalAgendamento()" style="background-color: #28a745; color: white; border: none; padding: 10px 20px; border-radius: 5px; font-size: 1em; cursor: pointer; font-weight: bold; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">
+                ➕ Novo Agendamento
+            </button>
+        </div>
+        
+        <div id="calendar" style="background-color: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); max-width: 1200px; margin: 0 auto; min-height: 700px;"></div>
+    </div>
+
+    <div id="modal-agendamento" class="modal-overlay" style="display: none;">
+        <div class="modal-content">
+            <span class="close-modal" onclick="fecharModalAgendamento()">&times;</span>
+            <h2 style="margin-bottom: 20px; color: #0056b3;">📅 Novo Agendamento</h2>
             
-            // Remove a classe active dos botões
-            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-            
-            // Mostra a aba desejada
-            document.getElementById('tab-' + nomeAba).style.display = 'block';
-            
-            // Adiciona active ao botão clicado (lógica simplificada via event target no futuro ou inline)
-            event.currentTarget.classList.add('active');
-        }
-    </script>
+            <form id="form-agendamento" onsubmit="salvarAgendamento(event)">
+                <div class="form-group">
+                    <label>Quem está agendando?</label>
+                    <select id="ag-funcionario" required>
+                        <option value="2">Gestor (Padrão)</option>
+                        <option value="3">Atendente</option>
+                        </select>
+                </div>
+
+                <div class="form-group">
+                    <label>Nome do Cliente:</label>
+                    <input type="text" id="ag-cliente" required placeholder="Ex: Maria da Silva">
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Telefone (WhatsApp):</label>
+                        <input type="text" id="ag-telefone" required placeholder="Ex: 44999998888">
+                    </div>
+                    <div class="form-group">
+                        <label>CPF (Opcional):</label>
+                        <input type="text" id="ag-cpf">
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Data:</label>
+                        <input type="date" id="ag-data" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Hora:</label>
+                        <input type="time" id="ag-hora" required>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Tipo de Evento:</label>
+                    <select id="ag-tipo" required>
+                        <option value="Carrinho de Sorvete">🛒 Carrinho de Sorvete</option>
+                        <option value="Festa de Aniversario">🎉 Festa de Aniversário</option>
+                        <option value="Reserva de Tortas de Sorvete">🎂 Reserva de Torta</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>Observações:</label>
+                    <textarea id="ag-obs" rows="3"></textarea>
+                </div>
+
+                <button type="submit" class="btn-salvar-agenda">✅ Confirmar e Enviar Zap</button>
+            </form>
+        </div>
+    </div>
 </body>
 </html>
