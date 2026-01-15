@@ -995,68 +995,63 @@ function abrirAba(nomeAba) {
 // === MÓDULO DE AGENDA E CALENDÁRIO (FULLCALENDAR) ========
 // =========================================================
 
-let calendarInstance = null; // Guarda a instância para não recriar
+let calendarInstance = null;
 
 function inicializarCalendario() {
     const calendarEl = document.getElementById('calendar');
-    
-    if (!calendarEl) return; // Se não estiver na tela, aborta
+    if (!calendarEl) return;
 
-    // Se já existe, apenas atualiza os dados (refetch) e ajusta o tamanho
     if (calendarInstance) {
         calendarInstance.refetchEvents();
-        calendarInstance.render(); // Garante que renderize corretamente ao reabrir a aba
+        calendarInstance.render();
         return;
     }
 
     calendarInstance = new FullCalendar.Calendar(calendarEl, {
-        initialView: 'dayGridMonth', // Visão mensal
-        locale: 'pt-br', // Português
+        initialView: 'dayGridMonth',
+        locale: 'pt-br',
         headerToolbar: {
             left: 'prev,next today',
             center: 'title',
             right: 'dayGridMonth,timeGridWeek,listWeek'
         },
-        buttonText: {
-            today: 'Hoje',
-            month: 'Mês',
-            week: 'Semana',
-            list: 'Lista'
-        },
+        buttonText: { today: 'Hoje', month: 'Mês', week: 'Semana', list: 'Lista' },
         height: 'auto',
-        navLinks: true, // Pode clicar no dia para ver detalhes
-        editable: false, // Não permite arrastar (por enquanto)
+        navLinks: true,
+        editable: false,
         
         // BUSCAR EVENTOS DA API
         events: function(info, successCallback, failureCallback) {
-            // ATENÇÃO: Verifique se este IP é o correto do seu servidor API
             fetch('http://192.168.18.44:5000/api/agendamentos')
                 .then(response => response.json())
                 .then(data => {
-                    // Mapeia o formato do seu banco para o formato do FullCalendar
                     const eventosFormatados = data.map(ag => {
-                        // Data vem "dd/mm/yyyy HH:MM", precisamos converter para ISO
                         const [dataPt, horaPt] = ag.data_evento.split(' ');
                         const [dia, mes, ano] = dataPt.split('/');
                         const dataIso = `${ano}-${mes}-${dia}T${horaPt}:00`;
 
-                        // Cores por tipo
-                        let cor = '#3788d8'; // Azul padrão
-                        if(ag.tipo_evento.includes('Festa')) cor = '#e83e8c'; // Rosa
-                        if(ag.tipo_evento.includes('Carrinho')) cor = '#fd7e14'; // Laranja
-                        if(ag.tipo_evento.includes('Torta')) cor = '#20c997'; // Verde Água
+                        let cor = '#3788d8';
+                        if(ag.tipo_evento.includes('Festa')) cor = '#e83e8c';
+                        if(ag.tipo_evento.includes('Carrinho')) cor = '#fd7e14';
+                        if(ag.tipo_evento.includes('Torta')) cor = '#20c997';
                         
                         return {
                             id: ag.agendamento_id,
-                            title: `${horaPt} - ${ag.nome_cliente}`, // Título do evento
+                            title: `${horaPt} - ${ag.nome_cliente}`,
                             start: dataIso,
                             backgroundColor: cor,
                             borderColor: cor,
+                            // Dados extras para o formulário de edição
                             extendedProps: {
+                                nome_cliente: ag.nome_cliente,
                                 tipo: ag.tipo_evento,
                                 telefone: ag.telefone_cliente,
+                                cpf: ag.cpf_cliente,
                                 status_pag: ag.status_pagamento,
-                                obs: ag.observacoes
+                                obs: ag.observacoes,
+                                funcionario_id: ag.funcionario_id || 2, // Default Gestor
+                                data_pura: `${ano}-${mes}-${dia}`,
+                                hora_pura: horaPt
                             }
                         };
                     });
@@ -1068,122 +1063,161 @@ function inicializarCalendario() {
                 });
         },
 
-        // CLIQUE NO EVENTO (VER DETALHES + WHATSAPP)
+        // CLIQUE NO EVENTO -> ABRE EDIÇÃO
         eventClick: function(info) {
-            const props = info.event.extendedProps;
-            const telLimpo = props.telefone ? props.telefone.replace(/\D/g, '') : '';
-            const linkWpp = telLimpo ? `https://wa.me/55${telLimpo}` : '#';
-            
-            const dataEvento = info.event.start.toLocaleDateString('pt-BR');
-            const horaEvento = info.event.start.toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'});
-
-            const msg = `
-📅 DETALHES DO AGENDAMENTO:
---------------------------------
-👤 Cliente: ${info.event.title.split(' - ')[1] || 'Cliente'}
-🎈 Evento: ${props.tipo}
-📆 Quando: ${dataEvento} às ${horaEvento}
-
-💰 Pagamento: ${props.status_pag}
-📝 Obs: ${props.obs || 'Nenhuma'}
-📞 Telefone: ${props.telefone}
-
-Clique em OK para abrir o WhatsApp deste cliente.
-            `;
-            
-            if(confirm(msg)) {
-                if(telLimpo) window.open(linkWpp, '_blank');
-                else alert("Cliente sem telefone cadastrado.");
-            }
+            abrirModalEdicao(info.event);
         }
     });
 
     calendarInstance.render();
 }
 
-// --- FUNÇÕES DO MODAL (JANELA DE CADASTRO) ---
+// --- FUNÇÕES DO MODAL ---
 
 function abrirModalAgendamento() {
-    const modal = document.getElementById('modal-agendamento');
-    modal.style.display = 'flex';
+    // Configura para MODO CRIAÇÃO
+    document.getElementById('modal-agendamento').style.display = 'flex';
+    document.getElementById('modal-titulo').innerText = "📅 Novo Agendamento";
+    document.getElementById('form-agendamento').reset();
+    document.getElementById('ag-id').value = ""; // Limpa ID
     
-    // Define a data de hoje como padrão no input
-    const hoje = new Date().toISOString().split('T')[0];
-    document.getElementById('ag-data').value = hoje;
-    
-    // Define hora padrão 14:00
+    // Mostra botões de Novo, esconde de Edição
+    document.getElementById('btn-container-novo').style.display = 'block';
+    document.getElementById('btn-container-editar').style.display = 'none';
+
+    // Padrões
+    document.getElementById('ag-data').value = new Date().toISOString().split('T')[0];
     document.getElementById('ag-hora').value = "14:00";
+}
+
+function abrirModalEdicao(evento) {
+    // Configura para MODO EDIÇÃO
+    document.getElementById('modal-agendamento').style.display = 'flex';
+    document.getElementById('modal-titulo').innerText = "✏️ Editar / Excluir Agendamento";
+    
+    // Mostra botões de Edição, esconde de Novo
+    document.getElementById('btn-container-novo').style.display = 'none';
+    document.getElementById('btn-container-editar').style.display = 'flex';
+
+    // Preenche os campos com os dados do evento clicado
+    const props = evento.extendedProps;
+    document.getElementById('ag-id').value = evento.id;
+    document.getElementById('ag-cliente').value = props.nome_cliente; // Pega nome puro
+    document.getElementById('ag-funcionario').value = props.funcionario_id;
+    document.getElementById('ag-telefone').value = props.telefone;
+    document.getElementById('ag-cpf').value = props.cpf;
+    document.getElementById('ag-tipo').value = props.tipo;
+    document.getElementById('ag-pagamento').value = props.status_pag;
+    document.getElementById('ag-obs').value = props.obs;
+    document.getElementById('ag-data').value = props.data_pura;
+    document.getElementById('ag-hora').value = props.hora_pura;
 }
 
 function fecharModalAgendamento() {
     document.getElementById('modal-agendamento').style.display = 'none';
 }
 
-async function salvarAgendamento(event) {
-    event.preventDefault(); // Não recarrega a página
+function processarFormulario(event) {
+    event.preventDefault();
+    // Esta função é chamada apenas pelo botão de SALVAR NOVO
+    // O botão de salvar edição chama atualizarAgendamento diretamente
+    salvarNovoAgendamento();
+}
 
-    const btn = document.querySelector('.btn-salvar-agenda');
-    const textoOriginal = btn.innerText;
-    
-    // Feedback visual de carregamento
-    btn.innerText = "⏳ Salvando e Enviando Zap...";
-    btn.disabled = true;
-    btn.style.opacity = "0.7";
-
-    // Coleta dados do formulário
-    const dataInput = document.getElementById('ag-data').value; // yyyy-mm-dd
-    const horaInput = document.getElementById('ag-hora').value; // HH:MM
-    
-    // Converter data para formato brasileiro (dd/mm/yyyy) não é necessário aqui
-    // pois a API Python vai receber e converter. Vamos mandar yyyy-mm-dd HH:MM
-    // e garantir que o Python aceite esse formato ou converter aqui.
-    // O Python espera: '%Y-%m-%d %H:%M' (padrão ISO do input date html)
-    
-    const payload = {
-        funcionario_id: document.getElementById('ag-funcionario').value,
-        nome_cliente: document.getElementById('ag-cliente').value,
-        telefone_cliente: document.getElementById('ag-telefone').value,
-        cpf_cliente: document.getElementById('ag-cpf').value,
-        tipo_evento: document.getElementById('ag-tipo').value,
-        data_evento: `${dataInput} ${horaInput}`,
-        observacoes: document.getElementById('ag-obs').value
-    };
-
+// 1. CRIAR NOVO
+async function salvarNovoAgendamento() {
+    const payload = coletarDadosFormulario();
     try {
-        // ATENÇÃO: Confirme se o IP é o mesmo da sua API
         const response = await fetch('http://192.168.18.44:5000/agendamentos/novo', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
-
         const result = await response.json();
-
         if (response.ok) {
-            alert("✅ Agendamento Salvo!\n" + result.mensagem);
+            alert("✅ " + result.mensagem);
             fecharModalAgendamento();
-            document.getElementById('form-agendamento').reset();
-            
-            // Atualiza o calendário imediatamente
-            if(calendarInstance) calendarInstance.refetchEvents();
+            calendarInstance.refetchEvents();
         } else {
-            alert("❌ Erro ao salvar: " + result.mensagem);
+            alert("❌ Erro: " + result.mensagem);
         }
-    } catch (error) {
-        alert("Erro de conexão com o servidor. Verifique se a API está rodando.");
-        console.error(error);
-    } finally {
-        // Restaura o botão
-        btn.innerText = textoOriginal;
-        btn.disabled = false;
-        btn.style.opacity = "1";
-    }
+    } catch (error) { console.error(error); alert("Erro de conexão."); }
 }
 
-// Fechar modal ao clicar fora da caixa branca
+// 2. ATUALIZAR EXISTENTE (PUT)
+async function atualizarAgendamento() {
+    const id = document.getElementById('ag-id').value;
+    if(!id) return;
+
+    if(!confirm("Deseja salvar as alterações neste agendamento?")) return;
+
+    const payload = coletarDadosFormulario();
+    // A rota de atualização espera o ID na URL
+    try {
+        const response = await fetch(`http://192.168.18.44:5000/agendamentos/${id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const result = await response.json();
+        if (response.ok) {
+            alert("✅ Agendamento atualizado!");
+            fecharModalAgendamento();
+            calendarInstance.refetchEvents();
+        } else {
+            alert("❌ Erro: " + result.mensagem);
+        }
+    } catch (error) { console.error(error); alert("Erro de conexão."); }
+}
+
+// 3. EXCLUIR (DELETE)
+async function excluirAgendamento() {
+    const id = document.getElementById('ag-id').value;
+    if(!id) return;
+
+    if(!confirm("⚠️ Tem certeza que deseja EXCLUIR este agendamento?\nEssa ação não pode ser desfeita.")) return;
+
+    try {
+        const response = await fetch(`http://192.168.18.44:5000/agendamentos/${id}`, {
+            method: 'DELETE'
+        });
+        
+        if (response.status === 204) {
+            alert("🗑️ Agendamento excluído.");
+            fecharModalAgendamento();
+            calendarInstance.refetchEvents();
+        } else {
+            alert("❌ Erro ao excluir.");
+        }
+    } catch (error) { console.error(error); alert("Erro de conexão."); }
+}
+
+// 4. ABRIR WHATSAPP
+function abrirWhatsAppCliente() {
+    const tel = document.getElementById('ag-telefone').value;
+    const telLimpo = tel.replace(/\D/g, '');
+    if(telLimpo) window.open(`https://wa.me/55${telLimpo}`, '_blank');
+    else alert("Telefone inválido.");
+}
+
+// Helper para pegar dados do form
+function coletarDadosFormulario() {
+    const dataInput = document.getElementById('ag-data').value;
+    const horaInput = document.getElementById('ag-hora').value;
+    
+    return {
+        funcionario_id: document.getElementById('ag-funcionario').value,
+        nome_cliente: document.getElementById('ag-cliente').value,
+        telefone_cliente: document.getElementById('ag-telefone').value,
+        cpf_cliente: document.getElementById('ag-cpf').value,
+        tipo_evento: document.getElementById('ag-tipo').value,
+        status_pagamento: document.getElementById('ag-pagamento').value,
+        data_evento: `${dataInput} ${horaInput}`,
+        observacoes: document.getElementById('ag-obs').value
+    };
+}
+
 window.onclick = function(event) {
     const modal = document.getElementById('modal-agendamento');
-    if (event.target == modal) {
-        fecharModalAgendamento();
-    }
+    if (event.target == modal) fecharModalAgendamento();
 }
