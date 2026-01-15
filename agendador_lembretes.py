@@ -4,7 +4,8 @@
 import logging
 import logging.handlers
 import sys
-import os # Necessário para criar a pasta de logs
+import os 
+import notificador_whatsapp 
 
 # --- Configurações ---
 LOG_FILENAME = 'gamificacao_sistema.log'
@@ -218,6 +219,100 @@ def enviar_lembretes_semanais():
     notificador_telegram.enviar_mensagem(config.AGENDAMENTOS_GROUP_CHAT_ID, mensagem)
     logger.info("--> Lembrete semanal enviado com sucesso!")
 
+# ===================================================================
+# == NOVAS ROTINAS DE AUTOMACAO WHATSAPP ============================
+# ===================================================================
+
+def enviar_confirmacoes_whatsapp():
+    """
+    Rotina D-1: Envia mensagem de confirmação para agendamentos de AMANHÃ.
+    """
+    logger.info(f"[{datetime.now().strftime('%H:%M:%S')}] 🤖 Iniciando rotina de confirmação WhatsApp (D-1)...")
+    
+    amanha = date.today() + timedelta(days=1)
+    amanha_str = amanha.strftime('%Y-%m-%d')
+    data_fmt = amanha.strftime('%d/%m') # Ex: 25/10
+    
+    # Busca no banco quem é de amanhã e ainda não recebeu 'MsgConfirmacaoEnviada'
+    pendentes = database.buscar_agendamentos_pendentes_confirmacao(amanha_str)
+    
+    if not pendentes:
+        logger.info("--> Nenhuma confirmação pendente para amanhã.")
+        return
+
+    enviados = 0
+    for ag in pendentes:
+        try:
+            # Formatação da mensagem amigável
+            hora_evento = ag['DataEvento'].strftime('%H:%M')
+            nome_cliente = ag['NomeCliente'].split()[0] # Pega só o primeiro nome
+            
+            mensagem = (
+                f"Olá, *{nome_cliente}*! Tudo bem? 👋\n\n"
+                f"Passando para confirmar seu agendamento de *{ag['TipoEvento']}* para amanhã, dia *{data_fmt}* às *{hora_evento}*.\n\n"
+                f"Está tudo certo por aqui! Qualquer dúvida, estamos à disposição. 🍦"
+            )
+            
+            # Envia via Z-API
+            sucesso, resp = notificador_whatsapp.enviar_mensagem_whatsapp(ag['TelefoneCliente'], mensagem)
+            
+            if sucesso:
+                database.marcar_flag_agendamento(ag['AgendamentoID'], 'confirmacao')
+                logger.info(f"--> Confirmação enviada para {nome_cliente} (ID: {ag['AgendamentoID']})")
+                enviados += 1
+                time.sleep(2) # Pausa para não bloquear a API
+            else:
+                logger.error(f"--> Falha ao enviar para {nome_cliente}: {resp}")
+                
+        except Exception as e:
+            logger.error(f"--> Erro ao processar agendamento {ag.get('AgendamentoID')}: {e}")
+
+    logger.info(f"--> Rotina de Confirmação finalizada. Total enviados: {enviados}/{len(pendentes)}")
+
+
+def enviar_posvenda_whatsapp():
+    """
+    Rotina D+1: Envia mensagem de pós-venda para agendamentos de ONTEM.
+    """
+    logger.info(f"[{datetime.now().strftime('%H:%M:%S')}] 🤖 Iniciando rotina de Pós-Venda WhatsApp (D+1)...")
+    
+    ontem = date.today() - timedelta(days=1)
+    ontem_str = ontem.strftime('%Y-%m-%d')
+    
+    # Busca no banco quem foi ontem e ainda não recebeu 'MsgPosVendaEnviada'
+    pendentes = database.buscar_agendamentos_pendentes_posvenda(ontem_str)
+    
+    if not pendentes:
+        logger.info("--> Nenhum pós-venda pendente para ontem.")
+        return
+
+    enviados = 0
+    for ag in pendentes:
+        try:
+            nome_cliente = ag['NomeCliente'].split()[0]
+            
+            mensagem = (
+                f"Oi, *{nome_cliente}*! Esperamos que seu evento ontem tenha sido incrível! 🥳\n\n"
+                f"Deu tudo certo com o nosso serviço de *{ag['TipoEvento']}*? \n"
+                f"Adoraríamos saber sua opinião para melhorarmos sempre.\n\n"
+                f"Obrigado pela preferência! ❤️"
+            )
+            
+            sucesso, resp = notificador_whatsapp.enviar_mensagem_whatsapp(ag['TelefoneCliente'], mensagem)
+            
+            if sucesso:
+                database.marcar_flag_agendamento(ag['AgendamentoID'], 'posvenda')
+                logger.info(f"--> Pós-venda enviado para {nome_cliente} (ID: {ag['AgendamentoID']})")
+                enviados += 1
+                time.sleep(2)
+            else:
+                logger.error(f"--> Falha ao enviar pós-venda para {nome_cliente}: {resp}")
+                
+        except Exception as e:
+            logger.error(f"--> Erro ao processar agendamento {ag.get('AgendamentoID')}: {e}")
+
+    logger.info(f"--> Rotina de Pós-Venda finalizada. Total enviados: {enviados}/{len(pendentes)}")
+
 if __name__ == "__main__":
     logger.info("--- 🤖 Robô de Lembretes de Agendamento v2.0 Iniciado 🤖 ---")
     logger.info("Verificação diária às 20:00 e semanal às sextas-feiras às 18:00.")
@@ -227,8 +322,15 @@ if __name__ == "__main__":
     # Alerta diário para os carrinhos de amanhã
     schedule.every().day.at("09:00").do(enviar_lembretes_diarios)
 
-    # NOVO ALERTA: Toda sexta-feira às 18:00, envia a prévia da semana que vem
+    # Toda sexta-feira às 18:00, envia a prévia da semana que vem
     schedule.every().monday.at("08:00").do(enviar_lembretes_semanais)
+
+    # --- NOVOS AGENDAMENTOS WHATSAPP ---
+    # Confirmação (D-1)
+    schedule.every().day.at("09:30").do(enviar_confirmacoes_whatsapp)
+    
+    # Pós-Venda (D+1)
+    schedule.every().day.at("10:30").do(enviar_posvenda_whatsapp)
 
     # Loop infinito para manter o script rodando
     while True:
