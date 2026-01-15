@@ -6,6 +6,7 @@ import logging.handlers
 import sys
 import os 
 import notificador_whatsapp 
+import random 
 
 # --- Configurações ---
 LOG_FILENAME = 'gamificacao_sistema.log'
@@ -260,7 +261,7 @@ def enviar_confirmacoes_whatsapp():
                 database.marcar_flag_agendamento(ag['AgendamentoID'], 'confirmacao')
                 logger.info(f"--> Confirmação enviada para {nome_cliente} (ID: {ag['AgendamentoID']})")
                 enviados += 1
-                time.sleep(2) # Pausa para não bloquear a API
+                time.sleep(45, 90) # Pausa para não bloquear a API
             else:
                 logger.error(f"--> Falha ao enviar para {nome_cliente}: {resp}")
                 
@@ -304,7 +305,7 @@ def enviar_posvenda_whatsapp():
                 database.marcar_flag_agendamento(ag['AgendamentoID'], 'posvenda')
                 logger.info(f"--> Pós-venda enviado para {nome_cliente} (ID: {ag['AgendamentoID']})")
                 enviados += 1
-                time.sleep(2)
+                time.sleep(45, 90)
             else:
                 logger.error(f"--> Falha ao enviar pós-venda para {nome_cliente}: {resp}")
                 
@@ -327,10 +328,10 @@ if __name__ == "__main__":
 
     # --- NOVOS AGENDAMENTOS WHATSAPP ---
     # Confirmação (D-1)
-    schedule.every().day.at("09:30").do(enviar_confirmacoes_whatsapp)
+    schedule.every().day.at("10:00").do(enviar_confirmacoes_whatsapp)
     
     # Pós-Venda (D+1)
-    schedule.every().day.at("10:30").do(enviar_posvenda_whatsapp)
+    schedule.every().day.at("14:10").do(enviar_posvenda_whatsapp)
 
     # Loop infinito para manter o script rodando
     while True:
