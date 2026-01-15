@@ -154,63 +154,83 @@
     </div>
 
     <div id="modal-agendamento" class="modal-overlay" style="display: none;">
-        <div class="modal-content">
-            <span class="close-modal" onclick="fecharModalAgendamento()">&times;</span>
-            <h2 style="margin-bottom: 20px; color: #0056b3;">📅 Novo Agendamento</h2>
-            
-            <form id="form-agendamento" onsubmit="salvarAgendamento(event)">
+    <div class="modal-content">
+        <span class="close-modal" onclick="fecharModalAgendamento()">&times;</span>
+        <h2 id="modal-titulo" style="margin-bottom: 20px; color: #0056b3;">📅 Novo Agendamento</h2>
+        
+        <form id="form-agendamento" onsubmit="processarFormulario(event)">
+            <input type="hidden" id="ag-id">
+
+            <div class="form-group">
+                <label>Quem está agendando?</label>
+                <select id="ag-funcionario" required>
+                    <option value="2">Gestor (Padrão)</option>
+                    <option value="3">Atendente</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Nome do Cliente:</label>
+                <input type="text" id="ag-cliente" required placeholder="Ex: Maria da Silva">
+            </div>
+
+            <div class="form-row">
                 <div class="form-group">
-                    <label>Quem está agendando?</label>
-                    <select id="ag-funcionario" required>
-                        <option value="2">Gestor (Padrão)</option>
-                        <option value="3">Atendente</option>
-                        </select>
+                    <label>Telefone (WhatsApp):</label>
+                    <input type="text" id="ag-telefone" required placeholder="Ex: 44999998888">
                 </div>
-
                 <div class="form-group">
-                    <label>Nome do Cliente:</label>
-                    <input type="text" id="ag-cliente" required placeholder="Ex: Maria da Silva">
+                    <label>CPF (Opcional):</label>
+                    <input type="text" id="ag-cpf">
                 </div>
+            </div>
 
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Telefone (WhatsApp):</label>
-                        <input type="text" id="ag-telefone" required placeholder="Ex: 44999998888">
-                    </div>
-                    <div class="form-group">
-                        <label>CPF (Opcional):</label>
-                        <input type="text" id="ag-cpf">
-                    </div>
-                </div>
-
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Data:</label>
-                        <input type="date" id="ag-data" required>
-                    </div>
-                    <div class="form-group">
-                        <label>Hora:</label>
-                        <input type="time" id="ag-hora" required>
-                    </div>
-                </div>
-
+            <div class="form-row">
                 <div class="form-group">
-                    <label>Tipo de Evento:</label>
-                    <select id="ag-tipo" required>
-                        <option value="Carrinho de Sorvete">🛒 Carrinho de Sorvete</option>
-                        <option value="Festa de Aniversario">🎉 Festa de Aniversário</option>
-                        <option value="Reserva de Tortas de Sorvete">🎂 Reserva de Torta</option>
+                    <label>Data:</label>
+                    <input type="date" id="ag-data" required>
+                </div>
+                <div class="form-group">
+                    <label>Hora:</label>
+                    <input type="time" id="ag-hora" required>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>Tipo de Evento:</label>
+                <select id="ag-tipo" required>
+                    <option value="Carrinho de Sorvete">🛒 Carrinho de Sorvete</option>
+                    <option value="Festa de Aniversario">🎉 Festa de Aniversário</option>
+                    <option value="Reserva de Tortas de Sorvete">🎂 Reserva de Torta</option>
+                </select>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Status Pagamento:</label>
+                    <select id="ag-pagamento">
+                        <option value="Pendente">❌ Pendente</option>
+                        <option value="Pago">✅ Pago</option>
                     </select>
                 </div>
+            </div>
 
-                <div class="form-group">
-                    <label>Observações:</label>
-                    <textarea id="ag-obs" rows="3"></textarea>
-                </div>
+            <div class="form-group">
+                <label>Observações:</label>
+                <textarea id="ag-obs" rows="3"></textarea>
+            </div>
 
+            <div id="btn-container-novo">
                 <button type="submit" class="btn-salvar-agenda">✅ Confirmar e Enviar Zap</button>
-            </form>
-        </div>
+            </div>
+
+            <div id="btn-container-editar" style="display: none; gap: 10px; margin-top: 15px;">
+                <button type="button" class="btn-salvar-agenda" onclick="atualizarAgendamento()">💾 Salvar Alterações</button>
+                <button type="button" class="btn-excluir-agenda" onclick="excluirAgendamento()">🗑️ Excluir</button>
+                <button type="button" class="btn-wpp-agenda" onclick="abrirWhatsAppCliente()">📱 Abrir WhatsApp</button>
+            </div>
+        </form>
     </div>
+</div>
 </body>
 </html>
