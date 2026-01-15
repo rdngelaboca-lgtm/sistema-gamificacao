@@ -263,11 +263,11 @@ def verificar_fim_jornada():
 
 def verificar_e_delegar_tarefas_de_folga():
     """
-    (VERSÃO V4 - COM SUPORTE A 6x1 E AFASTAMENTOS)
+    (VERSÃO V5 - CORRIGIDA E ROBUSTA)
     Verifica folgas fixas, domingos de folga e afastamentos (férias/atestado).
     Agrega todas as tarefas desses ausentes e envia o 'Drop' (Boletim).
     """
-    print(f"\n[{datetime.now().strftime('%H:%M:%S')}] 🎲 Verificando Ausências (Folgas/Férias) para Drop...")
+    logger.info(f"🎲 Verificando Ausências (Folgas/Férias) para Drop...")
     
     hoje_dt = datetime.now()
     hoje_date = hoje_dt.date()
@@ -278,94 +278,100 @@ def verificar_e_delegar_tarefas_de_folga():
     # 2. Determina qual Domingo do Mês é hoje (se for domingo)
     ocorrencia_domingo = 0
     if dia_semana_sql == 1: # É Domingo
-        # Divisão inteira do dia por 7 arredondada para cima dá a ocorrência (1º, 2º...)
         ocorrencia_domingo = (hoje_dt.day - 1) // 7 + 1
 
     funcionarios_ausentes = []
     
-    # Busca TODOS os funcionários para checar as 3 condições
-    todos_funcionarios = database.listar_funcionarios()
-    
+    try:
+        todos_funcionarios = database.listar_funcionarios()
+    except Exception as e:
+        logger.error(f"Erro ao listar funcionários para Drop: {e}")
+        return
+
     for f in todos_funcionarios:
         motivo_ausencia = None
 
-        # A. Período de Afastamento (Férias/Atestado) - PRIORIDADE ALTA
-        # Verifica se os atributos existem e não são nulos
-        data_ini_raw = getattr(f, 'DataInicioAfastamento', None)
-        data_fim_raw = getattr(f, 'DataFimAfastamento', None)
+        # A. Período de Afastamento (Férias/Atestado) - TRATAMENTO ROBUSTO DE DATA
+        try:
+            data_ini_raw = getattr(f, 'DataInicioAfastamento', None)
+            data_fim_raw = getattr(f, 'DataFimAfastamento', None)
 
-        if data_ini_raw and data_fim_raw:
-            try:
-                # Normaliza para objeto date do Python
+            if data_ini_raw and data_fim_raw:
+                # Normalização forçada para datetime.date
                 ini = data_ini_raw.date() if isinstance(data_ini_raw, datetime) else data_ini_raw
                 fim = data_fim_raw.date() if isinstance(data_fim_raw, datetime) else data_fim_raw
-
-                # Conversão extra caso venha como string do banco (YYYY-MM-DD)
-                if isinstance(ini, str): ini = datetime.strptime(ini, '%Y-%m-%d').date()
-                if isinstance(fim, str): fim = datetime.strptime(fim, '%Y-%m-%d').date()
+                
+                # Caso venha como string (raro, mas possível via drivers antigos)
+                if isinstance(ini, str): ini = datetime.strptime(ini[:10], '%Y-%m-%d').date()
+                if isinstance(fim, str): fim = datetime.strptime(fim[:10], '%Y-%m-%d').date()
 
                 if ini <= hoje_date <= fim:
                     motivo_ausencia = "Férias/Atestado"
-                    print(f"--> [DEBUG] {f.NomeCompleto} detectado em FÉRIAS ({ini} a {fim}).")
-            except Exception as e_date:
-                print(f"--> [ERRO DATA] Falha ao processar datas de {f.NomeCompleto}: {e_date}")
+                    logger.info(f"--> Ausência detectada: {f.NomeCompleto} (Período: {ini} a {fim})")
+        except Exception as e_date:
+            logger.error(f"Falha ao processar datas de {f.NomeCompleto}: {e_date}")
 
-        # B. Folga Fixa Semanal (Ex: Toda Segunda)
-        # Só verifica se não caiu na condição de férias (elif)
-        elif f.DiaDeFolga == dia_semana_sql:
+        # B. Folga Fixa Semanal
+        if not motivo_ausencia and f.DiaDeFolga == dia_semana_sql:
             motivo_ausencia = "Folga Semanal"
 
-        # C. Folga de Domingo Específico (Escala 6x1)
-        elif dia_semana_sql == 1 and hasattr(f, 'DomingoFolgaMensal') and f.DomingoFolgaMensal == ocorrencia_domingo:
-            motivo_ausencia = f"Folga de Domingo ({ocorrencia_domingo}º)"
+        # C. Folga de Domingo Específico (6x1)
+        if not motivo_ausencia and dia_semana_sql == 1:
+            # Verifica se o campo existe e tem valor
+            dom_folga = getattr(f, 'DomingoFolgaMensal', 0)
+            if dom_folga and dom_folga == ocorrencia_domingo:
+                motivo_ausencia = f"Folga de Domingo ({ocorrencia_domingo}º)"
 
         if motivo_ausencia:            
             f.MotivoLog = motivo_ausencia
             funcionarios_ausentes.append(f)
 
     if not funcionarios_ausentes:
-        print("--> Ninguém de folga ou afastado hoje. Drop cancelado.")
+        logger.info("--> Ninguém de folga ou afastado hoje. Drop cancelado.")
         return
 
     # Dicionário para agrupar tarefas por ChatID de destino
     drop_por_grupo = {}
 
     for funcionario in funcionarios_ausentes:
-        # Garante que o dia da semana seja tratado como string para busca no banco
         dia_semana_str = str(dia_semana_sql)
-        # Busca tarefas recorrentes agendadas para HOJE (dia da semana atual)
-        # Nota: Mesmo em férias, pegamos o que ele faria 'hoje' se estivesse trabalhando
+        # Busca tarefas recorrentes que seriam para HOJE
         tarefas_do_dia = database.buscar_tarefas_recorrentes_agendadas_para_hoje(funcionario.FuncionarioID, dia_semana_str)
         
-        if not tarefas_do_dia: continue
+        if not tarefas_do_dia:
+            logger.info(f"--> {funcionario.NomeCompleto} está ausente, mas não tinha tarefas agendadas para hoje.")
+            continue
         
-        print(f"--> Processando ausência de {funcionario.NomeCompleto} ({funcionario.MotivoLog})...")
+        logger.info(f"--> Processando {len(tarefas_do_dia)} tarefas de {funcionario.NomeCompleto} ({funcionario.MotivoLog})...")
 
         for tarefa in tarefas_do_dia:
-            # --- LÓGICA DE ROTEAMENTO ROBUSTA ---
             chat_destino = config.FOLGA_GROUP_CHAT_ID # Padrão (Fallback)
 
-            # Normaliza strings para busca (remove acentos, minúsculas)
-            # CORREÇÃO: Usando 'tarefa' e 'funcionario' (nomes corretos dos iteradores)
+            # Normalização para roteamento
             setor_t = normalizar_texto(tarefa.Setor or "")
             cargo_f = normalizar_texto(funcionario.Cargo or "")
 
             encontrou = False
 
-            # 1. Tenta casar chaves do mapa com o SETOR da tarefa
+            # 1. Roteamento por Setor da Tarefa
             for chave, chat_id in MAPA_SETOR_GRUPO.items():
                 if chave in setor_t:
                     chat_destino = chat_id; encontrou = True; break
 
-            # 2. Se não achou, tenta pelo CARGO do funcionário
+            # 2. Roteamento por Cargo do Funcionário
             if not encontrou:
                 for chave, chat_id in MAPA_SETOR_GRUPO.items():
                     if chave in cargo_f:
                         chat_destino = chat_id; encontrou = True; break
 
-            # Adiciona ao Drop do grupo identificado
             if chat_destino not in drop_por_grupo: drop_por_grupo[chat_destino] = []
-            drop_por_grupo[chat_destino].append({'tarefa': tarefa, 'origem': funcionario.NomeCompleto, 'motivo': funcionario.MotivoLog})
+            
+            # Adiciona item ao grupo
+            drop_por_grupo[chat_destino].append({
+                'tarefa': tarefa, 
+                'origem': funcionario.NomeCompleto, 
+                'motivo': getattr(funcionario, 'MotivoLog', 'Ausência')
+            })
 
     # --- Envio dos Drops ---
     for chat_id, itens in drop_por_grupo.items():
@@ -380,11 +386,12 @@ def verificar_e_delegar_tarefas_de_folga():
         keyboard = []
         for i, item in enumerate(itens):
             t = item['tarefa']
-            origem = item['origem'].split()[0]
-            # Adiciona motivo curto na mensagem (ex: Ana (Férias))
-            tag_motivo = "🌴" if "Férias" in item['motivo'] else "🏠"
+            origem_nome = item['origem'].split()[0]
+            motivo_desc = item['motivo']
             
-            mensagem += f"{i+1}️⃣ **{t.Titulo}**\n     └ {tag_motivo} *{origem}* |  💰 *{t.Pontos} pts*\n\n"
+            tag_motivo = "🌴" if "Férias" in motivo_desc or "Atestado" in motivo_desc else "🏠"
+            
+            mensagem += f"{i+1}️⃣ **{t.Titulo}**\n     └ {tag_motivo} *{origem_nome}* |  💰 *{t.Pontos} pts*\n\n"
             
             callback = f"aceitar_folga_{t.TarefaID}"
             keyboard.append([InlineKeyboardButton(f"🚀 Pegar Missão {i+1}", callback_data=callback)])
@@ -392,10 +399,10 @@ def verificar_e_delegar_tarefas_de_folga():
         mensagem += "👇 **Ajude a equipe e ganhe pontos extras:**"
         try:
             notificador_telegram.enviar_mensagem_com_botao(chat_id, mensagem, InlineKeyboardMarkup(keyboard))
-            print(f"--> Drop enviado para grupo {chat_id}.")
+            logger.info(f"--> Drop enviado com sucesso para grupo {chat_id} ({qtd} tarefas).")
         except Exception as e:
-            print(f"--> Erro envio Drop: {e}")
-                        
+            logger.error(f"--> Erro crítico ao enviar Drop para grupo {chat_id}: {e}")
+                                    
 def executar_fechamento_mensal():
     """
     Executa o fechamento separado por setores (Cozinha e Loja).
