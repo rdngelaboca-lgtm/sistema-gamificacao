@@ -248,9 +248,15 @@ def enviar_confirmacoes_whatsapp():
             hora_evento = ag['DataEvento'].strftime('%H:%M')
             nome_cliente = ag['NomeCliente'].split()[0] # Pega só o primeiro nome
             
+            # Formata a observação se houver
+            obs_texto = ""
+            if ag['Observacoes'] and str(ag['Observacoes']).strip():
+                obs_texto = f"\n📝 *Obs:* {ag['Observacoes']}\n"
+
             mensagem = (
                 f"Olá, *{nome_cliente}*! Tudo bem? 👋\n\n"
-                f"Passando para confirmar seu agendamento de *{ag['TipoEvento']}* para amanhã, dia *{data_fmt}* às *{hora_evento}*.\n\n"
+                f"Passando para confirmar seu agendamento de *{ag['TipoEvento']}* para amanhã, dia *{data_fmt}* às *{hora_evento}*.\n"
+                f"{obs_texto}\n"
                 f"Está tudo certo por aqui! Qualquer dúvida, estamos à disposição. 🍦"
             )
             
