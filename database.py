@@ -7513,7 +7513,7 @@ def buscar_agendamentos_pendentes_confirmacao(data_amanha_str):
             sql = """
                 SELECT 
                     AgendamentoID, NomeCliente, TelefoneCliente, 
-                    TipoEvento, DataEvento
+                    TipoEvento, DataEvento, Observacoes
                 FROM Agendamentos
                 WHERE 
                     -- Filtra pela data (ignorando hora)
