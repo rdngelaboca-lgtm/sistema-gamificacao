@@ -174,7 +174,8 @@ def rota_listar_agendamentos():
                 "data_evento": ag.DataEvento.strftime('%d/%m/%Y %H:%M'), # Formata a data
                 "status_agendamento": ag.StatusAgendamento,
                 "status_pagamento": ag.StatusPagamento,
-                "nome_funcionario": ag.NomeFuncionario
+                "nome_funcionario": ag.NomeFuncionario,
+                "observacoes": ag.Observacoes
             })
             
         return jsonify(lista_de_agendamentos), 200
