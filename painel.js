@@ -1048,7 +1048,7 @@ function inicializarCalendario() {
                                 telefone: ag.telefone_cliente,
                                 cpf: ag.cpf_cliente,
                                 status_pag: ag.status_pagamento,
-                                obs: ag.observacoes,
+                                obs: ag.observacoes || "",
                                 funcionario_id: ag.funcionario_id || 2, // Default Gestor
                                 data_pura: `${ano}-${mes}-${dia}`,
                                 hora_pura: horaPt
