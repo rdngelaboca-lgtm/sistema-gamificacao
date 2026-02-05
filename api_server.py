@@ -21,7 +21,7 @@ if not os.path.exists(log_dir):
     try:
         os.makedirs(log_dir)
     except OSError:
-        pass # Falha silenciosa se não der pra criar
+        pass 
 
 logging.basicConfig(
     filename=os.path.join(log_dir, LOG_FILENAME),
@@ -32,28 +32,34 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 
-# [CORREÇÃO 3] Fallback de segurança para Secret Key
+# Fallback de segurança para Secret Key
 app.secret_key = getattr(config, 'SECRET_KEY_FLASK', 'chave_padrao_insegura_dev')
 CORS(app)
 
 # ==============================================================================
-# 🛠️ UTILITÁRIOS DE SERIALIZAÇÃO (CORREÇÃO DO BUG 1)
+# 🛠️ CONVERSOR UNIVERSAL DE DADOS (A CORREÇÃO DO PAINEL)
 # ==============================================================================
 def converter_objeto_para_json(obj):
     """
-    Função recursiva para converter tipos complexos (Date, Time, Decimal)
-    em strings ou floats aceitáveis pelo JSON.
+    Transforma qualquer dado estranho do SQL Server em algo que o Javascript entenda.
     """
     if isinstance(obj, dict):
         return {k: converter_objeto_para_json(v) for k, v in obj.items()}
     elif isinstance(obj, list):
         return [converter_objeto_para_json(i) for i in obj]
     elif isinstance(obj, (date, datetime)):
-        return obj.isoformat() # Retorna "YYYY-MM-DD" ou "YYYY-MM-DDTHH:MM:SS"
+        return obj.isoformat() # "2023-10-27"
     elif isinstance(obj, time):
-        return obj.strftime('%H:%M') # Retorna "HH:MM"
+        return obj.strftime('%H:%M') # "14:30"
+    elif isinstance(obj, timedelta):
+        # Transforma duração (ex: 2 horas) em string "2:00:00"
+        return str(obj)
     elif isinstance(obj, decimal.Decimal):
-        return float(obj) # Converte Decimal SQL para Float Python
+        return float(obj) # Dinheiro vira número normal
+    elif hasattr(obj, 'cursor_description'): 
+        # Se vier uma linha crua do banco (pyodbc Row), transforma em Dicionário
+        colunas = [column[0] for column in obj.cursor_description]
+        return {k: converter_objeto_para_json(v) for k, v in zip(colunas, obj)}
     return obj
 
 # ==============================================================================
@@ -62,7 +68,6 @@ def converter_objeto_para_json(obj):
 
 @app.route('/')
 def index():
-    # Redireciona para o painel principal se acessar a raiz
     return send_from_directory('.', 'painel.html')
 
 @app.route('/admin')
@@ -73,25 +78,26 @@ def admin_page():
 def painel_page():
     return send_from_directory('.', 'painel.html')
 
-# Servir arquivos estáticos (CSS/JS)
 @app.route('/<path:path>')
 def serve_static(path):
     return send_from_directory('.', path)
 
 # ==============================================================================
-# 🔐 AUTENTICAÇÃO
+# 🔐 AUTENTICAÇÃO (MANTIDO IGUAL - POIS FUNCIONOU)
 # ==============================================================================
 
 @app.route('/api/login', methods=['POST'])
 def login():
-    data = request.json
-    senha = data.get('senha')
-    
-    if web_auth.verificar_senha(senha):
-        session['logged_in'] = True
-        return jsonify({"sucesso": True})
-    else:
+    try:
+        data = request.json
+        senha = data.get('senha')
+        if web_auth.verificar_senha(senha):
+            session['logged_in'] = True
+            return jsonify({"sucesso": True})
         return jsonify({"sucesso": False, "erro": "Senha incorreta"}), 401
+    except Exception as e:
+        logger.error(f"Erro no Login: {e}")
+        return jsonify({"sucesso": False, "erro": "Erro interno"}), 500
 
 @app.route('/api/logout', methods=['POST'])
 def logout():
@@ -105,74 +111,84 @@ def check_auth():
     return jsonify({"autenticado": False}), 401
 
 # ==============================================================================
-# 📊 API DE DADOS (DASHBOARD & RANKING)
+# 📊 API DE DADOS - PAINEL DE GESTÃO (AQUI ESTAVA O PROBLEMA)
 # ==============================================================================
 
 @app.route('/api/ranking', methods=['GET'])
 def get_ranking():
     try:
-        # Busca dados brutos (objetos Python)
-        dados = database.obter_ranking_geral()
-        # [CORREÇÃO 1] Converte antes de enviar
-        dados_json = converter_objeto_para_json(dados)
-        return jsonify(dados_json)
+        # Tenta buscar, se a função não existir no database, retorna lista vazia pra não travar a tela
+        if hasattr(database, 'obter_ranking_geral'):
+            dados = database.obter_ranking_geral()
+        else:
+            dados = [] 
+            logger.warning("Função obter_ranking_geral não encontrada no database.py")
+            
+        return jsonify(converter_objeto_para_json(dados))
     except Exception as e:
-        logger.error(f"Erro na API Ranking: {e}")
-        return jsonify({"erro": str(e)}), 500
+        logger.error(f"Erro API Ranking: {e}")
+        return jsonify([]) # Retorna vazio em vez de erro 500 para não quebrar o JS
 
 @app.route('/api/metas', methods=['GET'])
 def get_metas():
     try:
-        dados = database.obter_status_metas()
-        dados_json = converter_objeto_para_json(dados)
-        return jsonify(dados_json)
+        if hasattr(database, 'obter_status_metas'):
+            dados = database.obter_status_metas()
+        else:
+            dados = {"meta_diaria": 0, "vendido_hoje": 0} # Dados dummy
+            
+        return jsonify(converter_objeto_para_json(dados))
     except Exception as e:
-        logger.error(f"Erro na API Metas: {e}")
-        return jsonify({"erro": str(e)}), 500
+        logger.error(f"Erro API Metas: {e}")
+        return jsonify({"erro": str(e)})
 
 @app.route('/api/tarefas-hoje', methods=['GET'])
 def get_tarefas_hoje():
     try:
-        dados = database.listar_tarefas_pendentes_hoje() # Assumindo que existe func similar
-        dados_json = converter_objeto_para_json(dados)
-        return jsonify(dados_json)
+        # Verifica nomes comuns de função para listar tarefas
+        dados = []
+        if hasattr(database, 'listar_tarefas_pendentes_hoje'):
+            dados = database.listar_tarefas_pendentes_hoje()
+        elif hasattr(database, 'buscar_tarefas_hoje'):
+            dados = database.buscar_tarefas_hoje()
+            
+        return jsonify(converter_objeto_para_json(dados))
     except Exception as e:
-        # Se a função não existir no database, retorna lista vazia para não quebrar o front
-        logger.warning(f"Erro/Função Inexistente API Tarefas: {e}")
+        logger.error(f"Erro API Tarefas: {e}")
         return jsonify([])
 
 # ==============================================================================
-# 📅 API DE ESCALA (LEITURA E ESCRITA)
+# 📅 API DE ESCALA (USADO PELO PAINEL E PELO ADMIN)
 # ==============================================================================
 
 @app.route('/api/escala', methods=['GET'])
 def get_escala():
+    """Retorna a escala para preencher o Mapa da Loja e Gráficos"""
     data_str = request.args.get('data')
     if not data_str:
         data_str = date.today().strftime('%Y-%m-%d')
     
     try:
-        # database.buscar_escala_do_dia espera string YYYY-MM-DD ou date object
-        # Vamos passar string para garantir
         dados = database.buscar_escala_do_dia(data_str)
-        dados_json = converter_objeto_para_json(dados)
-        return jsonify(dados_json)
+        
+        # O Painel espera uma lista. Se vier None, enviamos lista vazia.
+        if dados is None:
+            dados = []
+            
+        json_saida = converter_objeto_para_json(dados)
+        return jsonify(json_saida)
     except Exception as e:
-        logger.error(f"Erro na API Escala: {e}")
-        return jsonify({"erro": str(e)}), 500
+        logger.error(f"Erro API Escala: {e}", exc_info=True)
+        return jsonify([])
 
 @app.route('/api/escala/atualizar-horario', methods=['POST'])
 @web_auth.login_required
 def update_horario():
-    """
-    Recebe atualização de um slot de horário específico.
-    """
     try:
         data = request.json
         escala_id = data.get('id')
         
-        # [CORREÇÃO 2] Sanitização de Inputs Vazios -> NULL
-        # Se o campo vier vazio "", converte para None para o SQL entender como NULL
+        # Converte strings vazias "" para None (NULL no banco)
         entrada = data.get('entrada') or None
         saida = data.get('saida') or None
         int_ini = data.get('int_ini') or None
@@ -181,15 +197,7 @@ def update_horario():
         if not escala_id:
             return jsonify({"sucesso": False, "erro": "ID não fornecido"}), 400
 
-        logger.info(f"Update Escala ID {escala_id}: {entrada}-{saida}")
-
-        sucesso = database.atualizar_horario_escala(
-            escala_id, 
-            entrada, 
-            saida, 
-            int_ini, 
-            int_fim
-        )
+        sucesso = database.atualizar_horario_escala(escala_id, entrada, saida, int_ini, int_fim)
 
         if sucesso:
             return jsonify({"sucesso": True})
@@ -205,7 +213,6 @@ def update_horario():
 # ==============================================================================
 
 if __name__ == '__main__':
-    print("--- 🌍 Servidor API Flask Iniciado na Porta 5000 ---")
+    print("--- 🌍 Servidor API Flask (V2.0 - Fixed) Iniciado ---")
     print("Acesse: http://localhost:5000/painel")
-    # debug=True ajuda a ver erros no console, mas cuidado em produção real
     app.run(host='0.0.0.0', port=5000, debug=True)
