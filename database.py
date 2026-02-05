@@ -7595,3 +7595,97 @@ def marcar_flag_agendamento(agendamento_id, tipo_flag):
         finally:
             conn.close()
     return False
+
+# ==============================================================================
+# 🌉 PONTES DE DADOS PARA O DASHBOARD (Adicione ao final do database.py)
+# ==============================================================================
+
+def obter_ranking_geral():
+    """Retorna o ranking dos funcionários ordenado por pontos."""
+    conn = get_db_connection()
+    if not conn: return []
+    try:
+        cursor = conn.cursor()
+        # Ajuste os nomes das colunas conforme sua tabela real de Funcionarios
+        sql = """
+            SELECT TOP 10 
+                NomeCompleto as nome, 
+                SaldoPontos as pontos, 
+                Nivel as nivel 
+            FROM Funcionarios 
+            WHERE Ativo = 1 
+            ORDER BY SaldoPontos DESC
+        """
+        cursor.execute(sql)
+        # Converte para lista de dicionários
+        colunas = [column[0] for column in cursor.description]
+        return [dict(zip(colunas, row)) for row in cursor.fetchall()]
+    except Exception as e:
+        logger.error(f"Erro SQL Ranking: {e}")
+        return []
+    finally:
+        conn.close()
+
+def obter_status_metas():
+    """Retorna o status financeiro do dia (Meta vs Realizado)."""
+    conn = get_db_connection()
+    if not conn: return {"meta_diaria": 0, "vendido_hoje": 0}
+    try:
+        cursor = conn.cursor()
+        
+        # 1. Busca a Meta (Se não tiver tabela de metas, define fixo ou cria lógica)
+        # Exemplo: Pegando de uma tabela de Configuração ou Metas
+        meta = 2000.00 # Valor fallback se não tiver no banco
+        
+        # Tenta buscar do banco se existir tabela
+        try:
+            cursor.execute("SELECT TOP 1 ValorMeta FROM MetasDiarias WHERE Data = CAST(GETDATE() AS DATE)")
+            row = cursor.fetchone()
+            if row: meta = float(row[0])
+        except:
+            pass # Mantém a meta fixa se der erro na query
+
+        # 2. Busca o Total Vendido Hoje (Soma de Vendas ou Pedidos)
+        # Adapte 'Vendas' para o nome da sua tabela de faturamento
+        vendido = 0.0
+        try:
+            # Exemplo genérico: Somar vendas do dia
+            cursor.execute("SELECT SUM(ValorTotal) FROM Vendas WHERE DataVenda = CAST(GETDATE() AS DATE)")
+            row = cursor.fetchone()
+            if row and row[0]: vendido = float(row[0])
+        except:
+            pass # Mantém 0.0 se não conseguir somar
+
+        return {"meta_diaria": meta, "vendido_hoje": vendido}
+    except Exception as e:
+        logger.error(f"Erro SQL Metas: {e}")
+        return {"meta_diaria": 1000, "vendido_hoje": 0} # Retorno de segurança
+    finally:
+        conn.close()
+
+def listar_tarefas_pendentes_hoje():
+    """Lista tarefas operacionais pendentes para o Dashboard."""
+    conn = get_db_connection()
+    if not conn: return []
+    try:
+        cursor = conn.cursor()
+        # Exemplo de query - Ajuste conforme sua estrutura de Tarefas
+        sql = """
+            SELECT 
+                t.Descricao as titulo,
+                f.NomeCompleto as responsavel,
+                'Pendente' as status
+            FROM TarefasAgendadas t
+            LEFT JOIN Funcionarios f ON t.FuncionarioID = f.FuncionarioID
+            WHERE CAST(t.DataAgendada AS DATE) = CAST(GETDATE() AS DATE)
+            AND t.Realizada = 0
+        """
+        cursor.execute(sql)
+        colunas = [column[0] for column in cursor.description]
+        return [dict(zip(colunas, row)) for row in cursor.fetchall()]
+    except Exception as e:
+        logger.error(f"Erro SQL Tarefas: {e}")
+        return []
+    finally:
+        conn.close()
+
