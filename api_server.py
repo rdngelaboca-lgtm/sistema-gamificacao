@@ -890,47 +890,6 @@ def rota_escala_tabela():
         return jsonify({}), 200
 
 
-# --- COLE ISSO NO FINAL DO api_server.py, ANTES DO app.run ---
-
-@app.route('/api/escala/atualizar-horario', methods=['POST'])
-@web_auth.login_required
-def atualizar_horario():
-    """Recebe os novos horários do Modal e salva no banco"""
-    data = request.json
-    try:
-        escala_id = data.get('id')
-        entrada = data.get('entrada')   # Formato HH:MM
-        saida = data.get('saida')       # Formato HH:MM
-        int_ini = data.get('int_ini')   # Formato HH:MM
-        int_fim = data.get('int_fim')   # Formato HH:MM
-
-        # Validação básica
-        if not escala_id:
-            return jsonify({"sucesso": False, "erro": "ID não fornecido"}), 400
-
-        logger.info(f"Admin editando ID {escala_id}: {entrada} - {saida}")
-
-        # Chama a função do database.py (reutilizando lógica existente)
-        # Nota: Você pode precisar adaptar a função atualizar_horario_escala no database.py
-        # se ela esperar tipos datetime em vez de string. 
-        # O código abaixo assume que o database trata a conversão ou aceita string.
-        sucesso = database.atualizar_horario_escala(
-            escala_id, 
-            entrada, 
-            saida, 
-            int_ini, 
-            int_fim
-        )
-
-        if sucesso:
-            return jsonify({"sucesso": True})
-        else:
-            return jsonify({"sucesso": False, "erro": "Erro ao gravar no banco"}), 500
-
-    except Exception as e:
-        logger.error(f"Erro na rota atualizar-horario: {e}")
-        return jsonify({"sucesso": False, "erro": str(e)}), 500
-
 if __name__ == "__main__":
     # O '0.0.0.0' é o segredo. Ele libera o acesso para a rede inteira.
     logger.info("Iniciando servidor API acessível na rede...")
