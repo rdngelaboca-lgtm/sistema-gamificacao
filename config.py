@@ -1,3 +1,8 @@
+# --- CONFIGURAÇÕES DO PAINEL WEB ---
+# Senha para acessar a área administrativa (Gestão de Escala)
+ADMIN_PASSWORD = "admin"  # <--- ALTERE PARA UMA SENHA FORTE DEPOIS
+SECRET_KEY_FLASK = "321Loj@890" # Necessário para criar sessões seguras
+
 # --- CONFIGURAÇÕES DO TELEGRAM ---
 # Token secreto do seu bot, obtido com o @BotFather no Telegram.
 TELEGRAM_TOKEN = '8286167530:AAHsQlEHQwNB1O7SdyAqLk-rEhSXFdf___M'
