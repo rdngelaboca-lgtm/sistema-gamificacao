@@ -7596,96 +7596,67 @@ def marcar_flag_agendamento(agendamento_id, tipo_flag):
             conn.close()
     return False
 
-# ==============================================================================
-# 🌉 PONTES DE DADOS PARA O DASHBOARD (Adicione ao final do database.py)
-# ==============================================================================
+# --- GESTÃO DE ACESSO WEB (MIGRAÇÃO) ---
 
-def obter_ranking_geral():
-    """Retorna o ranking dos funcionários ordenado por pontos."""
+def inicializar_tabela_usuarios():
+    """Cria a tabela de usuários administrativos se não existir e cria o admin padrão."""
     conn = get_db_connection()
-    if not conn: return []
+    if not conn: return
+    
     try:
         cursor = conn.cursor()
-        # Ajuste os nomes das colunas conforme sua tabela real de Funcionarios
-        sql = """
-            SELECT TOP 10 
-                NomeCompleto as nome, 
-                SaldoPontos as pontos, 
-                Nivel as nivel 
-            FROM Funcionarios 
-            WHERE Ativo = 1 
-            ORDER BY SaldoPontos DESC
-        """
-        cursor.execute(sql)
-        # Converte para lista de dicionários
-        colunas = [column[0] for column in cursor.description]
-        return [dict(zip(colunas, row)) for row in cursor.fetchall()]
-    except Exception as e:
-        logger.error(f"Erro SQL Ranking: {e}")
-        return []
-    finally:
-        conn.close()
-
-def obter_status_metas():
-    """Retorna o status financeiro do dia (Meta vs Realizado)."""
-    conn = get_db_connection()
-    if not conn: return {"meta_diaria": 0, "vendido_hoje": 0}
-    try:
-        cursor = conn.cursor()
+        # Cria a tabela
+        cursor.execute("""
+            IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='UsuariosAdmin' AND xtype='U')
+            CREATE TABLE UsuariosAdmin (
+                UsuarioID INT IDENTITY(1,1) PRIMARY KEY,
+                Login VARCHAR(50) UNIQUE NOT NULL,
+                SenhaHash VARCHAR(64) NOT NULL, -- SHA256
+                NomeExibicao VARCHAR(100),
+                NivelAcesso INT DEFAULT 1 -- 1=Admin, 2=Gerente
+            )
+        """)
         
-        # 1. Busca a Meta (Se não tiver tabela de metas, define fixo ou cria lógica)
-        # Exemplo: Pegando de uma tabela de Configuração ou Metas
-        meta = 2000.00 # Valor fallback se não tiver no banco
+        # Verifica se existe algum usuário
+        cursor.execute("SELECT COUNT(*) FROM UsuariosAdmin")
+        count = cursor.fetchone()[0]
         
-        # Tenta buscar do banco se existir tabela
-        try:
-            cursor.execute("SELECT TOP 1 ValorMeta FROM MetasDiarias WHERE Data = CAST(GETDATE() AS DATE)")
-            row = cursor.fetchone()
-            if row: meta = float(row[0])
-        except:
-            pass # Mantém a meta fixa se der erro na query
-
-        # 2. Busca o Total Vendido Hoje (Soma de Vendas ou Pedidos)
-        # Adapte 'Vendas' para o nome da sua tabela de faturamento
-        vendido = 0.0
-        try:
-            # Exemplo genérico: Somar vendas do dia
-            cursor.execute("SELECT SUM(ValorTotal) FROM Vendas WHERE DataVenda = CAST(GETDATE() AS DATE)")
-            row = cursor.fetchone()
-            if row and row[0]: vendido = float(row[0])
-        except:
-            pass # Mantém 0.0 se não conseguir somar
-
-        return {"meta_diaria": meta, "vendido_hoje": vendido}
+        # Se não existir ninguém, cria o Admin padrão
+        if count == 0:
+            # Senha padrão: "admin123" (SHA256)
+            senha_padrao = hashlib.sha256("admin123".encode()).hexdigest()
+            cursor.execute("""
+                INSERT INTO UsuariosAdmin (Login, SenhaHash, NomeExibicao, NivelAcesso)
+                VALUES (?, ?, ?, ?)
+            """, ('admin', senha_padrao, 'Administrador Master', 1))
+            print("--> [DB AUTH] Usuário 'admin' criado com senha padrão 'admin123'.")
+        
+        conn.commit()
     except Exception as e:
-        logger.error(f"Erro SQL Metas: {e}")
-        return {"meta_diaria": 1000, "vendido_hoje": 0} # Retorno de segurança
+        logger.error(f"Erro ao inicializar tabela usuários: {e}")
     finally:
         conn.close()
 
-def listar_tarefas_pendentes_hoje():
-    """Lista tarefas operacionais pendentes para o Dashboard."""
+def verificar_credenciais(login, senha_texto):
+    """Verifica se usuario e senha conferem. Retorna dados do usuario ou None."""
     conn = get_db_connection()
-    if not conn: return []
+    if not conn: return None
+    
     try:
+        senha_hash = hashlib.sha256(senha_texto.encode()).hexdigest()
         cursor = conn.cursor()
-        # Exemplo de query - Ajuste conforme sua estrutura de Tarefas
-        sql = """
-            SELECT 
-                t.Descricao as titulo,
-                f.NomeCompleto as responsavel,
-                'Pendente' as status
-            FROM TarefasAgendadas t
-            LEFT JOIN Funcionarios f ON t.FuncionarioID = f.FuncionarioID
-            WHERE CAST(t.DataAgendada AS DATE) = CAST(GETDATE() AS DATE)
-            AND t.Realizada = 0
-        """
-        cursor.execute(sql)
-        colunas = [column[0] for column in cursor.description]
-        return [dict(zip(colunas, row)) for row in cursor.fetchall()]
+        cursor.execute("""
+            SELECT UsuarioID, NomeExibicao, NivelAcesso 
+            FROM UsuariosAdmin 
+            WHERE Login = ? AND SenhaHash = ?
+        """, (login, senha_hash))
+        
+        row = cursor.fetchone()
+        if row:
+            return {"id": row[0], "nome": row[1], "nivel": row[2]}
+        return None
     except Exception as e:
-        logger.error(f"Erro SQL Tarefas: {e}")
-        return []
+        logger.error(f"Erro ao verificar login: {e}")
+        return None
     finally:
         conn.close()
-
