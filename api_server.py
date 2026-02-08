@@ -56,8 +56,9 @@ logger.info(f"*** Logging configurado para o módulo: {__name__} ***")
 # == FIM BLOCO DE CONFIGURAÇÃO DE LOGGING ======================================
 # ==============================================================================
 
-from flask import Flask, request, jsonify
+from flask import Flask, jsonify, render_template, request, session, redirect, url_for
 from flask_cors import CORS
+from functools import wraps
 import database 
 import os
 from werkzeug.utils import secure_filename
@@ -70,6 +71,9 @@ import re
 import notificador_whatsapp 
 
 app = Flask(__name__)
+# Configuração de Segurança de Sessão
+app.secret_key = config.SECRET_KEY_FLASK 
+# Se der erro de chave não encontrada, use temporariamente: app.secret_key = "chave_provisoria_segura"
 CORS(app)
 
 # --- LÓGICA DE CRIAÇÃO DA PASTA ---
@@ -889,6 +893,54 @@ def rota_escala_tabela():
         # Retorna JSON vazio em vez de erro 500 para o front não travar
         return jsonify({}), 200
 
+
+# --- SISTEMA DE AUTENTICAÇÃO ---
+
+def login_required(f):
+    """Protege rotas que exigem login."""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'usuario_id' not in session:
+            return redirect(url_for('page_login'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+@app.route('/login')
+def page_login():
+    """Renderiza a página de login."""
+    # Se já estiver logado, manda pro painel (ou futura home admin)
+    if 'usuario_id' in session:
+        return redirect(url_for('index')) 
+    return render_template('login.html')
+
+@app.route('/api/auth/login', methods=['POST'])
+def api_login():
+    """Recebe dados do formulário e valida no banco."""
+    dados = request.json
+    usuario = dados.get('usuario')
+    senha = dados.get('senha')
+    
+    user_data = database.verificar_credenciais(usuario, senha)
+    
+    if user_data:
+        session['usuario_id'] = user_data['id']
+        session['usuario_nome'] = user_data['nome']
+        session['nivel'] = user_data['nivel']
+        return jsonify({"sucesso": True, "nome": user_data['nome']})
+    else:
+        return jsonify({"sucesso": False, "erro": "Usuário ou senha incorretos."}), 401
+
+@app.route('/api/auth/logout', methods=['POST'])
+def api_logout():
+    session.clear()
+    return jsonify({"sucesso": True})
+
+@app.route('/api/auth/check')
+def api_check_auth():
+    """Verifica se o usuário está logado (para o frontend saber)."""
+    if 'usuario_id' in session:
+        return jsonify({"logado": True, "nome": session['usuario_nome']})
+    return jsonify({"logado": False})
 
 if __name__ == "__main__":
     # O '0.0.0.0' é o segredo. Ele libera o acesso para a rede inteira.
