@@ -7660,3 +7660,90 @@ def verificar_credenciais(login, senha_texto):
         return None
     finally:
         conn.close()
+
+# ==============================================================================
+# == FUNÇÕES NOVAS PARA O ADMIN WEB (MIGRAÇÃO) ==
+# ==============================================================================
+
+def buscar_funcionarios_ativos_simples():
+    """Retorna lista simplificada de funcionários ativos para o sidebar da Web."""
+    conn = get_db_connection()
+    if not conn: return []
+    try:
+        cursor = conn.cursor()
+        # Pega ID, Nome e Cargo (ajuste os nomes das colunas se seu banco for diferente)
+        cursor.execute("""
+            SELECT FuncionarioID, NomeCompleto, Cargo 
+            FROM Funcionarios 
+            WHERE Ativo = 1 
+            ORDER BY NomeCompleto ASC
+        """)
+        return [{"id": row[0], "nome": row[1], "cargo": row[2]} for row in cursor.fetchall()]
+    except Exception as e:
+        print(f"Erro ao buscar funcionarios simples: {e}")
+        return []
+    finally:
+        conn.close()
+
+def atualizar_item_escala_web(escala_id, entrada, saida, int_ini, int_fim):
+    """Atualiza horários de um card específico."""
+    conn = get_db_connection()
+    if not conn: return False
+    try:
+        cursor = conn.cursor()
+        # Tratamento para salvar NULL se vier vazio
+        entrada = entrada if entrada else None
+        saida = saida if saida else None
+        int_ini = int_ini if int_ini else None
+        int_fim = int_fim if int_fim else None
+
+        cursor.execute("""
+            UPDATE EscalaDiaria
+            SET HorarioEntrada = ?, HorarioSaida = ?, IntervaloInicio = ?, IntervaloFim = ?
+            WHERE EscalaID = ?
+        """, (entrada, saida, int_ini, int_fim, escala_id))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Erro ao atualizar item web: {e}")
+        return False
+    finally:
+        conn.close()
+
+def adicionar_funcionario_escala_web(funcionario_id, data_iso, setor):
+    """Adiciona funcionário na escala (Drag & Drop)."""
+    conn = get_db_connection()
+    if not conn: return False
+    try:
+        cursor = conn.cursor()
+        # Evita duplicidade no mesmo dia
+        cursor.execute("SELECT Count(*) FROM EscalaDiaria WHERE FuncionarioID = ? AND DataEscala = ?", (funcionario_id, data_iso))
+        if cursor.fetchone()[0] > 0:
+            return False 
+
+        cursor.execute("""
+            INSERT INTO EscalaDiaria (FuncionarioID, DataEscala, Setor, HorarioEntrada, HorarioSaida)
+            VALUES (?, ?, ?, '08:00', '17:00')
+        """, (funcionario_id, data_iso, setor))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Erro ao adicionar na escala web: {e}")
+        return False
+    finally:
+        conn.close()
+
+def remover_item_escala_web(escala_id):
+    """Remove funcionário da escala."""
+    conn = get_db_connection()
+    if not conn: return False
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM EscalaDiaria WHERE EscalaID = ?", (escala_id,))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Erro ao remover item web: {e}")
+        return False
+    finally:
+        conn.close()
