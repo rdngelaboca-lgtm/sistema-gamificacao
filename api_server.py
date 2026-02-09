@@ -942,6 +942,15 @@ def api_check_auth():
         return jsonify({"logado": True, "nome": session['usuario_nome']})
     return jsonify({"logado": False})
 
+# --- ADICIONE ESTE BLOCO QUE ESTÁ FALTANDO ---
+
+@app.route('/')
+def index():
+    """Rota da Página Principal (Painel da TV)."""
+    return render_template('painel.html')
+
+# ---------------------------------------------
+
 if __name__ == "__main__":
     # O '0.0.0.0' é o segredo. Ele libera o acesso para a rede inteira.
     logger.info("Iniciando servidor API acessível na rede...")
