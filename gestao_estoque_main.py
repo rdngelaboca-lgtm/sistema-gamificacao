@@ -374,13 +374,16 @@ class AppGestaoEstoque:
         frame_vincular.grid(row=1, column=0, sticky="nsew", pady=5)
         frame_vincular.rowconfigure(0, weight=1)
         frame_vincular.columnconfigure(0, weight=1)
-        cols_vinc = ('Fornecedor', 'Produto no XML', 'Cod. Forn.', 'EAN', 'NCM')
+        # --- COLUNAS ATUALIZADAS (Removido NCM, Adicionado Qtd/Custo) ---
+        cols_vinc = ('Fornecedor', 'Produto no XML', 'EAN', 'Qtd na Nota', 'Custo Unit.', 'Custo Total')
         self.tree_vincular = ttk.Treeview(frame_vincular, columns=cols_vinc, show='headings', selectmode='browse')
+
         self.tree_vincular.heading('Fornecedor', text='Fornecedor'); self.tree_vincular.column('Fornecedor', width=150)
-        self.tree_vincular.heading('Produto no XML', text='Produto no XML'); self.tree_vincular.column('Produto no XML', width=300)
-        self.tree_vincular.heading('Cod. Forn.', text='Cód. Forn.'); self.tree_vincular.column('Cod. Forn.', width=100)
-        self.tree_vincular.heading('EAN', text='Cód. Barras'); self.tree_vincular.column('EAN', width=100)
-        self.tree_vincular.heading('NCM', text='NCM'); self.tree_vincular.column('NCM', width=80)
+        self.tree_vincular.heading('Produto no XML', text='Produto no XML'); self.tree_vincular.column('Produto no XML', width=250)
+        self.tree_vincular.heading('EAN', text='EAN'); self.tree_vincular.column('EAN', width=100, anchor='center')
+        self.tree_vincular.heading('Qtd na Nota', text='Qtd Nota'); self.tree_vincular.column('Qtd na Nota', width=60, anchor='center')
+        self.tree_vincular.heading('Custo Unit.', text='Custo Unit.'); self.tree_vincular.column('Custo Unit.', width=80, anchor='e')
+        self.tree_vincular.heading('Custo Total', text='Custo Total'); self.tree_vincular.column('Custo Total', width=80, anchor='e')
         self.tree_vincular.grid(row=0, column=0, sticky="nsew")
         frame_ferramenta = ttk.Frame(main_frame)
         frame_ferramenta.grid(row=2, column=0, sticky="ew", pady=10)
@@ -605,8 +608,18 @@ class AppGestaoEstoque:
                             idx_lista = len(self.itens_xml_nao_vinculados)
                             self.itens_xml_nao_vinculados.append(item_pendente)
 
+                            # --- PREENCHIMENTO ATUALIZADO ---
+                            qtd_xml = float(item['Quantidade'])
+                            custo_unit = float(item['PrecoCustoUnitario'])
+                            custo_total = qtd_xml * custo_unit
+
                             self.tree_vincular.insert("", "end", iid=str(idx_lista), values=(
-                                nome_fornecedor, desc_xml, item['cProd'], item['cEAN'], item['NCM']
+                                nome_fornecedor, 
+                                desc_xml, 
+                                item['cEAN'], 
+                                f"{qtd_xml:.2f}".rstrip('0').rstrip('.'), # Qtd formatada
+                                f"R$ {custo_unit:.2f}", 
+                                f"R$ {custo_total:.2f}"
                             ))
 
             except Exception as e:
