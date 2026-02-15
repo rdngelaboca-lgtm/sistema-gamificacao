@@ -1,0 +1,12 @@
+2026-02-15 07:56:07,170 - __main__ - INFO - [main.py:55] - *** Logging configurado para o módulo: __main__ ***
+2026-02-15 07:58:46,745 - __main__ - INFO - [main.py:55] - *** Logging configurado para o módulo: __main__ ***
+2026-02-15 07:58:46,837 - database - INFO - [database.py:54] - *** Logging configurado para o módulo: database ***
+2026-02-15 08:05:16,085 - __main__ - INFO - [main.py:55] - *** Logging configurado para o módulo: __main__ ***
+2026-02-15 08:05:16,099 - database - INFO - [database.py:54] - *** Logging configurado para o módulo: database ***
+2026-02-15 08:05:16,111 - notificador_telegram - INFO - [notificador_telegram.py:54] - *** Logging configurado para o módulo: notificador_telegram ***
+2026-02-15 08:05:53,233 - database - CRITICAL - [database.py:87] - FALHA CRÍTICA na conexão com o banco de dados: ('08001', '[08001] [Microsoft][ODBC Driver 18 for SQL Server]Provedor de Pipes Nomeados: Não foi possível abrir uma conexão com o SQL Server [64].  (64) (SQLDriverConnect); [08001] [Microsoft][ODBC Driver 18 for SQL Server]O tempo limite do logon expirou (0); [08001] [Microsoft][ODBC Driver 18 for SQL Server]Ocorreu um erro relacionado à rede ou específico da instância ao estabelecer uma conexão com 192.168.18.44. Servidor não encontrado ou não acessível. Verifique se o nome da instância está correto e se o SQL Server está configurado para permitir conexões remotas. Para mais informações, veja os Manuais Online do SQL Server. (64)')
+Traceback (most recent call last):
+  File "C:\dev\sistema_gamificacao\database.py", line 84, in get_db_connection
+    conn = pyodbc.connect(CONNECTION_STRING)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+pyodbc.OperationalError: ('08001', '[08001] [Microsoft][ODBC Driver 18 for SQL Server]Provedor de Pipes Nomeados: Não foi possível abrir uma conexão com o SQL Server [64].  (64) (SQLDriverConnect); [08001] [Microsoft][ODBC Driver 18 for SQL Server]O tempo limite do logon expirou (0); [08001] [Microsoft][ODBC Driver 18 for SQL Server]Ocorreu um erro relacionado à rede ou específico da instância ao estabelecer uma conexão com 192.168.18.44. Servidor não encontrado ou não acessível. Verifique se o nome da instância está correto e se o SQL Server está configurado para permitir conexões remotas. Para mais informações, veja os Manuais Online do SQL Server. (64)')

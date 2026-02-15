@@ -781,58 +781,25 @@ def rota_escala_ocupacao():
     Isso permite filtrar por setor dinamicamente no Javascript.
     """
     try:
-<<<<<<< HEAD
-=======
-        # Importação local para garantir disponibilidade sem mexer no topo do arquivo
-        from datetime import timedelta 
-
->>>>>>> master
         hoje_str = datetime.now().strftime('%Y-%m-%d')
         # Reutiliza a função do banco que já traz (Entrada, Saida, IntIni, IntFim, Setor)
         horarios = database.buscar_horarios_ocupacao_hoje(hoje_str, 0)
 
         dados_formatados = []
 
-<<<<<<< HEAD
         def formatar_hora(val):
             if val is None: return None
             # Se for datetime/time, converte para string "HH:MM"
             if hasattr(val, 'strftime'): return val.strftime('%H:%M')
             return str(val)
-=======
-        # Função auxiliar robusta para converter qualquer formato de tempo SQL para "HH:MM"
-        def formatar_hora_segura(val):
-            if val is None: return None
-
-            # Caso 1: É um timedelta (duração) - Comum em SQL Server via ODBC
-            if isinstance(val, timedelta):
-                total_seconds = int(val.total_seconds())
-                hours = (total_seconds // 3600) % 24 # Modulo 24 para evitar "1 day"
-                minutes = (total_seconds % 3600) // 60
-                return f"{hours:02d}:{minutes:02d}"
-
-            # Caso 2: É um objeto time ou datetime
-            if hasattr(val, 'strftime'): 
-                return val.strftime('%H:%M')
-
-            # Caso 3: Fallback para string (pega os primeiros 5 chars HH:MM)
-            return str(val)[:5]
->>>>>>> master
 
         for row in horarios:
             # row = (Entrada, Saida, InicioIntervalo, FimIntervalo, Setor)
             dados_formatados.append({
-<<<<<<< HEAD
                 "entrada": formatar_hora(row[0]),
                 "saida": formatar_hora(row[1]),
                 "int_ini": formatar_hora(row[2]),
                 "int_fim": formatar_hora(row[3]),
-=======
-                "entrada": formatar_hora_segura(row[0]),
-                "saida": formatar_hora_segura(row[1]),
-                "int_ini": formatar_hora_segura(row[2]),
-                "int_fim": formatar_hora_segura(row[3]),
->>>>>>> master
                 "setor": row[4]
             })
 
@@ -842,10 +809,6 @@ def rota_escala_ocupacao():
         logger.error(f"Erro na rota ocupacao: {e}", exc_info=True)
         return jsonify([]), 500
     
-<<<<<<< HEAD
-
-=======
->>>>>>> master
 @app.route('/webhook/whatsapp', methods=['POST'])
 def webhook_whatsapp():
     """
@@ -949,15 +912,6 @@ def page_login():
         return redirect(url_for('index')) 
     return render_template('login.html')
 
-<<<<<<< HEAD
-=======
-@app.route('/admin/escala')
-@login_required
-def page_admin_escala():
-    """Renderiza a nova tela de Gestão de Escala (Drag & Drop)."""
-    return render_template('admin_escala.html')
-
->>>>>>> master
 @app.route('/api/auth/login', methods=['POST'])
 def api_login():
     """Recebe dados do formulário e valida no banco."""
@@ -996,107 +950,6 @@ def index():
 
 # ---------------------------------------------
 
-<<<<<<< HEAD
-=======
-# --- ROTAS PARA O PAINEL DE ADMINISTRAÇÃO (ESCALA WEB) ---
-
-@app.route('/api/admin/funcionarios/disponiveis', methods=['GET'])
-def rota_admin_funcionarios_disponiveis():
-    """Retorna lista simplificada de funcionários para o sidebar."""
-    try:
-        funcionarios = database.buscar_funcionarios_ativos_simples()
-        return jsonify(funcionarios), 200
-    except Exception as e:
-        logger.error(f"Erro na API Admin Funcionarios: {e}")
-        return jsonify([]), 500
-
-@app.route('/api/admin/escala/<data_iso>', methods=['GET'])
-def rota_admin_obter_escala(data_iso):
-    """Retorna a escala do dia formatada para o Drag & Drop."""
-    try:
-        # Busca dados brutos do banco
-        dados_brutos = database.listar_escala_detalhada_ordenada(data_iso)
-        
-        lista_escala = []
-        for row in dados_brutos:
-            # row: 0:EscalaID, 1:PosID, 2:Setor, 3:PosNome, 4:NomePessoa, 5:Ent, 6:Sai, 7:Ini, 8:Fim, 9:FuncID...
-            
-            # Formata horários
-            def fmt(v): return str(v)[:5] if v else ""
-            
-            item = {
-                "escala_id": row[0],
-                "funcionario_id": row[9],
-                "nome": row[4],
-                "setor": row[2] if row[2] else "Sem Setor",
-                "posicao": row[3],
-                "entrada": fmt(row[5]),
-                "saida": fmt(row[6]),
-                "int_ini": fmt(row[7]),
-                "int_fim": fmt(row[8])
-            }
-            lista_escala.append(item)
-            
-        return jsonify(lista_escala), 200
-    except Exception as e:
-        logger.error(f"Erro na API Admin Escala GET: {e}")
-        return jsonify([]), 500
-
-@app.route('/api/admin/escala/adicionar', methods=['POST'])
-def rota_admin_adicionar_escala():
-    """Recebe o Drag & Drop e salva no banco."""
-    dados = request.get_json()
-    try:
-        func_id = dados.get('funcionario_id')
-        data = dados.get('data')
-        setor = dados.get('setor')
-        
-        if database.adicionar_funcionario_escala_web(func_id, data, setor):
-            return jsonify({"status": "sucesso"}), 200
-        else:
-            return jsonify({"status": "erro", "mensagem": "Falha ao adicionar (Duplicidade?)"}), 400
-    except Exception as e:
-        logger.error(f"Erro API Admin Add: {e}")
-        return jsonify({"status": "erro"}), 500
-
-@app.route('/api/admin/escala/atualizar', methods=['POST'])
-def rota_admin_atualizar_horario():
-    """Atualiza horários via Modal."""
-    dados = request.get_json()
-    try:
-        # Validação simples de formato HH:MM
-        def validar_hora(h):
-            if not h: return None
-            if len(h) == 5 and h[2] == ':': return h
-            return None
-
-        entrada = validar_hora(dados.get('entrada'))
-        saida = validar_hora(dados.get('saida'))
-        ini = validar_hora(dados.get('int_ini'))
-        fim = validar_hora(dados.get('int_fim'))
-        
-        if database.atualizar_item_escala_web(dados.get('escala_id'), entrada, saida, ini, fim):
-            return jsonify({"status": "sucesso"}), 200
-        else:
-            return jsonify({"status": "erro"}), 400
-    except Exception as e:
-        logger.error(f"Erro API Admin Update: {e}")
-        return jsonify({"status": "erro"}), 500
-
-@app.route('/api/admin/escala/remover/<int:escala_id>', methods=['DELETE'])
-def rota_admin_remover_escala(escala_id):
-    """Remove funcionário da escala."""
-    try:
-        if database.remover_item_escala_web(escala_id):
-            return jsonify({"status": "sucesso"}), 200
-        else:
-            return jsonify({"status": "erro"}), 400
-    except Exception as e:
-        logger.error(f"Erro API Admin Delete: {e}")
-        return jsonify({"status": "erro"}), 500
-
-
->>>>>>> master
 if __name__ == "__main__":
     # O '0.0.0.0' é o segredo. Ele libera o acesso para a rede inteira.
     logger.info("Iniciando servidor API acessível na rede...")
