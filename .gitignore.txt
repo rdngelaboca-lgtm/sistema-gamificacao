@@ -1,5 +1,0 @@
-venv_gamificacao/
-__pycache__/
-*.pyc
-.env
-*.pdf
