@@ -7747,3 +7747,33 @@ def remover_item_escala_web(escala_id):
         return False
     finally:
         conn.close()
+
+def buscar_produto_por_ean(ean):
+    """
+    Busca um produto mestre através do código de barras (EAN) cadastrado nos vínculos.
+    Retorna: (ProdutoID, NomeProduto, Unidade, FatorConversao)
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Faz o JOIN para pegar o Nome do Mestre baseado no EAN do Fornecedor
+            sql = """
+                SELECT 
+                    PE.ProdutoID, 
+                    PE.NomeProduto, 
+                    PE.UnidadeMedida,
+                    PF.FatorConversao
+                FROM ProdutosFornecedor PF
+                JOIN ProdutosEstoque PE ON PF.ProdutoID = PE.ProdutoID
+                WHERE PF.EAN = ?
+            """
+            cursor.execute(sql, ean)
+            return cursor.fetchone()
+        except Exception as e:
+            logger.error(f"Erro ao buscar EAN {ean}: {e}")
+            return None
+        finally:
+            conn.close()
+    return None
+

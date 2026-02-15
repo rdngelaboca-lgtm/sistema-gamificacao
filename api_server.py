@@ -950,6 +950,48 @@ def index():
 
 # ---------------------------------------------
 
+# --- ROTAS PARA CONTAGEM MOBILE ---
+
+@app.route('/mobile/contagem')
+def page_contagem_mobile():
+    """Renderiza a página HTML de contagem."""
+    return render_template('mobile_contagem.html')
+
+@app.route('/api/produto/ean/<codigo>', methods=['GET'])
+def rota_buscar_ean(codigo):
+    """Busca dados do produto ao bipar."""
+    res = database.buscar_produto_por_ean(codigo)
+    if res:
+        return jsonify({
+            "encontrado": True,
+            "id": res[0],
+            "nome": res[1],
+            "unidade": res[2],
+            "fator": float(res[3]) if res[3] else 1.0
+        })
+    else:
+        return jsonify({"encontrado": False}), 404
+
+@app.route('/api/contagem/salvar-mobile', methods=['POST'])
+def rota_salvar_contagem_mobile():
+    """Recebe o JSON do celular e salva no banco."""
+    dados = request.json
+    # dados = { 'funcionario_id': 2, 'itens': [ {'ProdutoID': 1, 'QuantidadeContada': 10}, ... ] }
+
+    data_hoje = datetime.now().strftime('%Y-%m-%d')
+    funcionario_id = dados.get('funcionario_id', 2) # Default Gestor se não vier
+    itens = dados.get('itens', [])
+
+    if not itens:
+        return jsonify({"sucesso": False, "erro": "Lista vazia"}), 400
+
+    sucesso, msg = database.salvar_contagem_estoque(data_hoje, funcionario_id, itens)
+
+    if sucesso:
+        return jsonify({"sucesso": True, "msg": msg})
+    else:
+        return jsonify({"sucesso": False, "erro": msg}), 500
+
 if __name__ == "__main__":
     # O '0.0.0.0' é o segredo. Ele libera o acesso para a rede inteira.
     logger.info("Iniciando servidor API acessível na rede...")
