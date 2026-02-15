@@ -7860,3 +7860,27 @@ def atualizar_dados_auditoria(vinculo_id, novo_ean, novo_ncm, novo_fator, novo_c
         finally:
             conn.close()
     return False
+
+def descobrir_produto_mestre_por_ean(ean):
+    """
+    Verifica se este EAN já está vinculado a algum Produto Mestre,
+    mesmo que seja de outro fornecedor. Retorna o Nome e ID do Mestre.
+    """
+    if not ean or ean in ['SEM GTIN', 'SEM EAN', '']:
+        return None
+
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT TOP 1 P.NomeProduto, P.ProdutoID
+                FROM ProdutosFornecedor PF
+                JOIN ProdutosEstoque P ON PF.ProdutoID = P.ProdutoID
+                WHERE PF.EAN = ?
+            """
+            cursor.execute(sql, ean)
+            return cursor.fetchone()
+        finally:
+            conn.close()
+    return None

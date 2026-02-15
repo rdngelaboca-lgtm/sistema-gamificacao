@@ -385,6 +385,7 @@ class AppGestaoEstoque:
         self.tree_vincular.heading('Custo Unit.', text='Custo Unit.'); self.tree_vincular.column('Custo Unit.', width=80, anchor='e')
         self.tree_vincular.heading('Custo Total', text='Custo Total'); self.tree_vincular.column('Custo Total', width=80, anchor='e')
         self.tree_vincular.grid(row=0, column=0, sticky="nsew")
+        self.tree_vincular.bind("<<TreeviewSelect>>", self.sugerir_mestre_por_ean)
         frame_ferramenta = ttk.Frame(main_frame)
         frame_ferramenta.grid(row=2, column=0, sticky="ew", pady=10)
         frame_ferramenta.columnconfigure(1, weight=1)
@@ -423,6 +424,38 @@ class AppGestaoEstoque:
         # Botão de Gerenciamento de Vínculos (Correção)
         btn_gerir_vinculos = ttk.Button(main_frame, text="🛠️ Gerenciar / Corrigir Vínculos Salvos", command=self.abrir_gestor_vinculos)
         btn_gerir_vinculos.grid(row=5, column=0, sticky="ew", pady=(0, 10))
+
+    def sugerir_mestre_por_ean(self, event):
+        """
+        Ao clicar num item pendente, verifica se o EAN já existe no sistema.
+        Se existir, seleciona automaticamente o Produto Mestre no Combobox.
+        """
+        selecionado = self.tree_vincular.focus()
+        if not selecionado: return
+
+        # Pega os dados da linha clicada
+        # Ordem das colunas: Fornecedor, ProdutoXML, EAN, Qtd, Custo...
+        valores = self.tree_vincular.item(selecionado, 'values')
+        ean_clicado = valores[2] # O EAN é a terceira coluna (índice 2)
+
+        # 1. Tenta descobrir quem é esse EAN
+        sugestao = database.descobrir_produto_mestre_por_ean(ean_clicado)
+
+        if sugestao:
+            nome_mestre, id_mestre = sugestao
+            # Formata como aparece no Combobox: "Nome (ID: 123)"
+            texto_combo = f"{nome_mestre} (ID: {id_mestre})"
+
+            # Verifica se essa opção existe na lista atual do combo
+            if texto_combo in self.lista_mestre_produtos_nomes:
+                self.combo_produtos_mestre.set(texto_combo)
+                # Feedback visual sutil (Opcional: piscar o campo ou focar)
+                print(f"Sugestão Automática: {texto_combo}")
+            else:
+                self.combo_produtos_mestre.set('')
+        else:
+            # Se não achou nada, limpa para não confundir
+            self.combo_produtos_mestre.set('')
 
     def popular_combobox_produtos_mestre(self):
         # ... (código idêntico ao anterior) ...
