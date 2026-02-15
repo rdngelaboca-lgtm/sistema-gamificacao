@@ -1,3 +1,61 @@
+# ==============================================================================
+# == INÍCIO BLOCO DE CONFIGURAÇÃO DE LOGGING ===================================
+# ==============================================================================
+import logging
+import logging.handlers
+import sys
+import os # Necessário para criar a pasta de logs
+
+# --- Configurações ---
+LOG_FILENAME = 'gamificacao_sistema.log'
+LOG_FOLDER = 'logs' # Nome da pasta onde os logs serão salvos
+LOG_LEVEL = logging.INFO # Nível mínimo para registrar (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
+LOG_MAX_BYTES = 10 * 1024 * 1024 # Tamanho máximo de cada arquivo de log (10 MB)
+LOG_BACKUP_COUNT = 5 # Quantos arquivos de log antigos manter
+
+# --- Cria a pasta de logs se não existir ---
+log_dir = os.path.join(os.path.dirname(__file__), LOG_FOLDER)
+if not os.path.exists(log_dir):
+    try:
+        os.makedirs(log_dir)
+        print(f"Pasta de logs criada em: {log_dir}") # Print inicial para confirmar criação
+    except OSError as e:
+        print(f"Erro ao criar pasta de logs '{log_dir}': {e}", file=sys.stderr)
+        # Se não conseguir criar a pasta, tenta logar no diretório atual
+        log_dir = os.path.dirname(__file__)
+
+log_filepath = os.path.join(log_dir, LOG_FILENAME)
+
+# --- Configuração do Handler de Arquivo Rotativo ---
+# Rotaciona o log quando atinge LOG_MAX_BYTES, mantendo LOG_BACKUP_COUNT arquivos antigos
+file_handler = logging.handlers.RotatingFileHandler(
+    log_filepath, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT, encoding='utf-8'
+)
+file_handler.setLevel(LOG_LEVEL)
+file_formatter = logging.Formatter(LOG_FORMAT)
+file_handler.setFormatter(file_formatter)
+
+# --- Configuração do Handler do Console ---
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(LOG_LEVEL) # Pode ser diferente do arquivo se quiser (ex: logging.DEBUG)
+console_formatter = logging.Formatter(LOG_FORMAT)
+console_handler.setFormatter(console_formatter)
+
+# --- Configuração do Logger Raiz ---
+# Limpa handlers existentes para evitar duplicação em recargas
+logging.getLogger('').handlers = []
+# Adiciona os novos handlers
+logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT, handlers=[file_handler, console_handler])
+
+# Obtém um logger específico para este módulo
+logger = logging.getLogger(__name__)
+
+logger.info(f"*** Logging configurado para o módulo: {__name__} ***")
+# ==============================================================================
+# == FIM BLOCO DE CONFIGURAÇÃO DE LOGGING ======================================
+# ==============================================================================
+
 import tkinter as tk
 from tkinter import ttk, messagebox, Toplevel, Listbox, Checkbutton, Text, Entry, Scrollbar, Frame, Label, Button
 from datetime import datetime
@@ -8,12 +66,16 @@ import time
 import os
 from tkinter import filedialog
 from tkcalendar import DateEntry
-import requests
 import comunicado_generator
 import file_utils
 import recibo_generator
 import config
-
+import requests
+import json
+from PIL import Image, ImageTk
+from fpdf import FPDF
+import tempfile
+import shutil
 
 class AppGestaoPessoas:
     def __init__(self, root):
@@ -27,7 +89,17 @@ class AppGestaoPessoas:
 
         self.frame_comunicados = ttk.Frame(self.notebook, padding="10")
         self.frame_documentos = ttk.Frame(self.notebook, padding="10")
+        # --- Variáveis de Login para Simulação de Acesso (Gestor ID 2) ---
+        # Defina self.USUARIO_LOGADO_ID e self.nivel_usuario AQUI
+        self.USUARIO_LOGADO_ID = 2 
+        # Esta chamada requer que _buscar_nivel_acesso exista, o que faremos acima.
+        # CORREÇÃO: Garante que o nível de usuário seja recuperado corretamente ou define um padrão para teste
+        nivel_banco = self._buscar_nivel_acesso(self.USUARIO_LOGADO_ID)
+        self.nivel_usuario = nivel_banco if nivel_banco else 'Gestor' # Fallback para 'Gestor' se não encontrar no banco para testes
+        print(f"--> [DEBUG] Nível de Acesso do Usuário {self.USUARIO_LOGADO_ID}: {self.nivel_usuario}")
+        self.frame_onboarding = ttk.Frame(self.notebook, padding="10") # <<< NOVA ABA
 
+        self.notebook.add(self.frame_onboarding, text='📝 Onboarding/Admissional') # <<< NOVA ABA
         self.notebook.add(self.frame_comunicados, text='Comunicados')
         self.notebook.add(self.frame_documentos, text='Documentos Pessoais (RH)')
         
@@ -36,6 +108,7 @@ class AppGestaoPessoas:
 
         self.criar_aba_comunicados()
         self.criar_aba_documentos()
+        self.criar_aba_onboarding() # <<< CHAMA A NOVA ABA
         
         self.atualizar_lista_comunicados()
         self.carregar_rh_funcionarios() # Carrega funcionários para a nova aba
@@ -113,10 +186,477 @@ class AppGestaoPessoas:
         self.tree_rh_documentos.grid(row=0, column=0, sticky="nsew")
         frame_botoes_docs = ttk.Frame(frame_docs)
         frame_botoes_docs.grid(row=1, column=0, sticky="ew", pady=(10,0))
+        
+        btn_solicitar_onboarding = ttk.Button(frame_botoes_docs, text="🚀 Solicitar Documentos (Onboarding)", command=self.solicitar_onboarding_funcionario)
+        btn_solicitar_onboarding.pack(side="left", padx=(0, 20))
         btn_add = ttk.Button(frame_botoes_docs, text="Adicionar Novo Documento...", command=self.abrir_janela_add_documento)
         btn_add.pack(side="left")
+        
+        # --- NOVOS BOTÕES ---
+        btn_edit = ttk.Button(frame_botoes_docs, text="Editar Metadados", command=self.abrir_janela_edicao_documento)
+        btn_edit.pack(side="left", padx=10)
+        
+        btn_del = ttk.Button(frame_botoes_docs, text="Excluir Documento", command=self.excluir_documento_selecionado)
+        btn_del.pack(side="left", padx=10)
+        # --- FIM NOVOS BOTÕES ---
+
         btn_vis = ttk.Button(frame_botoes_docs, text="Visualizar/Baixar Documento", command=self.visualizar_documento_selecionado)
-        btn_vis.pack(side="left", padx=10)
+        btn_vis.pack(side="right")
+
+
+    def criar_aba_onboarding(self):
+        """Cria a interface para gerenciar a aprovação do exame admissional."""
+        # Acesso restrito apenas a Gestores e RH para evitar leaks de dados
+        if self.nivel_usuario not in ('RH', 'Gestor'):
+            ttk.Label(self.frame_onboarding, text="ACESSO NEGADO: Esta área é restrita ao RH/Gestão.", font=("Arial", 16, "bold"), foreground="red").pack(pady=50)
+            return
+
+        main_frame = ttk.Frame(self.frame_onboarding)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        main_frame.columnconfigure(0, weight=1)
+        main_frame.rowconfigure(0, weight=1)
+
+        # Treeview de Funcionários Prontos
+        cols = ('ID', 'Nome', 'Status Documentos', 'Status Admissional', 'Última Etapa', 'Data Admissional')
+        self.tree_onboarding = ttk.Treeview(main_frame, columns=cols, show='headings', selectmode='browse')
+        for col in cols: self.tree_onboarding.heading(col, text=col)
+
+        self.tree_onboarding.column('ID', width=40)
+        self.tree_onboarding.column('Status Documentos', width=120, anchor='center')
+        self.tree_onboarding.column('Status Admissional', width=120, anchor='center')
+        self.tree_onboarding.column('Data Admissional', width=120, anchor='center')
+
+        self.tree_onboarding.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+        self.tree_onboarding.bind('<<TreeviewSelect>>', self.on_onboarding_selecionado)
+
+        # Botões de Ação
+        frame_botoes = ttk.Frame(main_frame)
+        frame_botoes.grid(row=1, column=0, sticky="ew", padx=10, pady=5)
+        
+        ttk.Button(frame_botoes, text="🔄 Atualizar Lista", command=self.carregar_onboarding_lista).pack(side="left", padx=5)
+        ttk.Button(frame_botoes, text="📂 Ver Documentos Enviados", command=self.abrir_janela_documentos_onboarding).pack(side="left", padx=5)
+        ttk.Button(frame_botoes, text="📋 Ver Dados Cadastrais", command=self.ver_dados_cadastrais_selecionado).pack(side="left", padx=5)
+        ttk.Button(frame_botoes, text="🗑️ Excluir Cadastro", command=self.excluir_candidato_onboarding).pack(side="left", padx=5)
+        ttk.Button(frame_botoes, text="🔄 Reiniciar Processo", command=self.reiniciar_processo_onboarding).pack(side="left", padx=5)
+        self.btn_aprovar_admissional = ttk.Button(frame_botoes, text="✅ Aprovar Exame Admissional", command=self.aprovar_exame_admissional_rh)
+        self.btn_aprovar_admissional.pack(side="right", padx=5)
+
+        self.carregar_onboarding_lista()
+
+    def carregar_onboarding_lista(self):
+        """Carrega a lista de funcionários com onboarding completo/pendente para a Treeview."""
+        for i in self.tree_onboarding.get_children(): self.tree_onboarding.delete(i)
+        
+        funcionarios = database.buscar_onboarding_lista_rh()
+        
+        for f in funcionarios:
+            data_admissional = f.DataAdmissional.strftime('%d/%m/%Y') if f.DataAdmissional else '---'
+            
+            self.tree_onboarding.insert("", "end", values=(
+                f.FuncionarioID, f.NomeCompleto, f.StatusWorkflow, f.StatusAdmissional, f.UltimaEtapa, data_admissional
+            ))
+
+    def on_onboarding_selecionado(self, event):
+        """Habilita/desabilita o botão de aprovação e armazena os dados de download."""
+        selecionado = self.tree_onboarding.focus()
+        if not selecionado: return
+        
+        dados = self.tree_onboarding.item(selecionado, 'values')
+        status_admissional = dados[3]
+        
+        if status_admissional == 'Pendente':
+            self.btn_aprovar_admissional.config(state="normal")
+        else:
+            self.btn_aprovar_admissional.config(state="disabled")
+
+    def aprovar_exame_admissional_rh(self):
+        """Dispara a aprovação manual do exame admissional."""
+        selecionado = self.tree_onboarding.focus()
+        if not selecionado: return
+        
+        dados = self.tree_onboarding.item(selecionado, 'values')
+        funcionario_id = dados[0]
+        nome_funcionario = dados[1]
+
+        if dados[3] != 'Pendente':
+            messagebox.showwarning("Aviso", "O exame deste funcionário já foi aprovado.")
+            return
+
+        confirmado = messagebox.askyesno("Confirmar Aprovação", f"Tem certeza que deseja aprovar o exame admissional para {nome_funcionario}?\n\nIsso liberará o acesso TOTAL dele ao Bot Telegram.")
+
+        if confirmado:
+            hoje = datetime.now()
+            if database.aprovar_exame_admissional(funcionario_id, hoje):
+                
+                # 1. Notificação de Liberação Total
+                func_obj = database.buscar_funcionario_por_id(funcionario_id)
+                if func_obj and func_obj.ChatIDTelegram:
+                     notificador_telegram.enviar_mensagem(
+                        func_obj.ChatIDTelegram,
+                        "🎉 **PARABÉNS! SEU EXAME ADMISSIONAL FOI APROVADO!** 🎉\n\n"
+                        "Seu acesso ao sistema de Gamificação está **TOTALMENTE LIBERADO**! "
+                        "Você já pode usar todos os comandos (Tarefas, Ranking, Saldo). Bom trabalho! 🚀"
+                    )
+
+                # 2. Atualiza a lista na interface
+                self.carregar_onboarding_lista()
+                messagebox.showinfo("Sucesso", "Admissional Aprovado! Acesso liberado no sistema.")
+            else:
+                messagebox.showerror("Erro", "Falha ao atualizar o status no banco de dados.")
+
+    def excluir_candidato_onboarding(self):
+        """Exclui permanentemente o cadastro do candidato selecionado."""
+        selecionado = self.tree_onboarding.focus()
+        if not selecionado:
+            messagebox.showwarning("Aviso", "Selecione um funcionário na lista para excluir.")
+            return
+
+        # Recupera dados da linha selecionada
+        dados = self.tree_onboarding.item(selecionado, 'values')
+        funcionario_id = dados[0]
+        nome = dados[1]
+
+        # Confirmação de Segurança
+        confirmacao = messagebox.askyesno(
+            "Confirmar Exclusão",
+            f"Tem certeza que deseja excluir o cadastro de '{nome}'?\n\n"
+            "⚠️ ATENÇÃO: Esta ação apagará TODOS os dados, documentos e histórico deste funcionário permanentemente.\n"
+            "Não será possível desfazer.",
+            icon='warning',
+            default='no',
+            parent=self.root
+        )
+
+        if confirmacao:
+            try:
+                # Usa a função do database que já faz a limpeza em cascata
+                database.excluir_funcionario(funcionario_id)
+                messagebox.showinfo("Sucesso", "Cadastro excluído com sucesso!", parent=self.root)
+                self.carregar_onboarding_lista() # Atualiza a lista
+            except Exception as e:
+                logger.error(f"Erro ao excluir candidato {funcionario_id}: {e}", exc_info=True)
+                messagebox.showerror("Erro", f"Falha ao excluir cadastro:\n{e}", parent=self.root)
+
+    def abrir_janela_documentos_onboarding(self):
+        """Abre uma janela para visualizar os File IDs dos documentos enviados."""
+        selecionado = self.tree_onboarding.focus()
+        if not selecionado:
+            messagebox.showwarning("Aviso", "Selecione um funcionário da lista.")
+            return
+
+        funcionario_id = self.tree_onboarding.item(selecionado, 'values')[0]
+        nome_funcionario = self.tree_onboarding.item(selecionado, 'values')[1]
+        
+        file_ids = database.buscar_documentos_onboarding_para_download(funcionario_id)
+
+        popup = Toplevel(self.root)
+        popup.title(f"Documentos de Admissão - {nome_funcionario}")
+        popup.geometry("600x400")
+        popup.transient(self.root)
+
+        # ... (Implementação do painel de download que utiliza a função buscar_documentos_onboarding_para_download) ...
+        # (O painel de download em si é complexo, mas a função de banco está no lugar certo)
+        
+        # Simplificação: Apenas mostra os botões de download
+        frame = ttk.Frame(popup, padding="15")
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(frame, text="Documentos Enviados (Clique para Download):", font=("Arial", 12)).pack(anchor='w', pady=(0, 10))
+        
+        if not file_ids:
+             ttk.Label(frame, text="Nenhum documento finalizado (Workflow incompleto).", foreground="gray").pack()
+             return
+
+        for doc_name, file_id in file_ids.items():
+            if file_id:
+                # O botão deve ter uma função que chama o notificador_telegram para baixar a foto/documento
+                ttk.Button(frame, text=f"📥 Baixar {doc_name}", 
+                           command=lambda fid=file_id, dn=doc_name: self.disparar_download_documento(fid, dn, popup)
+                ).pack(fill='x', pady=5)
+            else:
+                 ttk.Label(frame, text=f"❌ {doc_name}: Não enviado ou File ID inválido.").pack(anchor='w', pady=2)
+
+    def ver_dados_cadastrais_selecionado(self):
+        """
+        Exibe dados textuais E imagens dos documentos, com opção de gerar PDF profissional.
+        """
+        selecionado = self.tree_onboarding.focus()
+        if not selecionado: return
+
+        vals = self.tree_onboarding.item(selecionado, 'values')
+        funcionario_id, nome = vals[0], vals[1]
+
+        status = database.buscar_onboarding_status(funcionario_id)
+        if not status: 
+            messagebox.showinfo("Aviso", "Sem dados de onboarding encontrados.", parent=self.root)
+            return
+
+        # --- 1. Preparação da Janela com Scroll (Necessário para muitas fotos) ---
+        popup = Toplevel(self.root)
+        popup.title(f"Prontuário Digital - {nome}")
+        popup.geometry("650x800")
+
+        # Container principal
+        main_container = ttk.Frame(popup)
+        main_container.pack(fill="both", expand=True)
+
+        canvas = tk.Canvas(main_container)
+        scrollbar = ttk.Scrollbar(main_container, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        # --- 2. Preparação dos Dados ---
+        # Dicionário para guardar caminhos locais das imagens baixadas (para o PDF)
+        cache_imagens = {} 
+
+        # Função interna para o botão de PDF
+        def acao_gerar_pdf():
+            self.gerar_pdf_prontuario(nome, status, cache_imagens)
+
+        # Botão de Exportação no Topo
+        frame_topo = ttk.Frame(scrollable_frame, padding="10")
+        frame_topo.pack(fill="x")
+        btn_pdf = ttk.Button(frame_topo, text="🖨️ Gerar PDF Completo (Dados + Fotos)", command=acao_gerar_pdf)
+        btn_pdf.pack(fill="x", ipady=8)
+
+        # --- 3. Exibição dos Dados (Texto) ---
+        lbl_dados = tk.Label(scrollable_frame, text="DADOS CADASTRAIS", font=("Arial", 12, "bold"), bg="#e0e0e0", anchor="w", padx=5)
+        lbl_dados.pack(fill="x", pady=(10, 5))
+
+        texto_dados = f"Funcionário: {nome} (ID: {funcionario_id})\n"
+        texto_dados += f"Escolaridade: {status.Escolaridade or '---'}\n"
+        texto_dados += f"Estado Civil: {status.EstadoCivil or '---'}\n"
+
+        if status.EstadoCivil and 'CASADO' in status.EstadoCivil.upper():
+            texto_dados += f"Data Casamento: {status.DataCasamento or '---'}\n"
+            texto_dados += f"Cônjuge: {status.NomeConjugue or '---'}\n"
+            texto_dados += f"CPF Cônjuge: {status.CPFConjugue or '---'}\n"
+
+        texto_dados += f"\nDEPENDENTES ({status.QtdFilhos or 0}):\n"
+        if status.DadosFilhos:
+            try:
+                filhos = json.loads(status.DadosFilhos)
+                for i, f in enumerate(filhos, 1):
+                    texto_dados += f"- {f.get('Nome', '')} ({f.get('Nasc', '')}) CPF: {f.get('CPF', '')}\n"
+            except: texto_dados += "(Erro na leitura dos dependentes)"
+        else:
+            texto_dados += "- Nenhum dependente declarado."
+
+        tk.Label(scrollable_frame, text=texto_dados, justify="left", font=("Consolas", 10), bg="white", relief="solid", bd=1, padx=10, pady=10).pack(fill="x", padx=10)
+
+        # --- 4. Exibição das Imagens (Visualização) ---
+        lbl_docs = tk.Label(scrollable_frame, text="DOCUMENTOS DIGITALIZADOS", font=("Arial", 12, "bold"), bg="#e0e0e0", anchor="w", padx=5)
+        lbl_docs.pack(fill="x", pady=(20, 5))
+
+        docs_map = {
+            "RG (Identidade)": status.RG_FileID,
+            "CPF": status.CPF_FileID,
+            "Carteira de Trabalho (CTPS)": status.CTPS_FileID,
+            "Título de Eleitor": status.TituloEleitor_FileID
+        }
+
+        # Diretório temporário para cache de visualização
+        temp_dir = os.path.join(os.getcwd(), "temp_view")
+        if not os.path.exists(temp_dir): os.makedirs(temp_dir)
+
+        for titulo, file_id in docs_map.items():
+            frame_doc = ttk.LabelFrame(scrollable_frame, text=titulo, padding="5")
+            frame_doc.pack(fill="x", padx=10, pady=5)
+
+            if file_id:
+                # Baixa a imagem para exibir
+                caminho_local = self._baixar_imagem_cache(file_id, temp_dir)
+
+                if caminho_local:
+                    cache_imagens[titulo] = caminho_local # Guarda referência para o PDF
+
+                    try:
+                        # Carrega e Redimensiona para o Painel (Thumbnail)
+                        pil_img = Image.open(caminho_local)
+                        # Redimensiona mantendo proporção (largura max 400px)
+                        base_width = 400
+                        w_percent = (base_width / float(pil_img.size[0]))
+                        h_size = int((float(pil_img.size[1]) * float(w_percent)))
+                        pil_img = pil_img.resize((base_width, h_size), Image.Resampling.LANCZOS)
+
+                        tk_img = ImageTk.PhotoImage(pil_img)
+
+                        lbl_img = tk.Label(frame_doc, image=tk_img)
+                        lbl_img.image = tk_img # Mantém referência na memória para não sumir
+                        lbl_img.pack()
+                    except Exception:
+                        tk.Label(frame_doc, text="[Arquivo PDF ou Formato não suportado para prévia]", fg="blue").pack()
+                else:
+                    tk.Label(frame_doc, text="Erro ao baixar arquivo do servidor.", fg="red").pack()
+            else:
+                tk.Label(frame_doc, text="Pendente / Não enviado", fg="gray").pack()
+
+    def _baixar_imagem_cache(self, file_id, pasta_destino):
+        """Baixa arquivo do Telegram para cache local."""
+        try:
+            token = config.TELEGRAM_TOKEN
+            # 1. Pega o caminho
+            url_info = f"https://api.telegram.org/bot{token}/getFile?file_id={file_id}"
+            r = requests.get(url_info, timeout=5).json()
+            if not r.get('ok'): return None
+
+            file_path = r['result']['file_path']
+            ext = os.path.splitext(file_path)[1]
+            if not ext: ext = ".jpg"
+
+            nome_arquivo = f"{file_id}{ext}"
+            caminho_completo = os.path.join(pasta_destino, nome_arquivo)
+
+            # Cache: Se já baixou, usa o local
+            if os.path.exists(caminho_completo): return caminho_completo
+
+            # 2. Baixa o conteúdo
+            url_download = f"https://api.telegram.org/file/bot{token}/{file_path}"
+            r_img = requests.get(url_download, timeout=20)
+
+            if r_img.status_code == 200:
+                with open(caminho_completo, 'wb') as f:
+                    f.write(r_img.content)
+                return caminho_completo
+        except: return None
+        return None
+
+    def gerar_pdf_prontuario(self, nome_funcionario, status, cache_imagens):
+        """Gera PDF profissional com dados e imagens anexadas."""
+        try:
+            dest = filedialog.asksaveasfilename(
+                title="Salvar Prontuário PDF",
+                defaultextension=".pdf",
+                initialfile=f"Prontuario_{nome_funcionario.replace(' ', '_')}.pdf"
+            )
+            if not dest: return
+
+            pdf = FPDF()
+            pdf.set_auto_page_break(auto=True, margin=15)
+            pdf.add_page()
+
+            # --- Cabeçalho ---
+            pdf.set_font("Arial", "B", 16)
+            pdf.cell(0, 10, "Ficha de Registro de Colaborador", ln=True, align="C")
+            pdf.set_font("Arial", "I", 10)
+            pdf.cell(0, 10, f"Gerado em: {datetime.now().strftime('%d/%m/%Y %H:%M')}", ln=True, align="C")
+            pdf.ln(10)
+
+            # --- Tabela de Dados ---
+            pdf.set_fill_color(240, 240, 240)
+            pdf.set_font("Arial", "B", 12)
+            pdf.cell(0, 10, "1. DADOS PESSOAIS", ln=True, fill=True)
+            pdf.ln(2)
+
+            pdf.set_font("Arial", "", 11)
+            pdf.multi_cell(0, 8, f"Nome: {nome_funcionario}\nEscolaridade: {status.Escolaridade}\nEstado Civil: {status.EstadoCivil}")
+
+            if status.EstadoCivil and 'CASADO' in status.EstadoCivil.upper():
+                pdf.multi_cell(0, 8, f"Cônjuge: {status.NomeConjugue}\nCPF Cônjuge: {status.CPFConjugue}")
+
+            pdf.ln(5)
+            pdf.set_font("Arial", "B", 12)
+            pdf.cell(0, 10, f"2. DEPENDENTES ({status.QtdFilhos or 0})", ln=True, fill=True)
+
+            if status.DadosFilhos:
+                try:
+                    filhos = json.loads(status.DadosFilhos)
+                    pdf.set_font("Arial", "", 10)
+                    for i, f in enumerate(filhos, 1):
+                        pdf.cell(0, 8, f"{i}. {f.get('Nome','')} - CPF: {f.get('CPF','')}", ln=True)
+                except: pass
+            else:
+                pdf.set_font("Arial", "I", 10)
+                pdf.cell(0, 8, "Nenhum dependente declarado.", ln=True)
+
+            # --- Imagens (Uma por página ou ajustada) ---
+            pdf.add_page()
+            pdf.set_font("Arial", "B", 12)
+            pdf.cell(0, 10, "3. DOCUMENTOS DIGITALIZADOS", ln=True, fill=True)
+            pdf.ln(5)
+
+            for titulo, caminho_img in cache_imagens.items():
+                if caminho_img and os.path.exists(caminho_img) and caminho_img.endswith(('.jpg', '.png', '.jpeg')):
+                    pdf.set_font("Arial", "B", 11)
+                    pdf.cell(0, 10, titulo, ln=True)
+
+                    # Centraliza imagem na página A4 (largura aprox 190mm útil)
+                    try:
+                        pdf.image(caminho_img, w=170) 
+                    except:
+                        pdf.cell(0, 10, "[Erro ao renderizar imagem no PDF]", ln=True)
+
+                    pdf.ln(10)
+                elif caminho_img and ".pdf" in caminho_img:
+                    pdf.set_font("Arial", "I", 10)
+                    pdf.cell(0, 10, f"{titulo}: Arquivo PDF anexado original não pode ser mesclado aqui.", ln=True)
+
+            pdf.output(dest)
+            messagebox.showinfo("Sucesso", "Prontuário PDF gerado com sucesso!", parent=self.root)
+            file_utils.abrir_arquivo(dest)
+
+        except Exception as e:
+            logger.error(f"Erro PDF: {e}", exc_info=True)
+            messagebox.showerror("Erro", f"Falha ao criar PDF: {e}", parent=self.root)
+
+    def disparar_download_documento(self, file_id, doc_name, parent_popup):
+        """Baixa o arquivo real da API do Telegram e salva onde o usuário escolher."""
+        try:
+            # 1. Define extensão provável
+            ext = ".jpg" # Padrão fotos Telegram
+            if "pdf" in doc_name.lower(): ext = ".pdf"
+
+            # 2. Pede ao usuário onde salvar
+            caminho_destino = filedialog.asksaveasfilename(
+                title=f"Salvar {doc_name}",
+                defaultextension=ext,
+                initialfile=f"{doc_name}_{file_id[:5]}{ext}",
+                parent=parent_popup
+            )
+
+            if not caminho_destino: return # Cancelado pelo usuário
+
+            # 3. Obtém o caminho do arquivo na API Telegram
+            token = config.TELEGRAM_TOKEN
+            url_info = f"https://api.telegram.org/bot{token}/getFile?file_id={file_id}"
+
+            r_info = requests.get(url_info, timeout=10)
+            if r_info.status_code != 200:
+                messagebox.showerror("Erro API", "Falha ao localizar arquivo no Telegram.", parent=parent_popup)
+                return
+
+            file_path_remoto = r_info.json().get('result', {}).get('file_path')
+            if not file_path_remoto:
+                messagebox.showerror("Erro API", "Caminho remoto não encontrado.", parent=parent_popup)
+                return
+
+            # 4. Baixa o conteúdo binário
+            url_download = f"https://api.telegram.org/file/bot{token}/{file_path_remoto}"
+            r_content = requests.get(url_download, timeout=30)
+
+            if r_content.status_code == 200:
+                with open(caminho_destino, 'wb') as f:
+                    f.write(r_content.content)
+
+                messagebox.showinfo("Sucesso", f"Download concluído!\nSalvo em: {caminho_destino}", parent=parent_popup)
+                file_utils.abrir_arquivo(caminho_destino)
+            else:
+                messagebox.showerror("Erro Download", f"Falha ao baixar bytes: {r_content.status_code}", parent=parent_popup)
+
+        except Exception as e:
+            logger.error(f"Erro no download manual: {e}", exc_info=True)
+            messagebox.showerror("Erro Crítico", f"Falha no download: {e}", parent=parent_popup)
+
 
     def visualizar_documento_selecionado(self):
         """Baixa o documento selecionado da API e o abre."""
@@ -124,10 +664,9 @@ class AppGestaoPessoas:
         if not selecionado:
             messagebox.showwarning("Aviso", "Por favor, selecione um documento na lista da direita.")
             return
-
         dados_doc = self.tree_rh_documentos.item(selecionado, 'values')
         documento_id = dados_doc[0]
-        nome_original = f"{dados_doc[1]}_{dados_doc[2].replace('/', '-')}.pdf" # Ex: Holerite_09-2025.pdf
+        # REMOVIDO: A linha que forçava .pdf foi substituída pela lógica abaixo
 
         url_download = f"{config.API_BASE_URL}/documentos/download/{documento_id}"
 
@@ -136,24 +675,67 @@ class AppGestaoPessoas:
             response = requests.get(url_download, stream=True)
 
             if response.status_code == 200:
-                # Cria uma pasta 'downloads' localmente se não existir
+                # --- CORREÇÃO DE PARSE DE HEADER ---
+                import cgi
+                nome_remoto = ""
+                
+                header_content = response.headers.get("Content-Disposition")
+                if header_content:
+                    try:
+                        # Tenta usar cgi para parsear corretamente (lida com aspas, utf-8, etc)
+                        _, params = cgi.parse_header(header_content)
+                        if 'filename' in params:
+                            nome_remoto = params['filename']
+                        elif 'filename*' in params:
+                            # Tratamento básico para filename* (UTF-8)
+                            encoding, _, filename = params['filename*'].split("'", 2)
+                            nome_remoto = urllib.parse.unquote(filename)
+                    except Exception:
+                        # Fallback para regex simples se cgi falhar
+                        import re
+                        fname = re.findall('filename="?([^"]+)"?', header_content)
+                        if fname:
+                            nome_remoto = fname[0]
+
+                # Fallback final se o header falhar ou não existir
+                if not nome_remoto:
+                    ext = ".pdf" 
+                    content_type = response.headers.get("Content-Type", "")
+                    if "image/jpeg" in content_type: ext = ".jpg"
+                    elif "image/png" in content_type: ext = ".png"
+                    
+                    # Nome seguro baseado nos dados da lista
+                    safe_tipo = "".join(x for x in dados_doc[1] if x.isalnum())
+                    nome_remoto = f"{safe_tipo}_{documento_id}{ext}"
+
+                # Limpeza de caracteres inválidos no nome do arquivo (segurança extra)
+                nome_remoto = os.path.basename(nome_remoto) 
+                # -----------------------------------
+
                 pasta_downloads = "downloads"
                 if not os.path.exists(pasta_downloads):
                     os.makedirs(pasta_downloads)
 
-                caminho_local = os.path.join(pasta_downloads, nome_original)
-
+                caminho_local = os.path.join(pasta_downloads, nome_remoto)
                 # Salva o arquivo recebido no disco local
                 with open(caminho_local, 'wb') as f:
                     for chunk in response.iter_content(chunk_size=8192):
                         f.write(chunk)
 
                 print(f"--> Download concluído! Arquivo salvo em: {caminho_local}")
-
-                # Abre o arquivo com o programa padrão do Windows
                 file_utils.abrir_arquivo(caminho_local)
             else:
-                messagebox.showerror("Erro da API", f"Não foi possível baixar o arquivo: {response.json().get('mensagem', response.text)}")
+                # --- CORREÇÃO: Tratamento seguro de resposta de erro ---
+                try:
+                    # Tenta ler como JSON se a API retornar estrutura padrão
+                    erro_json = response.json()
+                    msg_erro = erro_json.get('mensagem', 'Erro desconhecido no servidor.')
+                except Exception:
+                    # Se falhar (ex: erro 500 HTML ou Proxy), usa o texto cru limitado
+                    texto_erro = response.text[:200] if response.text else "Sem conteúdo"
+                    msg_erro = f"Erro HTTP {response.status_code}: {texto_erro}"
+
+                messagebox.showerror("Erro da API", f"Não foi possível baixar o arquivo:\n{msg_erro}")
 
         except requests.exceptions.RequestException as e:
             messagebox.showerror("Erro de Conexão", f"Não foi possível conectar à API para baixar o arquivo: {e}")
@@ -186,6 +768,128 @@ class AppGestaoPessoas:
             self.tree_rh_documentos.insert("", "end", values=(
                 doc.DocumentoID, doc.TipoDocumento, mes_ano_ref, data_upload, status_ciencia, data_ciencia
             ))
+    def excluir_documento_selecionado(self):
+        """Chama a API para excluir o documento selecionado (banco + arquivo)."""
+        selecionado = self.tree_rh_documentos.focus()
+        if not selecionado:
+            messagebox.showwarning("Aviso", "Por favor, selecione um documento na lista para excluir.")
+            return
+
+        dados_doc = self.tree_rh_documentos.item(selecionado, 'values')
+        documento_id = dados_doc[0]
+        tipo_doc = dados_doc[1]
+        mes_ano_ref = dados_doc[2]
+
+        confirmado = messagebox.askyesno(
+            "Confirmar Exclusão", 
+            f"Tem certeza que deseja excluir o documento:\n\nTipo: {tipo_doc}\nReferência: {mes_ano_ref}\n\n"
+            f"Esta ação removerá o registro do banco e o arquivo físico no servidor. NÃO PODE SER DESFEITA.", 
+            icon='warning'
+        )
+
+        if confirmado:
+            try:
+                # Chamada DELETE para a API
+                url = f"{config.API_BASE_URL}/documentos/excluir/{documento_id}"
+                response = requests.delete(url)
+
+                if response.status_code == 200:
+                    messagebox.showinfo("Sucesso", "Documento excluído com sucesso!")
+                    self.on_rh_funcionario_selecionado(None) # Recarrega a lista
+                else:
+                    msg_erro = response.json().get('mensagem', 'Erro desconhecido')
+                    messagebox.showerror("Erro da API", f"Falha ao excluir: {msg_erro}")
+
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Erro de conexão ao excluir documento: {e}", exc_info=True)
+                messagebox.showerror("Erro de Conexão", f"Não foi possível conectar ao servidor: {e}")
+                
+    def _buscar_nivel_acesso(self, funcionario_id):
+        """Busca o NivelAcesso de um funcionário pelo ID (função auxiliar)."""
+        conn = database.get_db_connection()
+        if conn:
+            try:
+                cursor = conn.cursor()
+                sql = "SELECT NivelAcesso FROM Funcionarios WHERE FuncionarioID = ?"
+                cursor.execute(sql, funcionario_id)
+                resultado = cursor.fetchone()
+                return resultado[0] if resultado else 'Funcionario' # Retorna o primeiro campo
+            except Exception as e:
+                logger.error(f"Falha ao buscar NivelAcesso para ID {funcionario_id}: {e}")
+                return 'Funcionario' # Default seguro
+            finally:
+                conn.close()
+        return 'Funcionario'
+
+    def abrir_janela_edicao_documento(self):
+        """Abre a janela Toplevel para editar os metadados do documento selecionado."""
+        selecionado = self.tree_rh_documentos.focus()
+        if not selecionado:
+            messagebox.showwarning("Aviso", "Por favor, selecione um documento na lista para editar.")
+            return
+
+        dados_doc = self.tree_rh_documentos.item(selecionado, 'values')
+        documento_id = dados_doc[0]
+        tipo_atual = dados_doc[1]
+        mes_ano_ref_atual = dados_doc[2] # dd/mm/yyyy
+
+        # Converte para objeto datetime para o DateEntry usar
+        try:
+            data_ref_obj = datetime.strptime(f"01/{mes_ano_ref_atual}", "%d/%m/%Y").date()
+        except ValueError:
+            data_ref_obj = datetime.now().date() # Fallback
+
+        # --- Criação da Janela Pop-up ---
+        popup = Toplevel(self.root)
+        popup.title(f"Editar Documento ID: {documento_id}")
+        popup.geometry("350x250")
+        popup.transient(self.root)
+
+        frame = ttk.Frame(popup, padding="15")
+        frame.pack(fill="both", expand=True)
+
+        # --- Widgets do Formulário ---
+        ttk.Label(frame, text="Tipo de Documento:").grid(row=0, column=0, sticky="w", pady=5)
+        combo_tipo = ttk.Combobox(frame, values=['Holerite', 'Cartão Ponto', 'Comprovante de Consumo', 'Contrato', 'Atestado', 'Advertência', 'Outro'])
+        combo_tipo.grid(row=0, column=1, sticky="ew", pady=5)
+        combo_tipo.set(tipo_atual)
+
+        ttk.Label(frame, text="Mês/Ano de Referência:").grid(row=1, column=0, sticky="w", pady=5)
+        entry_data_ref = DateEntry(frame, date_pattern='dd/mm/yyyy', width=18)
+        entry_data_ref.grid(row=1, column=1, sticky="w", pady=5)
+        entry_data_ref.set_date(data_ref_obj)
+
+        ttk.Label(frame, text=f"Arquivo atual: {dados_doc[3].split()[0]}").grid(row=2, column=0, columnspan=2, sticky="w", pady=(10, 5))
+        ttk.Label(frame, text="*Não é possível alterar o arquivo físico.", font=("Arial", 8, "italic")).grid(row=3, column=0, columnspan=2, sticky="w")
+
+
+        def salvar_edicao():
+            novo_tipo = combo_tipo.get()
+            nova_data_ref_obj = entry_data_ref.get_date()
+            nova_data_ref_db = nova_data_ref_obj.strftime('%Y-%m-%d') # Formato que o banco espera
+
+            if not novo_tipo:
+                messagebox.showerror("Erro", "O Tipo de Documento é obrigatório.", parent=popup)
+                return
+
+            try:
+                sucesso = database.atualizar_documento_pessoal_metadados(documento_id, novo_tipo, nova_data_ref_db)
+
+                if sucesso:
+                    messagebox.showinfo("Sucesso", "Metadados do documento atualizados!", parent=popup)
+                    popup.destroy()
+                    self.on_rh_funcionario_selecionado(None) # Recarrega a lista
+                else:
+                    messagebox.showwarning("Aviso", "Nenhuma alteração detectada ou falha na atualização.")
+
+            except Exception as e:
+                messagebox.showerror("Erro", f"Ocorreu um erro ao salvar: {e}", parent=popup)
+
+        # Botão de Envio
+        btn_salvar = ttk.Button(frame, text="Salvar Metadados", command=salvar_edicao)
+        btn_salvar.grid(row=4, column=0, columnspan=2, pady=20, ipady=5)
+
+        frame.columnconfigure(1, weight=1)
 
     def abrir_janela_add_documento(self):
         """Abre a janela (Toplevel) para adicionar um novo documento pessoal."""
@@ -219,7 +923,7 @@ class AppGestaoPessoas:
         entry_data_ref = DateEntry(frame, date_pattern='dd/mm/yyyy', width=18)
         entry_data_ref.grid(row=1, column=1, sticky="w", pady=5)
 
-        ttk.Label(frame, text="Arquivo (PDF):").grid(row=2, column=0, sticky="w", pady=5)
+        ttk.Label(frame, text="Arquivo (PDF, JPG, PNG):").grid(row=2, column=0, sticky="w", pady=5) # <-- Texto alterado
         frame_arquivo = ttk.Frame(frame)
         frame_arquivo.grid(row=2, column=1, sticky="ew", pady=5)
         
@@ -228,16 +932,22 @@ class AppGestaoPessoas:
         
         caminho_arquivo_selecionado = {"path": ""} # Usamos um dicionário para passar por referência
 
-        def selecionar_pdf():
+        # --- CORREÇÃO 1: Adicionado suporte a .png na seleção ---
+        def selecionar_arquivo():
             filepath = filedialog.askopenfilename(
-                title="Selecione o documento PDF",
-                filetypes=[("Arquivos PDF", "*.pdf")]
+                title="Selecione o documento (PDF, JPG ou PNG)",
+                filetypes=[
+                    ("Documentos Suportados", "*.pdf *.jpg *.jpeg *.png"), # <-- ADICIONADO .png
+                    ("Arquivos PDF", "*.pdf"),
+                    ("Imagens JPG", "*.jpg *.jpeg"),
+                    ("Imagens PNG", "*.png") # <-- ADICIONADA NOVA LINHA
+                ]
             )
             if filepath:
                 caminho_arquivo_selecionado["path"] = filepath
                 lbl_caminho_pdf.config(text=os.path.basename(filepath))
 
-        btn_selecionar = ttk.Button(frame_arquivo, text="Selecionar...", command=selecionar_pdf)
+        btn_selecionar = ttk.Button(frame_arquivo, text="Selecionar...", command=selecionar_arquivo) # <-- Usa a nova função
         btn_selecionar.pack(side="left")
 
         # --- Lógica de Envio ---
@@ -251,6 +961,22 @@ class AppGestaoPessoas:
                 messagebox.showerror("Erro", "Todos os campos são obrigatórios.", parent=popup)
                 return
 
+            # --- CORREÇÃO 2: Adicionado suporte a .png no MIME type ---
+            nome_arquivo = os.path.basename(caminho_arquivo)
+            # Pega a extensão (ex: '.jpg' ou '.pdf')
+            extensao = os.path.splitext(nome_arquivo)[1].lower() 
+
+            if extensao == '.pdf':
+                mime_type = 'application/pdf'
+            elif extensao in ['.jpg', '.jpeg']:
+                mime_type = 'image/jpeg'
+            elif extensao == '.png': # <-- ADICIONADO ELIF
+                mime_type = 'image/png'
+            else:
+                messagebox.showerror("Erro", "Tipo de arquivo não suportado. Use PDF, JPG ou PNG.", parent=popup)
+                return
+            # --- FIM DA CORREÇÃO 2 ---
+
             # Prepara os dados para enviar à API
             url_upload = f"{config.API_BASE_URL}/documentos/upload" # ATENÇÃO AO IP!
             dados_payload = {
@@ -261,7 +987,9 @@ class AppGestaoPessoas:
             
             try:
                 with open(caminho_arquivo, 'rb') as f:
-                    arquivos_payload = {'file': (os.path.basename(caminho_arquivo), f, 'application/pdf')}
+                    # --- CORREÇÃO 3: Usa o nome e o MIME type dinâmicos ---
+                    arquivos_payload = {'file': (nome_arquivo, f, mime_type)}
+                    # --- FIM DA CORREÇÃO 3 ---
                     
                     # Faz a requisição para a API
                     response = requests.post(url_upload, data=dados_payload, files=arquivos_payload)
@@ -280,8 +1008,37 @@ class AppGestaoPessoas:
         btn_salvar.grid(row=3, column=0, columnspan=2, pady=20, ipady=5)
 
         frame.columnconfigure(1, weight=1)
-      
 
+    def solicitar_onboarding_funcionario(self):
+        """Dispara a notificação para o funcionário iniciar o processo de onboarding."""
+        selecionado = self.tree_rh_funcionarios.focus()
+        if not selecionado:
+            messagebox.showwarning("Aviso", "Por favor, selecione um funcionário na lista da esquerda primeiro.")
+            return
+        
+        dados_func = self.tree_rh_funcionarios.item(selecionado, 'values')
+        funcionario_id = dados_func[0]
+        nome_funcionario = dados_func[1]
+        
+        # 1. Tenta inicializar o status no banco (seta para 'Pendente')
+        if not database.iniciar_onboarding_funcionario(funcionario_id):
+            messagebox.showerror("Erro", "Falha ao registrar o status de onboarding no banco.")
+            return
+
+        # 2. Busca o ChatID para notificar
+        func_obj = database.buscar_funcionario_por_id(funcionario_id)
+        if not func_obj or not func_obj.ChatIDTelegram:
+             messagebox.showwarning("Aviso", "Funcionário sem ChatID Telegram cadastrado. Não é possível notificar.")
+             return
+
+        # 3. Envia a notificação inicial que fará o fluxo de bloqueio começar
+        mensagem = (f"🎉 **Bem-vindo(a) à Gela Boca, {nome_funcionario}!** 🎉\n\n"
+                    "Para dar início ao seu registro, precisamos que você nos envie seus documentos e dados pessoais. "
+                    "Seu acesso ao sistema será bloqueado até que o processo seja concluído.\n\n"
+                    "Por favor, digite **qualquer mensagem** (ou /start) para começar o envio de documentos.")
+        
+        notificador_telegram.enviar_mensagem(func_obj.ChatIDTelegram, mensagem)
+        messagebox.showinfo("Sucesso", f"Notificação de Onboarding enviada para {nome_funcionario}!")
     
     def atualizar_lista_comunicados(self, filtro=None):
         for i in self.tree_comunicados.get_children(): self.tree_comunicados.delete(i)
@@ -292,6 +1049,10 @@ class AppGestaoPessoas:
             self.tree_comunicados.insert("", "end", values=(doc.DocumentoID, doc.Titulo, data_formatada, status))
 
     def abrir_janela_criacao(self): # <<< ESTA FUNÇÃO ESTAVA FALTANDO!
+            # --- CORREÇÃO: Limpa resíduos de seleções anteriores ---
+        if hasattr(self, 'caminho_imagem_selecionada'):
+            del self.caminho_imagem_selecionada
+        # -------------------------------------------------------
         if self.popup_criacao is not None and self.popup_criacao.winfo_exists():
             self.popup_criacao.focus()
             return
@@ -360,83 +1121,96 @@ class AppGestaoPessoas:
                 messagebox.showerror("Erro", "A pontuação deve ser um número inteiro positivo.", parent=self.popup_criacao)
                 return
 
-        try:
-            destinatarios_nomes = [listbox.get(i) for i in indices_selecionados]
-            destinatarios_objs = [self.dados_funcionarios[nome] for nome in destinatarios_nomes]
+        # Prepara dados iniciais na Thread principal para evitar erros de GUI
+        destinatarios_nomes = [listbox.get(i) for i in indices_selecionados]
+        destinatarios_objs = [self.dados_funcionarios[nome] for nome in destinatarios_nomes]
+        imagem_anexada = hasattr(self, 'caminho_imagem_selecionada') and self.caminho_imagem_selecionada
+        caminho_imagem = self.caminho_imagem_selecionada if imagem_anexada else None
 
-            GESTOR_ID = 2  # Assumindo ID 2 para o gestor
-            documento_id = database.criar_documento(titulo, conteudo.strip(), GESTOR_ID, pontos)
-            if not documento_id:
-                messagebox.showerror("Erro de BD", "Não foi possível criar o registro do documento.", parent=self.popup_criacao)
-                return
+        # Desabilita botão para evitar múltiplos cliques
+        btn_enviar = self.popup_criacao.nametowidget(listbox.master.master.winfo_children()[-1]) # Pega o botão enviar (último widget)
+        if btn_enviar: btn_enviar.config(state="disabled", text="Enviando... Aguarde")
 
-            imagem_anexada = hasattr(self, 'caminho_imagem_selecionada') and self.caminho_imagem_selecionada
-            telegram_file_id = None
-            enviados_com_sucesso = 0
-
-            # --- LÓGICA DE ENVIO EM DUAS ETAPAS ---
-            
-            # 1. Prepara as mensagens
-            legenda_imagem_curta = f"🚨 **NOVO COMUNICADO** 🚨\n\n**Título:** {titulo}"
-            texto_principal = f"**Conteúdo:**\n{conteudo.strip()}\n\nSua confirmação de leitura é obrigatória e será registrada."
-
-            # 2. Envia para o primeiro funcionário para obter o file_id da imagem (se houver)
-            if imagem_anexada:
-                primeiro_func = destinatarios_objs[0]
-                resposta_api_foto = notificador_telegram.enviar_foto_com_botoes(
-                    primeiro_func.ChatIDTelegram, 
-                    self.caminho_imagem_selecionada, 
-                    legenda_imagem_curta
-                ) # Envia a foto SÓ com a legenda curta
-
-                if resposta_api_foto and resposta_api_foto.get('ok'):
-                    telegram_file_id = resposta_api_foto['result']['photo'][-1]['file_id']
-                    database.atualizar_documento_com_file_id(documento_id, telegram_file_id)
-                else:
-                    messagebox.showerror("Erro Telegram", "Não foi possível enviar a imagem inicial.", parent=self.popup_criacao)
-                    database.excluir_documento(documento_id)
+        def tarefa_envio_background():
+            try:
+                GESTOR_ID = 2  # Assumindo ID 2 para o gestor
+                documento_id = database.criar_documento(titulo, conteudo.strip(), GESTOR_ID, pontos)
+                if not documento_id:
+                    self.root.after(0, lambda: messagebox.showerror("Erro de BD", "Não foi possível criar o registro do documento.", parent=self.popup_criacao))
                     return
 
-            # 3. Itera sobre TODOS os funcionários para enviar o conteúdo e o botão
-            for func in destinatarios_objs:
-                assinatura_id = database.registrar_pendencia_assinatura(documento_id, func.FuncionarioID)
-                if not assinatura_id:
-                    print(f"!!! Falha ao registrar pendência para {func.NomeCompleto}")
-                    continue
+                telegram_file_id = None
+                enviados_com_sucesso = 0
 
-                keyboard = [[InlineKeyboardButton("✅ Li e estou ciente", callback_data=f"doc_ciente_{assinatura_id}")]]
-                reply_markup = InlineKeyboardMarkup(keyboard)
+                # 1. Prepara as mensagens
+                legenda_imagem_curta = f"🚨 **NOVO COMUNICADO** 🚨\n\n**Título:** {titulo}"
+                texto_principal = f"**Conteúdo:**\n{conteudo.strip()}\n\nSua confirmação de leitura é obrigatória e será registrada."
 
-                # Se tivermos um file_id (de uma imagem), enviamos a foto primeiro
-                if telegram_file_id:
-                    notificador_telegram.enviar_foto_com_botoes(
+                # 2. Envio da imagem inicial (se houver) com Fallback
+                telegram_file_id = None
+                if caminho_imagem:
+                    try:
+                        logger.info(f"Tentando obter file_id via Grupo Gestor ({config.GESTOR_GROUP_CHAT_ID})...")
+                        resposta_api_foto = notificador_telegram.enviar_foto_com_botoes(
+                            config.GESTOR_GROUP_CHAT_ID, 
+                            caminho_imagem, 
+                            f"(Log de Envio: {titulo})" 
+                        )
+
+                        if resposta_api_foto and resposta_api_foto.get('ok'):
+                            telegram_file_id = resposta_api_foto['result']['photo'][-1]['file_id']
+                            database.atualizar_documento_com_file_id(documento_id, telegram_file_id)
+                        else:
+                            logger.warning(f"Falha ao enviar imagem para grupo de controle: {resposta_api_foto}")
+                            # Não aborta, apenas segue sem imagem
+                    except Exception as e_img:
+                        logger.error(f"Erro de conexão ao enviar imagem de controle: {e_img}")
+                        # Não aborta
+
+                # 3. Itera sobre TODOS os funcionários
+                for func in destinatarios_objs:
+                    assinatura_id = database.registrar_pendencia_assinatura(documento_id, func.FuncionarioID)
+                    if not assinatura_id:
+                        logger.warning(f"!!! Falha ao registrar pendência para {func.NomeCompleto}")
+                        continue
+
+                    keyboard = [[InlineKeyboardButton("✅ Li e estou ciente", callback_data=f"doc_ciente_{assinatura_id}")]]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+
+                    if telegram_file_id:
+                        notificador_telegram.enviar_foto_com_botoes(
+                            func.ChatIDTelegram,
+                            telegram_file_id, 
+                            legenda_imagem_curta
+                        )
+                        time.sleep(0.2) 
+
+                    notificador_telegram.enviar_mensagem_com_botao(
                         func.ChatIDTelegram,
-                        telegram_file_id, # Reutiliza o file_id
-                        legenda_imagem_curta
+                        texto_principal,
+                        reply_markup
                     )
-                    time.sleep(0.2) # Pequena pausa entre as mensagens
+                    enviados_com_sucesso += 1
+                    time.sleep(0.1)
 
-                # Envia a mensagem de texto com o conteúdo completo e o botão
-                notificador_telegram.enviar_mensagem_com_botao(
-                    func.ChatIDTelegram,
-                    texto_principal,
-                    reply_markup
-                )
-                enviados_com_sucesso += 1
-                time.sleep(0.1)
+                # Finalização na Thread Principal
+                def finalizar_ui():
+                    messagebox.showinfo("Sucesso", f"{enviados_com_sucesso} de {len(destinatarios_objs)} comunicados foram enviados.", parent=self.popup_criacao)
+                    if hasattr(self, 'caminho_imagem_selecionada'):
+                        del self.caminho_imagem_selecionada
+                    self.popup_criacao.destroy()
+                    self.atualizar_lista_comunicados()
+                
+                self.root.after(0, finalizar_ui)
 
-            messagebox.showinfo("Sucesso", f"{enviados_com_sucesso} de {len(destinatarios_objs)} comunicados foram enviados.", parent=self.popup_criacao)
-            if imagem_anexada:
-                del self.caminho_imagem_selecionada
-            self.popup_criacao.destroy()
-            self.atualizar_lista_comunicados()
+            except Exception as e:
+                self.root.after(0, lambda: messagebox.showerror("Erro Inesperado", f"O processo foi interrompido:\n{e}", parent=self.popup_criacao))
+                # Reabilita botão em caso de erro
+                self.root.after(0, lambda: btn_enviar.config(state="normal", text="ENVIAR COMUNICADO"))
 
-        except Exception as e:
-            messagebox.showerror("Erro Inesperado", f"Ocorreu um erro: {e}", parent=self.popup_criacao)
-            # Tenta limpar o documento do banco em caso de erro no meio do processo
-            if 'documento_id' in locals() and documento_id:
-                database.excluir_documento(documento_id)
-
+        # Inicia a thread
+        import threading
+        threading.Thread(target=tarefa_envio_background, daemon=True).start()
 
     def abrir_janela_detalhes(self):
         selecionado = self.tree_comunicados.focus()
@@ -601,6 +1375,43 @@ class AppGestaoPessoas:
         else:
             if hasattr(self, 'caminho_imagem_selecionada'): del self.caminho_imagem_selecionada
             label_caminho.config(text="Nenhuma imagem selecionada.")
+
+    def reiniciar_processo_onboarding(self):
+        """Limpa os dados de onboarding do funcionário para que ele faça de novo."""
+        selecionado = self.tree_onboarding.focus()
+        if not selecionado:
+            messagebox.showwarning("Aviso", "Selecione um funcionário na lista.")
+            return
+
+        dados = self.tree_onboarding.item(selecionado, 'values')
+        funcionario_id = dados[0]
+        nome = dados[1]
+
+        confirmacao = messagebox.askyesno(
+            "Reiniciar Onboarding",
+            f"Deseja reiniciar o processo de admissão para '{nome}'?\n\n"
+            "Isso apagará os documentos e dados preenchidos (Escolaridade, Filhos, etc), "
+            "permitindo que ele comece do zero pelo Telegram.\n\n"
+            "O funcionário NÃO será excluído do sistema.",
+            parent=self.root
+        )
+
+        if confirmacao:
+            if database.resetar_onboarding_completo(funcionario_id):
+                # Opcional: Notificar o funcionário que o processo foi reiniciado
+                func_obj = database.buscar_funcionario_por_id(funcionario_id)
+                if func_obj and func_obj.ChatIDTelegram:
+                    notificador_telegram.enviar_mensagem(
+                        func_obj.ChatIDTelegram,
+                        "🔄 **Processo de Admissão Reiniciado**\n\n"
+                        "O RH solicitou o preenchimento novamente dos seus dados.\n"
+                        "Por favor, digite 'Começar' para enviar as informações corretas."
+                    )
+
+                messagebox.showinfo("Sucesso", "Processo reiniciado! O funcionário pode preencher os dados novamente.", parent=self.root)
+                self.carregar_onboarding_lista()
+            else:
+                messagebox.showerror("Erro", "Falha ao reiniciar o processo no banco de dados.", parent=self.root)        
         
 if __name__ == "__main__":
     root = tk.Tk()

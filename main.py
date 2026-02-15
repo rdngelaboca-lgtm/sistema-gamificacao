@@ -1,3 +1,63 @@
+# ==============================================================================
+# == INÍCIO BLOCO DE CONFIGURAÇÃO DE LOGGING ===================================
+# ==============================================================================
+import logging
+import logging.handlers
+import sys
+import os # Necessário para criar a pasta de logs
+
+
+# --- Configurações ---
+LOG_FILENAME = 'gamificacao_sistema.log'
+LOG_FOLDER = 'logs' # Nome da pasta onde os logs serão salvos
+LOG_LEVEL = logging.INFO # Nível mínimo para registrar (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
+LOG_MAX_BYTES = 10 * 1024 * 1024 # Tamanho máximo de cada arquivo de log (10 MB)
+LOG_BACKUP_COUNT = 5 # Quantos arquivos de log antigos manter
+
+# --- Cria a pasta de logs se não existir ---
+log_dir = os.path.join(os.path.dirname(__file__), LOG_FOLDER)
+if not os.path.exists(log_dir):
+    try:
+        os.makedirs(log_dir)
+        print(f"Pasta de logs criada em: {log_dir}") # Print inicial para confirmar criação
+    except OSError as e:
+        print(f"Erro ao criar pasta de logs '{log_dir}': {e}", file=sys.stderr)
+        # Se não conseguir criar a pasta, tenta logar no diretório atual
+        log_dir = os.path.dirname(__file__)
+
+log_filepath = os.path.join(log_dir, LOG_FILENAME)
+
+# --- Configuração do Handler de Arquivo Rotativo ---
+# Rotaciona o log quando atinge LOG_MAX_BYTES, mantendo LOG_BACKUP_COUNT arquivos antigos
+file_handler = logging.handlers.RotatingFileHandler(
+    log_filepath, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT, encoding='utf-8'
+)
+file_handler.setLevel(LOG_LEVEL)
+file_formatter = logging.Formatter(LOG_FORMAT)
+file_handler.setFormatter(file_formatter)
+
+# --- Configuração do Handler do Console ---
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(LOG_LEVEL) # Pode ser diferente do arquivo se quiser (ex: logging.DEBUG)
+console_formatter = logging.Formatter(LOG_FORMAT)
+console_handler.setFormatter(console_formatter)
+
+# --- Configuração do Logger Raiz ---
+# Limpa handlers existentes para evitar duplicação em recargas
+logging.getLogger('').handlers = []
+# Adiciona os novos handlers
+logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT, handlers=[file_handler, console_handler])
+
+# Obtém um logger específico para este módulo
+logger = logging.getLogger(__name__)
+
+logger.info(f"*** Logging configurado para o módulo: {__name__} ***")
+# ==============================================================================
+# == FIM BLOCO DE CONFIGURAÇÃO DE LOGGING ======================================
+# ==============================================================================
+
+
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog, Toplevel
 import database
@@ -8,6 +68,13 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from datetime import datetime, timedelta
 from tkcalendar import DateEntry
+import config
+import file_utils
+import urllib.parse
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from database import adicionar_pontos_ao_saldo
+import threading
+import agendador # Importa o módulo para usar a função manual
 
 
 class App:
@@ -33,10 +100,11 @@ class App:
         self.frame_ranking = ttk.Frame(self.notebook)
         self.frame_relatorios = ttk.Frame(self.notebook)
         self.frame_feedbacks = ttk.Frame(self.notebook)
-        self.frame_solicitacoes = ttk.Frame(self.notebook)
         self.frame_agenda = ttk.Frame(self.notebook)
         self.frame_loja = ttk.Frame(self.notebook)
         self.frame_metas = ttk.Frame(self.notebook, padding="10")
+        self.frame_conquistas = ttk.Frame(self.notebook, padding="10")
+        self.frame_consulta_nf = ttk.Frame(self.notebook, padding="10")
 
         self.notebook.add(self.frame_dashboard, text='Dashboard')
         self.notebook.add(self.frame_funcionarios, text='Gerenciar Funcionários')
@@ -47,10 +115,11 @@ class App:
         self.notebook.add(self.frame_ranking, text='Ranking')
         self.notebook.add(self.frame_relatorios, text='Relatórios')
         self.notebook.add(self.frame_feedbacks, text='Feedbacks')
-        self.notebook.add(self.frame_solicitacoes, text='Feedbacks Pendentes')
         self.notebook.add(self.frame_agenda, text='Agenda Semanal')
         self.notebook.add(self.frame_loja, text='Loja e Resgates')
-        self.notebook.add(self.frame_metas, text='Metas de Equipe')
+        self.notebook.add(self.frame_metas, text='Gestão de Metas')
+        self.notebook.add(self.frame_conquistas, text='Gerenciar Conquistas')
+        self.notebook.add(self.frame_consulta_nf, text='Consultar NFs')
 
         self.criar_aba_dashboard()
         self.criar_aba_funcionarios()
@@ -61,16 +130,421 @@ class App:
         self.criar_aba_ranking()
         self.criar_aba_relatorios()
         self.criar_aba_feedbacks()
-        self.criar_aba_solicitacoes()
         self.criar_aba_agenda()
         self.criar_aba_loja()
         self.criar_aba_metas()
+        self.criar_aba_conquistas()
+        self.criar_aba_consulta_nf()
+
+    # Em main.py, DENTRO da classe App, adicione esta função completa:
+    def criar_aba_conquistas(self):
+        """Cria a interface para gerenciar os modelos de conquistas."""
+        main_frame = ttk.Frame(self.frame_conquistas)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        main_frame.columnconfigure(1, weight=1) # Coluna do formulário cresce mais
+        main_frame.rowconfigure(0, weight=1)    # Linha principal cresce
+
+        # --- PAINEL ESQUERDO: LISTA DE CONQUISTAS ---
+        frame_lista = ttk.LabelFrame(main_frame, text="Modelos de Conquistas", padding="10")
+        frame_lista.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        frame_lista.rowconfigure(0, weight=1)
+        frame_lista.columnconfigure(0, weight=1)
+
+        cols = ('ID', 'Ícone', 'Nome')
+        self.tree_conquistas = ttk.Treeview(frame_lista, columns=cols, show='headings', selectmode='browse')
+        self.tree_conquistas.heading('ID', text='ID'); self.tree_conquistas.column('ID', width=40, anchor='center')
+        self.tree_conquistas.heading('Ícone', text='Ícone'); self.tree_conquistas.column('Ícone', width=40, anchor='center')
+        self.tree_conquistas.heading('Nome', text='Nome da Conquista'); self.tree_conquistas.column('Nome', width=250)
+        self.tree_conquistas.grid(row=0, column=0, sticky="nsew")
+        self.tree_conquistas.bind('<<TreeviewSelect>>', self.selecionar_conquista_para_edicao)
+
+        scrollbar_lista = ttk.Scrollbar(frame_lista, orient="vertical", command=self.tree_conquistas.yview)
+        self.tree_conquistas.configure(yscrollcommand=scrollbar_lista.set)
+        scrollbar_lista.grid(row=0, column=1, sticky="ns")
+
+        # --- PAINEL DIREITO: FORMULÁRIO ---
+        frame_formulario = ttk.LabelFrame(main_frame, text="Criar ou Editar Conquista", padding="15")
+        frame_formulario.grid(row=0, column=1, sticky="nsew")
+        frame_formulario.columnconfigure(1, weight=1) # Coluna dos inputs cresce
+
+        ttk.Label(frame_formulario, text="Nome:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=3)
+        self.entry_conquista_nome = ttk.Entry(frame_formulario, width=40)
+        self.entry_conquista_nome.grid(row=0, column=1, sticky=tk.EW, padx=5, pady=3)
+
+        ttk.Label(frame_formulario, text="Ícone (Emoji):").grid(row=1, column=0, sticky=tk.W, padx=5, pady=3)
+        self.entry_conquista_icone = ttk.Entry(frame_formulario, width=10)
+        self.entry_conquista_icone.grid(row=1, column=1, sticky=tk.W, padx=5, pady=3)
+
+        ttk.Label(frame_formulario, text="Descrição:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=3)
+        self.text_conquista_descricao = tk.Text(frame_formulario, height=3, width=40)
+        self.text_conquista_descricao.grid(row=2, column=1, sticky=tk.EW, padx=5, pady=3)
+
+        ttk.Label(frame_formulario, text="Tipo de Critério:").grid(row=3, column=0, sticky=tk.W, padx=5, pady=3)
+        # [CORREÇÃO] Expondo todos os critérios suportados pelo database.py
+        self.combo_conquista_criterio_tipo = ttk.Combobox(frame_formulario,
+                                                        values=[
+                                                            'total_tarefas_aprovadas',
+                                                            'tarefas_aprovadas_periodo',
+                                                            'sequencia_dias_tarefas',
+                                                            'tarefas_grupo_competitivo_aceitas',
+                                                            'total_comunicados_cientes',
+                                                            'sequencia_feedback_diario'
+                                                        ],
+                                                        state="readonly")
+        self.combo_conquista_criterio_tipo.grid(row=3, column=1, sticky=tk.EW, padx=5, pady=3)
+        self.combo_conquista_criterio_tipo.set('total_tarefas_aprovadas') # Padrão
+
+        ttk.Label(frame_formulario, text="Valor do Critério:").grid(row=4, column=0, sticky=tk.W, padx=5, pady=3)
+        self.entry_conquista_criterio_valor = ttk.Entry(frame_formulario, width=10)
+        self.entry_conquista_criterio_valor.grid(row=4, column=1, sticky=tk.W, padx=5, pady=3)
+
+        ttk.Label(frame_formulario, text="Pontos Bônus:").grid(row=5, column=0, sticky=tk.W, padx=5, pady=3)
+        self.entry_conquista_pontos_bonus = ttk.Entry(frame_formulario, width=10)
+        self.entry_conquista_pontos_bonus.grid(row=5, column=1, sticky=tk.W, padx=5, pady=3)
+        self.entry_conquista_pontos_bonus.insert(0, "0") # Padrão é 0
+
+        # Frame para os botões do formulário
+        frame_botoes_form = ttk.Frame(frame_formulario)
+        frame_botoes_form.grid(row=6, column=1, sticky=tk.E, pady=20, padx=5)
+
+        self.btn_salvar_conquista = ttk.Button(frame_botoes_form, text="Criar Conquista", command=self.salvar_conquista)
+        self.btn_salvar_conquista.pack(side=tk.LEFT)
+
+        self.btn_limpar_form_conquista = ttk.Button(frame_botoes_form, text="Limpar", command=self.limpar_formulario_conquista)
+        self.btn_limpar_form_conquista.pack(side=tk.LEFT, padx=10)
+
+        # Botão Excluir (fora do frame do formulário, embaixo da lista)
+        self.btn_excluir_conquista = ttk.Button(frame_lista, text="Excluir Conquista Selecionada", command=self.excluir_conquista_selecionada)
+        self.btn_excluir_conquista.grid(row=1, column=0, pady=10)
+
+        self.conquista_selecionada_para_edicao = None # Guarda o ID da conquista selecionada
+        self.atualizar_lista_conquistas() # Carrega a lista ao iniciar
+
+    # Em main.py, DENTRO da classe App, adicione estas funções:
+
+    def atualizar_lista_conquistas(self):
+        """Limpa a Treeview e recarrega os modelos de conquistas do banco."""
+        try: # <--- ADICIONADO TRY
+            for i in self.tree_conquistas.get_children():
+                self.tree_conquistas.delete(i)
+            conquistas = database.listar_modelos_conquistas() # Pode falhar
+            for conq in conquistas:
+                self.tree_conquistas.insert("", "end", values=(conq.ConquistaID, conq.Icone, conq.Nome))
+            self.limpar_formulario_conquista()
+        except Exception as e: # <--- ADICIONADO EXCEPT
+            logger.exception(f"Erro ao atualizar lista de conquistas: {e}") # Loga o erro completo
+            messagebox.showerror("Erro de Banco", f"Não foi possível carregar os modelos de conquistas:\n{e}", parent=self.root) # Informa o usuário
+
+    def selecionar_conquista_para_edicao(self, event):
+        """Preenche o formulário com os dados da conquista selecionada na lista."""
+        try: # <--- ADICIONADO TRY
+            selecionado = self.tree_conquistas.focus()
+            if not selecionado: return
+            dados = self.tree_conquistas.item(selecionado, 'values')
+            conquista_id = dados[0]
+            conquistas_completas = database.listar_modelos_conquistas() # Pode falhar
+            conquista_completa = next((c for c in conquistas_completas if c.ConquistaID == int(conquista_id)), None) # int() pode falhar
+
+            if conquista_completa:
+                self.limpar_formulario_conquista()
+                self.conquista_selecionada_para_edicao = conquista_id
+                self.entry_conquista_nome.insert(0, conquista_completa.Nome)
+                self.entry_conquista_icone.insert(0, conquista_completa.Icone)
+                self.text_conquista_descricao.insert("1.0", conquista_completa.Descricao)
+                self.combo_conquista_criterio_tipo.set(conquista_completa.CriterioTipo)
+                self.entry_conquista_criterio_valor.insert(0, conquista_completa.CriterioValor)
+                self.entry_conquista_pontos_bonus.insert(0, conquista_completa.PontosBonus)
+                self.btn_salvar_conquista.config(text="Salvar Alterações")
+        except ValueError as e: # <--- ADICIONADO EXCEPT ESPECÍFICO
+             logger.error(f"Erro de formato ao selecionar conquista: {e}")
+             messagebox.showerror("Erro de Formato", f"O ID da conquista '{conquista_id}' não é válido.", parent=self.root)
+        except Exception as e: # <--- ADICIONADO EXCEPT GENÉRICO
+            logger.exception(f"Erro ao selecionar conquista para edição: {e}")
+            messagebox.showerror("Erro", f"Não foi possível carregar os detalhes da conquista:\n{e}", parent=self.root)
+
+    def limpar_formulario_conquista(self):
+        """Limpa todos os campos do formulário e reseta o estado de edição."""
+        self.entry_conquista_nome.delete(0, tk.END)
+        self.entry_conquista_icone.delete(0, tk.END)
+        self.text_conquista_descricao.delete("1.0", tk.END)
+        self.combo_conquista_criterio_tipo.set('total_tarefas_aprovadas') # Volta ao padrão
+        self.entry_conquista_criterio_valor.delete(0, tk.END)
+        self.entry_conquista_pontos_bonus.delete(0, tk.END); self.entry_conquista_pontos_bonus.insert(0, "0") # Volta a 0
+
+        self.conquista_selecionada_para_edicao = None # Reseta o ID de edição
+        self.btn_salvar_conquista.config(text="Criar Conquista") # Volta o texto do botão
+        self.tree_conquistas.selection_remove(self.tree_conquistas.selection()) # Remove seleção da lista
+
+    def salvar_conquista(self):
+        """Coleta dados do formulário, valida e chama a função apropriada do banco."""
+        # Validações básicas (fora do try)
+        nome = self.entry_conquista_nome.get()
+        icone = self.entry_conquista_icone.get()
+        descricao = self.text_conquista_descricao.get("1.0", tk.END).strip()
+        criterio_tipo = self.combo_conquista_criterio_tipo.get()
+        criterio_valor_str = self.entry_conquista_criterio_valor.get()
+        pontos_bonus_str = self.entry_conquista_pontos_bonus.get()
+
+        if not all([nome, icone, descricao, criterio_tipo, criterio_valor_str, pontos_bonus_str]):
+            messagebox.showerror("Erro", "Todos os campos são obrigatórios.", parent=self.root) # Adicionado parent
+            return
+
+        try: # <--- ADICIONADO TRY (para conversão e banco)
+            # Conversões que podem falhar
+            criterio_valor = int(criterio_valor_str)
+            pontos_bonus = int(pontos_bonus_str)
+            if criterio_valor <= 0 or pontos_bonus < 0: raise ValueError("Valor inválido")
+
+            # Chamadas de banco que podem falhar
+            if self.conquista_selecionada_para_edicao:
+                sucesso = database.atualizar_conquista(
+                    self.conquista_selecionada_para_edicao, nome, descricao, icone,
+                    criterio_tipo, criterio_valor, pontos_bonus
+                )
+                if sucesso: messagebox.showinfo("Sucesso", "Conquista atualizada!", parent=self.root) # Adicionado parent
+                else: messagebox.showerror("Erro", "Falha ao atualizar a conquista no banco.", parent=self.root) # Adicionado parent
+            else:
+                sucesso = database.criar_conquista(
+                    nome, descricao, icone, criterio_tipo, criterio_valor, pontos_bonus
+                )
+                if sucesso: messagebox.showinfo("Sucesso", "Conquista criada!", parent=self.root) # Adicionado parent
+                else: messagebox.showerror("Erro", "Falha ao criar a conquista no banco.", parent=self.root) # Adicionado parent
+
+            if sucesso:
+                self.atualizar_lista_conquistas()
+
+        except ValueError: # <--- ADICIONADO EXCEPT ESPECÍFICO
+            logger.error(f"Erro de formato em salvar_conquista: Valor Critério='{criterio_valor_str}', Pontos Bônus='{pontos_bonus_str}'")
+            messagebox.showerror("Erro de Formato", "Valor do Critério e Pontos Bônus devem ser números inteiros (Critério > 0, Bônus >= 0).", parent=self.root) # Adicionado parent
+        except Exception as e: # <--- ADICIONADO EXCEPT GENÉRICO
+            logger.exception(f"Erro inesperado em salvar_conquista: {e}")
+            messagebox.showerror("Erro Inesperado", f"Ocorreu um erro ao salvar a conquista:\n{e}", parent=self.root) # Adicionado parent
+
+    def excluir_conquista_selecionada(self):
+        """Exclui a conquista selecionada após confirmação."""
+        if not self.conquista_selecionada_para_edicao:
+             messagebox.showwarning("Aviso", "Selecione uma conquista da lista para excluir.", parent=self.root) # Adicionado parent
+             return
+
+        conquista_id = self.conquista_selecionada_para_edicao
+        nome_conquista = self.entry_conquista_nome.get()
+
+        if messagebox.askyesno("Confirmar Exclusão", f"Tem certeza que deseja excluir a conquista '{nome_conquista}'?\n\nIsso também removerá a conquista de todos os funcionários que a ganharam.", parent=self.root): # Adicionado parent
+            try: # <--- ADICIONADO TRY
+                sucesso = database.excluir_conquista(conquista_id) # Pode falhar
+                if sucesso:
+                    messagebox.showinfo("Sucesso", "Conquista excluída.", parent=self.root) # Adicionado parent
+                    self.atualizar_lista_conquistas()
+                else:
+                    messagebox.showerror("Erro", "Falha ao excluir a conquista do banco.", parent=self.root) # Adicionado parent
+            except Exception as e: # <--- ADICIONADO EXCEPT
+                logger.exception(f"Erro inesperado em excluir_conquista_selecionada: {e}")
+                messagebox.showerror("Erro Inesperado", f"Ocorreu um erro ao excluir a conquista:\n{e}", parent=self.root) # Adicionado parent
+
+
+        # --- INÍCIO: Funções da Aba "Consultar NFs" ---
+
+    def criar_aba_consulta_nf(self):
+        """Cria a interface para consultar o histórico de Notas Fiscais."""
+        main_frame = ttk.Frame(self.frame_consulta_nf)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        main_frame.columnconfigure(0, weight=1)
+        main_frame.rowconfigure(1, weight=1) # Linha da Treeview expande
+
+        # --- Frame de Filtros ---
+        frame_filtros = ttk.LabelFrame(main_frame, text="Filtros de Busca", padding="10")
+        frame_filtros.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+
+        ttk.Label(frame_filtros, text="De:").grid(row=0, column=0, padx=(0, 5), pady=5)
+        self.nf_date_inicio = DateEntry(frame_filtros, width=12, date_pattern='dd/mm/yyyy', locale='pt_BR')
+        self.nf_date_inicio.grid(row=0, column=1, padx=5, pady=5)
+
+        ttk.Label(frame_filtros, text="Até:").grid(row=0, column=2, padx=(10, 5), pady=5)
+        self.nf_date_fim = DateEntry(frame_filtros, width=12, date_pattern='dd/mm/yyyy', locale='pt_BR')
+        self.nf_date_fim.grid(row=0, column=3, padx=5, pady=5)
+
+        ttk.Label(frame_filtros, text="Funcionário:").grid(row=0, column=4, padx=(10, 5), pady=5)
+        self.nf_combo_funcionarios = ttk.Combobox(frame_filtros, state="readonly", width=30)
+        self.nf_combo_funcionarios.grid(row=0, column=5, padx=5, pady=5)
+
+        ttk.Label(frame_filtros, text="Status:").grid(row=0, column=6, padx=(10, 5), pady=5)
+        self.nf_combo_status = ttk.Combobox(frame_filtros, state="readonly", values=["Todos", "Pendente", "Processada"])
+        self.nf_combo_status.grid(row=0, column=7, padx=5, pady=5)
+        self.nf_combo_status.set("Todos")
+
+        btn_buscar = ttk.Button(frame_filtros, text="Buscar", command=self.buscar_historico_nfs)
+        btn_buscar.grid(row=0, column=8, padx=(10, 5), pady=5)
+        btn_limpar = ttk.Button(frame_filtros, text="Limpar", command=self.limpar_filtros_nf)
+        btn_limpar.grid(row=0, column=9, padx=5, pady=5)
+
+        # --- Frame da Lista (Treeview) ---
+        frame_lista = ttk.LabelFrame(main_frame, text="Histórico de Notas Fiscais Recebidas", padding="10")
+        frame_lista.grid(row=1, column=0, sticky="nsew")
+        frame_lista.rowconfigure(0, weight=1)
+        frame_lista.columnconfigure(0, weight=1)
+
+        cols_nf = ('ID', 'Data/Hora', 'Funcionário', 'Status', 'Caminho')
+        self.tree_consulta_nf = ttk.Treeview(frame_lista, columns=cols_nf, show='headings', selectmode='browse')
+        self.tree_consulta_nf.heading('ID', text='ID'); self.tree_consulta_nf.column('ID', width=50, anchor='center')
+        self.tree_consulta_nf.heading('Data/Hora', text='Data/Hora'); self.tree_consulta_nf.column('Data/Hora', width=150, anchor='center')
+        self.tree_consulta_nf.heading('Funcionário', text='Funcionário'); self.tree_consulta_nf.column('Funcionário', width=250)
+        self.tree_consulta_nf.heading('Status', text='Status'); self.tree_consulta_nf.column('Status', width=100, anchor='center')
+        self.tree_consulta_nf.heading('Caminho', text='Caminho'); self.tree_consulta_nf.column('Caminho', width=0, stretch=tk.NO) # Oculta
+
+        scrollbar = ttk.Scrollbar(frame_lista, orient="vertical", command=self.tree_consulta_nf.yview)
+        self.tree_consulta_nf.configure(yscrollcommand=scrollbar.set)
+        self.tree_consulta_nf.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+
+        # --- Frame de Ações ---
+        frame_acoes = ttk.Frame(frame_lista)
+        frame_acoes.grid(row=1, column=0, columnspan=2, sticky="w", pady=(10, 0))
+
+        btn_ver_foto = ttk.Button(frame_acoes, text="Ver Foto da NF Selecionada", command=self.ver_foto_nf_selecionada)
+        btn_ver_foto.pack(side=tk.LEFT)
+        btn_recriar_botoes = ttk.Button(frame_acoes, text="Recriar Ações no Telegram", command=self.recriar_botoes_nf_telegram)
+        btn_recriar_botoes.pack(side=tk.LEFT, padx=10)
+
+        # Carrega os dados iniciais
+        self.carregar_filtros_nf()
+        self.buscar_historico_nfs()
+
+    def carregar_filtros_nf(self):
+        """Carrega a lista de funcionários para o combobox de filtro de NFs."""
+        # Reutiliza o dicionário já carregado pela aba de relatórios
+        if not hasattr(self, 'dados_funcionarios_relatorio') or not self.dados_funcionarios_relatorio:
+            funcionarios = database.listar_funcionarios()
+            self.dados_funcionarios_relatorio = {f"{f.NomeCompleto} (ID: {f.FuncionarioID})": f.FuncionarioID for f in funcionarios}
+
+        nomes_para_combobox = ["Todos"] + list(self.dados_funcionarios_relatorio.keys())
+        self.nf_combo_funcionarios['values'] = nomes_para_combobox
+        self.nf_combo_funcionarios.set("Todos")
+        # Define datas padrão (últimos 30 dias)
+        self.nf_date_fim.set_date(datetime.now())
+        self.nf_date_inicio.set_date(datetime.now() - timedelta(days=30))
+
+    def limpar_filtros_nf(self):
+        """Limpa os filtros da aba de NFs e busca todos os registros."""
+        self.nf_combo_funcionarios.set("Todos")
+        self.nf_combo_status.set("Todos")
+        self.nf_date_fim.set_date(datetime.now())
+        self.nf_date_inicio.set_date(datetime.now() - timedelta(days=30))
+        self.buscar_historico_nfs()
+
+    def buscar_historico_nfs(self):
+        """Executa a busca no banco com base nos filtros e preenche a treeview."""
+        for i in self.tree_consulta_nf.get_children():
+            self.tree_consulta_nf.delete(i)
+
+        data_inicio = self.nf_date_inicio.get_date()
+        data_fim = self.nf_date_fim.get_date()
+
+        nome_selecionado = self.nf_combo_funcionarios.get()
+        func_id = self.dados_funcionarios_relatorio.get(nome_selecionado) if nome_selecionado != "Todos" else None
+
+        status = self.nf_combo_status.get()
+
+        historico = database.buscar_notas_fiscais_historico(data_inicio, data_fim, func_id, status)
+
+        for item in historico:
+            data_f = item.DataRecebimento.strftime("%d/%m/%Y %H:%M")
+            self.tree_consulta_nf.insert("", "end", values=(
+                item.NotaFiscalID, data_f, item.NomeCompleto, item.Status, item.PathFoto or ""
+            ))
+
+    def ver_foto_nf_selecionada(self):
+        """Abre o arquivo de foto da NF selecionada."""
+        selecionado = self.tree_consulta_nf.focus()
+        if not selecionado:
+            messagebox.showwarning("Aviso", "Selecione uma NF na lista para ver a foto.")
+            return
+
+        dados = self.tree_consulta_nf.item(selecionado, 'values')
+        path_foto = dados[4] # Coluna 'Caminho'
+
+        if not path_foto:
+            messagebox.showerror("Erro", "O download desta foto ainda não foi processado pelo servidor (PathFoto está NULO).")
+            return
+
+        if not os.path.exists(path_foto):
+            messagebox.showerror("Erro de Arquivo", f"O arquivo da foto não foi encontrado no servidor no caminho:\n{path_foto}")
+            return
+
+        try:
+            file_utils.abrir_arquivo(path_foto)
+        except Exception as e:
+            messagebox.showerror("Erro ao Abrir", f"Não foi possível abrir o arquivo de imagem:\n{e}")
+
+    def recriar_botoes_nf_telegram(self):
+        """
+        Busca os dados da NF selecionada e re-envia a foto e os botões
+        para o grupo de gestores, caso a mensagem original tenha sido perdida.
+        """
+        selecionado = self.tree_consulta_nf.focus()
+        if not selecionado:
+            messagebox.showwarning("Aviso", "Selecione uma NF na lista para recriar as ações.")
+            return
+
+        nota_fiscal_id = self.tree_consulta_nf.item(selecionado, 'values')[0]
+
+        if not messagebox.askyesno("Confirmar", f"Deseja reenviar a foto e os botões de ação para a NF ID: {nota_fiscal_id} no grupo de Gestores?"):
+            return
+
+        try:
+            dados_nf = database.buscar_nota_fiscal(nota_fiscal_id)
+            if not dados_nf:
+                messagebox.showerror("Erro", "Não foi possível encontrar os dados desta NF no banco.")
+                return
+
+            # Prepara a mesma mensagem do bot
+            legenda_gestor = (
+                f"🧾 **Nota Fiscal (Reenviada)** 🧾\n\n"
+                f"👤 **Enviada por:** {dados_nf.NomeFuncionario}\n"
+                f"🗓️ **Data Original:** {dados_nf.DataRecebimento.strftime('%d/%m/%Y %H:%M')}\n"
+                f"🆔 **NF ID:** {dados_nf.NotaFiscalID}\n\n"
+                "Ações Rápidas:"
+            )
+
+            keyboard = [
+                [InlineKeyboardButton("📲 Encaminhar p/ Financeiro", callback_data=f"nf_prep_fwd_{nota_fiscal_id}")],
+                [InlineKeyboardButton("📦 Criar Tarefa 'Guardar'", callback_data=f"nf_create_task_{nota_fiscal_id}")],
+                [InlineKeyboardButton("👍 Arquivar (Nenhuma Ação)", callback_data=f"nf_ignore_{nota_fiscal_id}")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            # Usa o notificador_telegram (HTTP) para enviar
+            # Usamos o FileID se a foto ainda não foi baixada, ou o PathFoto se já foi.
+            foto_para_enviar = dados_nf.PathFoto if dados_nf.PathFoto else dados_nf.FileIDTelegram
+
+            if not foto_para_enviar:
+                messagebox.showerror("Erro", "Esta NF não possui FileID nem PathFoto. Não é possível reenviar.")
+                return
+
+            notificador_telegram.enviar_foto_com_botoes(
+                config.GESTOR_GROUP_CHAT_ID,
+                foto_para_enviar,
+                legenda_gestor,
+                reply_markup,
+                parse_mode='HTML'
+            )
+            messagebox.showinfo("Sucesso", "A Nota Fiscal e os botões de ação foram reenviados para o grupo de Gestores.")
+
+        except Exception as e:
+            logger.error(f"Erro ao recriar botões de NF: {e}", exc_info=True)
+            messagebox.showerror("Erro Inesperado", f"Não foi possível reenviar as ações:\n{e}")
+
+    # --- FIM: Funções da Aba "Consultar NFs" ---
+
+
 
     def popular_combobox_filtro_setor(self):
         """Busca os setores únicos e popula o combobox de filtro."""
-        setores = database.listar_setores_unicos()
-        # Adicionamos a opção "Outras Tarefas" para tarefas sem setor definido
-        self.combo_filtro_setor['values'] = setores + ["Outras Tarefas"]
+        try: # <--- ADICIONADO TRY
+            setores = database.listar_setores_unicos() # Pode falhar
+            self.combo_filtro_setor['values'] = setores + ["Outras Tarefas"]
+        except Exception as e: # <--- ADICIONADO EXCEPT
+            logger.exception(f"Erro ao popular combobox de setores (filtro): {e}")
+            messagebox.showerror("Erro de Banco", f"Não foi possível carregar a lista de setores:\n{e}", parent=self.root)
 
     def limpar_filtro_tarefas(self):
         """Limpa o filtro de setor e de título, e recarrega todas as tarefas."""
@@ -79,23 +553,120 @@ class App:
         self.atualizar_lista_tarefas_atribuicao() # Chama a função principal sem filtro
 
     def filtrar_tarefas_por_setor(self, event=None):
+        # [CORREÇÃO] Limpa o campo de busca textual para evitar ambiguidade visual
+        self.entry_filtro_atr_tarefas.delete(0, tk.END)
         """Pega o setor selecionado e chama a função de atualização com o filtro."""
         setor_selecionado = self.combo_filtro_setor.get()
         if setor_selecionado:
-            # Chama a função de atualização, passando o setor como filtro
             self.atualizar_lista_tarefas_atribuicao(filtro_setor=setor_selecionado)
 
-    # --- SEÇÃO DE CRIAÇÃO DAS ABAS ---
     def criar_aba_dashboard(self):
-        ttk.Label(self.frame_dashboard, text="Dashboard de Performance", font=("Arial", 16)).pack(pady=10)
-        frame_grafico = ttk.Frame(self.frame_dashboard); frame_grafico.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
-        fig = Figure(figsize=(8, 5), dpi=100, tight_layout=True); self.ax_ranking = fig.add_subplot(111)
-        self.canvas_grafico = FigureCanvasTkAgg(fig, master=frame_grafico)
-        self.canvas_grafico.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        btn_atualizar = ttk.Button(self.frame_dashboard, text="Atualizar Dashboard", command=self.desenhar_grafico_ranking); btn_atualizar.pack(pady=10)
-        self.desenhar_grafico_ranking()
+        """Constrói o Dashboard Operacional (Sem gráfico, com filtros)."""
+        # --- Título e Botão de Atualização Geral ---
+        frame_topo = ttk.Frame(self.frame_dashboard)
+        frame_topo.pack(fill=tk.X, padx=10, pady=5)
 
-    # Em main.py, dentro da class App
+        ttk.Label(frame_topo, text="Dashboard & Controle Operacional", font=("Arial", 16, "bold")).pack(side=tk.LEFT)
+        ttk.Button(frame_topo, text="🔄 Atualizar Tudo", command=self.atualizar_dashboard_completo).pack(side=tk.RIGHT)
+
+        # --- Área Principal: Painéis Operacionais (3 Colunas) ---
+        # Agora expande para ocupar a tela toda, já que o gráfico saiu
+        frame_operacional = ttk.Frame(self.frame_dashboard)
+        frame_operacional.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+        # === COLUNA 1: Agendamentos de Grupo (COM FILTROS) ===
+        frame_col1 = ttk.Frame(frame_operacional)
+        frame_col1.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
+
+        frame_grupos = ttk.LabelFrame(frame_col1, text="📅 Agendamentos de Grupo", padding="5")
+        frame_grupos.pack(fill=tk.BOTH, expand=True)
+
+        # Filtros de Grupo
+        frame_filtros_grupo = ttk.Frame(frame_grupos)
+        frame_filtros_grupo.pack(fill=tk.X, pady=(0, 5))
+
+        ttk.Label(frame_filtros_grupo, text="Filtrar Grupo:").pack(side=tk.LEFT)
+        self.entry_filtro_grupo_nome = ttk.Entry(frame_filtros_grupo, width=15)
+        self.entry_filtro_grupo_nome.pack(side=tk.LEFT, padx=5)
+        # Bind para atualizar ao digitar (Enter ou KeyRelease)
+        self.entry_filtro_grupo_nome.bind("<KeyRelease>", lambda e: self.atualizar_dashboard_completo())
+
+        cols_g = ('Grupo', 'Tarefa', 'Horário')
+        self.tree_audit_grupos = ttk.Treeview(frame_grupos, columns=cols_g, show='headings')
+        self.tree_audit_grupos.heading('Grupo', text='Grupo'); self.tree_audit_grupos.column('Grupo', width=100)
+        self.tree_audit_grupos.heading('Tarefa', text='Tarefa'); self.tree_audit_grupos.column('Tarefa', width=150)
+        self.tree_audit_grupos.heading('Horário', text='Hora'); self.tree_audit_grupos.column('Horário', width=60, anchor='center')
+        self.tree_audit_grupos.pack(fill=tk.BOTH, expand=True)
+
+        # === COLUNA 2: Tarefas Órfãs ===
+        frame_orfas = ttk.LabelFrame(frame_operacional, text="⚠️ Tarefas Sem Dono (Órfãs)", padding="5")
+        frame_orfas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
+
+        cols_o = ('Setor', 'Tarefa', 'Pts')
+        self.tree_audit_orfas = ttk.Treeview(frame_orfas, columns=cols_o, show='headings')
+        self.tree_audit_orfas.heading('Setor', text='Setor'); self.tree_audit_orfas.column('Setor', width=80)
+        self.tree_audit_orfas.heading('Tarefa', text='Tarefa'); self.tree_audit_orfas.column('Tarefa', width=150)
+        self.tree_audit_orfas.heading('Pts', text='Pts'); self.tree_audit_orfas.column('Pts', width=40, anchor='center')
+        self.tree_audit_orfas.pack(fill=tk.BOTH, expand=True)
+
+        # === COLUNA 3: Pendências de Hoje ===
+        frame_pendencias = ttk.LabelFrame(frame_operacional, text="🚨 Pendências de HOJE", padding="5")
+        frame_pendencias.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(5, 0))
+
+        cols_p = ('Func.', 'Tarefa', 'Tipo')
+        self.tree_audit_pendencias = ttk.Treeview(frame_pendencias, columns=cols_p, show='headings')
+        self.tree_audit_pendencias.heading('Func.', text='Nome'); self.tree_audit_pendencias.column('Func.', width=100)
+        self.tree_audit_pendencias.heading('Tarefa', text='Tarefa Pendente'); self.tree_audit_pendencias.column('Tarefa', width=150)
+        self.tree_audit_pendencias.heading('Tipo', text='Tipo'); self.tree_audit_pendencias.column('Tipo', width=60, anchor='center')
+        self.tree_audit_pendencias.pack(fill=tk.BOTH, expand=True)
+
+        # Inicializa os dados
+        self.atualizar_dashboard_completo()
+
+    def atualizar_dashboard_completo(self):
+        """Atualiza as 3 tabelas operacionais. (Gráfico Removido)."""
+
+        # 1. Limpar as tabelas
+        for i in self.tree_audit_grupos.get_children(): self.tree_audit_grupos.delete(i)
+        for i in self.tree_audit_orfas.get_children(): self.tree_audit_orfas.delete(i)
+        for i in self.tree_audit_pendencias.get_children(): self.tree_audit_pendencias.delete(i)
+
+        try:
+            # 2. Carregar Grupos (COM FILTRO)
+            dados_grupos = database.listar_cronograma_agendado_grupos()
+
+            # Captura o texto do filtro (se o widget já existir)
+            filtro_texto = ""
+            if hasattr(self, 'entry_filtro_grupo_nome'):
+                filtro_texto = self.entry_filtro_grupo_nome.get().lower()
+
+            for row in dados_grupos:
+                # row = (NomeGrupo, Titulo, TipoFreq, Horario)
+                nome_grupo = row[0]
+                nome_tarefa = row[1]
+
+                # Aplica o filtro: Se tiver texto, verifica se está no nome do grupo ou da tarefa
+                if filtro_texto:
+                    if (filtro_texto not in nome_grupo.lower()) and (filtro_texto not in nome_tarefa.lower()):
+                        continue # Pula este registro
+
+                self.tree_audit_grupos.insert("", "end", values=(nome_grupo, nome_tarefa, row[3]))
+
+            # 3. Carregar Órfãs
+            dados_orfas = database.listar_tarefas_sem_atribuicao_ativa()
+            for row in dados_orfas:
+                # row = (ID, Titulo, Pontos, Setor)
+                self.tree_audit_orfas.insert("", "end", values=(row[3] or "Geral", row[1], row[2]))
+
+            # 4. Carregar Pendências do Dia (Agora com a query corrigida no database)
+            dados_pendencias = database.listar_pendencias_gerais_hoje()
+            for row in dados_pendencias:
+                # row = (NomeFuncionario, TituloTarefa, TipoFreq)
+                self.tree_audit_pendencias.insert("", "end", values=(row[0], row[1], row[2]))
+
+        except Exception as e:
+            logger.error(f"Erro ao atualizar dashboard operacional: {e}")
+
     def atualizar_combobox_setores(self):
         """Busca os setores únicos do banco e atualiza a lista do combobox."""
         setores = database.listar_setores_unicos()
@@ -106,7 +677,6 @@ class App:
         main_frame = ttk.Frame(self.frame_agenda, padding="10")
         main_frame.pack(fill=tk.BOTH, expand=True)
 
-        # --- Frame de Filtro ---
         frame_filtro = ttk.Frame(main_frame, padding="10")
         frame_filtro.pack(fill=tk.X)
         
@@ -116,20 +686,16 @@ class App:
         self.combo_funcionarios_agenda.pack(side=tk.LEFT, padx=10)
         self.combo_funcionarios_agenda.bind("<<ComboboxSelected>>", self.exibir_agenda_funcionario)
         
-        # --- Frame da Agenda (Tabela) ---
         frame_tabela = ttk.Frame(main_frame, padding="10")
         frame_tabela.pack(fill=tk.BOTH, expand=True)
         
-        # Definindo as colunas para os dias da semana
         dias_semana = ('Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo')
         self.tree_agenda = ttk.Treeview(frame_tabela, columns=dias_semana, show='headings')
         
-        # Configurando os cabeçalhos
         for dia in dias_semana:
             self.tree_agenda.heading(dia, text=dia)
             self.tree_agenda.column(dia, width=150)
 
-        # Remove a coluna fantasma "#0"
         self.tree_agenda.column("#0", width=0, stretch=tk.NO)
         
         self.tree_agenda.pack(fill=tk.BOTH, expand=True)
@@ -143,7 +709,6 @@ class App:
         main_frame.columnconfigure(0, weight=1) 
         main_frame.columnconfigure(1, weight=1)
 
-        # --- PAINEL ESQUERDO: GESTÃO DE PRODUTOS ---
         frame_produtos = ttk.LabelFrame(main_frame, text="Gerenciar Produtos da Loja", padding="10")
         frame_produtos.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
         frame_produtos.rowconfigure(0, weight=1)
@@ -163,7 +728,6 @@ class App:
         ttk.Button(frame_botoes_prod, text="Criar Novo", command=self.abrir_janela_produto).pack(side=tk.LEFT, padx=5)
         ttk.Button(frame_botoes_prod, text="Editar", command=lambda: self.abrir_janela_produto(editar=True)).pack(side=tk.LEFT, padx=5)
 
-        # --- PAINEL DIREITO: GESTÃO DE RESGATES ---
         frame_resgates = ttk.LabelFrame(main_frame, text="Aprovar Resgates Pendentes", padding="10")
         frame_resgates.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
         frame_resgates.rowconfigure(0, weight=1)
@@ -185,13 +749,11 @@ class App:
     def carregar_funcionarios_agenda(self):
         """Carrega a lista de funcionários para o combobox da aba Agenda."""
         funcionarios = database.listar_funcionarios()
-        # Criamos um dicionário para mapear o nome exibido para o ID do funcionário
         self.dados_funcionarios_agenda = {f"{f.NomeCompleto} (ID: {f.FuncionarioID})": f.FuncionarioID for f in funcionarios}
         self.combo_funcionarios_agenda['values'] = list(self.dados_funcionarios_agenda.keys())
 
     def exibir_agenda_funcionario(self, event=None):
         """Busca as tarefas do funcionário selecionado e as exibe na agenda semanal."""
-        # Limpa a tabela
         for i in self.tree_agenda.get_children():
             self.tree_agenda.delete(i)
 
@@ -202,7 +764,6 @@ class App:
         funcionario_id = self.dados_funcionarios_agenda[nome_selecionado]
         tarefas = database.listar_agenda_semanal_por_funcionario(funcionario_id)
         
-        # Dicionário para organizar as tarefas por dia
         agenda_semanal = {
             '2': [], '3': [], '4': [], '5': [], '6': [], '7': [], '1': []
         }
@@ -212,14 +773,11 @@ class App:
             if tarefa.TipoFrequencia == 'Diaria':
                 tarefas_diarias.append(tarefa.Titulo)
             elif tarefa.TipoFrequencia == 'Semanal':
-                # ValorFrequencia: 1=Dom, 2=Seg, ..., 7=Sab
                 agenda_semanal[str(tarefa.ValorFrequencia)].append(tarefa.Titulo)
         
-        # Preenche as tarefas diárias em todos os dias da semana
         for dia in agenda_semanal:
             agenda_semanal[dia].extend(tarefas_diarias)
 
-        # Encontra o número máximo de tarefas em um único dia para criar as linhas
         max_linhas = 0
         for tarefas_do_dia in agenda_semanal.values():
             if len(tarefas_do_dia) > max_linhas:
@@ -228,7 +786,6 @@ class App:
         if max_linhas == 0 and not tarefas_diarias:
             return
 
-        # Insere as linhas na tabela
         for i in range(max_linhas):
             linha = (
                 agenda_semanal['2'][i] if i < len(agenda_semanal['2']) else "",
@@ -241,73 +798,69 @@ class App:
             )
             self.tree_agenda.insert("", "end", values=linha)
 
-    # Em main.py, SUBSTITUA a função desenhar_grafico_ranking inteira:
-    # Em main.py, SUBSTITUA a função antiga por esta versão com espaçamento aprimorado
-
     def desenhar_grafico_ranking(self):
-        self.ax_ranking.clear()
-        
-        # Usando a calculadora de desempenho original conforme seu código
-        ranking_data = database.calcular_ranking_desempenho()[:5]
+        try: # <--- ADICIONADO TRY
+            self.ax_ranking.clear()
+            ranking_data = database.calcular_ranking_desempenho()[:5] # Pode falhar
 
-        if not ranking_data:
-            self.ax_ranking.text(0.5, 0.5, "Sem dados para exibir.", ha='center', va='center')
-            self.canvas_grafico.draw()
-            return
+            if not ranking_data:
+                self.ax_ranking.text(0.5, 0.5, "Sem dados para exibir.", ha='center', va='center')
+                self.canvas_grafico.draw()
+                return
 
-        ranking_data.reverse() 
-        nomes = [row['NomeCompleto'] for row in ranking_data]
-        percentuais = [row['Desempenho'] for row in ranking_data]
-        
-        # <<< MUDANÇA 1: Ajustando a espessura das barras
-        # Adicionamos o parâmetro 'height' para que as barras não sejam tão grossas. 0.6 é um bom valor.
-        self.ax_ranking.barh(nomes, percentuais, color='skyblue', height=0.6)
-        
-        # Adiciona o valor do percentual no final de cada barra
-        for index, value in enumerate(percentuais):
-            # <<< MUDANÇA 2: Adicionando espaçamento e alinhamento
-            # Adicionamos '+ 0.5' ao 'value' para criar uma margem à direita da barra.
-            # Adicionamos 'va='center'' para garantir que o texto fique perfeitamente alinhado no meio da barra.
-            self.ax_ranking.text(value + 0.5, index, f' {value}%', va='center')
+            ranking_data.reverse() 
+            nomes = [row['NomeCompleto'] for row in ranking_data]
+            percentuais = [row['Desempenho'] for row in ranking_data]
             
-        self.ax_ranking.set_title('Top 5 Funcionários por Desempenho (%)')
-        self.ax_ranking.set_xlabel('Percentual de Desempenho')
-        self.ax_ranking.set_xlim(0, 110)
-        self.ax_ranking.spines['top'].set_visible(False)
-        self.ax_ranking.spines['right'].set_visible(False)
+            self.ax_ranking.barh(nomes, percentuais, color='skyblue', height=0.6)
+            
+            for index, value in enumerate(percentuais):
+                self.ax_ranking.text(value + 0.5, index, f' {value}%', va='center')
+                
+            self.ax_ranking.set_title('Top 5 Funcionários por Desempenho (%)')
+            self.ax_ranking.set_xlabel('Percentual de Desempenho')
+            self.ax_ranking.set_xlim(0, 110)
+            self.ax_ranking.spines['top'].set_visible(False)
+            self.ax_ranking.spines['right'].set_visible(False)
+            
+            self.canvas_grafico.figure.tight_layout()
+            
+            self.canvas_grafico.draw()
         
-        # <<< MUDANÇA 3: Garantindo que o layout não se sobreponha
-        # Força o Matplotlib a ajustar todos os elementos para que caibam sem cortar títulos ou eixos.
-        self.canvas_grafico.figure.tight_layout()
-        
-        self.canvas_grafico.draw()
-
+        except Exception as e: # <--- ADICIONADO EXCEPT
+            logger.exception(f"Erro ao desenhar gráfico de ranking: {e}")
+            messagebox.showerror("Erro Gráfico", f"Não foi possível gerar o gráfico de ranking:\n{e}", parent=self.root)
+            # Limpa o eixo em caso de erro para não mostrar gráfico antigo
+            if hasattr(self, 'ax_ranking'):
+                self.ax_ranking.clear()
+                self.ax_ranking.text(0.5, 0.5, "Erro ao carregar dados.", ha='center', va='center', color='red')
+            if hasattr(self, 'canvas_grafico'):
+                self.canvas_grafico.draw()
 
     def on_funcionario_selecionado(self, event):
         """Chamada quando um funcionário é selecionado na lista."""
-        # Limpa a lista de tarefas do funcionário anterior
-        for i in self.tree_tarefas_funcionario.get_children():
-            self.tree_tarefas_funcionario.delete(i)
+        try: # <--- ADICIONADO TRY
+            for i in self.tree_tarefas_funcionario.get_children():
+                self.tree_tarefas_funcionario.delete(i)
 
-        indices = self.lista_funcionarios.curselection()
-        if not indices:
-            return
+            indices = self.lista_funcionarios.curselection()
+            if not indices: return
 
-        # Pega o ID do funcionário selecionado
-        texto_selecionado = self.lista_funcionarios.get(indices[0])
-        funcionario_selecionado = self.dados_funcionarios[texto_selecionado]
-        funcionario_id = funcionario_selecionado.FuncionarioID
+            texto_selecionado = self.lista_funcionarios.get(indices[0])
+            funcionario_selecionado = self.dados_funcionarios[texto_selecionado] # Pode dar KeyError se dados_funcionarios estiver vazio
+            funcionario_id = funcionario_selecionado.FuncionarioID
 
-        # Busca as tarefas ativas para esse funcionário no banco
-        tarefas_ativas = database.listar_atribuicoes_ativas_por_funcionario(funcionario_id)
-
-        # Preenche a nova lista de tarefas
-        for tarefa in tarefas_ativas:
-            self.tree_tarefas_funcionario.insert("", "end", values=tuple(tarefa))
-        
-        # Opcional: muda para a aba de tarefas automaticamente
-        self.notebook_funcionarios.select(self.notebook_funcionarios.tabs()[1])
-
+            tarefas_ativas = database.listar_atribuicoes_ativas_por_funcionario(funcionario_id) # Pode falhar
+            for tarefa in tarefas_ativas:
+                self.tree_tarefas_funcionario.insert("", "end", values=tuple(tarefa))
+            # [CORREÇÃO] Removida a mudança forçada de aba para não interromper o fluxo do gestor
+            # self.notebook_funcionarios.select(self.notebook_funcionarios.tabs()[1])
+        except KeyError as e: # <--- ADICIONADO EXCEPT ESPECÍFICO
+             logger.error(f"Erro ao buscar dados do funcionário selecionado: {e}")
+             messagebox.showerror("Erro Interno", f"Não foi possível encontrar os dados do funcionário selecionado na memória:\n{e}", parent=self.root)
+        except Exception as e: # <--- ADICIONADO EXCEPT GENÉRICO
+            logger.exception(f"Erro em on_funcionario_selecionado: {e}")
+            messagebox.showerror("Erro", f"Não foi possível carregar as tarefas ativas do funcionário:\n{e}", parent=self.root)
 
     def criar_aba_funcionarios(self):
         main_frame = ttk.Frame(self.frame_funcionarios, padding="10")
@@ -371,6 +924,14 @@ class App:
         btn_zerar_pontos = ttk.Button(frame_direita_acoes, text="Zerar Pontos do Mês", command=self.zerar_pontos_do_funcionario_selecionado); btn_zerar_pontos.pack(pady=10, fill='x', ipady=5)
         btn_excluir_func = ttk.Button(frame_direita_acoes, text="Excluir Funcionário", command=self.excluir_funcionario_selecionado, style="Danger.TButton"); btn_excluir_func.pack(pady=10, fill='x', ipady=5)
         
+        # Botão de Emergência para Ausência
+        ttk.Separator(frame_direita_acoes, orient='horizontal').pack(fill='x', pady=15)
+        lbl_emergencia = ttk.Label(frame_direita_acoes, text="🚨 Área de Emergência", foreground="red", font=("Arial", 9, "bold"))
+        lbl_emergencia.pack(pady=(0, 5))
+
+        btn_forcar_drop = ttk.Button(frame_direita_acoes, text="📢 Lançar Tarefas no Grupo (Falta/Atestado)", command=self.forcar_drop_selecionado)
+        btn_forcar_drop.pack(pady=5, fill='x', ipady=5)
+
         style = ttk.Style()
         style.configure("Danger.TButton", foreground="red")
         
@@ -411,151 +972,167 @@ class App:
         self.atualizar_lista_grupos()
 
     def popular_paineis_de_membros(self, event):
-        """
-        Esta função é chamada SEMPRE que um grupo é selecionado na lista.
-        Ela busca os membros e não-membros do grupo no banco de dados e atualiza as listas.
-        """
-        # Limpa as duas listas (de membros e não-membros) antes de preenchê-las
-        for i in self.tree_membros.get_children():
-            self.tree_membros.delete(i)
-        for i in self.tree_nao_membros.get_children():
-            self.tree_nao_membros.delete(i)
+        """Atualiza as listas de membros e não-membros de um grupo."""
+        try: # <--- ADICIONADO TRY
+            for i in self.tree_membros.get_children(): self.tree_membros.delete(i)
+            for i in self.tree_nao_membros.get_children(): self.tree_nao_membros.delete(i)
 
-        # Pega o item que foi selecionado na lista de grupos
-        selecionado = self.tree_grupos.focus()
-        if not selecionado:
-            return # Se nada estiver selecionado, não faz nada
+            selecionado = self.tree_grupos.focus()
+            if not selecionado: return
+            dados_grupo = self.tree_grupos.item(selecionado, 'values')
+            if not dados_grupo: return
+            grupo_id = dados_grupo[0]
 
-        # Pega o ID do grupo a partir dos valores da linha selecionada
-        dados_grupo = self.tree_grupos.item(selecionado, 'values')
-        if not dados_grupo:
-            return # Se a linha estiver vazia, não faz nada
-            
-        grupo_id = dados_grupo[0]
+            membros, nao_membros = database.listar_membros_e_nao_membros(grupo_id) # Pode falhar
 
-        # Busca no banco de dados quem é membro e quem não é
-        membros, nao_membros = database.listar_membros_e_nao_membros(grupo_id)
-
-        # Preenche a lista da direita (membros atuais)
-        for membro in membros:
-            self.tree_membros.insert("", "end", values=(membro.FuncionarioID, membro.NomeCompleto))
-        
-        # Preenche a lista da esquerda (funcionários disponíveis para adicionar)
-        for nao_membro in nao_membros:
-            self.tree_nao_membros.insert("", "end", values=(nao_membro.FuncionarioID, nao_membro.NomeCompleto))    
+            for membro in membros: self.tree_membros.insert("", "end", values=(membro.FuncionarioID, membro.NomeCompleto))
+            for nao_membro in nao_membros: self.tree_nao_membros.insert("", "end", values=(nao_membro.FuncionarioID, nao_membro.NomeCompleto))
+        except Exception as e: # <--- ADICIONADO EXCEPT
+            logger.exception(f"Erro ao popular painéis de membros para grupo ID {grupo_id if 'grupo_id' in locals() else 'N/A'}: {e}")
+            messagebox.showerror("Erro de Banco", f"Não foi possível carregar os membros do grupo:\n{e}", parent=self.root)   
 
     def atualizar_lista_grupos(self):
         """Limpa e recarrega a lista de grupos do banco de dados."""
-        for i in self.tree_grupos.get_children():
-            self.tree_grupos.delete(i)
-        for grupo in database.listar_grupos():
-            self.tree_grupos.insert("", "end", values=(grupo.GrupoID, grupo.NomeGrupo, grupo.ChatIDTelegram))
+        try: # <--- ADICIONADO TRY
+            for i in self.tree_grupos.get_children(): self.tree_grupos.delete(i)
+            for grupo in database.listar_grupos(): # Pode falhar
+                self.tree_grupos.insert("", "end", values=(grupo.GrupoID, grupo.NomeGrupo, grupo.ChatIDTelegram))
+        except Exception as e: # <--- ADICIONADO EXCEPT
+            logger.exception(f"Erro ao atualizar lista de grupos: {e}")
+            messagebox.showerror("Erro de Banco", f"Não foi possível carregar a lista de grupos:\n{e}", parent=self.root)
 
     def criar_novo_grupo(self):
         """Abre pop-ups para pedir o nome e o chat_id e cria um novo grupo."""
-        nome = simpledialog.askstring("Novo Grupo", "Digite o nome do novo grupo:", parent=self.root)
-        if nome:
-            chat_id = simpledialog.askstring("Chat ID", f"Digite o Chat ID do Telegram para o grupo '{nome}':", parent=self.root)
-            if chat_id:
-                database.criar_grupo(nome, chat_id)
-                self.atualizar_lista_grupos() # Atualiza a lista para mostrar o novo grupo
+        try: # <--- ADICIONADO TRY (para simpledialog e banco)
+            nome = simpledialog.askstring("Novo Grupo", "Digite o nome do novo grupo:", parent=self.root) # Pode retornar None
+            if nome:
+                chat_id = simpledialog.askstring("Chat ID", f"Digite o Chat ID do Telegram para o grupo '{nome}':", parent=self.root) # Pode retornar None
+                if chat_id:
+                    database.criar_grupo(nome, chat_id) # Pode falhar
+                    self.atualizar_lista_grupos()
+        except Exception as e: # <--- ADICIONADO EXCEPT
+            logger.exception(f"Erro ao criar novo grupo: {e}")
+            messagebox.showerror("Erro", f"Não foi possível criar o grupo:\n{e}", parent=self.root)
 
     def editar_grupo_selecionado(self):
         """Pega o grupo selecionado e abre pop-ups para editar seus dados."""
         selecionado = self.tree_grupos.focus()
         if not selecionado:
-            messagebox.showwarning("Aviso", "Por favor, selecione um grupo para editar.")
+            messagebox.showwarning("Aviso", "Por favor, selecione um grupo para editar.", parent=self.root) # Adicionado parent
             return
 
-        dados_grupo = self.tree_grupos.item(selecionado, 'values')
-        grupo_id, nome_antigo, chat_id_antigo = dados_grupo
+        try: # <--- ADICIONADO TRY (para simpledialog e banco)
+            dados_grupo = self.tree_grupos.item(selecionado, 'values')
+            grupo_id, nome_antigo, chat_id_antigo = dados_grupo
 
-        novo_nome = simpledialog.askstring("Editar Grupo", "Digite o novo nome do grupo:", initialvalue=nome_antigo, parent=self.root)
-        if novo_nome:
-            novo_chat_id = simpledialog.askstring("Editar Chat ID", "Digite o novo Chat ID do Telegram:", initialvalue=chat_id_antigo, parent=self.root)
-            if novo_chat_id:
-                database.atualizar_grupo(grupo_id, novo_nome, novo_chat_id)
-                self.atualizar_lista_grupos()
+            novo_nome = simpledialog.askstring("Editar Grupo", "Digite o novo nome do grupo:", initialvalue=nome_antigo, parent=self.root) # Pode retornar None
+            if novo_nome:
+                novo_chat_id = simpledialog.askstring("Editar Chat ID", "Digite o novo Chat ID do Telegram:", initialvalue=chat_id_antigo, parent=self.root) # Pode retornar None
+                if novo_chat_id:
+                    database.atualizar_grupo(grupo_id, novo_nome, novo_chat_id) # Pode falhar
+                    self.atualizar_lista_grupos()
+        except Exception as e: # <--- ADICIONADO EXCEPT
+            logger.exception(f"Erro ao editar grupo ID {grupo_id if 'grupo_id' in locals() else 'N/A'}: {e}")
+            messagebox.showerror("Erro", f"Não foi possível editar o grupo:\n{e}", parent=self.root)
 
     def excluir_grupo_selecionado(self):
         """Exclui o grupo selecionado após uma confirmação."""
         selecionado = self.tree_grupos.focus()
         if not selecionado:
-            messagebox.showwarning("Aviso", "Por favor, selecione um grupo para excluir.")
+            messagebox.showwarning("Aviso", "Por favor, selecione um grupo para excluir.", parent=self.root) # Adicionado parent
             return
 
         dados_grupo = self.tree_grupos.item(selecionado, 'values')
         grupo_id, nome_grupo, _ = dados_grupo
 
-        if messagebox.askyesno("Confirmar Exclusão", f"Tem certeza que deseja excluir o grupo '{nome_grupo}'?"):
-            database.excluir_grupo(grupo_id)
-            self.atualizar_lista_grupos()
+        if messagebox.askyesno("Confirmar Exclusão", f"Tem certeza que deseja excluir o grupo '{nome_grupo}'?", parent=self.root): # Adicionado parent
+            try: # <--- ADICIONADO TRY
+                database.excluir_grupo(grupo_id) # Pode falhar
+                self.atualizar_lista_grupos()
+            except Exception as e: # <--- ADICIONADO EXCEPT
+                logger.exception(f"Erro ao excluir grupo ID {grupo_id}: {e}")
+                messagebox.showerror("Erro", f"Não foi possível excluir o grupo:\n{e}", parent=self.root)
 
     def adicionar_membros_ao_grupo(self):
         """Adiciona os funcionários selecionados da lista de 'disponíveis' ao grupo."""
         grupo_selecionado = self.tree_grupos.focus()
         if not grupo_selecionado:
-            messagebox.showwarning("Aviso", "Selecione um grupo primeiro.")
+            messagebox.showwarning("Aviso", "Selecione um grupo primeiro.", parent=self.root) # Adicionado parent
             return
-        
         funcionarios_selecionados = self.tree_nao_membros.selection()
         if not funcionarios_selecionados:
-            messagebox.showwarning("Aviso", "Selecione pelo menos um funcionário da lista de 'Disponíveis'.")
+            messagebox.showwarning("Aviso", "Selecione pelo menos um funcionário da lista de 'Disponíveis'.", parent=self.root) # Adicionado parent
             return
 
         grupo_id = self.tree_grupos.item(grupo_selecionado, 'values')[0]
-        for item in funcionarios_selecionados:
-            funcionario_id = self.tree_nao_membros.item(item, 'values')[0]
-            database.adicionar_membro_ao_grupo(funcionario_id, grupo_id)
+        try: # <--- ADICIONADO TRY (em volta do loop)
+            erros = 0
+            for item in funcionarios_selecionados:
+                try: # Try interno para continuar mesmo se um falhar
+                    funcionario_id = self.tree_nao_membros.item(item, 'values')[0]
+                    database.adicionar_membro_ao_grupo(funcionario_id, grupo_id) # Pode falhar
+                except Exception as e_inner:
+                    erros += 1
+                    logger.error(f"Erro ao adicionar membro {funcionario_id} ao grupo {grupo_id}: {e_inner}")
 
-        # Dispara o evento de seleção novamente para atualizar os painéis
-        self.popular_paineis_de_membros(None) 
+            self.popular_paineis_de_membros(None) # Atualiza as listas
+
+            if erros > 0:
+                 messagebox.showwarning("Atenção", f"{len(funcionarios_selecionados) - erros} membro(s) adicionado(s), mas {erros} falharam.", parent=self.root)
+            # else: # Opcional: Mostrar sucesso se nenhum erro
+            #    messagebox.showinfo("Sucesso", f"{len(funcionarios_selecionados)} membro(s) adicionado(s).", parent=self.root)
+
+        except Exception as e: # <--- ADICIONADO EXCEPT (para erros inesperados no processo)
+            logger.exception(f"Erro inesperado ao adicionar membros ao grupo ID {grupo_id}: {e}")
+            messagebox.showerror("Erro Inesperado", f"Ocorreu um erro ao adicionar membros:\n{e}", parent=self.root) 
     
     def remover_membros_do_grupo(self):
         """Remove os funcionários selecionados da lista de 'membros' do grupo."""
         grupo_selecionado = self.tree_grupos.focus()
         if not grupo_selecionado:
-            messagebox.showwarning("Aviso", "Selecione um grupo primeiro.")
+            messagebox.showwarning("Aviso", "Selecione um grupo primeiro.", parent=self.root) # Adicionado parent
             return
-
         funcionarios_selecionados = self.tree_membros.selection()
         if not funcionarios_selecionados:
-            messagebox.showwarning("Aviso", "Selecione pelo menos um funcionário da lista de 'Membros Atuais'.")
+            messagebox.showwarning("Aviso", "Selecione pelo menos um funcionário da lista de 'Membros Atuais'.", parent=self.root) # Adicionado parent
             return
 
         grupo_id = self.tree_grupos.item(grupo_selecionado, 'values')[0]
-        for item in funcionarios_selecionados:
-            funcionario_id = self.tree_membros.item(item, 'values')[0]
-            database.remover_membro_do_grupo(funcionario_id, grupo_id)
-        
-        # Dispara o evento de seleção novamente para atualizar os painéis
-        self.popular_paineis_de_membros(None)        
+        try: # <--- ADICIONADO TRY (em volta do loop)
+            erros = 0
+            for item in funcionarios_selecionados:
+                try: # Try interno
+                    funcionario_id = self.tree_membros.item(item, 'values')[0]
+                    database.remover_membro_do_grupo(funcionario_id, grupo_id) # Pode falhar
+                except Exception as e_inner:
+                    erros += 1
+                    logger.error(f"Erro ao remover membro {funcionario_id} do grupo {grupo_id}: {e_inner}")
 
-    # COPIE ESTE BLOCO DE CÓDIGO INTEIRO E COLE NO LUGAR DO ANTIGO
-    # Em main.py, SUBSTITUA a função atualizar_lista_tarefas_atribuicao por esta:
+            self.popular_paineis_de_membros(None) # Atualiza as listas
+
+            if erros > 0:
+                 messagebox.showwarning("Atenção", f"{len(funcionarios_selecionados) - erros} membro(s) removido(s), mas {erros} falharam.", parent=self.root)
+
+        except Exception as e: # <--- ADICIONADO EXCEPT (geral)
+            logger.exception(f"Erro inesperado ao remover membros do grupo ID {grupo_id}: {e}")
+            messagebox.showerror("Erro Inesperado", f"Ocorreu um erro ao remover membros:\n{e}", parent=self.root)        
 
     def atualizar_lista_tarefas_atribuicao(self, filtro_setor=None):
         """(VERSÃO FINAL) Carrega a lista de tarefas, agrupada por setor, aplicando um filtro opcional."""
-        for i in self.tree_atr_tarefas.get_children():
-            self.tree_atr_tarefas.delete(i)
-
-        setores_nodes = {}
-        
-        # Passamos o filtro para a função do banco de dados
-        tarefas = database.listar_tarefas_para_atribuicao(filtro_setor)
-
-        for tarefa in tarefas:
-            setor_nome = tarefa.Setor if tarefa.Setor else "Outras Tarefas"
-
-            if setor_nome not in setores_nodes:
-                setor_node = self.tree_atr_tarefas.insert("", "end", text=setor_nome, open=True) # open=True para já vir expandido
-                setores_nodes[setor_nome] = setor_node
-            else:
-                setor_node = setores_nodes[setor_nome]
-
-            self.tree_atr_tarefas.insert(setor_node, "end", text=tarefa.Titulo, values=(tarefa.TarefaID, tarefa.Titulo))
-
-    # Em main.py, substitua a função antiga por esta:
+        try: # <--- ADICIONADO TRY
+            for i in self.tree_atr_tarefas.get_children(): self.tree_atr_tarefas.delete(i)
+            setores_nodes = {}
+            tarefas = database.listar_tarefas_para_atribuicao(filtro_setor) # Pode falhar
+            for tarefa in tarefas:
+                setor_nome = tarefa.Setor if tarefa.Setor else "Outras Tarefas"
+                if setor_nome not in setores_nodes:
+                    setor_node = self.tree_atr_tarefas.insert("", "end", text=setor_nome, open=True)
+                    setores_nodes[setor_nome] = setor_node
+                else: setor_node = setores_nodes[setor_nome]
+                self.tree_atr_tarefas.insert(setor_node, "end", text=tarefa.Titulo, values=(tarefa.TarefaID, tarefa.Titulo))
+        except Exception as e: # <--- ADICIONADO EXCEPT
+            logger.exception(f"Erro ao atualizar lista de tarefas para atribuição: {e}")
+            messagebox.showerror("Erro de Banco", f"Não foi possível carregar a lista de tarefas:\n{e}", parent=self.root)
 
     def filtrar_lista_tarefas_atribuicao(self):
         """
@@ -564,23 +1141,21 @@ class App:
         """
         termo_busca = self.entry_filtro_atr_tarefas.get().lower()
 
-        # Limpa a árvore de tarefas completamente
         for i in self.tree_atr_tarefas.get_children():
             self.tree_atr_tarefas.delete(i)
+        # [CORREÇÃO] Captura o setor selecionado para manter a consistência do filtro
+        setor_selecionado = self.combo_filtro_setor.get()
+        filtro_db = setor_selecionado if setor_selecionado else None
 
-        # Reutiliza a mesma lógica da função principal de atualização
         setores_nodes = {}
-        
-        # Busca todas as tarefas disponíveis no banco
-        tarefas = database.listar_tarefas_para_atribuicao()
+        # Passa o filtro de setor para o banco junto com a busca textual local
+        tarefas = database.listar_tarefas_para_atribuicao(filtro_setor=filtro_db)
 
-        # Itera sobre as tarefas e aplica o filtro ANTES de inserir na árvore
         for tarefa in tarefas:
-            # A MÁGICA ESTÁ AQUI: Só continua se o termo de busca estiver no título
+          
             if termo_busca not in tarefa.Titulo.lower():
                 continue # Pula para a próxima tarefa
 
-            # O resto do código é idêntico ao de 'atualizar_lista_tarefas_atribuicao'
             setor_nome = tarefa.Setor if tarefa.Setor else "Outras Tarefas"
 
             if setor_nome not in setores_nodes:
@@ -592,32 +1167,21 @@ class App:
             self.tree_atr_tarefas.insert(setor_node, "end", text=tarefa.Titulo, values=(tarefa.TarefaID, tarefa.Titulo))
 
     def atualizar_painel_selecao(self, tarefa_id=None):
-        """
-        Atualiza a lista de alvos (funcionários ou grupos).
-        Se um tarefa_id for fornecido, filtra os funcionários.
-        """
-        for i in self.tree_atr_selecao.get_children():
-            self.tree_atr_selecao.delete(i)
-        
-        modo = self.modo_atribuicao.get()
-        if modo == "Individual":
-            # --- LÓGICA NOVA E INTELIGENTE ---
-            if tarefa_id:
-                # Se temos uma tarefa, usamos a nova função do banco
-                _, disponiveis = database.listar_funcionarios_por_tarefa(tarefa_id)
-                alvos = disponiveis # Usaremos apenas a lista de disponíveis
-            else:
-                # Se nenhuma tarefa foi selecionada, mostra todos como antes
-                alvos = database.listar_funcionarios()
-            
-            for alvo in alvos:
-                self.tree_atr_selecao.insert("", "end", values=(alvo.FuncionarioID, alvo.NomeCompleto))
-
-        elif modo == "Grupo":
-            # Para grupos, a lógica continua a mesma de antes
-            alvos = database.listar_grupos()
-            for alvo in alvos:
-                self.tree_atr_selecao.insert("", "end", values=(alvo.GrupoID, alvo.NomeGrupo))
+        """Atualiza a lista de alvos (funcionários ou grupos)."""
+        try: # <--- ADICIONADO TRY
+            for i in self.tree_atr_selecao.get_children(): self.tree_atr_selecao.delete(i)
+            modo = self.modo_atribuicao.get()
+            if modo == "Individual":
+                if tarefa_id: _, disponiveis = database.listar_funcionarios_por_tarefa(tarefa_id) # Pode falhar
+                else: disponiveis = database.listar_funcionarios() # Pode falhar
+                alvos = disponiveis
+                for alvo in alvos: self.tree_atr_selecao.insert("", "end", values=(alvo.FuncionarioID, alvo.NomeCompleto))
+            elif modo == "Grupo":
+                alvos = database.listar_grupos() # Pode falhar
+                for alvo in alvos: self.tree_atr_selecao.insert("", "end", values=(alvo.GrupoID, alvo.NomeGrupo))
+        except Exception as e: # <--- ADICIONADO EXCEPT
+            logger.exception(f"Erro ao atualizar painel de seleção (alvos): {e}")
+            messagebox.showerror("Erro de Banco", f"Não foi possível carregar a lista de alvos:\n{e}", parent=self.root)
 
     def atualizar_lista_atribuicoes_ativas(self):
         """Carrega/Atualiza a lista de tarefas que já foram atribuídas."""
@@ -627,43 +1191,33 @@ class App:
             self.tree_atribuicoes_ativas.insert("", "end", values=atribuicao)
 
     def desatribuir_tarefa_selecionada(self):
-        """
-        Encerra a validade de uma atribuição e atualiza AMBAS as listas na tela.
-        """
-        # Primeiro, verificamos qual tarefa está selecionada no painel 1 (de tarefas)
-        # para sabermos qual contexto de funcionários recarregar depois.
+        """Encerra a validade de uma atribuição e atualiza AMBAS as listas na tela."""
+        # Validações (fora do try)
         tarefa_selecionada_item = self.tree_atr_tarefas.focus()
-        if not tarefa_selecionada_item:
-            messagebox.showwarning("Aviso", "Por favor, selecione uma tarefa no painel da esquerda primeiro.")
-            return
-
-        # Agora, verificamos qual atribuição está selecionada no painel 3 (de atribuições)
+        if not tarefa_selecionada_item: messagebox.showwarning("Aviso", "...", parent=self.root); return # Adicionado parent
         atribuicao_selecionada_item = self.tree_atribuicoes_ativas.focus()
-        if not atribuicao_selecionada_item:
-            messagebox.showwarning("Aviso", "Selecione uma atribuição da lista da direita para encerrar.")
-            return
-        
-        # Com tudo selecionado, pegamos os IDs de que precisamos
+        if not atribuicao_selecionada_item: messagebox.showwarning("Aviso", "...", parent=self.root); return # Adicionado parent
         atribuicao_id = self.tree_atribuicoes_ativas.item(atribuicao_selecionada_item, 'values')[0]
         tarefa_id_contexto = self.tree_atr_tarefas.item(tarefa_selecionada_item, 'values')[0]
-        
-        if messagebox.askyesno("Confirmar Encerramento", "Tem certeza que deseja encerrar esta atribuição?\n\nA tarefa não será mais considerada para o funcionário a partir de hoje."):
-            # 1. Encerra a atribuição no banco de dados
-            database.encerrar_atribuicao_tarefa(atribuicao_id)
 
-            # 2. Atualiza a lista da DIREITA (Atribuições Ativas)
-            self.atualizar_lista_atribuicoes_ativas()
+        if messagebox.askyesno("Confirmar Encerramento", "...", parent=self.root): # Adicionado parent
+            try: # <--- ADICIONADO TRY
+                database.encerrar_atribuicao_tarefa(atribuicao_id) # Pode falhar
+                self.atualizar_lista_atribuicoes_ativas() # Pode falhar
+                self.atualizar_painel_selecao(tarefa_id=tarefa_id_contexto) # Pode falhar
+                messagebox.showinfo("Sucesso", "Atribuição encerrada com sucesso.", parent=self.root) # Adicionado parent
+            except Exception as e: # <--- ADICIONADO EXCEPT
+                logger.exception(f"Erro ao desatribuir tarefa (AtribuicaoID {atribuicao_id}): {e}")
+                messagebox.showerror("Erro", f"Não foi possível encerrar a atribuição:\n{e}", parent=self.root)
 
-            # 3. A CORREÇÃO MÁGICA: Atualiza a lista do MEIO (Alvos Disponíveis)
-            self.atualizar_painel_selecao(tarefa_id=tarefa_id_contexto)
-            
-            messagebox.showinfo("Sucesso", "Atribuição encerrada com sucesso.")
 
+    # Em main.py, SUBSTITUA a função inteira abrir_popup_frequencia_universal por esta:
 
     def abrir_popup_frequencia_universal(self):
         """
-        Abre um pop-up inteligente para atribuição e
-        garante que a tela principal seja atualizada após a ação. (VERSÃO COM BLOQUEIO DE DUPLICIDADE)
+        (VERSÃO REVISADA - BOTÕES CORRIGIDOS)
+        Abre um pop-up inteligente para atribuição individual OU de grupo,
+        com as opções de frequência corretas e os botões corretos para cada modo.
         """
         tarefa_selecionada_item = self.tree_atr_tarefas.focus()
         alvos_selecionados_items = self.tree_atr_selecao.selection()
@@ -672,79 +1226,201 @@ class App:
             messagebox.showwarning("Aviso", "Selecione uma tarefa e pelo menos um alvo (funcionário ou grupo).")
             return
 
-        tarefa_id = self.tree_atr_tarefas.item(tarefa_selecionada_item, 'values')[0]
-        tarefa_titulo = self.tree_atr_tarefas.item(tarefa_selecionada_item, 'values')[1]
+        values_tarefa = self.tree_atr_tarefas.item(tarefa_selecionada_item, 'values')
+        if not values_tarefa or not values_tarefa[0]:
+            messagebox.showwarning("Aviso", "Por favor, selecione uma TAREFA específica, não um setor.")
+            return
+        tarefa_id = values_tarefa[0]
+        tarefa_titulo = values_tarefa[1]
 
         popup = tk.Toplevel(self.root)
         popup.title(f"Atribuir '{tarefa_titulo}'")
         frame = ttk.Frame(popup, padding="10"); frame.pack(fill="both", expand=True)
         modo = self.modo_atribuicao.get()
 
+        # ===========================================================
+        # == BLOCO PARA ATRIBUIÇÃO DE GRUPO =========================
+        # ===========================================================
         if modo == "Grupo":
-            # ... (a lógica de grupo não muda)
-            popup.geometry("300x200")
-            ttk.Label(frame, text="Disparar esta tarefa para o grupo no horário:").pack(pady=5)
-            horario_var = tk.StringVar(value="18:00"); ttk.Entry(frame, textvariable=horario_var, width=10).pack(pady=5)
+            popup.geometry("400x450")
+            # --- Interface do Grupo (sem alterações) ---
+            ttk.Label(frame, text="Selecione a Frequência de Oferta:", font=("Arial", 11, "bold")).pack(anchor=tk.W, pady=(0,10))
+            frequencia_grupo = tk.StringVar(value="Diaria")
+            frame_radios = ttk.Frame(frame); frame_radios.pack(fill=tk.X)
+            ttk.Radiobutton(frame_radios, text="Diária", variable=frequencia_grupo, value="Diaria").pack(side=tk.LEFT, padx=5)
+            ttk.Radiobutton(frame_radios, text="Semanal", variable=frequencia_grupo, value="Semanal").pack(side=tk.LEFT, padx=5)
+            ttk.Radiobutton(frame_radios, text="Mensal", variable=frequencia_grupo, value="Mensal").pack(side=tk.LEFT, padx=5)
+            frame_semanal = ttk.Frame(frame, padding=(10, 5, 0, 0))
+            ttk.Label(frame_semanal, text="Selecione os dias da semana:").pack(anchor=tk.W)
+            frame_checks = ttk.Frame(frame_semanal); frame_checks.pack(fill=tk.X)
+            dias_semana_vars_grupo = {"Dom": (tk.BooleanVar(), "1"), "Seg": (tk.BooleanVar(), "2"),"Ter": (tk.BooleanVar(), "3"), "Qua": (tk.BooleanVar(), "4"),"Qui": (tk.BooleanVar(), "5"), "Sex": (tk.BooleanVar(), "6"),"Sáb": (tk.BooleanVar(), "7")}
+            for dia, (var, _) in dias_semana_vars_grupo.items(): ttk.Checkbutton(frame_checks, text=dia, variable=var).pack(side=tk.LEFT)
+            frame_mensal = ttk.Frame(frame, padding=(10, 5, 0, 0))
+            ttk.Label(frame_mensal, text="Digite o dia do mês (1-31):").pack(side=tk.LEFT)
+            valor_mensal_grupo = tk.StringVar()
+            entry_mensal = ttk.Entry(frame_mensal, textvariable=valor_mensal_grupo, width=5); entry_mensal.pack(side=tk.LEFT, padx=5)
+            frame_horario = ttk.Frame(frame, padding=(0, 15, 0, 0)); frame_horario.pack(fill=tk.X)
+            ttk.Label(frame_horario, text="Horário de Disparo (HH:MM):").pack(side=tk.LEFT)
+            horario_var_grupo = tk.StringVar(value="19:00")
+            ttk.Entry(frame_horario, textvariable=horario_var_grupo, width=10).pack(side=tk.LEFT, padx=5)
+            
+            # --- CORREÇÃO DE LÓGICA DE LAYOUT ---
+            # 1. Definimos o botão, mas não o "empacotamos" (sem .pack())
+            btn_confirmar_grupo = ttk.Button(frame, text="Confirmar Agendamento Recorrente")
+            # --- FIM DA CORREÇÃO ---
+
+            def atualizar_visibilidade_grupo(*args):
+                freq = frequencia_grupo.get()
+                if freq == "Semanal": frame_semanal.pack(fill=tk.X, pady=5); frame_mensal.pack_forget()
+                elif freq == "Mensal": frame_mensal.pack(fill=tk.X, pady=5); frame_semanal.pack_forget()
+                else: frame_semanal.pack_forget(); frame_mensal.pack_forget()
+                
+                # --- CORREÇÃO DE LÓGICA DE LAYOUT ---
+                # 2. Empacotamos o botão *dentro* da função de atualização,
+                #    garantindo que ele seja sempre o último widget a ser desenhado.
+                btn_confirmar_grupo.pack(pady=20, ipady=5)
+                # --- FIM DA CORREÇÃO ---
+                
+            frequencia_grupo.trace_add("write", atualizar_visibilidade_grupo)
+            
+            # --- Função de Confirmação do Grupo (sem alterações) ---
             def confirmar_atribuicao_grupo():
-                horario = horario_var.get()
+                # (Código interno desta função permanece o mesmo)
+                horario = horario_var_grupo.get()
+                tipo_freq_selecionada = frequencia_grupo.get()
                 try: datetime.strptime(horario, '%H:%M')
-                except ValueError: messagebox.showerror("Erro", "Formato inválido. Use HH:MM.", parent=popup); return
-                for item in alvos_selecionados_items:
-                    grupo_id = self.tree_atr_selecao.item(item, 'values')[0]
-                    # A MÁGICA ESTÁ AQUI: Usamos o novo nome da função
-                    database.agendar_tarefa_competitiva_para_grupo(tarefa_id, grupo_id, horario) # <<< LINHA CORRIGIDA
-                messagebox.showinfo("Sucesso", "Tarefa de grupo agendada!", parent=popup); popup.destroy(); self.atualizar_lista_atribuicoes_ativas()
-            ttk.Button(frame, text="Agendar Tarefa de Grupo", command=confirmar_atribuicao_grupo).pack(pady=20)
-        
-        else: # modo == "Individual"
-            # Lógica Individual (COM A NOVA VERIFICAÇÃO)
-            popup.geometry("350x350")
-            ttk.Label(frame, text="Selecione a Frequência:").pack(anchor=tk.W)
-            frequencia = tk.StringVar(value="Diaria")
-            ttk.Radiobutton(frame, text="Tarefa Única", variable=frequencia, value="Unica").pack(anchor=tk.W)
-            ttk.Radiobutton(frame, text="Diária", variable=frequencia, value="Diaria").pack(anchor=tk.W)
-            ttk.Radiobutton(frame, text="Semanal (marque os dias):", variable=frequencia, value="Semanal").pack(anchor=tk.W, pady=(10,0))
-            frame_semanal = ttk.Frame(frame, padding=(20, 2, 0, 0)); frame_semanal.pack(fill=tk.X)
-            dias_semana_vars = {"Seg": (tk.BooleanVar(), "2"), "Ter": (tk.BooleanVar(), "3"), "Qua": (tk.BooleanVar(), "4"),
-                                "Qui": (tk.BooleanVar(), "5"), "Sex": (tk.BooleanVar(), "6"), "Sáb": (tk.BooleanVar(), "7"),
-                                "Dom": (tk.BooleanVar(), "1")}
-            for dia, (var, _) in dias_semana_vars.items(): ttk.Checkbutton(frame_semanal, text=dia, variable=var).pack(side=tk.LEFT)
-            frame_mensal = ttk.Frame(frame); frame_mensal.pack(anchor=tk.W, fill=tk.X, pady=(10,0))
-            ttk.Radiobutton(frame_mensal, text="Mensal (dia):", variable=frequencia, value="Mensal").pack(side=tk.LEFT)
-            valor_mensal = tk.StringVar(); ttk.Entry(frame_mensal, textvariable=valor_mensal, width=5).pack(side=tk.LEFT)
-
-            def confirmar_atribuicao_individual():
-                tipo_freq = frequencia.get()
-                alvos = {item: self.tree_atr_selecao.item(item, 'values') for item in alvos_selecionados_items}
-                ignorados = []
-                
-                for item_id, (func_id, func_nome) in alvos.items():
-                    # --- AQUI ESTÁ A NOVA VERIFICAÇÃO ---
-                    if database.verificar_atribuicao_existente(tarefa_id, func_id):
-                        ignorados.append(func_nome)
-                        continue # Pula para o próximo funcionário
-
-                    # Se não existe, atribui normalmente
-                    if tipo_freq == "Semanal":
-                        dias = [val for _, (var, val) in dias_semana_vars.items() if var.get()]
-                        if not dias: messagebox.showerror("Erro", "Selecione um dia da semana.", parent=popup); return
-                        for dia in dias: database.atribuir_tarefa(tarefa_id, func_id, tipo_freq, dia)
-                    else:
-                        val = valor_mensal.get() if tipo_freq == "Mensal" else None
-                        if tipo_freq == "Mensal" and not val: messagebox.showerror("Erro", "Digite o dia do mês.", parent=popup); return
-                        database.atribuir_tarefa(tarefa_id, func_id, tipo_freq, val)
-
-                mensagem_sucesso = "Tarefa(s) atribuída(s) com sucesso!"
-                if ignorados:
-                    mensagem_sucesso += f"\n\nAviso: As atribuições para {', '.join(ignorados)} foram ignoradas pois já existiam."
-
-                messagebox.showinfo("Sucesso", mensagem_sucesso, parent=popup)
+                except ValueError: messagebox.showerror("Erro", "Formato de horário inválido. Use HH:MM.", parent=popup); return
+                valores_frequencia = []
+                tipo_freq_db = f"Grupo{tipo_freq_selecionada}"
+                if tipo_freq_selecionada == "Semanal":
+                    valores_frequencia = [val_db for _, (var, val_db) in dias_semana_vars_grupo.items() if var.get()]
+                    if not valores_frequencia: messagebox.showerror("Erro", "Selecione pelo menos um dia da semana.", parent=popup); return
+                elif tipo_freq_selecionada == "Mensal":
+                    try: dia_mes = int(valor_mensal_grupo.get()); assert 1 <= dia_mes <= 31; valores_frequencia.append(str(dia_mes))
+                    except (ValueError, AssertionError): messagebox.showerror("Erro", "O dia do mês deve ser um número entre 1 e 31.", parent=popup); return
+                else: valores_frequencia.append(None)
+                sucessos = falhas = 0
+                for item_alvo in alvos_selecionados_items:
+                    grupo_id = self.tree_atr_selecao.item(item_alvo, 'values')[0]
+                    for valor in valores_frequencia:
+                        if database.agendar_tarefa_recorrente_para_grupo(tarefa_id, grupo_id, tipo_freq_db, valor, horario): sucessos += 1
+                        else: falhas += 1
+                if falhas == 0: messagebox.showinfo("Sucesso", f"{sucessos} agendamento(s) de tarefa recorrente para grupo criado(s)!", parent=popup)
+                else: messagebox.showwarning("Atenção", f"{sucessos} agendamentos criados, mas {falhas} falharam.", parent=popup)
                 popup.destroy()
+                self.atualizar_lista_atribuicoes_ativas()
+
+            # --- CORREÇÃO DE LÓGICA DE LAYOUT ---
+            # 3. Atribuímos o comando ao botão e chamamos a atualização pela primeira vez.
+            btn_confirmar_grupo.config(command=confirmar_atribuicao_grupo)
+            atualizar_visibilidade_grupo() # Desenha o layout inicial
+            # --- FIM DA CORREÇÃO ---
+
+
+        # ====================================================================
+        # == ELSE: BLOCO PARA ATRIBUIÇÃO INDIVIDUAL ==========================
+        # ====================================================================
+        else: # modo == "Individual"
+            popup.geometry("400x400")
+            # --- Interface Individual (com checkbuttons semanais, sem alterações na UI) ---
+            ttk.Label(frame, text="Selecione a Frequência:", font=("Arial", 11, "bold")).pack(anchor=tk.W, pady=(0,10))
+            frequencia_individual = tk.StringVar(value="Unica")
+            frame_radios = ttk.Frame(frame); frame_radios.pack(fill=tk.X)
+            ttk.Radiobutton(frame_radios, text="Única", variable=frequencia_individual, value="Unica").pack(side=tk.LEFT, padx=5)
+            ttk.Radiobutton(frame_radios, text="Diária", variable=frequencia_individual, value="Diaria").pack(side=tk.LEFT, padx=5)
+            ttk.Radiobutton(frame_radios, text="Semanal", variable=frequencia_individual, value="Semanal").pack(side=tk.LEFT, padx=5)
+            ttk.Radiobutton(frame_radios, text="Mensal", variable=frequencia_individual, value="Mensal").pack(side=tk.LEFT, padx=5)
+            frame_semanal_ind = ttk.Frame(frame, padding=(10, 5, 0, 0))
+            ttk.Label(frame_semanal_ind, text="Selecione os dias da semana:").pack(anchor=tk.W)
+            frame_checks_ind = ttk.Frame(frame_semanal_ind); frame_checks_ind.pack(fill=tk.X)
+            dias_semana_vars_individual = {"Dom": (tk.BooleanVar(), "1"), "Seg": (tk.BooleanVar(), "2"),"Ter": (tk.BooleanVar(), "3"), "Qua": (tk.BooleanVar(), "4"),"Qui": (tk.BooleanVar(), "5"), "Sex": (tk.BooleanVar(), "6"),"Sáb": (tk.BooleanVar(), "7")}
+            for dia, (var, _) in dias_semana_vars_individual.items(): ttk.Checkbutton(frame_checks_ind, text=dia, variable=var).pack(side=tk.LEFT)
+            frame_mensal_ind = ttk.Frame(frame, padding=(10, 5, 0, 0))
+            ttk.Label(frame_mensal_ind, text="Digite o dia do mês (1-31):").pack(side=tk.LEFT)
+            valor_mensal_individual = tk.StringVar()
+            entry_mensal_ind = ttk.Entry(frame_mensal_ind, textvariable=valor_mensal_individual, width=5); entry_mensal_ind.pack(side=tk.LEFT, padx=5)
+
+            # --- CORREÇÃO DE LÓGICA DE LAYOUT (MESMA LÓGICA DO GRUPO) ---
+            # 1. Definimos o botão, mas não o "empacotamos" (sem .pack())
+            btn_confirmar_individual = ttk.Button(frame, text="Confirmar Atribuição")
+            # --- FIM DA CORREÇÃO ---
+
+            def atualizar_visibilidade_individual(*args):
+                freq = frequencia_individual.get()
+                if freq == "Semanal": frame_semanal_ind.pack(fill=tk.X, pady=5); frame_mensal_ind.pack_forget()
+                elif freq == "Mensal": frame_mensal_ind.pack(fill=tk.X, pady=5); frame_semanal_ind.pack_forget()
+                else: frame_semanal_ind.pack_forget(); frame_mensal_ind.pack_forget()
                 
+                # --- CORREÇÃO DE LÓGICA DE LAYOUT ---
+                # 2. Empacotamos o botão *dentro* da função de atualização.
+                btn_confirmar_individual.pack(pady=20, ipady=5)
+                # --- FIM DA CORREÇÃO ---
+            
+            frequencia_individual.trace_add("write", atualizar_visibilidade_individual)
+            
+            # --- Função de Confirmação Individual (COM CORREÇÃO) ---
+            def confirmar_atribuicao_individual():
+                tipo_freq_selecionada = frequencia_individual.get()
+                valores_freq = []
+                # ... (lógica para obter valores_freq permanece a mesma) ...
+                if tipo_freq_selecionada == "Semanal":
+                    valores_freq = [val_db for _, (var, val_db) in dias_semana_vars_individual.items() if var.get()]
+                    if not valores_freq: messagebox.showerror("Erro", "Selecione pelo menos um dia da semana.", parent=popup); return
+                elif tipo_freq_selecionada == "Mensal":
+                    try: dia_mes = int(valor_mensal_individual.get()); assert 1 <= dia_mes <= 31; valores_freq.append(str(dia_mes))
+                    except (ValueError, AssertionError): messagebox.showerror("Erro", "O dia do mês deve ser um número entre 1 e 31.", parent=popup); return
+                else: # Para Unica e Diaria
+                    valores_freq.append(None) # Garante que o loop abaixo rode uma vez
+
+                sucessos = falhas = ignorados = 0
+                for item_alvo in alvos_selecionados_items:
+                    funcionario_id = self.tree_atr_selecao.item(item_alvo, 'values')[0]
+
+                    # [CORREÇÃO] Lógica refinada: Só bloqueia duplicidade se NÃO for tarefa Única.
+                    # Tarefas Únicas podem ser atribuídas múltiplas vezes (ex: reforço esporádico),
+                    # pois o histórico deve ser preservado.
+                    if tipo_freq_selecionada != 'Unica':
+                        # Passamos o tipo de frequência para ser mais específico
+                        if database.verificar_atribuicao_existente(tarefa_id, funcionario_id, tipo_freq_selecionada):
+                            ignorados += 1
+                            logger.warning(f"--> Atribuição Recorrente ignorada: Tarefa {tarefa_id} já ativa para Funcionario {funcionario_id}.")
+                            continue
+
+                    # Agora, itera pelos valores (dias da semana/mês ou None)
+                    for valor in valores_freq:
+                        # NÃO precisamos mais verificar aqui dentro
+                        # if database.verificar_atribuicao_existente(tarefa_id, funcionario_id): # <-- LINHA REMOVIDA
+                        #    ignorados += 1                                                     # <-- LINHA REMOVIDA
+                        #    print(f"--> Atribuição ignorada: Tarefa {tarefa_id} já está ativa para Funcionário {funcionario_id}.") # <-- LINHA REMOVIDA
+                        #    break # <-- LINHA REMOVIDA
+
+                        # Tenta atribuir a tarefa para este valor específico
+                        if database.atribuir_tarefa(tarefa_id, funcionario_id, tipo_freq_selecionada, valor):
+                            sucessos += 1
+                        else:
+                            falhas += 1
+                            # Se falhar aqui, pode ser um erro de banco, logar seria bom
+                            logger.error(f"Falha ao chamar database.atribuir_tarefa para Func:{funcionario_id}, Tar:{tarefa_id}, Freq:{tipo_freq_selecionada}, Val:{valor}")
+
+                # Lógica de mensagem final (ajustada para contar sucessos corretamente)
+                msg_final = f"{sucessos} atribuição(ões) de frequência criada(s) com sucesso!" # Mensagem mais precisa
+                if ignorados > 0:
+                    msg_final += f"\n{ignorados} funcionário(s) foram ignorados pois já tinham esta tarefa ativa."
+                if falhas > 0:
+                    messagebox.showwarning("Atenção", f"{msg_final}\n{falhas} falharam ao salvar no banco.", parent=popup)
+                else:
+                    messagebox.showinfo("Sucesso", msg_final, parent=popup)
+
+                popup.destroy()
                 self.atualizar_lista_atribuicoes_ativas()
                 self.atualizar_painel_selecao(tarefa_id=tarefa_id)
 
-            ttk.Button(frame, text="Confirmar Atribuição", command=confirmar_atribuicao_individual).pack(pady=20)
+            # --- CORREÇÃO DE LÓGICA DE LAYOUT ---
+            # 3. Atribuímos o comando ao botão e chamamos a atualização pela primeira vez.
+            btn_confirmar_individual.config(command=confirmar_atribuicao_individual)
+            atualizar_visibilidade_individual() # Desenha o layout inicial
+            # --- FIM DA CORREÇÃO ---
+
 
     def criar_aba_tarefas(self):
         frame_formulario = ttk.LabelFrame(self.frame_tarefas, text="Criar ou Editar Modelo de Tarefa", padding="10"); frame_formulario.pack(fill=tk.X, padx=10, pady=5)
@@ -792,6 +1468,7 @@ class App:
         
         self.combo_filtro_setor = ttk.Combobox(frame_filtro_setor, state="readonly")
         self.combo_filtro_setor.grid(row=0, column=0, sticky="ew")
+        self.combo_filtro_setor.bind("<<ComboboxSelected>>", self.filtrar_tarefas_por_setor)
         
         btn_limpar_filtro = ttk.Button(frame_filtro_setor, text="Limpar Filtro", command=self.limpar_filtro_tarefas)
         btn_limpar_filtro.grid(row=0, column=1, padx=(5,0))
@@ -872,89 +1549,120 @@ class App:
         btn_recusar = ttk.Button(frame_botoes, text="Recusar", command=self.recusar_entrega_selecionada); btn_recusar.pack(side=tk.LEFT, padx=10, ipadx=10, ipady=5)
         self.carregar_entregas_pendentes()
         
+    # Em main.py, SUBSTITUA a função criar_aba_ranking por esta:
+
     def criar_aba_ranking(self):
         ttk.Label(self.frame_ranking, text="Ranking de Desempenho Mensal", font=("Arial", 16)).pack(pady=10)
-        
-        cols = ('Posição', 'Nome', 'Score Final', 'Desempenho %', 'Pontos Ganhos', 'Pontos Possíveis')
-        self.tree_ranking = ttk.Treeview(self.frame_ranking, columns=cols, show='headings')
-        
-        self.tree_ranking.heading('Posição', text='Pos.')
-        self.tree_ranking.column('Posição', width=40, anchor='center')
-        self.tree_ranking.heading('Nome', text='Funcionário')
-        self.tree_ranking.column('Nome', width=300)
-        self.tree_ranking.heading('Score Final', text='Score Final') # <<< NOVA COLUNA
-        self.tree_ranking.column('Score Final', width=100, anchor='center')
-        self.tree_ranking.heading('Desempenho %', text='Confiabilidade (%)') # <<< NOME MELHORADO
-        self.tree_ranking.column('Desempenho %', width=120, anchor='center')
-        self.tree_ranking.heading('Pontos Ganhos', text='Pontos (Esforço)') # <<< NOME MELHORADO
-        self.tree_ranking.column('Pontos Ganhos', width=120, anchor='center')
-        self.tree_ranking.heading('Pontos Possíveis', text='Pontos Possíveis')
-        self.tree_ranking.column('Pontos Possíveis', width=120, anchor='center')
 
-        self.tree_ranking.pack(fill=tk.BOTH, expand=True, padx=20, pady=5)
-        btn_atualizar_ranking = ttk.Button(self.frame_ranking, text="Atualizar Ranking", command=self.atualizar_ranking)
-        btn_atualizar_ranking.pack(pady=10)
-        
-        self.atualizar_ranking()
+        # --- NOVO FRAME PARA FILTRO ---
+        frame_filtro_ranking = ttk.Frame(self.frame_ranking, padding=(0, 0, 0, 10))
+        frame_filtro_ranking.pack(fill=tk.X, padx=20)
+
+        ttk.Label(frame_filtro_ranking, text="Visualizar Ranking:").pack(side=tk.LEFT, padx=(0, 5))
+        self.combo_filtro_setor_ranking = ttk.Combobox(frame_filtro_ranking,
+                                                    values=['Geral', 'Cozinha', 'Loja'],
+                                                    state="readonly", width=15)
+        self.combo_filtro_setor_ranking.pack(side=tk.LEFT)
+        self.combo_filtro_setor_ranking.set('Geral') # Padrão
+        # Chama atualizar_ranking sempre que o valor do combobox mudar
+        self.combo_filtro_setor_ranking.bind("<<ComboboxSelected>>", self.atualizar_ranking)
+        # --- FIM DO NOVO FRAME ---
+
+        cols = ('Posição', 'Nome', 'Score Final', 'Desempenho %', 'Pontos Ganhos', 'Pontos Possíveis') # - Colunas originais mantidas
+        self.tree_ranking = ttk.Treeview(self.frame_ranking, columns=cols, show='headings') #
+
+        self.tree_ranking.heading('Posição', text='Pos.'); self.tree_ranking.column('Posição', width=40, anchor='center') #
+        self.tree_ranking.heading('Nome', text='Funcionário'); self.tree_ranking.column('Nome', width=300) #
+        self.tree_ranking.heading('Score Final', text='Score Final'); self.tree_ranking.column('Score Final', width=100, anchor='center') #
+        self.tree_ranking.heading('Desempenho %', text='Confiabilidade (%)'); self.tree_ranking.column('Desempenho %', width=120, anchor='center') #
+        self.tree_ranking.heading('Pontos Ganhos', text='Pontos (Esforço)'); self.tree_ranking.column('Pontos Ganhos', width=120, anchor='center') #
+        self.tree_ranking.heading('Pontos Possíveis', text='Pontos Possíveis'); self.tree_ranking.column('Pontos Possíveis', width=120, anchor='center') #
+
+        self.tree_ranking.pack(fill=tk.BOTH, expand=True, padx=20, pady=5) #
+        btn_atualizar_ranking = ttk.Button(self.frame_ranking, text="Atualizar Ranking", command=self.atualizar_ranking) #
+        btn_atualizar_ranking.pack(pady=10) #
+
+        self.atualizar_ranking() # - Chama ao iniciar a aba
+
+
+    def atualizar_ranking(self, event=None): # <<< CORREÇÃO: Adicionado event=None para suportar o bind do Combobox
+        # Limpa a tabela antes de tentar buscar novos dados
+        for i in self.tree_ranking.get_children(): self.tree_ranking.delete(i)
+
+        try:
+            # Captura o valor do filtro selecionado na interface
+            setor_selecionado = self.combo_filtro_setor_ranking.get()
+
+            # Converte o nome do combo para o parâmetro que o banco espera
+            filtro_db = None
+            if setor_selecionado == 'Cozinha':
+                filtro_db = 'Cozinha'
+            elif setor_selecionado == 'Loja':
+                filtro_db = 'Loja'
+
+            # Busca os dados filtrados
+            ranking_data = database.calcular_ranking_desempenho(setor_filtro=filtro_db)
+
+            if not ranking_data:
+                self.tree_ranking.insert("", "end", values=("Sem dados para este filtro.", "", "", "", "", ""))
+            else:
+                for i, row in enumerate(ranking_data):
+                    posicao = f"{i+1}º"
+                    nome = row['NomeCompleto']
+                    score_final = f"{row['ScoreHibrido']}"
+                    desempenho = f"{row['Desempenho']}%"
+                    ganhos = row['PontosGanhos']
+                    possiveis = row['PontosPossiveis']
+                    self.tree_ranking.insert("", "end", values=(posicao, nome, score_final, desempenho, ganhos, possiveis))
+        except Exception as e:
+            logger.exception(f"Erro ao atualizar o ranking na interface gráfica: {e}")
+            self.tree_ranking.insert("", "end", values=("Erro ao carregar dados.", "", "", "", "", ""))
+            messagebox.showerror("Erro de Ranking", f"Não foi possível carregar os dados do ranking:\n{e}", parent=self.root)
 
     def criar_aba_relatorios(self):
-        # Frame principal que usará um grid para dividir a tela
         frame_principal = ttk.Frame(self.frame_relatorios, padding="10")
         frame_principal.pack(fill=tk.BOTH, expand=True)
         frame_principal.columnconfigure(1, weight=1) # Coluna da direita (resultados) cresce
         frame_principal.rowconfigure(0, weight=1)    # A linha inteira cresce
 
-        # --- PAINEL ESQUERDO: SELEÇÃO DE RELATÓRIOS ---
         frame_selecao = ttk.LabelFrame(frame_principal, text="Tipos de Relatório", padding="10")
         frame_selecao.grid(row=0, column=0, sticky="ns", padx=(0, 10))
 
-        # Usaremos uma Listbox para o usuário escolher o relatório
         self.lista_relatorios = tk.Listbox(frame_selecao, exportselection=False)
         self.lista_relatorios.pack(fill=tk.Y, expand=True)
 
-        # Adicionamos as opções de relatório
         self.lista_relatorios.insert(tk.END, "Pendências Recorrentes")
         self.lista_relatorios.insert(tk.END, "Análise de Tarefas")
-        # Futuramente, adicionaremos mais relatórios aqui...
-        # self.lista_relatorios.insert(tk.END, "Desempenho por Grupo")
-        # self.lista_relatorios.insert(tk.END, "Análise de Tendências")
-
-        # Configura um evento para chamar uma função sempre que a seleção mudar
+        self.lista_relatorios.insert(tk.END, "Resgates do Mês (Consolidado)")
         self.lista_relatorios.bind('<<ListboxSelect>>', self.on_report_select)
 
-        # Seleciona o primeiro item por padrão
         self.lista_relatorios.select_set(0)
 
-        # --- PAINEL DIREITO: FILTROS E RESULTADOS ---
         self.frame_conteudo_relatorio = ttk.Frame(frame_principal)
         self.frame_conteudo_relatorio.grid(row=0, column=1, sticky="nsew")
 
-        # Dispara o evento manualmente para carregar a tela do primeiro relatório
         self.on_report_select(None)
 
-    # Em main.py, adicione esta NOVA função
     def on_report_select(self, event):
         """
         Chamada sempre que um relatório é selecionado na lista.
         Ela limpa o painel da direita e constrói a interface para o relatório escolhido.
         """
-        # Pega o índice do item selecionado
         selecionado_indices = self.lista_relatorios.curselection()
         if not selecionado_indices:
             return 
         
         nome_relatorio = self.lista_relatorios.get(selecionado_indices[0])
 
-        # Limpa tudo que estava no frame da direita
         for widget in self.frame_conteudo_relatorio.winfo_children():
             widget.destroy()
 
-        # Decide qual interface construir com base na seleção
         if nome_relatorio == "Pendências Recorrentes":
             self.construir_ui_relatorio_pendencias()
         elif nome_relatorio == "Análise de Tarefas":
             self.construir_ui_relatorio_analise_tarefas()
-        # Futuramente, teremos mais 'elifs' para outros relatórios
+        elif nome_relatorio == "Resgates do Mês (Consolidado)":
+            self.construir_ui_relatorio_resgates()
 
     def criar_aba_feedbacks(self):
         """Cria todos os widgets para a aba de visualização de feedbacks."""
@@ -1015,35 +1723,39 @@ class App:
     
 
     def on_tab_change(self, event):
-        """Chamada sempre que uma aba do notebook principal é alterada."""
-        try:
-            selected_tab_widget = event.widget.select()
-            if not selected_tab_widget:
-                return
-            tab_text = event.widget.tab(selected_tab_widget, "text")
+            """Chamada sempre que uma aba do notebook principal é alterada."""
+            try:
+                tab_text = event.widget.tab(event.widget.select(), "text")
 
-            tab_map = {
-                "Gerenciar Grupos": self.atualizar_lista_grupos,
-                "Atribuir Tarefas": self.on_tab_atribuir_tarefas_selected,
-                "Dashboard": self.desenhar_grafico_ranking,
-                "Ranking": self.atualizar_ranking,
-                "Gerenciar Funcionários": self.atualizar_lista_funcionarios,
-                "Catálogo de Tarefas": self.atualizar_catalogo_tarefas,
-                "Feedbacks Pendentes": self.atualizar_lista_solicitacoes,
-                "Loja e Resgates": self.carregar_dados_loja,
-                "Gestão de Metas": self.on_tab_gestao_metas_selected
-            }
+                tab_map = {
+                    "Gerenciar Grupos": self.atualizar_lista_grupos,
+                    "Atribuir Tarefas": self.on_tab_atribuir_tarefas_selected,
+                    "Dashboard": self.atualizar_dashboard_completo,
+                    "Ranking": self.atualizar_ranking,
+                    "Gerenciar Funcionários": self.atualizar_lista_funcionarios,
+                    "Catálogo de Tarefas": self.atualizar_catalogo_tarefas,
+                    "Loja e Resgates": self.carregar_dados_loja,
+                    # "Gestão de Metas" é tratado abaixo
+                    "Gerenciar Conquistas": self.atualizar_lista_conquistas,
+                }
 
-            if tab_text in tab_map:
-                tab_map[tab_text]()
+                if tab_text == "Gestão de Metas":
+                    # A aba de Metas tem duas funções de carregamento
+                    self.carregar_dados_metas()
+                    self.atualizar_lista_lucros() 
+                    return # Sai para não chamar a outra
+                
+                if tab_text == "Consultar NFs":
+                    self.carregar_filtros_nf()
+                    # self.buscar_historico_nfs() # Opcional: recarregar automaticamente ao clicar na aba
+                    return
 
-        except tk.TclError:
-            pass
-        
-    def on_tab_gestao_metas_selected(self):
-        """Função chamada especificamente quando a aba de Gestão de Metas é selecionada."""
-        self.carregar_modelos_de_metas()
-        self.carregar_instancias_de_metas_do_dia()   
+                if tab_text in tab_map:
+                    # Se estiver, executa a função correspondente
+                    tab_map[tab_text]()
+
+            except tk.TclError:
+                pass        
     
     def on_tab_atribuir_tarefas_selected(self):
         self.atualizar_lista_tarefas_atribuicao()
@@ -1051,7 +1763,6 @@ class App:
         self.atualizar_lista_atribuicoes_ativas()
 
     def carregar_dados_loja(self):
-        # Carrega produtos
         for i in self.tree_produtos_loja.get_children(): self.tree_produtos_loja.delete(i)
         produtos = database.listar_produtos_loja(incluir_inativos=True)
         for p in produtos:
@@ -1059,7 +1770,6 @@ class App:
             status = "Ativo" if p.Ativo else "Inativo"
             self.tree_produtos_loja.insert("", "end", values=(p.ProdutoID, p.Nome, p.CustoEmPontos, estoque, status))
 
-        # Carrega resgates pendentes
         for i in self.tree_resgates_pendentes.get_children(): self.tree_resgates_pendentes.delete(i)
         resgates = database.listar_resgates_pendentes()
         for r in resgates:
@@ -1075,8 +1785,7 @@ class App:
         dados_resgate = self.tree_resgates_pendentes.item(selecionado, 'values')
         resgate_id = dados_resgate[0]
         
-        GESTOR_ID = 2 # IMPORTANTE: Assumindo que o gestor logado tem ID 2. Mude se for outro.
-        sucesso = database.aprovar_resgate(resgate_id, GESTOR_ID)
+        sucesso = database.aprovar_resgate(resgate_id, config.ID_GESTOR_PADRAO)
         
         if sucesso:
             dados_notificacao = database.buscar_dados_resgate_para_notificacao(resgate_id)
@@ -1199,7 +1908,6 @@ class App:
         (VERSÃO CORRIGIDA)
         Chamada sempre que um item é selecionado na árvore de tarefas.
         """
-        # Limpa o painel da direita para começar
         for i in self.tree_atribuicoes_ativas.get_children():
             self.tree_atribuicoes_ativas.delete(i)
 
@@ -1207,30 +1915,19 @@ class App:
         if not selecionado: # Se nada estiver selecionado, não faz nada
             return
 
-        # Pega os valores do item clicado
         values = self.tree_atr_tarefas.item(selecionado, 'values')
 
-        # --- O PORTEIRO INTELIGENTE ESTÁ AQUI ---
         if not values or not values[0]:
-            # Se 'values' estiver vazio ou o primeiro item for vazio, significa
-            # que o usuário clicou em um cabeçalho de setor (uma "pasta").
-            # Neste caso, apenas limpamos os painéis e paramos a função.
             self.atualizar_painel_selecao() # Limpa o painel do meio
             return # Para a execução aqui
-        # ----------------------------------------
-        
-        # Se o código chegou até aqui, sabemos que é uma tarefa válida ("arquivo").
-        # A execução continua normalmente.
         tarefa_id_selecionada = values[0]
         tarefa_titulo_selecionado = values[1]
 
-        # Atualiza o painel do meio (alvos) como antes
         if self.modo_atribuicao.get() == "Individual":
             self.atualizar_painel_selecao(tarefa_id=tarefa_id_selecionada)
         else:
             self.atualizar_painel_selecao()
 
-        # FILTRA o painel da direita (atribuições ativas)
         for atribuicao in database.listar_atribuicoes_ativas():
             if atribuicao[2] == tarefa_titulo_selecionado:
                 self.tree_atribuicoes_ativas.insert("", "end", values=atribuicao)
@@ -1245,100 +1942,205 @@ class App:
         dia_folga_valor = self.dias_semana_mapa.get(dia_folga_texto, 0)
 
         if not all([nome, chat_id, cargo, horario]): 
+
             messagebox.showerror("Erro", "Todos os campos, exceto a folga, são obrigatórios!")
             return
-
-        database.adicionar_funcionario(nome, chat_id, cargo, horario, dia_folga_valor)
-        messagebox.showinfo("Sucesso", f"Funcionário {nome} adicionado com sucesso!")
         
+        # [CORREÇÃO] Validação de Chat ID numérico
+        # Remove espaços e traços (para grupos) e verifica se o resto são dígitos.
+        # Isso previne erros na API do Telegram que exige inteiros.
+        if not chat_id.lstrip('-').isdigit():
+            messagebox.showerror("Erro de Formato", "O Chat ID deve conter apenas números (ex: 123456789 ou -100...).")
+            return
+
+        # --- NOVA VALIDAÇÃO DE HORÁRIO ---
+        try:
+            datetime.strptime(horario, '%H:%M') # Tenta converter para validar o formato
+        except ValueError:
+            messagebox.showerror("Erro de Formato", "O Horário de Notificação deve estar no formato HH:MM (ex: 08:30).")
+            return # Impede o salvamento se o formato for inválido
+        # --- FIM DA VALIDAÇÃO ---
+        # 1. Cria o funcionário (Insert padrão)
+        database.adicionar_funcionario(nome, chat_id, cargo, horario, dia_folga_valor)
+        # 2. Atualiza o Verificador de Segurança (Se fornecido)
+        # Abordagem conservadora: Busca o ID recém-criado pelo ChatID (único) e faz update
+        verificador = self.entry_verificador_novo.get() if hasattr(self, 'entry_verificador_novo') else None
+
+        if verificador:
+            if len(verificador) == 3 and verificador.isdigit():
+                novo_func = database.buscar_funcionario_por_chat_id(chat_id)
+                # [CORREÇÃO] Validação defensiva: só tenta atualizar se o funcionário foi realmente encontrado/criado
+                if novo_func and hasattr(novo_func, 'FuncionarioID'):
+                    database.atualizar_verificador_cpf(novo_func.FuncionarioID, verificador)
+                else:
+                    logger.error(f"Erro: Funcionário com ChatID {chat_id} não encontrado após tentativa de criação.")
+                    messagebox.showwarning("Aviso", "Funcionário criado, mas houve erro ao vincular o Verificador CPF (Retorno Nulo). Tente editar depois.")
+            else:
+                messagebox.showwarning("Aviso", "Funcionário criado, mas o Verificador de CPF foi ignorado (deve ter 3 dígitos). Edite o cadastro depois.")
+        messagebox.showinfo("Sucesso", f"Funcionário {nome} adicionado com sucesso!")
+        # Limpeza dos campos
         self.entry_nome.delete(0, tk.END)
         self.entry_chat_id.delete(0, tk.END)
         self.entry_cargo.delete(0, tk.END)
         self.entry_horario.delete(0, tk.END); self.entry_horario.insert(0, "08:00")
         self.combo_folga.set('Sem Folga Definida')
+        if hasattr(self, 'entry_verificador_novo'): self.entry_verificador_novo.delete(0, tk.END)        # --- Campo Novo: Verificador CPF ---
+        ttk.Label(frame_direita_add, text="Verificador CPF (3 primeiros dígitos):").pack(pady=(10, 2))
+        self.entry_verificador_novo = ttk.Entry(frame_direita_add, width=10)
+        self.entry_verificador_novo.pack()
+        # -----------------------------------
         
         self.atualizar_todas_as_listas()
 
     def abrir_janela_edicao_funcionario(self):
         indices = self.lista_funcionarios.curselection()
         if not indices:
-            messagebox.showwarning("Aviso", "Por favor, selecione um funcionário da lista para editar.")
+            messagebox.showwarning("Aviso", "Selecione um funcionário da lista para editar.")
             return
         
         texto_selecionado = self.lista_funcionarios.get(indices[0])
         funcionario_selecionado = self.dados_funcionarios[texto_selecionado]
 
-        # Cria uma nova janela (Toplevel) para a edição
+        # Busca dados atualizados do banco para garantir que temos os novos campos
+        f_dados = database.buscar_funcionario_por_id(funcionario_selecionado.FuncionarioID)
+
         self.edit_window = tk.Toplevel(self.root)
-        self.edit_window.title("Editar Funcionário")
+        self.edit_window.title("Editar Funcionário (Dados Completos)")
+        self.edit_window.geometry("550x650") # Aumentado para caber novos campos
         
         frame_edicao = ttk.Frame(self.edit_window, padding="20")
         frame_edicao.pack(fill="both", expand=True)
 
-        ttk.Label(frame_edicao, text="Nome Completo:").grid(row=0, column=0, sticky="w", pady=5)
+        # Campos Básicos
+        ttk.Label(frame_edicao, text="Nome Completo:").grid(row=0, column=0, sticky="w", pady=2)
         edit_entry_nome = ttk.Entry(frame_edicao, width=40)
-        edit_entry_nome.grid(row=0, column=1, pady=5)
-        edit_entry_nome.insert(0, funcionario_selecionado.NomeCompleto)
+        edit_entry_nome.grid(row=0, column=1, pady=2)
+        edit_entry_nome.insert(0, f_dados.NomeCompleto)
 
-        ttk.Label(frame_edicao, text="ID do Chat Telegram:").grid(row=1, column=0, sticky="w", pady=5)
+        ttk.Label(frame_edicao, text="ID Telegram:").grid(row=1, column=0, sticky="w", pady=2)
         edit_entry_chat_id = ttk.Entry(frame_edicao, width=40)
-        edit_entry_chat_id.grid(row=1, column=1, pady=5)
-        edit_entry_chat_id.insert(0, funcionario_selecionado.ChatIDTelegram)
+        edit_entry_chat_id.grid(row=1, column=1, pady=2)
+        edit_entry_chat_id.insert(0, f_dados.ChatIDTelegram or "")
 
-        ttk.Label(frame_edicao, text="Cargo:").grid(row=2, column=0, sticky="w", pady=5)
+        ttk.Label(frame_edicao, text="Telefone WhatsApp:").grid(row=2, column=0, sticky="w", pady=2)
+        edit_entry_telefone = ttk.Entry(frame_edicao, width=40)
+        edit_entry_telefone.grid(row=2, column=1, pady=2)
+        edit_entry_telefone.insert(0, getattr(f_dados, 'TelefoneWhatsApp', '') or "")
+
+        ttk.Label(frame_edicao, text="Cargo:").grid(row=3, column=0, sticky="w", pady=2)
         edit_entry_cargo = ttk.Entry(frame_edicao, width=40)
-        edit_entry_cargo.grid(row=2, column=1, pady=5)
-        edit_entry_cargo.insert(0, funcionario_selecionado.Cargo)
+        edit_entry_cargo.grid(row=3, column=1, pady=2)
+        edit_entry_cargo.insert(0, f_dados.Cargo or "")
 
-        ttk.Label(frame_edicao, text="Horário de Notificação (HH:MM):").grid(row=3, column=0, sticky="w", pady=5)
+        ttk.Label(frame_edicao, text="Horário Notificação:").grid(row=4, column=0, sticky="w", pady=2)
         edit_entry_horario = ttk.Entry(frame_edicao, width=40)
-        edit_entry_horario.grid(row=3, column=1, pady=5)
-        horario = funcionario_selecionado.HorarioNotificacao if funcionario_selecionado.HorarioNotificacao else ""
-        edit_entry_horario.insert(0, horario)
-        ttk.Label(frame_edicao, text="Folga Semanal:").grid(row=4, column=0, sticky="w", pady=5)
-        dias_semana_lista = list(self.dias_semana_mapa.keys())
-        edit_combo_folga = ttk.Combobox(frame_edicao, state="readonly", values=dias_semana_lista)
-        edit_combo_folga.grid(row=4, column=1, pady=5)
+        edit_entry_horario.grid(row=4, column=1, pady=2)
+        # Formatação segura de horário
+        horario_str = ""
+        if f_dados.HorarioNotificacao:
+            horario_str = f_dados.HorarioNotificacao.strftime('%H:%M') if hasattr(f_dados.HorarioNotificacao, 'strftime') else str(f_dados.HorarioNotificacao)[:5]
+        edit_entry_horario.insert(0, horario_str)
 
-        ttk.Label(frame_edicao, text="Verificador de Segurança (3 dígitos CPF):").grid(row=5, column=0, sticky="w", pady=5)
-        edit_entry_verificador = ttk.Entry(frame_edicao, width=10)
-        edit_entry_verificador.grid(row=5, column=1, sticky="w", pady=5)
-        # Busca o valor atual no banco e preenche o campo
-        verificador_atual = getattr(funcionario_selecionado, 'VerificadorCPF', '')
-        edit_entry_verificador.insert(0, verificador_atual or "")
+        # Configuração de Folgas
+        ttk.Separator(frame_edicao, orient='horizontal').grid(row=5, column=0, columnspan=2, sticky='ew', pady=10)
+        ttk.Label(frame_edicao, text="-- Configuração de Folgas --", font=("Arial", 9, "bold")).grid(row=6, column=0, columnspan=2, pady=5)
 
-        # Encontra o nome do dia da folga a partir do número salvo no banco
-        folga_atual_num = getattr(funcionario_selecionado, 'DiaDeFolga', 0)
+        ttk.Label(frame_edicao, text="Folga Fixa Semanal:").grid(row=7, column=0, sticky="w", pady=2)
+        edit_combo_folga = ttk.Combobox(frame_edicao, state="readonly", values=list(self.dias_semana_mapa.keys()))
+        edit_combo_folga.grid(row=7, column=1, pady=2)
+        
+        folga_atual_num = getattr(f_dados, 'DiaDeFolga', 0)
         folga_atual_texto = next((nome for nome, num in self.dias_semana_mapa.items() if num == folga_atual_num), 'Sem Folga Definida')
         edit_combo_folga.set(folga_atual_texto)
 
-        # Substitua a chamada do botão de salvar por esta:
-        btn_salvar = ttk.Button(frame_edicao, text="Salvar Alterações", 
-                        command=lambda: self.salvar_edicao_funcionario(
-                            funcionario_selecionado.FuncionarioID, 
-                            edit_entry_nome.get(), 
-                            edit_entry_chat_id.get(), 
-                            edit_entry_cargo.get(), 
-                            edit_entry_horario.get(),
-                            edit_combo_folga.get(),
-                            edit_entry_verificador.get() # Passa o novo valor
-                        ))
-        btn_salvar.grid(row=6, columnspan=2, pady=20)
+        ttk.Label(frame_edicao, text="Domingo de Folga (6x1):").grid(row=8, column=0, sticky="w", pady=2)
+        domingos_mapa = {'Nenhum/Fixo': 0, '1º Domingo': 1, '2º Domingo': 2, '3º Domingo': 3, '4º Domingo': 4, '5º Domingo': 5}
+        edit_combo_domingo = ttk.Combobox(frame_edicao, state="readonly", values=list(domingos_mapa.keys()))
+        edit_combo_domingo.grid(row=8, column=1, pady=2)
+        
+        dom_atual = getattr(f_dados, 'DomingoFolgaMensal', 0) or 0
+        dom_texto = next((k for k, v in domingos_mapa.items() if v == dom_atual), 'Nenhum/Fixo')
+        edit_combo_domingo.set(dom_texto)
 
-    def salvar_edicao_funcionario(self, func_id, nome, chat_id, cargo, horario, dia_folga_texto, verificador_cpf): # 1. Novo parâmetro
+        # Configuração de Afastamento
+        ttk.Separator(frame_edicao, orient='horizontal').grid(row=9, column=0, columnspan=2, sticky='ew', pady=10)
+        ttk.Label(frame_edicao, text="-- Férias / Afastamento --", font=("Arial", 9, "bold")).grid(row=10, column=0, columnspan=2, pady=5)
+
+        ttk.Label(frame_edicao, text="Data Início:").grid(row=11, column=0, sticky="w", pady=2)
+        entry_afast_ini = DateEntry(frame_edicao, width=12, date_pattern='dd/mm/yyyy', locale='pt_BR')
+        entry_afast_ini.grid(row=11, column=1, sticky="w", pady=2)
+        # Limpa o default (hoje) para mostrar vazio se não tiver data
+        entry_afast_ini.delete(0, "end") 
+        if getattr(f_dados, 'DataInicioAfastamento', None):
+            entry_afast_ini.set_date(f_dados.DataInicioAfastamento)
+
+        ttk.Label(frame_edicao, text="Data Fim:").grid(row=12, column=0, sticky="w", pady=2)
+        entry_afast_fim = DateEntry(frame_edicao, width=12, date_pattern='dd/mm/yyyy', locale='pt_BR')
+        entry_afast_fim.grid(row=12, column=1, sticky="w", pady=2)
+        entry_afast_fim.delete(0, "end")
+        if getattr(f_dados, 'DataFimAfastamento', None):
+            entry_afast_fim.set_date(f_dados.DataFimAfastamento)
+
+        # Segurança
+        ttk.Separator(frame_edicao, orient='horizontal').grid(row=13, column=0, columnspan=2, sticky='ew', pady=10)
+        ttk.Label(frame_edicao, text="Verificador (3 dígitos CPF):").grid(row=14, column=0, sticky="w", pady=2)
+        edit_entry_verificador = ttk.Entry(frame_edicao, width=10)
+        edit_entry_verificador.grid(row=14, column=1, sticky="w", pady=2)
+        edit_entry_verificador.insert(0, getattr(f_dados, 'VerificadorCPF', '') or "")
+
+        def preparar_salvamento():
+            # Lógica para converter inputs em dados para o banco
+            dom_val = domingos_mapa.get(edit_combo_domingo.get(), 0)
+            
+            # Pega datas apenas se o campo não estiver vazio
+            ini_val = entry_afast_ini.get_date() if entry_afast_ini.get() else None
+            fim_val = entry_afast_fim.get_date() if entry_afast_fim.get() else None
+
+            self.salvar_edicao_funcionario(
+                f_dados.FuncionarioID,
+                edit_entry_nome.get(),
+                edit_entry_chat_id.get(),
+                edit_entry_cargo.get(),
+                edit_entry_horario.get(),
+                edit_combo_folga.get(),
+                edit_entry_verificador.get(),
+                edit_entry_telefone.get(), # Telefone
+                dom_val,                   # Domingo Folga
+                ini_val,                   # Inicio Afast.
+                fim_val                    # Fim Afast.
+            )
+
+        btn_salvar = ttk.Button(frame_edicao, text="💾 Salvar Alterações Completas", command=preparar_salvamento)
+        btn_salvar.grid(row=15, columnspan=2, pady=20)
+
+    def salvar_edicao_funcionario(self, func_id, nome, chat_id, cargo, horario, dia_folga_texto, verificador_cpf, telefone, dom_folga, ini_afast, fim_afast):
         dia_folga_valor = self.dias_semana_mapa.get(dia_folga_texto, 0)
         
-        # Validação simples para garantir 3 dígitos
         if verificador_cpf and len(verificador_cpf) != 3:
             messagebox.showerror("Erro", "O Verificador de Segurança deve ter exatamente 3 dígitos.")
             return
 
-        # 2. Passa o novo parâmetro para a função do banco
-        database.atualizar_funcionario(func_id, nome, chat_id, cargo, horario, dia_folga_valor, verificador_cpf)
-        
-        messagebox.showinfo("Sucesso", "Funcionário atualizado com sucesso.")
-        self.edit_window.destroy()
-        self.atualizar_todas_as_listas()
+        try:
+            if horario and horario.strip():
+                datetime.strptime(horario, '%H:%M')
+        except ValueError:
+            messagebox.showerror("Erro de Formato", "O Horário de Notificação deve estar no formato HH:MM (ex: 08:30).")
+            return
+
+        # Chama a nova versão da função no banco de dados com todos os argumentos
+        try:
+            database.atualizar_funcionario(
+                func_id, nome, chat_id, cargo, horario, dia_folga_valor, verificador_cpf,
+                telefone=telefone,
+                domingo_folga=dom_folga,
+                inicio_afastamento=ini_afast,
+                fim_afastamento=fim_afast
+            )
+            messagebox.showinfo("Sucesso", "Dados do funcionário (incluindo RH) atualizados com sucesso.")
+            self.edit_window.destroy()
+            self.atualizar_todas_as_listas()
+        except Exception as e:
+            messagebox.showerror("Erro de Banco", f"Falha ao salvar dados: {e}")
 
     def excluir_funcionario_selecionado(self):
         indices = self.lista_funcionarios.curselection()
@@ -1354,32 +2156,54 @@ class App:
             messagebox.showinfo("Sucesso", "Funcionário excluído.")
             self.atualizar_todas_as_listas()
 
+    def forcar_drop_selecionado(self):
+        """Aciona o agendador para enviar as tarefas do funcionário selecionado para o grupo AGORA."""
+        indices = self.lista_funcionarios.curselection()
+        if not indices:
+            messagebox.showwarning("Aviso", "Por favor, selecione o funcionário que faltou.")
+            return
+
+        texto_selecionado = self.lista_funcionarios.get(indices[0])
+        funcionario = self.dados_funcionarios[texto_selecionado]
+
+        confirmacao = messagebox.askyesno(
+            "Confirmar Drop Manual",
+            f"Você confirma que **{funcionario.NomeCompleto}** não virá hoje?\n\n"
+            "Isso irá pegar TODAS as tarefas agendadas para ele HOJE e enviar imediatamente no grupo do Telegram para que outros peguem.\n\n"
+            "Deseja continuar?",
+            icon='warning'
+        )
+
+        if confirmacao:
+            # Chama a função que criamos no agendador.py
+            sucesso, mensagem = agendador.forcar_drop_funcionario_especifico(funcionario.FuncionarioID)
+
+            if sucesso:
+                messagebox.showinfo("Sucesso", mensagem)
+            else:
+                messagebox.showerror("Erro / Aviso", mensagem)
+
     def abrir_janela_historico(self):
         """
         Abre uma nova janela para mostrar o histórico completo de tarefas
         e entregas do funcionário selecionado.
         """
-        # Passo 1: Descobrir qual funcionário está selecionado na lista.
         indices = self.lista_funcionarios.curselection()
         if not indices:
             messagebox.showwarning("Aviso", "Por favor, selecione um funcionário da lista para ver o histórico.")
             return
 
-        # Passo 2: Pegar os dados completos do funcionário selecionado.
         texto_selecionado = self.lista_funcionarios.get(indices[0])
         funcionario = self.dados_funcionarios[texto_selecionado]
         funcionario_id = funcionario.FuncionarioID
 
-        # Passo 3: Buscar o histórico no banco de dados usando a função que já temos.
         historico = database.obter_historico_funcionario(funcionario_id)
 
-        # Passo 4: Criar a janela de pop-up (Toplevel).
         popup_historico = Toplevel(self.root)
         popup_historico.title(f"Histórico de - {funcionario.NomeCompleto}")
         popup_historico.geometry("800x500")
         popup_historico.transient(self.root) # Faz a janela ficar sobre a principal.
 
-        # Passo 5: Criar um Frame e uma Treeview (tabela) para exibir os dados.
         frame_lista = ttk.Frame(popup_historico, padding="10")
         frame_lista.pack(fill="both", expand=True)
         frame_lista.grid_rowconfigure(0, weight=1)
@@ -1401,19 +2225,16 @@ class App:
         tree_historico.heading('Observação', text='Observação')
         tree_historico.column('Observação', width=200)
 
-        # Adiciona uma barra de rolagem
         scrollbar = ttk.Scrollbar(frame_lista, orient="vertical", command=tree_historico.yview)
         tree_historico.configure(yscrollcommand=scrollbar.set)
         
         tree_historico.grid(row=0, column=0, sticky="nsew")
         scrollbar.grid(row=0, column=1, sticky="ns")
 
-        # Passo 6: Preencher a tabela com os dados do histórico.
         if not historico:
             tree_historico.insert("", "end", values=("Nenhum histórico encontrado.", "", "", "", "", ""))
         else:
             for item in historico:
-                # Formata as datas para ficarem mais legíveis
                 data_atribuicao = item.DataAtribuicao.strftime("%d/%m/%Y") if item.DataAtribuicao else "---"
                 data_envio = item.DataEnvio.strftime("%d/%m/%Y %H:%M") if item.DataEnvio else "---"
                 pontos = item.PontosGanhos if item.PontosGanhos is not None else 0
@@ -1428,7 +2249,6 @@ class App:
         Chama a função "bomba atômica" para limpar o histórico de entregas
         do funcionário selecionado DENTRO DO MÊS CORRENTE.
         """
-        # A linha abaixo DEVE ter um recuo
         indices = self.lista_funcionarios.curselection()
         if not indices:
             messagebox.showwarning("Aviso", "Por favor, selecione um funcionário da lista.")
@@ -1491,7 +2311,6 @@ class App:
         tree_pendencias.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="left", fill="y")
 
-    # O laço 'for' agora está corretamente dentro da função
         for tarefa in tarefas_pendentes: # <--- Linha com recuo CORRETO
             tree_pendencias.insert("", "end", values=(tarefa.AtribuicaoID, tarefa.Titulo, tarefa.Pontos))
 
@@ -1549,42 +2368,79 @@ class App:
 
     def aprovar_entrega_selecionada(self):
         indices = self.lista_entregas.curselection()
-        if not indices: messagebox.showwarning("Aviso", "Selecione uma entrega para aprovar."); return
-        texto = self.lista_entregas.get(indices[0]); entrega_id = int(texto.split(" | ")[0].split(": ")[1]); entrega_atual = self.dados_entregas[entrega_id]
-        database.aprovar_entrega(entrega_atual.EntregaID, entrega_atual.FuncionarioID, entrega_atual.Pontos)
-        texto_notificacao = (f"🎉 Parabéns, <b>{entrega_atual.NomeCompleto}</b>! 🎉\n\n" f"Sua entrega para a tarefa '<b>{entrega_atual.Titulo}</b>' foi APROVADA!\n\n" f"Você ganhou <b>{entrega_atual.Pontos}</b> pontos. Continue assim!")
-        notificador_telegram.enviar_mensagem(entrega_atual.ChatIDTelegram, texto_notificacao)
-        messagebox.showinfo("Sucesso", "Entrega aprovada e pontuação atribuída!"); self.atualizar_todas_as_listas()
+        if not indices: messagebox.showwarning("Aviso", "...", parent=self.root); return # Adicionado parent
+        try: # <--- ADICIONADO TRY
+            texto = self.lista_entregas.get(indices[0])
+            entrega_id = int(texto.split(" | ")[0].split(": ")[1]) # int() pode falhar
+            entrega_atual = self.dados_entregas[entrega_id] # Pode dar KeyError
+
+            # Aprova e busca novas conquistas (pode falhar)
+            novas_conquistas_ganhas = database.aprovar_entrega(entrega_atual.EntregaID, entrega_atual.FuncionarioID, entrega_atual.Pontos)
+
+            texto_notificacao = f"🎉 Parabéns, <b>{entrega_atual.NomeCompleto}</b>! ... Você ganhou <b>{entrega_atual.Pontos}</b> pontos. ..."
+            if novas_conquistas_ganhas:
+                for conquista in novas_conquistas_ganhas:
+                    # Apenas monta a string da notificação
+                    texto_notificacao += (
+                        f"\n\n✨ <b>NOVA CONQUISTA DESBLOQUEADA!</b> ✨\n"
+                        f"{conquista.Icone} <b>{conquista.Nome}</b>\n"
+                        f"<i>{conquista.Descricao}</i>\n"
+                        f"Você ganhou um bônus de <b>{conquista.PontosBonus}</b> pontos!"
+                    )
+
+                    # --- CORREÇÃO: Lógica movida para DENTRO do loop ---
+                    # Agora cada conquista soma seus pontos ao saldo individualmente.
+                    if conquista.PontosBonus > 0:
+                        database.adicionar_pontos_ao_saldo(entrega_atual.FuncionarioID, conquista.PontosBonus)
+                    # ---------------------------------------------------
+
+            # Executa notificação em thread para não travar a UI
+            def enviar_notificacao_bg():
+                try:
+                    notificador_telegram.enviar_mensagem(entrega_atual.ChatIDTelegram, texto_notificacao)
+                except Exception as e:
+                    logger.error(f"Falha ao enviar notificação em background: {e}")
+
+            threading.Thread(target=enviar_notificacao_bg, daemon=True).start()
+
+            messagebox.showinfo("Sucesso", "Entrega aprovada e pontuação atribuída!", parent=self.root) # Adicionado parent
+            self.atualizar_todas_as_listas() # Pode falhar
+        except (ValueError, KeyError) as e_parse: # <--- ADICIONADO EXCEPT ESPECÍFICO
+            logger.error(f"Erro ao processar seleção da entrega: {e_parse}")
+            messagebox.showerror("Erro Interno", f"Não foi possível processar a entrega selecionada:\n{e_parse}", parent=self.root)
+        except Exception as e: # <--- ADICIONADO EXCEPT GENÉRICO
+            logger.exception(f"Erro ao aprovar entrega ID {entrega_id if 'entrega_id' in locals() else 'N/A'}: {e}")
+            messagebox.showerror("Erro Inesperado", f"Ocorreu um erro ao aprovar a entrega:\n{e}", parent=self.root)
     
     def recusar_entrega_selecionada(self):
         indices = self.lista_entregas.curselection()
-        if not indices: messagebox.showwarning("Aviso", "Selecione uma entrega para recusar."); return
-        texto = self.lista_entregas.get(indices[0]); entrega_id = int(texto.split(" | ")[0].split(": ")[1]); entrega_atual = self.dados_entregas[entrega_id]
-        motivo = simpledialog.askstring("Motivo da Recusa", "Por favor, digite o motivo para recusar esta entrega:", parent=self.root)
-        if motivo:
-            database.recusar_entrega(entrega_atual.EntregaID, motivo)
-            texto_notificacao = (f"⚠️ Atenção, <b>{entrega_atual.NomeCompleto}</b>! ⚠️\n\n" f"Sua entrega para a tarefa '<b>{entrega_atual.Titulo}</b>' foi RECUSADA.\n\n" f"<b>Motivo:</b> {motivo}\n\n" "Por favor, corrija e envie novamente.")
-            notificador_telegram.enviar_mensagem(entrega_atual.ChatIDTelegram, texto_notificacao); messagebox.showinfo("Sucesso", "Entrega recusada e funcionário notificado."); self.atualizar_todas_as_listas()
-        else: messagebox.showinfo("Cancelado", "Ação de recusa cancelada.")
+        if not indices: messagebox.showwarning("Aviso", "...", parent=self.root); return # Adicionado parent
+        try: # <--- ADICIONADO TRY
+            texto = self.lista_entregas.get(indices[0])
+            entrega_id = int(texto.split(" | ")[0].split(": ")[1]) # int() pode falhar
+            entrega_atual = self.dados_entregas[entrega_id] # Pode dar KeyError
+
+            motivo = simpledialog.askstring("Motivo da Recusa", "...", parent=self.root) # Pode retornar None
+            if motivo:
+                database.recusar_entrega(entrega_atual.EntregaID, motivo) # Pode falhar
+                texto_notificacao = f"⚠️ Atenção, <b>{entrega_atual.NomeCompleto}</b>! ... Motivo:</b> {motivo} ..."
+                notificador_telegram.enviar_mensagem(entrega_atual.ChatIDTelegram, texto_notificacao) # Pode falhar
+                messagebox.showinfo("Sucesso", "Entrega recusada e funcionário notificado.", parent=self.root) # Adicionado parent
+                self.atualizar_todas_as_listas() # Pode falhar
+            else:
+                messagebox.showinfo("Cancelado", "Ação de recusa cancelada.", parent=self.root) # Adicionado parent
+        except (ValueError, KeyError) as e_parse: # <--- ADICIONADO EXCEPT ESPECÍFICO
+            logger.error(f"Erro ao processar seleção da entrega para recusa: {e_parse}")
+            messagebox.showerror("Erro Interno", f"Não foi possível processar a entrega selecionada:\n{e_parse}", parent=self.root)
+        except Exception as e: # <--- ADICIONADO EXCEPT GENÉRICO
+            logger.exception(f"Erro ao recusar entrega ID {entrega_id if 'entrega_id' in locals() else 'N/A'}: {e}")
+            messagebox.showerror("Erro Inesperado", f"Ocorreu um erro ao recusar a entrega:\n{e}", parent=self.root)
 
     
     def limpar_detalhes_validacao(self):
         self.lbl_nome_funcionario.config(text="Funcionário: "); self.lbl_titulo_tarefa.config(text="Tarefa: "); self.lbl_imagem.config(image='')
         
-    def atualizar_ranking(self):
-        for i in self.tree_ranking.get_children(): self.tree_ranking.delete(i)
-        
-        ranking_data = database.calcular_ranking_desempenho()
-        
-        for i, row in enumerate(ranking_data):
-            posicao = f"{i+1}º"
-            nome = row['NomeCompleto']
-            score_final = f"{row['ScoreHibrido']}" # <<< NOVO DADO
-            desempenho = f"{row['Desempenho']}%"
-            ganhos = row['PontosGanhos']
-            possiveis = row['PontosPossiveis']
-            
-            self.tree_ranking.insert("", "end", values=(posicao, nome, score_final, desempenho, ganhos, possiveis))
+    # (Função duplicada removida. A versão correta com filtro já existe na linha ~1100 deste arquivo)
 
     def carregar_funcionarios_relatorio(self):
         funcionarios = database.listar_funcionarios(); self.dados_funcionarios_relatorio = {f"{f.NomeCompleto} (ID: {f.FuncionarioID})": f.FuncionarioID for f in funcionarios}
@@ -1657,9 +2513,14 @@ class App:
     def atualizar_lista_funcionarios(self):
         self.lista_funcionarios.delete(0, tk.END); self.dados_funcionarios.clear()
         funcionarios = database.listar_funcionarios()
+        
+        # Mapeamento do SELECT (Ordem garantida no database.py: 0:ID, 1:Nome, 8:HorarioNotificacao)
+        
         for func in funcionarios:
-            horario_str = func.HorarioNotificacao if func.HorarioNotificacao else "N/D"
-            texto = f"ID: {func.FuncionarioID} | {func.NomeCompleto} | Notificar às: {horario_str}"
+            # Acessamos por índice para garantir a compatibilidade com pyodbc.Row
+            # func[8] é HorarioNotificacao
+            horario_str = func[8].strftime('%H:%M') if func[8] else "N/D"
+            texto = f"ID: {func[0]} | {func[1]} | Notificar às: {horario_str}"
             self.lista_funcionarios.insert(tk.END, texto); self.dados_funcionarios[texto] = func
 
     def atualizar_catalogo_tarefas(self):
@@ -1676,27 +2537,57 @@ class App:
                 self.lista_entregas.insert(tk.END, texto); self.dados_entregas[entrega.EntregaID] = entrega
     
     def mostrar_detalhes_entrega(self, event):
-        indices = self.lista_entregas.curselection()
-        if not indices: return
-        texto = self.lista_entregas.get(indices[0]); entrega_id = int(texto.split(" | ")[0].split(": ")[1]); entrega_atual = self.dados_entregas[entrega_id]
-        self.lbl_nome_funcionario.config(text=f"Funcionário: {entrega_atual.NomeCompleto}")
-        self.lbl_titulo_tarefa.config(text=f"Tarefa: {entrega_atual.Titulo} ({entrega_atual.Pontos} pts)")
-        # Primeiro checamos se o caminho da foto não é Nulo (None)
-        if entrega_atual.PathFotoEvidencia and os.path.exists(entrega_atual.PathFotoEvidencia):
-            img = Image.open(entrega_atual.PathFotoEvidencia)
-            img.thumbnail((500, 400))
-            self.photo_img = ImageTk.PhotoImage(img)
-            self.lbl_imagem.config(image=self.photo_img)
-        else:
-            # A mensagem agora reflete melhor a situação real
-            self.lbl_imagem.config(image='', text="Foto ainda não processada pelo servidor ou não encontrada!")
+        try: 
+            indices = self.lista_entregas.curselection()
+            if not indices: return
+            texto = self.lista_entregas.get(indices[0])
 
+            # [CORREÇÃO] Parsing seguro do ID e acesso seguro ao dicionário
+            try:
+                entrega_id = int(texto.split(" | ")[0].split(": ")[1])
+            except (IndexError, ValueError):
+                return
+
+            entrega_atual = self.dados_entregas.get(entrega_id)
+            if not entrega_atual:
+                self.lbl_imagem.config(image='', text="Dados desatualizados. Atualize a lista.")
+                return
+
+            self.lbl_nome_funcionario.config(text=f"Funcionário: {entrega_atual.NomeCompleto}")
+            self.lbl_titulo_tarefa.config(text=f"Tarefa: {entrega_atual.Titulo} ({entrega_atual.Pontos} pts)")
+
+            if entrega_atual.PathFotoEvidencia and os.path.exists(entrega_atual.PathFotoEvidencia):
+                # [CORREÇÃO] Usa 'with' e 'copy' para liberar o arquivo imediatamente após carregar.
+                # Isso evita o erro de "Arquivo em uso" no Windows ao tentar excluir a entrega.
+                try:
+                    with Image.open(entrega_atual.PathFotoEvidencia) as img_temp:
+                        img_copy = img_temp.copy()
+
+                    img_copy.thumbnail((500, 400))
+                    self.photo_img = ImageTk.PhotoImage(img_copy)
+                    self.lbl_imagem.config(image=self.photo_img)
+                except Exception as e_img:
+                    logger.error(f"Erro ao processar imagem: {e_img}")
+                    self.lbl_imagem.config(image='', text="Erro ao carregar imagem.")
+
+            else:
+                self.lbl_imagem.config(image='', text="Foto ainda não processada pelo servidor ou não encontrada!")
+        except (ValueError, KeyError) as e_parse: # <--- ADICIONADO EXCEPT ESPECÍFICO
+            logger.error(f"Erro ao processar seleção da entrega para detalhes: {e_parse}")
+            messagebox.showerror("Erro Interno", f"Não foi possível processar a entrega selecionada:\n{e_parse}", parent=self.root)
+        except FileNotFoundError: # <--- ADICIONADO EXCEPT ESPECÍFICO
+             logger.error(f"Arquivo de imagem não encontrado: {entrega_atual.PathFotoEvidencia if 'entrega_atual' in locals() else 'N/A'}")
+             self.lbl_imagem.config(image='', text="Erro: Arquivo da imagem não encontrado no servidor!")
+             messagebox.showerror("Erro de Arquivo", f"Não foi possível encontrar o arquivo da imagem:\n{entrega_atual.PathFotoEvidencia}", parent=self.root)
+        except Exception as e: # <--- ADICIONADO EXCEPT GENÉRICO
+            logger.exception(f"Erro ao mostrar detalhes da entrega ID {entrega_id if 'entrega_id' in locals() else 'N/A'}: {e}")
+            self.lbl_imagem.config(image='', text=f"Erro ao carregar imagem: {e}")
+            messagebox.showerror("Erro Inesperado", f"Ocorreu um erro ao carregar os detalhes ou a imagem:\n{e}", parent=self.root)
+   
     def carregar_funcionarios_feedback(self):
         """Carrega a lista de funcionários para o combobox de filtro."""
         funcionarios = database.listar_funcionarios()
-        # Guardamos os dados em um dicionário para fácil acesso
         self.dados_funcionarios_feedback = {f.NomeCompleto: f.FuncionarioID for f in funcionarios}
-        # A primeira opção será "Todos"
         nomes_para_combobox = ["Todos"] + list(self.dados_funcionarios_feedback.keys())
         self.combo_funcionarios_feedback['values'] = nomes_para_combobox
         self.combo_funcionarios_feedback.set("Todos")
@@ -1712,11 +2603,9 @@ class App:
 
     def atualizar_lista_feedbacks(self):
         """Busca os feedbacks no banco com base nos filtros e atualiza a lista e a média."""
-        # Limpa a lista antiga
         for i in self.tree_feedbacks.get_children():
             self.tree_feedbacks.delete(i)
 
-        # --- Coleta de dados dos filtros ---
         nome_selecionado = self.combo_funcionarios_feedback.get()
         func_id = self.dados_funcionarios_feedback.get(nome_selecionado) if nome_selecionado != "Todos" else None
 
@@ -1726,18 +2615,15 @@ class App:
         data_fim = self.entry_data_fim_feedback.get()
         if data_fim == "AAAA-MM-DD": data_fim = None
 
-        # Busca os dados no banco
         feedbacks = database.buscar_feedbacks(func_id, data_inicio, data_fim)
 
         total_notas = 0
 
-        # Popula a lista e calcula a soma das notas
         for fb in feedbacks:
             data_formatada = fb.DataFeedback.strftime("%d/%m/%Y")
             self.tree_feedbacks.insert("", "end", values=(fb.FeedbackID, fb.NomeCompleto, data_formatada, fb.NotaDia))
             total_notas += fb.NotaDia
 
-        # Calcula e exibe a média
         if feedbacks:
             media = total_notas / len(feedbacks)
             self.lbl_media_feedback.config(text=f"Nota Média do Período: {media:.2f}")
@@ -1746,15 +2632,12 @@ class App:
 
     def executar_relatorio_analise_tarefas(self):
         """Busca os dados e preenche a tabela de análise de tarefas."""
-        # 1. Limpa a tabela de resultados antigos
         for i in self.tree_analise_tarefas.get_children():
             self.tree_analise_tarefas.delete(i)
 
-        # 2. Pega as datas dos campos de entrada
         data_inicio = self.entry_data_inicio_analise.get()
         data_fim = self.entry_data_fim_analise.get()
 
-        # 3. Valida o formato das datas ANTES de consultar o banco
         try:
             datetime.strptime(data_inicio, "%Y-%m-%d")
             datetime.strptime(data_fim, "%Y-%m-%d")
@@ -1762,36 +2645,28 @@ class App:
             messagebox.showerror("Erro de Formato", "As datas devem estar no formato AAAA-MM-DD.")
             return # Para a execução se o formato estiver errado
 
-        # 4. Agora sim, busca os dados no banco de dados
         resultados = database.relatorio_analise_tarefas(data_inicio, data_fim)
         
-        # 5. Preenche a tabela com os resultados da busca
         if not resultados:
             self.tree_analise_tarefas.insert("", "end", values=("Nenhum dado problemático encontrado no período!", "", "", ""))
         else:
             for res in resultados:
-                # Usando a versão corrigida com tuple()
                 self.tree_analise_tarefas.insert("", "end", values=tuple(res))
 
-        # Em main.py, adicione esta nova função à classe App
     def abrir_janela_justificativas(self):
         """Abre uma janela para mostrar os detalhes das justificativas 'Não Aplicável'."""
-        # 1. Verifica se uma tarefa está selecionada na tabela
         selecionado = self.tree_analise_tarefas.focus()
         if not selecionado:
             messagebox.showwarning("Aviso", "Por favor, selecione uma tarefa na lista de resultados.")
             return
 
-        # 2. Pega os dados da tarefa selecionada e dos filtros de data
         dados_tarefa = self.tree_analise_tarefas.item(selecionado, 'values')
         titulo_tarefa = dados_tarefa[0]
         data_inicio = self.entry_data_inicio_analise.get()
         data_fim = self.entry_data_fim_analise.get()
 
-        # 3. Busca as justificativas no banco de dados
         justificativas = database.buscar_justificativas_nao_aplicavel(titulo_tarefa, data_inicio, data_fim)
 
-        # 4. Cria a janela de pop-up
         popup = Toplevel(self.root)
         popup.title(f"Justificativas para '{titulo_tarefa}'")
         popup.geometry("600x400")
@@ -1801,7 +2676,6 @@ class App:
             ttk.Label(popup, text="Nenhuma justificativa encontrada para esta tarefa no período.").pack(pady=20)
             return
 
-        # 5. Cria a tabela (Treeview) para mostrar os detalhes
         frame_lista = ttk.Frame(popup, padding="10")
         frame_lista.pack(fill="both", expand=True)
         
@@ -1814,13 +2688,96 @@ class App:
         
         tree_justificativas.pack(fill="both", expand=True)
 
-        # 6. Preenche a tabela com os dados
         for just in justificativas:
-            # Remove o prefixo "Não aplicável: " da justificativa para ficar mais limpo
             motivo_limpo = just.MotivoRecusa.replace("Não aplicável: ", "", 1)
             data_formatada = just.DataEnvio.strftime('%d/%m/%Y %H:%M')
             tree_justificativas.insert("", "end", values=(data_formatada, just.NomeCompleto, motivo_limpo))
-    
+
+    def construir_ui_relatorio_resgates(self):
+        """Constrói a interface para o relatório de gastos na loja."""
+        container = self.frame_conteudo_relatorio
+
+        # Título
+        lbl_titulo = ttk.Label(container, text="Relatório de Resgates - Mês Atual", font=("Arial", 16))
+        lbl_titulo.pack(pady=(10, 5))
+
+        # Subtítulo explicativo
+        mes_atual_str = datetime.now().strftime("%B/%Y")
+        lbl_sub = ttk.Label(container, text=f"Total de pontos gastos por funcionário em {mes_atual_str}", foreground="gray")
+        lbl_sub.pack(pady=(0, 15))
+
+        # Botão de Atualizar
+        btn_atualizar = ttk.Button(container, text="🔄 Atualizar Dados", command=self.executar_relatorio_resgates)
+        btn_atualizar.pack(anchor='w', padx=10, pady=5)
+
+        # Tabela (ATUALIZADA COM COLUNA R$)
+        cols = ('Funcionário', 'Qtd. Itens', 'Total Gasto (Pontos)', 'Valor (R$)')
+        self.tree_relatorio_resgates = ttk.Treeview(container, columns=cols, show='headings')
+
+        self.tree_relatorio_resgates.heading('Funcionário', text='Funcionário')
+        self.tree_relatorio_resgates.column('Funcionário', width=250)
+
+        self.tree_relatorio_resgates.heading('Qtd. Itens', text='Qtd. Itens')
+        self.tree_relatorio_resgates.column('Qtd. Itens', width=80, anchor='center')
+
+        self.tree_relatorio_resgates.heading('Total Gasto (Pontos)', text='Total (Pontos)')
+        self.tree_relatorio_resgates.column('Total Gasto (Pontos)', width=120, anchor='center')
+
+        self.tree_relatorio_resgates.heading('Valor (R$)', text='Valor (R$)')
+        self.tree_relatorio_resgates.column('Valor (R$)', width=120, anchor='e') # Alinhado à direita
+
+        scrollbar = ttk.Scrollbar(container, orient="vertical", command=self.tree_relatorio_resgates.yview)
+        self.tree_relatorio_resgates.configure(yscrollcommand=scrollbar.set)
+
+        self.tree_relatorio_resgates.pack(side="left", fill="both", expand=True, padx=(10, 0), pady=10)
+        scrollbar.pack(side="right", fill="y", padx=(0, 10), pady=10)
+
+        # Carrega os dados automaticamente ao abrir
+        self.executar_relatorio_resgates()
+
+    def executar_relatorio_resgates(self):
+        """Busca os dados no banco e preenche a tabela de resgates com cálculo em R$."""
+        # Limpa a tabela
+        for i in self.tree_relatorio_resgates.get_children():
+            self.tree_relatorio_resgates.delete(i)
+
+        # Busca dados
+        resultados = database.relatorio_resgates_consolidado_mes()
+
+        total_geral_pontos = 0
+        total_geral_reais = 0.0
+        taxa = config.TAXA_CONVERSAO_PONTO_REAL # Pega o 0.03 do config
+
+        if not resultados:
+            self.tree_relatorio_resgates.insert("", "end", values=("Nenhum resgate aprovado neste mês.", "", "", ""))
+        else:
+            for row in resultados:
+                # row = (Nome, Qtd, TotalPontos)
+                nome = row[0]
+                qtd = row[1]
+                pontos = row[2]
+
+                # Cálculo do valor em reais
+                valor_reais = pontos * taxa
+
+                # Formatação bonita para moeda (R$ 1.234,56)
+                valor_formatado = f"R$ {valor_reais:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+                self.tree_relatorio_resgates.insert("", "end", values=(nome, qtd, pontos, valor_formatado))
+
+                total_geral_pontos += pontos
+                total_geral_reais += valor_reais
+
+            # Adiciona uma linha final de totais
+            self.tree_relatorio_resgates.insert("", "end", values=("", "", "", "")) # Linha vazia
+
+            total_reais_fmt = f"R$ {total_geral_reais:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+            self.tree_relatorio_resgates.insert("", "end", values=("TOTAL GERAL DO MÊS", "", f"{total_geral_pontos}", total_reais_fmt), tags=('total',))
+
+            # Destaca a linha de total
+            self.tree_relatorio_resgates.tag_configure('total', font=('Arial', 10, 'bold'), background='#e6e6e6')
+
     def construir_ui_relatorio_analise_tarefas(self):
         """Cria os widgets para o relatório de Análise de Tarefas."""
         container = self.frame_conteudo_relatorio
@@ -1860,649 +2817,624 @@ class App:
         
         self.tree_analise_tarefas.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-    # Em main.py, adicione estas TRÊS novas funções à classe App
-
-    def criar_aba_solicitacoes(self):
-        """Cria a interface da aba de solicitações de feedback."""
-        # Layout principal com dois painéis
-        main_frame = ttk.Frame(self.frame_solicitacoes, padding="10")
-        main_frame.pack(fill=tk.BOTH, expand=True)
-        main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(0, weight=1)
-
-        # Painel da Esquerda: Lista de Solicitações
-        frame_lista = ttk.LabelFrame(main_frame, text="Solicitações Pendentes", padding="10")
-        frame_lista.grid(row=0, column=0, sticky="ns", padx=(0, 10))
-
-        cols = ('ID', 'Funcionário', 'Data')
-        self.tree_solicitacoes = ttk.Treeview(frame_lista, columns=cols, show='headings', selectmode='browse')
-        self.tree_solicitacoes.heading('ID', text='ID')
-        self.tree_solicitacoes.column('ID', width=40)
-        self.tree_solicitacoes.heading('Funcionário', text='Funcionário')
-        self.tree_solicitacoes.column('Funcionário', width=200)
-        self.tree_solicitacoes.heading('Data', text='Data')
-        self.tree_solicitacoes.column('Data', width=120)
-        self.tree_solicitacoes.pack(fill=tk.BOTH, expand=True)
-        self.tree_solicitacoes.bind('<<ListboxSelect>>', self.on_solicitacao_select)
-        
-        # Adicionamos um dicionário para guardar os dados completos
-        self.dados_solicitacoes = {}
-
-        # Painel da Direita: Detalhes e Resposta
-        frame_detalhes = ttk.LabelFrame(main_frame, text="Responder Solicitação", padding="10")
-        frame_detalhes.grid(row=0, column=1, sticky="nsew")
-        frame_detalhes.rowconfigure(1, weight=1)
-        frame_detalhes.columnconfigure(0, weight=1)
-        
-        ttk.Label(frame_detalhes, text="Assunto Solicitado:").grid(row=0, column=0, sticky="w")
-        self.lbl_assunto_feedback = ttk.Label(frame_detalhes, text="...", wraplength=400, font=("Arial", 10, "italic"))
-        self.lbl_assunto_feedback.grid(row=1, column=0, sticky="new", pady=5)
-        
-        ttk.Label(frame_detalhes, text="Escreva seu Feedback Abaixo:").grid(row=2, column=0, sticky="w", pady=(10, 0))
-        self.txt_resposta_feedback = tk.Text(frame_detalhes, height=10)
-        self.txt_resposta_feedback.grid(row=3, column=0, sticky="nsew", pady=5)
-        frame_detalhes.rowconfigure(3, weight=1)
-
-        btn_enviar_resposta = ttk.Button(frame_detalhes, text="Enviar Resposta e Notificar Funcionário", command=self.enviar_resposta_feedback)
-        btn_enviar_resposta.grid(row=4, column=0, sticky="e", pady=10)
-
-        # Carrega os dados na lista
-        self.atualizar_lista_solicitacoes()
-
-    def atualizar_lista_solicitacoes(self):
-        """Limpa e recarrega a lista de solicitações de feedback pendentes."""
-        for i in self.tree_solicitacoes.get_children():
-            self.tree_solicitacoes.delete(i)
-        
-        self.dados_solicitacoes.clear()
-        solicitacoes = database.listar_solicitacoes_pendentes()
-        for sol in solicitacoes:
-            self.tree_solicitacoes.insert("", "end", values=(sol.SolicitacaoID, sol.NomeCompleto, sol.DataSolicitacao.strftime("%d/%m/%Y %H:%M")))
-            # Guarda o objeto completo para uso posterior
-            self.dados_solicitacoes[sol.SolicitacaoID] = sol
-
-    def on_solicitacao_select(self, event):
-        """Mostra o assunto da solicitação selecionada."""
-        selecionado = self.tree_solicitacoes.focus()
-        if not selecionado:
-            return
-
-        solicitacao_id = self.tree_solicitacoes.item(selecionado, 'values')[0]
-        dados_completos = self.dados_solicitacoes.get(int(solicitacao_id))
-
-        if dados_completos:
-            self.lbl_assunto_feedback.config(text=dados_completos.TextoAssunto)
-            self.txt_resposta_feedback.delete("1.0", tk.END) # Limpa a caixa de texto
-
-    def enviar_resposta_feedback(self):
-        """Salva a resposta do gestor no banco e notifica o funcionário."""
-        selecionado = self.tree_solicitacoes.focus()
-        if not selecionado:
-            messagebox.showwarning("Aviso", "Por favor, selecione uma solicitação na lista para responder.")
-            return
-
-        solicitacao_id = self.tree_solicitacoes.item(selecionado, 'values')[0]
-        texto_resposta = self.txt_resposta_feedback.get("1.0", tk.END).strip()
-
-        if not texto_resposta:
-            messagebox.showwarning("Aviso", "O campo de feedback não pode estar vazio.")
-            return
-
-        # Salva no banco de dados
-        sucesso_db = database.responder_solicitacao_feedback(solicitacao_id, texto_resposta)
-
-        if sucesso_db:
-            # Busca os dados do funcionário para notificar
-            dados_notificacao = database.buscar_dados_para_notificacao_feedback(solicitacao_id)
-            if dados_notificacao:
-                mensagem_telegram = (
-                f"Olá, <b>{dados_notificacao.NomeCompleto}</b>! 👋\n\n"
-                "Você recebeu um novo feedback do seu gestor:\n\n"
-                f"<i>\"{texto_resposta}\"</i>\n\n"
-                "Continue com o bom trabalho!"
-            )
-                notificador_telegram.enviar_mensagem(dados_notificacao.ChatIDTelegram, mensagem_telegram)
-            
-            messagebox.showinfo("Sucesso", "Feedback enviado e funcionário notificado com sucesso!")
-            
-            # Limpa a tela e atualiza a lista
-            self.lbl_assunto_feedback.config(text="...")
-            self.txt_resposta_feedback.delete("1.0", tk.END)
-            self.atualizar_lista_solicitacoes()
-        else:
-            messagebox.showerror("Erro", "Ocorreu um erro ao salvar o feedback no banco de dados.")
-
     def criar_aba_metas(self):
-        """Cria a interface completa para Gestão de Metas (Modelos e Lançamentos)."""
+        """(VERSÃO V6) Cria a interface para Gestão de Metas, com histórico de lucro ao lado."""
         main_frame = ttk.Frame(self.frame_metas)
         main_frame.pack(fill=tk.BOTH, expand=True)
-        main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(1, weight=1) 
+        # Layout: Venda (0), [Lançar Lucro + Histórico Lucro] (1), Ger. Metas (2), Detalhes Vendas (3)
+        main_frame.rowconfigure(3, weight=1) # Linha 3 (Detalhes) que se expande
+        main_frame.columnconfigure(0, weight=1)
 
-        frame_lista_modelos = ttk.LabelFrame(main_frame, text="Modelos de Meta", padding="10")
-        frame_lista_modelos.grid(row=0, column=0, sticky="nsew", padx=(0, 10), pady=(0, 10))
-        frame_lista_modelos.rowconfigure(0, weight=1)
-        frame_lista_modelos.columnconfigure(0, weight=1)
+        # --- Frame Lançamento Venda (Linha 0) ---
+        frame_lancamento = ttk.LabelFrame(main_frame, text="Lançar Apuração Diária (Vendas R$)", padding="10")
+        frame_lancamento.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        frame_lancamento.columnconfigure(1, weight=1)
+        ttk.Label(frame_lancamento, text="Meta Principal Ativa:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
+        self.combo_metas_ativas = ttk.Combobox(frame_lancamento, state="readonly")
+        self.combo_metas_ativas.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+        ttk.Label(frame_lancamento, text="Data da Apuração:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
+        self.date_apuracao = DateEntry(frame_lancamento, width=12, date_pattern='dd/mm/yyyy', locale='pt_BR')
+        self.date_apuracao.grid(row=1, column=1, padx=5, pady=5, sticky="w")
+        ttk.Label(frame_lancamento, text="Valor Vendido do Dia (R$):").grid(row=2, column=0, padx=5, pady=5, sticky="w")
+        self.entry_valor_dia = ttk.Entry(frame_lancamento)
+        self.entry_valor_dia.grid(row=2, column=1, padx=5, pady=5, sticky="w")
+        btn_lancar = ttk.Button(frame_lancamento, text="Lançar Apuração Diária", command=self.lancar_apuracao_diaria)
+        btn_lancar.grid(row=3, column=1, padx=5, pady=10, sticky="e")
 
-        cols_modelos = ('ID', 'Nome da Meta', 'Setor Alvo', 'Pontos')
-        self.tree_metas_modelos = ttk.Treeview(frame_lista_modelos, columns=cols_modelos, show='headings', selectmode='browse', height=5)
-        self.tree_metas_modelos.heading('ID', text='ID'); self.tree_metas_modelos.column('ID', width=40)
-        self.tree_metas_modelos.heading('Nome da Meta', text='Nome da Meta'); self.tree_metas_modelos.column('Nome da Meta', width=200)
-        self.tree_metas_modelos.heading('Setor Alvo', text='Setor'); self.tree_metas_modelos.column('Setor Alvo', width=100)
-        self.tree_metas_modelos.heading('Pontos', text='Prêmio'); self.tree_metas_modelos.column('Pontos', width=60, anchor='center')
-        self.tree_metas_modelos.grid(row=0, column=0, sticky="nsew")
-        self.tree_metas_modelos.bind('<<TreeviewSelect>>', self.on_modelo_meta_selecionado)
+        # --- NOVO: Frame Intermediário para Lucro (Linha 1) ---
+        frame_linha_lucro = ttk.Frame(main_frame)
+        frame_linha_lucro.grid(row=1, column=0, sticky="ew", pady=(0, 10))
+        frame_linha_lucro.columnconfigure(0, weight=1) # Coluna do lançamento
+        frame_linha_lucro.columnconfigure(1, weight=2) # Coluna do histórico (maior)
+        # --- FIM NOVO ---
 
-        frame_botoes_modelos = ttk.Frame(frame_lista_modelos)
-        frame_botoes_modelos.grid(row=1, column=0, pady=10)
-        ttk.Button(frame_botoes_modelos, text="Excluir Modelo", command=self.excluir_modelo_meta_selecionado).pack()
+        # --- Frame Lançar Lucro Mensal (Linha 1, Coluna 0 do frame_linha_lucro) ---
+        frame_lucro = ttk.LabelFrame(frame_linha_lucro, text="Lançar Lucro Mensal (%)", padding="10")
+        frame_lucro.grid(row=0, column=0, sticky="nsew", padx=(0, 5)) # Adicionado padx
+        # (Conteúdo interno do frame_lucro permanece o mesmo)
+        frame_lucro.columnconfigure(1, weight=1)
+        ttk.Label(frame_lucro, text="Ano:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
+        self.entry_lucro_ano = ttk.Entry(frame_lucro, width=6)
+        self.entry_lucro_ano.grid(row=0, column=1, padx=5, pady=5, sticky="w")
+        ttk.Label(frame_lucro, text="Mês:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
+        meses_nomes = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+                    "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+        self.combo_lucro_mes = ttk.Combobox(frame_lucro, values=meses_nomes, state="readonly", width=15)
+        self.combo_lucro_mes.grid(row=1, column=1, padx=5, pady=5, sticky="w")
+        ttk.Label(frame_lucro, text="Percentual (%):").grid(row=2, column=0, padx=5, pady=5, sticky="w")
+        self.entry_lucro_percentual = ttk.Entry(frame_lucro, width=10)
+        self.entry_lucro_percentual.grid(row=2, column=1, padx=5, pady=5, sticky="w")
+        btn_salvar_lucro = ttk.Button(frame_lucro, text="Salvar Lucro Mensal", command=self.salvar_lucro_interface)
+        btn_salvar_lucro.grid(row=3, column=1, padx=5, pady=10, sticky="e")
+        hoje = datetime.now()
+        primeiro_dia_mes_atual = hoje.replace(day=1)
+        ultimo_dia_mes_passado = primeiro_dia_mes_atual - timedelta(days=1)
+        self.entry_lucro_ano.insert(0, str(ultimo_dia_mes_passado.year))
+        self.combo_lucro_mes.current(ultimo_dia_mes_passado.month - 1)
 
-        frame_form_modelos = ttk.LabelFrame(main_frame, text="Criar ou Editar Modelo", padding="15")
-        frame_form_modelos.grid(row=0, column=1, sticky="nsew", pady=(0, 10))
-        frame_form_modelos.columnconfigure(1, weight=1)
-        
-        ttk.Label(frame_form_modelos, text="Nome da Meta:").grid(row=0, column=0, sticky="w", pady=5)
-        self.entry_meta_nome = ttk.Entry(frame_form_modelos); self.entry_meta_nome.grid(row=0, column=1, sticky="ew", pady=5)
-        ttk.Label(frame_form_modelos, text="Descrição:").grid(row=1, column=0, sticky="w", pady=5)
-        self.entry_meta_desc = ttk.Entry(frame_form_modelos); self.entry_meta_desc.grid(row=1, column=1, sticky="ew", pady=5)
-        ttk.Label(frame_form_modelos, text="Setor Alvo:").grid(row=2, column=0, sticky="w", pady=5)
-        self.combo_meta_setor = ttk.Combobox(frame_form_modelos); self.combo_meta_setor.grid(row=2, column=1, sticky="ew", pady=5)
-        ttk.Label(frame_form_modelos, text="Pontos de Prêmio:").grid(row=3, column=0, sticky="w", pady=5)
-        self.entry_meta_pontos = ttk.Entry(frame_form_modelos); self.entry_meta_pontos.grid(row=3, column=1, sticky="w", pady=5)
-        frame_botoes_form = ttk.Frame(frame_form_modelos); frame_botoes_form.grid(row=4, column=1, sticky="e", pady=20)
-        self.btn_salvar_meta_modelo = ttk.Button(frame_botoes_form, text="Criar Novo Modelo", command=self.salvar_modelo_meta)
-        self.btn_salvar_meta_modelo.pack(side="left")
-        ttk.Button(frame_botoes_form, text="Limpar", command=self.limpar_formulario_meta_modelo).pack(side="left", padx=10)
+        # --- Frame Histórico de Lucro (Linha 1, Coluna 1 do frame_linha_lucro) ---
+        frame_historico_lucro = ttk.LabelFrame(frame_linha_lucro, text="Histórico de Lucro Lançado (Duplo-clique para editar)", padding="10")
+        frame_historico_lucro.grid(row=0, column=1, sticky="nsew", padx=(5, 0)) # Adicionado padx
+        frame_historico_lucro.columnconfigure(0, weight=1)
+        frame_historico_lucro.rowconfigure(0, weight=1) # Permite que a Treeview cresça verticalmente se necessário
+        cols_lucro = ('ID', 'Ano', 'Mês', 'Percentual')
+        self.tree_lucros_lancados = ttk.Treeview(frame_historico_lucro, columns=cols_lucro, show='headings', selectmode='browse', height=5) # Ajuste a altura (height) conforme necessário
+        self.tree_lucros_lancados.heading('ID', text='ID'); self.tree_lucros_lancados.column('ID', width=40, anchor="center")
+        self.tree_lucros_lancados.heading('Ano', text='Ano'); self.tree_lucros_lancados.column('Ano', width=80, anchor="center")
+        self.tree_lucros_lancados.heading('Mês', text='Mês'); self.tree_lucros_lancados.column('Mês', width=100, anchor="center")
+        self.tree_lucros_lancados.heading('Percentual', text='Percentual (%)'); self.tree_lucros_lancados.column('Percentual', width=100, anchor="e")
+        self.tree_lucros_lancados.grid(row=0, column=0, sticky="nsew") # Treeview cresce
+        self.tree_lucros_lancados.bind("<Double-1>", self.abrir_janela_edicao_lucro)
+        btn_excluir_lucro = ttk.Button(frame_historico_lucro, text="Excluir Lançamento Selecionado", command=self.excluir_lancamento_lucro_selecionado)
+        btn_excluir_lucro.grid(row=1, column=0, sticky="e", pady=(5, 0)) # Botão abaixo da lista
 
-        # --- PAINEL INFERIOR: Gerenciamento de Metas do Dia ---
-        frame_diario = ttk.LabelFrame(main_frame, text="Metas do Dia", padding="10")
-        frame_diario.grid(row=1, column=0, columnspan=2, sticky="nsew")
-        frame_diario.rowconfigure(1, weight=1)
-        frame_diario.columnconfigure(0, weight=1)
+        # --- Seção Gerenciar Metas Principais (agora na linha 2) ---
+        frame_gerenciamento = ttk.LabelFrame(main_frame, text="Gerenciar Metas Principais (Clique para ver detalhes)", padding="10")
+        frame_gerenciamento.grid(row=2, column=0, sticky="ew", pady=(10, 10)) # Mudou para row=2
+        frame_gerenciamento.rowconfigure(0, weight=1)
+        frame_gerenciamento.columnconfigure(0, weight=1)
+        cols_principais = ('ID', 'Nome', 'Valor Total', 'Início', 'Fim', 'Status')
+        self.tree_metas_principais = ttk.Treeview(frame_gerenciamento, columns=cols_principais, show='headings', selectmode='browse', height=5) # Definindo altura inicial        for col in cols_principais: self.tree_metas_principais.heading(col, text=col)
+        self.tree_metas_principais.column('ID', width=40); self.tree_metas_principais.column('Nome', width=250)
+        self.tree_metas_principais.column('Valor Total', width=120, anchor="e"); self.tree_metas_principais.column('Início', width=100, anchor="center")
+        self.tree_metas_principais.column('Fim', width=100, anchor="center"); self.tree_metas_principais.column('Status', width=80, anchor="center")
+        self.tree_metas_principais.pack(fill="x", expand=True, side="left")
+        self.tree_metas_principais.bind('<<TreeviewSelect>>', self.on_meta_principal_selecionada)
+        frame_botoes_gerenciamento = ttk.Frame(frame_gerenciamento)
+        frame_botoes_gerenciamento.pack(side="left", fill="y", padx=10)
+        ttk.Button(frame_botoes_gerenciamento, text="Criar Nova Meta Principal...", command=self.abrir_janela_criar_meta_principal).pack(pady=5)
+        ttk.Button(frame_botoes_gerenciamento, text="Definir Metas Diárias...", command=self.abrir_janela_metas_diarias).pack(pady=5)
 
-        frame_filtros_diario = ttk.Frame(frame_diario)
-        frame_filtros_diario.grid(row=0, column=0, sticky="ew", pady=5)
-        
-        ttk.Label(frame_filtros_diario, text="Selecione a Data:").grid(row=0, column=0)
-        self.date_entry_metas = DateEntry(frame_filtros_diario, date_pattern='dd/mm/yyyy', width=12)
-        self.date_entry_metas.grid(row=0, column=1, padx=10)
-        self.date_entry_metas.bind("<<DateEntrySelected>>", self.on_data_meta_selecionada) 
-        
-        cols_instancias = ('ID', 'Nome Meta', 'Setor', 'Meta (R$)', 'Atingido (R$)', 'Status')
-        self.tree_metas_instancias = ttk.Treeview(frame_diario, columns=cols_instancias, show='headings', selectmode='browse')
-        self.tree_metas_instancias.heading('ID', text='ID'); self.tree_metas_instancias.column('ID', width=40)
-        self.tree_metas_instancias.heading('Nome Meta', text='Nome da Meta'); self.tree_metas_instancias.column('Nome Meta', width=250)
-        self.tree_metas_instancias.heading('Setor', text='Setor Alvo'); self.tree_metas_instancias.column('Setor', width=100)
-        self.tree_metas_instancias.heading('Meta (R$)', text='Meta (R$)'); self.tree_metas_instancias.column('Meta (R$)', width=100, anchor='e')
-        self.tree_metas_instancias.heading('Atingido (R$)', text='Atingido (R$)'); self.tree_metas_instancias.column('Atingido (R$)', width=100, anchor='e')
-        self.tree_metas_instancias.heading('Status', text='Status'); self.tree_metas_instancias.column('Status', width=100, anchor='center')
-        self.tree_metas_instancias.grid(row=1, column=0, sticky="nsew")
+        # --- Frame Detalhes (agora na linha 3) ---
+        frame_detalhes = ttk.LabelFrame(main_frame, text="Detalhes e Evolução da Meta de Vendas Selecionada", padding="10")
+        frame_detalhes.grid(row=3, column=0, sticky="nsew") # Ocupa a linha 3 do main_frame
 
-        frame_botoes_diario = ttk.Frame(frame_diario)
-        frame_botoes_diario.grid(row=2, column=0, pady=10)
-        
-        ttk.Button(frame_botoes_diario, text="Lançar Nova Meta para o Dia", command=self.abrir_janela_lancamento_meta).grid(row=0, column=0, padx=5)
-        ttk.Button(frame_botoes_diario, text="Apurar Meta Selecionada", command=self.abrir_janela_apuracao_meta).grid(row=0, column=1, padx=5)
-        def on_modelo_meta_selecionado(self, event):
-            """Quando um modelo é selecionado, preenche o formulário para edição."""
-            selecionado = self.tree_metas_modelos.focus()
-            if not selecionado: return
+        # --- CORREÇÃO AQUI ---
+        # Configura as linhas e colunas DENTRO do frame_detalhes
+        frame_detalhes.rowconfigure(3, weight=1)    # Linha 0 (onde está a Treeview) pode expandir verticalmente
+        frame_detalhes.rowconfigure(1, weight=0)    # Linha 1 (botão excluir) não expande
+        frame_detalhes.columnconfigure(0, weight=3) # Coluna 0 (Treeview) expande mais horizontalmente
+        frame_detalhes.columnconfigure(1, weight=1) # Coluna 1 (Resumo) expande menos
+        # --- FIM DA CORREÇÃO ---
 
-            dados = self.tree_metas_modelos.item(selecionado, 'values')
-            modelo_id = dados[0]
+        cols_detalhes = ('Data do Lançamento', 'Valor Lançado (R$)')
+        # Removemos o height=10 daqui
+        self.tree_detalhes_apuracoes = ttk.Treeview(frame_detalhes, columns=cols_detalhes, show='headings', selectmode='browse') 
+        self.tree_detalhes_apuracoes.heading('Data do Lançamento', text='Data do Lançamento')
+        self.tree_detalhes_apuracoes.column('Data do Lançamento', anchor='center', width=150) # Ajuste a largura se necessário
+        self.tree_detalhes_apuracoes.heading('Valor Lançado (R$)', text='Valor Lançado (R$)')
+        self.tree_detalhes_apuracoes.column('Valor Lançado (R$)', anchor='e', width=150) # Ajuste a largura se necessário
+        # A treeview agora ocupa a linha 0, coluna 0 e se expande (nsew)
+        self.tree_detalhes_apuracoes.grid(row=0, column=0, sticky="nsew", pady=(0, 5)) 
+        self.tree_detalhes_apuracoes.bind("<Double-1>", self.abrir_janela_edicao_apuracao)
 
-            modelos_completos = database.listar_metas_modelos()
-            modelo_completo = next((m for m in modelos_completos if m.MetaModeloID == int(modelo_id)), None)
+        # Frame do botão excluir fica na linha 1, coluna 0
+        frame_botoes_detalhes = ttk.Frame(frame_detalhes)
+        frame_botoes_detalhes.grid(row=1, column=0, sticky="w", padx=0, pady=(0, 5)) # Ajustado padx e pady
+        btn_excluir_apuracao = ttk.Button(frame_botoes_detalhes, text="Excluir Apuração Selecionada", command=self.excluir_apuracao_selecionada)
+        btn_excluir_apuracao.pack() # Pack dentro do seu próprio frame
 
-            if modelo_completo:
-                self.entry_meta_nome.delete(0, tk.END)
-                self.entry_meta_nome.insert(0, modelo_completo.NomeMeta)
-                self.entry_meta_desc.delete(0, tk.END)
-                self.entry_meta_desc.insert(0, modelo_completo.Descricao or "")
-                self.combo_meta_setor.set(modelo_completo.SetorAlvo)
-                self.entry_meta_pontos.delete(0, tk.END)
-                self.entry_meta_pontos.insert(0, modelo_completo.PontosPremio)
-                self.btn_salvar_meta_modelo.config(text="Salvar Alterações")
+        # Frame de resumo ocupa a linha 0 e 1 (rowspan=2) na coluna 1
+        frame_resumo = ttk.Frame(frame_detalhes, padding="20")
+        frame_resumo.grid(row=0, column=1, rowspan=2, sticky="nsew", padx=(10, 0))
+        self.lbl_total_atingido = ttk.Label(frame_resumo, text="Total Atingido: R$ 0,00", font=("Arial", 12, "bold"))
+        self.lbl_total_atingido.pack(anchor="w", pady=5)
+        self.lbl_progresso_percentual = ttk.Label(frame_resumo, text="Progresso: 0.00%", font=("Arial", 12))
+        self.lbl_progresso_percentual.pack(anchor="w", pady=5)
+        self.lbl_projecao_vendas = ttk.Label(frame_resumo, text="Projeção Final: R$ 0,00", font=("Arial", 12, "italic"))
+        self.lbl_projecao_vendas.pack(anchor="w", pady=(15, 5))
+        # Inicialização automática dos dados da aba
+        self.carregar_dados_metas()
+        self.atualizar_lista_lucros()
 
-    def salvar_modelo_meta(self):
-        """Salva um novo modelo ou atualiza um existente."""
-        nome = self.entry_meta_nome.get()
-        desc = self.entry_meta_desc.get()
-        setor = self.combo_meta_setor.get()
-        pontos_str = self.entry_meta_pontos.get()
+    def on_meta_principal_selecionada(self, event):
+        """(VERSÃO V2 FINAL) Carrega o histórico, o resumo, a projeção E VERIFICA SE A META MENSAL FOI ATINGIDA."""
+        for i in self.tree_detalhes_apuracoes.get_children(): self.tree_detalhes_apuracoes.delete(i)
+        self.lbl_total_atingido.config(text="Total Atingido: R$ 0,00"); self.lbl_progresso_percentual.config(text="Progresso: 0.00%")
+        self.lbl_projecao_vendas.config(text="Projeção Final: R$ 0,00")
 
-        if not all([nome, setor, pontos_str]):
-            messagebox.showerror("Erro", "Nome da Meta, Setor Alvo e Pontos são obrigatórios.")
-            return
+        selecionados = self.tree_metas_principais.selection()
+        if not selecionados: return
+        item_selecionado = selecionados[0]
 
+        dados_meta = self.tree_metas_principais.item(item_selecionado, 'values')
+        if not dados_meta: return
+            
+        meta_id = int(dados_meta[0])
+        valor_meta_total_str = dados_meta[2].replace("R$ ", "").replace(".", "").replace(",", ".")
+        valor_meta_total = float(valor_meta_total_str)
+        data_inicio_str, data_fim_str = dados_meta[3], dados_meta[4]
+        status_meta = dados_meta[5]
+
+        apuracoes = database.listar_apuracoes_por_meta_principal(meta_id)
+
+        total_atingido = 0.0
+        for apuracao in apuracoes:
+            data_f = apuracao.DataApuracao.strftime('%d/%m/%Y'); valor_f = f"{apuracao.ValorDia:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            self.tree_detalhes_apuracoes.insert("", "end", values=(data_f, valor_f)); total_atingido += float(apuracao.ValorDia)
+
+        percentual = (total_atingido / valor_meta_total) * 100 if valor_meta_total > 0 else 0
+        total_atingido_f = f"R$ {total_atingido:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        self.lbl_total_atingido.config(text=f"Total Atingido: {total_atingido_f}"); self.lbl_progresso_percentual.config(text=f"Progresso: {percentual:.2f}%")
+
+        if len(apuracoes) > 0:
+            media_diaria = total_atingido / len(apuracoes)
+            total_dias_meta = (datetime.strptime(data_fim_str, '%d/%m/%Y') - datetime.strptime(data_inicio_str, '%d/%m/%Y')).days + 1
+            projecao = media_diaria * total_dias_meta
+            projecao_f = f"R$ {projecao:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            self.lbl_projecao_vendas.config(text=f"Projeção Final: {projecao_f}")
+
+        # [CORREÇÃO] Recarrega metas do banco para garantir status atualizado (Atomicidade)
+        metas_banco = database.listar_metas_principais()
+        meta_detalhes = next((m for m in metas_banco if m.MetaPrincipalID == meta_id), None)
+
+        # Verifica o status REAL do banco, ignorando o cache visual da Treeview
+        if meta_detalhes and total_atingido >= valor_meta_total and meta_detalhes.Status == 'Ativa':
+            if meta_detalhes:
+                confirmado = messagebox.askyesno(
+                    "🎉 META MENSAL ATINGIDA! 🎉",
+                    f"Parabéns! A meta '{meta_detalhes.NomeMeta}' foi alcançada!\n\n"
+                    f"Deseja distribuir os {meta_detalhes.PontosPremio} pontos de prêmio para a equipe do setor '{meta_detalhes.SetorAlvo}' agora?"
+                )
+                if confirmado:
+                    funcionarios_premiados = database.distribuir_premio_meta_principal(meta_id)
+                    if funcionarios_premiados:
+                        mensagem_telegram = (
+                            f"🎉🎊 **META MENSAL ATINGIDA!** 🎊🎉\n\n"
+                            f"Parabéns, equipe do setor '{meta_detalhes.SetorAlvo.upper()}'! Vocês alcançaram o grande objetivo do mês!\n\n"
+                            f"Cada um recebeu um super bônus de **{meta_detalhes.PontosPremio} pontos**!\n\n"
+                            "Vocês são incríveis! 🚀"
+                        )
+                        for funcionario in funcionarios_premiados:
+                            notificador_telegram.enviar_mensagem(funcionario.ChatIDTelegram, mensagem_telegram)
+                        
+                        messagebox.showinfo("Sucesso", "Prêmio distribuído e equipe notificada com sucesso!")
+                        self.carregar_dados_metas()
+
+    def salvar_lucro_interface(self):
+        """Lê os dados da interface e salva o lucro mensal no banco."""
         try:
-            pontos = int(pontos_str)
-            selecionado = self.tree_metas_modelos.focus()
+            # [CORREÇÃO] Validação do índice do combobox para evitar mês 0
+            idx_mes = self.combo_lucro_mes.current()
+            if idx_mes == -1:
+                raise ValueError("Selecione um mês válido na lista.")
 
-            if selecionado:
-                modelo_id = self.tree_metas_modelos.item(selecionado, 'values')[0]
-                database.atualizar_meta_modelo(modelo_id, nome, desc, setor, pontos)
-                messagebox.showinfo("Sucesso", "Modelo de meta atualizado com sucesso!")
+            mes = int(idx_mes + 1)
+            percentual_str = self.entry_lucro_percentual.get().replace(',', '.')
+            percentual = float(percentual_str)
+
+            if not (2020 <= ano <= 2100): # Validação simples do ano
+                raise ValueError("Ano inválido.")
+            if not (0 <= percentual <= 1000): # Validação do percentual (permite > 100 se necessário)
+                raise ValueError("Percentual inválido.")
+
+            if database.salvar_lucro_mensal(ano, mes, percentual):
+                messagebox.showinfo("Sucesso", f"Percentual de lucro para {mes:02d}/{ano} salvo com sucesso!", parent=self.root)
+                self.entry_lucro_percentual.delete(0, tk.END)
+                self.atualizar_lista_lucros() # <-- ATUALIZA A LISTA
             else:
-                database.criar_meta_modelo(nome, desc, setor, pontos)
-                messagebox.showinfo("Sucesso", "Novo modelo de meta criado com sucesso!")
+                messagebox.showerror("Erro de Banco", "Não foi possível salvar o percentual de lucro.", parent=self.root)
 
-            self.carregar_modelos_de_metas()
+        except ValueError as e:
+            messagebox.showerror("Erro de Formato", f"Verifique os valores digitados.\nAno, Mês e Percentual devem ser números válidos.\nDetalhe: {e}", parent=self.root)
+        except Exception as e:
+            messagebox.showerror("Erro Inesperado", f"Ocorreu um erro: {e}", parent=self.root)
 
-        except ValueError:
-            messagebox.showerror("Erro de Formato", "O campo 'Pontos' deve ser um número inteiro.")
+    def abrir_janela_metas_diarias(self):
+        """Abre um pop-up para o gestor definir as metas para cada dia da semana."""
+        popup = Toplevel(self.root)
+        popup.title("Definir Modelos de Metas Diárias")
+        popup.geometry("550x350")
+        popup.transient(self.root)
+        frame = ttk.Frame(popup, padding="15")
+        frame.pack(fill="both", expand=True)
 
-    def limpar_formulario_meta_modelo(self):
-        """Limpa o formulário de edição e reseta o botão."""
-        if self.tree_metas_modelos.selection():
-            self.tree_metas_modelos.selection_remove(self.tree_metas_modelos.selection()[0])
-        self.entry_meta_nome.delete(0, tk.END)
-        self.entry_meta_desc.delete(0, tk.END)
-        self.combo_meta_setor.set("")
-        self.entry_meta_pontos.delete(0, tk.END)
-        self.btn_salvar_meta_modelo.config(text="Criar Novo Modelo")
+        ttk.Label(frame, text="Dê um duplo-clique em um dia para editar a meta.", font=("Arial", 9, "italic")).pack(pady=(0, 10))
 
-    def excluir_modelo_meta_selecionado(self):
-        """Exclui o modelo de meta selecionado."""
-        selecionado = self.tree_metas_modelos.focus()
-        if not selecionado:
-            messagebox.showwarning("Aviso", "Selecione um modelo da lista para excluir.")
-            return
+        cols = ('Dia da Semana', 'Valor da Meta (R$)', 'Prêmio (Pontos)')
+        tree = ttk.Treeview(frame, columns=cols, show='headings', selectmode='browse')
+        for col in cols: tree.heading(col, text=col)
+        tree.column('Valor da Meta (R$)', anchor='e')
+        tree.column('Prêmio (Pontos)', anchor='center')
+        tree.pack(fill="both", expand=True)
 
-        dados = self.tree_metas_modelos.item(selecionado, 'values')
-        modelo_id, nome_meta = dados[0], dados[1]
+        def carregar_dados():
+            for i in tree.get_children(): tree.delete(i)
+            modelos = database.listar_modelos_metas_diarias()
+            for modelo in modelos:
+                valor_f = f"{modelo.ValorMeta:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                tree.insert("", "end", values=(modelo.NomeDia, valor_f, modelo.PontosPremio), iid=modelo.DiaSemanaID)
 
-        if messagebox.askyesno("Confirmar Exclusão", f"Tem certeza que deseja excluir o modelo '{nome_meta}'?\n\nTodas as metas diárias baseadas neste modelo também serão excluídas."):
-            database.excluir_meta_modelo(modelo_id)
-            messagebox.showinfo("Sucesso", "Modelo de meta excluído.")
-            self.carregar_modelos_de_metas()
+        def abrir_edicao(event):
+            selecionado = tree.focus()
+            if not selecionado: return
+            self.abrir_janela_edicao_meta_diaria(popup, selecionado, carregar_dados)
 
-    def processar_meta_equipe(self):
-        """Processa os valores de meta, verifica e premia a equipe se aplicável."""
-        try:
-            meta_str = self.entry_meta_vendas.get().replace(',', '.')
-            vendido_str = self.entry_total_vendido.get().replace(',', '.')
-            pontos_str = self.entry_pontos_meta.get()
+        tree.bind("<Double-1>", abrir_edicao)
+        carregar_dados()
 
-            if not all([meta_str, vendido_str, pontos_str]):
-                messagebox.showerror("Erro", "Todos os campos são obrigatórios.")
+    def abrir_janela_edicao_meta_diaria(self, parent, dia_semana_id, callback_refresh):
+        """Abre a pequena janela para editar os valores de uma meta diária."""
+        dados_modelo = next((m for m in database.listar_modelos_metas_diarias() if m.DiaSemanaID == int(dia_semana_id)), None)
+        if not dados_modelo: return
+
+        popup = Toplevel(parent)
+        popup.title(f"Editar Meta de {dados_modelo.NomeDia}")
+        popup.geometry("300x200")
+        frame = ttk.Frame(popup, padding="15")
+        frame.pack(fill="both", expand=True)
+
+        ttk.Label(frame, text="Valor da Meta (R$):").pack()
+        entry_valor = ttk.Entry(frame); entry_valor.pack(pady=5)
+        entry_valor.insert(0, f"{dados_modelo.ValorMeta:.2f}")
+
+        ttk.Label(frame, text="Prêmio por Atingir (Pontos):").pack()
+        entry_pontos = ttk.Entry(frame); entry_pontos.pack(pady=5)
+        entry_pontos.insert(0, dados_modelo.PontosPremio)
+
+        def salvar():
+            try:
+                valor = float(entry_valor.get().replace(",", "."))
+                pontos = int(entry_pontos.get())
+                if database.atualizar_modelo_meta_diaria(dia_semana_id, valor, pontos):
+                    popup.destroy()
+                    callback_refresh() # Chama a função para atualizar a lista
+                else:
+                    messagebox.showerror("Erro", "Falha ao salvar no banco de dados.", parent=popup)
+            except ValueError:
+                messagebox.showerror("Erro de Formato", "Os valores devem ser números.", parent=popup)
+
+        ttk.Button(frame, text="Salvar", command=salvar).pack(pady=10)
+
+    def abrir_janela_edicao_apuracao(self, event):
+            """Abre um pop-up para editar o valor de um lançamento diário selecionado."""
+            
+            # 1. [CRÍTICO] Captura o contexto da Meta Principal ANTES de tudo.
+            # Isso garante que a variável exista antes de definirmos a função interna.
+            selecao_meta_principal = self.tree_metas_principais.selection()
+            if not selecao_meta_principal:
+                return
+            # Pega o ID da meta (coluna 0) e guarda na variável
+            meta_id_contexto = self.tree_metas_principais.item(selecao_meta_principal[0], 'values')[0]
+
+            # 2. Valida a seleção da apuração
+            selecionado = self.tree_detalhes_apuracoes.focus()
+            if not selecionado:
                 return
 
-            meta = float(meta_str)
-            vendido = float(vendido_str)
-            pontos = int(pontos_str)
+            dados_apuracao = self.tree_detalhes_apuracoes.item(selecionado, 'values')
+            data_lancamento_str = dados_apuracao[0]
+            valor_antigo_str = dados_apuracao[1].replace(".", "").replace(",", ".")
 
-        except ValueError:
-            messagebox.showerror("Erro de Formato", "Os valores de meta, vendas e pontos devem ser números.")
+            # 3. Cria a Janela
+            popup = Toplevel(self.root)
+            popup.title(f"Editar Lançamento de {data_lancamento_str}")
+            popup.geometry("350x200")
+            popup.transient(self.root)
+            frame = ttk.Frame(popup, padding="15")
+            frame.pack(fill="both", expand=True)
+
+            ttk.Label(frame, text=f"Data da Apuração: {data_lancamento_str}", font=("Arial", 10, "bold")).pack(pady=5)
+
+            ttk.Label(frame, text="Novo Valor Lançado (R$):").pack(pady=5)
+            entry_novo_valor = ttk.Entry(frame, justify="center")
+            entry_novo_valor.pack(pady=5, ipady=4)
+            entry_novo_valor.insert(0, valor_antigo_str)
+            entry_novo_valor.focus()
+
+            # 4. Função Interna (Closure)
+            # Agora 'meta_id_contexto' JÁ EXISTE (foi criada no passo 1), então não dará erro.
+            def salvar_edicao(meta_id_fixo=meta_id_contexto):
+                nova_valor_str = entry_novo_valor.get().replace(",", ".")
+
+                try:
+                    novo_valor = float(nova_valor_str)
+                    data_db_format = datetime.strptime(data_lancamento_str, '%d/%m/%Y').strftime('%Y-%m-%d')
+
+                    # Usa o ID fixo que congelamos no argumento
+                    id_funcionario_logado = 2 
+
+                    sucesso, resultado = database.lancar_apuracao_diaria(meta_id_fixo, data_db_format, novo_valor, id_funcionario_logado)
+
+                    if sucesso:
+                        apuracao_id = resultado
+                        messagebox.showinfo("Sucesso", "Apuração atualizada com sucesso!", parent=popup)
+                        popup.destroy()
+                        self.on_meta_principal_selecionada(None) 
+                        
+                        # [CORREÇÃO] Tratamento de erro dentro da thread para evitar falhas silenciosas
+                        def tarefa_background():
+                            try:
+                                database.verificar_e_premiar_meta_diaria(apuracao_id, data_db_format, novo_valor, meta_id_fixo)
+                            except Exception as e_bg:
+                                logger.error(f"FALHA CRÍTICA na thread de premiação de meta (ApuracaoID {apuracao_id}): {e_bg}", exc_info=True)
+
+                        threading.Thread(target=tarefa_background, daemon=True).start()
+                    else:
+                        messagebox.showerror("Erro", f"Não foi possível atualizar a apuração no banco.\nDetalhe: {resultado}", parent=popup)
+
+                except ValueError:
+                    messagebox.showerror("Erro de Formato", f"O valor '{nova_valor_str}' não é um número válido.", parent=popup)
+                except Exception as e:
+                    messagebox.showerror("Erro Inesperado", f"Ocorreu um erro: {e}", parent=popup)
+
+            btn_salvar = ttk.Button(frame, text="Salvar Alterações", command=salvar_edicao)
+            btn_salvar.pack(pady=15)
+            entry_novo_valor.bind("<Return>", lambda e: salvar_edicao())
+
+    def excluir_apuracao_selecionada(self):
+        """Exclui o registro de apuração diária selecionado na lista de detalhes."""
+        selecionado_apuracao = self.tree_detalhes_apuracoes.focus()
+        selecionado_meta = self.tree_metas_principais.focus()
+
+        if not selecionado_apuracao or not selecionado_meta:
+            messagebox.showwarning("Aviso", "Por favor, selecione uma meta na lista de cima e uma apuração na lista de detalhes para excluir.")
             return
+        dados_apuracao = self.tree_detalhes_apuracoes.item(selecionado_apuracao, 'values')
+        meta_id = self.tree_metas_principais.item(selecionado_meta, 'values')[0]
+        data_lancamento_str_br = dados_apuracao[0] # Formato: dd/mm/yyyy
 
-        if vendido >= meta:
-            confirmado = messagebox.askyesno("Meta Atingida!",
-                                            f"A meta de R${meta:.2f} foi ATINGIDA (Vendido: R${vendido:.2f})!\n\n"
-                                            f"Deseja premiar a equipe de 'Atendimento' com {pontos} pontos cada?")
-            if confirmado:
-                atendentes = database.listar_funcionarios_por_setor('Atendimento')
-                if not atendentes:
-                    messagebox.showwarning("Aviso", "Nenhum funcionário do setor 'Atendimento' foi encontrado para premiar.")
+        confirmado = messagebox.askyesno(
+            "Confirmar Exclusão",
+            f"Tem certeza que deseja excluir permanentemente o lançamento do dia {data_lancamento_str_br}?\n\nEsta ação não pode ser desfeita.",
+            icon='warning'
+        )
+
+        if confirmado:
+            try:
+                data_db_format = datetime.strptime(data_lancamento_str_br, '%d/%m/%Y').strftime('%Y-%m-%d')
+
+                sucesso = database.excluir_apuracao_diaria(meta_id, data_db_format)
+
+                if sucesso:
+                    messagebox.showinfo("Sucesso", "Lançamento excluído com sucesso!")
+                    self.on_meta_principal_selecionada(None)
+                else:
+                    messagebox.showerror("Erro", "Não foi possível excluir o lançamento do banco de dados.")
+            except Exception as e:
+                messagebox.showerror("Erro Inesperado", f"Ocorreu um erro: {e}")
+
+
+    def lancar_apuracao_diaria(self):
+        """(VERSÃO V4) Lança a apuração e CHAMA A FUNÇÃO AUXILIAR para verificar/premiar."""
+        print(">>> DEBUG: Função lancar_apuracao_diaria FOI CHAMADA!") # <-- Mantém o print de teste
+        meta_selecionada_str = self.combo_metas_ativas.get()
+        data_apuracao_obj = self.date_apuracao.get_date() # Pega o objeto date
+        data_apuracao_str = data_apuracao_obj.strftime('%Y-%m-%d') # Formata para o banco
+        valor_dia_str = self.entry_valor_dia.get().replace(',', '.')
+        
+        if not meta_selecionada_str or not valor_dia_str:
+            messagebox.showwarning("Aviso", "Selecione uma meta e preencha o valor vendido no dia.")
+            return
+                
+        try:
+            meta_id = int(meta_selecionada_str.split('(ID: ')[1][:-1])
+            valor_dia = float(valor_dia_str)
+            # Use um ID de gestor fixo ou busque o do usuário logado se tiver sistema de login
+            id_funcionario_logado = 2 # Exemplo: ID do gestor que está usando a interface
+                
+            # Salva/Atualiza no banco
+            sucesso, resultado = database.lancar_apuracao_diaria(meta_id, data_apuracao_str, valor_dia, id_funcionario_logado) #
+            print(f">>> DEBUG: Resultado do salvamento no DB - Sucesso: {sucesso}, Resultado: {resultado}") # <-- Mantém o print de teste
+                
+            if sucesso:
+                apuracao_id = resultado # Captura o ID retornado pelo banco
+                messagebox.showinfo("Sucesso", "Apuração diária lançada com sucesso!") #
+                self.entry_valor_dia.delete(0, tk.END)
+                self.on_meta_principal_selecionada(None) # Atualiza a lista de detalhes
+
+                # [CORREÇÃO] Executa a verificação e envio de notificações em Thread separada
+                # Isso evita que a interface do Tkinter congele enquanto o bot envia mensagens.
+                def tarefa_background():
+                    database.verificar_e_premiar_meta_diaria(apuracao_id, data_apuracao_str, valor_dia, meta_id)
+
+                threading.Thread(target=tarefa_background, daemon=True).start()
+
+            else:
+                 print(f">>> DEBUG: Lançamento no DB falhou. Não vai verificar premiação.") # <-- Mantém o print de teste
+                 messagebox.showerror("Erro", f"Não foi possível salvar a apuração no banco de dados.\nDetalhe: {resultado}") #
+        except (ValueError, IndexError):
+            messagebox.showerror("Erro de Formato", "Verifique o valor vendido e a seleção da meta.")
+        except Exception as e:
+             messagebox.showerror("Erro Inesperado", f"Ocorreu um erro: {e}")
+
+# Em main.py, SUBSTITUA a função carregar_dados_metas por esta:
+
+    def carregar_dados_metas(self):
+        """Carrega as metas principais na lista e popula o combobox de metas ativas."""
+        for i in self.tree_metas_principais.get_children():
+            self.tree_metas_principais.delete(i)
+        
+        metas = database.listar_metas_principais()
+        metas_ativas = []
+        data_hoje = datetime.now().date() # Pega a data de HOJE
+
+        for meta in metas:
+            data_inicio_f = meta.DataInicio.strftime('%d/%m/%Y')
+            data_fim_f = meta.DataFim.strftime('%d/%m/%Y')
+            valor_total_f = f"R$ {meta.ValorMetaTotal:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+            self.tree_metas_principais.insert("", "end", values=(
+                meta.MetaPrincipalID, meta.NomeMeta, valor_total_f, data_inicio_f, data_fim_f, meta.Status
+            ))
+            
+            # --- CORREÇÃO APLICADA AQUI ---
+            # Verifica o Status E TAMBÉM o intervalo de datas
+            # CORREÇÃO: Removemos .date() pois meta.DataInicio já é um objeto 'date'
+            data_inicio_obj = meta.DataInicio
+            data_fim_obj = meta.DataFim
+
+            if meta.Status == 'Ativa' and (data_inicio_obj <= data_hoje <= data_fim_obj):
+                metas_ativas.append(f"{meta.NomeMeta} (ID: {meta.MetaPrincipalID})")
+            # --- FIM DA CORREÇÃO ---
+                
+        self.combo_metas_ativas['values'] = metas_ativas
+        if metas_ativas:
+            self.combo_metas_ativas.current(0)
+
+
+    def abrir_janela_criar_meta_principal(self):
+        """Abre um popup para o gestor cadastrar uma nova meta principal."""
+        popup = Toplevel(self.root)
+        popup.title("Criar Nova Meta Principal")
+        popup.geometry("400x350")
+        frame = ttk.Frame(popup, padding="15")
+        frame.pack(fill="both", expand=True)
+
+        ttk.Label(frame, text="Nome da Meta:").pack(anchor='w')
+        entry_nome = ttk.Entry(frame); entry_nome.pack(fill='x', pady=5)
+
+        ttk.Label(frame, text="Setor Alvo:").pack(anchor='w')
+        combo_setor = ttk.Combobox(frame, values=['Equipe', 'Caixa', 'Atendimento'])
+        combo_setor.pack(fill='x', pady=5)
+
+        ttk.Label(frame, text="Valor Total da Meta (R$):").pack(anchor='w')
+        entry_valor = ttk.Entry(frame); entry_valor.pack(fill='x', pady=5)
+
+        ttk.Label(frame, text="Pontos de Prêmio (se atingir):").pack(anchor='w')
+        entry_pontos = ttk.Entry(frame); entry_pontos.pack(fill='x', pady=5)
+
+        ttk.Label(frame, text="Período da Meta:").pack(anchor='w', pady=(10,0))
+        frame_datas = ttk.Frame(frame)
+        frame_datas.pack(fill='x')
+        ttk.Label(frame_datas, text="De:").pack(side='left')
+        date_inicio = DateEntry(frame_datas, width=12, date_pattern='dd/mm/yyyy', locale='pt_BR')
+        date_inicio.pack(side='left', padx=5)
+        ttk.Label(frame_datas, text="Até:").pack(side='left')
+        date_fim = DateEntry(frame_datas, width=12, date_pattern='dd/mm/yyyy', locale='pt_BR')
+        date_fim.pack(side='left', padx=5)
+
+        def salvar_meta_principal():
+            try:
+                nome = entry_nome.get()
+                setor = combo_setor.get()
+                valor = float(entry_valor.get().replace(',', '.'))
+                pontos = int(entry_pontos.get())
+                inicio = date_inicio.get_date().strftime('%Y-%m-%d')
+                fim = date_fim.get_date().strftime('%Y-%m-%d')
+
+                if not all([nome, setor, valor, pontos, inicio, fim]):
+                    messagebox.showerror("Erro", "Todos os campos são obrigatórios.", parent=popup)
                     return
 
-                sucesso = database.registrar_pontos_por_meta_equipe(atendentes, pontos, meta, vendido)
-
+                sucesso = database.criar_meta_principal(nome, "", valor, inicio, fim, pontos, setor)
                 if sucesso:
-                    # Notifica o grupo do Atendimento, se ele existir
-                    chat_id_atendimento = database.buscar_chat_id_por_nome_grupo('Atendimento')
-                    if chat_id_atendimento:
-                        mensagem = (f"🏆🎉 **META DE VENDAS BATIDA!** 🎉🏆\n\n"
-                                    f"Parabéns, equipe de Atendimento! A meta de R${meta:.2f} foi superada, com um total de **R${vendido:.2f}** em vendas!\n\n"
-                                    f"Cada membro da equipe ganhou **{pontos} pontos** pelo excelente trabalho coletivo! 🚀")
-                        notificador_telegram.enviar_mensagem(chat_id_atendimento, mensagem)
-
-                    messagebox.showinfo("Sucesso", f"{len(atendentes)} funcionário(s) do Atendimento foram premiados com sucesso!")
-                    # Limpa os campos
-                    self.entry_meta_vendas.delete(0, 'end')
-                    self.entry_total_vendido.delete(0, 'end')
-                else:
-                    messagebox.showerror("Erro de Banco", "Ocorreu um erro ao registrar os pontos no banco de dados.")
-        else:
-            messagebox.showinfo("Meta não Atingida",
-                                f"A meta de R${meta:.2f} não foi atingida (Vendido: R${vendido:.2f}).\n\n"
-                                "Nenhum ponto foi distribuído. Mais sorte da próxima vez!")
-
-    def on_data_meta_selecionada(self, event):
-        """Chamada quando a data no calendário de metas é alterada."""
-        self.carregar_instancias_de_metas_do_dia()
-
-    def carregar_instancias_de_metas_do_dia(self):
-        """Busca e exibe as metas que foram lançadas para a data selecionada."""
-        for i in self.tree_metas_instancias.get_children():
-            self.tree_metas_instancias.delete(i)
-
-        data_selecionada = self.date_entry_metas.get_date().strftime("%Y-%m-%d")
-        instancias = database.listar_metas_instancias_por_data(data_selecionada)
-
-        for inst in instancias:
-            valor_meta = f"{inst.ValorMeta:.2f}"
-            valor_atingido = f"{inst.ValorAtingido:.2f}" if inst.ValorAtingido is not None else "---"
-            self.tree_metas_instancias.insert("", "end", values=(
-                inst.MetaInstanciaID, inst.NomeMeta, inst.SetorAlvo, valor_meta, valor_atingido, inst.Status
-            ))
-
-    def abrir_janela_lancamento_meta(self):
-        """Abre um pop-up para o gestor lançar uma nova meta para o dia selecionado."""
-        data_selecionada = self.date_entry_metas.get_date()
-
-        popup = Toplevel(self.root)
-        popup.title(f"Lançar Meta para {data_selecionada.strftime('%d/%m/%Y')}")
-        popup.geometry("400x200")
-        popup.transient(self.root)
-
-        frame = ttk.Frame(popup, padding="15")
-        frame.pack(fill="both", expand=True)
-
-        ttk.Label(frame, text="Selecione o Modelo de Meta:").pack(anchor='w')
-        combo_modelos = ttk.Combobox(frame, state="readonly")
-        combo_modelos.pack(fill='x', pady=5)
-        modelos_db = database.listar_metas_modelos()
-        modelos_map = {m.NomeMeta: m.MetaModeloID for m in modelos_db}
-        combo_modelos['values'] = list(modelos_map.keys())
-
-        ttk.Label(frame, text="Valor da Meta (R$):").pack(anchor='w')
-        entry_valor = ttk.Entry(frame)
-        entry_valor.pack(fill='x', pady=5)
-        entry_valor.focus()
-
-        def confirmar_lancamento():
-            nome_modelo = combo_modelos.get()
-            valor_str = entry_valor.get().replace(',', '.')
-            if not nome_modelo or not valor_str:
-                messagebox.showerror("Erro", "Selecione um modelo e defina um valor para a meta.", parent=popup)
-                return
-            try:
-                valor = float(valor_str)
-                modelo_id = modelos_map[nome_modelo]
-                sucesso = database.lancar_meta_diaria(modelo_id, data_selecionada.strftime("%Y-%m-%d"), valor)
-                if sucesso:
-                    messagebox.showinfo("Sucesso", "Meta lançada para o dia!", parent=popup)
-                    self.carregar_instancias_de_metas_do_dia()
+                    messagebox.showinfo("Sucesso", "Meta principal criada com sucesso!", parent=popup)
+                    self.carregar_dados_metas() # Atualiza a lista na tela principal
                     popup.destroy()
                 else:
-                    messagebox.showwarning("Aviso", "Esta meta já foi lançada para este dia.", parent=popup)
+                    messagebox.showerror("Erro de Banco", "Não foi possível salvar a meta.", parent=popup)
             except ValueError:
-                messagebox.showerror("Erro de Formato", "O valor da meta deve ser um número.", parent=popup)
+                messagebox.showerror("Erro de Formato", "Valor da Meta e Pontos devem ser números.", parent=popup)
 
-        ttk.Button(frame, text="Confirmar Lançamento", command=confirmar_lancamento).pack(pady=20)
+        ttk.Button(frame, text="Salvar Meta Principal", command=salvar_meta_principal).pack(pady=20)
 
-    def abrir_janela_apuracao_meta(self):
-        """Abre um pop-up para apurar o resultado de uma meta selecionada."""
-        selecionado = self.tree_metas_instancias.focus()
+
+        # --- NOVAS FUNÇÕES PARA GERENCIAR HISTÓRICO DE LUCRO ---
+    # --- NOVAS FUNÇÕES PARA GERENCIAR HISTÓRICO DE LUCRO ---
+
+    def atualizar_lista_lucros(self):
+        """Carrega (ou recarrega) o histórico de lucros mensais na treeview."""
+        try:
+            for i in self.tree_lucros_lancados.get_children():
+                self.tree_lucros_lancados.delete(i)
+
+            lucros = database.listar_lucros_mensais()
+            meses_nomes = ["", "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+                        "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+
+            for lucro in lucros:
+                lucro_id, ano, mes_num, percentual = lucro
+                nome_mes = meses_nomes[mes_num] if 1 <= mes_num <= 12 else "Mês Inválido"
+                percentual_f = f"{percentual:.2f} %"
+                self.tree_lucros_lancados.insert("", "end", values=(lucro_id, ano, nome_mes, percentual_f))
+
+        except Exception as e:
+            logger.error(f"Erro ao atualizar lista de lucros: {e}", exc_info=True)
+            messagebox.showerror("Erro", f"Não foi possível carregar o histórico de lucros:\n{e}", parent=self.root)
+
+    def abrir_janela_edicao_lucro(self, event):
+        """Chamada com duplo-clique para editar um lançamento de lucro."""
+        selecionado = self.tree_lucros_lancados.focus()
         if not selecionado:
-            messagebox.showwarning("Aviso", "Selecione uma meta na lista 'Metas do Dia' para apurar.")
             return
 
-        dados_inst = self.tree_metas_instancias.item(selecionado, 'values')
-        instancia_id, nome_meta, setor_alvo, valor_meta_str, _, status = dados_inst
+        dados = self.tree_lucros_lancados.item(selecionado, 'values')
+        try:
+            lucro_id = int(dados[0])
+            ano = dados[1]
+            mes = dados[2]
+            percentual_antigo_str = dados[3].replace(" %", "").replace(",", ".")
 
-        if status != 'Pendente':
-            messagebox.showinfo("Informação", "Esta meta já foi apurada anteriormente.")
+            novo_percentual_str = simpledialog.askstring(
+                "Editar Percentual de Lucro",
+                f"Digite o NOVO percentual de lucro para {mes} de {ano}:",
+                initialvalue=percentual_antigo_str,
+                parent=self.root
+            )
+
+            if novo_percentual_str is None:
+                return # Usuário cancelou
+
+            novo_percentual = float(novo_percentual_str.replace(",", "."))
+
+            if database.atualizar_lucro_mensal(lucro_id, novo_percentual):
+                messagebox.showinfo("Sucesso", "Percentual de lucro atualizado!", parent=self.root)
+                self.atualizar_lista_lucros() # Recarrega a lista
+            else:
+                messagebox.showerror("Erro", "Não foi possível atualizar o registro no banco.", parent=self.root)
+
+        except (ValueError, TypeError) as e:
+            messagebox.showerror("Erro de Formato", f"Valor inválido: {novo_percentual_str}\nO percentual deve ser um número.", parent=self.root)
+        except Exception as e:
+            logger.error(f"Erro ao editar lucro (ID: {lucro_id}): {e}", exc_info=True)
+            messagebox.showerror("Erro Inesperado", f"Ocorreu um erro: {e}", parent=self.root)
+
+    def excluir_lancamento_lucro_selecionado(self):
+        """Exclui um lançamento de lucro selecionado na treeview."""
+        selecionado = self.tree_lucros_lancados.focus()
+        if not selecionado:
+            messagebox.showwarning("Aviso", "Selecione um lançamento da lista de histórico de lucro para excluir.", parent=self.root)
             return
 
-        valor_meta = float(valor_meta_str)
+        dados = self.tree_lucros_lancados.item(selecionado, 'values')
+        try:
+            lucro_id = int(dados[0])
+            ano = dados[1]
+            mes = dados[2]
 
-        popup = Toplevel(self.root)
-        popup.title(f"Apurar Meta: {nome_meta}")
-        popup.geometry("400x200")
-        popup.transient(self.root)
-
-        frame = ttk.Frame(popup, padding="15")
-        frame.pack(fill="both", expand=True)
-
-        ttk.Label(frame, text=f"Meta do Dia: R$ {valor_meta:.2f}").pack(anchor='w')
-        ttk.Label(frame, text="Digite o Valor Total Atingido (R$):").pack(anchor='w', pady=(10,0))
-        entry_valor_atingido = ttk.Entry(frame)
-        entry_valor_atingido.pack(fill='x', pady=5)
-        entry_valor_atingido.focus()
-
-        def confirmar_apuracao():
-            valor_atingido_str = entry_valor_atingido.get().replace(',', '.')
-            if not valor_atingido_str:
-                messagebox.showerror("Erro", "O valor atingido é obrigatório.", parent=popup)
+            if not messagebox.askyesno("Confirmar Exclusão", f"Tem certeza que deseja excluir o lançamento de lucro de {mes} de {ano}?", parent=self.root):
                 return
-            try:
-                valor_atingido = float(valor_atingido_str)
-                data_selecionada_str = self.date_entry_metas.get_date().strftime("%Y-%m-%d")
 
-                if valor_atingido >= valor_meta:
-                    novo_status = "Atingida"
-
-                    modelos = database.listar_metas_modelos()
-                    modelo_correto = next((m for m in modelos if m.NomeMeta == nome_meta), None)
-                    pontos = modelo_correto.PontosPremio if modelo_correto else 0
-
-                    confirmado = messagebox.askyesno("Meta Atingida!",
-                                                    f"A meta foi ATINGIDA!\nDeseja premiar a equipe do setor '{setor_alvo}' com {pontos} pontos?",
-                                                    parent=popup)
-                    if confirmado:
-                        if setor_alvo.lower() == 'equipe' or setor_alvo.lower() == 'geral':
-                            funcionarios_a_premiar = database.listar_TODOS_funcionarios_que_trabalharam_no_dia(data_selecionada_str)
-                        else:
-                            funcionarios_a_premiar = database.listar_funcionarios_que_trabalharam_no_dia(data_selecionada_str, setor_alvo)
-
-                        if not funcionarios_a_premiar:
-                            messagebox.showwarning("Aviso", f"Nenhum funcionário do setor '{setor_alvo}' teve atividade registrada neste dia. Nenhum ponto será distribuído.", parent=popup)
-                        else:
-                            database.registrar_pontos_por_meta_equipe(funcionarios_a_premiar, pontos, valor_meta, valor_atingido)
-
-                            chat_id_grupo = database.buscar_chat_id_por_nome_grupo(setor_alvo)
-                            if chat_id_grupo:
-                                mensagem = (f"🏆🎉 **META DE VENDAS BATIDA!** ({nome_meta}) 🎉🏆\n\n"
-                                            f"Parabéns, equipe do setor **{setor_alvo}**! A meta de R${valor_meta:.2f} foi superada!\n\n"
-                                            f"Cada membro da equipe que trabalhou hoje ganhou **{pontos} pontos**! 🚀")
-                                notificador_telegram.enviar_mensagem(chat_id_grupo, mensagem)
-
-                            messagebox.showinfo("Sucesso", f"{len(funcionarios_a_premiar)} funcionário(s) premiados com sucesso!", parent=popup)
-                else:
-                    novo_status = "NaoAtingida"
-                    messagebox.showinfo("Resultado", "A meta não foi atingida. Nenhum ponto foi distribuído.", parent=popup)
-
-                database.apurar_meta_instancia(instancia_id, valor_atingido, novo_status)
-                self.carregar_instancias_de_metas_do_dia()
-                popup.destroy()
-
-            except ValueError:
-                messagebox.showerror("Erro de Formato", "O valor atingido deve ser um número.", parent=popup)
-
-        ttk.Button(frame, text="Confirmar e Apurar Resultado", command=confirmar_apuracao).pack(pady=20)
-
-
-    def carregar_modelos_de_metas(self):
-        """Busca os modelos de meta no banco e preenche a lista e o combobox."""
-        # Limpa a lista
-        for i in self.tree_metas_modelos.get_children():
-            self.tree_metas_modelos.delete(i)
-        
-        # Preenche a lista
-        modelos = database.listar_metas_modelos()
-        for modelo in modelos:
-            self.tree_metas_modelos.insert("", "end", values=(
-                modelo.MetaModeloID, modelo.NomeMeta, modelo.SetorAlvo, modelo.PontosPremio
-            ))
-        
-        # Atualiza o combobox de setores com os setores existentes nas tarefas
-        setores = database.listar_setores_unicos()
-        self.combo_meta_setor['values'] = setores + ['Caixa'] # Adicionando 'Caixa' manualmente se não existir
-        
-        self.limpar_formulario_meta_modelo()
-
-    def on_modelo_meta_selecionado(self, event):
-        """Quando um modelo é selecionado, preenche o formulário para edição."""
-        selecionado = self.tree_metas_modelos.focus()
-        if not selecionado: return
-
-        dados = self.tree_metas_modelos.item(selecionado, 'values')
-        modelo_id = dados[0]
-        
-        # Precisamos buscar os dados completos, incluindo a descrição
-        modelos_completos = database.listar_metas_modelos()
-        modelo_completo = next((m for m in modelos_completos if m.MetaModeloID == int(modelo_id)), None)
-
-        if modelo_completo:
-            self.entry_meta_nome.delete(0, tk.END)
-            self.entry_meta_nome.insert(0, modelo_completo.NomeMeta)
-            self.entry_meta_desc.delete(0, tk.END)
-            self.entry_meta_desc.insert(0, modelo_completo.Descricao or "")
-            self.combo_meta_setor.set(modelo_completo.SetorAlvo)
-            self.entry_meta_pontos.delete(0, tk.END)
-            self.entry_meta_pontos.insert(0, modelo_completo.PontosPremio)
-            self.btn_salvar_meta_modelo.config(text="Salvar Alterações")
-
-    def salvar_modelo_meta(self):
-        """Salva um novo modelo ou atualiza um existente."""
-        nome = self.entry_meta_nome.get()
-        desc = self.entry_meta_desc.get()
-        setor = self.combo_meta_setor.get()
-        pontos_str = self.entry_meta_pontos.get()
-
-        if not all([nome, setor, pontos_str]):
-            messagebox.showerror("Erro", "Nome da Meta, Setor Alvo e Pontos são obrigatórios.")
-            return
-        
-        try:
-            pontos = int(pontos_str)
-            selecionado = self.tree_metas_modelos.focus()
-            
-            # Se um item estiver selecionado, estamos em modo de edição
-            if selecionado:
-                modelo_id = self.tree_metas_modelos.item(selecionado, 'values')[0]
-                database.atualizar_meta_modelo(modelo_id, nome, desc, setor, pontos)
-                messagebox.showinfo("Sucesso", "Modelo de meta atualizado com sucesso!")
-            # Senão, estamos criando um novo
+            if database.excluir_lucro_mensal(lucro_id):
+                messagebox.showinfo("Sucesso", "Lançamento excluído com sucesso.", parent=self.root)
+                self.atualizar_lista_lucros()
             else:
-                database.criar_meta_modelo(nome, desc, setor, pontos)
-                messagebox.showinfo("Sucesso", "Novo modelo de meta criado com sucesso!")
+                messagebox.showerror("Erro", "Não foi possível excluir o registro do banco.", parent=self.root)
 
-            self.carregar_modelos_de_metas()
-
-        except ValueError:
-            messagebox.showerror("Erro de Formato", "O campo 'Pontos' deve ser um número inteiro.")
-
-    def limpar_formulario_meta_modelo(self):
-        """Limpa o formulário de edição e reseta o botão."""
-        if self.tree_metas_modelos.selection():
-            self.tree_metas_modelos.selection_remove(self.tree_metas_modelos.selection()[0])
-        self.entry_meta_nome.delete(0, tk.END)
-        self.entry_meta_desc.delete(0, tk.END)
-        self.combo_meta_setor.set("")
-        self.entry_meta_pontos.delete(0, tk.END)
-        self.btn_salvar_meta_modelo.config(text="Criar Novo Modelo")
-
-    def excluir_modelo_meta_selecionado(self):
-        """Exclui o modelo de meta selecionado."""
-        selecionado = self.tree_metas_modelos.focus()
-        if not selecionado:
-            messagebox.showwarning("Aviso", "Selecione um modelo da lista para excluir.")
-            return
-        
-        dados = self.tree_metas_modelos.item(selecionado, 'values')
-        modelo_id, nome_meta = dados[0], dados[1]
-
-        if messagebox.askyesno("Confirmar Exclusão", f"Tem certeza que deseja excluir o modelo '{nome_meta}'?\n\nTodas as metas diárias baseadas neste modelo também serão excluídas."):
-            database.excluir_meta_modelo(modelo_id)
-            messagebox.showinfo("Sucesso", "Modelo de meta excluído.")
-            self.carregar_modelos_de_metas()
-
-
-    # COLE ESTE BLOCO DE CÓDIGO COM AS NOVAS FUNÇÕES EM main.py
-
-    def carregar_modelos_de_metas(self):
-        """Busca os modelos de meta no banco e preenche a lista e o combobox."""
-        for i in self.tree_metas_modelos.get_children():
-            self.tree_metas_modelos.delete(i)
-        
-        modelos = database.listar_metas_modelos()
-        for modelo in modelos:
-            self.tree_metas_modelos.insert("", "end", values=(
-                modelo.MetaModeloID, modelo.NomeMeta, modelo.SetorAlvo, modelo.PontosPremio
-            ))
-        
-        setores = database.listar_setores_unicos()
-        self.combo_meta_setor['values'] = setores + ['Caixa', 'Equipe'] # Adicionando manualmente
-        
-        self.limpar_formulario_meta_modelo()
-
-    def on_modelo_meta_selecionado(self, event):
-        """Quando um modelo é selecionado, preenche o formulário para edição."""
-        selecionado = self.tree_metas_modelos.focus()
-        if not selecionado: return
-
-        dados = self.tree_metas_modelos.item(selecionado, 'values')
-        modelo_id = dados[0]
-        
-        modelos_completos = database.listar_metas_modelos()
-        modelo_completo = next((m for m in modelos_completos if m.MetaModeloID == int(modelo_id)), None)
-
-        if modelo_completo:
-            self.entry_meta_nome.delete(0, tk.END)
-            self.entry_meta_nome.insert(0, modelo_completo.NomeMeta)
-            self.entry_meta_desc.delete(0, tk.END)
-            self.entry_meta_desc.insert(0, modelo_completo.Descricao or "")
-            self.combo_meta_setor.set(modelo_completo.SetorAlvo)
-            self.entry_meta_pontos.delete(0, tk.END)
-            self.entry_meta_pontos.insert(0, modelo_completo.PontosPremio)
-            self.btn_salvar_meta_modelo.config(text="Salvar Alterações")
-
-    def salvar_modelo_meta(self):
-        """Salva um novo modelo ou atualiza um existente."""
-        nome = self.entry_meta_nome.get()
-        desc = self.entry_meta_desc.get()
-        setor = self.combo_meta_setor.get()
-        pontos_str = self.entry_meta_pontos.get()
-
-        if not all([nome, setor, pontos_str]):
-            messagebox.showerror("Erro", "Nome da Meta, Setor Alvo e Pontos são obrigatórios.")
-            return
-        
-        try:
-            pontos = int(pontos_str)
-            selecionado = self.tree_metas_modelos.focus()
-            
-            if selecionado:
-                modelo_id = self.tree_metas_modelos.item(selecionado, 'values')[0]
-                database.atualizar_meta_modelo(modelo_id, nome, desc, setor, pontos)
-                messagebox.showinfo("Sucesso", "Modelo de meta atualizado com sucesso!")
-            else:
-                database.criar_meta_modelo(nome, desc, setor, pontos)
-                messagebox.showinfo("Sucesso", "Novo modelo de meta criado com sucesso!")
-
-            self.carregar_modelos_de_metas()
-
-        except ValueError:
-            messagebox.showerror("Erro de Formato", "O campo 'Pontos' deve ser um número inteiro.")
-
-    def limpar_formulario_meta_modelo(self):
-        """Limpa o formulário de edição e reseta o botão."""
-        if self.tree_metas_modelos.selection():
-            self.tree_metas_modelos.selection_remove(self.tree_metas_modelos.selection()[0])
-        self.entry_meta_nome.delete(0, tk.END)
-        self.entry_meta_desc.delete(0, tk.END)
-        self.combo_meta_setor.set("")
-        self.entry_meta_pontos.delete(0, tk.END)
-        self.btn_salvar_meta_modelo.config(text="Criar Novo Modelo")
-
-    def excluir_modelo_meta_selecionado(self):
-        """Exclui o modelo de meta selecionado."""
-        selecionado = self.tree_metas_modelos.focus()
-        if not selecionado:
-            messagebox.showwarning("Aviso", "Selecione um modelo da lista para excluir.")
-            return
-        
-        dados = self.tree_metas_modelos.item(selecionado, 'values')
-        modelo_id, nome_meta = dados[0], dados[1]
-
-        if messagebox.askyesno("Confirmar Exclusão", f"Tem certeza que deseja excluir o modelo '{nome_meta}'?\n\nTodas as metas diárias baseadas neste modelo também serão excluídas."):
-            database.excluir_meta_modelo(modelo_id)
-            messagebox.showinfo("Sucesso", "Modelo de meta excluído.")
-            self.carregar_modelos_de_metas()
-
+        except Exception as e:
+            logger.error(f"Erro ao excluir lucro (ID: {lucro_id}): {e}", exc_info=True)
+            messagebox.showerror("Erro Inesperado", f"Ocorreu um erro ao tentar excluir: {e}", parent=self.root)
 
 if __name__ == "__main__":
     root = tk.Tk()
