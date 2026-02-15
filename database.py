@@ -7777,3 +7777,51 @@ def buscar_produto_por_ean(ean):
             conn.close()
     return None
 
+def listar_auditoria_produtos():
+    """
+    Lista detalhada para auditoria: Mestre, Vínculo, EAN, NCM e Último Custo.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT 
+                    PF.ProdutoFornecedorID,
+                    ISNULL(P.NomeProduto, 'SEM VÍNCULO') as NomeMestre,
+                    PF.DescricaoXML,
+                    PF.EAN,
+                    PF.NCM,
+                    F.NomeFantasia as Fornecedor,
+                    PF.FatorConversao
+                FROM ProdutosFornecedor PF
+                LEFT JOIN ProdutosEstoque P ON PF.ProdutoID = P.ProdutoID
+                LEFT JOIN Fornecedores F ON PF.FornecedorID = F.FornecedorID
+                ORDER BY P.NomeProduto
+            """
+            cursor.execute(sql)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def atualizar_dados_auditoria(vinculo_id, novo_ean, novo_ncm, novo_fator):
+    """Atualiza dados fiscais e de conversão diretamente."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                UPDATE ProdutosFornecedor 
+                SET EAN = ?, NCM = ?, FatorConversao = ?
+                WHERE ProdutoFornecedorID = ?
+            """
+            cursor.execute(sql, novo_ean, novo_ncm, novo_fator, vinculo_id)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Erro ao atualizar auditoria: {e}")
+            return False
+        finally:
+            conn.close()
+    return False

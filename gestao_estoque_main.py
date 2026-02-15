@@ -1451,6 +1451,14 @@ class AppGestaoEstoque:
         btn_del_nf = ttk.Button(frame_nfs, text="🗑️ Excluir Nota(s) Selecionada(s)", command=self.excluir_nfs_selecionadas)
         btn_del_nf.pack(side=tk.BOTTOM, fill=tk.X, pady=5)
 
+        # --- Botão de Auditoria ---
+        frame_auditoria = ttk.LabelFrame(main_frame, text="Revisão de Cadastros", padding="10")
+        frame_auditoria.pack(fill=tk.X, pady=10, padx=10)
+        
+        btn_auditoria = ttk.Button(frame_auditoria, text="🔍 Abrir Auditoria Completa de Produtos (EAN, NCM, Fator)", 
+                                   command=self.abrir_tela_auditoria)
+        btn_auditoria.pack(fill=tk.X, ipady=5)
+
         # --- Direita: Gestão de Contagens ---
         frame_cont = ttk.LabelFrame(paned, text="Gerenciar Contagens de Estoque", padding="10")
         paned.add(frame_cont, weight=1)
@@ -1724,6 +1732,95 @@ class AppGestaoEstoque:
         btn_excluir.grid(row=1, column=3, padx=10)
 
         carregar_lista()
+
+    def abrir_tela_auditoria(self):
+        popup = Toplevel(self.root)
+        popup.title("Auditoria de Cadastro de Produtos")
+        popup.geometry("1100x600")
+        popup.transient(self.root)
+
+        # Filtro
+        frame_topo = ttk.Frame(popup, padding="10")
+        frame_topo.pack(fill=tk.X)
+        ttk.Label(frame_topo, text="Filtrar:").pack(side=tk.LEFT)
+        entry_filtro = ttk.Entry(frame_topo, width=40)
+        entry_filtro.pack(side=tk.LEFT, padx=5)
+
+        # Lista
+        cols = ('ID', 'Produto Mestre', 'Descrição XML', 'Fornecedor', 'EAN (Cód. Barras)', 'NCM', 'Fator')
+        tree = ttk.Treeview(popup, columns=cols, show='headings', selectmode='browse')
+        
+        for col in cols: tree.heading(col, text=col)
+        tree.column('ID', width=40)
+        tree.column('Produto Mestre', width=200)
+        tree.column('Descrição XML', width=200)
+        tree.column('Fornecedor', width=150)
+        tree.column('EAN (Cód. Barras)', width=100)
+        tree.column('NCM', width=80)
+        tree.column('Fator', width=50, anchor='center')
+        
+        scrollbar = ttk.Scrollbar(popup, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=scrollbar.set)
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        dados_completo = []
+
+        def carregar(filtro=""):
+            for i in tree.get_children(): tree.delete(i)
+            dados = database.listar_auditoria_produtos()
+            dados_completo[:] = dados # Cache
+            
+            for row in dados:
+                # row: 0:ID, 1:Mestre, 2:XML, 3:EAN, 4:NCM, 5:Forn, 6:Fator
+                texto_busca = f"{row[1]} {row[2]} {row[3]}".lower()
+                if not filtro or filtro.lower() in texto_busca:
+                    tree.insert("", "end", values=(row[0], row[1], row[2], row[5], row[3], row[4], row[6]))
+
+        entry_filtro.bind("<KeyRelease>", lambda e: carregar(entry_filtro.get()))
+
+        def editar_selecionado(event):
+            sel = tree.focus()
+            if not sel: return
+            vals = tree.item(sel, 'values')
+            vinculo_id = vals[0]
+
+            # Janela de Edição Rápida
+            edit_win = Toplevel(popup)
+            edit_win.title(f"Editar: {vals[1]}")
+            edit_win.geometry("400x350")
+            
+            frame = ttk.Frame(edit_win, padding="20")
+            frame.pack(fill="both", expand=True)
+
+            ttk.Label(frame, text="EAN (Código de Barras):").pack(anchor="w")
+            ent_ean = ttk.Entry(frame); ent_ean.pack(fill="x", pady=5)
+            ent_ean.insert(0, vals[4] if vals[4] != 'None' else '')
+
+            ttk.Label(frame, text="NCM:").pack(anchor="w")
+            ent_ncm = ttk.Entry(frame); ent_ncm.pack(fill="x", pady=5)
+            ent_ncm.insert(0, vals[5] if vals[5] != 'None' else '')
+
+            ttk.Label(frame, text="Fator de Conversão (Itens p/ Cx):").pack(anchor="w")
+            ent_fator = ttk.Entry(frame); ent_fator.pack(fill="x", pady=5)
+            ent_fator.insert(0, vals[6])
+
+            def salvar():
+                try:
+                    fator = float(ent_fator.get().replace(',', '.'))
+                    if database.atualizar_dados_auditoria(vinculo_id, ent_ean.get(), ent_ncm.get(), fator):
+                        messagebox.showinfo("Sucesso", "Dados atualizados!")
+                        edit_win.destroy()
+                        carregar(entry_filtro.get())
+                    else:
+                        messagebox.showerror("Erro", "Falha ao salvar.")
+                except ValueError:
+                    messagebox.showerror("Erro", "Fator deve ser numérico.")
+
+            ttk.Button(frame, text="Salvar Alterações", command=salvar).pack(pady=20, fill="x")
+
+        tree.bind("<Double-1>", editar_selecionado)
+        carregar()
 
     
 
