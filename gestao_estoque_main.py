@@ -1734,95 +1734,173 @@ class AppGestaoEstoque:
         carregar_lista()
 
     def abrir_tela_auditoria(self):
+        """
+        Abre a tela de Auditoria Geral para revisão de cadastros, fatores e custos.
+        """
         popup = Toplevel(self.root)
-        popup.title("Auditoria de Cadastro de Produtos")
+        popup.title("Auditoria de Cadastro e Custos de Produtos")
         popup.geometry("1100x600")
         popup.transient(self.root)
 
-        # Filtro
+        # --- Área de Filtro ---
         frame_topo = ttk.Frame(popup, padding="10")
         frame_topo.pack(fill=tk.X)
-        ttk.Label(frame_topo, text="Filtrar:").pack(side=tk.LEFT)
+        
+        ttk.Label(frame_topo, text="Filtrar por Nome/Código:").pack(side=tk.LEFT)
         entry_filtro = ttk.Entry(frame_topo, width=40)
         entry_filtro.pack(side=tk.LEFT, padx=5)
+        
+        ttk.Label(frame_topo, text="(Dica: Dê duplo clique na linha para editar)", font=("Arial", 9, "italic"), foreground="gray").pack(side=tk.LEFT, padx=15)
 
-        # Lista
-        cols = ('ID', 'Produto Mestre', 'Descrição XML', 'Fornecedor', 'EAN (Cód. Barras)', 'NCM', 'Fator')
+        # --- Configuração da Tabela ---
+        # Colunas atualizadas para incluir o Custo
+        cols = ('ID', 'Produto Mestre', 'Descrição XML', 'Fornecedor', 'EAN', 'NCM', 'Fator', 'Último Custo')
         tree = ttk.Treeview(popup, columns=cols, show='headings', selectmode='browse')
         
+        # Cabeçalhos
         for col in cols: tree.heading(col, text=col)
-        tree.column('ID', width=40)
-        tree.column('Produto Mestre', width=200)
-        tree.column('Descrição XML', width=200)
-        tree.column('Fornecedor', width=150)
-        tree.column('EAN (Cód. Barras)', width=100)
-        tree.column('NCM', width=80)
-        tree.column('Fator', width=50, anchor='center')
         
+        # Larguras das Colunas
+        tree.column('ID', width=40, anchor='center')
+        tree.column('Produto Mestre', width=200)
+        tree.column('Descrição XML', width=250)
+        tree.column('Fornecedor', width=150)
+        tree.column('EAN', width=100, anchor='center')
+        tree.column('NCM', width=80, anchor='center')
+        tree.column('Fator', width=60, anchor='center')
+        tree.column('Último Custo', width=100, anchor='e') # Alinhado à direita
+        
+        # Barra de Rolagem
         scrollbar = ttk.Scrollbar(popup, orient="vertical", command=tree.yview)
         tree.configure(yscrollcommand=scrollbar.set)
+        
         tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
+        # Variável para cache dos dados (para filtro rápido)
         dados_completo = []
 
+        # --- Função Interna: Carregar Dados ---
         def carregar(filtro=""):
             for i in tree.get_children(): tree.delete(i)
+            
+            # Chama o banco apenas se a lista estiver vazia (primeira carga) ou se for recarga forçada
+            # Mas aqui simplificamos chamando sempre que não for filtro local
             dados = database.listar_auditoria_produtos()
-            dados_completo[:] = dados # Cache
+            dados_completo[:] = dados 
             
             for row in dados:
-                # row: 0:ID, 1:Mestre, 2:XML, 3:EAN, 4:NCM, 5:Forn, 6:Fator
-                texto_busca = f"{row[1]} {row[2]} {row[3]}".lower()
+                # row: 0:ID, 1:Mestre, 2:XML, 3:EAN, 4:NCM, 5:Forn, 6:Fator, 7:Custo
+                # Monta string de busca
+                texto_busca = f"{row[1]} {row[2]} {row[3]} {row[5]}".lower()
+                
                 if not filtro or filtro.lower() in texto_busca:
-                    tree.insert("", "end", values=(row[0], row[1], row[2], row[5], row[3], row[4], row[6]))
+                    # Formata o custo para R$
+                    custo_val = row[7] if row[7] is not None else 0.0
+                    custo_fmt = f"R$ {float(custo_val):.2f}".replace('.', ',')
+                    
+                    # Formata o Fator
+                    fator_val = row[6] if row[6] is not None else 1.0
+                    fator_fmt = f"{float(fator_val):.4f}".rstrip('0').rstrip('.')
 
+                    tree.insert("", "end", values=(
+                        row[0], # ID Vinculo
+                        row[1], # Mestre
+                        row[2], # XML
+                        row[5], # Fornecedor
+                        row[3], # EAN
+                        row[4], # NCM
+                        fator_fmt, # Fator
+                        custo_fmt  # Custo Formatado
+                    ))
+
+        # Bind do Filtro
         entry_filtro.bind("<KeyRelease>", lambda e: carregar(entry_filtro.get()))
 
+        # --- Função Interna: Editar Item (Duplo Clique) ---
         def editar_selecionado(event):
             sel = tree.focus()
             if not sel: return
             vals = tree.item(sel, 'values')
             vinculo_id = vals[0]
+            nome_produto = vals[1]
 
             # Janela de Edição Rápida
             edit_win = Toplevel(popup)
-            edit_win.title(f"Editar: {vals[1]}")
-            edit_win.geometry("400x350")
+            edit_win.title(f"Editando: {nome_produto}")
+            edit_win.geometry("450x520")
+            edit_win.transient(popup) # Fica na frente da auditoria
             
             frame = ttk.Frame(edit_win, padding="20")
             frame.pack(fill="both", expand=True)
 
+            # Campos de Edição
             ttk.Label(frame, text="EAN (Código de Barras):").pack(anchor="w")
             ent_ean = ttk.Entry(frame); ent_ean.pack(fill="x", pady=5)
-            ent_ean.insert(0, vals[4] if vals[4] != 'None' else '')
+            # Remove 'None' se vier do banco
+            ean_val = vals[4] if vals[4] != 'None' else ''
+            ent_ean.insert(0, ean_val)
 
-            ttk.Label(frame, text="NCM:").pack(anchor="w")
+            ttk.Label(frame, text="NCM (Classificação Fiscal):").pack(anchor="w")
             ent_ncm = ttk.Entry(frame); ent_ncm.pack(fill="x", pady=5)
-            ent_ncm.insert(0, vals[5] if vals[5] != 'None' else '')
+            ncm_val = vals[5] if vals[5] != 'None' else ''
+            ent_ncm.insert(0, ncm_val)
 
-            ttk.Label(frame, text="Fator de Conversão (Itens p/ Cx):").pack(anchor="w")
+            ttk.Separator(frame, orient='horizontal').pack(fill='x', pady=15)
+
+            ttk.Label(frame, text="Fator de Conversão (Itens p/ Cx):", font=("Arial", 9, "bold")).pack(anchor="w")
+            ttk.Label(frame, text="Ex: Se compra caixa com 12, coloque 12.", font=("Arial", 8), foreground="gray").pack(anchor="w")
             ent_fator = ttk.Entry(frame); ent_fator.pack(fill="x", pady=5)
             ent_fator.insert(0, vals[6])
 
+            ttk.Label(frame, text="Último Preço de Custo (Unitário no XML):", font=("Arial", 9, "bold")).pack(anchor="w", pady=(10, 0))
+            ttk.Label(frame, text="* Alterar aqui corrige o histórico da última nota.", font=("Arial", 8), foreground="red").pack(anchor="w")
+            
+            ent_custo = ttk.Entry(frame)
+            ent_custo.pack(fill="x", pady=5)
+            # Limpa formatação R$ para edição
+            custo_limpo = vals[7].replace("R$ ", "").strip()
+            ent_custo.insert(0, custo_limpo)
+
             def salvar():
                 try:
+                    # Tratamento de vírgula para ponto
                     fator = float(ent_fator.get().replace(',', '.'))
-                    if database.atualizar_dados_auditoria(vinculo_id, ent_ean.get(), ent_ncm.get(), fator):
-                        messagebox.showinfo("Sucesso", "Dados atualizados!")
+                    custo = float(ent_custo.get().replace(',', '.'))
+                    
+                    if fator <= 0:
+                        messagebox.showerror("Erro", "O Fator deve ser maior que 0.")
+                        return
+
+                    # Chama o banco
+                    sucesso = database.atualizar_dados_auditoria(
+                        vinculo_id, 
+                        ent_ean.get(), 
+                        ent_ncm.get(), 
+                        fator,
+                        custo
+                    )
+
+                    if sucesso:
+                        messagebox.showinfo("Sucesso", "Cadastro atualizado!", parent=edit_win)
                         edit_win.destroy()
+                        # Recarrega a lista mantendo o filtro atual
                         carregar(entry_filtro.get())
                     else:
-                        messagebox.showerror("Erro", "Falha ao salvar.")
+                        messagebox.showerror("Erro", "Falha ao salvar no banco de dados.", parent=edit_win)
+
                 except ValueError:
-                    messagebox.showerror("Erro", "Fator deve ser numérico.")
+                    messagebox.showerror("Erro de Formato", "Fator e Custo devem ser números válidos.", parent=edit_win)
 
-            ttk.Button(frame, text="Salvar Alterações", command=salvar).pack(pady=20, fill="x")
+            # Botão Salvar
+            btn_salvar = ttk.Button(frame, text="💾 Salvar Alterações", command=salvar)
+            btn_salvar.pack(pady=20, fill="x", ipady=5)
 
+        # Bind do Duplo Clique
         tree.bind("<Double-1>", editar_selecionado)
-        carregar()
-
-    
+        
+        # Carga Inicial
+        carregar()    
 
 # --- Bloco de Execução Principal ---
 if __name__ == "__main__":

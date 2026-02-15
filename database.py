@@ -7779,12 +7779,13 @@ def buscar_produto_por_ean(ean):
 
 def listar_auditoria_produtos():
     """
-    Lista detalhada para auditoria: Mestre, Vínculo, EAN, NCM e Último Custo.
+    Lista detalhada para auditoria incluindo o ÚLTIMO CUSTO PAGO.
     """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
+            # A subquery busca o preço unitário do item da nota fiscal mais recente
             sql = """
                 SELECT 
                     PF.ProdutoFornecedorID,
@@ -7793,7 +7794,14 @@ def listar_auditoria_produtos():
                     PF.EAN,
                     PF.NCM,
                     F.NomeFantasia as Fornecedor,
-                    PF.FatorConversao
+                    PF.FatorConversao,
+                    ISNULL((
+                        SELECT TOP 1 I.PrecoCustoUnitario 
+                        FROM ItensNotaFiscalEntrada I
+                        JOIN NotasFiscaisEntrada N ON I.NotaID = N.NotaID
+                        WHERE I.ProdutoFornecedorID = PF.ProdutoFornecedorID
+                        ORDER BY N.DataEmissao DESC, N.NotaID DESC
+                    ), 0) as UltimoCusto
                 FROM ProdutosFornecedor PF
                 LEFT JOIN ProdutosEstoque P ON PF.ProdutoID = P.ProdutoID
                 LEFT JOIN Fornecedores F ON PF.FornecedorID = F.FornecedorID
@@ -7805,22 +7813,46 @@ def listar_auditoria_produtos():
             conn.close()
     return []
 
-def atualizar_dados_auditoria(vinculo_id, novo_ean, novo_ncm, novo_fator):
-    """Atualiza dados fiscais e de conversão diretamente."""
+def atualizar_dados_auditoria(vinculo_id, novo_ean, novo_ncm, novo_fator, novo_custo=None):
+    """
+    Atualiza EAN, NCM, Fator e, opcionalmente, o Custo da última compra.
+    """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            sql = """
+            
+            # 1. Atualiza dados cadastrais (Vínculo)
+            sql_update_vinculo = """
                 UPDATE ProdutosFornecedor 
                 SET EAN = ?, NCM = ?, FatorConversao = ?
                 WHERE ProdutoFornecedorID = ?
             """
-            cursor.execute(sql, novo_ean, novo_ncm, novo_fator, vinculo_id)
+            cursor.execute(sql_update_vinculo, novo_ean, novo_ncm, novo_fator, vinculo_id)
+
+            # 2. Atualiza o custo (Se fornecido) na ÚLTIMA entrada deste produto
+            if novo_custo is not None:
+                # Busca o ID do item da última nota para esse produto
+                sql_busca_ultimo_item = """
+                    SELECT TOP 1 I.ItemID 
+                    FROM ItensNotaFiscalEntrada I
+                    JOIN NotasFiscaisEntrada N ON I.NotaID = N.NotaID
+                    WHERE I.ProdutoFornecedorID = ?
+                    ORDER BY N.DataEmissao DESC, N.NotaID DESC
+                """
+                cursor.execute(sql_busca_ultimo_item, vinculo_id)
+                resultado = cursor.fetchone()
+                
+                if resultado:
+                    item_id = resultado[0]
+                    sql_update_custo = "UPDATE ItensNotaFiscalEntrada SET PrecoCustoUnitario = ? WHERE ItemID = ?"
+                    cursor.execute(sql_update_custo, novo_custo, item_id)
+
             conn.commit()
             return True
         except Exception as e:
             logger.error(f"Erro ao atualizar auditoria: {e}")
+            conn.rollback()
             return False
         finally:
             conn.close()
