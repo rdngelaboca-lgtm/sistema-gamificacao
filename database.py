@@ -7816,6 +7816,7 @@ def listar_auditoria_produtos():
 def atualizar_dados_auditoria(vinculo_id, novo_ean, novo_ncm, novo_fator, novo_custo=None):
     """
     Atualiza EAN, NCM, Fator e, opcionalmente, o Custo da última compra.
+    (VERSÃO CORRIGIDA: Usa ItemNotaID)
     """
     conn = get_db_connection()
     if conn:
@@ -7833,8 +7834,9 @@ def atualizar_dados_auditoria(vinculo_id, novo_ean, novo_ncm, novo_fator, novo_c
             # 2. Atualiza o custo (Se fornecido) na ÚLTIMA entrada deste produto
             if novo_custo is not None:
                 # Busca o ID do item da última nota para esse produto
+                # CORREÇÃO AQUI: Usando ItemNotaID
                 sql_busca_ultimo_item = """
-                    SELECT TOP 1 I.ItemID 
+                    SELECT TOP 1 I.ItemNotaID 
                     FROM ItensNotaFiscalEntrada I
                     JOIN NotasFiscaisEntrada N ON I.NotaID = N.NotaID
                     WHERE I.ProdutoFornecedorID = ?
@@ -7844,9 +7846,10 @@ def atualizar_dados_auditoria(vinculo_id, novo_ean, novo_ncm, novo_fator, novo_c
                 resultado = cursor.fetchone()
                 
                 if resultado:
-                    item_id = resultado[0]
-                    sql_update_custo = "UPDATE ItensNotaFiscalEntrada SET PrecoCustoUnitario = ? WHERE ItemID = ?"
-                    cursor.execute(sql_update_custo, novo_custo, item_id)
+                    item_nota_id = resultado[0]
+                    # CORREÇÃO AQUI: Usando ItemNotaID na cláusula WHERE
+                    sql_update_custo = "UPDATE ItensNotaFiscalEntrada SET PrecoCustoUnitario = ? WHERE ItemNotaID = ?"
+                    cursor.execute(sql_update_custo, novo_custo, item_nota_id)
 
             conn.commit()
             return True
