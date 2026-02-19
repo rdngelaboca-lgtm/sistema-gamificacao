@@ -1942,6 +1942,21 @@ class AppGestaoEstoque:
             btn_salvar = ttk.Button(frame, text="💾 Salvar Alterações", command=salvar)
             btn_salvar.pack(pady=20, fill="x", ipady=5)
 
+            def excluir():
+                # Pede confirmação antes de deletar
+                if messagebox.askyesno("Confirmar Exclusão", f"Tem certeza que deseja EXCLUIR definitivamente o cadastro ID {vinculo_id}?\n\nIsso não pode ser desfeito.", parent=edit_win):
+                    sucesso, msg = database.excluir_vinculo_auditoria(vinculo_id)
+                    if sucesso:
+                        messagebox.showinfo("Sucesso", msg, parent=edit_win)
+                        edit_win.destroy()
+                        carregar(entry_filtro.get()) # Recarrega a lista
+                    else:
+                        messagebox.showerror("Ação Bloqueada", msg, parent=edit_win)
+
+            # Botão Excluir
+            btn_excluir = ttk.Button(frame, text="🗑️ Excluir Cadastro", command=excluir)
+            btn_excluir.pack(pady=(0, 10), fill="x", ipady=5)
+
         # Bind do Duplo Clique
         tree.bind("<Double-1>", editar_selecionado)
         

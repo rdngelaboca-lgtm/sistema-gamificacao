@@ -7872,6 +7872,25 @@ def criar_unidade_a_partir_de_caixa(id_origem, novo_ean, qtd_na_caixa):
             conn.close()
     return False, "Erro de conexão."
 
+def excluir_vinculo_auditoria(vinculo_id):
+    """Exclui um cadastro (vínculo) da tabela ProdutosFornecedor."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "DELETE FROM ProdutosFornecedor WHERE ProdutoFornecedorID = ?"
+            cursor.execute(sql, vinculo_id)
+            conn.commit()
+            return True, "Cadastro excluído com sucesso!"
+        except Exception as e:
+            logger.error(f"Erro ao excluir vínculo {vinculo_id}: {e}")
+            conn.rollback()
+            # O erro 547 do SQL Server é violação de Foreign Key
+            return False, "Não é possível excluir: Este cadastro já possui histórico de notas fiscais vinculadas."
+        finally:
+            conn.close()
+    return False, "Erro de conexão com o banco de dados."
+
 def listar_auditoria_produtos():
     """
     Lista detalhada para auditoria incluindo o ÚLTIMO CUSTO PAGO.
