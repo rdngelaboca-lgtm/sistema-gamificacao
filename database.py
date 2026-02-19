@@ -7807,8 +7807,8 @@ def buscar_produtos_mobile_por_nome(termo):
 
 def criar_unidade_a_partir_de_caixa(id_origem, novo_ean, qtd_na_caixa):
     """
-    Cria um novo vínculo de UNIDADE (Fator 1) baseado em um vínculo de CAIXA.
-    Calcula o custo unitário proporcional.
+    Cria um novo vínculo de UNIDADE (Fator 1) copiando dados exatos da caixa.
+    Registra custo fracionado na última nota (com qtd 0) para exibição em auditoria.
     """
     conn = get_db_connection()
     if conn:
@@ -7816,13 +7816,15 @@ def criar_unidade_a_partir_de_caixa(id_origem, novo_ean, qtd_na_caixa):
             cursor = conn.cursor()
 
             # 1. Pega os dados do cadastro da CAIXA (Origem)
-            # Incluindo o custo da última entrada para calcular o novo custo
             sql_origem = """
                 SELECT 
-                    PF.ProdutoID, PF.FornecedorID, PF.NCM, 
+                    PF.ProdutoID, PF.FornecedorID, PF.NCM, PF.DescricaoXML,
                     (SELECT TOP 1 PrecoCustoUnitario FROM ItensNotaFiscalEntrada 
                      WHERE ProdutoFornecedorID = PF.ProdutoFornecedorID 
-                     ORDER BY NotaID DESC) as UltimoCusto
+                     ORDER BY NotaID DESC) as UltimoCusto,
+                    (SELECT TOP 1 NotaID FROM ItensNotaFiscalEntrada 
+                     WHERE ProdutoFornecedorID = PF.ProdutoFornecedorID 
+                     ORDER BY NotaID DESC) as UltimaNotaID
                 FROM ProdutosFornecedor PF
                 WHERE PF.ProdutoFornecedorID = ?
             """
@@ -7832,23 +7834,33 @@ def criar_unidade_a_partir_de_caixa(id_origem, novo_ean, qtd_na_caixa):
             if not dados_caixa:
                 return False, "Cadastro origem não encontrado."
 
-            prod_id, forn_id, ncm, custo_caixa = dados_caixa
+            prod_id, forn_id, ncm, desc_xml, custo_caixa, ultima_nota_id = dados_caixa
             if custo_caixa is None: custo_caixa = 0.0
 
-            # 2. Calcula novo custo unitário
+            # 2. Calcula novo custo unitário fracionado
             try:
                 novo_custo = float(custo_caixa) / float(qtd_na_caixa)
             except ZeroDivisionError:
                 novo_custo = 0.0
 
-            # 3. Insere o novo vínculo de UNIDADE
-            # Nota: Descrição ganha sufixo (UN) para diferenciar visualmente
+            # 3. Insere o novo vínculo copiando a Descrição Exata e pega o ID gerado
             sql_insert = """
                 INSERT INTO ProdutosFornecedor 
                 (ProdutoID, FornecedorID, EAN, NCM, FatorConversao, DescricaoXML)
-                VALUES (?, ?, ?, ?, 1, '(UNIDADE DERIVADA) - Gerado via Mobile')
+                OUTPUT INSERTED.ProdutoFornecedorID
+                VALUES (?, ?, ?, ?, 1, ?)
             """
-            cursor.execute(sql_insert, prod_id, forn_id, novo_ean, ncm)
+            cursor.execute(sql_insert, prod_id, forn_id, novo_ean, ncm, desc_xml)
+            novo_vinculo_id = cursor.fetchone()[0]
+
+            # 4. Associa o novo custo à última nota fiscal (Qtd 0 para não alterar finanças)
+            if ultima_nota_id and novo_vinculo_id:
+                sql_insert_custo = """
+                    INSERT INTO ItensNotaFiscalEntrada 
+                    (NotaID, ProdutoFornecedorID, Quantidade, PrecoCustoUnitario)
+                    VALUES (?, ?, 0, ?)
+                """
+                cursor.execute(sql_insert_custo, ultima_nota_id, novo_vinculo_id, novo_custo)
 
             conn.commit()
             return True, "Cadastro de unidade criado com sucesso!"
