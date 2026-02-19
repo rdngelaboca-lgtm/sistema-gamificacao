@@ -7777,6 +7777,89 @@ def buscar_produto_por_ean(ean):
             conn.close()
     return None
 
+def buscar_produtos_mobile_por_nome(termo):
+    """Busca produtos por nome/descrição para a interface mobile."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Busca tanto no nome do fornecedor quanto no nome do mestre
+            sql = """
+                SELECT TOP 20
+                    PF.ProdutoFornecedorID,
+                    ISNULL(P.NomeProduto, 'SEM MESTRE') as NomeMestre,
+                    PF.DescricaoXML,
+                    F.NomeFantasia,
+                    PF.FatorConversao,
+                    PF.EAN
+                FROM ProdutosFornecedor PF
+                LEFT JOIN ProdutosEstoque P ON PF.ProdutoID = P.ProdutoID
+                LEFT JOIN Fornecedores F ON PF.FornecedorID = F.FornecedorID
+                WHERE P.NomeProduto LIKE ? OR PF.DescricaoXML LIKE ?
+                ORDER BY P.NomeProduto
+            """
+            busca = f"%{termo}%"
+            cursor.execute(sql, busca, busca)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def criar_unidade_a_partir_de_caixa(id_origem, novo_ean, qtd_na_caixa):
+    """
+    Cria um novo vínculo de UNIDADE (Fator 1) baseado em um vínculo de CAIXA.
+    Calcula o custo unitário proporcional.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+
+            # 1. Pega os dados do cadastro da CAIXA (Origem)
+            # Incluindo o custo da última entrada para calcular o novo custo
+            sql_origem = """
+                SELECT 
+                    PF.ProdutoID, PF.FornecedorID, PF.NCM, 
+                    (SELECT TOP 1 PrecoCustoUnitario FROM ItensNotaFiscalEntrada 
+                     WHERE ProdutoFornecedorID = PF.ProdutoFornecedorID 
+                     ORDER BY NotaID DESC) as UltimoCusto
+                FROM ProdutosFornecedor PF
+                WHERE PF.ProdutoFornecedorID = ?
+            """
+            cursor.execute(sql_origem, id_origem)
+            dados_caixa = cursor.fetchone()
+
+            if not dados_caixa:
+                return False, "Cadastro origem não encontrado."
+
+            prod_id, forn_id, ncm, custo_caixa = dados_caixa
+            if custo_caixa is None: custo_caixa = 0.0
+
+            # 2. Calcula novo custo unitário
+            try:
+                novo_custo = float(custo_caixa) / float(qtd_na_caixa)
+            except ZeroDivisionError:
+                novo_custo = 0.0
+
+            # 3. Insere o novo vínculo de UNIDADE
+            # Nota: Descrição ganha sufixo (UN) para diferenciar visualmente
+            sql_insert = """
+                INSERT INTO ProdutosFornecedor 
+                (ProdutoID, FornecedorID, EAN, NCM, FatorConversao, DescricaoXML)
+                VALUES (?, ?, ?, ?, 1, '(UNIDADE DERIVADA) - Gerado via Mobile')
+            """
+            cursor.execute(sql_insert, prod_id, forn_id, novo_ean, ncm)
+
+            conn.commit()
+            return True, "Cadastro de unidade criado com sucesso!"
+        except Exception as e:
+            logger.error(f"Erro ao criar unidade derivada: {e}")
+            conn.rollback()
+            return False, str(e)
+        finally:
+            conn.close()
+    return False, "Erro de conexão."
+
 def listar_auditoria_produtos():
     """
     Lista detalhada para auditoria incluindo o ÚLTIMO CUSTO PAGO.

@@ -971,6 +971,50 @@ def rota_buscar_ean(codigo):
         })
     else:
         return jsonify({"encontrado": False}), 404
+    
+@app.route('/api/produto/buscar/<termo>', methods=['GET'])
+def rota_buscar_por_nome(termo):
+    """Busca produtos por nome para o mobile."""
+    resultados = database.buscar_produtos_mobile_por_nome(termo)
+    lista = []
+    for row in resultados:
+        lista.append({
+            "id_vinculo": row[0],
+            "nome_mestre": row[1],
+            "desc_xml": row[2],
+            "fornecedor": row[3],
+            "fator": float(row[4]) if row[4] else 1.0,
+            "ean_existente": row[5]
+        })
+    return jsonify(lista)
+
+@app.route('/api/produto/criar-unidade', methods=['POST'])
+def rota_criar_unidade():
+    """Cria cadastro de unidade a partir de uma caixa."""
+    dados = request.json
+    id_origem = dados.get('id_origem') # ID da Caixa
+    novo_ean = dados.get('novo_ean')   # EAN da Unidade (que falhou ao bipar)
+    qtd_caixa = dados.get('qtd_caixa') # Quantas unidades vem na caixa
+
+    if not all([id_origem, novo_ean, qtd_caixa]):
+        return jsonify({"sucesso": False, "erro": "Dados incompletos"}), 400
+
+    sucesso, msg = database.criar_unidade_a_partir_de_caixa(id_origem, novo_ean, float(qtd_caixa))
+
+    if sucesso:
+        # Já retorna os dados do novo produto para adicionar na contagem imediatamente
+        # Busca o produto recém criado para garantir
+        res = database.buscar_produto_por_ean(novo_ean)
+        if res:
+            return jsonify({
+                "sucesso": True,
+                "msg": msg,
+                "produto": {
+                    "id": res[0], "nome": res[1], "unidade": res[2], "fator": 1.0
+                }
+            })
+
+    return jsonify({"sucesso": False, "erro": msg}), 500
 
 @app.route('/api/contagem/salvar-mobile', methods=['POST'])
 def rota_salvar_contagem_mobile():

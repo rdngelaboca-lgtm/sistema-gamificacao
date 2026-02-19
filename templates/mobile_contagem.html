@@ -3,62 +3,59 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Contagem Estoque 📱</title>
+    <title>Contagem Estoque v2.0</title>
     <style>
         body { font-family: sans-serif; background: #f0f2f5; margin: 0; padding: 10px; display: flex; flex-direction: column; height: 100vh; }
         .card { background: white; padding: 15px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin-bottom: 10px; }
-
+        
         h2 { margin: 0 0 10px 0; color: #333; font-size: 1.2rem; }
-
         .input-group { margin-bottom: 15px; }
         label { display: block; font-weight: bold; margin-bottom: 5px; }
-
+        
         input[type="number"], input[type="text"] {
             width: 100%; padding: 15px; font-size: 1.2rem; border: 2px solid #007bff; border-radius: 8px; box-sizing: border-box;
         }
-
-        /* Destaque para o campo de código de barras */
         #ean-input { background-color: #e8f0fe; }
         #ean-input:focus { border-color: #0056b3; outline: none; }
 
         .lista-itens { flex: 1; overflow-y: auto; background: white; border-radius: 10px; padding: 10px; }
-        .item-lista { 
-            display: flex; justify-content: space-between; align-items: center; 
-            padding: 10px; border-bottom: 1px solid #eee; animation: flash 0.5s; 
-        }
+        .item-lista { display: flex; justify-content: space-between; align-items: center; padding: 10px; border-bottom: 1px solid #eee; }
         .item-nome { font-weight: bold; font-size: 0.9rem; }
         .item-qtd { color: #007bff; font-weight: bold; }
         .btn-del { color: red; font-size: 1.2rem; cursor: pointer; padding: 0 10px; }
 
-        .btn-salvar {
-            background: #28a745; color: white; border: none; padding: 15px; 
-            font-size: 1.2rem; border-radius: 8px; width: 100%; cursor: pointer; margin-top: 10px;
-        }
+        .btn-salvar { background: #28a745; color: white; border: none; padding: 15px; font-size: 1.2rem; border-radius: 8px; width: 100%; cursor: pointer; margin-top: 10px; }
+        .btn-busca { background: #ffc107; color: #333; border: none; padding: 10px; border-radius: 5px; width: 100%; cursor: pointer; display: none; margin-top: 10px; font-weight: bold; }
+
+        /* Modal e Busca */
+        #painel-busca { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: white; z-index: 1000; padding: 20px; box-sizing: border-box; overflow-y: auto; }
+        .item-busca { padding: 15px; border-bottom: 1px solid #ddd; cursor: pointer; }
+        .item-busca small { color: #666; display: block; }
+        
+        #modal-qtd-caixa { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 2000; justify-content: center; align-items: center; }
+        .modal-content { background: white; padding: 20px; border-radius: 10px; width: 90%; max-width: 400px; text-align: center; }
 
         .status-msg { text-align: center; font-weight: bold; margin-bottom: 5px; height: 20px; }
         .sucesso { color: green; }
         .erro { color: red; }
-
-        @keyframes flash {
-            0% { background-color: #ccffcc; }
-            100% { background-color: white; }
-        }
     </style>
 </head>
 <body>
 
     <div class="card">
         <div id="status" class="status-msg">Pronto para bipar...</div>
-
+        
         <div class="input-group">
-            <label>Quantidade (Padrão: 1)</label>
+            <label>Quantidade</label>
             <input type="number" id="qtd-input" value="1" min="0.1" step="0.1">
         </div>
 
         <div class="input-group">
-            <label>Código de Barras (Bipar aqui)</label>
-            <input type="number" id="ean-input" placeholder="Aguardando leitor..." autofocus>
+            <label>Código de Barras</label>
+            <input type="number" id="ean-input" placeholder="Bipe aqui..." autofocus>
         </div>
+        
+        <button id="btn-abrir-busca" class="btn-busca" onclick="abrirBusca()">🔍 Não encontrou? Buscar por Nome</button>
     </div>
 
     <div class="lista-itens" id="lista-contagem">
@@ -67,143 +64,215 @@
 
     <button class="btn-salvar" onclick="finalizarContagem()">💾 Salvar Contagem</button>
 
+    <div id="painel-busca">
+        <h3>🔍 Buscar Cadastro Existente</h3>
+        <p>Procure pela CAIXA deste produto para criar a unidade.</p>
+        <div class="input-group">
+            <input type="text" id="termo-busca" placeholder="Digite o nome (ex: Kinder)...">
+        </div>
+        <button onclick="realizarBusca()" style="background:#007bff; color:white; padding:10px; width:100%; border:none; border-radius:5px;">Buscar</button>
+        <button onclick="fecharBusca()" style="background:#6c757d; color:white; padding:10px; width:100%; border:none; border-radius:5px; margin-top:5px;">Cancelar</button>
+        <div id="resultados-busca" style="margin-top:20px;"></div>
+    </div>
+
+    <div id="modal-qtd-caixa">
+        <div class="modal-content">
+            <h3>📦 Criar Unidade</h3>
+            <p id="msg-conversao" style="font-size: 0.9rem; margin-bottom: 15px;"></p>
+            <label>Quantas unidades vêm nesta caixa?</label>
+            <input type="number" id="qtd-conversao" value="1" style="margin-bottom: 15px;">
+            <button onclick="confirmarConversao()" style="background:#28a745; color:white; padding:10px; width:100%; border:none; border-radius:5px;">✅ Criar e Contar</button>
+            <button onclick="document.getElementById('modal-qtd-caixa').style.display='none'" style="background:#dc3545; color:white; padding:10px; width:100%; border:none; border-radius:5px; margin-top:5px;">Cancelar</button>
+        </div>
+    </div>
+
     <script>
         const eanInput = document.getElementById('ean-input');
         const qtdInput = document.getElementById('qtd-input');
         const listaEl = document.getElementById('lista-contagem');
         const statusEl = document.getElementById('status');
+        const btnBusca = document.getElementById('btn-abrir-busca');
+        
+        let itensContados = [];
+        let ultimoEANNaoEncontrado = "";
+        let idVinculoSelecionadoParaConversao = null;
 
-        let itensContados = []; 
-
-        // Mantém o foco no campo de Bipagem sempre que possível
         document.body.addEventListener('click', (e) => {
-            if(document.activeElement !== qtdInput && e.target.className !== 'btn-del' && e.target.className !== 'btn-salvar') {
+            // Foco inteligente
+            if(document.activeElement !== qtdInput && document.activeElement.type !== 'text' && document.activeElement.type !== 'number') {
                 eanInput.focus();
             }
         });
 
-        // Evento de "Enter" no campo EAN (O leitor envia um Enter no final)
         eanInput.addEventListener('keypress', async function (e) {
             if (e.key === 'Enter') {
                 const ean = eanInput.value;
                 const qtd = parseFloat(qtdInput.value);
-
                 if (!ean) return;
 
-                eanInput.value = ''; // Limpa rápido para o próximo
                 statusEl.textContent = "Buscando...";
-                statusEl.className = "status-msg";
-
                 try {
                     const response = await fetch(`/api/produto/ean/${ean}`);
-
+                    
                     if (response.ok) {
                         const prod = await response.json();
                         adicionarItemLista(prod, qtd);
                         statusEl.textContent = `✅ ${prod.nome}`;
                         statusEl.className = "status-msg sucesso";
+                        eanInput.value = ''; 
+                        btnBusca.style.display = 'none'; // Esconde botão de busca se achou
                     } else {
-                        statusEl.textContent = "❌ EAN Não encontrado!";
+                        statusEl.textContent = "❌ Não encontrado!";
                         statusEl.className = "status-msg erro";
+                        ultimoEANNaoEncontrado = ean; // Salva o EAN que falhou
+                        btnBusca.style.display = 'block'; // Mostra botão de busca
+                        btnBusca.textContent = `🔍 Buscar nome p/ EAN ${ean}`;
                         if(navigator.vibrate) navigator.vibrate(200);
                     }
                 } catch (error) {
                     statusEl.textContent = "Erro de conexão";
-                    statusEl.className = "status-msg erro";
                 }
             }
         });
 
-        function adicionarItemLista(prod, qtdDigitada) {
-            // Aplica fator se for caixa (o banco retorna o fator)
-            const qtdReal = qtdDigitada * prod.fator;
+        // --- LÓGICA DE BUSCA E CONVERSÃO ---
 
-            // Adiciona ao array de dados
-            itensContados.push({
-                ProdutoID: prod.id,
-                QuantidadeContada: qtdReal,
-                _nome: prod.nome, // Para exibição
-                _un: prod.unidade // Para exibição
-            });
-
-            renderizarLista();
+        function abrirBusca() {
+            document.getElementById('painel-busca').style.display = 'block';
+            document.getElementById('termo-busca').focus();
         }
 
-        function renderizarLista() {
-            if (itensContados.length === 0) {
-                listaEl.innerHTML = '<div style="text-align: center; color: #888; margin-top: 20px;">Nenhum item contado.</div>';
+        function fecharBusca() {
+            document.getElementById('painel-busca').style.display = 'none';
+            eanInput.focus();
+        }
+
+        async function realizarBusca() {
+            const termo = document.getElementById('termo-busca').value;
+            const divRes = document.getElementById('resultados-busca');
+            divRes.innerHTML = 'Carregando...';
+
+            const res = await fetch(`/api/produto/buscar/${termo}`);
+            const dados = await res.json();
+
+            divRes.innerHTML = '';
+            if(dados.length === 0) {
+                divRes.innerHTML = '<p>Nenhum produto encontrado.</p>';
                 return;
             }
 
-            listaEl.innerHTML = '';
-
-            // Inverte para o último bipado aparecer no topo
-            [...itensContados].reverse().forEach((item, index) => {
-                const realIndex = itensContados.length - 1 - index;
-
+            dados.forEach(item => {
                 const div = document.createElement('div');
-                div.className = 'item-lista';
+                div.className = 'item-busca';
                 div.innerHTML = `
-                    <div>
-                        <div class="item-nome">${item._nome}</div>
-                        <small>ID: ${item.ProdutoID}</small>
-                    </div>
-                    <div style="display:flex; align-items:center;">
-                        <span class="item-qtd">${item.QuantidadeContada} ${item._un}</span>
-                        <span class="btn-del" onclick="removerItem(${realIndex})">🗑️</span>
-                    </div>
+                    <div style="font-weight:bold">${item.nome_mestre}</div>
+                    <small>${item.desc_xml}</small>
+                    <small>Fator Atual: ${item.fator} | Forn: ${item.fornecedor}</small>
                 `;
-                listaEl.appendChild(div);
+                div.onclick = () => prepararConversao(item);
+                divRes.appendChild(div);
             });
         }
 
-        function removerItem(index) {
-            if(confirm("Remover este item?")) {
-                itensContados.splice(index, 1);
-                renderizarLista();
-            }
+        function prepararConversao(item) {
+            idVinculoSelecionadoParaConversao = item.id_vinculo;
+            document.getElementById('msg-conversao').innerHTML = `
+                Você vai vincular o código <b>${ultimoEANNaoEncontrado}</b><br>
+                ao produto <b>${item.nome_mestre}</b>.<br><br>
+                O cadastro selecionado é uma CAIXA com Fator ${item.fator}.
+            `;
+            // Sugere o fator atual como padrão
+            document.getElementById('qtd-conversao').value = item.fator > 1 ? item.fator : "";
+            
+            document.getElementById('painel-busca').style.display = 'none';
+            document.getElementById('modal-qtd-caixa').style.display = 'flex';
+            document.getElementById('qtd-conversao').focus();
         }
 
-        async function finalizarContagem() {
-            if (itensContados.length === 0) {
-                alert("A lista está vazia!");
-                return;
-            }
+        async function confirmarConversao() {
+            const qtdCaixa = document.getElementById('qtd-conversao').value;
+            if(!qtdCaixa || qtdCaixa <= 0) { alert("Digite uma quantidade válida."); return; }
 
-            if(!confirm(`Confirmar contagem de ${itensContados.length} tipos de itens?`)) return;
+            const payload = {
+                id_origem: idVinculoSelecionadoParaConversao,
+                novo_ean: ultimoEANNaoEncontrado,
+                qtd_caixa: qtdCaixa
+            };
 
-            const btn = document.querySelector('.btn-salvar');
-            btn.disabled = true;
-            btn.textContent = "Enviando...";
+            const btn = document.querySelector('#modal-qtd-caixa button');
+            btn.textContent = "Processando...";
 
             try {
-                const payload = {
-                    funcionario_id: 2, // ID do Gestor (Hardcoded por enquanto)
-                    itens: itensContados
-                };
-
-                const res = await fetch('/api/contagem/salvar-mobile', {
+                const res = await fetch('/api/produto/criar-unidade', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify(payload)
                 });
-
                 const data = await res.json();
 
-                if (res.ok) {
-                    alert("✅ Contagem salva com sucesso!");
-                    itensContados = []; // Limpa
-                    renderizarLista();
-                    statusEl.textContent = "Contagem finalizada.";
+                if(data.sucesso) {
+                    // Adiciona o item recém criado na contagem automaticamente
+                    const qtdParaContar = parseFloat(qtdInput.value); // Usa a qtd que estava na tela principal
+                    adicionarItemLista(data.produto, qtdParaContar);
+                    
+                    alert(`✅ Sucesso! Código ${ultimoEANNaoEncontrado} cadastrado como unidade.`);
+                    
+                    // Reseta tudo
+                    document.getElementById('modal-qtd-caixa').style.display = 'none';
+                    eanInput.value = '';
+                    btnBusca.style.display = 'none';
+                    statusEl.textContent = "✅ Cadastro criado e contado!";
+                    statusEl.className = "status-msg sucesso";
                 } else {
                     alert("Erro: " + data.erro);
                 }
-            } catch (e) {
-                alert("Erro de conexão ao salvar.");
-            } finally {
-                btn.disabled = false;
-                btn.textContent = "💾 Salvar Contagem";
+            } catch(e) {
+                alert("Erro de conexão.");
             }
+            btn.textContent = "✅ Criar e Contar";
+        }
+
+        // --- LÓGICA PADRÃO DA LISTA (Existente) ---
+        function adicionarItemLista(prod, qtdDigitada) {
+            const qtdReal = qtdDigitada * prod.fator;
+            itensContados.push({
+                ProdutoID: prod.id,
+                QuantidadeContada: qtdReal,
+                _nome: prod.nome,
+                _un: prod.unidade
+            });
+            renderizarLista();
+        }
+
+        function renderizarLista() {
+            listaEl.innerHTML = '';
+            [...itensContados].reverse().forEach((item, index) => {
+                const realIndex = itensContados.length - 1 - index;
+                const div = document.createElement('div');
+                div.className = 'item-lista';
+                div.innerHTML = `
+                    <div><div class="item-nome">${item._nome}</div><small>ID: ${item.ProdutoID}</small></div>
+                    <div><span class="item-qtd">${item.QuantidadeContada} ${item._un}</span><span class="btn-del" onclick="removerItem(${realIndex})">🗑️</span></div>
+                `;
+                listaEl.appendChild(div);
+            });
+        }
+        function removerItem(i) { itensContados.splice(i, 1); renderizarLista(); }
+
+        async function finalizarContagem() {
+            if (itensContados.length === 0) return alert("Lista vazia!");
+            if(!confirm("Salvar contagem?")) return;
+            
+            try {
+                const res = await fetch('/api/contagem/salvar-mobile', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ funcionario_id: 2, itens: itensContados })
+                });
+                if (res.ok) {
+                    alert("✅ Contagem Salva!");
+                    itensContados = []; renderizarLista();
+                } else { alert("Erro ao salvar."); }
+            } catch(e) { alert("Erro de conexão."); }
         }
     </script>
 </body>
