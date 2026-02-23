@@ -137,7 +137,7 @@ class AppGestaoEstoque:
         self.entry_prod_nome = ttk.Entry(form_frame, width=40)
         self.entry_prod_nome.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 10))
         # Lista Global de Categorias
-        self.lista_categorias = ["Geral", "Sorvetes", "Embalagens", "Material de Limpeza", "Mercado", "Distribuidoras", "Bebidas", "Insumos Produção", "Outros"]
+        self.lista_categorias = ["Geral", "Sorvetes", "Brinquedos", "Embalagens", "Material de Limpeza", "Material de Escritório", "Mercado", "Distribuidoras", "Bebidas", "Insumos Produção", "Outros"]
 
         ttk.Label(form_frame, text="Unidade (Ex: UN, KG):").grid(row=2, column=0, sticky="w", pady=2)
         self.entry_prod_unidade = ttk.Entry(form_frame, width=10)
