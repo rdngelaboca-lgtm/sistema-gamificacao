@@ -149,6 +149,16 @@ def verificar_migracao_banco():
                 conn.commit()
                 logger.info("Migração concluída: Coluna 'FatorConversao' adicionada.")
 
+
+                # 2.2. Migração de ProdutosEstoque (Categoria)
+                try:
+                    cursor.execute("SELECT TOP 1 Categoria FROM ProdutosEstoque")
+                except Exception:
+                    logger.info("Coluna 'Categoria' não encontrada em ProdutosEstoque. Criando...")
+                    cursor.execute("ALTER TABLE ProdutosEstoque ADD Categoria VARCHAR(100) DEFAULT 'Geral'")
+                    conn.commit()
+                    logger.info("Migração concluída: Coluna 'Categoria' adicionada.")
+            
                 # 2.1. GARANTIA DE TAREFAS DE SISTEMA (Auto-Reparo de FK)
                 # Verifica se a tarefa de Feedback (ID 5) existe. Se não, cria forçadamente.
                 try:
@@ -5754,7 +5764,7 @@ def verificar_e_aceitar_tarefa_de_folga(tarefa_id, funcionario_id):
 # == INÍCIO DO MÓDULO DE GESTÃO DE ESTOQUE (CATÁLOGO MESTRE) =========
 # ===================================================================
 
-def criar_produto_estoque(nome, unidade, estoque_min):
+def criar_produto_estoque(nome, unidade, estoque_min, categoria='Geral'):
     """Insere um novo produto mestre na tabela ProdutosEstoque.
     RETORNA O ID do novo produto criado."""
     conn = get_db_connection()
@@ -5762,24 +5772,24 @@ def criar_produto_estoque(nome, unidade, estoque_min):
         try:
             cursor = conn.cursor()
             sql = """
-                INSERT INTO ProdutosEstoque (NomeProduto, UnidadeMedida, EstoqueMinimo)
-                VALUES (?, ?, ?);
+                INSERT INTO ProdutosEstoque (NomeProduto, UnidadeMedida, EstoqueMinimo, Categoria)
+                VALUES (?, ?, ?, ?);
                 SELECT SCOPE_IDENTITY();
             """
-            cursor.execute(sql, nome, unidade, estoque_min)
+            cursor.execute(sql, nome, unidade, estoque_min, categoria)
             cursor.nextset()
             novo_id = cursor.fetchone()[0]
             conn.commit()
-            logger.info(f"Novo produto mestre criado (ID: {novo_id}): {nome}")
-            return novo_id # <-- MUDANÇA IMPORTANTE
+            logger.info(f"Novo produto mestre criado (ID: {novo_id}): {nome} - Categoria: {categoria}")
+            return novo_id
         except Exception as e:
             logger.error(f"ERRO ao criar produto mestre: {e}", exc_info=True)
             if conn: conn.rollback()
-            raise e # Lança o erro para que a interface (Tkinter) possa capturá-lo
+            raise e 
         finally:
             if conn:
                 conn.close()
-    return None # Retorna None se a conexão falhar
+    return None
 
 def listar_produtos_estoque():
     """Lista todos os produtos do catálogo mestre (ProdutosEstoque)."""
@@ -5798,7 +5808,7 @@ def listar_produtos_estoque():
                 conn.close()
     return []
 
-def atualizar_produto_estoque(produto_id, nome, unidade, estoque_min):
+def atualizar_produto_estoque(produto_id, nome, unidade, estoque_min, categoria='Geral'):
     """Atualiza um produto mestre existente na tabela ProdutosEstoque."""
     conn = get_db_connection()
     if conn:
@@ -5806,15 +5816,15 @@ def atualizar_produto_estoque(produto_id, nome, unidade, estoque_min):
             cursor = conn.cursor()
             sql = """
                 UPDATE ProdutosEstoque
-                SET NomeProduto = ?, UnidadeMedida = ?, EstoqueMinimo = ?
+                SET NomeProduto = ?, UnidadeMedida = ?, EstoqueMinimo = ?, Categoria = ?
                 WHERE ProdutoID = ?
             """
-            cursor.execute(sql, nome, unidade, estoque_min, produto_id)
+            cursor.execute(sql, nome, unidade, estoque_min, categoria, produto_id)
             conn.commit()
             logger.info(f"Produto mestre ID {produto_id} ({nome}) atualizado.")
         except Exception as e:
             logger.error(f"ERRO ao atualizar produto mestre ID {produto_id}: {e}", exc_info=True)
-            raise e # Lança o erro para a interface
+            raise e
         finally:
             if conn:
                 conn.close()
@@ -6281,7 +6291,8 @@ def gerar_sugestao_por_periodo(contagem_id_inicio, contagem_id_fim):
                 PE.NomeProduto, 
                 ISNULL(PE.UnidadeMedida, 'UN') as UnidadeMedida, 
                 ISNULL(PE.EstoqueMinimo, 0) as EstoqueMinimo, 
-                ISNULL(SUM(IC.QuantidadeContada), 0) as QuantidadeContada
+                ISNULL(SUM(IC.QuantidadeContada), 0) as QuantidadeContada,
+                ISNULL(PE.Categoria, 'Geral') as Categoria
             FROM ProdutosEstoque PE
             LEFT JOIN ItensContagemEstoque IC 
                 ON PE.ProdutoID = IC.ProdutoID AND IC.ContagemID = ?
@@ -6289,7 +6300,8 @@ def gerar_sugestao_por_periodo(contagem_id_inicio, contagem_id_fim):
                 PE.ProdutoID, 
                 PE.NomeProduto, 
                 PE.UnidadeMedida, 
-                PE.EstoqueMinimo
+                PE.EstoqueMinimo,
+                PE.Categoria
         """
         cursor.execute(sql_itens_fim, contagem_id_fim)
         itens_contagem_final = cursor.fetchall()
@@ -6370,7 +6382,8 @@ def gerar_sugestao_por_periodo(contagem_id_inicio, contagem_id_fim):
                 "EstoqueMinimo": estoque_minimo,
                 "Status": "OK",
                 "TotalComprado": total_comprado,
-                "DiasPeriodo": dias_periodo
+                "DiasPeriodo": dias_periodo,
+                "Categoria": item.Categoria
             })
         return relatorio_final
 
@@ -6952,6 +6965,21 @@ def resetar_dados_estoque_completo():
 # ===================================================================
 # == MÓDULO DE GERENCIAMENTO DE VÍNCULOS (DE/PARA) ==================
 # ===================================================================
+
+def buscar_ids_produtos_por_fornecedor(fornecedor_id):
+    """Busca a lista de Produtos Mestre que já foram comprados deste fornecedor."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT DISTINCT ProdutoID FROM ProdutosFornecedor WHERE FornecedorID = ? AND ProdutoID IS NOT NULL", fornecedor_id)
+            return {row[0] for row in cursor.fetchall()}
+        except Exception as e:
+            logger.error(f"Erro ao buscar produtos por fornecedor: {e}")
+            return set()
+        finally:
+            conn.close()
+    return set()
 
 def listar_todos_vinculos_detalhado():
     """

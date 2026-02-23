@@ -269,7 +269,8 @@
                 QuantidadeContada: qtdReal.toFixed(4), 
                 _nome: prod.nome,
                 _un: prod.unidade,
-                _custo: prod.custo // Salva o custo na memória temporária do JS
+                // Proteção contra float IEEE 754: Salva como string estática com 4 casas para evitar degradação de arredondamento
+                _custo: Number(prod.custo || 0).toFixed(4)
             });
 
             // SALVA NO CACHE DO CELULAR
@@ -284,8 +285,9 @@
                 const div = document.createElement('div');
                 div.className = 'item-lista';
                 
-                // Formata o custo salvo para exibição
-                const custoItemFmt = (item._custo || 0).toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'});
+                // Formata o custo salvo para exibição (Converte a string segura de volta para Number apenas no momento da renderização visual)
+                const custoNumerico = parseFloat(item._custo || 0);
+                const custoItemFmt = custoNumerico.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'});
                 
                 div.innerHTML = `
                     <div>

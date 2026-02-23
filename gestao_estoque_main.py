@@ -136,12 +136,21 @@ class AppGestaoEstoque:
         ttk.Label(form_frame, text="Nome do Produto:").grid(row=0, column=0, sticky="w", pady=2)
         self.entry_prod_nome = ttk.Entry(form_frame, width=40)
         self.entry_prod_nome.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 10))
-        ttk.Label(form_frame, text="Unidade (Ex: UN, KG, L):").grid(row=2, column=0, sticky="w", pady=2)
-        self.entry_prod_unidade = ttk.Entry(form_frame, width=15)
+        # Lista Global de Categorias
+        self.lista_categorias = ["Geral", "Sorvetes", "Embalagens", "Material de Limpeza", "Mercado", "Distribuidoras", "Bebidas", "Insumos Produção", "Outros"]
+
+        ttk.Label(form_frame, text="Unidade (Ex: UN, KG):").grid(row=2, column=0, sticky="w", pady=2)
+        self.entry_prod_unidade = ttk.Entry(form_frame, width=10)
         self.entry_prod_unidade.grid(row=3, column=0, sticky="w", pady=(0, 10))
-        ttk.Label(form_frame, text="Estoque Mínimo:").grid(row=2, column=1, sticky="w", pady=2)
+
+        ttk.Label(form_frame, text="Categoria:").grid(row=2, column=1, sticky="w", pady=2)
+        self.combo_prod_categoria = ttk.Combobox(form_frame, values=self.lista_categorias, width=15)
+        self.combo_prod_categoria.grid(row=3, column=1, sticky="w", pady=(0, 10))
+        self.combo_prod_categoria.set("Geral")
+
+        ttk.Label(form_frame, text="Estoque Mínimo:").grid(row=4, column=0, columnspan=2, sticky="w", pady=2)
         self.entry_prod_estoque_min = ttk.Entry(form_frame, width=15)
-        self.entry_prod_estoque_min.grid(row=3, column=1, sticky="w", pady=(0, 10))
+        self.entry_prod_estoque_min.grid(row=5, column=0, columnspan=2, sticky="w", pady=(0, 10))
         self.entry_prod_estoque_min.insert(0, "0.0")
         btn_frame = ttk.Frame(form_frame)
         btn_frame.grid(row=4, column=0, columnspan=2, pady=10)
@@ -153,11 +162,12 @@ class AppGestaoEstoque:
         lista_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
         lista_frame.rowconfigure(0, weight=1)
         lista_frame.columnconfigure(0, weight=1)
-        cols = ('ID', 'Nome', 'Unidade', 'Estoque Mínimo')
+        cols = ('ID', 'Nome', 'Unidade', 'Categoria', 'Estoque Mínimo')
         self.tree_produtos = ttk.Treeview(lista_frame, columns=cols, show='headings', selectmode='browse')
         self.tree_produtos.heading('ID', text='ID'); self.tree_produtos.column('ID', width=40, anchor='center')
-        self.tree_produtos.heading('Nome', text='Nome'); self.tree_produtos.column('Nome', width=250)
-        self.tree_produtos.heading('Unidade', text='UN'); self.tree_produtos.column('Unidade', width=50, anchor='center')
+        self.tree_produtos.heading('Nome', text='Nome'); self.tree_produtos.column('Nome', width=200)
+        self.tree_produtos.heading('Unidade', text='UN'); self.tree_produtos.column('Unidade', width=40, anchor='center')
+        self.tree_produtos.heading('Categoria', text='Categoria'); self.tree_produtos.column('Categoria', width=120)
         self.tree_produtos.heading('Estoque Mínimo', text='Est. Mínimo'); self.tree_produtos.column('Estoque Mínimo', width=80, anchor='e')
         scrollbar = ttk.Scrollbar(lista_frame, orient="vertical", command=self.tree_produtos.yview)
         self.tree_produtos.configure(yscrollcommand=scrollbar.set)
@@ -172,6 +182,7 @@ class AppGestaoEstoque:
     def limpar_formulario_produto(self):
         self.entry_prod_nome.delete(0, tk.END)
         self.entry_prod_unidade.delete(0, tk.END)
+        self.combo_prod_categoria.set("Geral")
         self.entry_prod_estoque_min.delete(0, tk.END); self.entry_prod_estoque_min.insert(0, "0.0")
         self.produto_selecionado_id = None
         self.btn_prod_salvar.config(text="Salvar Novo")
@@ -182,21 +193,22 @@ class AppGestaoEstoque:
     def salvar_produto(self):
         nome = self.entry_prod_nome.get()
         unidade = self.entry_prod_unidade.get().upper()
+        categoria = self.combo_prod_categoria.get()
         estoque_min_str = self.entry_prod_estoque_min.get().replace(",", ".")
         if not nome or not unidade:
             messagebox.showerror("Erro", "Nome e Unidade são obrigatórios.", parent=self.root)
             return
         try:
             estoque_min = Decimal(estoque_min_str)
-        except InvalidOperation: # <-- CORREÇÃO: Exceção específica
+        except InvalidOperation: 
             messagebox.showerror("Erro", "Estoque Mínimo deve ser um número.", parent=self.root)
             return
         try:
             if self.produto_selecionado_id:
-                database.atualizar_produto_estoque(self.produto_selecionado_id, nome, unidade, estoque_min)
+                database.atualizar_produto_estoque(self.produto_selecionado_id, nome, unidade, estoque_min, categoria)
                 messagebox.showinfo("Sucesso", "Produto atualizado com sucesso!", parent=self.root)
             else:
-                novo_id = database.criar_produto_estoque(nome, unidade, estoque_min) 
+                novo_id = database.criar_produto_estoque(nome, unidade, estoque_min, categoria) 
                 if not novo_id: raise Exception("Falha ao criar produto, não retornou ID.")
                 messagebox.showinfo("Sucesso", "Produto criado com sucesso!", parent=self.root)
             self.limpar_formulario_produto()
@@ -213,7 +225,8 @@ class AppGestaoEstoque:
             produtos = database.listar_produtos_estoque()
             self.mapa_produtos_mestre_contagem.clear()
             for p in produtos:
-                self.tree_produtos.insert("", "end", values=(p.ProdutoID, p.NomeProduto, p.UnidadeMedida, f"{p.EstoqueMinimo:.3f}"))
+                cat = getattr(p, 'Categoria', 'Geral')
+                self.tree_produtos.insert("", "end", values=(p.ProdutoID, p.NomeProduto, p.UnidadeMedida, cat, f"{p.EstoqueMinimo:.3f}"))
                 self.mapa_produtos_mestre_contagem[p.NomeProduto] = {'id': p.ProdutoID, 'un': p.UnidadeMedida}
         except Exception as e:
             logger.error(f"Erro ao atualizar lista de produtos: {e}", exc_info=True)
@@ -222,11 +235,12 @@ class AppGestaoEstoque:
         selecionado = self.tree_produtos.focus()
         if not selecionado: return
         dados = self.tree_produtos.item(selecionado, 'values')
-        produto_id, nome, unidade, estoque_min = dados
+        produto_id, nome, unidade, categoria, estoque_min = dados
         self.limpar_formulario_produto()
         self.produto_selecionado_id = int(produto_id)
         self.entry_prod_nome.insert(0, nome)
         self.entry_prod_unidade.insert(0, unidade)
+        self.combo_prod_categoria.set(categoria)
         self.entry_prod_estoque_min.delete(0, tk.END); self.entry_prod_estoque_min.insert(0, estoque_min)
         self.btn_prod_salvar.config(text="Atualizar Produto")
 
@@ -403,13 +417,18 @@ class AppGestaoEstoque:
         self.entry_fator_conversao.grid(row=0, column=5, sticky="w", padx=(0,10))
         
         ttk.Label(frame_ferramenta, text="EAN (Opc.):").grid(row=0, column=6, sticky="w")
-        self.entry_ean_importacao = ttk.Entry(frame_ferramenta, width=15)
-        self.entry_ean_importacao.grid(row=0, column=7, sticky="w", padx=(0,10))
-        
+        self.entry_ean_importacao = ttk.Entry(frame_ferramenta, width=10)
+        self.entry_ean_importacao.grid(row=0, column=7, sticky="w", padx=(0,5))
+
+        ttk.Label(frame_ferramenta, text="Cat. Novo:").grid(row=0, column=8, sticky="w")
+        self.combo_cat_importacao = ttk.Combobox(frame_ferramenta, values=self.lista_categorias, width=10, state="readonly")
+        self.combo_cat_importacao.grid(row=0, column=9, sticky="w", padx=(0,5))
+        self.combo_cat_importacao.set("Geral")
+
         btn_vincular = ttk.Button(frame_ferramenta, text="Vincular", command=self.vincular_produto_selecionado)
-        btn_vincular.grid(row=0, column=8, sticky="w", padx=5)
-        btn_criar_vincular = ttk.Button(frame_ferramenta, text="Criar Mestre e Vincular", command=self.criar_mestre_e_vincular)
-        btn_criar_vincular.grid(row=0, column=9, sticky="w", padx=5)
+        btn_vincular.grid(row=0, column=10, sticky="w", padx=2)
+        btn_criar_vincular = ttk.Button(frame_ferramenta, text="Criar e Vincular", command=self.criar_mestre_e_vincular)
+        btn_criar_vincular.grid(row=0, column=11, sticky="w", padx=2)
         frame_prontos = ttk.LabelFrame(main_frame, text="3. Itens Prontos para Salvar (Já Vinculados)", padding="10")
         frame_prontos.grid(row=3, column=0, sticky="nsew", pady=5)
         frame_prontos.rowconfigure(0, weight=1)
@@ -827,16 +846,18 @@ class AppGestaoEstoque:
             produto_id_mestre = database.buscar_produto_mestre_por_nome(nome_novo_produto)
             produto_foi_criado = False
             if not produto_id_mestre:
+                cat_selecionada = self.combo_cat_importacao.get()
                 if not messagebox.askyesno("Confirmar Auto-Criação",
-                                          f"O produto mestre '{nome_novo_produto}' não existe no Catálogo (Aba 1).\n\n"
-                                          f"Deseja criá-lo automaticamente agora?\n"
-                                          f"(Unidade: 'UN', Est. Mínimo: 0.0)",
-                                          parent=self.root):
+                                        f"O produto mestre '{nome_novo_produto}' não existe no Catálogo.\n\n"
+                                        f"Deseja criá-lo agora?\n"
+                                        f"(UN, Est. Mín: 0.0, Categoria: {cat_selecionada})",
+                                        parent=self.root):
                     return
                 produto_id_mestre = database.criar_produto_estoque(
                     nome=nome_novo_produto,
                     unidade="UN", 
-                    estoque_min=Decimal('0.0')
+                    estoque_min=Decimal('0.0'),
+                    categoria=cat_selecionada
                 )
                 if not produto_id_mestre:
                     raise Exception("Falha ao criar o produto mestre, não retornou ID.")
@@ -1125,6 +1146,23 @@ class AppGestaoEstoque:
         
         btn_gerar_sugestao = ttk.Button(frame_filtros, text="Gerar Sugestão de Compra", command=self.gerar_sugestao_compra)
         btn_gerar_sugestao.grid(row=1, column=2, columnspan=2, sticky="e", padx=5, pady=5, ipady=5)
+
+        ttk.Separator(frame_filtros, orient="horizontal").grid(row=2, column=0, columnspan=4, sticky="ew", pady=10)
+
+        # Filtros Inteligentes
+        ttk.Label(frame_filtros, text="Filtro Categoria:").grid(row=3, column=0, sticky="w", padx=5, pady=5)
+        self.combo_sugestao_categoria = ttk.Combobox(frame_filtros, state="readonly", values=["Todas"] + self.lista_categorias)
+        self.combo_sugestao_categoria.grid(row=3, column=1, sticky="ew", padx=5, pady=5)
+        self.combo_sugestao_categoria.set("Todas")
+
+        ttk.Label(frame_filtros, text="Filtro Fornecedor:").grid(row=3, column=2, sticky="w", padx=10, pady=5)
+        self.combo_sugestao_fornecedor = ttk.Combobox(frame_filtros, state="readonly")
+        self.combo_sugestao_fornecedor.grid(row=3, column=3, sticky="ew", padx=5, pady=5)
+        self.combo_sugestao_fornecedor.set("Todos")
+
+        self.var_ocultar_zeros = tk.BooleanVar(value=False)
+        self.check_ocultar_zeros = ttk.Checkbutton(frame_filtros, text="Ocultar itens que não precisam de compra (Sugestão = 0)", variable=self.var_ocultar_zeros)
+        self.check_ocultar_zeros.grid(row=4, column=0, columnspan=2, sticky="w", padx=5, pady=5)
         # --- FIM DO FRAME DE FILTROS ---
 
         # --- Frame 2: Tabela de Sugestões (Mesma de antes, mas o bind foi movido) ---
@@ -1198,7 +1236,29 @@ class AppGestaoEstoque:
                 messagebox.showinfo("Aviso", "Nenhum produto encontrado ou erro de processamento.", parent=self.root)
                 return
 
+            # Captura o estado dos filtros
+            categoria_filtro = self.combo_sugestao_categoria.get()
+            forn_filtro_str = self.combo_sugestao_fornecedor.get()
+            ocultar_zeros = self.var_ocultar_zeros.get()
+
+            # Se filtrou por fornecedor, busca quais IDs de produto pertencem a ele
+            ids_produtos_fornecedor = None
+            if forn_filtro_str and forn_filtro_str != "Todos":
+                try:
+                    forn_id = int(forn_filtro_str.split("ID: ")[1].replace(")", ""))
+                    ids_produtos_fornecedor = database.buscar_ids_produtos_por_fornecedor(forn_id)
+                except:
+                    pass
+
             for item in relatorio_posicao:
+                # 1. Filtro de Categoria
+                if categoria_filtro != "Todas" and item.get('Categoria', 'Geral') != categoria_filtro:
+                    continue
+
+                # 2. Filtro de Fornecedor
+                if ids_produtos_fornecedor is not None and item['ProdutoID'] not in ids_produtos_fornecedor:
+                    continue
+
                 # Armazena no cache para o recurso de duplo-clique (histórico)
                 self.cache_relatorio_posicao[item['ProdutoID']] = item
 
@@ -1221,6 +1281,10 @@ class AppGestaoEstoque:
 
                 # A sugestão não pode ser negativa
                 sugestao_compra = max(sugestao_calc, Decimal('0.0'))
+
+                # 3. Filtro de Zeros (Ocultar o que não precisa comprar)
+                if ocultar_zeros and sugestao_compra <= 0:
+                    continue
 
                 # --- CÁLCULO DA DURAÇÃO DE ESTOQUE (Visual) ---
                 if consumo_mes > 0:
@@ -1284,9 +1348,14 @@ class AppGestaoEstoque:
 
             # Lógica inteligente de seleção padrão
             if nomes_contagens:
-                self.combo_contagem_fim.set(nomes_contagens[0])   # A mais recente (Ponto B)
-                # Por padrão, sugere a opção especial se houver poucas contagens
+                self.combo_contagem_fim.set(nomes_contagens[0])   
                 self.combo_contagem_inicio.set(opcao_primeira_compra)
+
+            # Preenche o filtro de Fornecedores
+            fornecedores = database.listar_fornecedores()
+            nomes_forn = ["Todos"] + [f"{f.NomeFantasia} (ID: {f.FornecedorID})" for f in fornecedores]
+            if hasattr(self, 'combo_sugestao_fornecedor'):
+                self.combo_sugestao_fornecedor['values'] = nomes_forn
 
         except Exception as e:
             logger.error(f"Erro ao popular combos de contagem (Aba 5): {e}", exc_info=True)
