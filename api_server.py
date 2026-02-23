@@ -1037,6 +1037,55 @@ def rota_salvar_contagem_mobile():
         return jsonify({"sucesso": True, "msg": msg})
     else:
         return jsonify({"sucesso": False, "erro": msg}), 500
+    
+# ===================================================================
+# == ROTAS DO MÓDULO DE AUDITORIA DE CÓDIGOS DE BARRAS (MOBILE) =====
+# ===================================================================
+
+@app.route('/mobile/auditoria')
+def page_auditoria_mobile():
+    """Renderiza a página HTML de auditoria de EAN."""
+    return render_template('mobile_auditoria_ean.html')
+
+@app.route('/api/auditoria/sem-ean', methods=['GET'])
+def rota_buscar_sem_ean():
+    """Retorna a lista de itens que precisam de EAN."""
+    try:
+        itens = database.buscar_itens_sem_ean()
+        lista = []
+        for row in itens:
+            lista.append({
+                "vinculo_id": row.ProdutoFornecedorID,
+                "descricao": row.DescricaoXML,
+                "fornecedor": row.NomeFantasia,
+                "ultima_qtd": float(row.UltimaQtd) if row.UltimaQtd else 0.0,
+                "ultimo_custo": float(row.UltimoCusto) if row.UltimoCusto else 0.0
+            })
+        return jsonify(lista), 200
+    except Exception as e:
+        logger.error(f"Erro na rota buscar_sem_ean: {e}")
+        return jsonify({"sucesso": False, "erro": "Erro interno no servidor"}), 500
+
+@app.route('/api/auditoria/salvar-ean', methods=['POST'])
+def rota_salvar_ean():
+    """Recebe o EAN bipado ou a flag 'IGNORADO' e salva no banco."""
+    dados = request.json
+    vinculo_id = dados.get('vinculo_id')
+    ean = dados.get('ean')
+
+    if not vinculo_id or not ean:
+        return jsonify({"sucesso": False, "erro": "ID do vínculo ou EAN ausentes."}), 400
+
+    try:
+        sucesso = database.atualizar_ean_vinculo(vinculo_id, str(ean).strip())
+        if sucesso:
+            acao = "ignorado" if ean == "IGNORADO" else "atualizado"
+            return jsonify({"sucesso": True, "msg": f"Item {acao} com sucesso!"}), 200
+        else:
+            return jsonify({"sucesso": False, "erro": "Falha ao atualizar no banco de dados."}), 500
+    except Exception as e:
+        logger.error(f"Erro na rota salvar_ean: {e}")
+        return jsonify({"sucesso": False, "erro": "Erro interno no servidor"}), 500
 
 if __name__ == "__main__":
     # O '0.0.0.0' é o segredo. Ele libera o acesso para a rede inteira.

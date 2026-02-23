@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Auditoria EAN v1.0</title>
+    <style>
+        body { font-family: sans-serif; background: #f0f2f5; margin: 0; padding: 10px; display: flex; flex-direction: column; height: 100vh; }
+        .header { background: #0056b3; color: white; padding: 15px; border-radius: 10px; text-align: center; margin-bottom: 10px; font-weight: bold; font-size: 1.2rem; }
+        
+        .lista-pendencias { flex: 1; overflow-y: auto; }
+        
+        .card-item { background: white; padding: 15px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin-bottom: 10px; cursor: pointer; border-left: 5px solid #ffc107; transition: transform 0.1s; }
+        .card-item:active { transform: scale(0.98); }
+        
+        .item-nome { font-weight: bold; font-size: 1.1rem; color: #333; margin-bottom: 5px; }
+        .item-fornecedor { color: #666; font-size: 0.9rem; margin-bottom: 8px; }
+        .item-detalhes { display: flex; justify-content: space-between; font-size: 0.95rem; font-weight: bold; }
+        .qtd-tag { color: #007bff; }
+        .custo-tag { color: #28a745; }
+
+        /* Modal de Bipagem */
+        #modal-leitura { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 2000; justify-content: center; align-items: center; }
+        .modal-content { background: white; padding: 20px; border-radius: 12px; width: 90%; max-width: 400px; text-align: center; box-sizing: border-box; }
+        
+        .modal-titulo { font-size: 1.1rem; color: #333; margin-bottom: 15px; font-weight: bold; word-wrap: break-word; }
+        
+        input[type="number"], input[type="text"] { width: 100%; padding: 15px; font-size: 1.2rem; border: 2px solid #007bff; border-radius: 8px; box-sizing: border-box; margin-bottom: 15px; background-color: #e8f0fe; text-align: center; }
+        input:focus { border-color: #0056b3; outline: none; }
+
+        .btn { width: 100%; padding: 15px; border: none; border-radius: 8px; font-size: 1.1rem; font-weight: bold; cursor: pointer; margin-bottom: 10px; color: white; }
+        .btn-salvar { background: #28a745; }
+        .btn-ignorar { background: #6c757d; }
+        .btn-cancelar { background: #dc3545; }
+        
+        .msg-vazia { text-align: center; color: #888; margin-top: 50px; font-size: 1.1rem; }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        🔎 Auditoria de Códigos de Barras
+    </div>
+
+    <div class="lista-pendencias" id="lista-pendencias">
+        <div class="msg-vazia">Carregando pendências...</div>
+    </div>
+
+    <div id="modal-leitura">
+        <div class="modal-content">
+            <div class="modal-titulo" id="modal-nome-produto">Nome do Produto</div>
+            
+            <input type="number" id="ean-input" placeholder="Bipe o código aqui...">
+            
+            <button class="btn btn-salvar" onclick="salvarEan()">💾 Salvar Código</button>
+            <button class="btn btn-ignorar" onclick="ignorarItem()">🚫 Ignorar (Ex: Insumo/Gás)</button>
+            <button class="btn btn-cancelar" onclick="fecharModal()">❌ Cancelar</button>
+        </div>
+    </div>
+
+    <script>
+        let pendencias = [];
+        let itemAtualSelecionado = null;
+
+        document.addEventListener('DOMContentLoaded', carregarLista);
+
+        async function carregarLista() {
+            const container = document.getElementById('lista-pendencias');
+            try {
+                const response = await fetch('/api/auditoria/sem-ean');
+                if (response.ok) {
+                    pendencias = await response.json();
+                    renderizarLista();
+                } else {
+                    container.innerHTML = '<div class="msg-vazia" style="color: red;">Erro ao carregar dados do servidor.</div>';
+                }
+            } catch (e) {
+                container.innerHTML = '<div class="msg-vazia" style="color: red;">Falha de conexão com a API.</div>';
+            }
+        }
+
+        function renderizarLista() {
+            const container = document.getElementById('lista-pendencias');
+            container.innerHTML = '';
+
+            if (pendencias.length === 0) {
+                container.innerHTML = '<div class="msg-vazia">🎉 Nada pendente! Todos os itens possuem código de barras.</div>';
+                return;
+            }
+
+            pendencias.forEach(item => {
+                const div = document.createElement('div');
+                div.className = 'card-item';
+                
+                const custoFmt = (item.ultimo_custo || 0).toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'});
+                const qtdFmt = item.ultima_qtd % 1 === 0 ? item.ultima_qtd.toFixed(0) : item.ultima_qtd.toFixed(2);
+
+                div.innerHTML = `
+                    <div class="item-nome">${item.descricao}</div>
+                    <div class="item-fornecedor">🏢 ${item.fornecedor}</div>
+                    <div class="item-detalhes">
+                        <span class="qtd-tag">📦 Última Qtd: ${qtdFmt}</span>
+                        <span class="custo-tag">💰 Custo: ${custoFmt}</span>
+                    </div>
+                `;
+                
+                div.onclick = () => abrirModal(item);
+                container.appendChild(div);
+            });
+        }
+
+        function abrirModal(item) {
+            itemAtualSelecionado = item;
+            document.getElementById('modal-nome-produto').textContent = item.descricao;
+            const eanInput = document.getElementById('ean-input');
+            eanInput.value = ''; // Limpa o input
+            document.getElementById('modal-leitura').style.display = 'flex';
+            
+            // Foca no input para o leitor de código de barras preencher direto
+            setTimeout(() => eanInput.focus(), 100);
+        }
+
+        function fecharModal() {
+            document.getElementById('modal-leitura').style.display = 'none';
+            itemAtualSelecionado = null;
+        }
+
+        async function dispararAPI(eanString) {
+            if (!itemAtualSelecionado) return;
+
+            const payload = {
+                vinculo_id: itemAtualSelecionado.vinculo_id,
+                ean: eanString
+            };
+
+            try {
+                // Troca texto dos botões para mostrar progresso
+                document.getElementById('ean-input').disabled = true;
+                
+                const res = await fetch('/api/auditoria/salvar-ean', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const data = await res.json();
+
+                if (res.ok && data.sucesso) {
+                    // Remove o item da lista local da tela
+                    pendencias = pendencias.filter(i => i.vinculo_id !== itemAtualSelecionado.vinculo_id);
+                    renderizarLista();
+                    fecharModal();
+                    
+                    // Vibração de sucesso (se suportado pelo celular)
+                    if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+                } else {
+                    alert("Erro: " + data.erro);
+                }
+            } catch (error) {
+                alert("Erro de conexão ao salvar.");
+            } finally {
+                document.getElementById('ean-input').disabled = false;
+            }
+        }
+
+        function salvarEan() {
+            const eanValue = document.getElementById('ean-input').value.trim();
+            if (!eanValue) {
+                alert("Por favor, bipe ou digite o código de barras primeiro.");
+                return;
+            }
+            dispararAPI(eanValue);
+        }
+
+        function ignorarItem() {
+            if(confirm(`Tem certeza que deseja IGNORAR o código de barras para:\n\n${itemAtualSelecionado.descricao}?\n\nEle não aparecerá mais nesta lista.`)) {
+                dispararAPI("IGNORADO");
+            }
+        }
+
+        // Permite submeter pressionando Enter (padrão de leitores laser)
+        document.getElementById('ean-input').addEventListener('keypress', function (e) {
+            if (e.key === 'Enter') {
+                salvarEan();
+            }
+        });
+    </script>
+</body>
+</html>
