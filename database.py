@@ -7858,14 +7858,16 @@ def criar_unidade_a_partir_de_caixa(id_origem, novo_ean, qtd_na_caixa):
             except ZeroDivisionError:
                 novo_custo = 0.0
 
-            # 3. Insere o novo vínculo copiando a Descrição Exata e pega o ID gerado
+            # 3. Insere o novo vínculo modificando a Descrição para evitar restrição UNIQUE
+            nova_desc_xml = f"{desc_xml} (UNIDADE)"
+
             sql_insert = """
                 INSERT INTO ProdutosFornecedor 
                 (ProdutoID, FornecedorID, EAN, NCM, FatorConversao, DescricaoXML)
                 OUTPUT INSERTED.ProdutoFornecedorID
                 VALUES (?, ?, ?, ?, 1, ?)
             """
-            cursor.execute(sql_insert, prod_id, forn_id, novo_ean, ncm, desc_xml)
+            cursor.execute(sql_insert, prod_id, forn_id, novo_ean, ncm, nova_desc_xml)
             novo_vinculo_id = cursor.fetchone()[0]
 
             # 4. Associa o novo custo à última nota fiscal (Qtd 0 para não alterar finanças)
