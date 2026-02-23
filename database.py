@@ -6273,17 +6273,23 @@ def gerar_sugestao_por_periodo(contagem_id_inicio, contagem_id_fim):
                  else:
                     raise Exception("A Data da Contagem Final deve ser posterior à Inicial.")
         # 3. Busca os ITENS da Contagem FINAL (Estoque Atual Real)
-        # CORREÇÃO: Partir de ProdutosEstoque com LEFT JOIN para incluir itens com estoque ZERADO (não bipados)
+        # CORREÇÃO: Partir de ProdutosEstoque com LEFT JOIN e consolidar quantidades (SUM/GROUP BY) 
+        # para evitar duplicidade de ProdutoID na interface do Tkinter (TclError).
         sql_itens_fim = """
             SELECT 
                 PE.ProdutoID, 
                 PE.NomeProduto, 
                 ISNULL(PE.UnidadeMedida, 'UN') as UnidadeMedida, 
                 ISNULL(PE.EstoqueMinimo, 0) as EstoqueMinimo, 
-                ISNULL(IC.QuantidadeContada, 0) as QuantidadeContada
+                ISNULL(SUM(IC.QuantidadeContada), 0) as QuantidadeContada
             FROM ProdutosEstoque PE
             LEFT JOIN ItensContagemEstoque IC 
                 ON PE.ProdutoID = IC.ProdutoID AND IC.ContagemID = ?
+            GROUP BY 
+                PE.ProdutoID, 
+                PE.NomeProduto, 
+                PE.UnidadeMedida, 
+                PE.EstoqueMinimo
         """
         cursor.execute(sql_itens_fim, contagem_id_fim)
         itens_contagem_final = cursor.fetchall()
@@ -8015,3 +8021,68 @@ def descobrir_produto_mestre_por_ean(ean):
         finally:
             conn.close()
     return None
+
+# ===================================================================
+# == INÍCIO DO MÓDULO DE AUDITORIA DE CÓDIGOS DE BARRAS (MOBILE) ====
+# ===================================================================
+
+def buscar_itens_sem_ean():
+    """
+    Busca os itens vinculados que não possuem código de barras válido.
+    Ignora itens que o usuário marcou para não rastrear ('IGNORADO').
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT 
+                    PF.ProdutoFornecedorID,
+                    PF.DescricaoXML,
+                    F.NomeFantasia,
+                    ISNULL((
+                        SELECT TOP 1 I.Quantidade 
+                        FROM ItensNotaFiscalEntrada I
+                        JOIN NotasFiscaisEntrada N ON I.NotaID = N.NotaID
+                        WHERE I.ProdutoFornecedorID = PF.ProdutoFornecedorID
+                        ORDER BY N.DataEmissao DESC, N.NotaID DESC
+                    ), 0) as UltimaQtd,
+                    ISNULL((
+                        SELECT TOP 1 I.PrecoCustoUnitario 
+                        FROM ItensNotaFiscalEntrada I
+                        JOIN NotasFiscaisEntrada N ON I.NotaID = N.NotaID
+                        WHERE I.ProdutoFornecedorID = PF.ProdutoFornecedorID
+                        ORDER BY N.DataEmissao DESC, N.NotaID DESC
+                    ), 0) as UltimoCusto
+                FROM ProdutosFornecedor PF
+                JOIN Fornecedores F ON PF.FornecedorID = F.FornecedorID
+                WHERE PF.EAN IS NULL 
+                   OR PF.EAN = '' 
+                   OR PF.EAN = 'SEM GTIN'
+            """
+            cursor.execute(sql)
+            return cursor.fetchall()
+        except Exception as e:
+            logger.error(f"Erro ao buscar itens sem EAN: {e}", exc_info=True)
+            return []
+        finally:
+            conn.close()
+    return []
+
+def atualizar_ean_vinculo(vinculo_id, novo_ean):
+    """Atualiza o código de barras de um vínculo específico. Permite salvar 'IGNORADO'."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE ProdutosFornecedor SET EAN = ? WHERE ProdutoFornecedorID = ?"
+            cursor.execute(sql, novo_ean, vinculo_id)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Erro ao atualizar EAN do vínculo ID {vinculo_id}: {e}", exc_info=True)
+            if conn: conn.rollback()
+            return False
+        finally:
+            conn.close()
+    return False

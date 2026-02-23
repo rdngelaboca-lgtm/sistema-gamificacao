@@ -401,10 +401,15 @@ class AppGestaoEstoque:
         self.entry_fator_conversao = ttk.Entry(frame_ferramenta, width=5)
         self.entry_fator_conversao.insert(0, "1") # Padrão é 1 para 1
         self.entry_fator_conversao.grid(row=0, column=5, sticky="w", padx=(0,10))
+        
+        ttk.Label(frame_ferramenta, text="EAN (Opc.):").grid(row=0, column=6, sticky="w")
+        self.entry_ean_importacao = ttk.Entry(frame_ferramenta, width=15)
+        self.entry_ean_importacao.grid(row=0, column=7, sticky="w", padx=(0,10))
+        
         btn_vincular = ttk.Button(frame_ferramenta, text="Vincular", command=self.vincular_produto_selecionado)
-        btn_vincular.grid(row=0, column=6, sticky="w", padx=5)
+        btn_vincular.grid(row=0, column=8, sticky="w", padx=5)
         btn_criar_vincular = ttk.Button(frame_ferramenta, text="Criar Mestre e Vincular", command=self.criar_mestre_e_vincular)
-        btn_criar_vincular.grid(row=0, column=7, sticky="w", padx=5)
+        btn_criar_vincular.grid(row=0, column=9, sticky="w", padx=5)
         frame_prontos = ttk.LabelFrame(main_frame, text="3. Itens Prontos para Salvar (Já Vinculados)", padding="10")
         frame_prontos.grid(row=3, column=0, sticky="nsew", pady=5)
         frame_prontos.rowconfigure(0, weight=1)
@@ -707,12 +712,16 @@ class AppGestaoEstoque:
             return
 
         try:
+            # Verifica se o usuário digitou um EAN manualmente na tela
+            ean_digitado = self.entry_ean_importacao.get().strip()
+            ean_final = ean_digitado if ean_digitado else item_pendente['cEAN']
+
             database.criar_vinculo_produto_fornecedor(
                 produto_id_mestre=produto_mestre_id,
                 fornecedor_id=item_pendente['FornecedorID'],
                 descricao_xml=item_pendente['DescricaoXML'],
                 cProd=item_pendente['cProd'],
-                cEAN=item_pendente['cEAN'],
+                cEAN=ean_final,
                 NCM=item_pendente['NCM'],
                 fator_conversao=fator # <-- Passa o fator
             )
@@ -720,6 +729,7 @@ class AppGestaoEstoque:
             # Remove o objeto específico da lista e da árvore
             self.itens_xml_nao_vinculados.remove(item_pendente)
             self.tree_vincular.delete(selecionado_tree)
+            self.entry_ean_importacao.delete(0, tk.END) # Limpa o campo para o próximo
             messagebox.showinfo("Sucesso", 
                                 "Vínculo criado!\n\nPor favor, re-importe a pasta de XMLs para processar este item.",
                                 parent=self.root)
@@ -841,12 +851,16 @@ class AppGestaoEstoque:
             except:
                 fator = Decimal('1.0')
 
+            # Verifica se o usuário digitou um EAN manualmente na tela
+            ean_digitado = self.entry_ean_importacao.get().strip()
+            ean_final = ean_digitado if ean_digitado else item_pendente['cEAN']
+
             database.criar_vinculo_produto_fornecedor(
                 produto_id_mestre=produto_id_mestre,
                 fornecedor_id=item_pendente['FornecedorID'],
                 descricao_xml=item_pendente['DescricaoXML'],
                 cProd=item_pendente['cProd'],
-                cEAN=item_pendente['cEAN'],
+                cEAN=ean_final,
                 NCM=item_pendente['NCM'],
                 fator_conversao=fator
             )
@@ -854,6 +868,7 @@ class AppGestaoEstoque:
             # Remove o objeto específico da lista e da árvore
             self.itens_xml_nao_vinculados.remove(item_pendente)
             self.tree_vincular.delete(selecionado_tree)
+            self.entry_ean_importacao.delete(0, tk.END) # Limpa o campo
             if produto_foi_criado:
                 self.atualizar_lista_produtos()
                 self.popular_combobox_produtos_mestre()
