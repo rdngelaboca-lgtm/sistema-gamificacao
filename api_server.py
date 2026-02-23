@@ -959,7 +959,7 @@ def page_contagem_mobile():
 
 @app.route('/api/produto/ean/<codigo>', methods=['GET'])
 def rota_buscar_ean(codigo):
-    """Busca dados do produto ao bipar."""
+    """Busca dados do produto ao bipar (Agora envia o custo)."""
     res = database.buscar_produto_por_ean(codigo)
     if res:
         return jsonify({
@@ -967,14 +967,15 @@ def rota_buscar_ean(codigo):
             "id": res[0],
             "nome": res[1],
             "unidade": res[2],
-            "fator": float(res[3]) if res[3] else 1.0
+            "fator": float(res[3]) if res[3] else 1.0,
+            "custo": float(res[4]) if len(res) > 4 and res[4] else 0.0
         })
     else:
         return jsonify({"encontrado": False}), 404
     
 @app.route('/api/produto/buscar/<termo>', methods=['GET'])
 def rota_buscar_por_nome(termo):
-    """Busca produtos por nome para o mobile."""
+    """Busca produtos por nome para o mobile (Agora inclui o custo)."""
     resultados = database.buscar_produtos_mobile_por_nome(termo)
     lista = []
     for row in resultados:
@@ -984,7 +985,8 @@ def rota_buscar_por_nome(termo):
             "desc_xml": row[2],
             "fornecedor": row[3],
             "fator": float(row[4]) if row[4] else 1.0,
-            "ean_existente": row[5]
+            "ean_existente": row[5],
+            "custo": float(row[6]) if len(row) > 6 and row[6] else 0.0
         })
     return jsonify(lista)
 

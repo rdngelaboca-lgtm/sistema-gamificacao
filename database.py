@@ -7755,20 +7755,26 @@ def remover_item_escala_web(escala_id):
 
 def buscar_produto_por_ean(ean):
     """
-    Busca um produto mestre através do código de barras (EAN) cadastrado nos vínculos.
-    Retorna: (ProdutoID, NomeProduto, Unidade, FatorConversao)
+    Busca um produto mestre através do código de barras (EAN).
+    AGORA RETORNA TAMBÉM O ÚLTIMO CUSTO PAGO.
     """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            # Faz o JOIN para pegar o Nome do Mestre baseado no EAN do Fornecedor
             sql = """
                 SELECT 
                     PE.ProdutoID, 
                     PE.NomeProduto, 
                     PE.UnidadeMedida,
-                    PF.FatorConversao
+                    PF.FatorConversao,
+                    ISNULL((
+                        SELECT TOP 1 I.PrecoCustoUnitario 
+                        FROM ItensNotaFiscalEntrada I
+                        JOIN NotasFiscaisEntrada N ON I.NotaID = N.NotaID
+                        WHERE I.ProdutoFornecedorID = PF.ProdutoFornecedorID
+                        ORDER BY N.DataEmissao DESC, N.NotaID DESC
+                    ), 0) as UltimoCusto
                 FROM ProdutosFornecedor PF
                 JOIN ProdutosEstoque PE ON PF.ProdutoID = PE.ProdutoID
                 WHERE PF.EAN = ?
@@ -7783,12 +7789,11 @@ def buscar_produto_por_ean(ean):
     return None
 
 def buscar_produtos_mobile_por_nome(termo):
-    """Busca produtos por nome/descrição para a interface mobile."""
+    """Busca produtos por nome/descrição para a interface mobile. AGORA INCLUI CUSTO."""
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            # Busca tanto no nome do fornecedor quanto no nome do mestre
             sql = """
                 SELECT TOP 20
                     PF.ProdutoFornecedorID,
@@ -7796,7 +7801,14 @@ def buscar_produtos_mobile_por_nome(termo):
                     PF.DescricaoXML,
                     F.NomeFantasia,
                     PF.FatorConversao,
-                    PF.EAN
+                    PF.EAN,
+                    ISNULL((
+                        SELECT TOP 1 I.PrecoCustoUnitario 
+                        FROM ItensNotaFiscalEntrada I
+                        JOIN NotasFiscaisEntrada N ON I.NotaID = N.NotaID
+                        WHERE I.ProdutoFornecedorID = PF.ProdutoFornecedorID
+                        ORDER BY N.DataEmissao DESC, N.NotaID DESC
+                    ), 0) as UltimoCusto
                 FROM ProdutosFornecedor PF
                 LEFT JOIN ProdutosEstoque P ON PF.ProdutoID = P.ProdutoID
                 LEFT JOIN Fornecedores F ON PF.FornecedorID = F.FornecedorID

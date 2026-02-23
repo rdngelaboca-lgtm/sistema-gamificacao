@@ -44,10 +44,6 @@
 
     <div class="card">
         <div id="status" class="status-msg">Pronto para bipar...</div>
-        <div class="input-group">
-            <label>Seu ID de Matrícula (Obrigatório)</label>
-            <input type="number" id="func-id-input" placeholder="Ex: 5" required>
-        </div>
         
         <div class="input-group">
             <label>Quantidade</label>
@@ -124,6 +120,7 @@
                         statusEl.textContent = `✅ ${prod.nome}`;
                         statusEl.className = "status-msg sucesso";
                         eanInput.value = ''; 
+                        qtdInput.value = '1'; // REQ 2: Reseta a quantidade para 1
                         btnBusca.style.display = 'none'; // Esconde botão de busca se achou
                     } else {
                         statusEl.textContent = "❌ Não encontrado!";
@@ -168,75 +165,20 @@
             dados.forEach(item => {
                 const div = document.createElement('div');
                 div.className = 'item-busca';
+                // Formata o custo em Reais
+                const custoFormatado = item.custo.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'});
+                
                 div.innerHTML = `
                     <div style="font-weight:bold">${item.nome_mestre}</div>
                     <small>${item.desc_xml}</small>
-                    <small>Fator Atual: ${item.fator} | Forn: ${item.fornecedor}</small>
+                    <small style="color: #28a745; font-weight: bold;">Custo Base: ${custoFormatado}</small>
+                    <small>Fator: ${item.fator} | Forn: ${item.fornecedor}</small>
                 `;
                 div.onclick = () => prepararConversao(item);
                 divRes.appendChild(div);
             });
         }
 
-        function prepararConversao(item) {
-            idVinculoSelecionadoParaConversao = item.id_vinculo;
-            document.getElementById('msg-conversao').innerHTML = `
-                Você vai vincular o código <b>${ultimoEANNaoEncontrado}</b><br>
-                ao produto <b>${item.nome_mestre}</b>.<br><br>
-                O cadastro selecionado é uma CAIXA com Fator ${item.fator}.
-            `;
-            // Sugere o fator atual como padrão
-            document.getElementById('qtd-conversao').value = item.fator > 1 ? item.fator : "";
-            
-            document.getElementById('painel-busca').style.display = 'none';
-            document.getElementById('modal-qtd-caixa').style.display = 'flex';
-            document.getElementById('qtd-conversao').focus();
-        }
-
-        async function confirmarConversao() {
-            const qtdCaixa = document.getElementById('qtd-conversao').value;
-            if(!qtdCaixa || qtdCaixa <= 0) { alert("Digite uma quantidade válida."); return; }
-
-            const payload = {
-                id_origem: idVinculoSelecionadoParaConversao,
-                novo_ean: ultimoEANNaoEncontrado,
-                qtd_caixa: qtdCaixa
-            };
-
-            const btn = document.querySelector('#modal-qtd-caixa button');
-            btn.textContent = "Processando...";
-
-            try {
-                const res = await fetch('/api/produto/criar-unidade', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(payload)
-                });
-                const data = await res.json();
-
-                if(data.sucesso) {
-                    // Adiciona o item recém criado na contagem automaticamente
-                    const qtdParaContar = parseFloat(qtdInput.value); // Usa a qtd que estava na tela principal
-                    adicionarItemLista(data.produto, qtdParaContar);
-                    
-                    alert(`✅ Sucesso! Código ${ultimoEANNaoEncontrado} cadastrado como unidade.`);
-                    
-                    // Reseta tudo
-                    document.getElementById('modal-qtd-caixa').style.display = 'none';
-                    eanInput.value = '';
-                    btnBusca.style.display = 'none';
-                    statusEl.textContent = "✅ Cadastro criado e contado!";
-                    statusEl.className = "status-msg sucesso";
-                } else {
-                    alert("Erro: " + data.erro);
-                }
-            } catch(e) {
-                alert("Erro de conexão.");
-            }
-            btn.textContent = "✅ Criar e Contar";
-        }
-
-        // --- LÓGICA PADRÃO DA LISTA (Existente) ---
         function adicionarItemLista(prod, qtdDigitada) {
             const qtdReal = qtdDigitada * prod.fator;
             itensContados.push({
@@ -261,20 +203,16 @@
                 listaEl.appendChild(div);
             });
         }
-        function removerItem(i) { itensContados.splice(i, 1); renderizarLista(); }
 
         async function finalizarContagem() {
             if (itensContados.length === 0) return alert("Lista vazia!");
-            
-            const funcId = document.getElementById('func-id-input').value;
-            if (!funcId) return alert("Por favor, informe seu ID de Matrícula antes de salvar!");
-
             if(!confirm("Salvar contagem?")) return;
             
             try {
                 const res = await fetch('/api/contagem/salvar-mobile', {
                     method: 'POST', headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ funcionario_id: parseInt(funcId), itens: itensContados })
+                    // REQ 1: Voltando para o ID 2 padrão do sistema de gestão
+                    body: JSON.stringify({ funcionario_id: 2, itens: itensContados })
                 });
                 if (res.ok) {
                     alert("✅ Contagem Salva!");
