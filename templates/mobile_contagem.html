@@ -93,9 +93,19 @@
         const statusEl = document.getElementById('status');
         const btnBusca = document.getElementById('btn-abrir-busca');
         
-        let itensContados = [];
+        // Tenta recuperar o rascunho salvo no celular; se não existir, inicia vazio
+        let itensContados = JSON.parse(localStorage.getItem('rascunhoContagemEstoque')) || [];
         let ultimoEANNaoEncontrado = "";
         let idVinculoSelecionadoParaConversao = null;
+
+        // Se houver itens no rascunho ao carregar a página, já desenha a lista na tela
+        window.addEventListener('DOMContentLoaded', () => {
+            if (itensContados.length > 0) {
+                renderizarLista();
+                statusEl.textContent = "⚠️ Rascunho anterior recuperado!";
+                statusEl.className = "status-msg erro"; // Laranja/Vermelho para chamar atenção
+            }
+        });
 
         document.body.addEventListener('click', (e) => {
             // Foco inteligente
@@ -261,6 +271,9 @@
                 _un: prod.unidade,
                 _custo: prod.custo // Salva o custo na memória temporária do JS
             });
+
+            // SALVA NO CACHE DO CELULAR
+            localStorage.setItem('rascunhoContagemEstoque', JSON.stringify(itensContados));
             renderizarLista();
         }
 
@@ -285,10 +298,29 @@
             });
         }
 
+        // Função para remover item da lista local
+        function removerItem(index) {
+            // Remove 1 elemento do array na posição indicada pelo index
+            itensContados.splice(index, 1);
+
+            // ATUALIZA O CACHE DO CELULAR APÓS REMOVER
+            localStorage.setItem('rascunhoContagemEstoque', JSON.stringify(itensContados));
+
+            // Atualiza a interface visual
+            renderizarLista();
+
+            // Feedback visual rápido
+            statusEl.textContent = "🗑️ Item removido da lista.";
+            statusEl.className = "status-msg erro"; 
+
+            // Retorna o foco para o leitor
+            eanInput.focus();
+        }
+
         async function finalizarContagem() {
             if (itensContados.length === 0) return alert("Lista vazia!");
             if(!confirm("Salvar contagem?")) return;
-            
+
             try {
                 const res = await fetch('/api/contagem/salvar-mobile', {
                     method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -297,8 +329,13 @@
                 });
                 if (res.ok) {
                     alert("✅ Contagem Salva!");
-                    itensContados = []; renderizarLista();
-                } else { alert("Erro ao salvar."); }
+                    // LIMPA A MEMÓRIA E O CACHE DO NAVEGADOR
+                    itensContados = []; 
+                    localStorage.removeItem('rascunhoContagemEstoque');
+                    renderizarLista();
+                    statusEl.textContent = "Pronto para bipar...";
+                    statusEl.className = "status-msg";
+                } else { alert("Erro ao salvar no banco."); }
             } catch(e) { alert("Erro de conexão."); }
         }
     </script>
