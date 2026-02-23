@@ -44,6 +44,10 @@
 
     <div class="card">
         <div id="status" class="status-msg">Pronto para bipar...</div>
+        <div class="input-group">
+            <label>Seu ID de Matrícula (Obrigatório)</label>
+            <input type="number" id="func-id-input" placeholder="Ex: 5" required>
+        </div>
         
         <div class="input-group">
             <label>Quantidade</label>
@@ -261,12 +265,16 @@
 
         async function finalizarContagem() {
             if (itensContados.length === 0) return alert("Lista vazia!");
+            
+            const funcId = document.getElementById('func-id-input').value;
+            if (!funcId) return alert("Por favor, informe seu ID de Matrícula antes de salvar!");
+
             if(!confirm("Salvar contagem?")) return;
             
             try {
                 const res = await fetch('/api/contagem/salvar-mobile', {
                     method: 'POST', headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ funcionario_id: 2, itens: itensContados })
+                    body: JSON.stringify({ funcionario_id: parseInt(funcId), itens: itensContados })
                 });
                 if (res.ok) {
                     alert("✅ Contagem Salva!");

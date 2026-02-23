@@ -637,8 +637,6 @@ class AppGestaoEstoque:
                         }
 
                         if not any(p['DescricaoXML'] == desc_xml and p['FornecedorID'] == fornecedor_id for p in self.itens_xml_nao_vinculados):
-                            # [CORREÇÃO] Guarda o índice atual como ID único (iid) da linha na tabela
-                            idx_lista = len(self.itens_xml_nao_vinculados)
                             self.itens_xml_nao_vinculados.append(item_pendente)
 
                             # --- PREENCHIMENTO ATUALIZADO ---
@@ -646,7 +644,8 @@ class AppGestaoEstoque:
                             custo_unit = float(item['PrecoCustoUnitario'])
                             custo_total = qtd_xml * custo_unit
 
-                            self.tree_vincular.insert("", "end", iid=str(idx_lista), values=(
+                            # CORREÇÃO: Remoção do parâmetro 'iid' para evitar TclError (colisão de IDs) ao importar XMLs sequenciais
+                            self.tree_vincular.insert("", "end", values=(
                                 nome_fornecedor, 
                                 desc_xml, 
                                 item['cEAN'], 

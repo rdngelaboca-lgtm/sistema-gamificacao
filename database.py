@@ -6275,18 +6275,17 @@ def gerar_sugestao_por_periodo(contagem_id_inicio, contagem_id_fim):
                  else:
                     raise Exception("A Data da Contagem Final deve ser posterior à Inicial.")
         # 3. Busca os ITENS da Contagem FINAL (Estoque Atual Real)
-        # CORREÇÃO: Uso de LEFT JOIN para trazer itens mesmo se o Produto Mestre tiver sido deletado.
-        # ISNULL garante que o sistema não quebre ao tentar ler o nome ou unidade.
+        # CORREÇÃO: Partir de ProdutosEstoque com LEFT JOIN para incluir itens com estoque ZERADO (não bipados)
         sql_itens_fim = """
             SELECT 
-                IC.ProdutoID, 
-                ISNULL(P.NomeProduto, 'PRODUTO DELETADO (ID: ' + CAST(IC.ProdutoID AS VARCHAR) + ')') as NomeProduto, 
-                ISNULL(P.UnidadeMedida, 'UN') as UnidadeMedida, 
-                ISNULL(P.EstoqueMinimo, 0) as EstoqueMinimo, 
-                IC.QuantidadeContada
-            FROM ItensContagemEstoque IC
-            LEFT JOIN ProdutosEstoque P ON IC.ProdutoID = P.ProdutoID
-            WHERE IC.ContagemID = ?
+                PE.ProdutoID, 
+                PE.NomeProduto, 
+                ISNULL(PE.UnidadeMedida, 'UN') as UnidadeMedida, 
+                ISNULL(PE.EstoqueMinimo, 0) as EstoqueMinimo, 
+                ISNULL(IC.QuantidadeContada, 0) as QuantidadeContada
+            FROM ProdutosEstoque PE
+            LEFT JOIN ItensContagemEstoque IC 
+                ON PE.ProdutoID = IC.ProdutoID AND IC.ContagemID = ?
         """
         cursor.execute(sql_itens_fim, contagem_id_fim)
         itens_contagem_final = cursor.fetchall()
@@ -6336,8 +6335,14 @@ def gerar_sugestao_por_periodo(contagem_id_inicio, contagem_id_fim):
                 qtd_inicial_raw = resultado_inicio.QuantidadeContada if resultado_inicio else 0
                 estoque_inicial = Decimal(str(qtd_inicial_raw))
 
-            # Validação de Datas
-            dias_periodo = (data_final - data_ini_calc).days
+            # Validação de Datas (CORREÇÃO: Normalização segura para evitar TypeError entre date e datetime)
+            def extrair_data_segura(dt_obj):
+                return dt_obj.date() if hasattr(dt_obj, 'date') else dt_obj
+            
+            dt_final_norm = extrair_data_segura(data_final)
+            dt_ini_norm = extrair_data_segura(data_ini_calc)
+
+            dias_periodo = (dt_final_norm - dt_ini_norm).days
             if dias_periodo <= 0: dias_periodo = 1
 
             # 5. Soma compras no período (Função Auxiliar já existente)
