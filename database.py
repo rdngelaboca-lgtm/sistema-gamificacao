@@ -6005,8 +6005,8 @@ def salvar_nota_fiscal_completa(dados_nf_cabecalho, lista_itens_nf):
         # 1. Inserir o Cabeçalho da NF
         sql_nf = """
             INSERT INTO NotasFiscaisEntrada (NumeroNF, FornecedorID, DataEmissao, ValorTotalNF)
-            VALUES (?, ?, ?, ?);
-            SELECT SCOPE_IDENTITY();
+            OUTPUT INSERTED.NotaID
+            VALUES (?, ?, ?, ?)
         """
         cursor.execute(sql_nf, 
                        dados_nf_cabecalho['NumeroNF'], 
@@ -6014,7 +6014,6 @@ def salvar_nota_fiscal_completa(dados_nf_cabecalho, lista_itens_nf):
                        dados_nf_cabecalho['DataEmissao'], 
                        dados_nf_cabecalho['ValorTotalNF'])
         
-        cursor.nextset()
         nova_nota_id = cursor.fetchone()[0]
         
         if not nova_nota_id:
@@ -6105,12 +6104,11 @@ def salvar_contagem_estoque(data_contagem, funcionario_id, lista_itens_contados)
         # 1. Inserir o Cabeçalho da Contagem
         sql_contagem = """
             INSERT INTO ContagensEstoque (DataContagem, FuncionarioID)
-            VALUES (?, ?);
-            SELECT SCOPE_IDENTITY();
+            OUTPUT INSERTED.ContagemID
+            VALUES (?, ?)
         """
         cursor.execute(sql_contagem, data_contagem, funcionario_id)
         
-        cursor.nextset()
         nova_contagem_id = cursor.fetchone()[0]
         
         if not nova_contagem_id:

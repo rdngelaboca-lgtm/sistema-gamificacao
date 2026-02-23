@@ -640,8 +640,9 @@ class AppGestaoEstoque:
                             self.itens_xml_nao_vinculados.append(item_pendente)
 
                             # --- PREENCHIMENTO ATUALIZADO ---
-                            qtd_xml = float(item['Quantidade'])
-                            custo_unit = float(item['PrecoCustoUnitario'])
+                            # Usa Decimal c/ string para garantir precisão financeira e de estoque
+                            qtd_xml = Decimal(str(item['Quantidade']))
+                            custo_unit = Decimal(str(item['PrecoCustoUnitario']))
                             custo_total = qtd_xml * custo_unit
 
                             # CORREÇÃO: Remoção do parâmetro 'iid' para evitar TclError (colisão de IDs) ao importar XMLs sequenciais
