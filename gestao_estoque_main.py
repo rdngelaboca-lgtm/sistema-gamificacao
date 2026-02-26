@@ -377,7 +377,7 @@ class AppGestaoEstoque:
             sel = tree.focus()
             if not sel: return
             vals = tree.item(sel, 'values')
-            if not vals[0]: return # Ignora se clicar na linha vazia
+            if not vals[0]: return 
 
             vinculo_id = vals[0]
             fornecedor = vals[1]
@@ -387,7 +387,8 @@ class AppGestaoEstoque:
 
             edit_win = Toplevel(popup)
             edit_win.title("Edição Rápida de Vínculo")
-            edit_win.geometry("400x250")
+            # Aumentamos um pouco a altura para caber o novo campo
+            edit_win.geometry("400x320") 
             edit_win.transient(popup)
 
             f_edit = ttk.Frame(edit_win, padding="15")
@@ -395,6 +396,16 @@ class AppGestaoEstoque:
 
             ttk.Label(f_edit, text=f"Fornecedor: {fornecedor}", font=("Arial", 9, "bold")).pack(anchor="w", pady=2)
             ttk.Label(f_edit, text=f"XML: {desc_xml}", font=("Arial", 8, "italic")).pack(anchor="w", pady=(0, 10))
+
+            # --- NOVO CAMPO: Troca de Mestre ---
+            ttk.Label(f_edit, text="Vinculado ao Produto Mestre:").pack(anchor="w")
+            combo_mestre = ttk.Combobox(f_edit, values=self.lista_mestre_produtos_nomes, state="readonly")
+            combo_mestre.pack(fill="x", pady=(0, 10))
+
+            # Busca o nome de exibição do mestre atual para deixar pré-selecionado
+            nome_mestre_atual_display = next((k for k, v in self.mapa_produtos_mestre.items() if v == produto_id), "")
+            combo_mestre.set(nome_mestre_atual_display)
+            # -----------------------------------
 
             ttk.Label(f_edit, text="EAN (Código de Barras):").pack(anchor="w")
             ent_ean = ttk.Entry(f_edit)
@@ -412,7 +423,15 @@ class AppGestaoEstoque:
                     if novo_fator <= 0: raise ValueError
                     novo_ean = ent_ean.get().strip()
 
-                    if database.atualizar_vinculo_simples(vinculo_id, novo_fator, novo_ean):
+                    # Pega o ID do novo mestre selecionado no Combobox
+                    novo_mestre_display = combo_mestre.get()
+                    novo_mestre_id = self.mapa_produtos_mestre.get(novo_mestre_display)
+
+                    if not novo_mestre_id:
+                        messagebox.showerror("Erro", "Selecione um Produto Mestre válido.", parent=edit_win)
+                        return
+
+                    if database.atualizar_vinculo_simples(vinculo_id, novo_fator, novo_ean, novo_mestre_id):
                         messagebox.showinfo("Sucesso", "Vínculo atualizado com sucesso!", parent=edit_win)
                         edit_win.destroy()
                         carregar_lista_vinculos() # Atualiza a tabela imediatamente

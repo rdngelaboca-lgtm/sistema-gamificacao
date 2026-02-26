@@ -7005,14 +7005,14 @@ def buscar_vinculos_por_produto_mestre(produto_id):
     return []
 
 
-def atualizar_vinculo_simples(vinculo_id, novo_fator, novo_ean):
-    """Atualiza rapidamente o Fator de Conversão e o EAN de um vínculo."""
+def atualizar_vinculo_simples(vinculo_id, novo_fator, novo_ean, novo_mestre_id):
+    """Atualiza o Fator, EAN e permite trocar o Produto Mestre do vínculo."""
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            sql = "UPDATE ProdutosFornecedor SET FatorConversao = ?, EAN = ? WHERE ProdutoFornecedorID = ?"
-            cursor.execute(sql, novo_fator, novo_ean, vinculo_id)
+            sql = "UPDATE ProdutosFornecedor SET FatorConversao = ?, EAN = ?, ProdutoID = ? WHERE ProdutoFornecedorID = ?"
+            cursor.execute(sql, novo_fator, novo_ean, novo_mestre_id, vinculo_id)
             conn.commit()
             return True
         except Exception as e:
