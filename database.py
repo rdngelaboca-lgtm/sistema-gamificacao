@@ -6981,6 +6981,28 @@ def buscar_ids_produtos_por_fornecedor(fornecedor_id):
             conn.close()
     return set()
 
+def buscar_vinculos_por_produto_mestre(produto_id):
+    """Busca todos os vínculos DE/PARA associados a um Produto Mestre específico."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT F.NomeFantasia, PF.DescricaoXML, PF.FatorConversao, PF.EAN
+                FROM ProdutosFornecedor PF
+                JOIN Fornecedores F ON PF.FornecedorID = F.FornecedorID
+                WHERE PF.ProdutoID = ?
+                ORDER BY F.NomeFantasia
+            """
+            cursor.execute(sql, produto_id)
+            return cursor.fetchall()
+        except Exception as e:
+            logger.error(f"Erro ao buscar vínculos por mestre (ID: {produto_id}): {e}", exc_info=True)
+            return []
+        finally:
+            conn.close()
+    return []
+
 def listar_todos_vinculos_detalhado():
     """
     Lista todos os vínculos DE/PARA cadastrados para edição.

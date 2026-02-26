@@ -131,37 +131,65 @@ class AppGestaoEstoque:
     def criar_aba_catalogo_produtos(self):
         main_frame = ttk.Frame(self.frame_produtos)
         main_frame.pack(fill=tk.BOTH, expand=True)
-        form_frame = ttk.LabelFrame(main_frame, text="Cadastrar/Editar Produto Mestre", padding="10")
-        form_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
-        ttk.Label(form_frame, text="Nome do Produto:").grid(row=0, column=0, sticky="w", pady=2)
-        self.entry_prod_nome = ttk.Entry(form_frame, width=40)
+
+        # --- Lado Esquerdo: Formulário ---
+        self.form_frame_mestre = ttk.LabelFrame(main_frame, text="Modo: NOVO CADASTRO", padding="10")
+        self.form_frame_mestre.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
+
+        ttk.Label(self.form_frame_mestre, text="Nome do Produto:").grid(row=0, column=0, sticky="w", pady=2)
+        self.entry_prod_nome = ttk.Entry(self.form_frame_mestre, width=40)
         self.entry_prod_nome.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+
         # Lista Global de Categorias
         self.lista_categorias = ["Geral", "Sorvetes", "Brinquedos", "Embalagens", "Material de Limpeza", "Material de Escritório", "Mercado", "Distribuidoras", "Bebidas", "Insumos Produção", "Outros"]
 
-        ttk.Label(form_frame, text="Unidade (Ex: UN, KG):").grid(row=2, column=0, sticky="w", pady=2)
-        self.entry_prod_unidade = ttk.Entry(form_frame, width=10)
+        ttk.Label(self.form_frame_mestre, text="Unidade (Ex: UN, KG):").grid(row=2, column=0, sticky="w", pady=2)
+        self.entry_prod_unidade = ttk.Entry(self.form_frame_mestre, width=10)
         self.entry_prod_unidade.grid(row=3, column=0, sticky="w", pady=(0, 10))
 
-        ttk.Label(form_frame, text="Categoria:").grid(row=2, column=1, sticky="w", pady=2)
-        self.combo_prod_categoria = ttk.Combobox(form_frame, values=self.lista_categorias, width=15)
+        ttk.Label(self.form_frame_mestre, text="Categoria:").grid(row=2, column=1, sticky="w", pady=2)
+        self.combo_prod_categoria = ttk.Combobox(self.form_frame_mestre, values=self.lista_categorias, width=15, state="readonly")
         self.combo_prod_categoria.grid(row=3, column=1, sticky="w", pady=(0, 10))
         self.combo_prod_categoria.set("Geral")
 
-        ttk.Label(form_frame, text="Estoque Mínimo:").grid(row=4, column=0, columnspan=2, sticky="w", pady=2)
-        self.entry_prod_estoque_min = ttk.Entry(form_frame, width=15)
+        ttk.Label(self.form_frame_mestre, text="Estoque Mínimo:").grid(row=4, column=0, columnspan=2, sticky="w", pady=2)
+        self.entry_prod_estoque_min = ttk.Entry(self.form_frame_mestre, width=15)
         self.entry_prod_estoque_min.grid(row=5, column=0, columnspan=2, sticky="w", pady=(0, 10))
         self.entry_prod_estoque_min.insert(0, "0.0")
-        btn_frame = ttk.Frame(form_frame)
-        btn_frame.grid(row=4, column=0, columnspan=2, pady=10)
+
+        btn_frame = ttk.Frame(self.form_frame_mestre)
+        btn_frame.grid(row=6, column=0, columnspan=2, pady=10)
         self.btn_prod_salvar = ttk.Button(btn_frame, text="Salvar Novo", command=self.salvar_produto)
         self.btn_prod_salvar.pack(side=tk.LEFT, padx=5)
         self.btn_prod_limpar = ttk.Button(btn_frame, text="Limpar", command=self.limpar_formulario_produto)
         self.btn_prod_limpar.pack(side=tk.LEFT, padx=5)
-        lista_frame = ttk.LabelFrame(main_frame, text="Catálogo Mestre de Produtos", padding="10")
+
+        # Botão Excluir movido para o formulário (inicialmente desabilitado)
+        self.btn_excluir_mestre = ttk.Button(self.form_frame_mestre, text="🗑️ Excluir Produto", command=self.excluir_produto_selecionado, state=tk.DISABLED)
+        self.btn_excluir_mestre.grid(row=7, column=0, columnspan=2, pady=15, sticky="ew")
+
+        # --- Lado Direito: Tabela e Filtros ---
+        lista_frame = ttk.LabelFrame(main_frame, text="Catálogo Mestre de Produtos (Duplo-clique no item para ver vínculos)", padding="10")
         lista_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
-        lista_frame.rowconfigure(0, weight=1)
+        lista_frame.rowconfigure(1, weight=1)
         lista_frame.columnconfigure(0, weight=1)
+
+        # Barra de Filtros Inteligentes
+        filtro_frame = ttk.Frame(lista_frame)
+        filtro_frame.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+
+        ttk.Label(filtro_frame, text="Buscar:").pack(side=tk.LEFT)
+        self.entry_filtro_mestre = ttk.Entry(filtro_frame, width=30)
+        self.entry_filtro_mestre.pack(side=tk.LEFT, padx=5)
+        self.entry_filtro_mestre.bind("<KeyRelease>", self.atualizar_lista_produtos)
+
+        ttk.Label(filtro_frame, text="Categoria:").pack(side=tk.LEFT, padx=(15,0))
+        self.combo_filtro_cat_mestre = ttk.Combobox(filtro_frame, values=["Todas"] + self.lista_categorias, state="readonly", width=15)
+        self.combo_filtro_cat_mestre.pack(side=tk.LEFT, padx=5)
+        self.combo_filtro_cat_mestre.set("Todas")
+        self.combo_filtro_cat_mestre.bind("<<ComboboxSelected>>", self.atualizar_lista_produtos)
+
+        # Tabela
         cols = ('ID', 'Nome', 'Unidade', 'Categoria', 'Estoque Mínimo')
         self.tree_produtos = ttk.Treeview(lista_frame, columns=cols, show='headings', selectmode='browse')
         self.tree_produtos.heading('ID', text='ID'); self.tree_produtos.column('ID', width=40, anchor='center')
@@ -169,15 +197,23 @@ class AppGestaoEstoque:
         self.tree_produtos.heading('Unidade', text='UN'); self.tree_produtos.column('Unidade', width=40, anchor='center')
         self.tree_produtos.heading('Categoria', text='Categoria'); self.tree_produtos.column('Categoria', width=120)
         self.tree_produtos.heading('Estoque Mínimo', text='Est. Mínimo'); self.tree_produtos.column('Estoque Mínimo', width=80, anchor='e')
+
+        # Tags para Listras Zebra
+        self.tree_produtos.tag_configure('impar', background='#f9f9f9')
+        self.tree_produtos.tag_configure('par', background='#ffffff')
+
         scrollbar = ttk.Scrollbar(lista_frame, orient="vertical", command=self.tree_produtos.yview)
         self.tree_produtos.configure(yscrollcommand=scrollbar.set)
-        self.tree_produtos.grid(row=0, column=0, sticky="nsew")
-        scrollbar.grid(row=0, column=1, sticky="ns")
+        self.tree_produtos.grid(row=1, column=0, sticky="nsew")
+        scrollbar.grid(row=1, column=1, sticky="ns")
+
+        # Eventos (Binds)
         self.tree_produtos.bind('<<TreeviewSelect>>', self.selecionar_produto_para_edicao)
-        lista_btn_frame = ttk.Frame(lista_frame)
-        lista_btn_frame.grid(row=1, column=0, columnspan=2, pady=(10, 0))
-        btn_excluir = ttk.Button(lista_btn_frame, text="Excluir Selecionado", command=self.excluir_produto_selecionado)
-        btn_excluir.pack(side=tk.LEFT)
+        self.tree_produtos.bind('<Double-1>', self.abrir_popup_vinculos_produto)
+
+        # Rodapé com Indicador
+        self.lbl_total_mestre = ttk.Label(lista_frame, text="Carregando...", font=("Arial", 9, "italic"), foreground="gray")
+        self.lbl_total_mestre.grid(row=2, column=0, sticky="w", pady=(5,0))
 
     def limpar_formulario_produto(self):
         self.entry_prod_nome.delete(0, tk.END)
@@ -185,7 +221,12 @@ class AppGestaoEstoque:
         self.combo_prod_categoria.set("Geral")
         self.entry_prod_estoque_min.delete(0, tk.END); self.entry_prod_estoque_min.insert(0, "0.0")
         self.produto_selecionado_id = None
+
+        # Restaura visuais para Novo Cadastro
+        self.form_frame_mestre.config(text="Modo: NOVO CADASTRO")
         self.btn_prod_salvar.config(text="Salvar Novo")
+        self.btn_excluir_mestre.config(state=tk.DISABLED) # Oculta botão excluir
+
         self.entry_prod_nome.focus()
         if self.tree_produtos.selection():
             self.tree_produtos.selection_remove(self.tree_produtos.selection()[0])
@@ -218,16 +259,36 @@ class AppGestaoEstoque:
             logger.error(f"Erro ao salvar produto: {e}", exc_info=True)
             messagebox.showerror("Erro de Banco", f"Não foi possível salvar o produto.\nErro: {e}", parent=self.root)
 
-    def atualizar_lista_produtos(self):
+    def atualizar_lista_produtos(self, event=None):
         for i in self.tree_produtos.get_children():
             self.tree_produtos.delete(i)
         try:
             produtos = database.listar_produtos_estoque()
             self.mapa_produtos_mestre_contagem.clear()
+
+            # Captura valores dos filtros
+            termo = self.entry_filtro_mestre.get().lower() if hasattr(self, 'entry_filtro_mestre') else ""
+            cat_filtro = self.combo_filtro_cat_mestre.get() if hasattr(self, 'combo_filtro_cat_mestre') else "Todas"
+
+            count = 0
             for p in produtos:
                 cat = getattr(p, 'Categoria', 'Geral')
-                self.tree_produtos.insert("", "end", values=(p.ProdutoID, p.NomeProduto, p.UnidadeMedida, cat, f"{p.EstoqueMinimo:.3f}"))
+
+                # Aplica filtros em memória
+                if cat_filtro != "Todas" and cat != cat_filtro: continue
+                if termo and termo not in p.NomeProduto.lower(): continue
+
+                # Zebra striping (Cores alternadas)
+                tag = 'par' if count % 2 == 0 else 'impar'
+
+                self.tree_produtos.insert("", "end", values=(p.ProdutoID, p.NomeProduto, p.UnidadeMedida, cat, f"{p.EstoqueMinimo:.3f}"), tags=(tag,))
                 self.mapa_produtos_mestre_contagem[p.NomeProduto] = {'id': p.ProdutoID, 'un': p.UnidadeMedida}
+                count += 1
+
+            # Atualiza o rodapé numérico
+            if hasattr(self, 'lbl_total_mestre'):
+                self.lbl_total_mestre.config(text=f"Total exibido: {count} produto(s)")
+
         except Exception as e:
             logger.error(f"Erro ao atualizar lista de produtos: {e}", exc_info=True)
 
@@ -237,12 +298,17 @@ class AppGestaoEstoque:
         dados = self.tree_produtos.item(selecionado, 'values')
         produto_id, nome, unidade, categoria, estoque_min = dados
         self.limpar_formulario_produto()
+
         self.produto_selecionado_id = int(produto_id)
         self.entry_prod_nome.insert(0, nome)
         self.entry_prod_unidade.insert(0, unidade)
         self.combo_prod_categoria.set(categoria)
         self.entry_prod_estoque_min.delete(0, tk.END); self.entry_prod_estoque_min.insert(0, estoque_min)
+
+        # Visuais do Modo de Edição
+        self.form_frame_mestre.config(text="🚨 MODO: EDIÇÃO")
         self.btn_prod_salvar.config(text="Atualizar Produto")
+        self.btn_excluir_mestre.config(state=tk.NORMAL) # Habilita o botão de excluir apenas na edição
 
     def excluir_produto_selecionado(self):
         if not self.produto_selecionado_id:
@@ -260,6 +326,51 @@ class AppGestaoEstoque:
         except Exception as e:
             logger.error(f"Erro ao excluir produto: {e}", exc_info=True)
             messagebox.showerror("Erro de Banco", "Não foi possível excluir o produto.\nVerifique se ele já está vinculado a notas fiscais ou contagens.", parent=self.root)
+
+    def abrir_popup_vinculos_produto(self, event):
+        """Disparado pelo duplo clique na tabela mestre. Mostra de quem compramos este item."""
+        selecionado = self.tree_produtos.focus()
+        if not selecionado: return
+
+        dados = self.tree_produtos.item(selecionado, 'values')
+        produto_id = int(dados[0])
+        nome_produto = dados[1]
+
+        popup = Toplevel(self.root)
+        popup.title(f"Vínculos do Produto Mestre: {nome_produto}")
+        popup.geometry("750x300")
+        popup.transient(self.root)
+
+        frame = ttk.Frame(popup, padding="10")
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(frame, text=f"Fornecedores que entregam '{nome_produto}':", font=("Arial", 10, "bold")).pack(anchor="w", pady=(0,10))
+
+        # Tabela Pop-up
+        cols = ('Fornecedor', 'Descrição no XML', 'EAN', 'Fator (Qtd/Cx)')
+        tree = ttk.Treeview(frame, columns=cols, show='headings', selectmode='none')
+        tree.heading('Fornecedor', text='Fornecedor'); tree.column('Fornecedor', width=150)
+        tree.heading('Descrição no XML', text='Descrição na Nota Fiscal (XML)'); tree.column('Descrição no XML', width=250)
+        tree.heading('EAN', text='EAN'); tree.column('EAN', width=100, anchor='center')
+        tree.heading('Fator (Qtd/Cx)', text='Qtd por Caixa'); tree.column('Fator (Qtd/Cx)', width=100, anchor='center')
+
+        sb = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=sb.set)
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Busca no banco
+        vinculos = database.buscar_vinculos_por_produto_mestre(produto_id)
+        if not vinculos:
+            tree.insert("", "end", values=("Nenhum vínculo encontrado para este produto.", "", "", ""))
+        else:
+            for v in vinculos:
+                fator_fmt = f"{float(v[2]):.2f}" if v[2] else "1.00"
+                ean_fmt = v[3] if v[3] else "Sem EAN cadastrado"
+                tree.insert("", "end", values=(v[0], v[1], ean_fmt, fator_fmt))
+
+        ttk.Label(frame, text="* Dica: Para editar ou excluir vínculos, utilize a Aba 3 (Gerenciar Vínculos).", font=("Arial", 8, "italic"), foreground="gray").pack(side=tk.BOTTOM, anchor="w", pady=(10,0))
+
 
     # ===================================================================
     # == ABA 2: FORNECEDORES (Sem alterações) ===========================
