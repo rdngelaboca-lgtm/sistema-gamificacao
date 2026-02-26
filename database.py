@@ -6987,8 +6987,9 @@ def buscar_vinculos_por_produto_mestre(produto_id):
     if conn:
         try:
             cursor = conn.cursor()
+            # ADICIONADO: PF.ProdutoFornecedorID no início do SELECT
             sql = """
-                SELECT F.NomeFantasia, PF.DescricaoXML, PF.FatorConversao, PF.EAN
+                SELECT PF.ProdutoFornecedorID, F.NomeFantasia, PF.DescricaoXML, PF.FatorConversao, PF.EAN
                 FROM ProdutosFornecedor PF
                 JOIN Fornecedores F ON PF.FornecedorID = F.FornecedorID
                 WHERE PF.ProdutoID = ?
@@ -7002,6 +7003,25 @@ def buscar_vinculos_por_produto_mestre(produto_id):
         finally:
             conn.close()
     return []
+
+
+def atualizar_vinculo_simples(vinculo_id, novo_fator, novo_ean):
+    """Atualiza rapidamente o Fator de Conversão e o EAN de um vínculo."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = "UPDATE ProdutosFornecedor SET FatorConversao = ?, EAN = ? WHERE ProdutoFornecedorID = ?"
+            cursor.execute(sql, novo_fator, novo_ean, vinculo_id)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Erro ao atualizar vinculo simples (ID {vinculo_id}): {e}", exc_info=True)
+            return False
+        finally:
+            conn.close()
+    return False
+
 
 def listar_todos_vinculos_detalhado():
     """

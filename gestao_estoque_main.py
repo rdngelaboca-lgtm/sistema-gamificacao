@@ -328,7 +328,7 @@ class AppGestaoEstoque:
             messagebox.showerror("Erro de Banco", "Não foi possível excluir o produto.\nVerifique se ele já está vinculado a notas fiscais ou contagens.", parent=self.root)
 
     def abrir_popup_vinculos_produto(self, event):
-        """Disparado pelo duplo clique na tabela mestre. Mostra de quem compramos este item."""
+        """Disparado pelo duplo clique na tabela mestre. Mostra vínculos com opção de edição rápida."""
         selecionado = self.tree_produtos.focus()
         if not selecionado: return
 
@@ -338,7 +338,7 @@ class AppGestaoEstoque:
 
         popup = Toplevel(self.root)
         popup.title(f"Vínculos do Produto Mestre: {nome_produto}")
-        popup.geometry("750x300")
+        popup.geometry("800x350")
         popup.transient(self.root)
 
         frame = ttk.Frame(popup, padding="10")
@@ -346,9 +346,11 @@ class AppGestaoEstoque:
 
         ttk.Label(frame, text=f"Fornecedores que entregam '{nome_produto}':", font=("Arial", 10, "bold")).pack(anchor="w", pady=(0,10))
 
-        # Tabela Pop-up
-        cols = ('Fornecedor', 'Descrição no XML', 'EAN', 'Fator (Qtd/Cx)')
-        tree = ttk.Treeview(frame, columns=cols, show='headings', selectmode='none')
+        # Tabela Pop-up (Adicionado ID oculto e mudado selectmode para 'browse')
+        cols = ('ID', 'Fornecedor', 'Descrição no XML', 'EAN', 'Fator (Qtd/Cx)')
+        tree = ttk.Treeview(frame, columns=cols, show='headings', selectmode='browse')
+
+        tree.heading('ID', text='ID'); tree.column('ID', width=0, stretch=tk.NO) # Esconde a coluna ID
         tree.heading('Fornecedor', text='Fornecedor'); tree.column('Fornecedor', width=150)
         tree.heading('Descrição no XML', text='Descrição na Nota Fiscal (XML)'); tree.column('Descrição no XML', width=250)
         tree.heading('EAN', text='EAN'); tree.column('EAN', width=100, anchor='center')
@@ -359,17 +361,75 @@ class AppGestaoEstoque:
         tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         sb.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # Busca no banco
-        vinculos = database.buscar_vinculos_por_produto_mestre(produto_id)
-        if not vinculos:
-            tree.insert("", "end", values=("Nenhum vínculo encontrado para este produto.", "", "", ""))
-        else:
-            for v in vinculos:
-                fator_fmt = f"{float(v[2]):.2f}" if v[2] else "1.00"
-                ean_fmt = v[3] if v[3] else "Sem EAN cadastrado"
-                tree.insert("", "end", values=(v[0], v[1], ean_fmt, fator_fmt))
+        def carregar_lista_vinculos():
+            for i in tree.get_children(): tree.delete(i)
+            vinculos = database.buscar_vinculos_por_produto_mestre(produto_id)
+            if not vinculos:
+                tree.insert("", "end", values=("", "Nenhum vínculo encontrado.", "", "", ""))
+            else:
+                for v in vinculos:
+                    # v = (ID, Fornecedor, Descricao, Fator, EAN)
+                    fator_fmt = f"{float(v[3]):.2f}" if v[3] else "1.00"
+                    ean_fmt = v[4] if v[4] else "Sem EAN cadastrado"
+                    tree.insert("", "end", values=(v[0], v[1], v[2], ean_fmt, fator_fmt))
 
-        ttk.Label(frame, text="* Dica: Para editar ou excluir vínculos, utilize a Aba 3 (Gerenciar Vínculos).", font=("Arial", 8, "italic"), foreground="gray").pack(side=tk.BOTTOM, anchor="w", pady=(10,0))
+        def editar_vinculo_clicado(event_tree):
+            sel = tree.focus()
+            if not sel: return
+            vals = tree.item(sel, 'values')
+            if not vals[0]: return # Ignora se clicar na linha vazia
+
+            vinculo_id = vals[0]
+            fornecedor = vals[1]
+            desc_xml = vals[2]
+            ean_atual = vals[3] if vals[3] != "Sem EAN cadastrado" else ""
+            fator_atual = vals[4]
+
+            edit_win = Toplevel(popup)
+            edit_win.title("Edição Rápida de Vínculo")
+            edit_win.geometry("400x250")
+            edit_win.transient(popup)
+
+            f_edit = ttk.Frame(edit_win, padding="15")
+            f_edit.pack(fill=tk.BOTH, expand=True)
+
+            ttk.Label(f_edit, text=f"Fornecedor: {fornecedor}", font=("Arial", 9, "bold")).pack(anchor="w", pady=2)
+            ttk.Label(f_edit, text=f"XML: {desc_xml}", font=("Arial", 8, "italic")).pack(anchor="w", pady=(0, 10))
+
+            ttk.Label(f_edit, text="EAN (Código de Barras):").pack(anchor="w")
+            ent_ean = ttk.Entry(f_edit)
+            ent_ean.pack(fill="x", pady=2)
+            ent_ean.insert(0, ean_atual)
+
+            ttk.Label(f_edit, text="Fator de Conversão (Qtd p/ Caixa):").pack(anchor="w", pady=(10,0))
+            ent_fator = ttk.Entry(f_edit)
+            ent_fator.pack(fill="x", pady=2)
+            ent_fator.insert(0, fator_atual)
+
+            def salvar():
+                try:
+                    novo_fator = Decimal(ent_fator.get().replace(',', '.'))
+                    if novo_fator <= 0: raise ValueError
+                    novo_ean = ent_ean.get().strip()
+
+                    if database.atualizar_vinculo_simples(vinculo_id, novo_fator, novo_ean):
+                        messagebox.showinfo("Sucesso", "Vínculo atualizado com sucesso!", parent=edit_win)
+                        edit_win.destroy()
+                        carregar_lista_vinculos() # Atualiza a tabela imediatamente
+                    else:
+                        messagebox.showerror("Erro", "Falha ao salvar no banco de dados.", parent=edit_win)
+                except InvalidOperation:
+                    messagebox.showerror("Erro", "O Fator deve ser um número válido maior que zero.", parent=edit_win)
+
+            ttk.Button(f_edit, text="💾 Salvar Alterações", command=salvar).pack(pady=20, fill="x", ipady=5)
+
+        # Bind do duplo-clique na sub-janela
+        tree.bind("<Double-1>", editar_vinculo_clicado)
+
+        # Carga Inicial
+        carregar_lista_vinculos()
+
+        ttk.Label(frame, text="* DICA: Dê um duplo-clique no vínculo acima para ajustar a Qtd/Caixa e o EAN rapidamente.", font=("Arial", 8, "italic"), foreground="green").pack(side=tk.BOTTOM, anchor="w", pady=(10,0))
 
 
     # ===================================================================
