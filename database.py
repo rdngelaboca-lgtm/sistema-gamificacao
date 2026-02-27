@@ -8167,19 +8167,19 @@ def registrar_debito_pontos(funcionario_id, pontos_a_debitar, descricao):
 
     try:
         cursor = conn.cursor()
-        # 1. Busca o saldo e valida se tem o suficiente
-        cursor.execute("SELECT SaldoAtual FROM Funcionarios WHERE FuncionarioID = ?", funcionario_id)
+        # 1. Busca o saldo e valida se tem o suficiente (CORREÇÃO: Usar SaldoPontos)
+        cursor.execute("SELECT SaldoPontos FROM Funcionarios WHERE FuncionarioID = ?", funcionario_id)
         row = cursor.fetchone()
 
-        saldo_anterior = row.SaldoAtual if (row and row.SaldoAtual is not None) else 0
+        saldo_anterior = row.SaldoPontos if (row and row.SaldoPontos is not None) else 0
 
         if saldo_anterior < pontos_a_debitar:
             return False # Saldo insuficiente
 
         novo_saldo = saldo_anterior - pontos_a_debitar
 
-        # 2. Atualiza o Saldo na tabela Funcionarios
-        cursor.execute("UPDATE Funcionarios SET SaldoAtual = ? WHERE FuncionarioID = ?", novo_saldo, funcionario_id)
+        # 2. Atualiza o Saldo na tabela Funcionarios (CORREÇÃO: Usar SaldoPontos)
+        cursor.execute("UPDATE Funcionarios SET SaldoPontos = ? WHERE FuncionarioID = ?", novo_saldo, funcionario_id)
 
         # 3. Registra a movimentação no Extrato (Garante a auditoria do Tkinter)
         cursor.execute("""

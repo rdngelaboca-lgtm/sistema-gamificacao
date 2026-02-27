@@ -107,7 +107,8 @@ async def iniciar_abate_comanda(update, context):
         return
 
     try:
-        saldo_pontos = func.SaldoAtual if getattr(func, 'SaldoAtual', None) is not None else 0
+        # CORREÇÃO: Utilizando a coluna correta do banco (SaldoPontos) em vez de SaldoAtual
+        saldo_pontos = func.SaldoPontos if getattr(func, 'SaldoPontos', None) is not None else 0
         taxa = getattr(config, 'TAXA_CONVERSAO_PONTO_REAL', 0.03) # Default 1 ponto = R$ 0,03
         saldo_reais = saldo_pontos * taxa
 
@@ -2402,6 +2403,9 @@ def main() -> None:
     # --- Botões de Texto ---
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🏅 Minhas Conquistas$'), minhas_conquistas))
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🧾 Enviar Nota Fiscal$'), solicitar_foto_nf))
+    
+    # CORREÇÃO: O handler específico da comanda DEVE vir antes do handler genérico (button_callback_handler)
+    application.add_handler(CallbackQueryHandler(iniciar_abate_comanda, pattern='^abater_comanda$'))
     application.add_handler(CallbackQueryHandler(button_callback_handler))
 
     # --- Handlers para os Botões do Menu Fixo ---
@@ -2412,8 +2416,7 @@ def main() -> None:
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^❓ Ajuda$'), ajuda))
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^💰 Meu Saldo$'), meu_saldo))
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🏪 Loja de Recompensas$'), loja_recompensas))
-    # Handler do botão de comanda (Alta prioridade)
-    application.add_handler(CallbackQueryHandler(iniciar_abate_comanda, pattern='^abater_comanda$'))
+    # O handler da comanda foi movido para cima para evitar colisão
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^💬 Canal Confidencial$'), solicitar_feedback_start)) 
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^📄 Meus Documentos$'), solicitar_documentos_inicio)) 
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^📦 Solicitar Compras/Manutenção$'), lambda u,c: u.message.reply_text("Acessando Central...", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Abrir Menu", callback_data="menu_solicitacoes")]]))))
