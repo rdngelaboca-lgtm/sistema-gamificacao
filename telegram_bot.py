@@ -96,24 +96,36 @@ async def iniciar_abate_comanda(update, context):
 
     # Busca o funcionário e o saldo
     func = database.buscar_funcionario_por_chat_id(chat_id)
-    if not func: return
 
-    saldo_pontos = func.SaldoAtual or 0
-    taxa = getattr(config, 'TAXA_CONVERSAO_PONTO_REAL', 0.05) # Default 1 ponto = R$ 0,05
-    saldo_reais = saldo_pontos * taxa
+    # Correção: Informar ao invés de falhar silenciosamente
+    if not func:
+        await context.bot.send_message(
+            chat_id=chat_id, 
+            text="❌ *Acesso Negado:*\nO seu Telegram não está vinculado a um cadastro de funcionário válido no banco de dados. Apenas funcionários podem abater comanda.",
+            parse_mode='Markdown'
+        )
+        return
 
-    # Muda o estado do usuário para 'escuta ativa'
-    context.user_data['estado'] = 'aguardando_valor_comanda'
-    context.user_data['saldo_reais_atual'] = saldo_reais
-    context.user_data['taxa_conversao'] = taxa
+    try:
+        saldo_pontos = func.SaldoAtual if getattr(func, 'SaldoAtual', None) is not None else 0
+        taxa = getattr(config, 'TAXA_CONVERSAO_PONTO_REAL', 0.03) # Default 1 ponto = R$ 0,03
+        saldo_reais = saldo_pontos * taxa
 
-    mensagem = (
-        f"🍔 *Abater Saldo em Comanda*\n\n"
-        f"Seu saldo atual é de: *R$ {saldo_reais:.2f}* ({saldo_pontos} pontos).\n\n"
-        f"👉 Digite o valor exato em Reais que você consumiu e deseja abater.\n"
-        f"*(Exemplo: 15.50 ou 20)*"
-    )
-    await context.bot.send_message(chat_id=chat_id, text=mensagem, parse_mode='Markdown')
+        # Muda o estado do usuário para 'escuta ativa'
+        context.user_data['estado'] = 'aguardando_valor_comanda'
+        context.user_data['saldo_reais_atual'] = saldo_reais
+        context.user_data['taxa_conversao'] = taxa
+
+        mensagem = (
+            f"🍔 *Abater Saldo em Comanda*\n\n"
+            f"Seu saldo atual é de: *R$ {saldo_reais:.2f}* ({saldo_pontos} pontos).\n\n"
+            f"👉 Digite o valor exato em Reais que você consumiu e deseja abater.\n"
+            f"*(Exemplo: 15.50 ou 20)*"
+        )
+        await context.bot.send_message(chat_id=chat_id, text=mensagem, parse_mode='Markdown')
+    except Exception as e:
+        logger.error(f"Erro ao processar abate de comanda: {e}", exc_info=True)
+        await context.bot.send_message(chat_id=chat_id, text=f"❌ Ocorreu um erro interno ao calcular seu saldo. Tente novamente mais tarde.")
 
 async def processar_valor_comanda(update, context):
     """[NOVO] Processa o texto digitado (o valor em R$) e debita do banco."""
@@ -2400,7 +2412,7 @@ def main() -> None:
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^❓ Ajuda$'), ajuda))
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^💰 Meu Saldo$'), meu_saldo))
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🏪 Loja de Recompensas$'), loja_recompensas))
-    # [NOVO] Handler para o botão de abater comanda
+    # Handler do botão de comanda (Alta prioridade)
     application.add_handler(CallbackQueryHandler(iniciar_abate_comanda, pattern='^abater_comanda$'))
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^💬 Canal Confidencial$'), solicitar_feedback_start)) 
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^📄 Meus Documentos$'), solicitar_documentos_inicio)) 
