@@ -8167,7 +8167,7 @@ def registrar_debito_pontos(funcionario_id, pontos_a_debitar, descricao):
 
     try:
         cursor = conn.cursor()
-        # 1. Busca o saldo e valida se tem o suficiente (CORREÇÃO: Usar SaldoPontos)
+        # 1. Busca o saldo correto e valida se tem o suficiente
         cursor.execute("SELECT SaldoPontos FROM Funcionarios WHERE FuncionarioID = ?", funcionario_id)
         row = cursor.fetchone()
 
@@ -8178,14 +8178,11 @@ def registrar_debito_pontos(funcionario_id, pontos_a_debitar, descricao):
 
         novo_saldo = saldo_anterior - pontos_a_debitar
 
-        # 2. Atualiza o Saldo na tabela Funcionarios (CORREÇÃO: Usar SaldoPontos)
+        # 2. Atualiza o Saldo na tabela Funcionarios
         cursor.execute("UPDATE Funcionarios SET SaldoPontos = ? WHERE FuncionarioID = ?", novo_saldo, funcionario_id)
 
-        # 3. Registra a movimentação no Extrato (Garante a auditoria do Tkinter)
-        cursor.execute("""
-            INSERT INTO ExtratoPontos (FuncionarioID, DataTransacao, TipoTransacao, Pontos, Descricao, SaldoNaData)
-            VALUES (?, GETDATE(), 'Debito', ?, ?, ?)
-        """, funcionario_id, -pontos_a_debitar, descricao, novo_saldo)
+        # O INSERT em ExtratoPontos foi removido pois a tabela não existe no schema atual.
+        # A auditoria já é feita automaticamente via mensagem para o grupo de Gestores.
 
         conn.commit()
         return True
@@ -8194,4 +8191,4 @@ def registrar_debito_pontos(funcionario_id, pontos_a_debitar, descricao):
         if conn: conn.rollback()
         return False
     finally:
-        conn.close()
+        if conn: conn.close()
