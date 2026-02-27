@@ -158,11 +158,18 @@ async def processar_valor_comanda(update, context):
     if sucesso:
         await update.message.reply_text(f"✅ *Sucesso!*\n\nForam debitados {pontos_necessarios} pontos da sua conta.\nO Caixa já foi avisado para abater R$ {valor_reais:.2f} da sua comanda!", parse_mode='Markdown')
 
+        # Cálculos de Saldo para o Relatório do Caixa
+        saldo_pontos_anterior = func.SaldoPontos if getattr(func, 'SaldoPontos', None) is not None else 0
+        saldo_pontos_restante = saldo_pontos_anterior - pontos_necessarios
+        saldo_reais_restante = saldo_pontos_restante * taxa
+
         # Alerta aos Gestores / Caixa
         alerta = (
             f"🚨 *ALERTA DE CAIXA*\n\n"
             f"👤 Funcionário: *{update.effective_user.first_name}*\n"
-            f"💰 Valor a Abater: *R$ {valor_reais:.2f}*\n"
+            f"💰 Valor Abatido: *R$ {valor_reais:.2f}* ({pontos_necessarios} pts)\n"
+            f"🏦 Saldo Anterior: *R$ {saldo_reais:.2f}* ({saldo_pontos_anterior} pts)\n"
+            f"💳 Saldo Restante: *R$ {saldo_reais_restante:.2f}* ({saldo_pontos_restante} pts)\n"
             f"📌 Status: Pontos já deduzidos do sistema."
         )
         await context.bot.send_message(chat_id=config.GESTOR_GROUP_CHAT_ID, text=alerta, parse_mode='Markdown')
