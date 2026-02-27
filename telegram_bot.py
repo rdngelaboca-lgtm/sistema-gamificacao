@@ -524,18 +524,23 @@ async def loja_recompensas(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     chat_id = update.effective_chat.id
     produtos = database.listar_produtos_loja() # Lista apenas os produtos ativos por padrão
 
-    if not produtos:
-        await context.bot.send_message(chat_id, "Nossa loja de recompensas está vazia no momento. Volte em breve!")
-        return
-
-    texto = "🏪 **Loja de Recompensas** 🏪\n\nEscolha um item para ver os detalhes e resgatar:"
     keyboard = []
-    for produto in produtos:
-        # Mostra o estoque se ele for limitado
-        estoque_str = f"({produto.EstoqueDisponivel} un.)" if produto.EstoqueDisponivel is not None else ""
-        texto_botao = f"{produto.Nome} - {produto.CustoEmPontos} pts {estoque_str}"
-        keyboard.append([InlineKeyboardButton(texto_botao, callback_data=f"ver_produto_{produto.ProdutoID}")])
-    
+    texto = "🏪 **Loja de Recompensas** 🏪\n\nEscolha um item para ver os detalhes e resgatar:"
+
+    # 1. Carrega os produtos dinâmicos do banco (se houver)
+    if produtos:
+        for produto in produtos:
+            # Mostra o estoque se ele for limitado
+            estoque_str = f"({produto.EstoqueDisponivel} un.)" if produto.EstoqueDisponivel is not None else ""
+            texto_botao = f"{produto.Nome} - {produto.CustoEmPontos} pts {estoque_str}"
+            keyboard.append([InlineKeyboardButton(texto_botao, callback_data=f"ver_produto_{produto.ProdutoID}")])
+    else:
+        # Se não tiver produtos físicos, muda a mensagem mas não bloqueia a tela
+        texto = "🏪 **Loja de Recompensas** 🏪\n\nNão temos itens físicos no momento, mas você pode usar seu saldo abaixo:"
+
+    # 2. Adiciona o botão FIXO de Abater na Comanda sempre no final da lista
+    keyboard.append([InlineKeyboardButton("🍔 Abater na Comanda", callback_data="abater_comanda")])
+
     reply_markup = InlineKeyboardMarkup(keyboard)
     await context.bot.send_message(chat_id, texto, reply_markup=reply_markup)
 
