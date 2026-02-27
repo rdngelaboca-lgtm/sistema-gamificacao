@@ -88,6 +88,78 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 # == INÍCIO DAS NOVAS FUNÇÕES DA SALA DE COMANDO (GESTORES) =========
 # ===================================================================
 
+async def iniciar_abate_comanda(update, context):
+    """[NOVO] Disparado quando o usuário clica no botão 'Abater na Comanda'."""
+    query = update.callback_query
+    await query.answer()
+    chat_id = update.effective_chat.id
+
+    # Busca o funcionário e o saldo
+    func = database.buscar_funcionario_por_chat_id(chat_id)
+    if not func: return
+
+    saldo_pontos = func.SaldoAtual or 0
+    taxa = getattr(config, 'TAXA_CONVERSAO_PONTO_REAL', 0.05) # Default 1 ponto = R$ 0,05
+    saldo_reais = saldo_pontos * taxa
+
+    # Muda o estado do usuário para 'escuta ativa'
+    context.user_data['estado'] = 'aguardando_valor_comanda'
+    context.user_data['saldo_reais_atual'] = saldo_reais
+    context.user_data['taxa_conversao'] = taxa
+
+    mensagem = (
+        f"🍔 *Abater Saldo em Comanda*\n\n"
+        f"Seu saldo atual é de: *R$ {saldo_reais:.2f}* ({saldo_pontos} pontos).\n\n"
+        f"👉 Digite o valor exato em Reais que você consumiu e deseja abater.\n"
+        f"*(Exemplo: 15.50 ou 20)*"
+    )
+    await context.bot.send_message(chat_id=chat_id, text=mensagem, parse_mode='Markdown')
+
+async def processar_valor_comanda(update, context):
+    """[NOVO] Processa o texto digitado (o valor em R$) e debita do banco."""
+    # Substitui vírgula por ponto para evitar erro matemático
+    texto = update.message.text.strip().replace(',', '.')
+
+    try:
+        valor_reais = float(texto)
+        if valor_reais <= 0:
+            raise ValueError("Valor zerado ou negativo.")
+    except ValueError:
+        await update.message.reply_text("❌ Valor inválido. Por favor, digite apenas números (ex: 15.50).")
+        return
+
+    saldo_reais = context.user_data.get('saldo_reais_atual', 0)
+    taxa = context.user_data.get('taxa_conversao', 0.05)
+
+    if valor_reais > saldo_reais:
+        await update.message.reply_text(f"❌ *Saldo Insuficiente!*\nVocê tentou abater R$ {valor_reais:.2f}, mas possui apenas R$ {saldo_reais:.2f}.\nOperação cancelada.", parse_mode='Markdown')
+        context.user_data.pop('estado', None) # Limpa o estado
+        return
+
+    pontos_necessarios = int(valor_reais / taxa)
+    func = database.buscar_funcionario_por_chat_id(update.effective_chat.id)
+
+    # Efetua o débito no Banco de Dados
+    sucesso = database.registrar_debito_pontos(func.FuncionarioID, pontos_necessarios, f"Abate em Comanda: R$ {valor_reais:.2f}")
+
+    if sucesso:
+        await update.message.reply_text(f"✅ *Sucesso!*\n\nForam debitados {pontos_necessarios} pontos da sua conta.\nO Caixa já foi avisado para abater R$ {valor_reais:.2f} da sua comanda!", parse_mode='Markdown')
+
+        # Alerta aos Gestores / Caixa
+        alerta = (
+            f"🚨 *ALERTA DE CAIXA*\n\n"
+            f"👤 Funcionário: *{update.effective_user.first_name}*\n"
+            f"💰 Valor a Abater: *R$ {valor_reais:.2f}*\n"
+            f"📌 Status: Pontos já deduzidos do sistema."
+        )
+        await context.bot.send_message(chat_id=config.GESTOR_GROUP_CHAT_ID, text=alerta, parse_mode='Markdown')
+    else:
+        await update.message.reply_text("❌ Ocorreu um erro no sistema ao processar o débito. Tente novamente.")
+
+    # Limpa o estado para voltar ao normal
+    context.user_data.pop('estado', None)
+
+
 async def status_meta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Envia o status atual da meta principal para o grupo de gestão."""
     chat_id = update.effective_chat.id
@@ -980,6 +1052,12 @@ async def _interceptar_comandos_e_pendencias(update: Update, context: ContextTyp
 
 
 async def roteador_de_texto_privado(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # --- INÍCIO NOVO: Interceptador de Comanda ---
+    estado = context.user_data.get('estado')
+    if estado == 'aguardando_valor_comanda':
+        await processar_valor_comanda(update, context)
+        return # Encerra aqui, não processa mais nada
+    # --- FIM NOVO ---
     """
     Esta função atua como um roteador para todas as mensagens de texto em chat privado.
     Ela verifica o 'estado' do usuário e direciona para a ação correta.
@@ -2317,6 +2395,8 @@ def main() -> None:
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^❓ Ajuda$'), ajuda))
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^💰 Meu Saldo$'), meu_saldo))
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🏪 Loja de Recompensas$'), loja_recompensas))
+    # [NOVO] Handler para o botão de abater comanda
+    application.add_handler(CallbackQueryHandler(iniciar_abate_comanda, pattern='^abater_comanda$'))
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^💬 Canal Confidencial$'), solicitar_feedback_start)) 
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^📄 Meus Documentos$'), solicitar_documentos_inicio)) 
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^📦 Solicitar Compras/Manutenção$'), lambda u,c: u.message.reply_text("Acessando Central...", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Abrir Menu", callback_data="menu_solicitacoes")]]))))

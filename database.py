@@ -8156,3 +8156,42 @@ def atualizar_ean_vinculo(vinculo_id, novo_ean):
         finally:
             conn.close()
     return False
+
+def registrar_debito_pontos(funcionario_id, pontos_a_debitar, descricao):
+    """
+    [NOVO] Debita pontos do saldo do funcionário e registra a transação no extrato.
+    Usado para a funcionalidade de Abater Saldo em Comanda.
+    """
+    conn = get_db_connection()
+    if not conn: return False
+
+    try:
+        cursor = conn.cursor()
+        # 1. Busca o saldo e valida se tem o suficiente
+        cursor.execute("SELECT SaldoAtual FROM Funcionarios WHERE FuncionarioID = ?", funcionario_id)
+        row = cursor.fetchone()
+
+        saldo_anterior = row.SaldoAtual if (row and row.SaldoAtual is not None) else 0
+
+        if saldo_anterior < pontos_a_debitar:
+            return False # Saldo insuficiente
+
+        novo_saldo = saldo_anterior - pontos_a_debitar
+
+        # 2. Atualiza o Saldo na tabela Funcionarios
+        cursor.execute("UPDATE Funcionarios SET SaldoAtual = ? WHERE FuncionarioID = ?", novo_saldo, funcionario_id)
+
+        # 3. Registra a movimentação no Extrato (Garante a auditoria do Tkinter)
+        cursor.execute("""
+            INSERT INTO ExtratoPontos (FuncionarioID, DataTransacao, TipoTransacao, Pontos, Descricao, SaldoNaData)
+            VALUES (?, GETDATE(), 'Debito', ?, ?, ?)
+        """, funcionario_id, -pontos_a_debitar, descricao, novo_saldo)
+
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"Erro ao debitar pontos do FuncionarioID {funcionario_id}: {e}", exc_info=True)
+        if conn: conn.rollback()
+        return False
+    finally:
+        conn.close()
