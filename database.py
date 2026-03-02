@@ -6334,7 +6334,13 @@ def gerar_sugestao_por_periodo(contagem_id_inicio, contagem_id_fim):
                 res_data = cursor.fetchone()
 
                 if res_data and res_data.PrimeiraData:
-                    data_ini_calc = res_data.PrimeiraData
+                    primeira_data_banco = res_data.PrimeiraData
+                    # Tratamento de segurança para string vs date (caso o driver ODBC retorne string)
+                    if isinstance(primeira_data_banco, str):
+                        primeira_data_banco = datetime.strptime(primeira_data_banco[:10], '%Y-%m-%d').date()
+
+                    # Recua 1 dia para que a condição "> data_inicio" do SQL englobe a primeira nota fiscal!
+                    data_ini_calc = primeira_data_banco - timedelta(days=1)
                     estoque_inicial = Decimal('0.0') # Antes da primeira compra, estoque era zero
                 else:
                     data_ini_calc = data_final - timedelta(days=30) # Fallback
