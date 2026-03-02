@@ -6108,55 +6108,65 @@ def excluir_nota_fiscal_entrada(nota_id):
     return False        
             
 
-def salvar_contagem_estoque(data_contagem, funcionario_id, lista_itens_contados, nome_contagem="Geral"):
-    """
-    Salva uma nova contagem de estoque e seus itens de forma transacional.
-    'lista_itens_contados' é uma lista de dicts: [{'ProdutoID', 'QuantidadeContada'}]
-    """
+def verificar_migracao_itens_avulsos():
+    """Garante que a tabela suporte itens órfãos (sem ProdutoID)."""
     conn = get_db_connection()
-    if not conn:
-        return False, "Falha de conexão com o banco."
+    if conn:
+        try:
+            cursor = conn.cursor()
+            try:
+                cursor.execute("SELECT NomeAvulso FROM ItensContagemEstoque WHERE 1=0")
+            except Exception:
+                logger.info("Executando migração para suportar Itens Avulsos na contagem...")
+                cursor.execute("ALTER TABLE ItensContagemEstoque ALTER COLUMN ProdutoID INT NULL")
+                cursor.execute("ALTER TABLE ItensContagemEstoque ADD NomeAvulso VARCHAR(255) NULL")
+                cursor.execute("ALTER TABLE ItensContagemEstoque ADD EANAvulso VARCHAR(50) NULL")
+                conn.commit()
+                logger.info("Migração de Itens Avulsos concluída com sucesso.")
+        except Exception as e:
+            logger.error(f"Erro na migração de avulsos: {e}")
+        finally:
+            conn.close()
 
+verificar_migracao_itens_avulsos()
+
+def salvar_contagem_estoque(data_contagem, funcionario_id, lista_itens_contados, nome_contagem="Geral"):
+    """Salva uma nova contagem de estoque com suporte a itens avulsos."""
+    conn = get_db_connection()
+    if not conn: return False, "Falha de conexão com o banco."
     try:
         cursor = conn.cursor()
-        
-        # 1. Inserir o Cabeçalho da Contagem
         sql_contagem = """
             INSERT INTO ContagensEstoque (DataContagem, FuncionarioID, NomeContagem)
-            OUTPUT INSERTED.ContagemID
-            VALUES (?, ?, ?)
+            OUTPUT INSERTED.ContagemID VALUES (?, ?, ?)
         """
         cursor.execute(sql_contagem, data_contagem, funcionario_id, nome_contagem)
-        
         nova_contagem_id = cursor.fetchone()[0]
         
-        if not nova_contagem_id:
-            raise Exception("Falha ao obter o ID da nova Contagem.")
-            
-        # 2. Inserir os Itens da Contagem
+        # INSERÇÃO HÍBRIDA: Aceita ProdutoID ou NomeAvulso
         sql_item = """
-            INSERT INTO ItensContagemEstoque (ContagemID, ProdutoID, QuantidadeContada)
-            VALUES (?, ?, ?)
+            INSERT INTO ItensContagemEstoque (ContagemID, ProdutoID, QuantidadeContada, NomeAvulso, EANAvulso)
+            VALUES (?, ?, ?, ?, ?)
         """
         itens_para_inserir = [
-            (nova_contagem_id, item['ProdutoID'], item['QuantidadeContada'])
-            for item in lista_itens_contados
+            (
+                nova_contagem_id, 
+                item.get('ProdutoID'), 
+                item.get('QuantidadeContada', 0),
+                item.get('NomeAvulso'),
+                item.get('EANAvulso')
+            ) for item in lista_itens_contados
         ]
         
         cursor.executemany(sql_item, itens_para_inserir)
-        
-        # 3. Commita a transação
         conn.commit()
-        logger.info(f"Contagem ID {nova_contagem_id} (Data: {data_contagem}) salva com {len(itens_para_inserir)} itens.")
-        return True, f"Contagem de {data_contagem} salva com sucesso."
-
+        return True, f"Contagem salva com sucesso ({len(itens_para_inserir)} itens)."
     except Exception as e:
         if conn: conn.rollback()
         logger.error(f"ERRO CRÍTICO ao salvar contagem de estoque: {e}", exc_info=True)
         return False, f"Erro ao salvar contagem: {e}"
     finally:
-        if conn:
-            conn.close()
+        if conn: conn.close()
 
 def listar_contagens_cabecalho():
     """Lista os cabeçalhos das contagens de estoque já realizadas."""
@@ -6181,17 +6191,22 @@ def listar_contagens_cabecalho():
     return []
 
 def buscar_itens_contagem(contagem_id):
-    """Busca os itens de uma contagem específica."""
+    """Busca itens, mesclando os oficiais com os avulsos (LEFT JOIN)."""
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
             sql = """
-                SELECT P.NomeProduto, IC.QuantidadeContada, P.UnidadeMedida
+                SELECT 
+                    ISNULL(P.NomeProduto, IC.NomeAvulso + ' [AVULSO]') as NomeProduto, 
+                    IC.QuantidadeContada, 
+                    ISNULL(P.UnidadeMedida, 'UN') as UnidadeMedida,
+                    IC.ProdutoID,
+                    IC.NomeAvulso
                 FROM ItensContagemEstoque IC
-                JOIN ProdutosEstoque P ON IC.ProdutoID = P.ProdutoID
+                LEFT JOIN ProdutosEstoque P ON IC.ProdutoID = P.ProdutoID
                 WHERE IC.ContagemID = ?
-                ORDER BY P.NomeProduto
+                ORDER BY NomeProduto
             """
             cursor.execute(sql, contagem_id)
             return cursor.fetchall()
@@ -6199,8 +6214,7 @@ def buscar_itens_contagem(contagem_id):
             logger.error(f"ERRO ao buscar itens da contagem ID {contagem_id}: {e}", exc_info=True)
             return []
         finally:
-            if conn:
-                conn.close()
+            if conn: conn.close()
     return []
 
 def excluir_contagem_estoque(contagem_id):
@@ -6222,6 +6236,109 @@ def excluir_contagem_estoque(contagem_id):
         finally:
             conn.close()
     return False
+
+def listar_itens_avulsos_pendentes():
+    """Busca todos os itens contados que ainda não têm Produto Mestre associado."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT IC.ContagemID, C.DataContagem, IC.NomeAvulso, IC.QuantidadeContada, IC.EANAvulso
+                FROM ItensContagemEstoque IC
+                JOIN ContagensEstoque C ON IC.ContagemID = C.ContagemID
+                WHERE IC.ProdutoID IS NULL
+                ORDER BY C.DataContagem DESC
+            """
+            cursor.execute(sql)
+            return cursor.fetchall()
+        finally:
+            conn.close()
+    return []
+
+def vincular_item_avulso_contagem(contagem_id, nome_avulso, produto_id_mestre):
+    """
+    Resolve um item avulso na contagem. Se o mestre já estiver na mesma contagem,
+    soma as quantidades. Se não, apenas substitui o ID.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT QuantidadeContada FROM ItensContagemEstoque WHERE ContagemID = ? AND ProdutoID = ?", contagem_id, produto_id_mestre)
+            existente = cursor.fetchone()
+            
+            cursor.execute("SELECT QuantidadeContada FROM ItensContagemEstoque WHERE ContagemID = ? AND NomeAvulso = ?", contagem_id, nome_avulso)
+            avulso = cursor.fetchone()
+            qtd_avulso = avulso.QuantidadeContada if avulso else 0
+            
+            if existente:
+                cursor.execute("UPDATE ItensContagemEstoque SET QuantidadeContada = QuantidadeContada + ? WHERE ContagemID = ? AND ProdutoID = ?", qtd_avulso, contagem_id, produto_id_mestre)
+                cursor.execute("DELETE FROM ItensContagemEstoque WHERE ContagemID = ? AND NomeAvulso = ?", contagem_id, nome_avulso)
+            else:
+                cursor.execute("UPDATE ItensContagemEstoque SET ProdutoID = ?, NomeAvulso = NULL, EANAvulso = NULL WHERE ContagemID = ? AND NomeAvulso = ?", produto_id_mestre, contagem_id, nome_avulso)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Erro ao vincular avulso: {e}")
+            conn.rollback()
+            return False
+        finally:
+            conn.close()
+    return False
+
+def atualizar_qtd_item_contagem(contagem_id, produto_id, nome_avulso, nova_qtd):
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            if produto_id:
+                cursor.execute("UPDATE ItensContagemEstoque SET QuantidadeContada = ? WHERE ContagemID = ? AND ProdutoID = ?", nova_qtd, contagem_id, produto_id)
+            else:
+                cursor.execute("UPDATE ItensContagemEstoque SET QuantidadeContada = ? WHERE ContagemID = ? AND NomeAvulso = ?", nova_qtd, contagem_id, nome_avulso)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Erro ao atualizar qtd na contagem: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
+
+def remover_item_contagem(contagem_id, produto_id, nome_avulso):
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            if produto_id:
+                cursor.execute("DELETE FROM ItensContagemEstoque WHERE ContagemID = ? AND ProdutoID = ?", contagem_id, produto_id)
+            else:
+                cursor.execute("DELETE FROM ItensContagemEstoque WHERE ContagemID = ? AND NomeAvulso = ?", contagem_id, nome_avulso)
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+    return False
+
+def adicionar_item_contagem_existente(contagem_id, produto_id, qtd):
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1 FROM ItensContagemEstoque WHERE ContagemID = ? AND ProdutoID = ?", contagem_id, produto_id)
+            if cursor.fetchone():
+                cursor.execute("UPDATE ItensContagemEstoque SET QuantidadeContada = QuantidadeContada + ? WHERE ContagemID = ? AND ProdutoID = ?", qtd, contagem_id, produto_id)
+            else:
+                cursor.execute("INSERT INTO ItensContagemEstoque (ContagemID, ProdutoID, QuantidadeContada) VALUES (?, ?, ?)", contagem_id, produto_id, qtd)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Erro ao adicionar na contagem existente: {e}")
+            return False
+        finally:
+            conn.close()
+    return False
+
 
 # ===================================================================
 # == FIM DO MÓDULO DE GESTÃO DE ESTOQUE (CONTAGEM) ==================

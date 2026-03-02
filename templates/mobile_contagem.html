@@ -56,6 +56,7 @@
         </div>
         
         <button id="btn-abrir-busca" class="btn-busca" onclick="abrirBusca()">🔍 Não encontrou? Buscar por Nome</button>
+        <button id="btn-avulso" class="btn-busca" style="background: #6c757d; color: white;" onclick="abrirModalAvulso()">📝 Registrar Item Não Cadastrado</button>
     </div>
 
     <div class="lista-itens" id="lista-contagem">
@@ -88,6 +89,22 @@
             <input type="number" id="qtd-conversao" value="1" style="margin-bottom: 15px;">
             <button onclick="confirmarConversao()" style="background:#28a745; color:white; padding:10px; width:100%; border:none; border-radius:5px;">✅ Criar e Contar</button>
             <button onclick="document.getElementById('modal-qtd-caixa').style.display='none'" style="background:#dc3545; color:white; padding:10px; width:100%; border:none; border-radius:5px; margin-top:5px;">Cancelar</button>
+        </div>
+    </div>
+
+    <div id="modal-avulso" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 2000; justify-content: center; align-items: center;">
+        <div class="modal-content">
+            <h3>📝 Item Não Cadastrado</h3>
+            <p style="font-size: 0.9rem; margin-bottom: 15px;">Registre o nome provisório para vincular no computador depois.</p>
+            <div class="input-group">
+                <input type="text" id="avulso-nome" placeholder="Ex: Sorvete Pote 2L Morango">
+            </div>
+            <div class="input-group">
+                <label>EAN:</label>
+                <input type="text" id="avulso-ean" readonly style="background: #eee;">
+            </div>
+            <button onclick="salvarItemAvulso()" style="background:#28a745; color:white; padding:10px; width:100%; border:none; border-radius:5px;">✅ Adicionar à Contagem</button>
+            <button onclick="document.getElementById('modal-avulso').style.display='none'" style="background:#dc3545; color:white; padding:10px; width:100%; border:none; border-radius:5px; margin-top:5px;">Cancelar</button>
         </div>
     </div>
 
@@ -139,14 +156,16 @@
                         statusEl.textContent = `✅ ${prod.nome} - ${custoFmt}`;
                         statusEl.className = "status-msg sucesso";
                         eanInput.value = ''; 
-                        qtdInput.value = '1'; // REQ 2: Reseta a quantidade para 1
-                        btnBusca.style.display = 'none'; // Esconde botão de busca se achou
+                        qtdInput.value = '1'; 
+                        btnBusca.style.display = 'none';
+                        document.getElementById('btn-avulso').style.display = 'none'; // Esconde botão avulso
                     } else {
                         statusEl.textContent = "❌ Não encontrado!";
                         statusEl.className = "status-msg erro";
-                        ultimoEANNaoEncontrado = ean; // Salva o EAN que falhou
-                        btnBusca.style.display = 'block'; // Mostra botão de busca
+                        ultimoEANNaoEncontrado = ean; 
+                        btnBusca.style.display = 'block'; 
                         btnBusca.textContent = `🔍 Buscar nome p/ EAN ${ean}`;
+                        document.getElementById('btn-avulso').style.display = 'block'; // Mostra opção avulsa
                         if(navigator.vibrate) navigator.vibrate(200);
                     }
                 } catch (error) {
@@ -156,6 +175,45 @@
         });
 
         // --- LÓGICA DE BUSCA E CONVERSÃO ---
+
+        function abrirModalAvulso() {
+            document.getElementById('avulso-nome').value = '';
+            document.getElementById('avulso-ean').value = ultimoEANNaoEncontrado;
+            document.getElementById('modal-avulso').style.display = 'flex';
+            setTimeout(() => document.getElementById('avulso-nome').focus(), 100);
+        }
+
+        function salvarItemAvulso() {
+            const nome = document.getElementById('avulso-nome').value.trim();
+            const ean = document.getElementById('avulso-ean').value;
+            const qtdDigitada = parseFloat(qtdInput.value) || 1;
+
+            if (!nome) { alert("Digite um nome provisório."); return; }
+
+            // Insere o payload de Avulso na lista
+            itensContados.push({
+                ProdutoID: null, 
+                QuantidadeContada: qtdDigitada.toFixed(4),
+                NomeAvulso: nome,
+                EANAvulso: ean,
+                _nome: nome + " [AVULSO]",
+                _un: "UN",
+                _custo: "0.0000"
+            });
+
+            localStorage.setItem('rascunhoContagemEstoque', JSON.stringify(itensContados));
+            renderizarLista();
+
+            statusEl.textContent = `✅ Avulso: ${nome}`;
+            statusEl.className = "status-msg sucesso";
+
+            document.getElementById('modal-avulso').style.display = 'none';
+            btnBusca.style.display = 'none';
+            document.getElementById('btn-avulso').style.display = 'none';
+            eanInput.value = '';
+            qtdInput.value = '1';
+            eanInput.focus();
+        }
 
         function abrirBusca() {
             document.getElementById('painel-busca').style.display = 'block';

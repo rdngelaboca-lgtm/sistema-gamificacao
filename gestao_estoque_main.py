@@ -1177,6 +1177,15 @@ class AppGestaoEstoque:
         self.tree_hist_itens.heading('Qtd Contada', text='Qtd'); self.tree_hist_itens.column('Qtd Contada', width=60, anchor='e')
         self.tree_hist_itens.heading('UN', text='UN'); self.tree_hist_itens.column('UN', width=40, anchor='center')
         self.tree_hist_itens.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
+        # Novos botões de Ação para a Contagem Finalizada
+        frame_botoes_hist = ttk.Frame(frame_historico)
+        frame_botoes_hist.grid(row=2, column=0, sticky="ew", pady=5)
+        
+        btn_resolver_avulsos = ttk.Button(frame_botoes_hist, text="⚠️ Resolver Itens Avulsos", command=self.abrir_gerenciador_avulsos)
+        btn_resolver_avulsos.pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
+        
+        btn_editar_contagem = ttk.Button(frame_botoes_hist, text="✏️ Editar Contagem Selecionada", command=self.abrir_edicao_contagem)
+        btn_editar_contagem.pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
 
     def filtrar_combo_contagem(self, event=None):
         # ... (código idêntico ao anterior) ...
@@ -1332,6 +1341,155 @@ class AppGestaoEstoque:
                 self.tree_hist_itens.insert("", "end", values=(item.NomeProduto, f"{item.QuantidadeContada:.3f}", item.UnidadeMedida))
         except Exception as e:
             logger.error(f"Erro ao carregar itens do histórico (ContagemID {contagem_id}): {e}", exc_info=True)
+
+    def abrir_gerenciador_avulsos(self):
+        """Abre janela para resolver itens marcados como avulsos em qualquer contagem."""
+        popup = Toplevel(self.root)
+        popup.title("Resolver Itens Avulsos de Contagem")
+        popup.geometry("800x400")
+        popup.transient(self.root)
+
+        frame = ttk.Frame(popup, padding="10")
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        cols = ('ContagemID', 'Data', 'Nome Provisório', 'Qtd', 'EAN Fornecido')
+        tree = ttk.Treeview(frame, columns=cols, show='headings', selectmode='browse')
+        for c in cols: tree.heading(c, text=c)
+        tree.column('ContagemID', width=80, anchor='center')
+        tree.column('Data', width=100, anchor='center')
+        tree.column('Nome Provisório', width=250)
+        tree.column('Qtd', width=80, anchor='center')
+        tree.column('EAN Fornecido', width=120, anchor='center')
+
+        sb = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=sb.set)
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+
+        def carregar():
+            for i in tree.get_children(): tree.delete(i)
+            avulsos = database.listar_itens_avulsos_pendentes()
+            for av in avulsos:
+                data_fmt = av.DataContagem.strftime('%d/%m/%Y') if hasattr(av.DataContagem, 'strftime') else str(av.DataContagem)[:10]
+                tree.insert("", "end", values=(av.ContagemID, data_fmt, av.NomeAvulso, f"{av.QuantidadeContada:.3f}", av.EANAvulso or "Sem EAN"))
+
+        def resolver_clicado(event):
+            sel = tree.focus()
+            if not sel: return
+            vals = tree.item(sel, 'values')
+            contagem_id, nome_avulso = vals[0], vals[2]
+
+            edit_win = Toplevel(popup)
+            edit_win.title("Vincular Avulso ao Mestre")
+            edit_win.geometry("400x200")
+            edit_win.transient(popup)
+
+            ttk.Label(edit_win, text=f"Avulso: {nome_avulso}", font=("Arial", 10, "bold")).pack(pady=10)
+            ttk.Label(edit_win, text="Vincular ao Catálogo Mestre:").pack()
+            combo_mestre = ttk.Combobox(edit_win, values=self.lista_mestre_produtos_nomes, state="readonly", width=40)
+            combo_mestre.pack(pady=10)
+
+            def vincular():
+                selecionado = combo_mestre.get()
+                if not selecionado: return
+                mestre_id = self.mapa_produtos_mestre.get(selecionado)
+                if database.vincular_item_avulso_contagem(contagem_id, nome_avulso, mestre_id):
+                    messagebox.showinfo("Sucesso", "Item integrado à contagem oficial!", parent=edit_win)
+                    edit_win.destroy()
+                    carregar()
+                    self.carregar_itens_contagem_historico() # Atualiza tela de trás
+                else:
+                    messagebox.showerror("Erro", "Falha ao vincular.", parent=edit_win)
+
+            ttk.Button(edit_win, text="✅ Vincular e Transferir Saldo", command=vincular).pack(pady=10)
+
+        tree.bind("<Double-1>", resolver_clicado)
+        carregar()
+
+    def abrir_edicao_contagem(self):
+        """Abre janela para alterar quantidades ou adicionar/remover itens de uma contagem existente."""
+        selecionado = self.tree_hist_contagens.focus()
+        if not selecionado:
+            messagebox.showwarning("Aviso", "Selecione uma contagem no Histórico primeiro.", parent=self.root)
+            return
+        contagem_id = self.tree_hist_contagens.item(selecionado, 'values')[0]
+
+        popup = Toplevel(self.root)
+        popup.title(f"Editor de Contagem ID: {contagem_id}")
+        popup.geometry("700x500")
+        popup.transient(self.root)
+
+        frame_add = ttk.LabelFrame(popup, text="Adicionar Item Esquecido", padding="10")
+        frame_add.pack(fill=tk.X, padx=10, pady=5)
+        
+        combo_mestre = ttk.Combobox(frame_add, values=self.lista_mestre_produtos_nomes, state="readonly", width=40)
+        combo_mestre.pack(side=tk.LEFT, padx=5)
+        entry_qtd = ttk.Entry(frame_add, width=10)
+        entry_qtd.pack(side=tk.LEFT, padx=5)
+        
+        cols = ('Nome', 'Qtd', 'IDProduto', 'NomeAvulso')
+        tree = ttk.Treeview(popup, columns=cols, show='headings', selectmode='browse')
+        tree.heading('Nome', text='Produto / Avulso'); tree.column('Nome', width=300)
+        tree.heading('Qtd', text='Qtd'); tree.column('Qtd', width=100, anchor='center')
+        tree.heading('IDProduto', text='IDProduto'); tree.column('IDProduto', width=0, stretch=tk.NO)
+        tree.heading('NomeAvulso', text='NomeAvulso'); tree.column('NomeAvulso', width=0, stretch=tk.NO)
+        tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+        def carregar():
+            for i in tree.get_children(): tree.delete(i)
+            itens = database.buscar_itens_contagem(contagem_id)
+            for item in itens:
+                # Retorno do banco agora tem 5 posicoes: Nome, Qtd, UN, ProdutoID, NomeAvulso
+                tree.insert("", "end", values=(item.NomeProduto, f"{item.QuantidadeContada:.3f}", item.ProdutoID or "", item.NomeAvulso or ""))
+
+        def adicionar():
+            sel = combo_mestre.get()
+            qtd_str = entry_qtd.get().replace(",", ".")
+            if not sel or not qtd_str: return
+            try:
+                qtd = Decimal(qtd_str)
+                mestre_id = self.mapa_produtos_mestre.get(sel)
+                database.adicionar_item_contagem_existente(contagem_id, mestre_id, qtd)
+                entry_qtd.delete(0, tk.END)
+                combo_mestre.set("")
+                carregar()
+                self.carregar_itens_contagem_historico()
+            except: messagebox.showerror("Erro", "Quantidade inválida.", parent=popup)
+
+        ttk.Button(frame_add, text="➕ Inserir", command=adicionar).pack(side=tk.LEFT, padx=5)
+
+        def editar_remover(event):
+            sel = tree.focus()
+            if not sel: return
+            vals = tree.item(sel, 'values')
+            nome, qtd, prod_id, nome_avulso = vals[0], vals[1], vals[2], vals[3]
+
+            edit_win = Toplevel(popup)
+            edit_win.title("Alterar/Remover")
+            edit_win.geometry("300x150")
+            edit_win.transient(popup)
+
+            ttk.Label(edit_win, text=f"{nome}").pack(pady=5)
+            e_qtd = ttk.Entry(edit_win, justify='center'); e_qtd.pack(pady=5); e_qtd.insert(0, qtd)
+
+            def salvar():
+                try:
+                    nova_qtd = Decimal(e_qtd.get().replace(",", "."))
+                    database.atualizar_qtd_item_contagem(contagem_id, prod_id if prod_id else None, nome_avulso if nome_avulso else None, nova_qtd)
+                    edit_win.destroy(); carregar(); self.carregar_itens_contagem_historico()
+                except: pass
+
+            def apagar():
+                database.remover_item_contagem(contagem_id, prod_id if prod_id else None, nome_avulso if nome_avulso else None)
+                edit_win.destroy(); carregar(); self.carregar_itens_contagem_historico()
+
+            f_btn = ttk.Frame(edit_win); f_btn.pack(pady=10)
+            ttk.Button(f_btn, text="💾 Salvar Qtd", command=salvar).pack(side=tk.LEFT, padx=5)
+            ttk.Button(f_btn, text="🗑️ Remover", command=apagar).pack(side=tk.LEFT, padx=5)
+
+        tree.bind("<Double-1>", editar_remover)
+        carregar()
+    
 
     # ===================================================================
     # == ABA 5: SUGESTÃO DE COMPRA (ATUALIZADA) =========================
