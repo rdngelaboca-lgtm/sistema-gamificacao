@@ -1172,7 +1172,6 @@ class AppGestaoEstoque:
             if filtrados:
                 self.combo_contagem_produtos.set(filtrados[0])
                 self.atualizar_label_unidade_contagem() # [CORREÇÃO] Atualiza a unidade visualmente
-                self.atualizar_label_unidade_contagem()
             else:
                 self.combo_contagem_produtos.set('')
                 self.lbl_contagem_unidade.config(text="UN")
@@ -1195,12 +1194,20 @@ class AppGestaoEstoque:
             return
         try:
             quantidade = Decimal(qtd_str)
-        except InvalidOperation: # <-- CORREÇÃO: Exceção específica
-            messagebox.showerror("Erro", "Quantidade deve ser um número.", parent=self.root)
+            if quantidade < 0:
+                raise ValueError
+        except (InvalidOperation, ValueError): 
+            messagebox.showerror("Erro", "A quantidade deve ser um número válido, maior ou igual a zero.", parent=self.root)
             # Limpa o campo para evitar reenvio de dados inválidos e foca
             self.entry_contagem_qtd.delete(0, tk.END)
             self.entry_contagem_qtd.focus()
             return
+
+        if produto_nome not in self.mapa_produtos_mestre_contagem:
+            messagebox.showwarning("Aviso", "Produto não encontrado. Selecione um item válido da lista.", parent=self.root)
+            self.combo_contagem_produtos.focus()
+            return
+
         dados_produto = self.mapa_produtos_mestre_contagem[produto_nome]
         produto_id = dados_produto['id']
         unidade = dados_produto['un']
@@ -1271,14 +1278,17 @@ class AppGestaoEstoque:
         try:
             contagens = database.listar_contagens_cabecalho()
             for c in contagens:
-                data_f = c.DataContagem.strftime('%d/%m/%Y')
+                # Tratamento seguro para compatibilidade Date vs String
+                raw_date = c.DataContagem
+                data_f = raw_date.strftime('%d/%m/%Y') if hasattr(raw_date, 'strftime') else str(raw_date)[:10]
+
                 nome_display = f"ID: {c.ContagemID} - {data_f} ({c.NomeCompleto})"
-                
+
                 self.tree_hist_contagens.insert("", "end", values=(c.ContagemID, data_f, c.NomeCompleto))
-                
+
                 nomes_contagens.append(nome_display)
                 self.mapa_contagens_historico[nome_display] = c.ContagemID
-                
+
         except Exception as e:
             logger.error(f"Erro ao atualizar histórico de contagens: {e}", exc_info=True)
 
