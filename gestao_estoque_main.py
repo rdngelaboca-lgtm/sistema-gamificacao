@@ -1145,21 +1145,30 @@ class AppGestaoEstoque:
         frame_salvar.grid(row=2, column=0, sticky="nsew", padx=(0, 5))
         frame_salvar.columnconfigure(1, weight=1)
         ttk.Label(frame_salvar, text="Data da Contagem:").grid(row=0, column=0, sticky="w", padx=(0, 5))
-        self.date_contagem = DateEntry(frame_salvar, width=12, date_pattern='dd/mm/yyyy', locale='pt_BR')
+        self.date_contagem = DateEntry(frame_salvar, width=10, date_pattern='dd/mm/yyyy', locale='pt_BR')
         self.date_contagem.grid(row=0, column=1, sticky="w")
+        
+        ttk.Label(frame_salvar, text="Nome/Ref:").grid(row=0, column=2, sticky="w", padx=(10, 5))
+        self.entry_nome_contagem = ttk.Entry(frame_salvar, width=20)
+        self.entry_nome_contagem.grid(row=0, column=3, sticky="w")
+        self.entry_nome_contagem.insert(0, "Geral")
+
         self.id_funcionario_contagem = 2
         btn_salvar_contagem = ttk.Button(frame_salvar, text="Salvar Contagem Completa", command=self.salvar_contagem_completa)
-        btn_salvar_contagem.grid(row=0, column=2, sticky="e", padx=20, ipady=5)
+        btn_salvar_contagem.grid(row=0, column=4, sticky="e", padx=20, ipady=5)
+        
         frame_historico = ttk.LabelFrame(main_frame, text="Histórico de Contagens Realizadas", padding="10")
         frame_historico.grid(row=0, column=1, rowspan=3, sticky="nsew", pady=5)
         frame_historico.rowconfigure(0, weight=1)
         frame_historico.rowconfigure(1, weight=1)
         frame_historico.columnconfigure(0, weight=1)
-        cols_hist = ('ID', 'Data Contagem', 'Responsável')
+        
+        cols_hist = ('ID', 'Data', 'Nome', 'Responsável')
         self.tree_hist_contagens = ttk.Treeview(frame_historico, columns=cols_hist, show='headings', selectmode='browse', height=5)
-        self.tree_hist_contagens.heading('ID', text='ID'); self.tree_hist_contagens.column('ID', width=40, anchor='center')
-        self.tree_hist_contagens.heading('Data Contagem', text='Data'); self.tree_hist_contagens.column('Data Contagem', width=100, anchor='center')
-        self.tree_hist_contagens.heading('Responsável', text='Responsável'); self.tree_hist_contagens.column('Responsável', width=150)
+        self.tree_hist_contagens.heading('ID', text='ID'); self.tree_hist_contagens.column('ID', width=30, anchor='center')
+        self.tree_hist_contagens.heading('Data', text='Data'); self.tree_hist_contagens.column('Data', width=80, anchor='center')
+        self.tree_hist_contagens.heading('Nome', text='Nome/Ref'); self.tree_hist_contagens.column('Nome', width=120)
+        self.tree_hist_contagens.heading('Responsável', text='Responsável'); self.tree_hist_contagens.column('Responsável', width=120)
         self.tree_hist_contagens.grid(row=0, column=0, sticky="nsew")
         self.tree_hist_contagens.bind("<<TreeviewSelect>>", self.carregar_itens_contagem_historico)
         cols_hist_itens = ('Produto', 'Qtd Contada', 'UN')
@@ -1260,15 +1269,19 @@ class AppGestaoEstoque:
             return
         data_contagem = self.date_contagem.get_date().strftime('%Y-%m-%d')
         funcionario_id = self.id_funcionario_contagem 
+        nome_cont = self.entry_nome_contagem.get().strip() or "Geral"
         try:
             sucesso, msg = database.salvar_contagem_estoque(
                 data_contagem,
                 funcionario_id,
-                self.lista_itens_para_salvar_contagem
+                self.lista_itens_para_salvar_contagem,
+                nome_cont
             )
             if sucesso:
                 messagebox.showinfo("Sucesso", msg, parent=self.root)
                 for i in self.tree_contagem_atual.get_children(): self.tree_contagem_atual.delete(i)
+                self.entry_nome_contagem.delete(0, tk.END)
+                self.entry_nome_contagem.insert(0, "Geral")
                 self.lista_itens_para_salvar_contagem.clear()
                 self.atualizar_lista_contagens_historico()
             else:
@@ -1291,11 +1304,14 @@ class AppGestaoEstoque:
                 # Tratamento seguro para compatibilidade Date vs String
                 raw_date = c.DataContagem
                 data_f = raw_date.strftime('%d/%m/%Y') if hasattr(raw_date, 'strftime') else str(raw_date)[:10]
-
-                nome_display = f"ID: {c.ContagemID} - {data_f} ({c.NomeCompleto})"
-
-                self.tree_hist_contagens.insert("", "end", values=(c.ContagemID, data_f, c.NomeCompleto))
-
+                
+                nome_contagem_db = getattr(c, 'NomeContagem', 'Geral')
+                if not nome_contagem_db: nome_contagem_db = 'Geral'
+                
+                nome_display = f"ID: {c.ContagemID} - {data_f} - {nome_contagem_db} ({c.NomeCompleto})"
+                
+                self.tree_hist_contagens.insert("", "end", values=(c.ContagemID, data_f, nome_contagem_db, c.NomeCompleto))
+                
                 nomes_contagens.append(nome_display)
                 self.mapa_contagens_historico[nome_display] = c.ContagemID
 
@@ -1544,7 +1560,10 @@ class AppGestaoEstoque:
             # Adiciona as contagens físicas reais
             for c in contagens:
                 data_f = c.DataContagem.strftime('%d/%m/%Y')
-                nome_display = f"ID: {c.ContagemID} - {data_f} ({c.NomeCompleto})"
+                nome_contagem_db = getattr(c, 'NomeContagem', 'Geral')
+                if not nome_contagem_db: nome_contagem_db = 'Geral'
+                
+                nome_display = f"ID: {c.ContagemID} - {data_f} - {nome_contagem_db} ({c.NomeCompleto})"
                 nomes_contagens.append(nome_display)
                 self.mapa_contagens_historico[nome_display] = c.ContagemID
 

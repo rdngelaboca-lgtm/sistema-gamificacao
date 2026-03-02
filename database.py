@@ -159,6 +159,15 @@ def verificar_migracao_banco():
                 conn.commit()
                 logger.info("Migração concluída: Coluna 'Categoria' adicionada.")
         
+            # 2.3. Migração de ContagensEstoque (NomeContagem)
+            try:
+                cursor.execute("SELECT TOP 1 NomeContagem FROM ContagensEstoque")
+            except Exception:
+                logger.info("Coluna 'NomeContagem' não encontrada. Criando...")
+                cursor.execute("ALTER TABLE ContagensEstoque ADD NomeContagem VARCHAR(100) DEFAULT 'Geral'")
+                conn.commit()
+                logger.info("Migração concluída: Coluna 'NomeContagem' adicionada.")
+
             # 2.1. GARANTIA DE TAREFAS DE SISTEMA (Auto-Reparo de FK)
             # Verifica se a tarefa de Feedback (ID 5) existe. Se não, cria forçadamente.
             try:
@@ -6099,7 +6108,7 @@ def excluir_nota_fiscal_entrada(nota_id):
     return False        
             
 
-def salvar_contagem_estoque(data_contagem, funcionario_id, lista_itens_contados):
+def salvar_contagem_estoque(data_contagem, funcionario_id, lista_itens_contados, nome_contagem="Geral"):
     """
     Salva uma nova contagem de estoque e seus itens de forma transacional.
     'lista_itens_contados' é uma lista de dicts: [{'ProdutoID', 'QuantidadeContada'}]
@@ -6113,11 +6122,11 @@ def salvar_contagem_estoque(data_contagem, funcionario_id, lista_itens_contados)
         
         # 1. Inserir o Cabeçalho da Contagem
         sql_contagem = """
-            INSERT INTO ContagensEstoque (DataContagem, FuncionarioID)
+            INSERT INTO ContagensEstoque (DataContagem, FuncionarioID, NomeContagem)
             OUTPUT INSERTED.ContagemID
-            VALUES (?, ?)
+            VALUES (?, ?, ?)
         """
-        cursor.execute(sql_contagem, data_contagem, funcionario_id)
+        cursor.execute(sql_contagem, data_contagem, funcionario_id, nome_contagem)
         
         nova_contagem_id = cursor.fetchone()[0]
         
@@ -6156,7 +6165,7 @@ def listar_contagens_cabecalho():
         try:
             cursor = conn.cursor()
             sql = """
-                SELECT C.ContagemID, C.DataContagem, F.NomeCompleto
+                SELECT C.ContagemID, C.DataContagem, F.NomeCompleto, C.NomeContagem
                 FROM ContagensEstoque C
                 JOIN Funcionarios F ON C.FuncionarioID = F.FuncionarioID
                 ORDER BY C.DataContagem DESC

@@ -62,6 +62,11 @@
         <div style="text-align: center; color: #888; margin-top: 20px;">Nenhum item contado.</div>
     </div>
 
+    <div class="input-group" style="margin-top: 15px;">
+        <label>Nome / Referência da Contagem</label>
+        <input type="text" id="nome-contagem-input" placeholder="Ex: Freezer 1, Prateleira A..." maxlength="50">
+    </div>
+
     <button class="btn-salvar" onclick="finalizarContagem()">💾 Salvar Contagem</button>
 
     <div id="painel-busca">
@@ -324,16 +329,17 @@
             if(!confirm("Salvar contagem?")) return;
 
             try {
+                const nomeContagem = document.getElementById('nome-contagem-input').value.trim() || 'Mobile (Sem Nome)';
                 const res = await fetch('/api/contagem/salvar-mobile', {
                     method: 'POST', headers: {'Content-Type': 'application/json'},
-                    // REQ 1: Voltando para o ID 2 padrão do sistema de gestão
-                    body: JSON.stringify({ funcionario_id: 2, itens: itensContados })
+                    body: JSON.stringify({ funcionario_id: 2, itens: itensContados, nome_contagem: nomeContagem })
                 });
                 if (res.ok) {
                     alert("✅ Contagem Salva!");
                     // LIMPA A MEMÓRIA E O CACHE DO NAVEGADOR
                     itensContados = []; 
                     localStorage.removeItem('rascunhoContagemEstoque');
+                    document.getElementById('nome-contagem-input').value = '';
                     renderizarLista();
                     statusEl.textContent = "Pronto para bipar...";
                     statusEl.className = "status-msg";

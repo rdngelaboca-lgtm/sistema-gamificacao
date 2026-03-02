@@ -1022,16 +1022,16 @@ def rota_criar_unidade():
 def rota_salvar_contagem_mobile():
     """Recebe o JSON do celular e salva no banco."""
     dados = request.json
-    # dados = { 'funcionario_id': 2, 'itens': [ {'ProdutoID': 1, 'QuantidadeContada': 10}, ... ] }
 
     data_hoje = datetime.now().strftime('%Y-%m-%d')
     funcionario_id = dados.get('funcionario_id', 2) # Default Gestor se não vier
     itens = dados.get('itens', [])
+    nome_contagem = dados.get('nome_contagem', 'Mobile (Sem Nome)')
 
     if not itens:
         return jsonify({"sucesso": False, "erro": "Lista vazia"}), 400
 
-    sucesso, msg = database.salvar_contagem_estoque(data_hoje, funcionario_id, itens)
+    sucesso, msg = database.salvar_contagem_estoque(data_hoje, funcionario_id, itens, nome_contagem)
 
     if sucesso:
         return jsonify({"sucesso": True, "msg": msg})
