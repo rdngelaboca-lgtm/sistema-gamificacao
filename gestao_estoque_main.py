@@ -1377,31 +1377,117 @@ class AppGestaoEstoque:
             sel = tree.focus()
             if not sel: return
             vals = tree.item(sel, 'values')
-            contagem_id, nome_avulso = vals[0], vals[2]
+            contagem_id, nome_avulso, qtd_contada, ean_fornecido = vals[0], vals[2], vals[3], vals[4]
 
             edit_win = Toplevel(popup)
-            edit_win.title("Vincular Avulso ao Mestre")
-            edit_win.geometry("400x200")
+            edit_win.title("Resolução Inteligente de Avulsos")
+            edit_win.geometry("580x550")
             edit_win.transient(popup)
 
-            ttk.Label(edit_win, text=f"Avulso: {nome_avulso}", font=("Arial", 10, "bold")).pack(pady=10)
-            ttk.Label(edit_win, text="Vincular ao Catálogo Mestre:").pack()
-            combo_mestre = ttk.Combobox(edit_win, values=self.lista_mestre_produtos_nomes, state="readonly", width=40)
-            combo_mestre.pack(pady=10)
+            ttk.Label(edit_win, text=f"Item Contado: {nome_avulso}", font=("Arial", 11, "bold")).pack(pady=(10,2), padx=10, anchor="w")
+            ttk.Label(edit_win, text=f"Qtd Original: {qtd_contada} | EAN Bipado: {ean_fornecido}", font=("Arial", 9), foreground="blue").pack(pady=(0,10), padx=10, anchor="w")
 
-            def vincular():
-                selecionado = combo_mestre.get()
-                if not selecionado: return
-                mestre_id = self.mapa_produtos_mestre.get(selecionado)
-                if database.vincular_item_avulso_contagem(contagem_id, nome_avulso, mestre_id):
-                    messagebox.showinfo("Sucesso", "Item integrado à contagem oficial!", parent=edit_win)
-                    edit_win.destroy()
-                    carregar()
-                    self.carregar_itens_contagem_historico() # Atualiza tela de trás
-                else:
-                    messagebox.showerror("Erro", "Falha ao vincular.", parent=edit_win)
+            notebook_res = ttk.Notebook(edit_win)
+            notebook_res.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
-            ttk.Button(edit_win, text="✅ Vincular e Transferir Saldo", command=vincular).pack(pady=10)
+            # --- ABA A: Vínculo Direto ---
+            tab_direto = ttk.Frame(notebook_res, padding="10")
+            notebook_res.add(tab_direto, text='Opção A: Produto Normal')
+
+            ttk.Label(tab_direto, text="Este item já existe no sistema na medida correta (UN ou KG).\nSó esquecemos de cadastrar o código de barras.", font=("Arial", 9, "italic")).pack(anchor="w", pady=(0,15))
+
+            ttk.Label(tab_direto, text="Vincular ao Produto Mestre:").pack(anchor="w")
+            combo_mestre = ttk.Combobox(tab_direto, values=self.lista_mestre_produtos_nomes, state="readonly", width=50)
+            combo_mestre.pack(fill="x", pady=5)
+
+            ttk.Label(tab_direto, text="Ajuste de Quantidade a Lançar:").pack(anchor="w", pady=(10,0))
+            entry_qtd_a = ttk.Entry(tab_direto, width=15)
+            entry_qtd_a.pack(anchor="w", pady=5)
+            entry_qtd_a.insert(0, qtd_contada.strip())
+
+            var_salvar_ean = tk.BooleanVar(value=True)
+            check_ean = ttk.Checkbutton(tab_direto, text=f"Aprender EAN {ean_fornecido} para não dar erro na próxima vez?", variable=var_salvar_ean)
+            if ean_fornecido != "Sem EAN": check_ean.pack(anchor="w", pady=10)
+
+            def salvar_direto():
+                sel_mestre = combo_mestre.get()
+                if not sel_mestre: return messagebox.showerror("Erro", "Selecione o Mestre.", parent=edit_win)
+                try: nova_qtd = Decimal(entry_qtd_a.get().replace(",", "."))
+                except InvalidOperation: return messagebox.showerror("Erro", "Qtd inválida.", parent=edit_win)
+
+                mestre_id = self.mapa_produtos_mestre.get(sel_mestre)
+                salvar_perm = var_salvar_ean.get() if ean_fornecido != "Sem EAN" else False
+
+                if database.vincular_item_avulso_inteligente(contagem_id, nome_avulso, mestre_id, nova_qtd, ean_fornecido, salvar_perm):
+                    messagebox.showinfo("Sucesso", "Item integrado com sucesso!", parent=edit_win)
+                    edit_win.destroy(); carregar(); self.carregar_itens_contagem_historico()
+                else: messagebox.showerror("Erro", "Falha ao gravar.", parent=edit_win)
+
+            ttk.Button(tab_direto, text="✅ Confirmar Vinculação (Opção A)", command=salvar_direto).pack(pady=15, fill="x", ipady=5)
+
+
+            # --- ABA B: Fracionar Caixa ---
+            tab_caixa = ttk.Frame(notebook_res, padding="10")
+            notebook_res.add(tab_caixa, text='Opção B: Desmembrar Caixa')
+
+            ttk.Label(tab_caixa, text="Este item é a UNIDADE de uma caixa que compramos fechada.\nO sistema calculará o custo e aprenderá o código de barras novo.", font=("Arial", 9, "italic")).pack(anchor="w", pady=(0,10))
+
+            ttk.Label(tab_caixa, text="1. Buscar Cadastro da Caixa (por Nome XML ou Mestre):").pack(anchor="w")
+            frame_busca = ttk.Frame(tab_caixa)
+            frame_busca.pack(fill="x", pady=5)
+            entry_busca_caixa = ttk.Entry(frame_busca)
+            entry_busca_caixa.pack(side=tk.LEFT, fill="x", expand=True, padx=(0,5))
+
+            tree_caixas = ttk.Treeview(tab_caixa, columns=('ID', 'Mestre', 'Desc XML', 'Forn'), show='headings', height=4)
+            tree_caixas.heading('ID', text='ID'); tree_caixas.column('ID', width=0, stretch=tk.NO)
+            tree_caixas.heading('Mestre', text='Produto Mestre'); tree_caixas.column('Mestre', width=120)
+            tree_caixas.heading('Desc XML', text='Descrição NF'); tree_caixas.column('Desc XML', width=150)
+            tree_caixas.heading('Forn', text='Fornecedor'); tree_caixas.column('Forn', width=100)
+            tree_caixas.pack(fill="x", pady=5)
+
+            def buscar_caixas():
+                termo = entry_busca_caixa.get()
+                if not termo: return
+                for i in tree_caixas.get_children(): tree_caixas.delete(i)
+                # Reutiliza inteligentemente a função da API do celular
+                res = database.buscar_produtos_mobile_por_nome(termo)
+                for r in res:
+                    # r = [ProdutoFornecedorID, NomeMestre, DescricaoXML, Fornecedor...]
+                    tree_caixas.insert("", "end", values=(r[0], r[1], r[2], r[3]))
+
+            entry_busca_caixa.bind("<Return>", lambda e: buscar_caixas())
+            ttk.Button(frame_busca, text="🔍 Buscar", command=buscar_caixas).pack(side=tk.LEFT)
+
+            ttk.Label(tab_caixa, text="2. Quantas unidades vêm na caixa selecionada acima?").pack(anchor="w", pady=(10,0))
+            entry_fator_caixa = ttk.Entry(tab_caixa, width=15)
+            entry_fator_caixa.pack(anchor="w", pady=5)
+
+            ttk.Label(tab_caixa, text="3. Quantidade de UNIDADES contadas na loja:").pack(anchor="w", pady=(10,0))
+            entry_qtd_b = ttk.Entry(tab_caixa, width=15)
+            entry_qtd_b.pack(anchor="w", pady=5)
+            entry_qtd_b.insert(0, qtd_contada.strip())
+
+            def salvar_fracao():
+                sel_caixa = tree_caixas.focus()
+                if not sel_caixa: return messagebox.showerror("Erro", "Selecione a Caixa na tabela.", parent=edit_win)
+                id_vinculo_caixa = tree_caixas.item(sel_caixa, 'values')[0]
+
+                try:
+                    qtd_na_caixa = float(entry_fator_caixa.get().replace(",", "."))
+                    nova_qtd_contada = Decimal(entry_qtd_b.get().replace(",", "."))
+                    if qtd_na_caixa <= 0: raise ValueError
+                except: return messagebox.showerror("Erro", "Valores preenchidos inválidos.", parent=edit_win)
+
+                if ean_fornecido == "Sem EAN" or not ean_fornecido:
+                    return messagebox.showerror("Erro", "Para desmembrar uma caixa, o item avulso deve ter um Código de Barras válido bipado no celular.", parent=edit_win)
+
+                sucesso, msg = database.resolver_avulso_fracionando_caixa(contagem_id, nome_avulso, id_vinculo_caixa, ean_fornecido, qtd_na_caixa, nova_qtd_contada)
+                if sucesso:
+                    messagebox.showinfo("Sucesso", msg, parent=edit_win)
+                    edit_win.destroy(); carregar(); self.carregar_itens_contagem_historico()
+                else: messagebox.showerror("Erro", msg, parent=edit_win)
+
+            ttk.Button(tab_caixa, text="📦 Desmembrar e Confirmar (Opção B)", command=salvar_fracao).pack(pady=15, fill="x", ipady=5)
 
         tree.bind("<Double-1>", resolver_clicado)
         carregar()

@@ -6287,6 +6287,90 @@ def vincular_item_avulso_contagem(contagem_id, nome_avulso, produto_id_mestre):
             conn.close()
     return False
 
+def vincular_item_avulso_inteligente(contagem_id, nome_avulso, produto_id_mestre, nova_qtd, ean, salvar_permanente):
+    """
+    Substitui o avulso na contagem aplicando a quantidade corrigida.
+    Se 'salvar_permanente' for True, herda os dados do fornecedor do Mestre
+    e cria um vínculo definitivo para este novo EAN.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+
+            # 1. TRATA A CONTAGEM FÍSICA (Aplica a quantidade ajustada pelo gestor)
+            cursor.execute("SELECT QuantidadeContada FROM ItensContagemEstoque WHERE ContagemID = ? AND ProdutoID = ?", contagem_id, produto_id_mestre)
+            existente = cursor.fetchone()
+
+            if existente:
+                cursor.execute("UPDATE ItensContagemEstoque SET QuantidadeContada = QuantidadeContada + ? WHERE ContagemID = ? AND ProdutoID = ?", nova_qtd, contagem_id, produto_id_mestre)
+                cursor.execute("DELETE FROM ItensContagemEstoque WHERE ContagemID = ? AND NomeAvulso = ?", contagem_id, nome_avulso)
+            else:
+                cursor.execute("UPDATE ItensContagemEstoque SET ProdutoID = ?, QuantidadeContada = ?, NomeAvulso = NULL, EANAvulso = NULL WHERE ContagemID = ? AND NomeAvulso = ?", produto_id_mestre, nova_qtd, contagem_id, nome_avulso)
+
+            # 2. AUTO-APRENDIZAGEM DO SISTEMA (Grava o EAN para o futuro)
+            if salvar_permanente and ean and ean != "Sem EAN":
+                # Checa se o EAN já não foi cadastrado em paralelo
+                cursor.execute("SELECT 1 FROM ProdutosFornecedor WHERE EAN = ?", ean)
+                if not cursor.fetchone():
+                    # Herança Inteligente: Pega o vínculo mais recente deste Produto Mestre
+                    # para herdar o FornecedorID e o NCM e não deixar o banco sujo.
+                    cursor.execute("SELECT TOP 1 FornecedorID, NCM, DescricaoXML FROM ProdutosFornecedor WHERE ProdutoID = ? ORDER BY ProdutoFornecedorID DESC", produto_id_mestre)
+                    ref = cursor.fetchone()
+
+                    if ref:
+                        forn_id, ncm, desc_xml = ref
+                        nova_desc = f"{desc_xml} (EAN APRENDIDO)"
+                        # Insere com fator 1 (assumindo que bipou uma unidade)
+                        cursor.execute("""
+                            INSERT INTO ProdutosFornecedor (ProdutoID, FornecedorID, DescricaoXML, EAN, NCM, FatorConversao)
+                            VALUES (?, ?, ?, ?, ?, 1.0)
+                        """, produto_id_mestre, forn_id, nova_desc, ean, ncm)
+                        logger.info(f"EAN {ean} aprendido automaticamente e vinculado ao Mestre ID {produto_id_mestre}.")
+
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Erro no vínculo inteligente: {e}")
+            conn.rollback()
+            return False
+        finally:
+            conn.close()
+    return False
+
+def resolver_avulso_fracionando_caixa(contagem_id, nome_avulso, id_vinculo_caixa, novo_ean, qtd_na_caixa, qtd_contada):
+    """
+    Função híbrida para o Desktop: Cria o vínculo da unidade a partir de uma caixa
+    e, imediatamente após, resolve o item avulso apontando para o Produto Mestre da caixa.
+    """
+    # 1. Cria a unidade no banco (Clona o vínculo da caixa, calcula custo/fator e grava o EAN)
+    sucesso_criacao, msg_criacao = criar_unidade_a_partir_de_caixa(id_vinculo_caixa, novo_ean, qtd_na_caixa)
+    if not sucesso_criacao: 
+        return False, msg_criacao
+
+    # 2. Descobre qual é o Produto Mestre dessa caixa recém-desmembrada
+    conn = get_db_connection()
+    produto_id_mestre = None
+    if conn:
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT ProdutoID FROM ProdutosFornecedor WHERE ProdutoFornecedorID = ?", id_vinculo_caixa)
+            res = cursor.fetchone()
+            if res: produto_id_mestre = res[0]
+        finally:
+            conn.close()
+
+    if not produto_id_mestre: 
+        return False, "Unidade criada, mas falha ao localizar o Produto Mestre para a contagem."
+
+    # 3. Resolve o Avulso na Contagem
+    # (Passamos False no final pois o EAN já foi aprendido no passo 1)
+    ok = vincular_item_avulso_inteligente(contagem_id, nome_avulso, produto_id_mestre, qtd_contada, novo_ean, False)
+    if ok: 
+        return True, "Caixa desmembrada, EAN aprendido e Contagem atualizada com sucesso!"
+    
+    return False, "Erro na etapa final de atualizar a contagem."
+
 def atualizar_qtd_item_contagem(contagem_id, produto_id, nome_avulso, nova_qtd):
     conn = get_db_connection()
     if conn:
