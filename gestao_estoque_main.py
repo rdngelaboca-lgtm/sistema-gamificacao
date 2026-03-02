@@ -1820,11 +1820,12 @@ class AppGestaoEstoque:
         frame_cont = ttk.LabelFrame(paned, text="Gerenciar Contagens de Estoque", padding="10")
         paned.add(frame_cont, weight=1)
 
-        cols_cont = ('ID', 'Data', 'Responsável')
+        cols_cont = ('ID', 'Data', 'Nome', 'Responsável')
         self.tree_admin_cont = ttk.Treeview(frame_cont, columns=cols_cont, show='headings', selectmode='extended')
-        self.tree_admin_cont.heading('ID', text='ID'); self.tree_admin_cont.column('ID', width=40, anchor='center')
-        self.tree_admin_cont.heading('Data', text='Data'); self.tree_admin_cont.column('Data', width=100, anchor='center')
-        self.tree_admin_cont.heading('Responsável', text='Responsável'); self.tree_admin_cont.column('Responsável', width=150)
+        self.tree_admin_cont.heading('ID', text='ID'); self.tree_admin_cont.column('ID', width=30, anchor='center')
+        self.tree_admin_cont.heading('Data', text='Data'); self.tree_admin_cont.column('Data', width=80, anchor='center')
+        self.tree_admin_cont.heading('Nome', text='Nome/Ref'); self.tree_admin_cont.column('Nome', width=150)
+        self.tree_admin_cont.heading('Responsável', text='Responsável'); self.tree_admin_cont.column('Responsável', width=130)
 
         sb_cont = ttk.Scrollbar(frame_cont, orient="vertical", command=self.tree_admin_cont.yview)
         self.tree_admin_cont.configure(yscrollcommand=sb_cont.set)
@@ -1864,8 +1865,15 @@ class AppGestaoEstoque:
         try:
             contagens = database.listar_contagens_cabecalho()
             for c in contagens:
-                data_fmt = c.DataContagem.strftime('%d/%m/%Y')
-                self.tree_admin_cont.insert("", "end", values=(c.ContagemID, data_fmt, c.NomeCompleto))
+                # Tratamento seguro de data (reaproveitando a lógica que criamos)
+                raw_date = c.DataContagem
+                data_fmt = raw_date.strftime('%d/%m/%Y') if hasattr(raw_date, 'strftime') else str(raw_date)[:10]
+
+                # Resgata o nome da contagem
+                nome_contagem_db = getattr(c, 'NomeContagem', 'Geral')
+                if not nome_contagem_db: nome_contagem_db = 'Geral'
+
+                self.tree_admin_cont.insert("", "end", values=(c.ContagemID, data_fmt, nome_contagem_db, c.NomeCompleto))
         except Exception as e:
             print(f"Erro lista admin Contagem: {e}")
 
