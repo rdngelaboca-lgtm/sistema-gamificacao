@@ -264,7 +264,6 @@ class AppGestaoEstoque:
             self.tree_produtos.delete(i)
         try:
             produtos = database.listar_produtos_estoque()
-            self.mapa_produtos_mestre_contagem.clear()
 
             # Captura valores dos filtros
             termo = self.entry_filtro_mestre.get().lower() if hasattr(self, 'entry_filtro_mestre') else ""
@@ -282,7 +281,6 @@ class AppGestaoEstoque:
                 tag = 'par' if count % 2 == 0 else 'impar'
 
                 self.tree_produtos.insert("", "end", values=(p.ProdutoID, p.NomeProduto, p.UnidadeMedida, cat, f"{p.EstoqueMinimo:.3f}"), tags=(tag,))
-                self.mapa_produtos_mestre_contagem[p.NomeProduto] = {'id': p.ProdutoID, 'un': p.UnidadeMedida}
                 count += 1
 
             # Atualiza o rodapé numérico
@@ -672,18 +670,30 @@ class AppGestaoEstoque:
             self.combo_produtos_mestre.set('')
 
     def popular_combobox_produtos_mestre(self):
-        # ... (código idêntico ao anterior) ...
         try:
             produtos = database.listar_produtos_estoque()
+
+            # Limpa memórias globais
             self.mapa_produtos_mestre.clear()
             self.lista_mestre_produtos_nomes.clear() 
+            self.mapa_produtos_mestre_contagem.clear() 
+
             nomes_produtos_mestre = []
+
             for p in produtos:
+                # Dados para a Aba 3 (Vínculos)
                 nome_display = f"{p.NomeProduto} (ID: {p.ProdutoID})"
                 nomes_produtos_mestre.append(nome_display)
                 self.mapa_produtos_mestre[nome_display] = p.ProdutoID
+
+                # Dados para a Aba 4 (Contagem - Independente de filtros)
+                self.mapa_produtos_mestre_contagem[p.NomeProduto] = {'id': p.ProdutoID, 'un': p.UnidadeMedida}
+
+            # Configurações da Aba 3
             self.lista_mestre_produtos_nomes = sorted(nomes_produtos_mestre) 
             self.combo_produtos_mestre['values'] = self.lista_mestre_produtos_nomes
+
+            # Configurações da Aba 4
             self.lista_mestre_contagem_nomes = sorted(list(self.mapa_produtos_mestre_contagem.keys()))
             if hasattr(self, 'combo_contagem_produtos'):
                 self.combo_contagem_produtos['values'] = self.lista_mestre_contagem_nomes
