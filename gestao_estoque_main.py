@@ -1323,15 +1323,15 @@ class AppGestaoEstoque:
         ttk.Label(frame_filtros, text="Cobrir próximos:").grid(row=1, column=0, sticky="w", padx=5, pady=5)
         
         # --- CORREÇÃO DO BUG .pack() ---
-        # Criamos um sub-frame para o spinbox e o label "meses."
+        # Criamos um sub-frame para o spinbox e o label "dias."
         frame_spin = ttk.Frame(frame_filtros)
         frame_spin.grid(row=1, column=1, sticky="w") # .grid() para o sub-frame
-        
-        self.spin_meses_cobertura = ttk.Spinbox(frame_spin, from_=1, to=12, width=5)
-        self.spin_meses_cobertura.set("1") 
-        self.spin_meses_cobertura.pack(side=tk.LEFT, padx=5) # .pack() dentro do sub-frame
-        
-        ttk.Label(frame_spin, text="meses.").pack(side=tk.LEFT) # .pack() dentro do sub-frame
+
+        self.spin_dias_cobertura = ttk.Spinbox(frame_spin, from_=1, to=365, width=5)
+        self.spin_dias_cobertura.set("30") 
+        self.spin_dias_cobertura.pack(side=tk.LEFT, padx=5) # .pack() dentro do sub-frame
+
+        ttk.Label(frame_spin, text="dias.").pack(side=tk.LEFT) # .pack() dentro do sub-frame
         # --- FIM DA CORREÇÃO ---
         
         btn_gerar_sugestao = ttk.Button(frame_filtros, text="Gerar Sugestão de Compra", command=self.gerar_sugestao_compra)
@@ -1384,21 +1384,19 @@ class AppGestaoEstoque:
         
         self.tree_sugestao.bind("<Double-1>", self.abrir_popup_historico_compras)
 
-    # --- FUNÇÃO ATUALIZADA (v3 - Lógica por Período) ---
     def gerar_sugestao_compra(self):
         """Busca o relatório do banco baseado no período selecionado e calcula a sugestão."""
         try:
-            # Validação robusta do Spinbox (evita erro se estiver vazio)
-            valor_spin = self.spin_meses_cobertura.get().strip()
-            # CORREÇÃO: Garante que, se o valor for vazio, ele seja tratado como 1
-            if not valor_spin.isdigit(): # Verifica se é vazio ou não numérico
-                meses_cobertura = 1
-                self.spin_meses_cobertura.set("1")
+            # Validação robusta do Spinbox agora em DIAS
+            valor_spin = self.spin_dias_cobertura.get().strip()
+            if not valor_spin.isdigit(): 
+                dias_para_cobrir = 30 # Padrão seguro de 1 mês
+                self.spin_dias_cobertura.set("30")
             else:
-                meses_cobertura = int(valor_spin)
+                dias_para_cobrir = int(valor_spin)
 
-            # Converte para Decimal para garantir precisão no cálculo com UMD
-            dias_cobertura = Decimal(meses_cobertura * 30)
+            # Converte direto para Decimal usando os dias exatos solicitados
+            dias_cobertura = Decimal(dias_para_cobrir)
 
             str_contagem_inicio = self.combo_contagem_inicio.get()
             str_contagem_fim = self.combo_contagem_fim.get()
