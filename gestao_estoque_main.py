@@ -1833,83 +1833,104 @@ class AppGestaoEstoque:
 
     def abrir_popup_historico_compras(self, event):
         selecionado = self.tree_sugestao.focus()
-        if not selecionado:
-            return
-
-        try:
-            # O IID foi definido como ProdutoID na inserção, mas protegemos a conversão
-            produto_id = int(selecionado)
-        except ValueError:
-            # Se clicou em algo que não tem ID numérico
-            return
+        if not selecionado: return
+        try: produto_id = int(selecionado)
+        except ValueError: return
 
         dados_produto = self.cache_relatorio_posicao.get(produto_id)
-
-        # Proteção contra Cache Desatualizado
         if not dados_produto:
-            messagebox.showwarning("Dados Desatualizados", "As informações deste produto não estão mais na memória.\nPor favor, clique em 'Gerar Sugestão' novamente.", parent=self.root)
+            messagebox.showwarning("Aviso", "Gere a sugestão novamente para atualizar o cache.", parent=self.root)
             return
 
         nome_produto = dados_produto['NomeProduto']
         popup = Toplevel(self.root)
-        popup.title(f"Histórico de Compras - {nome_produto}")
-        popup.geometry("800x500")
+        popup.title(f"Histórico e Correção de Compras - {nome_produto}")
+        popup.geometry("850x500")
         popup.transient(self.root)
 
         frame = ttk.Frame(popup, padding="10")
         frame.pack(fill=tk.BOTH, expand=True)
-        frame.rowconfigure(0, weight=1)
+        
+        ttk.Label(frame, text="⚠️ DICA: Dê um duplo-clique em uma linha para corrigir quantidades e custos antigos importados com fator errado.", foreground="red", font=("Arial", 9, "bold")).pack(anchor="w", pady=(0, 10))
+
+        frame.rowconfigure(1, weight=1)
         frame.columnconfigure(0, weight=1)
 
-        cols_hist = ('Data Compra', 'NF', 'Fornecedor', 'Qtd', 'Custo Unit.')
-        tree_hist = ttk.Treeview(frame, columns=cols_hist, show='headings')
+        # Adicionado o ItemNotaID invisível na tabela
+        cols_hist = ('Data Compra', 'NF', 'Fornecedor', 'Qtd', 'Custo Unit.', 'ItemNotaID')
+        tree_hist = ttk.Treeview(frame, columns=cols_hist, show='headings', selectmode='browse')
 
-        for col in cols_hist: 
-            tree_hist.heading(col, text=col)
+        tree_hist.heading('Data Compra', text='Data Compra'); tree_hist.column('Data Compra', width=100, anchor='center')
+        tree_hist.heading('NF', text='NF'); tree_hist.column('NF', width=80, anchor='center')
+        tree_hist.heading('Fornecedor', text='Fornecedor'); tree_hist.column('Fornecedor', width=250)
+        tree_hist.heading('Qtd', text='Qtd'); tree_hist.column('Qtd', width=80, anchor='e')
+        tree_hist.heading('Custo Unit.', text='Custo Unit.'); tree_hist.column('Custo Unit.', width=100, anchor='e')
+        tree_hist.heading('ItemNotaID', text='ID Oculto'); tree_hist.column('ItemNotaID', width=0, stretch=tk.NO)
 
-        tree_hist.column('Data Compra', width=100, anchor='center')
-        tree_hist.column('NF', width=80, anchor='center')
-        tree_hist.column('Fornecedor', width=250)
-        tree_hist.column('Qtd', width=80, anchor='e')
-        tree_hist.column('Custo Unit.', width=100, anchor='e')
+        sb = ttk.Scrollbar(frame, orient="vertical", command=tree_hist.yview)
+        tree_hist.configure(yscrollcommand=sb.set)
+        tree_hist.grid(row=1, column=0, sticky="nsew")
+        sb.grid(row=1, column=1, sticky="ns")
 
-        scrollbar = ttk.Scrollbar(frame, orient="vertical", command=tree_hist.yview)
-        tree_hist.configure(yscrollcommand=scrollbar.set)
-        tree_hist.grid(row=0, column=0, sticky="nsew")
-        scrollbar.grid(row=0, column=1, sticky="ns")
+        def carregar_dados():
+            for i in tree_hist.get_children(): tree_hist.delete(i)
+            try:
+                historico = database.buscar_historico_compras_produto(produto_id)
+                for compra in historico:
+                    # Formatação da data
+                    raw_date = compra.DataEmissao
+                    data_f = "--/--/----"
+                    if raw_date:
+                        data_f = raw_date.strftime('%d/%m/%Y') if hasattr(raw_date, 'strftime') else str(raw_date)[:10]
 
-        try:
-            historico = database.buscar_historico_compras_produto(produto_id)
-            if not historico:
-                tree_hist.insert("", "end", values=("Nenhuma compra encontrada.", "", "", "", ""))
+                    qtd_f = f"{compra.Quantidade:.3f}"
+                    custo_f = f"R$ {compra.PrecoCustoUnitario:.4f}"
+                    item_id = compra.ItemNotaID # O ID que criamos no banco
 
-            for compra in historico:
-                # --- CORREÇÃO DE FORMATAÇÃO DE DATA ---
-                raw_date = compra.DataEmissao
-                data_f = "--/--/----"
+                    tree_hist.insert("", "end", values=(data_f, compra.NumeroNF, compra.NomeFantasia, qtd_f, custo_f, item_id))
+            except Exception as e:
+                messagebox.showerror("Erro", f"Falha ao carregar histórico: {e}", parent=popup)
 
-                if raw_date:
-                    if hasattr(raw_date, 'strftime'):
-                        data_f = raw_date.strftime('%d/%m/%Y')
+        def editar_linha(event_tree):
+            sel = tree_hist.focus()
+            if not sel: return
+            vals = tree_hist.item(sel, 'values')
+            data_nf, num_nf, qtd_atual, custo_atual, item_nota_id = vals[0], vals[1], vals[3], vals[4], vals[5]
+
+            edit_win = Toplevel(popup)
+            edit_win.title(f"Corrigir NF {num_nf} ({data_nf})")
+            edit_win.geometry("300x200")
+            edit_win.transient(popup)
+
+            ttk.Label(edit_win, text="Qtd Exata que Entrou na Loja:").pack(pady=(10,2))
+            e_qtd = ttk.Entry(edit_win, justify="center")
+            e_qtd.pack(pady=2)
+            e_qtd.insert(0, qtd_atual.replace('.', 'X').replace(',', '.').replace('X', '').strip()) # Tratamento para colocar no input
+
+            ttk.Label(edit_win, text="Custo da Unidade (R$):").pack(pady=(10,2))
+            e_custo = ttk.Entry(edit_win, justify="center")
+            e_custo.pack(pady=2)
+            e_custo.insert(0, custo_atual.replace("R$ ", "").replace(".", "").replace(",", ".").strip())
+
+            def salvar():
+                try:
+                    n_qtd = Decimal(e_qtd.get().replace(",", "."))
+                    n_custo = Decimal(e_custo.get().replace(",", "."))
+                    
+                    if database.atualizar_item_historico_compra(item_nota_id, n_qtd, n_custo):
+                        edit_win.destroy()
+                        carregar_dados() # Recarrega a tabelinha
+                        # Mostra um aviso pro gestor recalcular a tela de trás
+                        messagebox.showinfo("Sucesso", "Histórico corrigido!\nClique em 'Gerar Sugestão' novamente para ver a matemática atualizada.", parent=popup)
                     else:
-                        # Tenta converter string YYYY-MM-DD para BR
-                        try:
-                            # Pega os primeiros 10 chars (caso venha com hora)
-                            data_str = str(raw_date)[:10] 
-                            dt_obj = datetime.strptime(data_str, '%Y-%m-%d')
-                            data_f = dt_obj.strftime('%d/%m/%Y')
-                        except:
-                            data_f = str(raw_date) # Fallback: mostra como veio
+                        messagebox.showerror("Erro", "Falha ao gravar no banco.", parent=edit_win)
+                except InvalidOperation:
+                    messagebox.showerror("Erro", "Use apenas números.", parent=edit_win)
 
-                qtd_f = f"{compra.Quantidade:.3f}"
-                custo_f = f"R$ {compra.PrecoCustoUnitario:.4f}"
+            ttk.Button(edit_win, text="💾 Salvar Correção", command=salvar).pack(pady=15)
 
-                tree_hist.insert("", "end", values=(
-                    data_f, compra.NumeroNF, compra.NomeFantasia, qtd_f, custo_f
-                ))
-
-        except Exception as e:
-            messagebox.showerror("Erro de Banco", f"Não foi possível buscar o histórico: {e}", parent=popup)
+        tree_hist.bind("<Double-1>", editar_linha)
+        carregar_dados()
 
     # ===================================================================
     # == ABA 7: SOLICITAÇÕES (Transplantada do main.py) =================

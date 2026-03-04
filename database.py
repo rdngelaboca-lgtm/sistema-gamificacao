@@ -6647,10 +6647,7 @@ def verificar_nota_fiscal_existente(numero_nf, fornecedor_id):
     return True # Assume que existe para evitar duplicidade se a conexão falhar
 
 def buscar_historico_compras_produto(produto_id_mestre):
-    """
-    Busca o histórico de todas as compras (itens de NF) para um 
-    produto mestre específico, para a tela de drill-down.
-    """
+    """Busca o histórico de compras, AGORA TRAZENDO O ItemNotaID para edição."""
     conn = get_db_connection()
     if conn:
         try:
@@ -6661,7 +6658,8 @@ def buscar_historico_compras_produto(produto_id_mestre):
                     NF.NumeroNF,
                     F.NomeFantasia,
                     INI.Quantidade,
-                    INI.PrecoCustoUnitario
+                    INI.PrecoCustoUnitario,
+                    INI.ItemNotaID -- <--- CAMPO CRUCIAL ADICIONADO
                 FROM ItensNotaFiscalEntrada INI
                 JOIN NotasFiscaisEntrada NF ON INI.NotaID = NF.NotaID
                 JOIN ProdutosFornecedor PF ON INI.ProdutoFornecedorID = PF.ProdutoFornecedorID
@@ -6672,12 +6670,33 @@ def buscar_historico_compras_produto(produto_id_mestre):
             cursor.execute(sql, produto_id_mestre)
             return cursor.fetchall()
         except Exception as e:
-            logger.error(f"ERRO ao buscar histórico de compras para ProdutoID {produto_id_mestre}: {e}", exc_info=True)
+            logger.error(f"ERRO ao buscar histórico de compras: {e}", exc_info=True)
             return []
         finally:
-            if conn:
-                conn.close()
+            if conn: conn.close()
     return []
+
+def atualizar_item_historico_compra(item_nota_id, nova_qtd, novo_custo):
+    """Atualiza a quantidade e o custo de uma entrada de nota fiscal do passado."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                UPDATE ItensNotaFiscalEntrada 
+                SET Quantidade = ?, PrecoCustoUnitario = ? 
+                WHERE ItemNotaID = ?
+            """
+            cursor.execute(sql, nova_qtd, novo_custo, item_nota_id)
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Erro ao atualizar histórico de compra ID {item_nota_id}: {e}")
+            conn.rollback()
+            return False
+        finally:
+            conn.close()
+    return False
 
 def buscar_configuracoes_escala():
     """Busca o único registro de configurações de escala, incluindo Jornada Padrão."""
@@ -8114,25 +8133,21 @@ def buscar_produtos_mobile_por_nome(termo):
 
 def criar_unidade_a_partir_de_caixa(id_origem, novo_ean, qtd_na_caixa):
     """
-    Cria um novo vínculo de UNIDADE (Fator 1) copiando dados exatos da caixa.
-    Registra custo fracionado na última nota (com qtd 0) para exibição em auditoria.
+    (MÁQUINA DO TEMPO) Transforma o Mestre em 'Unidade', atualiza o fator da Caixa,
+    cria o vínculo da unidade e REGRAVA O PASSADO no histórico de compras.
     """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
+            qtd_caixa_float = float(qtd_na_caixa)
+            if qtd_caixa_float <= 0: return False, "Quantidade inválida."
 
-            # 1. Pega os dados do cadastro da CAIXA (Origem)
+            # 1. Pega os dados do cadastro da CAIXA (Origem) e o Nome do Mestre Atual
             sql_origem = """
-                SELECT 
-                    PF.ProdutoID, PF.FornecedorID, PF.NCM, PF.DescricaoXML,
-                    (SELECT TOP 1 PrecoCustoUnitario FROM ItensNotaFiscalEntrada 
-                     WHERE ProdutoFornecedorID = PF.ProdutoFornecedorID 
-                     ORDER BY NotaID DESC) as UltimoCusto,
-                    (SELECT TOP 1 NotaID FROM ItensNotaFiscalEntrada 
-                     WHERE ProdutoFornecedorID = PF.ProdutoFornecedorID 
-                     ORDER BY NotaID DESC) as UltimaNotaID
+                SELECT PF.ProdutoID, PF.FornecedorID, PF.NCM, PF.DescricaoXML, PF.FatorConversao, P.NomeProduto
                 FROM ProdutosFornecedor PF
+                JOIN ProdutosEstoque P ON PF.ProdutoID = P.ProdutoID
                 WHERE PF.ProdutoFornecedorID = ?
             """
             cursor.execute(sql_origem, id_origem)
@@ -8141,40 +8156,49 @@ def criar_unidade_a_partir_de_caixa(id_origem, novo_ean, qtd_na_caixa):
             if not dados_caixa:
                 return False, "Cadastro origem não encontrado."
 
-            prod_id, forn_id, ncm, desc_xml, custo_caixa, ultima_nota_id = dados_caixa
-            if custo_caixa is None: custo_caixa = 0.0
+            prod_id, forn_id, ncm, desc_xml, fator_atual, nome_mestre_atual = dados_caixa
+            fator_atual = float(fator_atual) if fator_atual else 1.0
 
-            # 2. Calcula novo custo unitário fracionado
+            # 2. Renomeia o Produto Mestre para indicar que agora controla UNIDADES (Se já não tiver)
+            if "(UNIDADE)" not in nome_mestre_atual.upper() and "(UN)" not in nome_mestre_atual.upper():
+                novo_nome_mestre = f"{nome_mestre_atual} (UNIDADE)"
+                cursor.execute("UPDATE ProdutosEstoque SET NomeProduto = ?, UnidadeMedida = 'UN' WHERE ProdutoID = ?", novo_nome_mestre, prod_id)
+
+            # 3. Calcula o multiplicador real para a Máquina do Tempo
+            # Se o fator antes era 1, e agora é 72, multiplicamos por 72.
+            # Se o fator antes era 10, e ele corrigiu pra 72, multiplicamos por 7.2 para arrumar a matemática exata.
             try:
-                novo_custo = float(custo_caixa) / float(qtd_na_caixa)
+                multiplicador = qtd_caixa_float / fator_atual
             except ZeroDivisionError:
-                novo_custo = 0.0
+                multiplicador = qtd_caixa_float
 
-            # 3. Insere o novo vínculo modificando a Descrição para evitar restrição UNIQUE
-            nova_desc_xml = f"{desc_xml} (UNIDADE)"
+            # 4. A MÁQUINA DO TEMPO: Atualiza TODAS as compras passadas desta caixa
+            if multiplicador != 1.0:
+                sql_maquina_tempo = """
+                    UPDATE ItensNotaFiscalEntrada
+                    SET Quantidade = Quantidade * ?,
+                        PrecoCustoUnitario = PrecoCustoUnitario / ?
+                    WHERE ProdutoFornecedorID = ?
+                """
+                cursor.execute(sql_maquina_tempo, multiplicador, multiplicador, id_origem)
+                logger.info(f"MÁQUINA DO TEMPO ativada para Vínculo {id_origem}. Fator {fator_atual} -> {qtd_caixa_float}.")
 
-            sql_insert = """
+            # 5. Atualiza o Vínculo da CAIXA para o novo Fator (Para compras futuras baterem certo)
+            cursor.execute("UPDATE ProdutosFornecedor SET FatorConversao = ? WHERE ProdutoFornecedorID = ?", qtd_caixa_float, id_origem)
+
+            # 6. Cria o Novo Vínculo da UNIDADE (Fator 1) para o novo EAN
+            nova_desc_xml = f"{desc_xml} (VINCULO UNIDADE)"
+            sql_insert_unidade = """
                 INSERT INTO ProdutosFornecedor 
                 (ProdutoID, FornecedorID, EAN, NCM, FatorConversao, DescricaoXML)
-                OUTPUT INSERTED.ProdutoFornecedorID
-                VALUES (?, ?, ?, ?, 1, ?)
+                VALUES (?, ?, ?, ?, 1.0, ?)
             """
-            cursor.execute(sql_insert, prod_id, forn_id, novo_ean, ncm, nova_desc_xml)
-            novo_vinculo_id = cursor.fetchone()[0]
-
-            # 4. Associa o novo custo à última nota fiscal (Qtd 0 para não alterar finanças)
-            if ultima_nota_id and novo_vinculo_id:
-                sql_insert_custo = """
-                    INSERT INTO ItensNotaFiscalEntrada 
-                    (NotaID, ProdutoFornecedorID, Quantidade, PrecoCustoUnitario)
-                    VALUES (?, ?, 0, ?)
-                """
-                cursor.execute(sql_insert_custo, ultima_nota_id, novo_vinculo_id, novo_custo)
+            cursor.execute(sql_insert_unidade, prod_id, forn_id, novo_ean, ncm, nova_desc_xml)
 
             conn.commit()
-            return True, "Cadastro de unidade criado com sucesso!"
+            return True, "Desmembramento inteligente e ajuste histórico concluídos!"
         except Exception as e:
-            logger.error(f"Erro ao criar unidade derivada: {e}")
+            logger.error(f"Erro ao desmembrar caixa inteligente: {e}")
             conn.rollback()
             return False, str(e)
         finally:
