@@ -1860,7 +1860,8 @@ class AppGestaoEstoque:
         frame = ttk.Frame(popup, padding="10")
         frame.pack(fill=tk.BOTH, expand=True)
         
-        ttk.Label(frame, text="⚠️ DICA: Dê um duplo-clique em uma linha para corrigir quantidades e custos antigos importados com fator errado.", foreground="red", font=("Arial", 9, "bold")).pack(anchor="w", pady=(0, 10))
+        # CORREÇÃO LÓGICA: Substituído .pack() por .grid() para não conflitar com a Treeview e Scrollbar que também usam grid no mesmo frame.
+        ttk.Label(frame, text="⚠️ DICA: Dê um duplo-clique em uma linha para corrigir quantidades e custos antigos importados com fator errado.", foreground="red", font=("Arial", 9, "bold")).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
 
         frame.rowconfigure(1, weight=1)
         frame.columnconfigure(0, weight=1)
