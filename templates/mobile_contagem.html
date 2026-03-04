@@ -301,11 +301,10 @@
 
                     // Pega a quantidade que o usuário havia digitado antes de dar erro no EAN
                     const qtdDigitada = parseFloat(qtdInput.value) || 1;
-
-                    // A API devolve o produto recém-criado (que agora é uma UNIDADE).
-                    data.produto.custo = 0.0; 
                     
-                    // CORREÇÃO: Não devemos multiplicar! 
+                    // CORREÇÃO: Removida a linha que zerava o custo.
+                    // Agora a tela respeita o valor (data.produto.custo) que veio da API após a matemática do banco!
+                    
                     // Se o funcionário bipou 1 lata (unidade), a quantidade contada é exatamente o que está no input (qtdDigitada).
                     // O fator da caixa serve apenas para o backend desmembrar os custos, não para a contagem física atual.
                     adicionarItemLista(data.produto, qtdDigitada);

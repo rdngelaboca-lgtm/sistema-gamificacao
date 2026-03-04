@@ -1012,7 +1012,9 @@ def rota_criar_unidade():
                 "sucesso": True,
                 "msg": msg,
                 "produto": {
-                    "id": res[0], "nome": res[1], "unidade": res[2], "fator": 1.0
+                    "id": res[0], "nome": res[1], "unidade": res[2], "fator": 1.0,
+                    # CORREÇÃO: Enviando o custo unitário que o banco acabou de calcular
+                    "custo": float(res[4] if len(res) > 4 and res[4] is not None else 0.0)
                 }
             })
 

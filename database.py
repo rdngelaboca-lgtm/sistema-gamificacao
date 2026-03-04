@@ -8072,6 +8072,9 @@ def buscar_produto_por_ean(ean):
     if conn:
         try:
             cursor = conn.cursor()
+            # CORREÇÃO LÓGICA: O sub-select agora faz JOIN com ProdutosFornecedor (PF_SUB) 
+            # para buscar o histórico de custo atrelado ao Produto Mestre (PE.ProdutoID), 
+            # garantindo que novos códigos de barras herdem o custo fracionado da caixa mãe.
             sql = """
                 SELECT 
                     PE.ProdutoID, 
@@ -8082,7 +8085,8 @@ def buscar_produto_por_ean(ean):
                         SELECT TOP 1 I.PrecoCustoUnitario 
                         FROM ItensNotaFiscalEntrada I
                         JOIN NotasFiscaisEntrada N ON I.NotaID = N.NotaID
-                        WHERE I.ProdutoFornecedorID = PF.ProdutoFornecedorID
+                        JOIN ProdutosFornecedor PF_SUB ON I.ProdutoFornecedorID = PF_SUB.ProdutoFornecedorID
+                        WHERE PF_SUB.ProdutoID = PE.ProdutoID
                         ORDER BY N.DataEmissao DESC, N.NotaID DESC
                     ), 0) as UltimoCusto
                 FROM ProdutosFornecedor PF
