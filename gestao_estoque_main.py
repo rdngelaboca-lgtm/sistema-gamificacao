@@ -1014,11 +1014,16 @@ class AppGestaoEstoque:
         for nf in self.dados_notas_processadas:
             cabecalho = nf['cabecalho']
             for item in nf['itens_vinculados']:
-                # Recalcula visualmente para exibir de novo
-                nome_mestre = next((k for k, v in self.mapa_produtos_mestre.items() if v == item['ProdutoFornecedorID']), "Item Processado")
-                # Nota: A lógica de exibição original usa IDs, simplificamos aqui para reexibir
-                # Para uma recarga visual perfeita, idealmente reprocessamos, mas aqui limpamos o que já foi.
-                pass
+                # CORREÇÃO: Utiliza o nome do XML como referência segura para reexibição de falhas
+                nome_exibicao = item.get('DescricaoXML', 'Item com Falha no Processamento')
+                qtd_rec = item['Quantidade']
+                custo_rec = item['PrecoCustoUnitario']
+                custo_tot_rec = qtd_rec * custo_rec
+
+                self.tree_prontos.insert("", "end", values=(
+                    cabecalho['NumeroNF'], cabecalho['FornecedorNome'], nome_exibicao, 
+                    f"{qtd_rec:.2f}", f"{custo_rec:.4f}", f"{custo_tot_rec:.2f}"
+                ))
         
         # Se tudo foi salvo e não há pendentes de vínculo, limpa tudo
         if len(self.dados_notas_processadas) == 0 and len(self.itens_xml_nao_vinculados) == 0:
@@ -1713,10 +1718,14 @@ class AppGestaoEstoque:
             ids_produtos_fornecedor = None
             if forn_filtro_str and forn_filtro_str != "Todos":
                 try:
-                    forn_id = int(forn_filtro_str.split("ID: ")[1].replace(")", ""))
-                    ids_produtos_fornecedor = database.buscar_ids_produtos_por_fornecedor(forn_id)
-                except:
-                    pass
+                    inicio_id = forn_filtro_str.rfind("ID: ")
+                    if inicio_id != -1:
+                        str_id = forn_filtro_str[inicio_id + 4:].replace(")", "").strip()
+                        forn_id = int(str_id)
+                        ids_produtos_fornecedor = database.buscar_ids_produtos_por_fornecedor(forn_id)
+                except (IndexError, ValueError) as e:
+                    logger.warning(f"Falha ao extrair ID do fornecedor do texto '{forn_filtro_str}': {e}")
+                    pass # Continua sem aplicar o filtro em caso de falha de string
 
             for item in relatorio_posicao:
                 # 1. Filtro de Categoria

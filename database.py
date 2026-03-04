@@ -6024,15 +6024,16 @@ def salvar_nota_fiscal_completa(dados_nf_cabecalho, lista_itens_nf):
         # 1. Inserir o Cabeçalho da NF
         sql_nf = """
             INSERT INTO NotasFiscaisEntrada (NumeroNF, FornecedorID, DataEmissao, ValorTotalNF)
-            OUTPUT INSERTED.NotaID
-            VALUES (?, ?, ?, ?)
+            VALUES (?, ?, ?, ?);
+            SELECT SCOPE_IDENTITY();
         """
         cursor.execute(sql_nf, 
-                       dados_nf_cabecalho['NumeroNF'], 
-                       dados_nf_cabecalho['FornecedorID'], 
-                       dados_nf_cabecalho['DataEmissao'], 
-                       dados_nf_cabecalho['ValorTotalNF'])
-        
+                    dados_nf_cabecalho['NumeroNF'], 
+                    dados_nf_cabecalho['FornecedorID'], 
+                    dados_nf_cabecalho['DataEmissao'], 
+                    dados_nf_cabecalho['ValorTotalNF'])
+
+        cursor.nextset()
         nova_nota_id = cursor.fetchone()[0]
         
         if not nova_nota_id:

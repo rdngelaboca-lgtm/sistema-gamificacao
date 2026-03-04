@@ -967,8 +967,8 @@ def rota_buscar_ean(codigo):
             "id": res[0],
             "nome": res[1],
             "unidade": res[2],
-            "fator": float(res[3]) if res[3] else 1.0,
-            "custo": float(res[4]) if len(res) > 4 and res[4] else 0.0
+            "fator": float(res[3] if res[3] is not None else 1.0),
+            "custo": float(res[4] if len(res) > 4 and res[4] is not None else 0.0)
         })
     else:
         return jsonify({"encontrado": False}), 404
