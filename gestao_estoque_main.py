@@ -1649,7 +1649,13 @@ class AppGestaoEstoque:
     # [ATUALIZAÇÃO] Adicionada coluna 'Duração (Meses)'
         cols = ('Produto', 'UN', 'Estoque Atual', 'Total Comprado', 'Consumo Médio/Mês', 'Consumo Médio/Dia', 'Duração (Meses)', 'Sugestão Compra', 'Status')
         self.tree_sugestao = ttk.Treeview(frame_resultado, columns=cols, show='headings')
-        for col in cols: self.tree_sugestao.heading(col, text=col)
+        for col in cols: 
+            # Acopla a função de ordenação inteligente ao clique de cada cabeçalho
+            self.tree_sugestao.heading(
+                col, 
+                text=col, 
+                command=lambda c=col: self.ordenar_coluna_treeview(self.tree_sugestao, c, False)
+            )
 
         self.tree_sugestao.column('Produto', width=250)
         self.tree_sugestao.column('UN', width=40, anchor='center')
@@ -2555,7 +2561,35 @@ class AppGestaoEstoque:
         tree.bind("<Double-1>", editar_selecionado)
         
         # Carga Inicial
-        carregar()    
+        carregar()  
+
+    def ordenar_coluna_treeview(self, tree, col, reverse):
+        """
+        Ordena dinamicamente a coluna da Treeview, identificando 
+        valores numéricos mascarados por strings (ex: '0.4 meses', 'R$ 10.00').
+        """
+        # Extrai os dados atuais da visualização
+        lista_itens = [(tree.set(k, col), k) for k in tree.get_children('')]
+
+        def formatar_para_ordenar(valor_texto):
+            try:
+                # Sanitiza caracteres de formatação conhecidos no sistema
+                texto_limpo = valor_texto.replace("R$", "").replace(" meses", "").strip()
+                # Tenta converter para float para ordenação matemática correta
+                return float(texto_limpo)
+            except ValueError:
+                # Se não for número (ex: nome do produto), faz ordenação alfabética case-insensitive
+                return valor_texto.lower()
+
+        # Realiza a ordenação usando a heurística definida
+        lista_itens.sort(key=lambda t: formatar_para_ordenar(t[0]), reverse=reverse)
+
+        # Aplica a nova ordem visual realocando os índices no Tkinter
+        for index, (val, k) in enumerate(lista_itens):
+            tree.move(k, '', index)
+
+        # Inverte o estado da ordenação para o próximo clique no mesmo cabeçalho
+        tree.heading(col, command=lambda: self.ordenar_coluna_treeview(tree, col, not reverse))      
 
 # --- Bloco de Execução Principal ---
 if __name__ == "__main__":
