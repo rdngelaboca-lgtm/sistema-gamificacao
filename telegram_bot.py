@@ -1100,8 +1100,8 @@ async def roteador_de_texto_privado(update: Update, context: ContextTypes.DEFAUL
         user_data.clear()
         await update.message.reply_text("Ação cancelada. Use os botões do menu.")
         return
-
-    # 🛑 Interceptador de Pendências: Bloqueia comandos do menu
+    
+        # 🛑 Interceptador de Pendências: Bloqueia comandos do menu
     if await _interceptar_comandos_e_pendencias(update, context):
         return # Bloqueia o processamento
     # 🛑 Fim do Interceptador
@@ -1881,10 +1881,12 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             estoque_str = f"({produto.EstoqueDisponivel} un.)" if produto.EstoqueDisponivel is not None else ""
             texto_botao = f"{produto.Nome} - {produto.CustoEmPontos} pts {estoque_str}"
             keyboard.append([InlineKeyboardButton(texto_botao, callback_data=f"ver_produto_{produto.ProdutoID}")])
+
+        keyboard.append([InlineKeyboardButton("🍔 Abater na Comanda", callback_data="abater_comanda")])
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(text=texto, reply_markup=reply_markup, parse_mode='Markdown')
 
-    # --- LÓGICA DE FEEDBACK DE FIM DE JORNADA ---
+        # --- LÓGICA DE FEEDBACK DE FIM DE JORNADA ---
     elif data == "avaliar_dia" or data == "avaliar_dia_ontem":
         keyboard = []; row = []
         for i in range(11):

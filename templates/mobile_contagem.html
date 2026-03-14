@@ -136,40 +136,54 @@
             }
         });
 
+        let isFetchingEan = false; // Flag de proteção contra double-scan
+
         eanInput.addEventListener('keypress', async function (e) {
             if (e.key === 'Enter') {
-                const ean = eanInput.value;
-                const qtd = parseFloat(qtdInput.value);
+                if (isFetchingEan) return; // Bloqueia requisições simultâneas
+
+                const ean = eanInput.value.trim();
+                // Sanitização de decimais para teclados mobile BR (ex: 1,5 -> 1.5)
+                const qtdStr = qtdInput.value.replace(',', '.');
+                const qtd = parseFloat(qtdStr) || 1;
+
                 if (!ean) return;
 
+                isFetchingEan = true;
+                eanInput.disabled = true; // Trava o campo visualmente
                 statusEl.textContent = "Buscando...";
+
                 try {
                     const response = await fetch(`/api/produto/ean/${ean}`);
-                    
+
                     if (response.ok) {
                         const prod = await response.json();
                         adicionarItemLista(prod, qtd);
-                        
-                        // Formata o custo recebido da API para R$
+
                         const custoFmt = (prod.custo || 0).toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'});
-                        
+
                         statusEl.textContent = `✅ ${prod.nome} - ${custoFmt}`;
                         statusEl.className = "status-msg sucesso";
                         eanInput.value = ''; 
                         qtdInput.value = '1'; 
                         btnBusca.style.display = 'none';
-                        document.getElementById('btn-avulso').style.display = 'none'; // Esconde botão avulso
+                        document.getElementById('btn-avulso').style.display = 'none';
                     } else {
                         statusEl.textContent = "❌ Não encontrado!";
                         statusEl.className = "status-msg erro";
                         ultimoEANNaoEncontrado = ean; 
                         btnBusca.style.display = 'block'; 
                         btnBusca.textContent = `🔍 Buscar nome p/ EAN ${ean}`;
-                        document.getElementById('btn-avulso').style.display = 'block'; // Mostra opção avulsa
+                        document.getElementById('btn-avulso').style.display = 'block';
                         if(navigator.vibrate) navigator.vibrate(200);
                     }
                 } catch (error) {
                     statusEl.textContent = "Erro de conexão";
+                    statusEl.className = "status-msg erro";
+                } finally {
+                    isFetchingEan = false;
+                    eanInput.disabled = false;
+                    setTimeout(() => eanInput.focus(), 50); // Garante que o foco volte após destravar
                 }
             }
         });
@@ -186,7 +200,9 @@
         function salvarItemAvulso() {
             const nome = document.getElementById('avulso-nome').value.trim();
             const ean = document.getElementById('avulso-ean').value;
-            const qtdDigitada = parseFloat(qtdInput.value) || 1;
+            // Sanitização da vírgula antes do parse
+            const qtdStr = qtdInput.value.replace(',', '.');
+            const qtdDigitada = parseFloat(qtdStr) || 1;
 
             if (!nome) { alert("Digite um nome provisório."); return; }
 
@@ -222,6 +238,9 @@
 
         function fecharBusca() {
             document.getElementById('painel-busca').style.display = 'none';
+            // Prevenção de vazamento de estado: limpa a seleção se a tela for fechada
+            idVinculoSelecionadoParaConversao = null; 
+            document.getElementById('termo-busca').value = ''; // Limpa o campo de busca
             eanInput.focus();
         }
 
