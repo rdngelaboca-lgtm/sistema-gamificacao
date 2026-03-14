@@ -6488,11 +6488,11 @@ def gerar_sugestao_por_periodo(contagem_id_inicio, contagem_id_fim):
             data_inicial_fixa = contagem_A.DataContagem
             
             # Validação de data apenas para modo fixo
-            if (data_final - data_inicial_fixa).days <= 0:
-                 if (data_final - data_inicial_fixa).days == 0:
-                     pass # Aceita mesmo dia
-                 else:
-                    raise Exception("A Data da Contagem Final deve ser posterior à Inicial.")
+            if contagem_id_inicio == contagem_id_fim:
+                raise Exception("A Contagem Inicial e a Contagem Final não podem ser a mesma. Selecione períodos distintos.")
+
+            if (data_final - data_inicial_fixa).days < 0:
+                raise Exception("A Data da Contagem Final deve ser posterior à Contagem Inicial.")
         # 3. Busca os ITENS da Contagem FINAL (Estoque Atual Real)
         # CORREÇÃO: Partir de ProdutosEstoque com LEFT JOIN e consolidar quantidades (SUM/GROUP BY) 
         # para evitar duplicidade de ProdutoID na interface do Tkinter (TclError).

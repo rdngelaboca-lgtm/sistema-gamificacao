@@ -241,8 +241,13 @@ class AppGestaoEstoque:
             return
         try:
             estoque_min = Decimal(estoque_min_str)
+            if estoque_min < 0:
+                raise ValueError("O Estoque Mínimo não pode ser negativo.")
         except InvalidOperation: 
-            messagebox.showerror("Erro", "Estoque Mínimo deve ser um número.", parent=self.root)
+            messagebox.showerror("Erro", "Estoque Mínimo deve ser um número válido.", parent=self.root)
+            return
+        except ValueError as ve:
+            messagebox.showerror("Erro Lógico", str(ve), parent=self.root)
             return
         try:
             if self.produto_selecionado_id:
@@ -882,17 +887,16 @@ class AppGestaoEstoque:
             except Exception as e:
                 arquivos_com_falha += 1
                 logger.error(f"Falha ao processar o arquivo {caminho_xml}: {e}", exc_info=True)
-                messagebox.showwarning("Aviso de Arquivo", 
-                                       f"Não foi possível processar o arquivo:\n\n{os.path.basename(caminho_xml)}\n\n"
-                                       f"Motivo: {e}\n\nVerifique se o arquivo não está corrompido ou se é uma NF-e de Produto válida.",
-                                       parent=self.root)
+
         self.dados_notas_processadas = list(notas_processadas_nesta_sessao.values())
-        messagebox.showinfo("Processamento Concluído", 
-                            f"Leitura de XMLs concluída.\n\n"
-                            f"- {len(self.itens_xml_nao_vinculados)} itens precisam de vinculação (Passo 2).\n"
-                            f"- {len(self.dados_notas_processadas)} NFs foram processadas com sucesso e estão prontas para salvar (Passo 3).\n"
-                            f"- {arquivos_com_falha} arquivos falharam ao ler (verifique os pop-ups de aviso).",
-                            parent=self.root)
+
+        msg_final = f"Leitura de XMLs concluída.\n\n- {len(self.itens_xml_nao_vinculados)} itens precisam de vinculação (Passo 2).\n- {len(self.dados_notas_processadas)} NFs foram processadas com sucesso e estão prontas para salvar (Passo 3)."
+
+        if arquivos_com_falha > 0:
+            msg_final += f"\n\n⚠️ AVISO: {arquivos_com_falha} arquivo(s) na pasta não eram Notas Fiscais válidas ou estavam corrompidos e foram ignorados."
+            messagebox.showwarning("Processamento Concluído com Avisos", msg_final, parent=self.root)
+        else:
+            messagebox.showinfo("Processamento Concluído", msg_final, parent=self.root)
 
     def vincular_produto_selecionado(self):
         # ... (código idêntico ao anterior) ...

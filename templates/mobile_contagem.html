@@ -403,9 +403,17 @@
             eanInput.focus();
         }
 
+        let isSaving = false;
+
         async function finalizarContagem() {
             if (itensContados.length === 0) return alert("Lista vazia!");
+            if (isSaving) return; // Bloqueia cliques duplos
             if(!confirm("Salvar contagem?")) return;
+
+            isSaving = true;
+            const btnSalvar = document.querySelector('.btn-salvar');
+            btnSalvar.textContent = "⏳ Salvando...";
+            btnSalvar.style.backgroundColor = "#6c757d";
 
             try {
                 const nomeContagem = document.getElementById('nome-contagem-input').value.trim() || 'Mobile (Sem Nome)';
@@ -415,7 +423,6 @@
                 });
                 if (res.ok) {
                     alert("✅ Contagem Salva!");
-                    // LIMPA A MEMÓRIA E O CACHE DO NAVEGADOR
                     itensContados = []; 
                     localStorage.removeItem('rascunhoContagemEstoque');
                     document.getElementById('nome-contagem-input').value = '';
@@ -423,7 +430,13 @@
                     statusEl.textContent = "Pronto para bipar...";
                     statusEl.className = "status-msg";
                 } else { alert("Erro ao salvar no banco."); }
-            } catch(e) { alert("Erro de conexão."); }
+            } catch(e) { 
+                alert("Erro de conexão."); 
+            } finally {
+                isSaving = false;
+                btnSalvar.textContent = "💾 Salvar Contagem";
+                btnSalvar.style.backgroundColor = "#28a745";
+            }
         }
     </script>
 </body>
