@@ -1644,9 +1644,13 @@ class AppGestaoEstoque:
         if not nome_nova_contagem:
             return
 
-        # BLINDAGEM 1: Muda o cursor para "Carregando" para acalmar o usuário
-        self.root.config(cursor="wait")
-        self.root.update_idletasks() # Força a tela a desenhar o cursor antes de travar
+        # BLINDAGEM 1: Muda o cursor para "Carregando" (Cross-platform seguro)
+        try:
+            self.root.config(cursor="watch") # 'watch' funciona no Linux/Lubuntu
+        except Exception:
+            pass # Ignora a falha visual do SO e segue com a regra de negócio
+
+        self.root.update_idletasks() # Força a tela a desenhar antes de travar
 
         itens_agrupados = {}
         ids_para_excluir = []
@@ -1713,7 +1717,10 @@ class AppGestaoEstoque:
             messagebox.showerror("Erro Crítico", f"Ocorreu um erro no processamento:\n{e}", parent=self.root)
         finally:
             # BLINDAGEM 4: SEMPRE restaura o cursor do mouse, mesmo se o banco der erro
-            self.root.config(cursor="")    
+            try:
+                self.root.config(cursor="")
+            except Exception:
+                pass    
 
     # ===================================================================
     # == ABA 5: SUGESTÃO DE COMPRA (ATUALIZADA) =========================
