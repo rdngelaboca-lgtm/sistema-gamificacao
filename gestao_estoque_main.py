@@ -1162,7 +1162,9 @@ class AppGestaoEstoque:
         self.entry_nome_contagem.grid(row=0, column=3, sticky="w")
         self.entry_nome_contagem.insert(0, "Geral")
 
-        self.id_funcionario_contagem = 2
+        import config # Trazemos o config para ler os dados dinamicamente
+        self.id_funcionario_contagem = getattr(config, 'ID_GESTOR_PADRAO', 2) 
+
         btn_salvar_contagem = ttk.Button(frame_salvar, text="Salvar Contagem Completa", command=self.salvar_contagem_completa)
         btn_salvar_contagem.grid(row=0, column=4, sticky="e", padx=20, ipady=5)
         
@@ -1173,7 +1175,8 @@ class AppGestaoEstoque:
         frame_historico.columnconfigure(0, weight=1)
         
         cols_hist = ('ID', 'Data', 'Nome', 'Responsável')
-        self.tree_hist_contagens = ttk.Treeview(frame_historico, columns=cols_hist, show='headings', selectmode='browse', height=5)
+        # Mudança de selectmode='browse' para 'extended'
+        self.tree_hist_contagens = ttk.Treeview(frame_historico, columns=cols_hist, show='headings', selectmode='extended', height=5)
         self.tree_hist_contagens.heading('ID', text='ID'); self.tree_hist_contagens.column('ID', width=30, anchor='center')
         self.tree_hist_contagens.heading('Data', text='Data'); self.tree_hist_contagens.column('Data', width=80, anchor='center')
         self.tree_hist_contagens.heading('Nome', text='Nome/Ref'); self.tree_hist_contagens.column('Nome', width=120)
@@ -1195,6 +1198,9 @@ class AppGestaoEstoque:
         
         btn_editar_contagem = ttk.Button(frame_botoes_hist, text="✏️ Editar Contagem Selecionada", command=self.abrir_edicao_contagem)
         btn_editar_contagem.pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
+
+        btn_consolidar = ttk.Button(frame_botoes_hist, text="🗜️ Consolidar Selecionadas", command=self.consolidar_contagens_selecionadas)
+        btn_consolidar.pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
 
     def filtrar_combo_contagem(self, event=None):
         # ... (código idêntico ao anterior) ...
@@ -1569,14 +1575,47 @@ class AppGestaoEstoque:
 
             def salvar():
                 try:
-                    nova_qtd = Decimal(e_qtd.get().replace(",", "."))
-                    database.atualizar_qtd_item_contagem(contagem_id, prod_id if prod_id else None, nome_avulso if nome_avulso else None, nova_qtd)
-                    edit_win.destroy(); carregar(); self.carregar_itens_contagem_historico()
-                except: pass
+                    valor_digitado = e_qtd.get().replace(",", ".")
+                    if not valor_digitado.strip():
+                        raise ValueError("O campo não pode estar vazio.")
+
+                    nova_qtd = Decimal(valor_digitado)
+                    if nova_qtd < 0:
+                        raise ValueError("A quantidade não pode ser negativa.")
+
+                    # Tipagem rigorosa para evitar falha na query do banco
+                    id_produto_limpo = int(prod_id) if prod_id and str(prod_id).strip() != "" else None
+                    avulso_limpo = str(nome_avulso) if nome_avulso and str(nome_avulso).strip() != "" else None
+
+                    sucesso = database.atualizar_qtd_item_contagem(contagem_id, id_produto_limpo, avulso_limpo, nova_qtd)
+
+                    if sucesso:
+                        edit_win.destroy()
+                        carregar()
+                        self.carregar_itens_contagem_historico()
+                    else:
+                        messagebox.showerror("Erro de Banco", "Falha ao salvar a nova quantidade no banco de dados.", parent=edit_win)
+
+                except (InvalidOperation, ValueError) as e:
+                    messagebox.showerror("Entrada Inválida", "Por favor, digite um número válido maior ou igual a zero.\nUse ponto ou vírgula para decimais.", parent=edit_win)
+                    e_qtd.focus() # Retorna o foco para o usuário corrigir
 
             def apagar():
-                database.remover_item_contagem(contagem_id, prod_id if prod_id else None, nome_avulso if nome_avulso else None)
-                edit_win.destroy(); carregar(); self.carregar_itens_contagem_historico()
+                if not messagebox.askyesno("Confirmar", f"Tem certeza que deseja remover o item '{nome}' desta contagem?", parent=edit_win):
+                    return
+
+                # Sanitização rigorosa de tipos (String da Treeview -> Tipos Nativos Python)
+                id_produto_limpo = int(prod_id) if prod_id and str(prod_id).strip() != "" else None
+                avulso_limpo = str(nome_avulso) if nome_avulso and str(nome_avulso).strip() != "" else None
+
+                sucesso = database.remover_item_contagem(contagem_id, id_produto_limpo, avulso_limpo)
+
+                if sucesso:
+                    edit_win.destroy()
+                    carregar()
+                    self.carregar_itens_contagem_historico()
+                else:
+                    messagebox.showerror("Erro", "Falha ao remover o item do banco de dados.", parent=edit_win)
 
             f_btn = ttk.Frame(edit_win); f_btn.pack(pady=10)
             ttk.Button(f_btn, text="💾 Salvar Qtd", command=salvar).pack(side=tk.LEFT, padx=5)
@@ -1584,6 +1623,83 @@ class AppGestaoEstoque:
 
         tree.bind("<Double-1>", editar_remover)
         carregar()
+
+    def consolidar_contagens_selecionadas(self):
+        """
+        Lógica completa de consolidação: mescla itens, soma quantidades de produtos iguais,
+        cria uma nova contagem unificada e exclui as matrizes originais.
+        """
+        selecionados = self.tree_hist_contagens.selection()
+        if len(selecionados) < 2:
+            messagebox.showwarning("Aviso", "Selecione pelo menos duas contagens no histórico para consolidar.", parent=self.root)
+            return
+
+        if not messagebox.askyesno("Confirmar Consolidação", 
+                                f"Deseja mesclar as {len(selecionados)} contagens selecionadas?\n\n"
+                                "Os itens iguais serão somados em uma ÚNICA contagem, e as contagens originais serão excluídas do histórico.", 
+                                parent=self.root):
+            return
+
+        nome_nova_contagem = simpledialog.askstring("Nome da Consolidação", "Digite um nome/referência para a nova contagem (Ex: Balanço Consolidado):", parent=self.root)
+        if not nome_nova_contagem:
+            return # O usuário cancelou a digitação do nome
+
+        itens_agrupados = {}
+        ids_para_excluir = []
+
+        try:
+            # 1. Coleta e agrupa os itens de todas as contagens selecionadas
+            for item in selecionados:
+                dados = self.tree_hist_contagens.item(item, 'values')
+                contagem_id = int(dados[0])
+                ids_para_excluir.append(contagem_id)
+
+                itens_da_contagem = database.buscar_itens_contagem(contagem_id)
+
+                for i in itens_da_contagem:
+                    prod_id = getattr(i, 'ProdutoID', None)
+                    avulso = getattr(i, 'NomeAvulso', None)
+                    qtd = Decimal(str(i.QuantidadeContada)) if getattr(i, 'QuantidadeContada', None) is not None else Decimal('0.0')
+
+                    # A chave de agrupamento garante que o mesmo produto em listas diferentes se some
+                    chave_agrupamento = f"PROD_{prod_id}" if prod_id else f"AVULSO_{avulso}"
+
+                    if chave_agrupamento in itens_agrupados:
+                        itens_agrupados[chave_agrupamento]['QuantidadeContada'] += qtd
+                    else:
+                        itens_agrupados[chave_agrupamento] = {
+                            'ProdutoID': prod_id,
+                            'QuantidadeContada': qtd,
+                            'NomeAvulso': avulso,
+                            'EANAvulso': getattr(i, 'EANAvulso', None) # Mantém EAN se houver
+                        }
+
+            # 2. Converte o dicionário agrupado na lista que o database.py espera
+            lista_para_salvar = list(itens_agrupados.values())
+
+            # 3. Salva a nova contagem consolidada
+            data_hoje = datetime.now().strftime('%Y-%m-%d')
+            sucesso, msg = database.salvar_contagem_estoque(
+                data_hoje, 
+                self.id_funcionario_contagem, 
+                lista_para_salvar, 
+                nome_nova_contagem.strip()
+            )
+
+            if sucesso:
+                # 4. Exclui as contagens antigas apenas se a nova foi salva com sucesso
+                for cid in ids_para_excluir:
+                    database.excluir_contagem_estoque(cid)
+
+                messagebox.showinfo("Sucesso", "Contagens consolidadas com sucesso!", parent=self.root)
+                self.atualizar_lista_contagens_historico()
+                for i in self.tree_hist_itens.get_children(): self.tree_hist_itens.delete(i) # Limpa a sub-lista
+            else:
+                messagebox.showerror("Erro de Banco", f"Falha ao gerar contagem consolidada:\n{msg}", parent=self.root)
+
+        except Exception as e:
+            logger.error(f"Erro crítico ao consolidar contagens: {e}", exc_info=True)
+            messagebox.showerror("Erro Crítico", f"Ocorreu um erro no processamento:\n{e}", parent=self.root)
     
 
     # ===================================================================
