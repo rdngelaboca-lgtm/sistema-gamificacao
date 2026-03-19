@@ -1626,8 +1626,8 @@ class AppGestaoEstoque:
 
     def consolidar_contagens_selecionadas(self):
         """
-        Lógica completa de consolidação: mescla itens, soma quantidades de produtos iguais,
-        cria uma nova contagem unificada e exclui as matrizes originais.
+        Lógica completa de consolidação blindada contra congelamentos (UI Freeze)
+        e falhas de duplicação em grandes volumes de dados.
         """
         selecionados = self.tree_hist_contagens.selection()
         if len(selecionados) < 2:
@@ -1642,13 +1642,16 @@ class AppGestaoEstoque:
 
         nome_nova_contagem = simpledialog.askstring("Nome da Consolidação", "Digite um nome/referência para a nova contagem (Ex: Balanço Consolidado):", parent=self.root)
         if not nome_nova_contagem:
-            return # O usuário cancelou a digitação do nome
+            return
+
+        # BLINDAGEM 1: Muda o cursor para "Carregando" para acalmar o usuário
+        self.root.config(cursor="wait")
+        self.root.update_idletasks() # Força a tela a desenhar o cursor antes de travar
 
         itens_agrupados = {}
         ids_para_excluir = []
 
         try:
-            # 1. Coleta e agrupa os itens de todas as contagens selecionadas
             for item in selecionados:
                 dados = self.tree_hist_contagens.item(item, 'values')
                 contagem_id = int(dados[0])
@@ -1661,7 +1664,6 @@ class AppGestaoEstoque:
                     avulso = getattr(i, 'NomeAvulso', None)
                     qtd = Decimal(str(i.QuantidadeContada)) if getattr(i, 'QuantidadeContada', None) is not None else Decimal('0.0')
 
-                    # A chave de agrupamento garante que o mesmo produto em listas diferentes se some
                     chave_agrupamento = f"PROD_{prod_id}" if prod_id else f"AVULSO_{avulso}"
 
                     if chave_agrupamento in itens_agrupados:
@@ -1671,36 +1673,47 @@ class AppGestaoEstoque:
                             'ProdutoID': prod_id,
                             'QuantidadeContada': qtd,
                             'NomeAvulso': avulso,
-                            'EANAvulso': getattr(i, 'EANAvulso', None) # Mantém EAN se houver
+                            'EANAvulso': getattr(i, 'EANAvulso', None)
                         }
 
-            # 2. Converte o dicionário agrupado na lista que o database.py espera
-            lista_para_salvar = list(itens_agrupados.values())
+                # BLINDAGEM 2: Avisa o Windows que o app não travou a cada volta do loop
+                self.root.update_idletasks()
 
-            # 3. Salva a nova contagem consolidada
+            lista_para_salvar = list(itens_agrupados.values())
             data_hoje = datetime.now().strftime('%Y-%m-%d')
-            sucesso, msg = database.salvar_contagem_estoque(
+
+            # Executa a transação de salvamento
+            sucesso_salvar, msg = database.salvar_contagem_estoque(
                 data_hoje, 
                 self.id_funcionario_contagem, 
                 lista_para_salvar, 
                 nome_nova_contagem.strip()
             )
 
-            if sucesso:
-                # 4. Exclui as contagens antigas apenas se a nova foi salva com sucesso
+            if sucesso_salvar:
+                falhas_exclusao = 0
+                # BLINDAGEM 3: Exclusão com tolerância a falhas
                 for cid in ids_para_excluir:
-                    database.excluir_contagem_estoque(cid)
+                    if not database.excluir_contagem_estoque(cid):
+                        falhas_exclusao += 1
+                    self.root.update_idletasks() # Mantém a tela viva durante a limpeza
 
-                messagebox.showinfo("Sucesso", "Contagens consolidadas com sucesso!", parent=self.root)
+                if falhas_exclusao == 0:
+                    messagebox.showinfo("Sucesso", f"Contagens consolidadas com sucesso!\n({len(lista_para_salvar)} itens únicos processados)", parent=self.root)
+                else:
+                    messagebox.showwarning("Aviso de Limpeza", f"A nova contagem consolidada foi criada com sucesso, mas houve falha ao excluir {falhas_exclusao} contagem(ns) antigas.\n\nAtualize a tela e exclua as antigas manualmente para não duplicar o estoque.", parent=self.root)
+
                 self.atualizar_lista_contagens_historico()
-                for i in self.tree_hist_itens.get_children(): self.tree_hist_itens.delete(i) # Limpa a sub-lista
+                for i in self.tree_hist_itens.get_children(): self.tree_hist_itens.delete(i)
             else:
                 messagebox.showerror("Erro de Banco", f"Falha ao gerar contagem consolidada:\n{msg}", parent=self.root)
 
         except Exception as e:
             logger.error(f"Erro crítico ao consolidar contagens: {e}", exc_info=True)
             messagebox.showerror("Erro Crítico", f"Ocorreu um erro no processamento:\n{e}", parent=self.root)
-    
+        finally:
+            # BLINDAGEM 4: SEMPRE restaura o cursor do mouse, mesmo se o banco der erro
+            self.root.config(cursor="")    
 
     # ===================================================================
     # == ABA 5: SUGESTÃO DE COMPRA (ATUALIZADA) =========================
