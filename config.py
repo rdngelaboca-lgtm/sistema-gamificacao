@@ -24,7 +24,7 @@ TODOS_FUNCIONARIOS_GROUP_ID = -5030960080
 
 # --- CONFIGURAÇÕES DO BANCO DE DADOS ---
 # Endereço do seu servidor SQL Server.
-DB_SERVER = '192.168.18.44'
+DB_SERVER = '192.168.18.81'
 # Nome do banco de dados que estamos usando.
 DB_DATABASE = 'gamificacao_db'
 # Usuário de acesso ao banco.
@@ -34,7 +34,7 @@ DB_PWD = 'Gamificacao#2025'
 
 # --- CONFIGURAÇÕES DA API E ARQUIVOS ---
 # URL base para a API. Essencial para o ngrok e para o deploy final.
-API_BASE_URL = "http://192.168.18.44:5000" # Lembre-se de atualizar se o ngrok mudar!
+API_BASE_URL = "http://192.168.18.81:5000" # Lembre-se de atualizar se o ngrok mudar!
 
 # Nome da pasta onde os documentos de RH (holerites, etc.) serão salvos no servidor.
 PASTA_DOCUMENTOS_RH = "documentos_rh_seguros"
