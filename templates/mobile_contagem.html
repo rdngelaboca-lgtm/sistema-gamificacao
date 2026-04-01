@@ -277,18 +277,60 @@
             dados.forEach(item => {
                 const div = document.createElement('div');
                 div.className = 'item-busca';
-                // Formata o custo em Reais
                 const custoFormatado = item.custo.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'});
-                
+
+                // Removido o 'div.onclick' geral. Agora usamos botões específicos.
                 div.innerHTML = `
                     <div style="font-weight:bold">${item.nome_mestre}</div>
                     <small>${item.desc_xml}</small>
                     <small style="color: #28a745; font-weight: bold;">Custo Base: ${custoFormatado}</small>
                     <small>Fator: ${item.fator} | Forn: ${item.fornecedor}</small>
+                    <div style="margin-top: 10px; display: flex; gap: 5px;">
+                        <button class="btn-add-direto" style="flex: 1; background: #28a745; color: white; border: none; padding: 8px; border-radius: 5px; font-weight: bold; font-size: 1rem;">➕ Contar</button>
+                        <button class="btn-desmembrar" style="flex: 1; background: #007bff; color: white; border: none; padding: 8px; border-radius: 5px; font-weight: bold; font-size: 1rem;">📦 Caixa</button>
+                    </div>
                 `;
-                div.onclick = () => prepararConversao(item);
+
+                // Evento para adicionar direto
+                div.querySelector('.btn-add-direto').onclick = (e) => {
+                    e.stopPropagation();
+                    adicionarDaBusca(item);
+                };
+
+                // Evento para desmembrar (antigo)
+                div.querySelector('.btn-desmembrar').onclick = (e) => {
+                    e.stopPropagation();
+                    prepararConversao(item);
+                };
+
                 divRes.appendChild(div);
             });
+        }
+
+        function adicionarDaBusca(item) {
+            // Pega a quantidade que ficou digitada na tela de trás
+            const qtdStr = document.getElementById('qtd-input').value.replace(',', '.');
+            const qtdDigitada = parseFloat(qtdStr) || 1;
+
+            // Monta o objeto simulando o que a API do EAN devolveria
+            const prod = {
+                id: item.produto_id,
+                nome: item.nome_mestre,
+                unidade: item.unidade,
+                fator: 1.0, // Fator 1 porque é adição direta do mestre
+                custo: item.custo
+            };
+
+            adicionarItemLista(prod, qtdDigitada);
+
+            statusEl.textContent = `✅ Adicionado: ${prod.nome}`;
+            statusEl.className = "status-msg sucesso";
+
+            fecharBusca();
+
+            // Reseta para o próximo
+            document.getElementById('qtd-input').value = '1';
+            document.getElementById('ean-input').value = '';
         }
 
         function prepararConversao(item) {

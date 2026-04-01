@@ -986,7 +986,9 @@ def rota_buscar_por_nome(termo):
             "fornecedor": row[3],
             "fator": float(row[4]) if row[4] else 1.0,
             "ean_existente": row[5],
-            "custo": float(row[6]) if len(row) > 6 and row[6] else 0.0
+            "custo": float(row[6]) if len(row) > 6 and row[6] else 0.0,
+            "produto_id": row[7] if len(row) > 7 else None,
+            "unidade": row[8] if len(row) > 8 else 'UN'
         })
     return jsonify(lista)
 

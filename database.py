@@ -8122,7 +8122,9 @@ def buscar_produtos_mobile_por_nome(termo):
                         JOIN NotasFiscaisEntrada N ON I.NotaID = N.NotaID
                         WHERE I.ProdutoFornecedorID = PF.ProdutoFornecedorID
                         ORDER BY N.DataEmissao DESC, N.NotaID DESC
-                    ), 0) as UltimoCusto
+                    ), 0) as UltimoCusto,
+                    P.ProdutoID,
+                    P.UnidadeMedida
                 FROM ProdutosFornecedor PF
                 LEFT JOIN ProdutosEstoque P ON PF.ProdutoID = P.ProdutoID
                 LEFT JOIN Fornecedores F ON PF.FornecedorID = F.FornecedorID
