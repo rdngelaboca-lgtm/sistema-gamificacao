@@ -200,7 +200,7 @@
                 } else {
                     // LÓGICA 2: TEM LETRAS, É UMA BUSCA POR NOME
                     statusEl.textContent = "Buscando por nome...";
-
+                    
                     // CORREÇÃO UX: Esconde os botões de erro caso estivessem abertos de uma tentativa anterior
                     btnBusca.style.display = 'none';
                     document.getElementById('btn-avulso').style.display = 'none';
@@ -208,8 +208,13 @@
                     document.getElementById('termo-busca').value = inputValue;
                     abrirBusca();
                     realizarBusca();
-                    eanInput.value = ''; // Limpa o input principal
-                    qtdInput.value = '1';
+                    
+                    // Limpa apenas o campo de texto para a próxima busca
+                    eanInput.value = ''; 
+                    
+                    // 🛑 BUG CORRIGIDO AQUI: Removemos o qtdInput.value = '1'.
+                    // A quantidade deve continuar na tela para que o botão verde "Contar" da 
+                    // tela de busca consiga ler o valor correto digitado pelo usuário.
                 }
             }
         });
