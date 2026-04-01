@@ -51,8 +51,8 @@
         </div>
 
         <div class="input-group">
-            <label>Código de Barras</label>
-            <input type="number" id="ean-input" placeholder="Bipe aqui..." autofocus>
+            <label>Código de Barras ou Nome</label>
+            <input type="text" id="ean-input" placeholder="Bipe o código ou digite o nome..." autofocus>
         </div>
         
         <button id="btn-abrir-busca" class="btn-busca" onclick="abrirBusca()">🔍 Não encontrou? Buscar por Nome</button>
@@ -142,48 +142,64 @@
             if (e.key === 'Enter') {
                 if (isFetchingEan) return; // Bloqueia requisições simultâneas
 
-                const ean = eanInput.value.trim();
-                // Sanitização de decimais para teclados mobile BR (ex: 1,5 -> 1.5)
+                const inputValue = eanInput.value.trim();
                 const qtdStr = qtdInput.value.replace(',', '.');
                 const qtd = parseFloat(qtdStr) || 1;
 
-                if (!ean) return;
+                if (!inputValue) return;
 
-                isFetchingEan = true;
-                eanInput.disabled = true; // Trava o campo visualmente
-                statusEl.textContent = "Buscando...";
+                // Verifica se contém APENAS números (é um código de barras)
+                const isNumeric = /^\d+$/.test(inputValue);
 
-                try {
-                    const response = await fetch(`/api/produto/ean/${ean}`);
+                if (isNumeric) {
+                    // LÓGICA 1: É NÚMERO, TENTA BUSCAR POR EAN
+                    isFetchingEan = true;
+                    eanInput.disabled = true; 
+                    statusEl.textContent = "Buscando código...";
 
-                    if (response.ok) {
-                        const prod = await response.json();
-                        adicionarItemLista(prod, qtd);
+                    try {
+                        const response = await fetch(`/api/produto/ean/${inputValue}`);
 
-                        const custoFmt = (prod.custo || 0).toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'});
+                        if (response.ok) {
+                            const prod = await response.json();
+                            adicionarItemLista(prod, qtd);
+                            const custoFmt = (prod.custo || 0).toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'});
 
-                        statusEl.textContent = `✅ ${prod.nome} - ${custoFmt}`;
-                        statusEl.className = "status-msg sucesso";
-                        eanInput.value = ''; 
-                        qtdInput.value = '1'; 
-                        btnBusca.style.display = 'none';
-                        document.getElementById('btn-avulso').style.display = 'none';
-                    } else {
-                        statusEl.textContent = "❌ Não encontrado!";
+                            statusEl.textContent = `✅ ${prod.nome} - ${custoFmt}`;
+                            statusEl.className = "status-msg sucesso";
+                            eanInput.value = ''; 
+                            qtdInput.value = '1'; 
+                            btnBusca.style.display = 'none';
+                            document.getElementById('btn-avulso').style.display = 'none';
+                        } else {
+                            // EAN NÃO ENCONTRADO: Abre a busca por nome automaticamente
+                            statusEl.textContent = "❌ Código não cadastrado. Buscando no catálogo...";
+                            statusEl.className = "status-msg erro";
+                            ultimoEANNaoEncontrado = inputValue; 
+
+                            // Aciona o painel de busca automaticamente
+                            document.getElementById('termo-busca').value = inputValue;
+                            abrirBusca();
+                            realizarBusca();
+
+                            if(navigator.vibrate) navigator.vibrate(200);
+                        }
+                    } catch (error) {
+                        statusEl.textContent = "Erro de conexão";
                         statusEl.className = "status-msg erro";
-                        ultimoEANNaoEncontrado = ean; 
-                        btnBusca.style.display = 'block'; 
-                        btnBusca.textContent = `🔍 Buscar nome p/ EAN ${ean}`;
-                        document.getElementById('btn-avulso').style.display = 'block';
-                        if(navigator.vibrate) navigator.vibrate(200);
+                    } finally {
+                        isFetchingEan = false;
+                        eanInput.disabled = false;
+                        setTimeout(() => eanInput.focus(), 50); 
                     }
-                } catch (error) {
-                    statusEl.textContent = "Erro de conexão";
-                    statusEl.className = "status-msg erro";
-                } finally {
-                    isFetchingEan = false;
-                    eanInput.disabled = false;
-                    setTimeout(() => eanInput.focus(), 50); // Garante que o foco volte após destravar
+                } else {
+                    // LÓGICA 2: TEM LETRAS, É UMA BUSCA POR NOME
+                    statusEl.textContent = "Buscando por nome...";
+                    document.getElementById('termo-busca').value = inputValue;
+                    abrirBusca();
+                    realizarBusca();
+                    eanInput.value = ''; // Limpa o input principal
+                    qtdInput.value = '1';
                 }
             }
         });
