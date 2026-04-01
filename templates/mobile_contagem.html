@@ -172,10 +172,15 @@
                             btnBusca.style.display = 'none';
                             document.getElementById('btn-avulso').style.display = 'none';
                         } else {
-                            // EAN NÃO ENCONTRADO: Abre a busca por nome automaticamente
+                            // EAN NÃO ENCONTRADO
                             statusEl.textContent = "❌ Código não cadastrado. Buscando no catálogo...";
                             statusEl.className = "status-msg erro";
                             ultimoEANNaoEncontrado = inputValue; 
+
+                            // CORREÇÃO: Garante que os botões de emergência apareçam atrás do modal
+                            btnBusca.style.display = 'block'; 
+                            btnBusca.textContent = `🔍 Buscar nome p/ EAN ${inputValue}`;
+                            document.getElementById('btn-avulso').style.display = 'block';
 
                             // Aciona o painel de busca automaticamente
                             document.getElementById('termo-busca').value = inputValue;
@@ -195,6 +200,11 @@
                 } else {
                     // LÓGICA 2: TEM LETRAS, É UMA BUSCA POR NOME
                     statusEl.textContent = "Buscando por nome...";
+
+                    // CORREÇÃO UX: Esconde os botões de erro caso estivessem abertos de uma tentativa anterior
+                    btnBusca.style.display = 'none';
+                    document.getElementById('btn-avulso').style.display = 'none';
+
                     document.getElementById('termo-busca').value = inputValue;
                     abrirBusca();
                     realizarBusca();
@@ -254,9 +264,10 @@
 
         function fecharBusca() {
             document.getElementById('painel-busca').style.display = 'none';
-            // Prevenção de vazamento de estado: limpa a seleção se a tela for fechada
+            // Prevenção de vazamento de estado: limpa a seleção e o EAN fantasma
             idVinculoSelecionadoParaConversao = null; 
-            document.getElementById('termo-busca').value = ''; // Limpa o campo de busca
+            ultimoEANNaoEncontrado = ""; // <-- CORREÇÃO CIRÚRGICA AQUI
+            document.getElementById('termo-busca').value = ''; 
             eanInput.focus();
         }
 
@@ -334,14 +345,19 @@
         }
 
         function prepararConversao(item) {
-            // Salva o ID do vínculo selecionado na variável global já existente
+            // Se o usuário buscou por nome e clicou em 'Caixa' sem ter bipado um EAN antes
+            if (!ultimoEANNaoEncontrado) {
+                const confirma = confirm("Atenção: Você não bipou nenhum código de barras novo antes de buscar.\n\nA unidade será desmembrada da caixa, mas ficará SEM código de barras no sistema.\n\nDeseja continuar?");
+                if (!confirma) return;
+            }
+
             idVinculoSelecionadoParaConversao = item.id_vinculo;
 
-            // Atualiza o texto do modal para mostrar ao usuário o que está acontecendo
             const msgEl = document.getElementById('msg-conversao');
-            msgEl.innerHTML = `Vincular novo EAN <b>${ultimoEANNaoEncontrado}</b><br>ao produto mestre:<br><b style="color:#007bff;">${item.nome_mestre}</b>`;
+            const textoEan = ultimoEANNaoEncontrado ? `<br>Vincular novo EAN: <b>${ultimoEANNaoEncontrado}</b>` : `<br><b style="color:red;">(Nenhum código de barras será vinculado)</b>`;
 
-            // Exibe o modal centralizado (usando flex para manter o alinhamento do CSS)
+            msgEl.innerHTML = `Desmembrar produto mestre:<br><b style="color:#007bff;">${item.nome_mestre}</b>${textoEan}`;
+
             document.getElementById('modal-qtd-caixa').style.display = 'flex';
         }
 

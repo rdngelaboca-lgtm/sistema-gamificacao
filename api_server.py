@@ -1000,10 +1000,15 @@ def rota_criar_unidade():
     novo_ean = dados.get('novo_ean')   # EAN da Unidade (que falhou ao bipar)
     qtd_caixa = dados.get('qtd_caixa') # Quantas unidades vem na caixa
 
-    if not all([id_origem, novo_ean, qtd_caixa]):
-        return jsonify({"sucesso": False, "erro": "Dados incompletos"}), 400
+    # Permite que o EAN seja vazio (quando o usuário busca por nome e desmembra a caixa)
+    # Mas exige obrigatoriamente a origem e a quantidade
+    if not id_origem or not qtd_caixa:
+        return jsonify({"sucesso": False, "erro": "ID da caixa e quantidade são obrigatórios."}), 400
 
-    sucesso, msg = database.criar_unidade_a_partir_de_caixa(id_origem, novo_ean, float(qtd_caixa))
+    # Se o EAN vier vazio, definimos um texto padrão para o Banco de Dados aceitar
+    ean_final = novo_ean if novo_ean else "Sem EAN"
+
+    sucesso, msg = database.criar_unidade_a_partir_de_caixa(id_origem, ean_final, float(qtd_caixa))
 
     if sucesso:
         # Já retorna os dados do novo produto para adicionar na contagem imediatamente
