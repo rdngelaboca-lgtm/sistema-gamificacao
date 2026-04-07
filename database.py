@@ -8507,3 +8507,34 @@ def criar_produto_manual_com_custo(nome, unidade, estoque_min, categoria, custo_
         return None
     finally:
         conn.close()
+
+def buscar_ultimo_custo_por_produto(produto_id):
+    """
+    (NOVA FUNÇÃO) Busca o último preço de custo registrado para um Produto Mestre.
+    Ele olha no histórico de todas as notas fiscais vinculadas a este produto
+    e pega a mais recente.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT TOP 1 I.PrecoCustoUnitario 
+                FROM ItensNotaFiscalEntrada I
+                JOIN NotasFiscaisEntrada N ON I.NotaID = N.NotaID
+                JOIN ProdutosFornecedor PF ON I.ProdutoFornecedorID = PF.ProdutoFornecedorID
+                WHERE PF.ProdutoID = ?
+                ORDER BY N.DataEmissao DESC, N.NotaID DESC
+            """
+            cursor.execute(sql, produto_id)
+            resultado = cursor.fetchone()
+            
+            # Se achou um valor, retorna. Se não achou (ou se o produto for novo sem nota), retorna 0.00
+            return resultado[0] if resultado else 0.00
+            
+        except Exception as e:
+            logger.error(f"Erro ao buscar último custo do produto {produto_id}: {e}", exc_info=True)
+            return 0.00
+        finally:
+            conn.close()
+    return 0.00

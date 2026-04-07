@@ -327,15 +327,26 @@ class AppGestaoEstoque:
         if not selecionado: return
         dados = self.tree_produtos.item(selecionado, 'values')
         produto_id, nome, unidade, categoria, estoque_min = dados
+        
+        # 1. Limpa a tela inteira primeiro (isso coloca 0.00 em tudo)
         self.limpar_formulario_produto()
 
+        # 2. Preenche os dados básicos que vieram da tabela
         self.produto_selecionado_id = int(produto_id)
         self.entry_prod_nome.insert(0, nome)
         self.entry_prod_unidade.insert(0, unidade)
         self.combo_prod_categoria.set(categoria)
-        self.entry_prod_estoque_min.delete(0, tk.END); self.entry_prod_estoque_min.insert(0, estoque_min)
+        self.entry_prod_estoque_min.delete(0, tk.END)
+        self.entry_prod_estoque_min.insert(0, estoque_min)
 
-        # Visuais do Modo de Edição
+        # 3. MÁGICA: Busca o custo real no banco de dados e preenche a caixinha
+        if hasattr(self, 'entry_prod_custo'):
+            custo_real = database.buscar_ultimo_custo_por_produto(self.produto_selecionado_id)
+            self.entry_prod_custo.delete(0, tk.END)
+            # Formata para ficar bonito com duas casas decimais (Ex: 15.50)
+            self.entry_prod_custo.insert(0, f"{float(custo_real):.2f}")
+
+        # 4. Visuais do Modo de Edição
         self.form_frame_mestre.config(text="🚨 MODO: EDIÇÃO")
         self.btn_prod_salvar.config(text="Atualizar Produto")
         self.btn_excluir_mestre.config(state=tk.NORMAL) # Habilita o botão de excluir apenas na edição
@@ -2763,3 +2774,4 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = AppGestaoEstoque(root)
     root.mainloop()
+
