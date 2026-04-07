@@ -152,10 +152,17 @@ class AppGestaoEstoque:
         self.combo_prod_categoria.grid(row=3, column=1, sticky="w", pady=(0, 10))
         self.combo_prod_categoria.set("Geral")
 
-        ttk.Label(self.form_frame_mestre, text="Estoque Mínimo:").grid(row=4, column=0, columnspan=2, sticky="w", pady=2)
+        # --- NOVO LAYOUT: Lado a Lado (Estoque Mínimo e Custo) ---
+        ttk.Label(self.form_frame_mestre, text="Estoque Mínimo:").grid(row=4, column=0, sticky="w", pady=2)
         self.entry_prod_estoque_min = ttk.Entry(self.form_frame_mestre, width=15)
-        self.entry_prod_estoque_min.grid(row=5, column=0, columnspan=2, sticky="w", pady=(0, 10))
+        self.entry_prod_estoque_min.grid(row=5, column=0, sticky="w", pady=(0, 10))
         self.entry_prod_estoque_min.insert(0, "0.0")
+
+        ttk.Label(self.form_frame_mestre, text="Custo Inicial (R$):").grid(row=4, column=1, sticky="w", pady=2)
+        self.entry_prod_custo = ttk.Entry(self.form_frame_mestre, width=15)
+        self.entry_prod_custo.grid(row=5, column=1, sticky="w", pady=(0, 10))
+        self.entry_prod_custo.insert(0, "0.00")
+        # ---------------------------------------------------------
 
         btn_frame = ttk.Frame(self.form_frame_mestre)
         btn_frame.grid(row=6, column=0, columnspan=2, pady=10)
@@ -219,7 +226,9 @@ class AppGestaoEstoque:
         self.entry_prod_nome.delete(0, tk.END)
         self.entry_prod_unidade.delete(0, tk.END)
         self.combo_prod_categoria.set("Geral")
-        self.entry_prod_estoque_min.delete(0, tk.END); self.entry_prod_estoque_min.insert(0, "0.0")
+        if hasattr(self, 'entry_prod_custo'):
+            self.entry_prod_custo.delete(0, tk.END)
+            self.entry_prod_custo.insert(0, "0.00")
         self.produto_selecionado_id = None
 
         # Restaura visuais para Novo Cadastro
@@ -235,31 +244,49 @@ class AppGestaoEstoque:
         nome = self.entry_prod_nome.get()
         unidade = self.entry_prod_unidade.get().upper()
         categoria = self.combo_prod_categoria.get()
+        
+        # 1. Tratamento de Virgulas (Padrão BR para Padrão US/SQL)
         estoque_min_str = self.entry_prod_estoque_min.get().replace(",", ".")
+        custo_str = self.entry_prod_custo.get().replace("R$", "").replace(",", ".").strip()
+
         if not nome or not unidade:
             messagebox.showerror("Erro", "Nome e Unidade são obrigatórios.", parent=self.root)
             return
         try:
+            # 2. Converte para números exatos do banco
             estoque_min = Decimal(estoque_min_str)
-            if estoque_min < 0:
-                raise ValueError("O Estoque Mínimo não pode ser negativo.")
+            custo_inicial = Decimal(custo_str) if custo_str else Decimal('0.00')
+
+            if estoque_min < 0 or custo_inicial < 0:
+                raise ValueError("Os valores numéricos não podem ser negativos.")
         except InvalidOperation: 
-            messagebox.showerror("Erro", "Estoque Mínimo deve ser um número válido.", parent=self.root)
+            messagebox.showerror("Erro de Formatação", "Digite apenas números nos campos de Estoque e Custo (ex: 15.50).", parent=self.root)
             return
         except ValueError as ve:
             messagebox.showerror("Erro Lógico", str(ve), parent=self.root)
             return
+
+        # 3. Comunicação com o Banco de Dados
         try:
             if self.produto_selecionado_id:
+                # Se estiver editando, não mexe no custo inicial (o custo é atualizado via Histórico de Compras)
                 database.atualizar_produto_estoque(self.produto_selecionado_id, nome, unidade, estoque_min, categoria)
                 messagebox.showinfo("Sucesso", "Produto atualizado com sucesso!", parent=self.root)
             else:
-                novo_id = database.criar_produto_estoque(nome, unidade, estoque_min, categoria) 
-                if not novo_id: raise Exception("Falha ao criar produto, não retornou ID.")
-                messagebox.showinfo("Sucesso", "Produto criado com sucesso!", parent=self.root)
+                # SE FOR NOVO: Chama nossa nova função mágica!
+                novo_id = database.criar_produto_manual_com_custo(nome, unidade, estoque_min, categoria, custo_inicial) 
+                
+                if not novo_id: 
+                    raise Exception("Falha ao criar produto. O banco não retornou o ID.")
+                
+                msg_extra = "\n\nCusto inicial salvo com sucesso via Fornecedor Interno!" if custo_inicial > 0 else ""
+                messagebox.showinfo("Sucesso", f"Produto '{nome}' criado com sucesso!{msg_extra}", parent=self.root)
+            
+            # Limpa e atualiza tudo
             self.limpar_formulario_produto()
             self.atualizar_lista_produtos()
             self.popular_combobox_produtos_mestre()
+            
         except Exception as e:
             logger.error(f"Erro ao salvar produto: {e}", exc_info=True)
             messagebox.showerror("Erro de Banco", f"Não foi possível salvar o produto.\nErro: {e}", parent=self.root)

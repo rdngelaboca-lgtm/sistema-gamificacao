@@ -8439,3 +8439,71 @@ def registrar_debito_pontos(funcionario_id, pontos_a_debitar, descricao):
         return False
     finally:
         if conn: conn.close()
+
+def criar_produto_manual_com_custo(nome, unidade, estoque_min, categoria, custo_inicial):
+    """
+    (NOVA FUNÇÃO) Cria um produto e, se tiver custo, gera um 'Vínculo Fantasma' 
+    e uma 'Nota Fiscal Fantasma' para que o sistema consiga ler o custo no celular.
+    """
+    conn = get_db_connection()
+    if not conn: return None
+    
+    try:
+        cursor = conn.cursor()
+        # 1. Cria o Produto Mestre no Catálogo normalmente
+        sql_mestre = """
+            INSERT INTO ProdutosEstoque (NomeProduto, UnidadeMedida, EstoqueMinimo, Categoria)
+            VALUES (?, ?, ?, ?);
+            SELECT SCOPE_IDENTITY();
+        """
+        cursor.execute(sql_mestre, nome, unidade, estoque_min, categoria)
+        cursor.nextset() # Avança para ler o ID criado
+        produto_id = cursor.fetchone()[0]
+
+        # 2. Se o gerente digitou um custo maior que zero, criamos a "Magia"
+        if custo_inicial > 0:
+            cnpj_interno = "00000000000000" # CNPJ Falso seguro
+            
+            # Checa se o fornecedor fantasma já existe
+            cursor.execute("SELECT FornecedorID FROM Fornecedores WHERE CNPJ = ?", cnpj_interno)
+            res_forn = cursor.fetchone()
+            
+            if res_forn:
+                forn_id = res_forn[0]
+            else:
+                # Se não existe, cria o Fornecedor Fantasma
+                cursor.execute("INSERT INTO Fornecedores (CNPJ, NomeFantasia) VALUES (?, ?); SELECT SCOPE_IDENTITY();", cnpj_interno, "PRODUÇÃO INTERNA / AVULSO")
+                cursor.nextset()
+                forn_id = cursor.fetchone()[0]
+
+            # 3. Cria o Vínculo Fantasma (DE/PARA)
+            desc_fantasma = f"{nome} (CADASTRO MANUAL)"
+            sql_vinculo = """
+                INSERT INTO ProdutosFornecedor (ProdutoID, FornecedorID, DescricaoXML, EAN, NCM, FatorConversao) 
+                VALUES (?, ?, ?, 'SEM EAN', '00000000', 1.0); 
+                SELECT SCOPE_IDENTITY();
+            """
+            cursor.execute(sql_vinculo, produto_id, forn_id, desc_fantasma)
+            cursor.nextset()
+            vinculo_id = cursor.fetchone()[0]
+
+            # 4. Cria a Nota Fiscal Fantasma (Com valor 0 e Data de Hoje)
+            numero_nf = f"MANUAL-{produto_id}" # Ex: MANUAL-45
+            cursor.execute("INSERT INTO NotasFiscaisEntrada (NumeroNF, FornecedorID, DataEmissao, ValorTotalNF) VALUES (?, ?, GETDATE(), 0); SELECT SCOPE_IDENTITY();", numero_nf, forn_id)
+            cursor.nextset()
+            nota_id = cursor.fetchone()[0]
+
+            # 5. Coloca o Item dentro da Nota Fantasma com o PREÇO DE CUSTO!
+            # Quantidade 0 para não inflar o estoque falsamente.
+            cursor.execute("INSERT INTO ItensNotaFiscalEntrada (NotaID, ProdutoFornecedorID, Quantidade, PrecoCustoUnitario) VALUES (?, ?, 0, ?)", nota_id, vinculo_id, custo_inicial)
+
+        # Salva tudo de uma vez (Transação segura)
+        conn.commit()
+        return produto_id
+        
+    except Exception as e:
+        conn.rollback() # Desfaz tudo se der erro!
+        logger.error(f"Erro ao criar produto manual com custo: {e}", exc_info=True)
+        return None
+    finally:
+        conn.close()
