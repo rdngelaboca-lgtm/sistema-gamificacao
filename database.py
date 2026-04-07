@@ -8589,7 +8589,9 @@ def atualizar_custo_manual_produto(produto_id, novo_custo):
                 cursor.execute("INSERT INTO ItensNotaFiscalEntrada (NotaID, ProdutoFornecedorID, Quantidade, PrecoCustoUnitario) VALUES (?, ?, 0, ?)", nota_id, vinculo_id, novo_custo)
         else:
             # 4. O Produto antigo NÃO tinha vínculo fantasma. Vamos criar tudo do zero!
-            desc_fantasma = f"(CUSTO ATUALIZADO MANUALMENTE)"
+            # ---> A CORREÇÃO ESTÁ AQUI: Incluímos o ID do produto no nome para garantir que NUNCA seja duplicado! <---
+            desc_fantasma = f"(CUSTO ATUALIZADO MANUAL - ID {produto_id})"
+            
             cursor.execute("INSERT INTO ProdutosFornecedor (ProdutoID, FornecedorID, DescricaoXML, EAN, NCM, FatorConversao) VALUES (?, ?, ?, 'SEM EAN', '00000000', 1.0); SELECT SCOPE_IDENTITY();", produto_id, forn_id, desc_fantasma)
             cursor.nextset()
             vinculo_id = cursor.fetchone()[0]
