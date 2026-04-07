@@ -8538,3 +8538,73 @@ def buscar_ultimo_custo_por_produto(produto_id):
         finally:
             conn.close()
     return 0.00
+
+def atualizar_custo_manual_produto(produto_id, novo_custo):
+    """
+    (NOVA FUNÇÃO) Permite adicionar ou atualizar o preço de custo de um
+    produto que JÁ ESTAVA CADASTRADO no sistema antes da atualização.
+    """
+    conn = get_db_connection()
+    if not conn: return False
+
+    try:
+        cursor = conn.cursor()
+        cnpj_interno = "00000000000000"
+
+        # 1. Procura ou Cria o Fornecedor Fantasma
+        cursor.execute("SELECT FornecedorID FROM Fornecedores WHERE CNPJ = ?", cnpj_interno)
+        res_forn = cursor.fetchone()
+        if not res_forn:
+            cursor.execute("INSERT INTO Fornecedores (CNPJ, NomeFantasia) VALUES (?, ?); SELECT SCOPE_IDENTITY();", cnpj_interno, "PRODUÇÃO INTERNA / AVULSO")
+            cursor.nextset()
+            forn_id = cursor.fetchone()[0]
+        else:
+            forn_id = res_forn[0]
+
+        # 2. Procura se este produto já foi vinculado ao Fornecedor Fantasma antes
+        cursor.execute("SELECT ProdutoFornecedorID FROM ProdutosFornecedor WHERE ProdutoID = ? AND FornecedorID = ?", produto_id, forn_id)
+        res_vinculo = cursor.fetchone()
+
+        if res_vinculo:
+            vinculo_id = res_vinculo[0]
+            # 3. Se tem vínculo, acha o ID do item na Nota Fantasma para atualizar o preço
+            cursor.execute("""
+                SELECT TOP 1 I.ItemNotaID
+                FROM ItensNotaFiscalEntrada I
+                JOIN NotasFiscaisEntrada N ON I.NotaID = N.NotaID
+                WHERE I.ProdutoFornecedorID = ? AND N.FornecedorID = ?
+                ORDER BY N.DataEmissao DESC, N.NotaID DESC
+            """, vinculo_id, forn_id)
+            res_item = cursor.fetchone()
+
+            if res_item:
+                # Achamos a nota! Atualiza o preço nela.
+                cursor.execute("UPDATE ItensNotaFiscalEntrada SET PrecoCustoUnitario = ? WHERE ItemNotaID = ?", novo_custo, res_item[0])
+            else:
+                # Caso raro: tem o vínculo, mas deletaram a nota. Vamos recriar.
+                num_nf = f"MANUAL-UPD-{produto_id}"
+                cursor.execute("INSERT INTO NotasFiscaisEntrada (NumeroNF, FornecedorID, DataEmissao, ValorTotalNF) VALUES (?, ?, GETDATE(), 0); SELECT SCOPE_IDENTITY();", num_nf, forn_id)
+                cursor.nextset()
+                nota_id = cursor.fetchone()[0]
+                cursor.execute("INSERT INTO ItensNotaFiscalEntrada (NotaID, ProdutoFornecedorID, Quantidade, PrecoCustoUnitario) VALUES (?, ?, 0, ?)", nota_id, vinculo_id, novo_custo)
+        else:
+            # 4. O Produto antigo NÃO tinha vínculo fantasma. Vamos criar tudo do zero!
+            desc_fantasma = f"(CUSTO ATUALIZADO MANUALMENTE)"
+            cursor.execute("INSERT INTO ProdutosFornecedor (ProdutoID, FornecedorID, DescricaoXML, EAN, NCM, FatorConversao) VALUES (?, ?, ?, 'SEM EAN', '00000000', 1.0); SELECT SCOPE_IDENTITY();", produto_id, forn_id, desc_fantasma)
+            cursor.nextset()
+            vinculo_id = cursor.fetchone()[0]
+
+            num_nf = f"MANUAL-UPD-{produto_id}"
+            cursor.execute("INSERT INTO NotasFiscaisEntrada (NumeroNF, FornecedorID, DataEmissao, ValorTotalNF) VALUES (?, ?, GETDATE(), 0); SELECT SCOPE_IDENTITY();", num_nf, forn_id)
+            cursor.nextset()
+            nota_id = cursor.fetchone()[0]
+            cursor.execute("INSERT INTO ItensNotaFiscalEntrada (NotaID, ProdutoFornecedorID, Quantidade, PrecoCustoUnitario) VALUES (?, ?, 0, ?)", nota_id, vinculo_id, novo_custo)
+
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"Erro ao atualizar custo manual: {e}", exc_info=True)
+        conn.rollback()
+        return False
+    finally:
+        conn.close()

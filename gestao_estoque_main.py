@@ -269,9 +269,14 @@ class AppGestaoEstoque:
         # 3. Comunicação com o Banco de Dados
         try:
             if self.produto_selecionado_id:
-                # Se estiver editando, não mexe no custo inicial (o custo é atualizado via Histórico de Compras)
+                # Se estiver editando, atualiza os dados básicos (Nome, Estoque Min)
                 database.atualizar_produto_estoque(self.produto_selecionado_id, nome, unidade, estoque_min, categoria)
-                messagebox.showinfo("Sucesso", "Produto atualizado com sucesso!", parent=self.root)
+                
+                # ---> A CORREÇÃO ESTÁ AQUI <---
+                # Envia o custo que estava na caixinha para o banco atualizar!
+                database.atualizar_custo_manual_produto(self.produto_selecionado_id, custo_inicial)
+                
+                messagebox.showinfo("Sucesso", "Produto e Custo atualizados com sucesso!", parent=self.root)
             else:
                 # SE FOR NOVO: Chama nossa nova função mágica!
                 novo_id = database.criar_produto_manual_com_custo(nome, unidade, estoque_min, categoria, custo_inicial) 
