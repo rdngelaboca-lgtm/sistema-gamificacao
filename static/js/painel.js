@@ -1023,7 +1023,7 @@ function inicializarCalendario() {
         
         // BUSCAR EVENTOS DA API
         events: function(info, successCallback, failureCallback) {
-            fetch('http://192.168.18.81:5000/api/agendamentos')
+            fetch('http://192.168.18.88:5000/api/agendamentos')
                 .then(response => response.json())
                 .then(data => {
                     const eventosFormatados = data.map(ag => {
@@ -1129,7 +1129,7 @@ function processarFormulario(event) {
 async function salvarNovoAgendamento() {
     const payload = coletarDadosFormulario();
     try {
-        const response = await fetch('http://192.168.18.81:5000/agendamentos/novo', {
+        const response = await fetch('http://192.168.18.88:5000/agendamentos/novo', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
@@ -1155,7 +1155,7 @@ async function atualizarAgendamento() {
     const payload = coletarDadosFormulario();
     // A rota de atualização espera o ID na URL
     try {
-        const response = await fetch(`http://192.168.18.81:5000/agendamentos/${id}`, {
+        const response = await fetch(`http://192.168.18.88:5000/agendamentos/${id}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
@@ -1179,7 +1179,7 @@ async function excluirAgendamento() {
     if(!confirm("⚠️ Tem certeza que deseja EXCLUIR este agendamento?\nEssa ação não pode ser desfeita.")) return;
 
     try {
-        const response = await fetch(`http://192.168.18.81:5000/agendamentos/${id}`, {
+        const response = await fetch(`http://192.168.18.88:5000/agendamentos/${id}`, {
             method: 'DELETE'
         });
         
