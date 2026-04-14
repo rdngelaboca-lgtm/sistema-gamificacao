@@ -1797,9 +1797,19 @@ class AppGestaoEstoque:
         ttk.Label(frame, text=f"Inventário Financeiro: {nome_contagem}", font=("Arial", 14, "bold"), foreground="#0056b3").pack(anchor="w", pady=(0, 5))
         ttk.Label(frame, text="O Preço de Custo exibido é uma MÉDIA das 3 últimas entradas no sistema.", font=("Arial", 9, "italic"), foreground="gray").pack(anchor="w", pady=(0, 15))
 
+        # --- CORREÇÃO 1: Estilo para Linha Azul ao Clicar ---
+        style = ttk.Style()
+        # O theme_use('default') garante que as cores de seleção funcionem em qualquer Sistema Operacional
+        style.theme_use('default') 
+        style.map('Treeview', 
+                  background=[('selected', '#0078D7')], # Fundo Azul
+                  foreground=[('selected', 'white')])   # Letra Branca
+
         # Tabela
         cols = ('Categoria', 'Produto', 'Qtd Contada', 'Custo Médio Unit.', 'Custo Total')
-        tree = ttk.Treeview(frame, columns=cols, show='headings', selectmode='none')
+        
+        # --- CORREÇÃO 2: Mudamos de selectmode='none' para 'browse' (permite selecionar 1 item) ---
+        tree = ttk.Treeview(frame, columns=cols, show='headings', selectmode='browse')
 
         # Cabeçalhos com ordenação inteligente (reaproveitada)
         for col in cols: 
@@ -1834,10 +1844,66 @@ class AppGestaoEstoque:
                 f"R$ {custo_total_item:.2f}".replace('.', ',')
             ))
 
-        # Rodapé com o Valor Total do Estoque
+        # --- CORREÇÃO 3: Lógica de Exportação para Excel ---
+        def exportar_para_excel():
+            import pandas as pd
+            from tkinter import filedialog
+            
+            # Pergunta ao usuário ONDE ele quer salvar o arquivo
+            caminho_arquivo = filedialog.asksaveasfilename(
+                parent=popup,
+                title="Salvar Relatório Excel",
+                defaultextension=".xlsx",
+                filetypes=[("Arquivos Excel", "*.xlsx")],
+                initialfile=f"CMV_{nome_contagem.replace(' ', '_')}_{data_contagem.replace('/', '-')}.xlsx"
+            )
+
+            # Se o usuário clicou em "Cancelar" na janela de salvar
+            if not caminho_arquivo:
+                return 
+
+            try:
+                # Montamos uma lista limpa para o Excel (apenas com números puros, sem "R$")
+                dados_excel = []
+                for item in dados_relatorio:
+                    qtd_num = float(item['QuantidadeContada']) if item['QuantidadeContada'] is not None else 0.0
+                    custo_med_num = float(item['CustoMedio']) if item['CustoMedio'] is not None else 0.0
+                    custo_tot_num = qtd_num * custo_med_num
+                    
+                    dados_excel.append({
+                        'Categoria': item['Categoria'],
+                        'Produto': item['NomeProduto'],
+                        'Qtd Contada': qtd_num,
+                        'Custo Médio Unitário': custo_med_num,
+                        'Custo Total do Item': custo_tot_num
+                    })
+
+                # Cria a tabela usando o Pandas
+                df = pd.DataFrame(dados_excel)
+                
+                # Adiciona uma linha vazia e depois a linha de Total Geral no rodapé
+                df.loc[len(df)] = ['', '', '', '', ''] 
+                df.loc[len(df)] = ['TOTAL GERAL', '', '', '', float(total_estoque_rs)]
+
+                # Salva o arquivo no disco do computador
+                df.to_excel(caminho_arquivo, index=False)
+                
+                messagebox.showinfo("Sucesso", f"Relatório exportado com sucesso!\nSalvo em: {caminho_arquivo}", parent=popup)
+                
+            except Exception as e:
+                logger.error(f"Erro ao exportar Excel: {e}", exc_info=True)
+                messagebox.showerror("Erro na Exportação", f"Não foi possível gerar o Excel.\nVerifique se o arquivo não está aberto em outro programa.\nErro: {e}", parent=popup)
+        # --------------------------------------------------
+
+        # Rodapé com os botões e o Valor Total do Estoque
         frame_total = ttk.Frame(popup, padding="15")
         frame_total.pack(fill=tk.X, side=tk.BOTTOM)
 
+        # Botão de Exportar à esquerda
+        btn_exportar = ttk.Button(frame_total, text="💾 Exportar para Excel", command=exportar_para_excel)
+        btn_exportar.pack(side=tk.LEFT)
+
+        # Texto do Total à direita
         lbl_total = ttk.Label(frame_total, text=f"VALOR TOTAL EM ESTOQUE: R$ {total_estoque_rs:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.'), font=("Arial", 16, "bold"), foreground="green")
         lbl_total.pack(side=tk.RIGHT)   
 
