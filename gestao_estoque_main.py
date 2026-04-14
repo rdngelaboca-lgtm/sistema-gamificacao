@@ -1244,6 +1244,8 @@ class AppGestaoEstoque:
 
         btn_consolidar = ttk.Button(frame_botoes_hist, text="🗜️ Consolidar Selecionadas", command=self.consolidar_contagens_selecionadas)
         btn_consolidar.pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
+        btn_relatorio_cmv = ttk.Button(frame_botoes_hist, text="📊 Gerar Relatório de Valoração (CMV)", command=self.abrir_relatorio_valoracao)
+        btn_relatorio_cmv.pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
 
     def filtrar_combo_contagem(self, event=None):
         # ... (código idêntico ao anterior) ...
@@ -1763,7 +1765,81 @@ class AppGestaoEstoque:
             try:
                 self.root.config(cursor="")
             except Exception:
-                pass    
+                pass 
+
+    def abrir_relatorio_valoracao(self):
+        """Abre uma janela com o relatório financeiro da contagem selecionada para cálculo do CMV."""
+        selecionado = self.tree_hist_contagens.focus()
+        if not selecionado:
+            messagebox.showwarning("Aviso", "Selecione uma contagem no Histórico primeiro para gerar a valoração.", parent=self.root)
+            return
+
+        dados_contagem = self.tree_hist_contagens.item(selecionado, 'values')
+        contagem_id = int(dados_contagem[0])
+        data_contagem = dados_contagem[1]
+        nome_contagem = dados_contagem[2]
+
+        # Busca os dados do banco
+        dados_relatorio = database.gerar_relatorio_valoracao_contagem(contagem_id)
+
+        if not dados_relatorio:
+            messagebox.showinfo("Aviso", "A contagem selecionada está vazia ou contém apenas itens avulsos não resolvidos.", parent=self.root)
+            return
+
+        popup = Toplevel(self.root)
+        popup.title(f"Relatório de Valoração (CMV) - {nome_contagem} ({data_contagem})")
+        popup.geometry("900x600")
+        popup.transient(self.root)
+
+        frame = ttk.Frame(popup, padding="15")
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(frame, text=f"Inventário Financeiro: {nome_contagem}", font=("Arial", 14, "bold"), foreground="#0056b3").pack(anchor="w", pady=(0, 5))
+        ttk.Label(frame, text="O Preço de Custo exibido é uma MÉDIA das 3 últimas entradas no sistema.", font=("Arial", 9, "italic"), foreground="gray").pack(anchor="w", pady=(0, 15))
+
+        # Tabela
+        cols = ('Categoria', 'Produto', 'Qtd Contada', 'Custo Médio Unit.', 'Custo Total')
+        tree = ttk.Treeview(frame, columns=cols, show='headings', selectmode='none')
+
+        # Cabeçalhos com ordenação inteligente (reaproveitada)
+        for col in cols: 
+            tree.heading(col, text=col, command=lambda c=col: self.ordenar_coluna_treeview(tree, c, False))
+
+        tree.column('Categoria', width=150)
+        tree.column('Produto', width=300)
+        tree.column('Qtd Contada', width=100, anchor='center')
+        tree.column('Custo Médio Unit.', width=120, anchor='e')
+        tree.column('Custo Total', width=120, anchor='e')
+
+        sb = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=sb.set)
+        tree.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+
+        total_estoque_rs = Decimal('0.0')
+
+        # Popula a tabela
+        for item in dados_relatorio:
+            qtd = Decimal(str(item['QuantidadeContada'])) if item['QuantidadeContada'] is not None else Decimal('0.0')
+            custo_medio = Decimal(str(item['CustoMedio'])) if item['CustoMedio'] is not None else Decimal('0.0')
+
+            custo_total_item = qtd * custo_medio
+            total_estoque_rs += custo_total_item
+
+            tree.insert("", "end", values=(
+                item['Categoria'],
+                item['NomeProduto'],
+                f"{qtd:.3f}".rstrip('0').rstrip('.'),
+                f"R$ {custo_medio:.4f}".replace('.', ','),
+                f"R$ {custo_total_item:.2f}".replace('.', ',')
+            ))
+
+        # Rodapé com o Valor Total do Estoque
+        frame_total = ttk.Frame(popup, padding="15")
+        frame_total.pack(fill=tk.X, side=tk.BOTTOM)
+
+        lbl_total = ttk.Label(frame_total, text=f"VALOR TOTAL EM ESTOQUE: R$ {total_estoque_rs:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.'), font=("Arial", 16, "bold"), foreground="green")
+        lbl_total.pack(side=tk.RIGHT)   
 
     # ===================================================================
     # == ABA 5: SUGESTÃO DE COMPRA (ATUALIZADA) =========================

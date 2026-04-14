@@ -6424,6 +6424,47 @@ def adicionar_item_contagem_existente(contagem_id, produto_id, qtd):
             conn.close()
     return False
 
+def gerar_relatorio_valoracao_contagem(contagem_id):
+    """
+    Gera o relatório financeiro de uma contagem para cálculo de CMV.
+    Calcula o Preço de Custo usando a MÉDIA das últimas 3 compras de cada produto.
+    Ignora itens avulsos (sem ProdutoID).
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            sql = """
+                SELECT 
+                    ISNULL(PE.Categoria, 'Geral') as Categoria,
+                    PE.NomeProduto,
+                    IC.QuantidadeContada,
+                    ISNULL((
+                        SELECT AVG(Sub.PrecoCustoUnitario)
+                        FROM (
+                            SELECT TOP 3 I.PrecoCustoUnitario 
+                            FROM ItensNotaFiscalEntrada I
+                            JOIN NotasFiscaisEntrada N ON I.NotaID = N.NotaID
+                            JOIN ProdutosFornecedor PF ON I.ProdutoFornecedorID = PF.ProdutoFornecedorID
+                            WHERE PF.ProdutoID = PE.ProdutoID
+                            ORDER BY N.DataEmissao DESC, N.NotaID DESC
+                        ) AS Sub
+                    ), 0) as CustoMedio
+                FROM ItensContagemEstoque IC
+                JOIN ProdutosEstoque PE ON IC.ProdutoID = PE.ProdutoID
+                WHERE IC.ContagemID = ?
+                ORDER BY ISNULL(PE.Categoria, 'Geral'), PE.NomeProduto
+            """
+            cursor.execute(sql, contagem_id)
+            cols = [column[0] for column in cursor.description]
+            return [dict(zip(cols, row)) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"Erro ao gerar relatório CMV para Contagem ID {contagem_id}: {e}", exc_info=True)
+            return []
+        finally:
+            conn.close()
+    return []
+
 
 # ===================================================================
 # == FIM DO MÓDULO DE GESTÃO DE ESTOQUE (CONTAGEM) ==================
