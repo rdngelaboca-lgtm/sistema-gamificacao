@@ -106,6 +106,47 @@ class AppGestaoEstoque:
         self.popular_combobox_produtos_mestre() 
         self.atualizar_lista_contagens_historico() 
         self.popular_combos_contagem_sugestao() # <-- CORREÇÃO: Inicializa os combos da aba 5
+        self.carregar_categorias_do_banco()
+
+    def carregar_categorias_do_banco(self):
+        """Busca as categorias dinâmicas do banco e atualiza todos os Comboboxes do sistema."""
+        try:
+            categorias_db = database.listar_categorias_produto()
+            # Se por algum motivo o banco retornar vazio, usa um fallback seguro
+            if not categorias_db:
+                categorias_db = ["Geral"]
+                
+            self.lista_categorias = categorias_db
+            lista_com_todas = ["Todas"] + self.lista_categorias
+
+            # 1. Aba 1: Formulário Novo Produto
+            if hasattr(self, 'combo_prod_categoria'):
+                self.combo_prod_categoria['values'] = self.lista_categorias
+                if self.combo_prod_categoria.get() not in self.lista_categorias:
+                    self.combo_prod_categoria.set("Geral" if "Geral" in self.lista_categorias else self.lista_categorias[0])
+            
+            # 2. Aba 1: Filtro da Tabela
+            if hasattr(self, 'combo_filtro_cat_mestre'):
+                valor_atual = self.combo_filtro_cat_mestre.get()
+                self.combo_filtro_cat_mestre['values'] = lista_com_todas
+                if valor_atual not in lista_com_todas:
+                    self.combo_filtro_cat_mestre.set("Todas")
+
+            # 3. Aba 3: Importação XML (Criar Mestre)
+            if hasattr(self, 'combo_cat_importacao'):
+                self.combo_cat_importacao['values'] = self.lista_categorias
+                if self.combo_cat_importacao.get() not in self.lista_categorias:
+                    self.combo_cat_importacao.set("Geral" if "Geral" in self.lista_categorias else self.lista_categorias[0])
+
+            # 4. Aba 5: Filtro Sugestão de Compra
+            if hasattr(self, 'combo_sugestao_categoria'):
+                valor_atual_sug = self.combo_sugestao_categoria.get()
+                self.combo_sugestao_categoria['values'] = lista_com_todas
+                if valor_atual_sug not in lista_com_todas:
+                    self.combo_sugestao_categoria.set("Todas")
+                    
+        except Exception as e:
+            logger.error(f"Erro ao carregar categorias do banco no Tkinter: {e}", exc_info=True)
 
     def on_tab_changed(self, event):
         """Atualiza os dados das abas quando elas são selecionadas."""
@@ -140,17 +181,25 @@ class AppGestaoEstoque:
         self.entry_prod_nome = ttk.Entry(self.form_frame_mestre, width=40)
         self.entry_prod_nome.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 10))
 
-        # Lista Global de Categorias
-        self.lista_categorias = ["Geral", "Sorvetes", "Brinquedos", "Embalagens", "Material de Limpeza", "Material de Escritório", "Mercado", "Distribuidoras", "Bebidas", "Insumos Produção", "Outros"]
+        # A lista self.lista_categorias agora nasce vazia e será preenchida pelo banco no __init__
+        self.lista_categorias = []
 
         ttk.Label(self.form_frame_mestre, text="Unidade (Ex: UN, KG):").grid(row=2, column=0, sticky="w", pady=2)
         self.entry_prod_unidade = ttk.Entry(self.form_frame_mestre, width=10)
         self.entry_prod_unidade.grid(row=3, column=0, sticky="w", pady=(0, 10))
 
         ttk.Label(self.form_frame_mestre, text="Categoria:").grid(row=2, column=1, sticky="w", pady=2)
-        self.combo_prod_categoria = ttk.Combobox(self.form_frame_mestre, values=self.lista_categorias, width=15, state="readonly")
-        self.combo_prod_categoria.grid(row=3, column=1, sticky="w", pady=(0, 10))
-        self.combo_prod_categoria.set("Geral")
+        
+        # Sub-frame para colocar o Combobox e o botão "Gerenciar" lado a lado
+        frame_categoria_mestre = ttk.Frame(self.form_frame_mestre)
+        frame_categoria_mestre.grid(row=3, column=1, sticky="w", pady=(0, 10))
+        
+        self.combo_prod_categoria = ttk.Combobox(frame_categoria_mestre, values=self.lista_categorias, width=15, state="readonly")
+        self.combo_prod_categoria.pack(side=tk.LEFT)
+        
+        # Botão para abrir o Popup de Gerenciamento
+        btn_gerir_categorias = ttk.Button(frame_categoria_mestre, text="⚙️", width=3, command=self.abrir_gestor_categorias)
+        btn_gerir_categorias.pack(side=tk.LEFT, padx=(2, 0))
 
         # --- NOVO LAYOUT: Lado a Lado (Estoque Mínimo e Custo) ---
         ttk.Label(self.form_frame_mestre, text="Estoque Mínimo:").grid(row=4, column=0, sticky="w", pady=2)
@@ -239,6 +288,108 @@ class AppGestaoEstoque:
         self.entry_prod_nome.focus()
         if self.tree_produtos.selection():
             self.tree_produtos.selection_remove(self.tree_produtos.selection()[0])
+    
+    def abrir_gestor_categorias(self):
+        """Abre uma janela pop-up para criar, editar e excluir categorias do sistema."""
+        popup = Toplevel(self.root)
+        popup.title("Gerenciador de Categorias")
+        popup.geometry("400x500")
+        popup.transient(self.root) # Mantém a janela sempre à frente da principal
+        popup.grab_set() # Impede que o usuário clique fora enquanto não fechar
+
+        frame = ttk.Frame(popup, padding="15")
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(frame, text="Categorias Atuais do Sistema:", font=("Arial", 10, "bold")).pack(anchor="w", pady=(0, 5))
+
+        # Lista visual
+        listbox_frame = ttk.Frame(frame)
+        listbox_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+        
+        scrollbar = ttk.Scrollbar(listbox_frame, orient="vertical")
+        lista_categorias_ui = tk.Listbox(listbox_frame, yscrollcommand=scrollbar.set, font=("Arial", 11), selectbackground="#0078D7")
+        scrollbar.config(command=lista_categorias_ui.yview)
+        
+        lista_categorias_ui.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        def atualizar_lista_ui():
+            lista_categorias_ui.delete(0, tk.END)
+            for cat in self.lista_categorias: # Lê da memória que acabou de ser atualizada do banco
+                lista_categorias_ui.insert(tk.END, cat)
+
+        atualizar_lista_ui()
+
+        # Área de Formulário (Edição/Criação)
+        ttk.Label(frame, text="Nome da Categoria:").pack(anchor="w", pady=(10, 2))
+        entry_cat = ttk.Entry(frame, font=("Arial", 11))
+        entry_cat.pack(fill=tk.X, pady=2)
+
+        def on_select(event):
+            # Preenche o input quando clica num item da lista
+            selecao = lista_categorias_ui.curselection()
+            if selecao:
+                entry_cat.delete(0, tk.END)
+                entry_cat.insert(0, lista_categorias_ui.get(selecao[0]))
+
+        lista_categorias_ui.bind('<<ListboxSelect>>', on_select)
+
+        # Botões de Ação
+        frame_botoes = ttk.Frame(frame)
+        frame_botoes.pack(fill=tk.X, pady=15)
+
+        def acao_salvar_nova():
+            nome = entry_cat.get().strip()
+            if not nome: return messagebox.showwarning("Aviso", "Digite um nome.", parent=popup)
+            
+            sucesso, msg = database.criar_categoria_produto(nome)
+            if sucesso:
+                self.carregar_categorias_do_banco() # Sincroniza o app todo
+                atualizar_lista_ui()
+                entry_cat.delete(0, tk.END)
+            else:
+                messagebox.showerror("Erro", msg, parent=popup)
+
+        def acao_atualizar():
+            selecao = lista_categorias_ui.curselection()
+            if not selecao: return messagebox.showwarning("Aviso", "Selecione uma categoria na lista para editar.", parent=popup)
+            
+            nome_antigo = lista_categorias_ui.get(selecao[0])
+            novo_nome = entry_cat.get().strip()
+            
+            if not novo_nome or novo_nome == nome_antigo: return
+            
+            if messagebox.askyesno("Confirmar Edição", f"Deseja renomear '{nome_antigo}' para '{novo_nome}'?\n\nISSO ATUALIZARÁ TODOS OS PRODUTOS DESTA CATEGORIA AUTOMATICAMENTE.", parent=popup):
+                sucesso, msg = database.atualizar_categoria_produto(nome_antigo, novo_nome)
+                if sucesso:
+                    self.carregar_categorias_do_banco()
+                    self.atualizar_lista_produtos() # Atualiza a tabela principal atrás do popup
+                    atualizar_lista_ui()
+                    entry_cat.delete(0, tk.END)
+                    messagebox.showinfo("Sucesso", msg, parent=popup)
+                else:
+                    messagebox.showerror("Erro", msg, parent=popup)
+
+        def acao_excluir():
+            selecao = lista_categorias_ui.curselection()
+            if not selecao: return messagebox.showwarning("Aviso", "Selecione uma categoria na lista para excluir.", parent=popup)
+            
+            nome_excluir = lista_categorias_ui.get(selecao[0])
+            
+            if messagebox.askyesno("Confirmar Exclusão", f"Tem certeza que deseja excluir a categoria '{nome_excluir}'?", parent=popup):
+                sucesso, msg = database.excluir_categoria_produto(nome_excluir)
+                if sucesso:
+                    self.carregar_categorias_do_banco()
+                    atualizar_lista_ui()
+                    entry_cat.delete(0, tk.END)
+                else:
+                    messagebox.showerror("Bloqueado", msg, parent=popup)
+
+        ttk.Button(frame_botoes, text="➕ Nova", command=acao_salvar_nova).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+        ttk.Button(frame_botoes, text="💾 Atualizar", command=acao_atualizar).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+        ttk.Button(frame_botoes, text="🗑️ Excluir", command=acao_excluir).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+        
+        ttk.Label(frame, text="💡 Dica: Se quiser apagar uma categoria, você deve primeiro alterar a categoria dos produtos que estão nela.", foreground="gray", font=("Arial", 8, "italic"), wraplength=350).pack(side=tk.BOTTOM, pady=5)
 
     def salvar_produto(self):
         nome = self.entry_prod_nome.get()

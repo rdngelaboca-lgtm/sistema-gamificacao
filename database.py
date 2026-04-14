@@ -5772,6 +5772,123 @@ def verificar_e_aceitar_tarefa_de_folga(tarefa_id, funcionario_id):
 # ===================================================================
 # == INÍCIO DO MÓDULO DE GESTÃO DE ESTOQUE (CATÁLOGO MESTRE) =========
 # ===================================================================
+def verificar_migracao_categorias_estoque():
+    """Cria a tabela de Categorias e insere as categorias padrão se estiver vazia."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # 1. Cria a tabela se não existir
+            sql_create = """
+                IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'CategoriasProduto')
+                CREATE TABLE CategoriasProduto (
+                    CategoriaID INT PRIMARY KEY IDENTITY(1,1),
+                    NomeCategoria VARCHAR(100) UNIQUE NOT NULL
+                )
+            """
+            cursor.execute(sql_create)
+            
+            # 2. Verifica se está vazia
+            cursor.execute("SELECT COUNT(*) FROM CategoriasProduto")
+            if cursor.fetchone()[0] == 0:
+                logger.info("Tabela CategoriasProduto vazia. Inserindo categorias padrão...")
+                categorias_padrao = ["Geral", "Sorvetes", "Brinquedos", "Embalagens", "Material de Limpeza", "Material de Escritório", "Mercado", "Distribuidoras", "Bebidas", "Insumos Produção", "Outros"]
+                for cat in categorias_padrao:
+                    cursor.execute("INSERT INTO CategoriasProduto (NomeCategoria) VALUES (?)", cat)
+            
+            conn.commit()
+        except Exception as e:
+            logger.error(f"Erro na migração de Categorias de Estoque: {e}")
+        finally:
+            conn.close()
+
+# Executa imediatamente ao iniciar o módulo
+verificar_migracao_categorias_estoque()
+
+def listar_categorias_produto():
+    """Retorna a lista de nomes de categorias em ordem alfabética."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT NomeCategoria FROM CategoriasProduto ORDER BY NomeCategoria")
+            # Retorna uma lista simples de strings, ex: ['Bebidas', 'Brinquedos', ...]
+            return [row[0] for row in cursor.fetchall()]
+        finally:
+            conn.close()
+    return []
+
+def criar_categoria_produto(nome_categoria):
+    """Cria uma nova categoria no banco."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO CategoriasProduto (NomeCategoria) VALUES (?)", nome_categoria)
+            conn.commit()
+            return True, "Categoria criada com sucesso."
+        except Exception as e:
+            conn.rollback()
+            # Erro 2627/2601 é violação de UNIQUE (nome repetido)
+            if 'UNIQUE' in str(e).upper() or 'DUPLICATE' in str(e).upper():
+                return False, "Já existe uma categoria com este exato nome."
+            return False, f"Erro de banco de dados: {e}"
+        finally:
+            conn.close()
+    return False, "Falha de conexão."
+
+def atualizar_categoria_produto(nome_antigo, novo_nome):
+    """
+    Atualiza o nome da categoria na tabela de categorias e, 
+    CRITICAMENTE, atualiza todos os produtos que usavam o nome antigo em cascata.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # 1. Atualiza na tabela de categorias
+            cursor.execute("UPDATE CategoriasProduto SET NomeCategoria = ? WHERE NomeCategoria = ?", novo_nome, nome_antigo)
+            
+            # 2. Atualiza em cascata nos Produtos Mestre (pois a coluna Categoria lá é VARCHAR)
+            cursor.execute("UPDATE ProdutosEstoque SET Categoria = ? WHERE Categoria = ?", novo_nome, nome_antigo)
+            
+            conn.commit()
+            return True, "Categoria atualizada em todo o sistema."
+        except Exception as e:
+            conn.rollback()
+            if 'UNIQUE' in str(e).upper():
+                 return False, "Já existe outra categoria com este novo nome."
+            return False, str(e)
+        finally:
+            conn.close()
+    return False, "Falha de conexão."
+
+def excluir_categoria_produto(nome_categoria):
+    """
+    Exclui uma categoria, MAS SÓ SE não houver nenhum produto usando ela.
+    Não queremos produtos "órfãos" sem categoria no sistema.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # 1. Verifica se tem produto usando
+            cursor.execute("SELECT COUNT(*) FROM ProdutosEstoque WHERE Categoria = ?", nome_categoria)
+            qtd_uso = cursor.fetchone()[0]
+            
+            if qtd_uso > 0:
+                return False, f"Não é possível excluir. Existem {qtd_uso} produto(s) usando esta categoria. Mude a categoria deles primeiro."
+                
+            # 2. Se não tem uso, pode apagar
+            cursor.execute("DELETE FROM CategoriasProduto WHERE NomeCategoria = ?", nome_categoria)
+            conn.commit()
+            return True, "Categoria excluída com sucesso."
+        except Exception as e:
+            conn.rollback()
+            return False, str(e)
+        finally:
+            conn.close()
+    return False, "Falha de conexão."
 
 def criar_produto_estoque(nome, unidade, estoque_min, categoria='Geral'):
     """Insere um novo produto mestre na tabela ProdutosEstoque.
