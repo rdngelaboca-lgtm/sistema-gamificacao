@@ -2116,6 +2116,10 @@ class AppGestaoEstoque:
         self.check_ocultar_zeros.grid(row=4, column=0, columnspan=2, sticky="w", padx=5, pady=5)
         # --- FIM DO FRAME DE FILTROS ---
 
+        # Botão Gerenciador de Buffet
+        btn_gerir_buffet = ttk.Button(frame_filtros, text="🍦 Gerenciar Buffet (Top Sabores)", command=self.abrir_gestor_buffet)
+        btn_gerir_buffet.grid(row=4, column=2, columnspan=2, sticky="e", padx=5, pady=5)
+
         # --- Frame 2: Tabela de Sugestões (Mesma de antes, mas o bind foi movido) ---
         frame_resultado = ttk.LabelFrame(main_frame, text="Relatório de Posição de Estoque e Sugestão (Duplo-clique para ver histórico de compras)", padding="10")
         frame_resultado.grid(row=1, column=0, sticky="nsew")
@@ -2321,6 +2325,95 @@ class AppGestaoEstoque:
 
         except Exception as e:
             logger.error(f"Erro ao popular combos de contagem (Aba 5): {e}", exc_info=True)
+
+    def abrir_gestor_buffet(self):
+        """Abre o painel de gestão inteligente do Buffet (Regra Fixos/Rotativos)."""
+        popup = Toplevel(self.root)
+        popup.title("🍦 Gerenciador Inteligente de Buffet")
+        popup.geometry("900x600")
+        popup.transient(self.root)
+
+        # --- Controle Superior ---
+        frame_topo = ttk.Frame(popup, padding="15")
+        frame_topo.pack(fill=tk.X)
+
+        ttk.Label(frame_topo, text="Analisar compras dos últimos:").pack(side=tk.LEFT, padx=(0,5))
+        spin_dias = ttk.Spinbox(frame_topo, from_=30, to=365, width=5)
+        spin_dias.set(90)
+        spin_dias.pack(side=tk.LEFT, padx=5)
+        ttk.Label(frame_topo, text="dias.").pack(side=tk.LEFT)
+
+        ttk.Label(frame_topo, text="|   Vagas FIXAS no Buffet:").pack(side=tk.LEFT, padx=(20, 5))
+        spin_vagas = ttk.Spinbox(frame_topo, from_=1, to=100, width=5)
+        spin_vagas.set(36) # O padrão de 36 vagas fixas que conversamos
+        spin_vagas.pack(side=tk.LEFT, padx=5)
+
+        btn_processar = ttk.Button(frame_topo, text="🔄 Processar Ranking", style="Accent.TButton")
+        btn_processar.pack(side=tk.LEFT, padx=20)
+
+        # --- Tabela ---
+        frame_tabela = ttk.Frame(popup, padding="10")
+        frame_tabela.pack(fill=tk.BOTH, expand=True)
+
+        cols = ('Posição', 'Status no Buffet', 'Sabor (Produto Mestre)', 'Unidades Compradas no Período', 'UMD (Consumo Médio/Dia)')
+        tree = ttk.Treeview(frame_tabela, columns=cols, show='headings', selectmode='none')
+
+        tree.heading('Posição', text='#'); tree.column('Posição', width=40, anchor='center')
+        tree.heading('Status no Buffet', text='Status no Buffet'); tree.column('Status no Buffet', width=150, anchor='center')
+        tree.heading('Sabor (Produto Mestre)', text='Sabor (Produto Mestre)'); tree.column('Sabor (Produto Mestre)', width=300)
+        tree.heading('Unidades Compradas no Período', text='Unid. Compradas no Período'); tree.column('Unidades Compradas no Período', width=200, anchor='center')
+        tree.heading('UMD (Consumo Médio/Dia)', text='UMD (Velocidade Diária)'); tree.column('UMD (Consumo Médio/Dia)', width=180, anchor='center')
+
+        # Tags para colorir a tabela
+        tree.tag_configure('fixo', background='#e6f4ea') # Verde bem clarinho
+        tree.tag_configure('rotativo', background='#fff3cd') # Amarelo clarinho
+
+        sb = ttk.Scrollbar(frame_tabela, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=sb.set)
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+
+        def gerar_analise():
+            for i in tree.get_children(): tree.delete(i)
+
+            try:
+                dias = int(spin_dias.get())
+                vagas = int(spin_vagas.get())
+            except ValueError:
+                messagebox.showerror("Erro", "Valores devem ser números inteiros.", parent=popup)
+                return
+
+            dados = database.gerar_ranking_sabores_buffet(dias)
+
+            if not dados:
+                tree.insert("", "end", values=("", "Sem dados de compra para 'Sorvetes' neste período.", "", "", ""))
+                return
+
+            for index, item in enumerate(dados):
+                posicao = index + 1
+
+                # Regra de Separação (Se a posição for <= às vagas fixas, ele é Fixo)
+                if posicao <= vagas:
+                    status = "⭐ FIXO"
+                    tag = "fixo"
+                else:
+                    status = "🔄 ROTATIVO (Fila de Troca)"
+                    tag = "rotativo"
+
+                umd_fmt = f"{float(item['UMD']):.4f}"
+                comprado_fmt = f"{float(item['TotalComprado']):.2f}".rstrip('0').rstrip('.')
+
+                tree.insert("", "end", values=(
+                    posicao,
+                    status,
+                    item['NomeProduto'],
+                    comprado_fmt,
+                    umd_fmt
+                ), tags=(tag,))
+
+        # Atrela o botão à função e roda a primeira vez automaticamente
+        btn_processar.config(command=gerar_analise)
+        gerar_analise()
 
     def abrir_popup_historico_compras(self, event):
         selecionado = self.tree_sugestao.focus()

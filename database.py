@@ -6874,6 +6874,42 @@ def buscar_configuracoes_escala():
             conn.close()
     return None
 
+def gerar_ranking_sabores_buffet(dias_analise=90):
+    """
+    Analisa o histórico de notas fiscais para determinar a velocidade de compra (UMD)
+    especificamente da categoria 'Sorvetes'. Ajuda a definir sabores fixos vs rotativos.
+    """
+    conn = get_db_connection()
+    if not conn: return []
+    try:
+        cursor = conn.cursor()
+        # Soma as quantidades compradas (já convertidas em unidades pelo seu sistema)
+        # e divide pelos dias de análise para achar a média diária.
+        sql = """
+            SELECT 
+                PE.ProdutoID,
+                PE.NomeProduto,
+                ISNULL(SUM(INI.Quantidade), 0) as TotalComprado,
+                ISNULL(SUM(INI.Quantidade) / CAST(? AS DECIMAL(10,4)), 0) as UMD
+            FROM ProdutosEstoque PE
+            JOIN ProdutosFornecedor PF ON PE.ProdutoID = PF.ProdutoID
+            JOIN ItensNotaFiscalEntrada INI ON PF.ProdutoFornecedorID = INI.ProdutoFornecedorID
+            JOIN NotasFiscaisEntrada NF ON INI.NotaID = NF.NotaID
+            WHERE PE.Categoria = 'Sorvetes'
+              AND NF.DataEmissao >= DATEADD(day, -?, GETDATE())
+            GROUP BY PE.ProdutoID, PE.NomeProduto
+            ORDER BY UMD DESC
+        """
+        # Passa 'dias_analise' duas vezes (para a divisão e para o filtro de data)
+        cursor.execute(sql, dias_analise, dias_analise)
+        cols = [column[0] for column in cursor.description]
+        return [dict(zip(cols, row)) for row in cursor.fetchall()]
+    except Exception as e:
+        logger.error(f"Erro ao gerar ranking do buffet: {e}", exc_info=True)
+        return []
+    finally:
+        if conn: conn.close()
+
 def listar_configuracoes_pico_diario():
     """Lista as configurações de horário de pico para todos os 7 dias da semana."""
     conn = get_db_connection()
