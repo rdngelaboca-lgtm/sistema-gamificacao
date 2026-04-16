@@ -2328,45 +2328,66 @@ class AppGestaoEstoque:
 
     def abrir_gestor_buffet(self):
         """Abre o painel de gestão inteligente do Buffet (Regra Fixos/Rotativos)."""
+        import json
+        import os
+
+        ARQUIVO_CONFIG_BUFFET = 'config_sabores_buffet.json'
+
+        # Funções internas para gerenciar o "Cérebro" de seleção
+        def carregar_ids_salvos():
+            if os.path.exists(ARQUIVO_CONFIG_BUFFET):
+                try:
+                    with open(ARQUIVO_CONFIG_BUFFET, 'r') as f:
+                        return json.load(f)
+                except: pass
+            return []
+
+        def salvar_ids_config(lista_ids):
+            with open(ARQUIVO_CONFIG_BUFFET, 'w') as f:
+                json.dump(lista_ids, f)
+
         popup = Toplevel(self.root)
         popup.title("🍦 Gerenciador Inteligente de Buffet")
-        popup.geometry("900x600")
+        popup.geometry("1000x600")
         popup.transient(self.root)
 
         # --- Controle Superior ---
         frame_topo = ttk.Frame(popup, padding="15")
         frame_topo.pack(fill=tk.X)
 
-        ttk.Label(frame_topo, text="Analisar compras dos últimos:").pack(side=tk.LEFT, padx=(0,5))
+        ttk.Label(frame_topo, text="Analisar últimos:").pack(side=tk.LEFT)
         spin_dias = ttk.Spinbox(frame_topo, from_=30, to=365, width=5)
         spin_dias.set(90)
         spin_dias.pack(side=tk.LEFT, padx=5)
         ttk.Label(frame_topo, text="dias.").pack(side=tk.LEFT)
 
-        ttk.Label(frame_topo, text="|   Vagas FIXAS no Buffet:").pack(side=tk.LEFT, padx=(20, 5))
+        ttk.Label(frame_topo, text="| Vagas FIXAS:").pack(side=tk.LEFT, padx=(10, 5))
         spin_vagas = ttk.Spinbox(frame_topo, from_=1, to=100, width=5)
-        spin_vagas.set(36) # O padrão de 36 vagas fixas que conversamos
+        spin_vagas.set(36)
         spin_vagas.pack(side=tk.LEFT, padx=5)
 
-        btn_processar = ttk.Button(frame_topo, text="🔄 Processar Ranking", style="Accent.TButton")
-        btn_processar.pack(side=tk.LEFT, padx=20)
+        btn_processar = ttk.Button(frame_topo, text="🔄 Atualizar Tabela", command=lambda: gerar_analise())
+        btn_processar.pack(side=tk.LEFT, padx=10)
+
+        # NOVO BOTÃO: SELETOR MANUAL
+        btn_seletor = ttk.Button(frame_topo, text="🛠️ Selecionar Sabores do Buffet", command=lambda: abrir_seletor_manual())
+        btn_seletor.pack(side=tk.RIGHT, padx=5)
 
         # --- Tabela ---
         frame_tabela = ttk.Frame(popup, padding="10")
         frame_tabela.pack(fill=tk.BOTH, expand=True)
 
-        cols = ('Posição', 'Status no Buffet', 'Sabor (Produto Mestre)', 'Unidades Compradas no Período', 'UMD (Consumo Médio/Dia)')
+        cols = ('Posição', 'Status no Buffet', 'Sabor (Produto Mestre)', 'Unidades Compradas', 'UMD (Consumo/Dia)')
         tree = ttk.Treeview(frame_tabela, columns=cols, show='headings', selectmode='none')
 
         tree.heading('Posição', text='#'); tree.column('Posição', width=40, anchor='center')
         tree.heading('Status no Buffet', text='Status no Buffet'); tree.column('Status no Buffet', width=150, anchor='center')
-        tree.heading('Sabor (Produto Mestre)', text='Sabor (Produto Mestre)'); tree.column('Sabor (Produto Mestre)', width=300)
-        tree.heading('Unidades Compradas no Período', text='Unid. Compradas no Período'); tree.column('Unidades Compradas no Período', width=200, anchor='center')
-        tree.heading('UMD (Consumo Médio/Dia)', text='UMD (Velocidade Diária)'); tree.column('UMD (Consumo Médio/Dia)', width=180, anchor='center')
+        tree.heading('Sabor (Produto Mestre)', text='Sabor (Produto Mestre)'); tree.column('Sabor (Produto Mestre)', width=350)
+        tree.heading('Unidades Compradas', text='Unid. Compradas'); tree.column('Unidades Compradas', width=150, anchor='center')
+        tree.heading('UMD (Consumo/Dia)', text='UMD (Velocidade Diária)'); tree.column('UMD (Consumo/Dia)', width=150, anchor='center')
 
-        # Tags para colorir a tabela
-        tree.tag_configure('fixo', background='#e6f4ea') # Verde bem clarinho
-        tree.tag_configure('rotativo', background='#fff3cd') # Amarelo clarinho
+        tree.tag_configure('fixo', background='#e6f4ea')
+        tree.tag_configure('rotativo', background='#fff3cd')
 
         sb = ttk.Scrollbar(frame_tabela, orient="vertical", command=tree.yview)
         tree.configure(yscrollcommand=sb.set)
@@ -2376,6 +2397,13 @@ class AppGestaoEstoque:
         def gerar_analise():
             for i in tree.get_children(): tree.delete(i)
 
+            ids_permitidos = carregar_ids_salvos()
+
+            # Se o arquivo não existir ou estiver vazio, avisa o usuário
+            if not ids_permitidos:
+                tree.insert("", "end", values=("", "⚠️ Nenhum sabor selecionado.", "Clique em 'Selecionar Sabores' acima para começar.", "", ""))
+                return
+
             try:
                 dias = int(spin_dias.get())
                 vagas = int(spin_vagas.get())
@@ -2383,139 +2411,78 @@ class AppGestaoEstoque:
                 messagebox.showerror("Erro", "Valores devem ser números inteiros.", parent=popup)
                 return
 
-            dados = database.gerar_ranking_sabores_buffet(dias)
+            dados = database.gerar_ranking_sabores_buffet(dias, ids_permitidos)
 
             if not dados:
-                tree.insert("", "end", values=("", "Sem dados de compra para 'Sorvetes' neste período.", "", "", ""))
+                tree.insert("", "end", values=("", "Sem dados de compra neste período.", "Nenhum dos sabores selecionados foi comprado nesses dias.", "", ""))
                 return
 
             for index, item in enumerate(dados):
                 posicao = index + 1
-
-                # Regra de Separação (Se a posição for <= às vagas fixas, ele é Fixo)
                 if posicao <= vagas:
-                    status = "⭐ FIXO"
-                    tag = "fixo"
+                    status, tag = "⭐ FIXO", "fixo"
                 else:
-                    status = "🔄 ROTATIVO (Fila de Troca)"
-                    tag = "rotativo"
+                    status, tag = "🔄 ROTATIVO", "rotativo"
 
                 umd_fmt = f"{float(item['UMD']):.4f}"
                 comprado_fmt = f"{float(item['TotalComprado']):.2f}".rstrip('0').rstrip('.')
 
-                tree.insert("", "end", values=(
-                    posicao,
-                    status,
-                    item['NomeProduto'],
-                    comprado_fmt,
-                    umd_fmt
-                ), tags=(tag,))
+                tree.insert("", "end", values=(posicao, status, item['NomeProduto'], comprado_fmt, umd_fmt), tags=(tag,))
 
-        # Atrela o botão à função e roda a primeira vez automaticamente
-        btn_processar.config(command=gerar_analise)
+        def abrir_seletor_manual():
+            """Abre uma sub-janela com Checklist para você escolher os produtos reais do Buffet."""
+            win_sel = Toplevel(popup)
+            win_sel.title("Selecione os Produtos que vão para o Buffet")
+            win_sel.geometry("500x600")
+            win_sel.transient(popup)
+            win_sel.grab_set() # Foca o mouse apenas aqui
+
+            ttk.Label(win_sel, text="Marque na lista os verdadeiros sorvetes de massa do Buffet:\n(Pressione e arraste ou clique para marcar vários)", font=("Arial", 10, "bold")).pack(pady=10, padx=10, anchor="w")
+
+            # Lista com Scroll
+            frame_list = ttk.Frame(win_sel, padding="10")
+            frame_list.pack(fill=tk.BOTH, expand=True)
+
+            sb_list = ttk.Scrollbar(frame_list, orient="vertical")
+
+            # selectmode=tk.MULTIPLE permite clicar em vários sem precisar segurar o CTRL
+            listbox = tk.Listbox(frame_list, selectmode=tk.MULTIPLE, yscrollcommand=sb_list.set, font=("Arial", 10))
+            sb_list.config(command=listbox.yview)
+            listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            sb_list.pack(side=tk.RIGHT, fill=tk.Y)
+
+            # Busca todos os produtos do estoque e organiza em ordem alfabética
+            produtos = database.listar_produtos_estoque()
+            produtos_ordenados = sorted(produtos, key=lambda x: x.NomeProduto)
+
+            mapa_indice_id = {}
+            ids_salvos = carregar_ids_salvos()
+
+            for idx, p in enumerate(produtos_ordenados):
+                # Mostra o nome do produto na lista
+                listbox.insert(tk.END, f"{p.NomeProduto} (Cat: {p.Categoria})")
+                # Salva o ID verdadeiro dele escondido na memória
+                mapa_indice_id[idx] = p.ProdutoID
+
+                # Se ele já estava selecionado antes, já deixa azulzinho
+                if p.ProdutoID in ids_salvos:
+                    listbox.selection_set(idx)
+
+            def salvar_selecao():
+                selecionados_idx = listbox.curselection()
+                # Converte a seleção da tela para os IDs verdadeiros do banco
+                ids_para_salvar = [mapa_indice_id[i] for i in selecionados_idx]
+
+                salvar_ids_config(ids_para_salvar)
+                messagebox.showinfo("Sucesso", f"{len(ids_para_salvar)} sabores configurados para análise de Buffet!", parent=win_sel)
+
+                win_sel.destroy()
+                gerar_analise() # Atualiza a tabela na mesma hora!
+
+            ttk.Button(win_sel, text="💾 Salvar Seleção", command=salvar_selecao).pack(pady=15, fill=tk.X, padx=20, ipady=5)
+
+        # Roda a primeira vez automaticamente
         gerar_analise()
-
-    def abrir_popup_historico_compras(self, event):
-        selecionado = self.tree_sugestao.focus()
-        if not selecionado: return
-        try: produto_id = int(selecionado)
-        except ValueError: return
-
-        dados_produto = self.cache_relatorio_posicao.get(produto_id)
-        if not dados_produto:
-            messagebox.showwarning("Aviso", "Gere a sugestão novamente para atualizar o cache.", parent=self.root)
-            return
-
-        nome_produto = dados_produto['NomeProduto']
-        popup = Toplevel(self.root)
-        popup.title(f"Histórico e Correção de Compras - {nome_produto}")
-        popup.geometry("850x500")
-        popup.transient(self.root)
-
-        frame = ttk.Frame(popup, padding="10")
-        frame.pack(fill=tk.BOTH, expand=True)
-        
-        # CORREÇÃO LÓGICA: Substituído .pack() por .grid() para não conflitar com a Treeview e Scrollbar que também usam grid no mesmo frame.
-        ttk.Label(frame, text="⚠️ DICA: Dê um duplo-clique em uma linha para corrigir quantidades e custos antigos importados com fator errado.", foreground="red", font=("Arial", 9, "bold")).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
-
-        frame.rowconfigure(1, weight=1)
-        frame.columnconfigure(0, weight=1)
-
-        # Adicionado o ItemNotaID invisível na tabela
-        cols_hist = ('Data Compra', 'NF', 'Fornecedor', 'Qtd', 'Custo Unit.', 'ItemNotaID')
-        tree_hist = ttk.Treeview(frame, columns=cols_hist, show='headings', selectmode='browse')
-
-        tree_hist.heading('Data Compra', text='Data Compra'); tree_hist.column('Data Compra', width=100, anchor='center')
-        tree_hist.heading('NF', text='NF'); tree_hist.column('NF', width=80, anchor='center')
-        tree_hist.heading('Fornecedor', text='Fornecedor'); tree_hist.column('Fornecedor', width=250)
-        tree_hist.heading('Qtd', text='Qtd'); tree_hist.column('Qtd', width=80, anchor='e')
-        tree_hist.heading('Custo Unit.', text='Custo Unit.'); tree_hist.column('Custo Unit.', width=100, anchor='e')
-        tree_hist.heading('ItemNotaID', text='ID Oculto'); tree_hist.column('ItemNotaID', width=0, stretch=tk.NO)
-
-        sb = ttk.Scrollbar(frame, orient="vertical", command=tree_hist.yview)
-        tree_hist.configure(yscrollcommand=sb.set)
-        tree_hist.grid(row=1, column=0, sticky="nsew")
-        sb.grid(row=1, column=1, sticky="ns")
-
-        def carregar_dados():
-            for i in tree_hist.get_children(): tree_hist.delete(i)
-            try:
-                historico = database.buscar_historico_compras_produto(produto_id)
-                for compra in historico:
-                    # Formatação da data
-                    raw_date = compra.DataEmissao
-                    data_f = "--/--/----"
-                    if raw_date:
-                        data_f = raw_date.strftime('%d/%m/%Y') if hasattr(raw_date, 'strftime') else str(raw_date)[:10]
-
-                    qtd_f = f"{compra.Quantidade:.3f}"
-                    custo_f = f"R$ {compra.PrecoCustoUnitario:.4f}"
-                    item_id = compra.ItemNotaID # O ID que criamos no banco
-
-                    tree_hist.insert("", "end", values=(data_f, compra.NumeroNF, compra.NomeFantasia, qtd_f, custo_f, item_id))
-            except Exception as e:
-                messagebox.showerror("Erro", f"Falha ao carregar histórico: {e}", parent=popup)
-
-        def editar_linha(event_tree):
-            sel = tree_hist.focus()
-            if not sel: return
-            vals = tree_hist.item(sel, 'values')
-            data_nf, num_nf, qtd_atual, custo_atual, item_nota_id = vals[0], vals[1], vals[3], vals[4], vals[5]
-
-            edit_win = Toplevel(popup)
-            edit_win.title(f"Corrigir NF {num_nf} ({data_nf})")
-            edit_win.geometry("300x200")
-            edit_win.transient(popup)
-
-            ttk.Label(edit_win, text="Qtd Exata que Entrou na Loja:").pack(pady=(10,2))
-            e_qtd = ttk.Entry(edit_win, justify="center")
-            e_qtd.pack(pady=2)
-            e_qtd.insert(0, qtd_atual.replace('.', 'X').replace(',', '.').replace('X', '').strip()) # Tratamento para colocar no input
-
-            ttk.Label(edit_win, text="Custo da Unidade (R$):").pack(pady=(10,2))
-            e_custo = ttk.Entry(edit_win, justify="center")
-            e_custo.pack(pady=2)
-            e_custo.insert(0, custo_atual.replace("R$ ", "").replace(".", "").replace(",", ".").strip())
-
-            def salvar():
-                try:
-                    n_qtd = Decimal(e_qtd.get().replace(",", "."))
-                    n_custo = Decimal(e_custo.get().replace(",", "."))
-                    
-                    if database.atualizar_item_historico_compra(item_nota_id, n_qtd, n_custo):
-                        edit_win.destroy()
-                        carregar_dados() # Recarrega a tabelinha
-                        # Mostra um aviso pro gestor recalcular a tela de trás
-                        messagebox.showinfo("Sucesso", "Histórico corrigido!\nClique em 'Gerar Sugestão' novamente para ver a matemática atualizada.", parent=popup)
-                    else:
-                        messagebox.showerror("Erro", "Falha ao gravar no banco.", parent=edit_win)
-                except InvalidOperation:
-                    messagebox.showerror("Erro", "Use apenas números.", parent=edit_win)
-
-            ttk.Button(edit_win, text="💾 Salvar Correção", command=salvar).pack(pady=15)
-
-        tree_hist.bind("<Double-1>", editar_linha)
-        carregar_dados()
 
     # ===================================================================
     # == ABA 7: SOLICITAÇÕES (Transplantada do main.py) =================
