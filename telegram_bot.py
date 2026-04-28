@@ -91,11 +91,19 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 async def iniciar_abate_comanda(update, context):
     """[NOVO] Disparado quando o usuário clica no botão 'Abater na Comanda'."""
     query = update.callback_query
-    await query.answer()
     chat_id = update.effective_chat.id
-
-    # Busca o funcionário e o saldo
     func = database.buscar_funcionario_por_chat_id(chat_id)
+
+    if not func:
+        await query.answer("❌ Usuário não vinculado.", show_alert=True)
+        return
+
+    # VERIFICAÇÃO DE PENDÊNCIA (MANTENDO A TRAVA SOLICITADA)
+    if not database.verificar_feedback_dia_anterior(func.FuncionarioID):
+        await query.answer("⚠️ Ação bloqueada! Você tem feedback pendente do dia anterior.", show_alert=True)
+        return
+
+    await query.answer() # Só confirma o clique se passar na trava
 
     # Correção: Informar ao invés de falhar silenciosamente
     if not func:
@@ -428,7 +436,7 @@ async def ranking(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     texto_final = "🏆 **Rankings de Desempenho do Mês** 🏆\n\n"
-    texto_final += "O *Score Final* equilibra Confiabilidade e Esforço (70%/30%).\n"
+    texto_final += "O *Score Final* equilibra Confiabilidade e Esforço (50%/50%).\n"
 
     # --- Ranking Cozinha ---
     texto_final += "\n🍳 **--- Ranking Cozinha ---** 🍳\n"
@@ -1094,6 +1102,11 @@ async def roteador_de_texto_privado(update: Update, context: ContextTypes.DEFAUL
 
     if not funcionario:
         return # Se o funcionário não for encontrado, não faz nada
+    # Prioridade para processo de abate de comanda iniciado
+    if context.user_data.get('estado') == 'aguardando_valor_comanda':
+        await processar_valor_comanda(update, context)
+        return
+
 
     # Comando /cancelar para limpar estado
     if texto_recebido.strip().lower() == '/cancelar':
