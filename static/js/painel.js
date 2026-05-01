@@ -1023,7 +1023,7 @@ function inicializarCalendario() {
         
         // BUSCAR EVENTOS DA API
         events: function(info, successCallback, failureCallback) {
-            fetch('http://192.168.18.88:5000/api/agendamentos')
+            fetch('http://192.168.18.97:5000/api/agendamentos')
                 .then(response => response.json())
                 .then(data => {
                     const eventosFormatados = data.map(ag => {
