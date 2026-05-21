@@ -964,13 +964,34 @@ class AppGestaoEstoque:
                 prod = det.find('prod')
                 if prod is None: continue
 
+                # 1. Quantidade comprada
+                qtd_xml = Decimal(prod.findtext('qCom', default='0.0'))
+
+                # 2. Valores brutos e rateios do produto
+                vProd = Decimal(prod.findtext('vProd', default='0.0')) # Valor total bruto dos itens
+                vFrete = Decimal(prod.findtext('vFrete', default='0.0'))
+                vSeg = Decimal(prod.findtext('vSeg', default='0.0'))
+                vOutro = Decimal(prod.findtext('vOutro', default='0.0'))
+                vDesc = Decimal(prod.findtext('vDesc', default='0.0'))
+
+                # 3. Impostos agregados (Substituição Tributária e IPI)
+                # O './/' faz o robô varrer profundamente qualquer tag de imposto procurando a ST
+                vICMSST = Decimal(det.findtext('.//vICMSST', default='0.0'))
+                vIPI = Decimal(det.findtext('.//vIPI', default='0.0'))
+
+                # 4. Cálculo do Custo Real de Aquisição Contábil
+                custo_total_item = vProd + vICMSST + vIPI + vFrete + vSeg + vOutro - vDesc
+                
+                # 5. Custo Unitário Certo (c/ Impostos Rateados)
+                custo_unit_real = custo_total_item / qtd_xml if qtd_xml > 0 else Decimal('0.0')
+
                 itens.append({
                     'cProd': prod.findtext('cProd', default=''),
                     'cEAN': prod.findtext('cEAN', default=''),
                     'DescricaoXML': prod.findtext('xProd', default=''),
                     'NCM': prod.findtext('NCM', default=''),
-                    'Quantidade': Decimal(prod.findtext('qCom', default='0.0')),
-                    'PrecoCustoUnitario': Decimal(prod.findtext('vUnCom', default='0.0'))
+                    'Quantidade': qtd_xml,
+                    'PrecoCustoUnitario': custo_unit_real # Agora leva o custo REAL!
                 })
 
             return dados_nf, itens
