@@ -2091,6 +2091,7 @@ class AppGestaoEstoque:
         """Gera um arquivo Excel estruturado por categorias e ordem alfabética para conferência física."""
         import pandas as pd
         from tkinter import filedialog
+        import re # Importação necessária para a limpeza de caracteres invisíveis
 
         # Busca os dados processados do banco
         dados_banco = database.buscar_produtos_para_folha_contagem()
@@ -2111,24 +2112,29 @@ class AppGestaoEstoque:
             return
 
         try:
+            # FILTRO MÁGICO: Remove caracteres de controle invisíveis que corrompem o MS Excel
+            def limpar_texto(texto):
+                if not texto: return ""
+                # Substitui tudo que for sujeira invisível (hexadecimais de controle) por NADA
+                return re.sub(r'[\x00-\x1f\x7f-\x9f]', '', str(texto)).strip()
+
             lista_exportacao = []
             for item in dados_banco:
                 custo_puro = float(item['UltimoCusto'])
-
-                # Monta a estrutura da linha adicionando os campos vazios para preenchimento manual
+                
                 lista_exportacao.append({
-                    'Categoria': item['Categoria'],
+                    'Categoria': limpar_texto(item['Categoria']),
                     'ID': item['ProdutoID'],
-                    'Nome do Produto Mestre': item['NomeProduto'],
-                    'UN': item['UnidadeMedida'],
+                    'Nome do Produto Mestre': limpar_texto(item['NomeProduto']),
+                    'UN': limpar_texto(item['UnidadeMedida']),
                     'Custo Unitário (c/ Imposto)': custo_puro,
-                    'CONTAGEM FÍSICA (Quantidade)': '________________' # Linha em branco para escrita manual
+                    'CONTAGEM FÍSICA (Quantidade)': '________________' 
                 })
 
-            # Cria o Dataframe e exporta para Excel
             df = pd.DataFrame(lista_exportacao)
-            df.to_excel(caminho_arquivo, index=False)
-
+            # engine='openpyxl' força a formatação estrita que o Windows exige
+            df.to_excel(caminho_arquivo, index=False, engine='openpyxl')
+            
             messagebox.showinfo("Sucesso", f"Folha de contagem gerada com sucesso!\n\nImprima a planilha para realizar a checagem manual.\n\nSalvo em: {caminho_arquivo}", parent=self.root)
 
         except Exception as e:
