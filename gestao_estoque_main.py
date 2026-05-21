@@ -1361,6 +1361,10 @@ class AppGestaoEstoque:
 
         btn_salvar_contagem = ttk.Button(frame_salvar, text="Salvar Contagem Completa", command=self.salvar_contagem_completa)
         btn_salvar_contagem.grid(row=0, column=4, sticky="e", padx=20, ipady=5)
+
+        # Botão para exportar a planilha de conferência manual (A caneta)
+        btn_planilha_contagem = ttk.Button(frame_salvar, text="📊 Exportar Folha de Contagem (Excel)", command=self.exportar_folha_contagem_manual)
+        btn_planilha_contagem.grid(row=1, column=4, sticky="e", padx=20, pady=(5, 0))
         
         frame_historico = ttk.LabelFrame(main_frame, text="Histórico de Contagens Realizadas", padding="10")
         frame_historico.grid(row=0, column=1, rowspan=3, sticky="nsew", pady=5)
@@ -2061,6 +2065,56 @@ class AppGestaoEstoque:
     # ===================================================================
     # == ABA 5: SUGESTÃO DE COMPRA (ATUALIZADA) =========================
     # ===================================================================
+
+    def exportar_folha_contagem_manual(self):
+        """Gera um arquivo Excel estruturado por categorias e ordem alfabética para conferência física."""
+        import pandas as pd
+        from tkinter import filedialog
+
+        # Busca os dados processados do banco
+        dados_banco = database.buscar_produtos_para_folha_contagem()
+        if not dados_banco:
+            messagebox.showerror("Erro", "Nenhum produto encontrado no catálogo mestre.", parent=self.root)
+            return
+
+        # Abre a caixa de diálogo para escolher onde salvar o arquivo
+        caminho_arquivo = filedialog.asksaveasfilename(
+            parent=self.root,
+            title="Salvar Folha de Contagem Manual",
+            defaultextension=".xlsx",
+            filetypes=[("Arquivos Excel", "*.xlsx")],
+            initialfile=f"Folha_Contagem_Manual_{datetime.now().strftime('%d-%m-%Y')}.xlsx"
+        )
+
+        if not caminho_arquivo:
+            return
+
+        try:
+            lista_exportacao = []
+            for item in dados_banco:
+                custo_puro = float(item['UltimoCusto'])
+
+                # Monta a estrutura da linha adicionando os campos vazios para preenchimento manual
+                lista_exportacao.append({
+                    'Categoria': item['Categoria'],
+                    'ID': item['ProdutoID'],
+                    'Nome do Produto Mestre': item['NomeProduto'],
+                    'UN': item['UnidadeMedida'],
+                    'Custo Unitário (c/ Imposto)': custo_puro,
+                    'CONTAGEM FÍSICA (Quantidade)': '________________' # Linha em branco para escrita manual
+                })
+
+            # Cria o Dataframe e exporta para Excel
+            df = pd.DataFrame(lista_exportacao)
+            df.to_excel(caminho_arquivo, index=False)
+
+            messagebox.showinfo("Sucesso", f"Folha de contagem gerada com sucesso!\n\nImprima a planilha para realizar a checagem manual.\n\nSalvo em: {caminho_arquivo}", parent=self.root)
+
+        except Exception as e:
+            logger.error(f"Erro ao exportar folha de contagem manual: {e}", exc_info=True)
+            messagebox.showerror("Erro", f"Não foi possível gerar a planilha Excel.\nErro: {e}", parent=self.root)
+
+
     def criar_aba_sugestao_compra(self):
         main_frame = ttk.Frame(self.frame_sugestao)
         main_frame.pack(fill=tk.BOTH, expand=True)

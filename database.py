@@ -8815,3 +8815,43 @@ def atualizar_custo_manual_produto(produto_id, novo_custo):
         return False
     finally:
         conn.close()
+
+def buscar_produtos_para_folha_contagem():
+    """
+    Busca todos os produtos cadastrados com seus respectivos últimos custos tributados,
+    ordenados por Categoria e Nome Alfabético para a folha de checagem manual.
+    """
+    conn = get_db_connection()
+    if not conn: return []
+    
+    try:
+        cursor = conn.cursor()
+        # Query que traz os dados básicos do mestre e faz uma subquery para buscar
+        # o valor unitário da última Nota Fiscal de Entrada que deu entrada no sistema.
+        sql = """
+            SELECT
+                ISNULL(PE.Categoria, 'Geral') as Categoria,
+                PE.ProdutoID,
+                PE.NomeProduto,
+                PE.UnidadeMedida,
+                ISNULL((
+                    SELECT TOP 1 I.PrecoCustoUnitario
+                    FROM ItensNotaFiscalEntrada I
+                    JOIN NotasFiscaisEntrada N ON I.NotaID = N.NotaID
+                    JOIN ProdutosFornecedor PF ON I.ProdutoFornecedorID = PF.ProdutoFornecedorID
+                    WHERE PF.ProdutoID = PE.ProdutoID
+                    ORDER BY N.DataEmissao DESC, N.NotaID DESC
+                ), 0) as UltimoCusto
+            FROM ProdutosEstoque PE
+            ORDER BY Categoria ASC, NomeProduto ASC
+        """
+        cursor.execute(sql)
+        cols = [column[0] for column in cursor.description]
+        return [dict(zip(cols, row)) for row in cursor.fetchall()]
+        
+    except Exception as e:
+        logger.error(f"Erro ao buscar produtos para folha de contagem: {e}", exc_info=True)
+        return []
+        
+    finally:
+        if conn: conn.close()
