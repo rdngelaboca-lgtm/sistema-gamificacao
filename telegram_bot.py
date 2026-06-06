@@ -160,29 +160,23 @@ async def processar_valor_comanda(update, context):
     pontos_necessarios = int(valor_reais / taxa)
     func = database.buscar_funcionario_por_chat_id(update.effective_chat.id)
 
-    # Efetua o débito no Banco de Dados
-    sucesso = database.registrar_debito_pontos(func.FuncionarioID, pontos_necessarios, f"Abate em Comanda: R$ {valor_reais:.2f}")
+    # Efetua o registro do resgate pendente no Banco de Dados
+    sucesso, mensagem, resgate_id = database.registrar_solicitacao_comanda(func.FuncionarioID, valor_reais, pontos_necessarios)
 
     if sucesso:
-        await update.message.reply_text(f"✅ *Sucesso!*\n\nForam debitados {pontos_necessarios} pontos da sua conta.\nO Caixa já foi avisado para abater R$ {valor_reais:.2f} da sua comanda!", parse_mode='Markdown')
+        await update.message.reply_text(f"⏳ *Solicitação Enviada!*\n\n{mensagem}\nOs {pontos_necessarios} pontos foram reservados do seu saldo.", parse_mode='Markdown')
 
-        # Cálculos de Saldo para o Relatório do Caixa
-        saldo_pontos_anterior = func.SaldoPontos if getattr(func, 'SaldoPontos', None) is not None else 0
-        saldo_pontos_restante = saldo_pontos_anterior - pontos_necessarios
-        saldo_reais_restante = saldo_pontos_restante * taxa
-
-        # Alerta aos Gestores / Caixa
+        # Alerta aos Gestores
         alerta = (
-            f"🚨 *ALERTA DE CAIXA*\n\n"
-            f"👤 Funcionário: *{update.effective_user.first_name}*\n"
-            f"💰 Valor Abatido: *R$ {valor_reais:.2f}* ({pontos_necessarios} pts)\n"
-            f"🏦 Saldo Anterior: *R$ {saldo_reais:.2f}* ({saldo_pontos_anterior} pts)\n"
-            f"💳 Saldo Restante: *R$ {saldo_reais_restante:.2f}* ({saldo_pontos_restante} pts)\n"
-            f"📌 Status: Pontos já deduzidos do sistema."
+            f"🔔 **Nova Solicitação de Abate na Comanda** 🔔\n\n"
+            f"👤 **Funcionário:** {update.effective_user.first_name}\n"
+            f"💰 **Valor a Abater:** R$ {valor_reais:.2f}\n"
+            f"💎 **Pontos:** {pontos_necessarios} pts\n\n"
+            f"Acesse o sistema para aprovar na aba 'Loja e Resgates'."
         )
         await context.bot.send_message(chat_id=config.GESTOR_GROUP_CHAT_ID, text=alerta, parse_mode='Markdown')
     else:
-        await update.message.reply_text("❌ Ocorreu um erro no sistema ao processar o débito. Tente novamente.")
+        await update.message.reply_text(f"❌ Ocorreu um erro: {mensagem}")
 
     # Limpa o estado para voltar ao normal
     context.user_data.pop('estado', None)

@@ -3131,6 +3131,44 @@ def buscar_dados_resgate_para_notificacao(resgate_id):
             conn.close()
     return None
 
+def registrar_solicitacao_comanda(funcionario_id, valor_reais, pontos_necessarios):
+    """Registra o abate de comanda como um resgate pendente na loja, criando um produto virtual se necessário."""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+
+            # 1. Garante que existe um 'Produto Virtual' para a Comanda (Ativo=0 para não aparecer no menu)
+            nome_produto = "Abate na Comanda"
+            cursor.execute("SELECT ProdutoID FROM ProdutosLoja WHERE Nome = ?", nome_produto)
+            res = cursor.fetchone()
+            if res:
+                produto_id = res[0]
+            else:
+                cursor.execute("INSERT INTO ProdutosLoja (Nome, Descricao, CustoEmPontos, EstoqueDisponivel, Ativo) VALUES (?, ?, 0, NULL, 0); SELECT SCOPE_IDENTITY();", nome_produto, "Abatimento dinâmico de valor na comanda.")
+                cursor.nextset()
+                produto_id = cursor.fetchone()[0]
+
+            # 2. Debita os pontos (Reserva Provisória)
+            sql_debitar = "UPDATE Funcionarios SET SaldoPontos = SaldoPontos - ? WHERE FuncionarioID = ?"
+            cursor.execute(sql_debitar, pontos_necessarios, funcionario_id)
+
+            # 3. Insere em Resgates como Pendente
+            sql_resgate = "INSERT INTO Resgates (FuncionarioID, ProdutoID, PontosGastos, Status) VALUES (?, ?, ?, 'Pendente'); SELECT SCOPE_IDENTITY();"
+            cursor.execute(sql_resgate, funcionario_id, produto_id, pontos_necessarios)
+            cursor.nextset()
+            resgate_id = cursor.fetchone()[0]
+
+            conn.commit()
+            return (True, f"Solicitação de abate no valor de R$ {valor_reais:.2f} enviada para aprovação do gestor!", resgate_id)
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"ERRO em registrar_solicitacao_comanda: {e}")
+            return (False, "Ocorreu um erro ao processar a solicitação.", None)
+        finally:
+            conn.close()
+    return (False, "Erro de conexão.", None)
+
 # ===================================================================
 # == INÍCIO DO MÓDULO DE CONQUISTAS (BADGES) ========================
 # ===================================================================
