@@ -24,7 +24,7 @@ TODOS_FUNCIONARIOS_GROUP_ID = -5030960080
 
 # --- CONFIGURAÇÕES DO BANCO DE DADOS ---
 # Endereço do seu servidor SQL Server.
-DB_SERVER = '192.168.18.107'
+DB_SERVER = '127.0.0.1'
 # Nome do banco de dados que estamos usando.
 DB_DATABASE = 'gamificacao_db'
 # Usuário de acesso ao banco.
