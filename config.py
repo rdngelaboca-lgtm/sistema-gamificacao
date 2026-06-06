@@ -33,8 +33,9 @@ DB_UID = 'sa'
 DB_PWD = 'Gamificacao#2025'
 
 # --- CONFIGURAÇÕES DA API E ARQUIVOS ---
-# URL base para a API. Essencial para o ngrok e para o deploy final.
-API_BASE_URL = "http://192.168.18.107:5000" # Lembre-se de atualizar se o ngrok mudar!
+# URL base para a API. Como o Bot e a API rodam no mesmo servidor Linux (Lubuntu),
+# usamos localhost (127.0.0.1) para que eles conversem internamente, imunes a quedas de rede.
+API_BASE_URL = "http://127.0.0.1:5000"
 
 # Nome da pasta onde os documentos de RH (holerites, etc.) serão salvos no servidor.
 PASTA_DOCUMENTOS_RH = "documentos_rh_seguros"
