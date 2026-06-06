@@ -8000,6 +8000,42 @@ def listar_escala_detalhada_ordenada(data_str):
             conn.close()
     return []
 
+def copiar_escala_dia(data_origem, data_destino):
+    """
+    Copia todos os turnos de um dia específico para outro dia.
+    Substitui a escala do dia de destino caso ela já exista.
+    """
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # 1. Verifica se existe algo para copiar
+            cursor.execute("SELECT COUNT(*) FROM EscalaDiaria WHERE DataEscala = ?", data_origem)
+            if cursor.fetchone()[0] == 0:
+                return False, "Nenhuma escala encontrada na data de origem selecionada."
+
+            # 2. Limpa o dia de destino para não encavalar turnos
+            cursor.execute("DELETE FROM EscalaDiaria WHERE DataEscala = ?", data_destino)
+
+            # 3. Copia tudo em uma única transação usando SELECT INSERT
+            sql_copy = """
+                INSERT INTO EscalaDiaria 
+                (DataEscala, PosicaoID, FuncionarioID, FreelancerID, HorarioEntrada, HorarioSaida, InicioIntervalo, FimIntervalo, FocoDoDia)
+                SELECT ?, PosicaoID, FuncionarioID, FreelancerID, HorarioEntrada, HorarioSaida, InicioIntervalo, FimIntervalo, FocoDoDia
+                FROM EscalaDiaria 
+                WHERE DataEscala = ?
+            """
+            cursor.execute(sql_copy, data_destino, data_origem)
+            conn.commit()
+            return True, "Escala copiada com sucesso!"
+        except Exception as e:
+            logger.error(f"Erro ao copiar escala de {data_origem} para {data_destino}: {e}", exc_info=True)
+            conn.rollback()
+            return False, f"Erro interno no banco de dados: {e}"
+        finally:
+            conn.close()
+    return False, "Erro de conexão com o banco de dados."
+
 # ===================================================================
 # == MÓDULO DE SOLICITAÇÕES (COMPRAS E MANUTENÇÃO) ==================
 # ===================================================================

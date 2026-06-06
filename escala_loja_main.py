@@ -82,6 +82,9 @@ class AppEscalaLoja:
         self.date_entry = DateEntry(self.frame_topo, width=10, date_pattern='dd/mm/yyyy', locale='pt_BR')
         self.date_entry.pack(side=tk.LEFT, padx=5)
         self.date_entry.bind("<<DateEntrySelected>>", self.carregar_escala_do_dia)
+        # [NOVO] Botão de Copiar Escala Anterior
+        self.btn_copiar = ttk.Button(self.frame_topo, text="📋 Copiar Escala Anterior", command=self.abrir_dialogo_copiar_escala)
+        self.btn_copiar.pack(side=tk.LEFT, padx=5)
 
         ttk.Separator(self.frame_topo, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=10)
 
@@ -150,6 +153,50 @@ class AppEscalaLoja:
         self.redesenhar_marcadores()
         # [CORREÇÃO] Garante que o gráfico seja redesenhado junto com o mapa
         self.atualizar_grafico_fluxo()
+
+    def abrir_dialogo_copiar_escala(self):
+        """Abre opções rápidas para clonar escalas de dias anteriores."""
+        if not self.data_selecionada:
+            messagebox.showwarning("Aviso", "Selecione uma data no calendário primeiro.", parent=self.root)
+            return
+
+        # Proteção: Se a escala do dia atual já tiver dados, avisa que vai sobrescrever
+        if any(self.escala_atual.values()):
+            if not messagebox.askyesno("Atenção", f"Já existem pessoas escaladas para o dia {self.data_selecionada}.\n\nSe você copiar uma escala anterior, o preenchimento atual SERÁ APAGADO.\n\nDeseja continuar?", icon='warning', parent=self.root):
+                return
+
+        popup = Toplevel(self.root)
+        popup.title("Copiar Escala")
+        popup.geometry("380x150")
+        popup.transient(self.root)
+        popup.grab_set()
+
+        ttk.Label(popup, text="Deseja copiar a escala de qual período?", font=("Arial", 11, "bold")).pack(pady=15)
+
+        frame_btns = ttk.Frame(popup)
+        frame_btns.pack(fill=tk.X, padx=10)
+
+        # Cálculos das datas dinâmicas baseadas no dia selecionado na tela
+        data_alvo_obj = datetime.strptime(self.data_selecionada, '%Y-%m-%d')
+        data_ontem_str = (data_alvo_obj - timedelta(days=1)).strftime('%Y-%m-%d')
+        data_semana_str = (data_alvo_obj - timedelta(days=7)).strftime('%Y-%m-%d')
+
+        def executar_copia(data_origem):
+            sucesso, msg = database.copiar_escala_dia(data_origem, self.data_selecionada)
+            if sucesso:
+                messagebox.showinfo("Sucesso", msg, parent=popup)
+                popup.destroy()
+                self.carregar_escala_do_dia() # Recarrega a tela com os novos dados copiados
+            else:
+                messagebox.showerror("Erro", msg, parent=popup)
+
+        # Botão 1: Copiar de Ontem
+        btn_ontem = ttk.Button(frame_btns, text="Copiar de Ontem", command=lambda: executar_copia(data_ontem_str))
+        btn_ontem.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=5, ipady=5)
+
+        # Botão 2: Copiar da Semana Passada (Mesmo dia da semana)
+        btn_semana = ttk.Button(frame_btns, text="Copiar Semana Passada", command=lambda: executar_copia(data_semana_str))
+        btn_semana.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=5, ipady=5)
 
     def redesenhar_marcadores(self):
         if not self.data_selecionada:
