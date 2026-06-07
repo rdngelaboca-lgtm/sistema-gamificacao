@@ -218,6 +218,9 @@ class AppEscalaLoja:
 
         dia_semana_hoje = datetime.strptime(self.data_selecionada, '%Y-%m-%d').isoweekday() + 1
         if dia_semana_hoje == 8: dia_semana_hoje = 1
+        # [NOVO] Cria um dicionário rápido na memória com a folga de todos os funcionários 
+        # para não travar o mapa fazendo consultas repetidas no banco de dados.
+        mapa_folgas = {f.FuncionarioID: getattr(f, 'DiaFolga', None) for f in database.listar_funcionarios()}
 
         for pos in self.posicoes:
             pos_id, nome, coord_x_db, coord_y_db, _, setor = pos 
@@ -250,21 +253,30 @@ class AppEscalaLoja:
             if lista_turnos:
                 # Se tem alguém escalado (um ou mais)
                 cor = "#00C851" # Verde
-                
+
                 # Monta a lista de nomes e horários
                 nomes_formatados = []
                 for dados in lista_turnos:
                     nome_p = dados.NomePessoa if dados.NomePessoa else "?"
-                    
+
+                    # --- NOVA VERIFICAÇÃO DE FOLGA DIRETO NO MAPA ---
+                    if dados.FuncionarioID:
+                        folga_fixa = mapa_folgas.get(dados.FuncionarioID)
+                        # Se o dia do calendário bater com o dia de folga do funcionário escalado
+                        if str(folga_fixa) == str(dia_semana_hoje):
+                            nome_p = f"⚠️ {nome_p} [FOLGA]"
+                            cor = "#FF8800" # Muda a bolinha para Laranja (Alerta de Conflito)
+                    # ------------------------------------------------
+
                     # Formata horário curto (Ex: 13-18)
                     h_ent = str(dados.HorarioEntrada)[:5] if dados.HorarioEntrada else ""
                     h_sai = str(dados.HorarioSaida)[:5] if dados.HorarioSaida else ""
-                    
+
                     # Se não tiver nome, muda cor para amarelo (alerta)
                     if not dados.NomePessoa: cor = "#FFBB33"
-                        
+
                     nomes_formatados.append(f"{nome_p} ({h_ent}-{h_sai})")
-                
+
                 label_final += "\n".join(nomes_formatados)
 
             elif not self.modo_edicao:
