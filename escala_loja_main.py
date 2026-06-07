@@ -115,9 +115,20 @@ class AppEscalaLoja:
         self.btn_intervalos = ttk.Button(self.frame_topo, text="⏱️ Gerenciar Intervalos", command=self.abrir_gerenciador_intervalos)
         self.btn_intervalos.pack(side=tk.LEFT, padx=5)
 
+        # --- Painel Lateral Embutido (Oculto por padrão) ---
+        self.frame_lateral = ttk.LabelFrame(self.frame_mapa, text="Selecione uma Posição", width=380)
+        self.frame_lateral.pack(side=tk.RIGHT, fill=tk.Y, padx=5, pady=5)
+        self.frame_lateral.pack_propagate(False) # Impede que o painel encolha
+
+        self.pos_id_selecionada = None
+        self.mapa_ids_lateral = {} # Guarda IDs de func/free
+        self._construir_painel_lateral()
+        self.frame_lateral.pack_forget() # Esconde o painel ao iniciar o app
+
         # --- Canvas do Mapa ---
+        # Empacotado com side=tk.LEFT para dividir o espaço harmonicamente com o painel
         self.canvas = tk.Canvas(self.frame_mapa, bg="#e0e0e0", cursor="hand2")
-        self.canvas.pack(fill=tk.BOTH, expand=True)
+        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.canvas.bind("<Button-1>", self.clique_no_mapa) 
         # Garante que os marcadores acompanhem o mapa em caso de redimensionamento da janela
         self.canvas.bind("<Configure>", lambda e: self.redesenhar_marcadores())
@@ -316,6 +327,34 @@ class AppEscalaLoja:
             return valor
 
         return None # Tipo desconhecido
+    
+    @staticmethod
+    def _aplicar_mascara_hora(event):
+        """
+        Formata automaticamente um campo de entrada para o padrão HH:MM
+        enquanto o usuário digita. Ignora teclas de navegação/deleção para não travar o cursor.
+        """
+        # Se apertou Backspace, Delete ou setinhas, não faz nada para permitir correção
+        if event.keysym in ('BackSpace', 'Delete', 'Left', 'Right', 'Up', 'Down', 'Tab'):
+            return
+
+        widget = event.widget
+        # Remove qualquer coisa que não seja dígito (ex: letras, ou os próprios dois pontos)
+        texto_limpo = ''.join(filter(str.isdigit, widget.get()))
+
+        # Limita a apenas 4 números
+        if len(texto_limpo) > 4:
+            texto_limpo = texto_limpo[:4]
+
+        # Injeta os dois pontos se já tivermos 3 ou mais dígitos (ex: "080" vira "08:0")
+        nova_string = texto_limpo
+        if len(texto_limpo) >= 3:
+            nova_string = f"{texto_limpo[:2]}:{texto_limpo[2:]}"
+
+        # Só atualiza a caixa de texto se a string formatada for diferente da atual
+        if widget.get() != nova_string:
+            widget.delete(0, tk.END)
+            widget.insert(0, nova_string)
 
     def atualizar_grafico_fluxo(self):
             """Calcula a ocupação hora a hora, filtrando por setor e descontando intervalos."""
@@ -1027,200 +1066,217 @@ class AppEscalaLoja:
         carregar_lista()
 
 
+    def _construir_painel_lateral(self):
+        """Monta a interface gráfica do painel lateral fixo (criado apenas uma vez)."""
+        # Lista (Treeview)
+        cols = ('ID', 'Nome', 'Ent', 'Sai')
+        self.tree_lateral = ttk.Treeview(self.frame_lateral, columns=cols, show='headings', height=4)
+        self.tree_lateral.heading('ID', text='ID'); self.tree_lateral.column('ID', width=30)
+        self.tree_lateral.heading('Nome', text='Nome'); self.tree_lateral.column('Nome', width=160)
+        self.tree_lateral.heading('Ent', text='Ent'); self.tree_lateral.column('Ent', width=60, anchor='center')
+        self.tree_lateral.heading('Sai', text='Sai'); self.tree_lateral.column('Sai', width=60, anchor='center')
+        self.tree_lateral.pack(fill=tk.X, padx=10, pady=10)
+        self.tree_lateral.bind("<<TreeviewSelect>>", self._carregar_edicao_lateral)
+
+        # Variáveis de Estado
+        self.var_escala_id_edit = tk.StringVar()
+        self.var_ent_lateral = tk.StringVar(value="08:00")
+        self.var_sai_lateral = tk.StringVar()
+
+        # Formulário
+        ttk.Label(self.frame_lateral, text="Funcionário / Freelancer:").pack(anchor="w", padx=10)
+        self.combo_pessoas_lateral = ttk.Combobox(self.frame_lateral, state="readonly")
+        self.combo_pessoas_lateral.pack(fill=tk.X, padx=10, pady=2)
+
+        frame_h = ttk.Frame(self.frame_lateral)
+        frame_h.pack(fill=tk.X, padx=10, pady=5)
+        ttk.Label(frame_h, text="Entrada:").pack(side=tk.LEFT)
+        self.e_ent_lat = ttk.Entry(frame_h, textvariable=self.var_ent_lateral, width=8)
+        self.e_ent_lat.pack(side=tk.LEFT, padx=5)
+        ttk.Label(frame_h, text="Saída:").pack(side=tk.LEFT)
+        self.e_sai_lat = ttk.Entry(frame_h, textvariable=self.var_sai_lateral, width=8)
+        self.e_sai_lat.pack(side=tk.LEFT, padx=5)
+
+        ttk.Label(self.frame_lateral, text="Intervalo (Início - Fim):").pack(anchor="w", padx=10)
+        frame_i = ttk.Frame(self.frame_lateral)
+        frame_i.pack(fill=tk.X, padx=10, pady=2)
+        self.e_int_ini_lat = ttk.Entry(frame_i, width=8)
+        self.e_int_ini_lat.pack(side=tk.LEFT, padx=(0,5))
+        self.e_int_fim_lat = ttk.Entry(frame_i, width=8)
+        self.e_int_fim_lat.pack(side=tk.LEFT)
+
+        ttk.Label(self.frame_lateral, text="Foco do Dia:").pack(anchor="w", padx=10)
+        self.txt_foco_lateral = tk.Text(self.frame_lateral, height=3)
+        self.txt_foco_lateral.pack(fill=tk.X, padx=10, pady=2)
+
+        # Binds (Máscaras de Horário e Auto-cálculo)
+        self.e_ent_lat.bind('<KeyRelease>', self._aplicar_mascara_hora)
+        self.e_sai_lat.bind('<KeyRelease>', self._aplicar_mascara_hora)
+        self.e_int_ini_lat.bind('<KeyRelease>', self._aplicar_mascara_hora)
+        self.e_int_fim_lat.bind('<KeyRelease>', self._aplicar_mascara_hora)
+        self.var_ent_lateral.trace_add("write", self._calcular_saida_lateral)
+
+        # Botões
+        frame_btn = ttk.Frame(self.frame_lateral)
+        frame_btn.pack(fill=tk.X, side=tk.BOTTOM, pady=15, padx=10)
+
+        ttk.Button(frame_btn, text="✨ Limpar", command=self._limpar_form_lateral).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+        ttk.Button(frame_btn, text="🗑️ Excluir", command=self._excluir_lateral).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+        self.btn_salvar_lat = ttk.Button(frame_btn, text="✅ Salvar", command=self._salvar_lateral)
+        self.btn_salvar_lat.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+
+        ttk.Button(self.frame_lateral, text="❌ Fechar Painel", command=self.frame_lateral.pack_forget).pack(side=tk.BOTTOM, fill=tk.X, padx=10)
+
+    # --- LÓGICA DO PAINEL LATERAL ---
+
+    def _calcular_saida_lateral(self, *args):
+        config_db = database.buscar_configuracoes_escala()
+        jornada = getattr(config_db, 'DuracaoJornadaPadrao', 8) or 8
+        entrada = self.var_ent_lateral.get()
+        if len(entrada) == 5 and re.match(r'^\d{2}:\d{2}$', entrada):
+            try:
+                dt_ent = datetime.strptime(entrada, '%H:%M')
+                dt_sai = dt_ent + timedelta(hours=float(jornada))
+                self.var_sai_lateral.set(dt_sai.strftime('%H:%M'))
+            except ValueError: pass
+
+    def _carregar_edicao_lateral(self, event):
+        sel = self.tree_lateral.focus()
+        if not sel: return
+        item = self.tree_lateral.item(sel, 'values')
+        escala_id = int(item[0])
+
+        lista_turnos = self.escala_atual.get(self.pos_id_selecionada, [])
+        turno = next((t for t in lista_turnos if t.EscalaID == escala_id), None)
+        if not turno: return
+
+        self.var_escala_id_edit.set(escala_id)
+
+        nome_combo = ""
+        if turno.FuncionarioID:
+            nome_combo = next((k for k, v in self.mapa_ids_lateral.items() if v['tipo'] == 'func' and v['id'] == turno.FuncionarioID), "")
+        elif turno.FreelancerID:
+            nome_combo = next((k for k, v in self.mapa_ids_lateral.items() if v['tipo'] == 'free' and v['id'] == turno.FreelancerID), "")
+        self.combo_pessoas_lateral.set(nome_combo)
+
+        fmt = lambda v: v.strftime('%H:%M') if hasattr(v, 'strftime') else str(v)[:5] if v else ""
+        self.var_ent_lateral.set(fmt(turno.HorarioEntrada))
+        self.var_sai_lateral.set(fmt(turno.HorarioSaida))
+        self.e_int_ini_lat.delete(0, tk.END); self.e_int_ini_lat.insert(0, fmt(turno.InicioIntervalo))
+        self.e_int_fim_lat.delete(0, tk.END); self.e_int_fim_lat.insert(0, fmt(turno.FimIntervalo))
+        self.txt_foco_lateral.delete("1.0", tk.END); self.txt_foco_lateral.insert("1.0", turno.FocoDoDia or "")
+
+        self.btn_salvar_lat.config(text="🔄 Atualizar")
+
+    def _limpar_form_lateral(self):
+        self.var_escala_id_edit.set("")
+        self.combo_pessoas_lateral.set("")
+        self.var_ent_lateral.set("08:00")
+        self.e_int_ini_lat.delete(0, tk.END); self.e_int_fim_lat.delete(0, tk.END)
+        self.txt_foco_lateral.delete("1.0", tk.END)
+        self.btn_salvar_lat.config(text="✅ Salvar")
+        if self.tree_lateral.selection():
+            self.tree_lateral.selection_remove(self.tree_lateral.selection())
+
+    def _salvar_lateral(self):
+        if not self.pos_id_selecionada: return
+        selecao = self.combo_pessoas_lateral.get()
+        if not selecao or selecao == "(Vazio)":
+            messagebox.showwarning("Aviso", "Selecione um funcionário ou freelancer.", parent=self.root)
+            return
+
+        func_id = None; free_id = None
+        d = self.mapa_ids_lateral.get(selecao)
+        if d:
+            if d['tipo'] == 'func': func_id = d['id']
+            else: free_id = d['id']
+
+        escala_id = self.var_escala_id_edit.get()
+
+        if database.salvar_escala_dia_v3(
+            escala_id if escala_id else None,
+            self.data_selecionada, self.pos_id_selecionada, func_id, free_id,
+            self.var_ent_lateral.get(), self.var_sai_lateral.get(), 
+            self.e_int_ini_lat.get(), self.e_int_fim_lat.get(),
+            self.txt_foco_lateral.get("1.0", tk.END).strip()
+        ):
+            self.carregar_escala_do_dia()
+            self.abrir_janela_escalacao(self.pos_id_selecionada) # Recarrega a lista lateral em tempo real
+        else:
+            messagebox.showerror("Erro", "Conflito de horário detectado!", parent=self.root)
+
+    def _excluir_lateral(self):
+        sel = self.tree_lateral.focus()
+        if not sel:
+            messagebox.showwarning("Aviso", "Selecione um turno na lista para excluir.", parent=self.root)
+            return
+
+        item = self.tree_lateral.item(sel, 'values')
+        escala_id = item[0]
+        nome_pessoa = item[1]
+
+        if messagebox.askyesno("Confirmar Exclusão", f"Remover a escalação de {nome_pessoa}?", parent=self.root):
+            if database.excluir_turno_escala(escala_id):
+                self.carregar_escala_do_dia()
+                self.abrir_janela_escalacao(self.pos_id_selecionada)
+            else:
+                messagebox.showerror("Erro", "Falha ao excluir o registro.", parent=self.root)
+
     def abrir_janela_escalacao(self, pos_id):
+        """Nova versão: Apenas injeta os dados no painel lateral em vez de abrir um Pop-up!"""
         try:
             dados_pos = next((p for p in self.posicoes if p[0] == pos_id), None)
             if not dados_pos: return
             nome_pos = dados_pos[1]
         except StopIteration: return 
 
-        popup = Toplevel(self.root)
-        popup.title(f"Escalar: {nome_pos}")
-        popup.geometry("600x650") 
-        popup.update_idletasks()
-        
-        # Centraliza a janela em relação à tela principal
-        x_c = self.root.winfo_x() + (self.root.winfo_width() // 2) - (600 // 2)
-        y_c = self.root.winfo_y() + (self.root.winfo_height() // 2) - (650 // 2)
-        popup.geometry(f"+{x_c}+{y_c}")
+        self.pos_id_selecionada = pos_id
 
-        # --- Parte 1: Lista de Turnos Existentes ---
-        frame_lista = ttk.LabelFrame(popup, text=f"Quem já está em '{nome_pos}' hoje?", padding=10)
-        frame_lista.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        # Exibe o painel lateral e ajusta o título
+        self.frame_lateral.config(text=f"Escalando: {nome_pos}")
+        self.frame_lateral.pack(side=tk.RIGHT, fill=tk.Y, padx=5, pady=5) 
 
-        cols = ('ID', 'Nome', 'Entrada', 'Saída')
-        tree = ttk.Treeview(frame_lista, columns=cols, show='headings', height=4)
-        tree.heading('ID', text='ID'); tree.column('ID', width=30)
-        tree.heading('Nome', text='Nome'); tree.column('Nome', width=180)
-        tree.heading('Entrada', text='Entrada'); tree.column('Entrada', width=70)
-        tree.heading('Saída', text='Saída'); tree.column('Saída', width=70)
-        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        scrollbar = ttk.Scrollbar(frame_lista, orient="vertical", command=tree.yview)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        tree.configure(yscrollcommand=scrollbar.set)
+        self._limpar_form_lateral()
+        self.tree_lateral.delete(*self.tree_lateral.get_children())
 
         # Carrega dados atuais da escala para a lista
         lista_turnos = self.escala_atual.get(pos_id, [])
         for t in lista_turnos:
-            fmt = lambda v: v.strftime('%H:%M') if hasattr(v, 'strftime') else str(v)[:5]
-            tree.insert("", "end", values=(t.EscalaID, t.NomePessoa, fmt(t.HorarioEntrada), fmt(t.HorarioSaida)))
-
-        # --- Parte 2: Formulário de Adição/Edição ---
-        frame_form = ttk.LabelFrame(popup, text="Adicionar / Editar Turno", padding=10)
-        frame_form.pack(fill=tk.X, padx=10, pady=10)
-
-        var_ent = tk.StringVar(value="08:00")
-        var_sai = tk.StringVar()
-        var_escala_id_edit = tk.StringVar(value="") # Vazio = Novo, Com Valor = Edição
-
-        # Carregar Configurações de jornada
-        config_db = database.buscar_configuracoes_escala()
-        JORNADA_PADRAO = getattr(config_db, 'DuracaoJornadaPadrao', 8) or 8
-
-        ttk.Label(frame_form, text="Funcionário / Freelancer:").pack(anchor="w")
-        combo_pessoas = ttk.Combobox(frame_form, width=40)
-        combo_pessoas.pack(fill="x", pady=5)
-
-        mapa_ids = {} 
-        lista_nomes = ["(Vazio)"]
-        for f in database.listar_funcionarios():
-            label = f"[Fixo] {f.NomeCompleto}"; lista_nomes.append(label)
-            mapa_ids[label] = {'tipo': 'func', 'id': f.FuncionarioID, 'tel': f.TelefoneWhatsApp} 
-        for fr in database.listar_freelancers():
-            label = f"[Free] {fr.Nome}"; lista_nomes.append(label)
-            mapa_ids[label] = {'tipo': 'free', 'id': fr.FreelancerID, 'tel': fr.Telefone}
-        combo_pessoas['values'] = lista_nomes
-
-        frame_h = ttk.Frame(frame_form)
-        frame_h.pack(fill="x", pady=5)
-        ttk.Label(frame_h, text="Entrada:").pack(side=tk.LEFT)
-        e_ent = ttk.Entry(frame_h, textvariable=var_ent, width=8); e_ent.pack(side=tk.LEFT, padx=5)
-        ttk.Label(frame_h, text="Saída:").pack(side=tk.LEFT)
-        e_sai = ttk.Entry(frame_h, textvariable=var_sai, width=8); e_sai.pack(side=tk.LEFT, padx=5)
-        
-        ttk.Label(frame_form, text="Intervalo (Início - Fim):").pack(anchor="w")
-        frame_int = ttk.Frame(frame_form)
-        frame_int.pack(fill="x", pady=5)
-        e_int_ini = ttk.Entry(frame_int, width=8); e_int_ini.pack(side=tk.LEFT, padx=(0,5))
-        e_int_fim = ttk.Entry(frame_int, width=8); e_int_fim.pack(side=tk.LEFT)
-
-        ttk.Label(frame_form, text="Foco do Dia:").pack(anchor="w")
-        txt_foco = tk.Text(frame_form, height=3, width=40); txt_foco.pack(fill="x", pady=5)
-
-        # --- Lógica de Auto-Cálculo de Saída ---
-        def calcular_saida(*args):
-            entrada = var_ent.get()
-            if len(entrada) == 5 and re.match(r'^\d{2}:\d{2}$', entrada):
-                try:
-                    dt_ent = datetime.strptime(entrada, '%H:%M')
-                    dt_sai = dt_ent + timedelta(hours=float(JORNADA_PADRAO))
-                    var_sai.set(dt_sai.strftime('%H:%M'))
-                except ValueError: pass
-        var_ent.trace_add("write", calcular_saida)
-
-        # --- Função para Carregar Edição ao Clicar na Lista ---
-        def carregar_para_edicao(event):
-            sel = tree.focus()
-            if not sel: return
-            item = tree.item(sel, 'values')
-            escala_id = int(item[0])
-            
-            turno = next((t for t in lista_turnos if t.EscalaID == escala_id), None)
-            if not turno: return
-
-            var_escala_id_edit.set(escala_id)
-            
-            nome_combo = ""
-            if turno.FuncionarioID:
-                nome_combo = next((k for k, v in mapa_ids.items() if v['tipo'] == 'func' and v['id'] == turno.FuncionarioID), "")
-            elif turno.FreelancerID:
-                nome_combo = next((k for k, v in mapa_ids.items() if v['tipo'] == 'free' and v['id'] == turno.FreelancerID), "")
-            combo_pessoas.set(nome_combo)
-
             fmt = lambda v: v.strftime('%H:%M') if hasattr(v, 'strftime') else str(v)[:5] if v else ""
-            var_ent.set(fmt(turno.HorarioEntrada))
-            var_sai.set(fmt(turno.HorarioSaida))
-            e_int_ini.delete(0, tk.END); e_int_ini.insert(0, fmt(turno.InicioIntervalo))
-            e_int_fim.delete(0, tk.END); e_int_fim.insert(0, fmt(turno.FimIntervalo))
-            txt_foco.delete("1.0", tk.END); txt_foco.insert("1.0", turno.FocoDoDia or "")
+            self.tree_lateral.insert("", "end", values=(t.EscalaID, t.NomePessoa, fmt(t.HorarioEntrada), fmt(t.HorarioSaida)))
 
-            btn_salvar.config(text="🔄 Atualizar Turno")
-            btn_novo.config(state="normal")
+        # Atualiza o dropdown de funcionários do banco de dados
+        self.mapa_ids_lateral = {} 
+        lista_nomes = ["(Vazio)"]
 
-        tree.bind("<<TreeviewSelect>>", carregar_para_edicao)
+        # Descobre o dia da semana no padrão do banco (Dom=1, Seg=2... Sab=7)
+        try:
+            dia_obj = datetime.strptime(self.data_selecionada, '%Y-%m-%d')
+            dia_semana_hoje = (dia_obj.isoweekday() % 7) + 1
+        except Exception:
+            dia_semana_hoje = -1
 
-        def limpar_form():
-            var_escala_id_edit.set("")
-            combo_pessoas.set("")
-            var_ent.set("08:00")
-            e_int_ini.delete(0, tk.END); e_int_fim.delete(0, tk.END)
-            txt_foco.delete("1.0", tk.END)
-            btn_salvar.config(text="✅ Adicionar Turno")
-            tree.selection_remove(tree.selection())
+        for f in database.listar_funcionarios():
+            # 1. Verifica Férias/Atestados/Afastamentos pelo banco
+            indisponivel = database.verificar_status_disponibilidade(f.FuncionarioID, self.data_selecionada)
 
-        def salvar():
-            selecao = combo_pessoas.get()
-            if not selecao or selecao == "(Vazio)":
-                messagebox.showwarning("Aviso", "Selecione um funcionário ou freelancer.", parent=popup)
-                return
+            # 2. Verifica a Folga Fixa da semana
+            folga_fixa = getattr(f, 'DiaFolga', None)
+            esta_de_folga = indisponivel or (str(folga_fixa) == str(dia_semana_hoje) and folga_fixa is not None)
 
-            func_id = None; free_id = None
-            d = mapa_ids.get(selecao)
-            if d:
-                if d['tipo'] == 'func': func_id = d['id']
-                else: free_id = d['id']
+            # Monta a etiqueta com o Alerta
+            tag_aviso = " [FOLGA]" if esta_de_folga else ""
+            label = f"[Fixo] {f.NomeCompleto}{tag_aviso}"
 
-            escala_id = var_escala_id_edit.get()
+            lista_nomes.append(label)
+            self.mapa_ids_lateral[label] = {'tipo': 'func', 'id': f.FuncionarioID, 'tel': getattr(f, 'TelefoneWhatsApp', '')} 
 
-            if database.salvar_escala_dia_v3(
-                escala_id if escala_id else None,
-                self.data_selecionada, pos_id, func_id, free_id,
-                var_ent.get(), var_sai.get(), 
-                e_int_ini.get(), e_int_fim.get(),
-                txt_foco.get("1.0", tk.END).strip()
-            ):
-                popup.destroy()
-                self.carregar_escala_do_dia()
-            else:
-                messagebox.showerror("Erro", "Conflito de horário detectado!", parent=popup)
+        for fr in database.listar_freelancers():
+            label = f"[Free] {fr.Nome}"
+            lista_nomes.append(label)
+            self.mapa_ids_lateral[label] = {'tipo': 'free', 'id': fr.FreelancerID, 'tel': getattr(fr, 'Telefone', '')}
 
-        # --- NOVA FUNÇÃO DE EXCLUSÃO ---
-        def excluir_selecionado():
-            sel = tree.focus()
-            if not sel:
-                messagebox.showwarning("Aviso", "Selecione um turno na lista acima para excluir.", parent=popup)
-                return
-            
-            item = tree.item(sel, 'values')
-            escala_id = item[0]
-            nome_pessoa = item[1]
-
-            confirmar = messagebox.askyesno("Confirmar Exclusão", 
-                                            f"Deseja realmente remover a escalação de {nome_pessoa}?", 
-                                            parent=popup)
-            
-            if confirmar:
-                if database.excluir_turno_escala(escala_id):
-                    messagebox.showinfo("Sucesso", "Escalação removida.", parent=popup)
-                    popup.destroy()
-                    self.carregar_escala_do_dia()
-                else:
-                    messagebox.showerror("Erro", "Falha ao excluir o registro.", parent=popup)
-
-        # --- Frame de Botões (Rodapé) ---
-        frame_btns = ttk.Frame(popup, padding=10)
-        frame_btns.pack(fill=tk.X, side=tk.BOTTOM)
-        
-        btn_novo = ttk.Button(frame_btns, text="✨ Novo (Limpar)", command=limpar_form, state="disabled")
-        btn_novo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)
-
-        # Botão de Exclusão integrado
-        btn_excluir = ttk.Button(frame_btns, text="🗑️ Excluir Turno", command=excluir_selecionado)
-        btn_excluir.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)
-        
-        btn_salvar = ttk.Button(frame_btns, text="✅ Adicionar Turno", command=salvar)
-        btn_salvar.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)    
+        self.combo_pessoas_lateral['values'] = lista_nomes    
 
     def abrir_gerenciador_intervalos(self):
         """
@@ -1295,6 +1351,10 @@ class AppEscalaLoja:
         ttk.Label(frame_inputs, text="Fim Intervalo (HH:MM):").pack(side=tk.LEFT, padx=(20, 0))
         entry_fim = ttk.Entry(frame_inputs, textvariable=var_int_fim, width=10, font=("Arial", 11))
         entry_fim.pack(side=tk.LEFT, padx=5)
+
+        # [NOVO] Liga a máscara de auto-formatação aos campos de intervalo
+        entry_ini.bind('<KeyRelease>', self._aplicar_mascara_hora)
+        entry_fim.bind('<KeyRelease>', self._aplicar_mascara_hora)
 
         btn_salvar = ttk.Button(frame_inputs, text="✅ SALVAR (Enter)", command=lambda: salvar_alteracao())
         btn_salvar.pack(side=tk.LEFT, padx=20)
