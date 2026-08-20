@@ -1098,5 +1098,5 @@ def rota_salvar_ean():
 
 if __name__ == "__main__":
     # O '0.0.0.0' é o segredo. Ele libera o acesso para a rede inteira.
-    logger.info("Iniciando servidor API acessível na rede...")
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    logger.info("Iniciando servidor API acessível na rede em modo Produção...")
+    app.run(host='0.0.0.0', port=5000, debug=False)
