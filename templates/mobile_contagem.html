@@ -1,520 +1,161 @@
 <!DOCTYPE html>
-<html lang="pt-br">
+<html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Contagem Estoque v2.0</title>
+    <!-- Essa linha impede que o tablet dê zoom sozinho quando você clica num campo -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>📱 Contagem de Estoque</title>
     <style>
-        body { font-family: sans-serif; background: #f0f2f5; margin: 0; padding: 10px; display: flex; flex-direction: column; height: 100vh; }
-        .card { background: white; padding: 15px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin-bottom: 10px; }
-        
-        h2 { margin: 0 0 10px 0; color: #333; font-size: 1.2rem; }
-        .input-group { margin-bottom: 15px; }
-        label { display: block; font-weight: bold; margin-bottom: 5px; }
-        
-        input[type="number"], input[type="text"] {
-            width: 100%; padding: 15px; font-size: 1.2rem; border: 2px solid #007bff; border-radius: 8px; box-sizing: border-box;
-        }
-        #ean-input { background-color: #e8f0fe; }
-        #ean-input:focus { border-color: #0056b3; outline: none; }
-
-        .lista-itens { flex: 1; overflow-y: auto; background: white; border-radius: 10px; padding: 10px; }
-        .item-lista { display: flex; justify-content: space-between; align-items: center; padding: 10px; border-bottom: 1px solid #eee; }
-        .item-nome { font-weight: bold; font-size: 0.9rem; }
-        .item-qtd { color: #007bff; font-weight: bold; }
-        .btn-del { color: red; font-size: 1.2rem; cursor: pointer; padding: 0 10px; }
-
-        .btn-salvar { background: #28a745; color: white; border: none; padding: 15px; font-size: 1.2rem; border-radius: 8px; width: 100%; cursor: pointer; margin-top: 10px; }
-        .btn-busca { background: #ffc107; color: #333; border: none; padding: 10px; border-radius: 5px; width: 100%; cursor: pointer; display: none; margin-top: 10px; font-weight: bold; }
-
-        /* Modal e Busca */
-        #painel-busca { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: white; z-index: 1000; padding: 20px; box-sizing: border-box; overflow-y: auto; }
-        .item-busca { padding: 15px; border-bottom: 1px solid #ddd; cursor: pointer; }
-        .item-busca small { color: #666; display: block; }
-        
-        #modal-qtd-caixa { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 2000; justify-content: center; align-items: center; }
-        .modal-content { background: white; padding: 20px; border-radius: 10px; width: 90%; max-width: 400px; text-align: center; }
-
-        .status-msg { text-align: center; font-weight: bold; margin-bottom: 5px; height: 20px; }
-        .sucesso { color: green; }
-        .erro { color: red; }
+        body { font-family: 'Segoe UI', Arial, sans-serif; background-color: #f4f7fa; margin: 0; padding: 15px; }
+        h2 { color: #0056b3; text-align: center; margin-bottom: 20px; }
+        .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 15px; }
+        label { font-weight: bold; color: #555; display: block; margin-bottom: 8px; }
+        input { width: 100%; padding: 15px; margin-bottom: 15px; border-radius: 8px; border: 2px solid #ddd; font-size: 18px; box-sizing: border-box; }
+        input:focus { border-color: #007bff; outline: none; }
+        button { width: 100%; padding: 15px; border-radius: 8px; border: none; font-size: 18px; font-weight: bold; color: white; background-color: #007bff; cursor: pointer; }
+        button:active { background-color: #0056b3; transform: scale(0.98); }
+        .btn-success { background-color: #28a745; margin-top: 10px; }
+        .btn-success:active { background-color: #1e7e34; }
+        .item-lista { border-bottom: 1px solid #eee; padding: 12px 0; display: flex; justify-content: space-between; align-items: center; }
+        .item-lista:last-child { border-bottom: none; }
+        .qtd-badge { background-color: #007bff; color: white; padding: 5px 15px; border-radius: 20px; font-weight: bold; font-size: 1.2em;}
     </style>
 </head>
 <body>
+    <h2>📦 Contagem Estoque (Tablet)</h2>
 
+    <!-- Bloco 1: Leitor de Código de Barras -->
     <div class="card">
-        <div id="status" class="status-msg">Pronto para bipar...</div>
-        
-        <div class="input-group">
-            <label>Quantidade</label>
-            <input type="number" id="qtd-input" value="1" min="0.1" step="0.1">
-        </div>
-
-        <div class="input-group">
-            <label>Código de Barras ou Nome</label>
-            <input type="text" id="ean-input" placeholder="Bipe o código ou digite o nome..." autofocus>
-        </div>
-        
-        <button id="btn-abrir-busca" class="btn-busca" onclick="abrirBusca()">🔍 Não encontrou? Buscar por Nome</button>
-        <button id="btn-avulso" class="btn-busca" style="background: #6c757d; color: white;" onclick="abrirModalAvulso()">📝 Registrar Item Não Cadastrado</button>
+        <label>Bipar Código de Barras (EAN):</label>
+        <input type="number" id="input-ean" placeholder="Bipe ou digite o código..." autofocus>
+        <button onclick="buscarProduto()">🔍 Buscar Item</button>
+    </div>
+    
+    <!-- Bloco 2: Lançamento de Quantidade (Fica oculto até achar o produto) -->
+    <div class="card" id="card-resultado" style="display: none; border-left: 5px solid #28a745;">
+        <h3 id="nome-produto" style="color: #333; margin-top: 0; font-size: 1.3em;"></h3>
+        <p style="color: #666; font-size: 1.1em;">Custo Última Compra: <strong id="custo-produto"></strong></p>
+        <label>Quantidade Física na Prateleira:</label>
+        <input type="number" id="input-qtd" step="0.001" placeholder="Ex: 5 ou 2.500">
+        <button class="btn-success" onclick="adicionarAContagem()">➕ Lançar Quantidade</button>
     </div>
 
-    <div class="lista-itens" id="lista-contagem">
-        <div style="text-align: center; color: #888; margin-top: 20px;">Nenhum item contado.</div>
-    </div>
-
-    <div class="input-group" style="margin-top: 15px;">
-        <label>Nome / Referência da Contagem</label>
-        <input type="text" id="nome-contagem-input" placeholder="Ex: Freezer 1, Prateleira A..." maxlength="50">
-    </div>
-
-    <button class="btn-salvar" onclick="finalizarContagem()">💾 Salvar Contagem</button>
-
-    <div id="painel-busca">
-        <h3>🔍 Buscar Cadastro Existente</h3>
-        <p>Procure pela CAIXA deste produto para criar a unidade.</p>
-        <div class="input-group">
-            <input type="text" id="termo-busca" placeholder="Digite o nome (ex: Kinder)...">
+    <!-- Bloco 3: Memória do Tablet (Carrinho) -->
+    <div class="card">
+        <h3 style="margin-top: 0; color: #555;">📝 Itens nesta Sessão:</h3>
+        <div id="lista-itens">
+            <p style="color: #999; text-align: center; font-style: italic;">Nenhum item bipado ainda.</p>
         </div>
-        <button onclick="realizarBusca()" style="background:#007bff; color:white; padding:10px; width:100%; border:none; border-radius:5px;">Buscar</button>
-        <button onclick="fecharBusca()" style="background:#6c757d; color:white; padding:10px; width:100%; border:none; border-radius:5px; margin-top:5px;">Cancelar</button>
-        <div id="resultados-busca" style="margin-top:20px;"></div>
-    </div>
-
-    <div id="modal-qtd-caixa">
-        <div class="modal-content">
-            <h3>📦 Criar Unidade</h3>
-            <p id="msg-conversao" style="font-size: 0.9rem; margin-bottom: 15px;"></p>
-            <label>Quantas unidades vêm nesta caixa?</label>
-            <input type="number" id="qtd-conversao" value="1" style="margin-bottom: 15px;">
-            <button onclick="confirmarConversao()" style="background:#28a745; color:white; padding:10px; width:100%; border:none; border-radius:5px;">✅ Criar e Contar</button>
-            <button onclick="document.getElementById('modal-qtd-caixa').style.display='none'" style="background:#dc3545; color:white; padding:10px; width:100%; border:none; border-radius:5px; margin-top:5px;">Cancelar</button>
-        </div>
-    </div>
-
-    <div id="modal-avulso" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 2000; justify-content: center; align-items: center;">
-        <div class="modal-content">
-            <h3>📝 Item Não Cadastrado</h3>
-            <p style="font-size: 0.9rem; margin-bottom: 15px;">Registre o nome provisório para vincular no computador depois.</p>
-            <div class="input-group">
-                <input type="text" id="avulso-nome" placeholder="Ex: Sorvete Pote 2L Morango">
-            </div>
-            <div class="input-group">
-                <label>EAN:</label>
-                <input type="text" id="avulso-ean" readonly style="background: #eee;">
-            </div>
-            <button onclick="salvarItemAvulso()" style="background:#28a745; color:white; padding:10px; width:100%; border:none; border-radius:5px;">✅ Adicionar à Contagem</button>
-            <button onclick="document.getElementById('modal-avulso').style.display='none'" style="background:#dc3545; color:white; padding:10px; width:100%; border:none; border-radius:5px; margin-top:5px;">Cancelar</button>
-        </div>
+        <button class="btn-success" style="background-color: #5a3e8d; margin-top: 20px;" onclick="salvarContagem()">💾 Enviar para o Computador Central</button>
     </div>
 
     <script>
-        const eanInput = document.getElementById('ean-input');
-        const qtdInput = document.getElementById('qtd-input');
-        const listaEl = document.getElementById('lista-contagem');
-        const statusEl = document.getElementById('status');
-        const btnBusca = document.getElementById('btn-abrir-busca');
-        
-        // Tenta recuperar o rascunho salvo no celular; se não existir, inicia vazio
-        let itensContados = JSON.parse(localStorage.getItem('rascunhoContagemEstoque')) || [];
-        let ultimoEANNaoEncontrado = "";
-        let idVinculoSelecionadoParaConversao = null;
+        let produtoAtual = null;
+        let listaContagem = [];
 
-        // Se houver itens no rascunho ao carregar a página, já desenha a lista na tela
-        window.addEventListener('DOMContentLoaded', () => {
-            if (itensContados.length > 0) {
-                renderizarLista();
-                statusEl.textContent = "⚠️ Rascunho anterior recuperado!";
-                statusEl.className = "status-msg erro"; // Laranja/Vermelho para chamar atenção
-            }
+        // Ouve a tecla "Enter" (Leitores de código de barras dão um "Enter" automático)
+        document.getElementById('input-ean').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') buscarProduto();
         });
 
-        document.body.addEventListener('click', (e) => {
-            // Foco inteligente
-            if(document.activeElement !== qtdInput && document.activeElement.type !== 'text' && document.activeElement.type !== 'number') {
-                eanInput.focus();
-            }
-        });
-
-        let isFetchingEan = false; // Flag de proteção contra double-scan
-
-        eanInput.addEventListener('keypress', async function (e) {
-            if (e.key === 'Enter') {
-                if (isFetchingEan) return; // Bloqueia requisições simultâneas
-
-                const inputValue = eanInput.value.trim();
-                const qtdStr = qtdInput.value.replace(',', '.');
-                const qtd = parseFloat(qtdStr) || 1;
-
-                if (!inputValue) return;
-
-                // Verifica se contém APENAS números (é um código de barras)
-                const isNumeric = /^\d+$/.test(inputValue);
-
-                if (isNumeric) {
-                    // LÓGICA 1: É NÚMERO, TENTA BUSCAR POR EAN
-                    isFetchingEan = true;
-                    eanInput.disabled = true; 
-                    statusEl.textContent = "Buscando código...";
-
-                    try {
-                        const response = await fetch(`/api/produto/ean/${inputValue}`);
-
-                        if (response.ok) {
-                            const prod = await response.json();
-                            adicionarItemLista(prod, qtd);
-                            const custoFmt = (prod.custo || 0).toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'});
-
-                            statusEl.textContent = `✅ ${prod.nome} - ${custoFmt}`;
-                            statusEl.className = "status-msg sucesso";
-                            eanInput.value = ''; 
-                            qtdInput.value = '1'; 
-                            btnBusca.style.display = 'none';
-                            document.getElementById('btn-avulso').style.display = 'none';
-                        } else {
-                            // EAN NÃO ENCONTRADO
-                            statusEl.textContent = "❌ Código não cadastrado. Buscando no catálogo...";
-                            statusEl.className = "status-msg erro";
-                            ultimoEANNaoEncontrado = inputValue; 
-
-                            // CORREÇÃO: Garante que os botões de emergência apareçam atrás do modal
-                            btnBusca.style.display = 'block'; 
-                            btnBusca.textContent = `🔍 Buscar nome p/ EAN ${inputValue}`;
-                            document.getElementById('btn-avulso').style.display = 'block';
-
-                            // Aciona o painel de busca automaticamente
-                            document.getElementById('termo-busca').value = inputValue;
-                            abrirBusca();
-                            realizarBusca();
-
-                            if(navigator.vibrate) navigator.vibrate(200);
-                        }
-                    } catch (error) {
-                        statusEl.textContent = "Erro de conexão";
-                        statusEl.className = "status-msg erro";
-                    } finally {
-                        isFetchingEan = false;
-                        eanInput.disabled = false;
-                        setTimeout(() => eanInput.focus(), 50); 
-                    }
-                } else {
-                    // LÓGICA 2: TEM LETRAS, É UMA BUSCA POR NOME
-                    statusEl.textContent = "Buscando por nome...";
-                    
-                    // CORREÇÃO UX: Esconde os botões de erro caso estivessem abertos de uma tentativa anterior
-                    btnBusca.style.display = 'none';
-                    document.getElementById('btn-avulso').style.display = 'none';
-
-                    document.getElementById('termo-busca').value = inputValue;
-                    abrirBusca();
-                    realizarBusca();
-                    
-                    // Limpa apenas o campo de texto para a próxima busca
-                    eanInput.value = ''; 
-                    
-                    // 🛑 BUG CORRIGIDO AQUI: Removemos o qtdInput.value = '1'.
-                    // A quantidade deve continuar na tela para que o botão verde "Contar" da 
-                    // tela de busca consiga ler o valor correto digitado pelo usuário.
-                }
-            }
-        });
-
-        // --- LÓGICA DE BUSCA E CONVERSÃO ---
-
-        function abrirModalAvulso() {
-            document.getElementById('avulso-nome').value = '';
-            document.getElementById('avulso-ean').value = ultimoEANNaoEncontrado;
-            document.getElementById('modal-avulso').style.display = 'flex';
-            setTimeout(() => document.getElementById('avulso-nome').focus(), 100);
-        }
-
-        function salvarItemAvulso() {
-            const nome = document.getElementById('avulso-nome').value.trim();
-            const ean = document.getElementById('avulso-ean').value;
-            // Sanitização da vírgula antes do parse
-            const qtdStr = qtdInput.value.replace(',', '.');
-            const qtdDigitada = parseFloat(qtdStr) || 1;
-
-            if (!nome) { alert("Digite um nome provisório."); return; }
-
-            // Insere o payload de Avulso na lista
-            itensContados.push({
-                ProdutoID: null, 
-                QuantidadeContada: qtdDigitada.toFixed(4),
-                NomeAvulso: nome,
-                EANAvulso: ean,
-                _nome: nome + " [AVULSO]",
-                _un: "UN",
-                _custo: "0.0000"
-            });
-
-            localStorage.setItem('rascunhoContagemEstoque', JSON.stringify(itensContados));
-            renderizarLista();
-
-            statusEl.textContent = `✅ Avulso: ${nome}`;
-            statusEl.className = "status-msg sucesso";
-
-            document.getElementById('modal-avulso').style.display = 'none';
-            btnBusca.style.display = 'none';
-            document.getElementById('btn-avulso').style.display = 'none';
-            eanInput.value = '';
-            qtdInput.value = '1';
-            eanInput.focus();
-        }
-
-        function abrirBusca() {
-            document.getElementById('painel-busca').style.display = 'block';
-            document.getElementById('termo-busca').focus();
-        }
-
-        function fecharBusca() {
-            document.getElementById('painel-busca').style.display = 'none';
-            // Prevenção de vazamento de estado: limpa a seleção e o EAN fantasma
-            idVinculoSelecionadoParaConversao = null; 
-            ultimoEANNaoEncontrado = ""; // <-- CORREÇÃO CIRÚRGICA AQUI
-            document.getElementById('termo-busca').value = ''; 
-            eanInput.focus();
-        }
-
-        async function realizarBusca() {
-            const termo = document.getElementById('termo-busca').value;
-            const divRes = document.getElementById('resultados-busca');
-            divRes.innerHTML = 'Carregando...';
-
-            const res = await fetch(`/api/produto/buscar/${termo}`);
-            const dados = await res.json();
-
-            divRes.innerHTML = '';
-            if(dados.length === 0) {
-                divRes.innerHTML = '<p>Nenhum produto encontrado.</p>';
-                return;
-            }
-
-            dados.forEach(item => {
-                const div = document.createElement('div');
-                div.className = 'item-busca';
-                const custoFormatado = item.custo.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'});
-
-                // Removido o 'div.onclick' geral. Agora usamos botões específicos.
-                div.innerHTML = `
-                    <div style="font-weight:bold">${item.nome_mestre}</div>
-                    <small>${item.desc_xml}</small>
-                    <small style="color: #28a745; font-weight: bold;">Custo Base: ${custoFormatado}</small>
-                    <small>Fator: ${item.fator} | Forn: ${item.fornecedor}</small>
-                    <div style="margin-top: 10px; display: flex; gap: 5px;">
-                        <button class="btn-add-direto" style="flex: 1; background: #28a745; color: white; border: none; padding: 8px; border-radius: 5px; font-weight: bold; font-size: 1rem;">➕ Contar</button>
-                        <button class="btn-desmembrar" style="flex: 1; background: #007bff; color: white; border: none; padding: 8px; border-radius: 5px; font-weight: bold; font-size: 1rem;">📦 Caixa</button>
-                    </div>
-                `;
-
-                // Evento para adicionar direto
-                div.querySelector('.btn-add-direto').onclick = (e) => {
-                    e.stopPropagation();
-                    adicionarDaBusca(item);
-                };
-
-                // Evento para desmembrar (antigo)
-                div.querySelector('.btn-desmembrar').onclick = (e) => {
-                    e.stopPropagation();
-                    prepararConversao(item);
-                };
-
-                divRes.appendChild(div);
-            });
-        }
-
-        function adicionarDaBusca(item) {
-            // Pega a quantidade que ficou digitada na tela de trás
-            const qtdStr = document.getElementById('qtd-input').value.replace(',', '.');
-            const qtdDigitada = parseFloat(qtdStr) || 1;
-
-            // Monta o objeto simulando o que a API do EAN devolveria
-            const prod = {
-                id: item.produto_id,
-                nome: item.nome_mestre,
-                unidade: item.unidade,
-                fator: 1.0, // Fator 1 porque é adição direta do mestre
-                custo: item.custo
-            };
-
-            adicionarItemLista(prod, qtdDigitada);
-
-            statusEl.textContent = `✅ Adicionado: ${prod.nome}`;
-            statusEl.className = "status-msg sucesso";
-
-            fecharBusca();
-
-            // Reseta para o próximo
-            document.getElementById('qtd-input').value = '1';
-            document.getElementById('ean-input').value = '';
-        }
-
-        function prepararConversao(item) {
-            // Se o usuário buscou por nome e clicou em 'Caixa' sem ter bipado um EAN antes
-            if (!ultimoEANNaoEncontrado) {
-                const confirma = confirm("Atenção: Você não bipou nenhum código de barras novo antes de buscar.\n\nA unidade será desmembrada da caixa, mas ficará SEM código de barras no sistema.\n\nDeseja continuar?");
-                if (!confirma) return;
-            }
-
-            idVinculoSelecionadoParaConversao = item.id_vinculo;
-
-            const msgEl = document.getElementById('msg-conversao');
-            const textoEan = ultimoEANNaoEncontrado ? `<br>Vincular novo EAN: <b>${ultimoEANNaoEncontrado}</b>` : `<br><b style="color:red;">(Nenhum código de barras será vinculado)</b>`;
-
-            msgEl.innerHTML = `Desmembrar produto mestre:<br><b style="color:#007bff;">${item.nome_mestre}</b>${textoEan}`;
-
-            document.getElementById('modal-qtd-caixa').style.display = 'flex';
-        }
-
-        async function confirmarConversao() {
-            const qtdCaixa = document.getElementById('qtd-conversao').value;
-
-            if (!qtdCaixa || qtdCaixa <= 0) {
-                alert("Digite uma quantidade válida maior que zero.");
-                return;
-            }
-
-            // Monta o pacote esperado pelo backend (api_server.py -> rota_criar_unidade)
-            const payload = {
-                id_origem: idVinculoSelecionadoParaConversao,
-                novo_ean: ultimoEANNaoEncontrado,
-                qtd_caixa: qtdCaixa
-            };
-
+        async function buscarProduto() {
+            const ean = document.getElementById('input-ean').value;
+            if (!ean) return;
+            
             try {
-                const res = await fetch('/api/produto/criar-unidade', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-
-                const data = await res.json();
-
-                if (res.ok && data.sucesso) {
-                    alert("✅ " + data.msg);
-
-                    // Fecha os modais
-                    document.getElementById('modal-qtd-caixa').style.display = 'none';
-                    fecharBusca();
-
-                    // Pega a quantidade que o usuário havia digitado antes de dar erro no EAN
-                    const qtdDigitada = parseFloat(qtdInput.value) || 1;
+                // Chama a rota criada no api_server.py
+                const response = await fetch(`/api/produto/ean/${ean}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    produtoAtual = data;
+                    document.getElementById('nome-produto').innerText = `${data.nome} (${data.unidade})`;
+                    document.getElementById('custo-produto').innerText = `R$ ${data.custo.toFixed(2).replace('.', ',')}`;
+                    document.getElementById('card-resultado').style.display = 'block';
                     
-                    // CORREÇÃO: Removida a linha que zerava o custo.
-                    // Agora a tela respeita o valor (data.produto.custo) que veio da API após a matemática do banco!
-                    
-                    // Se o funcionário bipou 1 lata (unidade), a quantidade contada é exatamente o que está no input (qtdDigitada).
-                    // O fator da caixa serve apenas para o backend desmembrar os custos, não para a contagem física atual.
-                    adicionarItemLista(data.produto, qtdDigitada);
-
-                    statusEl.textContent = `✅ Unidade Criada: ${data.produto.nome}`;
-                    statusEl.className = "status-msg sucesso";
-
-                    // Reseta os campos
-                    eanInput.value = '';
-                    qtdInput.value = '1';
-                    eanInput.focus();
-
+                    // Joga o cursor para o campo de quantidade automaticamente para ganhar tempo
+                    document.getElementById('input-qtd').focus();
                 } else {
-                    alert("❌ Erro: " + data.erro);
+                    alert("⚠️ Produto não encontrado no sistema!\n\nVerifique se o código está correto ou se o produto está vinculado a um EAN no Catálogo Mestre.");
+                    document.getElementById('input-ean').value = "";
                 }
-            } catch (error) {
-                alert("Erro de conexão ao comunicar com o servidor.");
+            } catch (e) {
+                alert("❌ Erro de conexão de rede com o Servidor (Computador).");
             }
         }
 
-
-        function adicionarItemLista(prod, qtdDigitada) {
-            const qtdReal = qtdDigitada * prod.fator;
-            itensContados.push({
-                ProdutoID: prod.id,
-                // Converte para string com 4 casas para o backend Python instanciar um Decimal exato
-                QuantidadeContada: qtdReal.toFixed(4), 
-                _nome: prod.nome,
-                _un: prod.unidade,
-                // Proteção contra float IEEE 754: Salva como string estática com 4 casas para evitar degradação de arredondamento
-                _custo: Number(prod.custo || 0).toFixed(4)
+        function adicionarAContagem() {
+            const qtdInput = document.getElementById('input-qtd').value.replace(',', '.');
+            const qtd = parseFloat(qtdInput);
+            
+            if (!qtd || qtd < 0) {
+                alert("Por favor, digite uma quantidade válida maior ou igual a zero.");
+                return;
+            }
+            
+            // Adiciona na memória (array)
+            listaContagem.push({
+                ProdutoID: produtoAtual.id,
+                NomeProduto: produtoAtual.nome,
+                QuantidadeContada: qtd
             });
-
-            // SALVA NO CACHE DO CELULAR
-            localStorage.setItem('rascunhoContagemEstoque', JSON.stringify(itensContados));
+            
+            // Reseta a tela para bipar o próximo produto rapidamente
+            document.getElementById('input-ean').value = "";
+            document.getElementById('input-qtd').value = "";
+            document.getElementById('card-resultado').style.display = 'none';
+            document.getElementById('input-ean').focus();
+            
             renderizarLista();
         }
 
         function renderizarLista() {
-            listaEl.innerHTML = '';
-            [...itensContados].reverse().forEach((item, index) => {
-                const realIndex = itensContados.length - 1 - index;
-                const div = document.createElement('div');
-                div.className = 'item-lista';
-                
-                // Formata o custo salvo para exibição (Converte a string segura de volta para Number apenas no momento da renderização visual)
-                const custoNumerico = parseFloat(item._custo || 0);
-                const custoItemFmt = custoNumerico.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'});
-                
-                div.innerHTML = `
-                    <div>
-                        <div class="item-nome">${item._nome}</div>
-                        <small>ID: ${item.ProdutoID} | <span style="color: #28a745; font-weight: bold;">Custo Base: ${custoItemFmt}</span></small>
-                    </div>
-                    <div><span class="item-qtd">${item.QuantidadeContada} ${item._un}</span><span class="btn-del" onclick="removerItem(${realIndex})">🗑️</span></div>
-                `;
-                listaEl.appendChild(div);
+            const div = document.getElementById('lista-itens');
+            div.innerHTML = "";
+            
+            listaContagem.forEach((item) => {
+                div.innerHTML += `
+                <div class="item-lista">
+                    <span style="font-size: 1.1em; font-weight: bold;">${item.NomeProduto}</span>
+                    <span class="qtd-badge">${item.QuantidadeContada}</span>
+                </div>`;
             });
         }
 
-        // Função para remover item da lista local
-        function removerItem(index) {
-            // Remove 1 elemento do array na posição indicada pelo index
-            itensContados.splice(index, 1);
+        async function salvarContagem() {
+            if (listaContagem.length === 0) {
+                alert("Sua lista está vazia. Bipe produtos primeiro.");
+                return;
+            }
+            
+            // Pergunta o nome da contagem
+            const nomeRef = prompt("Dê um nome para esta coleta (Ex: Corredor A, Prateleira 2):", "Coleta Mobile");
+            if (!nomeRef) return; // Cancelou
 
-            // ATUALIZA O CACHE DO CELULAR APÓS REMOVER
-            localStorage.setItem('rascunhoContagemEstoque', JSON.stringify(itensContados));
-
-            // Atualiza a interface visual
-            renderizarLista();
-
-            // Feedback visual rápido
-            statusEl.textContent = "🗑️ Item removido da lista.";
-            statusEl.className = "status-msg erro"; 
-
-            // Retorna o foco para o leitor
-            eanInput.focus();
-        }
-
-        let isSaving = false;
-
-        async function finalizarContagem() {
-            if (itensContados.length === 0) return alert("Lista vazia!");
-            if (isSaving) return; // Bloqueia cliques duplos
-            if(!confirm("Salvar contagem?")) return;
-
-            isSaving = true;
-            const btnSalvar = document.querySelector('.btn-salvar');
-            btnSalvar.textContent = "⏳ Salvando...";
-            btnSalvar.style.backgroundColor = "#6c757d";
+            // Monta o pacote de dados exigido pela rota do Python
+            const payload = {
+                nome_contagem: nomeRef,
+                itens: listaContagem,
+                funcionario_id: 2 // Pode ser ajustado para um ID logado depois
+            };
 
             try {
-                const nomeContagem = document.getElementById('nome-contagem-input').value.trim() || 'Mobile (Sem Nome)';
-                const res = await fetch('/api/contagem/salvar-mobile', {
-                    method: 'POST', headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ funcionario_id: 2, itens: itensContados, nome_contagem: nomeContagem })
+                // Chama a rota criada no api_server.py
+                const response = await fetch('/api/contagem/salvar-mobile', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
                 });
-                if (res.ok) {
-                    alert("✅ Contagem Salva!");
-                    itensContados = []; 
-                    localStorage.removeItem('rascunhoContagemEstoque');
-                    document.getElementById('nome-contagem-input').value = '';
-                    renderizarLista();
-                    statusEl.textContent = "Pronto para bipar...";
-                    statusEl.className = "status-msg";
-                } else { alert("Erro ao salvar no banco."); }
-            } catch(e) { 
-                alert("Erro de conexão."); 
-            } finally {
-                isSaving = false;
-                btnSalvar.textContent = "💾 Salvar Contagem";
-                btnSalvar.style.backgroundColor = "#28a745";
+                
+                if (response.ok) {
+                    alert("✅ Contagem salva com sucesso no Computador Central!");
+                    listaContagem = []; // Esvazia o carrinho do tablet
+                    document.getElementById('lista-itens').innerHTML = '<p style="color: #28a745; text-align: center; font-weight: bold;">Sessão enviada com sucesso!</p>';
+                } else {
+                    const errorData = await response.json();
+                    alert(`❌ Erro no Servidor: ${errorData.erro}`);
+                }
+            } catch (e) {
+                alert("❌ Erro de rede Wi-Fi ao tentar enviar para o Servidor.");
             }
         }
     </script>
