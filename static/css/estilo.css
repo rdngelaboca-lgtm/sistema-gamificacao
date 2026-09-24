@@ -1,3 +1,8 @@
+/* =============================================================================
+   estilo.css  -  Visual do Painel da TV (templates/painel.html)
+   Versão DEPURADA: procure por [DEPURAÇÃO] para ver cada correção.
+   ============================================================================= */
+
 /* ===== RESET BÁSICO E ESTILOS GLOBAIS ===== */
 * {
     margin: 0;
@@ -51,55 +56,65 @@ body {
     transition: width 0.5s ease-in-out;
 }
 
+/* [DEPURAÇÃO] O texto era BRANCO: em cima da parte cinza da barra (quando poucas
+   tarefas estão feitas) ficava quase invisível (contraste 1,5). Agora é escuro com
+   um contorno branco, legível tanto no cinza quanto no azul. */
 .progresso-texto {
     position: absolute;
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    color: #ffffff;
+    width: 100%;
+    text-align: center;
+    color: #1a1a1a;
     font-weight: bold;
-    text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
+    text-shadow: 0 0 3px #fff, 0 0 3px #fff, 0 0 2px #fff;
+    white-space: nowrap;
 }
 
+/* ===== TOPO DA ABA OPERACIONAL (PÓDIO + AGENDAMENTOS) ===== */
+/* [DEPURAÇÃO] Este bloco estava escrito DUAS vezes no arquivo; foi juntado aqui. */
 .top-info-wrapper {
     display: flex;
-    align-items: stretch; /* Mantém alinhamento */
-    justify-content: space-between; /* Garante espaçamento */
+    align-items: stretch;
+    justify-content: center;
     gap: 20px;
-    margin-bottom: 20px; /* Reduzido um pouco */
+    margin-bottom: 20px;
 }
 
-/* Coluna da Esquerda (Metas) - Menor */
+/* Coluna das metas (aba Financeiro) */
 .metas-coluna-esquerda {
-    flex: 1; /* Ocupa 1 parte do espaço */
-    min-width: 250px; /* Largura mínima */
+    flex: 1;
+    min-width: 250px;
     display: flex;
     flex-direction: column;
     gap: 20px;
 }
 
-/* Pódio (Centro) - Maior */
+/* Pódio */
 .podio-container {
-    flex: 1.5; /* Ocupa 1.5 partes do espaço (centralizado e maior) */
+    flex: 1.5;
     display: flex;
     justify-content: center;
-    gap: 15px; /* Reduzido gap */
+    align-items: flex-start;   /* [DEPURAÇÃO] as caixas do pódio esticavam até a altura da lista de agendamentos (caixas enormes e vazias) */
+    gap: 15px;
     text-align: center;
     margin-bottom: 0;
 }
 
 .podio-item {
     background-color: #fff;
-    padding: 10px 15px; /* Ajustado padding */
+    padding: 10px 15px;
     border-radius: 8px;
     box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    width: 33%; /* Ocupa 1/3 do container do pódio */
+    width: 33%;
     max-width: 200px;
+    min-width: 0;          /* [DEPURAÇÃO] deixa o nome ser cortado com "..." em vez de alargar a caixa */
     border-top: 5px solid;
 }
-.podio-item .posicao { font-size: 1.8em; font-weight: bold; } /* Reduzido */
-.podio-item .nome { font-weight: bold; margin: 5px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 0.95em; } /* Reduzido */
-.podio-item .pontos { font-size: 1em; color: #28a745; } /* Reduzido */
+.podio-item .posicao { font-size: 1.8em; font-weight: bold; }
+.podio-item .nome { font-weight: bold; margin: 5px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 0.95em; }
+.podio-item .pontos { font-size: 1em; color: #28a745; }
 .posicao-1 { border-color: #ffd700; }
 .posicao-2 { border-color: #c0c0c0; }
 .posicao-3 { border-color: #cd7f32; }
@@ -115,60 +130,52 @@ body {
     flex-direction: column;
     justify-content: center;
 }
-#meta-titulo, #meta-diaria-titulo { 
-    color: #0056b3; 
-    margin-bottom: 10px; 
+#meta-titulo, #meta-diaria-titulo {
+    color: #0056b3;
+    margin-bottom: 10px;
     font-size: 1.2em;
 }
 .meta-progresso-container {
-    background-color: #e9ecef; border-radius: 50px; height: 25px;
-    position: relative; overflow: hidden;
+    background-color: #e9ecef;
+    border-radius: 50px;
+    height: 25px;
+    position: relative;
+    overflow: hidden;
 }
 .meta-progresso-barra {
-    background: linear-gradient(90deg, #28a745, #218838); height: 100%;
-    width: 0%; border-radius: 50px; transition: width 0.7s ease-in-out;
+    background: linear-gradient(90deg, #28a745, #218838);
+    height: 100%;
+    width: 0%;
+    border-radius: 50px;
+    transition: width 0.7s ease-in-out;
 }
+/* [DEPURAÇÃO] Mesmo problema da barra geral: "0.0%" branco sobre cinza claro (contraste 1,2). */
 .meta-progresso-texto {
-    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-    color: white; font-weight: bold; text-shadow: 1px 1px 1px #333;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    color: #1a1a1a;
+    font-weight: bold;
+    text-shadow: 0 0 3px #fff, 0 0 3px #fff, 0 0 2px #fff;
 }
-.meta-valores {
-    margin-top: 8px; font-size: 1.1em; color: #495057;
-    position: relative; /* Necessário para o ícone */
-    display: flex; /* Alinha valores e ícone */
-    justify-content: center; /* Centraliza */
-    align-items: center; /* Alinha verticalmente */
-}
-
-/* REQ 1: Estilos para ocultar/mostrar valores */
-.meta-valores .valor-ocultavel {
-    transition: opacity 0.3s ease;
-    opacity: 1;
-    margin: 0 3px; /* Espaçamento entre os valores */
-}
-
-.meta-valores.oculto .valor-ocultavel {
-    opacity: 0; /* Esconde suavemente */
-    pointer-events: none; /* Impede interação */
-}
-
 #meta-diaria-progresso-barra {
     background: linear-gradient(90deg, #17a2b8, #138496);
 }
-#container-meta-mensal .meta-valores {
-    display: none; /* Esconde valores R$ da meta mensal */
-}
+/* [DEPURAÇÃO] REMOVIDOS .meta-valores e .valor-ocultavel: esses campos saíram do painel.html
+   (os valores em R$ não são mostrados na TV). */
 
-/* ===== NOVO PAINEL DE AGENDAMENTOS (DIREITA) ===== */
+/* ===== PAINEL DE PRÓXIMOS AGENDAMENTOS ===== */
 .agendamentos-container {
-    flex: 1; /* Ocupa 1 parte do espaço */
+    flex: 1;
+    min-width: 0;
     background-color: #fff;
     border-radius: 8px;
     box-shadow: 0 2px 5px rgba(0,0,0,0.1);
     padding: 15px;
     display: flex;
     flex-direction: column;
-    max-height: 250px; /* Define uma altura máxima para o painel */
+    max-height: 250px;
 }
 .agendamentos-titulo {
     color: #0056b3;
@@ -179,8 +186,10 @@ body {
     border-bottom: 2px solid #e9eef2;
 }
 .agendamentos-lista {
-    overflow-y: auto; /* Adiciona barra de rolagem se a lista for longa */
-    padding-right: 5px; /* Espaço para a barra de rolagem */
+    flex: 1;
+    min-height: 0;          /* [DEPURAÇÃO] garante a rolagem DENTRO da caixa quando há muitos agendamentos */
+    overflow-y: auto;
+    padding-right: 5px;
 }
 .agendamento-item {
     padding: 8px 0;
@@ -242,15 +251,18 @@ body {
     box-shadow: 0 1px 3px rgba(0,0,0,0.1);
     border-left: 5px solid #007bff;
 }
+/* [DEPURAÇÃO] Era "justify-content: space-between": o ícone (⏳ ⚠️) ficava na
+   esquerda e o TÍTULO era empurrado para a ponta direita do card (258px de distância).
+   Agora o título fica junto do ícone; só a etiqueta "ATRASADA" vai para a direita. */
 .card-titulo {
     font-weight: bold;
     margin-bottom: 5px;
     display: flex;
-    justify-content: space-between;
+    flex-wrap: wrap;
+    justify-content: flex-start;
     align-items: center;
-}
-.card-titulo span:first-child {
-    margin-right: 8px;
+    gap: 6px;
+    overflow-wrap: anywhere;   /* títulos muito longos quebram a linha em vez de vazar */
 }
 .card-info {
     font-size: 0.9em;
@@ -263,6 +275,7 @@ body {
     margin-top: 8px;
 }
 .card-tag-atrasada {
+    margin-left: auto;
     font-size: 0.7em;
     font-weight: bold;
     color: #dc3545;
@@ -271,118 +284,182 @@ body {
     border-radius: 4px;
     border: 1px solid #dc3545;
 }
-.card.concluida {
-    border-left-color: #28a745;
-    background-color: #f0fff4;
+/* [DEPURAÇÃO] REMOVIDO .card.concluida: o painel não mostra mais a coluna de concluídas
+   (e o JS antigo escrevia "conclida", então essa regra nunca era usada). */
+
+/* ===== ALERTA DE TAREFA ATRASADA ===== */
+@keyframes piscarAlerta {
+    0%   { background-color: #fff;    border-left-color: #007bff; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    50%  { background-color: #fff0f0; border-left-color: #dc3545; box-shadow: 0 0 8px rgba(220, 53, 69, 0.4); }
+    100% { background-color: #fff;    border-left-color: #007bff; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
 }
 
-/* REQ 3: Estilos para a coluna do feed no Kanban */
+/* [DEPURAÇÃO] Antes: "border: 1px solid ... !important" apagava a faixa grossa da
+   esquerda (5px) e a animação ficava quase invisível. Agora a faixa continua grossa. */
+.card.alerta-atraso {
+    animation: piscarAlerta 2s infinite;
+    border: 1px solid #dc3545;
+    border-left: 5px solid #dc3545;
+}
+
+/* Horário "Disparado às" dentro do card */
+.card-hora-grupo {
+    font-size: 0.85em;
+    font-weight: bold;
+    color: #6c757d;
+    margin-top: 5px;
+    display: block;
+    padding-top: 3px;
+    border-top: 1px dashed #e9ecef;
+}
+
+/* ===== COLUNA "ATIVIDADE RECENTE" (FEED + RESGATES) ===== */
 .coluna-feed {
-    background-color: #f8f9fa; /* Fundo ligeiramente diferente */
+    background-color: #f8f9fa;
 }
 
 #coluna-feed-recente {
-    padding: 0 5px; /* Remove padding extra do card */
+    padding: 0 5px;
 }
 
-#feed-lista-kanban {
+#feed-lista-kanban,
+#resgates-lista {
     list-style: none;
     padding: 0;
     margin: 0;
 }
 
-#feed-lista-kanban li {
+/* Resgates: ícone + texto na mesma linha */
+#resgates-lista li {
     display: flex;
     align-items: center;
     padding: 10px;
     border-bottom: 1px solid #e9eef2;
-    font-size: 0.9em; /* Ligeiramente menor para caber */
+    font-size: 0.9em;
 }
-
-#feed-lista-kanban li:last-child {
+#resgates-lista li:last-child {
     border-bottom: none;
+}
+/* [DEPURAÇÃO] O bloco de #resgates-lista estava escrito DUAS vezes; ficou só este. */
+
+/* Mensagem "Nenhuma atividade recente" */
+#feed-lista-kanban li {
+    padding: 10px;
+    font-size: 0.9em;
 }
 
 .feed-icone {
-    font-size: 1.3em; /* Ligeiramente menor */
-    margin-right: 10px; /* Menos espaço */
+    font-size: 1.3em;
+    margin-right: 10px;
 }
 
-/* REQ 3: Estilo para o novo título secundário (Resgates) dentro da coluna */
 .coluna-titulo-secundario {
-    font-size: 1.0em; /* Menor que o título principal da coluna */
+    font-size: 1.0em;
     font-weight: bold;
-    color: #5a3e8d; /* Cor roxa (pode ajustar) */
+    color: #5a3e8d;
     text-align: center;
     padding-bottom: 10px;
-    margin-top: 20px; /* Espaço para separar do feed de atividades */
+    margin-top: 20px;
     margin-bottom: 15px;
     border-bottom: 2px solid #d0d7de;
 }
 
-/* REQ 3: Ajusta a lista de resgates (que agora está no Kanban) */
-#resgates-lista {
-    list-style: none;
-    padding: 0;
-    margin: 0;
-}
-
-#resgates-lista li {
+/* ===== ESTILO FEED INSTAGRAM ===== */
+/* [DEPURAÇÃO] A regra "#feed-lista-kanban li" (align-items: center) vencia esta
+   (um #id é mais forte que uma .classe): todo o conteúdo do post ficava CENTRALIZADO.
+   Agora o seletor é mais específico e o post fica alinhado como no Instagram. */
+#feed-lista-kanban li.feed-item-instagram {
     display: flex;
-    align-items: center;
-    padding: 10px;
+    flex-direction: column;
+    align-items: stretch;
+    padding: 15px;
     border-bottom: 1px solid #e9eef2;
-    font-size: 0.9em; /* Mesmo tamanho do feed de atividades */
+    background-color: #fff;
+    margin-bottom: 10px;
+    border-radius: 8px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
 }
 
-#resgates-lista li:last-child {
-    border-bottom: none;
-}
-
-
-
-#resgates-lista {
-    list-style: none;
-    padding: 0;
-}
-
-#resgates-lista li {
+.feed-header {
     display: flex;
+    align-items: flex-start;
+    margin-bottom: 10px;
+}
+
+.feed-texto {
+    font-size: 0.95em;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+}
+
+.feed-pontos {
+    color: #28a745;
+    font-weight: bold;
+}
+
+.feed-imagem-wrapper {
+    width: 100%;
+    margin: 5px 0 10px 0;
+    background-color: #f8f9fa;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid #e9eef2;
+    display: flex;
+    justify-content: center;
     align-items: center;
-    padding: 10px;
-    border-bottom: 1px solid #e9eef2;
 }
 
-#resgates-lista li:last-child {
-    border-bottom: none;
+.feed-foto {
+    width: 100%;
+    height: auto;
+    max-height: 300px;
+    object-fit: cover;
+    display: block;
 }
 
+.feed-footer {
+    color: #888;
+    font-size: 0.85em;
+}
 
-/* ===== ESTILOS PARA ANIMAÇÃO DE META BATIDA ===== */
+/* ===== ANIMAÇÃO DE META BATIDA ===== */
 #fireworks-container {
-    position: fixed; /* Fixa na tela */
+    position: fixed;
     top: 0;
     left: 0;
     width: 100%;
     height: 100%;
-    z-index: 9999; /* Garante que fique por cima de tudo */
-    pointer-events: none; /* Permite cliques através do container */
-    overflow: hidden; /* Evita barras de rolagem indesejadas */
+    z-index: 9999;
+    pointer-events: none;
+    overflow: hidden;
 }
 
-/* REQ 2: Estilos para a "Meta de Lucro" (antigo histórico) */
+/* ===== ABA FINANCEIRO ===== */
+.financeiro-wrapper {
+    max-width: 800px;
+    margin: 0 auto;
+}
+
+.metas-coluna-esquerda.full-width {
+    width: 100%;
+    margin-bottom: 20px;
+}
+
+/* Meta de Lucro */
 .meta-lucro-container {
     background-color: #fff;
     border-radius: 8px;
     box-shadow: 0 2px 5px rgba(0,0,0,0.1);
     padding: 15px;
-    margin-bottom: 25px; /* Espaçamento abaixo */
-    display: block; /* REQ 2: Agora está sempre visível */
-    height: 130px; /* REQ 2: Altura fixa menor */
+    margin-bottom: 25px;
+    display: block;
+    /* [DEPURAÇÃO] era "height: 130px" (fixo): o conteúdo já ocupava exatamente 130px
+       e qualquer nome de mês mais longo ou fonte maior (TV) ficava cortado. */
+    min-height: 130px;
 }
 
 .meta-lucro-container h3 {
-    color: #5a3e8d; /* Uma cor diferente para destacar */
+    color: #5a3e8d;
     font-size: 1.2em;
     text-align: center;
     margin-bottom: 15px;
@@ -390,68 +467,53 @@ body {
     border-bottom: 2px solid #e9eef2;
 }
 
-
-/* ... (estilos de h3, .historico-lucro-barras, .mes-lucro-item, .mes-lucro-label mantidos) ... */
-
-.progresso-lucro-container {
-    background-color: #e9ecef;
-    border-radius: 50px;
-    height: 25px;
-    width: 80%; /* Barra não ocupa 100% da largura do item */
-    position: relative;
-    overflow: hidden;
-    /* margin-bottom: 5px; <<<< REMOVIDO: Não há mais detalhes abaixo */
-}
-
 .historico-lucro-barras {
-    display: flex; /* Coloca os meses lado a lado */
-    justify-content: space-around; /* Espaça igualmente */
-    gap: 15px; /* Espaço entre os meses */
-    align-items: flex-end; /* Alinha itens na base para melhor visualização */
+    display: flex;
+    justify-content: space-around;
+    gap: 15px;
+    align-items: flex-end;
 }
 
 .mes-lucro-item {
-    flex: 1; /* Faz cada item ocupar espaço igual */
+    flex: 1;
     text-align: center;
     display: flex;
     flex-direction: column;
     align-items: center;
+    gap: 4px;
 }
 
-/* ===== CORREÇÃO: Readicionando estilos da barra de lucro ===== */
+/* [DEPURAÇÃO] .progresso-lucro-container e .meta-lucro-batida estavam escritos
+   DUAS vezes cada; agora aparecem uma vez só. */
 .progresso-lucro-container {
     background-color: #e9ecef;
     border-radius: 50px;
     height: 25px;
-    width: 80%; /* Barra não ocupa 100% da largura do item */
+    width: 80%;
     position: relative;
     overflow: hidden;
 }
 
 .progresso-lucro-barra {
-    background: linear-gradient(90deg, #ffc107, #e0a800); /* Gradiente Amarelo/Ouro */
+    background: linear-gradient(90deg, #ffc107, #e0a800);   /* Amarelo: abaixo da meta */
     height: 100%;
-    width: 0%; /* Será definido pelo JS */
+    width: 0%;
     border-radius: 50px;
-    transition: width 0.7s ease-in-out, background 0.5s ease; /* Transição suave */
+    transition: width 0.7s ease-in-out, background 0.5s ease;
 }
 
-/* Estilo para quando a meta de lucro é batida (Já deve existir, mas garantindo) */
 .progresso-lucro-barra.meta-lucro-batida {
-     background: linear-gradient(90deg, #28a745, #218838); /* Muda para Verde */
-}
-/* ===== FIM DA CORREÇÃO ===== */
-
-/* Estilo para quando a meta de lucro é batida */
-.progresso-lucro-barra.meta-lucro-batida {
-     background: linear-gradient(90deg, #28a745, #218838); /* Muda para Verde */
+    background: linear-gradient(90deg, #28a745, #218838);   /* Verde: meta batida */
 }
 
-/* Estilos .lucro-detalhes e .toggle-detalhes (antigos) removidos */
+.progresso-lucro-barra.meta-prejuizo {
+    background: #dc3545;                                     /* Vermelho: prejuízo */
+}
 
-/* ===== ESTILOS DAS ABAS ===== */
+/* ===== ABAS ===== */
 .tabs-nav {
     display: flex;
+    flex-wrap: wrap;           /* [DEPURAÇÃO] em telas estreitas os botões quebram a linha em vez de vazar */
     justify-content: center;
     gap: 10px;
     margin-bottom: 20px;
@@ -483,20 +545,44 @@ body {
     box-shadow: 0 2px 4px rgba(0,0,0,0.2);
 }
 
-/* Ajustes para a aba Financeiro ocupar largura total */
-.financeiro-wrapper {
-    max-width: 800px;
-    margin: 0 auto; /* Centraliza */
+/* [DEPURAÇÃO] contorno visível para quem navega com o teclado (Tab) */
+.tab-btn:focus-visible,
+.btn-salvar-agenda:focus-visible,
+.btn-excluir-agenda:focus-visible,
+.btn-wpp-agenda:focus-visible,
+.btn-novo-agendamento:focus-visible {
+    outline: 3px solid #ffbf47;
+    outline-offset: 2px;
 }
 
-.metas-coluna-esquerda.full-width {
+/* ===== ABA MAPA DA LOJA ===== */
+.mapa-layout-container {
+    display: flex;
+    gap: 20px;
+    align-items: flex-start;
+}
+
+.coluna-mapa-visual {
+    flex: 3;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.mapa-container {
+    position: relative;
     width: 100%;
-    margin-bottom: 20px;
-}
-
-/* Garante que o container principal não fique com buracos */
-.top-info-wrapper {
-    justify-content: center; /* Centraliza o pódio e agendamentos */
+    height: 650px;
+    /* A imagem inteira aparece (contain), encostada no topo (o painel.js usa a mesma regra
+       para posicionar os marcadores - se mudar aqui, mude lá também) */
+    background-image: url('/static/img/layout_loja.png');
+    background-size: contain;
+    background-position: center top;
+    background-repeat: no-repeat;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    background-color: #f9f9f9;
+    overflow: hidden;
 }
 
 .marcador-mapa {
@@ -506,7 +592,7 @@ body {
     border-radius: 50%;
     border: 2px solid white;
     box-shadow: 0 2px 5px rgba(0,0,0,0.3);
-    transform: translate(-50%, -50%); /* Centraliza no ponto X,Y */
+    transform: translate(-50%, -50%);
     cursor: pointer;
 }
 
@@ -530,9 +616,11 @@ body {
     color: #0056b3;
 }
 
-/* ===== GRÁFICO DE OCUPAÇÃO (ABAIXO DO MAPA) ===== */
+/* ===== GRÁFICO "FLUXO DE EQUIPE" (ABAIXO DO MAPA) ===== */
 .ocupacao-wrapper {
-    width: 1080px; /* Mesma largura do mapa */
+    /* [DEPURAÇÃO] era "width: 1080px" (fixo): em telas menores o gráfico vazava */
+    width: 100%;
+    max-width: 100%;
     margin: 20px auto;
     background-color: #fff;
     padding: 15px;
@@ -547,20 +635,29 @@ body {
     font-size: 1.1em;
 }
 
+/* [DEPURAÇÃO] BUG GRAVE: TODAS as barras do gráfico tinham só 2px de altura (o gráfico
+   aparecia "achatado", só com os números). A altura da barra é dada em % pelo painel.js,
+   mas a "caixinha" em volta de cada barra não tinha altura definida - e porcentagem de
+   algo sem altura vira zero. Agora cada coluna ocupa a altura toda do gráfico, e o
+   horário fica embaixo, fora da área das barras. */
 .grafico-container {
     display: flex;
     justify-content: space-between;
-    align-items: flex-end;
-    height: 100px; /* Altura das barras */
-    padding-bottom: 20px; /* Espaço para os labels */
+    align-items: stretch;
+    height: 150px;
+    padding-top: 22px;         /* espaço para o número em cima da barra mais alta */
+    margin-bottom: 38px;       /* espaço para os horários inclinados */
     border-bottom: 1px solid #ccc;
 }
 
 .barra-wrapper {
+    flex: 1;
+    min-width: 0;
+    height: 100%;
     display: flex;
     flex-direction: column;
+    justify-content: flex-end;   /* barras crescem de baixo para cima */
     align-items: center;
-    flex: 1;
     position: relative;
 }
 
@@ -569,12 +666,12 @@ body {
     background-color: #33b5e5;
     border-radius: 4px 4px 0 0;
     transition: height 0.5s ease;
-    min-height: 2px; /* Para mostrar que existe 0 */
+    min-height: 2px;
     position: relative;
 }
 
 .barra-visual:hover {
-    background-color: #0099cc;
+    filter: brightness(0.9);   /* [DEPURAÇÃO] antes trocava a cor, e o vermelho/verde de alerta sumia */
 }
 
 .barra-valor {
@@ -588,140 +685,24 @@ body {
 }
 
 .barra-hora {
-    margin-top: 5px;
+    position: absolute;
+    top: 100%;
+    margin-top: 8px;
     font-size: 0.75em;
     color: #666;
-    transform: rotate(-45deg); /* Inclina a hora para caber melhor */
+    white-space: nowrap;
+    transform: rotate(-45deg);
     transform-origin: center;
 }
 
-/* [CORREÇÃO] Estilo para barra de prejuízo */
-.progresso-lucro-barra.meta-prejuizo {
-    background: #dc3545 !important; /* Vermelho alerta */
-}
-
-/* --- NOVOS ESTILOS: Alerta de Tarefas de Grupo --- */
-
-/* Animação de pulsar em vermelho */
-@keyframes piscarAlerta {
-    0% { background-color: #fff; border-left-color: #007bff; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-    50% { background-color: #fff0f0; border-left-color: #dc3545; box-shadow: 0 0 8px rgba(220, 53, 69, 0.4); }
-    100% { background-color: #fff; border-left-color: #007bff; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-}
-
-.card.alerta-atraso {
-    animation: piscarAlerta 2s infinite; /* Executa a animação infinitamente a cada 2s */
-    border: 1px solid #dc3545 !important; /* Borda vermelha forçada */
-}
-
-/* Estilo para o horário no card */
-.card-hora-grupo {
-    font-size: 0.85em;
-    font-weight: bold;
-    color: #6c757d;
-    margin-top: 5px;
-    display: block;
-    padding-top: 3px;
-    border-top: 1px dashed #e9ecef;
-}
-
-/* ===== ESTILO FEED INSTAGRAM ===== */
-.feed-item-instagram {
-    display: flex;
-    flex-direction: column;
-    padding: 15px;
-    border-bottom: 1px solid #e9eef2;
-    background-color: #fff;
-    margin-bottom: 10px;
-    border-radius: 8px;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
-}
-
-.feed-header {
-    display: flex;
-    align-items: flex-start;
-    margin-bottom: 10px;
-}
-
-.feed-texto {
-    font-size: 0.95em;
-    line-height: 1.4;
-}
-
-.feed-pontos {
-    color: #28a745;
-    font-weight: bold;
-}
-
-.feed-imagem-wrapper {
-    width: 100%;
-    margin: 5px 0 10px 0;
-    background-color: #f8f9fa;
-    border-radius: 8px;
-    overflow: hidden;
-    border: 1px solid #e9eef2;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-}
-
-.feed-foto {
-    width: 100%;
-    height: auto;
-    max-height: 300px; /* Limite de altura para não quebrar o layout */
-    object-fit: cover; /* Garante que a foto preencha bem */
-    display: block;
-}
-
-.feed-footer {
-    color: #888;
-    font-size: 0.85em;
-}
-
-/* ===== NOVO LAYOUT DO MAPA (Centro de Comando) ===== */
-.mapa-layout-container {
-    display: flex;
-    gap: 20px;
-    align-items: flex-start;
-}
-
-.coluna-mapa-visual {
-    flex: 3; /* Ocupa ~70% */
-    display: flex;
-    flex-direction: column;
-}
-
-/* CORREÇÃO DO MAPA - VERSÃO V2 */
-.mapa-container {
-    position: relative;
-    width: 100%;
-    /* Altura fixa suficiente para mostrar o mapa sem scroll na maioria das telas */
-    height: 650px; 
-    
-    /* Configuração da Imagem de Fundo */
-    /* CORREÇÃO: Adicionada a pasta /img/ ao caminho */
-    background-image: url('/static/img/layout_loja.png');
-    
-    /* 'contain' garante que a imagem inteira apareça, sem cortes */
-    background-size: contain; 
-    
-    /* Centraliza a imagem no espaço disponível */
-    background-position: center top; 
-    background-repeat: no-repeat;
-    
-    /* Borda para visualização (opcional) */
-    border: 1px solid #ddd;
-    border-radius: 8px;
-    background-color: #f9f9f9; /* Cor de fundo caso sobre espaço nas laterais */
-    overflow: hidden;
-}
-
+/* ===== CRONOGRAMA DE PAUSAS (LATERAL DO MAPA) ===== */
 .coluna-cronograma {
-    flex: 1.2; /* Ocupa ~30% */
+    flex: 1.2;
+    min-width: 0;
     background-color: #fff;
     border-radius: 8px;
     box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-    height: 750px; /* Altura fixa para scroll */
+    height: 750px;
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -731,7 +712,9 @@ body {
     background-color: #e9ecef;
     padding: 12px 15px;
     border-bottom: 2px solid #dee2e6;
-    display: flex; justify-content: space-between; align-items: center;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
 }
 
 .cronograma-header h2 { font-size: 1.1em; margin: 0; color: #333; }
@@ -739,11 +722,11 @@ body {
 .lista-pausas-scroll {
     overflow-y: auto;
     flex: 1;
+    min-height: 0;
     padding: 10px;
     background-color: #f8f9fa;
 }
 
-/* Blocos de Setor */
 .setor-bloco {
     margin-bottom: 15px;
     background: #fff;
@@ -762,9 +745,10 @@ body {
     letter-spacing: 0.5px;
 }
 
-/* Cards de Funcionário */
 .pausa-card {
-    display: flex; justify-content: space-between; align-items: center;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
     padding: 8px 10px;
     border-bottom: 1px solid #f0f0f0;
     font-size: 0.9em;
@@ -775,20 +759,16 @@ body {
 .pausa-nome { font-weight: bold; color: #333; }
 .pausa-horario { font-size: 0.85em; color: #666; margin-top: 2px; }
 
-/* Estados Visuais (Semáforo) */
-
-/* 1. Futuro (Normal) */
+/* Estados (semáforo) */
 .status-futuro { background-color: #fff; }
 
-/* 2. EM PAUSA (AMARELO - DESTAQUE) */
 .status-em-pausa {
-    background-color: #fff3cd !important;
+    background-color: #fff3cd;   /* [DEPURAÇÃO] o !important não era necessário */
     border-left: 5px solid #ffc107;
 }
 .status-em-pausa .pausa-nome { color: #856404; font-size: 1.05em; }
 .status-em-pausa .pausa-status-icon { font-size: 1.3em; animation: pulse 2s infinite; }
 
-/* 3. Concluído (Apagado) */
 .status-concluido {
     background-color: #e9ecef;
     opacity: 0.6;
@@ -796,42 +776,47 @@ body {
 .status-concluido .pausa-nome { text-decoration: line-through; color: #888; }
 
 @keyframes pulse {
-    0% { transform: scale(1); }
-    50% { transform: scale(1.2); }
+    0%   { transform: scale(1); }
+    50%  { transform: scale(1.2); }
     100% { transform: scale(1); }
 }
 
 /* ========================================= */
-/* === ESTILOS DA AGENDA E MODAL (NOVO) ==== */
+/* === AGENDA E JANELA DE AGENDAMENTO    === */
 /* ========================================= */
 
-/* Estilos do Botão na Aba */
-.btn-novo-agendamento:hover { 
-    background-color: #218838 !important; 
+/* [DEPURAÇÃO] a "transição" estava só no :hover (o botão subia suave, mas descia de uma vez) */
+.btn-novo-agendamento {
+    transition: background-color 0.2s, transform 0.2s;
+}
+.btn-novo-agendamento:hover {
+    background-color: #218838 !important;   /* !important: a cor normal está escrita no próprio HTML */
     transform: translateY(-2px);
-    transition: 0.2s;
 }
 
-/* Fundo Escuro do Modal */
+/* Fundo escuro */
 .modal-overlay {
     position: fixed;
     top: 0; left: 0;
     width: 100%; height: 100%;
-    background-color: rgba(0,0,0,0.6); /* Escurece o fundo */
-    z-index: 10000; /* Fica na frente de tudo */
+    background-color: rgba(0,0,0,0.6);
+    z-index: 10000;
     display: flex;
     justify-content: center;
-    align-items: center; /* Centraliza na tela */
-    backdrop-filter: blur(3px); /* Desfoque leve no fundo */
+    align-items: center;
+    backdrop-filter: blur(3px);
+    padding: 10px;
 }
 
-/* Caixa Branca do Modal */
+/* Caixa branca */
 .modal-content {
     background-color: white;
     padding: 25px;
     border-radius: 12px;
     width: 95%;
-    max-width: 500px; /* Largura máxima */
+    max-width: 500px;
+    max-height: 90vh;          /* [DEPURAÇÃO] em telas baixas os botões finais saíam da tela */
+    overflow-y: auto;
     box-shadow: 0 10px 25px rgba(0,0,0,0.4);
     position: relative;
     animation: modalFadeIn 0.3s ease-out;
@@ -839,10 +824,10 @@ body {
 
 @keyframes modalFadeIn {
     from { opacity: 0; transform: translateY(-20px); }
-    to { opacity: 1; transform: translateY(0); }
+    to   { opacity: 1; transform: translateY(0); }
 }
 
-/* Botão X de fechar */
+/* X de fechar */
 .close-modal {
     position: absolute;
     top: 10px; right: 15px;
@@ -854,10 +839,10 @@ body {
 }
 .close-modal:hover { color: #dc3545; }
 
-/* Organização do Formulário */
+/* Formulário */
 .form-group { margin-bottom: 15px; }
 .form-row { display: flex; gap: 15px; }
-.form-row .form-group { flex: 1; }
+.form-row .form-group { flex: 1; min-width: 0; }
 
 .modal-content label {
     display: block;
@@ -867,8 +852,8 @@ body {
     font-size: 0.9em;
 }
 
-.modal-content input, 
-.modal-content select, 
+.modal-content input,
+.modal-content select,
 .modal-content textarea {
     width: 100%;
     padding: 10px;
@@ -878,15 +863,20 @@ body {
     font-family: inherit;
 }
 
-.modal-content input:focus, 
-.modal-content select:focus, 
+.modal-content input:focus,
+.modal-content select:focus,
 .modal-content textarea:focus {
     border-color: #007bff;
     outline: none;
-    box-shadow: 0 0 0 3px rgba(0,123,255,0.1);
+    box-shadow: 0 0 0 3px rgba(0,123,255,0.25);   /* [DEPURAÇÃO] 0.1 era quase invisível */
 }
 
-/* Botão de Salvar */
+/* [DEPURAÇÃO] campo com erro (ex: telefone sem DDD) fica com a borda vermelha */
+.modal-content input:user-invalid {
+    border-color: #dc3545;
+}
+
+/* Botão Salvar (novo agendamento) */
 .btn-salvar-agenda {
     width: 100%;
     padding: 12px;
@@ -901,9 +891,16 @@ body {
     transition: background 0.3s;
 }
 .btn-salvar-agenda:hover { background-color: #0056b3; }
-.btn-salvar-agenda:disabled { background-color: #ccc; cursor: not-allowed; }
 
-/* Botões extras do modal de agenda */
+/* [DEPURAÇÃO] "desativado" valia só para o Salvar; agora vale para todos os botões
+   (o painel.js trava os botões enquanto salva, para não criar agendamento duplicado) */
+.btn-salvar-agenda:disabled,
+.btn-excluir-agenda:disabled,
+.btn-wpp-agenda:disabled {
+    background-color: #ccc;
+    cursor: not-allowed;
+}
+
 .btn-excluir-agenda {
     flex: 1;
     padding: 12px;
@@ -919,17 +916,89 @@ body {
 .btn-wpp-agenda {
     flex: 1;
     padding: 12px;
-    background-color: #25D366;
+    background-color: #1e8f47;   /* [DEPURAÇÃO] o verde do WhatsApp (#25D366) com letra branca era difícil de ler */
     color: white;
     border: none;
     border-radius: 6px;
     font-weight: bold;
     cursor: pointer;
 }
-.btn-wpp-agenda:hover { background-color: #1ebc57; }
+.btn-wpp-agenda:hover { background-color: #16713a; }
 
-/* Ajuste para botões ficarem lado a lado na edição */
+/* [DEPURAÇÃO] Na edição, o "Salvar" (com margem em cima e fonte maior) ficava 15px mais
+   baixo e mais baixinho que "Excluir" e "WhatsApp". Agora os três ficam alinhados. */
 #btn-container-editar {
     display: flex;
     justify-content: space-between;
+    align-items: stretch;
+    gap: 10px;
+}
+#btn-container-editar button {
+    margin-top: 0;
+    width: auto;
+    font-size: 1em;
+}
+#btn-container-editar .btn-salvar-agenda {
+    flex: 2;
+}
+
+/* ============================================================================
+   [DEPURAÇÃO] TELAS PEQUENAS (celular e notebook pequeno)
+   Antes não havia NENHUMA regra para telas pequenas: no celular a página ficava
+   com 810px de largura (tinha que arrastar para os lados). Quem usa a Agenda
+   pelo celular agora vê tudo em uma coluna só.
+   ============================================================================ */
+@media (max-width: 900px) {
+    .painel-container { padding: 10px; }
+    .cabecalho h1 { font-size: 1.4em; }
+
+    .tab-btn { padding: 8px 12px; font-size: 1em; }
+    .progresso-container { width: 100%; }
+
+    .top-info-wrapper,
+    .kanban-board,
+    .mapa-layout-container {
+        flex-direction: column;
+    }
+
+    .coluna {
+        width: 100%;
+        min-width: 0;
+    }
+
+    .podio-item { padding: 8px; }
+    .podio-item .posicao { font-size: 1.4em; }
+
+    .agendamentos-container { max-height: none; }
+    .agendamentos-lista { max-height: 260px; }
+
+    .coluna-mapa-visual,
+    .coluna-cronograma {
+        width: 100%;
+    }
+    .mapa-container { height: 320px; }
+    .coluna-cronograma { height: auto; max-height: 500px; }
+
+    .barra-hora { font-size: 0.65em; }
+    .barra-valor { font-size: 0.75em; }
+
+    .modal-content { padding: 18px; }
+    .form-row { flex-direction: column; gap: 0; }
+}
+
+/* ============================================================================
+   [DEPURAÇÃO] ACESSIBILIDADE: quem ativa "reduzir movimento" no computador
+   (pessoas com enxaqueca/labirintite) não vê o card piscando sem parar.
+   O card atrasado continua vermelho, só não pisca.
+   ============================================================================ */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation: none !important;
+        transition: none !important;
+    }
+    .card.alerta-atraso {
+        background-color: #fff0f0;
+    }
 }

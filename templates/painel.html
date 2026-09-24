@@ -5,22 +5,33 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Painel de Gestão</title>
     <link rel="stylesheet" href="/static/css/estilo.css">
-    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js"></script>
-    <script src='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js'></script>
+    <!--
+        [DEPURAÇÃO] Bibliotecas externas (internet) agora com "defer":
+        antes, se a internet da loja estivesse lenta/fora, a página inteira ficava
+        EM BRANCO esperando essas bibliotecas. Com "defer" o painel aparece mesmo assim.
+    -->
+    <script defer src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js"></script>
+    <!--
+        [DEPURAÇÃO] O pacote principal do FullCalendar NÃO traz o português.
+        Sem esta linha a agenda aparecia em inglês ("January", "Mon", "today").
+    -->
+    <script defer src="https://cdn.jsdelivr.net/npm/@fullcalendar/core@6.1.10/locales/pt-br.global.min.js"></script>
 </head>
 <body>
     <div id="fireworks-container"></div>
     <div class="painel-container">
-        
+
         <header class="cabecalho">
             <h1>Painel de Gestão de Tarefas</h1>
             <p id="ultima-atualizacao">Atualizando...</p>
-            
+
+            <!-- [DEPURAÇÃO] "this" informa qual botão foi clicado (antes dependia de uma variável global "event") -->
             <nav class="tabs-nav">
-                <button class="tab-btn active" onclick="abrirAba('operacional')">📋 Operacional</button>
-                <button class="tab-btn" onclick="abrirAba('financeiro')">💰 Financeiro & Metas</button>
-                <button class="tab-btn" onclick="abrirAba('mapa')">🗺️ Mapa da Loja</button>
-                <button class="tab-btn" onclick="abrirAba('agenda')">📅 Agenda & Reservas</button>
+                <button type="button" class="tab-btn active" onclick="abrirAba('operacional', this)">📋 Operacional</button>
+                <button type="button" class="tab-btn" onclick="abrirAba('financeiro', this)">💰 Financeiro & Metas</button>
+                <button type="button" class="tab-btn" onclick="abrirAba('mapa', this)">🗺️ Mapa da Loja</button>
+                <button type="button" class="tab-btn" onclick="abrirAba('agenda', this)">📅 Agenda & Reservas</button>
             </nav>
 
             <div class="progresso-container">
@@ -29,6 +40,7 @@
             </div>
         </header>
 
+        <!-- ===================== ABA 1: OPERACIONAL ===================== -->
         <div id="tab-operacional" class="tab-content active">
             <div class="top-info-wrapper">
                 <div class="podio-container" id="podio-diario"></div>
@@ -59,18 +71,16 @@
             </main>
         </div>
 
+        <!-- ===================== ABA 2: FINANCEIRO ===================== -->
         <div id="tab-financeiro" class="tab-content" style="display: none;">
             <div class="financeiro-wrapper">
                 <div class="metas-coluna-esquerda full-width">
-                    
+
                     <div class="meta-container" id="container-meta-mensal">
                         <h3 id="meta-titulo">Meta Faturamento Mensal</h3>
                         <div class="meta-progresso-container">
                             <div class="meta-progresso-barra" id="meta-progresso-barra"></div>
                             <span class="meta-progresso-texto" id="meta-progresso-texto">--%</span>
-                        </div>
-                        <div style="display:none;">
-                            <span id="meta-valor-atingido"></span><span id="meta-valor-total"></span>
                         </div>
                     </div>
 
@@ -80,11 +90,8 @@
                             <div class="meta-progresso-barra" id="meta-diaria-progresso-barra"></div>
                             <span class="meta-progresso-texto" id="meta-diaria-progresso-texto">--%</span>
                         </div>
-                        <div class="meta-valores" id="meta-diaria-valores" style="display: none;">
-                            <span class="valor-ocultavel"></span>
-                            <span class="valor-ocultavel"></span>
-                            <span id="toggle-valores-dia"></span>
-                        </div>
+                        <!-- [DEPURAÇÃO] REMOVIDOS os campos de valores ocultos e o botão 👁️ vazio:
+                             o painel.js já não escrevia nada neles (os valores em R$ não aparecem na TV). -->
                     </div>
 
                 </div>
@@ -96,6 +103,7 @@
             </div>
         </div>
 
+        <!-- ===================== ABA 3: MAPA DA LOJA ===================== -->
         <div id="tab-mapa" class="tab-content" style="display: none;">
 
             <div class="mapa-layout-container">
@@ -108,6 +116,8 @@
                     <div class="ocupacao-wrapper" style="width: 100%; margin-top: 20px;">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
                             <h3>Fluxo de Equipe</h3>
+                            <!-- [DEPURAÇÃO] Setores novos que aparecerem na escala (ex: "Atendimento")
+                                 são adicionados sozinhos a esta lista pelo painel.js -->
                             <select id="filtro-setor-grafico" style="padding: 5px; font-size: 16px; border-radius: 5px;">
                                 <option value="Geral (Todos)">Geral (Todos)</option>
                                 <option value="Varanda">Varanda</option>
@@ -139,99 +149,115 @@
             <p style="text-align: center; margin-top: 10px; color: #666;">Atualizado em tempo real.</p>
         </div>
 
+        <!-- ===================== ABA 4: AGENDA ===================== -->
+        <!-- [DEPURAÇÃO] Esta aba estava FORA do "painel-container" (depois do </div> de fechamento),
+             por isso ficava sem o espaçamento das outras abas. -->
+        <div id="tab-agenda" class="tab-content" style="display: none;">
+            <div class="agenda-controls" style="text-align: right; max-width: 1200px; margin: 0 auto 10px auto;">
+                <button type="button" class="btn-novo-agendamento" onclick="abrirModalAgendamento()" style="background-color: #28a745; color: white; border: none; padding: 10px 20px; border-radius: 5px; font-size: 1em; cursor: pointer; font-weight: bold; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">
+                    ➕ Novo Agendamento
+                </button>
+            </div>
 
-    </div>
-    <script src="painel.js" defer></script>
-    
-    <div id="tab-agenda" class="tab-content" style="display: none;">
-        <div class="agenda-controls" style="text-align: right; max-width: 1200px; margin: 0 auto 10px auto;">
-            <button class="btn-novo-agendamento" onclick="abrirModalAgendamento()" style="background-color: #28a745; color: white; border: none; padding: 10px 20px; border-radius: 5px; font-size: 1em; cursor: pointer; font-weight: bold; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">
-                ➕ Novo Agendamento
-            </button>
+            <div id="calendar" style="background-color: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); max-width: 1200px; margin: 0 auto; min-height: 700px;"></div>
         </div>
-        
-        <div id="calendar" style="background-color: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); max-width: 1200px; margin: 0 auto; min-height: 700px;"></div>
+
     </div>
 
+    <!-- ===================== JANELA (MODAL) DE AGENDAMENTO ===================== -->
     <div id="modal-agendamento" class="modal-overlay" style="display: none;">
-    <div class="modal-content">
-        <span class="close-modal" onclick="fecharModalAgendamento()">&times;</span>
-        <h2 id="modal-titulo" style="margin-bottom: 20px; color: #0056b3;">📅 Novo Agendamento</h2>
-        
-        <form id="form-agendamento" onsubmit="processarFormulario(event)">
-            <input type="hidden" id="ag-id">
+        <!-- [DEPURAÇÃO] max-height + rolagem: em telas baixas (notebook/celular) os botões
+             do fim do formulário ficavam fora da tela e não dava para clicar -->
+        <div class="modal-content" style="max-height: 90vh; overflow-y: auto;" role="dialog" aria-modal="true" aria-labelledby="modal-titulo">
+            <span class="close-modal" onclick="fecharModalAgendamento()" title="Fechar (Esc)">&times;</span>
+            <h2 id="modal-titulo" style="margin-bottom: 20px; color: #0056b3;">📅 Novo Agendamento</h2>
 
-            <div class="form-group">
-                <label>Quem está agendando?</label>
-                <select id="ag-funcionario" required>
-                    <option value="2">Gestor (Padrão)</option>
-                    <option value="3">Atendente</option>
-                </select>
-            </div>
+            <form id="form-agendamento" onsubmit="processarFormulario(event)">
+                <input type="hidden" id="ag-id">
 
-            <div class="form-group">
-                <label>Nome do Cliente:</label>
-                <input type="text" id="ag-cliente" required placeholder="Ex: Maria da Silva">
-            </div>
-
-            <div class="form-row">
                 <div class="form-group">
-                    <label>Telefone (WhatsApp):</label>
-                    <input type="text" id="ag-telefone" required placeholder="Ex: 44999998888">
-                </div>
-                <div class="form-group">
-                    <label>CPF (Opcional):</label>
-                    <input type="text" id="ag-cpf">
-                </div>
-            </div>
-
-            <div class="form-row">
-                <div class="form-group">
-                    <label>Data:</label>
-                    <input type="date" id="ag-data" required>
-                </div>
-                <div class="form-group">
-                    <label>Hora:</label>
-                    <input type="time" id="ag-hora" required>
-                </div>
-            </div>
-
-            <div class="form-group">
-                <label>Tipo de Evento:</label>
-                <select id="ag-tipo" required>
-                    <option value="Carrinho de Sorvete">🛒 Carrinho de Sorvete</option>
-                    <option value="Festa de Aniversario">🎉 Festa de Aniversário</option>
-                    <option value="Reserva de Tortas de Sorvete">🎂 Reserva de Torta</option>
-                </select>
-            </div>
-
-            <div class="form-row">
-                <div class="form-group">
-                    <label>Status Pagamento:</label>
-                    <select id="ag-pagamento">
-                        <option value="Pendente">❌ Pendente</option>
-                        <option value="Pago">✅ Pago</option>
+                    <label for="ag-funcionario">Quem está agendando?</label>
+                    <select id="ag-funcionario" required>
+                        <option value="2">Gestor (Padrão)</option>
+                        <option value="3">Atendente</option>
                     </select>
                 </div>
-            </div>
 
-            <div class="form-group">
-                <label>Observações:</label>
-                <textarea id="ag-obs" rows="3"></textarea>
-            </div>
+                <div class="form-group">
+                    <label for="ag-cliente">Nome do Cliente:</label>
+                    <input type="text" id="ag-cliente" required maxlength="100" placeholder="Ex: Maria da Silva">
+                </div>
 
-            <div id="btn-container-novo">
-                <button type="submit" class="btn-salvar-agenda">✅ Confirmar e Enviar Zap</button>
-            </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="ag-telefone">Telefone (WhatsApp):</label>
+                        <!-- [DEPURAÇÃO] o painel.js confere se tem DDD + número (10 ou 11 dígitos) -->
+                        <input type="tel" id="ag-telefone" required inputmode="tel" maxlength="20"
+                               placeholder="Ex: 44999998888" title="Digite o DDD e o número (ex: 44999998888)">
+                    </div>
+                    <div class="form-group">
+                        <label for="ag-cpf">CPF (Opcional):</label>
+                        <input type="text" id="ag-cpf" inputmode="numeric" maxlength="14">
+                    </div>
+                </div>
 
-            <div id="btn-container-editar" style="display: none; gap: 10px; margin-top: 15px;">
-                <button type="button" class="btn-salvar-agenda" onclick="atualizarAgendamento()">💾 Salvar Alterações</button>
-                <button type="button" class="btn-excluir-agenda" onclick="excluirAgendamento()">🗑️ Excluir</button>
-                <button type="button" class="btn-wpp-agenda" onclick="abrirWhatsAppCliente()">📱 Abrir WhatsApp</button>
-            </div>
-        </form>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="ag-data">Data:</label>
+                        <input type="date" id="ag-data" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="ag-hora">Hora:</label>
+                        <input type="time" id="ag-hora" required>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="ag-tipo">Tipo de Evento:</label>
+                    <select id="ag-tipo" required>
+                        <option value="Carrinho de Sorvete">🛒 Carrinho de Sorvete</option>
+                        <option value="Festa de Aniversario">🎉 Festa de Aniversário</option>
+                        <option value="Reserva de Tortas de Sorvete">🎂 Reserva de Torta</option>
+                    </select>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="ag-pagamento">Status Pagamento:</label>
+                        <select id="ag-pagamento">
+                            <option value="Pendente">❌ Pendente</option>
+                            <option value="Pago">✅ Pago</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="ag-obs">Observações:</label>
+                    <textarea id="ag-obs" rows="3" maxlength="1000"></textarea>
+                </div>
+
+                <div id="btn-container-novo">
+                    <button type="submit" id="btn-salvar-novo" class="btn-salvar-agenda">✅ Confirmar e Enviar Zap</button>
+                </div>
+
+                <!-- [DEPURAÇÃO] Os botões de edição agora também respeitam os campos obrigatórios
+                     (antes dava para salvar a edição com o nome do cliente em branco) -->
+                <div id="btn-container-editar" style="display: none; gap: 10px; margin-top: 15px;">
+                    <button type="button" id="btn-salvar-edicao" class="btn-salvar-agenda" onclick="atualizarAgendamento()">💾 Salvar Alterações</button>
+                    <button type="button" id="btn-excluir" class="btn-excluir-agenda" onclick="excluirAgendamento()">🗑️ Excluir</button>
+                    <button type="button" class="btn-wpp-agenda" onclick="abrirWhatsAppCliente()">📱 Abrir WhatsApp</button>
+                </div>
+            </form>
+        </div>
     </div>
-</div>
-    <script src="/static/js/painel.js"></script>
+
+    <!--
+        [DEPURAÇÃO] O arquivo carregava o painel.js DUAS vezes:
+          1) <script src="painel.js" defer>  -> caminho errado (dava erro 404 no servidor)
+          2) <script src="/static/js/painel.js">
+        Se o 1º algum dia fosse encontrado, o 2º quebraria ("Identifier has already been declared")
+        e o painel atualizaria em dobro. Agora carrega UMA vez, do lugar certo.
+    -->
+    <script defer src="/static/js/painel.js"></script>
 </body>
 </html>
