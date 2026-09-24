@@ -1,711 +1,922 @@
 # ==============================================================================
+# == agendador.py  -  Robô Agendador (roda o dia todo em segundo plano) ========
+# ==============================================================================
+# O que ele faz sozinho:
+#   • a cada minuto: missões de grupo, aviso de início de jornada, lembretes e
+#     resumo de fim de jornada (com convite para avaliar o dia);
+#   • a cada minuto (em paralelo): baixa as fotos de entregas e notas fiscais;
+#   • 08:00: fechamento mensal (pódio) nos primeiros dias do mês;
+#   • 09:00: lembrete de comunicados sem "ciente";
+#   • 09:05: "Drop" das tarefas de quem está de folga/férias.
+#
+# Como rodar:  python agendador.py        (para parar: Ctrl+C)
+#
+# Versão DEPURADA: procure por [DEPURAÇÃO] para ver cada correção.
+# O main.py usa a função forcar_drop_funcionario_especifico() daqui: ela continua
+# com o mesmo nome e devolve (sucesso, mensagem) como antes.
+# ==============================================================================
+
+# ==============================================================================
 # == INÍCIO BLOCO DE CONFIGURAÇÃO DE LOGGING ===================================
 # ==============================================================================
 import logging
 import logging.handlers
 import sys
-import os # Necessário para criar a pasta de logs
+import os
 
-# --- Configurações ---
 LOG_FILENAME = 'gamificacao_sistema.log'
-LOG_FOLDER = 'logs' # Nome da pasta onde os logs serão salvos
-LOG_LEVEL = logging.INFO # Nível mínimo para registrar (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+LOG_FOLDER = 'logs'
+LOG_LEVEL = logging.INFO
 LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
-LOG_MAX_BYTES = 10 * 1024 * 1024 # Tamanho máximo de cada arquivo de log (10 MB)
-LOG_BACKUP_COUNT = 5 # Quantos arquivos de log antigos manter
+LOG_MAX_BYTES = 10 * 1024 * 1024
+LOG_BACKUP_COUNT = 5
 
-# --- Cria a pasta de logs se não existir ---
-log_dir = os.path.join(os.path.dirname(__file__), LOG_FOLDER)
-if not os.path.exists(log_dir):
+PASTA_DO_PROGRAMA = os.path.dirname(os.path.abspath(__file__))
+
+# [DEPURAÇÃO] O main.py importa este arquivo. Antes, ao importar, o agendador APAGAVA
+# a configuração de log do main.py. Agora só configura se ninguém configurou antes.
+if not logging.getLogger().handlers:
+    log_dir = os.path.join(PASTA_DO_PROGRAMA, LOG_FOLDER)
     try:
-        os.makedirs(log_dir)
-        print(f"Pasta de logs criada em: {log_dir}") # Print inicial para confirmar criação
+        os.makedirs(log_dir, exist_ok=True)
     except OSError as e:
         print(f"Erro ao criar pasta de logs '{log_dir}': {e}", file=sys.stderr)
-        # Se não conseguir criar a pasta, tenta logar no diretório atual
-        log_dir = os.path.dirname(__file__)
+        log_dir = PASTA_DO_PROGRAMA
+    _file_handler = logging.handlers.RotatingFileHandler(
+        os.path.join(log_dir, LOG_FILENAME), maxBytes=LOG_MAX_BYTES,
+        backupCount=LOG_BACKUP_COUNT, encoding='utf-8')
+    _console_handler = logging.StreamHandler(sys.stdout)
+    logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT, handlers=[_file_handler, _console_handler])
 
-log_filepath = os.path.join(log_dir, LOG_FILENAME)
-
-# --- Configuração do Handler de Arquivo Rotativo ---
-# Rotaciona o log quando atinge LOG_MAX_BYTES, mantendo LOG_BACKUP_COUNT arquivos antigos
-file_handler = logging.handlers.RotatingFileHandler(
-    log_filepath, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT, encoding='utf-8'
-)
-file_handler.setLevel(LOG_LEVEL)
-file_formatter = logging.Formatter(LOG_FORMAT)
-file_handler.setFormatter(file_formatter)
-
-# --- Configuração do Handler do Console ---
-console_handler = logging.StreamHandler(sys.stdout)
-console_handler.setLevel(LOG_LEVEL) # Pode ser diferente do arquivo se quiser (ex: logging.DEBUG)
-console_formatter = logging.Formatter(LOG_FORMAT)
-console_handler.setFormatter(console_formatter)
-
-# --- Configuração do Logger Raiz ---
-# Limpa handlers existentes para evitar duplicação em recargas
-logging.getLogger('').handlers = []
-# Adiciona os novos handlers
-logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT, handlers=[file_handler, console_handler])
-
-# Obtém um logger específico para este módulo
 logger = logging.getLogger(__name__)
-
-logger.info(f"*** Logging configurado para o módulo: {__name__} ***")
 # ==============================================================================
 # == FIM BLOCO DE CONFIGURAÇÃO DE LOGGING ======================================
 # ==============================================================================
 
-import schedule
+import html
+import json
+import threading
 import time
+import unicodedata
+from collections import deque
+from datetime import datetime, date, timedelta
+
+import requests
+import schedule
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+import config
 import database
 import notificador_telegram
-import config
-import os
-from datetime import datetime, date, timedelta
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-import requests
-import urllib.parse
-from collections import deque
-import threading # Adicionado para concorrência
 
-import unicodedata
+# ------------------------------------------------------------------------------
+# Configurações
+# ------------------------------------------------------------------------------
+# [DEPURAÇÃO] Pastas agora ficam SEMPRE ao lado do programa. Antes eram relativas à
+# "pasta atual": iniciado por atalho ou pelo Agendador de Tarefas do Windows, as fotos
+# iam parar em outra pasta (ex: C:\Windows\System32\entregas) e o painel não as achava.
+PASTA_ENTREGAS = os.path.join(PASTA_DO_PROGRAMA, 'entregas')
+PASTA_NOTAS = os.path.join(PASTA_DO_PROGRAMA, 'notas_fiscais')
+ARQUIVO_ESTADO = os.path.join(PASTA_DO_PROGRAMA, 'agendador_estado.json')
+
+MAX_MINUTOS_RECUPERAR = 10      # se o robô "travar" alguns minutos, recupera até 10 minutos perdidos
+HORARIO_FECHAMENTO = "08:00"
+HORARIO_LEMBRETE_COMUNICADOS = "09:00"
+HORARIO_DROP = "09:05"
+DIAS_PARA_FECHAMENTO = 5        # o fechamento do mês anterior pode rodar do dia 1 ao dia 5
 
 # --- CONTROLE DE CONCORRÊNCIA ---
-# Semáforo para limitar downloads simultâneos (máx 3 threads baixando ao mesmo tempo)
+# Semáforo: no máximo 3 downloads ao mesmo tempo
 download_semaphore = threading.BoundedSemaphore(value=3)
+_travas_de_tarefa = {}          # [DEPURAÇÃO] impede a MESMA tarefa rodar 2x ao mesmo tempo
+_trava_estado = threading.Lock()
 
-# --- MAPA DE ROTEAMENTO ROBUSTO ---
-# Centraliza a lógica de para onde vai cada drop
+# --- MAPA DE ROTEAMENTO DOS DROPS ---
+# [DEPURAÇÃO] getattr: se faltar um grupo no config.py, o main.py (que importa este
+# arquivo) não quebra mais ao abrir.
+_GRUPO_COZINHA = getattr(config, 'COZINHA_GROUP_CHAT_ID', None)
+_GRUPO_ATENDIMENTO = getattr(config, 'ATENDIMENTO_GROUP_CHAT_ID', None)
 MAPA_SETOR_GRUPO = {
-    'cozinha': config.COZINHA_GROUP_CHAT_ID,
-    'producao': config.COZINHA_GROUP_CHAT_ID,
-    'produção': config.COZINHA_GROUP_CHAT_ID,
-    'estoque': config.COZINHA_GROUP_CHAT_ID,
-
-    'atendimento': config.ATENDIMENTO_GROUP_CHAT_ID,
-    'loja': config.ATENDIMENTO_GROUP_CHAT_ID,
-    'caixa': config.ATENDIMENTO_GROUP_CHAT_ID,
-    'salao': config.ATENDIMENTO_GROUP_CHAT_ID,
-    'salão': config.ATENDIMENTO_GROUP_CHAT_ID,
+    'cozinha': _GRUPO_COZINHA,
+    'producao': _GRUPO_COZINHA,
+    'estoque': _GRUPO_COZINHA,
+    'atendimento': _GRUPO_ATENDIMENTO,
+    'loja': _GRUPO_ATENDIMENTO,
+    'caixa': _GRUPO_ATENDIMENTO,
+    'salao': _GRUPO_ATENDIMENTO,
 }
+# (as versões com acento, 'produção' e 'salão', eram desnecessárias: o texto é
+#  comparado SEM acento pela função normalizar_texto)
+
+
+# ==============================================================================
+# == FUNÇÕES AUXILIARES ========================================================
+# ==============================================================================
+def esc(valor):
+    """[DEPURAÇÃO] Protege nomes/títulos com < > & (senão o Telegram recusava a mensagem)."""
+    return html.escape('' if valor is None else str(valor), quote=False)
+
 
 def normalizar_texto(texto):
     """Remove acentos e coloca em minúsculas para comparação segura."""
-    if not texto: return ""
-    return unicodedata.normalize('NFKD', texto).encode('ASCII', 'ignore').decode('ASCII').lower()
+    if not texto:
+        return ""
+    return unicodedata.normalize('NFKD', str(texto)).encode('ASCII', 'ignore').decode('ASCII').lower()
+
+
+def dia_semana_sql(dt):
+    """Dia da semana no padrão do projeto: 1=Domingo, 2=Segunda ... 7=Sábado."""
+    return (dt.weekday() + 1) % 7 + 1
+
+
+def _para_int(valor, padrao=0):
+    try:
+        return int(valor)
+    except (TypeError, ValueError):
+        return padrao
+
+
+def _para_data(valor):
+    """Converte date/datetime/texto 'AAAA-MM-DD' em date (ou None)."""
+    if valor is None or valor == '':
+        return None
+    if isinstance(valor, datetime):
+        return valor.date()
+    if isinstance(valor, date):
+        return valor
+    try:
+        return datetime.strptime(str(valor)[:10], '%Y-%m-%d').date()
+    except ValueError:
+        return None
+
+
+def _sem_token(texto):
+    """[DEPURAÇÃO] Erros de download mostravam a URL com o TOKEN do bot, que ia para o log."""
+    token = str(getattr(config, 'TELEGRAM_TOKEN', '') or '')
+    texto = str(texto)
+    return texto.replace(token, '***TOKEN***') if token else texto
+
+
+def enviado(resposta):
+    """True se o Telegram confirmou o envio."""
+    return bool(resposta) and bool(resposta.get('ok'))
+
+
+def motivo_ausencia_hoje(funcionario, hoje=None):
+    """
+    Diz se o funcionário está AUSENTE hoje e por quê (ou None se está trabalhando):
+    férias/atestado (período de afastamento), folga semanal ou domingo de folga do mês.
+    """
+    hoje = hoje or date.today()
+    dia_sql = dia_semana_sql(hoje)
+
+    ini = _para_data(getattr(funcionario, 'DataInicioAfastamento', None))
+    fim = _para_data(getattr(funcionario, 'DataFimAfastamento', None))
+    if ini and fim and ini <= hoje <= fim:
+        return "Férias/Atestado"
+
+    if _para_int(getattr(funcionario, 'DiaDeFolga', 0)) == dia_sql:
+        return "Folga Semanal"
+
+    if dia_sql == 1:  # domingo
+        ocorrencia_domingo = (hoje.day - 1) // 7 + 1
+        dom_folga = _para_int(getattr(funcionario, 'DomingoFolgaMensal', 0))
+        if dom_folga and dom_folga == ocorrencia_domingo:
+            return f"Folga de Domingo ({ocorrencia_domingo}º)"
+    return None
+
+
+def executar_com_seguranca(funcao, *args):
+    """
+    [DEPURAÇÃO] BUG GRAVE: a biblioteca "schedule" NÃO trata erros. Qualquer erro em
+    qualquer tarefa (ex: banco fora do ar por 1 minuto, um funcionário excluído no
+    meio do fechamento) DERRUBAVA O ROBÔ INTEIRO, e ele ficava parado até alguém
+    perceber e abrir de novo. Agora o erro vai para o log e o robô continua.
+    """
+    try:
+        return funcao(*args)
+    except Exception as e:
+        logger.error(f"Erro na tarefa '{funcao.__name__}': {_sem_token(e)}", exc_info=True)
+        return None
+
 
 def run_threaded(job_func):
-    """Executa uma função agendada em uma nova thread para não bloquear o loop principal."""
-    job_thread = threading.Thread(target=job_func)
-    job_thread.start()
+    """
+    Executa uma tarefa em outra thread (para downloads não travarem o robô).
+    [DEPURAÇÃO] Antes, se um download demorasse mais de 1 minuto, a próxima rodada
+    começava JUNTO com a anterior e as duas baixavam as mesmas fotos (e avisavam o
+    gestor 2 vezes). Agora a mesma tarefa nunca roda duas vezes ao mesmo tempo.
+    """
+    with _trava_estado:
+        trava = _travas_de_tarefa.setdefault(job_func.__name__, threading.Lock())
+    if not trava.acquire(blocking=False):
+        logger.info(f"'{job_func.__name__}' ainda está rodando; pulando esta rodada.")
+        return
+
+    def alvo():
+        try:
+            executar_com_seguranca(job_func)
+        finally:
+            trava.release()
+
+    threading.Thread(target=alvo, name=job_func.__name__, daemon=True).start()
 
 
+# ------------------------------------------------------------------------------
+# [DEPURAÇÃO] "Memória" das tarefas diárias (arquivo agendador_estado.json).
+# Antes, se o robô fosse aberto depois das 09:05, o Drop do dia NÃO acontecia; e se
+# fosse reiniciado às 09:05, o Drop era enviado DUAS vezes.
+# ------------------------------------------------------------------------------
+def _ler_estado():
+    try:
+        with open(ARQUIVO_ESTADO, 'r', encoding='utf-8') as f:
+            dados = json.load(f)
+            return dados if isinstance(dados, dict) else {}
+    except (OSError, ValueError):
+        return {}
 
+
+def ja_rodou_hoje(nome):
+    return _ler_estado().get(nome) == date.today().isoformat()
+
+
+def marcar_rodou_hoje(nome):
+    with _trava_estado:
+        estado = _ler_estado()
+        estado[nome] = date.today().isoformat()
+        try:
+            with open(ARQUIVO_ESTADO, 'w', encoding='utf-8') as f:
+                json.dump(estado, f, ensure_ascii=False, indent=2)
+        except OSError as e:
+            logger.warning(f"Não foi possível salvar {ARQUIVO_ESTADO}: {e}")
+
+
+# ==============================================================================
+# == MÓDULO 1: MISSÕES DE GRUPO ================================================
+# ==============================================================================
 cache_tarefas_enviadas = deque(maxlen=500)
 
-def verificar_e_enviar_tarefas_de_grupo():
-    """
-    (VERSÃO CORRIGIDA COM CACHE ANTI-DUPLICAÇÃO)
-    Verifica e envia tarefas de grupo, evitando envios repetidos no mesmo minuto.
-    """
-    agora_dt = datetime.now()
-    agora_hm = agora_dt.strftime('%H:%M')
 
-    chave_dia_atual = agora_dt.strftime('%Y-%m-%d')
-    
+def verificar_e_enviar_tarefas_de_grupo(momento=None):
+    """Envia as missões de grupo agendadas para este minuto (com proteção anti-duplicação)."""
+    momento = momento or datetime.now()
+    agora_hm = momento.strftime('%H:%M')
+    chave_dia = momento.strftime('%Y-%m-%d')
 
-    dia_python = agora_dt.weekday()
-    dia_semana_sql = (dia_python + 1) % 7 + 1
-    dia_mes = agora_dt.day
-
-    # Busca tarefas no banco
     tarefas_para_disparar = database.buscar_tarefas_de_grupo_para_disparar(
-        agora_hm, 
-        str(dia_semana_sql), 
-        str(dia_mes)
-    )
-
+        agora_hm, str(dia_semana_sql(momento)), str(momento.day))
     if not tarefas_para_disparar:
         return
 
     logger.info(f"[{agora_hm}] Encontradas {len(tarefas_para_disparar)} potenciais tarefas de grupo.")
-    
+
     for tarefa in tarefas_para_disparar:
         atribuicao_id, titulo, pontos, nome_grupo, chat_id, *_ = tarefa
 
-        # --- LÓGICA ANTI-DUPLICAÇÃO (CORRIGIDA) ---
-        # Alteramos a chave para usar Título + Chat + Horário. 
-        # Isso impede que tarefas duplicadas no banco (IDs diferentes, mesmo conteúdo) sejam enviadas duas vezes.
-        assinatura_envio = (chat_id, titulo, agora_hm, chave_dia_atual)
-
+        # Mesma tarefa (título) para o mesmo grupo, no mesmo horário/dia: envia uma vez só
+        assinatura_envio = (chat_id, titulo, agora_hm, chave_dia)
         if assinatura_envio in cache_tarefas_enviadas:
-            # Log silencioso para não poluir o terminal se houver muitas duplicatas
-            # print(f"--> [ANTI-FLOOD] Tarefa '{titulo}' já enviada para este grupo neste horário. Ignorando.")
             continue
-        
-        # Se não está no cache, adiciona
-        cache_tarefas_enviadas.append(assinatura_envio)
-        # -----------------------------
 
         if not chat_id:
             logger.error(f"ERRO: O grupo '{nome_grupo}' não tem Chat ID cadastrado!")
             continue
 
+        # [DEPURAÇÃO] Mensagem em HTML com o título protegido. No formato antigo (Markdown),
+        # um "_" no título (ex: "Limpar_freezer") fazia o Telegram recusar a missão.
         mensagem = (
-            f"🚨 **Nova Missão para a Equipe!** 🚨\n\n"
-            f"**Tarefa:** {titulo}\n"
-            f"**Recompensa:** {pontos} pontos\n\n"
-            "O primeiro a aceitar fica responsável pela entrega *de hoje*. Quem vai encarar?"
+            "🚨 <b>Nova Missão para a Equipe!</b> 🚨\n\n"
+            f"<b>Tarefa:</b> {esc(titulo)}\n"
+            f"<b>Recompensa:</b> {esc(pontos)} pontos\n\n"
+            "O primeiro a aceitar fica responsável pela entrega <b>de hoje</b>. Quem vai encarar?"
         )
+        reply_markup = InlineKeyboardMarkup(
+            [[InlineKeyboardButton("✅ Eu aceito o desafio!", callback_data=f"aceitar_tarefa_{atribuicao_id}")]])
 
-        keyboard = [[InlineKeyboardButton("✅ Eu aceito o desafio!", callback_data=f"aceitar_tarefa_{atribuicao_id}")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        resposta = notificador_telegram.enviar_mensagem_com_botao(chat_id, mensagem, reply_markup, 'HTML')
+        # [DEPURAÇÃO] Antes escrevia "SUCESSO" mesmo quando o Telegram recusava.
+        if enviado(resposta):
+            cache_tarefas_enviadas.append(assinatura_envio)
+            logger.info(f"Missão '{titulo}' enviada para '{nome_grupo}' às {agora_hm}.")
+        else:
+            logger.error(f"Missão '{titulo}' NÃO foi entregue ao grupo '{nome_grupo}': "
+                         f"{(resposta or {}).get('description')}")
 
-        try:
-            notificador_telegram.enviar_mensagem_com_botao(chat_id, mensagem, reply_markup)
-            print(f"--> SUCESSO: Missão '{titulo}' enviada para '{nome_grupo}' às {agora_hm}.")
-        except Exception as e:
-            print(f"--> ERRO AO ENVIAR no Telegram: {e}")
 
-# --- MÓDULO 2: INÍCIO DA JORNADA (Lógica antiga, agora focada) ---
-def verificar_inicio_jornada():
-    """Verifica e notifica funcionários que estão começando a jornada AGORA."""
-    agora = datetime.now().strftime('%H:%M')
-    
+# ==============================================================================
+# == MÓDULO 2: INÍCIO DA JORNADA ===============================================
+# ==============================================================================
+_inicio_jornada_enviado = set()   # (FuncionarioID, data) - evita aviso repetido no mesmo dia
+
+
+def _lista_tarefas_html(tarefas, com_tipo=False, com_pontos=True):
+    linhas = []
+    for tarefa in tarefas:
+        tipo = ""
+        if com_tipo:
+            tipo = " (Especial)" if getattr(tarefa, 'Tipo', '') == 'Unica' else f" ({esc(getattr(tarefa, 'Tipo', ''))})"
+        pontos = f" - <i>{esc(tarefa.Pontos)} pts</i>" if com_pontos else ""
+        linhas.append(f"  - {esc(tarefa.Titulo)}{tipo}{pontos}")
+    return "\n".join(linhas) + "\n"
+
+
+def verificar_inicio_jornada(momento=None):
+    """Avisa os funcionários que estão começando a jornada neste minuto."""
+    momento = momento or datetime.now()
+    agora = momento.strftime('%H:%M')
+
     funcionarios_para_notificar = database.buscar_funcionarios_por_horario(agora)
-
     if not funcionarios_para_notificar:
         return
 
     logger.info(f"[{agora}] {len(funcionarios_para_notificar)} funcionário(s) iniciando a jornada!")
-    
     for funcionario in funcionarios_para_notificar:
-        print(f"--> Processando início de jornada para: {funcionario.NomeCompleto}")
-        
+        chave = (funcionario.FuncionarioID, momento.date())
+        if chave in _inicio_jornada_enviado:
+            continue
+        # [DEPURAÇÃO] Quem está de FÉRIAS/ATESTADO ou no domingo de folga recebia
+        # "bom dia, estes são seus desafios" todos os dias. (O banco só olhava a folga semanal.)
+        ausencia = motivo_ausencia_hoje(funcionario, momento.date())
+        if ausencia:
+            logger.info(f"--> {funcionario.NomeCompleto} está ausente hoje ({ausencia}); sem aviso de jornada.")
+            continue
+
         tarefas_do_dia = database.listar_tarefas_do_dia_por_funcionario(funcionario.FuncionarioID)
-        
-        mensagem = f"Olá, <b>{funcionario.NomeCompleto}</b>! 🌤️\n\n"
+        mensagem = f"Olá, <b>{esc(funcionario.NomeCompleto)}</b>! 🌤️\n\n"
         if not tarefas_do_dia:
             mensagem += "Você não tem nenhuma tarefa recorrente para hoje. Tenha um excelente dia de trabalho! ✨"
         else:
             mensagem += "Estes são os seus desafios de hoje:\n\n"
-            for tarefa in tarefas_do_dia:
-                tipo_str = f"({tarefa.Tipo})" if tarefa.Tipo != 'Unica' else "(Especial)"
-                mensagem += f"  - {tarefa.Titulo} {tipo_str} - <i>{tarefa.Pontos} pts</i>\n"
+            mensagem += _lista_tarefas_html(tarefas_do_dia, com_tipo=True)
             mensagem += "\nUse o comando /tarefas para começar. Bom trabalho! 💪"
-            
-        notificador_telegram.enviar_mensagem(funcionario.ChatIDTelegram, mensagem)
-        logger.info(f"--> Notificação de início de jornada enviada com sucesso para {funcionario.NomeCompleto}.")
 
-# --- MÓDULO 3: LEMBRETES INTERMEDIÁRIOS (Lógica Nova!) ---
+        if enviado(notificador_telegram.enviar_mensagem(funcionario.ChatIDTelegram, mensagem)):
+            _inicio_jornada_enviado.add(chave)
+            logger.info(f"--> Início de jornada enviado para {funcionario.NomeCompleto}.")
+        else:
+            logger.warning(f"--> Início de jornada NÃO entregue para {funcionario.NomeCompleto}.")
+
+
+# ==============================================================================
+# == MÓDULO 3: LEMBRETES INTERMEDIÁRIOS ========================================
+# ==============================================================================
 def verificar_lembretes_intermediarios():
-    """Verifica e envia lembretes para funcionários no meio do expediente."""
+    """Lembrete no meio do expediente (3h e 6h depois do início)."""
     agora = datetime.now().strftime('%H:%M')
-
     funcionarios_para_lembrar = database.buscar_funcionarios_para_lembrete(agora)
-
     if not funcionarios_para_lembrar:
         return
 
     logger.info(f"[{agora}] {len(funcionarios_para_lembrar)} funcionário(s) para enviar LEMBRETE!")
-    
     for funcionario in funcionarios_para_lembrar:
+        if motivo_ausencia_hoje(funcionario):
+            continue
         tarefas_pendentes = database.listar_tarefas_do_dia_por_funcionario(funcionario.FuncionarioID)
+        if not tarefas_pendentes:
+            logger.info(f"--> {funcionario.NomeCompleto} está com tudo em dia! Nenhum lembrete necessário.")
+            continue
 
-        if tarefas_pendentes:
-            logger.info(f"--> {funcionario.NomeCompleto} tem tarefas pendentes. Enviando lembrete.")
-            mensagem = f"Olá, <b>{funcionario.NomeCompleto}</b>! 👋 Só um lembrete amigável sobre seus desafios de hoje que ainda estão em aberto:\n\n"
-            for tarefa in tarefas_pendentes:
-                mensagem += f"  - {tarefa.Titulo} - <i>{tarefa.Pontos} pts</i>\n"
-            
-            ### ALTERAÇÃO AQUI ###
-            # Adicionamos a chamada para ação antes da mensagem de incentivo.
-            mensagem += "\nUse o comando /tarefas para iniciar uma delas."
-            mensagem += "\n\nContinue com o ótimo trabalho! Você consegue! 🚀"
-            
-            notificador_telegram.enviar_mensagem(funcionario.ChatIDTelegram, mensagem)
-        else:
-            print(f"--> {funcionario.NomeCompleto} está com tudo em dia! Nenhum lembrete necessário.")
+        mensagem = (f"Olá, <b>{esc(funcionario.NomeCompleto)}</b>! 👋 Só um lembrete amigável sobre "
+                    "seus desafios de hoje que ainda estão em aberto:\n\n")
+        mensagem += _lista_tarefas_html(tarefas_pendentes)
+        mensagem += "\nUse o comando /tarefas para iniciar uma delas."
+        mensagem += "\n\nContinue com o ótimo trabalho! Você consegue! 🚀"
+        if not enviado(notificador_telegram.enviar_mensagem(funcionario.ChatIDTelegram, mensagem)):
+            logger.warning(f"--> Lembrete NÃO entregue para {funcionario.NomeCompleto}.")
 
+
+# ==============================================================================
+# == MÓDULO 4: FIM DA JORNADA ==================================================
+# ==============================================================================
 def verificar_fim_jornada():
-    """Verifica e envia um resumo para funcionários que terminaram o expediente."""
+    """Resumo de fim de expediente com o convite para avaliar o dia."""
     agora = datetime.now().strftime('%H:%M')
-
     funcionarios_para_resumo = database.buscar_funcionarios_para_resumo_final(agora)
-
     if not funcionarios_para_resumo:
         return
 
     logger.info(f"[{agora}] {len(funcionarios_para_resumo)} funcionário(s) finalizando a jornada!")
-
     for funcionario in funcionarios_para_resumo:
+        if motivo_ausencia_hoje(funcionario):
+            continue
         tarefas_pendentes = database.listar_tarefas_do_dia_por_funcionario(funcionario.FuncionarioID)
 
-        mensagem = f"<b>{funcionario.NomeCompleto}</b>, fim de expediente! 🌆\n\n"
+        mensagem = f"<b>{esc(funcionario.NomeCompleto)}</b>, fim de expediente! 🌆\n\n"
         if not tarefas_pendentes:
             mensagem += "Você concluiu todos os seus desafios de hoje. Trabalho incrível! 🏆\n\n"
         else:
             mensagem += "Obrigado pelo seu esforço hoje! 🙌\n\nAs seguintes tarefas ficaram pendentes:\n"
-            for tarefa in tarefas_pendentes:
-                mensagem += f"  - {tarefa.Titulo}\n"
-            mensagem += "\n"
-
-        # --- NOVA PARTE: CONVITE PARA FEEDBACK ---
+            mensagem += _lista_tarefas_html(tarefas_pendentes, com_pontos=False) + "\n"
         mensagem += "Sua opinião é muito importante para nós! Como você avalia seu dia de trabalho hoje?"
 
-        keyboard = [[InlineKeyboardButton("⭐ Avaliar meu dia", callback_data="avaliar_dia")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("⭐ Avaliar meu dia", callback_data="avaliar_dia")]])
+        # [DEPURAÇÃO] 'HTML': antes esta mensagem (escrita em HTML) era enviada em modo
+        # Markdown e o funcionário via "<b>Ana</b>" na tela.
+        resposta = notificador_telegram.enviar_mensagem_com_botao(funcionario.ChatIDTelegram, mensagem, reply_markup, 'HTML')
+        if enviado(resposta):
+            logger.info(f"--> Resumo de fim de jornada enviado para {funcionario.NomeCompleto}.")
+        else:
+            logger.warning(f"--> Resumo de fim de jornada NÃO entregue para {funcionario.NomeCompleto}.")
 
-        # Usamos o enviar_mensagem_com_botao que já existe no notificador
-        notificador_telegram.enviar_mensagem_com_botao(funcionario.ChatIDTelegram, mensagem, reply_markup)
-        print(f"--> Resumo de fim de jornada com convite de feedback enviado para {funcionario.NomeCompleto}.")
 
-def verificar_e_delegar_tarefas_de_folga():
+# ==============================================================================
+# == MÓDULO 5: DROP DE TAREFAS (FOLGAS / FÉRIAS) ===============================
+# ==============================================================================
+def _grupo_destino(setor_tarefa, cargo_funcionario):
+    """Escolhe o grupo do Telegram: primeiro pelo setor da tarefa, depois pelo cargo."""
+    for texto in (normalizar_texto(setor_tarefa), normalizar_texto(cargo_funcionario)):
+        for chave, chat_id in MAPA_SETOR_GRUPO.items():
+            if chave in texto and chat_id:
+                return chat_id
+    return getattr(config, 'FOLGA_GROUP_CHAT_ID', None)
+
+
+def _mensagem_drop(titulo_html, subtitulo_html, itens, texto_botao, rodape_html):
+    """Monta a mensagem do Drop e os botões. itens = [(tarefa, linha_extra_html)]."""
+    mensagem = f"{titulo_html}\n\n{subtitulo_html}\n━━━━━━━━━━━━━━━━━━\n"
+    teclado = []
+    for i, (tarefa, extra) in enumerate(itens, 1):
+        mensagem += f"{i}️⃣ <b>{esc(tarefa.Titulo)}</b>\n     └ {extra}💰 <b>{esc(tarefa.Pontos)} pts</b>\n\n"
+        teclado.append([InlineKeyboardButton(f"🚀 {texto_botao} {i}", callback_data=f"aceitar_folga_{tarefa.TarefaID}")])
+    mensagem += rodape_html
+    return mensagem, InlineKeyboardMarkup(teclado)
+
+
+def verificar_e_delegar_tarefas_de_folga(forcar=False):
     """
-    (VERSÃO V5 - CORRIGIDA E ROBUSTA)
-    Verifica folgas fixas, domingos de folga e afastamentos (férias/atestado).
-    Agrega todas as tarefas desses ausentes e envia o 'Drop' (Boletim).
+    Verifica folgas fixas, domingos de folga e afastamentos (férias/atestado),
+    junta as tarefas dessas pessoas e envia o 'Drop' para os grupos.
     """
-    logger.info(f"🎲 Verificando Ausências (Folgas/Férias) para Drop...")
-    
-    hoje_dt = datetime.now()
-    hoje_date = hoje_dt.date()
-    
-    # 1. Determina Dia da Semana (SQL Padrão: 1=Dom ... 7=Sab)
-    dia_semana_sql = (hoje_dt.weekday() + 1) % 7 + 1
-    
-    # 2. Determina qual Domingo do Mês é hoje (se for domingo)
-    ocorrencia_domingo = 0
-    if dia_semana_sql == 1: # É Domingo
-        ocorrencia_domingo = (hoje_dt.day - 1) // 7 + 1
-
-    funcionarios_ausentes = []
-    
-    try:
-        todos_funcionarios = database.listar_funcionarios()
-    except Exception as e:
-        logger.error(f"Erro ao listar funcionários para Drop: {e}")
+    if not forcar and ja_rodou_hoje('drop'):
+        logger.info("Drop de hoje já foi enviado. Nada a fazer.")
         return
 
+    logger.info("🎲 Verificando Ausências (Folgas/Férias) para Drop...")
+    hoje = date.today()
+    dia_sql = dia_semana_sql(hoje)
+
+    todos_funcionarios = database.listar_funcionarios() or []
+    ausentes = []
     for f in todos_funcionarios:
-        motivo_ausencia = None
+        motivo = motivo_ausencia_hoje(f, hoje)
+        if motivo:
+            ausentes.append((f, motivo))
+            logger.info(f"--> Ausência detectada: {f.NomeCompleto} ({motivo})")
 
-        # A. Período de Afastamento (Férias/Atestado) - TRATAMENTO ROBUSTO DE DATA
-        try:
-            data_ini_raw = getattr(f, 'DataInicioAfastamento', None)
-            data_fim_raw = getattr(f, 'DataFimAfastamento', None)
-
-            if data_ini_raw and data_fim_raw:
-                # Normalização forçada para datetime.date
-                ini = data_ini_raw.date() if isinstance(data_ini_raw, datetime) else data_ini_raw
-                fim = data_fim_raw.date() if isinstance(data_fim_raw, datetime) else data_fim_raw
-                
-                # Caso venha como string (raro, mas possível via drivers antigos)
-                if isinstance(ini, str): ini = datetime.strptime(ini[:10], '%Y-%m-%d').date()
-                if isinstance(fim, str): fim = datetime.strptime(fim[:10], '%Y-%m-%d').date()
-
-                if ini <= hoje_date <= fim:
-                    motivo_ausencia = "Férias/Atestado"
-                    logger.info(f"--> Ausência detectada: {f.NomeCompleto} (Período: {ini} a {fim})")
-        except Exception as e_date:
-            logger.error(f"Falha ao processar datas de {f.NomeCompleto}: {e_date}")
-
-        # B. Folga Fixa Semanal
-        if not motivo_ausencia and f.DiaDeFolga == dia_semana_sql:
-            motivo_ausencia = "Folga Semanal"
-
-        # C. Folga de Domingo Específico (6x1)
-        if not motivo_ausencia and dia_semana_sql == 1:
-            # Verifica se o campo existe e tem valor
-            dom_folga = getattr(f, 'DomingoFolgaMensal', 0)
-            if dom_folga and dom_folga == ocorrencia_domingo:
-                motivo_ausencia = f"Folga de Domingo ({ocorrencia_domingo}º)"
-
-        if motivo_ausencia:            
-            f.MotivoLog = motivo_ausencia
-            funcionarios_ausentes.append(f)
-
-    if not funcionarios_ausentes:
+    marcar_rodou_hoje('drop')
+    if not ausentes:
         logger.info("--> Ninguém de folga ou afastado hoje. Drop cancelado.")
         return
 
-    # Dicionário para agrupar tarefas por ChatID de destino
     drop_por_grupo = {}
-
-    for funcionario in funcionarios_ausentes:
-        dia_semana_str = str(dia_semana_sql)
-        # Busca tarefas recorrentes que seriam para HOJE
-        tarefas_do_dia = database.buscar_tarefas_recorrentes_agendadas_para_hoje(funcionario.FuncionarioID, dia_semana_str)
-        
+    for funcionario, motivo in ausentes:
+        tarefas_do_dia = database.buscar_tarefas_recorrentes_agendadas_para_hoje(funcionario.FuncionarioID, str(dia_sql))
         if not tarefas_do_dia:
             logger.info(f"--> {funcionario.NomeCompleto} está ausente, mas não tinha tarefas agendadas para hoje.")
             continue
-        
-        logger.info(f"--> Processando {len(tarefas_do_dia)} tarefas de {funcionario.NomeCompleto} ({funcionario.MotivoLog})...")
-
         for tarefa in tarefas_do_dia:
-            chat_destino = config.FOLGA_GROUP_CHAT_ID # Padrão (Fallback)
+            chat_destino = _grupo_destino(getattr(tarefa, 'Setor', ''), getattr(funcionario, 'Cargo', ''))
+            drop_por_grupo.setdefault(chat_destino, []).append((tarefa, funcionario, motivo))
 
-            # Normalização para roteamento
-            setor_t = normalizar_texto(tarefa.Setor or "")
-            cargo_f = normalizar_texto(funcionario.Cargo or "")
-
-            encontrou = False
-
-            # 1. Roteamento por Setor da Tarefa
-            for chave, chat_id in MAPA_SETOR_GRUPO.items():
-                if chave in setor_t:
-                    chat_destino = chat_id; encontrou = True; break
-
-            # 2. Roteamento por Cargo do Funcionário
-            if not encontrou:
-                for chave, chat_id in MAPA_SETOR_GRUPO.items():
-                    if chave in cargo_f:
-                        chat_destino = chat_id; encontrou = True; break
-
-            if chat_destino not in drop_por_grupo: drop_por_grupo[chat_destino] = []
-            
-            # Adiciona item ao grupo
-            drop_por_grupo[chat_destino].append({
-                'tarefa': tarefa, 
-                'origem': funcionario.NomeCompleto, 
-                'motivo': getattr(funcionario, 'MotivoLog', 'Ausência')
-            })
-
-    # --- Envio dos Drops ---
     for chat_id, itens in drop_por_grupo.items():
-        if not itens: continue
-        
-        qtd = len(itens)
-        mensagem = (
-            f"⚡ **DROP DE TAREFAS LIBERADO!** ⚡\n\n"
-            f"Equipe reduzida hoje (Folgas/Férias). Temos **{qtd} missões extras** disponíveis!\n"
-            f"━━━━━━━━━━━━━━━━━━\n"
-        )
-        keyboard = []
-        for i, item in enumerate(itens):
-            t = item['tarefa']
-            origem_nome = item['origem'].split()[0]
-            motivo_desc = item['motivo']
-            
-            tag_motivo = "🌴" if "Férias" in motivo_desc or "Atestado" in motivo_desc else "🏠"
-            
-            mensagem += f"{i+1}️⃣ **{t.Titulo}**\n     └ {tag_motivo} *{origem_nome}* |  💰 *{t.Pontos} pts*\n\n"
-            
-            callback = f"aceitar_folga_{t.TarefaID}"
-            keyboard.append([InlineKeyboardButton(f"🚀 Pegar Missão {i+1}", callback_data=callback)])
+        if not chat_id:
+            logger.error(f"Drop com {len(itens)} tarefa(s) sem grupo de destino (confira FOLGA_GROUP_CHAT_ID no config.py).")
+            continue
+        linhas = []
+        for tarefa, funcionario, motivo in itens:
+            primeiro_nome = (funcionario.NomeCompleto or '?').split()[0]
+            tag = "🌴" if ("Férias" in motivo or "Atestado" in motivo) else "🏠"
+            linhas.append((tarefa, f"{tag} <b>{esc(primeiro_nome)}</b> |  "))
 
-        mensagem += "👇 **Ajude a equipe e ganhe pontos extras:**"
-        try:
-            notificador_telegram.enviar_mensagem_com_botao(chat_id, mensagem, InlineKeyboardMarkup(keyboard))
-            logger.info(f"--> Drop enviado com sucesso para grupo {chat_id} ({qtd} tarefas).")
-        except Exception as e:
-            logger.error(f"--> Erro crítico ao enviar Drop para grupo {chat_id}: {e}")
-                                    
-def executar_fechamento_mensal():
-    """
-    Executa o fechamento separado por setores (Cozinha e Loja).
-    """
-    print(f"\n[{datetime.now().strftime('%H:%M:%S')}] 🏆 INICIANDO ROTINA DE FECHAMENTO MENSAL! 🏆")
+        mensagem, teclado = _mensagem_drop(
+            "⚡ <b>DROP DE TAREFAS LIBERADO!</b> ⚡",
+            f"Equipe reduzida hoje (Folgas/Férias). Temos <b>{len(itens)} missões extras</b> disponíveis!",
+            linhas, "Pegar Missão", "👇 <b>Ajude a equipe e ganhe pontos extras:</b>")
 
-    hoje = date.today()
-    fim_mes_passado = hoje.replace(day=1) - timedelta(days=1)
-    ano_fechamento = fim_mes_passado.year
-    mes_fechamento = fim_mes_passado.month
-
-    # Verificação de segurança
-    if database.verificar_se_fechamento_ja_rodou(ano_fechamento, mes_fechamento):
-        print(f"--> ATENÇÃO: O fechamento para {mes_fechamento}/{ano_fechamento} já foi executado.")
-        return
-
-    premios_cozinha = [
-        "🏆 1 Pote 2L + Cobertura + Casquinhas (Kit Família)",
-        "🥈 1 Taça Especial do Cardápio (Para comer na loja)",
-        "🥉 1 Milkshake Grande ou Açaí 500ml"
-    ]
-
-    premios_loja = [
-        "🏆 1 Torta de Sorvete inteira (ou Pote Especial)",
-        "🥈 1 Fondue ou Taça Especial",
-        "🥉 1 Pote Pop para levar para casa"
-]
-    # ==============================================================================
-
-    def processar_setor(nome_setor, filtro_db, lista_premios):
-        print(f"--> Processando ranking: {nome_setor}...")
-        # Calcula ranking filtrado
-        ranking = database.calcular_ranking_desempenho(data_final_calculo=fim_mes_passado, setor_filtro=filtro_db)
-
-        if not ranking:
-            print(f"   -> Sem dados para {nome_setor}.")
-            return
-
-        # Salva no histórico
-        database.salvar_historico_ranking(ranking)
-
-        # Monta mensagem para os Gestores
-        texto_gestores = f"🎉 **Fechamento {nome_setor}: Pódio Final!** 🎉\n\n"
-        vencedores_para_notificar = []
-
-        for i, vencedor in enumerate(ranking[:len(lista_premios)]):
-            premio = lista_premios[i]
-            texto_gestores += f"{i+1}º: {vencedor['NomeCompleto']} ({vencedor['Desempenho']}%)\n   - Prêmio: {premio}\n"
-            vencedores_para_notificar.append({'dados': vencedor, 'premio': premio, 'posicao': i+1})
-
-        # Envia para o Grupo de Gestão
-        notificador_telegram.enviar_mensagem(config.GESTOR_GROUP_CHAT_ID, texto_gestores)
-
-        # Envia Mensagem Privada para os Vencedores
-        for vencedor in vencedores_para_notificar:
-            dados = vencedor['dados']
-            # Busca o ChatID atualizado
-            chat_id = database.buscar_funcionario_por_id(dados['FuncionarioID']).ChatIDTelegram
-            if chat_id:
-                texto_vencedor = (f"🎉🎊 **PARABÉNS, {dados['NomeCompleto']}!** 🎊🎉\n\n"
-                                  f"Você foi destaque no ranking de **{nome_setor}**!\n\n"
-                                  f"Sua Posição: **{vencedor['posicao']}º Lugar**\n"
-                                  f"Sua Recompensa: **{vencedor['premio']}**\n\n"
-                                  "Procure a gestão para retirar seu prêmio!")
-                notificador_telegram.enviar_mensagem(chat_id, texto_vencedor)
-
-    # --- EXECUTA PARA OS DOIS SETORES ---
-    processar_setor("Cozinha", "Cozinha", premios_cozinha)
-    processar_setor("Atendimento/Loja", "Loja", premios_loja)
-
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ FECHAMENTO MENSAL CONCLUÍDO! ✅")
-    
-def verificar_e_executar_fechamento():
-    """
-    Função que o agendador chama todo dia. Ela verifica se hoje é o dia
-    correto para rodar a rotina de fechamento.
-    """
-    # A lógica só roda se hoje for o dia 1 do mês.
-    if datetime.now().day == 1:
-        executar_fechamento_mensal()
-    else:
-        # Apenas um log para sabermos que a verificação foi feita.
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Verificação de fechamento: hoje não é dia 1. Nenhuma ação necessária.", end='\r')
-
-# Em agendador.py, ADICIONE esta nova função
-
-def verificar_e_enviar_lembretes_comunicados():
-    """Verifica e envia lembretes de comunicados pendentes há mais de 24h."""
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] Verificando lembretes de comunicados...")
-
-    pendencias = database.buscar_assinaturas_pendentes_antigas(horas_atras=24)
-
-    if not pendencias:
-        print("--> Nenhum lembrete de comunicado a ser enviado.")
-        return
-
-    print(f"--> Encontradas {len(pendencias)} pendências de comunicados para lembrar!")
-    for pendencia in pendencias:
-        mensagem = (
-            f"Olá, <b>{pendencia.NomeCompleto}</b>! 👋\n\n"
-            "Só um lembrete amigável de que o seguinte comunicado ainda aguarda sua confirmação de ciência:\n\n"
-            f"📄 <b>Título:</b> {pendencia.Titulo}\n"
-            f"🗓️ <b>Enviado em:</b> {pendencia.DataEnvio.strftime('%d/%m/%Y')}\n\n"
-            "Por favor, verifique seu histórico de mensagens para dar o ciente. Obrigado!"
-        )
-        notificador_telegram.enviar_mensagem(pendencia.ChatIDTelegram, mensagem)
-        print(f"--> Lembrete sobre '{pendencia.Titulo}' enviado para {pendencia.NomeCompleto}.")
-
-def processar_downloads_pendentes_sync():
-    """
-    (VERSÃO CORRIGIDA: SEMÁFORO E ATOMICIDADE)
-    Baixa evidências com controle de concorrência e limpeza em caso de falha.
-    """
-    # 1. Tenta adquirir o semáforo. Se estiver cheio, retorna imediatamente (não bloqueia a thread).
-    if not download_semaphore.acquire(blocking=False):
-        logger.warning("--> Limite de downloads simultâneos atingido. Tentando na próxima rodada.")
-        return
-
-    try:
-        entregas = database.buscar_entregas_para_download()
-        if not entregas: return
-
-        logger.info(f"--> Baixando {len(entregas)} evidências pendentes...")
-        token = config.TELEGRAM_TOKEN
-        pasta = 'entregas'
-        if not os.path.exists(pasta): os.makedirs(pasta)
-
-        for entrega in entregas:
-            # --- CORREÇÃO 4: PREVENÇÃO DE ZOMBIE FILES ---
-            local_path = None
-            try:
-                # Busca info do arquivo
-                r_info = requests.get(f"https://api.telegram.org/bot{token}/getFile?file_id={entrega.FileIDTelegram}", timeout=10)
-                if not r_info.json().get('ok'): continue
-
-                remoto_path = r_info.json()['result']['file_path']
-                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                local_path = os.path.join(pasta, f'{ts}_{entrega.EntregaID}.jpg')
-
-                # Baixa conteúdo
-                r_file = requests.get(f"https://api.telegram.org/file/bot{token}/{remoto_path}", stream=True, timeout=30)
-                if r_file.status_code == 200:
-                    with open(local_path, 'wb') as f:
-                        for chunk in r_file.iter_content(8192): f.write(chunk)
-
-                    # TENTA atualizar o banco
-                    try:
-                        database.finalizar_registro_entrega(entrega.EntregaID, local_path)
-                        logger.info(f"--> Sucesso: Entrega {entrega.EntregaID} salva em {local_path}")
-
-                        # Notificação ao Gestor (apenas se salvou no banco)
-                        if not database.verificar_status_notificacao_gestor(entrega.EntregaID):
-                            detalhes = database.buscar_detalhes_da_entrega(entrega.EntregaID)
-                            if detalhes and config.GESTOR_GROUP_CHAT_ID:
-                                caption = (f"<b>Nova Entrega</b>\n👤 {detalhes.NomeCompleto}\n📝 {detalhes.Titulo}\n📦 ID: {entrega.EntregaID}")
-                                kb = [[InlineKeyboardButton("✅ Aprovar", callback_data=f"aprovar_gestor_{entrega.EntregaID}"),
-                                       InlineKeyboardButton("❌ Reprovar", callback_data=f"reprovar_gestor_{entrega.EntregaID}")]]
-                                resp = notificador_telegram.enviar_foto_com_botoes(config.GESTOR_GROUP_CHAT_ID, local_path, caption, InlineKeyboardMarkup(kb), 'HTML')
-                                if resp and resp.get('ok'): database.marcar_notificacao_gestor_enviada(entrega.EntregaID)
-
-                    except Exception as e_db:
-                        # FALHA NO BANCO: Apaga o arquivo para não virar zumbi
-                        logger.error(f"Erro BD ao salvar entrega {entrega.EntregaID}. Removendo arquivo.")
-                        if os.path.exists(local_path): os.remove(local_path)
-                        raise e_db # Relança para o log externo
-
-            except Exception as e:
-                logger.error(f"Erro download entrega {entrega.EntregaID}: {e}")
-                # Limpeza de segurança final
-                if local_path and os.path.exists(local_path) and not database.buscar_detalhes_da_entrega(entrega.EntregaID).PathFotoEvidencia:
-                     os.remove(local_path)
-
-    finally:
-        # Sempre libera o semáforo
-        download_semaphore.release()
-
-def processar_downloads_notas_fiscais():
-    """Baixa NFs com controle de concorrência."""
-    if not download_semaphore.acquire(blocking=False): return
-
-    try:
-        nfs = database.buscar_notas_para_download()
-        if not nfs: return
-
-        token = config.TELEGRAM_TOKEN
-        pasta = 'notas_fiscais'
-        if not os.path.exists(pasta): os.makedirs(pasta)
-
-        for nf in nfs:
-            local_path = None
-            try:
-                r_info = requests.get(f"https://api.telegram.org/bot{token}/getFile?file_id={nf.FileIDTelegram}", timeout=10)
-                if not r_info.json().get('ok'): continue
-
-                remoto = r_info.json()['result']['file_path']
-                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                local_path = os.path.join(pasta, f'NF_{ts}_{nf.NotaFiscalID}.jpg')
-
-                r_file = requests.get(f"https://api.telegram.org/file/bot{token}/{remoto}", stream=True, timeout=30)
-                if r_file.status_code == 200:
-                    with open(local_path, 'wb') as f:
-                        for chunk in r_file.iter_content(8192): f.write(chunk)
-
-                    try:
-                        database.finalizar_download_nota_fiscal(nf.NotaFiscalID, local_path)
-                    except Exception:
-                        if os.path.exists(local_path): os.remove(local_path)
-                        raise
-
-            except Exception as e:
-                logger.error(f"Erro download NF {nf.NotaFiscalID}: {e}")
-                if local_path and os.path.exists(local_path): os.remove(local_path)
-    finally:
-        download_semaphore.release()
+        resposta = notificador_telegram.enviar_mensagem_com_botao(chat_id, mensagem, teclado, 'HTML')
+        if enviado(resposta):
+            logger.info(f"--> Drop enviado com sucesso para grupo {chat_id} ({len(itens)} tarefas).")
+        else:
+            logger.error(f"--> Drop NÃO entregue ao grupo {chat_id}: {(resposta or {}).get('description')}")
 
 
 def forcar_drop_funcionario_especifico(funcionario_id):
     """
-    Função manual para gestores dispararem o Drop de um funcionário específico
-    que faltou de última hora (fora do horário automático).
+    Usado pelo main.py (botão do gestor) quando alguém falta de última hora.
+    Devolve (sucesso, mensagem_para_a_tela).
     """
-    print(f"--> Iniciando Drop Manual para FuncionarioID: {funcionario_id}...")
-    
-    # 1. Busca dados do funcionário
-    funcionario = database.buscar_funcionario_por_id(funcionario_id)
-    if not funcionario:
-        return False, "Funcionário não encontrado."
-
-    hoje_dt = datetime.now()
-    # SQL Padrão: 1=Dom ... 7=Sab
-    dia_semana_sql = (hoje_dt.weekday() + 1) % 7 + 1
-
-    # 2. Busca tarefas de hoje
-    tarefas_do_dia = database.buscar_tarefas_recorrentes_agendadas_para_hoje(funcionario_id, dia_semana_sql)
-    
-    if not tarefas_do_dia:
-        return False, f"O funcionário {funcionario.NomeCompleto} não tem tarefas agendadas para hoje ({hoje_dt.strftime('%d/%m')})."
-
-    # 3. Define o Grupo de Destino (Lógica de Roteamento)
-    chat_destino = config.FOLGA_GROUP_CHAT_ID # Padrão
-    
-    # Tenta rotear pelo Cargo
-    cargo_f = normalizar_texto(funcionario.Cargo or "")
-    encontrou_grupo = False
-    
-    for chave, chat_id in MAPA_SETOR_GRUPO.items():
-        if chave in cargo_f:
-            chat_destino = chat_id
-            encontrou_grupo = True
-            break
-            
-    # Se não achou pelo cargo, tenta pelo setor da primeira tarefa (heurística)
-    if not encontrou_grupo and tarefas_do_dia:
-        setor_t = normalizar_texto(tarefas_do_dia[0].Setor or "")
-        for chave, chat_id in MAPA_SETOR_GRUPO.items():
-            if chave in setor_t:
-                chat_destino = chat_id
-                break
-
-    # 4. Monta e Envia a Mensagem
-    qtd = len(tarefas_do_dia)
-    mensagem = (
-        f"🚨 **DROP DE TAREFAS (AUSÊNCIA IMPREVISTA)** 🚨\n\n"
-        f"O colaborador **{funcionario.NomeCompleto}** não poderá comparecer/continuar hoje.\n"
-        f"Temos **{qtd} missões** que precisam ser cobertas!\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-    )
-    
-    keyboard = []
-    for i, t in enumerate(tarefas_do_dia):
-        mensagem += f"{i+1}️⃣ **{t.Titulo}**\n     └ 💰 *{t.Pontos} pts*\n\n"
-        callback = f"aceitar_folga_{t.TarefaID}"
-        keyboard.append([InlineKeyboardButton(f"🚀 Assumir Missão {i+1}", callback_data=callback)])
-
-    mensagem += "👇 **Quem pode cobrir e ganhar esses pontos?**"
-
+    logger.info(f"--> Iniciando Drop Manual para FuncionarioID: {funcionario_id}...")
     try:
-        notificador_telegram.enviar_mensagem_com_botao(chat_destino, mensagem, InlineKeyboardMarkup(keyboard))
-        print(f"--> Drop manual enviado para grupo {chat_destino}.")
-        return True, f"Drop enviado com sucesso para o grupo (ChatID: {chat_destino})!"
+        funcionario = database.buscar_funcionario_por_id(funcionario_id)
+        if not funcionario:
+            return False, "Funcionário não encontrado."
+
+        hoje_dt = datetime.now()
+        tarefas_do_dia = database.buscar_tarefas_recorrentes_agendadas_para_hoje(funcionario_id, str(dia_semana_sql(hoje_dt)))
+        if not tarefas_do_dia:
+            return False, (f"O funcionário {funcionario.NomeCompleto} não tem tarefas agendadas "
+                           f"para hoje ({hoje_dt.strftime('%d/%m')}).")
+
+        # Grupo: primeiro pelo cargo, depois pelo setor da primeira tarefa
+        chat_destino = None
+        for texto in (normalizar_texto(getattr(funcionario, 'Cargo', '')),
+                      normalizar_texto(getattr(tarefas_do_dia[0], 'Setor', ''))):
+            for chave, chat_id in MAPA_SETOR_GRUPO.items():
+                if chave in texto and chat_id:
+                    chat_destino = chat_id
+                    break
+            if chat_destino:
+                break
+        chat_destino = chat_destino or getattr(config, 'FOLGA_GROUP_CHAT_ID', None)
+        if not chat_destino:
+            return False, "Nenhum grupo de destino configurado (confira FOLGA_GROUP_CHAT_ID no config.py)."
+
+        mensagem, teclado = _mensagem_drop(
+            "🚨 <b>DROP DE TAREFAS (AUSÊNCIA IMPREVISTA)</b> 🚨",
+            f"O colaborador <b>{esc(funcionario.NomeCompleto)}</b> não poderá comparecer/continuar hoje.\n"
+            f"Temos <b>{len(tarefas_do_dia)} missões</b> que precisam ser cobertas!",
+            [(t, "") for t in tarefas_do_dia], "Assumir Missão",
+            "👇 <b>Quem pode cobrir e ganhar esses pontos?</b>")
+
+        resposta = notificador_telegram.enviar_mensagem_com_botao(chat_destino, mensagem, teclado, 'HTML')
+        # [DEPURAÇÃO] Antes a tela do gestor dizia "sucesso" mesmo quando o Telegram recusava.
+        if enviado(resposta):
+            logger.info(f"--> Drop manual enviado para grupo {chat_destino}.")
+            return True, f"Drop enviado com sucesso para o grupo (ChatID: {chat_destino})!"
+        motivo = (resposta or {}).get('description', 'sem resposta')
+        return False, f"O Telegram não aceitou o envio: {motivo}"
     except Exception as e:
-        print(f"--> Erro envio Drop Manual: {e}")
-        return False, f"Erro ao enviar para o Telegram: {e}"
-        
-if __name__ == "__main__":
-    print("--- 🤖 Robô Agendador 2.0 Iniciado 🤖 ---")
-    print("O sistema verificará a cada minuto e o fechamento mensal às 08:00.")
+        logger.error(f"Erro no Drop Manual: {_sem_token(e)}", exc_info=True)
+        return False, f"Erro ao enviar o Drop: {_sem_token(e)}"
 
-    schedule.every(1).minutes.do(verificar_inicio_jornada)
-    schedule.every(1).minutes.do(verificar_lembretes_intermediarios)
-    schedule.every(1).minutes.do(verificar_fim_jornada)
-    schedule.every(30).seconds.do(verificar_e_enviar_tarefas_de_grupo)
 
-    schedule.every().day.at("08:00").do(verificar_e_executar_fechamento)
-    schedule.every().day.at("09:05").do(verificar_e_delegar_tarefas_de_folga)
-    schedule.every().day.at("09:00").do(verificar_e_enviar_lembretes_comunicados)
+# ==============================================================================
+# == MÓDULO 6: FECHAMENTO MENSAL ===============================================
+# ==============================================================================
+PREMIOS_COZINHA = [
+    "🏆 1 Pote 2L + Cobertura + Casquinhas (Kit Família)",
+    "🥈 1 Taça Especial do Cardápio (Para comer na loja)",
+    "🥉 1 Milkshake Grande ou Açaí 500ml",
+]
+PREMIOS_LOJA = [
+    "🏆 1 Torta de Sorvete inteira (ou Pote Especial)",
+    "🥈 1 Fondue ou Taça Especial",
+    "🥉 1 Pote Pop para levar para casa",
+]
 
-    # CORREÇÃO: Downloads agora rodam em threads separadas para não bloquear o agendador
+
+def _processar_setor_fechamento(nome_setor, filtro_db, lista_premios, fim_mes_passado):
+    logger.info(f"--> Processando ranking: {nome_setor}...")
+    ranking = database.calcular_ranking_desempenho(data_final_calculo=fim_mes_passado, setor_filtro=filtro_db)
+    if not ranking:
+        logger.info(f"   -> Sem dados para {nome_setor}.")
+        return
+
+    database.salvar_historico_ranking(ranking)
+
+    # [DEPURAÇÃO] Mensagens em HTML (antes com ** que apareciam como asteriscos)
+    texto_gestores = f"🎉 <b>Fechamento {esc(nome_setor)}: Pódio Final!</b> 🎉\n\n"
+    vencedores = []
+    for i, vencedor in enumerate(ranking[:len(lista_premios)]):
+        premio = lista_premios[i]
+        texto_gestores += (f"{i + 1}º: {esc(vencedor['NomeCompleto'])} ({esc(vencedor['Desempenho'])}%)\n"
+                           f"   - Prêmio: {esc(premio)}\n")
+        vencedores.append({'dados': vencedor, 'premio': premio, 'posicao': i + 1})
+
+    if not enviado(notificador_telegram.enviar_mensagem(getattr(config, 'GESTOR_GROUP_CHAT_ID', None), texto_gestores)):
+        logger.error(f"Pódio de {nome_setor} NÃO foi entregue ao grupo de gestores.")
+
+    for vencedor in vencedores:
+        dados = vencedor['dados']
+        # [DEPURAÇÃO] Funcionário excluído depois do mês -> antes dava erro e INTERROMPIA
+        # o fechamento (os outros vencedores e o setor seguinte ficavam sem aviso).
+        funcionario = database.buscar_funcionario_por_id(dados['FuncionarioID'])
+        chat_id = getattr(funcionario, 'ChatIDTelegram', None) if funcionario else None
+        if not chat_id:
+            logger.warning(f"Vencedor {dados['NomeCompleto']} sem Telegram cadastrado; aviso não enviado.")
+            continue
+        texto_vencedor = (f"🎉🎊 <b>PARABÉNS, {esc(dados['NomeCompleto'])}!</b> 🎊🎉\n\n"
+                          f"Você foi destaque no ranking de <b>{esc(nome_setor)}</b>!\n\n"
+                          f"Sua Posição: <b>{vencedor['posicao']}º Lugar</b>\n"
+                          f"Sua Recompensa: <b>{esc(vencedor['premio'])}</b>\n\n"
+                          "Procure a gestão para retirar seu prêmio!")
+        notificador_telegram.enviar_mensagem(chat_id, texto_vencedor)
+
+
+def executar_fechamento_mensal():
+    """Executa o fechamento do mês anterior, separado por setores (Cozinha e Loja)."""
+    logger.info("🏆 INICIANDO ROTINA DE FECHAMENTO MENSAL! 🏆")
+    hoje = date.today()
+    fim_mes_passado = hoje.replace(day=1) - timedelta(days=1)
+
+    if database.verificar_se_fechamento_ja_rodou(fim_mes_passado.year, fim_mes_passado.month):
+        logger.info(f"--> O fechamento de {fim_mes_passado.month}/{fim_mes_passado.year} já foi executado.")
+        return
+
+    # [DEPURAÇÃO] Cada setor protegido: um erro na Cozinha não impede mais o da Loja
+    executar_com_seguranca(_processar_setor_fechamento, "Cozinha", "Cozinha", PREMIOS_COZINHA, fim_mes_passado)
+    executar_com_seguranca(_processar_setor_fechamento, "Atendimento/Loja", "Loja", PREMIOS_LOJA, fim_mes_passado)
+    logger.info("✅ FECHAMENTO MENSAL CONCLUÍDO! ✅")
+
+
+def verificar_e_executar_fechamento():
+    """
+    Roda todo dia às 08:00 (e quando o robô é aberto).
+    [DEPURAÇÃO] Antes só rodava se o robô estivesse ligado exatamente no DIA 1 às 08:00.
+    Se o computador estivesse desligado nessa hora, o mês ficava SEM fechamento.
+    Agora tenta do dia 1 ao dia 5 (o banco impede fazer duas vezes o mesmo mês).
+    """
+    if date.today().day <= DIAS_PARA_FECHAMENTO:
+        executar_fechamento_mensal()
+    else:
+        logger.info("Verificação de fechamento: fora dos primeiros dias do mês. Nenhuma ação necessária.")
+
+
+# ==============================================================================
+# == MÓDULO 7: LEMBRETE DE COMUNICADOS =========================================
+# ==============================================================================
+def verificar_e_enviar_lembretes_comunicados(forcar=False):
+    """Lembra quem está há mais de 24h sem dar 'ciente' num comunicado."""
+    if not forcar and ja_rodou_hoje('lembretes_comunicados'):
+        return
+    logger.info("Verificando lembretes de comunicados...")
+    pendencias = database.buscar_assinaturas_pendentes_antigas(horas_atras=24)
+    marcar_rodou_hoje('lembretes_comunicados')
+    if not pendencias:
+        logger.info("--> Nenhum lembrete de comunicado a ser enviado.")
+        return
+
+    logger.info(f"--> Encontradas {len(pendencias)} pendências de comunicados para lembrar!")
+    for pendencia in pendencias:
+        data_envio = pendencia.DataEnvio.strftime('%d/%m/%Y') if hasattr(pendencia.DataEnvio, 'strftime') else str(pendencia.DataEnvio or '')[:10]
+        mensagem = (
+            f"Olá, <b>{esc(pendencia.NomeCompleto)}</b>! 👋\n\n"
+            "Só um lembrete amigável de que o seguinte comunicado ainda aguarda sua confirmação de ciência:\n\n"
+            f"📄 <b>Título:</b> {esc(pendencia.Titulo)}\n"
+            f"🗓️ <b>Enviado em:</b> {esc(data_envio)}\n\n"
+            "Envie /tarefas (ou qualquer comando) ao bot para aparecer o botão de ciência. Obrigado!"
+        )
+        if enviado(notificador_telegram.enviar_mensagem(pendencia.ChatIDTelegram, mensagem)):
+            logger.info(f"--> Lembrete sobre '{pendencia.Titulo}' enviado para {pendencia.NomeCompleto}.")
+
+
+# ==============================================================================
+# == MÓDULO 8: DOWNLOADS (fotos de entregas e notas fiscais) ===================
+# ==============================================================================
+def _baixar_arquivo_telegram(file_id, pasta, prefixo):
+    """
+    Baixa um arquivo do Telegram para a pasta. Devolve o caminho salvo ou None.
+    [DEPURAÇÃO] Antes: sempre salvava como .jpg (um PDF virava ".jpg" e não abria);
+    arquivo baixado pela metade ficava no disco; o TOKEN aparecia no log em erros.
+    """
+    token = getattr(config, 'TELEGRAM_TOKEN', '')
+    try:
+        r_info = requests.get(f"https://api.telegram.org/bot{token}/getFile",
+                              params={'file_id': file_id}, timeout=15)
+        info = r_info.json()
+    except (requests.exceptions.RequestException, ValueError) as e:
+        logger.warning(f"Falha ao consultar arquivo no Telegram: {_sem_token(e)}")
+        return None
+    if not info.get('ok'):
+        # Arquivos acima de 20 MB ou file_id inválido caem aqui
+        logger.warning(f"Telegram não liberou o arquivo ({prefixo}): {info.get('description')}")
+        return None
+
+    remoto = info['result']['file_path']
+    extensao = os.path.splitext(remoto)[1].lower() or '.jpg'
+    os.makedirs(pasta, exist_ok=True)
+    local_path = os.path.join(pasta, f"{prefixo}_{datetime.now().strftime('%Y%m%d_%H%M%S')}{extensao}")
+    temporario = local_path + '.parcial'
+    try:
+        with requests.get(f"https://api.telegram.org/file/bot{token}/{remoto}", stream=True, timeout=60) as r_file:
+            if r_file.status_code != 200:
+                logger.warning(f"Download recusado ({prefixo}): HTTP {r_file.status_code}")
+                return None
+            with open(temporario, 'wb') as f:
+                for chunk in r_file.iter_content(8192):
+                    if chunk:
+                        f.write(chunk)
+        os.replace(temporario, local_path)   # só vira arquivo "de verdade" quando terminou
+        return local_path
+    except (requests.exceptions.RequestException, OSError) as e:
+        logger.warning(f"Falha no download ({prefixo}): {_sem_token(e)}")
+        return None
+    finally:
+        if os.path.exists(temporario):
+            try:
+                os.remove(temporario)
+            except OSError:
+                pass
+
+
+def _notificar_gestor_entrega(entrega_id, foto):
+    """Envia a foto da entrega ao grupo de gestores (com Aprovar/Reprovar) e marca a flag."""
+    grupo = getattr(config, 'GESTOR_GROUP_CHAT_ID', None)
+    detalhes = database.buscar_detalhes_da_entrega(entrega_id)
+    if not detalhes or not grupo:
+        return False
+    caption = (f"<b>Nova Entrega</b>\n👤 {esc(detalhes.NomeCompleto)}\n"
+               f"📝 {esc(detalhes.Titulo)}\n📦 ID: {entrega_id}")
+    kb = [[InlineKeyboardButton("✅ Aprovar", callback_data=f"aprovar_gestor_{entrega_id}"),
+           InlineKeyboardButton("❌ Reprovar", callback_data=f"reprovar_gestor_{entrega_id}")]]
+    resposta = notificador_telegram.enviar_foto_com_botoes(grupo, foto, caption, InlineKeyboardMarkup(kb), 'HTML')
+    if enviado(resposta):
+        database.marcar_notificacao_gestor_enviada(entrega_id)
+        return True
+    logger.warning(f"Aviso ao gestor da entrega {entrega_id} não foi entregue: {(resposta or {}).get('description')}")
+    return False
+
+
+def processar_downloads_pendentes_sync():
+    """Baixa as fotos de evidência das entregas e avisa o gestor (se ainda não foi avisado)."""
+    if not download_semaphore.acquire(blocking=False):
+        logger.warning("--> Limite de downloads simultâneos atingido. Tentando na próxima rodada.")
+        return
+    try:
+        entregas = database.buscar_entregas_para_download()
+        if not entregas:
+            return
+        logger.info(f"--> Baixando {len(entregas)} evidências pendentes...")
+
+        for entrega in entregas:
+            if not entrega.FileIDTelegram:
+                continue
+            local_path = _baixar_arquivo_telegram(entrega.FileIDTelegram, PASTA_ENTREGAS, str(entrega.EntregaID))
+            if not local_path:
+                continue
+            try:
+                database.finalizar_registro_entrega(entrega.EntregaID, local_path)
+                logger.info(f"--> Sucesso: Entrega {entrega.EntregaID} salva em {local_path}")
+            except Exception as e_db:
+                # Falha no banco: apaga o arquivo para não ficar "órfão" no disco
+                logger.error(f"Erro no banco ao salvar entrega {entrega.EntregaID}: {e_db}. Removendo arquivo.")
+                if os.path.exists(local_path):
+                    os.remove(local_path)
+                continue
+            # [DEPURAÇÃO] Antes, um erro aqui caía numa "limpeza" que usava um campo que a
+            # consulta não traz (PathFotoEvidencia) -> novo erro, e as entregas seguintes
+            # da lista ficavam sem download naquela rodada.
+            try:
+                if not database.verificar_status_notificacao_gestor(entrega.EntregaID):
+                    _notificar_gestor_entrega(entrega.EntregaID, local_path)
+            except Exception as e:
+                logger.error(f"Erro ao avisar o gestor da entrega {entrega.EntregaID}: {_sem_token(e)}")
+    finally:
+        download_semaphore.release()
+
+
+def reenviar_avisos_de_entregas_pendentes():
+    """
+    [DEPURAÇÃO] NOVO. Se o aviso de uma entrega ao grupo de gestores falhasse (sem
+    internet naquele momento), ele NUNCA mais era reenviado e a entrega ficava
+    esquecida. Agora, a cada 10 minutos, reenvia os avisos das últimas 48h que não
+    foram confirmados (no máximo 10 por vez).
+    """
+    conn = database.get_db_connection()
+    if not conn:
+        return
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT TOP 10 EntregaID, PathFotoEvidencia
+            FROM Entregas
+            WHERE StatusValidacao = 'Pendente'
+              AND PathFotoEvidencia IS NOT NULL
+              AND ISNULL(NotificacaoGestorEnviada, 0) = 0
+              AND DataEnvio >= DATEADD(hour, -48, GETDATE())
+            ORDER BY DataEnvio
+        """)
+        pendentes = cursor.fetchall()
+    finally:
+        conn.close()
+    for entrega_id, caminho in pendentes:
+        if caminho and os.path.isfile(caminho):
+            if _notificar_gestor_entrega(entrega_id, caminho):
+                logger.info(f"Aviso da entrega {entrega_id} reenviado aos gestores.")
+
+
+def processar_downloads_notas_fiscais():
+    """Baixa as fotos das notas fiscais enviadas pelo bot."""
+    if not download_semaphore.acquire(blocking=False):
+        return
+    try:
+        nfs = database.buscar_notas_para_download()
+        for nf in nfs or []:
+            # [DEPURAÇÃO] NF sem file_id era consultada no Telegram A CADA MINUTO, para sempre
+            if not nf.FileIDTelegram:
+                continue
+            local_path = _baixar_arquivo_telegram(nf.FileIDTelegram, PASTA_NOTAS, f"NF_{nf.NotaFiscalID}")
+            if not local_path:
+                continue
+            try:
+                database.finalizar_download_nota_fiscal(nf.NotaFiscalID, local_path)
+            except Exception as e:
+                logger.error(f"Erro no banco ao salvar NF {nf.NotaFiscalID}: {e}. Removendo arquivo.")
+                if os.path.exists(local_path):
+                    os.remove(local_path)
+    finally:
+        download_semaphore.release()
+
+
+# ==============================================================================
+# == RELÓGIO DO ROBÔ ===========================================================
+# ==============================================================================
+def processar_minuto(momento):
+    """Tarefas que dependem do MINUTO exato (podem ser recuperadas se o robô atrasar)."""
+    executar_com_seguranca(verificar_e_enviar_tarefas_de_grupo, momento)
+    executar_com_seguranca(verificar_inicio_jornada, momento)
+
+
+def processar_minuto_atual():
+    """Tarefas cujo horário é calculado pelo próprio banco (só valem no minuto atual)."""
+    executar_com_seguranca(verificar_lembretes_intermediarios)
+    executar_com_seguranca(verificar_fim_jornada)
+
+
+class RelogioDeMinutos:
+    """
+    [DEPURAÇÃO] BUG GRAVE: antes era usado schedule.every(1).minutes. Essa forma conta
+    60 segundos a partir do FIM da última execução, então o horário vai "escorregando"
+    (o tempo da consulta ao banco + até 1 s de espera, a cada minuto). De tempos em
+    tempos um minuto inteiro era PULADO - e quem tinha o horário de início naquele
+    minuto ficava sem o aviso de jornada (e o grupo, sem a missão).
+    Agora o robô confere o relógio a cada segundo e processa CADA minuto uma vez só;
+    se atrasar (computador lento), recupera os minutos perdidos (até 10).
+    """
+    def __init__(self):
+        self.ultimo = None
+
+    def verificar(self, agora=None):
+        agora = (agora or datetime.now()).replace(second=0, microsecond=0)
+        if self.ultimo is None:
+            self.ultimo = agora - timedelta(minutes=1)
+        if agora <= self.ultimo:
+            return 0      # mesmo minuto (ou relógio voltou): nada a fazer
+        perdidos = int((agora - self.ultimo).total_seconds() // 60)
+        if perdidos > 1:
+            logger.warning(f"O robô ficou {perdidos - 1} minuto(s) sem verificar; recuperando...")
+        inicio = max(self.ultimo + timedelta(minutes=1), agora - timedelta(minutes=MAX_MINUTOS_RECUPERAR - 1))
+        momento = inicio
+        processados = 0
+        while momento <= agora:
+            processar_minuto(momento)
+            processados += 1
+            momento += timedelta(minutes=1)
+        processar_minuto_atual()
+        self.ultimo = agora
+        return processados
+
+
+def _passou_do_horario(hhmm, limite_horas=5):
+    """True se agora está entre o horário hhmm e algumas horas depois (para recuperar tarefas perdidas)."""
+    h, m = map(int, hhmm.split(':'))
+    inicio = datetime.now().replace(hour=h, minute=m, second=0, microsecond=0)
+    return inicio <= datetime.now() <= inicio + timedelta(hours=limite_horas)
+
+
+def configurar_agendamentos():
+    """Registra as tarefas no 'schedule' (todas protegidas contra erros)."""
+    schedule.every().day.at(HORARIO_FECHAMENTO).do(executar_com_seguranca, verificar_e_executar_fechamento)
+    schedule.every().day.at(HORARIO_LEMBRETE_COMUNICADOS).do(executar_com_seguranca, verificar_e_enviar_lembretes_comunicados)
+    schedule.every().day.at(HORARIO_DROP).do(executar_com_seguranca, verificar_e_delegar_tarefas_de_folga)
+
+    # Downloads em threads separadas (não travam o relógio do robô)
     schedule.every(1).minutes.do(run_threaded, processar_downloads_pendentes_sync)
     schedule.every(1).minutes.do(run_threaded, processar_downloads_notas_fiscais)
+    schedule.every(10).minutes.do(run_threaded, reenviar_avisos_de_entregas_pendentes)
 
+
+def recuperar_tarefas_do_dia():
+    """[DEPURAÇÃO] Se o robô foi aberto DEPOIS do horário, roda hoje o que ficou para trás."""
+    executar_com_seguranca(verificar_e_executar_fechamento)
+    if _passou_do_horario(HORARIO_LEMBRETE_COMUNICADOS):
+        executar_com_seguranca(verificar_e_enviar_lembretes_comunicados)
+    if _passou_do_horario(HORARIO_DROP):
+        executar_com_seguranca(verificar_e_delegar_tarefas_de_folga)
+
+
+def main():
+    print("--- 🤖 Robô Agendador 2.0 Iniciado 🤖 ---")
+    print(f"Verifica a cada minuto. Fechamento às {HORARIO_FECHAMENTO}, lembretes às "
+          f"{HORARIO_LEMBRETE_COMUNICADOS} e Drop às {HORARIO_DROP}. Para parar: Ctrl+C")
+    configurar_agendamentos()
+    recuperar_tarefas_do_dia()
+    relogio = RelogioDeMinutos()
 
     while True:
-        schedule.run_pending()
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Robô Ativo. Verificando agendamentos...", end='\r')
+        try:
+            relogio.verificar()
+            schedule.run_pending()
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Robô Ativo. Verificando agendamentos...", end='\r')
+        except KeyboardInterrupt:
+            raise
+        except Exception as e:  # última proteção: o robô NUNCA para sozinho
+            logger.error(f"Erro no ciclo principal do robô: {_sem_token(e)}", exc_info=True)
         time.sleep(1)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nRobô Agendador encerrado pelo usuário (Ctrl+C).")
