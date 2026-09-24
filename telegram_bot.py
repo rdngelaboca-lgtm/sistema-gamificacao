@@ -1,191 +1,459 @@
 # ==============================================================================
+# telegram_bot.py - Bot do Telegram do Sistema de Gamificação
+# ------------------------------------------------------------------------------
+# VERSÃO DEPURADA
+#
+# Principais correções desta versão (detalhes no relatório de depuração):
+#   1. Cliques em botões: o Telegram só aceita UMA resposta (query.answer) por
+#      clique. O código antigo respondia duas vezes, o que quebrava os botões
+#      "Ciente" de comunicados, as Notas Fiscais e todos os alertas.
+#   2. Onboarding (cadastro): as perguntas estavam "uma etapa adiantadas"
+#      (pedia o CPF e salvava como RG). O fluxo foi reescrito.
+#   3. Grupo de gestores: supergrupos eram ignorados, então o motivo de
+#      recusa nunca era recebido. Agora aceita grupo e supergrupo.
+#   4. O comando /cancelar não existia (nunca funcionava). Agora existe.
+#   5. Gestores eram bloqueados pela trava de feedback ao aprovar tarefas.
+#   6. Toda a formatação foi padronizada em HTML com escape de nomes, evitando
+#      o erro "Can't parse entities" quando um nome tem _ * < ou &.
+#   7. Compatível com python-telegram-bot 20.x, 21.x e 22.x.
+# ==============================================================================
+
+# ==============================================================================
 # == INÍCIO BLOCO DE CONFIGURAÇÃO DE LOGGING ===================================
 # ==============================================================================
 import logging
 import logging.handlers
 import sys
-import os # Necessário para criar a pasta de logs
+import os  # Necessário para criar a pasta de logs
 
 # --- Configurações ---
 LOG_FILENAME = 'gamificacao_sistema.log'
-LOG_FOLDER = 'logs' # Nome da pasta onde os logs serão salvos
-LOG_LEVEL = logging.INFO # Nível mínimo para registrar (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+LOG_FOLDER = 'logs'            # Nome da pasta onde os logs serão salvos
+LOG_LEVEL = logging.INFO       # Nível mínimo para registrar (DEBUG, INFO, WARNING, ERROR, CRITICAL)
 LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
-LOG_MAX_BYTES = 10 * 1024 * 1024 # Tamanho máximo de cada arquivo de log (10 MB)
-LOG_BACKUP_COUNT = 5 # Quantos arquivos de log antigos manter
+LOG_MAX_BYTES = 10 * 1024 * 1024  # Tamanho máximo de cada arquivo de log (10 MB)
+LOG_BACKUP_COUNT = 5              # Quantos arquivos de log antigos manter
 
-# Em telegram_bot.py
 # --- Cria a pasta de logs se não existir ---
-log_dir = os.path.join(os.path.dirname(__file__), LOG_FOLDER)
+# abspath garante um caminho completo mesmo se o bot for iniciado de outra pasta.
+PASTA_DO_BOT = os.path.dirname(os.path.abspath(__file__))
+log_dir = os.path.join(PASTA_DO_BOT, LOG_FOLDER)
 if not os.path.exists(log_dir):
     try:
         os.makedirs(log_dir)
-        # CORREÇÃO: Usar print() antes do logger ser definido.
-        print(f"Pasta de logs criada em: {log_dir}") 
+        print(f"Pasta de logs criada em: {log_dir}")  # print: o logger ainda não existe
     except OSError as e:
-        # CORREÇÃO: Usar print() antes do logger ser definido.
         print(f"Erro ao criar pasta de logs '{log_dir}': {e}", file=sys.stderr)
-        # Se não conseguir criar a pasta, tenta logar no diretório atual
-        log_dir = os.path.dirname(__file__)
+        log_dir = PASTA_DO_BOT  # Se não conseguir criar a pasta, loga na pasta do bot
 
 log_filepath = os.path.join(log_dir, LOG_FILENAME)
 
-# --- Configuração do Handler de Arquivo Rotativo ---
-# Rotaciona o log quando atinge LOG_MAX_BYTES, mantendo LOG_BACKUP_COUNT arquivos antigos
+# --- Handler de arquivo rotativo (troca de arquivo ao atingir LOG_MAX_BYTES) ---
 file_handler = logging.handlers.RotatingFileHandler(
     log_filepath, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT, encoding='utf-8'
 )
 file_handler.setLevel(LOG_LEVEL)
-file_formatter = logging.Formatter(LOG_FORMAT)
-file_handler.setFormatter(file_formatter)
+file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
 
-# --- Configuração do Handler do Console ---
+# --- Handler do console (tela preta do terminal) ---
 console_handler = logging.StreamHandler(sys.stdout)
-console_handler.setLevel(LOG_LEVEL) # Pode ser diferente do arquivo se quiser (ex: logging.DEBUG)
-console_formatter = logging.Formatter(LOG_FORMAT)
-console_handler.setFormatter(console_formatter)
+console_handler.setLevel(LOG_LEVEL)
+console_handler.setFormatter(logging.Formatter(LOG_FORMAT))
 
-# --- Configuração do Logger Raiz ---
-# Limpa handlers existentes para evitar duplicação em recargas
+# --- Logger raiz: limpa handlers antigos para não duplicar linhas ---
 logging.getLogger('').handlers = []
-# Adiciona os novos handlers
 logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT, handlers=[file_handler, console_handler])
 
-# Obtém um logger específico para este módulo
-logger = logging.getLogger(__name__)
+# A biblioteca httpx registra CADA requisição ao Telegram em nível INFO,
+# o que enche o log (e mostra o token do bot na URL). Deixamos só avisos.
+logging.getLogger('httpx').setLevel(logging.WARNING)
 
+logger = logging.getLogger(__name__)
 logger.info(f"*** Logging configurado para o módulo: {__name__} ***")
 # ==============================================================================
 # == FIM BLOCO DE CONFIGURAÇÃO DE LOGGING ======================================
 # ==============================================================================
 
-import recibo_generator
-import random
-import os
-import logging, config, database, random, notificador_telegram
-from datetime import datetime, timedelta, timezone, date
+# --- Bibliotecas padrão do Python (já vêm instaladas) ---
+import calendar                      # Para saber quantos dias tem o mês
+import html                          # Para "escapar" textos em mensagens HTML
+import json                          # Para salvar os dados dos filhos
+import locale                        # Para nomes de meses em português
+import math                          # Para arredondar pontos para cima
+import re                            # Expressões regulares (padrões de texto)
+import unicodedata                   # Para remover acentos (VIÚVO -> VIUVO)
+import urllib.parse                  # Para montar o link do WhatsApp
+from datetime import datetime, timedelta, date
 from zoneinfo import ZoneInfo
-from PIL import Image
-import exifread
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
-from telegram.ext import (Application, CommandHandler, MessageHandler, filters, 
+
+# --- Biblioteca do Telegram (pip install python-telegram-bot) ---
+from telegram import (Update, InlineKeyboardButton, InlineKeyboardMarkup,
+                      ReplyKeyboardMarkup, ReplyKeyboardRemove, ForceReply)
+from telegram.constants import ParseMode
+from telegram.error import BadRequest, Forbidden, TelegramError
+from telegram.ext import (Application, CommandHandler, MessageHandler, filters,
                           ContextTypes, CallbackQueryHandler)
-from telegram.helpers import escape_markdown
-import urllib.parse
-from database import adicionar_pontos_ao_saldo
-import locale
-import json # <<< IMPORT FALTANDO!
-import re # Necessário para regex na normalização de chaves
-import html # Necessário para escapar strings em modo HTML
+
+# --- Módulos do próprio projeto ---
+import config
+import database
+import notificador_telegram
+
 try:
     locale.setlocale(locale.LC_TIME, 'pt_BR.UTF-8')
 except locale.Error:
-    print("Locale pt_BR.UTF-8 não encontrado. Usando o padrão do sistema.")
+    logger.warning("Locale pt_BR.UTF-8 não encontrado. Usando o padrão do sistema.")
 
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+
+# ==============================================================================
+# == CONSTANTES ================================================================
+# ==============================================================================
+
+# Textos dos botões do menu fixo. Usados no /start, nos handlers e para
+# impedir que um clique no menu seja salvo como resposta do cadastro.
+BTN_TAREFAS = "📋 Minhas Tarefas"
+BTN_RANKING = "🏆 Ranking do Mês"
+BTN_METAS = "🎯 Acompanhar Metas"
+BTN_SALDO = "💰 Meu Saldo"
+BTN_LOJA = "🏪 Loja de Recompensas"
+BTN_NF = "🧾 Enviar Nota Fiscal"
+BTN_HISTORICO = "📜 Meu Histórico"
+BTN_CONFIDENCIAL = "💬 Canal Confidencial"
+BTN_CONQUISTAS = "🏅 Minhas Conquistas"
+BTN_DOCUMENTOS = "📄 Meus Documentos"
+BTN_SOLICITACOES = "📦 Solicitar Compras/Manutenção"
+BTN_AJUDA = "❓ Ajuda"
+
+BOTOES_MENU = {
+    BTN_TAREFAS, BTN_RANKING, BTN_METAS, BTN_SALDO, BTN_LOJA, BTN_NF,
+    BTN_HISTORICO, BTN_CONFIDENCIAL, BTN_CONQUISTAS, BTN_DOCUMENTOS,
+    BTN_SOLICITACOES, BTN_AJUDA,
+}
+
+TECLADO_MENU = [
+    [BTN_TAREFAS, BTN_RANKING, BTN_METAS],
+    [BTN_SALDO, BTN_LOJA, BTN_NF],
+    [BTN_HISTORICO, BTN_CONFIDENCIAL],
+    [BTN_CONQUISTAS, BTN_DOCUMENTOS],
+    [BTN_SOLICITACOES],
+    [BTN_AJUDA],
+]
+
+# Botões usados pelos gestores. A trava de "feedback pendente" não vale para eles.
+PREFIXOS_CALLBACK_GESTAO = (
+    "aprovar_gestor_", "reprovar_gestor_", "nf_prep_fwd_", "nf_create_task_",
+    "nf_ignore_", "ver_pendencias_", "voltar_lista_funcs",
+)
+
+NIVEIS_GESTAO = ('Gestor', 'RH')
+
+# ------------------------------------------------------------------------------
+# Onboarding (cadastro inicial)
+# REGRA ÚNICA: a etapa salva no banco (UltimaEtapa) é a informação que o bot
+# está ESPERANDO receber, e 'pergunta' é o texto que PEDE essa informação.
+# Ex.: UltimaEtapa='CPF' -> o bot espera o arquivo do CPF.
+# ------------------------------------------------------------------------------
+ETAPAS_DOCUMENTO = {'RG', 'CPF', 'CTPS', 'TITULO_ELEITOR'}
+
+WORKFLOW_ONBOARDING = {
+    'RG': {
+        'pergunta': "Vamos começar. Por favor, envie a <b>FOTO ou PDF do seu RG</b> (frente e verso).",
+        'campo_db': 'RG_FileID', 'proxima_etapa': 'CPF',
+    },
+    'CPF': {
+        'pergunta': "Ótimo! Agora envie a <b>FOTO ou PDF do seu CPF</b>.",
+        'campo_db': 'CPF_FileID', 'proxima_etapa': 'CTPS',
+    },
+    'CTPS': {
+        'pergunta': ("Perfeito. Envie a <b>FOTO da sua Carteira de Trabalho</b> (página da foto) "
+                     "ou o <b>PDF</b> exportado, se ela for digital."),
+        'campo_db': 'CTPS_FileID', 'proxima_etapa': 'TITULO_ELEITOR',
+    },
+    'TITULO_ELEITOR': {
+        'pergunta': "Quase lá nos documentos! Envie a <b>FOTO ou PDF do Título de Eleitor</b>.",
+        'campo_db': 'TituloEleitor_FileID', 'proxima_etapa': 'ESCOLARIDADE',
+    },
+    'ESCOLARIDADE': {
+        'pergunta': "Documentos salvos! ✅ Agora, digite sua <b>Escolaridade</b> (ex.: Ensino Médio Completo).",
+        'campo_db': 'Escolaridade', 'proxima_etapa': 'ESTADO_CIVIL',
+    },
+    'ESTADO_CIVIL': {
+        'pergunta': "Qual o seu <b>Estado Civil</b>? (Solteiro, Casado, Divorciado, Separado ou Viúvo)",
+        'campo_db': 'EstadoCivil', 'proxima_etapa': None,  # Decidido pela resposta
+    },
+    'DATA_CASAMENTO': {
+        'pergunta': "Ok. Agora, digite a <b>Data de Casamento</b> (dd/mm/aaaa).",
+        'campo_db': 'DataCasamento', 'proxima_etapa': 'NOME_CONJUGUE',
+    },
+    'NOME_CONJUGUE': {
+        'pergunta': "Qual o nome completo do seu <b>Cônjuge</b>?",
+        'campo_db': 'NomeConjugue', 'proxima_etapa': 'CPF_CONJUGUE',
+    },
+    'CPF_CONJUGUE': {
+        'pergunta': "Qual o <b>CPF do seu Cônjuge</b>? (apenas números)",
+        'campo_db': 'CPFConjugue', 'proxima_etapa': 'FILHOS_QTD',
+    },
+    'FILHOS_QTD': {
+        'pergunta': "Quantos <b>filhos menores de idade</b> você tem? (digite apenas o NÚMERO, ex.: 0, 1, 2)",
+        'campo_db': 'QtdFilhos', 'proxima_etapa': None,  # Decidido pela resposta
+    },
+}
+
+# Permite achar a etapa mesmo se o banco tiver 'ESTADOCIVIL' (sem o _)
+_MAPA_ETAPAS_SEM_UNDERLINE = {chave.replace('_', ''): chave for chave in WORKFLOW_ONBOARDING}
+
+PADRAO_ETAPA_FILHO = re.compile(r'^DADOS_FILHO_(\d+)_(NOME|NASC|CPF)$')
+
+ESTADOS_CIVIS_CASADO = {'CASADO', 'CASADA'}
+ESTADOS_CIVIS_VALIDOS = {
+    'SOLTEIRO', 'SOLTEIRA', 'CASADO', 'CASADA', 'DIVORCIADO', 'DIVORCIADA',
+    'VIUVO', 'VIUVA', 'SEPARADO', 'SEPARADA',
+}
+MAX_FILHOS_CADASTRO = 20
+
+
+# ==============================================================================
+# == FUNÇÕES AUXILIARES ========================================================
+# ==============================================================================
+
+def esc(valor) -> str:
+    """Escapa um valor para uso seguro dentro de mensagens HTML (< > & viram códigos)."""
+    if valor is None:
+        return ""
+    return html.escape(str(valor))
+
+
+def agora() -> datetime:
+    """
+    Data/hora atual. Se config.FUSO_HORARIO existir (ex.: 'America/Cuiaba'),
+    usa esse fuso; senão, usa o relógio do computador (comportamento antigo).
+    """
+    fuso = getattr(config, 'FUSO_HORARIO', None)
+    if fuso:
+        try:
+            return datetime.now(ZoneInfo(fuso)).replace(tzinfo=None)
+        except Exception as e:
+            logger.warning(f"FUSO_HORARIO inválido em config.py ('{fuso}'): {e}")
+    return datetime.now()
+
+
+def hoje() -> date:
+    return agora().date()
+
+
+def sem_acentos(texto: str) -> str:
+    """Remove acentos: 'VIÚVO' -> 'VIUVO'."""
+    normalizado = unicodedata.normalize('NFKD', texto)
+    return ''.join(c for c in normalizado if not unicodedata.combining(c))
+
+
+def eh_gestor(funcionario) -> bool:
+    """True se o funcionário tem nível de acesso de gestão (Gestor ou RH)."""
+    return bool(funcionario) and getattr(funcionario, 'NivelAcesso', None) in NIVEIS_GESTAO
+
+
+def eh_encaminhada(message) -> bool:
+    """
+    True se a mensagem foi encaminhada de outro chat.
+    Usa getattr porque a versão 21+ da biblioteca trocou 'forward_from' por
+    'forward_origin'. Acessar 'forward_from' direto gerava erro nas versões novas.
+    """
+    return bool(
+        getattr(message, 'forward_origin', None)
+        or getattr(message, 'forward_from', None)
+        or getattr(message, 'forward_from_chat', None)
+    )
+
+
+def eh_pdf(documento) -> bool:
+    """True se o documento enviado é um PDF (mime_type pode vir vazio)."""
+    if not documento:
+        return False
+    mime = (documento.mime_type or '').lower()
+    nome = (documento.file_name or '').lower()
+    return mime == 'application/pdf' or nome.endswith('.pdf')
+
+
+def eh_imagem_como_arquivo(documento) -> bool:
+    """True se a pessoa enviou uma imagem como 'Arquivo' em vez de 'Foto'."""
+    return bool(documento) and (documento.mime_type or '').lower().startswith('image/')
+
+
+def extrair_file_id_foto_ou_pdf(message):
+    """Devolve o file_id de uma foto ou de um PDF. Qualquer outra coisa -> None."""
+    if message.photo:
+        return message.photo[-1].file_id  # [-1] = maior resolução
+    if eh_pdf(message.document):
+        return message.document.file_id
+    return None
+
+
+def cpf_valido(cpf_digitos: str) -> bool:
+    """Confere o tamanho e os 2 dígitos verificadores do CPF."""
+    if len(cpf_digitos) != 11 or cpf_digitos == cpf_digitos[0] * 11:
+        return False
+    for tamanho in (9, 10):
+        soma = sum(int(cpf_digitos[i]) * (tamanho + 1 - i) for i in range(tamanho))
+        digito = (soma * 10) % 11
+        if digito == 10:
+            digito = 0
+        if digito != int(cpf_digitos[tamanho]):
+            return False
+    return True
+
+
+def validar_data_passada(texto: str):
+    """Aceita 'dd/mm/aaaa' que não esteja no futuro. Devolve o texto padronizado ou None."""
+    try:
+        data_obj = datetime.strptime(texto.strip(), '%d/%m/%Y').date()
+    except ValueError:
+        return None
+    if data_obj > hoje():
+        return None
+    return data_obj.strftime('%d/%m/%Y')
+
+
+def barra_de_progresso(percentual: float) -> str:
+    """Barra de 10 blocos. Limita entre 0% e 100% para não 'estourar'."""
+    blocos = max(0, min(10, int(percentual // 10)))
+    return '▓' * blocos + '░' * (10 - blocos)
+
+
+def montar_loja(produtos):
+    """Monta o texto e os botões da loja (usado no menu e no botão Voltar)."""
+    keyboard = []
+    if produtos:
+        texto = "🏪 <b>Loja de Recompensas</b> 🏪\n\nEscolha um item para ver os detalhes e resgatar:"
+        for produto in produtos:
+            estoque_str = f" ({produto.EstoqueDisponivel} un.)" if produto.EstoqueDisponivel is not None else ""
+            texto_botao = f"{produto.Nome} - {produto.CustoEmPontos} pts{estoque_str}"
+            keyboard.append([InlineKeyboardButton(texto_botao, callback_data=f"ver_produto_{produto.ProdutoID}")])
+    else:
+        texto = ("🏪 <b>Loja de Recompensas</b> 🏪\n\n"
+                 "Não temos itens físicos no momento, mas você pode usar seu saldo abaixo:")
+    # Botão fixo de Abater na Comanda, sempre no final da lista
+    keyboard.append([InlineKeyboardButton("🍔 Abater na Comanda", callback_data="abater_comanda")])
+    return texto, InlineKeyboardMarkup(keyboard)
+
+
+def taxa_de_conversao() -> float:
+    """Valor em R$ de 1 ponto. Um único lugar para evitar valores diferentes pelo código."""
+    return float(getattr(config, 'TAXA_CONVERSAO_PONTO_REAL', 0.03))
+
 
 # ===================================================================
-# == INÍCIO DAS NOVAS FUNÇÕES DA SALA DE COMANDO (GESTORES) =========
+# == SALA DE COMANDO (GESTORES) E COMANDA ===========================
 # ===================================================================
 
-async def iniciar_abate_comanda(update, context):
-    """[NOVO] Disparado quando o usuário clica no botão 'Abater na Comanda'."""
+async def iniciar_abate_comanda(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Disparado quando o usuário clica no botão 'Abater na Comanda'."""
     query = update.callback_query
     chat_id = update.effective_chat.id
-    func = database.buscar_funcionario_por_chat_id(chat_id)
+    func = database.buscar_funcionario_por_chat_id(update.effective_user.id)
 
     if not func:
-        await query.answer("❌ Usuário não vinculado.", show_alert=True)
+        await query.answer("❌ Seu Telegram não está vinculado a um cadastro de funcionário.", show_alert=True)
         return
 
-    # VERIFICAÇÃO DE PENDÊNCIA (MANTENDO A TRAVA SOLICITADA)
-    if not database.verificar_feedback_dia_anterior(func.FuncionarioID):
+    # Trava: feedback do dia anterior pendente
+    if not eh_gestor(func) and not database.verificar_feedback_dia_anterior(func.FuncionarioID):
         await query.answer("⚠️ Ação bloqueada! Você tem feedback pendente do dia anterior.", show_alert=True)
         return
 
-    await query.answer() # Só confirma o clique se passar na trava
-
-    # Correção: Informar ao invés de falhar silenciosamente
-    if not func:
-        await context.bot.send_message(
-            chat_id=chat_id, 
-            text="❌ *Acesso Negado:*\nO seu Telegram não está vinculado a um cadastro de funcionário válido no banco de dados. Apenas funcionários podem abater comanda.",
-            parse_mode='Markdown'
-        )
-        return
+    await query.answer()  # Só confirma o clique depois de passar pelas travas (UMA única vez)
 
     try:
-        # CORREÇÃO: Utilizando a coluna correta do banco (SaldoPontos) em vez de SaldoAtual
-        saldo_pontos = func.SaldoPontos if getattr(func, 'SaldoPontos', None) is not None else 0
-        taxa = getattr(config, 'TAXA_CONVERSAO_PONTO_REAL', 0.03) # Default 1 ponto = R$ 0,03
+        # Usa a MESMA fonte de saldo do botão "Meu Saldo"
+        saldo_pontos = database.buscar_saldo_funcionario(func.FuncionarioID) or 0
+        taxa = taxa_de_conversao()
         saldo_reais = saldo_pontos * taxa
 
-        # Muda o estado do usuário para 'escuta ativa'
         context.user_data['estado'] = 'aguardando_valor_comanda'
-        context.user_data['saldo_reais_atual'] = saldo_reais
-        context.user_data['taxa_conversao'] = taxa
 
         mensagem = (
-            f"🍔 *Abater Saldo em Comanda*\n\n"
-            f"Seu saldo atual é de: *R$ {saldo_reais:.2f}* ({saldo_pontos} pontos).\n\n"
+            f"🍔 <b>Abater Saldo em Comanda</b>\n\n"
+            f"Seu saldo atual é de: <b>R$ {saldo_reais:.2f}</b> ({saldo_pontos} pontos).\n\n"
             f"👉 Digite o valor exato em Reais que você consumiu e deseja abater.\n"
-            f"*(Exemplo: 15.50 ou 20)*"
+            f"<i>(Exemplo: 15.50 ou 20)</i>\n\n"
+            f"Para desistir, digite /cancelar."
         )
-        await context.bot.send_message(chat_id=chat_id, text=mensagem, parse_mode='Markdown')
+        await context.bot.send_message(chat_id=chat_id, text=mensagem, parse_mode=ParseMode.HTML)
     except Exception as e:
         logger.error(f"Erro ao processar abate de comanda: {e}", exc_info=True)
-        await context.bot.send_message(chat_id=chat_id, text=f"❌ Ocorreu um erro interno ao calcular seu saldo. Tente novamente mais tarde.")
+        await context.bot.send_message(chat_id=chat_id, text="❌ Ocorreu um erro interno ao calcular seu saldo. Tente novamente mais tarde.")
 
-async def processar_valor_comanda(update, context):
-    """[NOVO] Processa o texto digitado (o valor em R$) e debita do banco."""
-    # Substitui vírgula por ponto para evitar erro matemático
-    texto = update.message.text.strip().replace(',', '.')
+
+async def processar_valor_comanda(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Processa o valor em R$ digitado e registra a solicitação de abate."""
+    texto = update.message.text.strip().replace('R$', '').replace(' ', '').replace(',', '.')
 
     try:
-        valor_reais = float(texto)
+        valor_reais = round(float(texto), 2)
         if valor_reais <= 0:
             raise ValueError("Valor zerado ou negativo.")
     except ValueError:
-        await update.message.reply_text("❌ Valor inválido. Por favor, digite apenas números (ex: 15.50).")
+        await update.message.reply_text("❌ Valor inválido. Digite apenas números (ex: 15.50) ou /cancelar para sair.")
+        return  # Mantém o estado para a pessoa tentar de novo
+
+    func = database.buscar_funcionario_por_chat_id(update.effective_user.id)
+    if not func:
+        context.user_data.pop('estado', None)
+        await update.message.reply_text("❌ Não encontrei seu cadastro no sistema.")
         return
 
-    saldo_reais = context.user_data.get('saldo_reais_atual', 0)
-    taxa = context.user_data.get('taxa_conversao', 0.05)
-
-    if valor_reais > saldo_reais:
-        await update.message.reply_text(f"❌ *Saldo Insuficiente!*\nVocê tentou abater R$ {valor_reais:.2f}, mas possui apenas R$ {saldo_reais:.2f}.\nOperação cancelada.", parse_mode='Markdown')
-        context.user_data.pop('estado', None) # Limpa o estado
+    taxa = taxa_de_conversao()
+    if taxa <= 0:
+        context.user_data.pop('estado', None)
+        logger.error("TAXA_CONVERSAO_PONTO_REAL precisa ser maior que zero em config.py")
+        await update.message.reply_text("❌ Configuração de conversão inválida. Avise o gestor.")
         return
 
-    pontos_necessarios = int(valor_reais / taxa)
-    func = database.buscar_funcionario_por_chat_id(update.effective_chat.id)
+    # Saldo RELIDO do banco agora (pode ter mudado desde o clique no botão)
+    saldo_pontos = database.buscar_saldo_funcionario(func.FuncionarioID) or 0
+    saldo_reais = saldo_pontos * taxa
 
-    # Efetua o registro do resgate pendente no Banco de Dados
-    sucesso, mensagem, resgate_id = database.registrar_solicitacao_comanda(func.FuncionarioID, valor_reais, pontos_necessarios)
+    # round(...,6) elimina "sujeira" de ponto flutuante (15/0.03 = 499.9999...)
+    # e ceil arredonda para CIMA, para nunca cobrar menos pontos que o devido.
+    pontos_necessarios = math.ceil(round(valor_reais / taxa, 6))
 
-    if sucesso:
-        await update.message.reply_text(f"⏳ *Solicitação Enviada!*\n\n{mensagem}\nOs {pontos_necessarios} pontos foram reservados do seu saldo.", parse_mode='Markdown')
+    context.user_data.pop('estado', None)  # Daqui em diante a operação termina
 
-        # Alerta aos Gestores
-        alerta = (
-            f"🔔 **Nova Solicitação de Abate na Comanda** 🔔\n\n"
-            f"👤 **Funcionário:** {update.effective_user.first_name}\n"
-            f"💰 **Valor a Abater:** R$ {valor_reais:.2f}\n"
-            f"💎 **Pontos:** {pontos_necessarios} pts\n\n"
-            f"Acesse o sistema para aprovar na aba 'Loja e Resgates'."
+    if pontos_necessarios > saldo_pontos:
+        await update.message.reply_html(
+            f"❌ <b>Saldo Insuficiente!</b>\nVocê tentou abater R$ {valor_reais:.2f}, "
+            f"mas possui apenas R$ {saldo_reais:.2f}.\nOperação cancelada."
         )
-        await context.bot.send_message(chat_id=config.GESTOR_GROUP_CHAT_ID, text=alerta, parse_mode='Markdown')
-    else:
-        await update.message.reply_text(f"❌ Ocorreu um erro: {mensagem}")
+        return
 
-    # Limpa o estado para voltar ao normal
-    context.user_data.pop('estado', None)
+    sucesso, mensagem, resgate_id = database.registrar_solicitacao_comanda(
+        func.FuncionarioID, valor_reais, pontos_necessarios
+    )
+
+    if not sucesso:
+        await update.message.reply_text(f"❌ Ocorreu um erro: {mensagem}")
+        return
+
+    await update.message.reply_html(
+        f"⏳ <b>Solicitação Enviada!</b>\n\n{esc(mensagem)}\n"
+        f"Os {pontos_necessarios} pontos foram reservados do seu saldo."
+    )
+
+    alerta = (
+        f"🔔 <b>Nova Solicitação de Abate na Comanda</b> 🔔\n\n"
+        f"👤 <b>Funcionário:</b> {esc(func.NomeCompleto)}\n"
+        f"💰 <b>Valor a Abater:</b> R$ {valor_reais:.2f}\n"
+        f"💎 <b>Pontos:</b> {pontos_necessarios} pts\n\n"
+        f"Acesse o sistema para aprovar na aba 'Loja e Resgates'."
+    )
+    try:
+        await context.bot.send_message(chat_id=config.GESTOR_GROUP_CHAT_ID, text=alerta, parse_mode=ParseMode.HTML)
+    except TelegramError as e:
+        logger.error(f"Solicitação de comanda {resgate_id} registrada, mas falhou ao avisar os gestores: {e}")
 
 
 async def status_meta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Envia o status atual da meta principal para o grupo de gestão."""
-    chat_id = update.effective_chat.id
-    if chat_id != config.GESTOR_GROUP_CHAT_ID:
+    if update.effective_chat.id != config.GESTOR_GROUP_CHAT_ID:
         await update.message.reply_text("Este comando é exclusivo para o grupo de gestão.")
         return
 
@@ -194,1321 +462,382 @@ async def status_meta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await update.message.reply_text("Nenhuma meta principal está ativa no momento.")
         return
 
-    # Coleta de dados (sem alteração)
     nome = dados_meta['nome_meta']
-    atingido = dados_meta['valor_atingido']
-    total = dados_meta['valor_meta']
+    atingido = float(dados_meta['valor_atingido'] or 0)
+    total = float(dados_meta['valor_meta'])
     percentual = (atingido / total) * 100 if total > 0 else 0
-    
-    # Barra de progresso (sem alteração)
-    blocos_cheios = int(percentual // 10); blocos_vazios = 10 - blocos_cheios
-    barra_progresso = '▓' * blocos_cheios + '░' * blocos_vazios
 
-    # Cálculo da projeção (sem alteração)
-    hoje = date.today()
-    dias_no_mes = (hoje.replace(month=hoje.month % 12 + 1, day=1) - timedelta(days=1)).day
-    dias_corridos = hoje.day
-    media_diaria = atingido / dias_corridos if dias_corridos > 0 else 0
-    projecao = media_diaria * dias_no_mes if media_diaria > 0 else 0
+    # Projeção: média diária até hoje x total de dias do mês
+    data_hoje = hoje()
+    dias_no_mes = calendar.monthrange(data_hoje.year, data_hoje.month)[1]
+    media_diaria = atingido / data_hoje.day if data_hoje.day > 0 else 0
+    projecao = media_diaria * dias_no_mes
 
-    # --- A CORREÇÃO DEFINITIVA ESTÁ AQUI ---
-    # Usamos tags HTML (<b> para negrito, <code> para fonte monoespaçada)
     mensagem = (
-        f"📊 <b>Status da Meta: {nome}</b> 📊\n\n"
-        f"<code>{barra_progresso}</code>  <b>{percentual:.2f}%</b>\n\n"
+        f"📊 <b>Status da Meta: {esc(nome)}</b> 📊\n\n"
+        f"<code>{barra_de_progresso(percentual)}</code>  <b>{percentual:.2f}%</b>\n\n"
         f"💰 <b>Atingido:</b> <code>R$ {atingido:,.2f}</code>\n"
         f"🎯 <b>Meta:</b> <code>R$ {total:,.2f}</code>\n\n"
         f"📈 <b>Projeção Final:</b> <code>R$ {projecao:,.2f}</code>"
     )
-
-    # Enviamos a mensagem usando reply_html em vez de reply_markdown_v2
     await update.message.reply_html(mensagem)
 
-async def lancar_venda(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Registra o valor da apuração diária enviado pelo gestor."""
-    chat_id = update.effective_chat.id
-    gestor = database.buscar_funcionario_por_chat_id(update.effective_user.id)
 
-    # Verifica se é o grupo de gestão
-    if chat_id != config.GESTOR_GROUP_CHAT_ID:
+async def lancar_venda(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Registra o valor da apuração diária enviado pelo gestor: /lancar 1250.50"""
+    if update.effective_chat.id != config.GESTOR_GROUP_CHAT_ID:
         await update.message.reply_text("Este comando é exclusivo para o grupo de gestão.")
         return
-    # Verifica se o gestor foi encontrado no banco
+
+    gestor = database.buscar_funcionario_por_chat_id(update.effective_user.id)
     if not gestor:
         await update.message.reply_text("Erro: Seu usuário do Telegram não foi encontrado no sistema para registrar esta ação.")
         return
 
-    # Verifica se o valor foi fornecido
     if not context.args:
-        await update.message.reply_text("Por favor, informe o valor a ser lançado.\nExemplo: `/lancar 1250.50`")
+        await update.message.reply_html("Por favor, informe o valor a ser lançado.\nExemplo: <code>/lancar 1250.50</code>")
         return
 
-    # Tenta converter o valor para float
     try:
-        valor_str = context.args[0].replace(',', '.')
-        valor_dia = float(valor_str)
+        valor_dia = float(context.args[0].replace('R$', '').replace(',', '.'))
+        if valor_dia < 0:
+            raise ValueError
     except (ValueError, IndexError):
-        await update.message.reply_text("Valor inválido. Por favor, use apenas números.\nExemplo: `/lancar 1250.50`")
+        await update.message.reply_html("Valor inválido. Use apenas números.\nExemplo: <code>/lancar 1250.50</code>")
         return
 
-    # Busca o ID da meta principal ativa para hoje
     meta_id = database.buscar_meta_ativa_id_hoje()
     if not meta_id:
         await update.message.reply_text("Erro: Nenhuma meta principal está ativa para hoje. Não é possível lançar.")
         return
 
-    # Pega a data de hoje e formata para o banco
-    data_hoje_obj = date.today() # Pega o objeto date
-    data_hoje_str = data_hoje_obj.strftime('%Y-%m-%d')
-
-    # Tenta lançar a apuração no banco
+    data_hoje_str = hoje().strftime('%Y-%m-%d')
     sucesso, resultado = database.lancar_apuracao_diaria(meta_id, data_hoje_str, valor_dia, gestor.FuncionarioID)
 
-    if sucesso:
-        apuracao_id = resultado # Captura o ID da apuração retornado pelo banco
-
-        # Envia mensagem de sucesso
-        await update.message.reply_html(
-            f"✅ <b>Sucesso!</b> Lançamento de <code>R$ {valor_dia:,.2f}</code> registrado por {gestor.NomeCompleto}.\n\n"
-            "Aguarde, estou atualizando o status..."
-        )
-
-        try:
-            # --- A CORREÇÃO ESTÁ AQUI ---
-            # A função correta em database.py NÃO tem o underscore no início.
-            database.verificar_e_premiar_meta_diaria(apuracao_id, data_hoje_str, valor_dia, meta_id)
-            # --- FIM DA CORREÇÃO ---
-            logger.info(f"Verificação de meta diária (ID {apuracao_id}) acionada via Telegram.")
-        except NameError:
-            logger.error("!!! ERRO: Função verificar_e_premiar_meta_diaria não encontrada/importada corretamente. Premiação diária via Telegram falhou.")
-        except Exception as e_premio:
-            logger.error(f"Erro ao tentar verificar/premiar meta diária após lançamento via Telegram: {e_premio}", exc_info=True)
-        # --- FIM DA CORREÇÃO ---
-        # Mostra o status atualizado da meta principal
-        await status_meta(update, context)
-
-    else:
-        # Envia mensagem de falha
+    if not sucesso:
         await update.message.reply_text(f"❌ Falha ao registrar o lançamento.\nErro: {resultado}")
+        return
 
-
-# ===================================================================
-# == FIM DAS NOVAS FUNÇÕES DA SALA DE COMANDO =======================
-# ===================================================================
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user = update.effective_user
-    chat_id = user.id
-    funcionario = database.buscar_funcionario_por_chat_id(chat_id)
-
-    # Lógica para decidir se mostra o menu ou instrução de onboarding
-    mostrar_menu = True
-    mensagem = ""
-
-    if funcionario:
-        status_onboarding = database.buscar_onboarding_status(funcionario.FuncionarioID)
-
-        # Se onboarding não está completo, ESCONDE o menu e dá instrução clara
-        if status_onboarding and status_onboarding.StatusWorkflow != 'Completo':
-            mostrar_menu = False
-            mensagem = (
-                f"👋 Olá, **{funcionario.NomeCompleto}**!\n\n"
-                "Precisamos concluir seu cadastro antes de liberar o sistema.\n\n"
-                "👉 **Digite 'Começar'** (ou envie qualquer mensagem) para enviar seus documentos."
-            )
-        else:
-            mensagem = f"Bem-vindo(a) de volta, <b>{funcionario.NomeCompleto}</b>! 👋\n\nUse os botões abaixo para interagir:"
-    else:
-        mensagem = "Olá! Parece que seu usuário não foi encontrado no sistema. Por favor, contate seu gestor."
-        mostrar_menu = False
-
-    if mostrar_menu:
-        REPLY_KEYBOARD = [
-            ["📋 Minhas Tarefas", "🏆 Ranking do Mês", "🎯 Acompanhar Metas"],
-            ["💰 Meu Saldo", "🏪 Loja de Recompensas", "🧾 Enviar Nota Fiscal"],
-            ["📜 Meu Histórico", "💬 Canal Confidencial"],
-            ["🏅 Minhas Conquistas", "📄 Meus Documentos"],
-            ["📦 Solicitar Compras/Manutenção"], # <--- NOVO BOTÃO AQUI
-            ["❓ Ajuda"]
-        ]
-        reply_markup = ReplyKeyboardMarkup(REPLY_KEYBOARD, resize_keyboard=True)
-        await update.message.reply_html(mensagem, reply_markup=reply_markup)
-    else:
-        # Remove o teclado se não for para mostrar
-        from telegram import ReplyKeyboardRemove
-        # Usa Markdown para a mensagem de onboarding funcionar com negrito
-        await update.message.reply_markdown(mensagem, reply_markup=ReplyKeyboardRemove())
-
-async def obter_id_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id = update.effective_chat.id
-    await update.message.reply_html(f"O ID deste chat é: <code>{chat_id}</code>")
-
-async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    texto_ajuda = (
-        "Olá! Eu sou seu assistente de gamificação. Aqui estão os comandos:\n\n"
-        "<b>Comandos Principais (Botões):</b>\n"
-        "📋 **Minhas Tarefas**: Mostra sua lista de tarefas pendentes para hoje.\n"
-        "🏆 **Ranking do Mês**: Exibe a classificação de desempenho atual.\n"
-        "💰 **Meu Saldo**: Mostra seus pontos acumulados e o valor em R$.\n"
-        "🏪 **Loja de Recompensas**: Permite trocar seus pontos por prêmios.\n"
-        "📜 **Meu Histórico**: Exibe suas últimas 10 atividades.\n"
-        "🏅 **Minhas Conquistas**: Lista suas conquistas desbloqueadas.\n"
-        "📄 **Meus Documentos**: Acessa documentos pessoais, como holerites.\n\n"
-        "💬 **Canal Confidencial** (Botão 'Solicitar Feedback'):\n"
-        "   Envia uma sugestão, reclamação ou denúncia de forma <b>100% ANÔNIMA</b> para a gestão.\n"
+    apuracao_id = resultado
+    await update.message.reply_html(
+        f"✅ <b>Sucesso!</b> Lançamento de <code>R$ {valor_dia:,.2f}</code> registrado por {esc(gestor.NomeCompleto)}.\n\n"
+        "Aguarde, estou atualizando o status..."
     )
-    # Usamos reply_html por causa do <b>
-    await update.message.reply_html(texto_ajuda, reply_markup=update.message.reply_markup)
+
+    try:
+        database.verificar_e_premiar_meta_diaria(apuracao_id, data_hoje_str, valor_dia, meta_id)
+        logger.info(f"Verificação de meta diária (ID {apuracao_id}) acionada via Telegram.")
+    except Exception as e_premio:
+        logger.error(f"Erro ao verificar/premiar meta diária após lançamento via Telegram: {e_premio}", exc_info=True)
+
+    await status_meta(update, context)
+
 
 async def pendencias_gestor(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id = update.effective_chat.id
-    if chat_id != config.GESTOR_GROUP_CHAT_ID:
+    """/pendencias - lista funcionários para o gestor ver as tarefas pendentes."""
+    if update.effective_chat.id != config.GESTOR_GROUP_CHAT_ID:
         await update.message.reply_text("Este comando só pode ser usado no grupo de gestão.")
         return
     funcionarios = database.listar_funcionarios()
     if not funcionarios:
         await update.message.reply_text("Não há funcionários cadastrados no sistema.")
         return
-    keyboard = []
-    for func in funcionarios:
-        keyboard.append([
-            InlineKeyboardButton(
-                func.NomeCompleto, 
-                callback_data=f"ver_pendencias_{func.FuncionarioID}"
-            )
-        ])
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Selecione um funcionário para ver as tarefas pendentes:", reply_markup=reply_markup)
+    keyboard = [[InlineKeyboardButton(f.NomeCompleto, callback_data=f"ver_pendencias_{f.FuncionarioID}")]
+                for f in funcionarios]
+    await update.message.reply_text("Selecione um funcionário para ver as tarefas pendentes:",
+                                    reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+# ===================================================================
+# == COMANDOS GERAIS ================================================
+# ===================================================================
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    funcionario = database.buscar_funcionario_por_chat_id(update.effective_user.id)
+
+    if not funcionario:
+        await update.message.reply_text(
+            "Olá! Parece que seu usuário não foi encontrado no sistema. Por favor, contate seu gestor.",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return
+
+    status_onboarding = database.buscar_onboarding_status(funcionario.FuncionarioID)
+    status_workflow = (getattr(status_onboarding, 'StatusWorkflow', None) or '').strip() if status_onboarding else ''
+
+    # Cadastro incompleto: esconde o menu e dá instrução clara
+    if status_onboarding and status_workflow != 'Completo' and not eh_gestor(funcionario):
+        await update.message.reply_html(
+            f"👋 Olá, <b>{esc(funcionario.NomeCompleto)}</b>!\n\n"
+            "Precisamos concluir seu cadastro antes de liberar o sistema.\n\n"
+            "👉 <b>Digite 'Começar'</b> (ou envie qualquer mensagem) para enviar seus documentos.",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return
+
+    await update.message.reply_html(
+        f"Bem-vindo(a) de volta, <b>{esc(funcionario.NomeCompleto)}</b>! 👋\n\nUse os botões abaixo para interagir:",
+        reply_markup=ReplyKeyboardMarkup(TECLADO_MENU, resize_keyboard=True)
+    )
+
+
+async def cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    /cancelar - limpa qualquer ação em andamento (comanda, compra, denúncia...).
+    Antes esse comando não existia: o texto '/cancelar' era filtrado e nunca chegava ao bot.
+    """
+    context.user_data.clear()
+    await update.message.reply_text("Ação cancelada. Use os botões do menu.")
+
+    # Se o cadastro estiver em andamento, lembra a pergunta atual (o progresso fica salvo no banco)
+    funcionario = database.buscar_funcionario_por_chat_id(update.effective_user.id)
+    if funcionario and not eh_gestor(funcionario):
+        status = database.buscar_onboarding_status(funcionario.FuncionarioID)
+        if status and (getattr(status, 'StatusWorkflow', None) or '').strip() == 'Em Progresso':
+            etapa = normalizar_etapa(getattr(status, 'UltimaEtapa', None))
+            pergunta = pergunta_da_etapa(etapa)
+            if pergunta:
+                await update.message.reply_html(
+                    "📝 Seu cadastro continua de onde parou. Responda quando puder:\n\n" + pergunta
+                )
+
+
+async def obter_id_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_html(f"O ID deste chat é: <code>{update.effective_chat.id}</code>")
+
+
+async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    texto_ajuda = (
+        "Olá! Eu sou seu assistente de gamificação. Aqui estão os comandos:\n\n"
+        "<b>Comandos Principais (Botões):</b>\n"
+        "📋 <b>Minhas Tarefas</b>: Mostra sua lista de tarefas pendentes para hoje.\n"
+        "🏆 <b>Ranking do Mês</b>: Exibe a classificação de desempenho atual.\n"
+        "🎯 <b>Acompanhar Metas</b>: Mostra o progresso da meta da equipe.\n"
+        "💰 <b>Meu Saldo</b>: Mostra seus pontos acumulados e o valor em R$.\n"
+        "🏪 <b>Loja de Recompensas</b>: Permite trocar seus pontos por prêmios.\n"
+        "🧾 <b>Enviar Nota Fiscal</b>: Envia a foto de uma nota recebida.\n"
+        "📜 <b>Meu Histórico</b>: Exibe suas últimas 10 atividades.\n"
+        "🏅 <b>Minhas Conquistas</b>: Lista suas conquistas desbloqueadas.\n"
+        "📄 <b>Meus Documentos</b>: Acessa documentos pessoais, como holerites.\n\n"
+        "💬 <b>Canal Confidencial</b>:\n"
+        "   Envia uma sugestão, reclamação ou denúncia de forma <b>100% ANÔNIMA</b> para a gestão.\n\n"
+        "↩️ <b>/cancelar</b>: Desiste de qualquer ação em andamento."
+    )
+    await update.message.reply_html(texto_ajuda)
+
+
+async def abrir_central_solicitacoes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Botão '📦 Solicitar Compras/Manutenção' (antes era um lambda difícil de depurar)."""
+    await update.message.reply_text(
+        "Acessando Central...",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Abrir Menu", callback_data="menu_solicitacoes")]])
+    )
+
+
+# ===================================================================
+# == FUNÇÕES DO FUNCIONÁRIO =========================================
+# ===================================================================
 
 async def tarefas(update: Update, context: ContextTypes.DEFAULT_TYPE, query=None) -> None:
-    chat_id = update.effective_chat.id; funcionario = database.buscar_funcionario_por_chat_id(chat_id)
-    if not funcionario: return
-    
-    # 🛑 Interceptador de Pendências
+    chat_id = update.effective_chat.id
+    funcionario = database.buscar_funcionario_por_chat_id(update.effective_user.id)
+    if not funcionario:
+        await context.bot.send_message(chat_id, "Desculpe, não consegui encontrar seu cadastro no sistema.")
+        return
+
     if await _interceptar_comandos_e_pendencias(update, context):
-        return # Bloqueia o comando
-    # 🛑 Fim do Interceptador
-    
+        return
+
     tarefas_do_dia = database.listar_tarefas_do_dia_por_funcionario(funcionario.FuncionarioID)
     if not tarefas_do_dia:
         texto = "Você não tem nenhuma tarefa pendente para hoje. Bom trabalho! ✨"
-        if query: await query.edit_message_text(texto)
-        else: await context.bot.send_message(chat_id, texto)
+        if query:
+            await query.edit_message_text(texto)
+        else:
+            await context.bot.send_message(chat_id, texto)
         return
-    texto = "📋 **Suas Tarefas para Hoje:**\n\nClique em uma tarefa para ver os detalhes:"
-    keyboard = [[InlineKeyboardButton(f"👀 {t.Titulo} ({t.Pontos} pts)", callback_data=f"ver_tarefa_{t.AtribuicaoID}")] for t in tarefas_do_dia]
+
+    texto = "📋 <b>Suas Tarefas para Hoje:</b>\n\nClique em uma tarefa para ver os detalhes:"
+    keyboard = [[InlineKeyboardButton(f"👀 {t.Titulo} ({t.Pontos} pts)", callback_data=f"ver_tarefa_{t.AtribuicaoID}")]
+                for t in tarefas_do_dia]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    if query: await query.edit_message_text(texto, reply_markup=reply_markup, parse_mode='Markdown')
-    else: await update.message.reply_text(texto, reply_markup=reply_markup, parse_mode='Markdown')
+    if query:
+        await query.edit_message_text(texto, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+    else:
+        await context.bot.send_message(chat_id, texto, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+
 
 async def ranking(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    ranking_cozinha = []
-    ranking_loja = []
-    erro_db = None
-    
-    # 🛑 Interceptador de Pendências
     if await _interceptar_comandos_e_pendencias(update, context):
-        return # Bloqueia o comando
-    # 🛑 Fim do Interceptador
+        return
 
-    try: # <<< ADICIONADO TRY >>>
-        # Tenta buscar ambos os rankings
+    try:
         ranking_cozinha = database.calcular_ranking_desempenho(setor_filtro='Cozinha')
         ranking_loja = database.calcular_ranking_desempenho(setor_filtro='Loja')
-
-    except Exception as e: # <<< ADICIONADO EXCEPT >>>
-        logger.exception(f"Erro ao buscar dados do ranking para o comando /ranking do Telegram: {e}")
-        erro_db = e # Guarda o erro para informar o usuário
-
-    # --- Lógica de exibição com tratamento de erro ---
-    if erro_db:
-        await update.message.reply_text(f"❌ Desculpe, ocorreu um erro ao buscar os dados do ranking no momento.\nPor favor, tente novamente mais tarde ou contate o suporte se o problema persistir.")
-        return # Interrompe se houve erro no banco
+    except Exception as e:
+        logger.exception(f"Erro ao buscar dados do ranking: {e}")
+        await update.message.reply_text(
+            "❌ Desculpe, ocorreu um erro ao buscar os dados do ranking no momento.\n"
+            "Tente novamente mais tarde ou contate o suporte se o problema persistir."
+        )
+        return
 
     if not ranking_cozinha and not ranking_loja:
         await update.message.reply_text("Ainda não há dados suficientes para gerar os rankings este mês.")
         return
 
-    texto_final = "🏆 **Rankings de Desempenho do Mês** 🏆\n\n"
-    texto_final += "O *Score Final* equilibra Confiabilidade e Esforço (50%/50%).\n"
-
-    # --- Ranking Cozinha ---
-    texto_final += "\n🍳 **--- Ranking Cozinha ---** 🍳\n"
-    if not ranking_cozinha:
-        texto_final += "_Sem dados para este setor no momento._\n"
-    else:
+    def formatar_setor(titulo: str, lista) -> str:
+        bloco = f"\n{titulo}\n"
+        if not lista:
+            return bloco + "<i>Sem dados para este setor no momento.</i>\n"
         icones = ["🥇", "🥈", "🥉"]
-        for i, dados in enumerate(ranking_cozinha):
-            posicao_icone = icones[i] if i < len(icones) else f" {i+1}."
-            nome = dados['NomeCompleto']
-            score = dados['ScoreHibrido']
-            detalhes = f"(Desemp: {dados['Desempenho']}%, Pts: {dados['PontosGanhos']})"
-            texto_final += f"{posicao_icone} {nome} - **Score: {score}**\n   {detalhes}\n"
+        for i, dados in enumerate(lista):
+            posicao = icones[i] if i < len(icones) else f" {i + 1}."
+            nome = esc(dados.get('NomeCompleto') or "Desconhecido")
+            detalhes = f"(Desemp: {esc(dados.get('Desempenho'))}%, Pts: {esc(dados.get('PontosGanhos'))})"
+            bloco += f"{posicao} {nome} - <b>Score: {esc(dados.get('ScoreHibrido'))}</b>\n   {detalhes}\n"
+        return bloco
 
-    texto_final += "\n🛒 <b>--- Ranking Atendimento/Loja ---</b> 🛒\n"
-    if not ranking_loja:
-        texto_final += "<i>Sem dados para este setor no momento.</i>\n"
-    else:
-        icones = ["🥇", "🥈", "🥉"]
-        for i, dados in enumerate(ranking_loja):
-            posicao_icone = icones[i] if i < len(icones) else f" {i+1}."
-            nome = dados['NomeCompleto']
-            score = dados['ScoreHibrido']
-            detalhes = f"(Desemp: {dados['Desempenho']}%, Pts: {dados['PontosGanhos']})"
-            # Usando HTML Tags
-            # Sanitização do nome
-            nome_esc = html.escape(nome or "Desconhecido")
-            texto_final += f"{posicao_icone} {nome_esc} - <b>Score: {score}</b>\n   {detalhes}\n"
-
-    # CORREÇÃO: Envia usando HTML para evitar erros com caracteres especiais em nomes
+    texto_final = (
+        "🏆 <b>Rankings de Desempenho do Mês</b> 🏆\n\n"
+        "O <i>Score Final</i> equilibra Confiabilidade e Esforço (50%/50%).\n"
+        + formatar_setor("🍳 <b>--- Ranking Cozinha ---</b> 🍳", ranking_cozinha)
+        + formatar_setor("🛒 <b>--- Ranking Atendimento/Loja ---</b> 🛒", ranking_loja)
+    )
     await update.message.reply_html(texto_final)
+
 
 async def meu_historico(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Envia ao usuário um resumo de suas últimas 10 atividades."""
-    chat_id = update.effective_chat.id
-    
-    # 🛑 Interceptador de Pendências
     if await _interceptar_comandos_e_pendencias(update, context):
-        return # Bloqueia o comando
-    # 🛑 Fim do Interceptador
-    
-    # 1. Identifica o funcionário pelo Chat ID do Telegram
-    funcionario = database.buscar_funcionario_por_chat_id(chat_id)
+        return
+
+    funcionario = database.buscar_funcionario_por_chat_id(update.effective_user.id)
     if not funcionario:
         await update.message.reply_text("Desculpe, não consegui encontrar seu cadastro no sistema.")
         return
 
-    # 2. Busca o histórico completo no banco de dados
     historico_completo = database.obter_historico_funcionario(funcionario.FuncionarioID)
-
     if not historico_completo:
         await update.message.reply_text("Você ainda não possui nenhuma atividade registrada no seu histórico.")
         return
 
-    # 3. Monta a mensagem de resposta, pegando apenas os 10 itens mais recentes
-    texto_historico = f"📜 <b>Seu Histórico Recente (últimas 10 atividades)</b> 📜\n\n"
-    
-    for item in historico_completo[:10]: # O [:10] fatia a lista para pegar só os 10 primeiros
-        status_icone = "❓" # Padrão
-        if item.Status == 'Aprovada':
-            status_icone = "✅"
-        elif item.Status == 'Recusada':
-            status_icone = "❌"
-        elif item.Status == 'Pendente (Não Entregue)':
-            status_icone = "⏳"
+    icones_status = {'Aprovada': "✅", 'Recusada': "❌", 'Pendente (Não Entregue)': "⏳"}
+    texto = "📜 <b>Seu Histórico Recente (últimas 10 atividades)</b> 📜\n\n"
 
-        # Formata a data para ficar mais amigável
-        data_envio = item.DataEnvio.strftime("%d/%m/%Y") if item.DataEnvio else "N/A"
+    for item in historico_completo[:10]:
+        icone = icones_status.get(item.Status, "❓")
         pontos = item.PontosGanhos if item.PontosGanhos is not None else 0
-        
-        # Sanitização para evitar erros de HTML
-        titulo_esc = html.escape(item.Titulo or "Sem Título")
-        status_esc = html.escape(item.Status or "")
-
-        texto_historico += f"{status_icone} <b>{titulo_esc}</b>\n"
-        texto_historico += f"    - Status: {status_esc}\n"
-        texto_historico += f"    - Pontos: {pontos}\n"
-
-        # Adiciona o motivo da recusa, se houver
+        texto += f"{icone} <b>{esc(item.Titulo or 'Sem Título')}</b>\n"
+        texto += f"    - Status: {esc(item.Status)}\n"
+        texto += f"    - Pontos: {pontos}\n"
         if item.MotivoRecusa:
-            motivo_esc = html.escape(item.MotivoRecusa)
-            texto_historico += f"    - Motivo: <i>{motivo_esc}</i>\n"
-        
-        texto_historico += "\n"
+            texto += f"    - Motivo: <i>{esc(item.MotivoRecusa)}</i>\n"
+        texto += "\n"
 
-    # 4. Envia a mensagem formatada em HTML para o usuário
-    await update.message.reply_html(texto_historico)    
+    await update.message.reply_html(texto)
 
 
 async def meu_saldo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Mostra o saldo de pontos cumulativo do funcionário."""
-    chat_id = update.effective_chat.id
-    funcionario = database.buscar_funcionario_por_chat_id(chat_id)
+    funcionario = database.buscar_funcionario_por_chat_id(update.effective_user.id)
     if not funcionario:
         await update.message.reply_text("Não encontrei seu cadastro no sistema.")
         return
 
-    saldo_pontos = database.buscar_saldo_funcionario(funcionario.FuncionarioID)
-    # Usamos a taxa de conversão que definimos no config.py
-    valor_monetario = saldo_pontos * config.TAXA_CONVERSAO_PONTO_REAL
+    saldo_pontos = database.buscar_saldo_funcionario(funcionario.FuncionarioID) or 0
+    valor_monetario = saldo_pontos * taxa_de_conversao()
 
-    texto = (
+    await update.message.reply_html(
         f"💰 <b>Seu Saldo Atual</b> 💰\n\n"
         f"Você acumulou: <b>{saldo_pontos} pontos</b>\n\n"
         f"Isso equivale a <b>R$ {valor_monetario:.2f}</b> para troca na nossa Loja de Recompensas!\n\n"
         "Continue assim para resgatar prêmios incríveis! ✨"
     )
-    await update.message.reply_html(texto)
+
 
 async def loja_recompensas(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Exibe os produtos da loja como um menu de botões."""
-    # Usamos 'update.effective_chat.id' para funcionar tanto com comandos (/loja) quanto com cliques de botão.
-    chat_id = update.effective_chat.id
-    produtos = database.listar_produtos_loja() # Lista apenas os produtos ativos por padrão
+    texto, reply_markup = montar_loja(database.listar_produtos_loja())
+    await context.bot.send_message(update.effective_chat.id, texto, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
 
-    keyboard = []
-    texto = "🏪 **Loja de Recompensas** 🏪\n\nEscolha um item para ver os detalhes e resgatar:"
 
-    # 1. Carrega os produtos dinâmicos do banco (se houver)
-    if produtos:
-        for produto in produtos:
-            # Mostra o estoque se ele for limitado
-            estoque_str = f"({produto.EstoqueDisponivel} un.)" if produto.EstoqueDisponivel is not None else ""
-            texto_botao = f"{produto.Nome} - {produto.CustoEmPontos} pts {estoque_str}"
-            keyboard.append([InlineKeyboardButton(texto_botao, callback_data=f"ver_produto_{produto.ProdutoID}")])
-    else:
-        # Se não tiver produtos físicos, muda a mensagem mas não bloqueia a tela
-        texto = "🏪 **Loja de Recompensas** 🏪\n\nNão temos itens físicos no momento, mas você pode usar seu saldo abaixo:"
-
-    # 2. Adiciona o botão FIXO de Abater na Comanda sempre no final da lista
-    keyboard.append([InlineKeyboardButton("🍔 Abater na Comanda", callback_data="abater_comanda")])
-
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await context.bot.send_message(chat_id, texto, reply_markup=reply_markup)
-
-async def solicitar_documentos_inicio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Inicia o fluxo de solicitação de DOCUMENTOS PESSOAIS com verificação de segurança."""
-    chat_id = update.effective_chat.id
-    funcionario = database.buscar_funcionario_por_chat_id(chat_id)
-
-    if not funcionario or not funcionario.VerificadorCPF:
-        await update.message.reply_text("Desculpe, esta funcionalidade não está habilitada para você. Por favor, contate o RH para cadastrar seu código de verificação.")
+async def acompanhar_metas(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Envia para o funcionário o status da meta principal em porcentagem."""
+    dados_meta = database.buscar_meta_principal_do_dia()
+    if not dados_meta or not dados_meta.get('valor_meta'):
+        await update.message.reply_text("Nenhuma meta de equipe está ativa no momento. Foco nas tarefas individuais! 💪")
         return
 
+    atingido = float(dados_meta['valor_atingido'] or 0)
+    total = float(dados_meta['valor_meta'])
+    percentual = (atingido / total) * 100 if total > 0 else 0
+
+    if percentual >= 100:
+        frase = "META BATIDA! Parabéns, equipe! 🎉"
+    elif percentual >= 75:
+        frase = "Estamos quase lá! Este é o nosso progresso até agora:"
+    else:
+        frase = "Este é o nosso progresso até agora:"
+
+    await update.message.reply_html(
+        f"🎯 <b>Meta da Equipe: {esc(dados_meta['nome_meta'])}</b> 🎯\n\n"
+        f"{frase}\n\n"
+        f"<code>{barra_de_progresso(percentual)}</code>\n\n"
+        f"🏁 <b>Progresso: {percentual:.2f}% de 100%</b>\n\n"
+        "Vamos com tudo, equipe! 🚀"
+    )
+
+
+async def minhas_conquistas(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Exibe a lista de conquistas já desbloqueadas pelo funcionário."""
+    funcionario = database.buscar_funcionario_por_chat_id(update.effective_user.id)
+    if not funcionario:
+        await update.message.reply_text("Desculpe, não consegui encontrar seu cadastro no sistema.")
+        return
+
+    conquistas_ganhas = database.listar_conquistas_por_funcionario(funcionario.FuncionarioID)
+    if not conquistas_ganhas:
+        await update.message.reply_text("Você ainda não desbloqueou nenhuma conquista. Continue se esforçando! 💪")
+        return
+
+    texto = (f"🏅 <b>Suas Conquistas Desbloqueadas</b> ({len(conquistas_ganhas)}) 🏅\n\n"
+             "Parabéns pelas suas realizações!\n")
+    for conquista in conquistas_ganhas:
+        data_formatada = conquista.DataConquista.strftime('%d/%m/%Y') if conquista.DataConquista else "N/A"
+        texto += (
+            f"\n--------------------\n"
+            f"{esc(conquista.Icone)} <b>{esc(conquista.Nome)}</b>\n"
+            f"<i>{esc(conquista.Descricao)}</i>\n"
+            f"<pre>Desbloqueada em: {data_formatada}</pre>\n"
+        )
+    await update.message.reply_html(texto)
+
+
+async def solicitar_documentos_inicio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Inicia a solicitação de DOCUMENTOS PESSOAIS com verificação de segurança."""
+    funcionario = database.buscar_funcionario_por_chat_id(update.effective_user.id)
+    if not funcionario or not funcionario.VerificadorCPF:
+        await update.message.reply_text(
+            "Desculpe, esta funcionalidade não está habilitada para você. "
+            "Por favor, contate o RH para cadastrar seu código de verificação."
+        )
+        return
     context.user_data['aguardando_verificador_cpf'] = True
     await update.message.reply_text("Para sua segurança, por favor, digite os 3 primeiros dígitos do seu CPF.")
 
 
-async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Gerencia a máquina de estados para o onboarding inicial (coleta de documentos e dados).
-    """
-    user = update.effective_user
-    chat_id = update.effective_chat.id
-    funcionario = database.buscar_funcionario_por_chat_id(chat_id)
-    
-    if not funcionario:
-        await context.bot.send_message(chat_id, "Desculpe, não consegui encontrar seu cadastro no sistema.")
-        return
-
-    status_onboarding = database.buscar_onboarding_status(funcionario.FuncionarioID)
-
-    # 1. Recuperação e Sanitização de Estado Robusta
-    raw_etapa = getattr(status_onboarding, 'UltimaEtapa', 'INICIO')
-    if raw_etapa is None: raw_etapa = 'INICIO'
-
-    # REMOVE TUDO que não for letra ou número (limpa caracteres ocultos/fantasmas)
-    # Ex: 'ESTADO_CIVIL ' (com espaço oculto) vira 'ESTADOCIVIL'
-    ultima_etapa = "".join(char for char in str(raw_etapa) if char.isalnum() or char == '_').upper()
-
-    logger.info(f"--> ONBOARDING DEBUG: Raw='{raw_etapa}' | Processada='{ultima_etapa}'")
-
-    # Se a última mensagem foi uma foto, tentamos processar o File ID
-    texto_recebido = update.message.text
-    
-    # CORREÇÃO: Aceita Foto OU Documento (PDF) se estiver no fluxo de onboarding
-    # Isso permite que a CTPS Digital (PDF) seja processada corretamente
-    tem_arquivo = (update.message.photo or update.message.document)
-    foto_recebida = tem_arquivo and context.user_data.get('onboarding_foto')
-    
-    # Dicionário de Configuração do Workflow
-    WORKFLOW = {
-        'INICIO': { 
-            'pergunta': "Olá! Para finalizar seu registro, preciso de alguns documentos. \n\n"
-                        "Vamos começar. Por favor, envie a **FOTO ou PDF do seu RG** (Frente e Verso).",
-            'proxima_etapa': 'RG', 'espera_tipo': 'FOTO_OU_PDF' 
-        },
-        'RG': { 
-            'proxima_etapa': 'CPF', 'campo_db': ('RG_FileID', 'FileID'),
-            'pergunta': "Ótimo. Agora envie a **FOTO ou PDF do seu CPF**."
-        },
-        'CPF': { 
-            'proxima_etapa': 'CTPS', 'campo_db': ('CPF_FileID', 'FileID'),
-            'pergunta': "Perfeito. Envie a **FOTO da sua Carteira de Trabalho** (página da foto) ou o **PDF** exportado se for digital."
-        },
-        'CTPS': { 
-            'proxima_etapa': 'TITULO_ELEITOR', 'campo_db': ('CTPS_FileID', 'FileID'),
-            'pergunta': "Quase lá nos documentos. Envie a **FOTO ou PDF do Título de Eleitor**."
-        },
-        'TITULO_ELEITOR': { 
-            'proxima_etapa': 'ESCOLARIDADE', 'campo_db': ('TituloEleitor_FileID', 'FileID'),
-            'pergunta': "Documentos salvos! Agora, digite sua **Escolaridade** (Ex: Ensino Médio Completo)."
-        },
-        'ESCOLARIDADE': { 
-            'proxima_etapa': 'ESTADO_CIVIL', 'campo_db': ('Escolaridade', texto_recebido),
-            'pergunta': "Qual seu **Estado Civil**? (Ex: Solteiro, Casado, etc.)"
-        },
-        'ESTADO_CIVIL': { 
-            'proxima_etapa': 'FILHOS_QTD',  # Default seguro
-            'campo_db': ('EstadoCivil', texto_recebido),
-            # Pergunta padrão caso o fluxo precise repetir
-            'pergunta': "Qual seu **Estado Civil**? (Ex: Solteiro, Casado, etc.)"
-        },
-        # --- CAMPOS OBRIGATÓRIOS SE CASADO ---
-        'DATA_CASAMENTO': { 
-            'proxima_etapa': 'NOME_CONJUGUE', 'campo_db': ('DataCasamento', texto_recebido),
-            # Esta pergunta é usada se o fluxo retornar para cá, mas o fluxo normal usa hardcode no bloco anterior
-            'pergunta': "Ok. Agora, digite a **Data de Casamento** (dd/mm/aaaa)."
-        },
-        'NOME_CONJUGUE': { 
-            'proxima_etapa': 'CPF_CONJUGUE', 'campo_db': ('NomeConjugue', texto_recebido),
-            # CORREÇÃO: Aqui deve ser a pergunta do NOME, pois é a próxima etapa
-            'pergunta': "Qual o nome completo do seu **Cônjuge**?"
-        },
-        'CPF_CONJUGUE': { 
-            'proxima_etapa': 'FILHOS_QTD', 'campo_db': ('CPFConjugue', texto_recebido),
-            # CORREÇÃO: Aqui deve ser a pergunta do CPF
-            'pergunta': "Qual o **CPF do seu Cônjuge**? (Apenas números)"
-        },
-        # --- COLETA DE FILHOS (Estados de Coleta em Loop) ---
-        'FILHOS_QTD': { 
-            'proxima_etapa': 'CONCLUIR', # Esta será ajustada pela lógica
-            'campo_db': ('QtdFilhos', texto_recebido),
-            'pergunta': "Quantos filhos menores de idade você tem? (Digite o NÚMERO)"
-        },
-        'DADOS_FILHO_1_NOME': {
-             'proxima_etapa': 'DADOS_FILHO_1_NASC', 'campo_db': ('Filho{numero}_Nome', texto_recebido),
-             'pergunta': "Digite a **Data de Nascimento** (dd/mm/aaaa) do(a) {numero}º filho(a):"
-        },
-        'DADOS_FILHO_1_NASC': {
-             'proxima_etapa': 'DADOS_FILHO_1_CPF', 'campo_db': ('Filho{numero}_Nasc', texto_recebido),
-             'pergunta': "Digite o **CPF** (apenas números) do(a) {numero}º filho(a):"
-        },
-        'DADOS_FILHO_1_CPF': {
-             'proxima_etapa': 'DADOS_FILHO_2_NOME', 'campo_db': ('Filho{numero}_CPF', texto_recebido),
-             'pergunta': "Qual o nome completo do(a) {numero}º filho(a)?"
-        },
-    }
-  
-    # --- Lógica de Processamento da Etapa Anterior ---
-    if ultima_etapa != 'INICIO':
-        # CORREÇÃO: Normaliza chaves dinâmicas de filhos (ex: FILHO_2 -> FILHO_1) para buscar no WORKFLOW
-        chave_config = ultima_etapa
-        if ultima_etapa.startswith('DADOS_FILHO_'):
-            chave_config = re.sub(r'DADOS_FILHO_\d+_', 'DADOS_FILHO_1_', ultima_etapa)
-
-        etapa_anterior_config = WORKFLOW.get(chave_config)
-
-        if not etapa_anterior_config:
-            # Fallback de segurança para evitar crash se a chave não existir
-            await context.bot.send_message(chat_id, "Erro de estado no cadastro. Digite /cancelar para reiniciar.")
-            return
-
-    # Se recebemos texto e a etapa anterior esperava foto, ou vice-versa, é um erro.
-        esperava_foto = etapa_anterior_config.get('espera_tipo') in ['FOTO_OU_PDF']
-        recebeu_texto_nao_esperado = not esperava_foto and update.message.text and 'campo_db' not in etapa_anterior_config
-        
-        if (esperava_foto and not foto_recebida) or recebeu_texto_nao_esperado:
-            # Se esperava FOTO e não veio, ou veio texto em etapa que não espera campo_db, repete a pergunta.
-            espera_tipo = etapa_anterior_config.get('espera_tipo', 'TEXTO')
-            await context.bot.send_message(chat_id, f"⚠️ Formato inválido. Por favor, envie o {espera_tipo} ou digite o texto solicitado.")
-            return
-
-        # 1. PROCESSAMENTO DE FOTO/ARQUIVO
-        if foto_recebida:
-            proxima_etapa = etapa_anterior_config['proxima_etapa']
-            # Salva o File ID do documento
-            file_id_a_salvar = context.user_data.pop('file_id_documento_onboarding')
-            campo_db = etapa_anterior_config['campo_db'][0]
-            
-            # Salva no banco e avança a etapa
-            database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa, (campo_db, file_id_a_salvar))
-            context.user_data.pop('onboarding_foto', None) # Limpa o estado
-
-            # --- CORREÇÃO DO BUG: Envia a pergunta da próxima etapa ---
-            if proxima_etapa in WORKFLOW:
-                await context.bot.send_message(chat_id, WORKFLOW[proxima_etapa]['pergunta'])
-                
-                # Se a próxima etapa TAMBÉM espera foto (ex: do RG para o CPF), reativa o modo foto
-                if WORKFLOW[proxima_etapa].get('espera_tipo') in ['FOTO_OU_PDF']:
-                    context.user_data['onboarding_foto'] = True
-            # ----------------------------------------------------------
-
-        # 2. PROCESSAMENTO DE TEXTO/DADOS
-        elif texto_recebido:
-            valor_recebido = texto_recebido.strip()
-            
-            # 2a. RAMIFICAÇÃO: ESTADO CIVIL (CORREÇÃO DE BUG DOUBLE PROMPT)
-            texto_upper = texto_recebido.strip().upper()
-            respostas_validas_civil = ['SOLTEIRO', 'SOLTEIRA', 'CASADO', 'CASADA', 'DIVORCIADO', 'DIVORCIADA', 'VIUVO', 'VIUVA', 'SEPARADO', 'SEPARADA']
-
-            # [CORREÇÃO] Verificação ESTRITA da etapa para evitar disparos falsos
-            # Normaliza removendo _ para garantir match com 'ESTADOCIVIL' ou 'ESTADO_CIVIL'
-            etapa_normalizada = ultima_etapa.replace('_', '')
-
-            if 'ESTADOCIVIL' in etapa_normalizada:
-                # Lógica de Decisão do Próximo Passo
-                if 'CASADO' in texto_upper:
-                    proxima_etapa = 'DATA_CASAMENTO'
-                    # Mensagem específica para casado
-                    await context.bot.send_message(chat_id, "Ok. Agora, digite a **Data de Casamento** (dd/mm/aaaa).")
-                elif texto_upper in respostas_validas_civil:
-                    # Qualquer outro estado civil válido
-                    proxima_etapa = 'FILHOS_QTD'
-                    await context.bot.send_message(chat_id, WORKFLOW['FILHOS_QTD']['pergunta'])
-                else:
-                    # Se caiu aqui, está na etapa certa mas digitou algo inválido
-                    await context.bot.send_message(chat_id, "⚠️ Estado Civil inválido. Escolha: Solteiro, Casado, Viúvo, Divorciado...")
-                    return
-
-                # ATUALIZAÇÃO FORÇADA E RETORNO IMEDIATO
-                database.atualizar_onboarding_etapa(
-                    funcionario.FuncionarioID, 
-                    proxima_etapa, 
-                    ('EstadoCivil', texto_upper)
-                )
-                return # [IMPORTANTE] Encerra aqui para não cair no bloco genérico
-                
-            # 2b. VALIDAÇÃO E AVANÇO: DATA CASAMENTO
-            if ultima_etapa == 'DATA_CASAMENTO':
-                try:
-                    datetime.strptime(valor_recebido, '%d/%m/%Y')
-                    proxima_etapa = WORKFLOW['DATA_CASAMENTO']['proxima_etapa']
-                    
-                    database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa, ('DataCasamento', valor_recebido))
-                    
-                    # Pergunta o nome do cônjuge
-                    await context.bot.send_message(chat_id, WORKFLOW[proxima_etapa]['pergunta'])
-                except ValueError:
-                    await context.bot.send_message(chat_id, "⚠️ Data inválida. Por favor, digite no formato **dd/mm/aaaa**.")
-                
-                return # <--- OBRIGATÓRIO
-
-            # 2c. VALIDAÇÃO CPF CÔNJUGE
-            if ultima_etapa == 'CPF_CONJUGUE':
-                cpf_limpo = ''.join(filter(str.isdigit, valor_recebido))
-                if len(cpf_limpo) != 11:
-                    await context.bot.send_message(chat_id, "⚠️ CPF inválido (deve ter 11 dígitos). Digite novamente.")
-                    return
-                
-                proxima_etapa = WORKFLOW['CPF_CONJUGUE']['proxima_etapa']
-                database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa, ('CPFConjugue', cpf_limpo))
-                
-                # Pergunta quantidade de filhos
-                await context.bot.send_message(chat_id, WORKFLOW[proxima_etapa]['pergunta'])
-                return # <--- OBRIGATÓRIO
-
-            # 2d. VALIDAÇÃO E RAMIFICAÇÃO: FILHOS_QTD
-            if ultima_etapa == 'FILHOS_QTD':
-                try:
-                    qtd = int(valor_recebido)
-                    if qtd < 0: raise ValueError
-                    
-                    # Salva a quantidade
-                    database.atualizar_onboarding_etapa(funcionario.FuncionarioID, 'FILHOS_QTD', ('QtdFilhos', qtd))
-                    
-                    if qtd > 0:
-                        # Se tem filhos, entra no loop de coleta
-                        proxima_etapa = 'DADOS_FILHO_1_NOME' 
-                        context.user_data['qtd_filhos_onboarding'] = qtd
-                        context.user_data['filho_atual_onboarding'] = 1
-                        
-                        await context.bot.send_message(chat_id, f"Ok, vamos coletar os dados de **{qtd} filho(s)**.")
-                        await context.bot.send_message(chat_id, "Qual o nome completo do(a) 1º filho(a)?")
-                        
-                        database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa)
-                    else:
-                        # Se não tem filhos, finaliza
-                        proxima_etapa = 'CONCLUIR' 
-                        database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa)
-                        await _finalizar_onboarding_e_redirecionar(update, context, funcionario)
-                    
-                    return # <--- OBRIGATÓRIO
-                except ValueError:
-                    await context.bot.send_message(chat_id, "⚠️ Por favor, digite apenas um NÚMERO válido para a quantidade de filhos.")
-                    return
-
-            # 2e. COLETA DE DADOS DE FILHOS EM LOOP (Usa função auxiliar)
-            if ultima_etapa.startswith('DADOS_FILHO_'):
-                await _coletar_dados_filhos_e_avancar(update, context, funcionario, valor_recebido, ultima_etapa)
-                return # <--- OBRIGATÓRIO
-
-            # 2f. SALVAMENTO PADRÃO DE DADO TEXTO (Genérico)
-            # [CORREÇÃO] A exclusão agora verifica a string normalizada para garantir que 'ESTADOCIVIL' também seja ignorado aqui
-            etapa_norm_check = ultima_etapa.replace('_', '')
-
-            if etapa_anterior_config and 'proxima_etapa' in etapa_anterior_config and 'ESTADOCIVIL' not in etapa_norm_check:
-                proxima_etapa = etapa_anterior_config['proxima_etapa']
-                
-                # Salva no banco se tiver campo definido
-                if 'campo_db' in etapa_anterior_config:
-                    campo_db = etapa_anterior_config['campo_db'][0]
-                    database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa, (campo_db, valor_recebido))
-                else:
-                    database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa)
-
-                # Verifica finalização ou envia próxima pergunta
-                if proxima_etapa == 'CONCLUIR':
-                    await _finalizar_onboarding_e_redirecionar(update, context, funcionario)
-                elif proxima_etapa in WORKFLOW:
-                    await context.bot.send_message(chat_id, WORKFLOW[proxima_etapa]['pergunta'])
-                    # Prepara estado se a próxima for foto
-                    if WORKFLOW[proxima_etapa].get('espera_tipo') in ['FOTO_OU_PDF']:
-                        context.user_data['onboarding_foto'] = True
-                
-                return # <--- OBRIGATÓRIO
-            
-            # Fallback para estados desconhecidos
-            await context.bot.send_message(chat_id, "Erro no fluxo. Não sei qual a próxima etapa. Digite /cancelar e tente novamente.")
-
-        # 3. TRATAMENTO DE INPUT INVÁLIDO (Não é Texto nem Foto esperada)
-        else:
-            if ultima_etapa != 'INICIO':
-                await context.bot.send_message(chat_id, "⚠️ Eu não entendi isso. Por favor, envie uma **FOTO** (se for documento) ou **TEXTO** para responder.")
-            return
-
-    # --- Envio da Primeira Pergunta (Etapa INICIO) ---
-    elif ultima_etapa == 'INICIO':
-        # Esta lógica só é chamada se o Bot recebeu uma mensagem enquanto o estado era INICIO.
-        if texto_recebido: 
-            database.iniciar_onboarding_funcionario(funcionario.FuncionarioID) # Garante que o status seja 'Em Progresso'
-            proxima_etapa = 'RG'
-            
-            # Envia a primeira pergunta de foto
-            await context.bot.send_message(chat_id, WORKFLOW[proxima_etapa]['pergunta'])
-            context.user_data['onboarding_foto'] = True
-            database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa) # Avança para RG
-            return
-        
-        # Se for chamado sem texto (via start sem interagir), repete a mensagem.
-        # Isto é uma medida de segurança caso o disparo inicial falhe.
-        await context.bot.send_message(chat_id, WORKFLOW['INICIO']['pergunta'])
-        database.atualizar_onboarding_etapa(funcionario.FuncionarioID, 'RG') # Prepara o próximo estado
-        return
-
-async def _coletar_dados_filhos_e_avancar(update: Update, context: ContextTypes.DEFAULT_TYPE, funcionario, valor_recebido, ultima_etapa):
-    """
-    Função auxiliar que gerencia a coleta sequencial de dados dos filhos e salva em JSON.
-    CORRIGIDA: Recuperação de estado em caso de reinício do bot.
-    """
-    chat_id = update.effective_chat.id
-    
-    # Recupera o status atual do banco para consistência
-    status_onboarding = database.buscar_onboarding_status(funcionario.FuncionarioID)
-    dados_filhos_json = getattr(status_onboarding, 'DadosFilhos', None)
-    dados_filhos = json.loads(dados_filhos_json) if dados_filhos_json else []
-    
-    # RECUPERAÇÃO DE ESTADO (MEMÓRIA VS BANCO)
-    # Se não houver dados na RAM (ex: bot reiniciou), tentamos inferir pelo banco/etapa
-    if 'qtd_filhos_onboarding' not in context.user_data:
-        # Recupera a quantidade total salva na etapa anterior do banco
-        context.user_data['qtd_filhos_onboarding'] = getattr(status_onboarding, 'QtdFilhos', 0)
-        
-        # Infere qual filho estamos editando com base na string da etapa atual
-        try:
-            # Extrai o número do filho da string (ex: DADOS_FILHO_2_NOME -> 2)
-            match = re.search(r'DADOS_FILHO_(\d+)_', ultima_etapa)
-            if match:
-                context.user_data['filho_atual_onboarding'] = int(match.group(1))
-            else:
-                context.user_data['filho_atual_onboarding'] = len(dados_filhos) + 1
-        except Exception:
-            context.user_data['filho_atual_onboarding'] = 1
-
-    filho_atual = context.user_data.get('filho_atual_onboarding', 1)
-    qtd_filhos = context.user_data.get('qtd_filhos_onboarding', 0)
-    
-    # Mapeia o campo atual (Nome, Nasc, CPF)
-    _, _, campo_tipo = ultima_etapa.rpartition('_') # ex: DADOS_FILHO_1_NOME -> NOME
-
-    # Se ainda não tivermos o objeto para o filho atual, criamos
-    while len(dados_filhos) < filho_atual:
-         dados_filhos.append({})
-
-    # 2. Salva o dado recebido no índice correto (filho_atual - 1)
-    idx = filho_atual - 1
-    
-    # Definição da próxima etapa
-    proxima_pergunta = ""
-    proxima_etapa_nome = ""
-
-    if campo_tipo == 'NOME':
-         dados_filhos[idx]['Nome'] = valor_recebido
-         proxima_pergunta = "Digite a **Data de Nascimento** (dd/mm/aaaa) deste filho(a):"
-         proxima_etapa_nome = 'DADOS_FILHO_' + str(filho_atual) + '_NASC'
-    elif campo_tipo == 'NASC':
-         dados_filhos[idx]['Nasc'] = valor_recebido
-         proxima_pergunta = "Digite o **CPF** (apenas números) deste filho(a):"
-         proxima_etapa_nome = 'DADOS_FILHO_' + str(filho_atual) + '_CPF'
-    elif campo_tipo == 'CPF':
-         dados_filhos[idx]['CPF'] = valor_recebido
-         
-         # 3. Verifica se finalizou o loop de filhos
-         if filho_atual < qtd_filhos:
-             # Próximo filho
-             context.user_data['filho_atual_onboarding'] = filho_atual + 1
-             proxima_pergunta = f"Qual o nome completo do(a) {filho_atual + 1}º filho(a)?"
-             proxima_etapa_nome = 'DADOS_FILHO_' + str(filho_atual + 1) + '_NOME'
-         else:
-             # FIM DO LOOP
-             proxima_etapa_nome = 'CONCLUIR'
-
-    else:
-        await context.bot.send_message(chat_id, "Erro interno de campo. Tente /cancelar e comece novamente.")
-        return
-        
-    # 4. Salva o JSON atualizado e avança o estado
-    database.salvar_dados_filhos(funcionario.FuncionarioID, json.dumps(dados_filhos))
-    
-    if proxima_etapa_nome == 'CONCLUIR':
-         database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa_nome)
-         await _finalizar_onboarding_e_redirecionar(update, context, funcionario)
-    else:
-         database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa_nome)
-         await context.bot.send_message(chat_id, proxima_pergunta)
-
-async def _finalizar_onboarding_e_redirecionar(update: Update, context: ContextTypes.DEFAULT_TYPE, funcionario):
-    """
-    Função finaliza o onboarding, notifica o gestor, define o status 'Admissional Pendente'
-    e redireciona para o exame.
-    """
-    # 1. Marca o status Workflow como 'Completo' e Admissional como 'Pendente'
-    # Esta função está em database.py e deve ser ajustada para o novo schema
-    database.finalizar_onboarding_e_notificar_gestor(funcionario.FuncionarioID)
-    
-    mensagem_final = (
-        "🥳 **Parabéns! Registro Quase Concluído!** 🥳\n\n"
-        "Você enviou todos os documentos e informações de registro! Seu gestor já foi notificado.\n\n"
-        "⚠️ **Acesso Bloqueado:** O sistema só será liberado após a aprovação do seu exame admissional.\n\n"
-        "➡️ **Próxima Ação Obrigatória:** Por favor, agende imediatamente seu exame admissional no local indicado abaixo:\n\n"
-        "🏥 **Clínica/Local:** [Gera Medicina e Segurança do Trabalho]\n"
-        "📍 **Endereço:** [R. Afonso Pena, 809 - Centro, Rondonópolis - MT, 78700-070]\n"
-        "📞 **Telefone:** [(66) 3424-0035]\n\n"
-        "Qualquer dúvida, contate o RH. Aguarde a notificação de liberação! 🔒"
-    )
-    await context.bot.send_message(update.effective_chat.id, mensagem_final, parse_mode='Markdown')
-    context.user_data.clear() # Limpa todos os estados
-
-
-async def _interceptar_comandos_e_pendencias(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """
-    Intercepta comandos e verifica se o usuário tem pendências críticas.
-    Retorna True se houver bloqueio, False se o comando pode prosseguir.
-    """
-    user = update.effective_user
-    chat_id = update.effective_chat.id
-
-    # --- CORREÇÃO: Inicialização segura da variável data ---
-    query = update.callback_query
-    data = query.data if query else None
-    # -------------------------------------------------------
-
-    funcionario = database.buscar_funcionario_por_chat_id(chat_id)
-    # 1. Bypass para Comandos de Suporte e Gestores
-    # Usamos getattr() para definir 'Funcionario' como fallback se o atributo não existir ou for None.
-    nivel_acesso_seguro = getattr(funcionario, 'NivelAcesso', 'Funcionario') if funcionario else None
-    
-    if (update.message and update.message.text and update.message.text.lower().startswith(('/start', '/ajuda'))) or \
-       (nivel_acesso_seguro in ('Gestor', 'RH')):
-        return False # Não bloqueia
-
-    if not funcionario:
-        await context.bot.send_message(chat_id, "Desculpe, não consegui encontrar seu cadastro no sistema.")
-        return True # Bloqueia
-
-    # --- VERIFICAÇÃO 0: ONBOARDING OBRIGATÓRIO ---
-    status_onboarding = database.buscar_onboarding_status(funcionario.FuncionarioID)
-
-    if status_onboarding:
-        # Normaliza a string removendo espaços extras que causam erro na comparação
-        status_atual = status_onboarding.StatusWorkflow.strip()
-
-        # Bloqueio 0A: Se o Workflow de Documentos está incompleto
-        if status_atual != 'Completo':
-            # Se já está 'Em Progresso', apenas repassa para o handler (silencioso)
-            if status_atual == 'Em Progresso':
-                await onboarding_handler(update, context)
-                return True 
-
-            # Se está 'Pendente' (ainda não começou ou parou), manda o aviso
-            await context.bot.send_message(chat_id, 
-                                    f"🛑 **Ação Obrigatória (Onboarding):** Seu registro de documentos está pendente.\n"
-                                    "Você deve finalizar este processo antes de usar o sistema.",
-                                    parse_mode='Markdown')
-            await onboarding_handler(update, context)
-            return True # Bloqueia
-
-        # Bloqueio 0B: Se o Workflow de Documentos está completo, mas o Admissional está Pendente
-        if status_onboarding.StatusWorkflow == 'Completo' and status_onboarding.StatusAdmissional == 'Pendente':
-             await context.bot.send_message(chat_id, 
-                                       "🔒 **Acesso Bloqueado:** Seu registro de documentos está completo, mas o sistema só será liberado após a **aprovação do seu exame admissional** pelo RH.",
-                                       parse_mode='Markdown')
-             return True # Bloqueia o uso do sistema
-
-    # --- VERIFICAÇÃO 1: FEEDBACK DO DIA ANTERIOR ---
-    if not database.verificar_feedback_dia_anterior(funcionario.FuncionarioID):
-        # Bloqueia e envia o botão de avaliação para ontem
-        data_ontem_str = (datetime.now() - timedelta(days=1)).strftime('%d/%m')
-        mensagem = f"⚠️ **Ação Obrigatória:** Antes de prosseguir, por favor, avalie seu dia de trabalho referente a **{data_ontem_str}**."
-        
-        keyboard = [[InlineKeyboardButton("⭐ Avaliar meu dia de ontem", callback_data="avaliar_dia_ontem")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-
-        # Usamos send_message para garantir que a mensagem de bloqueio apareça
-        await context.bot.send_message(chat_id, mensagem, reply_markup=reply_markup, parse_mode='Markdown')
-        return True # Bloqueia
-
-    # --- VERIFICAÇÃO 2: PENDÊNCIAS DE CIÊNCIA ---
-    keyboard = []
-
-    # 2a. Comunicados Gerais (Usa CienciaID/AssinaturaID)
-    pendencias_gerais = database.buscar_pendencias_criticas(funcionario.FuncionarioID)
-    for p in pendencias_gerais:
-        id_pendencia, tipo, titulo, data_envio = p
-        if tipo == 'Comunicado':
-            data_str = data_envio.strftime('%d/%m')
-            # Para comunicados, o ID já é a assinatura, correto para 'doc_ciente_'
-            keyboard.append([InlineKeyboardButton(f"⚠️ Ler Comunicado ({data_str})", callback_data=f"doc_ciente_{id_pendencia}")])
-
-    # 2b. Documentos Pessoais (Usa DocumentoID correto para download)
-    docs_pessoais_pendentes = database.buscar_documentos_disponiveis(funcionario.FuncionarioID)
-    for doc in docs_pessoais_pendentes:
-        doc_id = doc.DocumentoID
-        tipo = doc.TipoDocumento
-        mes_ref = doc.MesAno.strftime('%m/%Y') if doc.MesAno else ""
-        # Para documentos, usamos o ID do documento para 'get_documento_'
-        keyboard.append([InlineKeyboardButton(f"⚠️ Ver {tipo} {mes_ref}", callback_data=f"get_documento_{doc_id}")])
-
-    if keyboard:
-        mensagem = f"🛑 **Ação Obrigatória:** Você possui **{len(keyboard)}** documento(s) pendente(s) de leitura/ciência. Clique abaixo para resolver."
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await context.bot.send_message(chat_id, mensagem, reply_markup=reply_markup, parse_mode='Markdown')
-        return True # Bloqueia
-
-    return False # Comando pode prosseguir
-
-
-async def roteador_de_texto_privado(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # --- INÍCIO NOVO: Interceptador de Comanda ---
-    estado = context.user_data.get('estado')
-    if estado == 'aguardando_valor_comanda':
-        await processar_valor_comanda(update, context)
-        return # Encerra aqui, não processa mais nada
-    # --- FIM NOVO ---
-    """
-    Esta função atua como um roteador para todas as mensagens de texto em chat privado.
-    Ela verifica o 'estado' do usuário e direciona para a ação correta.
-    """
-    user_data = context.user_data
-    texto_recebido = update.message.text
-    chat_id = update.effective_chat.id
-    funcionario = database.buscar_funcionario_por_chat_id(chat_id)
-
-    if not funcionario:
-        return # Se o funcionário não for encontrado, não faz nada
-    # Prioridade para processo de abate de comanda iniciado
-    if context.user_data.get('estado') == 'aguardando_valor_comanda':
-        await processar_valor_comanda(update, context)
-        return
-
-
-    # Comando /cancelar para limpar estado
-    if texto_recebido.strip().lower() == '/cancelar':
-        user_data.clear()
-        await update.message.reply_text("Ação cancelada. Use os botões do menu.")
-        return
-    
-        # 🛑 Interceptador de Pendências: Bloqueia comandos do menu
-    if await _interceptar_comandos_e_pendencias(update, context):
-        return # Bloqueia o processamento
-    # 🛑 Fim do Interceptador
-
-    if user_data.get('aguardando_verificador_cpf'): # Usar .get() é mais seguro
-        user_data.pop('aguardando_verificador_cpf', None) # Limpa mesmo se falhar
-        verificador_correto = database.buscar_verificador_cpf(funcionario.FuncionarioID)
-
-        if verificador_correto and texto_recebido.strip() == verificador_correto: # Adiciona verificação se verificador_correto existe
-            await update.message.reply_text("✅ Verificação bem-sucedida! Buscando seus documentos pendentes de ciência...")
-
-            # <<< A CORREÇÃO ESTÁ AQUI: Busca todos os documentos
-            documentos_disponiveis = database.buscar_documentos_disponiveis(funcionario.FuncionarioID)
-
-            if not documentos_disponiveis:
-                await update.message.reply_text("Você não possui novos documentos pendentes de ciência no momento.")
-                return
-
-            keyboard = []
-            for doc in documentos_disponiveis:
-                doc_id = doc.DocumentoID
-                tipo = doc.TipoDocumento
-                # Se for Holerite ou Cartão Ponto, usa a data, senão, usa a data de upload
-                if tipo in ['Holerite', 'Cartão Ponto']:
-                    mes_ano_str = f"({doc.MesAno.strftime('%m/%Y')})"
-                else:
-                    mes_ano_str = "" # O tipo já é autoexplicativo
-
-                # O CALLBACK AGORA USA O DocumentoID
-                keyboard.append([
-                    InlineKeyboardButton(
-                        f"📄 {tipo} {mes_ano_str}",
-                        callback_data=f"get_documento_{doc_id}" # <<< CALLBACK POR DocumentoID
-                    )
-                ])
-
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text("Selecione o documento que deseja visualizar:", reply_markup=reply_markup)
-
-        else:
-            await update.message.reply_text("❌ Código de verificação incorreto ou não cadastrado. Por favor, inicie o processo novamente ou contate o RH.")
-        return # Importante retornar após tratar um estado
-    
-    elif user_data.get('aguardando_dados_compra'):
-        # --- LÓGICA DE CARRINHO DE COMPRAS ---
-        texto = texto_recebido.strip()
-        categoria = user_data.get('temp_categoria_compra', 'Geral')
-        
-        # 1. Inicializa o carrinho se não existir
-        if 'carrinho_compras' not in user_data:
-            user_data['carrinho_compras'] = []
-            
-        # 2. Adiciona o item atual ao carrinho
-        user_data['carrinho_compras'].append({
-            'item': texto,
-            'categoria': categoria
-        })
-        
-        qtd_itens = len(user_data['carrinho_compras'])
-        
-        # 3. Pergunta se quer mais
-        msg = (f"✅ Item adicionado: <b>{texto}</b>\n"
-               f"📦 Itens no carrinho: {qtd_itens}\n\n"
-               f"Deseja adicionar mais itens na categoria <b>{categoria}</b> ou finalizar?")
-               
-        keyboard = [
-            [InlineKeyboardButton("➕ Adicionar Mais", callback_data="compra_add_mais")],
-            [InlineKeyboardButton("✅ Finalizar Pedido", callback_data="compra_finalizar")]
-        ]
-        
-        # Remove o estado de "aguardando texto" para não duplicar se ele clicar sem querer
-        user_data.pop('aguardando_dados_compra', None)
-        
-        await update.message.reply_html(msg, reply_markup=InlineKeyboardMarkup(keyboard))
-        return
-
-    elif user_data.get('aguardando_desc_manutencao'):
-        # Usuário digitou a descrição do problema, agora pede a foto
-        user_data.pop('aguardando_desc_manutencao', None)
-        user_data['temp_desc_manutencao'] = texto_recebido
-        user_data['aguardando_foto_manutencao'] = True
-        
-        await update.message.reply_text("📸 Agora, envie uma **FOTO** obrigatória do problema para registrarmos.")
-        return
-    
-    elif user_data.get('tarefa_nao_aplicavel'):
-        atribuicao_id = user_data.pop('tarefa_nao_aplicavel', None)
-        if atribuicao_id: # Só prossegue se conseguiu pegar o ID
-            database.registrar_tarefa_nao_aplicavel(atribuicao_id, texto_recebido)
-            keyboard = [[InlineKeyboardButton("⬅️ Ver Tarefas Restantes", callback_data="voltar_lista_tarefas")]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text("Ok, justificativa registrada!", reply_markup=reply_markup)
-        else:
-             await update.message.reply_text("Ocorreu um erro. Por favor, tente marcar como 'Não Aplicável' novamente.")
-        return
-
-    elif user_data.get('aguardando_denuncia_anonima'):
-        # Limpa o estado
-        user_data.pop('aguardando_denuncia_anonima', None)
-
-        # IMPORTANTE: NÃO HÁ 'funcionario.FuncionarioID' aqui.
-        # Salva a mensagem anonimamente no banco
-        # (Certifique-se que a função registrar_denuncia_anonima e a tabela DenunciasAnonimas foram criadas no banco)
-        novo_id = database.registrar_denuncia_anonima(texto_recebido)
-
-        if novo_id:
-            # Envia a confirmação ANÔNIMA para o gestor
-            mensagem_gestor = (
-                f"Atenção: Nova mensagem anônima recebida (Protocolo: {novo_id})\n\n"
-                f"<b>Mensagem:</b>\n"
-                f"<i>\"{texto_recebido}\"</i>"
-            )
-            # Envia para o grupo de gestão
-            try:
-                notificador_telegram.enviar_mensagem(config.GESTOR_GROUP_CHAT_ID, mensagem_gestor)
-            except Exception as e_notify:
-                logger.error(f"Falha ao notificar gestores sobre denuncia anonima (ID: {novo_id}): {e_notify}")
-                # O usuário não precisa saber se a notificação falhou, apenas que foi registrada.
-
-            # Envia a confirmação para o usuário que enviou
-            await update.message.reply_text(
-                "✅ Sua mensagem anônima foi registrada e enviada à gestão. Obrigado por sua contribuição."
-            )
-        else:
-            await update.message.reply_text("❌ Ocorreu um erro ao tentar registrar sua mensagem. Tente novamente mais tarde.")
-        return # Fim do fluxo
-
-    # Se não caiu em nenhum estado específico, é uma mensagem normal não esperada
-    else:
-        funcionario = database.buscar_funcionario_por_chat_id(chat_id)
-        status_onboarding = database.buscar_onboarding_status(funcionario.FuncionarioID)
-
-        # --- ROTEAMENTO DE TEXTO PARA ONBOARDING (Se estiver no meio do processo) ---
-        if status_onboarding and status_onboarding.StatusWorkflow == 'Em Progresso' and texto_recebido:
-            await onboarding_handler(update, context)
-            return
-
-        # --- SE NÃO FOI ONBOARDING, É UMA MENSAGEM NÃO ESPERADA ---
-        # Limpa qualquer estado residual por segurança
-        user_data.clear()
-        await update.message.reply_text("Não entendi o que você quis dizer. Use os botões do menu para interagir comigo. Se precisar, use o comando /ajuda ou digite /cancelar para recomeçar.")
-         
-
 async def solicitar_feedback_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """(REAPROVEITADO) Inicia o processo de Denúncia/Sugestão Anônima."""
-
-    # Envia a mensagem explicativa conforme solicitado
-    texto_explicativo = (
+    """Inicia o Canal Confidencial (mensagem anônima)."""
+    await update.message.reply_html(
         "Este é o seu <b>Canal Confidencial</b>.\n\n"
         "Use este espaço para enviar sugestões, reclamações ou denúncias de forma <b>100% ANÔNIMA</b>.\n\n"
-        "⚠️ <b>IMPORTANTE:</b> Sua identidade <b>NÃO</b> será registrada nem enviada à gestão. O sistema foi programado para descartar seu nome e ID de usuário nesta operação.\n\n"
+        "⚠️ <b>IMPORTANTE:</b> Sua identidade <b>NÃO</b> será registrada nem enviada à gestão. "
+        "O sistema foi programado para descartar seu nome e ID de usuário nesta operação.\n\n"
         "Por favor, digite sua mensagem completa abaixo e pressione Enviar. (Ou digite /cancelar para sair)."
     )
-
-    await update.message.reply_html(texto_explicativo) # Usar HTML por causa do <b>
-
-    # Define o NOVO estado para o roteador
     context.user_data['aguardando_denuncia_anonima'] = True
-    # Remove o estado antigo, caso exista (segurança)
     context.user_data.pop('aguardando_assunto_feedback', None)
-
-async def handler_foto_tarefa(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    MAX_SECONDS_DIFFERENCE = config.MAX_DIFERENCA_FOTO_SEGUNDOS # Usa valor do config.py
-    temp_photo_path = None
-    # --- CORREÇÃO: Recuperação de Estado de Onboarding ---
-    # Se a memória RAM foi limpa (ex: restart), verifica no banco se o usuário está em admissão.
-    if not context.user_data.get('onboarding_foto'):
-        user_id = update.effective_user.id
-        # Busca rápida apenas para verificar status
-        func_temp = database.buscar_funcionario_por_chat_id(user_id)
-        if func_temp:
-            status_db = database.buscar_onboarding_status(func_temp.FuncionarioID)
-            # Se o banco diz que está 'Em Progresso', restauramos a flag na memória
-            if status_db and status_db.StatusWorkflow == 'Em Progresso':
-                context.user_data['onboarding_foto'] = True
-                logger.info(f"Estado de onboarding restaurado via banco para {user_id}")
-    # -----------------------------------------------------
-    # --- ROTEAMENTO DE FOTO PARA ONBOARDING ---
-    if context.user_data.get('onboarding_foto', False):
-        try:
-            # Extrai o File ID do Telegram (para evitar o download completo agora)
-            if update.message.photo:
-                 file_id = update.message.photo[-1].file_id
-            elif update.message.document and 'pdf' in update.message.document.mime_type:
-                 file_id = update.message.document.file_id
-            else:
-                 raise ValueError("Tipo de arquivo inválido.")
-                 
-            # Armazena o File ID para o Onboarding Handler usar
-            context.user_data['file_id_documento_onboarding'] = file_id
-            
-            # Chama o Onboarding Handler para processar a etapa
-            await onboarding_handler(update, context)
-            return
-        except ValueError:
-             await context.bot.send_message(update.effective_chat.id, "⚠️ Por favor, envie o documento como FOTO ou PDF.")
-             return
-        except Exception as e:
-             logger.error(f"Erro no roteador de foto de onboarding: {e}", exc_info=True)
-             await context.bot.send_message(update.effective_chat.id, "Ocorreu um erro ao processar sua foto. Tente novamente.")
-             return
-
-    # --- FIM ROTEAMENTO DE ONBOARDING ---
-
-    try:
-        # Camada 1 de Verificação (sem alteração)
-        if update.message.forward_from or update.message.forward_from_chat:
-            await update.message.reply_text("❌ Desculpe, fotos encaminhadas não são aceitas.")
-            return
-        if update.message.document and 'image' in update.message.document.mime_type:
-            await update.message.reply_text("❌ Por favor, envie a imagem como 'Foto', e não como 'Arquivo'.")
-            return
-
-        # Camada 2 de Verificação
-        # [OTIMIZAÇÃO] Download local removido pois a validação EXIF foi desativada.
-
-        # Verifica se o usuário selecionou uma tarefa antes de enviar a foto
-        if 'identificador_tarefa' not in context.user_data:
-            await update.message.reply_text("Parece que você enviou uma foto sem antes selecionar uma tarefa. Por favor, use o comando /tarefas primeiro.")
-            return
-
-        # Continua com o registro da entrega...
-        atribuicao_id = int(context.user_data.pop('identificador_tarefa'))
-        funcionario = database.buscar_funcionario_por_chat_id(update.effective_user.id) #
-        tarefa = database.buscar_tarefa_por_atribuicao(atribuicao_id) #
-
-        if not (funcionario and tarefa):
-            await update.message.reply_text("Ocorreu um erro ao identificar seus dados ou a tarefa.")
-            # Limpa o caminho temporário antes de retornar
-            if temp_photo_path and os.path.exists(temp_photo_path): os.remove(temp_photo_path)
-            return
-
-        # --- CORREÇÃO DEFINITIVA: LÓGICA HÍBRIDA (FOTO OU DOCUMENTO) ---
-        file_id = None
-        
-        # Caso 1: É uma Foto (Galeria)
-        if update.message.photo:
-            file_id = update.message.photo[-1].file_id
-            
-        # Caso 2: É um Documento (PDF, Arquivo)
-        elif update.message.document:
-            file_id = update.message.document.file_id
-            
-        else:
-            await update.message.reply_text("❌ Formato de arquivo não reconhecido. Envie Foto ou PDF.")
-            return
-        # ------------------------------------------------
-
-        # Registra preliminarmente com file_id detectado
-        entrega_id = database.registrar_entrega_preliminar(tarefa.TarefaID, funcionario.FuncionarioID, atribuicao_id, file_id)
-
-        if entrega_id and config.GESTOR_GROUP_CHAT_ID: #
-            # Prepara notificação para gestor
-            # Usar html.escape para segurança se os títulos puderem conter < ou >
-            # import html
-            # titulo_escaped = html.escape(tarefa.Titulo)
-            # nome_funcionario_escaped = html.escape(funcionario.NomeCompleto)
-            legenda = (f"<b>Nova Entrega para Validação</b>\n\n"
-                    f"👤 <b>Funcionário:</b> {funcionario.NomeCompleto}\n"
-                    f"📝 <b>Tarefa:</b> {tarefa.Titulo} ({tarefa.Pontos} pts)\n"
-                    f"🗓️ <b>Data:</b> {datetime.now().strftime('%d/%m/%Y %H:%M')}")
-            keyboard = [[
-                InlineKeyboardButton("✅ Aprovar", callback_data=f"aprovar_gestor_{entrega_id}"),
-                InlineKeyboardButton("❌ Reprovar", callback_data=f"reprovar_gestor_{entrega_id}")
-            ]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            # --- CORREÇÃO: Enviar a notificação ANTES de marcar a flag ---
-
-            # Tenta enviar a notificação para o gestor PRIMEIRO
-            try:
-                resposta_api = notificador_telegram.enviar_foto_com_botoes( # Captura a resposta
-                    config.GESTOR_GROUP_CHAT_ID,
-                    file_id,
-                    legenda,
-                    reply_markup,
-                    parse_mode='HTML' # Mantenha como HTML
-                )
-
-                # SE (e somente SE) o envio foi um sucesso, marcamos a flag
-                if resposta_api and resposta_api.get('ok'):
-                    try:
-                        database.marcar_notificacao_gestor_enviada(entrega_id)
-                        logger.info(f"Notificação inicial para gestor (EntregaID {entrega_id}) enviada com sucesso E flag marcada.")
-                    except Exception as flag_error:
-                        logger.error(f"Notificação enviada, MAS FALHOU AO MARCAR FLAG para EntregaID {entrega_id}: {flag_error}", exc_info=True)
-                        # Trade-off: O agendador pode enviar uma duplicata, o que é aceitável.
-                else:
-                    # Se falhou, logamos o erro e NÃO marcamos a flag.
-                    # O agendador.py vai pegar esta entrega.
-                    logger.error(f"Falha ao enviar notificação inicial para gestores sobre EntregaID {entrega_id}. Resposta API: {resposta_api}. Flag NÃO marcada.")
-
-            except Exception as notify_error:
-                # Se ocorreu um erro de rede/timeout, também NÃO marcamos a flag.
-                # O agendador.py vai pegar esta entrega.
-                logger.error(f"Erro inesperado durante o envio da notificação inicial para gestor (EntregaID {entrega_id}): {notify_error}. Flag NÃO marcada.", exc_info=True)
-
-            # --- FIM DA CORREÇÃO ---
-
-            # Envia confirmação para o usuário (esta linha já existe depois do bloco acima)
-            await update.message.reply_text("✅ Evidência válida! Entrega registrada com sucesso e enviada para validação!")
-
-    except Exception as e:
-        logger.error(f"Erro crítico em receber_foto: {e}", exc_info=True)
-        await update.message.reply_text("Ocorreu um erro crítico ao registrar sua entrega. Contate o administrador.")
-
-    finally:
-        # Garante que o arquivo temporário seja sempre removido
-        if temp_photo_path and os.path.exists(temp_photo_path):
-            try:
-                os.remove(temp_photo_path)
-            except Exception as del_err:
-                logger.error(f"Erro ao remover arquivo temporário {temp_photo_path}: {del_err}")        
-
-# Em telegram_bot.py, SUBSTITUA a função receber_motivo_recusa por esta:
-
-async def receber_motivo_recusa(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id_grupo = update.effective_chat.id
-    # [CORREÇÃO] Validação de Reply: Só aceita se for resposta à mensagem do bot
-    # Isso impede que mensagens aleatórias no grupo sejam capturadas como motivo.
-    is_reply = update.message.reply_to_message is not None
-    is_reply_to_bot = is_reply and update.message.reply_to_message.from_user.id == context.bot.id
-
-    if not (is_reply and is_reply_to_bot):
-        return # Ignora mensagens soltas, processa apenas respostas diretas ao bot
-    gestor_id = update.effective_user.id
-    gestor_nome = update.effective_user.first_name
-    # Sanitização HTML para evitar erro "Unclosed tag" no Telegram
-    motivo_raw = update.message.text
-    motivo = html.escape(motivo_raw) if motivo_raw else "Sem motivo especificado"
-
-    # --- Bloco de leitura (sem alteração) ---
-    dados_recusa = None
-    if 'pendencias_recusa' in context.bot_data and \
-    chat_id_grupo in context.bot_data['pendencias_recusa'] and \
-    gestor_id in context.bot_data['pendencias_recusa'][chat_id_grupo]:
-        dados_recusa = context.bot_data['pendencias_recusa'][chat_id_grupo].pop(gestor_id)
-        logger.info(f"Dados de recusa encontrados em bot_data para GestorID {gestor_id} no ChatID {chat_id_grupo}.")
-        if not context.bot_data['pendencias_recusa'][chat_id_grupo]:
-            context.bot_data['pendencias_recusa'].pop(chat_id_grupo)
-        if not dados_recusa:
-            await update.message.reply_text(
-                "⚠️ **Sessão Expirada:** Não consegui vincular sua resposta à tarefa.\n"
-                "Por favor, localize a mensagem original e clique no botão **❌ Reprovar** novamente.",
-                parse_mode='Markdown'
-            )
-            return
-
-    if not dados_recusa:
-        # Se for uma resposta direta ao bot, mas sem dados na memória, avisa o gestor.
-        # Isso acontece se o bot reiniciou ou se o cache expirou.
-        if update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id:
-            await update.message.reply_text(
-                "⚠️ **Sessão Expirada:** Não consegui vincular sua resposta à tarefa.\n"
-                "Por favor, clique no botão **❌ Reprovar** novamente na mensagem original da tarefa.",
-                parse_mode='Markdown'
-            )
-        return
-
-    # --- CORREÇÃO APLICADA AQUI ---
-    # Extrai os dados recuperados de bot_data (que já continha o msg_id)
-    entrega_id = dados_recusa['entrega_id']
-    id_mensagem_original = dados_recusa['msg_id'] # <-- USAMOS O VALOR CORRETO
-    # --- FIM DA CORREÇÃO ---
-
-    detalhes = database.buscar_detalhes_da_entrega(entrega_id)
-
-    if not detalhes or detalhes.StatusValidacao != 'Pendente':
-        await update.message.reply_text("Esta tarefa já foi validada por outro gestor ou não foi encontrada.")
-        return
-
-    database.recusar_entrega(entrega_id, motivo)
-
-    texto_notificacao = (f"⚠️ Atenção, <b>{detalhes.NomeCompleto}</b>!\n\n"
-                        f"Sua entrega para a tarefa '<b>{detalhes.Titulo}</b>' foi RECUSADA.\n\n"
-                        f"<b>Motivo:</b> {motivo}\n\n"
-                        "Por favor, corrija e envie novamente.")
-
-    notificador_telegram.enviar_mensagem(detalhes.ChatIDFuncionario, texto_notificacao)
-
-    legenda_final = (f"**Entrega RECUSADA por {gestor_nome}**\n\n"
-                    f"👤 **Funcionário:** {detalhes.NomeCompleto}\n"
-                    f"📝 **Tarefa:** {detalhes.Titulo}\n"
-                    f"💬 **Motivo:** {motivo}")
-
-    # A linha "context.chat_data.pop" foi removida.
-    if id_mensagem_original: # Agora usamos a variável correta
-        try:
-            await context.bot.edit_message_caption(chat_id=chat_id_grupo, message_id=id_mensagem_original, caption=legenda_final)
-        except Exception as e_edit:
-            logger.error(f"Erro ao editar caption da mensagem recusada (ID: {entrega_id}): {e_edit}")
-            try:
-                await update.message.reply_text(legenda_final)
-            except Exception as e_send:
-                logger.error(f"Falha também ao enviar mensagem de fallback para recusa {entrega_id}: {e_send}")
-    else:
-        logger.warning(f"Não foi possível encontrar msg_id original para recusa {entrega_id}. Enviando status como nova mensagem.")
-        try:
-            await update.message.reply_text(legenda_final)
-        except Exception as e_send:
-            logger.error(f"Falha ao enviar mensagem de fallback (sem msg_id) para recusa {entrega_id}: {e_send}")
 
 
 async def solicitar_foto_nf(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1520,893 +849,1363 @@ async def solicitar_foto_nf(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         "(Se mudar de ideia, digite /cancelar)"
     )
 
-async def receber_nota_fiscal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Handler dedicado para receber a foto da Nota Fiscal (Regras 1, 2, 3).
-    Este handler SÓ é ativado se o estado 'aguardando_nota_fiscal' for True.
-    """
-    # Limpa o estado imediatamente
-    context.user_data.pop('aguardando_nota_fiscal', None)
 
-    # 1. Validações básicas (não encaminhada, não arquivo)
-    if update.message.forward_from or update.message.forward_from_chat:
-        await update.message.reply_text("❌ Desculpe, fotos encaminhadas não são aceitas. Por favor, tire a foto na hora ou envie da sua galeria.")
+# ===================================================================
+# == ONBOARDING (CADASTRO INICIAL) ==================================
+# ===================================================================
+
+def normalizar_etapa(raw_etapa) -> str:
+    """Limpa a etapa vinda do banco (espaços, caracteres invisíveis) e padroniza."""
+    if raw_etapa is None:
+        return 'INICIO'
+    etapa = "".join(c for c in str(raw_etapa) if c.isalnum() or c == '_').upper()
+    if not etapa:
+        return 'INICIO'
+    if etapa in WORKFLOW_ONBOARDING or etapa in ('INICIO', 'CONCLUIR') or PADRAO_ETAPA_FILHO.match(etapa):
+        return etapa
+    # Tenta achar sem o underline (ex.: 'ESTADOCIVIL' -> 'ESTADO_CIVIL')
+    return _MAPA_ETAPAS_SEM_UNDERLINE.get(etapa.replace('_', ''), etapa)
+
+
+def pergunta_da_etapa(etapa: str):
+    """Texto (HTML) que pede a informação da etapa atual. None se a etapa for desconhecida."""
+    if etapa in WORKFLOW_ONBOARDING:
+        return WORKFLOW_ONBOARDING[etapa]['pergunta']
+    if etapa == 'INICIO':
+        return WORKFLOW_ONBOARDING['RG']['pergunta']
+    combinacao = PADRAO_ETAPA_FILHO.match(etapa)
+    if combinacao:
+        numero, campo = int(combinacao.group(1)), combinacao.group(2)
+        if campo == 'NOME':
+            return f"Qual o <b>nome completo</b> do(a) {numero}º filho(a)?"
+        if campo == 'NASC':
+            return f"Digite a <b>Data de Nascimento</b> (dd/mm/aaaa) do(a) {numero}º filho(a):"
+        return (f"Digite o <b>CPF</b> (apenas números) do(a) {numero}º filho(a).\n"
+                f"<i>Se ainda não tiver CPF, digite: não tem</i>")
+    return None
+
+
+async def _enviar_html(context, chat_id, texto):
+    await context.bot.send_message(chat_id, texto, parse_mode=ParseMode.HTML)
+
+
+async def onboarding_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Máquina de estados do cadastro inicial. O progresso fica SALVO NO BANCO
+    (UltimaEtapa), então nada se perde se o bot reiniciar.
+    Recebe fotos/PDFs nas etapas de documento e texto nas demais.
+    """
+    chat_id = update.effective_chat.id
+    funcionario = database.buscar_funcionario_por_chat_id(update.effective_user.id)
+    if not funcionario:
+        await context.bot.send_message(chat_id, "Desculpe, não consegui encontrar seu cadastro no sistema.")
         return
-    if update.message.document and 'image' in update.message.document.mime_type:
-        await update.message.reply_text("❌ Por favor, envie a imagem como 'Foto', e não como 'Arquivo'.")
+
+    status = database.buscar_onboarding_status(funcionario.FuncionarioID)
+    if not status:
+        await context.bot.send_message(chat_id, "Não há cadastro pendente para você. Contate o RH se achar que isso é um erro.")
         return
+    if (getattr(status, 'StatusWorkflow', None) or '').strip() == 'Completo':
+        return  # Nada a fazer
+
+    etapa = normalizar_etapa(getattr(status, 'UltimaEtapa', None))
+    logger.info(f"ONBOARDING: FuncionarioID={funcionario.FuncionarioID} etapa='{etapa}'")
+    func_id = funcionario.FuncionarioID
+    msg = update.message  # Pode ser None se veio de um clique em botão
+
+    # --- Etapa INICIO: qualquer interação começa o cadastro ---
+    if etapa == 'INICIO':
+        database.iniciar_onboarding_funcionario(func_id)   # Status -> 'Em Progresso'
+        database.atualizar_onboarding_etapa(func_id, 'RG')  # Agora esperamos o RG
+        await _enviar_html(
+            context, chat_id,
+            "Olá! Para finalizar seu registro, preciso de alguns documentos.\n\n" + WORKFLOW_ONBOARDING['RG']['pergunta']
+        )
+        return
+
+    # --- Etapa CONCLUIR: tudo coletado, só falta finalizar (ex.: caiu antes de finalizar) ---
+    if etapa == 'CONCLUIR':
+        await _finalizar_onboarding_e_redirecionar(update, context, funcionario)
+        return
+
+    pergunta_atual = pergunta_da_etapa(etapa)
+    if pergunta_atual is None:
+        logger.error(f"ONBOARDING: etapa desconhecida '{etapa}' para FuncionarioID={func_id}")
+        await context.bot.send_message(chat_id, "Houve um problema no seu cadastro. Por favor, avise o RH.")
+        return
+
+    # Sem mensagem (veio de botão): apenas repete a pergunta atual
+    if msg is None:
+        await _enviar_html(context, chat_id, "📝 Continue seu cadastro:\n\n" + pergunta_atual)
+        return
+
+    texto = msg.text.strip() if msg.text else None
+
+    # Clique em botão do menu antigo não pode virar resposta do cadastro
+    if texto in BOTOES_MENU:
+        await _enviar_html(context, chat_id,
+                           "⚠️ Primeiro precisamos concluir seu cadastro.\n\n" + pergunta_atual)
+        return
+
+    # ---------- ETAPAS DE DOCUMENTO (foto ou PDF) ----------
+    if etapa in ETAPAS_DOCUMENTO:
+        file_id = extrair_file_id_foto_ou_pdf(msg)
+        if not file_id:
+            aviso = ("⚠️ Formato não aceito. Envie uma <b>FOTO</b> ou um arquivo <b>PDF</b>."
+                     if msg.document else
+                     "⚠️ Nesta etapa preciso que você envie uma <b>FOTO</b> ou <b>PDF</b>.")
+            await _enviar_html(context, chat_id, f"{aviso}\n\n{pergunta_atual}")
+            return
+
+        config_etapa = WORKFLOW_ONBOARDING[etapa]
+        proxima = config_etapa['proxima_etapa']
+        database.atualizar_onboarding_etapa(func_id, proxima, (config_etapa['campo_db'], file_id))
+        await _enviar_html(context, chat_id, pergunta_da_etapa(proxima))
+        return
+
+    # ---------- ETAPAS DE TEXTO ----------
+    if not texto:
+        await _enviar_html(context, chat_id,
+                           "⚠️ Nesta etapa preciso que você <b>DIGITE</b> a resposta.\n\n" + pergunta_atual)
+        return
+
+    if etapa == 'ESTADO_CIVIL':
+        resposta = sem_acentos(texto).upper().replace('(A)', '').strip()
+        if resposta not in ESTADOS_CIVIS_VALIDOS:
+            await _enviar_html(context, chat_id,
+                               "⚠️ Estado Civil inválido. Escolha: Solteiro, Casado, Divorciado, Separado ou Viúvo.")
+            return
+        proxima = 'DATA_CASAMENTO' if resposta in ESTADOS_CIVIS_CASADO else 'FILHOS_QTD'
+        database.atualizar_onboarding_etapa(func_id, proxima, ('EstadoCivil', resposta))
+        await _enviar_html(context, chat_id, pergunta_da_etapa(proxima))
+        return
+
+    if etapa == 'DATA_CASAMENTO':
+        data_ok = validar_data_passada(texto)
+        if not data_ok:
+            await _enviar_html(context, chat_id,
+                               "⚠️ Data inválida. Digite no formato <b>dd/mm/aaaa</b> (ex.: 15/03/2018).")
+            return
+        database.atualizar_onboarding_etapa(func_id, 'NOME_CONJUGUE', ('DataCasamento', data_ok))
+        await _enviar_html(context, chat_id, pergunta_da_etapa('NOME_CONJUGUE'))
+        return
+
+    if etapa == 'CPF_CONJUGUE':
+        cpf_limpo = ''.join(filter(str.isdigit, texto))
+        if not cpf_valido(cpf_limpo):
+            await _enviar_html(context, chat_id, "⚠️ CPF inválido. Confira os 11 números e digite novamente.")
+            return
+        database.atualizar_onboarding_etapa(func_id, 'FILHOS_QTD', ('CPFConjugue', cpf_limpo))
+        await _enviar_html(context, chat_id, pergunta_da_etapa('FILHOS_QTD'))
+        return
+
+    if etapa == 'FILHOS_QTD':
+        try:
+            qtd = int(texto)
+            if qtd < 0 or qtd > MAX_FILHOS_CADASTRO:
+                raise ValueError
+        except ValueError:
+            await _enviar_html(context, chat_id,
+                               "⚠️ Digite apenas um <b>NÚMERO</b> válido para a quantidade de filhos (ex.: 0, 1, 2).")
+            return
+
+        if qtd == 0:
+            database.atualizar_onboarding_etapa(func_id, 'CONCLUIR', ('QtdFilhos', 0))
+            await _finalizar_onboarding_e_redirecionar(update, context, funcionario)
+            return
+
+        database.salvar_dados_filhos(func_id, json.dumps([]))  # Começa a lista de filhos do zero
+        database.atualizar_onboarding_etapa(func_id, 'DADOS_FILHO_1_NOME', ('QtdFilhos', qtd))
+        await _enviar_html(context, chat_id, f"Ok, vamos coletar os dados de <b>{qtd} filho(s)</b>.")
+        await _enviar_html(context, chat_id, pergunta_da_etapa('DADOS_FILHO_1_NOME'))
+        return
+
+    if PADRAO_ETAPA_FILHO.match(etapa):
+        await _coletar_dados_filhos_e_avancar(update, context, funcionario, texto, etapa, status)
+        return
+
+    # Etapas simples de texto (ESCOLARIDADE, NOME_CONJUGUE)
+    config_etapa = WORKFLOW_ONBOARDING.get(etapa)
+    if config_etapa and config_etapa.get('proxima_etapa'):
+        proxima = config_etapa['proxima_etapa']
+        database.atualizar_onboarding_etapa(func_id, proxima, (config_etapa['campo_db'], texto))
+        await _enviar_html(context, chat_id, pergunta_da_etapa(proxima))
+        return
+
+    logger.error(f"ONBOARDING: sem regra para a etapa '{etapa}' (FuncionarioID={func_id})")
+    await context.bot.send_message(chat_id, "Houve um problema no seu cadastro. Por favor, avise o RH.")
+
+
+async def _coletar_dados_filhos_e_avancar(update, context, funcionario, valor_recebido, etapa, status_onboarding):
+    """
+    Coleta Nome -> Nascimento -> CPF de cada filho e salva a lista em JSON.
+    Tudo é lido do banco, então funciona mesmo se o bot reiniciar no meio.
+    """
+    chat_id = update.effective_chat.id
+    combinacao = PADRAO_ETAPA_FILHO.match(etapa)
+    filho_atual, campo = int(combinacao.group(1)), combinacao.group(2)
+
+    try:
+        qtd_filhos = int(getattr(status_onboarding, 'QtdFilhos', 0) or 0)
+    except (TypeError, ValueError):
+        qtd_filhos = 0
+    if qtd_filhos < filho_atual:  # Segurança: nunca menos que o filho em andamento
+        qtd_filhos = filho_atual
+
+    try:
+        dados_filhos = json.loads(getattr(status_onboarding, 'DadosFilhos', None) or '[]')
+        if not isinstance(dados_filhos, list):
+            dados_filhos = []
+    except (json.JSONDecodeError, TypeError):
+        logger.warning(f"DadosFilhos inválido no banco para FuncionarioID={funcionario.FuncionarioID}. Recomeçando lista.")
+        dados_filhos = []
+
+    while len(dados_filhos) < filho_atual:
+        dados_filhos.append({})
+    idx = filho_atual - 1
+
+    if campo == 'NOME':
+        dados_filhos[idx]['Nome'] = valor_recebido
+        proxima_etapa = f'DADOS_FILHO_{filho_atual}_NASC'
+
+    elif campo == 'NASC':
+        data_ok = validar_data_passada(valor_recebido)
+        if not data_ok:
+            await _enviar_html(context, chat_id, "⚠️ Data inválida. Digite no formato <b>dd/mm/aaaa</b>.")
+            return
+        dados_filhos[idx]['Nasc'] = data_ok
+        proxima_etapa = f'DADOS_FILHO_{filho_atual}_CPF'
+
+    else:  # CPF
+        resposta = sem_acentos(valor_recebido).upper().strip()
+        if resposta in ('NAO TEM', 'NAO POSSUI', 'NAO', 'NENHUM'):
+            dados_filhos[idx]['CPF'] = ''
+        else:
+            cpf_limpo = ''.join(filter(str.isdigit, valor_recebido))
+            if not cpf_valido(cpf_limpo):
+                await _enviar_html(context, chat_id,
+                                   "⚠️ CPF inválido. Confira os 11 números ou digite <b>não tem</b>.")
+                return
+            dados_filhos[idx]['CPF'] = cpf_limpo
+        proxima_etapa = f'DADOS_FILHO_{filho_atual + 1}_NOME' if filho_atual < qtd_filhos else 'CONCLUIR'
+
+    database.salvar_dados_filhos(funcionario.FuncionarioID, json.dumps(dados_filhos, ensure_ascii=False))
+    database.atualizar_onboarding_etapa(funcionario.FuncionarioID, proxima_etapa)
+
+    if proxima_etapa == 'CONCLUIR':
+        await _finalizar_onboarding_e_redirecionar(update, context, funcionario)
+    else:
+        await _enviar_html(context, chat_id, pergunta_da_etapa(proxima_etapa))
+
+
+async def _finalizar_onboarding_e_redirecionar(update, context, funcionario):
+    """Marca o cadastro como completo, avisa o gestor e orienta sobre o exame admissional."""
+    database.finalizar_onboarding_e_notificar_gestor(funcionario.FuncionarioID)
+
+    mensagem_final = (
+        "🥳 <b>Parabéns! Registro Quase Concluído!</b> 🥳\n\n"
+        "Você enviou todos os documentos e informações de registro! Seu gestor já foi notificado.\n\n"
+        "⚠️ <b>Acesso Bloqueado:</b> O sistema só será liberado após a aprovação do seu exame admissional.\n\n"
+        "➡️ <b>Próxima Ação Obrigatória:</b> Agende imediatamente seu exame admissional no local abaixo:\n\n"
+        "🏥 <b>Clínica/Local:</b> Gera Medicina e Segurança do Trabalho\n"
+        "📍 <b>Endereço:</b> R. Afonso Pena, 809 - Centro, Rondonópolis - MT, 78700-070\n"
+        "📞 <b>Telefone:</b> (66) 3424-0035\n\n"
+        "Qualquer dúvida, contate o RH. Aguarde a notificação de liberação! 🔒"
+    )
+    await _enviar_html(context, update.effective_chat.id, mensagem_final)
+    context.user_data.clear()
+
+
+# ===================================================================
+# == INTERCEPTADOR DE PENDÊNCIAS ====================================
+# ===================================================================
+
+async def _interceptar_comandos_e_pendencias(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """
+    Verifica se o usuário tem pendências obrigatórias.
+    Retorna True se BLOQUEOU (a função que chamou deve parar), False se pode seguir.
+    """
+    chat_id = update.effective_chat.id
+    funcionario = database.buscar_funcionario_por_chat_id(update.effective_user.id)
+
+    if not funcionario:
+        await context.bot.send_message(chat_id, "Desculpe, não consegui encontrar seu cadastro no sistema.")
+        return True
+
+    if eh_gestor(funcionario):
+        return False  # Gestores e RH não são bloqueados
+
+    # --- VERIFICAÇÃO 0: ONBOARDING OBRIGATÓRIO ---
+    status_onboarding = database.buscar_onboarding_status(funcionario.FuncionarioID)
+    if status_onboarding:
+        status_atual = (getattr(status_onboarding, 'StatusWorkflow', None) or '').strip()
+
+        if status_atual != 'Completo':
+            if status_atual != 'Em Progresso':
+                await _enviar_html(context, chat_id,
+                                   "🛑 <b>Ação Obrigatória (Onboarding):</b> Seu registro de documentos está pendente.\n"
+                                   "Você deve finalizar este processo antes de usar o sistema.")
+            await onboarding_handler(update, context)
+            return True
+
+        status_admissional = (getattr(status_onboarding, 'StatusAdmissional', None) or '').strip()
+        if status_admissional == 'Pendente':
+            await _enviar_html(context, chat_id,
+                               "🔒 <b>Acesso Bloqueado:</b> Seu registro de documentos está completo, mas o sistema "
+                               "só será liberado após a <b>aprovação do seu exame admissional</b> pelo RH.")
+            return True
+
+    # --- VERIFICAÇÃO 1: FEEDBACK DO DIA ANTERIOR ---
+    if not database.verificar_feedback_dia_anterior(funcionario.FuncionarioID):
+        data_ontem_str = (agora() - timedelta(days=1)).strftime('%d/%m')
+        keyboard = [[InlineKeyboardButton("⭐ Avaliar meu dia de ontem", callback_data="avaliar_dia_ontem")]]
+        await context.bot.send_message(
+            chat_id,
+            f"⚠️ <b>Ação Obrigatória:</b> Antes de prosseguir, por favor, avalie seu dia de trabalho referente a <b>{data_ontem_str}</b>.",
+            reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML
+        )
+        return True
+
+    # --- VERIFICAÇÃO 2: PENDÊNCIAS DE CIÊNCIA ---
+    keyboard = []
+    for pendencia in database.buscar_pendencias_criticas(funcionario.FuncionarioID) or []:
+        id_pendencia, tipo, titulo, data_envio = pendencia
+        if tipo == 'Comunicado':
+            data_str = data_envio.strftime('%d/%m') if data_envio else ""
+            keyboard.append([InlineKeyboardButton(f"⚠️ Ler Comunicado ({data_str})", callback_data=f"doc_ciente_{id_pendencia}")])
+
+    for doc in database.buscar_documentos_disponiveis(funcionario.FuncionarioID) or []:
+        mes_ref = doc.MesAno.strftime('%m/%Y') if doc.MesAno else ""
+        keyboard.append([InlineKeyboardButton(f"⚠️ Ver {doc.TipoDocumento} {mes_ref}", callback_data=f"get_documento_{doc.DocumentoID}")])
+
+    if keyboard:
+        await context.bot.send_message(
+            chat_id,
+            f"🛑 <b>Ação Obrigatória:</b> Você possui <b>{len(keyboard)}</b> documento(s) pendente(s) de leitura/ciência. Clique abaixo para resolver.",
+            reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML
+        )
+        return True
+
+    return False
+
+
+# ===================================================================
+# == ROTEADOR DE TEXTO (CHAT PRIVADO) ===============================
+# ===================================================================
+
+async def roteador_de_texto_privado(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Recebe TODAS as mensagens de texto do chat privado que não são comandos nem
+    botões do menu, verifica o 'estado' do usuário e direciona para a ação certa.
+    """
+    user_data = context.user_data
+    texto_recebido = update.message.text
+    chat_id = update.effective_chat.id
+
+    # Prioridade: processo de abate de comanda em andamento
+    if user_data.get('estado') == 'aguardando_valor_comanda':
+        await processar_valor_comanda(update, context)
+        return
+
+    funcionario = database.buscar_funcionario_por_chat_id(update.effective_user.id)
+    if not funcionario:
+        await update.message.reply_text("Olá! Seu usuário não foi encontrado no sistema. Por favor, contate seu gestor.")
+        return
+
+    # Bloqueios obrigatórios (cadastro, feedback, ciência). O cadastro é tratado aqui dentro.
+    if await _interceptar_comandos_e_pendencias(update, context):
+        return
+
+    if user_data.pop('aguardando_verificador_cpf', None):
+        verificador_correto = database.buscar_verificador_cpf(funcionario.FuncionarioID)
+        if not (verificador_correto and texto_recebido.strip() == str(verificador_correto).strip()):
+            await update.message.reply_text("❌ Código de verificação incorreto ou não cadastrado. Inicie o processo novamente ou contate o RH.")
+            return
+
+        await update.message.reply_text("✅ Verificação bem-sucedida! Buscando seus documentos pendentes de ciência...")
+        documentos = database.buscar_documentos_disponiveis(funcionario.FuncionarioID)
+        if not documentos:
+            await update.message.reply_text("Você não possui novos documentos pendentes de ciência no momento.")
+            return
+
+        keyboard = []
+        for doc in documentos:
+            if doc.TipoDocumento in ['Holerite', 'Cartão Ponto'] and doc.MesAno:
+                sufixo = f" ({doc.MesAno.strftime('%m/%Y')})"
+            else:
+                sufixo = ""
+            keyboard.append([InlineKeyboardButton(f"📄 {doc.TipoDocumento}{sufixo}", callback_data=f"get_documento_{doc.DocumentoID}")])
+        await update.message.reply_text("Selecione o documento que deseja visualizar:", reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+
+    if user_data.get('aguardando_dados_compra'):
+        texto = texto_recebido.strip()
+        categoria = user_data.get('temp_categoria_compra', 'Geral')
+        user_data.setdefault('carrinho_compras', []).append({'item': texto, 'categoria': categoria})
+        qtd_itens = len(user_data['carrinho_compras'])
+
+        keyboard = [
+            [InlineKeyboardButton("➕ Adicionar Mais", callback_data="compra_add_mais")],
+            [InlineKeyboardButton("✅ Finalizar Pedido", callback_data="compra_finalizar")],
+        ]
+        user_data.pop('aguardando_dados_compra', None)  # Evita duplicar item
+        await update.message.reply_html(
+            f"✅ Item adicionado: <b>{esc(texto)}</b>\n"
+            f"📦 Itens no carrinho: {qtd_itens}\n\n"
+            f"Deseja adicionar mais itens na categoria <b>{esc(categoria)}</b> ou finalizar?",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+
+    if user_data.get('aguardando_desc_manutencao'):
+        user_data.pop('aguardando_desc_manutencao', None)
+        user_data['temp_desc_manutencao'] = texto_recebido
+        user_data['aguardando_foto_manutencao'] = True
+        await update.message.reply_html("📸 Agora, envie uma <b>FOTO</b> obrigatória do problema para registrarmos.")
+        return
+
+    if 'tarefa_nao_aplicavel' in user_data:
+        atribuicao_id = user_data.pop('tarefa_nao_aplicavel', None)
+        if atribuicao_id:
+            database.registrar_tarefa_nao_aplicavel(atribuicao_id, texto_recebido)
+            keyboard = [[InlineKeyboardButton("⬅️ Ver Tarefas Restantes", callback_data="voltar_lista_tarefas")]]
+            await update.message.reply_text("Ok, justificativa registrada!", reply_markup=InlineKeyboardMarkup(keyboard))
+        else:
+            await update.message.reply_text("Ocorreu um erro. Por favor, tente marcar como 'Não Aplicável' novamente.")
+        return
+
+    if user_data.get('aguardando_denuncia_anonima'):
+        user_data.pop('aguardando_denuncia_anonima', None)
+        # IMPORTANTE: nenhum dado do funcionário é enviado ou salvo aqui.
+        novo_id = database.registrar_denuncia_anonima(texto_recebido)
+        if not novo_id:
+            await update.message.reply_text("❌ Ocorreu um erro ao tentar registrar sua mensagem. Tente novamente mais tarde.")
+            return
+
+        mensagem_gestor = (
+            f"Atenção: Nova mensagem anônima recebida (Protocolo: {novo_id})\n\n"
+            f"<b>Mensagem:</b>\n<i>\"{esc(texto_recebido)}\"</i>"
+        )
+        try:
+            notificador_telegram.enviar_mensagem(config.GESTOR_GROUP_CHAT_ID, mensagem_gestor)
+        except Exception as e_notify:
+            logger.error(f"Falha ao notificar gestores sobre mensagem anônima (Protocolo: {novo_id}): {e_notify}")
+        await update.message.reply_text("✅ Sua mensagem anônima foi registrada e enviada à gestão. Obrigado por sua contribuição.")
+        return
+
+    # Mensagem sem nenhum contexto esperado
+    user_data.clear()
+    await update.message.reply_text(
+        "Não entendi o que você quis dizer. Use os botões do menu para interagir comigo. "
+        "Se precisar, use /ajuda ou digite /cancelar para recomeçar."
+    )
+
+
+# ===================================================================
+# == RECEBIMENTO DE FOTOS E ARQUIVOS (CHAT PRIVADO) =================
+# ===================================================================
+
+async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Roteador mestre de fotos/documentos.
+    Prioridade: Manutenção > Nota Fiscal > Cadastro (onboarding) > Evidência de tarefa.
+    """
+    if context.user_data.get('aguardando_foto_manutencao'):
+        await receber_foto_manutencao(update, context)
+        return
+
+    if context.user_data.get('aguardando_nota_fiscal'):
+        await receber_nota_fiscal(update, context)
+        return
+
+    # Cadastro incompleto: o estado vem do BANCO (sobrevive a reinícios do bot)
+    funcionario = database.buscar_funcionario_por_chat_id(update.effective_user.id)
+    if funcionario and not eh_gestor(funcionario):
+        status = database.buscar_onboarding_status(funcionario.FuncionarioID)
+        if status and (getattr(status, 'StatusWorkflow', None) or '').strip() != 'Completo':
+            await onboarding_handler(update, context)
+            return
+
+    await handler_foto_tarefa(update, context)
+
+
+async def handler_foto_tarefa(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Recebe a foto (ou PDF) de evidência de uma tarefa e envia para validação."""
+    msg = update.message
+    try:
+        if 'identificador_tarefa' not in context.user_data:
+            await msg.reply_text("Parece que você enviou uma foto sem antes selecionar uma tarefa. "
+                                 "Use o botão 📋 Minhas Tarefas primeiro.")
+            return
+
+        if eh_encaminhada(msg):
+            await msg.reply_text("❌ Desculpe, fotos encaminhadas não são aceitas.")
+            return
+        if eh_imagem_como_arquivo(msg.document):
+            await msg.reply_text("❌ Por favor, envie a imagem como 'Foto', e não como 'Arquivo'.")
+            return
+
+        file_id = extrair_file_id_foto_ou_pdf(msg)
+        if not file_id:
+            await msg.reply_text("❌ Formato de arquivo não reconhecido. Envie uma Foto ou um PDF.")
+            return  # A tarefa continua selecionada para a pessoa tentar de novo
+
+        # Só agora "consome" a tarefa selecionada
+        atribuicao_id = int(context.user_data.pop('identificador_tarefa'))
+        funcionario = database.buscar_funcionario_por_chat_id(update.effective_user.id)
+        tarefa = database.buscar_tarefa_por_atribuicao(atribuicao_id)
+        if not (funcionario and tarefa):
+            await msg.reply_text("Ocorreu um erro ao identificar seus dados ou a tarefa.")
+            return
+
+        entrega_id = database.registrar_entrega_preliminar(tarefa.TarefaID, funcionario.FuncionarioID, atribuicao_id, file_id)
+        if not entrega_id:
+            await msg.reply_text("❌ Não consegui registrar sua entrega. Tente novamente em instantes.")
+            return
+
+        # Resposta ao funcionário (antes ela não era enviada se faltasse o grupo de gestão)
+        await msg.reply_text("✅ Evidência válida! Entrega registrada com sucesso e enviada para validação!")
+
+        if not config.GESTOR_GROUP_CHAT_ID:
+            logger.error("GESTOR_GROUP_CHAT_ID não configurado: a entrega foi salva, mas ninguém foi avisado.")
+            return
+
+        legenda = (f"<b>Nova Entrega para Validação</b>\n\n"
+                   f"👤 <b>Funcionário:</b> {esc(funcionario.NomeCompleto)}\n"
+                   f"📝 <b>Tarefa:</b> {esc(tarefa.Titulo)} ({tarefa.Pontos} pts)\n"
+                   f"🗓️ <b>Data:</b> {agora().strftime('%d/%m/%Y %H:%M')}")
+        reply_markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ Aprovar", callback_data=f"aprovar_gestor_{entrega_id}"),
+            InlineKeyboardButton("❌ Reprovar", callback_data=f"reprovar_gestor_{entrega_id}"),
+        ]])
+
+        # Envia a notificação ao gestor ANTES de marcar a flag.
+        # Se falhar, a flag fica desmarcada e o agendador reenvia depois.
+        try:
+            resposta_api = notificador_telegram.enviar_foto_com_botoes(
+                config.GESTOR_GROUP_CHAT_ID, file_id, legenda, reply_markup, parse_mode='HTML'
+            )
+            if resposta_api and resposta_api.get('ok'):
+                try:
+                    database.marcar_notificacao_gestor_enviada(entrega_id)
+                    logger.info(f"Notificação da EntregaID {entrega_id} enviada e flag marcada.")
+                except Exception as flag_error:
+                    logger.error(f"Notificação enviada, mas falhou ao marcar flag da EntregaID {entrega_id}: {flag_error}", exc_info=True)
+            else:
+                logger.error(f"Falha ao notificar gestores sobre EntregaID {entrega_id}. Resposta: {resposta_api}. Flag NÃO marcada.")
+        except Exception as notify_error:
+            logger.error(f"Erro ao notificar gestores sobre EntregaID {entrega_id}: {notify_error}. Flag NÃO marcada.", exc_info=True)
+
+    except Exception as e:
+        logger.error(f"Erro crítico em handler_foto_tarefa: {e}", exc_info=True)
+        await msg.reply_text("Ocorreu um erro crítico ao registrar sua entrega. Contate o administrador.")
+
+
+async def receber_nota_fiscal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Recebe a foto da Nota Fiscal (só é chamado com o estado 'aguardando_nota_fiscal')."""
+    msg = update.message
+
+    # Validações ANTES de limpar o estado: se errar, a pessoa pode tentar de novo
+    if eh_encaminhada(msg):
+        await msg.reply_text("❌ Fotos encaminhadas não são aceitas. Tire a foto na hora ou envie da galeria.")
+        return
+    if not msg.photo:
+        await msg.reply_text("❌ Por favor, envie a nota como 'Foto' (não como arquivo). Ou digite /cancelar.")
+        return
+
+    context.user_data.pop('aguardando_nota_fiscal', None)
 
     try:
         funcionario = database.buscar_funcionario_por_chat_id(update.effective_user.id)
         if not funcionario:
-            await update.message.reply_text("Erro: Não consegui encontrar seu cadastro no sistema.")
+            await msg.reply_text("Erro: Não consegui encontrar seu cadastro no sistema.")
             return
 
-        file_id = update.message.photo[-1].file_id
-
-        # 2. Salva o registro preliminar no banco (tabela NotasFiscais)
+        file_id = msg.photo[-1].file_id
         nota_fiscal_id = database.registrar_nota_fiscal(funcionario.FuncionarioID, file_id)
         if not nota_fiscal_id:
-            await update.message.reply_text("❌ Ocorreu um erro interno ao tentar registrar sua nota fiscal. Tente novamente.")
+            await msg.reply_text("❌ Ocorreu um erro interno ao registrar sua nota fiscal. Tente novamente.")
             return
 
-        # 3. Dá os pontos bônus (Regra 1)
         pontos_bonus = config.PONTOS_BONUS_NOTA_FISCAL
         database.registrar_pontos_de_bonus(
-            funcionario.FuncionarioID,
-            pontos_bonus,
-            f"Envio de Nota Fiscal (ID: {nota_fiscal_id})",
-            config.TAREFA_ID_NOTA_FISCAL
+            funcionario.FuncionarioID, pontos_bonus,
+            f"Envio de Nota Fiscal (ID: {nota_fiscal_id})", config.TAREFA_ID_NOTA_FISCAL
         )
         database.adicionar_pontos_ao_saldo(funcionario.FuncionarioID, pontos_bonus)
+        await msg.reply_html(f"✅ Nota Fiscal enviada com sucesso! Você ganhou <b>{pontos_bonus} pontos</b> pelo recebimento!")
 
-        await update.message.reply_text(f"✅ Nota Fiscal enviada com sucesso! Você ganhou *{pontos_bonus} pontos* pelo recebimento!", parse_mode='Markdown')
-
-        # 4. Encaminha para os Gestores (Regras 2, 3, 4)
         legenda_gestor = (
-            f"🧾 **Nova Nota Fiscal Recebida** 🧾\n\n"
-            f"👤 **Enviada por:** {funcionario.NomeCompleto}\n"
-            f"🗓️ **Data:** {datetime.now().strftime('%d/%m/%Y %H:%M')}\n"
-            f"🆔 **NF ID:** {nota_fiscal_id}\n\n"
+            f"🧾 <b>Nova Nota Fiscal Recebida</b> 🧾\n\n"
+            f"👤 <b>Enviada por:</b> {esc(funcionario.NomeCompleto)}\n"
+            f"🗓️ <b>Data:</b> {agora().strftime('%d/%m/%Y %H:%M')}\n"
+            f"🆔 <b>NF ID:</b> {nota_fiscal_id}\n\n"
             "Ações Rápidas:"
         )
-
-        # Prepara botões com o ID da NF para rastreio
-        keyboard = [
+        reply_markup = InlineKeyboardMarkup([
             [InlineKeyboardButton("📲 Encaminhar p/ Financeiro", callback_data=f"nf_prep_fwd_{nota_fiscal_id}")],
             [InlineKeyboardButton("📦 Criar Tarefa 'Guardar'", callback_data=f"nf_create_task_{nota_fiscal_id}")],
-            [InlineKeyboardButton("👍 Arquivar (Nenhuma Ação)", callback_data=f"nf_ignore_{nota_fiscal_id}")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-
+            [InlineKeyboardButton("👍 Arquivar (Nenhuma Ação)", callback_data=f"nf_ignore_{nota_fiscal_id}")],
+        ])
         notificador_telegram.enviar_foto_com_botoes(
-            config.GESTOR_GROUP_CHAT_ID,
-            file_id,
-            legenda_gestor,
-            reply_markup,
-            parse_mode='HTML'
+            config.GESTOR_GROUP_CHAT_ID, file_id, legenda_gestor, reply_markup, parse_mode='HTML'
         )
         logger.info(f"Nota Fiscal {nota_fiscal_id} encaminhada para o grupo de gestores.")
-
     except Exception as e:
         logger.error(f"Erro crítico em receber_nota_fiscal: {e}", exc_info=True)
-        await update.message.reply_text("Ocorreu um erro crítico. Contate o administrador.")
+        await msg.reply_text("Ocorreu um erro crítico. Contate o administrador.")
 
-async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Roteador Mestre para fotos e documentos privados.
-    Decide o destino com base na prioridade: NF > Onboarding > Tarefa.
-    """
-    user_id = update.effective_user.id
-    # 0. Prioridade Absoluta: Manutenção
-    if context.user_data.get('aguardando_foto_manutencao', False):
-        await receber_foto_manutencao(update, context)
-        return
-    
-    # 1. Prioridade Máxima: Nota Fiscal (Fluxo explícito iniciado pelo usuário na memória)
-    if context.user_data.get('aguardando_nota_fiscal', False):
-        await receber_nota_fiscal(update, context)
-        return
-
-    # 2. Prioridade Alta: Onboarding (Fluxo Obrigatório)
-    # RECUPERAÇÃO DE ESTADO: Se a flag não está na memória, consultamos o banco.
-    if not context.user_data.get('onboarding_foto'):
-        funcionario = database.buscar_funcionario_por_chat_id(user_id)
-        if funcionario:
-            status_db = database.buscar_onboarding_status(funcionario.FuncionarioID)
-            # Se o status é 'Em Progresso', definimos a flag na memória para direcionar corretamente
-            if status_db and status_db.StatusWorkflow == 'Em Progresso':
-                context.user_data['onboarding_foto'] = True
-                # Opcional: Log para debug
-                # logger.info(f"Estado de onboarding recuperado via banco para {user_id}")
-    
-    if context.user_data.get('onboarding_foto', False):
-        # Força o handler de tarefa a tratar como onboarding (ele tem a lógica interna de desvio)
-        await handler_foto_tarefa(update, context)
-        return
-
-    # 3. Prioridade Padrão: Evidência de Tarefa
-    await handler_foto_tarefa(update, context)
 
 async def receber_foto_manutencao(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handler exclusivo para receber fotos de manutenção."""
-    # Limpa o estado
+    """Recebe a foto de um pedido de manutenção, salva no disco e avisa a gestão."""
+    msg = update.message
+    if not msg.photo:
+        await msg.reply_text("❌ Envie o problema como 'Foto' (não como arquivo). Ou digite /cancelar.")
+        return  # Mantém o estado para tentar de novo
+
     context.user_data.pop('aguardando_foto_manutencao', None)
-    
-    user = update.effective_user
-    funcionario = database.buscar_funcionario_por_chat_id(user.id)
-    descricao_problema = context.user_data.get('temp_desc_manutencao')
-    
+    descricao_problema = context.user_data.pop('temp_desc_manutencao', None) or "(sem descrição)"
+
+    funcionario = database.buscar_funcionario_por_chat_id(update.effective_user.id)
     if not funcionario:
-        await update.message.reply_text("Erro de identificação.")
+        await msg.reply_text("Erro de identificação. Seu cadastro não foi encontrado.")
         return
 
-    # Processa a foto
-    file_id = update.message.photo[-1].file_id
-    
-    # Salva preliminarmente no banco ou baixa direto (vamos baixar direto para simplificar o fluxo de gestão)
-    # Reutiliza lógica de download do notificador se possível, ou faz manual aqui para garantir path local
-    import requests
-    token = config.TELEGRAM_TOKEN
-    
+    file_id = msg.photo[-1].file_id
     try:
-        # Pega info do arquivo
-        r_info = requests.get(f"https://api.telegram.org/bot{token}/getFile?file_id={file_id}")
-        file_path_remoto = r_info.json()['result']['file_path']
-        
-        # Cria pasta se não existir
-        pasta_manut = os.path.join(os.getcwd(), 'fotos_manutencao')
-        if not os.path.exists(pasta_manut): os.makedirs(pasta_manut)
-        
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        nome_arquivo = f"manut_{funcionario.FuncionarioID}_{ts}.jpg"
+        # Download pela própria biblioteca (assíncrono). O código antigo usava
+        # 'requests', que TRAVAVA o bot inteiro durante o download.
+        pasta_manut = os.path.join(PASTA_DO_BOT, 'fotos_manutencao')
+        os.makedirs(pasta_manut, exist_ok=True)
+        nome_arquivo = f"manut_{funcionario.FuncionarioID}_{agora().strftime('%Y%m%d_%H%M%S')}.jpg"
         caminho_local = os.path.join(pasta_manut, nome_arquivo)
-        
-        # Baixa
-        r_content = requests.get(f"https://api.telegram.org/file/bot{token}/{file_path_remoto}")
-        with open(caminho_local, 'wb') as f:
-            f.write(r_content.content)
-            
-        # Salva no banco
-        if database.criar_solicitacao_interna(funcionario.FuncionarioID, 'Manutencao', 'Predial', descricao_problema, None, caminho_local):
-            await update.message.reply_text("✅ Solicitação de Manutenção registrada com foto! A gestão foi notificada.")
-            # Notifica gestão
-            msg_gestor = f"🔧 **Nova Solicitação de Manutenção**\n👤 {funcionario.NomeCompleto}\n📝 {descricao_problema}"
-            notificador_telegram.enviar_foto_com_botoes(config.GESTOR_GROUP_CHAT_ID, caminho_local, msg_gestor)
-        else:
-            await update.message.reply_text("Erro ao salvar no banco de dados.")
-            
+
+        arquivo_telegram = await context.bot.get_file(file_id)
+        await arquivo_telegram.download_to_drive(caminho_local)
     except Exception as e:
-        logger.error(f"Erro ao baixar foto manutenção: {e}")
-        await update.message.reply_text("Erro ao processar a foto.")
+        logger.error(f"Erro ao baixar foto de manutenção: {e}", exc_info=True)
+        await msg.reply_text("Erro ao baixar a foto. Tente novamente pelo menu de solicitações.")
+        return
+
+    if not database.criar_solicitacao_interna(funcionario.FuncionarioID, 'Manutencao', 'Predial',
+                                              descricao_problema, None, caminho_local):
+        await msg.reply_text("Erro ao salvar a solicitação no banco de dados.")
+        return
+
+    await msg.reply_text("✅ Solicitação de Manutenção registrada com foto! A gestão foi notificada.")
+
+    # Aviso aos gestores separado: se falhar, a solicitação JÁ está salva
+    try:
+        await context.bot.send_photo(
+            chat_id=config.GESTOR_GROUP_CHAT_ID, photo=file_id,
+            caption=(f"🔧 <b>Nova Solicitação de Manutenção</b>\n"
+                     f"👤 {esc(funcionario.NomeCompleto)}\n📝 {esc(descricao_problema)}"),
+            parse_mode=ParseMode.HTML
+        )
+    except TelegramError as e:
+        logger.error(f"Manutenção salva, mas falhou ao avisar os gestores: {e}")
+
+
+# ===================================================================
+# == TEXTO NO GRUPO DE GESTÃO (MOTIVO DE RECUSA) ====================
+# ===================================================================
+
+async def receber_motivo_recusa(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Recebe o motivo digitado pelo gestor como RESPOSTA à mensagem do bot."""
+    msg = update.message
+    resposta_a = msg.reply_to_message
+    if not (resposta_a and resposta_a.from_user and resposta_a.from_user.id == context.bot.id):
+        return  # Ignora conversas normais do grupo
+
+    chat_id_grupo = update.effective_chat.id
+    gestor_id = update.effective_user.id
+    gestor_nome = update.effective_user.first_name
+    motivo = (msg.text or "").strip() or "Sem motivo especificado"  # Texto ORIGINAL (salvo no banco)
+
+    pendencias_grupo = context.bot_data.get('pendencias_recusa', {}).get(chat_id_grupo, {})
+    dados_recusa = pendencias_grupo.pop(gestor_id, None)
+    if not pendencias_grupo:
+        context.bot_data.get('pendencias_recusa', {}).pop(chat_id_grupo, None)
+
+    if not dados_recusa:
+        # Bot reiniciou, ou outro gestor respondeu
+        await msg.reply_html(
+            "⚠️ <b>Sessão Expirada:</b> Não consegui vincular sua resposta à tarefa.\n"
+            "Clique no botão <b>❌ Reprovar</b> novamente na mensagem original da tarefa."
+        )
+        return
+
+    entrega_id = dados_recusa['entrega_id']
+    id_mensagem_original = dados_recusa['msg_id']
+
+    detalhes = database.buscar_detalhes_da_entrega(entrega_id)
+    if not detalhes or detalhes.StatusValidacao != 'Pendente':
+        await msg.reply_text("Esta tarefa já foi validada por outro gestor ou não foi encontrada.")
+        return
+
+    # Salva o texto original. O escape é feito só na hora de exibir
+    # (antes o banco guardava '&lt;' e o histórico mostrava errado).
+    database.recusar_entrega(entrega_id, motivo)
+
+    notificador_telegram.enviar_mensagem(
+        detalhes.ChatIDFuncionario,
+        f"⚠️ Atenção, <b>{esc(detalhes.NomeCompleto)}</b>!\n\n"
+        f"Sua entrega para a tarefa '<b>{esc(detalhes.Titulo)}</b>' foi RECUSADA.\n\n"
+        f"<b>Motivo:</b> {esc(motivo)}\n\n"
+        "Por favor, corrija e envie novamente."
+    )
+
+    legenda_final = (f"<b>Entrega RECUSADA por {esc(gestor_nome)}</b>\n\n"
+                     f"👤 <b>Funcionário:</b> {esc(detalhes.NomeCompleto)}\n"
+                     f"📝 <b>Tarefa:</b> {esc(detalhes.Titulo)}\n"
+                     f"💬 <b>Motivo:</b> {esc(motivo)}")
+    try:
+        await context.bot.edit_message_caption(chat_id=chat_id_grupo, message_id=id_mensagem_original,
+                                               caption=legenda_final, parse_mode=ParseMode.HTML)
+    except TelegramError as e_edit:
+        logger.warning(f"Não foi possível editar a legenda da recusa {entrega_id}: {e_edit}")
+        try:
+            await msg.reply_html(legenda_final)
+        except TelegramError as e_send:
+            logger.error(f"Falha também ao enviar a mensagem de recusa {entrega_id}: {e_send}")
+
+
+# ===================================================================
+# == CLIQUES EM BOTÕES (CALLBACKS) ==================================
+# ===================================================================
 
 async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Trata TODOS os cliques em botões inline (exceto 'abater_comanda').
+
+    REGRA IMPORTANTE: o Telegram aceita só UMA resposta (query.answer) por clique.
+    Por isso usamos a função 'responder' abaixo, que garante resposta única.
+    No final (bloco finally), se ninguém respondeu, respondemos em branco
+    para o reloginho do botão parar de girar.
+    """
     query = update.callback_query
-    # Não damos answer() aqui imediatamente para permitir alertas de bloqueio
-    
-    data = query.data
+    data = query.data or ""
     user = update.effective_user
+    ja_respondido = False
 
-    # --- CORREÇÃO FALTANTE: VERIFICAÇÃO DE BLOQUEIO (FEEDBACK PENDENTE) ---
-    # Impede uso de botões antigos se houver pendência de feedback
-    if data not in ["avaliar_dia", "avaliar_dia_ontem"] and not data.startswith("nota_dia"):
-        func_check = database.buscar_funcionario_por_chat_id(user.id)
-        # Se funcionário existe E não fez o feedback de ontem
-        if func_check and not database.verificar_feedback_dia_anterior(func_check.FuncionarioID):
-             await query.answer("⚠️ Ação bloqueada! Você tem feedback pendente do dia anterior.", show_alert=True)
-             return # <--- IMPEDE A EXECUÇÃO DO RESTO DA FUNÇÃO
-    # ---------------------------------------------------
-
-    # Se passou pelo bloqueio, confirma o clique
-    await query.answer()
-
-    # --- FLUXO DE SOLICITAÇÕES ---
-    if data == "menu_solicitacoes":
-        func_db = database.buscar_funcionario_por_chat_id(user.id)
-        # Verifica permissão (Adapte conforme a string exata do seu banco)
-        pode_acessar = False
-        if func_db:
-            cargo = func_db.Cargo.upper() if func_db.Cargo else ""
-            nivel = getattr(func_db, 'NivelAcesso', '')
-            if nivel == 'Gestor' or 'LÍDER' in cargo or 'LIDER' in cargo or 'GERENTE' in cargo:
-                pode_acessar = True
-        
-        if pode_acessar:
-            keyboard = [
-                [InlineKeyboardButton("🛒 Compra de Insumos", callback_data="solic_compra")],
-                [InlineKeyboardButton("🔧 Manutenção Predial", callback_data="solic_manut")]
-            ]
-            await query.edit_message_text("Selecione o tipo de solicitação:", reply_markup=InlineKeyboardMarkup(keyboard))
-        else:
-            await query.edit_message_text("🚫 Acesso restrito a Líderes e Gerentes.")
-        return
-
-    elif data == "solic_compra":
-        keyboard = [
-            [InlineKeyboardButton("🧹 Limpeza", callback_data="cat_limpeza"), InlineKeyboardButton("📠 Escritório", callback_data="cat_escritorio")],
-            [InlineKeyboardButton("🍳 Cozinha", callback_data="cat_cozinha"), InlineKeyboardButton("📦 Outros", callback_data="cat_outros")]
-        ]
-        await query.edit_message_text("Selecione a categoria do produto:", reply_markup=InlineKeyboardMarkup(keyboard))
-        return
-
-    elif data.startswith("cat_"):
-        categoria = data.split("_")[1].capitalize()
-        context.user_data['temp_categoria_compra'] = categoria
-        context.user_data['aguardando_dados_compra'] = True
-        await query.edit_message_text(f"Categoria: {categoria}.\n\nDigite o **Nome do Item e a Quantidade** (Ex: 'Detergente 5 litros'):")
-        return
-
-    elif data == "solic_manut":
-        context.user_data['aguardando_desc_manutencao'] = True
-        await query.edit_message_text("🔧 Descreva brevemente o problema de manutenção:")
-        return
-    
-    # --- FLUXO DE CARRINHO DE COMPRAS ---
-    elif data == "compra_add_mais":
-        # Reativa o estado de espera de texto
-        context.user_data['aguardando_dados_compra'] = True
-        categoria = context.user_data.get('temp_categoria_compra', 'Geral')
-        await query.edit_message_text(f"Ok, digite o próximo item e quantidade para <b>{categoria}</b>:", parse_mode='HTML')
-        return
-
-    elif data == "compra_finalizar":
-        carrinho = context.user_data.get('carrinho_compras', [])
-        if not carrinho:
-            await query.edit_message_text("Erro: Carrinho vazio.")
+    async def responder(texto=None, alerta=False):
+        nonlocal ja_respondido
+        if ja_respondido:
             return
-            
-        funcionario_db = database.buscar_funcionario_por_chat_id(user.id)
-        erros = 0
-        sucessos = 0
-        
-        # Processa o lote
-        for item in carrinho:
-            # Salva cada item individualmente no banco
-            if database.criar_solicitacao_interna(funcionario_db.FuncionarioID, 'Compra', item['categoria'], item['item'], None, None):
-                sucessos += 1
+        ja_respondido = True
+        try:
+            await query.answer(texto, show_alert=alerta)
+        except BadRequest as e:
+            logger.warning(f"Não foi possível responder ao clique '{data}': {e}")
+
+    try:
+        # --- TRAVA: feedback do dia anterior pendente (não vale para gestores) ---
+        eh_clique_de_feedback = data in ("avaliar_dia", "avaliar_dia_ontem") or data.startswith("nota_dia")
+        if not eh_clique_de_feedback and not data.startswith(PREFIXOS_CALLBACK_GESTAO):
+            func_check = database.buscar_funcionario_por_chat_id(user.id)
+            if (func_check and not eh_gestor(func_check)
+                    and not database.verificar_feedback_dia_anterior(func_check.FuncionarioID)):
+                await responder("⚠️ Ação bloqueada! Você tem feedback pendente do dia anterior.", alerta=True)
+                return
+
+        # ================= SOLICITAÇÕES (COMPRAS / MANUTENÇÃO) =================
+        if data == "menu_solicitacoes":
+            func_db = database.buscar_funcionario_por_chat_id(user.id)
+            pode_acessar = False
+            if func_db:
+                cargo = sem_acentos((func_db.Cargo or "")).upper()
+                if eh_gestor(func_db) or 'LIDER' in cargo or 'GERENTE' in cargo:
+                    pode_acessar = True
+            if pode_acessar:
+                keyboard = [
+                    [InlineKeyboardButton("🛒 Compra de Insumos", callback_data="solic_compra")],
+                    [InlineKeyboardButton("🔧 Manutenção Predial", callback_data="solic_manut")],
+                ]
+                await query.edit_message_text("Selecione o tipo de solicitação:", reply_markup=InlineKeyboardMarkup(keyboard))
             else:
-                erros += 1
-        
-        # Notifica Gestão (Resumo)
-        if sucessos > 0:
-            msg_resumo = f"🛒 **Novo Pedido de Compra (Lote)**\n👤 {funcionario_db.NomeCompleto}\n"
+                await query.edit_message_text("🚫 Acesso restrito a Líderes e Gerentes.")
+
+        elif data == "solic_compra":
+            keyboard = [
+                [InlineKeyboardButton("🧹 Limpeza", callback_data="cat_limpeza"),
+                 InlineKeyboardButton("📠 Escritório", callback_data="cat_escritorio")],
+                [InlineKeyboardButton("🍳 Cozinha", callback_data="cat_cozinha"),
+                 InlineKeyboardButton("📦 Outros", callback_data="cat_outros")],
+            ]
+            await query.edit_message_text("Selecione a categoria do produto:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+        elif data.startswith("cat_"):
+            categoria = data.split("_", 1)[1].capitalize()
+            context.user_data['temp_categoria_compra'] = categoria
+            context.user_data['aguardando_dados_compra'] = True
+            await query.edit_message_text(
+                f"Categoria: <b>{esc(categoria)}</b>.\n\nDigite o <b>Nome do Item e a Quantidade</b> (Ex: 'Detergente 5 litros'):",
+                parse_mode=ParseMode.HTML
+            )
+
+        elif data == "solic_manut":
+            context.user_data['aguardando_desc_manutencao'] = True
+            await query.edit_message_text("🔧 Descreva brevemente o problema de manutenção:")
+
+        elif data == "compra_add_mais":
+            context.user_data['aguardando_dados_compra'] = True
+            categoria = context.user_data.get('temp_categoria_compra', 'Geral')
+            await query.edit_message_text(f"Ok, digite o próximo item e quantidade para <b>{esc(categoria)}</b>:",
+                                          parse_mode=ParseMode.HTML)
+
+        elif data == "compra_finalizar":
+            carrinho = context.user_data.get('carrinho_compras', [])
+            funcionario_db = database.buscar_funcionario_por_chat_id(user.id)
+            if not carrinho:
+                await query.edit_message_text("Seu carrinho está vazio. Abra o menu de solicitações novamente.")
+                return
+            if not funcionario_db:
+                await query.edit_message_text("Erro: seu cadastro não foi encontrado.")
+                return
+
+            itens_salvos = []
             for item in carrinho:
-                msg_resumo += f"▫️ {item['item']} ({item['categoria']})\n"
-            
-            notificador_telegram.enviar_mensagem(config.GESTOR_GROUP_CHAT_ID, msg_resumo)
-            
-        # Feedback ao usuário
-        await query.edit_message_text(f"✅ Pedido enviado!\n\nItens solicitados: {sucessos}\n(Aguarde a aprovação da gestão)")
-        
-        # Limpa memória
-        context.user_data.pop('carrinho_compras', None)
-        context.user_data.pop('temp_categoria_compra', None)
-        return
+                if database.criar_solicitacao_interna(funcionario_db.FuncionarioID, 'Compra',
+                                                      item['categoria'], item['item'], None, None):
+                    itens_salvos.append(item)
+            erros = len(carrinho) - len(itens_salvos)
 
-    # --- LÓGICA DE DOCUMENTOS PESSOAIS ---
-    if data.startswith("get_documento_"):
-        await query.edit_message_text("Processando sua solicitação...")
-        documento_id = int(data.split('_')[-1]) # <<< AGORA USA DocumentoID
-        
-        dados_documento = database.buscar_dados_documento_para_envio(documento_id)
-        
-        if not dados_documento:
-            await query.edit_message_text("Erro: Não foi possível encontrar este documento ou ele já foi processado.")
-            return
+            if itens_salvos:
+                msg_resumo = (f"🛒 <b>Novo Pedido de Compra (Lote)</b>\n"
+                              f"👤 {esc(funcionario_db.NomeCompleto)}\n")
+                for item in itens_salvos:
+                    msg_resumo += f"▫️ {esc(item['item'])} ({esc(item['categoria'])})\n"
+                notificador_telegram.enviar_mensagem(config.GESTOR_GROUP_CHAT_ID, msg_resumo)
+                texto_final = f"✅ Pedido enviado!\n\nItens solicitados: {len(itens_salvos)}\n(Aguarde a aprovação da gestão)"
+                if erros:
+                    texto_final += f"\n\n⚠️ {erros} item(ns) não puderam ser salvos. Tente enviá-los novamente."
+            else:
+                texto_final = "❌ Não foi possível salvar o pedido. Tente novamente mais tarde."
 
-        caminho_arquivo, ciencia_id, funcionario_id_db, mes_ano_obj = dados_documento
-        
-        # Validação extra de segurança: Garante que o usuário do Telegram é o dono do documento
-        funcionario = database.buscar_funcionario_por_chat_id(user.id)
-        if not funcionario or funcionario.FuncionarioID != funcionario_id_db:
-             await query.edit_message_text("Erro de Acesso: Este documento não pertence ao seu usuário.")
-             return
+            await query.edit_message_text(texto_final)
+            context.user_data.pop('carrinho_compras', None)
+            context.user_data.pop('temp_categoria_compra', None)
 
-        # Ajuste o callback de ciência para ser genérico
-        keyboard = [[InlineKeyboardButton("✅ Recebi e estou ciente", callback_data=f"doc_pessoal_ciente_{ciencia_id}")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        # ================= DOCUMENTOS PESSOAIS =================
+        elif data.startswith("get_documento_"):
+            await query.edit_message_text("Processando sua solicitação...")
+            documento_id = int(data.split('_')[-1])
+            dados_documento = database.buscar_dados_documento_para_envio(documento_id)
+            if not dados_documento:
+                await query.edit_message_text("Erro: Não foi possível encontrar este documento ou ele já foi processado.")
+                return
 
-        # Prepara a legenda
-        tipo_doc = dados_documento[2] # MesAno
-        if mes_ano_obj:
-             caption_text = f"Aqui está seu documento ({tipo_doc}) referente a {mes_ano_obj.strftime('%B de %Y').capitalize()}.\n\nPor favor, confirme o recebimento."
-        else:
-             caption_text = f"Aqui está seu documento ({tipo_doc}).\n\nPor favor, confirme o recebimento."
+            caminho_arquivo, ciencia_id, funcionario_id_db, mes_ano_obj = dados_documento
 
-        try:
-            # O `notificador_telegram.py` agora tem uma função para enviar documento com botões
-            # Mas como não temos essa função no contexto, vamos usar a mais próxima
-            # (send_document do python-telegram-bot)
-            with open(caminho_arquivo, 'rb') as documento:
-                await context.bot.send_document(
-                    chat_id=user.id,
-                    document=documento,
-                    caption=caption_text,
-                    reply_markup=reply_markup
-                )
-            await query.edit_message_text("✔️ Seu documento foi enviado. Por favor, verifique a nova mensagem e confirme a ciência.")
-        except FileNotFoundError:
-            await query.edit_message_text("❌ ERRO CRÍTICO: O arquivo do documento não foi encontrado no servidor. Por favor, contate o RH.")
-        except Exception as e:
-            await query.edit_message_text(f"❌ Ocorreu um erro inesperado ao enviar seu documento: {e}")
+            # Segurança: o documento precisa ser de quem clicou
+            funcionario = database.buscar_funcionario_por_chat_id(user.id)
+            if not funcionario or funcionario.FuncionarioID != funcionario_id_db:
+                await query.edit_message_text("Erro de Acesso: Este documento não pertence ao seu usuário.")
+                return
 
-    elif data.startswith("doc_pessoal_ciente_"): # <<< NOVO CALLBACK DE CIÊNCIA
-        ciencia_id = int(data.split('_')[-1])
-        sucesso = database.marcar_holerite_como_ciente(ciencia_id) # A função no database é genérica o suficiente
-        
-        if not sucesso:
-            await query.answer("Este documento já foi assinado.", show_alert=True)
-            return
-            
-        mensagem_gestor = f"✍️ O funcionário **{user.first_name}** confirmou o recebimento de um documento pessoal (CienciaID: {ciencia_id})."
-        notificador_telegram.enviar_mensagem(config.GESTOR_GROUP_CHAT_ID, mensagem_gestor)
-        
-        # AQUI É O AJUSTE: Removemos a edição de caption/text que estava falhando.
-        # A confirmação é dada via popup (query.answer) e remoção do teclado inline.
-        try:
-            # Tenta remover o teclado inline
-            await query.edit_message_reply_markup(reply_markup=None)
-        except Exception as e:
-            logger.warning(f"Falha ao remover teclado inline do documento pessoal: {e}")
-            
-        await query.answer("Recebimento e ciência registrados com sucesso!", show_alert=True)
+            # (O código antigo mostrava o ID do funcionário no lugar do tipo do documento.)
+            if mes_ano_obj:
+                legenda = (f"Aqui está seu documento referente a {mes_ano_obj.strftime('%B de %Y').capitalize()}.\n\n"
+                           "Por favor, confirme o recebimento.")
+            else:
+                legenda = "Aqui está seu documento.\n\nPor favor, confirme o recebimento."
 
-    # --- LÓGICA DA LOJA DE RECOMPENSAS ---
-    elif data.startswith("ver_produto_"):
-        produto_id = int(data.split('_')[-1])
-        produtos = database.listar_produtos_loja(incluir_inativos=True)
-        produto = next((p for p in produtos if p.ProdutoID == produto_id), None)
-        if not produto:
-            await query.edit_message_text("Este produto não está mais disponível.")
-            return
-        funcionario = database.buscar_funcionario_por_chat_id(user.id)
-        saldo_atual = database.buscar_saldo_funcionario(funcionario.FuncionarioID)
-        texto = (f"<b>{produto.Nome}</b>\n\n<i>{produto.Descricao}</i>\n\nCusto: <b>{produto.CustoEmPontos} pontos</b>\nSeu Saldo: <b>{saldo_atual} pontos</b>")
-        keyboard = [[InlineKeyboardButton("✅ Confirmar Resgate", callback_data=f"confirmar_resgate_{produto.ProdutoID}")],
-                    [InlineKeyboardButton("⬅️ Voltar para a Loja", callback_data="voltar_loja")]]
-        if saldo_atual < produto.CustoEmPontos:
-            texto += "\n\n⚠️ Você não tem pontos suficientes para resgatar este item."
-            keyboard.pop(0)
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(texto, reply_markup=reply_markup, parse_mode='HTML')
-
-    elif data.startswith("confirmar_resgate_"):
-        produto_id = int(data.split('_')[-1])
-        funcionario = database.buscar_funcionario_por_chat_id(user.id)
-        sucesso, mensagem, resgate_id = database.solicitar_resgate(funcionario.FuncionarioID, produto_id)
-        await query.edit_message_text(mensagem)
-        if sucesso:
-            produto = next((p for p in database.listar_produtos_loja(incluir_inativos=True) if p.ProdutoID == produto_id), None)
-            msg_gestor = (f"🔔 **Nova Solicitação de Resgate** 🔔\n\n👤 **Funcionário:** {funcionario.NomeCompleto}\n🎁 **Produto:** {produto.Nome}\n💰 **Custo:** {produto.CustoEmPontos} pontos\n\nAcesse o sistema (`main.py`) para aprovar.")
-            notificador_telegram.enviar_mensagem(config.GESTOR_GROUP_CHAT_ID, msg_gestor)
-
-    elif data == "voltar_loja":
-        produtos = database.listar_produtos_loja()
-        texto = "🏪 **Loja de Recompensas** 🏪\n\nEscolha um item para ver os detalhes e resgatar:"
-        keyboard = []
-        for produto in produtos:
-            estoque_str = f"({produto.EstoqueDisponivel} un.)" if produto.EstoqueDisponivel is not None else ""
-            texto_botao = f"{produto.Nome} - {produto.CustoEmPontos} pts {estoque_str}"
-            keyboard.append([InlineKeyboardButton(texto_botao, callback_data=f"ver_produto_{produto.ProdutoID}")])
-
-        keyboard.append([InlineKeyboardButton("🍔 Abater na Comanda", callback_data="abater_comanda")])
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(text=texto, reply_markup=reply_markup, parse_mode='Markdown')
-
-        # --- LÓGICA DE FEEDBACK DE FIM DE JORNADA ---
-    elif data == "avaliar_dia" or data == "avaliar_dia_ontem":
-        keyboard = []; row = []
-        for i in range(11):
-            # O callback é ajustado para saber que é a nota do dia anterior, que é a pendência
-            callback_data = f"nota_dia_ontem_{i}" if data == "avaliar_dia_ontem" else f"nota_dia_{i}"
-            row.append(InlineKeyboardButton(str(i), callback_data=callback_data))
-            if len(row) == 5 or i == 10: keyboard.append(row); row = []
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        texto_base = "Como você classificaria seu dia de 0 a 10?\n(0 = Muito Ruim / 10 = Excelente)"
-        if data == "avaliar_dia_ontem":
-            texto_base = "Por favor, avalie o dia de ontem (pendência obrigatória):"
-            
-        await query.edit_message_text(text=(f"{query.message.text}\n\n{texto_base}"), reply_markup=reply_markup)
-
-    elif data.startswith("nota_dia_") or data.startswith("nota_dia_ontem_"):
-        # Determina a nota e se é referente ao dia anterior (para ajuste da data de registro)
-        if data.startswith("nota_dia_ontem_"):
-            nota = int(data.split('_')[-1])
-            data_registro = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-            msg_pendencia = "Sua pendência de feedback foi resolvida."
-        else:
-            nota = int(data.split('_')[-1])
-            data_registro = datetime.now().strftime('%Y-%m-%d')
-            msg_pendencia = "Seu feedback foi salvo com sucesso."
-
-        funcionario_db = database.buscar_funcionario_por_chat_id(user.id)
-        if funcionario_db:
-            # Chama a função de salvar com a data correta
-            sucesso = database.salvar_feedback_do_dia_com_data(funcionario_db.FuncionarioID, nota, data_registro)
-
-            if sucesso:
-                # O restante da lógica de premiação permanece a mesma
-                # ... (Lógica de premiação existente) ...
-                
-                # --- CORREÇÃO APLICADA AQUI ---
-                # Usamos a nova função genérica de bônus, especificando o ID correto da tarefa de feedback.
-                database.registrar_pontos_de_bonus(
-                    funcionario_db.FuncionarioID, 
-                    config.PONTOS_BONUS_FEEDBACK_DIARIO, 
-                    f"Feedback Diário ({data_registro})",
-                    config.TAREFA_ID_FEEDBACK_DIARIO
-                )
-                # --- FIM DA CORREÇÃO ---
-                
-                database.adicionar_pontos_ao_saldo(funcionario_db.FuncionarioID, config.PONTOS_BONUS_FEEDBACK_DIARIO)
-                texto_final = (f"Obrigado pelo seu feedback! Sua nota foi **{nota}**.\n\nVocê ganhou **{config.PONTOS_BONUS_FEEDBACK_DIARIO}** pontos por sua participação. Sua opinião nos ajuda a melhorar sempre! 💪\n\n{msg_pendencia}")
-                await query.edit_message_text(texto_final, parse_mode='Markdown')
-            else: 
-                await query.edit_message_text("Você já enviou seu feedback para esta data. Obrigado!")
-        else: 
-            await query.edit_message_text("Erro: não foi possível identificar seu usuário.")
-
-    elif data.startswith("aceitar_tarefa_"):
-        origem_atribuicao_id = int(data.split('_')[-1])
-        funcionario_db = database.buscar_funcionario_por_chat_id(user.id)
-        if not funcionario_db:
-            await query.answer("Seu usuário do Telegram não foi encontrado no nosso sistema.", show_alert=True) # Avisa via popup
-            return
-
-        # Chama a função do banco
-        nova_atribuicao_id_criada = database.aceitar_tarefa_de_grupo(origem_atribuicao_id, funcionario_db.FuncionarioID)
-
-        # Busca o título da tarefa original para as mensagens
-        tarefa_original = database.buscar_tarefa_por_atribuicao(origem_atribuicao_id)
-        tarefa_titulo = tarefa_original.Titulo if tarefa_original else "Tarefa desconhecida"
-
-        # <<< CORREÇÃO: Verifica se a atribuição foi criada com sucesso >>>
-        if nova_atribuicao_id_criada:
-            # SUCESSO! A instância 'Unica' foi criada para este funcionário HOJE.
-            nova_mensagem_grupo = (
-                f"✅ **Missão Aceita por {user.first_name}!** ✅\n\n"
-                f"**Tarefa:** {tarefa_titulo}\n\n"
-                f"{user.first_name} agora é o responsável pela entrega *de hoje*. Boa sorte!"
-            )
+            keyboard = [[InlineKeyboardButton("✅ Recebi e estou ciente", callback_data=f"doc_pessoal_ciente_{ciencia_id}")]]
             try:
-                await query.edit_message_text(text=nova_mensagem_grupo, reply_markup=None)
+                with open(caminho_arquivo, 'rb') as documento:
+                    await context.bot.send_document(chat_id=user.id, document=documento, caption=legenda,
+                                                    reply_markup=InlineKeyboardMarkup(keyboard))
+                await query.edit_message_text("✔️ Seu documento foi enviado. Verifique a nova mensagem e confirme a ciência.")
+            except FileNotFoundError:
+                logger.error(f"Arquivo do DocumentoID {documento_id} não encontrado: {caminho_arquivo}")
+                await query.edit_message_text("❌ O arquivo do documento não foi encontrado no servidor. Por favor, contate o RH.")
             except Exception as e:
-                logger.info(f"Aviso: Não foi possível editar a mensagem original no grupo para {origem_atribuicao_id}. Erro: {e}")
+                logger.error(f"Erro ao enviar DocumentoID {documento_id}: {e}", exc_info=True)
+                await query.edit_message_text("❌ Ocorreu um erro inesperado ao enviar seu documento. Tente novamente ou contate o RH.")
 
-            # Mensagem privada de sucesso
-            await context.bot.send_message(
-                chat_id=user.id,
-                text=f"Você aceitou a missão '{tarefa_titulo}' para hoje. Agora ela aparecerá na sua lista de /tarefas. Capriche na entrega! 💪"
+        elif data.startswith("doc_pessoal_ciente_"):
+            ciencia_id = int(data.split('_')[-1])
+            if not database.marcar_holerite_como_ciente(ciencia_id):
+                await responder("Este documento já foi assinado.", alerta=True)
+                return
+            notificador_telegram.enviar_mensagem(
+                config.GESTOR_GROUP_CHAT_ID,
+                f"✍️ O funcionário <b>{esc(user.first_name)}</b> confirmou o recebimento de um documento pessoal (CienciaID: {ciencia_id})."
             )
-        else:
-            # FALHA! Alguém já aceitou HOJE ou ocorreu outro erro no banco.
-            # Avisa o usuário que clicou via popup (show_alert=True)
-            await query.answer(f"Que pena, parece que a missão '{tarefa_titulo}' já foi aceita por outro colega hoje.", show_alert=True)
-            # Opcional: Logar que a tentativa falhou
-            logger.info(f"Funcionário {funcionario_db.FuncionarioID} tentou aceitar tarefa {origem_atribuicao_id} que já foi aceita hoje ou falhou no DB.")
-
-
-
-    # Em telegram_bot.py, SUBSTITUA a lógica do 'aceitar_folga_' dentro de button_callback_handler
-
-    elif data.startswith("aceitar_folga_"):
-        tarefa_id = int(data.split('_')[-1])
-        funcionario_aceitou = database.buscar_funcionario_por_chat_id(user.id)
-        
-        if not funcionario_aceitou:
-            await query.answer("Seu usuário não foi encontrado.", show_alert=True)
-            return
-
-        # 1. Tenta Aceitar no Banco (Transacional)
-        novo_atribuicao_id = database.verificar_e_aceitar_tarefa_de_folga(tarefa_id, funcionario_aceitou.FuncionarioID)
-        tarefa_info = database.buscar_tarefa_por_atribuicao(novo_atribuicao_id) if novo_atribuicao_id else None
-
-        if novo_atribuicao_id and tarefa_info:
-            # SUCESSO!
-            await query.answer("Missão aceita com sucesso! Ganhe esses pontos! 🚀", show_alert=True)
-            
-            # --- LÓGICA INTELIGENTE DE ATUALIZAÇÃO DO DROP ---
-            # Objetivo: Remover APENAS o botão clicado e atualizar o texto
-            try:
-                # 1. Recupera o teclado atual
-                current_markup = query.message.reply_markup
-                new_keyboard = []
-                
-                # 2. Reconstrói o teclado EXCLUINDO o botão clicado
-                if current_markup and current_markup.inline_keyboard:
-                    for row in current_markup.inline_keyboard:
-                        new_row = []
-                        for button in row:
-                            # Se o callback do botão for diferente do atual, mantém ele
-                            if button.callback_data != data:
-                                new_row.append(button)
-                        if new_row:
-                            new_keyboard.append(new_row)
-                
-                # 3. Atualiza o texto adicionando quem pegou
-                # Tenta pegar HTML, senão texto puro
-                texto_atual = query.message.text_html if hasattr(query.message, 'text_html') and query.message.text_html else query.message.text
-                
-                # Adiciona log de quem pegou (Usamos HTML para negrito)
-                novo_texto = texto_atual + f"\n\n✅ <b>{tarefa_info.Titulo}</b> resgatada por <b>{user.first_name}</b>!"
-
-                # 4. Edita a mensagem (Texto atualizado + Teclado sem o botão clicado)
-                await query.edit_message_text(
-                    text=novo_texto, 
-                    reply_markup=InlineKeyboardMarkup(new_keyboard), 
-                    parse_mode='HTML'
-                )
-                
-                # 5. Confirmação Privada
-                await context.bot.send_message(
-                    chat_id=user.id,
-                    text=f"🚀 Você assumiu a missão '{tarefa_info.Titulo}'! Ela já está na sua lista de /tarefas."
-                )
-
-            except Exception as e:
-                logger.warning(f"Erro ao atualizar visual do Drop (mas a tarefa foi aceita): {e}")
-        
-        else:
-            # FALHA (Já pegaram)
-            # Tenta remover o botão clicado visualmente para evitar novos cliques frustrados
-            try:
-                current_markup = query.message.reply_markup
-                new_keyboard = []
-                if current_markup and current_markup.inline_keyboard:
-                    for row in current_markup.inline_keyboard:
-                        new_row = [btn for btn in row if btn.callback_data != data]
-                        if new_row: new_keyboard.append(new_row)
-                
-                await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(new_keyboard))
-            except:
-                pass
-                
-            await query.answer("Que pena! Outro colega foi mais rápido e já pegou essa missão.", show_alert=True)
-
-
-
-    # --- LÓGICA DE VISUALIZAÇÃO DE PENDÊNCIAS (GESTOR) ---
-    elif data.startswith("ver_pendencias_"):
-        funcionario_id = int(data.split('_')[-1])
-        funcionario = database.buscar_funcionario_por_id(funcionario_id)
-        tarefas_pendentes = database.listar_tarefas_do_dia_por_funcionario(funcionario_id)
-        if not funcionario:
-            await query.edit_message_text("Erro: Funcionário não encontrado.")
-            return
-        texto_resposta = f"📋 **Tarefas Pendentes para {funcionario.NomeCompleto}**\n\n"
-        if not tarefas_pendentes:
-            texto_resposta += "Nenhuma tarefa pendente no momento. Bom trabalho! ✅"
-        else:
-            for tarefa in tarefas_pendentes:
-                texto_resposta += f"  - {tarefa.Titulo} ({tarefa.Pontos} pts)\n"
-        keyboard = [[InlineKeyboardButton("⬅️ Voltar para a lista", callback_data="voltar_lista_funcs")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(texto_resposta, reply_markup=reply_markup, parse_mode='Markdown')
-
-    elif data == "voltar_lista_funcs":
-        funcionarios = database.listar_funcionarios()
-        keyboard = [[InlineKeyboardButton(f.NomeCompleto, callback_data=f"ver_pendencias_{f.FuncionarioID}")] for f in funcionarios]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text("Selecione um funcionário para ver as tarefas pendentes:", reply_markup=reply_markup)
-
-    elif data.startswith("doc_ciente_"):
-        await query.answer()
-        assinatura_id = int(data.split('_')[-1])
-        detalhes = database.buscar_detalhes_assinatura_para_bot(assinatura_id)
-
-        # <<< CORREÇÃO: Verifica se 'detalhes' foi encontrado (ou seja, se a assinatura ainda estava pendente) >>>
-        if not detalhes:
-            await query.answer("Esta ciência já foi registrada anteriormente.", show_alert=True)
-            # Tenta remover o botão se a edição anterior falhou
             try:
                 await query.edit_message_reply_markup(reply_markup=None)
-            except Exception:
-                pass # Ignora erro se não conseguir editar
-            return # Interrompe a execução aqui
+            except TelegramError as e:
+                logger.warning(f"Falha ao remover teclado do documento pessoal: {e}")
+            await responder("Recebimento e ciência registrados com sucesso!", alerta=True)
 
-        # Se 'detalhes' existe, prossegue com a lógica original
-        nome_funcionario = user.first_name
-        mensagem_gestor = f"✅ O funcionário **{nome_funcionario}** confirmou ciência do comunicado: *'{detalhes.Titulo}'*."
-        notificador_telegram.enviar_mensagem(config.GESTOR_GROUP_CHAT_ID, mensagem_gestor)
-        database.marcar_como_ciente(assinatura_id)
+        # ================= LOJA DE RECOMPENSAS =================
+        elif data.startswith("ver_produto_"):
+            produto_id = int(data.split('_')[-1])
+            produto = next((p for p in database.listar_produtos_loja(incluir_inativos=True) if p.ProdutoID == produto_id), None)
+            funcionario = database.buscar_funcionario_por_chat_id(user.id)
+            if not produto:
+                await query.edit_message_text("Este produto não está mais disponível.")
+                return
+            if not funcionario:
+                await query.edit_message_text("Erro: seu cadastro não foi encontrado.")
+                return
 
-        datetime_ciencia = datetime.now()
-        mensagem_confirmacao = (
-            f"\n\n---"
-            f"\n📜 **RECIBO DE CIÊNCIA** 📜"
-            f"\n\nSua confirmação de leitura foi registrada com sucesso."
-            f"\n\n**Protocolo:** `{assinatura_id}`"
-            f"\n**Data:** `{datetime_ciencia.strftime('%d/%m/%Y')}`"
-            f"\n**Hora:** `{datetime_ciencia.strftime('%H:%M:%S')}`"
-        )
-        if detalhes.PontosPorCiencia > 0:
-            # Adiciona pontos ao saldo PRIMEIRO (mais crítico)
-            database.adicionar_pontos_ao_saldo(detalhes.FuncionarioID, detalhes.PontosPorCiencia)
-            # DEPOIS registra no histórico (menos crítico se falhar)
-            database.registrar_pontos_por_leitura(detalhes.FuncionarioID, detalhes.PontosPorCiencia, detalhes.Titulo)
-            mensagem_confirmacao += f"\n\n🎉 Você ganhou **{detalhes.PontosPorCiencia}** pontos por sua agilidade!"
+            saldo_atual = database.buscar_saldo_funcionario(funcionario.FuncionarioID) or 0
+            texto = (f"<b>{esc(produto.Nome)}</b>\n\n<i>{esc(produto.Descricao)}</i>\n\n"
+                     f"Custo: <b>{produto.CustoEmPontos} pontos</b>\nSeu Saldo: <b>{saldo_atual} pontos</b>")
+            keyboard = [[InlineKeyboardButton("✅ Confirmar Resgate", callback_data=f"confirmar_resgate_{produto.ProdutoID}")],
+                        [InlineKeyboardButton("⬅️ Voltar para a Loja", callback_data="voltar_loja")]]
+            if saldo_atual < produto.CustoEmPontos:
+                texto += "\n\n⚠️ Você não tem pontos suficientes para resgatar este item."
+                keyboard.pop(0)
+            elif produto.EstoqueDisponivel is not None and produto.EstoqueDisponivel <= 0:
+                texto += "\n\n⚠️ Produto sem estoque no momento."
+                keyboard.pop(0)
+            await query.edit_message_text(texto, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
 
-        # Lógica de edição da mensagem (permanece a mesma, já corrigida anteriormente)
-        try:
-            if query.message.photo:
-                texto_original = query.message.caption
-                await query.edit_message_caption(
-                    caption=f"{texto_original}{mensagem_confirmacao}",
-                    parse_mode='Markdown',
-                    reply_markup=None
+        elif data.startswith("confirmar_resgate_"):
+            produto_id = int(data.split('_')[-1])
+            funcionario = database.buscar_funcionario_por_chat_id(user.id)
+            if not funcionario:
+                await query.edit_message_text("Erro: seu cadastro não foi encontrado.")
+                return
+            sucesso, mensagem, resgate_id = database.solicitar_resgate(funcionario.FuncionarioID, produto_id)
+            await query.edit_message_text(mensagem)
+            if sucesso:
+                produto = next((p for p in database.listar_produtos_loja(incluir_inativos=True) if p.ProdutoID == produto_id), None)
+                nome_produto = produto.Nome if produto else f"Produto {produto_id}"
+                custo = produto.CustoEmPontos if produto else "?"
+                notificador_telegram.enviar_mensagem(
+                    config.GESTOR_GROUP_CHAT_ID,
+                    f"🔔 <b>Nova Solicitação de Resgate</b> 🔔\n\n"
+                    f"👤 <b>Funcionário:</b> {esc(funcionario.NomeCompleto)}\n"
+                    f"🎁 <b>Produto:</b> {esc(nome_produto)}\n"
+                    f"💰 <b>Custo:</b> {custo} pontos\n\n"
+                    f"Acesse o sistema (<code>main.py</code>) para aprovar."
+                )
+
+        elif data == "voltar_loja":
+            texto, reply_markup = montar_loja(database.listar_produtos_loja())
+            await query.edit_message_text(text=texto, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+
+        # ================= FEEDBACK DE FIM DE JORNADA =================
+        elif data in ("avaliar_dia", "avaliar_dia_ontem"):
+            prefixo = "nota_dia_ontem_" if data == "avaliar_dia_ontem" else "nota_dia_"
+            botoes = [InlineKeyboardButton(str(i), callback_data=f"{prefixo}{i}") for i in range(11)]
+            keyboard = [botoes[0:5], botoes[5:10], botoes[10:]]
+            if data == "avaliar_dia_ontem":
+                texto_base = "Por favor, avalie o dia de ontem (pendência obrigatória):"
+            else:
+                texto_base = "Como você classificaria seu dia de 0 a 10?\n(0 = Muito Ruim / 10 = Excelente)"
+            texto_original = query.message.text if query.message and query.message.text else ""
+            await query.edit_message_text(text=f"{texto_original}\n\n{texto_base}".strip(),
+                                          reply_markup=InlineKeyboardMarkup(keyboard))
+
+        elif data.startswith("nota_dia_"):
+            nota = int(data.split('_')[-1])
+            if data.startswith("nota_dia_ontem_"):
+                data_registro = (agora() - timedelta(days=1)).strftime('%Y-%m-%d')
+                msg_pendencia = "Sua pendência de feedback foi resolvida."
+            else:
+                data_registro = agora().strftime('%Y-%m-%d')
+                msg_pendencia = "Seu feedback foi salvo com sucesso."
+
+            funcionario_db = database.buscar_funcionario_por_chat_id(user.id)
+            if not funcionario_db:
+                await query.edit_message_text("Erro: não foi possível identificar seu usuário.")
+                return
+
+            if database.salvar_feedback_do_dia_com_data(funcionario_db.FuncionarioID, nota, data_registro):
+                database.registrar_pontos_de_bonus(
+                    funcionario_db.FuncionarioID, config.PONTOS_BONUS_FEEDBACK_DIARIO,
+                    f"Feedback Diário ({data_registro})", config.TAREFA_ID_FEEDBACK_DIARIO
+                )
+                database.adicionar_pontos_ao_saldo(funcionario_db.FuncionarioID, config.PONTOS_BONUS_FEEDBACK_DIARIO)
+                await query.edit_message_text(
+                    f"Obrigado pelo seu feedback! Sua nota foi <b>{nota}</b>.\n\n"
+                    f"Você ganhou <b>{config.PONTOS_BONUS_FEEDBACK_DIARIO}</b> pontos por sua participação. "
+                    f"Sua opinião nos ajuda a melhorar sempre! 💪\n\n{msg_pendencia}",
+                    parse_mode=ParseMode.HTML
                 )
             else:
-                texto_original = query.message.text
-                await query.edit_message_text(
-                    text=f"{texto_original}{mensagem_confirmacao}",
-                    parse_mode='Markdown',
-                    reply_markup=None
-                )
-        except Exception as e:
-            logger.error(f"Erro ao editar a mensagem de ciência (ID: {assinatura_id}): {e}")
-            await query.answer("Sua ciência foi registrada!", show_alert=True) # Feedback mínimo
+                await query.edit_message_text("Você já enviou seu feedback para esta data. Obrigado!")
 
-    # --- LÓGICA DE ENTREGA DE TAREFAS (FUNCIONÁRIO) ---
-    elif data.startswith("ver_tarefa_"):
-        atribuicao_id = int(data.split('_')[-1])
-        detalhes = database.buscar_detalhes_da_atribuicao(atribuicao_id)
-        if not detalhes: await query.edit_message_text("Erro: Tarefa não encontrada."); return
-        texto = f"📄 **Detalhes:** *{detalhes.Descricao}*\n\nO que deseja fazer?"
-        keyboard = [[InlineKeyboardButton("✅ Enviar Evidência", callback_data=f"entregar_{atribuicao_id}")],
-                    [InlineKeyboardButton("🤷 Não Aplicável", callback_data=f"nao_aplicavel_{atribuicao_id}")],
-                    [InlineKeyboardButton("⬅️ Voltar", callback_data="voltar_lista_tarefas")]]
-        await query.edit_message_text(text=texto, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+        # ================= TAREFAS DE GRUPO / FOLGA =================
+        elif data.startswith("aceitar_tarefa_"):
+            origem_atribuicao_id = int(data.split('_')[-1])
+            funcionario_db = database.buscar_funcionario_por_chat_id(user.id)
+            if not funcionario_db:
+                await responder("Seu usuário do Telegram não foi encontrado no nosso sistema.", alerta=True)
+                return
 
-    elif data.startswith("entregar_"):
-        context.user_data['identificador_tarefa'] = int(data.split('_')[-1])
-        await query.edit_message_text(text="Excelente! ✅\nAgora, por favor, envie a foto de evidência.")
+            nova_atribuicao_id = database.aceitar_tarefa_de_grupo(origem_atribuicao_id, funcionario_db.FuncionarioID)
+            tarefa_original = database.buscar_tarefa_por_atribuicao(origem_atribuicao_id)
+            tarefa_titulo = tarefa_original.Titulo if tarefa_original else "Tarefa desconhecida"
 
-    elif data.startswith("nao_aplicavel_"):
-        context.user_data['tarefa_nao_aplicavel'] = int(data.split('_')[-1])
-        await query.edit_message_text(text="Entendido. 🤷\nPor favor, diga o motivo (ex: 'Chuva', 'Nenhum cliente').")
+            if nova_atribuicao_id:
+                try:
+                    await query.edit_message_text(
+                        text=(f"✅ <b>Missão Aceita por {esc(user.first_name)}!</b> ✅\n\n"
+                              f"<b>Tarefa:</b> {esc(tarefa_titulo)}\n\n"
+                              f"{esc(user.first_name)} agora é o responsável pela entrega <i>de hoje</i>. Boa sorte!"),
+                        reply_markup=None, parse_mode=ParseMode.HTML
+                    )
+                except TelegramError as e:
+                    logger.info(f"Não foi possível editar a mensagem do grupo para {origem_atribuicao_id}: {e}")
+                try:
+                    await context.bot.send_message(
+                        chat_id=user.id,
+                        text=f"Você aceitou a missão '{tarefa_titulo}' para hoje. Ela já aparece em 📋 Minhas Tarefas. Capriche na entrega! 💪"
+                    )
+                except Forbidden:
+                    logger.info(f"Usuário {user.id} ainda não iniciou conversa privada com o bot.")
+                await responder("Missão aceita! 🚀")
+            else:
+                await responder(f"Que pena, a missão '{tarefa_titulo}' já foi aceita por outro colega hoje.", alerta=True)
+                logger.info(f"Funcionário {funcionario_db.FuncionarioID} tentou aceitar a tarefa {origem_atribuicao_id} já aceita.")
 
-    elif data == "voltar_lista_tarefas":
-        await tarefas(update, context, query=query)
+        elif data.startswith("aceitar_folga_"):
+            tarefa_id = int(data.split('_')[-1])
+            funcionario_aceitou = database.buscar_funcionario_por_chat_id(user.id)
+            if not funcionario_aceitou:
+                await responder("Seu usuário não foi encontrado.", alerta=True)
+                return
 
-    elif data.startswith("aprovar_gestor_"):
-        entrega_id = int(data.split('_')[-1])
-        gestor_nome = query.from_user.first_name
-        detalhes = database.buscar_detalhes_da_entrega(entrega_id) # Busca detalhes uma vez
+            novo_atribuicao_id = database.verificar_e_aceitar_tarefa_de_folga(tarefa_id, funcionario_aceitou.FuncionarioID)
+            tarefa_info = database.buscar_tarefa_por_atribuicao(novo_atribuicao_id) if novo_atribuicao_id else None
 
-        # <<< CORREÇÃO: Verifica o status ANTES de tentar aprovar >>>
-        if not detalhes:
-            try: await query.edit_message_caption(caption="ERRO: Entrega não encontrada no banco de dados.")
-            except Exception: pass
-            return
-        if detalhes.StatusValidacao != 'Pendente':
-            try: await query.edit_message_caption(caption=f"Esta tarefa já foi validada anteriormente. (Status: {detalhes.StatusValidacao})")
-            except Exception: pass
-            return
+            # Remove do teclado o botão clicado (nos dois casos: sucesso ou já pego)
+            novo_teclado = []
+            teclado_atual = query.message.reply_markup if query.message else None
+            if teclado_atual and teclado_atual.inline_keyboard:
+                for linha in teclado_atual.inline_keyboard:
+                    nova_linha = [btn for btn in linha if btn.callback_data != data]
+                    if nova_linha:
+                        novo_teclado.append(nova_linha)
 
-        # Se passou nas verificações, tenta aprovar no banco
-        novas_conquistas_ganhas = database.aprovar_entrega(entrega_id, detalhes.FuncionarioID, detalhes.Pontos)
+            if novo_atribuicao_id and tarefa_info:
+                await responder("Missão aceita com sucesso! Ganhe esses pontos! 🚀", alerta=True)
+                try:
+                    texto_atual = query.message.text_html or esc(query.message.text or "")
+                    novo_texto = texto_atual + f"\n\n✅ <b>{esc(tarefa_info.Titulo)}</b> resgatada por <b>{esc(user.first_name)}</b>!"
+                    await query.edit_message_text(text=novo_texto, reply_markup=InlineKeyboardMarkup(novo_teclado),
+                                                  parse_mode=ParseMode.HTML)
+                except TelegramError as e:
+                    logger.warning(f"Erro ao atualizar a mensagem do Drop (a tarefa foi aceita): {e}")
+                try:
+                    await context.bot.send_message(
+                        chat_id=user.id,
+                        text=f"🚀 Você assumiu a missão '{tarefa_info.Titulo}'! Ela já está em 📋 Minhas Tarefas."
+                    )
+                except Forbidden:
+                    logger.info(f"Usuário {user.id} ainda não iniciou conversa privada com o bot.")
+            else:
+                await responder("Que pena! Outro colega foi mais rápido e já pegou essa missão.", alerta=True)
+                try:
+                    await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(novo_teclado))
+                except TelegramError:
+                    pass
 
-        # Prepara notificação para funcionário (mesma lógica de antes)
-        texto_notificacao = (f"🎉 Parabéns, <b>{detalhes.NomeCompleto}</b>!\nSua entrega para '<b>{detalhes.Titulo}</b>' foi APROVADA!\n\n"
-                            f"Você ganhou <b>{detalhes.Pontos}</b> pontos. Continue assim!")
-        if novas_conquistas_ganhas:
-            for conquista in novas_conquistas_ganhas:
+        # ================= PENDÊNCIAS (GESTOR) =================
+        elif data.startswith("ver_pendencias_"):
+            funcionario_id = int(data.split('_')[-1])
+            funcionario = database.buscar_funcionario_por_id(funcionario_id)
+            if not funcionario:
+                await query.edit_message_text("Erro: Funcionário não encontrado.")
+                return
+            tarefas_pendentes = database.listar_tarefas_do_dia_por_funcionario(funcionario_id)
+            texto_resposta = f"📋 <b>Tarefas Pendentes para {esc(funcionario.NomeCompleto)}</b>\n\n"
+            if not tarefas_pendentes:
+                texto_resposta += "Nenhuma tarefa pendente no momento. Bom trabalho! ✅"
+            else:
+                for tarefa in tarefas_pendentes:
+                    texto_resposta += f"  - {esc(tarefa.Titulo)} ({tarefa.Pontos} pts)\n"
+            keyboard = [[InlineKeyboardButton("⬅️ Voltar para a lista", callback_data="voltar_lista_funcs")]]
+            await query.edit_message_text(texto_resposta, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
+
+        elif data == "voltar_lista_funcs":
+            funcionarios = database.listar_funcionarios() or []
+            keyboard = [[InlineKeyboardButton(f.NomeCompleto, callback_data=f"ver_pendencias_{f.FuncionarioID}")] for f in funcionarios]
+            await query.edit_message_text("Selecione um funcionário para ver as tarefas pendentes:",
+                                          reply_markup=InlineKeyboardMarkup(keyboard))
+
+        # ================= CIÊNCIA DE COMUNICADOS =================
+        elif data.startswith("doc_ciente_"):
+            # (O código antigo chamava query.answer() aqui pela 2ª vez e QUEBRAVA sempre.)
+            assinatura_id = int(data.split('_')[-1])
+            detalhes = database.buscar_detalhes_assinatura_para_bot(assinatura_id)
+            if not detalhes:
+                await responder("Esta ciência já foi registrada anteriormente.", alerta=True)
+                try:
+                    await query.edit_message_reply_markup(reply_markup=None)
+                except TelegramError:
+                    pass
+                return
+
+            database.marcar_como_ciente(assinatura_id)
+            notificador_telegram.enviar_mensagem(
+                config.GESTOR_GROUP_CHAT_ID,
+                f"✅ O funcionário <b>{esc(user.first_name)}</b> confirmou ciência do comunicado: <i>'{esc(detalhes.Titulo)}'</i>."
+            )
+
+            momento = agora()
+            confirmacao = (
+                "\n\n---"
+                "\n📜 <b>RECIBO DE CIÊNCIA</b> 📜"
+                "\n\nSua confirmação de leitura foi registrada com sucesso."
+                f"\n\n<b>Protocolo:</b> <code>{assinatura_id}</code>"
+                f"\n<b>Data:</b> <code>{momento.strftime('%d/%m/%Y')}</code>"
+                f"\n<b>Hora:</b> <code>{momento.strftime('%H:%M:%S')}</code>"
+            )
+            pontos = detalhes.PontosPorCiencia or 0
+            if pontos > 0:
+                database.adicionar_pontos_ao_saldo(detalhes.FuncionarioID, pontos)
+                database.registrar_pontos_por_leitura(detalhes.FuncionarioID, pontos, detalhes.Titulo)
+                confirmacao += f"\n\n🎉 Você ganhou <b>{pontos}</b> pontos por sua agilidade!"
+
+            try:
+                if query.message.photo or query.message.document:
+                    original = query.message.caption_html or ""
+                    await query.edit_message_caption(caption=f"{original}{confirmacao}", parse_mode=ParseMode.HTML, reply_markup=None)
+                else:
+                    original = query.message.text_html or ""
+                    await query.edit_message_text(text=f"{original}{confirmacao}", parse_mode=ParseMode.HTML, reply_markup=None)
+                await responder("Ciência registrada!")
+            except TelegramError as e:
+                logger.error(f"Erro ao editar a mensagem de ciência (ID: {assinatura_id}): {e}")
+                await responder("Sua ciência foi registrada!", alerta=True)
+
+        # ================= TAREFAS (FUNCIONÁRIO) =================
+        elif data.startswith("ver_tarefa_"):
+            atribuicao_id = int(data.split('_')[-1])
+            detalhes = database.buscar_detalhes_da_atribuicao(atribuicao_id)
+            if not detalhes:
+                await query.edit_message_text("Erro: Tarefa não encontrada.")
+                return
+            keyboard = [[InlineKeyboardButton("✅ Enviar Evidência", callback_data=f"entregar_{atribuicao_id}")],
+                        [InlineKeyboardButton("🤷 Não Aplicável", callback_data=f"nao_aplicavel_{atribuicao_id}")],
+                        [InlineKeyboardButton("⬅️ Voltar", callback_data="voltar_lista_tarefas")]]
+            await query.edit_message_text(
+                text=f"📄 <b>Detalhes:</b> <i>{esc(detalhes.Descricao)}</i>\n\nO que deseja fazer?",
+                reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML
+            )
+
+        elif data.startswith("entregar_"):
+            context.user_data['identificador_tarefa'] = int(data.split('_')[-1])
+            context.user_data.pop('tarefa_nao_aplicavel', None)
+            await query.edit_message_text(text="Excelente! ✅\nAgora, por favor, envie a foto de evidência.")
+
+        elif data.startswith("nao_aplicavel_"):
+            context.user_data['tarefa_nao_aplicavel'] = int(data.split('_')[-1])
+            context.user_data.pop('identificador_tarefa', None)
+            await query.edit_message_text(text="Entendido. 🤷\nPor favor, diga o motivo (ex: 'Chuva', 'Nenhum cliente').")
+
+        elif data == "voltar_lista_tarefas":
+            await tarefas(update, context, query=query)
+
+        # ================= VALIDAÇÃO (GESTOR) =================
+        elif data.startswith("aprovar_gestor_"):
+            entrega_id = int(data.split('_')[-1])
+            gestor_nome = query.from_user.first_name
+            detalhes = database.buscar_detalhes_da_entrega(entrega_id)
+
+            if not detalhes:
+                await responder("Entrega não encontrada no banco de dados.", alerta=True)
+                return
+            if detalhes.StatusValidacao != 'Pendente':
+                await responder(f"Esta tarefa já foi validada. (Status: {detalhes.StatusValidacao})", alerta=True)
+                try:
+                    await query.edit_message_reply_markup(reply_markup=None)
+                except TelegramError:
+                    pass
+                return
+
+            novas_conquistas = database.aprovar_entrega(entrega_id, detalhes.FuncionarioID, detalhes.Pontos)
+
+            texto_notificacao = (f"🎉 Parabéns, <b>{esc(detalhes.NomeCompleto)}</b>!\n"
+                                 f"Sua entrega para '<b>{esc(detalhes.Titulo)}</b>' foi APROVADA!\n\n"
+                                 f"Você ganhou <b>{detalhes.Pontos}</b> pontos. Continue assim!")
+            for conquista in novas_conquistas or []:
                 texto_notificacao += (
                     f"\n\n✨ <b>NOVA CONQUISTA DESBLOQUEADA!</b> ✨\n"
-                    f"{conquista.Icone} <b>{conquista.Nome}</b>\n"
-                    f"<i>{conquista.Descricao}</i>\n"
+                    f"{esc(conquista.Icone)} <b>{esc(conquista.Nome)}</b>\n"
+                    f"<i>{esc(conquista.Descricao)}</i>\n"
                     f"Você ganhou um bônus de <b>{conquista.PontosBonus}</b> pontos!"
                 )
-                # Adiciona pontos bônus AO SALDO aqui, pois aprovar_entrega só registra
-                if conquista.PontosBonus > 0:
+                if conquista.PontosBonus and conquista.PontosBonus > 0:
                     database.adicionar_pontos_ao_saldo(detalhes.FuncionarioID, conquista.PontosBonus)
+            notificador_telegram.enviar_mensagem(detalhes.ChatIDFuncionario, texto_notificacao)
 
-        notificador_telegram.enviar_mensagem(detalhes.ChatIDFuncionario, texto_notificacao)
-
-        # Edita a mensagem no grupo GESTOR
-        legenda_final = (f"**Entrega APROVADA por {gestor_nome}**\n\n"
-                        f"👤 **Funcionário:** {detalhes.NomeCompleto}\n"
-                        f"📝 **Tarefa:** {detalhes.Titulo} (+{detalhes.Pontos} pts)")
-
-                # <<< CORREÇÃO REVISADA: Adiciona try/except e fallback com nova mensagem >>>
-        try:
-            await query.edit_message_caption(caption=legenda_final, reply_markup=None) # Remove botões também
-        except Exception as e_edit:
-            logger.warning(f"Não foi possível editar a mensagem de aprovação {entrega_id} no grupo gestor: {e_edit}")
-            # Fallback: Envia uma nova mensagem se a edição falhar
+            legenda_final = (f"<b>Entrega APROVADA por {esc(gestor_nome)}</b>\n\n"
+                             f"👤 <b>Funcionário:</b> {esc(detalhes.NomeCompleto)}\n"
+                             f"📝 <b>Tarefa:</b> {esc(detalhes.Titulo)} (+{detalhes.Pontos} pts)")
             try:
-                await context.bot.send_message(chat_id=query.message.chat_id, text=legenda_final)
-            except Exception as e_send:
-                logger.error(f"Falha também ao enviar mensagem de fallback para aprovação {entrega_id}: {e_send}")
-    # --- INÍCIO: LÓGICA DE GERENCIAMENTO DE NOTA FISCAL (GESTOR) ---
+                await query.edit_message_caption(caption=legenda_final, reply_markup=None, parse_mode=ParseMode.HTML)
+            except TelegramError as e_edit:
+                logger.warning(f"Não foi possível editar a mensagem de aprovação {entrega_id}: {e_edit}")
+                try:
+                    await context.bot.send_message(chat_id=query.message.chat_id, text=legenda_final, parse_mode=ParseMode.HTML)
+                except TelegramError as e_send:
+                    logger.error(f"Falha também ao enviar a mensagem de aprovação {entrega_id}: {e_send}")
 
-    elif data.startswith("nf_prep_fwd_"):
-        # Regra 3: Encaminhar para o WhatsApp
-        await query.answer("Processando...")
-        gestor_chat_id = query.from_user.id
-        try:
+        elif data.startswith("reprovar_gestor_"):
+            entrega_id = int(data.split('_')[-1])
+            gestor = query.from_user
+            chat_id_grupo = query.message.chat_id
+
+            # Guarda "qual entrega este gestor está recusando" (fica na memória do bot)
+            context.bot_data.setdefault('pendencias_recusa', {}).setdefault(chat_id_grupo, {})[gestor.id] = {
+                'entrega_id': entrega_id,
+                'msg_id': query.message.message_id,
+            }
+            logger.info(f"Recusa da EntregaID {entrega_id} aguardando motivo do GestorID {gestor.id}.")
+
+            try:
+                await query.edit_message_reply_markup(reply_markup=None)
+            except TelegramError as e:
+                logger.warning(f"Não foi possível remover botões ao iniciar a recusa {entrega_id}: {e}")
+
+            # ForceReply abre a "resposta" automaticamente no celular do gestor,
+            # e o motivo só é aceito quando é uma RESPOSTA a esta mensagem.
+            await query.message.reply_html(
+                f'<a href="tg://user?id={gestor.id}">{esc(gestor.first_name)}</a>, '
+                "<b>responda a esta mensagem</b> com o motivo da recusa.",
+                reply_markup=ForceReply(selective=True, input_field_placeholder="Motivo da recusa")
+            )
+
+        # ================= NOTA FISCAL (GESTOR) =================
+        elif data.startswith("nf_prep_fwd_"):
+            gestor_chat_id = query.from_user.id
             nota_fiscal_id = int(data.split('_')[-1])
             dados_nf = database.buscar_nota_fiscal(nota_fiscal_id)
-
             if not dados_nf:
-                await context.bot.send_message(gestor_chat_id, "Erro: Não encontrei os dados desta NF no banco.")
+                await responder("Não encontrei os dados desta NF no banco.", alerta=True)
                 return
-
             if not dados_nf.PathFoto:
-                await context.bot.send_message(gestor_chat_id, "O download desta foto ainda está sendo processado pelo servidor. Tente novamente em 1 minuto.")
+                await responder("O download desta foto ainda está sendo processado. Tente novamente em 1 minuto.", alerta=True)
                 return
 
-            # Constrói o link do WhatsApp
-            texto_mensagem_wpp = urllib.parse.quote(f"Olá, segue a Nota Fiscal recebida (ID Interno: {nota_fiscal_id})")
-            link_wpp = f"https://wa.me/{config.WHATSAPP_CONTATO_FINANCEIRO}?text={texto_mensagem_wpp}"
+            texto_wpp = urllib.parse.quote(f"Olá, segue a Nota Fiscal recebida (ID Interno: {nota_fiscal_id})")
+            link_wpp = f"https://wa.me/{config.WHATSAPP_CONTATO_FINANCEIRO}?text={texto_wpp}"
+            try:
+                with open(dados_nf.PathFoto, 'rb') as nf_file:
+                    await context.bot.send_document(
+                        chat_id=gestor_chat_id, document=nf_file,
+                        caption=f"Pronto! Encaminhe este arquivo para o Financeiro.\n\nVocê também pode usar este link:\n{link_wpp}"
+                    )
+            except Forbidden:
+                await responder("Abra uma conversa privada comigo (/start) para eu poder te enviar o arquivo.", alerta=True)
+                return
+            except FileNotFoundError:
+                logger.error(f"Arquivo da NF {nota_fiscal_id} não encontrado: {dados_nf.PathFoto}")
+                await responder("O arquivo desta NF não foi encontrado no servidor.", alerta=True)
+                return
 
-            # Envia o arquivo da NF (do disco) PRIVADAMENTE para o gestor
-            with open(dados_nf.PathFoto, 'rb') as nf_file:
-                await context.bot.send_document(
-                    chat_id=gestor_chat_id,
-                    document=nf_file,
-                    caption=f"Pronto! Por favor, encaminhe este arquivo para o Financeiro.\n\nVocê também pode usar este link:\n{link_wpp}"
-                )
-            # Atualiza o status no grupo
-            await query.edit_message_caption(caption=f"{query.message.caption}\n\n---\n✅ Encaminhada para o Financeiro por {query.from_user.first_name}.")
+            await responder("Arquivo enviado no seu privado!")
+            await query.edit_message_caption(
+                caption=f"{query.message.caption_html or ''}\n\n---\n✅ Encaminhada para o Financeiro por {esc(query.from_user.first_name)}.",
+                parse_mode=ParseMode.HTML
+            )
 
-        except Exception as e:
-            logger.error(f"Erro em nf_prep_fwd: {e}", exc_info=True)
-            await context.bot.send_message(gestor_chat_id, f"Ocorreu um erro ao preparar o encaminhamento: {e}")
-
-    elif data.startswith("nf_create_task_"):
-        # Regra 4: Criar Tarefa "Guardar Mercadoria"
-        await query.answer("Criando tarefa...")
-        try:
+        elif data.startswith("nf_create_task_"):
             nota_fiscal_id = int(data.split('_')[-1])
+            legenda_original = query.message.caption_html or ""
             dados_nf = database.buscar_nota_fiscal(nota_fiscal_id)
-
             if not dados_nf:
-                await query.edit_message_caption(caption=f"{query.message.caption}\n\n---\n❌ Erro: Não encontrei os dados desta NF.")
+                await query.edit_message_caption(caption=f"{legenda_original}\n\n---\n❌ Erro: Não encontrei os dados desta NF.",
+                                                 parse_mode=ParseMode.HTML)
                 return
 
-            # Cria a nova tarefa 'Unica'
             nova_atribuicao_id = database.atribuir_tarefa(
                 tarefa_id=config.TAREFA_ID_GUARDAR_MERCADORIA_MODELO,
                 funcionario_id=dados_nf.FuncionarioID,
                 tipo_frequencia='Unica',
                 valor_frequencia=None,
                 descricao_override="Guarde a mercadoria referente a esta Nota Fiscal.",
-                data_agendamento=datetime.now().date() # Agenda para hoje
+                data_agendamento=hoje()
             )
-
             if not nova_atribuicao_id:
-                await query.edit_message_caption(caption=f"{query.message.caption}\n\n---\n❌ Erro: Falha ao salvar a nova tarefa no banco.")
+                await query.edit_message_caption(caption=f"{legenda_original}\n\n---\n❌ Erro: Falha ao salvar a nova tarefa no banco.",
+                                                 parse_mode=ParseMode.HTML)
                 return
 
-            # Atualiza o status da NF
             database.atualizar_status_nota_fiscal(nota_fiscal_id, "Processada")
-
-            # Notifica o funcionário PRIVADAMENTE
-            await context.bot.send_photo(
-                chat_id=dados_nf.ChatIDFuncionario,
-                photo=dados_nf.FileIDTelegram,
-                caption="📦 **Nova Tarefa Atribuída!** 📦\n\nUma tarefa para *'Guardar Mercadoria (NF)'* foi criada para você com base na nota fiscal que você enviou.\n\nUse o comando /tarefas para ver e enviar a evidência."
+            try:
+                await context.bot.send_photo(
+                    chat_id=dados_nf.ChatIDFuncionario, photo=dados_nf.FileIDTelegram,
+                    caption=("📦 <b>Nova Tarefa Atribuída!</b> 📦\n\n"
+                             "Uma tarefa para <i>'Guardar Mercadoria (NF)'</i> foi criada para você com base na nota fiscal que você enviou.\n\n"
+                             "Use o botão 📋 Minhas Tarefas para ver e enviar a evidência."),
+                    parse_mode=ParseMode.HTML
+                )
+            except TelegramError as e:
+                logger.error(f"Tarefa da NF {nota_fiscal_id} criada, mas falhou ao avisar o funcionário: {e}")
+            await query.edit_message_caption(
+                caption=f"{legenda_original}\n\n---\n✅ Tarefa 'Guardar' criada para o funcionário por {esc(query.from_user.first_name)}.",
+                parse_mode=ParseMode.HTML
             )
+            await responder("Tarefa criada!")
 
-            # Atualiza a mensagem no grupo
-            await query.edit_message_caption(caption=f"{query.message.caption}\n\n---\n✅ Tarefa 'Guardar' criada para o funcionário por {query.from_user.first_name}.")
-
-        except Exception as e:
-            logger.error(f"Erro em nf_create_task: {e}", exc_info=True)
-            await query.edit_message_caption(caption=f"{query.message.caption}\n\n---\n❌ Erro inesperado ao criar tarefa: {e}")
-
-    elif data.startswith("nf_ignore_"):
-        # Ação de arquivar/ignorar
-        await query.answer("Arquivando...")
-        try:
+        elif data.startswith("nf_ignore_"):
             nota_fiscal_id = int(data.split('_')[-1])
             database.atualizar_status_nota_fiscal(nota_fiscal_id, "Processada")
-            await query.edit_message_caption(caption=f"{query.message.caption}\n\n---\n👍 Nota revisada e arquivada por {query.from_user.first_name}.")
-        except Exception as e:
-            logger.error(f"Erro em nf_ignore: {e}", exc_info=True)
+            await query.edit_message_caption(
+                caption=f"{query.message.caption_html or ''}\n\n---\n👍 Nota revisada e arquivada por {esc(query.from_user.first_name)}.",
+                parse_mode=ParseMode.HTML
+            )
+            await responder("Arquivada!")
 
-    # --- FIM: LÓGICA DE GERENCIAMENTO DE NOTA FISCAL (GESTOR) ---
+        else:
+            logger.warning(f"Callback desconhecido recebido: '{data}'")
+            await responder("Este botão não está mais disponível.", alerta=True)
 
-    elif data.startswith("reprovar_gestor_"):
-        entrega_id = int(data.split('_')[-1])
-        gestor_id = query.from_user.id
-        chat_id_grupo = query.message.chat_id
-        msg_id_original = query.message.message_id
+    except Exception as e:
+        logger.error(f"Erro ao processar o clique '{data}': {e}", exc_info=True)
+        await responder("❌ Ocorreu um erro ao processar sua ação. Tente novamente.", alerta=True)
+    finally:
+        await responder()  # Se ninguém respondeu, para o "reloginho" do botão
 
-        # --- CORREÇÃO: Usar bot_data ---
-        # Garante que a estrutura de dicionários exista
-        if 'pendencias_recusa' not in context.bot_data:
-            context.bot_data['pendencias_recusa'] = {}
-        if chat_id_grupo not in context.bot_data['pendencias_recusa']:
-            context.bot_data['pendencias_recusa'][chat_id_grupo] = {}
 
-        # Armazena os dados associados ao gestor que clicou dentro do chat específico
-        context.bot_data['pendencias_recusa'][chat_id_grupo][gestor_id] = {
-            'entrega_id': entrega_id,
-            'msg_id': msg_id_original
-        }
-        logger.info(f"Estado de recusa para EntregaID {entrega_id} armazenado em bot_data para GestorID {gestor_id} no ChatID {chat_id_grupo}.")
-        # --- FIM CORREÇÃO ---
+# ===================================================================
+# == TRATAMENTO GLOBAL DE ERROS =====================================
+# ===================================================================
 
-        # Remove botões da mensagem original (pode falhar, mas o estado já está salvo)
+async def tratar_erro_global(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Registra no log qualquer erro não tratado (antes eles podiam sumir sem registro)."""
+    logger.error("Exceção não tratada durante o processamento de uma atualização:", exc_info=context.error)
+    if isinstance(update, Update) and update.effective_chat and update.effective_chat.type == 'private':
         try:
-            await query.edit_message_reply_markup(reply_markup=None)
-        except Exception as e_edit_markup:
-            logger.warning(f"Não foi possível remover botões ao iniciar recusa {entrega_id}: {e_edit_markup}")
+            await context.bot.send_message(update.effective_chat.id,
+                                           "❌ Ocorreu um erro inesperado. Tente novamente ou use /cancelar.")
+        except TelegramError:
+            pass
 
-        await query.message.reply_text(f"Por favor, {query.from_user.first_name}, digite o motivo da recusa para esta tarefa.")
 
+# ===================================================================
+# == INICIALIZAÇÃO DO BOT ===========================================
+# ===================================================================
 
-async def acompanhar_metas(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Envia para o funcionário o status da meta principal em formato de porcentagem."""
+def botao_menu(texto: str):
+    """Filtro que reconhece exatamente o texto de um botão do menu fixo."""
+    return filters.TEXT & filters.Regex(f'^{re.escape(texto)}$')
 
-    dados_meta = database.buscar_meta_principal_do_dia()
-
-    if not dados_meta or not dados_meta.get('valor_meta'):
-        await update.message.reply_text("Nenhuma meta de equipe está ativa no momento. Foco nas tarefas individuais! 💪")
-        return
-
-    nome = dados_meta['nome_meta']
-    atingido = dados_meta['valor_atingido']
-    total = dados_meta['valor_meta']
-    percentual = (atingido / total) * 100 if total > 0 else 0
-
-    blocos_cheios = int(percentual // 10)
-    blocos_vazios = 10 - blocos_cheios
-    barra_progresso = '▓' * blocos_cheios + '░' * blocos_vazios
-
-    mensagem = (
-        f"🎯 <b>Meta da Equipe: {nome}</b> 🎯\n\n"
-        f"Estamos quase lá! Este é o nosso progresso até agora:\n\n"
-        f"<code>{barra_progresso}</code>\n\n"
-        f"🏁 <b>Progresso: {percentual:.2f}% de 100%</b>\n\n"
-        "Vamos com tudo, equipe! 🚀"
-    )
-
-    await update.message.reply_html(mensagem)
-
-async def minhas_conquistas(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Exibe a lista de conquistas já desbloqueadas pelo funcionário."""
-    user = update.effective_user
-    chat_id = user.id
-    funcionario = database.buscar_funcionario_por_chat_id(chat_id) #
-
-    if not funcionario:
-        await update.message.reply_text("Desculpe, não consegui encontrar seu cadastro no sistema.") #
-        return
-
-    conquistas_ganhas = database.listar_conquistas_por_funcionario(funcionario.FuncionarioID) #
-
-    if not conquistas_ganhas:
-        await update.message.reply_text("Você ainda não desbloqueou nenhuma conquista. Continue se esforçando! 💪") #
-        return
-
-    texto_conquistas = f"🏅 **Suas Conquistas Desbloqueadas** ({len(conquistas_ganhas)}) 🏅\n\nParabéns pelas suas realizações!\n"
-
-    for conquista in conquistas_ganhas:
-        data_formatada = conquista.DataConquista.strftime('%d/%m/%Y') # - Formata a data
-        texto_conquistas += (
-            f"\n--------------------\n"
-            f"{conquista.Icone} <b>{conquista.Nome}</b>\n" # - Usa os dados do banco
-            f"<i>{conquista.Descricao}</i>\n" #
-            f"<pre>Desbloqueada em: {data_formatada}</pre>\n" # - Usa <pre> para monoespaçado
-        )
-
-    await update.message.reply_html(texto_conquistas) #
 
 def main() -> None:
-    application = Application.builder().token(config.TELEGRAM_TOKEN).connect_timeout(30).read_timeout(30).build()
-    
-    # --- Comandos do Admin ---
+    application = (Application.builder()
+                   .token(config.TELEGRAM_TOKEN)
+                   .connect_timeout(30)
+                   .read_timeout(30)
+                   .build())
+
+    # --- Comandos do grupo de gestão ---
     application.add_handler(CommandHandler("id", obter_id_chat))
     application.add_handler(CommandHandler("pendencias", pendencias_gestor))
     application.add_handler(CommandHandler("status_meta", status_meta))
     application.add_handler(CommandHandler("lancar", lancar_venda))
 
-    # --- Comandos do Funcionário ---
+    # --- Comandos do funcionário ---
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("cancelar", cancelar))  # NOVO: antes não existia
     application.add_handler(CommandHandler("tarefas", tarefas))
     application.add_handler(CommandHandler("ranking", ranking))
     application.add_handler(CommandHandler("meuhistorico", meu_historico))
@@ -2415,44 +2214,44 @@ def main() -> None:
     application.add_handler(CommandHandler("loja", loja_recompensas))
     application.add_handler(CommandHandler("documentos", solicitar_documentos_inicio))
     application.add_handler(CommandHandler("conquistas", minhas_conquistas))
-    
-    # --- Botões de Texto ---
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🏅 Minhas Conquistas$'), minhas_conquistas))
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🧾 Enviar Nota Fiscal$'), solicitar_foto_nf))
-    
-    # CORREÇÃO: O handler específico da comanda DEVE vir antes do handler genérico (button_callback_handler)
+
+    # --- Cliques em botões inline (o específico ANTES do genérico) ---
     application.add_handler(CallbackQueryHandler(iniciar_abate_comanda, pattern='^abater_comanda$'))
     application.add_handler(CallbackQueryHandler(button_callback_handler))
 
-    # --- Handlers para os Botões do Menu Fixo ---
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^📋 Minhas Tarefas$'), tarefas))
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🏆 Ranking do Mês$'), ranking))
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🎯 Acompanhar Metas$'), acompanhar_metas))
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^📜 Meu Histórico$'), meu_historico))
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^❓ Ajuda$'), ajuda))
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^💰 Meu Saldo$'), meu_saldo))
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^🏪 Loja de Recompensas$'), loja_recompensas))
-    # O handler da comanda foi movido para cima para evitar colisão
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^💬 Canal Confidencial$'), solicitar_feedback_start)) 
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^📄 Meus Documentos$'), solicitar_documentos_inicio)) 
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex('^📦 Solicitar Compras/Manutenção$'), lambda u,c: u.message.reply_text("Acessando Central...", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Abrir Menu", callback_data="menu_solicitacoes")]]))))
-    
-    # --- CORREÇÃO FINAL: HANDLERS DE ARQUIVO SEPARADOS ---
-    # 1. Aceita FOTOS (comprimidas, padrão do celular)
+    # --- Botões do menu fixo ---
+    application.add_handler(MessageHandler(botao_menu(BTN_TAREFAS), tarefas))
+    application.add_handler(MessageHandler(botao_menu(BTN_RANKING), ranking))
+    application.add_handler(MessageHandler(botao_menu(BTN_METAS), acompanhar_metas))
+    application.add_handler(MessageHandler(botao_menu(BTN_SALDO), meu_saldo))
+    application.add_handler(MessageHandler(botao_menu(BTN_LOJA), loja_recompensas))
+    application.add_handler(MessageHandler(botao_menu(BTN_NF), solicitar_foto_nf))
+    application.add_handler(MessageHandler(botao_menu(BTN_HISTORICO), meu_historico))
+    application.add_handler(MessageHandler(botao_menu(BTN_CONFIDENCIAL), solicitar_feedback_start))
+    application.add_handler(MessageHandler(botao_menu(BTN_CONQUISTAS), minhas_conquistas))
+    application.add_handler(MessageHandler(botao_menu(BTN_DOCUMENTOS), solicitar_documentos_inicio))
+    application.add_handler(MessageHandler(botao_menu(BTN_SOLICITACOES), abrir_central_solicitacoes))
+    application.add_handler(MessageHandler(botao_menu(BTN_AJUDA), ajuda))
+
+    # --- Fotos e documentos no chat privado ---
     application.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, receber_foto))
-    
-    # 2. Aceita DOCUMENTOS (PDFs, Arquivos sem compressão)
     application.add_handler(MessageHandler(filters.Document.ALL & filters.ChatType.PRIVATE, receber_foto))
 
-    # Handler de TEXTO genérico (para justificativas, cpf, etc.)
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, roteador_de_texto_privado))
-    
-    # Handler de TEXTO em GRUPO (para motivo de recusa do gestor)
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUP, receber_motivo_recusa))
-    
+    # --- Texto livre no chat privado (justificativas, CPF, cadastro etc.) ---
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
+                                           roteador_de_texto_privado))
+
+    # --- Texto no grupo de gestão (motivo de recusa) ---
+    # CORREÇÃO: ChatType.GROUPS aceita grupo E supergrupo.
+    # Com ChatType.GROUP, supergrupos (a maioria) eram ignorados.
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS,
+                                           receber_motivo_recusa))
+
+    application.add_error_handler(tratar_erro_global)
+
     logger.info("--- BOT INICIADO COM SUCESSO ---")
-    application.run_polling()
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
+
 
 if __name__ == '__main__':
     main()
-
