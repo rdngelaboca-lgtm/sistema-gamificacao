@@ -1,4 +1,12 @@
 # ==============================================================================
+# main.py - Painel do Gestor (Desktop / Tkinter) do Sistema de Gamificação
+# ------------------------------------------------------------------------------
+# VERSÃO DEPURADA
+# Procure por "[DEPURAÇÃO]" para ver cada ponto corrigido e o motivo.
+# Nenhuma aba, botão ou função foi removida: a tela continua igual.
+# ==============================================================================
+
+# ==============================================================================
 # == INÍCIO BLOCO DE CONFIGURAÇÃO DE LOGGING ===================================
 # ==============================================================================
 import logging
@@ -74,7 +82,75 @@ import urllib.parse
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from database import adicionar_pontos_ao_saldo
 import threading
+import html  # [DEPURAÇÃO] Para proteger nomes/textos nas mensagens HTML do Telegram
+from datetime import date
 import agendador # Importa o módulo para usar a função manual
+
+
+# ==============================================================================
+# == FUNÇÕES AUXILIARES [DEPURAÇÃO] ===========================================
+# ==============================================================================
+
+# ID do gestor usado nos registros feitos pelo painel (aprovações, lançamentos).
+# Antes o número 2 estava escrito "na mão" em 4 lugares; agora vem do config.py.
+ID_GESTOR = getattr(config, 'ID_GESTOR_PADRAO', 2)
+
+
+def esc(valor):
+    """
+    Protege um texto para mensagens do Telegram em modo HTML.
+    Um nome com '&' ou '<' (ex.: 'Zé & Cia') fazia o Telegram RECUSAR a mensagem inteira.
+    """
+    return html.escape(str(valor)) if valor is not None else ""
+
+
+def para_data(valor):
+    """Converte datetime/date/texto 'AAAA-MM-DD' em date (ou None). Evita erro ao comparar datas."""
+    if valor is None:
+        return None
+    if isinstance(valor, datetime):
+        return valor.date()
+    if isinstance(valor, date):
+        return valor
+    try:
+        return datetime.strptime(str(valor)[:10], '%Y-%m-%d').date()
+    except ValueError:
+        return None
+
+
+def formatar_data_hora(valor, formato="%d/%m/%Y %H:%M"):
+    """Formata data/hora com segurança: devolve '---' se estiver vazia em vez de travar a tela."""
+    if valor is None:
+        return "---"
+    if hasattr(valor, 'strftime'):
+        return valor.strftime(formato)
+    return str(valor)
+
+
+def formatar_hora(valor):
+    """HH:MM a partir de um time/datetime ou texto ('08:00:00' -> '08:00')."""
+    if not valor:
+        return "N/D"
+    if hasattr(valor, 'strftime'):
+        return valor.strftime('%H:%M')
+    return str(valor)[:5]
+
+
+def para_int(valor, padrao=0):
+    """int() seguro: aceita None, texto e Decimal."""
+    try:
+        return int(valor)
+    except (TypeError, ValueError):
+        return padrao
+
+
+def data_iso_valida(texto):
+    """True se o texto está no formato AAAA-MM-DD e é uma data real."""
+    try:
+        datetime.strptime(texto, "%Y-%m-%d")
+        return True
+    except (TypeError, ValueError):
+        return False
 
 
 class App:
@@ -447,7 +523,7 @@ class App:
         historico = database.buscar_notas_fiscais_historico(data_inicio, data_fim, func_id, status)
 
         for item in historico:
-            data_f = item.DataRecebimento.strftime("%d/%m/%Y %H:%M")
+            data_f = formatar_data_hora(item.DataRecebimento)  # [DEPURAÇÃO] data vazia não trava mais a lista
             self.tree_consulta_nf.insert("", "end", values=(
                 item.NotaFiscalID, data_f, item.NomeCompleto, item.Status, item.PathFoto or ""
             ))
@@ -497,11 +573,13 @@ class App:
                 return
 
             # Prepara a mesma mensagem do bot
+            # [DEPURAÇÃO] A mensagem é enviada em modo HTML: os **negritos** apareciam com
+            # asteriscos no grupo. Agora usa <b> e protege o nome com esc().
             legenda_gestor = (
-                f"🧾 **Nota Fiscal (Reenviada)** 🧾\n\n"
-                f"👤 **Enviada por:** {dados_nf.NomeFuncionario}\n"
-                f"🗓️ **Data Original:** {dados_nf.DataRecebimento.strftime('%d/%m/%Y %H:%M')}\n"
-                f"🆔 **NF ID:** {dados_nf.NotaFiscalID}\n\n"
+                f"🧾 <b>Nota Fiscal (Reenviada)</b> 🧾\n\n"
+                f"👤 <b>Enviada por:</b> {esc(dados_nf.NomeFuncionario)}\n"
+                f"🗓️ <b>Data Original:</b> {formatar_data_hora(dados_nf.DataRecebimento)}\n"
+                f"🆔 <b>NF ID:</b> {dados_nf.NotaFiscalID}\n\n"
                 "Ações Rápidas:"
             )
 
@@ -514,19 +592,29 @@ class App:
 
             # Usa o notificador_telegram (HTTP) para enviar
             # Usamos o FileID se a foto ainda não foi baixada, ou o PathFoto se já foi.
-            foto_para_enviar = dados_nf.PathFoto if dados_nf.PathFoto else dados_nf.FileIDTelegram
+            # [DEPURAÇÃO] Só usa o arquivo local se ele EXISTIR neste computador. Antes, se o
+            # caminho fosse de outra máquina, o texto do caminho era enviado como "foto" e falhava.
+            if dados_nf.PathFoto and os.path.exists(dados_nf.PathFoto):
+                foto_para_enviar = dados_nf.PathFoto
+            else:
+                foto_para_enviar = dados_nf.FileIDTelegram
 
             if not foto_para_enviar:
                 messagebox.showerror("Erro", "Esta NF não possui FileID nem PathFoto. Não é possível reenviar.")
                 return
 
-            notificador_telegram.enviar_foto_com_botoes(
+            resposta = notificador_telegram.enviar_foto_com_botoes(
                 config.GESTOR_GROUP_CHAT_ID,
                 foto_para_enviar,
                 legenda_gestor,
                 reply_markup,
                 parse_mode='HTML'
             )
+            # [DEPURAÇÃO] Antes mostrava "Sucesso" mesmo quando o Telegram recusava o envio.
+            if not (resposta and resposta.get('ok')):
+                logger.error(f"Reenvio da NF {nota_fiscal_id} recusado pelo Telegram: {resposta}")
+                messagebox.showerror("Erro no Telegram", f"O Telegram não aceitou o reenvio.\nDetalhe: {resposta}")
+                return
             messagebox.showinfo("Sucesso", "A Nota Fiscal e os botões de ação foram reenviados para o grupo de Gestores.")
 
         except Exception as e:
@@ -773,7 +861,12 @@ class App:
             if tarefa.TipoFrequencia == 'Diaria':
                 tarefas_diarias.append(tarefa.Titulo)
             elif tarefa.TipoFrequencia == 'Semanal':
-                agenda_semanal[str(tarefa.ValorFrequencia)].append(tarefa.Titulo)
+                # [DEPURAÇÃO] Um dia inválido no banco (ex.: '8' ou vazio) derrubava a aba com KeyError.
+                dia = str(tarefa.ValorFrequencia).strip() if tarefa.ValorFrequencia is not None else ''
+                if dia in agenda_semanal:
+                    agenda_semanal[dia].append(tarefa.Titulo)
+                else:
+                    logger.warning(f"Agenda: tarefa semanal '{tarefa.Titulo}' com dia inválido ({tarefa.ValorFrequencia}).")
         
         for dia in agenda_semanal:
             agenda_semanal[dia].extend(tarefas_diarias)
@@ -900,7 +993,14 @@ class App:
         self.combo_folga = ttk.Combobox(frame_direita_add, state="readonly", values=list(self.dias_semana_mapa.keys()))
         self.combo_folga.pack()
         self.combo_folga.set('Sem Folga Definida')
-        
+
+        # [DEPURAÇÃO] O campo "Verificador CPF" era criado DENTRO da função de adicionar,
+        # usando uma variável que só existe aqui. Resultado: todo cadastro novo dava erro
+        # logo após salvar, e o campo nunca aparecia na tela. Agora ele é criado aqui.
+        ttk.Label(frame_direita_add, text="Verificador CPF (3 primeiros dígitos, opcional):").pack(pady=(10, 2))
+        self.entry_verificador_novo = ttk.Entry(frame_direita_add, width=10)
+        self.entry_verificador_novo.pack()
+
         btn_adicionar = ttk.Button(frame_direita_add, text="Adicionar Funcionário", command=self.adicionar_novo_funcionario); btn_adicionar.pack(pady=20, ipadx=10, ipady=5)
 
         # Aba 2: Tarefas Ativas do Selecionado
@@ -1192,15 +1292,25 @@ class App:
 
     def desatribuir_tarefa_selecionada(self):
         """Encerra a validade de uma atribuição e atualiza AMBAS as listas na tela."""
-        # Validações (fora do try)
-        tarefa_selecionada_item = self.tree_atr_tarefas.focus()
-        if not tarefa_selecionada_item: messagebox.showwarning("Aviso", "...", parent=self.root); return # Adicionado parent
+        # [DEPURAÇÃO] As mensagens eram literalmente "..." (textos nunca preenchidos), e era
+        # OBRIGATÓRIO ter uma tarefa selecionada à esquerda, mesmo sem necessidade.
         atribuicao_selecionada_item = self.tree_atribuicoes_ativas.focus()
-        if not atribuicao_selecionada_item: messagebox.showwarning("Aviso", "...", parent=self.root); return # Adicionado parent
-        atribuicao_id = self.tree_atribuicoes_ativas.item(atribuicao_selecionada_item, 'values')[0]
-        tarefa_id_contexto = self.tree_atr_tarefas.item(tarefa_selecionada_item, 'values')[0]
+        if not atribuicao_selecionada_item:
+            messagebox.showwarning("Aviso", "Selecione na lista 'Atribuições Ativas' a atribuição que deseja encerrar.", parent=self.root)
+            return
+        valores_atribuicao = self.tree_atribuicoes_ativas.item(atribuicao_selecionada_item, 'values')
+        atribuicao_id = valores_atribuicao[0]
+        descricao_atribuicao = f"'{valores_atribuicao[2]}' de {valores_atribuicao[1]}" if len(valores_atribuicao) >= 3 else f"ID {atribuicao_id}"
 
-        if messagebox.askyesno("Confirmar Encerramento", "...", parent=self.root): # Adicionado parent
+        # A tarefa selecionada à esquerda (se houver) serve só para atualizar a lista do meio
+        tarefa_selecionada_item = self.tree_atr_tarefas.focus()
+        valores_tarefa = self.tree_atr_tarefas.item(tarefa_selecionada_item, 'values') if tarefa_selecionada_item else ()
+        tarefa_id_contexto = valores_tarefa[0] if valores_tarefa else None
+
+        if messagebox.askyesno("Confirmar Encerramento",
+                               f"Deseja encerrar a atribuição {descricao_atribuicao}?\n\n"
+                               "O histórico de entregas é mantido; a tarefa apenas deixa de ser enviada.",
+                               parent=self.root):
             try: # <--- ADICIONADO TRY
                 database.encerrar_atribuicao_tarefa(atribuicao_id) # Pode falhar
                 self.atualizar_lista_atribuicoes_ativas() # Pode falhar
@@ -1376,23 +1486,17 @@ class App:
                 for item_alvo in alvos_selecionados_items:
                     funcionario_id = self.tree_atr_selecao.item(item_alvo, 'values')[0]
 
-                    # [CORREÇÃO] Lógica refinada: Só bloqueia duplicidade se NÃO for tarefa Única.
-                    # Tarefas Únicas podem ser atribuídas múltiplas vezes (ex: reforço esporádico),
-                    # pois o histórico deve ser preservado.
-                    if tipo_freq_selecionada != 'Unica':
-                        # Passamos o tipo de frequência para ser mais específico
-                        if database.verificar_atribuicao_existente(tarefa_id, funcionario_id, tipo_freq_selecionada):
-                            ignorados += 1
-                            logger.warning(f"--> Atribuição Recorrente ignorada: Tarefa {tarefa_id} já ativa para Funcionario {funcionario_id}.")
-                            continue
-
-                    # Agora, itera pelos valores (dias da semana/mês ou None)
+                    # Itera pelos valores (dias da semana/mês ou None)
                     for valor in valores_freq:
-                        # NÃO precisamos mais verificar aqui dentro
-                        # if database.verificar_atribuicao_existente(tarefa_id, funcionario_id): # <-- LINHA REMOVIDA
-                        #    ignorados += 1                                                     # <-- LINHA REMOVIDA
-                        #    print(f"--> Atribuição ignorada: Tarefa {tarefa_id} já está ativa para Funcionário {funcionario_id}.") # <-- LINHA REMOVIDA
-                        #    break # <-- LINHA REMOVIDA
+                        # [DEPURAÇÃO] Antes a checagem de duplicidade olhava só o TIPO (ex.: 'Semanal').
+                        # Se o funcionário já tinha a tarefa na segunda, era IMPOSSÍVEL adicionar
+                        # a terça. Agora a checagem é por tipo + dia exato.
+                        # Tarefas Únicas continuam liberadas (podem se repetir, ex.: reforço).
+                        if tipo_freq_selecionada != 'Unica':
+                            if database.verificar_atribuicao_especifica_existente(tarefa_id, funcionario_id, tipo_freq_selecionada, valor):
+                                ignorados += 1
+                                logger.warning(f"--> Atribuição ignorada: Tarefa {tarefa_id} ({tipo_freq_selecionada} {valor or ''}) já ativa para Funcionario {funcionario_id}.")
+                                continue
 
                         # Tenta atribuir a tarefa para este valor específico
                         if database.atribuir_tarefa(tarefa_id, funcionario_id, tipo_freq_selecionada, valor):
@@ -1405,7 +1509,7 @@ class App:
                 # Lógica de mensagem final (ajustada para contar sucessos corretamente)
                 msg_final = f"{sucessos} atribuição(ões) de frequência criada(s) com sucesso!" # Mensagem mais precisa
                 if ignorados > 0:
-                    msg_final += f"\n{ignorados} funcionário(s) foram ignorados pois já tinham esta tarefa ativa."
+                    msg_final += f"\n{ignorados} atribuição(ões) ignorada(s) porque já existiam (mesma frequência e mesmo dia)."
                 if falhas > 0:
                     messagebox.showwarning("Atenção", f"{msg_final}\n{falhas} falharam ao salvar no banco.", parent=popup)
                 else:
@@ -1773,7 +1877,7 @@ class App:
         for i in self.tree_resgates_pendentes.get_children(): self.tree_resgates_pendentes.delete(i)
         resgates = database.listar_resgates_pendentes()
         for r in resgates:
-            data_f = r.DataSolicitacao.strftime("%d/%m/%Y %H:%M")
+            data_f = formatar_data_hora(r.DataSolicitacao)  # [DEPURAÇÃO] data vazia não trava a aba
             self.tree_resgates_pendentes.insert("", "end", values=(r.ResgateID, r.NomeCompleto, r.Nome, data_f))
 
     def aprovar_resgate_selecionado(self):
@@ -1785,20 +1889,22 @@ class App:
         dados_resgate = self.tree_resgates_pendentes.item(selecionado, 'values')
         resgate_id = dados_resgate[0]
         
-        sucesso = database.aprovar_resgate(resgate_id, config.ID_GESTOR_PADRAO)
-        
+        sucesso = database.aprovar_resgate(resgate_id, ID_GESTOR)
+
         if sucesso:
             dados_notificacao = database.buscar_dados_resgate_para_notificacao(resgate_id)
             if dados_notificacao:
-                mensagem = (f"✅ **Seu resgate foi APROVADO!** ✅\n\n"
-                            f"🎁 **Produto:** {dados_notificacao.Nome}\n\n"
+                # [DEPURAÇÃO] O envio é em HTML: os ** apareciam como asteriscos. Agora <b> + esc().
+                mensagem = (f"✅ <b>Seu resgate foi APROVADO!</b> ✅\n\n"
+                            f"🎁 <b>Produto:</b> {esc(dados_notificacao.Nome)}\n\n"
                             "Procure seu gestor para combinar a retirada do seu prêmio. Parabéns!")
                 notificador_telegram.enviar_mensagem(dados_notificacao.ChatIDTelegram, mensagem)
-            
+
             messagebox.showinfo("Sucesso", "Resgate aprovado! O funcionário foi notificado.", parent=self.root)
-            self.carregar_dados_loja()
         else:
-            messagebox.showerror("Erro", "Não foi possível aprovar o resgate.", parent=self.root)
+            # [DEPURAÇÃO] Com o database.py novo, só resgates 'Pendentes' podem ser aprovados.
+            messagebox.showerror("Erro", "Não foi possível aprovar o resgate.\n\nEle pode já ter sido aprovado ou recusado por outra pessoa. A lista será atualizada.", parent=self.root)
+        self.carregar_dados_loja()
 
     def recusar_resgate_selecionado(self):
         selecionado = self.tree_resgates_pendentes.focus()
@@ -1813,23 +1919,24 @@ class App:
 
         dados_resgate = self.tree_resgates_pendentes.item(selecionado, 'values')
         resgate_id = dados_resgate[0]
-        GESTOR_ID = 2 # Novamente, assumindo GESTOR_ID = 2
-        
-        sucesso = database.recusar_resgate(resgate_id, GESTOR_ID)
-        
+
+        sucesso = database.recusar_resgate(resgate_id, ID_GESTOR)
+
         if sucesso:
             dados_notificacao = database.buscar_dados_resgate_para_notificacao(resgate_id)
             if dados_notificacao:
-                mensagem = (f"❌ **Seu resgate foi RECUSADO.** ❌\n\n"
-                            f"🎁 **Produto:** {dados_notificacao.Nome}\n"
-                            f"📝 **Motivo:** {motivo}\n\n"
+                # [DEPURAÇÃO] HTML correto + esc() no motivo (um '<' digitado pelo gestor
+                # fazia o Telegram recusar a mensagem e o funcionário nunca era avisado).
+                mensagem = (f"❌ <b>Seu resgate foi RECUSADO.</b> ❌\n\n"
+                            f"🎁 <b>Produto:</b> {esc(dados_notificacao.Nome)}\n"
+                            f"📝 <b>Motivo:</b> {esc(motivo)}\n\n"
                             "Os pontos foram estornados para o seu saldo. Fale com seu gestor para mais detalhes.")
                 notificador_telegram.enviar_mensagem(dados_notificacao.ChatIDTelegram, mensagem)
-            
+
             messagebox.showinfo("Sucesso", "Resgate recusado. Os pontos foram devolvidos e o funcionário notificado.", parent=self.root)
-            self.carregar_dados_loja()
         else:
-            messagebox.showerror("Erro", "Não foi possível recusar o resgate.", parent=self.root)
+            messagebox.showerror("Erro", "Não foi possível recusar o resgate.\n\nEle pode já ter sido aprovado ou recusado por outra pessoa. A lista será atualizada.", parent=self.root)
+        self.carregar_dados_loja()
 
     def abrir_janela_produto(self, editar=False):
         dados_produto = None
@@ -1841,6 +1948,11 @@ class App:
             produto_id = self.tree_produtos_loja.item(selecionado, 'values')[0]
             produtos = database.listar_produtos_loja(incluir_inativos=True)
             dados_produto = next((p for p in produtos if p.ProdutoID == int(produto_id)), None)
+            # [DEPURAÇÃO] Se o produto sumiu do banco, a janela abria e o Salvar dava erro.
+            if not dados_produto:
+                messagebox.showerror("Erro", "Produto não encontrado. A lista será atualizada.", parent=self.root)
+                self.carregar_dados_loja()
+                return
 
         popup = Toplevel(self.root)
         popup.title("Criar/Editar Produto da Loja")
@@ -1873,7 +1985,9 @@ class App:
             entry_nome.insert(0, dados_produto.Nome)
             entry_desc.insert(0, dados_produto.Descricao or "")
             entry_custo.insert(0, dados_produto.CustoEmPontos)
-            entry_estoque.insert(0, dados_produto.EstoqueDisponivel or "")
+            # [DEPURAÇÃO] Com 'or ""', estoque 0 virava campo vazio (= ILIMITADO) ao salvar:
+            # um produto esgotado voltava a ter estoque infinito. Agora 0 continua 0.
+            entry_estoque.insert(0, "" if dados_produto.EstoqueDisponivel is None else dados_produto.EstoqueDisponivel)
             var_ativo.set(dados_produto.Ativo)
 
         def salvar():
@@ -1888,17 +2002,27 @@ class App:
                 return
             try:
                 custo = int(custo_str)
-                estoque = int(estoque_str) if estoque_str else None
-                
+                estoque = int(estoque_str) if estoque_str.strip() else None
+                # [DEPURAÇÃO] Custo/estoque negativos eram aceitos
+                if custo < 0 or (estoque is not None and estoque < 0):
+                    raise ValueError("negativo")
+            except ValueError:
+                messagebox.showerror("Erro de Formato", "Custo e Estoque devem ser números inteiros (0 ou maior).", parent=popup)
+                return
+
+            # [DEPURAÇÃO] Erros de banco antes fechavam a ação sem nenhum aviso.
+            try:
                 if editar:
                     database.atualizar_produto_loja(dados_produto.ProdutoID, nome, desc, custo, estoque, ativo)
                 else:
                     database.criar_produto_loja(nome, desc, custo, estoque, ativo)
-                
-                self.carregar_dados_loja()
-                popup.destroy()
-            except ValueError:
-                messagebox.showerror("Erro de Formato", "Custo e Estoque devem ser números.", parent=popup)
+            except Exception as e:
+                logger.exception(f"Erro ao salvar produto da loja: {e}")
+                messagebox.showerror("Erro de Banco", f"Não foi possível salvar o produto:\n{e}", parent=popup)
+                return
+
+            self.carregar_dados_loja()
+            popup.destroy()
 
         btn_salvar = ttk.Button(frame, text="Salvar", command=salvar)
         btn_salvar.grid(row=5, columnspan=2, pady=20)
@@ -1960,11 +2084,24 @@ class App:
             messagebox.showerror("Erro de Formato", "O Horário de Notificação deve estar no formato HH:MM (ex: 08:30).")
             return # Impede o salvamento se o formato for inválido
         # --- FIM DA VALIDAÇÃO ---
+
+        # [DEPURAÇÃO] Evita cadastrar dois funcionários com o mesmo Telegram
+        # (o bot identifica a pessoa pelo Chat ID; duplicado = bot confuso).
+        if database.buscar_funcionario_por_chat_id(chat_id):
+            messagebox.showerror("Chat ID em uso", f"Já existe um funcionário com o Chat ID {chat_id}.")
+            return
+
         # 1. Cria o funcionário (Insert padrão)
-        database.adicionar_funcionario(nome, chat_id, cargo, horario, dia_folga_valor)
+        # [DEPURAÇÃO] Antes um erro de banco aqui fechava a ação sem nenhuma mensagem.
+        try:
+            database.adicionar_funcionario(nome, chat_id, cargo, horario, dia_folga_valor)
+        except Exception as e:
+            logger.exception(f"Erro ao adicionar funcionário '{nome}': {e}")
+            messagebox.showerror("Erro de Banco", f"Não foi possível adicionar o funcionário:\n{e}")
+            return
         # 2. Atualiza o Verificador de Segurança (Se fornecido)
         # Abordagem conservadora: Busca o ID recém-criado pelo ChatID (único) e faz update
-        verificador = self.entry_verificador_novo.get() if hasattr(self, 'entry_verificador_novo') else None
+        verificador = self.entry_verificador_novo.get().strip()
 
         if verificador:
             if len(verificador) == 3 and verificador.isdigit():
@@ -1984,12 +2121,9 @@ class App:
         self.entry_cargo.delete(0, tk.END)
         self.entry_horario.delete(0, tk.END); self.entry_horario.insert(0, "08:00")
         self.combo_folga.set('Sem Folga Definida')
-        if hasattr(self, 'entry_verificador_novo'): self.entry_verificador_novo.delete(0, tk.END)        # --- Campo Novo: Verificador CPF ---
-        ttk.Label(frame_direita_add, text="Verificador CPF (3 primeiros dígitos):").pack(pady=(10, 2))
-        self.entry_verificador_novo = ttk.Entry(frame_direita_add, width=10)
-        self.entry_verificador_novo.pack()
-        # -----------------------------------
-        
+        self.entry_verificador_novo.delete(0, tk.END)
+        # [DEPURAÇÃO] As linhas que criavam o campo aqui (e quebravam) foram movidas para
+        # criar_aba_funcionarios(). Agora a lista é atualizada normalmente após o cadastro.
         self.atualizar_todas_as_listas()
 
     def abrir_janela_edicao_funcionario(self):
@@ -2003,6 +2137,11 @@ class App:
 
         # Busca dados atualizados do banco para garantir que temos os novos campos
         f_dados = database.buscar_funcionario_por_id(funcionario_selecionado.FuncionarioID)
+        # [DEPURAÇÃO] Se o funcionário foi excluído (ou o banco caiu), a janela quebrava.
+        if not f_dados:
+            messagebox.showerror("Erro", "Não foi possível carregar este funcionário. A lista será atualizada.")
+            self.atualizar_lista_funcionarios()
+            return
 
         self.edit_window = tk.Toplevel(self.root)
         self.edit_window.title("Editar Funcionário (Dados Completos)")
@@ -2049,7 +2188,9 @@ class App:
         edit_combo_folga = ttk.Combobox(frame_edicao, state="readonly", values=list(self.dias_semana_mapa.keys()))
         edit_combo_folga.grid(row=7, column=1, pady=2)
         
-        folga_atual_num = getattr(f_dados, 'DiaDeFolga', 0)
+        # [DEPURAÇÃO] Se o banco devolver a folga como texto ('3'), 3 != '3' e a tela mostrava
+        # "Sem Folga Definida". Ao salvar, a folga do funcionário era APAGADA sem ninguém perceber.
+        folga_atual_num = para_int(getattr(f_dados, 'DiaDeFolga', 0), 0)
         folga_atual_texto = next((nome for nome, num in self.dias_semana_mapa.items() if num == folga_atual_num), 'Sem Folga Definida')
         edit_combo_folga.set(folga_atual_texto)
 
@@ -2058,7 +2199,7 @@ class App:
         edit_combo_domingo = ttk.Combobox(frame_edicao, state="readonly", values=list(domingos_mapa.keys()))
         edit_combo_domingo.grid(row=8, column=1, pady=2)
         
-        dom_atual = getattr(f_dados, 'DomingoFolgaMensal', 0) or 0
+        dom_atual = para_int(getattr(f_dados, 'DomingoFolgaMensal', 0), 0)
         dom_texto = next((k for k, v in domingos_mapa.items() if v == dom_atual), 'Nenhum/Fixo')
         edit_combo_domingo.set(dom_texto)
 
@@ -2093,8 +2234,13 @@ class App:
             dom_val = domingos_mapa.get(edit_combo_domingo.get(), 0)
             
             # Pega datas apenas se o campo não estiver vazio
-            ini_val = entry_afast_ini.get_date() if entry_afast_ini.get() else None
-            fim_val = entry_afast_fim.get_date() if entry_afast_fim.get() else None
+            # [DEPURAÇÃO] Uma data digitada errada (ex.: 31/02) travava o botão Salvar sem aviso.
+            try:
+                ini_val = entry_afast_ini.get_date() if entry_afast_ini.get().strip() else None
+                fim_val = entry_afast_fim.get_date() if entry_afast_fim.get().strip() else None
+            except ValueError:
+                messagebox.showerror("Data inválida", "Confira as datas de férias/afastamento (formato dd/mm/aaaa).", parent=self.edit_window)
+                return
 
             self.salvar_edicao_funcionario(
                 f_dados.FuncionarioID,
@@ -2115,9 +2261,31 @@ class App:
 
     def salvar_edicao_funcionario(self, func_id, nome, chat_id, cargo, horario, dia_folga_texto, verificador_cpf, telefone, dom_folga, ini_afast, fim_afast):
         dia_folga_valor = self.dias_semana_mapa.get(dia_folga_texto, 0)
-        
-        if verificador_cpf and len(verificador_cpf) != 3:
-            messagebox.showerror("Erro", "O Verificador de Segurança deve ter exatamente 3 dígitos.")
+        verificador_cpf = (verificador_cpf or "").strip()
+        chat_id = (chat_id or "").strip()
+
+        # [DEPURAÇÃO] Nome vazio era aceito e apagava o nome do funcionário.
+        if not nome or not nome.strip():
+            messagebox.showerror("Erro", "O nome do funcionário não pode ficar vazio.")
+            return
+
+        # [DEPURAÇÃO] O cadastro novo exigia Chat ID numérico, mas a edição não.
+        # Um Chat ID com letras/espaços fazia o bot parar de reconhecer a pessoa.
+        if chat_id and not chat_id.lstrip('-').isdigit():
+            messagebox.showerror("Erro de Formato", "O Chat ID deve conter apenas números (ex: 123456789).")
+            return
+
+        # [DEPURAÇÃO] Antes aceitava 3 letras (ex.: 'abc'); o bot nunca conseguia conferir.
+        if verificador_cpf and (len(verificador_cpf) != 3 or not verificador_cpf.isdigit()):
+            messagebox.showerror("Erro", "O Verificador de Segurança deve ter exatamente 3 dígitos numéricos.")
+            return
+
+        # [DEPURAÇÃO] Férias com data final antes da inicial eram aceitas.
+        if ini_afast and fim_afast and fim_afast < ini_afast:
+            messagebox.showerror("Erro", "A data final do afastamento não pode ser antes da data inicial.")
+            return
+        if bool(ini_afast) != bool(fim_afast):
+            messagebox.showerror("Erro", "Para registrar férias/afastamento, preencha a data inicial E a final (ou deixe as duas vazias).")
             return
 
         try:
@@ -2152,7 +2320,14 @@ class App:
         funcionario = self.dados_funcionarios[texto]
 
         if messagebox.askyesno("Confirmar Exclusão", f"Tem certeza que deseja excluir '{funcionario.NomeCompleto}'?\n\nTODAS as suas tarefas e entregas serão apagadas permanentemente."):
-            database.excluir_funcionario(funcionario.FuncionarioID)
+            # [DEPURAÇÃO] O database.py repassa o erro quando a exclusão falha. Antes a tela
+            # não mostrava nada (o erro só aparecia no terminal) e o gestor achava que excluiu.
+            try:
+                database.excluir_funcionario(funcionario.FuncionarioID)
+            except Exception as e:
+                logger.exception(f"Erro ao excluir funcionário {funcionario.FuncionarioID}: {e}")
+                messagebox.showerror("Erro ao Excluir", f"Não foi possível excluir o funcionário.\nNada foi apagado.\n\nDetalhe: {e}")
+                return
             messagebox.showinfo("Sucesso", "Funcionário excluído.")
             self.atualizar_todas_as_listas()
 
@@ -2168,7 +2343,7 @@ class App:
 
         confirmacao = messagebox.askyesno(
             "Confirmar Drop Manual",
-            f"Você confirma que **{funcionario.NomeCompleto}** não virá hoje?\n\n"
+            f"Você confirma que {funcionario.NomeCompleto} NÃO virá hoje?\n\n"  # [DEPURAÇÃO] janelas do Windows não entendem **negrito**
             "Isso irá pegar TODAS as tarefas agendadas para ele HOJE e enviar imediatamente no grupo do Telegram para que outros peguem.\n\n"
             "Deseja continuar?",
             icon='warning'
@@ -2176,7 +2351,13 @@ class App:
 
         if confirmacao:
             # Chama a função que criamos no agendador.py
-            sucesso, mensagem = agendador.forcar_drop_funcionario_especifico(funcionario.FuncionarioID)
+            # [DEPURAÇÃO] Um erro no agendador antes fechava a ação sem aviso.
+            try:
+                sucesso, mensagem = agendador.forcar_drop_funcionario_especifico(funcionario.FuncionarioID)
+            except Exception as e:
+                logger.exception(f"Erro no drop manual do funcionário {funcionario.FuncionarioID}: {e}")
+                messagebox.showerror("Erro", f"Não foi possível lançar as tarefas no grupo:\n{e}")
+                return
 
             if sucesso:
                 messagebox.showinfo("Sucesso", mensagem)
@@ -2362,37 +2543,67 @@ class App:
         selecionado = self.tree_tarefas.focus()
         if not selecionado: messagebox.showwarning("Aviso", "Selecione um modelo da lista para excluir."); return
         dados_tarefa = self.tree_tarefas.item(selecionado, 'values'); tarefa_id = dados_tarefa[0]; titulo_tarefa = dados_tarefa[1]
-        if messagebox.askyesno("Confirmar Exclusão", f"Tem certeza que deseja excluir o modelo de tarefa '{titulo_tarefa}'?\n\nTODAS as suas atribuições e entregas relacionadas serão apagadas permanentemente."):
-            database.excluir_tarefa(tarefa_id); messagebox.showinfo("Sucesso", "Modelo de tarefa excluído com sucesso.")
+        if messagebox.askyesno("Confirmar Exclusão", f"Tem certeza que deseja excluir o modelo de tarefa '{titulo_tarefa}'?"):
+            # [DEPURAÇÃO] O aviso antigo dizia que atribuições e entregas seriam apagadas, mas a
+            # função do banco apaga SÓ o modelo. Se ele já foi usado, o SQL Server normalmente
+            # bloqueia (para proteger o histórico). Antes esse erro aparecia só no terminal.
+            try:
+                database.excluir_tarefa(tarefa_id)
+            except Exception as e:
+                logger.warning(f"Exclusão da TarefaID {tarefa_id} bloqueada: {e}")
+                messagebox.showerror(
+                    "Não foi possível excluir",
+                    "O banco não permitiu excluir este modelo. Normalmente isso acontece porque ele já "
+                    "foi atribuído ou tem entregas registradas (o histórico é protegido).\n\n"
+                    "Dica: encerre as atribuições dele na aba 'Atribuir Tarefas' para ele deixar de ser enviado.\n\n"
+                    f"Detalhe técnico: {e}"
+                )
+                return
+            messagebox.showinfo("Sucesso", "Modelo de tarefa excluído com sucesso.")
             self.limpar_formulario_tarefa(); self.atualizar_todas_as_listas()
 
     def aprovar_entrega_selecionada(self):
         indices = self.lista_entregas.curselection()
-        if not indices: messagebox.showwarning("Aviso", "...", parent=self.root); return # Adicionado parent
+        if not indices:
+            messagebox.showwarning("Aviso", "Selecione uma entrega na lista à esquerda para aprovar.", parent=self.root)
+            return
         try: # <--- ADICIONADO TRY
             texto = self.lista_entregas.get(indices[0])
             entrega_id = int(texto.split(" | ")[0].split(": ")[1]) # int() pode falhar
             entrega_atual = self.dados_entregas[entrega_id] # Pode dar KeyError
 
+            # [DEPURAÇÃO] Confere se ainda está pendente. Se um gestor já aprovou/recusou pelo
+            # Telegram, antes o painel mostrava "Sucesso" e mandava a mensagem de parabéns de novo.
+            detalhes_atuais = database.buscar_detalhes_da_entrega(entrega_atual.EntregaID)
+            if not detalhes_atuais or detalhes_atuais.StatusValidacao != 'Pendente':
+                status_txt = detalhes_atuais.StatusValidacao if detalhes_atuais else "não encontrada"
+                messagebox.showwarning("Já validada", f"Esta entrega já foi validada (status: {status_txt}).\nA lista será atualizada.", parent=self.root)
+                self.carregar_entregas_pendentes()
+                self.limpar_detalhes_validacao()
+                return
+
             # Aprova e busca novas conquistas (pode falhar)
             novas_conquistas_ganhas = database.aprovar_entrega(entrega_atual.EntregaID, entrega_atual.FuncionarioID, entrega_atual.Pontos)
 
-            texto_notificacao = f"🎉 Parabéns, <b>{entrega_atual.NomeCompleto}</b>! ... Você ganhou <b>{entrega_atual.Pontos}</b> pontos. ..."
+            # [DEPURAÇÃO] O texto antigo tinha "..." no lugar das frases (ficou incompleto)
+            # e os nomes não eram protegidos para o modo HTML do Telegram.
+            texto_notificacao = (f"🎉 Parabéns, <b>{esc(entrega_atual.NomeCompleto)}</b>!\n"
+                                 f"Sua entrega para '<b>{esc(entrega_atual.Titulo)}</b>' foi APROVADA!\n\n"
+                                 f"Você ganhou <b>{entrega_atual.Pontos}</b> pontos. Continue assim!")
             if novas_conquistas_ganhas:
                 for conquista in novas_conquistas_ganhas:
+                    bonus = conquista.PontosBonus or 0  # [DEPURAÇÃO] bônus vazio (NULL) dava erro
                     # Apenas monta a string da notificação
                     texto_notificacao += (
                         f"\n\n✨ <b>NOVA CONQUISTA DESBLOQUEADA!</b> ✨\n"
-                        f"{conquista.Icone} <b>{conquista.Nome}</b>\n"
-                        f"<i>{conquista.Descricao}</i>\n"
-                        f"Você ganhou um bônus de <b>{conquista.PontosBonus}</b> pontos!"
+                        f"{esc(conquista.Icone)} <b>{esc(conquista.Nome)}</b>\n"
+                        f"<i>{esc(conquista.Descricao)}</i>\n"
+                        f"Você ganhou um bônus de <b>{bonus}</b> pontos!"
                     )
 
-                    # --- CORREÇÃO: Lógica movida para DENTRO do loop ---
-                    # Agora cada conquista soma seus pontos ao saldo individualmente.
-                    if conquista.PontosBonus > 0:
-                        database.adicionar_pontos_ao_saldo(entrega_atual.FuncionarioID, conquista.PontosBonus)
-                    # ---------------------------------------------------
+                    # Cada conquista soma seus pontos ao saldo individualmente.
+                    if bonus > 0:
+                        database.adicionar_pontos_ao_saldo(entrega_atual.FuncionarioID, bonus)
 
             # Executa notificação em thread para não travar a UI
             def enviar_notificacao_bg():
@@ -2404,6 +2615,7 @@ class App:
             threading.Thread(target=enviar_notificacao_bg, daemon=True).start()
 
             messagebox.showinfo("Sucesso", "Entrega aprovada e pontuação atribuída!", parent=self.root) # Adicionado parent
+            self.limpar_detalhes_validacao()  # [DEPURAÇÃO] a foto da entrega aprovada ficava na tela
             self.atualizar_todas_as_listas() # Pode falhar
         except (ValueError, KeyError) as e_parse: # <--- ADICIONADO EXCEPT ESPECÍFICO
             logger.error(f"Erro ao processar seleção da entrega: {e_parse}")
@@ -2414,18 +2626,36 @@ class App:
     
     def recusar_entrega_selecionada(self):
         indices = self.lista_entregas.curselection()
-        if not indices: messagebox.showwarning("Aviso", "...", parent=self.root); return # Adicionado parent
+        if not indices:
+            messagebox.showwarning("Aviso", "Selecione uma entrega na lista à esquerda para recusar.", parent=self.root)
+            return
         try: # <--- ADICIONADO TRY
             texto = self.lista_entregas.get(indices[0])
             entrega_id = int(texto.split(" | ")[0].split(": ")[1]) # int() pode falhar
             entrega_atual = self.dados_entregas[entrega_id] # Pode dar KeyError
 
-            motivo = simpledialog.askstring("Motivo da Recusa", "...", parent=self.root) # Pode retornar None
-            if motivo:
-                database.recusar_entrega(entrega_atual.EntregaID, motivo) # Pode falhar
-                texto_notificacao = f"⚠️ Atenção, <b>{entrega_atual.NomeCompleto}</b>! ... Motivo:</b> {motivo} ..."
-                notificador_telegram.enviar_mensagem(entrega_atual.ChatIDTelegram, texto_notificacao) # Pode falhar
-                messagebox.showinfo("Sucesso", "Entrega recusada e funcionário notificado.", parent=self.root) # Adicionado parent
+            motivo = simpledialog.askstring("Motivo da Recusa", "Digite o motivo da recusa (será enviado ao funcionário):", parent=self.root) # Pode retornar None
+            if motivo and motivo.strip():
+                motivo = motivo.strip()
+                # [DEPURAÇÃO] Com o database.py novo, recusar_entrega diz se conseguiu
+                # (só recusa o que ainda está Pendente).
+                if database.recusar_entrega(entrega_atual.EntregaID, motivo) is False:
+                    messagebox.showwarning("Já validada", "Esta entrega já foi aprovada ou recusada por outra pessoa.\nA lista será atualizada.", parent=self.root)
+                    self.carregar_entregas_pendentes()
+                    self.limpar_detalhes_validacao()
+                    return
+                # [DEPURAÇÃO] A mensagem antiga tinha um '</b>' sem o '<b>' de abertura. O Telegram
+                # RECUSA mensagens HTML malformadas, então o funcionário NUNCA recebia o aviso de recusa.
+                texto_notificacao = (f"⚠️ Atenção, <b>{esc(entrega_atual.NomeCompleto)}</b>!\n\n"
+                                     f"Sua entrega para a tarefa '<b>{esc(entrega_atual.Titulo)}</b>' foi RECUSADA.\n\n"
+                                     f"<b>Motivo:</b> {esc(motivo)}\n\n"
+                                     "Por favor, corrija e envie novamente.")
+                resposta = notificador_telegram.enviar_mensagem(entrega_atual.ChatIDTelegram, texto_notificacao) # Pode falhar
+                if resposta and resposta.get('ok'):
+                    messagebox.showinfo("Sucesso", "Entrega recusada e funcionário notificado.", parent=self.root) # Adicionado parent
+                else:
+                    messagebox.showwarning("Recusada", "Entrega recusada, mas o Telegram não entregou o aviso ao funcionário.\nVerifique o Chat ID dele.", parent=self.root)
+                self.limpar_detalhes_validacao()
                 self.atualizar_todas_as_listas() # Pode falhar
             else:
                 messagebox.showinfo("Cancelado", "Ação de recusa cancelada.", parent=self.root) # Adicionado parent
@@ -2519,7 +2749,9 @@ class App:
         for func in funcionarios:
             # Acessamos por índice para garantir a compatibilidade com pyodbc.Row
             # func[8] é HorarioNotificacao
-            horario_str = func[8].strftime('%H:%M') if func[8] else "N/D"
+            # [DEPURAÇÃO] Alguns drivers ODBC devolvem a hora como TEXTO ('08:00:00');
+            # .strftime() num texto derrubava a aba inteira de Funcionários.
+            horario_str = formatar_hora(func[8])
             texto = f"ID: {func[0]} | {func[1]} | Notificar às: {horario_str}"
             self.lista_funcionarios.insert(tk.END, texto); self.dados_funcionarios[texto] = func
 
@@ -2609,23 +2841,43 @@ class App:
         nome_selecionado = self.combo_funcionarios_feedback.get()
         func_id = self.dados_funcionarios_feedback.get(nome_selecionado) if nome_selecionado != "Todos" else None
 
-        data_inicio = self.entry_data_inicio_feedback.get()
-        if data_inicio == "AAAA-MM-DD": data_inicio = None
+        data_inicio = self.entry_data_inicio_feedback.get().strip()
+        if data_inicio in ("", "AAAA-MM-DD"): data_inicio = None
 
-        data_fim = self.entry_data_fim_feedback.get()
-        if data_fim == "AAAA-MM-DD": data_fim = None
+        data_fim = self.entry_data_fim_feedback.get().strip()
+        if data_fim in ("", "AAAA-MM-DD"): data_fim = None
 
-        feedbacks = database.buscar_feedbacks(func_id, data_inicio, data_fim)
+        # [DEPURAÇÃO] Uma data digitada errada (ex.: 24/09/2026) ia direto para o SQL,
+        # gerava erro no banco e a tela ficava vazia sem explicação.
+        for rotulo, valor in (("De", data_inicio), ("Até", data_fim)):
+            if valor and not data_iso_valida(valor):
+                messagebox.showerror("Data inválida", f"A data '{rotulo}' deve estar no formato AAAA-MM-DD (ex.: 2026-09-24).", parent=self.root)
+                return
+        # [DEPURAÇÃO] Com a data final "2026-09-24", o banco comparava com 24/09 00:00 e
+        # os feedbacks do próprio dia 24 ficavam de fora. Agora o dia final inteiro entra.
+        if data_fim:
+            # Objeto datetime (e não texto): o pyodbc envia sem ambiguidade de formato de data.
+            data_fim = datetime.strptime(data_fim, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
+
+        try:
+            feedbacks = database.buscar_feedbacks(func_id, data_inicio, data_fim)
+        except Exception as e:
+            logger.exception(f"Erro ao buscar feedbacks: {e}")
+            messagebox.showerror("Erro de Banco", f"Não foi possível carregar os feedbacks:\n{e}", parent=self.root)
+            return
 
         total_notas = 0
+        qtd_com_nota = 0
 
         for fb in feedbacks:
-            data_formatada = fb.DataFeedback.strftime("%d/%m/%Y")
-            self.tree_feedbacks.insert("", "end", values=(fb.FeedbackID, fb.NomeCompleto, data_formatada, fb.NotaDia))
-            total_notas += fb.NotaDia
+            data_formatada = formatar_data_hora(fb.DataFeedback, "%d/%m/%Y")
+            self.tree_feedbacks.insert("", "end", values=(fb.FeedbackID, fb.NomeCompleto, data_formatada, fb.NotaDia if fb.NotaDia is not None else "-"))
+            if fb.NotaDia is not None:  # [DEPURAÇÃO] nota vazia derrubava o cálculo da média
+                total_notas += fb.NotaDia
+                qtd_com_nota += 1
 
-        if feedbacks:
-            media = total_notas / len(feedbacks)
+        if qtd_com_nota:
+            media = total_notas / qtd_com_nota
             self.lbl_media_feedback.config(text=f"Nota Média do Período: {media:.2f}")
         else:
             self.lbl_media_feedback.config(text="Nota Média do Período: --")
@@ -2689,8 +2941,8 @@ class App:
         tree_justificativas.pack(fill="both", expand=True)
 
         for just in justificativas:
-            motivo_limpo = just.MotivoRecusa.replace("Não aplicável: ", "", 1)
-            data_formatada = just.DataEnvio.strftime('%d/%m/%Y %H:%M')
+            motivo_limpo = (just.MotivoRecusa or "").replace("Não aplicável: ", "", 1)
+            data_formatada = formatar_data_hora(just.DataEnvio)  # [DEPURAÇÃO] data vazia não trava a janela
             tree_justificativas.insert("", "end", values=(data_formatada, just.NomeCompleto, motivo_limpo))
 
     def construir_ui_relatorio_resgates(self):
@@ -2894,7 +3146,10 @@ class App:
         frame_gerenciamento.rowconfigure(0, weight=1)
         frame_gerenciamento.columnconfigure(0, weight=1)
         cols_principais = ('ID', 'Nome', 'Valor Total', 'Início', 'Fim', 'Status')
-        self.tree_metas_principais = ttk.Treeview(frame_gerenciamento, columns=cols_principais, show='headings', selectmode='browse', height=5) # Definindo altura inicial        for col in cols_principais: self.tree_metas_principais.heading(col, text=col)
+        self.tree_metas_principais = ttk.Treeview(frame_gerenciamento, columns=cols_principais, show='headings', selectmode='browse', height=5) # Definindo altura inicial
+        # [DEPURAÇÃO] Esta linha estava "grudada" no comentário acima e por isso NUNCA
+        # executava: a tabela de metas aparecia sem os títulos das colunas.
+        for col in cols_principais: self.tree_metas_principais.heading(col, text=col)
         self.tree_metas_principais.column('ID', width=40); self.tree_metas_principais.column('Nome', width=250)
         self.tree_metas_principais.column('Valor Total', width=120, anchor="e"); self.tree_metas_principais.column('Início', width=100, anchor="center")
         self.tree_metas_principais.column('Fim', width=100, anchor="center"); self.tree_metas_principais.column('Status', width=80, anchor="center")
@@ -2911,7 +3166,7 @@ class App:
 
         # --- CORREÇÃO AQUI ---
         # Configura as linhas e colunas DENTRO do frame_detalhes
-        frame_detalhes.rowconfigure(3, weight=1)    # Linha 0 (onde está a Treeview) pode expandir verticalmente
+        frame_detalhes.rowconfigure(0, weight=1)    # [DEPURAÇÃO] Era rowconfigure(3): a lista de lançamentos não crescia com a janela
         frame_detalhes.rowconfigure(1, weight=0)    # Linha 1 (botão excluir) não expande
         frame_detalhes.columnconfigure(0, weight=3) # Coluna 0 (Treeview) expande mais horizontalmente
         frame_detalhes.columnconfigure(1, weight=1) # Coluna 1 (Resumo) expande menos
@@ -2999,17 +3254,34 @@ class App:
                 if confirmado:
                     funcionarios_premiados = database.distribuir_premio_meta_principal(meta_id)
                     if funcionarios_premiados:
+                        # [DEPURAÇÃO] Envio em HTML: **negrito** virava asteriscos na mensagem.
                         mensagem_telegram = (
-                            f"🎉🎊 **META MENSAL ATINGIDA!** 🎊🎉\n\n"
-                            f"Parabéns, equipe do setor '{meta_detalhes.SetorAlvo.upper()}'! Vocês alcançaram o grande objetivo do mês!\n\n"
-                            f"Cada um recebeu um super bônus de **{meta_detalhes.PontosPremio} pontos**!\n\n"
+                            f"🎉🎊 <b>META MENSAL ATINGIDA!</b> 🎊🎉\n\n"
+                            f"Parabéns, equipe do setor '{esc((meta_detalhes.SetorAlvo or '').upper())}'! Vocês alcançaram o grande objetivo do mês!\n\n"
+                            f"Cada um recebeu um super bônus de <b>{meta_detalhes.PontosPremio} pontos</b>!\n\n"
                             "Vocês são incríveis! 🚀"
                         )
-                        for funcionario in funcionarios_premiados:
-                            notificador_telegram.enviar_mensagem(funcionario.ChatIDTelegram, mensagem_telegram)
-                        
-                        messagebox.showinfo("Sucesso", "Prêmio distribuído e equipe notificada com sucesso!")
+                        # [DEPURAÇÃO] Envio em segundo plano: com muitos funcionários a tela
+                        # ficava "congelada" enquanto cada mensagem era enviada.
+                        destinatarios = [f.ChatIDTelegram for f in funcionarios_premiados if getattr(f, 'ChatIDTelegram', None)]
+                        def enviar_bg():
+                            for chat in destinatarios:
+                                try:
+                                    notificador_telegram.enviar_mensagem(chat, mensagem_telegram)
+                                except Exception as e_env:
+                                    logger.error(f"Falha ao avisar prêmio de meta mensal ({chat}): {e_env}")
+                        threading.Thread(target=enviar_bg, daemon=True).start()
+
+                        messagebox.showinfo("Sucesso", f"Prêmio distribuído para {len(funcionarios_premiados)} funcionário(s) e equipe notificada!")
                         self.carregar_dados_metas()
+                    else:
+                        # [DEPURAÇÃO] Antes, se ninguém fosse premiado, a tela não dizia nada.
+                        messagebox.showwarning(
+                            "Nenhum funcionário premiado",
+                            f"O prêmio NÃO foi distribuído.\n\nO sistema procura funcionários cujo CARGO contém "
+                            f"'{meta_detalhes.SetorAlvo}'. Confira o Setor Alvo da meta e os cargos cadastrados "
+                            "(ou a meta já pode ter sido premiada)."
+                        )
 
     def salvar_lucro_interface(self):
         """Lê os dados da interface e salva o lucro mensal no banco."""
@@ -3020,6 +3292,9 @@ class App:
                 raise ValueError("Selecione um mês válido na lista.")
 
             mes = int(idx_mes + 1)
+            # [DEPURAÇÃO] A variável 'ano' era usada mas NUNCA lida do campo: salvar o lucro
+            # mensal dava SEMPRE "Erro Inesperado: name 'ano' is not defined".
+            ano = int(self.entry_lucro_ano.get().strip())
             percentual_str = self.entry_lucro_percentual.get().replace(',', '.')
             percentual = float(percentual_str)
 
@@ -3152,7 +3427,7 @@ class App:
                     data_db_format = datetime.strptime(data_lancamento_str, '%d/%m/%Y').strftime('%Y-%m-%d')
 
                     # Usa o ID fixo que congelamos no argumento
-                    id_funcionario_logado = 2 
+                    id_funcionario_logado = ID_GESTOR  # [DEPURAÇÃO] vem do config.py (antes: 2 fixo)
 
                     sucesso, resultado = database.lancar_apuracao_diaria(meta_id_fixo, data_db_format, novo_valor, id_funcionario_logado)
 
@@ -3217,7 +3492,7 @@ class App:
 
     def lancar_apuracao_diaria(self):
         """(VERSÃO V4) Lança a apuração e CHAMA A FUNÇÃO AUXILIAR para verificar/premiar."""
-        print(">>> DEBUG: Função lancar_apuracao_diaria FOI CHAMADA!") # <-- Mantém o print de teste
+        logger.debug("lancar_apuracao_diaria chamada")  # [DEPURAÇÃO] print de teste virou log
         meta_selecionada_str = self.combo_metas_ativas.get()
         data_apuracao_obj = self.date_apuracao.get_date() # Pega o objeto date
         data_apuracao_str = data_apuracao_obj.strftime('%Y-%m-%d') # Formata para o banco
@@ -3231,11 +3506,11 @@ class App:
             meta_id = int(meta_selecionada_str.split('(ID: ')[1][:-1])
             valor_dia = float(valor_dia_str)
             # Use um ID de gestor fixo ou busque o do usuário logado se tiver sistema de login
-            id_funcionario_logado = 2 # Exemplo: ID do gestor que está usando a interface
+            id_funcionario_logado = ID_GESTOR  # [DEPURAÇÃO] vem do config.py (antes: 2 fixo)
                 
             # Salva/Atualiza no banco
             sucesso, resultado = database.lancar_apuracao_diaria(meta_id, data_apuracao_str, valor_dia, id_funcionario_logado) #
-            print(f">>> DEBUG: Resultado do salvamento no DB - Sucesso: {sucesso}, Resultado: {resultado}") # <-- Mantém o print de teste
+            logger.info(f"Apuração lançada - Sucesso: {sucesso}, Resultado: {resultado}")
                 
             if sucesso:
                 apuracao_id = resultado # Captura o ID retornado pelo banco
@@ -3246,12 +3521,16 @@ class App:
                 # [CORREÇÃO] Executa a verificação e envio de notificações em Thread separada
                 # Isso evita que a interface do Tkinter congele enquanto o bot envia mensagens.
                 def tarefa_background():
-                    database.verificar_e_premiar_meta_diaria(apuracao_id, data_apuracao_str, valor_dia, meta_id)
+                    # [DEPURAÇÃO] Sem try, um erro aqui sumia sem deixar registro no log.
+                    try:
+                        database.verificar_e_premiar_meta_diaria(apuracao_id, data_apuracao_str, valor_dia, meta_id)
+                    except Exception as e_bg:
+                        logger.error(f"FALHA na thread de premiação de meta (ApuracaoID {apuracao_id}): {e_bg}", exc_info=True)
 
                 threading.Thread(target=tarefa_background, daemon=True).start()
 
             else:
-                 print(f">>> DEBUG: Lançamento no DB falhou. Não vai verificar premiação.") # <-- Mantém o print de teste
+                 logger.warning("Lançamento no DB falhou. Premiação não verificada.")
                  messagebox.showerror("Erro", f"Não foi possível salvar a apuração no banco de dados.\nDetalhe: {resultado}") #
         except (ValueError, IndexError):
             messagebox.showerror("Erro de Formato", "Verifique o valor vendido e a seleção da meta.")
@@ -3270,27 +3549,29 @@ class App:
         data_hoje = datetime.now().date() # Pega a data de HOJE
 
         for meta in metas:
-            data_inicio_f = meta.DataInicio.strftime('%d/%m/%Y')
-            data_fim_f = meta.DataFim.strftime('%d/%m/%Y')
-            valor_total_f = f"R$ {meta.ValorMetaTotal:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            # [DEPURAÇÃO] Se a coluna for DATETIME (e não DATE), comparar datetime com date
+            # dava TypeError e a aba de Metas inteira ficava em branco. para_data() resolve
+            # os dois casos.
+            data_inicio_obj = para_data(meta.DataInicio)
+            data_fim_obj = para_data(meta.DataFim)
+            data_inicio_f = data_inicio_obj.strftime('%d/%m/%Y') if data_inicio_obj else "---"
+            data_fim_f = data_fim_obj.strftime('%d/%m/%Y') if data_fim_obj else "---"
+            valor_total_f = f"R$ {float(meta.ValorMetaTotal or 0):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
             self.tree_metas_principais.insert("", "end", values=(
                 meta.MetaPrincipalID, meta.NomeMeta, valor_total_f, data_inicio_f, data_fim_f, meta.Status
             ))
-            
-            # --- CORREÇÃO APLICADA AQUI ---
-            # Verifica o Status E TAMBÉM o intervalo de datas
-            # CORREÇÃO: Removemos .date() pois meta.DataInicio já é um objeto 'date'
-            data_inicio_obj = meta.DataInicio
-            data_fim_obj = meta.DataFim
 
-            if meta.Status == 'Ativa' and (data_inicio_obj <= data_hoje <= data_fim_obj):
+            # Verifica o Status E TAMBÉM o intervalo de datas
+            if meta.Status == 'Ativa' and data_inicio_obj and data_fim_obj and (data_inicio_obj <= data_hoje <= data_fim_obj):
                 metas_ativas.append(f"{meta.NomeMeta} (ID: {meta.MetaPrincipalID})")
             # --- FIM DA CORREÇÃO ---
                 
         self.combo_metas_ativas['values'] = metas_ativas
         if metas_ativas:
             self.combo_metas_ativas.current(0)
+        else:
+            self.combo_metas_ativas.set('')  # [DEPURAÇÃO] não deixa uma meta encerrada "presa" no combo
 
 
     def abrir_janela_criar_meta_principal(self):
@@ -3333,8 +3614,13 @@ class App:
                 inicio = date_inicio.get_date().strftime('%Y-%m-%d')
                 fim = date_fim.get_date().strftime('%Y-%m-%d')
 
-                if not all([nome, setor, valor, pontos, inicio, fim]):
-                    messagebox.showerror("Erro", "Todos os campos são obrigatórios.", parent=popup)
+                # [DEPURAÇÃO] Antes 'pontos = 0' era tratado como campo vazio, e datas
+                # invertidas (fim antes do início) eram aceitas.
+                if not nome.strip() or not setor.strip() or valor <= 0 or pontos < 0:
+                    messagebox.showerror("Erro", "Preencha nome e setor, com valor maior que zero e pontos 0 ou mais.", parent=popup)
+                    return
+                if date_fim.get_date() < date_inicio.get_date():
+                    messagebox.showerror("Erro", "A data final da meta não pode ser antes da data inicial.", parent=popup)
                     return
 
                 sucesso = database.criar_meta_principal(nome, "", valor, inicio, fim, pontos, setor)
