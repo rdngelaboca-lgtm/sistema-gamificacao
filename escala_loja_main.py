@@ -1,3 +1,10 @@
+# ==============================================================================
+# escala_loja_main.py - Gestão de Escala da Loja (Mapa + Intervalos)
+# ------------------------------------------------------------------------------
+# VERSÃO DEPURADA
+# Procure por "[DEPURAÇÃO]" para ver cada ponto corrigido e o motivo.
+# Nenhum botão ou tela foi removido; foi ADICIONADO o botão "Excluir" nos Freelancers.
+# ==============================================================================
 import tkinter as tk
 import logging
 from tkinter import ttk, messagebox, simpledialog, Toplevel
@@ -20,6 +27,55 @@ import time
 
 logger = logging.getLogger(__name__)
 
+# [DEPURAÇÃO] Padrão de horário aceito nos campos (00:00 até 23:59)
+PADRAO_HORA = re.compile(r'^([01]\d|2[0-3]):[0-5]\d$')
+
+
+def hora_ou_none(texto):
+    """
+    Devolve 'HH:MM' válido ou None se o campo estiver vazio.
+    Lança ValueError se o texto estiver preenchido com formato errado.
+
+    [DEPURAÇÃO] Antes o texto vazio '' ia direto para o banco. No SQL Server,
+    '' convertido para TIME vira 00:00 (MEIA-NOITE): um intervalo apagado virava
+    "intervalo de 00:00 às 00:00" e bagunçava o gráfico e as mensagens.
+    """
+    texto = (texto or "").strip()
+    if not texto:
+        return None
+    if not PADRAO_HORA.match(texto):
+        raise ValueError(texto)
+    return texto
+
+
+def normalizar_folga(valor):
+    """Converte o dia de folga (1=Dom..7=Sáb) para número. None/0/texto inválido = sem folga."""
+    try:
+        valor = int(valor)
+    except (TypeError, ValueError):
+        return None
+    return valor if valor > 0 else None  # 0 = "sem folga definida"
+
+
+def folga_do_funcionario(func):
+    """
+    [DEPURAÇÃO] O código procurava o campo 'DiaFolga', mas a coluna do banco se chama
+    'DiaDeFolga'. Resultado: o aviso "[FOLGA]" no mapa NUNCA aparecia. Esta função
+    lê o nome certo (e aceita o antigo, por segurança).
+    """
+    valor = getattr(func, 'DiaDeFolga', None)
+    if valor is None:
+        valor = getattr(func, 'DiaFolga', None)
+    return normalizar_folga(valor)
+
+
+def formatar_hora_curta(v):
+    """HH:MM a partir de time/datetime/texto; '' se vazio."""
+    if not v:
+        return ""
+    return v.strftime('%H:%M') if hasattr(v, 'strftime') else str(v)[:5]
+
+
 class AppEscalaLoja:
     def __init__(self, root):
         self.root = root
@@ -29,9 +85,11 @@ class AppEscalaLoja:
         # Variáveis de Estado
         self.modo_edicao = False
         self.data_selecionada = None
-        self.escala_atual = {} 
-        self.posicoes = [] 
+        self.escala_atual = {}
+        self.posicoes = []
         self.tk_img = None
+        self._cache_indisponibilidade = {}
+        self._config_escala_cache = None  # [DEPURAÇÃO] evita consultar o banco a cada tecla digitada
 
         # --- Layout Principal ---
         self.frame_topo = ttk.Frame(root, padding="10")
@@ -81,7 +139,7 @@ class AppEscalaLoja:
         ttk.Label(self.frame_topo, text="Data:").pack(side=tk.LEFT)
         self.date_entry = DateEntry(self.frame_topo, width=10, date_pattern='dd/mm/yyyy', locale='pt_BR')
         self.date_entry.pack(side=tk.LEFT, padx=5)
-        self.date_entry.bind("<<DateEntrySelected>>", self.carregar_escala_do_dia)
+        self.date_entry.bind("<<DateEntrySelected>>", self._ao_trocar_data)
         # [NOVO] Botão de Copiar Escala Anterior
         self.btn_copiar = ttk.Button(self.frame_topo, text="📋 Copiar Escala Anterior", command=self.abrir_dialogo_copiar_escala)
         self.btn_copiar.pack(side=tk.LEFT, padx=5)
@@ -154,11 +212,32 @@ class AppEscalaLoja:
             self.tk_img = ImageTk.PhotoImage(pil_img.resize((1180, 600), Image.Resampling.LANCZOS))
             self.canvas.create_image(590, 300, image=self.tk_img, anchor=tk.CENTER, tags="fundo")
         except Exception as e:
-            print(f"Erro ao carregar imagem do mapa: {e}")
+            logger.error(f"Erro ao carregar imagem do mapa: {e}")
             self.canvas.create_text(590, 300, text=f"Erro ao carregar 'layout_loja.png':\n{e}\nO sistema continua funcional sem o mapa de fundo.", fill="red", font=("Arial", 12, "bold"))
+
+    def _indisponivel_no_dia(self, funcionario_id):
+        """
+        [DEPURAÇÃO] Consulta férias/afastamento/folga UMA vez por funcionário por dia.
+        O mapa é redesenhado a cada redimensionamento da janela; sem este "cache" o
+        banco seria consultado dezenas de vezes por segundo.
+        """
+        chave = (funcionario_id, self.data_selecionada)
+        if chave not in self._cache_indisponibilidade:
+            self._cache_indisponibilidade[chave] = database.verificar_status_disponibilidade(funcionario_id, self.data_selecionada)
+        return self._cache_indisponibilidade[chave]
+
+    def _ao_trocar_data(self, event=None):
+        """
+        [DEPURAÇÃO] Ao trocar a data, fecha o painel lateral. Antes ele continuava
+        mostrando os turnos do dia ANTERIOR, e um "Salvar" gravava no dia novo.
+        """
+        self.frame_lateral.pack_forget()
+        self.pos_id_selecionada = None
+        self.carregar_escala_do_dia()
 
     def carregar_escala_do_dia(self, event=None):
         self.data_selecionada = self.date_entry.get_date().strftime('%Y-%m-%d')
+        self._cache_indisponibilidade = {}  # Dados novos: esquece o cache antigo
         self.posicoes = database.listar_posicoes_loja()
         self.escala_atual = database.buscar_escala_do_dia(self.data_selecionada)
         self.redesenhar_marcadores()
@@ -220,7 +299,7 @@ class AppEscalaLoja:
         if dia_semana_hoje == 8: dia_semana_hoje = 1
         # [NOVO] Cria um dicionário rápido na memória com a folga de todos os funcionários 
         # para não travar o mapa fazendo consultas repetidas no banco de dados.
-        mapa_folgas = {f.FuncionarioID: getattr(f, 'DiaFolga', None) for f in database.listar_funcionarios()}
+        mapa_folgas = {f.FuncionarioID: folga_do_funcionario(f) for f in database.listar_funcionarios()}
 
         for pos in self.posicoes:
             pos_id, nome, coord_x_db, coord_y_db, _, setor = pos 
@@ -263,7 +342,9 @@ class AppEscalaLoja:
                     if dados.FuncionarioID:
                         folga_fixa = mapa_folgas.get(dados.FuncionarioID)
                         # Se o dia do calendário bater com o dia de folga do funcionário escalado
-                        if str(folga_fixa) == str(dia_semana_hoje):
+                        # [DEPURAÇÃO] Agora também avisa férias/afastamento e domingo de folga (6x1)
+                        indisponivel = folga_fixa == dia_semana_hoje or self._indisponivel_no_dia(dados.FuncionarioID)
+                        if indisponivel:
                             nome_p = f"⚠️ {nome_p} [FOLGA]"
                             cor = "#FF8800" # Muda a bolinha para Laranja (Alerta de Conflito)
                     # ------------------------------------------------
@@ -284,9 +365,9 @@ class AppEscalaLoja:
                 func_padrao = database.buscar_funcionarios_com_posicao_padrao(pos_id)
                 if func_padrao:
                     f_id, f_nome, f_folga = func_padrao
-                    status_indisponivel = database.verificar_status_disponibilidade(f_id, self.data_selecionada)
+                    status_indisponivel = self._indisponivel_no_dia(f_id)
 
-                    if not status_indisponivel and str(f_folga) != str(dia_semana_hoje):
+                    if not status_indisponivel and normalizar_folga(f_folga) != dia_semana_hoje:
                         label_final += f"{f_nome} (Fixo)"
                         cor = "#33b5e5" # Azul
                     else:
@@ -503,18 +584,27 @@ class AppEscalaLoja:
             combo_setor.set(dados_pos[5])
 
         def salvar_cfg():
-            novo_nome = entry_nome.get()
-            novo_setor = combo_setor.get()
-            if novo_nome:
-                database.atualizar_dados_posicao(pos_id, novo_nome, novo_setor)
+            novo_nome = entry_nome.get().strip()
+            novo_setor = combo_setor.get() or None
+            # [DEPURAÇÃO] Nome vazio era ignorado em silêncio e falhas do banco não apareciam.
+            if not novo_nome:
+                messagebox.showwarning("Aviso", "O nome da posição não pode ficar vazio.", parent=popup)
+                return
+            if database.atualizar_dados_posicao(pos_id, novo_nome, novo_setor):
                 self.carregar_escala_do_dia()
                 popup.destroy()
+            else:
+                messagebox.showerror("Erro", "Não foi possível salvar a posição no banco.", parent=popup)
 
         def excluir_cfg():
-            if messagebox.askyesno("Excluir", "Tem certeza? Isso apaga o histórico desta posição."):
-                database.excluir_posicao_loja(pos_id)
-                self.carregar_escala_do_dia()
-                popup.destroy()
+            # [DEPURAÇÃO] O aviso dizia que o histórico seria apagado, mas a posição é apenas
+            # DESATIVADA (some do mapa; as escalas antigas continuam guardadas).
+            if messagebox.askyesno("Excluir", "Remover esta posição do mapa?\n\nAs escalas antigas continuam guardadas no histórico.", parent=popup):
+                if database.excluir_posicao_loja(pos_id):
+                    self.carregar_escala_do_dia()
+                    popup.destroy()
+                else:
+                    messagebox.showerror("Erro", "Não foi possível remover a posição.", parent=popup)
 
     # --- Frame de Botões (Fixo no Rodapé) ---
         frame_btns = ttk.Frame(popup, padding="10")
@@ -557,27 +647,47 @@ class AppEscalaLoja:
             # Normalização do setor para o SQL
             setor_limpo = setor if setor else None
 
-            if nome:
+            if nome and nome.strip():
                 # PERSISTÊNCIA: Agora guardamos o valor relativo (EX: 0.4567) em vez de pixels (EX: 540)
-                database.criar_posicao_loja(nome, rel_x, rel_y, setor_limpo)
-                self.carregar_escala_do_dia()
-                popup.destroy()
+                if database.criar_posicao_loja(nome.strip(), rel_x, rel_y, setor_limpo):
+                    self.carregar_escala_do_dia()
+                    popup.destroy()
+                else:
+                    messagebox.showerror("Erro", "Não foi possível criar a posição no banco.", parent=popup)
+            else:
+                messagebox.showwarning("Aviso", "Digite um nome para a posição.", parent=popup)
 
         ttk.Button(popup, text="Criar", command=confirmar).pack(pady=10)
 
     # --- INTEGRAÇÃO COM O CÉREBRO (CALCULADORA) ---
     def gerar_intervalos(self):
-        # (A função extrair_tempo foi removida pois agora usamos self._parse_horario_seguro)
-        
+        """
+        Calcula os intervalos automaticamente (calculadora_logica) e grava no banco.
+
+        [DEPURAÇÃO] Correções:
+        - A calculadora identifica cada pessoa pelo campo 'id_posicao'. Antes era passado
+          o ID da POSIÇÃO: se a mesma posição tivesse 2 turnos no dia (manhã e noite),
+          o intervalo do 2º SOBRESCREVIA o do 1º, e ao salvar os DOIS turnos recebiam o
+          mesmo horário. Agora é passado o ID do TURNO (EscalaID), único por pessoa.
+        - Turnos que viram a meia-noite (ex.: 18:00 às 02:00) tinham saída "antes" da
+          entrada e a duração dava negativa. Agora a saída passa para o dia seguinte.
+        - Se nenhuma sugestão fosse gerada, a variável 'count_aplicados' não existia e a
+          função quebrava com erro no final.
+        - A gravação agora é feita por turno, numa única transação (tudo ou nada).
+        """
+        if not self.data_selecionada:
+            messagebox.showwarning("Aviso", "Selecione uma data primeiro.", parent=self.root)
+            return
+
         # 1. Coleta dados da tela e do banco
         pessoas_para_calcular = []
+        dados_por_turno = {}  # EscalaID -> dados do turno (para montar o que salvar)
 
         dia_obj = self.date_entry.get_date()
 
-        # CORREÇÃO: Converter isoweekday (Seg=1...Dom=7) para o padrão do Banco (Dom=1...Sab=7)
+        # Converter isoweekday (Seg=1...Dom=7) para o padrão do Banco (Dom=1...Sab=7)
         dia_iso = (dia_obj.isoweekday() % 7) + 1
 
-        # Coleta turnos considerando que escala_atual agora é um dicionário de listas (v2)
         for pos_id, turnos in self.escala_atual.items():
             # Busca o setor da posição correspondente
             setor = next((p[5] for p in self.posicoes if p[0] == pos_id), "Geral")
@@ -591,26 +701,30 @@ class AppEscalaLoja:
                     if t_ent and t_sai:
                         dt_entrada = datetime.combine(dia_obj, t_ent)
                         dt_saida = datetime.combine(dia_obj, t_sai)
+                        if dt_saida <= dt_entrada:
+                            dt_saida += timedelta(days=1)  # Turno que vira a meia-noite
 
                         pessoas_para_calcular.append({
-                            'id_posicao': pos_id,
+                            'id_posicao': dados.EscalaID,  # ID do TURNO (único por pessoa)
                             'nome': dados.NomePessoa,
                             'setor': setor,
                             'entrada': dt_entrada,
                             'saida': dt_saida
                         })
+                        dados_por_turno[dados.EscalaID] = dados
                     else:
                         logger.warning(f"Horário inválido ignorado na posição {pos_id}: {dados.NomePessoa}")
 
         if not pessoas_para_calcular:
-            messagebox.showwarning("Vazio", "Não há funcionários escalados com horário de entrada/saída para calcular.")
+            messagebox.showwarning("Vazio", "Não há funcionários escalados com horário de entrada/saída para calcular.", parent=self.root)
             return
 
         # 2. Chama o Cérebro Lógico
         try:
             sugestoes, erros = calculadora_logica.calcular_intervalos_automaticos(pessoas_para_calcular, dia_iso)
         except Exception as e:
-            messagebox.showerror("Erro de Cálculo", f"Falha na calculadora lógica: {e}")
+            logger.exception(f"Falha na calculadora de intervalos: {e}")
+            messagebox.showerror("Erro de Cálculo", f"Falha na calculadora lógica: {e}", parent=self.root)
             return
 
         # 3. Exibe Erros no Rodapé
@@ -618,28 +732,49 @@ class AppEscalaLoja:
         color = "red" if erros else "green"
         self.lbl_alertas.config(text=texto_erros, fg=color)
 
-        # 4. Acumula sugestões e aplica em Lote (Atômico)
-        lote_para_salvar = []
-        for pos_id, (ini, fim) in sugestoes.items():
-            lote_para_salvar.append({
-                'pos_id': pos_id,
-                'ini': ini,
-                'fim': fim
-            })
-
-        if lote_para_salvar:
-            if database.salvar_escalas_em_lote(self.data_selecionada, lote_para_salvar):
-                count_aplicados = len(lote_para_salvar)
+        # 4. Grava as sugestões (uma por turno, tudo ou nada)
+        count_aplicados = 0
+        if sugestoes:
+            if self._salvar_intervalos_por_turno(sugestoes):
+                count_aplicados = len(sugestoes)
             else:
-                messagebox.showerror("Erro Crítico", "Falha ao persistir lote de intervalos. Nenhuma alteração foi salva.")
+                messagebox.showerror("Erro Crítico", "Falha ao gravar os intervalos. Nenhuma alteração foi salva.", parent=self.root)
                 return
 
         self.carregar_escala_do_dia()
 
-        if erros:
-            messagebox.showwarning("Atenção", f"{count_aplicados} intervalos agendados, mas houve conflitos!\nVerifique os alertas no rodapé.")
+        if count_aplicados == 0:
+            messagebox.showwarning("Nenhum intervalo", "Nenhum intervalo pôde ser agendado automaticamente.\nVeja o motivo nos alertas do rodapé.", parent=self.root)
+        elif erros:
+            messagebox.showwarning("Atenção", f"{count_aplicados} intervalos agendados, mas houve conflitos!\nVerifique os alertas no rodapé.", parent=self.root)
         else:
-            messagebox.showinfo("Sucesso", f"{count_aplicados} intervalos agendados com sucesso!")
+            messagebox.showinfo("Sucesso", f"{count_aplicados} intervalos agendados com sucesso!", parent=self.root)
+
+    def _salvar_intervalos_por_turno(self, sugestoes):
+        """
+        [DEPURAÇÃO - NOVA] Grava {EscalaID: (inicio, fim)} numa única transação.
+        A função antiga do banco (salvar_escalas_em_lote) atualiza pela POSIÇÃO e por isso
+        aplicava o mesmo intervalo a todos os turnos daquela posição no dia.
+        """
+        conn = database.get_db_connection()
+        if not conn:
+            return False
+        try:
+            cursor = conn.cursor()
+            for escala_id, (ini, fim) in sugestoes.items():
+                cursor.execute(
+                    "UPDATE EscalaDiaria SET InicioIntervalo = ?, FimIntervalo = ? WHERE EscalaID = ?",
+                    ini.strftime('%H:%M'), fim.strftime('%H:%M'), escala_id
+                )
+            conn.commit()
+            logger.info(f"{len(sugestoes)} intervalo(s) gravado(s) para {self.data_selecionada}.")
+            return True
+        except Exception as e:
+            logger.error(f"Erro ao gravar intervalos em lote: {e}", exc_info=True)
+            conn.rollback()
+            return False
+        finally:
+            conn.close()
 
 
     def enviar_escala_telegram(self):
@@ -652,16 +787,29 @@ class AppEscalaLoja:
             # Desabilita o botão para evitar cliques múltiplos
             self.btn_telegram.config(state='disabled', text="Enviando...")
 
+            data_snapshot = self.data_selecionada  # [DEPURAÇÃO] a data não muda se o usuário mexer no calendário durante o envio
+
             def tarefa_background():
                 try:
-                    texto_escala = database.gerar_relatorio_escala_texto(self.data_selecionada)
-                    notificador_telegram.enviar_mensagem(config.TODOS_FUNCIONARIOS_GROUP_ID, texto_escala)
+                    texto_escala = database.gerar_relatorio_escala_texto(data_snapshot)
+                    # [DEPURAÇÃO] Em caso de problema, a função do banco devolve um TEXTO de erro
+                    # ("Erro de conexão.", "Nenhuma escala definida..."), que era enviado ao grupo
+                    # de TODOS os funcionários como se fosse a escala.
+                    if not texto_escala or texto_escala.startswith(("Erro", "Nenhuma escala")):
+                        raise RuntimeError(texto_escala or "Escala vazia.")
+
+                    resposta = notificador_telegram.enviar_mensagem(config.TODOS_FUNCIONARIOS_GROUP_ID, texto_escala)
+                    # [DEPURAÇÃO] Antes dizia "Sucesso" mesmo quando o Telegram recusava a mensagem.
+                    if not (resposta and resposta.get('ok')):
+                        raise RuntimeError(f"O Telegram recusou o envio: {resposta}")
 
                     # Sucesso: Reabilita botão e avisa
                     self.root.after(0, lambda: self._finalizar_envio_telegram(True))
                 except Exception as e:
                     # Erro: Reabilita botão e avisa erro
-                    self.root.after(0, lambda: self._finalizar_envio_telegram(False, str(e)))
+                    erro_txt = str(e)  # [DEPURAÇÃO] guarda o texto: 'e' deixa de existir quando o 'except' termina
+                    logger.error(f"Falha ao enviar escala ao Telegram: {erro_txt}")
+                    self.root.after(0, lambda: self._finalizar_envio_telegram(False, erro_txt))
 
             threading.Thread(target=tarefa_background, daemon=True).start()
 
@@ -725,6 +873,7 @@ class AppEscalaLoja:
         self.btn_wpp_mass.config(state='disabled', text="Enviando...")
 
         def run_envio():
+            # [DEPURAÇÃO] Os print() deste envio viraram logger: agora ficam gravados em logs/
             enviados = 0
             erros = 0
 
@@ -741,7 +890,9 @@ class AppEscalaLoja:
                     # Formatação de Horário Segura
                     fmt = lambda v: v.strftime('%H:%M') if hasattr(v, 'strftime') else str(v)[:5]
                     horario_str = f"{fmt(item['entrada'])} às {fmt(item['saida'])}"
-                    data_fmt = datetime.strptime(self.data_selecionada, '%Y-%m-%d').strftime('%d/%m')
+                    # [DEPURAÇÃO] Usava self.data_selecionada: se o gestor mudasse a data no calendário
+                    # durante o envio (que demora), as mensagens seguintes saíam com a DATA ERRADA.
+                    data_fmt = datetime.strptime(data_snapshot, '%Y-%m-%d').strftime('%d/%m')
 
                     # Lógica para adicionar o intervalo se ele existir
                     intervalo_str = ""
@@ -785,23 +936,23 @@ class AppEscalaLoja:
                                     ok_foco, resp_foco = notificador_whatsapp.enviar_mensagem_whatsapp(item['telefone'], msg_foco)
                                     
                                     if ok_foco:
-                                        print(f"--> [WPP] Diretriz de '{setor_para_buscar}' (origem: {setor_origem}) enviada para {item['nome']}.")
+                                        logger.info(f"[WPP] Diretriz de '{setor_para_buscar}' (origem: {setor_origem}) enviada para {item['nome']}.")
                                     else:
-                                        print(f"--> [ERRO WPP] Falha ao enviar diretriz para {item['nome']}: {resp_foco}")
+                                        logger.error(f"[WPP] Falha ao enviar diretriz para {item['nome']}: {resp_foco}")
                                 else:
-                                    print(f"--> [AVISO] Sem diretriz cadastrada para '{setor_para_buscar}' (origem: {setor_origem}) no banco.")
+                                    logger.warning(f"[WPP] Sem diretriz cadastrada para '{setor_para_buscar}' (origem: {setor_origem}) no banco.")
                             except Exception as e_foco:
-                                print(f"--> [ERRO CRÍTICO] Erro ao processar foco do setor para {item['nome']}: {e_foco}")
+                                logger.error(f"[WPP] Erro ao processar foco do setor para {item['nome']}: {e_foco}")
                         else:
-                            print(f"--> [AVISO] {item['nome']} não tem setor definido na posição.")
+                            logger.warning(f"[WPP] {item['nome']} não tem setor definido na posição.")
                     else:
-                        print(f"--> [ERRO WPP] Falha ao enviar mensagem principal para {item['nome']}: {resp_msg}")
+                        logger.error(f"[WPP] Falha ao enviar mensagem principal para {item['nome']}: {resp_msg}")
                         erros += 1
 
                     time.sleep(1.5) # Delay de segurança para a API (Anti-Spam)
 
                 except Exception as e:
-                    print(f"--> [ERRO GENÉRICO] Erro ao processar envio para {item['nome']}: {e}")
+                    logger.error(f"[WPP] Erro ao processar envio para {item['nome']}: {e}", exc_info=True)
                     erros += 1
 
             # Callback para UI
@@ -889,7 +1040,18 @@ class AppEscalaLoja:
 
                 # Atualiza configurações globais
                 # Nota: O banco precisa aceitar FLOAT/DECIMAL na coluna DuracaoJornadaPadrao
+                # [DEPURAÇÃO] A coluna DuracaoJornadaPadrao do banco é INT (número inteiro).
+                # '8:20' virava 8,33 e o banco guardava só 8, sem avisar. Agora o usuário é avisado.
+                if jornada != int(jornada):
+                    if not messagebox.askyesno(
+                        "Jornada fracionada",
+                        f"O banco guarda a jornada apenas em HORAS INTEIRAS.\n\n{jornada_str} será salvo como {int(jornada)}h.\n\nDeseja continuar?",
+                        parent=popup):
+                        return
+                    jornada = int(jornada)
+
                 if database.atualizar_configuracoes_escala(None, None, max_horas, duracao, jornada):
+                    self._config_escala_cache = None  # [DEPURAÇÃO] força reler a jornada nova
                     messagebox.showinfo("Sucesso", "Configurações globais salvas! Atualize a escala.", parent=popup)
                     popup.destroy()
                 else:
@@ -915,6 +1077,7 @@ class AppEscalaLoja:
         
         # Mapa para armazenar os campos de entrada (DiaID: (Entry_Ini, Entry_Fim))
         campos_pico = {}
+        nomes_dias = {}  # [DEPURAÇÃO] mensagens de erro mostram "Sábado" em vez de "Dia 7"
         
         # 1. Carregar valores atuais
         picos_atuais = database.listar_configuracoes_pico_diario()
@@ -943,6 +1106,7 @@ class AppEscalaLoja:
             entry_fim.grid(row=row_num, column=2, sticky=tk.W, padx=5, pady=2)
             
             campos_pico[dia_id] = (entry_ini, entry_fim)
+            nomes_dias[dia_id] = nome_dia
 
         # 3. Função de Salvamento
         def salvar_picos():
@@ -950,25 +1114,27 @@ class AppEscalaLoja:
             sucessos = 0
             
             for dia_id, (entry_ini, entry_fim) in campos_pico.items():
-                h_ini_str = entry_ini.get().strip()
-                h_fim_str = entry_fim.get().strip()
-                
-                # Trata string vazia como NULL para o banco
-                h_ini = h_ini_str if h_ini_str else None
-                h_fim = h_fim_str if h_fim_str else None
-
-                # Validação de formato HH:MM (só se o campo não estiver vazio)
-                if h_ini and not re.match(r'^\d{2}:\d{2}$', h_ini):
-                    erros.append(f"Dia {dia_id} (Início): Formato inválido.")
+                nome_dia = nomes_dias.get(dia_id, f"Dia {dia_id}")
+                # [DEPURAÇÃO] A validação antiga aceitava horários impossíveis como 25:99,
+                # e aceitava só o início ou só o fim (o pico nunca era aplicado).
+                try:
+                    h_ini = hora_ou_none(entry_ini.get())
+                except ValueError:
+                    erros.append(f"{nome_dia} (Início): use HH:MM entre 00:00 e 23:59.")
                     continue
-                if h_fim and not re.match(r'^\d{2}:\d{2}$', h_fim):
-                    erros.append(f"Dia {dia_id} (Fim): Formato inválido.")
+                try:
+                    h_fim = hora_ou_none(entry_fim.get())
+                except ValueError:
+                    erros.append(f"{nome_dia} (Fim): use HH:MM entre 00:00 e 23:59.")
+                    continue
+                if bool(h_ini) != bool(h_fim):
+                    erros.append(f"{nome_dia}: preencha início E fim (ou deixe os dois vazios).")
                     continue
 
                 if database.atualizar_pico_diario(dia_id, h_ini, h_fim):
                     sucessos += 1
                 else:
-                    erros.append(f"Dia {dia_id}: Falha de escrita no banco.")
+                    erros.append(f"{nome_dia}: Falha de escrita no banco.")
             
             if erros:
                 messagebox.showerror("Erros de Salva.", "\n".join(erros) + f"\n\n{sucessos} dia(s) salvo(s) com sucesso.", parent=popup)
@@ -1025,12 +1191,20 @@ class AppEscalaLoja:
 
         def novo():
             nome = simpledialog.askstring("Novo", "Nome Completo:", parent=popup)
-            if nome:
+            if nome and nome.strip():
                 tel = simpledialog.askstring("Contato", "Telefone (WhatsApp) com DDD:", parent=popup)
-                if tel:
-                    if database.criar_freelancer(nome, tel):
+                if tel and tel.strip():
+                    # [DEPURAÇÃO] Um erro de banco aqui fechava a ação sem nenhum aviso.
+                    try:
+                        criado = database.criar_freelancer(nome.strip(), tel.strip())
+                    except Exception as e:
+                        logger.exception(f"Erro ao cadastrar freelancer: {e}")
+                        criado = False
+                    if criado:
                         carregar_lista()
                         messagebox.showinfo("Sucesso", "Freelancer cadastrado!", parent=popup)
+                    else:
+                        messagebox.showerror("Erro", "Não foi possível cadastrar o freelancer.", parent=popup)
         # --- NOVA FUNÇÃO: Excluir Freelancer ---
         def excluir():
             selecionado = tree.focus()
@@ -1073,6 +1247,9 @@ class AppEscalaLoja:
 
         ttk.Button(frame_btns, text="➕ Novo Cadastro", command=novo).pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
         ttk.Button(frame_btns, text="✏️ Editar Selecionado", command=editar).pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
+        # [DEPURAÇÃO] A função excluir() existia, mas o BOTÃO nunca foi criado:
+        # não havia como excluir um freelancer pela tela.
+        ttk.Button(frame_btns, text="🗑️ Excluir Selecionado", command=excluir).pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
 
         # Carrega dados iniciais
         carregar_lista()
@@ -1142,7 +1319,11 @@ class AppEscalaLoja:
     # --- LÓGICA DO PAINEL LATERAL ---
 
     def _calcular_saida_lateral(self, *args):
-        config_db = database.buscar_configuracoes_escala()
+        # [DEPURAÇÃO] Antes o banco era consultado a CADA tecla digitada no campo Entrada.
+        # Agora a configuração é lida uma vez (e relida ao salvar as Configurações).
+        if self._config_escala_cache is None:
+            self._config_escala_cache = database.buscar_configuracoes_escala() or False
+        config_db = self._config_escala_cache or None
         jornada = getattr(config_db, 'DuracaoJornadaPadrao', 8) or 8
         entrada = self.var_ent_lateral.get()
         if len(entrada) == 5 and re.match(r'^\d{2}:\d{2}$', entrada):
@@ -1199,23 +1380,42 @@ class AppEscalaLoja:
 
         func_id = None; free_id = None
         d = self.mapa_ids_lateral.get(selecao)
-        if d:
-            if d['tipo'] == 'func': func_id = d['id']
-            else: free_id = d['id']
+        # [DEPURAÇÃO] Se a pessoa não estivesse no mapa, o turno era salvo SEM ninguém.
+        if not d:
+            messagebox.showwarning("Aviso", "Pessoa não encontrada na lista. Feche e abra a posição novamente.", parent=self.root)
+            return
+        if d['tipo'] == 'func': func_id = d['id']
+        else: free_id = d['id']
+
+        # [DEPURAÇÃO] Validação dos horários antes de ir ao banco.
+        # Campos vazios viravam 00:00 no SQL Server (meia-noite).
+        try:
+            h_ent = hora_ou_none(self.var_ent_lateral.get())
+            h_sai = hora_ou_none(self.var_sai_lateral.get())
+            h_int_ini = hora_ou_none(self.e_int_ini_lat.get())
+            h_int_fim = hora_ou_none(self.e_int_fim_lat.get())
+        except ValueError as e:
+            messagebox.showerror("Horário inválido", f"'{e}' não é um horário válido. Use HH:MM (ex.: 08:00).", parent=self.root)
+            return
+        if not h_ent or not h_sai:
+            messagebox.showwarning("Aviso", "Preencha os horários de Entrada e Saída.", parent=self.root)
+            return
+        if bool(h_int_ini) != bool(h_int_fim):
+            messagebox.showwarning("Aviso", "Preencha o início E o fim do intervalo (ou deixe os dois vazios).", parent=self.root)
+            return
 
         escala_id = self.var_escala_id_edit.get()
 
         if database.salvar_escala_dia_v3(
             escala_id if escala_id else None,
             self.data_selecionada, self.pos_id_selecionada, func_id, free_id,
-            self.var_ent_lateral.get(), self.var_sai_lateral.get(), 
-            self.e_int_ini_lat.get(), self.e_int_fim_lat.get(),
+            h_ent, h_sai, h_int_ini, h_int_fim,
             self.txt_foco_lateral.get("1.0", tk.END).strip()
         ):
             self.carregar_escala_do_dia()
             self.abrir_janela_escalacao(self.pos_id_selecionada) # Recarrega a lista lateral em tempo real
         else:
-            messagebox.showerror("Erro", "Conflito de horário detectado!", parent=self.root)
+            messagebox.showerror("Erro", "Não foi possível salvar.\n\nProvável conflito de horário com outro turno desta posição (ou falha no banco).", parent=self.root)
 
     def _excluir_lateral(self):
         sel = self.tree_lateral.focus()
@@ -1270,11 +1470,11 @@ class AppEscalaLoja:
 
         for f in database.listar_funcionarios():
             # 1. Verifica Férias/Atestados/Afastamentos pelo banco
-            indisponivel = database.verificar_status_disponibilidade(f.FuncionarioID, self.data_selecionada)
+            indisponivel = self._indisponivel_no_dia(f.FuncionarioID)
 
             # 2. Verifica a Folga Fixa da semana
-            folga_fixa = getattr(f, 'DiaFolga', None)
-            esta_de_folga = indisponivel or (str(folga_fixa) == str(dia_semana_hoje) and folga_fixa is not None)
+            folga_fixa = folga_do_funcionario(f)  # [DEPURAÇÃO] a coluna é 'DiaDeFolga', não 'DiaFolga'
+            esta_de_folga = indisponivel or (folga_fixa is not None and folga_fixa == dia_semana_hoje)
 
             # Monta a etiqueta com o Alerta
             tag_aviso = " [FOLGA]" if esta_de_folga else ""
@@ -1299,8 +1499,12 @@ class AppEscalaLoja:
             messagebox.showwarning("Aviso", "Selecione uma data primeiro.")
             return
 
+        # [DEPURAÇÃO] Guarda a data desta janela. Antes, se o gestor trocasse a data no
+        # calendário com esta janela aberta, os intervalos eram gravados no DIA ERRADO.
+        data_janela = self.data_selecionada
+
         popup = Toplevel(self.root)
-        popup.title(f"Gerenciador de Intervalos - {datetime.strptime(self.data_selecionada, '%Y-%m-%d').strftime('%d/%m/%Y')}")
+        popup.title(f"Gerenciador de Intervalos - {datetime.strptime(data_janela, '%Y-%m-%d').strftime('%d/%m/%Y')}")
         popup.geometry("900x600")
         popup.transient(self.root)
 
@@ -1376,7 +1580,7 @@ class AppEscalaLoja:
             # Limpa e recarrega
             for i in tree.get_children(): tree.delete(i)
 
-            dados = database.listar_escala_detalhada_ordenada(self.data_selecionada)
+            dados = database.listar_escala_detalhada_ordenada(data_janela)
 
             for i, row in enumerate(dados):
                 # Row: 0:EscalaID, 1:PosID, 2:Setor, 3:NomePos, 4:NomePessoa, 5:Ent, 6:Sai, 7:IniInt, 8:FimInt...
@@ -1433,31 +1637,44 @@ class AppEscalaLoja:
             meta_dados = dados_ocultos.get(escala_id)
             if not meta_dados: return
 
+            # [DEPURAÇÃO] Valida o formato e trata campo vazio como "sem intervalo".
+            # Antes, apagar o intervalo gravava 00:00 (meia-noite) no banco.
+            try:
+                int_ini = hora_ou_none(var_int_ini.get())
+                int_fim = hora_ou_none(var_int_fim.get())
+            except ValueError as e:
+                messagebox.showerror("Horário inválido", f"'{e}' não é um horário válido. Use HH:MM.", parent=popup)
+                return
+            if bool(int_ini) != bool(int_fim):
+                messagebox.showwarning("Aviso", "Preencha o início E o fim do intervalo (ou deixe os dois vazios para remover).", parent=popup)
+                return
+
             # Chama a função de salvar existente (v3)
             # Note que passamos os mesmos dados antigos para campos que não mudaram (entrada, saida, etc)
             sucesso = database.salvar_escala_dia_v3(
                 escala_id,
-                self.data_selecionada,
+                data_janela,
                 meta_dados['pos_id'],
                 meta_dados['func_id'],
                 meta_dados['free_id'],
-                meta_dados['h_ent'],
-                meta_dados['h_sai'],
-                var_int_ini.get(), # Novo Valor
-                var_int_fim.get(), # Novo Valor
+                meta_dados['h_ent'] or None,
+                meta_dados['h_sai'] or None,
+                int_ini, # Novo Valor
+                int_fim, # Novo Valor
                 meta_dados['foco']
             )
 
             if sucesso:
                 # Atualiza visualmente a linha (sem recarregar tudo do banco para ser rápido)
-                tree.set(escala_id, column='Início Int.', value=var_int_ini.get())
-                tree.set(escala_id, column='Fim Int.', value=var_int_fim.get())
+                tree.set(escala_id, column='Início Int.', value=int_ini or "")
+                tree.set(escala_id, column='Fim Int.', value=int_fim or "")
 
-                # Muda a cor para verde
-                tags_atuais = list(tree.item(escala_id, 'tags'))
-                if 'pendente' in tags_atuais: tags_atuais.remove('pendente')
-                if 'definido' not in tags_atuais: tags_atuais.append('definido')
+                # Verde se tem intervalo, vermelho se ficou sem
+                tags_atuais = [t for t in tree.item(escala_id, 'tags') if t not in ('pendente', 'definido')]
+                tags_atuais.append('definido' if int_ini else 'pendente')
                 tree.item(escala_id, tags=tags_atuais)
+                # [DEPURAÇÃO] O mapa e o gráfico por trás desta janela ficavam desatualizados.
+                self.carregar_escala_do_dia()
 
                 # Seleciona o próximo
                 proximo = tree.next(escala_id)
@@ -1536,7 +1753,7 @@ class AppEscalaLoja:
             # Captura o texto do widget, garantindo que pegamos tudo
             novo_texto = txt_msg.get("1.0", "end-1c").strip() 
 
-            print(f"--> [DEBUG GUI] Tentando salvar diretriz para '{setor}': {novo_texto[:30]}...") 
+            logger.info(f"Salvando diretriz do setor '{setor}'")  # [DEPURAÇÃO] print de teste virou log
 
             if database.atualizar_diretriz_setor(setor, novo_texto):
                 # ATUALIZAÇÃO CRÍTICA: Força a atualização do cache local com o valor salvo

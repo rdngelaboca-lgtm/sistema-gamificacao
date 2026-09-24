@@ -1,4 +1,14 @@
 # ==============================================================================
+# api_server.py - Servidor Web/API (Painel da TV, celular e programas desktop)
+# ------------------------------------------------------------------------------
+# VERSÃO DEPURADA
+# Procure por "[DEPURAÇÃO]" para ver cada ponto corrigido e o motivo.
+# Todas as rotas (endereços) continuam com o mesmo nome e o mesmo formato de
+# resposta, então o painel da TV, as páginas do celular, o agendamentos_main.py
+# e o gestao_pessoas_main.py continuam funcionando.
+# ==============================================================================
+
+# ==============================================================================
 # == INÍCIO BLOCO DE CONFIGURAÇÃO DE LOGGING ===================================
 # ==============================================================================
 import logging
@@ -19,9 +29,11 @@ log_dir = os.path.join(os.path.dirname(__file__), LOG_FOLDER)
 if not os.path.exists(log_dir):
     try:
         os.makedirs(log_dir)
-        logger.info(f"Pasta de logs criada em: {log_dir}") # Print inicial para confirmar criação
+        # [DEPURAÇÃO] Aqui era usado 'logger', que só é criado mais abaixo. Na PRIMEIRA vez
+        # que o servidor rodava (pasta 'logs' ainda não existia) ele CAÍA com NameError.
+        print(f"Pasta de logs criada em: {log_dir}")
     except OSError as e:
-        logger.exception(f"Erro ao criar pasta de logs '{log_dir}': {e}", file=sys.stderr)
+        print(f"Erro ao criar pasta de logs '{log_dir}': {e}", file=sys.stderr)
         # Se não conseguir criar a pasta, tenta logar no diretório atual
         log_dir = os.path.dirname(__file__)
 
@@ -59,22 +71,131 @@ logger.info(f"*** Logging configurado para o módulo: {__name__} ***")
 from flask import Flask, jsonify, render_template, request, session, redirect, url_for
 from flask_cors import CORS
 from functools import wraps
-import database 
+import database
 import os
 from werkzeug.utils import secure_filename
-from datetime import datetime
+from werkzeug.exceptions import HTTPException
+from jinja2 import TemplateNotFound
+# [DEPURAÇÃO] 'timedelta' era usado em 2 lugares mas nunca importado (NameError).
+from datetime import datetime, timedelta
 from flask import send_from_directory
-import notificador_telegram 
+import notificador_telegram
 import config
 import hashlib
+import hmac
+import html
+import ipaddress
 import re
-import notificador_whatsapp 
+import notificador_whatsapp
 
 app = Flask(__name__)
 # Configuração de Segurança de Sessão
-app.secret_key = config.SECRET_KEY_FLASK 
+app.secret_key = config.SECRET_KEY_FLASK
 # Se der erro de chave não encontrada, use temporariamente: app.secret_key = "chave_provisoria_segura"
+# [DEPURAÇÃO] Limite de tamanho dos arquivos enviados (antes era ilimitado: um arquivo
+# gigante podia encher o disco do servidor). Ajustável no config.py.
+app.config['MAX_CONTENT_LENGTH'] = getattr(config, 'API_TAMANHO_MAX_UPLOAD_MB', 20) * 1024 * 1024
+# [DEPURAÇÃO] O cookie de login não pode ser lido por JavaScript de outras páginas.
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 CORS(app)
+
+ID_GESTOR = getattr(config, 'ID_GESTOR_PADRAO', 2)
+
+
+# ==============================================================================
+# == [DEPURAÇÃO] PROTEÇÃO DOS DOCUMENTOS PESSOAIS ==============================
+# ==============================================================================
+# O servidor roda em 0.0.0.0 (aberto para a rede inteira) e as rotas de documentos
+# (holerites, cartão ponto...) NÃO tinham proteção nenhuma: qualquer celular no Wi-Fi
+# da loja podia baixar o holerite de QUALQUER funcionário só trocando o número no
+# endereço (/documentos/download/1, /2, /3...), além de enviar ou APAGAR documentos.
+#
+# Agora essas rotas só aceitam pedidos:
+#   1) do próprio computador do servidor (é assim que o gestao_pessoas_main.py usa,
+#      pelo endereço 127.0.0.1 do config.py) -> continua funcionando igual;
+#   2) de quem fez login no painel web (/login); ou
+#   3) com o cabeçalho X-API-Key igual ao config.API_KEY (se você criar essa chave).
+# Para voltar ao comportamento antigo (NÃO recomendado), coloque no config.py:
+#   API_LIBERAR_DOCUMENTOS_NA_REDE = True
+# ==============================================================================
+
+def _pedido_do_proprio_computador():
+    """True se o pedido veio do mesmo computador onde o servidor está rodando."""
+    try:
+        return ipaddress.ip_address(request.remote_addr or '').is_loopback
+    except ValueError:
+        return False
+
+
+def _chave_api_valida():
+    chave_config = getattr(config, 'API_KEY', None)
+    chave_recebida = request.headers.get('X-API-Key', '')
+    return bool(chave_config) and hmac.compare_digest(str(chave_config), chave_recebida)
+
+
+def acesso_protegido(f):
+    """Decorador para rotas sensíveis (documentos pessoais)."""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if (getattr(config, 'API_LIBERAR_DOCUMENTOS_NA_REDE', False)
+                or _pedido_do_proprio_computador()
+                or 'usuario_id' in session
+                or _chave_api_valida()):
+            return f(*args, **kwargs)
+        logger.warning(f"Acesso NEGADO a {request.path} vindo de {request.remote_addr}")
+        return jsonify({"status": "erro", "mensagem": "Acesso negado. Faça login no painel."}), 401
+    return decorated_function
+
+
+def ler_json():
+    """
+    [DEPURAÇÃO] Lê o corpo JSON do pedido com segurança.
+    Antes, 'request.get_json()' devolvia None quando o corpo vinha vazio ou mal
+    formatado, e a linha seguinte quebrava com erro 500 (página de erro em HTML,
+    que o painel e os programas não conseguem ler).
+    """
+    dados = request.get_json(silent=True)
+    return dados if isinstance(dados, dict) else None
+
+
+def esc(valor):
+    """Protege textos digitados pelo usuário em mensagens HTML do Telegram."""
+    return html.escape(str(valor)) if valor is not None else ""
+
+
+def enviar_telegram_em_partes(chat_id, texto, limite=3900):
+    """
+    [DEPURAÇÃO] O Telegram recusa mensagens com mais de 4096 caracteres. Com muitos
+    agendamentos, o "lembrete geral" era recusado INTEIRO (e a rota dizia "sucesso").
+    Esta função divide o texto em partes (sem cortar linhas no meio) e confere a
+    resposta de cada envio. Devolve True só se TODAS as partes foram aceitas.
+    """
+    partes, atual = [], ""
+    for linha in texto.split("\n"):
+        if len(atual) + len(linha) + 1 > limite and atual:
+            partes.append(atual)
+            atual = ""
+        atual += linha + "\n"
+    if atual.strip():
+        partes.append(atual)
+    tudo_ok = True
+    for parte in partes:
+        resposta = notificador_telegram.enviar_mensagem(chat_id, parte)
+        if not (resposta and resposta.get('ok')):
+            logger.error(f"Telegram recusou uma parte da mensagem: {resposta}")
+            tudo_ok = False
+    return tudo_ok
+
+
+# [DEPURAÇÃO] Erros inesperados agora respondem em JSON (o painel e os programas
+# esperam JSON; antes recebiam uma página HTML de erro e mostravam "erro desconhecido").
+@app.errorhandler(Exception)
+def tratar_erro_inesperado(e):
+    if isinstance(e, HTTPException):
+        return jsonify({"status": "erro", "mensagem": e.description}), e.code
+    logger.exception(f"Erro não tratado em {request.path}: {e}")
+    return jsonify({"status": "erro", "mensagem": "Ocorreu um erro interno no servidor. Tente novamente mais tarde ou contate o suporte."}), 500
 
 # --- LÓGICA DE CRIAÇÃO DA PASTA ---
 # Pega o caminho do diretório onde o script está rodando
@@ -133,11 +254,13 @@ def formatar_data_pt_br(dt_obj, formato_str):
 
 def criar_link_whatsapp(telefone):
     """Limpa o número de telefone e cria um link 'wa.me'."""
-    if not telefone or not telefone.strip():
+    if not telefone or not str(telefone).strip():
         return None, None
-    
+
     # Remove todos os caracteres que não são números
-    numeros = re.sub(r'\D', '', telefone)
+    numeros = re.sub(r'\D', '', str(telefone))
+    if not numeros:  # [DEPURAÇÃO] telefone só com letras gerava o link "wa.me/55"
+        return None, None
     
     # Se não tiver um código de país (assumimos Brasil '55')
     if len(numeros) <= 11:
@@ -175,32 +298,55 @@ def rota_listar_agendamentos():
                 "cpf_cliente": ag.CPFCliente,
                 "telefone_cliente": ag.TelefoneCliente,
                 "tipo_evento": ag.TipoEvento,
-                "data_evento": ag.DataEvento.strftime('%d/%m/%Y %H:%M'), # Formata a data
+                # [DEPURAÇÃO] Um agendamento sem data derrubava a lista INTEIRA
+                "data_evento": ag.DataEvento.strftime('%d/%m/%Y %H:%M') if ag.DataEvento else "",
                 "status_agendamento": ag.StatusAgendamento,
                 "status_pagamento": ag.StatusPagamento,
                 "nome_funcionario": ag.NomeFuncionario,
                 "observacoes": ag.Observacoes
             })
-            
+
         return jsonify(lista_de_agendamentos), 200
     except Exception as e:
+        # [DEPURAÇÃO] O erro não era registrado em lugar nenhum (impossível descobrir a causa)
+        logger.exception(f"!!! ERRO em /api/agendamentos: {e}")
         return jsonify({"status": "erro", "mensagem": "Ocorreu um erro interno no servidor. Tente novamente mais tarde ou contate o suporte."}), 500
+
+
+def _validar_dados_agendamento(dados):
+    """
+    [DEPURAÇÃO] Confere os campos que o banco EXIGE (database.criar_agendamento e
+    atualizar_agendamento usam dados['...'] e quebram se faltar algum).
+    Converte data_evento para datetime. Devolve (dados, mensagem_de_erro).
+    """
+    if not dados:
+        return None, "Dados não enviados (o corpo do pedido precisa ser JSON)."
+    faltando = [c for c in ('nome_cliente', 'tipo_evento', 'data_evento', 'funcionario_id')
+                if dados.get(c) in (None, "")]
+    if faltando:
+        return None, f"Campos obrigatórios ausentes: {', '.join(faltando)}"
+    if not str(dados['nome_cliente']).strip():
+        return None, "O nome do cliente não pode ficar vazio."
+    try:
+        dados['funcionario_id'] = int(dados['funcionario_id'])
+    except (TypeError, ValueError):
+        return None, "funcionario_id deve ser um número."
+    if not isinstance(dados['data_evento'], datetime):
+        try:
+            dados['data_evento'] = datetime.strptime(str(dados['data_evento']).strip(), '%Y-%m-%d %H:%M')
+        except ValueError:
+            return None, "Formato de data_evento inválido. Use 'AAAA-MM-DD HH:MM'."
+    return dados, None
 
 
 @app.route('/agendamentos/novo', methods=['POST'])
 def rota_criar_agendamento():
     """Endpoint para criar um novo agendamento."""
-    dados = request.get_json()
-
-    campos_obrigatorios = ['nome_cliente', 'tipo_evento', 'data_evento', 'funcionario_id']
-    if not all(campo in dados for campo in campos_obrigatorios):
-        return jsonify({"status": "erro", "mensagem": "Campos obrigatórios ausentes"}), 400
-
-    try:
-        data_evento_str = dados['data_evento']
-        dados['data_evento'] = datetime.strptime(data_evento_str, '%Y-%m-%d %H:%M')
-    except (ValueError, TypeError):
-        return jsonify({"status": "erro", "mensagem": "Formato de data_evento inválido. Use 'AAAA-MM-DD HH:MM'."}), 400
+    # [DEPURAÇÃO] Antes, um pedido sem JSON derrubava a rota ('in None') e campos
+    # presentes mas VAZIOS eram aceitos.
+    dados, erro = _validar_dados_agendamento(ler_json())
+    if erro:
+        return jsonify({"status": "erro", "mensagem": erro}), 400
 
     sucesso, resultado = database.criar_agendamento(dados)
 
@@ -217,7 +363,7 @@ def rota_criar_agendamento():
                 f"Observações: {dados.get('observacoes', 'Nenhuma')}"
             )
             
-            database.atribuir_tarefa(
+            id_tarefa = database.atribuir_tarefa(
                 tarefa_id=config.TAREFA_MODELO_AGENDAMENTO_ID,
                 funcionario_id=config.RESPONSAVEL_AGENDAMENTOS_ID,
                 tipo_frequencia='Unica', valor_frequencia=None,
@@ -225,23 +371,32 @@ def rota_criar_agendamento():
                 data_agendamento=dados['data_evento'].date(),
                 agendamento_id=novo_agendamento_id
             )
-            logger.info(f"Tarefa de gamificação criada para Agendamento ID {novo_agendamento_id}")
+            # [DEPURAÇÃO] Antes registrava "criada" mesmo quando o banco falhava (retorno None)
+            if id_tarefa:
+                logger.info(f"Tarefa de gamificação criada para Agendamento ID {novo_agendamento_id}")
+            else:
+                logger.warning(f"!!! Tarefa de gamificação NÃO foi criada para o Agendamento ID {novo_agendamento_id}")
         except Exception as e:
             logger.warning(f"!!! Falha na gamificação: {e}")
         
         # --- 2. NOTIFICAÇÃO TELEGRAM GRUPO (MANTIDA) ---
         try:
             data_formatada = dados['data_evento'].strftime('%d/%m/%Y às %H:%M')
+            # [DEPURAÇÃO] O notificador envia em modo HTML: os **negritos** apareciam com
+            # asteriscos no grupo. E um '<' ou '&' digitado no nome/observação fazia o
+            # Telegram RECUSAR o aviso. Agora usa <b> e protege os textos com esc().
             mensagem_alerta = (
-                f"✅ **Novo Agendamento Recebido!** ✅\n\n"
-                f"**Cliente:** {dados['nome_cliente']}\n"
-                f"**Evento:** {dados['tipo_evento']}\n"
-                f"**Quando:** {data_formatada}\n"
+                f"✅ <b>Novo Agendamento Recebido!</b> ✅\n\n"
+                f"<b>Cliente:</b> {esc(dados['nome_cliente'])}\n"
+                f"<b>Evento:</b> {esc(dados['tipo_evento'])}\n"
+                f"<b>Quando:</b> {data_formatada}\n"
             )
             if dados.get('observacoes'):
-                mensagem_alerta += f"**Obs:** {dados['observacoes']}"
-            
-            notificador_telegram.enviar_mensagem(config.AGENDAMENTOS_GROUP_CHAT_ID, mensagem_alerta)
+                mensagem_alerta += f"<b>Obs:</b> {esc(dados['observacoes'])}"
+
+            resposta_tg = notificador_telegram.enviar_mensagem(config.AGENDAMENTOS_GROUP_CHAT_ID, mensagem_alerta)
+            if not (resposta_tg and resposta_tg.get('ok')):
+                logger.warning(f"!!! Telegram recusou o aviso do novo agendamento: {resposta_tg}")
         except Exception as e:
             logger.warning(f"!!! Falha no Telegram: {e}")
 
@@ -282,6 +437,7 @@ def rota_criar_agendamento():
         return jsonify({"status": "erro", "mensagem": "Ocorreu um erro interno no servidor."}), 500
 
 @app.route('/documentos/upload', methods=['POST'])
+@acesso_protegido  # [DEPURAÇÃO] antes qualquer aparelho da rede podia enviar documentos
 def rota_upload_documento():
     """
     Endpoint para fazer o upload de um documento pessoal (holerite, etc.)
@@ -305,6 +461,13 @@ def rota_upload_documento():
         if not all([funcionario_id, tipo_documento, mes_ano_str]):
             return jsonify({"status": "erro", "mensagem": "Dados do formulário incompletos."}), 400
 
+        # [DEPURAÇÃO] Validações que faltavam: ID numérico e data real (AAAA-MM-DD)
+        try:
+            funcionario_id = int(funcionario_id)
+            datetime.strptime(mes_ano_str, '%Y-%m-%d')
+        except ValueError:
+            return jsonify({"status": "erro", "mensagem": "funcionario_id deve ser número e mes_ano deve estar no formato AAAA-MM-DD."}), 400
+
         # --- CORREÇÃO APLICADA AQUI ---
         # 1. Pegamos a extensão do arquivo original enviado
         nome_original = arquivo.filename
@@ -315,7 +478,12 @@ def rota_upload_documento():
             return jsonify({"status": "erro", "mensagem": "Tipo de arquivo não suportado pelo servidor."}), 400
 
         # 3. Usamos a extensão dinâmica no nome do arquivo
-        nome_arquivo_seguro = secure_filename(f"{tipo_documento.lower()}_{funcionario_id}_{mes_ano_str}{extensao}")
+        # [DEPURAÇÃO] O nome antigo era só tipo+funcionário+mês. Reenviar o holerite do
+        # mesmo mês SOBRESCREVIA o arquivo anterior, e os dois registros do banco passavam
+        # a apontar para o mesmo arquivo (excluir um apagava o do outro). Agora o nome
+        # leva também data/hora do envio, então cada envio tem seu próprio arquivo.
+        carimbo = datetime.now().strftime('%Y%m%d%H%M%S%f')
+        nome_arquivo_seguro = secure_filename(f"{tipo_documento.lower()}_{funcionario_id}_{mes_ano_str}_{carimbo}{extensao}")
         # --- FIM DA CORREÇÃO ---
         
         caminho_para_salvar = os.path.join(PASTA_DOCUMENTOS_SEGUROS, nome_arquivo_seguro)
@@ -333,8 +501,12 @@ def rota_upload_documento():
         if not documento_id:
             os.remove(caminho_para_salvar)
             return jsonify({"status": "erro", "mensagem": "Falha ao registrar o documento no banco de dados."}), 500
-        
-        database.criar_pendencia_ciencia_documento_pessoal(documento_id, funcionario_id)
+
+        # [DEPURAÇÃO] Se a pendência de ciência falhasse, o funcionário nunca veria o documento
+        # no bot (a busca do bot depende dela) e a rota dizia "sucesso" mesmo assim.
+        if not database.criar_pendencia_ciencia_documento_pessoal(documento_id, funcionario_id):
+            logger.error(f"Documento {documento_id} salvo, mas a pendência de ciência NÃO foi criada.")
+            return jsonify({"status": "alerta", "mensagem": "Documento salvo, mas não foi possível avisar o funcionário. Contate o suporte."}), 201
 
         return jsonify({"status": "sucesso", "mensagem": "Documento enviado e registrado com sucesso!"}), 201
 
@@ -343,6 +515,7 @@ def rota_upload_documento():
         return jsonify({"status": "erro", "mensagem": "Ocorreu um erro interno no servidor. Tente novamente mais tarde ou contate o suporte."}), 500
             
 @app.route('/documentos/download/<int:documento_id>', methods=['GET'])
+@acesso_protegido  # [DEPURAÇÃO] antes QUALQUER aparelho da rede baixava holerites trocando o número
 def rota_download_documento(documento_id):
     """
     Endpoint seguro para baixar um documento pessoal a partir do seu ID.
@@ -363,6 +536,7 @@ def rota_download_documento(documento_id):
         return jsonify({"status": "erro", "mensagem": "Ocorreu um erro interno no servidor. Tente novamente mais tarde ou contate o suporte."}), 500
     
 @app.route('/documentos/excluir/<int:documento_id>', methods=['DELETE'])
+@acesso_protegido  # [DEPURAÇÃO] antes qualquer aparelho da rede podia APAGAR documentos
 def rota_excluir_documento_fisico(documento_id):
     """
     Endpoint para excluir o arquivo físico e o registro do banco.
@@ -396,18 +570,12 @@ def rota_excluir_documento_fisico(documento_id):
 @app.route('/agendamentos/<int:agendamento_id>', methods=['PUT'])
 def rota_atualizar_agendamento(agendamento_id):
     """Endpoint para atualizar um agendamento existente."""
-    dados = request.get_json()
-    if not dados:
-        return jsonify({"status": "erro", "mensagem": "Dados não enviados."}), 400
-
-    # --- ADICIONANDO A MESMA CORREÇÃO AQUI ---
-    if 'data_evento' in dados:
-        try:
-            data_evento_str = dados['data_evento']
-            dados['data_evento'] = datetime.strptime(data_evento_str, '%Y-%m-%d %H:%M')
-        except (ValueError, TypeError):
-            return jsonify({"status": "erro", "mensagem": "Formato de data_evento inválido para atualização."}), 400
-    # ---------------------------------------
+    # [DEPURAÇÃO] A função do banco EXIGE nome, evento, data e funcionário. Se um deles
+    # faltasse, a rota quebrava com erro 500 (e sem data, a sincronização da tarefa
+    # também quebrava). Agora responde 400 com a lista do que falta.
+    dados, erro = _validar_dados_agendamento(ler_json())
+    if erro:
+        return jsonify({"status": "erro", "mensagem": erro}), 400
 
     sucesso = database.atualizar_agendamento(agendamento_id, dados)
     if sucesso:
@@ -452,7 +620,7 @@ def rota_excluir_agendamento(agendamento_id):
 @app.route('/agendamentos/<int:agendamento_id>/pagamento', methods=['PATCH'])
 def rota_patch_pagamento(agendamento_id):
     """Endpoint para atualizar SOMENTE o status do pagamento."""
-    dados = request.get_json()
+    dados = ler_json() or {}  # [DEPURAÇÃO] pedido sem JSON quebrava com erro 500
     novo_status = dados.get('status')
     if not novo_status or novo_status not in ['Pago', 'Pendente']:
         return jsonify({"status": "erro", "mensagem": "Status de pagamento inválido."}), 400
@@ -472,7 +640,7 @@ def rota_buscar_agendamento(agendamento_id):
         ag_dict = {
             "agendamento_id": agendamento.AgendamentoID, "nome_cliente": agendamento.NomeCliente,
             "cpf_cliente": agendamento.CPFCliente, "telefone_cliente": agendamento.TelefoneCliente,
-            "tipo_evento": agendamento.TipoEvento, "data_evento": agendamento.DataEvento.strftime('%d/%m/%Y %H:%M'),
+            "tipo_evento": agendamento.TipoEvento, "data_evento": agendamento.DataEvento.strftime('%d/%m/%Y %H:%M') if agendamento.DataEvento else "",
             "status_agendamento": agendamento.StatusAgendamento, "status_pagamento": agendamento.StatusPagamento,
             "observacoes": agendamento.Observacoes, "funcionario_id": agendamento.FuncionarioID
         }
@@ -488,48 +656,56 @@ def rota_enviar_lembrete_geral():
     try:
         agendamentos_db = database.listar_agendamentos()
         
+        # [DEPURAÇÃO] Antes entravam também os agendamentos CANCELADOS e os sem data
+        # (que derrubavam a rota ao comparar None com a data de hoje).
         agendamentos_futuros = sorted(
-            [ag for ag in agendamentos_db if ag.DataEvento > datetime.now()],
+            [ag for ag in agendamentos_db
+             if ag.DataEvento and ag.DataEvento > datetime.now()
+             and (ag.StatusAgendamento or '') != 'Cancelado'],
             key=lambda ag: ag.DataEvento
         )
 
+        # [DEPURAÇÃO] A mensagem era montada em Markdown (**negrito**, _itálico_, [link](url))
+        # mas o notificador envia em modo HTML: tudo aparecia com asteriscos e o link do
+        # WhatsApp não funcionava. Agora é HTML, com os textos protegidos por esc().
         if not agendamentos_futuros:
             mensagem = "✅ Nenhum agendamento futuro encontrado no sistema."
         else:
-            mensagem = "🗓️ **Resumo de Todos os Agendamentos Futuros** 🗓️\n"
+            mensagem = "🗓️ <b>Resumo de Todos os Agendamentos Futuros</b> 🗓️\n"
             data_atual = None
             for i, ag in enumerate(agendamentos_futuros):
                 if ag.DataEvento.date() != data_atual:
                     data_atual = ag.DataEvento.date()
                     data_formatada = formatar_data_pt_br(data_atual, '%A, %d de %B de %Y')
-                    mensagem += f"\n{'=' * 40}\n**{data_formatada}**\n{'=' * 40}\n"
+                    mensagem += f"\n{'=' * 30}\n<b>{data_formatada}</b>\n{'=' * 30}\n"
                 
                 hora_formatada = ag.DataEvento.strftime('%H:%M')
-                mensagem += f"\n🔹 **{ag.TipoEvento}**\n"
-                mensagem += f"  - ⏰ **{hora_formatada}**\n"
-                mensagem += f"  - 👤 **Cliente:** {ag.NomeCliente}\n"
+                mensagem += f"\n🔹 <b>{esc(ag.TipoEvento)}</b>\n"
+                mensagem += f"  - ⏰ <b>{hora_formatada}</b>\n"
+                mensagem += f"  - 👤 <b>Cliente:</b> {esc(ag.NomeCliente)}\n"
                 
-                # --- NOVAS INFORMAÇÕES AQUI ---
                 telefone_limpo, link_wpp = criar_link_whatsapp(ag.TelefoneCliente)
                 if telefone_limpo:
-                    mensagem += f"  - 📞 **Telefone:** [{telefone_limpo}]({link_wpp})\n"
+                    mensagem += f'  - 📞 <b>Telefone:</b> <a href="{link_wpp}">{esc(telefone_limpo)}</a>\n'
                 
                 if ag.CPFCliente and ag.CPFCliente.strip():
-                    mensagem += f"  - 📄 **CPF:** {ag.CPFCliente.strip()}\n"
+                    mensagem += f"  - 📄 <b>CPF:</b> {esc(ag.CPFCliente.strip())}\n"
 
                 status_pag = "PAGO" if ag.StatusPagamento == "Pago" else "RECEBER (Pendente)"
-                mensagem += f"  - 💰 **Pagamento:** **{status_pag}**\n"
-                # --- FIM DAS NOVAS INFORMAÇÕES ---
+                mensagem += f"  - 💰 <b>Pagamento: {status_pag}</b>\n"
 
                 if ag.Observacoes and ag.Observacoes.strip():
-                    mensagem += "  - 📝 **Observações:**\n"
+                    mensagem += "  - 📝 <b>Observações:</b>\n"
                     for linha in ag.Observacoes.strip().splitlines():
-                        mensagem += f"    > _{linha.strip()}_\n"
+                        mensagem += f"    &gt; <i>{esc(linha.strip())}</i>\n"
                 
                 if (i + 1) < len(agendamentos_futuros) and agendamentos_futuros[i+1].DataEvento.date() == data_atual:
-                    mensagem += "\n`- - - - - - - - - - - - - - - - -`\n"
+                    mensagem += "\n<code>- - - - - - - - - - - - - - - -</code>\n"
 
-        notificador_telegram.enviar_mensagem(config.AGENDAMENTOS_GROUP_CHAT_ID, mensagem)
+        # [DEPURAÇÃO] Envio em partes e conferência da resposta (antes dizia "sucesso"
+        # mesmo quando o Telegram recusava a mensagem por ser grande demais).
+        if not enviar_telegram_em_partes(config.AGENDAMENTOS_GROUP_CHAT_ID, mensagem):
+            return jsonify({"status": "erro", "mensagem": "O Telegram recusou o envio do lembrete. Veja o log do servidor."}), 502
         return jsonify({"status": "sucesso", "mensagem": "Lembrete geral enviado com sucesso!"}), 200
 
     except Exception as e:
@@ -539,20 +715,29 @@ def rota_enviar_lembrete_geral():
 @app.route('/login', methods=['POST'])
 def rota_login():
     """Endpoint para autenticar um funcionário."""
-    dados = request.get_json()
+    dados = ler_json()
     if not dados or 'id' not in dados or 'senha' not in dados:
         return jsonify({"status": "erro", "mensagem": "ID e senha são obrigatórios."}), 400
 
     funcionario_id = dados['id']
-    senha_digitada = dados['senha']
+    senha_digitada = str(dados['senha'])
+
+    # [DEPURAÇÃO] Um ID com letras virava erro 500; agora é 400 com mensagem clara.
+    try:
+        funcionario_id = int(funcionario_id)
+    except (TypeError, ValueError):
+        return jsonify({"status": "erro", "mensagem": "O ID do funcionário deve ser um número."}), 400
 
     try:
-        dados_funcionario_db = database.autenticar_funcionario(int(funcionario_id))
+        dados_funcionario_db = database.autenticar_funcionario(funcionario_id)
 
-        if dados_funcionario_db and dados_funcionario_db.SenhaHash:
+        # [DEPURAÇÃO] getattr: se a coluna SenhaHash não existir, antes dava erro 500
+        senha_hash_banco = getattr(dados_funcionario_db, 'SenhaHash', None) if dados_funcionario_db else None
+        if dados_funcionario_db and senha_hash_banco:
             senha_hash_digitada = hashlib.sha256(senha_digitada.encode('utf-8')).hexdigest()
 
-            if senha_hash_digitada == dados_funcionario_db.SenhaHash:
+            # [DEPURAÇÃO] compare_digest: comparação que não "vaza" informação pelo tempo de resposta
+            if hmac.compare_digest(senha_hash_digitada, str(senha_hash_banco)):
                 # Login bem-sucedido! Retorna os dados do funcionário.
                 return jsonify({
                     "status": "sucesso",
@@ -736,7 +921,9 @@ def rota_escala_hoje():
                         def to_time(val):
                             if isinstance(val, timedelta): return (datetime.min + val).time()
                             if hasattr(val, 'time'): return val.time()
-                            if hasattr(val, 'strftime'): return val.time()
+                            # [DEPURAÇÃO] Um objeto 'time' puro tem strftime mas NÃO tem .time():
+                            # a linha antiga chamava val.time() e dava erro. Ele já é o que queremos.
+                            if hasattr(val, 'strftime'): return val
                             # Se for string, tenta parsear
                             if isinstance(val, str):
                                 try: return datetime.strptime(val[:5], '%H:%M').time()
@@ -748,7 +935,14 @@ def rota_escala_hoje():
 
                         if ini_t and fim_t:
                             # Se agora estiver dentro do intervalo
-                            if ini_t <= agora_time <= fim_t:
+                            # [DEPURAÇÃO] Intervalo que vira a meia-noite (ex.: 23:30 às 00:30)
+                            # nunca era reconhecido. E o 'timedelta' usado em to_time() não
+                            # estava importado: esse caso sempre caía no "(Intervalo)".
+                            if ini_t <= fim_t:
+                                em_intervalo = ini_t <= agora_time <= fim_t
+                            else:
+                                em_intervalo = agora_time >= ini_t or agora_time <= fim_t
+                            if em_intervalo:
                                 detalhes = "EM INTERVALO ☕"
                                 cor = "#FFBB33" # Amarelo
                             else:
@@ -904,29 +1098,66 @@ def login_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
+# [DEPURAÇÃO] A pasta 'templates' não tem o arquivo login.html: abrir /login dava erro 500.
+# Esta página simples é usada quando o login.html não existir (se um dia você criar o
+# seu login.html, ele passa a ser usado automaticamente).
+PAGINA_LOGIN_PADRAO = """<!doctype html>
+<html lang="pt-br"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Login - Painel</title>
+<style>
+ body{font-family:Arial,sans-serif;background:#f2f2f2;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
+ form{background:#fff;padding:24px;border-radius:8px;box-shadow:0 2px 8px #0002;width:280px}
+ input,button{width:100%;padding:10px;margin-top:10px;box-sizing:border-box;font-size:15px}
+ button{background:#0056b3;color:#fff;border:0;border-radius:4px;cursor:pointer}
+ #erro{color:#c00;margin-top:10px;min-height:1em}
+</style></head><body>
+<form id="f"><h3>Acesso do Gestor</h3>
+<input id="u" placeholder="Usuário" autocomplete="username" required>
+<input id="s" type="password" placeholder="Senha" autocomplete="current-password" required>
+<button>Entrar</button><div id="erro"></div></form>
+<script>
+document.getElementById('f').onsubmit = async (e) => {
+  e.preventDefault();
+  const r = await fetch('/api/auth/login', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({usuario: document.getElementById('u').value, senha: document.getElementById('s').value})});
+  const d = await r.json();
+  if (d.sucesso) { location.href = '/'; } else { document.getElementById('erro').textContent = d.erro || 'Falha no login.'; }
+};
+</script></body></html>"""
+
+
 @app.route('/login')
 def page_login():
     """Renderiza a página de login."""
     # Se já estiver logado, manda pro painel (ou futura home admin)
     if 'usuario_id' in session:
-        return redirect(url_for('index')) 
-    return render_template('login.html')
+        return redirect(url_for('index'))
+    try:
+        return render_template('login.html')
+    except TemplateNotFound:
+        return PAGINA_LOGIN_PADRAO
 
 @app.route('/api/auth/login', methods=['POST'])
 def api_login():
     """Recebe dados do formulário e valida no banco."""
-    dados = request.json
-    usuario = dados.get('usuario')
-    senha = dados.get('senha')
-    
+    dados = ler_json() or {}  # [DEPURAÇÃO] pedido sem JSON quebrava com erro 500
+    usuario = (dados.get('usuario') or '').strip()
+    senha = dados.get('senha') or ''
+    if not usuario or not senha:
+        return jsonify({"sucesso": False, "erro": "Informe usuário e senha."}), 400
+
     user_data = database.verificar_credenciais(usuario, senha)
-    
+
     if user_data:
+        session.clear()  # [DEPURAÇÃO] começa uma sessão nova a cada login
         session['usuario_id'] = user_data['id']
         session['usuario_nome'] = user_data['nome']
         session['nivel'] = user_data['nivel']
+        logger.info(f"Login web de '{usuario}' a partir de {request.remote_addr}")
         return jsonify({"sucesso": True, "nome": user_data['nome']})
     else:
+        logger.warning(f"Tentativa de login web FALHOU para '{usuario}' a partir de {request.remote_addr}")
         return jsonify({"sucesso": False, "erro": "Usuário ou senha incorretos."}), 401
 
 @app.route('/api/auth/logout', methods=['POST'])
@@ -938,7 +1169,7 @@ def api_logout():
 def api_check_auth():
     """Verifica se o usuário está logado (para o frontend saber)."""
     if 'usuario_id' in session:
-        return jsonify({"logado": True, "nome": session['usuario_nome']})
+        return jsonify({"logado": True, "nome": session.get('usuario_nome', '')})
     return jsonify({"logado": False})
 
 # --- ADICIONE ESTE BLOCO QUE ESTÁ FALTANDO ---
@@ -995,9 +1226,9 @@ def rota_buscar_por_nome(termo):
 @app.route('/api/produto/criar-unidade', methods=['POST'])
 def rota_criar_unidade():
     """Cria cadastro de unidade a partir de uma caixa."""
-    dados = request.json
+    dados = ler_json() or {}  # [DEPURAÇÃO] pedido sem JSON quebrava com erro 500
     id_origem = dados.get('id_origem') # ID da Caixa
-    novo_ean = dados.get('novo_ean')   # EAN da Unidade (que falhou ao bipar)
+    novo_ean = (str(dados.get('novo_ean') or '')).strip()   # EAN da Unidade (que falhou ao bipar)
     qtd_caixa = dados.get('qtd_caixa') # Quantas unidades vem na caixa
 
     # Permite que o EAN seja vazio (quando o usuário busca por nome e desmembra a caixa)
@@ -1005,15 +1236,25 @@ def rota_criar_unidade():
     if not id_origem or not qtd_caixa:
         return jsonify({"sucesso": False, "erro": "ID da caixa e quantidade são obrigatórios."}), 400
 
+    # [DEPURAÇÃO] Quantidade com letras (ex.: "12un") dava erro 500
+    try:
+        qtd_caixa = float(str(qtd_caixa).replace(',', '.'))
+        if qtd_caixa <= 0:
+            raise ValueError
+    except ValueError:
+        return jsonify({"sucesso": False, "erro": "A quantidade na caixa deve ser um número maior que zero."}), 400
+
     # Se o EAN vier vazio, definimos um texto padrão para o Banco de Dados aceitar
     ean_final = novo_ean if novo_ean else "Sem EAN"
 
-    sucesso, msg = database.criar_unidade_a_partir_de_caixa(id_origem, ean_final, float(qtd_caixa))
+    sucesso, msg = database.criar_unidade_a_partir_de_caixa(id_origem, ean_final, qtd_caixa)
 
     if sucesso:
         # Já retorna os dados do novo produto para adicionar na contagem imediatamente
-        # Busca o produto recém criado para garantir
-        res = database.buscar_produto_por_ean(novo_ean)
+        # [DEPURAÇÃO] Com EAN vazio, a busca abaixo não achava nada e a rota respondia
+        # ERRO 500 — mesmo com a unidade JÁ CRIADA no banco. O celular mostrava falha e o
+        # usuário tentava de novo, criando cadastros duplicados. Agora responde sucesso.
+        res = database.buscar_produto_por_ean(novo_ean) if novo_ean else None
         if res:
             return jsonify({
                 "sucesso": True,
@@ -1024,20 +1265,22 @@ def rota_criar_unidade():
                     "custo": float(res[4] if len(res) > 4 and res[4] is not None else 0.0)
                 }
             })
+        return jsonify({"sucesso": True, "msg": msg, "produto": None})
 
     return jsonify({"sucesso": False, "erro": msg}), 500
 
 @app.route('/api/contagem/salvar-mobile', methods=['POST'])
 def rota_salvar_contagem_mobile():
     """Recebe o JSON do celular e salva no banco."""
-    dados = request.json
+    dados = ler_json() or {}  # [DEPURAÇÃO] pedido sem JSON quebrava com erro 500
 
     data_hoje = datetime.now().strftime('%Y-%m-%d')
-    funcionario_id = dados.get('funcionario_id', 2) # Default Gestor se não vier
+    funcionario_id = dados.get('funcionario_id') or ID_GESTOR  # [DEPURAÇÃO] gestor padrão vem do config.py (antes: 2 fixo)
     itens = dados.get('itens', [])
-    nome_contagem = dados.get('nome_contagem', 'Mobile (Sem Nome)')
+    nome_contagem = dados.get('nome_contagem') or 'Mobile (Sem Nome)'
 
-    if not itens:
+    # [DEPURAÇÃO] 'itens' precisa ser uma LISTA de itens (antes um texto quebrava o banco)
+    if not itens or not isinstance(itens, list) or not all(isinstance(i, dict) for i in itens):
         return jsonify({"sucesso": False, "erro": "Lista vazia"}), 400
 
     sucesso, msg = database.salvar_contagem_estoque(data_hoje, funcionario_id, itens, nome_contagem)
@@ -1078,7 +1321,7 @@ def rota_buscar_sem_ean():
 @app.route('/api/auditoria/salvar-ean', methods=['POST'])
 def rota_salvar_ean():
     """Recebe o EAN bipado ou a flag 'IGNORADO' e salva no banco."""
-    dados = request.json
+    dados = ler_json() or {}  # [DEPURAÇÃO] pedido sem JSON quebrava com erro 500
     vinculo_id = dados.get('vinculo_id')
     ean = dados.get('ean')
 
@@ -1096,7 +1339,22 @@ def rota_salvar_ean():
         logger.error(f"Erro na rota salvar_ean: {e}")
         return jsonify({"sucesso": False, "erro": "Erro interno no servidor"}), 500
 
+def verificar_senha_padrao_admin():
+    """
+    [DEPURAÇÃO] O banco cria o usuário 'admin' com a senha 'admin123' na primeira vez.
+    Se ela nunca foi trocada, qualquer pessoa na rede entra no painel. Este aviso
+    aparece no terminal/log ao iniciar o servidor até a senha ser trocada.
+    """
+    try:
+        if database.verificar_credenciais('admin', 'admin123'):
+            logger.warning("!!! SEGURANÇA: o usuário 'admin' do painel web ainda usa a senha padrão 'admin123'. "
+                           "Troque-a na tabela UsuariosAdmin (atenção: o reset_admin.py VOLTA a senha para admin123).")
+    except Exception as e:
+        logger.debug(f"Não foi possível verificar a senha padrão do admin: {e}")
+
+
 if __name__ == "__main__":
     # O '0.0.0.0' é o segredo. Ele libera o acesso para a rede inteira.
     logger.info("Iniciando servidor API acessível na rede em modo Produção...")
+    verificar_senha_padrao_admin()
     app.run(host='0.0.0.0', port=5000, debug=False)
