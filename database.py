@@ -6919,37 +6919,57 @@ def _br(valor, casas=None):
     return f"{v:,.{casas}f}".replace(',', 'X').replace('.', ',').replace('X', '.')
 
 
-def _garantir_tabelas_valor_estoque(cursor):
-    """Cria (uma vez) as tabelas onde o valor fechado de cada contagem fica guardado."""
+def _garantir_tabelas_valor_estoque(cursor=None):
+    """
+    Cria (uma vez) as tabelas onde o valor fechado de cada contagem fica guardado.
+    [CORREÇÃO] A 1ª versão criava as tabelas na mesma conexão da consulta e NÃO fazia
+    commit: ao fechar a conexão, o SQL Server desfazia a criação ("Nome de objeto
+    'ValorEstoqueFechamento' inválido"). Agora usa uma conexão própria, faz COMMIT e só
+    marca como "pronto" depois que a criação foi realmente gravada.
+    (O parâmetro 'cursor' é ignorado; ficou só para não mudar quem chama.)
+    """
     global _tabelas_valor_ok
     if _tabelas_valor_ok:
         return
-    cursor.execute("""
-        IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ValorEstoqueFechamento')
-        CREATE TABLE ValorEstoqueFechamento (
-            ContagemID INT PRIMARY KEY,
-            DataFechamento DATETIME NOT NULL DEFAULT GETDATE(),
-            ValorTotal DECIMAL(18, 2) NOT NULL,
-            Metodo NVARCHAR(200) NULL,
-            QtdAvisos INT NULL
-        )
-    """)
-    cursor.execute("""
-        IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ValorEstoqueFechamentoItens')
-        CREATE TABLE ValorEstoqueFechamentoItens (
-            ItemID INT IDENTITY(1,1) PRIMARY KEY,
-            ContagemID INT NOT NULL,
-            ProdutoID INT NULL,
-            NomeProduto NVARCHAR(255) NOT NULL,
-            Categoria NVARCHAR(100) NULL,
-            Unidade NVARCHAR(20) NULL,
-            Quantidade DECIMAL(18, 3) NOT NULL,
-            CustoUnitario DECIMAL(18, 4) NOT NULL,
-            ValorTotal DECIMAL(18, 2) NOT NULL,
-            OrigemCusto NVARCHAR(200) NULL
-        )
-    """)
-    _tabelas_valor_ok = True
+    conn = get_db_connection()
+    if not conn:
+        raise Exception("Falha de conexão com o banco de dados.")
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ValorEstoqueFechamento')
+            CREATE TABLE ValorEstoqueFechamento (
+                ContagemID INT PRIMARY KEY,
+                DataFechamento DATETIME NOT NULL DEFAULT GETDATE(),
+                ValorTotal DECIMAL(18, 2) NOT NULL,
+                Metodo NVARCHAR(200) NULL,
+                QtdAvisos INT NULL
+            )
+        """)
+        cur.execute("""
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ValorEstoqueFechamentoItens')
+            CREATE TABLE ValorEstoqueFechamentoItens (
+                ItemID INT IDENTITY(1,1) PRIMARY KEY,
+                ContagemID INT NOT NULL,
+                ProdutoID INT NULL,
+                NomeProduto NVARCHAR(255) NOT NULL,
+                Categoria NVARCHAR(100) NULL,
+                Unidade NVARCHAR(20) NULL,
+                Quantidade DECIMAL(18, 3) NOT NULL,
+                CustoUnitario DECIMAL(18, 4) NOT NULL,
+                ValorTotal DECIMAL(18, 2) NOT NULL,
+                OrigemCusto NVARCHAR(200) NULL
+            )
+        """)
+        conn.commit()
+        _tabelas_valor_ok = True
+        logger.info("Tabelas ValorEstoqueFechamento / ValorEstoqueFechamentoItens verificadas/criadas.")
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Não foi possível criar as tabelas do Valor do Estoque: {e}", exc_info=True)
+        raise
+    finally:
+        conn.close()
 
 
 def _custos_por_produto(cursor, data_contagem):
