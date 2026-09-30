@@ -152,12 +152,145 @@ def nome_arquivo_seguro(nome):
 def so_digitos(texto):
     return re.sub(r'\D', '', str(texto or ''))
 
+
+# ==============================================================================
+# == [MELHORIA UX] FUNÇÕES AUXILIARES DAS MELHORIAS DE USABILIDADE =============
+# ==============================================================================
+import unicodedata
+import math
+
+ARQUIVO_RASCUNHO_CONTAGEM = os.path.join(PASTA_DO_PROGRAMA, 'rascunho_contagem.json')
+ARQUIVO_PREFERENCIAS = os.path.join(PASTA_DO_PROGRAMA, 'estoque_preferencias.json')
+PASTA_BACKUPS = os.path.join(PASTA_DO_PROGRAMA, 'backups_estoque')
+
+
+def sem_acento(texto):
+    """'Açaí Côco' -> 'acai coco' (para a busca achar com ou sem acento)."""
+    t = unicodedata.normalize('NFKD', str(texto or ''))
+    return ''.join(c for c in t if not unicodedata.combining(c)).lower()
+
+
+def buscar_nomes(termo, nomes):
+    """
+    [MELHORIA UX] Busca "inteligente" usada na contagem:
+      - ignora acentos e maiúsculas ("acai" acha "Açaí");
+      - aceita várias palavras em qualquer ordem ("1kg choc" acha "Chocolate 1KG");
+      - os nomes que COMEÇAM com o que foi digitado aparecem primeiro.
+    """
+    palavras = sem_acento(termo).split()
+    if not palavras:
+        return list(nomes)
+    achados = [n for n in nomes if all(p in sem_acento(n) for p in palavras)]
+    inicio = sem_acento(termo).strip()
+    return sorted(achados, key=lambda n: (not sem_acento(n).startswith(inicio), sem_acento(n)))
+
+
+def fmt_qtd(valor):
+    """3.500 -> '3,5'   2.000 -> '2'   (quantidade no jeito brasileiro, sem zeros sobrando)."""
+    try:
+        v = Decimal(str(valor))
+    except (InvalidOperation, ValueError):
+        return str(valor)
+    texto = f"{v:.3f}".rstrip('0').rstrip('.')
+    return texto.replace('.', ',') if texto else '0'
+
+
+def fmt_reais(valor):
+    """1234.5 -> 'R$ 1.234,50'."""
+    try:
+        v = Decimal(str(valor or 0))
+    except (InvalidOperation, ValueError):
+        v = Decimal('0')
+    return "R$ " + f"{v:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
+
+
+UNIDADES_FRACIONADAS = {'KG', 'G', 'GR', 'L', 'LT', 'ML', 'M'}
+
+
+def qtd_para_pedido(sugestao, unidade):
+    """
+    Arredonda a sugestão para uma quantidade que dá para pedir:
+    unidades inteiras (UN, CX, PCT...) sobem para o próximo número inteiro;
+    peso/volume (KG, L...) ficam com até 3 casas.
+    """
+    s = Decimal(str(sugestao or 0))
+    if s <= 0:
+        return Decimal('0')
+    if str(unidade or '').strip().upper() in UNIDADES_FRACIONADAS:
+        return s.quantize(Decimal('0.001'))
+    return Decimal(math.ceil(s))
+
+
+def linhas_do_banco_para_dicts(linhas):
+    """Converte o que o banco devolve (Row do pyodbc, dict ou objeto) em lista de dicionários."""
+    resultado = []
+    for linha in linhas or []:
+        if isinstance(linha, dict):
+            resultado.append(dict(linha))
+        elif hasattr(linha, 'cursor_description'):
+            resultado.append({c[0]: v for c, v in zip(linha.cursor_description, linha)})
+        elif hasattr(linha, '__dict__'):
+            resultado.append({k: v for k, v in vars(linha).items() if not k.startswith('_')})
+        else:
+            resultado.append({'valor': str(linha)})
+    for d in resultado:  # o Excel não aceita alguns tipos (Decimal fica como número)
+        for k, v in d.items():
+            if isinstance(v, Decimal):
+                d[k] = float(v)
+    return resultado
+
+
+def nome_aba_excel(nome, usados):
+    """Nome de aba válido no Excel (máx. 31 letras, sem []:*?/\\) e sem repetir."""
+    base = re.sub(r'[\[\]:*?/\\]', '_', str(nome or 'Sem nome')).strip()[:28] or 'Aba'
+    nome_final, n = base, 2
+    while nome_final.lower() in usados:
+        nome_final = f"{base[:25]}_{n}"; n += 1
+    usados.add(nome_final.lower())
+    return nome_final
+
+
+def criar_tree_zebrada(pai, **kwargs):
+    """
+    [MELHORIA UX] Cria uma tabela (Treeview) com linhas alternadas cinza/branco,
+    que facilitam acompanhar a linha com os olhos em listas longas.
+    """
+    tree = ttk.Treeview(pai, **kwargs)
+    insert_original = tree.insert
+
+    def insert_zebrado(parent, index, *args, **kw):
+        qtd = len(tree.get_children(parent))
+        tags = kw.get('tags', ())
+        if isinstance(tags, str):
+            tags = (tags,) if tags else ()
+        kw['tags'] = tuple(tags) + ('zebra_impar' if qtd % 2 else 'zebra_par',)
+        return insert_original(parent, index, *args, **kw)
+
+    tree.insert = insert_zebrado
+    try:
+        tree.tag_configure('zebra_impar', background='#f3f6fa')
+        tree.tag_configure('zebra_par', background='#ffffff')
+    except tk.TclError:
+        pass
+    return tree
+
 class AppGestaoEstoque:
     def __init__(self, root):
         self.root = root
         self.root.title("Módulo de Gestão de Estoque")
         self.root.geometry("1200x700") 
-        
+
+        # [MELHORIA UX] Barra de status no rodapé: mostra "✅ Produto salvo" etc. sem
+        # abrir uma janelinha que precisa de clique em OK. (Criada ANTES das abas para
+        # ficar sempre visível embaixo.)
+        self._status_job = None
+        self.barra_status = ttk.Frame(root, relief="sunken", padding=(8, 3))
+        self.barra_status.pack(side=tk.BOTTOM, fill=tk.X)
+        self.lbl_status = ttk.Label(self.barra_status, text="", anchor="w")
+        self.lbl_status.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Label(self.barra_status, foreground="gray",
+                  text="Atalhos: Ctrl+F = buscar · F5 = atualizar · Delete = excluir selecionado").pack(side=tk.RIGHT)
+
         self.notebook = ttk.Notebook(root)
         self.notebook.pack(pady=10, padx=10, fill="both", expand=True)
 
@@ -215,6 +348,120 @@ class AppGestaoEstoque:
         self.popular_combos_contagem_sugestao() # <-- CORREÇÃO: Inicializa os combos da aba 5
         self.carregar_categorias_do_banco()
         self.carregar_solicitacoes()  # [DEPURAÇÃO] antes a aba 7 abria sempre vazia
+
+        # [MELHORIA UX] Atalhos de teclado, lembrar tamanho da janela / última aba,
+        # aviso ao fechar e recuperação de contagem não salva.
+        self.configurar_atalhos()
+        self.aplicar_preferencias()
+        self.root.protocol("WM_DELETE_WINDOW", self.ao_fechar_janela)
+        self.root.after(400, self.verificar_rascunho_contagem)
+
+    # ===================================================================
+    # == [MELHORIA UX] BARRA DE STATUS, ATALHOS E PREFERÊNCIAS ==========
+    # ===================================================================
+    def status(self, mensagem, tipo='ok', segundos=10):
+        """
+        Mostra uma mensagem no rodapé. tipo: 'ok' (verde), 'aviso' (laranja),
+        'erro' (vermelho) ou 'info' (preto). Some sozinha depois de alguns segundos.
+        """
+        icones = {'ok': '✅ ', 'aviso': '⚠️ ', 'erro': '❌ ', 'info': 'ℹ️ '}
+        cores = {'ok': '#1b7a2f', 'aviso': '#b35c00', 'erro': '#c62828', 'info': '#222222'}
+        texto = " ".join(str(mensagem).split())  # tira quebras de linha
+        self.ultimo_status = texto
+        try:
+            self.lbl_status.config(text=icones.get(tipo, '') + texto, foreground=cores.get(tipo, '#222222'))
+            if self._status_job:
+                self.root.after_cancel(self._status_job)
+            self._status_job = self.root.after(segundos * 1000, lambda: self.lbl_status.config(text=""))
+        except tk.TclError:
+            pass
+        logger.info(f"[status] {texto}")
+
+    def aba_atual(self):
+        try:
+            return self.notebook.tab(self.notebook.select(), "text")
+        except tk.TclError:
+            return ''
+
+    def configurar_atalhos(self):
+        """Ctrl+F = ir para a busca da aba; F5 = atualizar a aba; Delete = excluir o selecionado."""
+        self.root.bind_all("<Control-f>", self.atalho_buscar)
+        self.root.bind_all("<Control-F>", self.atalho_buscar)
+        self.root.bind_all("<F5>", lambda e: (self.on_tab_changed(None), self.status("Aba atualizada.", 'info', 4)))
+        atalhos_delete = [
+            (self.tree_produtos, self.excluir_produto_selecionado),
+            (self.tree_fornecedores, self.excluir_fornecedor_selecionado),
+            (self.tree_contagem_atual, self.remover_item_contagem),
+            (self.tree_admin_nfs, self.excluir_nfs_selecionadas),
+            (self.tree_admin_cont, self.excluir_contagens_selecionadas),
+        ]
+        for tree, acao in atalhos_delete:
+            tree.bind("<Delete>", lambda e, f=acao: f())
+
+    def atalho_buscar(self, event=None):
+        campos = {
+            '1.': getattr(self, 'entry_filtro_mestre', None),
+            '3.': getattr(self, 'entry_filtro_importacao', None),
+            '4.': getattr(self, 'entry_filtro_contagem', None),
+        }
+        campo = campos.get(self.aba_atual()[:2])
+        if campo is not None:
+            campo.focus_set()
+            campo.select_range(0, tk.END)
+        return "break"
+
+    def ler_preferencias(self):
+        try:
+            with open(ARQUIVO_PREFERENCIAS, 'r', encoding='utf-8') as f:
+                dados = json.load(f)
+            return dados if isinstance(dados, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def aplicar_preferencias(self):
+        """Abre a janela do mesmo tamanho/posição e na mesma aba da última vez."""
+        pref = self.ler_preferencias()
+        geo = str(pref.get('geometria', ''))
+        m = re.match(r'^(\d+)x(\d+)\+(-?\d+)\+(-?\d+)$', geo)
+        if m:
+            larg, alt, x, y = map(int, m.groups())
+            try:
+                tela_l, tela_a = int(self.root.winfo_screenwidth()), int(self.root.winfo_screenheight())
+            except (tk.TclError, TypeError, ValueError):
+                tela_l, tela_a = 0, 0
+            # Só usa se a janela couber na tela atual (ex: monitor extra desligado)
+            if 400 <= larg <= tela_l and 300 <= alt <= tela_a and 0 <= x < tela_l - 100 and 0 <= y < tela_a - 100:
+                self.root.geometry(geo)
+        aba = pref.get('aba')
+        if isinstance(aba, int) and 0 <= aba < 7:
+            try:
+                self.notebook.select(aba)
+            except tk.TclError:
+                pass
+
+    def salvar_preferencias(self):
+        try:
+            dados = {'geometria': self.root.geometry(), 'aba': self.notebook.index(self.notebook.select())}
+            with open(ARQUIVO_PREFERENCIAS, 'w', encoding='utf-8') as f:
+                json.dump(dados, f)
+        except Exception as e:  # nunca impede o programa de fechar
+            logger.warning(f"Não foi possível salvar as preferências da janela: {e}")
+
+    def ao_fechar_janela(self):
+        """Antes de fechar: avisa sobre contagem não salva e guarda tamanho/aba."""
+        qtd = len(self.lista_itens_para_salvar_contagem)
+        if qtd:
+            if not messagebox.askyesno(
+                    "Contagem não salva",
+                    f"Há {qtd} item(ns) na contagem que ainda NÃO foram salvos no banco.\n\n"
+                    "Fique tranquilo: eles ficam guardados como rascunho e o programa vai "
+                    "oferecer para continuar na próxima vez que abrir.\n\n"
+                    "Deseja fechar o programa mesmo assim?",
+                    icon='warning', parent=self.root):
+                return
+            self.salvar_rascunho_contagem()
+        self.salvar_preferencias()
+        self.root.destroy()
 
     def carregar_categorias_do_banco(self):
         """Busca as categorias dinâmicas do banco e atualiza todos os Comboboxes do sistema."""
@@ -543,12 +790,12 @@ class AppGestaoEstoque:
                 # Agora só grava se o valor da caixinha foi realmente alterado.
                 if custo_texto != (self.custo_carregado_texto or ""):
                     if database.atualizar_custo_manual_produto(self.produto_selecionado_id, custo_inicial):
-                        messagebox.showinfo("Sucesso", "Produto e Custo atualizados com sucesso!", parent=self.root)
+                        self.status("Produto e Custo atualizados com sucesso!")  # [MELHORIA UX] rodapé em vez de janelinha
                     else:
                         messagebox.showwarning("Atenção", "Os dados do produto foram salvos, mas o CUSTO não pôde "
                                                           "ser gravado (veja o log).", parent=self.root)
                 else:
-                    messagebox.showinfo("Sucesso", "Produto atualizado com sucesso!", parent=self.root)
+                    self.status("Produto atualizado com sucesso!")  # [MELHORIA UX] rodapé em vez de janelinha
             else:
                 # SE FOR NOVO: Chama nossa nova função mágica!
                 novo_id = database.criar_produto_manual_com_custo(nome, unidade, estoque_min, categoria, custo_inicial) 
@@ -557,7 +804,7 @@ class AppGestaoEstoque:
                     raise Exception("Falha ao criar produto. O banco não retornou o ID.")
                 
                 msg_extra = "\n\nCusto inicial salvo com sucesso via Fornecedor Interno!" if custo_inicial > 0 else ""
-                messagebox.showinfo("Sucesso", f"Produto '{nome}' criado com sucesso!{msg_extra}", parent=self.root)
+                self.status(f"Produto '{nome}' criado com sucesso!{msg_extra}")  # [MELHORIA UX] rodapé em vez de janelinha
             
             # Limpa e atualiza tudo
             self.limpar_formulario_produto()
@@ -644,7 +891,7 @@ class AppGestaoEstoque:
             return
         try:
             database.excluir_produto_estoque(self.produto_selecionado_id)
-            messagebox.showinfo("Sucesso", "Produto excluído com sucesso!", parent=self.root)
+            self.status("Produto excluído com sucesso!")  # [MELHORIA UX] rodapé em vez de janelinha
             self.limpar_formulario_produto()
             self.atualizar_lista_produtos()
             self.popular_combobox_produtos_mestre()
@@ -673,7 +920,7 @@ class AppGestaoEstoque:
 
         # Tabela Pop-up (Adicionado ID oculto e mudado selectmode para 'browse')
         cols = ('ID', 'Fornecedor', 'Descrição no XML', 'EAN', 'Fator (Qtd/Cx)')
-        tree = ttk.Treeview(frame, columns=cols, show='headings', selectmode='browse')
+        tree = criar_tree_zebrada(frame, columns=cols, show='headings', selectmode='browse')
 
         tree.heading('ID', text='ID'); tree.column('ID', width=0, stretch=tk.NO) # Esconde a coluna ID
         tree.heading('Fornecedor', text='Fornecedor'); tree.column('Fornecedor', width=150)
@@ -808,7 +1055,7 @@ class AppGestaoEstoque:
         lista_frame.rowconfigure(0, weight=1)
         lista_frame.columnconfigure(0, weight=1)
         cols_forn = ('ID', 'Nome Fantasia', 'CNPJ')
-        self.tree_fornecedores = ttk.Treeview(lista_frame, columns=cols_forn, show='headings', selectmode='browse')
+        self.tree_fornecedores = criar_tree_zebrada(lista_frame, columns=cols_forn, show='headings', selectmode='browse')
         self.tree_fornecedores.heading('ID', text='ID'); self.tree_fornecedores.column('ID', width=40, anchor='center')
         self.tree_fornecedores.heading('Nome Fantasia', text='Nome'); self.tree_fornecedores.column('Nome Fantasia', width=250)
         self.tree_fornecedores.heading('CNPJ', text='CNPJ'); self.tree_fornecedores.column('CNPJ', width=150, anchor='center')
@@ -847,10 +1094,10 @@ class AppGestaoEstoque:
         try:
             if self.fornecedor_selecionado_id:
                 database.atualizar_fornecedor(self.fornecedor_selecionado_id, cnpj, nome)
-                messagebox.showinfo("Sucesso", "Fornecedor atualizado com sucesso!", parent=self.root)
+                self.status("Fornecedor atualizado com sucesso!")  # [MELHORIA UX] rodapé em vez de janelinha
             else:
                 database.criar_fornecedor(cnpj, nome)
-                messagebox.showinfo("Sucesso", "Fornecedor criado com sucesso!", parent=self.root)
+                self.status("Fornecedor criado com sucesso!")  # [MELHORIA UX] rodapé em vez de janelinha
             self.limpar_formulario_fornecedor()
             self.atualizar_lista_fornecedores()
         except Exception as e:
@@ -890,7 +1137,7 @@ class AppGestaoEstoque:
             return
         try:
             database.excluir_fornecedor(self.fornecedor_selecionado_id)
-            messagebox.showinfo("Sucesso", "Fornecedor excluído com sucesso!", parent=self.root)
+            self.status("Fornecedor excluído com sucesso!")  # [MELHORIA UX] rodapé em vez de janelinha
             self.limpar_formulario_fornecedor()
             self.atualizar_lista_fornecedores()
         except Exception as e:
@@ -913,13 +1160,17 @@ class AppGestaoEstoque:
         # [DEPURAÇÃO] Depois de vincular itens, basta clicar aqui (não precisa escolher a pasta de novo)
         btn_reprocessar = ttk.Button(frame_botoes, text="🔄 Reprocessar Pasta Atual", command=self.reprocessar_pasta_xml)
         btn_reprocessar.pack(side=tk.LEFT, padx=(5, 0), ipady=10)
+        # [MELHORIA UX] Placar da importação: quanto falta e quanto já está pronto
+        self.lbl_resumo_importacao = ttk.Label(frame_botoes, text="Nenhuma pasta carregada ainda.",
+                                               font=("Arial", 10, "bold"))
+        self.lbl_resumo_importacao.pack(side=tk.LEFT, padx=15)
         frame_vincular = ttk.LabelFrame(main_frame, text="2. Itens Pendentes de Vinculação (DE/PARA)", padding="10")
         frame_vincular.grid(row=1, column=0, sticky="nsew", pady=5)
         frame_vincular.rowconfigure(0, weight=1)
         frame_vincular.columnconfigure(0, weight=1)
         # --- COLUNAS ATUALIZADAS (Removido NCM, Adicionado Qtd/Custo) ---
         cols_vinc = ('Fornecedor', 'Produto no XML', 'EAN', 'Qtd na Nota', 'Custo Unit.', 'Custo Total')
-        self.tree_vincular = ttk.Treeview(frame_vincular, columns=cols_vinc, show='headings', selectmode='browse')
+        self.tree_vincular = criar_tree_zebrada(frame_vincular, columns=cols_vinc, show='headings', selectmode='browse')
 
         self.tree_vincular.heading('Fornecedor', text='Fornecedor'); self.tree_vincular.column('Fornecedor', width=150)
         self.tree_vincular.heading('Produto no XML', text='Produto no XML'); self.tree_vincular.column('Produto no XML', width=250)
@@ -963,7 +1214,7 @@ class AppGestaoEstoque:
         frame_prontos.rowconfigure(0, weight=1)
         frame_prontos.columnconfigure(0, weight=1)
         cols_prontos = ('NF', 'Fornecedor', 'Produto Mestre', 'Qtd', 'Custo Unit.', 'Custo Total')
-        self.tree_prontos = ttk.Treeview(frame_prontos, columns=cols_prontos, show='headings', selectmode='none')
+        self.tree_prontos = criar_tree_zebrada(frame_prontos, columns=cols_prontos, show='headings', selectmode='none')
         for col in cols_prontos: self.tree_prontos.heading(col, text=col)
         self.tree_prontos.column('NF', width=80, anchor='center')
         self.tree_prontos.column('Fornecedor', width=150)
@@ -974,6 +1225,8 @@ class AppGestaoEstoque:
         self.tree_prontos.grid(row=0, column=0, sticky="nsew")
         btn_salvar_tudo = ttk.Button(main_frame, text="4. Salvar Todas as Notas Processadas no Banco", command=self.salvar_notas_processadas)
         btn_salvar_tudo.grid(row=4, column=0, sticky="ew", pady=10, ipady=10)
+        self.btn_salvar_notas = btn_salvar_tudo
+        self.btn_salvar_notas.state(['disabled'])  # [MELHORIA UX] só libera quando há nota pronta
         # Botão de Gerenciamento de Vínculos (Correção)
         btn_gerir_vinculos = ttk.Button(main_frame, text="🛠️ Gerenciar / Corrigir Vínculos Salvos", command=self.abrir_gestor_vinculos)
         btn_gerir_vinculos.grid(row=5, column=0, sticky="ew", pady=(0, 10))
@@ -1067,6 +1320,51 @@ class AppGestaoEstoque:
             return
         self._carregar_pasta_xml(self.ultima_pasta_xml)
 
+    def atualizar_resumo_importacao(self):
+        """[MELHORIA UX] Atualiza o placar e libera o botão 'Salvar' só quando há o que salvar."""
+        pendentes = len(self.itens_xml_nao_vinculados)
+        prontos = len(self.tree_prontos.get_children())
+        completas = sum(1 for n in self.dados_notas_processadas
+                        if n.get('itens_pendentes', 0) == 0 and n.get('itens_vinculados'))
+        if not self.ultima_pasta_xml:
+            texto = "Nenhuma pasta carregada ainda."
+        elif pendentes:
+            texto = (f"📋 {pendentes} item(ns) para vincular   ·   ✅ {prontos} pronto(s)   ·   "
+                     f"🧾 {completas} nota(s) completa(s)")
+        elif completas:
+            texto = f"🎉 Tudo vinculado! {completas} nota(s) prontas — clique no botão 4 para salvar."
+        else:
+            texto = "Nada pendente nesta pasta."
+        try:
+            self.lbl_resumo_importacao.config(text=texto)
+            self.btn_salvar_notas.state(['!disabled'] if any(n.get('itens_vinculados') for n in self.dados_notas_processadas)
+                                        else ['disabled'])
+        except (tk.TclError, AttributeError):
+            pass
+
+    def _apos_vincular(self, indice_removido):
+        """
+        [MELHORIA UX] Depois de vincular um item:
+          - seleciona sozinho o PRÓXIMO pendente (não precisa clicar nele);
+          - quando não sobra nenhum, relê a pasta sozinho (antes era preciso lembrar
+            de clicar em 'Reprocessar' para os itens irem para a lista de salvar).
+        """
+        restantes = self.tree_vincular.get_children()
+        if restantes:
+            proximo = restantes[min(indice_removido, len(restantes) - 1)]
+            self.tree_vincular.focus(proximo)
+            self.tree_vincular.selection_set(proximo)
+            try:
+                self.tree_vincular.see(proximo)
+            except tk.TclError:
+                pass
+            self.atualizar_resumo_importacao()
+        elif self.ultima_pasta_xml and os.path.isdir(self.ultima_pasta_xml):
+            self.status("Último item vinculado! Relendo a pasta para liberar as notas...", 'info')
+            self._carregar_pasta_xml(self.ultima_pasta_xml)
+        else:
+            self.atualizar_resumo_importacao()
+
     def _carregar_pasta_xml(self, pasta_selecionada):
         self.ultima_pasta_xml = pasta_selecionada
         for i in self.tree_vincular.get_children(): self.tree_vincular.delete(i)
@@ -1078,6 +1376,12 @@ class AppGestaoEstoque:
         except Exception as e:
             logger.error(f"Erro GERAL ao processar pasta XML: {e}", exc_info=True)
             messagebox.showerror("Erro Crítico no Processamento", f"Ocorreu um erro ao ler os arquivos:\n{e}", parent=self.root)
+        self.atualizar_resumo_importacao()
+        # [MELHORIA UX] já deixa o primeiro pendente selecionado
+        pendentes = self.tree_vincular.get_children()
+        if pendentes:
+            self.tree_vincular.focus(pendentes[0])
+            self.tree_vincular.selection_set(pendentes[0])
 
     def ler_xml_nota_fiscal(self, caminho_arquivo_xml):
         def dec(texto):
@@ -1364,13 +1668,14 @@ class AppGestaoEstoque:
                 return
 
             # Remove o objeto específico da lista e da árvore
+            indice = list(self.tree_vincular.get_children()).index(selecionado_tree)
             self.itens_xml_nao_vinculados.remove(item_pendente)
             self.tree_vincular.delete(selecionado_tree)
             self.entry_ean_importacao.delete(0, tk.END) # Limpa o campo para o próximo
-            messagebox.showinfo("Sucesso",
-                                "Vínculo criado!\n\nQuando terminar de vincular, clique em "
-                                "'🔄 Reprocessar Pasta Atual' para este item ir para a lista de salvar.",
-                                parent=self.root)
+            self.entry_fator_conversao.delete(0, tk.END); self.entry_fator_conversao.insert(0, "1")
+            # [MELHORIA UX] rodapé em vez de janelinha + próximo item já selecionado
+            self.status(f"Vínculo criado: '{item_pendente['DescricaoXML']}' → {produto_mestre_selecionado}")
+            self._apos_vincular(indice)
         except Exception as e:
             logger.error(f"Erro ao criar vínculo: {e}", exc_info=True)
             messagebox.showerror("Erro de Banco", f"Não foi possível criar o vínculo.\n{e}", parent=self.root)
@@ -1463,8 +1768,9 @@ class AppGestaoEstoque:
                     f"{qtd_rec:.2f}", f"{custo_rec:.4f}", f"{custo_tot_rec:.2f}"
                 ))
 
+        self.atualizar_resumo_importacao()
         if not self.dados_notas_processadas and not self.itens_xml_nao_vinculados:
-            messagebox.showinfo("Limpeza", "Todas as notas e itens foram processados com sucesso! Tela limpa.", parent=self.root)
+            self.status("Todas as notas e itens foram processados com sucesso! Tela limpa.")  # [MELHORIA UX] rodapé em vez de janelinha
 
     def criar_mestre_e_vincular(self):
         # ... (código idêntico ao anterior) ...
@@ -1534,14 +1840,14 @@ class AppGestaoEstoque:
                 raise Exception("O banco não conseguiu gravar o vínculo (veja o log).")
 
             # Remove o objeto específico da lista e da árvore
+            indice = list(self.tree_vincular.get_children()).index(selecionado_tree)
             self.itens_xml_nao_vinculados.remove(item_pendente)
             self.tree_vincular.delete(selecionado_tree)
             self.entry_ean_importacao.delete(0, tk.END) # Limpa o campo
-            messagebox.showinfo("Sucesso",
-                                f"Produto vinculado com sucesso!\n\n"
-                                "Quando terminar de vincular, clique em '🔄 Reprocessar Pasta Atual' "
-                                "para este item aparecer na lista 'Prontos para Salvar'.",
-                                parent=self.root)
+            self.entry_fator_conversao.delete(0, tk.END); self.entry_fator_conversao.insert(0, "1")
+            criado = "criado e vinculado" if produto_foi_criado else "vinculado"
+            self.status(f"Produto '{nome_novo_produto}' {criado}.")
+            self._apos_vincular(indice)
         except Exception as e:
             logger.error(f"Erro ao auto-criar e vincular: {e}", exc_info=True)
             messagebox.showerror("Erro Crítico", f"Não foi possível criar e vincular o produto.\nVerifique se o nome já existe no Catálogo Mestre com alguma variação.\n\nErro: {e}", parent=self.root)
@@ -1559,10 +1865,18 @@ class AppGestaoEstoque:
         frame_lancamento = ttk.LabelFrame(main_frame, text="1. Lançar Itens Contados", padding="10")
         frame_lancamento.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
         frame_lancamento.columnconfigure(0, weight=1)
-        ttk.Label(frame_lancamento, text="Filtrar Produto:").grid(row=0, column=0, sticky="w")
+        # [MELHORIA UX] Contagem só pelo teclado:
+        #   digite parte do nome -> Enter -> digite a quantidade -> Enter (e repete).
+        #   Setas ↑/↓ no campo de busca escolhem entre os produtos encontrados.
+        ttk.Label(frame_lancamento, text="Buscar Produto (digite e tecle Enter):").grid(row=0, column=0, sticky="w")
         self.entry_filtro_contagem = ttk.Entry(frame_lancamento)
         self.entry_filtro_contagem.grid(row=1, column=0, sticky="ew", padx=(0, 5))
         self.entry_filtro_contagem.bind("<KeyRelease>", self.filtrar_combo_contagem)
+        self.entry_filtro_contagem.bind("<Return>", self.contagem_enter_na_busca)
+        self.entry_filtro_contagem.bind("<Down>", lambda e: self.contagem_navegar_resultados(1))
+        self.entry_filtro_contagem.bind("<Up>", lambda e: self.contagem_navegar_resultados(-1))
+        self.lbl_contagem_encontrados = ttk.Label(frame_lancamento, text="", foreground="gray")
+        self.lbl_contagem_encontrados.grid(row=1, column=1, columnspan=3, sticky="w", padx=5)
         ttk.Label(frame_lancamento, text="Produto do Catálogo Mestre:").grid(row=2, column=0, sticky="w", pady=(5,0))
         self.combo_contagem_produtos = ttk.Combobox(frame_lancamento, state="readonly")
         self.combo_contagem_produtos.grid(row=3, column=0, sticky="ew", padx=(0, 5))
@@ -1570,16 +1884,21 @@ class AppGestaoEstoque:
         ttk.Label(frame_lancamento, text="Quantidade:").grid(row=2, column=1, sticky="w", pady=(5,0))
         self.entry_contagem_qtd = ttk.Entry(frame_lancamento, width=10)
         self.entry_contagem_qtd.grid(row=3, column=1, sticky="w", padx=5)
+        self.entry_contagem_qtd.bind("<Return>", lambda e: self.adicionar_item_contagem())
+        self.entry_contagem_qtd.bind("<KP_Enter>", lambda e: self.adicionar_item_contagem())
+        self.entry_contagem_qtd.bind("<Escape>", lambda e: self.entry_filtro_contagem.focus_set())
         self.lbl_contagem_unidade = ttk.Label(frame_lancamento, text="UN", font=("Arial", 10, "italic"))
         self.lbl_contagem_unidade.grid(row=3, column=2, sticky="w", padx=5)
         btn_adicionar_item = ttk.Button(frame_lancamento, text="Adicionar à Lista", command=self.adicionar_item_contagem)
         btn_adicionar_item.grid(row=3, column=3, sticky="w", padx=10)
-        frame_lista_lancar = ttk.LabelFrame(main_frame, text="2. Itens nesta Contagem", padding="10")
+        frame_lista_lancar = ttk.LabelFrame(main_frame, text="2. Itens nesta Contagem (0) — duplo clique corrige a quantidade", padding="10")
+        self.frame_lista_lancar = frame_lista_lancar
         frame_lista_lancar.grid(row=1, column=0, sticky="nsew", padx=(0, 5), pady=10)
         frame_lista_lancar.rowconfigure(0, weight=1)
         frame_lista_lancar.columnconfigure(0, weight=1)
         cols_cont = ('Produto Mestre', 'Qtd Contada', 'UN')
-        self.tree_contagem_atual = ttk.Treeview(frame_lista_lancar, columns=cols_cont, show='headings', selectmode='browse')
+        self.tree_contagem_atual = criar_tree_zebrada(frame_lista_lancar, columns=cols_cont, show='headings', selectmode='browse')
+        self.tree_contagem_atual.bind("<Double-1>", lambda e: self.editar_item_contagem())
         self.tree_contagem_atual.heading('Produto Mestre', text='Produto'); self.tree_contagem_atual.column('Produto Mestre', width=200)
         self.tree_contagem_atual.heading('Qtd Contada', text='Qtd'); self.tree_contagem_atual.column('Qtd Contada', width=60, anchor='e')
         self.tree_contagem_atual.heading('UN', text='UN'); self.tree_contagem_atual.column('UN', width=40, anchor='center')
@@ -1615,7 +1934,7 @@ class AppGestaoEstoque:
         
         cols_hist = ('ID', 'Data', 'Nome', 'Responsável')
         # Mudança de selectmode='browse' para 'extended'
-        self.tree_hist_contagens = ttk.Treeview(frame_historico, columns=cols_hist, show='headings', selectmode='extended', height=5)
+        self.tree_hist_contagens = criar_tree_zebrada(frame_historico, columns=cols_hist, show='headings', selectmode='extended', height=5)
         self.tree_hist_contagens.heading('ID', text='ID'); self.tree_hist_contagens.column('ID', width=30, anchor='center')
         self.tree_hist_contagens.heading('Data', text='Data'); self.tree_hist_contagens.column('Data', width=80, anchor='center')
         self.tree_hist_contagens.heading('Nome', text='Nome/Ref'); self.tree_hist_contagens.column('Nome', width=120)
@@ -1623,7 +1942,7 @@ class AppGestaoEstoque:
         self.tree_hist_contagens.grid(row=0, column=0, sticky="nsew")
         self.tree_hist_contagens.bind("<<TreeviewSelect>>", self.carregar_itens_contagem_historico)
         cols_hist_itens = ('Produto', 'Qtd Contada', 'UN')
-        self.tree_hist_itens = ttk.Treeview(frame_historico, columns=cols_hist_itens, show='headings')
+        self.tree_hist_itens = criar_tree_zebrada(frame_historico, columns=cols_hist_itens, show='headings')
         self.tree_hist_itens.heading('Produto', text='Produto'); self.tree_hist_itens.column('Produto', width=200)
         self.tree_hist_itens.heading('Qtd Contada', text='Qtd'); self.tree_hist_itens.column('Qtd Contada', width=60, anchor='e')
         self.tree_hist_itens.heading('UN', text='UN'); self.tree_hist_itens.column('UN', width=40, anchor='center')
@@ -1644,21 +1963,51 @@ class AppGestaoEstoque:
         btn_relatorio_cmv.pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
 
     def filtrar_combo_contagem(self, event=None):
-        # ... (código idêntico ao anterior) ...
-        texto = self.entry_filtro_contagem.get().lower()
-        if not texto:
+        # [MELHORIA UX] Busca sem acento, com várias palavras, e ignorando teclas de
+        # navegação (antes, apertar a seta ou o Enter refazia a busca e perdia a escolha).
+        if event is not None and getattr(event, 'keysym', '') in ('Return', 'KP_Enter', 'Up', 'Down', 'Tab', 'Escape'):
+            return
+        texto = self.entry_filtro_contagem.get()
+        if not texto.strip():
             self.combo_contagem_produtos['values'] = self.lista_mestre_contagem_nomes
             self.combo_contagem_produtos.set('')
             self.lbl_contagem_unidade.config(text="UN")
+            self.lbl_contagem_encontrados.config(text="")
+            return
+        filtrados = buscar_nomes(texto, self.lista_mestre_contagem_nomes)
+        self.combo_contagem_produtos['values'] = filtrados
+        if filtrados:
+            self.combo_contagem_produtos.set(filtrados[0])
+            self.atualizar_label_unidade_contagem()  # [CORREÇÃO] Atualiza a unidade visualmente
+            extra = " (use ↑ ↓ para trocar)" if len(filtrados) > 1 else ""
+            self.lbl_contagem_encontrados.config(text=f"{len(filtrados)} encontrado(s){extra}", foreground="gray")
         else:
-            filtrados = [nome for nome in self.lista_mestre_contagem_nomes if texto in nome.lower()]
-            self.combo_contagem_produtos['values'] = filtrados
-            if filtrados:
-                self.combo_contagem_produtos.set(filtrados[0])
-                self.atualizar_label_unidade_contagem() # [CORREÇÃO] Atualiza a unidade visualmente
-            else:
-                self.combo_contagem_produtos.set('')
-                self.lbl_contagem_unidade.config(text="UN")
+            self.combo_contagem_produtos.set('')
+            self.lbl_contagem_unidade.config(text="UN")
+            self.lbl_contagem_encontrados.config(text="Nenhum produto encontrado", foreground="#c62828")
+
+    def contagem_navegar_resultados(self, passo):
+        """Setas ↑/↓ no campo de busca trocam o produto escolhido."""
+        valores = list(self.combo_contagem_produtos['values'] or [])
+        if not valores:
+            return "break"
+        atual = self.combo_contagem_produtos.get()
+        pos = valores.index(atual) if atual in valores else -1
+        novo = valores[(pos + passo) % len(valores)]
+        self.combo_contagem_produtos.set(novo)
+        self.atualizar_label_unidade_contagem()
+        self.lbl_contagem_encontrados.config(
+            text=f"{valores.index(novo) + 1} de {len(valores)}: {novo}", foreground="gray")
+        return "break"
+
+    def contagem_enter_na_busca(self, event=None):
+        """Enter na busca: confirma o produto e pula para o campo de quantidade."""
+        if self.combo_contagem_produtos.get() in self.mapa_produtos_mestre_contagem:
+            self.entry_contagem_qtd.focus_set()
+            self.entry_contagem_qtd.select_range(0, tk.END)
+        else:
+            self.status("Nenhum produto encontrado com esse nome. Confira a digitação.", 'aviso')
+        return "break"
 
     def atualizar_label_unidade_contagem(self, event=None):
         # ... (código idêntico ao anterior) ...
@@ -1669,70 +2018,148 @@ class AppGestaoEstoque:
         else:
             self.lbl_contagem_unidade.config(text="UN")
 
+    def _item_contagem_por_id(self, produto_id):
+        return next((i for i in self.lista_itens_para_salvar_contagem if i['ProdutoID'] == produto_id), None)
+
+    def _redesenhar_lista_contagem(self, destacar_id=None):
+        """Mostra a lista da contagem atual (e o total de itens no título)."""
+        for i in self.tree_contagem_atual.get_children():
+            self.tree_contagem_atual.delete(i)
+        for item in self.lista_itens_para_salvar_contagem:
+            self.tree_contagem_atual.insert("", "end", iid=str(item['ProdutoID']), values=(
+                item['NomeProduto'], f"{Decimal(str(item['QuantidadeContada'])):.3f}", item['Unidade']))
+        qtd = len(self.lista_itens_para_salvar_contagem)
+        try:
+            self.frame_lista_lancar.config(text=f"2. Itens nesta Contagem ({qtd}) — duplo clique corrige a quantidade")
+        except (tk.TclError, AttributeError):
+            pass
+        if destacar_id is not None:
+            iid = str(destacar_id)
+            try:
+                self.tree_contagem_atual.see(iid)
+                self.tree_contagem_atual.selection_set(iid)
+            except tk.TclError:
+                pass
+
+    def _limpar_campos_lancamento(self):
+        self.combo_contagem_produtos.set('')
+        self.entry_contagem_qtd.delete(0, tk.END)
+        self.lbl_contagem_unidade.config(text="UN")
+        self.lbl_contagem_encontrados.config(text="")
+        self.entry_filtro_contagem.delete(0, tk.END)
+        self.combo_contagem_produtos['values'] = self.lista_mestre_contagem_nomes
+        self.entry_filtro_contagem.focus_set()
+
     def adicionar_item_contagem(self):
-        # ... (código idêntico ao anterior) ...
         produto_nome = self.combo_contagem_produtos.get()
-        qtd_str = self.entry_contagem_qtd.get().replace(",", ".")
-        if not produto_nome or not qtd_str:
+        qtd_str = self.entry_contagem_qtd.get()
+        if not produto_nome or not qtd_str.strip():
             messagebox.showwarning("Aviso", "Selecione um produto e digite a quantidade.", parent=self.root)
             return
         try:
+            # [MELHORIA UX] aceita "1.234,5" e "1,5" (antes "1.234,5" virava erro)
             quantidade = para_decimal(qtd_str, "Quantidade")  # [DEPURAÇÃO] recusa 'NaN'/'Infinity'
-        except ValueError: 
+        except ValueError:
             messagebox.showerror("Erro", "A quantidade deve ser um número válido, maior ou igual a zero.", parent=self.root)
             # Limpa o campo para evitar reenvio de dados inválidos e foca
             self.entry_contagem_qtd.delete(0, tk.END)
-            self.entry_contagem_qtd.focus()
+            self.entry_contagem_qtd.focus_set()
             return
 
         if produto_nome not in self.mapa_produtos_mestre_contagem:
             messagebox.showwarning("Aviso", "Produto não encontrado. Selecione um item válido da lista.", parent=self.root)
-            self.combo_contagem_produtos.focus()
+            self.entry_filtro_contagem.focus_set()
             return
 
         dados_produto = self.mapa_produtos_mestre_contagem[produto_nome]
         produto_id = dados_produto['id']
         unidade = dados_produto['un']
-        for item in self.lista_itens_para_salvar_contagem:
-            if item['ProdutoID'] == produto_id:
-                messagebox.showwarning("Aviso", "Este produto já está na lista. Remova-o se quiser alterar a quantidade.", parent=self.root)
+
+        existente = self._item_contagem_por_id(produto_id)
+        if existente:
+            # [MELHORIA UX] Antes: "já está na lista, remova-o". Agora dá para SOMAR
+            # (ex: 2 caixas no freezer + 1 no depósito) ou SUBSTITUIR.
+            anterior = Decimal(str(existente['QuantidadeContada']))
+            resposta = messagebox.askyesnocancel(
+                "Produto já contado",
+                f"'{produto_nome}' já está na lista com {fmt_qtd(anterior)} {unidade}.\n\n"
+                f"SIM = SOMAR ({fmt_qtd(anterior)} + {fmt_qtd(quantidade)} = {fmt_qtd(anterior + quantidade)} {unidade})\n"
+                f"NÃO = SUBSTITUIR por {fmt_qtd(quantidade)} {unidade}\n"
+                f"CANCELAR = não mudar nada",
+                parent=self.root)
+            if resposta is None:
+                self.entry_contagem_qtd.focus_set()
                 return
-        self.lista_itens_para_salvar_contagem.append({
-            'ProdutoID': produto_id,
-            'NomeProduto': produto_nome,
-            'QuantidadeContada': quantidade,
-            'Unidade': unidade
-        })
-        self.tree_contagem_atual.insert("", "end", values=(produto_nome, f"{quantidade:.3f}", unidade))
-        self.combo_contagem_produtos.set('')
-        self.entry_contagem_qtd.delete(0, tk.END)
-        self.lbl_contagem_unidade.config(text="UN")
-        self.entry_filtro_contagem.delete(0, tk.END) 
-        self.combo_contagem_produtos['values'] = self.lista_mestre_contagem_nomes 
-        self.entry_filtro_contagem.focus()
-        
+            existente['QuantidadeContada'] = anterior + quantidade if resposta else quantidade
+            acao = "somado" if resposta else "substituído"
+            msg = f"{produto_nome}: {acao}, agora {fmt_qtd(existente['QuantidadeContada'])} {unidade}."
+        else:
+            self.lista_itens_para_salvar_contagem.append({
+                'ProdutoID': produto_id,
+                'NomeProduto': produto_nome,
+                'QuantidadeContada': quantidade,
+                'Unidade': unidade
+            })
+            msg = f"{produto_nome}: {fmt_qtd(quantidade)} {unidade} adicionado."
+
+        self._redesenhar_lista_contagem(destacar_id=produto_id)
+        self.salvar_rascunho_contagem()
+        self.status(f"{msg} ({len(self.lista_itens_para_salvar_contagem)} itens na contagem)")
+        self._limpar_campos_lancamento()
+
+    def editar_item_contagem(self):
+        """[MELHORIA UX] Duplo clique num item da lista: corrige a quantidade."""
+        selecionado = self.tree_contagem_atual.focus()
+        if not selecionado:
+            return
+        item = next((i for i in self.lista_itens_para_salvar_contagem if str(i['ProdutoID']) == str(selecionado)), None)
+        if not item:
+            return
+        texto = simpledialog.askstring(
+            "Corrigir quantidade",
+            f"{item['NomeProduto']}\n\nNova quantidade ({item['Unidade']}):",
+            initialvalue=fmt_qtd(item['QuantidadeContada']), parent=self.root)
+        if texto is None:
+            return
+        try:
+            item['QuantidadeContada'] = para_decimal(texto, "Quantidade")
+        except ValueError as e:
+            messagebox.showerror("Erro", str(e), parent=self.root)
+            return
+        self._redesenhar_lista_contagem(destacar_id=item['ProdutoID'])
+        self.salvar_rascunho_contagem()
+        self.status(f"{item['NomeProduto']}: quantidade corrigida para {fmt_qtd(item['QuantidadeContada'])} {item['Unidade']}.")
+
     def remover_item_contagem(self):
-        # ... (código idêntico ao anterior) ...
         selecionado = self.tree_contagem_atual.focus()
         if not selecionado:
             messagebox.showwarning("Aviso", "Selecione um item da lista 'Itens nesta Contagem' para remover.", parent=self.root)
             return
-        dados = self.tree_contagem_atual.item(selecionado, 'values')
-        nome_produto = dados[0]
+        item = next((i for i in self.lista_itens_para_salvar_contagem if str(i['ProdutoID']) == str(selecionado)), None)
+        nome_produto = item['NomeProduto'] if item else self.tree_contagem_atual.item(selecionado, 'values')[0]
+        # [MELHORIA UX] confirmação (com a tecla Delete ficou fácil apagar sem querer)
+        if not messagebox.askyesno("Remover item", f"Remover '{nome_produto}' desta contagem?", parent=self.root):
+            return
         self.lista_itens_para_salvar_contagem = [
-            item for item in self.lista_itens_para_salvar_contagem 
-            if item['NomeProduto'] != nome_produto
+            i for i in self.lista_itens_para_salvar_contagem if str(i['ProdutoID']) != str(selecionado)
         ]
-        self.tree_contagem_atual.delete(selecionado)
+        self._redesenhar_lista_contagem()
+        self.salvar_rascunho_contagem()
+        self.status(f"'{nome_produto}' removido da contagem.", 'info')
 
     def salvar_contagem_completa(self):
-        # ... (código idêntico ao anterior) ...
         if not self.lista_itens_para_salvar_contagem:
             messagebox.showwarning("Aviso", "Adicione pelo menos um item à lista de contagem antes de salvar.", parent=self.root)
             return
         data_contagem = self.date_contagem.get_date().strftime('%Y-%m-%d')
         funcionario_id = self.id_funcionario_contagem 
         nome_cont = self.entry_nome_contagem.get().strip() or "Geral"
+        # [MELHORIA UX] confirmação com o resumo (evita salvar pela metade por engano)
+        if not messagebox.askyesno(
+                "Salvar contagem",
+                f"Salvar a contagem '{nome_cont}' de {self.date_contagem.get_date().strftime('%d/%m/%Y')} "
+                f"com {len(self.lista_itens_para_salvar_contagem)} itens?", parent=self.root):
+            return
         try:
             sucesso, msg = database.salvar_contagem_estoque(
                 data_contagem,
@@ -1741,17 +2168,108 @@ class AppGestaoEstoque:
                 nome_cont
             )
             if sucesso:
-                messagebox.showinfo("Sucesso", msg, parent=self.root)
-                for i in self.tree_contagem_atual.get_children(): self.tree_contagem_atual.delete(i)
+                self.status(msg)
                 self.entry_nome_contagem.delete(0, tk.END)
                 self.entry_nome_contagem.insert(0, "Geral")
                 self.lista_itens_para_salvar_contagem.clear()
+                self._redesenhar_lista_contagem()
+                self.apagar_rascunho_contagem()  # [MELHORIA UX] salvo no banco: rascunho não é mais necessário
                 self.atualizar_lista_contagens_historico()
             else:
                 messagebox.showerror("Erro de Banco", msg, parent=self.root)
         except Exception as e:
             logger.error(f"Erro ao salvar contagem completa: {e}", exc_info=True)
-            messagebox.showerror("Erro Crítico", f"Ocorreu um erro inesperado: {e}", parent=self.root)
+            messagebox.showerror("Erro Crítico", f"Ocorreu um erro inesperado: {e}\n\n"
+                                 "Os itens continuam na lista (e guardados no rascunho).", parent=self.root)
+
+    # -------------------------------------------------------------------
+    # [MELHORIA UX] RASCUNHO AUTOMÁTICO DA CONTAGEM
+    # -------------------------------------------------------------------
+    # A cada item lançado, a lista é gravada em "rascunho_contagem.json" (na pasta do
+    # programa). Se o programa fechar, travar ou faltar luz, nada se perde: ao abrir de
+    # novo, ele pergunta se você quer continuar de onde parou.
+    def salvar_rascunho_contagem(self):
+        if not self.lista_itens_para_salvar_contagem:
+            self.apagar_rascunho_contagem()
+            return
+        try:
+            data_txt = self.date_contagem.get_date().strftime('%Y-%m-%d')
+        except Exception:
+            data_txt = date.today().strftime('%Y-%m-%d')
+        dados = {
+            'salvo_em': datetime.now().strftime('%d/%m/%Y %H:%M'),
+            'data_contagem': data_txt,
+            'nome_contagem': self.entry_nome_contagem.get().strip() or 'Geral',
+            'itens': [{'ProdutoID': i['ProdutoID'], 'NomeProduto': i['NomeProduto'],
+                       'QuantidadeContada': str(i['QuantidadeContada']), 'Unidade': i['Unidade']}
+                      for i in self.lista_itens_para_salvar_contagem],
+        }
+        temporario = ARQUIVO_RASCUNHO_CONTAGEM + '.tmp'
+        try:
+            with open(temporario, 'w', encoding='utf-8') as f:
+                json.dump(dados, f, ensure_ascii=False, indent=1)
+            os.replace(temporario, ARQUIVO_RASCUNHO_CONTAGEM)  # troca de uma vez (não corrompe)
+        except OSError as e:
+            logger.error(f"Não foi possível salvar o rascunho da contagem: {e}")
+            self.status("Não foi possível guardar o rascunho da contagem (veja o log).", 'erro')
+
+    def apagar_rascunho_contagem(self):
+        try:
+            if os.path.exists(ARQUIVO_RASCUNHO_CONTAGEM):
+                os.remove(ARQUIVO_RASCUNHO_CONTAGEM)
+        except OSError as e:
+            logger.warning(f"Não foi possível apagar o rascunho da contagem: {e}")
+
+    def verificar_rascunho_contagem(self):
+        """Ao abrir o programa: oferece continuar uma contagem que não foi salva."""
+        if not os.path.exists(ARQUIVO_RASCUNHO_CONTAGEM) or self.lista_itens_para_salvar_contagem:
+            return
+        try:
+            with open(ARQUIVO_RASCUNHO_CONTAGEM, 'r', encoding='utf-8') as f:
+                dados = json.load(f)
+            itens = []
+            for i in dados.get('itens', []):
+                itens.append({'ProdutoID': i['ProdutoID'], 'NomeProduto': i['NomeProduto'],
+                              'QuantidadeContada': Decimal(str(i['QuantidadeContada'])),
+                              'Unidade': i.get('Unidade') or 'UN'})
+        except (OSError, ValueError, KeyError, TypeError, InvalidOperation) as e:
+            logger.error(f"Rascunho de contagem ilegível: {e}")
+            return
+        if not itens:
+            self.apagar_rascunho_contagem()
+            return
+
+        if messagebox.askyesno(
+                "Contagem não salva encontrada",
+                f"Existe uma contagem que NÃO foi salva no banco:\n\n"
+                f"  • Nome: {dados.get('nome_contagem', 'Geral')}\n"
+                f"  • Itens lançados: {len(itens)}\n"
+                f"  • Último lançamento: {dados.get('salvo_em', '?')}\n\n"
+                "Deseja CONTINUAR essa contagem?\n\n"
+                "(Se responder NÃO, ela é descartada — uma cópia fica guardada na pasta "
+                "'backups_estoque', por segurança.)", parent=self.root):
+            self.lista_itens_para_salvar_contagem = itens
+            self.entry_nome_contagem.delete(0, tk.END)
+            self.entry_nome_contagem.insert(0, dados.get('nome_contagem', 'Geral'))
+            try:
+                self.date_contagem.set_date(datetime.strptime(dados['data_contagem'], '%Y-%m-%d').date())
+            except (KeyError, ValueError, tk.TclError):
+                pass
+            self._redesenhar_lista_contagem()
+            try:
+                self.notebook.select(self.frame_contagem)
+            except tk.TclError:
+                pass
+            self.status(f"Contagem recuperada: {len(itens)} itens. Continue de onde parou.")
+        else:
+            try:
+                os.makedirs(PASTA_BACKUPS, exist_ok=True)
+                destino = os.path.join(PASTA_BACKUPS, f"rascunho_descartado_{datetime.now():%Y%m%d_%H%M%S}.json")
+                os.replace(ARQUIVO_RASCUNHO_CONTAGEM, destino)
+            except OSError as e:
+                logger.warning(f"Não foi possível arquivar o rascunho descartado: {e}")
+                self.apagar_rascunho_contagem()
+            self.status("Rascunho descartado (cópia guardada em 'backups_estoque').", 'info')
 
     def atualizar_lista_contagens_historico(self):
         # ... (código idêntico ao anterior) ...
@@ -1806,7 +2324,7 @@ class AppGestaoEstoque:
         frame.pack(fill=tk.BOTH, expand=True)
 
         cols = ('ContagemID', 'Data', 'Nome Provisório', 'Qtd', 'EAN Fornecido')
-        tree = ttk.Treeview(frame, columns=cols, show='headings', selectmode='browse')
+        tree = criar_tree_zebrada(frame, columns=cols, show='headings', selectmode='browse')
         for c in cols: tree.heading(c, text=c)
         tree.column('ContagemID', width=80, anchor='center')
         tree.column('Data', width=100, anchor='center')
@@ -1897,7 +2415,7 @@ class AppGestaoEstoque:
             entry_busca_caixa = ttk.Entry(frame_busca)
             entry_busca_caixa.pack(side=tk.LEFT, fill="x", expand=True, padx=(0,5))
 
-            tree_caixas = ttk.Treeview(tab_caixa, columns=('ID', 'Mestre', 'Desc XML', 'Forn'), show='headings', height=4)
+            tree_caixas = criar_tree_zebrada(tab_caixa, columns=('ID', 'Mestre', 'Desc XML', 'Forn'), show='headings', height=4)
             tree_caixas.heading('ID', text='ID'); tree_caixas.column('ID', width=0, stretch=tk.NO)
             tree_caixas.heading('Mestre', text='Produto Mestre'); tree_caixas.column('Mestre', width=120)
             tree_caixas.heading('Desc XML', text='Descrição NF'); tree_caixas.column('Desc XML', width=150)
@@ -1976,7 +2494,7 @@ class AppGestaoEstoque:
         entry_qtd.pack(side=tk.LEFT, padx=5)
         
         cols = ('Nome', 'Qtd', 'IDProduto', 'NomeAvulso')
-        tree = ttk.Treeview(popup, columns=cols, show='headings', selectmode='browse')
+        tree = criar_tree_zebrada(popup, columns=cols, show='headings', selectmode='browse')
         tree.heading('Nome', text='Produto / Avulso'); tree.column('Nome', width=300)
         tree.heading('Qtd', text='Qtd'); tree.column('Qtd', width=100, anchor='center')
         tree.heading('IDProduto', text='IDProduto'); tree.column('IDProduto', width=0, stretch=tk.NO)
@@ -2230,7 +2748,7 @@ class AppGestaoEstoque:
         cols = ('Categoria', 'Produto', 'Qtd Contada', 'Custo Médio Unit.', 'Custo Total')
         
         # --- CORREÇÃO 2: Mudamos de selectmode='none' para 'browse' (permite selecionar 1 item) ---
-        tree = ttk.Treeview(frame, columns=cols, show='headings', selectmode='browse')
+        tree = criar_tree_zebrada(frame, columns=cols, show='headings', selectmode='browse')
 
         # Cabeçalhos com ordenação inteligente (reaproveitada)
         for col in cols: 
@@ -2464,6 +2982,16 @@ class AppGestaoEstoque:
         btn_gerir_buffet = ttk.Button(frame_filtros, text="🍦 Gerenciar Buffet (Top Sabores)", command=self.abrir_gestor_buffet)
         btn_gerir_buffet.grid(row=4, column=2, columnspan=2, sticky="e", padx=5, pady=5)
 
+        # [MELHORIA UX] Resumo colorido + botão que transforma a sugestão em PEDIDO
+        frame_acoes_sug = ttk.Frame(frame_filtros)
+        frame_acoes_sug.grid(row=5, column=0, columnspan=4, sticky="ew", pady=(5, 0))
+        self.lbl_resumo_sugestao = ttk.Label(frame_acoes_sug, text="Clique em 'Gerar Sugestão de Compra' para ver a posição do estoque.",
+                                             font=("Arial", 10, "bold"))
+        self.lbl_resumo_sugestao.pack(side=tk.LEFT)
+        ttk.Button(frame_acoes_sug, text="📤 Montar Pedido por Fornecedor",
+                   command=self.abrir_pedido_compra).pack(side=tk.RIGHT, ipady=4)
+        self.dados_sugestao_tela = {}
+
         # --- Frame 2: Tabela de Sugestões (Mesma de antes, mas o bind foi movido) ---
         frame_resultado = ttk.LabelFrame(main_frame, text="Relatório de Posição de Estoque e Sugestão (Duplo-clique para ver histórico de compras)", padding="10")
         frame_resultado.grid(row=1, column=0, sticky="nsew")
@@ -2498,6 +3026,11 @@ class AppGestaoEstoque:
         scrollbar.grid(row=0, column=1, sticky="ns")
         
         self.tree_sugestao.bind("<Double-1>", self.abrir_popup_historico_compras)
+        # [MELHORIA UX] Cores por situação do item
+        self.tree_sugestao.tag_configure('critico', background='#ffd6d6')
+        self.tree_sugestao.tag_configure('comprar', background='#fff4cc')
+        self.tree_sugestao.tag_configure('ok', background='#e3f5e1')
+        self.tree_sugestao.tag_configure('sem_giro', background='#eeeeee', foreground='#666666')
 
     def gerar_sugestao_compra(self):
         """Busca o relatório do banco baseado no período selecionado e calcula a sugestão."""
@@ -2529,7 +3062,9 @@ class AppGestaoEstoque:
 
         for i in self.tree_sugestao.get_children():
             self.tree_sugestao.delete(i)
-            
+        self.dados_sugestao_tela = {}
+        contadores = {'critico': 0, 'comprar': 0, 'ok': 0, 'sem_giro': 0}
+
         try:
             # Chama a função corrigida do database, que já retorna Decimals prontos
             relatorio_posicao = database.gerar_sugestao_por_periodo(contagem_id_inicio, contagem_id_fim)
@@ -2584,7 +3119,6 @@ class AppGestaoEstoque:
                 umd = dec(item.get('UsoMedioDiario'))
                 minimo = dec(item.get('EstoqueMinimo'))
                 total_comprado = dec(item.get('TotalComprado'))
-                status = item.get('Status') or ''
 
                 # Cálculo de apresentação: Consumo Mensal
                 consumo_mes = umd * 30
@@ -2621,15 +3155,169 @@ class AppGestaoEstoque:
                 umd_f = f"{umd:.3f}"
                 sugestao_f = f"{sugestao_compra:.3f}"
 
+                # [MELHORIA UX] Situação calculada (antes o banco mandava sempre "OK").
+                #   🔴 CRÍTICO: estoque abaixo do mínimo, ou acaba em menos de 7 dias
+                #   🟡 COMPRAR: precisa comprar para cobrir o período escolhido
+                #   🟢 OK: estoque suficiente   ⚪ SEM GIRO: não teve consumo no período
+                dias_restantes = (atual / umd) if umd > 0 else None
+                if umd <= 0 and sugestao_compra <= 0:
+                    situacao, tag = "⚪ SEM GIRO", 'sem_giro'
+                elif (minimo > 0 and atual <= minimo) or (dias_restantes is not None and dias_restantes < 7):
+                    situacao, tag = "🔴 CRÍTICO", 'critico'
+                elif sugestao_compra > 0:
+                    situacao, tag = "🟡 COMPRAR", 'comprar'
+                else:
+                    situacao, tag = "🟢 OK", 'ok'
+                contadores[tag] += 1
+
                 # Insere na Treeview
                 self.tree_sugestao.insert("", "end", values=(
-                    nome, un, atual_f, total_comprado_f, consumo_mes_f, umd_f, duracao_f, sugestao_f, status
-                ), iid=iid_item)
+                    nome, un, atual_f, total_comprado_f, consumo_mes_f, umd_f, duracao_f, sugestao_f, situacao
+                ), iid=iid_item, tags=(tag,))
                 ids_na_tela.add(iid_item)
+                self.dados_sugestao_tela[item['ProdutoID']] = {
+                    'nome': nome, 'un': un, 'sugestao': sugestao_compra, 'situacao': situacao}
+
+            self.lbl_resumo_sugestao.config(
+                text=f"🔴 {contadores['critico']} crítico(s)   🟡 {contadores['comprar']} para comprar   "
+                     f"🟢 {contadores['ok']} ok   ⚪ {contadores['sem_giro']} sem giro")
+            self.status(f"Sugestão gerada para {dias_para_cobrir} dias: {len(ids_na_tela)} produtos na tabela.")
 
         except Exception as e:
             logger.error(f"Erro ao gerar sugestão de compra (Frontend): {e}", exc_info=True)
             messagebox.showerror("Erro de Processamento", f"Falha ao exibir relatório:\n{e}", parent=self.root)
+
+    # -------------------------------------------------------------------
+    # [MELHORIA UX] PEDIDO DE COMPRA POR FORNECEDOR
+    # -------------------------------------------------------------------
+    def montar_pedido_por_fornecedor(self):
+        """
+        Agrupa os itens da sugestão (com quantidade > 0) pelo fornecedor da ÚLTIMA compra.
+        Devolve {fornecedor: [ {nome, un, qtd, custo, total}, ... ]}.
+        """
+        pedido = {}
+        for produto_id, dados in self.dados_sugestao_tela.items():
+            qtd = qtd_para_pedido(dados['sugestao'], dados['un'])
+            if qtd <= 0:
+                continue
+            fornecedor, custo = "Sem fornecedor (nunca comprado)", Decimal('0')
+            try:
+                historico = database.buscar_historico_compras_produto(produto_id) or []
+                if historico:
+                    ultima = historico[0]  # o banco devolve da mais nova para a mais antiga
+                    fornecedor = getattr(ultima, 'NomeFantasia', None) or fornecedor
+                    custo = Decimal(str(getattr(ultima, 'PrecoCustoUnitario', 0) or 0))
+            except Exception as e:
+                logger.warning(f"Não foi possível ver o último fornecedor do produto {produto_id}: {e}")
+            pedido.setdefault(fornecedor, []).append({
+                'nome': dados['nome'], 'un': dados['un'], 'qtd': qtd,
+                'custo': custo, 'total': qtd * custo, 'situacao': dados.get('situacao', '')})
+        for itens in pedido.values():
+            itens.sort(key=lambda i: sem_acento(i['nome']))
+        return dict(sorted(pedido.items(), key=lambda kv: (kv[0].startswith("Sem fornecedor"), sem_acento(kv[0]))))
+
+    @staticmethod
+    def texto_pedido_whatsapp(fornecedor, itens):
+        """Mensagem pronta para colar no WhatsApp do fornecedor."""
+        empresa = getattr(config, 'NOME_EMPRESA', '') or ''
+        linhas = [f"Olá, {fornecedor}! Tudo bem?", "",
+                  "Gostaria de fazer o seguinte pedido:", ""]
+        for i in itens:
+            linhas.append(f"• {fmt_qtd(i['qtd'])} {i['un']} - {i['nome']}")
+        linhas += ["", "Pode me confirmar a disponibilidade, o valor e o prazo de entrega?", "Obrigado!"]
+        if empresa:
+            linhas.append(empresa)
+        return "\n".join(linhas)
+
+    def abrir_pedido_compra(self):
+        if not self.dados_sugestao_tela:
+            messagebox.showwarning("Aviso", "Primeiro clique em 'Gerar Sugestão de Compra'.", parent=self.root)
+            return
+        self.root.config(cursor="watch"); self.root.update_idletasks()
+        try:
+            pedido = self.montar_pedido_por_fornecedor()
+        finally:
+            self.root.config(cursor="")
+        if not pedido:
+            messagebox.showinfo("Nada para comprar", "Pela sugestão atual, nenhum produto precisa ser comprado. 🎉", parent=self.root)
+            return
+        self.ultimo_pedido = pedido
+
+        popup = Toplevel(self.root)
+        popup.title("📤 Pedido de Compra por Fornecedor")
+        popup.geometry("760x560")
+        popup.transient(self.root)
+        frame = ttk.Frame(popup, padding=10)
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        total_geral = sum(i['total'] for itens in pedido.values() for i in itens)
+        ttk.Label(frame, text=f"{len(pedido)} fornecedor(es) · valor estimado {fmt_reais(total_geral)} "
+                              "(pelo último custo pago)", font=("Arial", 10, "bold")).pack(anchor="w")
+        ttk.Label(frame, text="Escolha o fornecedor, confira a mensagem (dá para editar) e clique em Copiar. "
+                              "Depois é só colar no WhatsApp.", foreground="gray").pack(anchor="w", pady=(0, 8))
+
+        opcoes = [f"{f}  ({len(itens)} itens · {fmt_reais(sum(i['total'] for i in itens))})" for f, itens in pedido.items()]
+        mapa = dict(zip(opcoes, pedido.keys()))
+        combo = ttk.Combobox(frame, values=opcoes, state="readonly")
+        combo.pack(fill=tk.X)
+        texto = tk.Text(frame, height=18, wrap="word", font=("Consolas", 10))
+        texto.pack(fill=tk.BOTH, expand=True, pady=8)
+
+        def mostrar(event=None):
+            fornecedor = mapa.get(combo.get())
+            if fornecedor is None:
+                return
+            texto.delete("1.0", tk.END)
+            texto.insert("1.0", self.texto_pedido_whatsapp(fornecedor, pedido[fornecedor]))
+
+        def copiar():
+            conteudo = texto.get("1.0", tk.END).strip()
+            popup.clipboard_clear()
+            popup.clipboard_append(conteudo)
+            self.status(f"Pedido de '{mapa.get(combo.get(), '')}' copiado. Cole no WhatsApp com Ctrl+V.")
+
+        def salvar_excel():
+            self.exportar_pedido_excel(pedido, popup)
+
+        combo.bind("<<ComboboxSelected>>", mostrar)
+        combo.set(opcoes[0]); mostrar()
+
+        botoes = ttk.Frame(frame)
+        botoes.pack(fill=tk.X)
+        ttk.Button(botoes, text="📋 Copiar mensagem", command=copiar).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 5), ipady=4)
+        ttk.Button(botoes, text="💾 Salvar Excel (todos os fornecedores)", command=salvar_excel).pack(side=tk.LEFT, expand=True, fill=tk.X, ipady=4)
+
+    def exportar_pedido_excel(self, pedido, janela_pai=None):
+        """Excel com uma aba de resumo e uma aba para cada fornecedor."""
+        pai = janela_pai or self.root
+        pd = self._importar_pandas(pai)
+        if pd is None:
+            return None
+        caminho = filedialog.asksaveasfilename(
+            parent=pai, title="Salvar Pedido de Compra", defaultextension=".xlsx",
+            filetypes=[("Arquivos Excel", "*.xlsx")],
+            initialfile=f"Pedido_Compra_{datetime.now():%d-%m-%Y}.xlsx")
+        if not caminho:
+            return None
+        try:
+            usados = set()
+            resumo = [{'Fornecedor': f, 'Qtd de itens': len(itens),
+                       'Valor estimado (R$)': float(sum(i['total'] for i in itens))} for f, itens in pedido.items()]
+            with pd.ExcelWriter(caminho, engine='openpyxl') as escritor:
+                pd.DataFrame(resumo).to_excel(escritor, sheet_name=nome_aba_excel('Resumo', usados), index=False)
+                for fornecedor, itens in pedido.items():
+                    linhas = [{'Produto': i['nome'], 'Quantidade': float(i['qtd']), 'UN': i['un'],
+                               'Último custo (R$)': float(i['custo']), 'Total estimado (R$)': float(i['total']),
+                               'Situação': i['situacao']} for i in itens]
+                    pd.DataFrame(linhas).to_excel(escritor, sheet_name=nome_aba_excel(fornecedor, usados), index=False)
+            self.status(f"Pedido salvo em: {caminho}")
+            messagebox.showinfo("Pedido salvo", f"Pedido de compra salvo em:\n{caminho}", parent=pai)
+            return caminho
+        except Exception as e:
+            logger.error(f"Erro ao exportar pedido de compra: {e}", exc_info=True)
+            messagebox.showerror("Erro", f"Não foi possível salvar o Excel.\n{e}\n\n"
+                                 "Se o arquivo estiver aberto no Excel, feche-o e tente de novo.", parent=pai)
+            return None
 
     def popular_combos_contagem_sugestao(self):
         """Atualiza os combos da Aba 5 com os dados mais recentes da Aba 4."""
@@ -2880,7 +3568,7 @@ class AppGestaoEstoque:
 
         # Adicionado o ItemNotaID invisível na tabela
         cols_hist = ('Data Compra', 'NF', 'Fornecedor', 'Qtd', 'Custo Unit.', 'ItemNotaID')
-        tree_hist = ttk.Treeview(frame, columns=cols_hist, show='headings', selectmode='browse')
+        tree_hist = criar_tree_zebrada(frame, columns=cols_hist, show='headings', selectmode='browse')
 
         tree_hist.heading('Data Compra', text='Data Compra'); tree_hist.column('Data Compra', width=100, anchor='center')
         tree_hist.heading('NF', text='NF'); tree_hist.column('NF', width=80, anchor='center')
@@ -2964,7 +3652,7 @@ class AppGestaoEstoque:
         frame_lista.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0,10))
         
         cols = ('ID', 'Solicitante', 'Tipo', 'Categoria', 'Data')
-        self.tree_solicitacoes = ttk.Treeview(frame_lista, columns=cols, show='headings', selectmode='browse')
+        self.tree_solicitacoes = criar_tree_zebrada(frame_lista, columns=cols, show='headings', selectmode='browse')
         self.tree_solicitacoes.heading('ID', text='ID'); self.tree_solicitacoes.column('ID', width=40)
         self.tree_solicitacoes.heading('Solicitante', text='Solicitante'); self.tree_solicitacoes.column('Solicitante', width=150)
         self.tree_solicitacoes.heading('Tipo', text='Tipo'); self.tree_solicitacoes.column('Tipo', width=80)
@@ -3072,7 +3760,7 @@ class AppGestaoEstoque:
         if not messagebox.askyesno("Confirmar", "Aprovar a solicitação selecionada?", parent=self.root):
             return
         if self._mudar_status_solicitacao('Aprovado'):
-            messagebox.showinfo("Sucesso", "Solicitação Aprovada!", parent=self.root)
+            self.status("Solicitação Aprovada!")  # [MELHORIA UX] rodapé em vez de janelinha
             self.carregar_solicitacoes()
         else:
             messagebox.showerror("Erro", "Não foi possível aprovar (veja o log).", parent=self.root)
@@ -3084,7 +3772,7 @@ class AppGestaoEstoque:
         motivo = simpledialog.askstring("Recusa", "Motivo da recusa:", parent=self.root)
         if motivo and motivo.strip():
             if self._mudar_status_solicitacao('Recusado', motivo.strip()):
-                messagebox.showinfo("Sucesso", "Solicitação Recusada.", parent=self.root)
+                self.status("Solicitação Recusada.")  # [MELHORIA UX] rodapé em vez de janelinha
                 self.carregar_solicitacoes()  # [DEPURAÇÃO] agora também limpa os detalhes da tela
             else:
                 messagebox.showerror("Erro", "Não foi possível recusar (veja o log).", parent=self.root)
@@ -3108,7 +3796,7 @@ class AppGestaoEstoque:
         paned.add(frame_nfs, weight=1)
 
         cols_nf = ('ID', 'Número', 'Fornecedor', 'Data', 'Valor', 'Itens')
-        self.tree_admin_nfs = ttk.Treeview(frame_nfs, columns=cols_nf, show='headings', selectmode='extended')
+        self.tree_admin_nfs = criar_tree_zebrada(frame_nfs, columns=cols_nf, show='headings', selectmode='extended')
         self.tree_admin_nfs.heading('ID', text='ID'); self.tree_admin_nfs.column('ID', width=30, anchor='center')
         self.tree_admin_nfs.heading('Número', text='Número'); self.tree_admin_nfs.column('Número', width=80)
         self.tree_admin_nfs.heading('Fornecedor', text='Fornecedor'); self.tree_admin_nfs.column('Fornecedor', width=120)
@@ -3137,7 +3825,7 @@ class AppGestaoEstoque:
         paned.add(frame_cont, weight=1)
 
         cols_cont = ('ID', 'Data', 'Nome', 'Responsável')
-        self.tree_admin_cont = ttk.Treeview(frame_cont, columns=cols_cont, show='headings', selectmode='extended')
+        self.tree_admin_cont = criar_tree_zebrada(frame_cont, columns=cols_cont, show='headings', selectmode='extended')
         self.tree_admin_cont.heading('ID', text='ID'); self.tree_admin_cont.column('ID', width=30, anchor='center')
         self.tree_admin_cont.heading('Data', text='Data'); self.tree_admin_cont.column('Data', width=80, anchor='center')
         self.tree_admin_cont.heading('Nome', text='Nome/Ref'); self.tree_admin_cont.column('Nome', width=150)
@@ -3161,8 +3849,20 @@ class AppGestaoEstoque:
         style = ttk.Style()
         style.configure("Danger.TButton", foreground="red", font=("Arial", 10, "bold"))
 
-        btn_reset_total = ttk.Button(frame_perigo, text="☢️ APAGAR TUDO E RECOMEÇAR ESTOQUE ☢️", style="Danger.TButton", command=self.resetar_sistema_estoque)
-        btn_reset_total.pack(ipadx=10, ipady=10)
+        # [MELHORIA UX] O botão fica TRAVADO até marcar a caixinha abaixo (evita clique
+        # acidental) e, antes de apagar, o programa faz um BACKUP em Excel de tudo.
+        self.var_liberar_reset = tk.BooleanVar(value=False)
+        self.btn_reset_total = ttk.Button(frame_perigo, text="☢️ APAGAR TUDO E RECOMEÇAR ESTOQUE ☢️", style="Danger.TButton", command=self.resetar_sistema_estoque)
+
+        def alternar_trava():
+            self.btn_reset_total.state(['!disabled'] if self.var_liberar_reset.get() else ['disabled'])
+
+        ttk.Checkbutton(frame_perigo, text="Eu entendo que esta ação apaga TODO o estoque (liberar o botão)",
+                        variable=self.var_liberar_reset, command=alternar_trava).pack(pady=(0, 5))
+        self.btn_reset_total.pack(ipadx=10, ipady=10)
+        self.btn_reset_total.state(['disabled'])
+        ttk.Label(frame_perigo, foreground="gray",
+                  text="Um backup em Excel é salvo automaticamente na pasta 'backups_estoque' antes de apagar.").pack(pady=(5, 0))
 
     def atualizar_lista_nfs_admin(self):
         for i in self.tree_admin_nfs.get_children(): self.tree_admin_nfs.delete(i)
@@ -3207,7 +3907,7 @@ class AppGestaoEstoque:
                 sucessos += 1
         
         if sucessos == len(selecionados):
-            messagebox.showinfo("Resultado", f"{sucessos} de {len(selecionados)} nota(s) excluída(s) com sucesso.", parent=self.root)
+            self.status(f"{sucessos} de {len(selecionados)} nota(s) excluída(s) com sucesso.")  # [MELHORIA UX] rodapé em vez de janelinha
         else:
             messagebox.showwarning("Resultado", f"{sucessos} de {len(selecionados)} nota(s) excluída(s) com sucesso.", parent=self.root)
         self.atualizar_lista_nfs_admin()
@@ -3229,7 +3929,7 @@ class AppGestaoEstoque:
                 sucessos += 1
         
         if sucessos == len(selecionados):
-            messagebox.showinfo("Resultado", f"{sucessos} de {len(selecionados)} contagem(ns) excluída(s) com sucesso.", parent=self.root)
+            self.status(f"{sucessos} de {len(selecionados)} contagem(ns) excluída(s) com sucesso.")  # [MELHORIA UX] rodapé em vez de janelinha
         else:
             messagebox.showwarning("Resultado", f"{sucessos} de {len(selecionados)} contagem(ns) excluída(s) com sucesso.", parent=self.root)
         self.atualizar_lista_contagens_admin()
@@ -3255,11 +3955,24 @@ class AppGestaoEstoque:
             codigo_seguranca = simpledialog.askstring("Confirmação Final", "Para confirmar, digite 'DELETAR' (em maiúsculo) abaixo:", parent=self.root)
             
             if codigo_seguranca == "DELETAR":
+                # [MELHORIA UX] Backup automático ANTES de apagar
+                caminho_backup = self.backup_estoque_excel()
+                if not caminho_backup:
+                    if not messagebox.askyesno(
+                            "Backup falhou",
+                            "NÃO foi possível fazer o backup antes de apagar (veja o log).\n\n"
+                            "Deseja apagar MESMO SEM BACKUP?\n(Recomendado: NÃO)",
+                            icon='warning', default='no', parent=self.root):
+                        return
+
                 # Chama a função do banco de dados
                 sucesso = database.resetar_dados_estoque_completo()
                 
                 if sucesso:
-                    messagebox.showinfo("Sistema Resetado", "O banco de dados de estoque foi limpo com sucesso.\n\nVocê pode começar a cadastrar e vincular novamente.", parent=self.root)
+                    texto_backup = f"\n\nBackup do que existia antes:\n{caminho_backup}" if caminho_backup else ""
+                    messagebox.showinfo("Sistema Resetado", "O banco de dados de estoque foi limpo com sucesso.\n\nVocê pode começar a cadastrar e vincular novamente." + texto_backup, parent=self.root)
+                    self.var_liberar_reset.set(False)
+                    self.btn_reset_total.state(['disabled'])
                     
                     # Atualiza todas as listas para refletir o vazio
                     self.atualizar_lista_produtos()
@@ -3281,6 +3994,46 @@ class AppGestaoEstoque:
             else:
                 messagebox.showinfo("Cancelado", "Ação cancelada. O código de confirmação estava incorreto.", parent=self.root)
 
+    def backup_estoque_excel(self):
+        """
+        [MELHORIA UX] Salva uma cópia de TODO o estoque em Excel (uma aba para cada tipo
+        de dado) na pasta 'backups_estoque'. Devolve o caminho do arquivo, ou None se falhar.
+        """
+        try:
+            import pandas as pd
+        except ImportError:
+            logger.error("Backup antes do reset: pandas não instalado.")
+            return None
+        try:
+            os.makedirs(PASTA_BACKUPS, exist_ok=True)
+            caminho = os.path.join(PASTA_BACKUPS, f"backup_estoque_antes_reset_{datetime.now():%Y-%m-%d_%H%M%S}.xlsx")
+            itens_contagens = []
+            for c in database.listar_contagens_cabecalho() or []:
+                for it in linhas_do_banco_para_dicts(database.buscar_itens_contagem(c.ContagemID)):
+                    it = {'ContagemID': c.ContagemID, 'DataContagem': fmt_data(c.DataContagem),
+                          'NomeContagem': getattr(c, 'NomeContagem', '') or 'Geral', **it}
+                    itens_contagens.append(it)
+            abas = {
+                'Produtos': linhas_do_banco_para_dicts(database.listar_produtos_estoque()),
+                'Fornecedores': linhas_do_banco_para_dicts(database.listar_fornecedores()),
+                'Vinculos': linhas_do_banco_para_dicts(database.listar_todos_vinculos_detalhado()),
+                'NotasFiscais': linhas_do_banco_para_dicts(database.listar_notas_fiscais_entrada_completa()),
+                'Contagens': itens_contagens,
+            }
+            with pd.ExcelWriter(caminho, engine='openpyxl') as escritor:
+                for nome, linhas in abas.items():
+                    df = pd.DataFrame(linhas) if linhas else pd.DataFrame({'(vazio)': []})
+                    # datas/horas com fuso e objetos estranhos viram texto (o Excel não aceita tudo)
+                    for col in df.columns:
+                        if df[col].dtype == object:
+                            df[col] = df[col].map(lambda v: v if isinstance(v, (str, int, float)) or v is None else str(v))
+                    df.to_excel(escritor, sheet_name=nome, index=False)
+            logger.info(f"Backup do estoque salvo em {caminho}")
+            return caminho
+        except Exception as e:
+            logger.error(f"Falha no backup do estoque antes do reset: {e}", exc_info=True)
+            return None
+
     def abrir_gestor_vinculos(self):
         """Abre uma janela para editar/excluir vínculos DE/PARA existentes."""
         popup = Toplevel(self.root)
@@ -3300,7 +4053,7 @@ class AppGestaoEstoque:
         frame_lista.pack(fill=tk.BOTH, expand=True)
 
         cols = ('ID', 'Fornecedor', 'Descrição no XML', 'Produto Mestre Atual', 'Fator (Cx)')
-        tree_vinculos = ttk.Treeview(frame_lista, columns=cols, show='headings', selectmode='browse')
+        tree_vinculos = criar_tree_zebrada(frame_lista, columns=cols, show='headings', selectmode='browse')
 
         tree_vinculos.heading('ID', text='ID'); tree_vinculos.column('ID', width=40)
         tree_vinculos.heading('Fornecedor', text='Fornecedor'); tree_vinculos.column('Fornecedor', width=200)
@@ -3443,7 +4196,7 @@ class AppGestaoEstoque:
         # --- Configuração da Tabela ---
         # Colunas atualizadas para incluir o Custo
         cols = ('ID', 'Produto Mestre', 'Descrição XML', 'Fornecedor', 'EAN', 'NCM', 'Fator', 'Último Custo')
-        tree = ttk.Treeview(popup, columns=cols, show='headings', selectmode='browse')
+        tree = criar_tree_zebrada(popup, columns=cols, show='headings', selectmode='browse')
         
         # Cabeçalhos
         for col in cols: tree.heading(col, text=col)
