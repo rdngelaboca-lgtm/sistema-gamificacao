@@ -250,6 +250,24 @@ def nome_aba_excel(nome, usados):
     return nome_final
 
 
+# [MELHORIA VALOR] Tipo da operação de cada item da nota (CFOP, últimos 3 dígitos).
+# Bonificação / brinde / amostra grátis: a mercadoria entra no estoque com CUSTO ZERO
+# (não foi paga). Comodato (ex: freezer emprestado pela fábrica), remessas, conserto,
+# vasilhame e devoluções NÃO são compra: esses itens são ignorados.
+CFOP_BONIFICACAO = {'910', '911'}
+CFOP_IGNORAR = {'908', '909', '912', '913', '915', '916', '920', '921', '201', '202', '410', '411'}
+
+
+def tipo_item_por_cfop(cfop):
+    """'compra', 'bonificacao' ou 'ignorar'."""
+    final = so_digitos(cfop)[-3:]
+    if final in CFOP_BONIFICACAO:
+        return 'bonificacao'
+    if final in CFOP_IGNORAR:
+        return 'ignorar'
+    return 'compra'
+
+
 def criar_tree_zebrada(pai, **kwargs):
     """
     [MELHORIA UX] Cria uma tabela (Treeview) com linhas alternadas cinza/branco,
@@ -1426,7 +1444,9 @@ class AppGestaoEstoque:
                 'ValorTotalNF': dec(total.findtext('vNF', default='0.0')),
                 # [DEPURAÇÃO] Produtor rural emite NF-e com CPF (não CNPJ). Antes o arquivo era recusado.
                 'FornecedorCNPJ': so_digitos(emit.findtext('CNPJ', default='') or emit.findtext('CPF', default='')),
-                'FornecedorNome': (emit.findtext('xNome', default='') or '').strip()
+                'FornecedorNome': (emit.findtext('xNome', default='') or '').strip(),
+                # [MELHORIA VALOR] finNFe=4 é nota de DEVOLUÇÃO (não é compra)
+                'Finalidade': (ide.findtext('finNFe', default='1') or '1').strip(),
             }
 
             itens = []
@@ -1449,9 +1469,12 @@ class AppGestaoEstoque:
                 # O './/' faz o robô varrer profundamente qualquer tag de imposto procurando a ST
                 vICMSST = dec(det.findtext('.//vICMSST', default='0.0'))
                 vIPI = dec(det.findtext('.//vIPI', default='0.0'))
+                # [MELHORIA VALOR] FCP-ST (Fundo de Combate à Pobreza cobrado junto com a ST)
+                # também é pago na compra e faz parte do custo.
+                vFCPST = dec(det.findtext('.//vFCPST', default='0.0'))
 
                 # 4. Cálculo do Custo Real de Aquisição Contábil
-                custo_total_item = vProd + vICMSST + vIPI + vFrete + vSeg + vOutro - vDesc
+                custo_total_item = vProd + vICMSST + vFCPST + vIPI + vFrete + vSeg + vOutro - vDesc
                 
                 # 5. Custo Unitário Certo (c/ Impostos Rateados)
                 custo_unit_real = custo_total_item / qtd_xml if qtd_xml > 0 else Decimal('0.0')
@@ -1462,7 +1485,8 @@ class AppGestaoEstoque:
                     'DescricaoXML': prod.findtext('xProd', default=''),
                     'NCM': prod.findtext('NCM', default=''),
                     'Quantidade': qtd_xml,
-                    'PrecoCustoUnitario': custo_unit_real # Agora leva o custo REAL!
+                    'PrecoCustoUnitario': custo_unit_real, # Agora leva o custo REAL!
+                    'CFOP': (prod.findtext('CFOP', default='') or '').strip(),
                 })
 
             return dados_nf, itens
@@ -1478,6 +1502,7 @@ class AppGestaoEstoque:
         notas_processadas_nesta_sessao = {}
         arquivos_com_falha = 0
         arquivos_repetidos = 0
+        notas_ignoradas, itens_ignorados, itens_bonificados = [], [], []  # [MELHORIA VALOR]
         for caminho_xml in arquivos_xml:
             try:
                 cabecalho_nf, itens_nf = self.ler_xml_nota_fiscal(caminho_xml)
@@ -1486,6 +1511,26 @@ class AppGestaoEstoque:
                 num_nf = cabecalho_nf['NumeroNF']
                 if not cnpj or not itens_nf:
                     raise Exception("Arquivo XML não contém CNPJ ou lista de itens.")
+
+                # [MELHORIA VALOR] Nota de devolução não é compra: fica de fora
+                if cabecalho_nf.get('Finalidade') == '4':
+                    notas_ignoradas.append(f"NF {num_nf} ({nome_fornecedor}) - nota de devolução")
+                    continue
+                # Itens de comodato/remessa/devolução saem; bonificação entra com custo zero
+                itens_filtrados = []
+                for it in itens_nf:
+                    tipo = tipo_item_por_cfop(it.get('CFOP'))
+                    if tipo == 'ignorar':
+                        itens_ignorados.append(f"NF {num_nf}: {it['DescricaoXML']} (CFOP {it.get('CFOP')})")
+                        continue
+                    if tipo == 'bonificacao':
+                        it = dict(it, PrecoCustoUnitario=Decimal('0'))
+                        itens_bonificados.append(f"NF {num_nf}: {it['DescricaoXML']}")
+                    itens_filtrados.append(it)
+                if not itens_filtrados:
+                    notas_ignoradas.append(f"NF {num_nf} ({nome_fornecedor}) - só itens de comodato/remessa")
+                    continue
+                itens_nf = itens_filtrados
 
                 # [DEPURAÇÃO] Antes as notas eram separadas SÓ pelo número. Duas notas nº 123 de
                 # fornecedores diferentes viravam UMA nota só (e os itens do 2º iam para o 1º).
@@ -1563,7 +1608,8 @@ class AppGestaoEstoque:
                             'DescricaoXML': desc_xml,
                             'cProd': item['cProd'],
                             'cEAN': item['cEAN'],
-                            'NCM': item['NCM']
+                            'NCM': item['NCM'],
+                            'CustoXML': item['PrecoCustoUnitario'],   # [MELHORIA VALOR] p/ conferir o fator
                         }
 
                         ja_listado = any(p['DescricaoXML'] == desc_xml and p['FornecedorID'] == fornecedor_id
@@ -1606,6 +1652,16 @@ class AppGestaoEstoque:
                      f"e prontas para salvar (Passo 3).")
         if arquivos_repetidos:
             msg_final += f"\n\nℹ️ {arquivos_repetidos} arquivo(s) eram cópias de notas já lidas e foram ignorados."
+        # [MELHORIA VALOR] Resumo do que NÃO é compra
+        if notas_ignoradas:
+            msg_final += f"\n\nℹ️ {len(notas_ignoradas)} nota(s) ignorada(s) (não são compra):\n  • " + "\n  • ".join(notas_ignoradas[:5])
+        if itens_ignorados:
+            msg_final += f"\n\nℹ️ {len(itens_ignorados)} item(ns) de comodato/remessa/devolução ignorado(s):\n  • " + "\n  • ".join(itens_ignorados[:5])
+        if itens_bonificados:
+            msg_final += f"\n\n🎁 {len(itens_bonificados)} item(ns) de BONIFICAÇÃO entram no estoque com custo zero:\n  • " + "\n  • ".join(itens_bonificados[:5])
+        for lista in (notas_ignoradas, itens_ignorados, itens_bonificados):
+            for linha in lista:
+                logger.info(f"[importação XML] {linha}")
 
         if arquivos_com_falha > 0:
             msg_final += f"\n\n⚠️ AVISO: {arquivos_com_falha} arquivo(s) na pasta não eram Notas Fiscais válidas ou estavam corrompidos e foram ignorados."
@@ -1648,6 +1704,9 @@ class AppGestaoEstoque:
             messagebox.showerror("Erro", "O Fator de Conversão deve ser um número válido maior que 0.", parent=self.root)
             return
 
+        if not self.conferir_fator_com_custo_anterior(item_pendente, produto_mestre_id, produto_mestre_selecionado, fator):
+            return
+
         try:
             # Verifica se o usuário digitou um EAN manualmente na tela
             ean_digitado = self.entry_ean_importacao.get().strip()
@@ -1679,6 +1738,37 @@ class AppGestaoEstoque:
         except Exception as e:
             logger.error(f"Erro ao criar vínculo: {e}", exc_info=True)
             messagebox.showerror("Erro de Banco", f"Não foi possível criar o vínculo.\n{e}", parent=self.root)
+
+    def conferir_fator_com_custo_anterior(self, item_pendente, produto_mestre_id, nome_mestre, fator):
+        """
+        [MELHORIA VALOR] Fator de caixa errado é o erro que MAIS distorce o valor do estoque
+        (ex: CX com 12 vinculada com fator 1 -> custo 12x maior). Compara o custo por
+        unidade que vai resultar com o último custo do produto e avisa se ficar muito diferente.
+        Devolve True para continuar.
+        """
+        custo_xml = item_pendente.get('CustoXML')
+        if not custo_xml:
+            return True
+        try:
+            custo_anterior = Decimal(str(database.buscar_ultimo_custo_por_produto(produto_mestre_id) or 0))
+        except Exception:
+            return True
+        if custo_anterior <= 0:
+            return True
+        custo_novo = Decimal(str(custo_xml)) / fator
+        razao = custo_novo / custo_anterior
+        if Decimal('0.34') < razao < Decimal('3'):
+            return True
+        fator_sugerido = (Decimal(str(custo_xml)) / custo_anterior).quantize(Decimal('1'))
+        dica = f"\n\nDica: para o custo ficar parecido com o anterior, o fator seria perto de {fator_sugerido}." if fator_sugerido > 0 else ""
+        return messagebox.askyesno(
+            "Confira o fator (Itens p/ Cx)",
+            f"'{item_pendente['DescricaoXML']}' → {nome_mestre}\n\n"
+            f"Com fator {fmt_qtd(fator)}, o custo vai ficar {fmt_reais(custo_novo)} por unidade.\n"
+            f"A última compra deste produto custou {fmt_reais(custo_anterior)} por unidade "
+            f"({fmt_qtd(razao.quantize(Decimal('0.1')))}x de diferença).{dica}\n\n"
+            "Um fator errado distorce o VALOR DO ESTOQUE.\n\nContinuar com este fator mesmo assim?",
+            icon='warning', parent=self.root)
 
     def salvar_notas_processadas(self):
         if not self.dados_notas_processadas:
@@ -1819,6 +1909,8 @@ class AppGestaoEstoque:
                 if not produto_id_mestre:
                     raise Exception("Falha ao criar o produto mestre, não retornou ID.")
                 produto_foi_criado = True
+            elif not self.conferir_fator_com_custo_anterior(item_pendente, produto_id_mestre, nome_novo_produto, fator):
+                return  # [MELHORIA VALOR] produto já existia: confere o fator com o custo anterior
 
             # Verifica se o usuário digitou um EAN manualmente na tela
             ean_digitado = self.entry_ean_importacao.get().strip()
@@ -1932,9 +2024,11 @@ class AppGestaoEstoque:
         frame_historico.rowconfigure(1, weight=1)
         frame_historico.columnconfigure(0, weight=1)
         
-        cols_hist = ('ID', 'Data', 'Nome', 'Responsável')
+        cols_hist = ('ID', 'Data', 'Nome', 'Responsável', 'Valor')
         # Mudança de selectmode='browse' para 'extended'
         self.tree_hist_contagens = criar_tree_zebrada(frame_historico, columns=cols_hist, show='headings', selectmode='extended', height=5)
+        # [MELHORIA VALOR] mostra o valor das contagens já FECHADAS (🔒)
+        self.tree_hist_contagens.heading('Valor', text='Valor Fechado'); self.tree_hist_contagens.column('Valor', width=110, anchor='e')
         self.tree_hist_contagens.heading('ID', text='ID'); self.tree_hist_contagens.column('ID', width=30, anchor='center')
         self.tree_hist_contagens.heading('Data', text='Data'); self.tree_hist_contagens.column('Data', width=80, anchor='center')
         self.tree_hist_contagens.heading('Nome', text='Nome/Ref'); self.tree_hist_contagens.column('Nome', width=120)
@@ -1959,7 +2053,7 @@ class AppGestaoEstoque:
 
         btn_consolidar = ttk.Button(frame_botoes_hist, text="🗜️ Consolidar Selecionadas", command=self.consolidar_contagens_selecionadas)
         btn_consolidar.pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
-        btn_relatorio_cmv = ttk.Button(frame_botoes_hist, text="📊 Gerar Relatório de Valoração (CMV)", command=self.abrir_relatorio_valoracao)
+        btn_relatorio_cmv = ttk.Button(frame_botoes_hist, text="💰 Valor do Estoque", command=self.abrir_relatorio_valoracao)
         btn_relatorio_cmv.pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
 
     def filtrar_combo_contagem(self, event=None):
@@ -2281,6 +2375,11 @@ class AppGestaoEstoque:
         
         try:
             contagens = database.listar_contagens_cabecalho()
+            try:
+                fechados = database.listar_valores_estoque_fechados()
+            except Exception as e:
+                logger.warning(f"Não foi possível ler os valores fechados: {e}")
+                fechados = {}
             for c in contagens:
                 # Tratamento seguro para compatibilidade Date vs String
                 data_f = fmt_data(c.DataContagem)
@@ -2290,7 +2389,8 @@ class AppGestaoEstoque:
                 
                 nome_display = f"ID: {c.ContagemID} - {data_f} - {nome_contagem_db} ({c.NomeCompleto})"
                 
-                self.tree_hist_contagens.insert("", "end", values=(c.ContagemID, data_f, nome_contagem_db, c.NomeCompleto))
+                valor_txt = f"🔒 {fmt_reais(fechados[c.ContagemID][0])}" if c.ContagemID in fechados else ""
+                self.tree_hist_contagens.insert("", "end", values=(c.ContagemID, data_f, nome_contagem_db, c.NomeCompleto, valor_txt))
                 
                 nomes_contagens.append(nome_display)
                 self.mapa_contagens_historico[nome_display] = c.ContagemID
@@ -2354,6 +2454,8 @@ class AppGestaoEstoque:
             if not sel: return
             vals = tree.item(sel, 'values')
             contagem_id, nome_avulso, qtd_contada, ean_fornecido = vals[0], vals[2], vals[3], vals[4]
+            if self.contagem_bloqueada(contagem_id, "resolver este item avulso", popup):
+                return
 
             edit_win = Toplevel(popup)
             edit_win.title("Resolução Inteligente de Avulsos")
@@ -2472,6 +2574,29 @@ class AppGestaoEstoque:
         tree.bind("<Double-1>", resolver_clicado)
         carregar()
 
+    def contagem_bloqueada(self, contagem_id, acao, janela=None):
+        """
+        [MELHORIA VALOR] Contagem com valor FECHADO não pode mudar (senão o valor lançado
+        no outro sistema deixa de bater com as quantidades). Devolve True se estiver bloqueada.
+        """
+        try:
+            fechados = database.listar_valores_estoque_fechados()
+        except Exception:
+            return False
+        try:
+            chave = int(contagem_id)
+        except (TypeError, ValueError):
+            return False
+        if chave not in fechados:
+            return False
+        messagebox.showwarning(
+            "Contagem com valor fechado",
+            f"A contagem ID {chave} está com o VALOR DO ESTOQUE FECHADO ({fmt_reais(fechados[chave][0])}).\n\n"
+            f"Para {acao}, selecione a contagem, clique em '💰 Valor do Estoque' e depois em '🔓 Reabrir'.\n"
+            "(Se você já lançou esse valor em outro lugar, lembre de corrigir lá também.)",
+            parent=janela or self.root)
+        return True
+
     def abrir_edicao_contagem(self):
         """Abre janela para alterar quantidades ou adicionar/remover itens de uma contagem existente."""
         selecionado = self.tree_hist_contagens.focus()
@@ -2479,6 +2604,8 @@ class AppGestaoEstoque:
             messagebox.showwarning("Aviso", "Selecione uma contagem no Histórico primeiro.", parent=self.root)
             return
         contagem_id = self.tree_hist_contagens.item(selecionado, 'values')[0]
+        if self.contagem_bloqueada(contagem_id, "editar esta contagem"):
+            return
 
         popup = Toplevel(self.root)
         popup.title(f"Editor de Contagem ID: {contagem_id}")
@@ -2606,6 +2733,9 @@ class AppGestaoEstoque:
         if len(selecionados) < 2:
             messagebox.showwarning("Aviso", "Selecione pelo menos duas contagens no histórico para consolidar.", parent=self.root)
             return
+        for item in selecionados:  # [MELHORIA VALOR] consolidar apaga as originais
+            if self.contagem_bloqueada(self.tree_hist_contagens.item(item, 'values')[0], "consolidar esta contagem"):
+                return
 
         if not messagebox.askyesno("Confirmar Consolidação", 
                                 f"Deseja mesclar as {len(selecionados)} contagens selecionadas?\n\n"
@@ -2707,149 +2837,291 @@ class AppGestaoEstoque:
                 pass 
 
     def abrir_relatorio_valoracao(self):
-        """Abre uma janela com o relatório financeiro da contagem selecionada para cálculo do CMV."""
+        """
+        [MELHORIA VALOR] Janela "💰 Valor do Estoque" da contagem selecionada.
+        - custo de cada produto = MÉDIA PONDERADA das compras dos 90 dias até a data da contagem;
+        - conferência antes de fechar: não contados, avulsos, sem custo e custo suspeito;
+        - total e subtotal por categoria;
+        - "🔒 Fechar valor" grava tudo: o total nunca mais muda (dá para reabrir).
+        """
         selecionado = self.tree_hist_contagens.focus()
         if not selecionado:
-            messagebox.showwarning("Aviso", "Selecione uma contagem no Histórico primeiro para gerar a valoração.", parent=self.root)
+            messagebox.showwarning("Aviso", "Selecione uma contagem no Histórico primeiro para ver o valor do estoque.", parent=self.root)
             return
-
         dados_contagem = self.tree_hist_contagens.item(selecionado, 'values')
         contagem_id = int(dados_contagem[0])
         data_contagem = dados_contagem[1]
         nome_contagem = dados_contagem[2]
 
-        # Busca os dados do banco
-        dados_relatorio = database.gerar_relatorio_valoracao_contagem(contagem_id)
-
-        if not dados_relatorio:
-            messagebox.showinfo("Aviso", "A contagem selecionada está vazia ou contém apenas itens avulsos não resolvidos.", parent=self.root)
-            return
-
         popup = Toplevel(self.root)
-        popup.title(f"Relatório de Valoração (CMV) - {nome_contagem} ({data_contagem})")
-        popup.geometry("900x600")
+        popup.title(f"💰 Valor do Estoque - {nome_contagem} ({data_contagem})")
+        popup.geometry("1050x720")
         popup.transient(self.root)
+        estado = {'dados': None}
 
-        frame = ttk.Frame(popup, padding="15")
+        frame = ttk.Frame(popup, padding="12")
         frame.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(frame, text=f"💰 Valor do Estoque — {nome_contagem} ({data_contagem})",
+                  font=("Arial", 14, "bold"), foreground="#0056b3").pack(anchor="w")
+        lbl_situacao = ttk.Label(frame, text="", font=("Arial", 10, "bold"))
+        lbl_situacao.pack(anchor="w", pady=(2, 8))
 
-        ttk.Label(frame, text=f"Inventário Financeiro: {nome_contagem}", font=("Arial", 14, "bold"), foreground="#0056b3").pack(anchor="w", pady=(0, 5))
-        ttk.Label(frame, text="O Preço de Custo exibido é uma MÉDIA das 3 últimas entradas no sistema.", font=("Arial", 9, "italic"), foreground="gray").pack(anchor="w", pady=(0, 15))
+        # ---------- Conferência ----------
+        frame_avisos = ttk.LabelFrame(frame, text="⚠️ Conferência antes de fechar — duplo clique numa linha para resolver", padding="6")
+        cols_av = ('Tipo', 'Produto', 'Detalhe')
+        tree_av = criar_tree_zebrada(frame_avisos, columns=cols_av, show='headings', selectmode='browse', height=6)
+        tree_av.heading('Tipo', text='Tipo'); tree_av.column('Tipo', width=130)
+        tree_av.heading('Produto', text='Produto'); tree_av.column('Produto', width=260)
+        tree_av.heading('Detalhe', text='O que fazer / detalhe'); tree_av.column('Detalhe', width=560)
+        tree_av.pack(fill=tk.X)
+        mapa_avisos = {}
 
-        # --- CORREÇÃO 1: Estilo para Linha Azul ao Clicar ---
-        style = ttk.Style()
-        # [DEPURAÇÃO] REMOVIDO style.theme_use('default'): ele trocava o visual do PROGRAMA
-        # INTEIRO (todas as abas) toda vez que este relatório era aberto.
-        style.map('Treeview', 
-                  background=[('selected', '#0078D7')], # Fundo Azul
-                  foreground=[('selected', 'white')])   # Letra Branca
-
-        # Tabela
-        cols = ('Categoria', 'Produto', 'Qtd Contada', 'Custo Médio Unit.', 'Custo Total')
-        
-        # --- CORREÇÃO 2: Mudamos de selectmode='none' para 'browse' (permite selecionar 1 item) ---
-        tree = criar_tree_zebrada(frame, columns=cols, show='headings', selectmode='browse')
-
-        # Cabeçalhos com ordenação inteligente (reaproveitada)
-        for col in cols: 
+        # ---------- Itens ----------
+        cols = ('Categoria', 'Produto', 'Qtd', 'UN', 'Custo Unit.', 'Valor', 'Origem do custo')
+        frame_tab = ttk.Frame(frame)
+        tree = criar_tree_zebrada(frame_tab, columns=cols, show='headings', selectmode='browse')
+        for col in cols:
             tree.heading(col, text=col, command=lambda c=col: self.ordenar_coluna_treeview(tree, c, False))
-
-        tree.column('Categoria', width=150)
-        tree.column('Produto', width=300)
-        tree.column('Qtd Contada', width=100, anchor='center')
-        tree.column('Custo Médio Unit.', width=120, anchor='e')
-        tree.column('Custo Total', width=120, anchor='e')
-
-        sb = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
+        for col, larg, anc in (('Categoria', 120, 'w'), ('Produto', 250, 'w'), ('Qtd', 80, 'e'), ('UN', 45, 'center'),
+                               ('Custo Unit.', 100, 'e'), ('Valor', 110, 'e'), ('Origem do custo', 290, 'w')):
+            tree.column(col, width=larg, anchor=anc)
+        sb = ttk.Scrollbar(frame_tab, orient="vertical", command=tree.yview)
         tree.configure(yscrollcommand=sb.set)
-        tree.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         sb.pack(side=tk.RIGHT, fill=tk.Y)
 
-        total_estoque_rs = Decimal('0.0')
+        # ---------- Rodapé: categorias + total + botões ----------
+        frame_rodape = ttk.Frame(frame)
+        tree_cat = criar_tree_zebrada(frame_rodape, columns=('Categoria', 'Valor', '%'), show='headings', height=5)
+        tree_cat.heading('Categoria', text='Categoria'); tree_cat.column('Categoria', width=160)
+        tree_cat.heading('Valor', text='Valor'); tree_cat.column('Valor', width=120, anchor='e')
+        tree_cat.heading('%', text='%'); tree_cat.column('%', width=60, anchor='e')
+        tree_cat.pack(side=tk.LEFT)
+        frame_dir = ttk.Frame(frame_rodape)
+        frame_dir.pack(side=tk.RIGHT, fill=tk.Y)
+        lbl_total = ttk.Label(frame_dir, text="", font=("Arial", 18, "bold"), foreground="green")
+        lbl_total.pack(anchor="e", pady=(0, 10))
+        frame_bot = ttk.Frame(frame_dir)
+        frame_bot.pack(anchor="e")
 
-        # Popula a tabela
-        for item in dados_relatorio:
-            qtd = Decimal(str(item['QuantidadeContada'])) if item['QuantidadeContada'] is not None else Decimal('0.0')
-            item['Categoria'] = item.get('Categoria') or 'Geral'
-            custo_medio = Decimal(str(item['CustoMedio'])) if item['CustoMedio'] is not None else Decimal('0.0')
+        frame_avisos.pack(fill=tk.X, pady=(0, 8))
+        frame_tab.pack(fill=tk.BOTH, expand=True)
+        frame_rodape.pack(fill=tk.X, pady=(8, 0))
 
-            custo_total_item = qtd * custo_medio
-            total_estoque_rs += custo_total_item
+        def recarregar():
+            try:
+                popup.config(cursor="watch"); popup.update_idletasks()
+                dados = database.calcular_valor_estoque(contagem_id)
+            except Exception as e:
+                logger.error(f"Erro ao calcular o valor do estoque (contagem {contagem_id}): {e}", exc_info=True)
+                messagebox.showerror("Erro", f"Não foi possível calcular o valor do estoque:\n{e}", parent=popup)
+                return
+            finally:
+                try:
+                    popup.config(cursor="")
+                except tk.TclError:
+                    pass
+            estado['dados'] = dados
 
-            tree.insert("", "end", values=(
-                item['Categoria'],
-                item['NomeProduto'],
-                f"{qtd:.3f}".rstrip('0').rstrip('.'),
-                f"R$ {custo_medio:.4f}".replace('.', ','),
-                f"R$ {custo_total_item:.2f}".replace('.', ',')
-            ))
+            for t in (tree, tree_av, tree_cat):
+                for i in t.get_children():
+                    t.delete(i)
+            for it in dados['itens']:
+                tree.insert("", "end", values=(
+                    it.get('Categoria') or 'Geral', it['NomeProduto'], fmt_qtd(it['Quantidade']), it.get('Unidade') or 'UN',
+                    fmt_reais(it['CustoUnitario']), fmt_reais(it['ValorTotal']), it.get('OrigemCusto') or ''))
+            total = Decimal(str(dados['total'] or 0))
+            for cat, valor in dados['por_categoria'].items():
+                pct = (Decimal(str(valor)) / total * 100) if total > 0 else Decimal('0')
+                tree_cat.insert("", "end", values=(cat or 'Geral', fmt_reais(valor), f"{pct:.1f}%".replace('.', ',')))
+            lbl_total.config(text=f"TOTAL: {fmt_reais(total)}")
 
-        # --- CORREÇÃO 3: Lógica de Exportação para Excel ---
+            mapa_avisos.clear()
+            av = dados['avisos']
+            textos = {
+                'nao_contados': ("❓ Não contado", "{Detalhe} → duplo clique para informar a quantidade (0 se acabou)"),
+                'avulsos': ("📦 Avulso", "não entra no valor → duplo clique para resolver"),
+                'sem_custo': ("💲 Sem custo", "vai valer R$ 0,00 → duplo clique para informar o custo"),
+                'custo_suspeito': ("🔍 Custo suspeito", "{Detalhe} → duplo clique para ver os vínculos"),
+            }
+            for tipo, lista in av.items():
+                rotulo, modelo = textos[tipo]
+                for a in lista:
+                    iid = tree_av.insert("", "end", values=(rotulo, a['NomeProduto'], modelo.format(Detalhe=a.get('Detalhe', ''))))
+                    mapa_avisos[iid] = (tipo, a)
+            qtd_avisos = sum(len(v) for v in av.values())
+
+            if dados['fechado']:
+                data_f = dados['fechado']['data']
+                data_txt = data_f.strftime('%d/%m/%Y %H:%M') if hasattr(data_f, 'strftime') else str(data_f)[:16]
+                lbl_situacao.config(text=f"🔒 VALOR FECHADO em {data_txt} — este total não muda mais.", foreground="#1b7a2f")
+                frame_avisos.pack_forget()
+                btn_fechar.pack_forget(); btn_reabrir.pack(side=tk.LEFT, padx=3, before=btn_copiar)
+            else:
+                lbl_situacao.config(
+                    text="🔓 Valor em aberto — custo médio ponderado das compras dos 90 dias até a data da contagem. "
+                         "Confira os avisos e clique em '🔒 Fechar valor'.", foreground="#b35c00")
+                btn_reabrir.pack_forget(); btn_fechar.pack(side=tk.LEFT, padx=3, before=btn_copiar)
+                if qtd_avisos:
+                    frame_avisos.config(text=f"⚠️ Conferência antes de fechar: {qtd_avisos} aviso(s) — duplo clique numa linha para resolver")
+                    frame_avisos.pack(fill=tk.X, pady=(0, 8), before=frame_tab)
+                else:
+                    frame_avisos.pack_forget()
+
+        def resolver_aviso(event=None):
+            sel = tree_av.focus()
+            if not sel or sel not in mapa_avisos:
+                return
+            tipo, a = mapa_avisos[sel]
+            if tipo == 'nao_contados':
+                texto = simpledialog.askstring(
+                    "Produto não contado",
+                    f"{a['NomeProduto']}\n\nQuantos {a.get('Unidade') or 'UN'} havia na data da contagem?\n(digite 0 se tinha acabado)",
+                    parent=popup)
+                if texto is None:
+                    return
+                try:
+                    qtd = para_decimal(texto, "Quantidade")
+                except ValueError as e:
+                    messagebox.showerror("Erro", str(e), parent=popup); return
+                if database.adicionar_item_contagem_existente(contagem_id, a['ProdutoID'], qtd):
+                    self.status(f"{a['NomeProduto']}: {fmt_qtd(qtd)} adicionado à contagem.")
+                    recarregar()
+                else:
+                    messagebox.showerror("Erro", "Não foi possível adicionar o item à contagem (veja o log).", parent=popup)
+            elif tipo == 'sem_custo':
+                texto = simpledialog.askstring(
+                    "Produto sem custo",
+                    f"{a['NomeProduto']}\n\nCusto por {a.get('Unidade') or 'UN'} (R$):", parent=popup)
+                if texto is None:
+                    return
+                try:
+                    custo = para_decimal(texto, "Custo", permitir_zero=False)
+                except ValueError as e:
+                    messagebox.showerror("Erro", str(e), parent=popup); return
+                if database.atualizar_custo_manual_produto(a['ProdutoID'], custo):
+                    self.status(f"Custo de {a['NomeProduto']} gravado: {fmt_reais(custo)}.")
+                    recarregar()
+                else:
+                    messagebox.showerror("Erro", "Não foi possível gravar o custo (veja o log).", parent=popup)
+            elif tipo == 'avulsos':
+                messagebox.showinfo("Item avulso", f"'{a['NomeProduto']}' foi contado sem produto do Catálogo e NÃO entra no valor.\n\n"
+                                    "Vou abrir a janela 'Resolver Itens Avulsos'. Depois de resolver, clique em '🔄 Recalcular'.",
+                                    parent=popup)
+                self.abrir_gerenciador_avulsos()
+            elif tipo == 'custo_suspeito':
+                messagebox.showinfo("Custo suspeito", f"{a['NomeProduto']}: {a.get('Detalhe', '')}\n\n"
+                                    "Normalmente é um vínculo com o fator (Itens p/ Cx) errado. Vou abrir o "
+                                    "Gerenciador de Vínculos: procure o produto e confira o fator.\n\n"
+                                    "Depois de corrigir, pode ser preciso ajustar o custo da compra no histórico "
+                                    "(aba 5, duplo clique no produto). Então clique em '🔄 Recalcular'.", parent=popup)
+                self.abrir_gestor_vinculos()
+
+        tree_av.bind("<Double-1>", resolver_aviso)
+
+        def fechar_valor():
+            dados = estado['dados']
+            if not dados:
+                return
+            av = dados['avisos']
+            qtd_avisos = sum(len(v) for v in av.values())
+            texto = f"Fechar o valor do estoque desta contagem em {fmt_reais(dados['total'])}?\n\n" \
+                    "Depois de fechado, o total NÃO muda mais (nem com notas novas).\n" \
+                    "Você poderá reabrir se precisar corrigir."
+            if qtd_avisos:
+                texto = (f"⚠️ Ainda há {qtd_avisos} aviso(s) na conferência:\n"
+                         f"  • {len(av['nao_contados'])} produto(s) não contado(s)\n"
+                         f"  • {len(av['avulsos'])} item(ns) avulso(s)\n"
+                         f"  • {len(av['sem_custo'])} produto(s) sem custo\n"
+                         f"  • {len(av['custo_suspeito'])} custo(s) suspeito(s)\n\n") + texto
+            if not messagebox.askyesno("Fechar valor do estoque", texto, icon='warning' if qtd_avisos else 'question', parent=popup):
+                return
+            ok, msg, total = database.fechar_valor_estoque(contagem_id)
+            if ok:
+                self.status(f"Valor do estoque fechado: {fmt_reais(total)} (contagem {nome_contagem} de {data_contagem}).")
+                recarregar()
+                self.atualizar_lista_contagens_historico()
+            else:
+                messagebox.showerror("Erro", msg, parent=popup)
+
+        def reabrir_valor():
+            dados = estado['dados']
+            valor = fmt_reais(dados['total']) if dados else ''
+            if not messagebox.askyesno(
+                    "Reabrir valor",
+                    f"Reabrir o valor desta contagem (hoje fechado em {valor})?\n\n"
+                    "Ele será recalculado com os custos e quantidades ATUAIS e pode mudar.\n"
+                    "Se você já lançou esse valor em outro lugar, lembre de corrigir lá também.",
+                    icon='warning', parent=popup):
+                return
+            if database.reabrir_valor_estoque(contagem_id):
+                self.status("Valor do estoque reaberto.", 'aviso')
+                recarregar()
+                self.atualizar_lista_contagens_historico()
+            else:
+                messagebox.showerror("Erro", "Não foi possível reabrir (veja o log).", parent=popup)
+
+        def copiar_total():
+            dados = estado['dados']
+            if not dados:
+                return
+            texto = f"{Decimal(str(dados['total'])):.2f}".replace('.', ',')
+            popup.clipboard_clear(); popup.clipboard_append(texto)
+            self.status(f"Total {fmt_reais(dados['total'])} copiado. Cole com Ctrl+V onde for lançar.")
+
         def exportar_para_excel():
+            dados = estado['dados']
+            if not dados:
+                return
             pd = self._importar_pandas(popup)
             if pd is None:
                 return
-
-            # Pergunta ao usuário ONDE ele quer salvar o arquivo
             caminho_arquivo = filedialog.asksaveasfilename(
-                parent=popup,
-                title="Salvar Relatório Excel",
-                defaultextension=".xlsx",
+                parent=popup, title="Salvar Valor do Estoque", defaultextension=".xlsx",
                 filetypes=[("Arquivos Excel", "*.xlsx")],
-                # [DEPURAÇÃO] nome da contagem com "/" (ex: "Balanço 01/2025") gerava nome de arquivo inválido
-                initialfile=nome_arquivo_seguro(f"CMV_{nome_contagem.replace(' ', '_')}_{data_contagem.replace('/', '-')}.xlsx")
-            )
-
-            # Se o usuário clicou em "Cancelar" na janela de salvar
+                initialfile=nome_arquivo_seguro(f"Valor_Estoque_{nome_contagem.replace(' ', '_')}_{data_contagem.replace('/', '-')}.xlsx"))
             if not caminho_arquivo:
-                return 
-
+                return
             try:
-                # Montamos uma lista limpa para o Excel (apenas com números puros, sem "R$")
-                dados_excel = []
-                for item in dados_relatorio:
-                    qtd_num = float(item['QuantidadeContada']) if item['QuantidadeContada'] is not None else 0.0
-                    custo_med_num = float(item['CustoMedio']) if item['CustoMedio'] is not None else 0.0
-                    custo_tot_num = qtd_num * custo_med_num
-                    
-                    dados_excel.append({
-                        'Categoria': item['Categoria'],
-                        'Produto': item['NomeProduto'],
-                        'Qtd Contada': qtd_num,
-                        'Custo Médio Unitário': custo_med_num,
-                        'Custo Total do Item': custo_tot_num
-                    })
-
-                # Cria a tabela usando o Pandas
-                df = pd.DataFrame(dados_excel)
-                
-                # Adiciona uma linha vazia e depois a linha de Total Geral no rodapé
-                df.loc[len(df)] = ['', '', '', '', ''] 
-                df.loc[len(df)] = ['TOTAL GERAL', '', '', '', float(total_estoque_rs)]
-
-                # Salva o arquivo no disco do computador
-                df.to_excel(caminho_arquivo, index=False, engine='openpyxl')
-                
-                messagebox.showinfo("Sucesso", f"Relatório exportado com sucesso!\nSalvo em: {caminho_arquivo}", parent=popup)
-                
-            except ImportError:
-                messagebox.showerror("Biblioteca Faltando", "Para gerar Excel, instale o openpyxl:\n\npip install openpyxl", parent=popup)
+                linhas = [{'Categoria': it.get('Categoria') or 'Geral', 'Produto': it['NomeProduto'],
+                           'Quantidade': float(it['Quantidade']), 'UN': it.get('Unidade') or 'UN',
+                           'Custo Unitário (R$)': float(it['CustoUnitario']), 'Valor (R$)': float(it['ValorTotal']),
+                           'Origem do custo': it.get('OrigemCusto') or ''} for it in dados['itens']]
+                df = pd.DataFrame(linhas, columns=['Categoria', 'Produto', 'Quantidade', 'UN', 'Custo Unitário (R$)', 'Valor (R$)', 'Origem do custo'])
+                df.loc[len(df)] = ['', '', None, '', None, None, '']
+                df.loc[len(df)] = ['TOTAL', '', None, '', None, float(dados['total']), '']
+                situacao = "FECHADO" if dados['fechado'] else "EM ABERTO (pode mudar)"
+                resumo = pd.DataFrame([
+                    {'Item': 'Contagem', 'Valor': f"{nome_contagem} ({data_contagem})"},
+                    {'Item': 'Situação do valor', 'Valor': situacao},
+                    {'Item': 'Método de custo', 'Valor': 'Custo médio ponderado das compras dos 90 dias até a data da contagem'},
+                    {'Item': 'VALOR TOTAL DO ESTOQUE (R$)', 'Valor': float(dados['total'])},
+                ] + [{'Item': f"Categoria: {c}", 'Valor': float(v)} for c, v in dados['por_categoria'].items()])
+                with pd.ExcelWriter(caminho_arquivo, engine='openpyxl') as escritor:
+                    resumo.to_excel(escritor, sheet_name='Resumo', index=False)
+                    df.to_excel(escritor, sheet_name='Itens', index=False)
+                    avisos = [{'Tipo': t, 'Produto': a['NomeProduto'], 'Detalhe': a.get('Detalhe', '')}
+                              for t, lista in dados['avisos'].items() for a in lista]
+                    if avisos:
+                        pd.DataFrame(avisos).to_excel(escritor, sheet_name='Avisos', index=False)
+                messagebox.showinfo("Sucesso", f"Valor do estoque exportado!\nSalvo em: {caminho_arquivo}", parent=popup)
             except Exception as e:
-                logger.error(f"Erro ao exportar Excel: {e}", exc_info=True)
-                messagebox.showerror("Erro na Exportação", f"Não foi possível gerar o Excel.\nVerifique se o arquivo não está aberto em outro programa.\nErro: {e}", parent=popup)
-        # --------------------------------------------------
+                logger.error(f"Erro ao exportar valor do estoque: {e}", exc_info=True)
+                messagebox.showerror("Erro", f"Não foi possível salvar o Excel.\n{e}\n\n"
+                                     "Se o arquivo estiver aberto no Excel, feche-o e tente de novo.", parent=popup)
 
-        # Rodapé com os botões e o Valor Total do Estoque
-        frame_total = ttk.Frame(popup, padding="15")
-        frame_total.pack(fill=tk.X, side=tk.BOTTOM)
-
-        # Botão de Exportar à esquerda
-        btn_exportar = ttk.Button(frame_total, text="💾 Exportar para Excel", command=exportar_para_excel)
-        btn_exportar.pack(side=tk.LEFT)
-
-        # Texto do Total à direita
-        lbl_total = ttk.Label(frame_total, text=f"VALOR TOTAL EM ESTOQUE: R$ {total_estoque_rs:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.'), font=("Arial", 16, "bold"), foreground="green")
-        lbl_total.pack(side=tk.RIGHT)   
+        ttk.Button(frame_bot, text="🔄 Recalcular", command=recarregar).pack(side=tk.LEFT, padx=3)
+        btn_fechar = ttk.Button(frame_bot, text="🔒 Fechar valor", command=fechar_valor)
+        btn_reabrir = ttk.Button(frame_bot, text="🔓 Reabrir", command=reabrir_valor)
+        btn_copiar = ttk.Button(frame_bot, text="📋 Copiar total", command=copiar_total)
+        btn_copiar.pack(side=tk.LEFT, padx=3)
+        btn_exportar = ttk.Button(frame_bot, text="💾 Exportar para Excel", command=exportar_para_excel)
+        btn_exportar.pack(side=tk.LEFT, padx=3)
+        self._janela_valor = {'popup': popup, 'recarregar': recarregar, 'estado': estado, 'tree': tree,
+                              'tree_av': tree_av, 'mapa_avisos': mapa_avisos, 'fechar': fechar_valor,
+                              'reabrir': reabrir_valor, 'copiar': copiar_total, 'exportar': exportar_para_excel,
+                              'lbl_total': lbl_total}
+        recarregar()
 
     # ===================================================================
     # == ABA 5: SUGESTÃO DE COMPRA (ATUALIZADA) =========================
@@ -3203,8 +3475,13 @@ class AppGestaoEstoque:
             fornecedor, custo = "Sem fornecedor (nunca comprado)", Decimal('0')
             try:
                 historico = database.buscar_historico_compras_produto(produto_id) or []
-                if historico:
-                    ultima = historico[0]  # o banco devolve da mais nova para a mais antiga
+                # [MELHORIA VALOR] ignora as "notas fantasmas" do custo manual (quantidade 0,
+                # fornecedor "PRODUÇÃO INTERNA / AVULSO"): ninguém compra desse fornecedor.
+                reais = [h for h in historico
+                         if Decimal(str(getattr(h, 'Quantidade', 0) or 0)) > 0
+                         and 'PRODUÇÃO INTERNA' not in str(getattr(h, 'NomeFantasia', '') or '').upper()]
+                if reais:
+                    ultima = reais[0]  # o banco devolve da mais nova para a mais antiga
                     fornecedor = getattr(ultima, 'NomeFantasia', None) or fornecedor
                     custo = Decimal(str(getattr(ultima, 'PrecoCustoUnitario', 0) or 0))
             except Exception as e:

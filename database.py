@@ -76,7 +76,7 @@ import locale    # [DEPURAÇÃO] Movido para o topo (estava no meio do arquivo)
 import config
 import notificador_telegram
 import random
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from collections import deque
 
 # Cache para armazenar (ID_Atribuicao, Data_Hora_Minuto) das tarefas já enviadas
@@ -6664,6 +6664,10 @@ def excluir_contagem_estoque(contagem_id):
     if conn:
         try:
             cursor = conn.cursor()
+            # [MELHORIA] Apaga também o "valor fechado" desta contagem (se existir)
+            _garantir_tabelas_valor_estoque(cursor)
+            cursor.execute("DELETE FROM ValorEstoqueFechamentoItens WHERE ContagemID = ?", contagem_id)
+            cursor.execute("DELETE FROM ValorEstoqueFechamento WHERE ContagemID = ?", contagem_id)
             # 1. Excluir Itens
             cursor.execute("DELETE FROM ItensContagemEstoque WHERE ContagemID = ?", contagem_id)
             # 2. Excluir Cabeçalho
@@ -6863,6 +6867,345 @@ def adicionar_item_contagem_existente(contagem_id, produto_id, qtd):
         finally:
             conn.close()
     return False
+
+
+# ===================================================================
+# == [MELHORIA] VALOR DO ESTOQUE (custo médio ponderado + fechamento)
+# ===================================================================
+# Como o valor de cada produto é calculado (opção "B" escolhida pelo gestor):
+#   1) Custo médio PONDERADO das compras dos últimos 90 dias ATÉ a data da contagem
+#      (cada compra pesa pela quantidade; compras depois da contagem NÃO entram);
+#   2) sem compras nesses 90 dias -> custo da última compra anterior à contagem;
+#   3) nunca comprado por nota -> custo digitado à mão no Catálogo ("custo manual");
+#   4) nada disso -> R$ 0,00 (e aparece um aviso "Sem custo").
+# As "notas fantasmas" do custo manual (quantidade 0) NÃO entram na média.
+# Ao "Fechar valor", o custo de cada item fica GRAVADO e o total nunca mais muda,
+# mesmo que cheguem notas novas (dá para reabrir se precisar corrigir).
+CNPJ_FORNECEDOR_INTERNO = "00000000000000"
+JANELA_CUSTO_MEDIO_DIAS = 90
+DIAS_VERIFICACAO_SUSPEITO = 365
+FATOR_CUSTO_SUSPEITO = Decimal('3')   # maior custo >= 3x o menor -> provável fator errado
+_tabelas_valor_ok = False
+
+
+def _como_data(valor):
+    """Aceita date, datetime ou texto 'AAAA-MM-DD' e devolve date (ou None)."""
+    if valor is None:
+        return None
+    if isinstance(valor, datetime):
+        return valor.date()
+    if isinstance(valor, date):
+        return valor
+    try:
+        return datetime.strptime(str(valor).strip()[:10], '%Y-%m-%d').date()
+    except ValueError:
+        return None
+
+
+def _dec(valor):
+    try:
+        return Decimal(str(valor)) if valor is not None else Decimal('0')
+    except (InvalidOperation, ValueError):
+        return Decimal('0')
+
+
+def _br(valor, casas=None):
+    """Número no jeito brasileiro: 1234.5 -> '1.234,50' (casas=2) ou '1234,5' (casas=None)."""
+    v = _dec(valor)
+    if casas is None:
+        texto = f"{v:f}"
+        texto = texto.rstrip('0').rstrip('.') if '.' in texto else texto
+        return texto.replace('.', ',')
+    return f"{v:,.{casas}f}".replace(',', 'X').replace('.', ',').replace('X', '.')
+
+
+def _garantir_tabelas_valor_estoque(cursor):
+    """Cria (uma vez) as tabelas onde o valor fechado de cada contagem fica guardado."""
+    global _tabelas_valor_ok
+    if _tabelas_valor_ok:
+        return
+    cursor.execute("""
+        IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ValorEstoqueFechamento')
+        CREATE TABLE ValorEstoqueFechamento (
+            ContagemID INT PRIMARY KEY,
+            DataFechamento DATETIME NOT NULL DEFAULT GETDATE(),
+            ValorTotal DECIMAL(18, 2) NOT NULL,
+            Metodo NVARCHAR(200) NULL,
+            QtdAvisos INT NULL
+        )
+    """)
+    cursor.execute("""
+        IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ValorEstoqueFechamentoItens')
+        CREATE TABLE ValorEstoqueFechamentoItens (
+            ItemID INT IDENTITY(1,1) PRIMARY KEY,
+            ContagemID INT NOT NULL,
+            ProdutoID INT NULL,
+            NomeProduto NVARCHAR(255) NOT NULL,
+            Categoria NVARCHAR(100) NULL,
+            Unidade NVARCHAR(20) NULL,
+            Quantidade DECIMAL(18, 3) NOT NULL,
+            CustoUnitario DECIMAL(18, 4) NOT NULL,
+            ValorTotal DECIMAL(18, 2) NOT NULL,
+            OrigemCusto NVARCHAR(200) NULL
+        )
+    """)
+    _tabelas_valor_ok = True
+
+
+def _custos_por_produto(cursor, data_contagem):
+    """
+    Calcula o custo de cada produto NA DATA da contagem.
+    Devolve {ProdutoID: {'custo', 'origem', 'suspeito': (menor, maior) ou None}}.
+    """
+    # Compras REAIS até a data da contagem (sem notas fantasmas de quantidade 0)
+    cursor.execute("""
+        SELECT PF.ProdutoID, NF.DataEmissao, NF.NotaID, INI.ItemNotaID,
+               INI.Quantidade, INI.PrecoCustoUnitario, F.CNPJ
+        FROM ItensNotaFiscalEntrada INI
+        JOIN NotasFiscaisEntrada NF ON INI.NotaID = NF.NotaID
+        JOIN ProdutosFornecedor PF ON INI.ProdutoFornecedorID = PF.ProdutoFornecedorID
+        JOIN Fornecedores F ON NF.FornecedorID = F.FornecedorID
+        WHERE PF.ProdutoID IS NOT NULL AND NF.DataEmissao < ?
+    """, data_contagem + timedelta(days=1))  # "< dia seguinte": inclui notas do próprio dia, mesmo com hora
+    compras = {}
+    for pid, dt, nota_id, item_id, qtd, custo, cnpj in cursor.fetchall():
+        if (cnpj or '').strip() == CNPJ_FORNECEDOR_INTERNO or _dec(qtd) <= 0:
+            continue
+        compras.setdefault(pid, []).append((_como_data(dt), nota_id or 0, item_id or 0, _dec(qtd), _dec(custo)))
+
+    # Custo manual (notas fantasmas): vale só para quem NUNCA foi comprado por nota
+    cursor.execute("""
+        SELECT PF.ProdutoID, NF.DataEmissao, NF.NotaID, INI.ItemNotaID, INI.PrecoCustoUnitario
+        FROM ItensNotaFiscalEntrada INI
+        JOIN NotasFiscaisEntrada NF ON INI.NotaID = NF.NotaID
+        JOIN ProdutosFornecedor PF ON INI.ProdutoFornecedorID = PF.ProdutoFornecedorID
+        JOIN Fornecedores F ON NF.FornecedorID = F.FornecedorID
+        WHERE PF.ProdutoID IS NOT NULL AND F.CNPJ = ?
+    """, CNPJ_FORNECEDOR_INTERNO)
+    manuais = {}
+    for pid, dt, nota_id, item_id, custo in cursor.fetchall():
+        chave = (_como_data(dt) or date.min, nota_id or 0, item_id or 0)
+        if pid not in manuais or chave > manuais[pid][0]:
+            manuais[pid] = (chave, _dec(custo))
+
+    inicio_janela = data_contagem - timedelta(days=JANELA_CUSTO_MEDIO_DIAS)
+    inicio_suspeito = data_contagem - timedelta(days=DIAS_VERIFICACAO_SUSPEITO)
+    resultado = {}
+    for pid in set(compras) | set(manuais):
+        lista = compras.get(pid, [])
+        na_janela = [c for c in lista if c[0] and c[0] > inicio_janela]
+        suspeito = None
+        custos_validos = [c[4] for c in lista if c[0] and c[0] > inicio_suspeito and c[4] > 0]
+        if len(custos_validos) >= 2 and min(custos_validos) > 0 and max(custos_validos) >= min(custos_validos) * FATOR_CUSTO_SUSPEITO:
+            suspeito = (min(custos_validos), max(custos_validos))
+
+        if na_janela:
+            qtd_total = sum(c[3] for c in na_janela)
+            custo = sum(c[3] * c[4] for c in na_janela) / qtd_total
+            origem = f"Média ponderada de {len(na_janela)} compra(s) em {JANELA_CUSTO_MEDIO_DIAS} dias"
+        elif lista:
+            ultima = max(lista, key=lambda c: (c[0] or date.min, c[1], c[2]))
+            custo = ultima[4]
+            data_txt = ultima[0].strftime('%d/%m/%Y') if ultima[0] else '?'
+            origem = f"Última compra ({data_txt})"
+        else:
+            custo = manuais[pid][1]
+            origem = "Custo manual (Catálogo)"
+        resultado[pid] = {'custo': custo, 'origem': origem, 'suspeito': suspeito}
+    return resultado, compras
+
+
+def calcular_valor_estoque(contagem_id):
+    """
+    Calcula o VALOR DO ESTOQUE de uma contagem (quantidade x custo médio ponderado).
+    Se a contagem já teve o valor FECHADO, devolve os valores gravados (não mudam mais).
+    Devolve um dicionário:
+      {'contagem': {...}, 'itens': [...], 'total', 'por_categoria': {cat: valor},
+       'avisos': {'nao_contados', 'avulsos', 'sem_custo', 'custo_suspeito'},
+       'fechado': None ou {'data', 'total'}}
+    """
+    conn = get_db_connection()
+    if not conn:
+        raise Exception("Falha de conexão com o banco de dados.")
+    try:
+        cursor = conn.cursor()
+        _garantir_tabelas_valor_estoque(cursor)
+
+        cursor.execute("SELECT ContagemID, DataContagem, NomeContagem FROM ContagensEstoque WHERE ContagemID = ?", contagem_id)
+        cab = cursor.fetchone()
+        if not cab:
+            raise Exception(f"Contagem {contagem_id} não encontrada.")
+        data_contagem = _como_data(cab[1])
+        if data_contagem is None:
+            raise Exception(f"A contagem {contagem_id} está sem data válida.")
+        info = {'id': cab[0], 'data': data_contagem, 'nome': cab[2] or 'Geral'}
+        vazio = {'nao_contados': [], 'avulsos': [], 'sem_custo': [], 'custo_suspeito': []}
+
+        # ---------- Já fechada? Devolve o que foi gravado ----------
+        cursor.execute("SELECT DataFechamento, ValorTotal FROM ValorEstoqueFechamento WHERE ContagemID = ?", contagem_id)
+        fech = cursor.fetchone()
+        if fech:
+            cursor.execute("""
+                SELECT ProdutoID, NomeProduto, Categoria, Unidade, Quantidade, CustoUnitario, ValorTotal, OrigemCusto
+                FROM ValorEstoqueFechamentoItens WHERE ContagemID = ? ORDER BY Categoria, NomeProduto
+            """, contagem_id)
+            itens = [{'ProdutoID': r[0], 'NomeProduto': r[1], 'Categoria': r[2] or 'Geral', 'Unidade': r[3] or 'UN',
+                      'Quantidade': _dec(r[4]), 'CustoUnitario': _dec(r[5]), 'ValorTotal': _dec(r[6]),
+                      'OrigemCusto': r[7] or ''} for r in cursor.fetchall()]
+            por_cat = {}
+            for it in itens:
+                por_cat[it['Categoria']] = por_cat.get(it['Categoria'], Decimal('0')) + it['ValorTotal']
+            return {'contagem': info, 'itens': itens, 'total': _dec(fech[1]), 'por_categoria': dict(sorted(por_cat.items())),
+                    'avisos': vazio, 'fechado': {'data': fech[0], 'total': _dec(fech[1])}}
+
+        # ---------- Catálogo ----------
+        cursor.execute("SELECT ProdutoID, NomeProduto, UnidadeMedida, Categoria FROM ProdutosEstoque")
+        catalogo = {r[0]: {'nome': r[1], 'un': r[2] or 'UN', 'cat': r[3] or 'Geral'} for r in cursor.fetchall()}
+
+        # ---------- Itens contados (somando repetidos) e avulsos ----------
+        cursor.execute("SELECT ProdutoID, QuantidadeContada, NomeAvulso FROM ItensContagemEstoque WHERE ContagemID = ?", contagem_id)
+        contados, avulsos = {}, []
+        for pid, qtd, nome_avulso in cursor.fetchall():
+            if pid is None:
+                avulsos.append({'NomeProduto': nome_avulso or '(sem nome)', 'Quantidade': _dec(qtd)})
+            else:
+                contados[pid] = contados.get(pid, Decimal('0')) + _dec(qtd)
+
+        custos, compras = _custos_por_produto(cursor, data_contagem)
+
+        itens, sem_custo, suspeitos = [], [], []
+        for pid, qtd in contados.items():
+            prod = catalogo.get(pid, {'nome': f'Produto {pid} (excluído do catálogo)', 'un': 'UN', 'cat': 'Geral'})
+            c = custos.get(pid, {'custo': Decimal('0'), 'origem': 'SEM CUSTO', 'suspeito': None})
+            custo = c['custo'].quantize(Decimal('0.0001'))
+            valor = (qtd * custo).quantize(Decimal('0.01'))
+            item = {'ProdutoID': pid, 'NomeProduto': prod['nome'], 'Categoria': prod['cat'], 'Unidade': prod['un'],
+                    'Quantidade': qtd, 'CustoUnitario': custo, 'ValorTotal': valor, 'OrigemCusto': c['origem']}
+            itens.append(item)
+            if qtd > 0 and custo <= 0:
+                sem_custo.append(item)
+            if c['suspeito'] and qtd > 0:
+                menor, maior = c['suspeito']
+                suspeitos.append(dict(item, Detalhe=f"compras entre R$ {_br(menor, 2)} e R$ {_br(maior, 2)} por {prod['un']} — confira o fator da caixa"))
+        itens.sort(key=lambda i: (i['Categoria'], i['NomeProduto']))
+
+        # ---------- Não contados ----------
+        cursor.execute("SELECT ContagemID, DataContagem FROM ContagensEstoque")
+        anteriores = [(_como_data(d), cid) for cid, d in cursor.fetchall() if _como_data(d) and _como_data(d) < data_contagem]
+        nao_contados = {}
+        desde = data_contagem - timedelta(days=60)
+        if anteriores:
+            data_ant, id_ant = max(anteriores)
+            desde = data_ant
+            cursor.execute("SELECT ProdutoID, QuantidadeContada FROM ItensContagemEstoque WHERE ContagemID = ? AND ProdutoID IS NOT NULL", id_ant)
+            qtd_ant = {}
+            for pid, qtd in cursor.fetchall():
+                qtd_ant[pid] = qtd_ant.get(pid, Decimal('0')) + _dec(qtd)
+            for pid, qtd in qtd_ant.items():
+                if qtd > 0 and pid not in contados and pid in catalogo:
+                    nao_contados[pid] = f"tinha {_br(qtd)} {catalogo[pid]['un']} na contagem de {data_ant:%d/%m/%Y}"
+        for pid, lista in compras.items():
+            if pid in contados or pid not in catalogo:
+                continue
+            qtd_comprada = sum(c[3] for c in lista if c[0] and c[0] > desde)
+            if qtd_comprada > 0:
+                texto = f"comprado {_br(qtd_comprada)} {catalogo[pid]['un']} desde {desde:%d/%m/%Y}"
+                nao_contados[pid] = f"{nao_contados[pid]}; {texto}" if pid in nao_contados else texto
+        lista_nao_contados = sorted(
+            [{'ProdutoID': pid, 'NomeProduto': catalogo[pid]['nome'], 'Unidade': catalogo[pid]['un'], 'Detalhe': motivo}
+             for pid, motivo in nao_contados.items()], key=lambda i: i['NomeProduto'])
+
+        total = sum((i['ValorTotal'] for i in itens), Decimal('0'))
+        por_cat = {}
+        for it in itens:
+            por_cat[it['Categoria']] = por_cat.get(it['Categoria'], Decimal('0')) + it['ValorTotal']
+        return {'contagem': info, 'itens': itens, 'total': total, 'por_categoria': dict(sorted(por_cat.items())),
+                'avisos': {'nao_contados': lista_nao_contados, 'avulsos': avulsos,
+                           'sem_custo': sem_custo, 'custo_suspeito': suspeitos},
+                'fechado': None}
+    finally:
+        conn.close()
+
+
+def fechar_valor_estoque(contagem_id):
+    """Grava (congela) o valor atual da contagem. Devolve (sucesso, mensagem, total)."""
+    try:
+        dados = calcular_valor_estoque(contagem_id)
+    except Exception as e:
+        logger.error(f"Erro ao calcular valor para fechamento (contagem {contagem_id}): {e}", exc_info=True)
+        return False, f"Erro ao calcular: {e}", None
+    if dados['fechado']:
+        return False, "Esta contagem já está com o valor fechado.", dados['total']
+    qtd_avisos = sum(len(v) for v in dados['avisos'].values())
+    conn = get_db_connection()
+    if not conn:
+        return False, "Falha de conexão com o banco de dados.", None
+    try:
+        cursor = conn.cursor()
+        _garantir_tabelas_valor_estoque(cursor)
+        cursor.execute("INSERT INTO ValorEstoqueFechamento (ContagemID, DataFechamento, ValorTotal, Metodo, QtdAvisos) VALUES (?, ?, ?, ?, ?)",
+                       contagem_id, datetime.now(), dados['total'],
+                       f"Custo médio ponderado ({JANELA_CUSTO_MEDIO_DIAS} dias)", qtd_avisos)
+        linhas = [(contagem_id, i['ProdutoID'], i['NomeProduto'], i['Categoria'], i['Unidade'], i['Quantidade'],
+                   i['CustoUnitario'], i['ValorTotal'], i['OrigemCusto']) for i in dados['itens']]
+        if linhas:
+            cursor.executemany("""
+                INSERT INTO ValorEstoqueFechamentoItens
+                (ContagemID, ProdutoID, NomeProduto, Categoria, Unidade, Quantidade, CustoUnitario, ValorTotal, OrigemCusto)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, linhas)
+        conn.commit()
+        logger.info(f"Valor do estoque da contagem {contagem_id} FECHADO em R$ {dados['total']:.2f} ({qtd_avisos} aviso(s)).")
+        return True, "Valor fechado com sucesso.", dados['total']
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao fechar valor do estoque (contagem {contagem_id}): {e}", exc_info=True)
+        return False, f"Erro ao gravar o fechamento: {e}", None
+    finally:
+        conn.close()
+
+
+def reabrir_valor_estoque(contagem_id):
+    """Apaga o valor gravado (a contagem volta a ser calculada com os custos atuais)."""
+    conn = get_db_connection()
+    if not conn:
+        return False
+    try:
+        cursor = conn.cursor()
+        _garantir_tabelas_valor_estoque(cursor)
+        cursor.execute("DELETE FROM ValorEstoqueFechamentoItens WHERE ContagemID = ?", contagem_id)
+        cursor.execute("DELETE FROM ValorEstoqueFechamento WHERE ContagemID = ?", contagem_id)
+        conn.commit()
+        logger.info(f"Valor do estoque da contagem {contagem_id} REABERTO.")
+        return True
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao reabrir valor do estoque (contagem {contagem_id}): {e}", exc_info=True)
+        return False
+    finally:
+        conn.close()
+
+
+def listar_valores_estoque_fechados():
+    """Devolve {ContagemID: (ValorTotal, DataFechamento)} das contagens com valor fechado."""
+    conn = get_db_connection()
+    if not conn:
+        return {}
+    try:
+        cursor = conn.cursor()
+        _garantir_tabelas_valor_estoque(cursor)
+        cursor.execute("SELECT ContagemID, ValorTotal, DataFechamento FROM ValorEstoqueFechamento")
+        return {r[0]: (_dec(r[1]), r[2]) for r in cursor.fetchall()}
+    except Exception as e:
+        logger.error(f"Erro ao listar valores de estoque fechados: {e}", exc_info=True)
+        return {}
+    finally:
+        conn.close()
+
+
+def contagem_esta_fechada(contagem_id):
+    """True se a contagem já tem o valor do estoque fechado (gravado)."""
+    return int(contagem_id) in listar_valores_estoque_fechados()
 
 def gerar_relatorio_valoracao_contagem(contagem_id):
     """
