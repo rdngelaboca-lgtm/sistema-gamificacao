@@ -3010,12 +3010,8 @@ class AppGestaoEstoque:
                                     parent=popup)
                 self.abrir_gerenciador_avulsos()
             elif tipo == 'custo_suspeito':
-                messagebox.showinfo("Custo suspeito", f"{a['NomeProduto']}: {a.get('Detalhe', '')}\n\n"
-                                    "Normalmente é um vínculo com o fator (Itens p/ Cx) errado. Vou abrir o "
-                                    "Gerenciador de Vínculos: procure o produto e confira o fator.\n\n"
-                                    "Depois de corrigir, pode ser preciso ajustar o custo da compra no histórico "
-                                    "(aba 5, duplo clique no produto). Então clique em '🔄 Recalcular'.", parent=popup)
-                self.abrir_gestor_vinculos()
+                # [MELHORIA UX] abre direto nos vínculos DESTE produto; ao salvar, o valor é recalculado
+                self.abrir_gestor_vinculos(produto_id=a['ProdutoID'], nome_produto=a['NomeProduto'], ao_salvar=recarregar)
 
         tree_av.bind("<Double-1>", resolver_aviso)
 
@@ -4311,145 +4307,277 @@ class AppGestaoEstoque:
             logger.error(f"Falha no backup do estoque antes do reset: {e}", exc_info=True)
             return None
 
-    def abrir_gestor_vinculos(self):
-        """Abre uma janela para editar/excluir vínculos DE/PARA existentes."""
+    def abrir_gestor_vinculos(self, produto_id=None, nome_produto=None, ao_salvar=None):
+        """
+        [MELHORIA UX] Gerenciador de Vínculos (DE/PARA) mais prático:
+          - aberto a partir de um aviso, já vem FILTRADO no produto em questão;
+          - mostra o custo por unidade da última compra, o nº de compras e a data;
+          - linhas em VERMELHO = fator provavelmente errado (+ opção "só suspeitos");
+          - busca sem acento, por várias palavras (fornecedor, XML, produto, EAN);
+          - prévia ao digitar o fator ("a caixa de R$ 72 vira 12 UN a R$ 6,00");
+          - ao corrigir o fator, oferece corrigir também as compras JÁ importadas;
+          - Enter salva; duplo clique vai direto para o fator.
+        ao_salvar: função chamada depois de cada alteração (ex: recalcular o Valor do Estoque).
+        """
         popup = Toplevel(self.root)
         popup.title("Gerenciador de Vínculos de Produtos")
-        popup.geometry("900x600")
+        popup.geometry("1180x700")
         popup.transient(self.root)
+        estado = {'dados': {}, 'produto_id': produto_id}
 
-        # --- Filtro ---
-        frame_topo = ttk.Frame(popup, padding="10")
+        # ---------- Topo: filtros ----------
+        frame_topo = ttk.Frame(popup, padding=(10, 10, 10, 0))
         frame_topo.pack(fill=tk.X)
-        ttk.Label(frame_topo, text="Filtrar (XML ou Mestre):").pack(side=tk.LEFT)
-        entry_filtro = ttk.Entry(frame_topo, width=30)
+        ttk.Label(frame_topo, text="🔍 Buscar:").pack(side=tk.LEFT)
+        entry_filtro = ttk.Entry(frame_topo, width=40)
         entry_filtro.pack(side=tk.LEFT, padx=5)
+        var_suspeitos = tk.BooleanVar(value=False)
+        ttk.Checkbutton(frame_topo, text="Só suspeitos (fator provavelmente errado)", variable=var_suspeitos,
+                        command=lambda: mostrar()).pack(side=tk.LEFT, padx=10)
+        lbl_contador = ttk.Label(frame_topo, text="", foreground="gray")
+        lbl_contador.pack(side=tk.RIGHT)
 
-        # --- Lista ---
+        frame_produto = ttk.Frame(popup, padding=(10, 4, 10, 0))
+        frame_produto.pack(fill=tk.X)
+        lbl_produto = ttk.Label(frame_produto, text="", font=("Arial", 10, "bold"), foreground="#0056b3")
+        lbl_produto.pack(side=tk.LEFT)
+        btn_todos = ttk.Button(frame_produto, text="Mostrar todos os vínculos", command=lambda: mostrar_todos())
+
+        # ---------- Lista ----------
         frame_lista = ttk.Frame(popup, padding="10")
         frame_lista.pack(fill=tk.BOTH, expand=True)
-
-        cols = ('ID', 'Fornecedor', 'Descrição no XML', 'Produto Mestre Atual', 'Fator (Cx)')
+        cols = ('ID', 'Fornecedor', 'Descrição no XML', 'Produto Mestre', 'Qtd/Cx', 'Custo/Unid.', 'Compras', 'Última compra')
         tree_vinculos = criar_tree_zebrada(frame_lista, columns=cols, show='headings', selectmode='browse')
-
-        tree_vinculos.heading('ID', text='ID'); tree_vinculos.column('ID', width=40)
-        tree_vinculos.heading('Fornecedor', text='Fornecedor'); tree_vinculos.column('Fornecedor', width=200)
-        tree_vinculos.heading('Descrição no XML', text='Descrição no XML'); tree_vinculos.column('Descrição no XML', width=250)
-        tree_vinculos.heading('Produto Mestre Atual', text='Produto Mestre (Seu Estoque)'); tree_vinculos.column('Produto Mestre Atual', width=250)
-        tree_vinculos.heading('Fator (Cx)', text='Qtd/Cx'); tree_vinculos.column('Fator (Cx)', width=60, anchor='center')
-
+        for col, larg, anc in (('ID', 50, 'center'), ('Fornecedor', 190, 'w'), ('Descrição no XML', 260, 'w'),
+                               ('Produto Mestre', 260, 'w'), ('Qtd/Cx', 65, 'center'), ('Custo/Unid.', 95, 'e'),
+                               ('Compras', 65, 'center'), ('Última compra', 95, 'center')):
+            tree_vinculos.heading(col, text=col if col != 'Produto Mestre' else 'Produto Mestre (Seu Estoque)',
+                                  command=lambda c=col: self.ordenar_coluna_treeview(tree_vinculos, c, False))
+            tree_vinculos.column(col, width=larg, anchor=anc)
+        tree_vinculos.tag_configure('suspeito', background='#ffd6d6')
         sb = ttk.Scrollbar(frame_lista, orient="vertical", command=tree_vinculos.yview)
         tree_vinculos.configure(yscrollcommand=sb.set)
         tree_vinculos.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         sb.pack(side=tk.RIGHT, fill=tk.Y)
+        ttk.Label(popup, text="🔴 Vermelho = custo por unidade muito diferente das outras compras do mesmo produto "
+                              "(normalmente o 'Qtd/Cx' está errado).  Clique no título da coluna para ordenar.",
+                  foreground="gray", padding=(10, 0)).pack(anchor="w")
 
-        def carregar_lista(filtro=""):
-            for i in tree_vinculos.get_children(): tree_vinculos.delete(i)
-            
-            try:
-                dados = database.listar_todos_vinculos_detalhado()
-                if not dados:
-                    logger.info("Nenhum vínculo encontrado no banco.")
-                    return
-
-                for item in dados:
-                    # item = (ID, Fornecedor, DescXML, NomeMestre, Fator)
-                    
-                    # Proteção para campos nulos
-                    desc_xml = item[2] if item[2] else "Sem Descrição"
-                    nome_mestre = item[3] if item[3] else "Sem Nome"
-                    
-                    texto_busca = f"{desc_xml} {nome_mestre}".lower()
-                    
-                    if not filtro or filtro.lower() in texto_busca:
-                        # Tratamento seguro para o fator
-                        fator_fmt = fmt_num(item[4] if item[4] is not None else 1, 2).replace('.', ',')
-                        
-                        tree_vinculos.insert("", "end", values=(item[0], item[1], desc_xml, nome_mestre, fator_fmt))
-            except Exception as e:
-                messagebox.showerror("Erro de Carregamento", f"Falha ao ler os vínculos: {e}", parent=popup)
-
-        entry_filtro.bind("<KeyRelease>", lambda e: carregar_lista(entry_filtro.get()))
-
-        # --- Área de Edição ---
+        # ---------- Edição ----------
         frame_edit = ttk.LabelFrame(popup, text="Editar Vínculo Selecionado", padding="10")
         frame_edit.pack(fill=tk.X, padx=10, pady=10)
+        frame_edit.columnconfigure(0, weight=1)
+        lbl_selecionado = ttk.Label(frame_edit, text="Selecione um vínculo na lista.", font=("Arial", 10, "bold"))
+        lbl_selecionado.grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 6))
 
-        ttk.Label(frame_edit, text="Alterar Produto Mestre para:").grid(row=0, column=0, sticky="w")
-        combo_mestre_edit = ttk.Combobox(frame_edit, values=self.lista_mestre_produtos_nomes, width=40, state="readonly")
-        combo_mestre_edit.grid(row=1, column=0, sticky="ew", padx=(0,10))
+        ttk.Label(frame_edit, text="Produto Mestre (digite para buscar):").grid(row=1, column=0, sticky="w")
+        frame_mestre = ttk.Frame(frame_edit)
+        frame_mestre.grid(row=2, column=0, sticky="ew", padx=(0, 10))
+        frame_mestre.columnconfigure(1, weight=1)
+        entry_busca_mestre = ttk.Entry(frame_mestre, width=18)
+        entry_busca_mestre.grid(row=0, column=0, sticky="w", padx=(0, 5))
+        combo_mestre_edit = ttk.Combobox(frame_mestre, values=self.lista_mestre_produtos_nomes, state="readonly")
+        combo_mestre_edit.grid(row=0, column=1, sticky="ew")
 
-        ttk.Label(frame_edit, text="Alterar Qtd por Caixa (Fator):").grid(row=0, column=1, sticky="w")
+        ttk.Label(frame_edit, text="Qtd por Caixa (Fator):").grid(row=1, column=1, sticky="w")
         entry_fator_edit = ttk.Entry(frame_edit, width=10)
-        entry_fator_edit.grid(row=1, column=1, sticky="w")
+        entry_fator_edit.grid(row=2, column=1, sticky="w")
 
-        def preencher_edicao(event):
-            selecionado = tree_vinculos.focus()
-            if not selecionado: return
-            vals = tree_vinculos.item(selecionado, 'values')
-            # vals = (ID, Fornecedor, DescXML, NomeMestre, Fator)
+        lbl_previa = ttk.Label(frame_edit, text="", foreground="#0056b3")
+        lbl_previa.grid(row=3, column=0, columnspan=4, sticky="w", pady=(6, 0))
 
-            # [DEPURAÇÃO] BUG: buscava o nome "em qualquer parte" do texto. O mestre "Sal"
-            # selecionava "Bacon Salgado" (vem antes na ordem) e, ao salvar só o fator, o
-            # vínculo era TROCADO para o produto errado. Se nada batesse, ficava o produto
-            # da linha clicada ANTES. Agora só aceita o nome exato; se não achar, fica vazio.
-            nome_mestre_atual = vals[3]
-            prefixo = f"{nome_mestre_atual} (ID: "
-            candidatos = [item for item in self.lista_mestre_produtos_nomes if item.startswith(prefixo)]
-            combo_mestre_edit.set(candidatos[0] if len(candidatos) == 1 else "")
+        # ---------- Funções ----------
+        def carregar_dados():
+            try:
+                lista = database.listar_vinculos_com_resumo()
+            except Exception as e:
+                logger.error(f"Erro ao carregar vínculos: {e}", exc_info=True)
+                messagebox.showerror("Erro de Carregamento", f"Falha ao ler os vínculos: {e}", parent=popup)
+                lista = []
+            estado['dados'] = {str(v['ID']): v for v in lista}
 
-            entry_fator_edit.delete(0, tk.END)
-            entry_fator_edit.insert(0, vals[4])
+        def mostrar(manter=None):
+            manter = manter or tree_vinculos.focus()
+            for i in tree_vinculos.get_children():
+                tree_vinculos.delete(i)
+            palavras = sem_acento(entry_filtro.get()).split()
+            so_suspeitos = var_suspeitos.get()
+            n = 0
+            for iid, v in estado['dados'].items():
+                if estado['produto_id'] is not None and v['ProdutoID'] != estado['produto_id']:
+                    continue
+                if so_suspeitos and not v['Suspeito']:
+                    continue
+                texto = sem_acento(f"{v['Fornecedor']} {v['DescricaoXML']} {v['NomeMestre']} {v['EAN']} {v['ID']}")
+                if palavras and not all(p in texto for p in palavras):
+                    continue
+                custo = fmt_reais(v['UltimoCustoUnid']) if v['UltimoCustoUnid'] is not None else "—"
+                data = v['UltimaData'].strftime('%d/%m/%Y') if v['UltimaData'] else "—"
+                tree_vinculos.insert("", "end", iid=iid, tags=('suspeito',) if v['Suspeito'] else (), values=(
+                    v['ID'], v['Fornecedor'], v['DescricaoXML'], v['NomeMestre'], fmt_qtd(v['Fator']),
+                    custo, v['QtdCompras'], data))
+                n += 1
+            total = len(estado['dados'])
+            suspeitos = sum(1 for v in estado['dados'].values() if v['Suspeito'])
+            lbl_contador.config(text=f"{n} de {total} vínculo(s) · 🔴 {suspeitos} suspeito(s)")
+            if manter and tree_vinculos.exists(manter):
+                tree_vinculos.focus(manter); tree_vinculos.selection_set(manter); tree_vinculos.see(manter)
+            elif n == 1:
+                unico = tree_vinculos.get_children()[0]
+                tree_vinculos.focus(unico); tree_vinculos.selection_set(unico)
 
-        tree_vinculos.bind("<<TreeviewSelect>>", preencher_edicao)
+        def mostrar_todos():
+            estado['produto_id'] = None
+            lbl_produto.config(text="")
+            btn_todos.pack_forget()
+            mostrar()
 
-        def salvar_alteracao():
-            selecionado = tree_vinculos.focus()
-            if not selecionado: return
-            vinculo_id = tree_vinculos.item(selecionado, 'values')[0]
+        def selecionado_atual():
+            sel = tree_vinculos.focus()
+            return (sel, estado['dados'].get(sel)) if sel else (None, None)
 
-            novo_mestre_nome = combo_mestre_edit.get()
-            if not novo_mestre_nome:
-                messagebox.showerror("Erro", "Selecione um produto mestre.", parent=popup)
+        def atualizar_previa(event=None):
+            sel, v = selecionado_atual()
+            if not v:
+                lbl_previa.config(text=""); return
+            try:
+                novo = para_decimal(entry_fator_edit.get(), "Fator", permitir_zero=False)
+            except ValueError:
+                lbl_previa.config(text="⚠️ Digite um número maior que zero (ex: 12).", foreground="#c62828"); return
+            if not v['UltimoCustoUnid']:
+                lbl_previa.config(text="Ainda não há compras por este vínculo: o fator vale para as próximas notas.",
+                                  foreground="gray"); return
+            custo_embalagem = v['UltimoCustoUnid'] * v['Fator']
+            embalagens = v['UltimaQtd'] / v['Fator'] if v['UltimaQtd'] else Decimal('0')
+            unidade = self.mapa_produtos_mestre_contagem.get(v['NomeMestre'], {}).get('un', 'UN')
+            texto = (f"Última compra: {fmt_qtd(embalagens)} embalagem(ns) de {fmt_reais(custo_embalagem)}.  "
+                     f"Com fator {fmt_qtd(novo)} → {fmt_qtd(embalagens * novo)} {unidade} a {fmt_reais(custo_embalagem / novo)} cada.")
+            lbl_previa.config(text=texto, foreground="#0056b3")
+
+        def preencher_edicao(event=None):
+            sel, v = selecionado_atual()
+            if not v:
                 return
+            lbl_selecionado.config(text=f"{v['Fornecedor']}  •  {v['DescricaoXML']}")
+            # [DEPURAÇÃO] só aceita o nome EXATO do mestre (antes "Sal" virava "Bacon Salgado")
+            prefixo = f"{v['NomeMestre']} (ID: "
+            candidatos = [n for n in self.lista_mestre_produtos_nomes if n.startswith(prefixo)]
+            if v['ProdutoID'] is not None:
+                exato = f"{v['NomeMestre']} (ID: {v['ProdutoID']})"
+                candidatos = [exato] if exato in self.lista_mestre_produtos_nomes else candidatos
+            combo_mestre_edit['values'] = self.lista_mestre_produtos_nomes
+            combo_mestre_edit.set(candidatos[0] if len(candidatos) == 1 else "")
+            entry_busca_mestre.delete(0, tk.END)
+            entry_fator_edit.delete(0, tk.END)
+            entry_fator_edit.insert(0, fmt_qtd(v['Fator']))
+            atualizar_previa()
 
+        def filtrar_mestre(event=None):
+            if event is not None and getattr(event, 'keysym', '') in ('Return', 'Tab', 'Up', 'Down'):
+                return
+            achados = buscar_nomes(entry_busca_mestre.get(), self.lista_mestre_produtos_nomes)
+            combo_mestre_edit['values'] = achados
+            if achados and entry_busca_mestre.get().strip():
+                combo_mestre_edit.set(achados[0])
+
+        def salvar_alteracao(event=None):
+            sel, v = selecionado_atual()
+            if not v:
+                messagebox.showwarning("Aviso", "Selecione um vínculo na lista.", parent=popup)
+                return
+            novo_mestre_nome = combo_mestre_edit.get()
             novo_mestre_id = self.mapa_produtos_mestre.get(novo_mestre_nome)
             if not novo_mestre_id:
-                messagebox.showerror("Erro", "Produto mestre não encontrado. Escolha de novo.", parent=popup)
+                messagebox.showerror("Erro", "Selecione um Produto Mestre válido.", parent=popup)
                 return
-
             try:
                 novo_fator = para_decimal(entry_fator_edit.get(), "Fator", permitir_zero=False)
             except ValueError:
                 messagebox.showerror("Erro", "Fator inválido. Use um número maior que 0.", parent=popup)
                 return
 
-            if database.atualizar_vinculo_existente(vinculo_id, novo_mestre_id, novo_fator):
-                messagebox.showinfo("Sucesso", "Vínculo atualizado!", parent=popup)
-                carregar_lista(entry_filtro.get())
+            recalcular = False
+            if novo_fator != v['Fator'] and v['QtdCompras'] > 0:
+                fator_antigo, previa = database.previa_recalculo_vinculo(v['ID'], novo_fator)
+                exemplos = "\n".join(
+                    f"  • NF {p['NF']} ({p['Data'].strftime('%d/%m/%Y') if p['Data'] else '?'}): "
+                    f"{fmt_qtd(p['QtdAtual'])} a {fmt_reais(p['CustoAtual'])}  →  "
+                    f"{fmt_qtd(p['QtdNova'])} a {fmt_reais(p['CustoNovo'])}" for p in previa[:5])
+                mais = f"\n  ... e mais {len(previa) - 5}" if len(previa) > 5 else ""
+                resposta = messagebox.askyesnocancel(
+                    "Corrigir também as compras já importadas?",
+                    f"O fator vai mudar de {fmt_qtd(fator_antigo)} para {fmt_qtd(novo_fator)}.\n\n"
+                    f"Existem {len(previa)} compra(s) já importada(s) com o fator antigo:\n{exemplos}{mais}\n\n"
+                    "SIM = corrigir também essas compras (recomendado se o fator estava ERRADO;\n"
+                    "         o valor total de cada nota não muda)\n"
+                    "NÃO = mudar só para as PRÓXIMAS notas\n"
+                    "CANCELAR = não salvar\n\n"
+                    "Obs.: contagens com o valor do estoque já FECHADO não mudam.",
+                    parent=popup)
+                if resposta is None:
+                    return
+                recalcular = bool(resposta)
+
+            if database.atualizar_vinculo_existente(v['ID'], novo_mestre_id, novo_fator, recalcular_compras=recalcular):
+                extra = " e compras antigas corrigidas" if recalcular else ""
+                self.status(f"Vínculo '{v['DescricaoXML']}' salvo (fator {fmt_qtd(novo_fator)}{extra}).")
+                carregar_dados(); mostrar(manter=sel); preencher_edicao()
+                if ao_salvar:
+                    try:
+                        ao_salvar()
+                    except Exception as e:
+                        logger.warning(f"Falha ao atualizar a janela de origem após salvar vínculo: {e}")
             else:
-                messagebox.showerror("Erro", "Falha ao atualizar.", parent=popup)
+                messagebox.showerror("Erro", "Falha ao atualizar (veja o log).", parent=popup)
+            return "break"
 
         def excluir_vinculo():
-            selecionado = tree_vinculos.focus()
-            if not selecionado: return
-            vinculo_id = tree_vinculos.item(selecionado, 'values')[0]
-            desc = tree_vinculos.item(selecionado, 'values')[2]
-
-            if messagebox.askyesno("Excluir", f"Deseja excluir o vínculo para '{desc}'?\n\nNa próxima importação, o sistema pedirá para vincular novamente.", parent=popup):
-                if database.excluir_vinculo_existente(vinculo_id):
-                    messagebox.showinfo("Sucesso", "Vínculo excluído.", parent=popup)
-                    carregar_lista(entry_filtro.get())
+            sel, v = selecionado_atual()
+            if not v:
+                return
+            if v['QtdCompras'] > 0:
+                messagebox.showwarning(
+                    "Não é possível excluir",
+                    f"'{v['DescricaoXML']}' já tem {v['QtdCompras']} compra(s) registrada(s).\n\n"
+                    "Excluir apagaria a ligação dessas compras com o estoque.\n"
+                    "Se o produto está errado, troque o Produto Mestre e clique em 'Salvar Alterações'.",
+                    parent=popup)
+                return
+            if messagebox.askyesno("Excluir", f"Deseja excluir o vínculo para '{v['DescricaoXML']}'?\n\n"
+                                   "Na próxima importação, o sistema pedirá para vincular novamente.", parent=popup):
+                if database.excluir_vinculo_existente(v['ID']):
+                    self.status(f"Vínculo '{v['DescricaoXML']}' excluído.", 'info')
+                    carregar_dados(); mostrar()
                 else:
                     messagebox.showerror("Erro", "Falha ao excluir.", parent=popup)
 
+        def ir_para_fator(event=None):
+            entry_fator_edit.focus_set(); entry_fator_edit.select_range(0, tk.END)
+
+        entry_filtro.bind("<KeyRelease>", lambda e: mostrar())
+        entry_busca_mestre.bind("<KeyRelease>", filtrar_mestre)
+        entry_fator_edit.bind("<KeyRelease>", atualizar_previa)
+        entry_fator_edit.bind("<Return>", salvar_alteracao)
+        tree_vinculos.bind("<<TreeviewSelect>>", preencher_edicao)
+        tree_vinculos.bind("<Double-1>", ir_para_fator)
+        tree_vinculos.bind("<Delete>", lambda e: excluir_vinculo())
+
         btn_salvar = ttk.Button(frame_edit, text="💾 Salvar Alterações", command=salvar_alteracao)
-        btn_salvar.grid(row=1, column=2, padx=10)
-
+        btn_salvar.grid(row=2, column=2, padx=10)
         btn_excluir = ttk.Button(frame_edit, text="🗑️ Excluir Vínculo", command=excluir_vinculo)
-        btn_excluir.grid(row=1, column=3, padx=10)
+        btn_excluir.grid(row=2, column=3, padx=(0, 5))
 
-        carregar_lista()
+        if produto_id is not None:
+            lbl_produto.config(text=f"Mostrando só os vínculos de: {nome_produto or produto_id}")
+            btn_todos.pack(side=tk.LEFT, padx=10)
+        carregar_dados()
+        mostrar()
+        entry_filtro.focus_set()
+        self._janela_vinculos = {'popup': popup, 'tree': tree_vinculos, 'filtro': entry_filtro,
+                                 'fator': entry_fator_edit, 'combo': combo_mestre_edit, 'busca_mestre': entry_busca_mestre,
+                                 'previa': lbl_previa, 'salvar': salvar_alteracao, 'excluir': excluir_vinculo,
+                                 'suspeitos': var_suspeitos, 'mostrar': mostrar, 'mostrar_todos': mostrar_todos,
+                                 'contador': lbl_contador}
 
     def abrir_tela_auditoria(self):
         """

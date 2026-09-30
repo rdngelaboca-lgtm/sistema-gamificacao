@@ -8188,12 +8188,34 @@ def listar_todos_vinculos_detalhado():
             conn.close()
     return []
 
-def atualizar_vinculo_existente(vinculo_id, novo_produto_id, novo_fator):
-    """Atualiza o Produto Mestre e o Fator de um vínculo existente."""
+def atualizar_vinculo_existente(vinculo_id, novo_produto_id, novo_fator, recalcular_compras=False):
+    """
+    Atualiza o Produto Mestre e o Fator de um vínculo existente.
+    [MELHORIA] recalcular_compras=True: corrige também as compras JÁ IMPORTADAS por
+    este vínculo. Antes, trocar o fator só valia para as próximas notas e o histórico
+    continuava errado (ex: 1 UN a R$ 72 em vez de 12 UN a R$ 6). O valor total de cada
+    compra não muda: Quantidade x (novo/antigo) e Custo x (antigo/novo).
+    """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
+            if recalcular_compras:
+                cursor.execute("SELECT FatorConversao FROM ProdutosFornecedor WHERE ProdutoFornecedorID = ?", vinculo_id)
+                linha = cursor.fetchone()
+                fator_antigo = _dec(linha[0]) if linha else Decimal('1')
+                if fator_antigo <= 0:
+                    fator_antigo = Decimal('1')
+                fator_novo = _dec(novo_fator)
+                if fator_novo > 0 and fator_novo != fator_antigo:
+                    cursor.execute("SELECT ItemNotaID, Quantidade, PrecoCustoUnitario FROM ItensNotaFiscalEntrada "
+                                   "WHERE ProdutoFornecedorID = ? AND Quantidade > 0", vinculo_id)
+                    for item_id, qtd, custo in cursor.fetchall():
+                        nova_qtd = (_dec(qtd) * fator_novo / fator_antigo).quantize(Decimal('0.001'))
+                        novo_custo = (_dec(custo) * fator_antigo / fator_novo).quantize(Decimal('0.0001'))
+                        cursor.execute("UPDATE ItensNotaFiscalEntrada SET Quantidade = ?, PrecoCustoUnitario = ? WHERE ItemNotaID = ?",
+                                       nova_qtd, novo_custo, item_id)
+                    logger.info(f"Vínculo {vinculo_id}: compras recalculadas do fator {fator_antigo} para {fator_novo}.")
             sql = """
                 UPDATE ProdutosFornecedor 
                 SET ProdutoID = ?, FatorConversao = ? 
@@ -8203,11 +8225,130 @@ def atualizar_vinculo_existente(vinculo_id, novo_produto_id, novo_fator):
             conn.commit()
             return True
         except Exception as e:
-            logger.error(f"Erro ao atualizar vínculo ID {vinculo_id}: {e}")
+            conn.rollback()
+            logger.error(f"Erro ao atualizar vínculo ID {vinculo_id}: {e}", exc_info=True)
             return False
         finally:
             conn.close()
     return False
+
+
+def listar_vinculos_com_resumo():
+    """
+    [MELHORIA] Lista os vínculos com o resumo das compras de cada um, para a tela de
+    vínculos: quantas compras, data e custo por unidade da ÚLTIMA compra, custo da
+    embalagem (custo x fator) e se o vínculo parece ter o fator errado.
+    Devolve uma lista de dicionários.
+    """
+    conn = get_db_connection()
+    if not conn:
+        return []
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT PF.ProdutoFornecedorID, F.NomeFantasia, PF.DescricaoXML, PF.ProdutoID, P.NomeProduto,
+                   PF.FatorConversao, PF.EAN, F.CNPJ
+            FROM ProdutosFornecedor PF
+            LEFT JOIN Fornecedores F ON PF.FornecedorID = F.FornecedorID
+            LEFT JOIN ProdutosEstoque P ON PF.ProdutoID = P.ProdutoID
+        """)
+        vinculos = cursor.fetchall()
+        cursor.execute("""
+            SELECT INI.ProdutoFornecedorID, NF.DataEmissao, NF.NotaID, INI.ItemNotaID, INI.Quantidade, INI.PrecoCustoUnitario
+            FROM ItensNotaFiscalEntrada INI
+            JOIN NotasFiscaisEntrada NF ON INI.NotaID = NF.NotaID
+            WHERE INI.Quantidade > 0
+        """)
+        compras = {}
+        for pf, dt, nota_id, item_id, qtd, custo in cursor.fetchall():
+            compras.setdefault(pf, []).append((_como_data(dt) or date.min, nota_id or 0, item_id or 0, _dec(qtd), _dec(custo)))
+
+        resultado = []
+        for pf, forn, desc, pid, nome_mestre, fator, ean, cnpj in vinculos:
+            fator = _dec(fator) if fator is not None and _dec(fator) > 0 else Decimal('1')
+            lista = sorted(compras.get(pf, []))
+            ultima = lista[-1] if lista else None
+            custos = [c[4] for c in lista if c[4] > 0]
+            resultado.append({
+                'ID': pf, 'Fornecedor': forn or 'FORNECEDOR DELETADO', 'DescricaoXML': desc or 'Sem Descrição',
+                'ProdutoID': pid, 'NomeMestre': nome_mestre or ('PRODUTO DELETADO (ÓRFÃO)' if pid else 'SEM PRODUTO'),
+                'Fator': fator, 'EAN': ean or '', 'Interno': (cnpj or '').strip() == CNPJ_FORNECEDOR_INTERNO,
+                'QtdCompras': len(lista),
+                'UltimaData': ultima[0] if ultima and ultima[0] != date.min else None,
+                'UltimaQtd': ultima[3] if ultima else None,          # já na unidade do estoque
+                'UltimoCustoUnid': ultima[4] if ultima else None,    # por unidade do estoque
+                'VariacaoPropria': bool(len(custos) >= 2 and max(custos) >= min(custos) * FATOR_CUSTO_SUSPEITO),
+            })
+
+        # Suspeito: custo por unidade muito diferente do custo "típico" do mesmo produto.
+        # O típico é a MEDIANA PONDERADA PELA QUANTIDADE de todas as compras do produto:
+        # um vínculo com fator errado costuma ter poucas unidades (ex: 1 "UN" a R$ 72) e
+        # por isso não "puxa" a referência para o lado errado.
+        compras_por_produto = {}
+        for v in resultado:
+            if v['ProdutoID'] and not v['Interno']:
+                for c in compras.get(v['ID'], []):
+                    if c[4] > 0:
+                        compras_por_produto.setdefault(v['ProdutoID'], []).append((c[4], c[3]))
+        referencia = {}
+        for pid, lista in compras_por_produto.items():
+            lista.sort()
+            metade = sum(q for _, q in lista) / 2
+            acumulado = Decimal('0')
+            for custo, qtd in lista:
+                acumulado += qtd
+                if acumulado >= metade:
+                    referencia[pid] = custo
+                    break
+        for v in resultado:
+            v['Suspeito'] = v['VariacaoPropria']
+            ref = referencia.get(v['ProdutoID'])
+            if ref and ref > 0 and v['UltimoCustoUnid'] and v['UltimoCustoUnid'] > 0 and not v['Interno']:
+                if v['UltimoCustoUnid'] >= ref * FATOR_CUSTO_SUSPEITO or v['UltimoCustoUnid'] * FATOR_CUSTO_SUSPEITO <= ref:
+                    v['Suspeito'] = True
+            v['CustoReferencia'] = ref
+        resultado.sort(key=lambda v: (str(v['Fornecedor']), str(v['DescricaoXML'])))
+        return resultado
+    except Exception as e:
+        logger.error(f"Erro ao listar vínculos com resumo: {e}", exc_info=True)
+        return []
+    finally:
+        conn.close()
+
+
+def previa_recalculo_vinculo(vinculo_id, novo_fator):
+    """
+    [MELHORIA] Mostra como ficariam as compras já importadas se o fator mudar.
+    Devolve (fator_antigo, [ {NF, Data, QtdAtual, CustoAtual, QtdNova, CustoNovo} ]).
+    """
+    conn = get_db_connection()
+    if not conn:
+        return Decimal('1'), []
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT FatorConversao FROM ProdutosFornecedor WHERE ProdutoFornecedorID = ?", vinculo_id)
+        linha = cursor.fetchone()
+        fator_antigo = _dec(linha[0]) if linha and linha[0] is not None and _dec(linha[0]) > 0 else Decimal('1')
+        fator_novo = _dec(novo_fator)
+        cursor.execute("""
+            SELECT NF.NumeroNF, NF.DataEmissao, INI.Quantidade, INI.PrecoCustoUnitario
+            FROM ItensNotaFiscalEntrada INI
+            JOIN NotasFiscaisEntrada NF ON INI.NotaID = NF.NotaID
+            WHERE INI.ProdutoFornecedorID = ? AND INI.Quantidade > 0
+            ORDER BY NF.DataEmissao DESC
+        """, vinculo_id)
+        itens = []
+        for nf, dt, qtd, custo in cursor.fetchall():
+            q, c = _dec(qtd), _dec(custo)
+            itens.append({'NF': nf, 'Data': _como_data(dt), 'QtdAtual': q, 'CustoAtual': c,
+                          'QtdNova': (q * fator_novo / fator_antigo) if fator_novo > 0 else q,
+                          'CustoNovo': (c * fator_antigo / fator_novo) if fator_novo > 0 else c})
+        return fator_antigo, itens
+    except Exception as e:
+        logger.error(f"Erro na prévia de recálculo do vínculo {vinculo_id}: {e}", exc_info=True)
+        return Decimal('1'), []
+    finally:
+        conn.close()
 
 def excluir_vinculo_existente(vinculo_id):
     """Exclui um vínculo DE/PARA."""
