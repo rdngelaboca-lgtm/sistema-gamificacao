@@ -6413,6 +6413,67 @@ def buscar_vinculo_produto_fornecedor(fornecedor_id, descricao_xml):
                 conn.close()
     return None
 
+def _ean_valido(ean):
+    """EAN de verdade (8 a 14 dígitos). 'SEM GTIN', vazio, '0' etc. não servem para reconhecer produto."""
+    digitos = ''.join(ch for ch in str(ean or '') if ch.isdigit())
+    return digitos if 8 <= len(digitos) <= 14 and set(digitos) != {'0'} else None
+
+
+def _codigo_valido(codigo):
+    """Código do produto no fornecedor (cProd). Ignora vazios e códigos genéricos como '0'."""
+    c = str(codigo or '').strip()
+    return c if c and c.strip('0') else None
+
+
+def buscar_vinculo_inteligente(fornecedor_id, descricao_xml, cprod=None, ean=None):
+    """
+    [MELHORIA] Reconhece o item da nota mesmo quando o fornecedor MUDA a descrição
+    (ex: lote/validade no fim do nome). Antes o sistema só reconhecia pela descrição
+    EXATA, e cada variação virava um "produto novo" para vincular de novo (vínculos
+    duplicados). Ordem de busca, sempre dentro do MESMO fornecedor:
+      1) descrição exata;  2) código do produto no fornecedor (cProd);  3) EAN.
+    Só aceita 2) e 3) se todos os vínculos encontrados apontarem para o MESMO produto
+    e com o MESMO fator (senão é ambíguo e o item vai para "pendentes", como antes).
+    Devolve {'ProdutoFornecedorID', 'ProdutoID', 'Fator', 'Como'} ou None.
+    """
+    conn = get_db_connection()
+    if not conn:
+        return None
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT ProdutoFornecedorID, ProdutoID, FatorConversao FROM ProdutosFornecedor "
+                       "WHERE FornecedorID = ? AND DescricaoXML = ?", fornecedor_id, descricao_xml)
+        linha = cursor.fetchone()
+        if linha:
+            return {'ProdutoFornecedorID': linha[0], 'ProdutoID': linha[1], 'Fator': linha[2], 'Como': 'descricao'}
+
+        tentativas = []
+        codigo = _codigo_valido(cprod)
+        if codigo:
+            tentativas.append(('codigo', "CodigoFornecedor = ?", codigo))
+        ean_ok = _ean_valido(ean)
+        if ean_ok:
+            tentativas.append(('ean', "EAN = ?", ean_ok))
+        for como, condicao, valor in tentativas:
+            cursor.execute(f"SELECT ProdutoFornecedorID, ProdutoID, FatorConversao FROM ProdutosFornecedor "
+                           f"WHERE FornecedorID = ? AND ProdutoID IS NOT NULL AND {condicao}", fornecedor_id, valor)
+            achados = cursor.fetchall()
+            if not achados:
+                continue
+            produtos = {a[1] for a in achados}
+            fatores = {_dec(a[2]) if a[2] is not None else Decimal('1') for a in achados}
+            if len(produtos) == 1 and len(fatores) == 1:
+                mais_novo = max(achados, key=lambda a: a[0])
+                return {'ProdutoFornecedorID': mais_novo[0], 'ProdutoID': mais_novo[1], 'Fator': mais_novo[2], 'Como': como}
+            logger.info(f"Item '{descricao_xml}': {como} '{valor}' aponta para produtos/fatores diferentes - fica pendente.")
+        return None
+    except Exception as e:
+        logger.error(f"Erro no reconhecimento inteligente de '{descricao_xml}': {e}", exc_info=True)
+        return None
+    finally:
+        conn.close()
+
+
 def criar_vinculo_produto_fornecedor(produto_id_mestre, fornecedor_id, descricao_xml, cProd, cEAN, NCM, fator_conversao=1.0):
     """Cria um novo vínculo 'DE/PARA' incluindo o Fator de Conversão."""
     conn = get_db_connection()
@@ -8188,7 +8249,7 @@ def listar_todos_vinculos_detalhado():
             conn.close()
     return []
 
-def atualizar_vinculo_existente(vinculo_id, novo_produto_id, novo_fator, recalcular_compras=False):
+def atualizar_vinculo_existente(vinculo_id, novo_produto_id, novo_fator, recalcular_compras=False, novo_ean=None, novo_ncm=None):
     """
     Atualiza o Produto Mestre e o Fator de um vínculo existente.
     [MELHORIA] recalcular_compras=True: corrige também as compras JÁ IMPORTADAS por
@@ -8222,6 +8283,11 @@ def atualizar_vinculo_existente(vinculo_id, novo_produto_id, novo_fator, recalcu
                 WHERE ProdutoFornecedorID = ?
             """
             cursor.execute(sql, novo_produto_id, novo_fator, vinculo_id)
+            # [MELHORIA] EAN e NCM também podem ser editados aqui (None = não mexe)
+            if novo_ean is not None:
+                cursor.execute("UPDATE ProdutosFornecedor SET EAN = ? WHERE ProdutoFornecedorID = ?", novo_ean, vinculo_id)
+            if novo_ncm is not None:
+                cursor.execute("UPDATE ProdutosFornecedor SET NCM = ? WHERE ProdutoFornecedorID = ?", novo_ncm, vinculo_id)
             conn.commit()
             return True
         except Exception as e:
@@ -8247,7 +8313,7 @@ def listar_vinculos_com_resumo():
         cursor = conn.cursor()
         cursor.execute("""
             SELECT PF.ProdutoFornecedorID, F.NomeFantasia, PF.DescricaoXML, PF.ProdutoID, P.NomeProduto,
-                   PF.FatorConversao, PF.EAN, F.CNPJ
+                   PF.FatorConversao, PF.EAN, F.CNPJ, PF.NCM, PF.CodigoFornecedor, PF.FornecedorID
             FROM ProdutosFornecedor PF
             LEFT JOIN Fornecedores F ON PF.FornecedorID = F.FornecedorID
             LEFT JOIN ProdutosEstoque P ON PF.ProdutoID = P.ProdutoID
@@ -8264,7 +8330,7 @@ def listar_vinculos_com_resumo():
             compras.setdefault(pf, []).append((_como_data(dt) or date.min, nota_id or 0, item_id or 0, _dec(qtd), _dec(custo)))
 
         resultado = []
-        for pf, forn, desc, pid, nome_mestre, fator, ean, cnpj in vinculos:
+        for pf, forn, desc, pid, nome_mestre, fator, ean, cnpj, ncm, codigo, forn_id in vinculos:
             fator = _dec(fator) if fator is not None and _dec(fator) > 0 else Decimal('1')
             lista = sorted(compras.get(pf, []))
             ultima = lista[-1] if lista else None
@@ -8273,6 +8339,8 @@ def listar_vinculos_com_resumo():
                 'ID': pf, 'Fornecedor': forn or 'FORNECEDOR DELETADO', 'DescricaoXML': desc or 'Sem Descrição',
                 'ProdutoID': pid, 'NomeMestre': nome_mestre or ('PRODUTO DELETADO (ÓRFÃO)' if pid else 'SEM PRODUTO'),
                 'Fator': fator, 'EAN': ean or '', 'Interno': (cnpj or '').strip() == CNPJ_FORNECEDOR_INTERNO,
+                'NCM': ncm or '', 'Codigo': codigo or '', 'FornecedorID': forn_id,
+                'Orfao': bool(pid) and not nome_mestre, 'SemProduto': not pid,
                 'QtdCompras': len(lista),
                 'UltimaData': ultima[0] if ultima and ultima[0] != date.min else None,
                 'UltimaQtd': ultima[3] if ultima else None,          # já na unidade do estoque
@@ -8307,11 +8375,122 @@ def listar_vinculos_com_resumo():
                 if v['UltimoCustoUnid'] >= ref * FATOR_CUSTO_SUSPEITO or v['UltimoCustoUnid'] * FATOR_CUSTO_SUSPEITO <= ref:
                     v['Suspeito'] = True
             v['CustoReferencia'] = ref
+
+        # [MELHORIA] Grupos de duplicados (mesmo fornecedor + mesmo produto + mesmo código ou EAN)
+        grupos = _agrupar_duplicados(resultado)
+        for n, grupo in enumerate(grupos, start=1):
+            for v in grupo:
+                v['Grupo'] = n
+        for v in resultado:
+            v.setdefault('Grupo', None)
+            v['Duplicado'] = v['Grupo'] is not None
+            v['SemEAN'] = not v['Interno'] and not _ean_valido(v['EAN'])
+            v['SemCompras'] = v['QtdCompras'] == 0 and not v['Interno']
         resultado.sort(key=lambda v: (str(v['Fornecedor']), str(v['DescricaoXML'])))
         return resultado
     except Exception as e:
         logger.error(f"Erro ao listar vínculos com resumo: {e}", exc_info=True)
         return []
+    finally:
+        conn.close()
+
+
+def _agrupar_duplicados(vinculos):
+    """
+    Junta em grupos os vínculos que são o MESMO item: mesmo fornecedor, mesmo Produto
+    Mestre e que compartilham o código do fornecedor ou o EAN. Devolve lista de grupos
+    (cada grupo = lista de dicionários, com 2 ou mais vínculos).
+    """
+    pai = {}
+
+    def achar(x):
+        while pai[x] != x:
+            pai[x] = pai[pai[x]]
+            x = pai[x]
+        return x
+
+    chaves = {}
+    for v in vinculos:
+        if v.get('Interno') or not v.get('ProdutoID'):
+            continue
+        pai[v['ID']] = v['ID']
+        base = (v.get('FornecedorID'), v['ProdutoID'])
+        for chave in ((('COD',) + base + (_codigo_valido(v.get('Codigo')),)) if _codigo_valido(v.get('Codigo')) else None,
+                      (('EAN',) + base + (_ean_valido(v.get('EAN')),)) if _ean_valido(v.get('EAN')) else None):
+            if chave is None:
+                continue
+            if chave in chaves:
+                pai[achar(v['ID'])] = achar(chaves[chave])
+            else:
+                chaves[chave] = v['ID']
+    por_raiz = {}
+    por_id = {v['ID']: v for v in vinculos}
+    for vid in pai:
+        por_raiz.setdefault(achar(vid), []).append(por_id[vid])
+    return [sorted(g, key=lambda v: v['ID']) for g in por_raiz.values() if len(g) >= 2]
+
+
+def listar_grupos_duplicados():
+    """[MELHORIA] Grupos de vínculos duplicados, com o vínculo sugerido para MANTER em cada um."""
+    grupos = {}
+    for v in listar_vinculos_com_resumo():
+        if v.get('Grupo'):
+            grupos.setdefault(v['Grupo'], []).append(v)
+    resultado = []
+    for n, lista in sorted(grupos.items()):
+        # Sugere manter o que tem a compra mais recente (e, empatando, mais compras)
+        manter = max(lista, key=lambda v: (v['UltimaData'] or date.min, v['QtdCompras'], v['ID']))
+        resultado.append({'Grupo': n, 'Vinculos': lista, 'ManterID': manter['ID'],
+                          'FatoresIguais': len({v['Fator'] for v in lista}) == 1,
+                          'Fornecedor': lista[0]['Fornecedor'], 'NomeMestre': lista[0]['NomeMestre']})
+    return resultado
+
+
+def juntar_vinculos(manter_id, remover_ids):
+    """
+    [MELHORIA] Junta vínculos duplicados num só: as compras dos removidos passam a
+    apontar para o vínculo mantido e os removidos são apagados. As quantidades e custos
+    já gravados NÃO mudam (já estão na unidade do estoque). Exige mesmo fornecedor e
+    mesmo Produto Mestre. Devolve (sucesso, mensagem).
+    """
+    remover_ids = [r for r in remover_ids if str(r) != str(manter_id)]
+    if not remover_ids:
+        return False, "Nada para juntar."
+    conn = get_db_connection()
+    if not conn:
+        return False, "Falha de conexão com o banco de dados."
+    try:
+        cursor = conn.cursor()
+        todos = [manter_id] + list(remover_ids)
+        marcas = ", ".join("?" for _ in todos)
+        cursor.execute(f"SELECT ProdutoFornecedorID, FornecedorID, ProdutoID, EAN, CodigoFornecedor, NCM "
+                       f"FROM ProdutosFornecedor WHERE ProdutoFornecedorID IN ({marcas})", *todos)
+        linhas = {str(r[0]): r for r in cursor.fetchall()}
+        if str(manter_id) not in linhas or any(str(r) not in linhas for r in remover_ids):
+            return False, "Algum vínculo não foi encontrado (a lista pode estar desatualizada)."
+        if len({(linhas[str(i)][1], linhas[str(i)][2]) for i in todos}) != 1:
+            return False, "Só é possível juntar vínculos do MESMO fornecedor e do MESMO produto."
+        manter = linhas[str(manter_id)]
+        # Aproveita EAN / código / NCM dos removidos se o mantido não tiver
+        for campo, idx in (('EAN', 3), ('CodigoFornecedor', 4), ('NCM', 5)):
+            valor_mantido = manter[idx]
+            if (campo == 'EAN' and not _ean_valido(valor_mantido)) or (campo != 'EAN' and not str(valor_mantido or '').strip()):
+                for r in remover_ids:
+                    candidato = linhas[str(r)][idx]
+                    if (campo == 'EAN' and _ean_valido(candidato)) or (campo != 'EAN' and str(candidato or '').strip()):
+                        cursor.execute(f"UPDATE ProdutosFornecedor SET {campo} = ? WHERE ProdutoFornecedorID = ?", candidato, manter_id)
+                        break
+        marcas_r = ", ".join("?" for _ in remover_ids)
+        cursor.execute(f"UPDATE ItensNotaFiscalEntrada SET ProdutoFornecedorID = ? WHERE ProdutoFornecedorID IN ({marcas_r})",
+                       manter_id, *remover_ids)
+        cursor.execute(f"DELETE FROM ProdutosFornecedor WHERE ProdutoFornecedorID IN ({marcas_r})", *remover_ids)
+        conn.commit()
+        logger.info(f"Vínculos {remover_ids} juntados no vínculo {manter_id}.")
+        return True, f"{len(remover_ids)} vínculo(s) juntado(s) no ID {manter_id}."
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao juntar vínculos {remover_ids} em {manter_id}: {e}", exc_info=True)
+        return False, f"Erro ao juntar: {e}"
     finally:
         conn.close()
 
