@@ -8320,14 +8320,18 @@ def listar_vinculos_com_resumo():
         """)
         vinculos = cursor.fetchall()
         cursor.execute("""
-            SELECT INI.ProdutoFornecedorID, NF.DataEmissao, NF.NotaID, INI.ItemNotaID, INI.Quantidade, INI.PrecoCustoUnitario
+            SELECT INI.ProdutoFornecedorID, NF.DataEmissao, NF.NotaID, INI.ItemNotaID, INI.Quantidade, INI.PrecoCustoUnitario,
+                   NF.ValorTotalNF
             FROM ItensNotaFiscalEntrada INI
             JOIN NotasFiscaisEntrada NF ON INI.NotaID = NF.NotaID
             WHERE INI.Quantidade > 0
         """)
         compras = {}
-        for pf, dt, nota_id, item_id, qtd, custo in cursor.fetchall():
+        custo_errado = set()   # [MELHORIA] vínculos com alguma compra que custa mais que a NOTA INTEIRA
+        for pf, dt, nota_id, item_id, qtd, custo, total_nf in cursor.fetchall():
             compras.setdefault(pf, []).append((_como_data(dt) or date.min, nota_id or 0, item_id or 0, _dec(qtd), _dec(custo)))
+            if _item_maior_que_nota(_dec(qtd) * _dec(custo), total_nf):
+                custo_errado.add(pf)
 
         resultado = []
         for pf, forn, desc, pid, nome_mestre, fator, ean, cnpj, ncm, codigo, forn_id in vinculos:
@@ -8346,6 +8350,7 @@ def listar_vinculos_com_resumo():
                 'UltimaQtd': ultima[3] if ultima else None,          # já na unidade do estoque
                 'UltimoCustoUnid': ultima[4] if ultima else None,    # por unidade do estoque
                 'VariacaoPropria': bool(len(custos) >= 2 and max(custos) >= min(custos) * FATOR_CUSTO_SUSPEITO),
+                'CustoErrado': pf in custo_errado,
             })
 
         # Suspeito: custo por unidade muito diferente do custo "típico" do mesmo produto.
@@ -8390,6 +8395,55 @@ def listar_vinculos_com_resumo():
         return resultado
     except Exception as e:
         logger.error(f"Erro ao listar vínculos com resumo: {e}", exc_info=True)
+        return []
+    finally:
+        conn.close()
+
+
+def _item_maior_que_nota(total_item, total_nota):
+    """
+    [MELHORIA] True quando UM item custa mais que a NOTA INTEIRA (impossível: é erro de
+    digitação/importação, ex: R$ 840.000,00 no lugar de R$ 84,00). Só confere quando o
+    total da nota foi gravado (> 0). Tolerância de 5% + R$ 1 para arredondamentos.
+    """
+    total_nota = _dec(total_nota) if total_nota is not None else Decimal('0')
+    return total_nota > 0 and _dec(total_item) > total_nota * Decimal('1.05') + Decimal('1')
+
+
+def listar_compras_do_vinculo(vinculo_id):
+    """
+    [MELHORIA] Todas as compras (itens de nota) de um vínculo, da mais nova para a mais
+    antiga, com o que é preciso para conferir e corrigir o custo:
+    [{'ItemNotaID','NotaID','NF','Data','Quantidade','Custo','TotalItem','TotalNota',
+      'SomaOutrosItens','MaiorQueNota'}]
+    """
+    conn = get_db_connection()
+    if not conn:
+        return []
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT INI.ItemNotaID, NF.NotaID, NF.NumeroNF, NF.DataEmissao, INI.Quantidade, INI.PrecoCustoUnitario,
+                   NF.ValorTotalNF
+            FROM ItensNotaFiscalEntrada INI
+            JOIN NotasFiscaisEntrada NF ON INI.NotaID = NF.NotaID
+            WHERE INI.ProdutoFornecedorID = ?
+        """, vinculo_id)
+        linhas = cursor.fetchall()
+        resultado = []
+        for item_id, nota_id, nf, dt, qtd, custo, total_nf in linhas:
+            cursor.execute("SELECT Quantidade, PrecoCustoUnitario FROM ItensNotaFiscalEntrada "
+                           "WHERE NotaID = ? AND ItemNotaID <> ?", nota_id, item_id)
+            outros = sum((_dec(q) * _dec(c) for q, c in cursor.fetchall()), Decimal('0'))
+            q, c = _dec(qtd), _dec(custo)
+            total_nota = _dec(total_nf) if total_nf is not None else Decimal('0')
+            resultado.append({'ItemNotaID': item_id, 'NotaID': nota_id, 'NF': nf, 'Data': _como_data(dt),
+                              'Quantidade': q, 'Custo': c, 'TotalItem': q * c, 'TotalNota': total_nota,
+                              'SomaOutrosItens': outros, 'MaiorQueNota': _item_maior_que_nota(q * c, total_nota)})
+        resultado.sort(key=lambda r: (r['Data'] or date.min, r['ItemNotaID'] or 0), reverse=True)
+        return resultado
+    except Exception as e:
+        logger.error(f"Erro ao listar compras do vínculo {vinculo_id}: {e}", exc_info=True)
         return []
     finally:
         conn.close()

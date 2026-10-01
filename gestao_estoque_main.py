@@ -5129,9 +5129,10 @@ class AppGestaoEstoque:
     # ===================================================================
     FILTROS_PROBLEMA = [
         ('todos', 'Todos os vínculos'),
-        ('qualquer', '❗ Precisa de atenção (duplicado, fator suspeito, sem produto)'),
+        ('qualquer', '❗ Precisa de atenção (duplicado, fator/custo suspeito, sem produto)'),
         ('duplicado', '🔁 Duplicados'),
         ('suspeito', '🔴 Fator suspeito'),
+        ('custo_errado', '💸 Custo maior que a nota inteira'),
         ('sem_ean', '🏷️ Sem EAN'),
         ('sem_compras', '💤 Sem compras'),
         ('orfao', '⚠️ Sem produto / produto excluído'),
@@ -5139,7 +5140,7 @@ class AppGestaoEstoque:
 
     # Só estes contam como "precisa de atenção". Sem EAN / sem compras são informativos
     # (muitos itens legítimos não têm código de barras, ex: frutas e frios vendidos por KG).
-    PROBLEMAS_GRAVES = ('duplicado', 'suspeito', 'orfao')
+    PROBLEMAS_GRAVES = ('duplicado', 'suspeito', 'custo_errado', 'orfao')
 
     @staticmethod
     def problemas_do_vinculo(v):
@@ -5147,6 +5148,7 @@ class AppGestaoEstoque:
         lista = []
         if v.get('Duplicado'): lista.append('duplicado')
         if v.get('Suspeito'): lista.append('suspeito')
+        if v.get('CustoErrado'): lista.append('custo_errado')
         if v.get('SemEAN'): lista.append('sem_ean')
         if v.get('SemCompras'): lista.append('sem_compras')
         if v.get('Orfao') or v.get('SemProduto'): lista.append('orfao')
@@ -5179,7 +5181,7 @@ class AppGestaoEstoque:
         popup.transient(self.root)
         estado = {'dados': {}, 'produto_id': produto_id}
         rotulos = dict(self.FILTROS_PROBLEMA)
-        icones = {'duplicado': '🔁', 'suspeito': '🔴', 'sem_ean': '🏷️', 'sem_compras': '💤', 'orfao': '⚠️'}
+        icones = {'duplicado': '🔁', 'suspeito': '🔴', 'custo_errado': '💸', 'sem_ean': '🏷️', 'sem_compras': '💤', 'orfao': '⚠️'}
 
         # ---------- Topo: filtros ----------
         frame_topo = ttk.Frame(popup, padding=(10, 10, 10, 0))
@@ -5224,7 +5226,7 @@ class AppGestaoEstoque:
         tree_vinculos.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         sb.pack(side=tk.RIGHT, fill=tk.Y)
         ttk.Label(popup, foreground="gray", padding=(10, 0), text=(
-            "🔴 vermelho = fator provavelmente errado (custo/unid. muito diferente do normal)   "
+            "🔴 vermelho = fator ou custo provavelmente errado (💸 = item mais caro que a nota inteira)   "
             "🔁 lilás = duplicado   ⚠️ laranja = sem produto   ·   Custo/Unid. = por unidade do SEU estoque; "
             "Custo embalagem = como veio na nota (Custo/Unid. × Qtd/Cx)")).pack(anchor="w")
 
@@ -5305,7 +5307,7 @@ class AppGestaoEstoque:
                 custo = fmt_reais(v['UltimoCustoUnid']) if tem_compra else "—"
                 custo_emb = fmt_reais(v['UltimoCustoUnid'] * v['Fator']) if tem_compra else "—"
                 data = v['UltimaData'].strftime('%d/%m/%Y') if v['UltimaData'] else "—"
-                tag = ('suspeito',) if 'suspeito' in probs else ('orfao',) if 'orfao' in probs else ('duplicado',) if 'duplicado' in probs else ()
+                tag = ('suspeito',) if ('suspeito' in probs or 'custo_errado' in probs) else ('orfao',) if 'orfao' in probs else ('duplicado',) if 'duplicado' in probs else ()
                 grupo_txt = f"{icones['duplicado']}{v['Grupo']}" if v.get('Grupo') else ''
                 probs_txt = " ".join(icones[p] if p != 'duplicado' else grupo_txt for p in probs)
                 tree_vinculos.insert("", "end", iid=iid, tags=tag, values=(
@@ -5357,6 +5359,10 @@ class AppGestaoEstoque:
             ref = v.get('CustoReferencia')
             if ref:
                 texto += f"  Normal deste produto: ~{fmt_reais(ref)} por {unidade}."
+            if v.get('CustoErrado'):
+                texto = ("💸 Uma compra deste vínculo custa MAIS QUE A NOTA INTEIRA: o PREÇO foi gravado errado "
+                         "(o Qtd/Cx não é o problema). Clique em '🧾 Compras / corrigir custo'.\n") + texto
+                lbl_previa.config(text=texto, foreground="#c62828"); return
             lbl_previa.config(text=texto, foreground="#0056b3")
 
         def preencher_edicao(event=None):
@@ -5479,6 +5485,27 @@ class AppGestaoEstoque:
         btn_excluir = ttk.Button(frame_edit, text="🗑️ Excluir Vínculo", command=excluir_vinculo)
         btn_excluir.grid(row=2, column=5, padx=(0, 5))
 
+        def abrir_compras():
+            sel, v = selecionado_atual()
+            if not v:
+                messagebox.showwarning("Aviso", "Selecione um vínculo na lista.", parent=popup)
+                return
+            if not v['QtdCompras']:
+                messagebox.showinfo("Sem compras", "Este vínculo ainda não tem compras registradas.", parent=popup)
+                return
+            def depois():
+                carregar_dados(); mostrar(manter=sel); preencher_edicao()
+                if ao_salvar:
+                    try:
+                        ao_salvar()
+                    except Exception as e:
+                        logger.warning(f"Falha ao atualizar a janela de origem após corrigir custo: {e}")
+            self.abrir_compras_do_vinculo(v, popup, ao_mudar=depois)
+
+        # [MELHORIA] ver as compras do vínculo e corrigir um PREÇO gravado errado
+        btn_compras = ttk.Button(frame_edit, text="🧾 Compras / corrigir custo", command=abrir_compras)
+        btn_compras.grid(row=0, column=4, columnspan=2, sticky="e", padx=(0, 5))
+
         if produto_id is not None:
             lbl_produto.config(text=f"Mostrando só os vínculos de: {nome_produto or produto_id}")
             btn_todos.pack(side=tk.LEFT, padx=10)
@@ -5492,7 +5519,141 @@ class AppGestaoEstoque:
                                  'previa': lbl_previa, 'salvar': salvar_alteracao, 'excluir': excluir_vinculo,
                                  'problema': combo_problema, 'opcoes': lambda: estado['opcoes'],
                                  'mostrar': mostrar, 'mostrar_todos': mostrar_todos,
-                                 'contador': lbl_contador, 'btn_juntar': btn_juntar}
+                                 'contador': lbl_contador, 'btn_juntar': btn_juntar, 'compras': abrir_compras}
+
+    def abrir_compras_do_vinculo(self, v, janela_pai=None, ao_mudar=None):
+        """
+        [MELHORIA] Mostra todas as compras de um vínculo (nota, data, embalagens, preço da
+        embalagem, total do item x total da nota) e deixa corrigir o PREÇO de uma compra
+        gravado errado (ex: R$ 840.000,00 no lugar de R$ 84,00). A quantidade não muda.
+        O usuário digita o preço da EMBALAGEM como está no DANFE (papel da nota).
+        """
+        pai = janela_pai or self.root
+        popup = Toplevel(pai)
+        popup.title(f"🧾 Compras de: {v['DescricaoXML']}")
+        popup.geometry("1050x520")
+        popup.transient(pai)
+        fator = v['Fator'] if v['Fator'] and v['Fator'] > 0 else Decimal('1')
+        unidade = self.mapa_produtos_mestre_contagem.get(v['NomeMestre'], {}).get('un', 'UN')
+        frame = ttk.Frame(popup, padding=10)
+        frame.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(frame, font=("Arial", 10, "bold"), text=(
+            f"{v['Fornecedor']}  •  {v['DescricaoXML']}  →  {v['NomeMestre']}  (Qtd/Cx {fmt_qtd(fator)})")).pack(anchor="w")
+        ttk.Label(frame, foreground="gray", text=(
+            "Selecione a compra com o preço errado, digite o preço CERTO de UMA embalagem (como está no DANFE) e clique em Corrigir. "
+            "Só o preço muda; a quantidade fica igual.")).pack(anchor="w", pady=(0, 6))
+
+        cols = ('NF', 'Data', 'Embalagens', 'Preço embalagem', f'Qtd ({unidade})', f'Custo/{unidade}',
+                'Total do item', 'Total da nota', 'Alerta')
+        tree = criar_tree_zebrada(frame, columns=cols, show='headings', selectmode='browse')
+        for col, larg, anc in zip(cols, (70, 90, 85, 120, 85, 110, 120, 120, 200),
+                                  ('center', 'center', 'center', 'e', 'center', 'e', 'e', 'e', 'w')):
+            tree.heading(col, text=col); tree.column(col, width=larg, anchor=anc)
+        tree.tag_configure('errado', background='#ffd6d6')
+        tree.pack(fill=tk.BOTH, expand=True)
+
+        frame_corr = ttk.LabelFrame(popup, text="Corrigir o preço da compra selecionada", padding=10)
+        frame_corr.pack(fill=tk.X, padx=10, pady=(0, 10))
+        lbl_sel = ttk.Label(frame_corr, text="Selecione uma compra na lista.", font=("Arial", 10, "bold"))
+        lbl_sel.grid(row=0, column=0, columnspan=4, sticky="w")
+        ttk.Label(frame_corr, text="Preço CERTO de 1 embalagem (R$):").grid(row=1, column=0, sticky="w", pady=(6, 0))
+        entry_preco = ttk.Entry(frame_corr, width=14)
+        entry_preco.grid(row=1, column=1, sticky="w", padx=5, pady=(6, 0))
+        lbl_sugestao = ttk.Label(frame_corr, text="", foreground="#0056b3")
+        lbl_sugestao.grid(row=2, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        estado = {'compras': {}}
+
+        def carregar(manter=None):
+            for i in tree.get_children():
+                tree.delete(i)
+            estado['compras'] = {}
+            for c in database.listar_compras_do_vinculo(v['ID']):
+                iid = str(c['ItemNotaID'])
+                estado['compras'][iid] = c
+                embalagens = c['Quantidade'] / fator
+                alerta = "💸 Mais caro que a nota inteira!" if c['MaiorQueNota'] else ""
+                tree.insert("", "end", iid=iid, tags=('errado',) if c['MaiorQueNota'] else (), values=(
+                    c['NF'], c['Data'].strftime('%d/%m/%Y') if c['Data'] else "—", fmt_qtd(embalagens),
+                    fmt_reais(c['Custo'] * fator), fmt_qtd(c['Quantidade']), fmt_reais(c['Custo']),
+                    fmt_reais(c['TotalItem']), fmt_reais(c['TotalNota']) if c['TotalNota'] > 0 else "—", alerta))
+            filhos = tree.get_children()
+            alvo = manter if manter and tree.exists(manter) else next(
+                (i for i in filhos if estado['compras'][i]['MaiorQueNota']), filhos[0] if filhos else None)
+            if alvo:
+                tree.focus(alvo); tree.selection_set(alvo); tree.see(alvo)
+            preencher()
+
+        def preencher(event=None):
+            sel = tree.focus()
+            c = estado['compras'].get(sel)
+            entry_preco.delete(0, tk.END)
+            if not c:
+                lbl_sel.config(text="Selecione uma compra na lista."); lbl_sugestao.config(text=""); return
+            embalagens = c['Quantidade'] / fator
+            lbl_sel.config(text=(f"NF {c['NF']} de {c['Data'].strftime('%d/%m/%Y') if c['Data'] else '?'}: "
+                                 f"{fmt_qtd(embalagens)} embalagem(ns) a {fmt_reais(c['Custo'] * fator)} cada "
+                                 f"(total do item {fmt_reais(c['TotalItem'])})"))
+            texto = ""
+            if c['TotalNota'] > 0 and embalagens > 0:
+                sobra = c['TotalNota'] - c['SomaOutrosItens']
+                if sobra > 0:
+                    sugestao = (sobra / embalagens).quantize(Decimal('0.01'))
+                    texto = (f"💡 Pelo total da nota ({fmt_reais(c['TotalNota'])}) menos os outros itens "
+                             f"({fmt_reais(c['SomaOutrosItens'])}), sobram {fmt_reais(sobra)} para este item = "
+                             f"~{fmt_reais(sugestao)} por embalagem (pode incluir frete/ST). Confira no DANFE.")
+                    if c['MaiorQueNota']:
+                        entry_preco.insert(0, fmt_reais(sugestao).replace('R$', '').strip())
+            lbl_sugestao.config(text=texto)
+
+        def corrigir(event=None):
+            sel = tree.focus()
+            c = estado['compras'].get(sel)
+            if not c:
+                messagebox.showwarning("Aviso", "Selecione a compra que quer corrigir.", parent=popup)
+                return
+            try:
+                preco_emb = para_decimal(entry_preco.get(), "Preço da embalagem", permitir_zero=False)
+            except ValueError as e:
+                messagebox.showerror("Valor inválido", str(e), parent=popup)
+                return
+            novo_custo = (preco_emb / fator).quantize(Decimal('0.0001'))
+            embalagens = c['Quantidade'] / fator
+            novo_total = c['Quantidade'] * novo_custo
+            aviso = ""
+            if c['TotalNota'] > 0 and novo_total > c['TotalNota'] * Decimal('1.05') + 1:
+                aviso = (f"\n\n⚠️ ATENÇÃO: mesmo assim o item ({fmt_reais(novo_total)}) continua mais caro que a "
+                         f"nota inteira ({fmt_reais(c['TotalNota'])}). Confira o valor digitado.")
+            if not messagebox.askyesno("Corrigir preço", (
+                    f"NF {c['NF']} — {v['DescricaoXML']}\n\n"
+                    f"Preço da embalagem: {fmt_reais(c['Custo'] * fator)}  →  {fmt_reais(preco_emb)}\n"
+                    f"Custo por {unidade}: {fmt_reais(c['Custo'])}  →  {fmt_reais(novo_custo)}\n"
+                    f"Total do item: {fmt_reais(c['TotalItem'])}  →  {fmt_reais(novo_total)}\n"
+                    f"A quantidade ({fmt_qtd(embalagens)} emb. = {fmt_qtd(c['Quantidade'])} {unidade}) não muda.\n\n"
+                    f"Contagens com o valor do estoque já FECHADO não mudam.{aviso}\n\nConfirmar?"), parent=popup):
+                return
+            ok, msg = database.atualizar_custos_itens([(c['ItemNotaID'], novo_custo)])
+            if not ok:
+                messagebox.showerror("Erro", msg, parent=popup)
+                return
+            self.status(f"Preço corrigido: NF {c['NF']} • {v['DescricaoXML']} → {fmt_reais(preco_emb)} por embalagem.")
+            carregar(manter=sel)
+            if ao_mudar:
+                try:
+                    ao_mudar()
+                except Exception as e:
+                    logger.warning(f"Falha ao atualizar a janela de vínculos: {e}")
+            messagebox.showinfo("Pronto", "Preço corrigido! 👍\n\nSe houver contagem em aberto no '💰 Valor do Estoque', "
+                                "clique em '🔄 Recalcular' para ver o efeito.", parent=popup)
+
+        btn_corrigir = ttk.Button(frame_corr, text="💾 Corrigir preço", command=corrigir)
+        btn_corrigir.grid(row=1, column=2, padx=10, pady=(6, 0))
+        ttk.Button(frame_corr, text="Fechar", command=popup.destroy).grid(row=1, column=3, pady=(6, 0))
+        tree.bind("<<TreeviewSelect>>", preencher)
+        entry_preco.bind("<Return>", corrigir)
+        carregar()
+        entry_preco.focus_set()
+        self._janela_compras = {'popup': popup, 'tree': tree, 'preco': entry_preco, 'corrigir': corrigir,
+                                'sugestao': lbl_sugestao, 'selecionado': lbl_sel}
 
     def abrir_juntar_duplicados(self, janela_pai=None, ao_mudar=None):
         """
