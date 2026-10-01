@@ -8495,6 +8495,151 @@ def juntar_vinculos(manter_id, remover_ids):
         conn.close()
 
 
+# ===================================================================
+# == [MELHORIA] CONSULTAS: histórico de preços e notas fiscais ======
+# ===================================================================
+def historico_compras_detalhado(produto_id):
+    """
+    Todas as compras REAIS de um Produto Mestre (sem as notas fantasmas do custo manual),
+    da mais nova para a mais antiga. Quantidade e custo já na unidade do estoque;
+    'Fator' permite mostrar também como veio na nota (embalagens e custo da embalagem).
+    """
+    conn = get_db_connection()
+    if not conn:
+        return []
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT NF.NotaID, NF.NumeroNF, NF.DataEmissao, F.FornecedorID, F.NomeFantasia, F.CNPJ,
+                   PF.DescricaoXML, PF.FatorConversao, INI.Quantidade, INI.PrecoCustoUnitario, INI.ItemNotaID
+            FROM ItensNotaFiscalEntrada INI
+            JOIN NotasFiscaisEntrada NF ON INI.NotaID = NF.NotaID
+            JOIN ProdutosFornecedor PF ON INI.ProdutoFornecedorID = PF.ProdutoFornecedorID
+            JOIN Fornecedores F ON NF.FornecedorID = F.FornecedorID
+            WHERE PF.ProdutoID = ? AND INI.Quantidade > 0
+        """, produto_id)
+        resultado = []
+        for nota_id, numero, dt, forn_id, forn, cnpj, desc, fator, qtd, custo, item_id in cursor.fetchall():
+            if (cnpj or '').strip() == CNPJ_FORNECEDOR_INTERNO:
+                continue
+            fator = _dec(fator) if fator is not None and _dec(fator) > 0 else Decimal('1')
+            q, c = _dec(qtd), _dec(custo)
+            resultado.append({'NotaID': nota_id, 'NumeroNF': numero, 'Data': _como_data(dt), 'FornecedorID': forn_id,
+                              'Fornecedor': forn or '?', 'DescricaoXML': desc or '', 'Fator': fator,
+                              'Quantidade': q, 'CustoUnitario': c, 'Total': q * c,
+                              'Embalagens': q / fator, 'CustoEmbalagem': c * fator, 'ItemNotaID': item_id})
+        resultado.sort(key=lambda r: (r['Data'] or date.min, r['NotaID'], r['ItemNotaID'] or 0), reverse=True)
+        return resultado
+    except Exception as e:
+        logger.error(f"Erro ao buscar histórico detalhado do produto {produto_id}: {e}", exc_info=True)
+        return []
+    finally:
+        conn.close()
+
+
+def resumo_precos_por_fornecedor(historico, desde=None):
+    """
+    Resume um histórico (de historico_compras_detalhado) por fornecedor, do MAIS BARATO
+    para o mais caro (pelo custo médio ponderado por unidade do estoque).
+    Bonificações (custo zero) contam na quantidade mas não entram no "menor preço".
+    """
+    grupos = {}
+    for r in historico:
+        if desde and r['Data'] and r['Data'] < desde:
+            continue
+        grupos.setdefault((r['FornecedorID'], r['Fornecedor']), []).append(r)
+    resumo = []
+    for (forn_id, forn), lista in grupos.items():
+        qtd = sum((r['Quantidade'] for r in lista), Decimal('0'))
+        valor = sum((r['Total'] for r in lista), Decimal('0'))
+        pagos = [r['CustoUnitario'] for r in lista if r['CustoUnitario'] > 0]
+        ultima = max(lista, key=lambda r: (r['Data'] or date.min, r['NotaID']))
+        resumo.append({'FornecedorID': forn_id, 'Fornecedor': forn, 'Compras': len(lista), 'Quantidade': qtd,
+                       'CustoMedio': (valor / qtd) if qtd > 0 else Decimal('0'),
+                       'Menor': min(pagos) if pagos else Decimal('0'), 'Maior': max(pagos) if pagos else Decimal('0'),
+                       'Ultimo': ultima['CustoUnitario'], 'UltimaData': ultima['Data']})
+    resumo.sort(key=lambda r: (r['CustoMedio'] <= 0, r['CustoMedio']))
+    return resumo
+
+
+def listar_notas_para_consulta():
+    """
+    Notas fiscais importadas (sem as notas fantasmas do custo manual), com a quantidade
+    de itens, o total dos itens e um texto com os itens (para a busca "que nota tinha X?").
+    """
+    conn = get_db_connection()
+    if not conn:
+        return []
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT NF.NotaID, NF.NumeroNF, NF.DataEmissao, NF.ValorTotalNF, F.NomeFantasia, F.CNPJ
+            FROM NotasFiscaisEntrada NF
+            LEFT JOIN Fornecedores F ON NF.FornecedorID = F.FornecedorID
+        """)
+        notas = {}
+        for nota_id, numero, dt, valor, forn, cnpj in cursor.fetchall():
+            if (cnpj or '').strip() == CNPJ_FORNECEDOR_INTERNO:
+                continue
+            notas[nota_id] = {'NotaID': nota_id, 'NumeroNF': numero or '', 'Data': _como_data(dt),
+                              'ValorNF': _dec(valor), 'Fornecedor': forn or '?', 'CNPJ': cnpj or '',
+                              'Itens': 0, 'TotalItens': Decimal('0'), 'TextoItens': ''}
+        cursor.execute("""
+            SELECT INI.NotaID, INI.Quantidade, INI.PrecoCustoUnitario, PF.DescricaoXML, P.NomeProduto
+            FROM ItensNotaFiscalEntrada INI
+            LEFT JOIN ProdutosFornecedor PF ON INI.ProdutoFornecedorID = PF.ProdutoFornecedorID
+            LEFT JOIN ProdutosEstoque P ON PF.ProdutoID = P.ProdutoID
+        """)
+        textos = {}
+        for nota_id, qtd, custo, desc, nome in cursor.fetchall():
+            n = notas.get(nota_id)
+            if not n:
+                continue
+            n['Itens'] += 1
+            n['TotalItens'] += _dec(qtd) * _dec(custo)
+            textos.setdefault(nota_id, []).append(f"{desc or ''} {nome or ''}")
+        for nota_id, partes in textos.items():
+            notas[nota_id]['TextoItens'] = " | ".join(partes)
+        return sorted(notas.values(), key=lambda n: (n['Data'] or date.min, n['NotaID']), reverse=True)
+    except Exception as e:
+        logger.error(f"Erro ao listar notas para consulta: {e}", exc_info=True)
+        return []
+    finally:
+        conn.close()
+
+
+def itens_da_nota(nota_id):
+    """Itens de uma nota fiscal: produto do estoque, descrição na nota, quantidades e custos."""
+    conn = get_db_connection()
+    if not conn:
+        return []
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT INI.ItemNotaID, PF.DescricaoXML, P.ProdutoID, P.NomeProduto, P.UnidadeMedida,
+                   PF.FatorConversao, INI.Quantidade, INI.PrecoCustoUnitario
+            FROM ItensNotaFiscalEntrada INI
+            LEFT JOIN ProdutosFornecedor PF ON INI.ProdutoFornecedorID = PF.ProdutoFornecedorID
+            LEFT JOIN ProdutosEstoque P ON PF.ProdutoID = P.ProdutoID
+            WHERE INI.NotaID = ?
+        """, nota_id)
+        itens = []
+        for item_id, desc, pid, nome, un, fator, qtd, custo in cursor.fetchall():
+            fator = _dec(fator) if fator is not None and _dec(fator) > 0 else Decimal('1')
+            q, c = _dec(qtd), _dec(custo)
+            itens.append({'ItemNotaID': item_id, 'DescricaoXML': desc or '(vínculo excluído)', 'ProdutoID': pid,
+                          'NomeProduto': nome or '(sem produto)', 'Unidade': un or 'UN', 'Fator': fator,
+                          'Quantidade': q, 'CustoUnitario': c, 'Total': q * c,
+                          'Embalagens': q / fator, 'CustoEmbalagem': c * fator})
+        itens.sort(key=lambda i: i['ItemNotaID'] or 0)
+        return itens
+    except Exception as e:
+        logger.error(f"Erro ao buscar itens da nota {nota_id}: {e}", exc_info=True)
+        return []
+    finally:
+        conn.close()
+
+
 def previa_recalculo_vinculo(vinculo_id, novo_fator):
     """
     [MELHORIA] Mostra como ficariam as compras já importadas se o fator mudar.

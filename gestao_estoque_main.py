@@ -48,7 +48,7 @@ import database # Importa nosso arquivo de banco de dados
 import config
 import json
 import re
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from tkcalendar import DateEntry
 from decimal import Decimal, InvalidOperation # <-- Adicionado InvalidOperation
 
@@ -327,6 +327,9 @@ class AppGestaoEstoque:
         self.notebook.add(self.frame_admin, text='6. Administração / Reset')
         self.frame_solicitacoes = ttk.Frame(self.notebook, padding="10")
         self.notebook.add(self.frame_solicitacoes, text='7. Solicitações (Líderes)')
+        # [MELHORIA] Aba de consultas rápidas: histórico de preços do produto e itens das notas
+        self.frame_consultas = ttk.Frame(self.notebook, padding="10")
+        self.notebook.add(self.frame_consultas, text='8. 🔎 Consultas')
         self.criar_aba_solicitacoes()
 
         self.produto_selecionado_id = None
@@ -357,6 +360,7 @@ class AppGestaoEstoque:
         self.criar_aba_contagem_estoque()
         self.criar_aba_sugestao_compra() 
         self.criar_aba_administracao()
+        self.criar_aba_consultas()  # [MELHORIA]
         
         # Carregamento inicial
         self.atualizar_lista_produtos() 
@@ -421,6 +425,7 @@ class AppGestaoEstoque:
             '1.': getattr(self, 'entry_filtro_mestre', None),
             '3.': getattr(self, 'entry_filtro_importacao', None),
             '4.': getattr(self, 'entry_filtro_contagem', None),
+            '8.': self._campo_busca_consultas() if hasattr(self, 'nb_consultas') else None,
         }
         campo = campos.get(self.aba_atual()[:2])
         if campo is not None:
@@ -451,7 +456,7 @@ class AppGestaoEstoque:
             if 400 <= larg <= tela_l and 300 <= alt <= tela_a and 0 <= x < tela_l - 100 and 0 <= y < tela_a - 100:
                 self.root.geometry(geo)
         aba = pref.get('aba')
-        if isinstance(aba, int) and 0 <= aba < 7:
+        if isinstance(aba, int) and 0 <= aba < 8:
             try:
                 self.notebook.select(aba)
             except tk.TclError:
@@ -539,6 +544,8 @@ class AppGestaoEstoque:
         elif tab_selecionada == '6. Administração / Reset':
             self.atualizar_lista_nfs_admin()
             self.atualizar_lista_contagens_admin()
+        elif tab_selecionada.startswith('8.'):
+            self.atualizar_consultas()  # [MELHORIA] notas/produtos novos aparecem ao abrir a aba
         elif tab_selecionada.startswith('7.'):
             # [DEPURAÇÃO] comparava com '7. Aprovar Compras/Manutenção', mas a aba se chama
             # '7. Solicitações (Líderes)' -> a lista NUNCA atualizava sozinha.
@@ -4842,6 +4849,420 @@ class AppGestaoEstoque:
         self._janela_juntar = {'popup': popup, 'tree': tree, 'manter': estado['manter'], 'grupos': lambda: estado['grupos'],
                                'juntar_todos': juntar_todos_iguais, 'juntar_selecionado': juntar_selecionado,
                                'definir_manter': definir_manter, 'resumo': lbl_resumo}
+
+
+    # ===================================================================
+    # == [MELHORIA] ABA 8: CONSULTAS RÁPIDAS ============================
+    # ===================================================================
+    PERIODOS_CONSULTA = [('Últimos 90 dias', 90), ('Últimos 6 meses', 183), ('Últimos 12 meses', 365), ('Todo o histórico', None)]
+
+    def _campo_busca_consultas(self):
+        try:
+            aba = self.nb_consultas.index(self.nb_consultas.select())
+        except (tk.TclError, TypeError, ValueError):
+            aba = 0
+        return self.entry_busca_nota if aba == 1 else self.entry_busca_produto_consulta
+
+    def criar_aba_consultas(self):
+        """
+        Duas consultas rápidas:
+          📦 Produto: histórico de compras de um produto, comparação de preços entre
+             fornecedores (o mais barato primeiro), menor/último preço e quantidades.
+          🧾 Nota Fiscal: busca a nota (número, fornecedor ou um produto que veio nela)
+             e mostra todos os itens.
+        """
+        self.nb_consultas = ttk.Notebook(self.frame_consultas)
+        self.nb_consultas.pack(fill=tk.BOTH, expand=True)
+        aba_prod = ttk.Frame(self.nb_consultas, padding=8)
+        aba_nota = ttk.Frame(self.nb_consultas, padding=8)
+        self.nb_consultas.add(aba_prod, text='📦 Produto: histórico de preços')
+        self.nb_consultas.add(aba_nota, text='🧾 Nota Fiscal: itens da nota')
+        self.cache_consulta_notas = []
+        self.historico_consulta = []
+        self.produto_consulta = None
+
+        # ======================= PRODUTO =======================
+        aba_prod.columnconfigure(1, weight=1)
+        aba_prod.rowconfigure(0, weight=1)
+        esquerda = ttk.LabelFrame(aba_prod, text="1. Escolha o produto", padding=6)
+        esquerda.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        esquerda.rowconfigure(2, weight=1)
+        ttk.Label(esquerda, text="Buscar (nome ou ID):").grid(row=0, column=0, sticky="w")
+        self.entry_busca_produto_consulta = ttk.Entry(esquerda, width=34)
+        self.entry_busca_produto_consulta.grid(row=1, column=0, sticky="ew", pady=(0, 4))
+        self.tree_consulta_produtos = criar_tree_zebrada(esquerda, columns=('Produto', 'UN'), show='headings',
+                                                         selectmode='browse', height=20)
+        self.tree_consulta_produtos.heading('Produto', text='Produto'); self.tree_consulta_produtos.column('Produto', width=250)
+        self.tree_consulta_produtos.heading('UN', text='UN'); self.tree_consulta_produtos.column('UN', width=45, anchor='center')
+        self.tree_consulta_produtos.grid(row=2, column=0, sticky="nsew")
+        self.lbl_consulta_qtd_produtos = ttk.Label(esquerda, text="", foreground="gray")
+        self.lbl_consulta_qtd_produtos.grid(row=3, column=0, sticky="w")
+
+        direita = ttk.Frame(aba_prod)
+        direita.grid(row=0, column=1, sticky="nsew")
+        direita.columnconfigure(0, weight=1)
+        direita.rowconfigure(3, weight=1)
+        direita.rowconfigure(5, weight=2)
+
+        topo = ttk.Frame(direita)
+        topo.grid(row=0, column=0, sticky="ew")
+        self.lbl_consulta_produto = ttk.Label(topo, text="Escolha um produto na lista à esquerda.",
+                                              font=("Arial", 13, "bold"), foreground="#0056b3")
+        self.lbl_consulta_produto.pack(side=tk.LEFT)
+        ttk.Button(topo, text="💾 Exportar Excel", command=self.exportar_consulta_produto).pack(side=tk.RIGHT)
+        self.combo_periodo_consulta = ttk.Combobox(topo, state="readonly", width=18,
+                                                   values=[p for p, _ in self.PERIODOS_CONSULTA])
+        self.combo_periodo_consulta.set('Últimos 12 meses')
+        self.combo_periodo_consulta.pack(side=tk.RIGHT, padx=8)
+        ttk.Label(topo, text="Período:").pack(side=tk.RIGHT)
+
+        cartoes = ttk.Frame(direita)
+        cartoes.grid(row=1, column=0, sticky="ew", pady=8)
+        self.cartoes_consulta = {}
+        for i, (chave, titulo) in enumerate((('ultimo', 'Último preço pago'), ('menor', 'Menor preço no período'),
+                                             ('media', 'Média ponderada no período'), ('comprado', 'Comprado no período'))):
+            cartoes.columnconfigure(i, weight=1)
+            caixa = ttk.LabelFrame(cartoes, text=titulo, padding=6)
+            caixa.grid(row=0, column=i, sticky="nsew", padx=3)
+            valor = ttk.Label(caixa, text="—", font=("Arial", 14, "bold"))
+            valor.pack(anchor="w")
+            detalhe = ttk.Label(caixa, text="", foreground="gray")
+            detalhe.pack(anchor="w")
+            self.cartoes_consulta[chave] = (valor, detalhe)
+
+        ttk.Label(direita, text="Comparação por fornecedor (o mais barato primeiro) — preços por unidade do seu estoque",
+                  font=("Arial", 10, "bold")).grid(row=2, column=0, sticky="w")
+        cols_f = ('Fornecedor', 'Compras', 'Qtd comprada', 'Média/unid.', 'Menor', 'Maior', 'Último', 'Última compra', 'vs. mais barato')
+        self.tree_consulta_fornecedores = criar_tree_zebrada(direita, columns=cols_f, show='headings', selectmode='browse', height=5)
+        for col, larg, anc in (('Fornecedor', 220, 'w'), ('Compras', 65, 'center'), ('Qtd comprada', 100, 'e'),
+                               ('Média/unid.', 95, 'e'), ('Menor', 85, 'e'), ('Maior', 85, 'e'), ('Último', 85, 'e'),
+                               ('Última compra', 95, 'center'), ('vs. mais barato', 100, 'center')):
+            self.tree_consulta_fornecedores.heading(col, text=col)
+            self.tree_consulta_fornecedores.column(col, width=larg, anchor=anc)
+        self.tree_consulta_fornecedores.tag_configure('mais_barato', background='#d8f3dc')
+        self.tree_consulta_fornecedores.grid(row=3, column=0, sticky="nsew")
+
+        ttk.Label(direita, text="Histórico de compras (duplo clique abre a nota)", font=("Arial", 10, "bold")).grid(
+            row=4, column=0, sticky="w", pady=(8, 0))
+        frame_hist = ttk.Frame(direita)
+        frame_hist.grid(row=5, column=0, sticky="nsew")
+        frame_hist.columnconfigure(0, weight=1); frame_hist.rowconfigure(0, weight=1)
+        cols_h = ('Data', 'NF', 'Fornecedor', 'Descrição na nota', 'Embalagens', 'Custo emb.', 'Qtd', 'Custo/unid.', 'Total')
+        self.tree_consulta_historico = criar_tree_zebrada(frame_hist, columns=cols_h, show='headings', selectmode='browse')
+        for col, larg, anc in (('Data', 85, 'center'), ('NF', 70, 'center'), ('Fornecedor', 170, 'w'),
+                               ('Descrição na nota', 240, 'w'), ('Embalagens', 80, 'e'), ('Custo emb.', 90, 'e'),
+                               ('Qtd', 70, 'e'), ('Custo/unid.', 90, 'e'), ('Total', 95, 'e')):
+            self.tree_consulta_historico.heading(col, text=col, command=lambda c=col: self.ordenar_coluna_treeview(self.tree_consulta_historico, c, False))
+            self.tree_consulta_historico.column(col, width=larg, anchor=anc)
+        self.tree_consulta_historico.tag_configure('menor', background='#d8f3dc')
+        self.tree_consulta_historico.tag_configure('maior', background='#ffe0e0')
+        sb_h = ttk.Scrollbar(frame_hist, orient="vertical", command=self.tree_consulta_historico.yview)
+        self.tree_consulta_historico.configure(yscrollcommand=sb_h.set)
+        self.tree_consulta_historico.grid(row=0, column=0, sticky="nsew"); sb_h.grid(row=0, column=1, sticky="ns")
+        ttk.Label(direita, foreground="gray", text="🟩 verde = compra mais barata do período   🟥 vermelho = mais cara.  "
+                  "Embalagens/Custo emb. = como veio na nota; Qtd/Custo/unid. = na unidade do seu estoque.").grid(row=6, column=0, sticky="w")
+
+        self.entry_busca_produto_consulta.bind("<KeyRelease>", lambda e: self.listar_produtos_consulta())
+        self.entry_busca_produto_consulta.bind("<Return>", lambda e: self._consulta_escolher_primeiro())
+        self.tree_consulta_produtos.bind("<<TreeviewSelect>>", lambda e: self.mostrar_consulta_produto())
+        self.combo_periodo_consulta.bind("<<ComboboxSelected>>", lambda e: self.mostrar_consulta_produto(recarregar=False))
+        self.tree_consulta_historico.bind("<Double-1>", lambda e: self._consulta_abrir_nota_do_historico())
+
+        # ======================= NOTA FISCAL =======================
+        aba_nota.columnconfigure(0, weight=1)
+        aba_nota.rowconfigure(1, weight=1)
+        aba_nota.rowconfigure(3, weight=1)
+        filtros = ttk.Frame(aba_nota)
+        filtros.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        ttk.Label(filtros, text="🔍 Buscar (número da nota, fornecedor ou um produto que veio na nota):").pack(side=tk.LEFT)
+        self.entry_busca_nota = ttk.Entry(filtros, width=36)
+        self.entry_busca_nota.pack(side=tk.LEFT, padx=5)
+        ttk.Label(filtros, text="Período:").pack(side=tk.LEFT, padx=(10, 3))
+        self.combo_periodo_nota = ttk.Combobox(filtros, state="readonly", width=16,
+                                               values=['Últimos 30 dias'] + [p for p, _ in self.PERIODOS_CONSULTA])
+        self.combo_periodo_nota.set('Todo o histórico')
+        self.combo_periodo_nota.pack(side=tk.LEFT)
+        self.lbl_consulta_qtd_notas = ttk.Label(filtros, text="", foreground="gray")
+        self.lbl_consulta_qtd_notas.pack(side=tk.RIGHT)
+
+        frame_notas = ttk.Frame(aba_nota)
+        frame_notas.grid(row=1, column=0, sticky="nsew")
+        frame_notas.columnconfigure(0, weight=1); frame_notas.rowconfigure(0, weight=1)
+        cols_n = ('Data', 'Número', 'Fornecedor', 'Itens', 'Valor da nota')
+        self.tree_consulta_notas = criar_tree_zebrada(frame_notas, columns=cols_n, show='headings', selectmode='browse', height=9)
+        for col, larg, anc in (('Data', 90, 'center'), ('Número', 90, 'center'), ('Fornecedor', 380, 'w'),
+                               ('Itens', 60, 'center'), ('Valor da nota', 120, 'e')):
+            self.tree_consulta_notas.heading(col, text=col, command=lambda c=col: self.ordenar_coluna_treeview(self.tree_consulta_notas, c, False))
+            self.tree_consulta_notas.column(col, width=larg, anchor=anc)
+        sb_n = ttk.Scrollbar(frame_notas, orient="vertical", command=self.tree_consulta_notas.yview)
+        self.tree_consulta_notas.configure(yscrollcommand=sb_n.set)
+        self.tree_consulta_notas.grid(row=0, column=0, sticky="nsew"); sb_n.grid(row=0, column=1, sticky="ns")
+
+        self.lbl_consulta_nota = ttk.Label(aba_nota, text="Itens da nota selecionada (duplo clique num item mostra o histórico de preços do produto)",
+                                           font=("Arial", 10, "bold"))
+        self.lbl_consulta_nota.grid(row=2, column=0, sticky="w", pady=(8, 0))
+        frame_itens = ttk.Frame(aba_nota)
+        frame_itens.grid(row=3, column=0, sticky="nsew")
+        frame_itens.columnconfigure(0, weight=1); frame_itens.rowconfigure(0, weight=1)
+        cols_i = ('Produto do estoque', 'Descrição na nota', 'Embalagens', 'Qtd/Cx', 'Custo emb.', 'Qtd', 'UN', 'Custo/unid.', 'Total')
+        self.tree_consulta_itens = criar_tree_zebrada(frame_itens, columns=cols_i, show='headings', selectmode='browse')
+        for col, larg, anc in (('Produto do estoque', 230, 'w'), ('Descrição na nota', 250, 'w'), ('Embalagens', 80, 'e'),
+                               ('Qtd/Cx', 60, 'center'), ('Custo emb.', 90, 'e'), ('Qtd', 70, 'e'), ('UN', 40, 'center'),
+                               ('Custo/unid.', 90, 'e'), ('Total', 95, 'e')):
+            self.tree_consulta_itens.heading(col, text=col, command=lambda c=col: self.ordenar_coluna_treeview(self.tree_consulta_itens, c, False))
+            self.tree_consulta_itens.column(col, width=larg, anchor=anc)
+        self.tree_consulta_itens.tag_configure('achado', background='#fff4cc')
+        sb_i = ttk.Scrollbar(frame_itens, orient="vertical", command=self.tree_consulta_itens.yview)
+        self.tree_consulta_itens.configure(yscrollcommand=sb_i.set)
+        self.tree_consulta_itens.grid(row=0, column=0, sticky="nsew"); sb_i.grid(row=0, column=1, sticky="ns")
+        self.lbl_consulta_total_nota = ttk.Label(aba_nota, text="", font=("Arial", 11, "bold"), foreground="green")
+        self.lbl_consulta_total_nota.grid(row=4, column=0, sticky="e", pady=(4, 0))
+
+        self.entry_busca_nota.bind("<KeyRelease>", lambda e: self.listar_notas_consulta())
+        self.combo_periodo_nota.bind("<<ComboboxSelected>>", lambda e: self.listar_notas_consulta())
+        self.tree_consulta_notas.bind("<<TreeviewSelect>>", lambda e: self.mostrar_itens_nota_consulta())
+        self.tree_consulta_itens.bind("<Double-1>", lambda e: self._consulta_ir_para_produto_do_item())
+
+    # -------------------------- dados --------------------------
+    def atualizar_consultas(self):
+        try:
+            self.cache_consulta_notas = database.listar_notas_para_consulta() or []
+        except Exception as e:
+            logger.error(f"Erro ao carregar notas para consulta: {e}", exc_info=True)
+            self.cache_consulta_notas = []
+        self.listar_produtos_consulta()
+        self.listar_notas_consulta()
+
+    def listar_produtos_consulta(self):
+        busca = self.entry_busca_produto_consulta.get().strip()
+        nomes = self.lista_mestre_contagem_nomes or sorted(self.mapa_produtos_mestre_contagem)
+        if busca.isdigit():
+            achados = [n for n in nomes if str(self.mapa_produtos_mestre_contagem[n]['id']) == busca] or buscar_nomes(busca, nomes)
+        else:
+            achados = buscar_nomes(busca, nomes)
+        for i in self.tree_consulta_produtos.get_children():
+            self.tree_consulta_produtos.delete(i)
+        for nome in achados[:500]:
+            dados = self.mapa_produtos_mestre_contagem[nome]
+            self.tree_consulta_produtos.insert("", "end", iid=str(dados['id']), values=(nome, dados['un']))
+        extra = " (mostrando 500)" if len(achados) > 500 else ""
+        self.lbl_consulta_qtd_produtos.config(text=f"{len(achados)} produto(s){extra}")
+
+    def _consulta_escolher_primeiro(self):
+        itens = self.tree_consulta_produtos.get_children()
+        if itens:
+            self.tree_consulta_produtos.focus(itens[0]); self.tree_consulta_produtos.selection_set(itens[0])
+            self.mostrar_consulta_produto()
+        return "break"
+
+    def _data_inicio_periodo(self, texto):
+        dias = dict(self.PERIODOS_CONSULTA + [('Últimos 30 dias', 30)]).get(texto)
+        return (date.today() - timedelta(days=dias)) if dias else None
+
+    def mostrar_consulta_produto(self, recarregar=True, produto_id=None):
+        """Mostra os cartões, a comparação por fornecedor e o histórico do produto escolhido."""
+        if produto_id is None:
+            sel = self.tree_consulta_produtos.focus()
+            if not sel:
+                return
+            produto_id = int(sel)
+        if recarregar or self.produto_consulta != produto_id:
+            try:
+                self.historico_consulta = database.historico_compras_detalhado(produto_id) or []
+            except Exception as e:
+                logger.error(f"Erro ao consultar histórico do produto {produto_id}: {e}", exc_info=True)
+                messagebox.showerror("Erro", f"Não foi possível carregar o histórico:\n{e}", parent=self.root)
+                return
+            self.produto_consulta = produto_id
+        nome = next((n for n, d in self.mapa_produtos_mestre_contagem.items() if d['id'] == produto_id), f"Produto {produto_id}")
+        un = self.mapa_produtos_mestre_contagem.get(nome, {}).get('un', 'UN')
+        self.nome_produto_consulta = nome
+        self.lbl_consulta_produto.config(text=f"📦 {nome}  (ID {produto_id}, {un})")
+
+        desde = self._data_inicio_periodo(self.combo_periodo_consulta.get())
+        periodo = [r for r in self.historico_consulta if not desde or (r['Data'] and r['Data'] >= desde)]
+        pagos = [r for r in periodo if r['CustoUnitario'] > 0]
+
+        def cartao(chave, valor, detalhe=""):
+            self.cartoes_consulta[chave][0].config(text=valor)
+            self.cartoes_consulta[chave][1].config(text=detalhe)
+
+        if self.historico_consulta:
+            u = self.historico_consulta[0]
+            cartao('ultimo', f"{fmt_reais(u['CustoUnitario'])} /{un}",
+                   f"{u['Fornecedor'][:28]} · {u['Data'].strftime('%d/%m/%Y') if u['Data'] else '?'}")
+        else:
+            cartao('ultimo', "—", "nunca comprado por nota")
+        if pagos:
+            m = min(pagos, key=lambda r: r['CustoUnitario'])
+            cartao('menor', f"{fmt_reais(m['CustoUnitario'])} /{un}",
+                   f"{m['Fornecedor'][:28]} · {m['Data'].strftime('%d/%m/%Y') if m['Data'] else '?'}")
+        else:
+            cartao('menor', "—", "sem compras no período")
+        qtd = sum((r['Quantidade'] for r in periodo), Decimal('0'))
+        valor = sum((r['Total'] for r in periodo), Decimal('0'))
+        cartao('media', f"{fmt_reais(valor / qtd)} /{un}" if qtd > 0 else "—", f"{len(periodo)} compra(s)")
+        cartao('comprado', f"{fmt_qtd(qtd)} {un}", f"total pago {fmt_reais(valor)}")
+
+        for i in self.tree_consulta_fornecedores.get_children():
+            self.tree_consulta_fornecedores.delete(i)
+        resumo = database.resumo_precos_por_fornecedor(self.historico_consulta, desde)
+        mais_barato = next((r['CustoMedio'] for r in resumo if r['CustoMedio'] > 0), None)
+        for n, r in enumerate(resumo):
+            if mais_barato and r['CustoMedio'] > 0:
+                dif = (r['CustoMedio'] / mais_barato - 1) * 100
+                comparacao = "⭐ mais barato" if n == 0 else f"+{dif:.0f}%".replace('.', ',')
+            else:
+                comparacao = "bonificação" if r['CustoMedio'] <= 0 else "—"
+            self.tree_consulta_fornecedores.insert("", "end", tags=('mais_barato',) if n == 0 and mais_barato else (), values=(
+                r['Fornecedor'], r['Compras'], f"{fmt_qtd(r['Quantidade'])} {un}", fmt_reais(r['CustoMedio']),
+                fmt_reais(r['Menor']), fmt_reais(r['Maior']), fmt_reais(r['Ultimo']),
+                r['UltimaData'].strftime('%d/%m/%Y') if r['UltimaData'] else '—', comparacao))
+
+        for i in self.tree_consulta_historico.get_children():
+            self.tree_consulta_historico.delete(i)
+        menor = min((r['CustoUnitario'] for r in pagos), default=None)
+        maior = max((r['CustoUnitario'] for r in pagos), default=None)
+        for r in periodo:
+            tag = ()
+            if menor is not None and maior is not None and menor != maior:
+                tag = ('menor',) if r['CustoUnitario'] == menor else ('maior',) if r['CustoUnitario'] == maior else ()
+            self.tree_consulta_historico.insert("", "end", iid=f"h{r['ItemNotaID']}", tags=tag, values=(
+                r['Data'].strftime('%d/%m/%Y') if r['Data'] else '?', r['NumeroNF'], r['Fornecedor'], r['DescricaoXML'],
+                fmt_qtd(r['Embalagens']), fmt_reais(r['CustoEmbalagem']), fmt_qtd(r['Quantidade']),
+                fmt_reais(r['CustoUnitario']), fmt_reais(r['Total'])))
+
+    def _consulta_abrir_nota_do_historico(self):
+        sel = self.tree_consulta_historico.focus()
+        if not sel:
+            return
+        item_id = sel[1:]
+        registro = next((r for r in self.historico_consulta if str(r['ItemNotaID']) == item_id), None)
+        if registro:
+            self.abrir_nota_na_consulta(registro['NotaID'], destacar=self.nome_produto_consulta)
+
+    def listar_notas_consulta(self):
+        busca = sem_acento(self.entry_busca_nota.get()).split()
+        desde = self._data_inicio_periodo(self.combo_periodo_nota.get())
+        for i in self.tree_consulta_notas.get_children():
+            self.tree_consulta_notas.delete(i)
+        n = 0
+        for nota in self.cache_consulta_notas:
+            if desde and (not nota['Data'] or nota['Data'] < desde):
+                continue
+            if busca:
+                texto = sem_acento(f"{nota['NumeroNF']} {nota['Fornecedor']} {nota['CNPJ']} {nota['TextoItens']}")
+                if not all(p in texto for p in busca):
+                    continue
+            self.tree_consulta_notas.insert("", "end", iid=f"n{nota['NotaID']}", values=(
+                nota['Data'].strftime('%d/%m/%Y') if nota['Data'] else '?', nota['NumeroNF'], nota['Fornecedor'],
+                nota['Itens'], fmt_reais(nota['ValorNF'] or nota['TotalItens'])))
+            n += 1
+        self.lbl_consulta_qtd_notas.config(text=f"{n} nota(s)")
+
+    def mostrar_itens_nota_consulta(self, destacar=None):
+        sel = self.tree_consulta_notas.focus()
+        for i in self.tree_consulta_itens.get_children():
+            self.tree_consulta_itens.delete(i)
+        if not sel:
+            return
+        nota_id = int(sel[1:])
+        nota = next((n for n in self.cache_consulta_notas if n['NotaID'] == nota_id), None)
+        try:
+            itens = database.itens_da_nota(nota_id) or []
+        except Exception as e:
+            logger.error(f"Erro ao carregar itens da nota {nota_id}: {e}", exc_info=True)
+            itens = []
+        self.itens_nota_consulta = itens
+        palavras = sem_acento(destacar).split() if destacar else sem_acento(self.entry_busca_nota.get()).split()
+        total = Decimal('0')
+        for it in itens:
+            texto = sem_acento(f"{it['NomeProduto']} {it['DescricaoXML']}")
+            achou = bool(palavras) and all(p in texto for p in palavras)
+            self.tree_consulta_itens.insert("", "end", iid=f"i{it['ItemNotaID']}", tags=('achado',) if achou else (), values=(
+                it['NomeProduto'], it['DescricaoXML'], fmt_qtd(it['Embalagens']), fmt_qtd(it['Fator']),
+                fmt_reais(it['CustoEmbalagem']), fmt_qtd(it['Quantidade']), it['Unidade'],
+                fmt_reais(it['CustoUnitario']), fmt_reais(it['Total'])))
+            total += it['Total']
+        if nota:
+            self.lbl_consulta_nota.config(text=f"🧾 NF {nota['NumeroNF']} — {nota['Fornecedor']} — "
+                                               f"{nota['Data'].strftime('%d/%m/%Y') if nota['Data'] else '?'} — {len(itens)} item(ns)")
+        texto_total = f"Total dos itens: {fmt_reais(total)}"
+        if nota and nota['ValorNF'] and abs(nota['ValorNF'] - total) >= Decimal('0.05'):
+            texto_total += f"   ·   Valor da nota: {fmt_reais(nota['ValorNF'])} (a diferença são itens ignorados, como comodato, ou itens não salvos)"
+        self.lbl_consulta_total_nota.config(text=texto_total)
+
+    def abrir_nota_na_consulta(self, nota_id, destacar=None):
+        """Vai para a aba 8 > Nota Fiscal e mostra a nota (usado pelo histórico do produto)."""
+        if not self.cache_consulta_notas:
+            self.cache_consulta_notas = database.listar_notas_para_consulta() or []
+        self.entry_busca_nota.delete(0, tk.END)
+        self.combo_periodo_nota.set('Todo o histórico')
+        self.listar_notas_consulta()
+        iid = f"n{nota_id}"
+        try:
+            self.nb_consultas.select(1)
+        except tk.TclError:
+            pass
+        if self.tree_consulta_notas.exists(iid):
+            self.tree_consulta_notas.focus(iid); self.tree_consulta_notas.selection_set(iid); self.tree_consulta_notas.see(iid)
+            self.mostrar_itens_nota_consulta(destacar=destacar)
+
+    def _consulta_ir_para_produto_do_item(self):
+        sel = self.tree_consulta_itens.focus()
+        if not sel:
+            return
+        item = next((i for i in getattr(self, 'itens_nota_consulta', []) if f"i{i['ItemNotaID']}" == sel), None)
+        if not item or not item['ProdutoID']:
+            self.status("Este item não está ligado a um produto do estoque.", 'aviso')
+            return
+        self.abrir_produto_na_consulta(item['ProdutoID'])
+
+    def abrir_produto_na_consulta(self, produto_id):
+        """Vai para a aba 8 > Produto e mostra o histórico de preços do produto."""
+        self.entry_busca_produto_consulta.delete(0, tk.END)
+        self.listar_produtos_consulta()
+        try:
+            self.nb_consultas.select(0)
+        except tk.TclError:
+            pass
+        iid = str(produto_id)
+        if self.tree_consulta_produtos.exists(iid):
+            self.tree_consulta_produtos.focus(iid); self.tree_consulta_produtos.selection_set(iid); self.tree_consulta_produtos.see(iid)
+        self.mostrar_consulta_produto(produto_id=int(produto_id))
+
+    def exportar_consulta_produto(self):
+        if not self.produto_consulta:
+            messagebox.showwarning("Aviso", "Escolha um produto primeiro.", parent=self.root)
+            return
+        pd = self._importar_pandas(self.root)
+        if pd is None:
+            return
+        caminho = filedialog.asksaveasfilename(
+            parent=self.root, title="Salvar histórico de preços", defaultextension=".xlsx",
+            filetypes=[("Arquivos Excel", "*.xlsx")],
+            initialfile=nome_arquivo_seguro(f"Historico_Precos_{self.nome_produto_consulta}.xlsx"))
+        if not caminho:
+            return
+        try:
+            desde = self._data_inicio_periodo(self.combo_periodo_consulta.get())
+            periodo = [r for r in self.historico_consulta if not desde or (r['Data'] and r['Data'] >= desde)]
+            resumo = database.resumo_precos_por_fornecedor(self.historico_consulta, desde)
+            with pd.ExcelWriter(caminho, engine='openpyxl') as escritor:
+                pd.DataFrame([{'Fornecedor': r['Fornecedor'], 'Compras': r['Compras'], 'Qtd comprada': float(r['Quantidade']),
+                               'Custo médio/unid.': float(r['CustoMedio']), 'Menor': float(r['Menor']), 'Maior': float(r['Maior']),
+                               'Último': float(r['Ultimo']), 'Última compra': r['UltimaData'].strftime('%d/%m/%Y') if r['UltimaData'] else ''}
+                              for r in resumo]).to_excel(escritor, sheet_name='Por fornecedor', index=False)
+                pd.DataFrame([{'Data': r['Data'].strftime('%d/%m/%Y') if r['Data'] else '', 'NF': r['NumeroNF'],
+                               'Fornecedor': r['Fornecedor'], 'Descrição na nota': r['DescricaoXML'],
+                               'Embalagens': float(r['Embalagens']), 'Custo embalagem': float(r['CustoEmbalagem']),
+                               'Quantidade': float(r['Quantidade']), 'Custo/unid.': float(r['CustoUnitario']),
+                               'Total': float(r['Total'])} for r in periodo]).to_excel(escritor, sheet_name='Histórico', index=False)
+            self.status(f"Histórico de preços salvo em: {caminho}")
+            messagebox.showinfo("Salvo", f"Histórico salvo em:\n{caminho}", parent=self.root)
+        except Exception as e:
+            logger.error(f"Erro ao exportar histórico de preços: {e}", exc_info=True)
+            messagebox.showerror("Erro", f"Não foi possível salvar o Excel.\n{e}", parent=self.root)
 
     def ordenar_coluna_treeview(self, tree, col, reverse):
         """
