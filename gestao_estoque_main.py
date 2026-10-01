@@ -269,6 +269,41 @@ def tipo_item_por_cfop(cfop):
     return 'compra'
 
 
+# [MELHORIA CATÁLOGO] Sugestão de nome "limpo" para produtos criados a partir do XML
+_PALAVRAS_MINUSCULAS = {'de', 'da', 'do', 'das', 'dos', 'com', 'sem', 'e', 'em', 'a', 'o', 'ao', 'na', 'no', 'p/', 'c/', 's/'}
+_SIGLAS_MAIUSCULAS = {'KG', 'G', 'GR', 'ML', 'L', 'LT', 'UN', 'UND', 'PCT', 'PC', 'CX', 'FD', 'DZ', 'PT', 'SC', 'TP', 'PET'}
+
+
+def sugerir_nome_limpo(nome):
+    """
+    '003 FERRERO ROCHER T3X16..........01X37.5GR %AGR: 2'  ->  'Ferrero Rocher T3X16 01X37.5GR'
+    '160068-BARBIE FAB BARBIE FASHION   BARBIE   12X'      ->  'Barbie Fab Barbie Fashion Barbie 12X'
+    '232 - CARNE CONG. FRANGO S/O FILE'                    ->  'Carne Cong. Frango s/o File'
+    Regras: tira o código numérico do início, as sequências de pontos, os textos técnicos do
+    fornecedor (%AGR:, CXA:, ***), espaços repetidos, e deixa só a 1ª letra maiúscula.
+    Palavras com números (12X, 5KG, T3X16) ficam como estão.
+    """
+    t = str(nome or '')
+    t = re.split(r'%AGR:|\bCXA:|\bCX\.:', t, maxsplit=1, flags=re.IGNORECASE)[0]   # lixo técnico no fim
+    t = re.sub(r'\*{2,}', ' ', t)                                                 # ***
+    t = re.sub(r'\.{3,}', ' ', t)                                                 # ..........
+    t = re.sub(r'^\s*\d{2,}\s*(?:-\s*|\s+)', '', t)                                # "003 " / "160068-" / "232 - "
+    t = ' '.join(t.split()).strip(' -.:;')
+    if not t:
+        return str(nome or '').strip()
+    palavras = []
+    for i, p in enumerate(t.split(' ')):
+        if any(ch.isdigit() for ch in p):
+            palavras.append(p)
+        elif p.upper() in _SIGLAS_MAIUSCULAS or ('/' in p and len(p) <= 4 and p.lower() not in _PALAVRAS_MINUSCULAS):
+            palavras.append(p.upper())          # KG, UN, S/O, C/G ficam em maiúsculas
+        elif i > 0 and p.lower() in _PALAVRAS_MINUSCULAS:
+            palavras.append(p.lower())
+        else:
+            palavras.append(p[:1].upper() + p[1:].lower())
+    return ' '.join(palavras)
+
+
 def criar_tree_zebrada(pai, **kwargs):
     """
     [MELHORIA UX] Cria uma tabela (Treeview) com linhas alternadas cinza/branco,
@@ -593,14 +628,20 @@ class AppGestaoEstoque:
         self.entry_prod_estoque_min.grid(row=5, column=0, sticky="w", pady=(0, 10))
         self.entry_prod_estoque_min.insert(0, "0.0")
 
-        ttk.Label(self.form_frame_mestre, text="Custo Inicial (R$):").grid(row=4, column=1, sticky="w", pady=2)
+        # [MELHORIA CATÁLOGO] "Custo" honesto: só é editável quando o produto NUNCA foi
+        # comprado por nota. Se tem nota, mostra o custo que o sistema realmente usa.
+        self.lbl_prod_custo = ttk.Label(self.form_frame_mestre, text="Custo manual (R$):")
+        self.lbl_prod_custo.grid(row=4, column=1, sticky="w", pady=2)
         self.entry_prod_custo = ttk.Entry(self.form_frame_mestre, width=15)
         self.entry_prod_custo.grid(row=5, column=1, sticky="w", pady=(0, 10))
         self.entry_prod_custo.insert(0, "0.00")
+        self.lbl_prod_custo_info = ttk.Label(self.form_frame_mestre, text="Opcional: custo para produto sem nota fiscal.",
+                                             foreground="gray", wraplength=330, justify="left")
+        self.lbl_prod_custo_info.grid(row=6, column=0, columnspan=2, sticky="w", pady=(0, 6))
         # ---------------------------------------------------------
 
         btn_frame = ttk.Frame(self.form_frame_mestre)
-        btn_frame.grid(row=6, column=0, columnspan=2, pady=10)
+        btn_frame.grid(row=7, column=0, columnspan=2, pady=10)
         self.btn_prod_salvar = ttk.Button(btn_frame, text="Salvar Novo", command=self.salvar_produto)
         self.btn_prod_salvar.pack(side=tk.LEFT, padx=5)
         self.btn_prod_limpar = ttk.Button(btn_frame, text="Limpar", command=self.limpar_formulario_produto)
@@ -608,7 +649,7 @@ class AppGestaoEstoque:
 
         # Botão Excluir movido para o formulário (inicialmente desabilitado)
         self.btn_excluir_mestre = ttk.Button(self.form_frame_mestre, text="🗑️ Excluir Produto", command=self.excluir_produto_selecionado, state=tk.DISABLED)
-        self.btn_excluir_mestre.grid(row=7, column=0, columnspan=2, pady=15, sticky="ew")
+        self.btn_excluir_mestre.grid(row=8, column=0, columnspan=2, pady=15, sticky="ew")
 
         # --- Lado Direito: Tabela e Filtros ---
         lista_frame = ttk.LabelFrame(main_frame, text="Catálogo Mestre de Produtos (Duplo-clique no item para ver vínculos)", padding="10")
@@ -630,15 +671,34 @@ class AppGestaoEstoque:
         self.combo_filtro_cat_mestre.pack(side=tk.LEFT, padx=5)
         self.combo_filtro_cat_mestre.set("Todas")
         self.combo_filtro_cat_mestre.bind("<<ComboboxSelected>>", self.atualizar_lista_produtos)
+        # [MELHORIA CATÁLOGO] filtro por situação
+        ttk.Label(filtro_frame, text="Mostrar:").pack(side=tk.LEFT, padx=(10, 0))
+        self.combo_filtro_situacao = ttk.Combobox(filtro_frame, state="readonly", width=30,
+                                                  values=[r for _, r in self.FILTROS_CATALOGO])
+        self.combo_filtro_situacao.set(self.FILTROS_CATALOGO[0][1])
+        self.combo_filtro_situacao.pack(side=tk.LEFT, padx=5)
+        self.combo_filtro_situacao.bind("<<ComboboxSelected>>", self.atualizar_lista_produtos)
+        acoes_frame = ttk.Frame(lista_frame)
+        acoes_frame.grid(row=3, column=0, sticky="ew", pady=(6, 0))
+        self.btn_editar_massa = ttk.Button(acoes_frame, text="✏️ Editar selecionados", command=self.abrir_edicao_em_massa)
+        self.btn_editar_massa.pack(side=tk.LEFT)
+        ttk.Button(acoes_frame, text="🧹 Sugerir nomes limpos", command=self.abrir_sugestao_nomes).pack(side=tk.LEFT, padx=5)
+        ttk.Button(acoes_frame, text="🔗 Juntar produtos duplicados", command=lambda: self.abrir_juntar_produtos()).pack(side=tk.LEFT)
+        ttk.Label(acoes_frame, foreground="gray", text="  Ctrl ou Shift + clique = selecionar vários").pack(side=tk.LEFT)
 
         # Tabela
-        cols = ('ID', 'Nome', 'Unidade', 'Categoria', 'Estoque Mínimo')
-        self.tree_produtos = ttk.Treeview(lista_frame, columns=cols, show='headings', selectmode='browse')
-        self.tree_produtos.heading('ID', text='ID'); self.tree_produtos.column('ID', width=40, anchor='center')
-        self.tree_produtos.heading('Nome', text='Nome'); self.tree_produtos.column('Nome', width=200)
-        self.tree_produtos.heading('Unidade', text='UN'); self.tree_produtos.column('Unidade', width=40, anchor='center')
-        self.tree_produtos.heading('Categoria', text='Categoria'); self.tree_produtos.column('Categoria', width=120)
-        self.tree_produtos.heading('Estoque Mínimo', text='Est. Mínimo'); self.tree_produtos.column('Estoque Mínimo', width=80, anchor='e')
+        # [MELHORIA CATÁLOGO] colunas novas (as 5 primeiras continuam na mesma ordem) e
+        # seleção de VÁRIOS produtos (Ctrl/Shift + clique) para editar em massa.
+        cols = ('ID', 'Nome', 'Unidade', 'Categoria', 'Estoque Mínimo', 'Custo atual', 'Última compra',
+                'Mais barato (12m)', 'Última contagem', 'Situação')
+        self.tree_produtos = ttk.Treeview(lista_frame, columns=cols, show='headings', selectmode='extended')
+        for col, titulo, larg, anc in (('ID', 'ID', 45, 'center'), ('Nome', 'Nome', 260, 'w'), ('Unidade', 'UN', 40, 'center'),
+                                       ('Categoria', 'Categoria', 110, 'w'), ('Estoque Mínimo', 'Est. Mínimo', 75, 'e'),
+                                       ('Custo atual', 'Custo atual', 90, 'e'), ('Última compra', 'Última compra', 90, 'center'),
+                                       ('Mais barato (12m)', 'Mais barato (12m)', 200, 'w'),
+                                       ('Última contagem', 'Última contagem', 120, 'e'), ('Situação', 'Situação', 110, 'w')):
+            self.tree_produtos.heading(col, text=titulo, command=lambda c=col: self.ordenar_coluna_treeview(self.tree_produtos, c, False))
+            self.tree_produtos.column(col, width=larg, anchor=anc)
 
         # Tags para Listras Zebra
         self.tree_produtos.tag_configure('impar', background='#f9f9f9')
@@ -657,6 +717,287 @@ class AppGestaoEstoque:
         self.lbl_total_mestre = ttk.Label(lista_frame, text="Carregando...", font=("Arial", 9, "italic"), foreground="gray")
         self.lbl_total_mestre.grid(row=2, column=0, sticky="w", pady=(5,0))
 
+    # ===================================================================
+    # == [MELHORIA CATÁLOGO] custo, edição em massa, nomes, duplicados ===
+    # ===================================================================
+    def _custo_editavel(self, sim):
+        try:
+            self.entry_prod_custo.config(state='normal' if sim else 'readonly')
+        except tk.TclError:
+            pass
+
+    def _ids_selecionados_catalogo(self):
+        return [int(i) for i in self.tree_produtos.selection() if str(i).isdigit()]
+
+    def abrir_edicao_em_massa(self):
+        """Muda categoria, unidade e/ou estoque mínimo de VÁRIOS produtos de uma vez."""
+        ids = self._ids_selecionados_catalogo()
+        if not ids:
+            messagebox.showwarning("Aviso", "Selecione os produtos na lista (Ctrl ou Shift + clique para vários).", parent=self.root)
+            return
+        popup = Toplevel(self.root)
+        popup.title(f"✏️ Editar {len(ids)} produto(s)")
+        popup.geometry("460x330")
+        popup.transient(self.root)
+        f = ttk.Frame(popup, padding=15)
+        f.pack(fill=tk.BOTH, expand=True)
+        nomes = [self.tree_produtos.item(str(i), 'values')[1] for i in ids[:4] if self.tree_produtos.exists(str(i))]
+        ttk.Label(f, text=f"{len(ids)} produto(s): " + ", ".join(nomes) + (" ..." if len(ids) > 4 else ""),
+                  wraplength=420, font=("Arial", 9, "bold")).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
+        ttk.Label(f, foreground="gray", text="Marque só o que você quer mudar. O resto fica como está.").grid(
+            row=1, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        var_cat, var_un, var_min = tk.BooleanVar(value=False), tk.BooleanVar(value=False), tk.BooleanVar(value=False)
+        ttk.Checkbutton(f, text="Categoria:", variable=var_cat).grid(row=2, column=0, sticky="w", pady=4)
+        combo_cat = ttk.Combobox(f, values=self.lista_categorias, state="readonly", width=25)
+        combo_cat.grid(row=2, column=1, sticky="w")
+        ttk.Checkbutton(f, text="Unidade:", variable=var_un).grid(row=3, column=0, sticky="w", pady=4)
+        entry_un = ttk.Entry(f, width=10)
+        entry_un.grid(row=3, column=1, sticky="w")
+        ttk.Checkbutton(f, text="Estoque mínimo:", variable=var_min).grid(row=4, column=0, sticky="w", pady=4)
+        entry_min = ttk.Entry(f, width=10)
+        entry_min.grid(row=4, column=1, sticky="w")
+        # escolher um valor já marca a caixinha
+        combo_cat.bind("<<ComboboxSelected>>", lambda e: var_cat.set(True))
+        entry_un.bind("<KeyRelease>", lambda e: var_un.set(bool(entry_un.get().strip())))
+        entry_min.bind("<KeyRelease>", lambda e: var_min.set(bool(entry_min.get().strip())))
+
+        def aplicar():
+            categoria = combo_cat.get() if var_cat.get() else None
+            unidade = entry_un.get().strip().upper() if var_un.get() else None
+            minimo = None
+            if var_cat.get() and not categoria:
+                messagebox.showerror("Erro", "Escolha a categoria.", parent=popup); return
+            if var_un.get() and not unidade:
+                messagebox.showerror("Erro", "Digite a unidade (ex: UN, KG).", parent=popup); return
+            if var_min.get():
+                try:
+                    minimo = para_decimal(entry_min.get() or "0", "Estoque mínimo")
+                except ValueError as e:
+                    messagebox.showerror("Erro", str(e), parent=popup); return
+            if categoria is None and unidade is None and minimo is None:
+                messagebox.showwarning("Aviso", "Marque pelo menos um campo para mudar.", parent=popup); return
+            if unidade is not None and not messagebox.askyesno(
+                    "Mudar a unidade", "Atenção: a unidade é a forma como você CONTA o produto. Se mudar de UN para KG, "
+                    "confira também o Qtd/Cx dos vínculos (fornecedores) desses produtos.\n\nContinuar?", parent=popup):
+                return
+            ok, msg = database.atualizar_produtos_em_massa(ids, categoria=categoria, unidade=unidade, estoque_min=minimo)
+            if ok:
+                self.status(msg)
+                popup.destroy()
+                self.atualizar_lista_produtos()
+                self.popular_combobox_produtos_mestre()
+            else:
+                messagebox.showerror("Erro", msg, parent=popup)
+
+        ttk.Button(f, text=f"💾 Aplicar nos {len(ids)} produto(s)", command=aplicar).grid(row=5, column=0, columnspan=2, sticky="ew", pady=(18, 0), ipady=4)
+        self._janela_massa = {'popup': popup, 'var_cat': var_cat, 'cat': combo_cat, 'var_un': var_un, 'un': entry_un,
+                              'var_min': var_min, 'min': entry_min, 'aplicar': aplicar}
+
+    def abrir_sugestao_nomes(self):
+        """Sugere nomes limpos para os produtos (os selecionados, ou todos da lista) e aplica os aprovados."""
+        ids = self._ids_selecionados_catalogo()
+        base = [p for p in getattr(self, '_cache_produtos', []) if not ids or p.ProdutoID in ids]
+        sugestoes = []
+        for p in base:
+            novo = sugerir_nome_limpo(p.NomeProduto)
+            if novo and novo != (p.NomeProduto or '').strip():
+                sugestoes.append({'ProdutoID': p.ProdutoID, 'Atual': p.NomeProduto or '', 'Novo': novo})
+        if not sugestoes:
+            messagebox.showinfo("Nomes", "Nenhum nome para limpar. 👍", parent=self.root)
+            return
+        popup = Toplevel(self.root)
+        popup.title("🧹 Sugerir nomes limpos")
+        popup.geometry("1100x620")
+        popup.transient(self.root)
+        f = ttk.Frame(popup, padding=10)
+        f.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(f, wraplength=1050, justify="left", text=(
+            "Os nomes vieram da nota fiscal. Abaixo está uma sugestão mais limpa. Marque (✔) os que você aprova — "
+            "duplo clique no ✔ marca/desmarca; duplo clique no NOME SUGERIDO deixa você escrever outro. "
+            "Renomear é seguro: as próximas notas continuam sendo reconhecidas pelo vínculo, não pelo nome.")).pack(anchor="w", pady=(0, 6))
+        lbl = ttk.Label(f, font=("Arial", 10, "bold"))
+        lbl.pack(anchor="w")
+        cols = ('✔', 'ID', 'Nome atual', 'Nome sugerido')
+        tree = criar_tree_zebrada(f, columns=cols, show='headings', selectmode='browse')
+        for col, larg, anc in (('✔', 35, 'center'), ('ID', 55, 'center'), ('Nome atual', 480, 'w'), ('Nome sugerido', 480, 'w')):
+            tree.heading(col, text=col); tree.column(col, width=larg, anchor=anc)
+        sb = ttk.Scrollbar(f, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=sb.set)
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, pady=6); sb.pack(side=tk.LEFT, fill=tk.Y, pady=6)
+        marcados = set(s_['ProdutoID'] for s_ in sugestoes)
+        por_id = {str(s_['ProdutoID']): s_ for s_ in sugestoes}
+
+        def mostrar():
+            for i in tree.get_children():
+                tree.delete(i)
+            for s_ in sugestoes:
+                tree.insert("", "end", iid=str(s_['ProdutoID']), values=(
+                    "✔" if s_['ProdutoID'] in marcados else "", s_['ProdutoID'], s_['Atual'], s_['Novo']))
+            lbl.config(text=f"{len(sugestoes)} sugestão(ões) · ✔ {len(marcados)} marcada(s)")
+
+        def duplo_clique(event=None):
+            sel = tree.focus()
+            if not sel:
+                return
+            coluna = tree.identify_column(event.x) if event is not None and hasattr(event, 'x') else '#1'
+            s_ = por_id[sel]
+            if coluna == '#4':
+                novo = simpledialog.askstring("Nome do produto", f"Nome atual:\n{s_['Atual']}\n\nNovo nome:",
+                                              initialvalue=s_['Novo'], parent=popup)
+                if novo and novo.strip():
+                    s_['Novo'] = ' '.join(novo.split()); marcados.add(s_['ProdutoID'])
+            else:
+                marcados.symmetric_difference_update({s_['ProdutoID']})
+            mostrar(); tree.focus(sel); tree.selection_set(sel)
+
+        def marcar_todos(sim):
+            marcados.clear()
+            if sim:
+                marcados.update(s_['ProdutoID'] for s_ in sugestoes)
+            mostrar()
+
+        def aplicar():
+            escolhidos = [(s_['ProdutoID'], s_['Novo']) for s_ in sugestoes if s_['ProdutoID'] in marcados]
+            if not escolhidos:
+                messagebox.showwarning("Aviso", "Nenhum nome marcado.", parent=popup); return
+            if not messagebox.askyesno("Renomear", f"Renomear {len(escolhidos)} produto(s)?", parent=popup):
+                return
+            ok_n, erros = database.renomear_produtos(escolhidos)
+            self.status(f"{ok_n} produto(s) renomeado(s).")
+            if erros:
+                messagebox.showwarning("Alguns nomes não foram trocados", "\n".join(erros[:15]), parent=popup)
+            self.atualizar_lista_produtos()
+            self.popular_combobox_produtos_mestre()
+            popup.destroy()
+
+        tree.bind("<Double-1>", duplo_clique)
+        botoes = ttk.Frame(popup, padding=(10, 0, 10, 10))
+        botoes.pack(fill=tk.X)
+        ttk.Button(botoes, text="✅ Renomear os marcados", command=aplicar).pack(side=tk.RIGHT, ipady=3)
+        ttk.Button(botoes, text="Desmarcar todos", command=lambda: marcar_todos(False)).pack(side=tk.RIGHT, padx=5, ipady=3)
+        ttk.Button(botoes, text="Marcar todos", command=lambda: marcar_todos(True)).pack(side=tk.RIGHT, ipady=3)
+        mostrar()
+        self._janela_nomes = {'popup': popup, 'tree': tree, 'sugestoes': sugestoes, 'marcados': marcados,
+                              'duplo_clique': duplo_clique, 'aplicar': aplicar, 'marcar_todos': marcar_todos}
+
+    def abrir_juntar_produtos(self):
+        """
+        Junta produtos duplicados do Catálogo. Se houver 2+ produtos selecionados na lista,
+        junta ESSES; senão, procura sozinho (mesmo nome ou mesmo EAN em produtos diferentes).
+        """
+        ids = self._ids_selecionados_catalogo()
+        if len(ids) >= 2:
+            produtos = [{'ProdutoID': p.ProdutoID, 'NomeProduto': p.NomeProduto or '', 'UnidadeMedida': p.UnidadeMedida or 'UN',
+                         'Categoria': getattr(p, 'Categoria', None) or 'Geral', 'Compras': None, 'Vinculos': None}
+                        for p in self._cache_produtos if p.ProdutoID in ids]
+            grupos = [{'Grupo': 1, 'Motivo': 'selecionados por você', 'Produtos': produtos, 'ManterID': min(ids)}]
+        else:
+            grupos = database.listar_produtos_duplicados() if hasattr(database, 'listar_produtos_duplicados') else []
+        if not grupos:
+            messagebox.showinfo("Duplicados", "Não encontrei produtos duplicados (mesmo nome ou mesmo EAN). 👍\n\n"
+                                "Dica: para juntar dois produtos de nomes diferentes, selecione os dois na lista "
+                                "(Ctrl + clique) e clique em '🔗 Juntar produtos duplicados'.", parent=self.root)
+            return
+        popup = Toplevel(self.root)
+        popup.title("🔗 Juntar produtos duplicados")
+        popup.geometry("1000x560")
+        popup.transient(self.root)
+        f = ttk.Frame(popup, padding=10)
+        f.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(f, wraplength=960, justify="left", text=(
+            "Cada grupo parece ser o MESMO produto cadastrado mais de uma vez. Juntar mantém o produto marcado como "
+            "MANTER: os fornecedores/compras dos outros passam para ele e, nas contagens, as quantidades são SOMADAS. "
+            "Duplo clique numa linha = escolher qual MANTER.")).pack(anchor="w", pady=(0, 6))
+        cols = ('Ação', 'ID', 'Nome', 'UN', 'Categoria', 'Compras', 'Fornecedores')
+        tree = criar_tree_zebrada(f, columns=cols, show='headings', selectmode='browse')
+        for col, larg, anc in (('Ação', 160, 'w'), ('ID', 60, 'center'), ('Nome', 380, 'w'), ('UN', 45, 'center'),
+                               ('Categoria', 120, 'w'), ('Compras', 70, 'center'), ('Fornecedores', 90, 'center')):
+            tree.heading(col, text=col); tree.column(col, width=larg, anchor=anc)
+        tree.tag_configure('grupo', background='#dfe8f5')
+        tree.tag_configure('manter', foreground='#1b7a2f')
+        sb = ttk.Scrollbar(f, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=sb.set)
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True); sb.pack(side=tk.LEFT, fill=tk.Y)
+        manter = {g['Grupo']: g['ManterID'] for g in grupos}
+
+        def mostrar():
+            for i in tree.get_children():
+                tree.delete(i)
+            for g in grupos:
+                unidades = {p['UnidadeMedida'] for p in g['Produtos']}
+                alerta = "  ⚠️ unidades diferentes!" if len(unidades) > 1 else ""
+                tree.insert("", "end", iid=f"g{g['Grupo']}", tags=('grupo',), values=(
+                    f"Grupo {g['Grupo']}", '', f"{len(g['Produtos'])} produtos · {g['Motivo']}{alerta}", '', '', '', ''))
+                for p in g['Produtos']:
+                    m = p['ProdutoID'] == manter[g['Grupo']]
+                    tree.insert("", "end", iid=f"p{g['Grupo']}_{p['ProdutoID']}", tags=('manter',) if m else (), values=(
+                        "✅ MANTER" if m else "   juntar", p['ProdutoID'], p['NomeProduto'], p['UnidadeMedida'], p['Categoria'],
+                        '' if p['Compras'] is None else p['Compras'], '' if p['Vinculos'] is None else p['Vinculos']))
+
+        def definir_manter(event=None):
+            sel = tree.focus()
+            if not sel or not sel.startswith('p'):
+                return
+            g, pid = sel[1:].split('_')
+            manter[int(g)] = int(pid)
+            mostrar(); tree.focus(sel); tree.selection_set(sel)
+
+        def juntar_grupo():
+            sel = tree.focus()
+            if not sel:
+                messagebox.showwarning("Aviso", "Clique numa linha do grupo que você quer juntar.", parent=popup); return
+            n = int(sel[1:].split('_')[0])
+            g = next(x for x in grupos if x['Grupo'] == n)
+            alvo = next(p for p in g['Produtos'] if p['ProdutoID'] == manter[n])
+            outros = [p for p in g['Produtos'] if p['ProdutoID'] != manter[n]]
+            unidades = {p['UnidadeMedida'] for p in g['Produtos']}
+            aviso = (f"\n\n⚠️ As unidades são diferentes ({', '.join(sorted(unidades))}). As quantidades das contagens "
+                     f"serão SOMADAS como se fossem {alvo['UnidadeMedida']}. Confira antes!") if len(unidades) > 1 else ""
+            if not messagebox.askyesno("Juntar produtos",
+                                       f"Juntar {len(outros)} produto(s) em:\n'{alvo['NomeProduto']}' (ID {alvo['ProdutoID']})?\n\n"
+                                       + "\n".join(f"  • {p['NomeProduto']} (ID {p['ProdutoID']})" for p in outros[:8])
+                                       + aviso, icon='warning' if aviso else 'question', parent=popup):
+                return
+            ok, msg = database.juntar_produtos(alvo['ProdutoID'], [p['ProdutoID'] for p in outros])
+            if ok:
+                self.status(msg)
+                self._atualizar_buffet_apos_juntar(alvo['ProdutoID'], [p['ProdutoID'] for p in outros])
+                grupos.remove(g)
+                mostrar()
+                self.atualizar_lista_produtos(); self.popular_combobox_produtos_mestre()
+                if not grupos:
+                    popup.destroy()
+            else:
+                messagebox.showerror("Erro", msg, parent=popup)
+
+        tree.bind("<Double-1>", definir_manter)
+        botoes = ttk.Frame(popup, padding=(10, 0, 10, 10))
+        botoes.pack(fill=tk.X)
+        ttk.Button(botoes, text="🔗 Juntar o grupo selecionado", command=juntar_grupo).pack(side=tk.RIGHT, ipady=3)
+        mostrar()
+        self._janela_juntar_produtos = {'popup': popup, 'tree': tree, 'manter': manter, 'grupos': grupos,
+                                        'definir_manter': definir_manter, 'juntar': juntar_grupo}
+
+    def _atualizar_buffet_apos_juntar(self, manter_id, removidos):
+        """Se algum produto juntado estava na lista de sabores do Buffet, troca pelo produto mantido."""
+        caminho = os.path.join(PASTA_DO_PROGRAMA, 'config_sabores_buffet.json')
+        try:
+            if not os.path.exists(caminho):
+                return
+            with open(caminho, 'r', encoding='utf-8') as f:
+                ids = json.load(f)
+            if not isinstance(ids, list) or not any(int(i) in removidos for i in ids):
+                return
+            novos = []
+            for i in ids:
+                i = manter_id if int(i) in removidos else int(i)
+                if i not in novos:
+                    novos.append(i)
+            with open(caminho, 'w', encoding='utf-8') as f:
+                json.dump(novos, f)
+        except (OSError, ValueError, TypeError) as e:
+            logger.warning(f"Não foi possível atualizar a lista de sabores do buffet: {e}")
+
     def limpar_formulario_produto(self, limpar_selecao=True):
         self.entry_prod_nome.delete(0, tk.END)
         self.entry_prod_unidade.delete(0, tk.END)
@@ -666,9 +1007,13 @@ class AppGestaoEstoque:
         self.entry_prod_estoque_min.delete(0, tk.END)
         self.entry_prod_estoque_min.insert(0, "0.0")
         if hasattr(self, 'entry_prod_custo'):
+            self._custo_editavel(True)
             self.entry_prod_custo.delete(0, tk.END)
             self.entry_prod_custo.insert(0, "0.00")
+            self.lbl_prod_custo.config(text="Custo manual (R$):")
+            self.lbl_prod_custo_info.config(text="Opcional: custo para produto sem nota fiscal.", foreground="gray")
         self.produto_selecionado_id = None
+        self.produto_tem_nota = False
         self.custo_carregado_texto = None
 
         # Restaura visuais para Novo Cadastro
@@ -814,7 +1159,7 @@ class AppGestaoEstoque:
                 # Isso criava uma "nota fiscal manual" com a data de HOJE, que passava a ser
                 # o "último custo" e escondia as notas reais importadas depois.
                 # Agora só grava se o valor da caixinha foi realmente alterado.
-                if custo_texto != (self.custo_carregado_texto or ""):
+                if not getattr(self, 'produto_tem_nota', False) and custo_texto != (self.custo_carregado_texto or ""):
                     if database.atualizar_custo_manual_produto(self.produto_selecionado_id, custo_inicial):
                         self.status("Produto e Custo atualizados com sucesso!")  # [MELHORIA UX] rodapé em vez de janelinha
                     else:
@@ -841,37 +1186,92 @@ class AppGestaoEstoque:
             logger.error(f"Erro ao salvar produto: {e}", exc_info=True)
             messagebox.showerror("Erro de Banco", f"Não foi possível salvar o produto.\nErro: {e}", parent=self.root)
 
+    FILTROS_CATALOGO = [
+        ('todos', 'Todos os produtos'),
+        ('minimo_zero', 'Estoque mínimo zerado'),
+        ('sem_compra_90', 'Sem compra há mais de 90 dias'),
+        ('nunca_comprado', 'Nunca comprado por nota'),
+        ('sem_custo', 'Sem custo (vale R$ 0 no estoque)'),
+        ('custo_manual', 'Com custo manual'),
+    ]
+
+    def _carregar_cache_catalogo(self):
+        self._cache_produtos = database.listar_produtos_estoque() or []
+        try:
+            self._cache_resumo_catalogo = database.resumo_catalogo() if hasattr(database, 'resumo_catalogo') else {}
+        except Exception as e:
+            logger.error(f"Erro ao carregar resumo do catálogo: {e}", exc_info=True)
+            self._cache_resumo_catalogo = {}
+
+    def situacao_produto(self, p, r):
+        """Lista de situações do produto (para a coluna 'Situação' e o filtro 'Mostrar')."""
+        sit = []
+        if r.get('CustoAtual') is None or r.get('CustoAtual') <= 0:
+            sit.append('sem_custo')
+        elif not r.get('TemNota'):
+            sit.append('custo_manual')
+        if not r.get('TemNota'):
+            sit.append('nunca_comprado')
+        elif r.get('UltimaCompra') and (date.today() - r['UltimaCompra']).days > 90:
+            sit.append('sem_compra_90')
+        try:
+            if Decimal(str(p.EstoqueMinimo or 0)) <= 0:
+                sit.append('minimo_zero')
+        except (InvalidOperation, ValueError):
+            sit.append('minimo_zero')
+        return sit
+
     def atualizar_lista_produtos(self, event=None):
+        """
+        [MELHORIA CATÁLOGO] Quando chamada por uma tecla/filtro (event), usa os dados já carregados
+        (rápido). Quando chamada pelo programa (sem event), relê o banco.
+        """
+        if event is None or not hasattr(self, '_cache_produtos'):
+            try:
+                self._carregar_cache_catalogo()
+            except Exception as e:
+                logger.error(f"Erro ao atualizar lista de produtos: {e}", exc_info=True)
+                return
+        selecionados = set(self.tree_produtos.selection())
         for i in self.tree_produtos.get_children():
             self.tree_produtos.delete(i)
         try:
-            produtos = database.listar_produtos_estoque()
-
-            # Captura valores dos filtros
-            termo = self.entry_filtro_mestre.get().lower() if hasattr(self, 'entry_filtro_mestre') else ""
+            # [MELHORIA CATÁLOGO] busca sem acento, por várias palavras, também pelo ID
+            palavras = sem_acento(self.entry_filtro_mestre.get()).split() if hasattr(self, 'entry_filtro_mestre') else []
             cat_filtro = self.combo_filtro_cat_mestre.get() if hasattr(self, 'combo_filtro_cat_mestre') else "Todas"
-
+            rotulo = self.combo_filtro_situacao.get() if hasattr(self, 'combo_filtro_situacao') else ''
+            filtro_sit = next((ch for ch, r in self.FILTROS_CATALOGO if r == rotulo), 'todos')
+            icones = {'sem_custo': '⚠️ sem custo', 'custo_manual': '✍️ manual', 'sem_compra_90': '💤 +90 dias',
+                      'nunca_comprado': '', 'minimo_zero': ''}
             count = 0
-            for p in produtos or []:
+            for p in self._cache_produtos or []:
                 cat = getattr(p, 'Categoria', None) or 'Geral'
                 nome = p.NomeProduto or ''
-
-                # Aplica filtros em memória
                 if cat_filtro != "Todas" and cat != cat_filtro: continue
-                if termo and termo not in nome.lower(): continue
-
-                # Zebra striping (Cores alternadas)
+                if palavras and not all(w in sem_acento(f"{nome} {p.ProdutoID}") for w in palavras): continue
+                r = self._cache_resumo_catalogo.get(p.ProdutoID, {})
+                sit = self.situacao_produto(p, r)
+                if filtro_sit != 'todos' and filtro_sit not in sit: continue
                 tag = 'par' if count % 2 == 0 else 'impar'
-
+                un = p.UnidadeMedida or 'UN'
+                custo = fmt_reais(r['CustoAtual']) if r.get('CustoAtual') else '—'
+                ultima = r['UltimaCompra'].strftime('%d/%m/%Y') if r.get('UltimaCompra') else '—'
+                barato = (f"{r['MaisBaratoFornecedor'][:22]} {fmt_reais(r['MaisBaratoCusto'])}"
+                          if r.get('MaisBaratoFornecedor') and r.get('QtdFornecedores', 0) > 1 else
+                          (r.get('FornecedorUltimo') or '—'))
+                contagem = (f"{fmt_qtd(r['UltContagemQtd'])} {un} ({r['UltContagemData'].strftime('%d/%m')})"
+                            if r.get('UltContagemData') and r.get('UltContagemQtd') is not None else '—')
+                situacao = " ".join(t for t in (icones[x] for x in sit) if t)
                 # [DEPURAÇÃO] EstoqueMinimo vazio (NULL) no banco fazia a LISTA INTEIRA sumir
-                self.tree_produtos.insert("", "end", values=(p.ProdutoID, nome, p.UnidadeMedida or 'UN', cat,
-                                                             fmt_num(p.EstoqueMinimo, 3, "0.000")), tags=(tag,))
+                self.tree_produtos.insert("", "end", iid=str(p.ProdutoID), values=(
+                    p.ProdutoID, nome, un, cat, fmt_num(p.EstoqueMinimo, 3, "0.000"),
+                    custo, ultima, barato, contagem, situacao), tags=(tag,))
                 count += 1
-
-            # Atualiza o rodapé numérico
+            for iid in selecionados:
+                if self.tree_produtos.exists(iid):
+                    self.tree_produtos.selection_add(iid)
             if hasattr(self, 'lbl_total_mestre'):
-                self.lbl_total_mestre.config(text=f"Total exibido: {count} produto(s)")
-
+                self.lbl_total_mestre.config(text=f"Total exibido: {count} de {len(self._cache_produtos or [])} produto(s)")
         except Exception as e:
             logger.error(f"Erro ao atualizar lista de produtos: {e}", exc_info=True)
 
@@ -879,6 +1279,12 @@ class AppGestaoEstoque:
         # [DEPURAÇÃO] usa a SELEÇÃO (e não o foco): assim "Limpar" funciona de verdade
         selecao = self.tree_produtos.selection()
         if not selecao: return
+        if len(selecao) > 1:
+            # [MELHORIA CATÁLOGO] vários produtos selecionados: edição em massa
+            self.form_frame_mestre.config(text=f"✅ {len(selecao)} PRODUTOS SELECIONADOS")
+            self.btn_editar_massa.config(text=f"✏️ Editar os {len(selecao)} selecionados")
+            return
+        self.btn_editar_massa.config(text="✏️ Editar selecionados")
         selecionado = selecao[0]
         dados = self.tree_produtos.item(selecionado, 'values')
         if not dados or len(dados) < 5: return
@@ -895,13 +1301,31 @@ class AppGestaoEstoque:
         self.entry_prod_estoque_min.delete(0, tk.END)
         self.entry_prod_estoque_min.insert(0, estoque_min)
 
-        # 3. MÁGICA: Busca o custo real no banco de dados e preenche a caixinha
+        # 3. Custo
+        # [MELHORIA CATÁLOGO] Se o produto já foi comprado por NOTA, o custo vem das notas
+        # (média ponderada de 90 dias) e NÃO é editável aqui: antes dava para "mudar" o custo,
+        # mas o Valor do Estoque ignorava, sem avisar. Sem nota, continua o custo manual.
         if hasattr(self, 'entry_prod_custo'):
-            custo_real = database.buscar_ultimo_custo_por_produto(self.produto_selecionado_id)
+            r = getattr(self, '_cache_resumo_catalogo', {}).get(self.produto_selecionado_id, {})
+            self.produto_tem_nota = bool(r.get('TemNota'))
+            self._custo_editavel(True)
             self.entry_prod_custo.delete(0, tk.END)
-            # Formata para ficar bonito com duas casas decimais (Ex: 15.50)
-            self.custo_carregado_texto = fmt_num(custo_real, 2, "0.00")  # [DEPURAÇÃO] None não trava
-            self.entry_prod_custo.insert(0, self.custo_carregado_texto)
+            if self.produto_tem_nota:
+                self.custo_carregado_texto = fmt_num(r.get('CustoAtual'), 2, "0.00")
+                self.entry_prod_custo.insert(0, self.custo_carregado_texto)
+                self._custo_editavel(False)
+                self.lbl_prod_custo.config(text="Custo atual (das notas):")
+                self.lbl_prod_custo_info.config(foreground="#0056b3", text=(
+                    f"{r.get('OrigemCusto', '')}. Este é o custo usado no Valor do Estoque. "
+                    "Para corrigir, ajuste a nota/vínculo (aba 8 Consultas ou Vínculos)."))
+            else:
+                custo_real = database.buscar_ultimo_custo_por_produto(self.produto_selecionado_id)
+                # Formata para ficar bonito com duas casas decimais (Ex: 15.50)
+                self.custo_carregado_texto = fmt_num(custo_real, 2, "0.00")  # [DEPURAÇÃO] None não trava
+                self.entry_prod_custo.insert(0, self.custo_carregado_texto)
+                self.lbl_prod_custo.config(text="Custo manual (R$):")
+                self.lbl_prod_custo_info.config(foreground="gray", text=(
+                    "Produto nunca comprado por nota: este custo manual é o usado no Valor do Estoque."))
 
         # 4. Visuais do Modo de Edição
         self.form_frame_mestre.config(text="🚨 MODO: EDIÇÃO")
@@ -926,9 +1350,21 @@ class AppGestaoEstoque:
             messagebox.showerror("Erro de Banco", "Não foi possível excluir o produto.\nVerifique se ele já está vinculado a notas fiscais ou contagens.", parent=self.root)
 
     def abrir_popup_vinculos_produto(self, event):
-        """Disparado pelo duplo clique na tabela mestre. Mostra vínculos com opção de edição rápida."""
+        """
+        Disparado pelo duplo clique na tabela mestre.
+        [MELHORIA CATÁLOGO] Abre a janela única "Vínculos e Auditoria" já filtrada no produto
+        (mesmo editor, com prévia do Qtd/Cx e correção das compras antigas).
+        """
         selecionado = self.tree_produtos.focus()
         if not selecionado: return
+        dados = self.tree_produtos.item(selecionado, 'values')
+        if hasattr(database, 'listar_vinculos_com_resumo'):
+            self.abrir_gestor_vinculos(produto_id=int(dados[0]), nome_produto=dados[1],
+                                       ao_salvar=self.atualizar_lista_produtos)
+            return
+        self._popup_vinculos_antigo(selecionado)
+
+    def _popup_vinculos_antigo(self, selecionado):
 
         dados = self.tree_produtos.item(selecionado, 'values')
         produto_id = int(dados[0])

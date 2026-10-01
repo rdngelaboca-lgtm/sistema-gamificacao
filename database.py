@@ -8816,6 +8816,275 @@ def ratear_diferenca_nas_notas(nota_ids):
         conn.close()
 
 
+# ===================================================================
+# == [MELHORIA] CATÁLOGO MESTRE: resumo, edição em massa, duplicados
+# ===================================================================
+def resumo_catalogo():
+    """
+    Uma linha de resumo por produto (para as colunas do Catálogo):
+    custo atual (mesma regra do Valor do Estoque, na data de HOJE), se tem compra por nota,
+    última compra (data e fornecedor), fornecedor mais barato (12 meses), custo manual e a
+    quantidade na última contagem em que o produto apareceu.
+    """
+    conn = get_db_connection()
+    if not conn:
+        return {}
+    try:
+        cursor = conn.cursor()
+        hoje = date.today()
+        custos, _ = _custos_por_produto(cursor, hoje)
+        cursor.execute("""
+            SELECT PF.ProdutoID, NF.DataEmissao, NF.NotaID, INI.Quantidade, INI.PrecoCustoUnitario, F.NomeFantasia, F.CNPJ
+            FROM ItensNotaFiscalEntrada INI
+            JOIN NotasFiscaisEntrada NF ON INI.NotaID = NF.NotaID
+            JOIN ProdutosFornecedor PF ON INI.ProdutoFornecedorID = PF.ProdutoFornecedorID
+            JOIN Fornecedores F ON NF.FornecedorID = F.FornecedorID
+            WHERE PF.ProdutoID IS NOT NULL AND INI.Quantidade > 0
+        """)
+        compras = {}
+        for pid, dt, nota_id, qtd, custo, forn, cnpj in cursor.fetchall():
+            if (cnpj or '').strip() == CNPJ_FORNECEDOR_INTERNO:
+                continue
+            compras.setdefault(pid, []).append((_como_data(dt) or date.min, nota_id or 0, _dec(qtd), _dec(custo), forn or '?'))
+        cursor.execute("""
+            SELECT IC.ProdutoID, C.DataContagem, C.ContagemID, IC.QuantidadeContada
+            FROM ItensContagemEstoque IC JOIN ContagensEstoque C ON IC.ContagemID = C.ContagemID
+            WHERE IC.ProdutoID IS NOT NULL
+        """)
+        contagens = {}
+        for pid, dt, cid, qtd in cursor.fetchall():
+            chave = (_como_data(dt) or date.min, cid)
+            atual = contagens.get(pid)
+            if not atual or chave > atual[0]:
+                contagens[pid] = (chave, _dec(qtd))
+            elif chave == atual[0]:
+                contagens[pid] = (chave, atual[1] + _dec(qtd))   # mesmo produto 2x na mesma contagem
+        resultado = {}
+        um_ano = hoje - timedelta(days=365)
+        for pid in set(custos) | set(compras) | set(contagens):
+            lista = compras.get(pid, [])
+            ultima = max(lista) if lista else None
+            por_forn = {}
+            for dt, _, q, c, forn in lista:
+                if dt >= um_ano and c > 0:
+                    soma = por_forn.setdefault(forn, [Decimal('0'), Decimal('0')])
+                    soma[0] += q * c; soma[1] += q
+            barato = min(((v[0] / v[1], f) for f, v in por_forn.items() if v[1] > 0), default=None)
+            info = custos.get(pid, {})
+            cont = contagens.get(pid)
+            resultado[pid] = {
+                'TemNota': bool(lista), 'CustoAtual': info.get('custo'), 'OrigemCusto': info.get('origem', 'SEM CUSTO'),
+                'UltimaCompra': ultima[0] if ultima and ultima[0] != date.min else None,
+                'FornecedorUltimo': ultima[4] if ultima else None,
+                'MaisBaratoFornecedor': barato[1] if barato else None, 'MaisBaratoCusto': barato[0] if barato else None,
+                'QtdFornecedores': len(por_forn),
+                'UltContagemData': cont[0][0] if cont and cont[0][0] != date.min else None,
+                'UltContagemQtd': cont[1] if cont else None,
+            }
+        return resultado
+    except Exception as e:
+        logger.error(f"Erro ao montar o resumo do catálogo: {e}", exc_info=True)
+        return {}
+    finally:
+        conn.close()
+
+
+def atualizar_produtos_em_massa(ids, categoria=None, unidade=None, estoque_min=None):
+    """Muda categoria / unidade / estoque mínimo de VÁRIOS produtos de uma vez (None = não muda)."""
+    campos, valores = [], []
+    if categoria is not None:
+        campos.append("Categoria = ?"); valores.append(categoria)
+    if unidade is not None:
+        campos.append("UnidadeMedida = ?"); valores.append(unidade)
+    if estoque_min is not None:
+        campos.append("EstoqueMinimo = ?"); valores.append(_dec(estoque_min))
+    if not campos or not ids:
+        return False, "Nada para alterar."
+    conn = get_db_connection()
+    if not conn:
+        return False, "Falha de conexão com o banco de dados."
+    try:
+        cursor = conn.cursor()
+        for pid in ids:
+            cursor.execute(f"UPDATE ProdutosEstoque SET {', '.join(campos)} WHERE ProdutoID = ?", *valores, pid)
+        conn.commit()
+        logger.info(f"Edição em massa: {len(ids)} produto(s) -> {', '.join(campos)}")
+        return True, f"{len(ids)} produto(s) atualizado(s)."
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro na edição em massa: {e}", exc_info=True)
+        return False, f"Erro ao gravar: {e}"
+    finally:
+        conn.close()
+
+
+def renomear_produtos(novos_nomes):
+    """
+    Renomeia produtos: novos_nomes = [(ProdutoID, 'Nome novo'), ...]. Um nome que já existe
+    em outro produto é recusado (evita dois produtos com o mesmo nome).
+    Devolve (quantidade_renomeada, [erros]).
+    """
+    conn = get_db_connection()
+    if not conn:
+        return 0, ["Falha de conexão com o banco de dados."]
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT ProdutoID, NomeProduto FROM ProdutosEstoque")
+        nomes = {r[0]: (r[1] or '') for r in cursor.fetchall()}
+        ok, erros = 0, []
+        for pid, novo in novos_nomes:
+            novo = ' '.join(str(novo or '').split())
+            if not novo:
+                erros.append(f"ID {pid}: nome vazio"); continue
+            conflito = next((outro for outro, n in nomes.items() if outro != pid and n.strip().lower() == novo.lower()), None)
+            if conflito:
+                erros.append(f"ID {pid}: '{novo}' já é o nome do produto ID {conflito} (talvez sejam duplicados: use 'Juntar')")
+                continue
+            cursor.execute("UPDATE ProdutosEstoque SET NomeProduto = ? WHERE ProdutoID = ?", novo, pid)
+            nomes[pid] = novo
+            ok += 1
+        conn.commit()
+        return ok, erros
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao renomear produtos: {e}", exc_info=True)
+        return 0, [f"Erro ao gravar: {e}"]
+    finally:
+        conn.close()
+
+
+def _nome_normalizado(nome):
+    import unicodedata
+    t = unicodedata.normalize('NFKD', str(nome or ''))
+    t = ''.join(c for c in t if not unicodedata.combining(c)).lower()
+    return ''.join(c for c in t if c.isalnum())
+
+
+def listar_produtos_duplicados():
+    """
+    Grupos de produtos do Catálogo que parecem ser o MESMO produto:
+      - mesmo nome (ignorando acentos, maiúsculas, espaços e pontuação); ou
+      - o mesmo EAN ligado a produtos diferentes.
+    Devolve [{'Grupo', 'Motivo', 'Produtos': [{ProdutoID, NomeProduto, UnidadeMedida, Categoria, Compras, Vinculos}], 'ManterID'}]
+    """
+    conn = get_db_connection()
+    if not conn:
+        return []
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT ProdutoID, NomeProduto, UnidadeMedida, Categoria FROM ProdutosEstoque")
+        produtos = {r[0]: {'ProdutoID': r[0], 'NomeProduto': r[1] or '', 'UnidadeMedida': r[2] or 'UN',
+                           'Categoria': r[3] or 'Geral', 'Compras': 0, 'Vinculos': 0} for r in cursor.fetchall()}
+        cursor.execute("SELECT ProdutoFornecedorID, ProdutoID, EAN FROM ProdutosFornecedor WHERE ProdutoID IS NOT NULL")
+        por_ean = {}
+        for pf, pid, ean in cursor.fetchall():
+            if pid in produtos:
+                produtos[pid]['Vinculos'] += 1
+                e = _ean_valido(ean)
+                if e:
+                    por_ean.setdefault(e, set()).add(pid)
+        cursor.execute("""SELECT PF.ProdutoID, COUNT(*) FROM ItensNotaFiscalEntrada INI
+                          JOIN ProdutosFornecedor PF ON INI.ProdutoFornecedorID = PF.ProdutoFornecedorID
+                          WHERE INI.Quantidade > 0 GROUP BY PF.ProdutoID""")
+        for pid, n in cursor.fetchall():
+            if pid in produtos:
+                produtos[pid]['Compras'] = n
+
+        # Junta (union-find) por nome normalizado e por EAN compartilhado
+        pai = {pid: pid for pid in produtos}
+        motivo = {}
+
+        def achar(x):
+            while pai[x] != x:
+                pai[x] = pai[pai[x]]; x = pai[x]
+            return x
+
+        def unir(a, b, por):
+            ra, rb = achar(a), achar(b)
+            if ra != rb:
+                pai[rb] = ra
+            motivo.setdefault(a, set()).add(por)
+
+        por_nome = {}
+        for pid, p in produtos.items():
+            chave = _nome_normalizado(p['NomeProduto'])
+            if chave:
+                por_nome.setdefault(chave, []).append(pid)
+        for ids in por_nome.values():
+            for outro in ids[1:]:
+                unir(ids[0], outro, 'mesmo nome')
+        for ean, ids in por_ean.items():
+            ids = sorted(ids)
+            for outro in ids[1:]:
+                unir(ids[0], outro, f'mesmo EAN {ean}')
+        grupos = {}
+        for pid in produtos:
+            grupos.setdefault(achar(pid), []).append(produtos[pid])
+        resultado = []
+        for raiz, lista in grupos.items():
+            if len(lista) < 2:
+                continue
+            motivos = set()
+            for p in lista:
+                motivos |= motivo.get(p['ProdutoID'], set())
+            lista.sort(key=lambda p: p['ProdutoID'])
+            manter = max(lista, key=lambda p: (p['Compras'], p['Vinculos'], -p['ProdutoID']))
+            resultado.append({'Motivo': ', '.join(sorted(motivos)), 'Produtos': lista, 'ManterID': manter['ProdutoID']})
+        resultado.sort(key=lambda g: g['Produtos'][0]['NomeProduto'])
+        for n, g in enumerate(resultado, start=1):
+            g['Grupo'] = n
+        return resultado
+    except Exception as e:
+        logger.error(f"Erro ao procurar produtos duplicados: {e}", exc_info=True)
+        return []
+    finally:
+        conn.close()
+
+
+def juntar_produtos(manter_id, remover_ids):
+    """
+    Junta produtos duplicados do Catálogo num só:
+      - os vínculos (fornecedores/XML) dos removidos passam para o mantido (as compras vão junto);
+      - nas contagens, a quantidade do removido é SOMADA à do mantido (ou passa para ele);
+      - os produtos removidos são apagados.
+    Valores de estoque já FECHADOS não mudam. Devolve (sucesso, mensagem).
+    """
+    remover_ids = [int(r) for r in remover_ids if int(r) != int(manter_id)]
+    if not remover_ids:
+        return False, "Nada para juntar."
+    conn = get_db_connection()
+    if not conn:
+        return False, "Falha de conexão com o banco de dados."
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT ProdutoID FROM ProdutosEstoque WHERE ProdutoID = ?", manter_id)
+        if not cursor.fetchone():
+            return False, "O produto a manter não existe mais."
+        for rid in remover_ids:
+            cursor.execute("UPDATE ProdutosFornecedor SET ProdutoID = ? WHERE ProdutoID = ?", manter_id, rid)
+            cursor.execute("SELECT ContagemID, QuantidadeContada FROM ItensContagemEstoque WHERE ProdutoID = ?", rid)
+            for cid, qtd in cursor.fetchall():
+                cursor.execute("SELECT QuantidadeContada FROM ItensContagemEstoque WHERE ContagemID = ? AND ProdutoID = ?", cid, manter_id)
+                existe = cursor.fetchone()
+                if existe:
+                    cursor.execute("UPDATE ItensContagemEstoque SET QuantidadeContada = QuantidadeContada + ? "
+                                   "WHERE ContagemID = ? AND ProdutoID = ?", _dec(qtd), cid, manter_id)
+                    cursor.execute("DELETE FROM ItensContagemEstoque WHERE ContagemID = ? AND ProdutoID = ?", cid, rid)
+                else:
+                    cursor.execute("UPDATE ItensContagemEstoque SET ProdutoID = ? WHERE ContagemID = ? AND ProdutoID = ?",
+                                   manter_id, cid, rid)
+            cursor.execute("DELETE FROM ProdutosEstoque WHERE ProdutoID = ?", rid)
+        conn.commit()
+        logger.info(f"Produtos {remover_ids} juntados no produto {manter_id}.")
+        return True, f"{len(remover_ids)} produto(s) juntado(s) no ID {manter_id}."
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao juntar produtos {remover_ids} em {manter_id}: {e}", exc_info=True)
+        return False, f"Erro ao juntar: {e}"
+    finally:
+        conn.close()
+
+
 def previa_recalculo_vinculo(vinculo_id, novo_fator):
     """
     [MELHORIA] Mostra como ficariam as compras já importadas se o fator mudar.
