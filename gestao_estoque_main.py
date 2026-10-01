@@ -1185,6 +1185,9 @@ class AppGestaoEstoque:
         # [DEPURAÇÃO] Depois de vincular itens, basta clicar aqui (não precisa escolher a pasta de novo)
         btn_reprocessar = ttk.Button(frame_botoes, text="🔄 Reprocessar Pasta Atual", command=self.reprocessar_pasta_xml)
         btn_reprocessar.pack(side=tk.LEFT, padx=(5, 0), ipady=10)
+        # [MELHORIA ST] Corrige o custo de notas JÁ SALVAS (ex: importadas sem a ST)
+        ttk.Button(frame_botoes, text="🧾 Recalcular custos de notas já salvas",
+                   command=self.recalcular_custos_notas_salvas).pack(side=tk.LEFT, padx=(5, 0), ipady=10)
         # [MELHORIA UX] Placar da importação: quanto falta e quanto já está pronto
         self.lbl_resumo_importacao = ttk.Label(frame_botoes, text="Nenhuma pasta carregada ainda.",
                                                font=("Arial", 10, "bold"))
@@ -1345,6 +1348,130 @@ class AppGestaoEstoque:
             return
         self._carregar_pasta_xml(self.ultima_pasta_xml)
 
+    def montar_recalculo_custos(self, pasta):
+        """
+        [MELHORIA ST] Lê os XMLs da pasta e compara o custo que DEVERIA ter (com ST, FCP-ST,
+        frete etc. — inclusive os valores que vêm só no total da nota) com o custo gravado
+        nas notas que JÁ FORAM SALVAS. Não grava nada: devolve (alteracoes, resumo).
+        alteracoes = [{'ItemNotaID','NF','Fornecedor','Descricao','Quantidade','CustoAtual','CustoNovo'}]
+        """
+        alteracoes, resumo = [], {'arquivos': 0, 'notas': 0, 'nao_importadas': 0, 'sem_vinculo': 0, 'falhas': 0}
+        arquivos = sorted(os.path.join(pasta, f) for f in os.listdir(pasta) if f.lower().endswith(('.xml', '.txt')))
+        vistas = set()
+        for caminho in arquivos:
+            resumo['arquivos'] += 1
+            try:
+                cab, itens = self.ler_xml_nota_fiscal(caminho)
+            except Exception:
+                resumo['falhas'] += 1
+                continue
+            if cab.get('Finalidade') == '4':
+                continue
+            fornecedor_id = database.buscar_fornecedor_por_cnpj(cab['FornecedorCNPJ'])
+            nota_id = database.buscar_nota_importada(cab['NumeroNF'], fornecedor_id) if fornecedor_id else None
+            if not nota_id:
+                resumo['nao_importadas'] += 1
+                continue
+            if nota_id in vistas:
+                continue
+            vistas.add(nota_id)
+            resumo['notas'] += 1
+            gravados = database.itens_nota_para_recalculo(nota_id)
+            usados = set()
+            for it in itens:
+                tipo = tipo_item_por_cfop(it.get('CFOP'))
+                if tipo == 'ignorar':
+                    continue
+                achado = database.buscar_vinculo_inteligente(fornecedor_id, it['DescricaoXML'], it.get('cProd'), it.get('cEAN'))
+                if not achado:
+                    resumo['sem_vinculo'] += 1
+                    continue
+                total_xml = Decimal('0') if tipo == 'bonificacao' else it['PrecoCustoUnitario'] * it['Quantidade']
+                fator = Decimal(str(achado['Fator'] or 1)) if Decimal(str(achado['Fator'] or 1)) > 0 else Decimal('1')
+                qtd_esperada = it['Quantidade'] * fator
+                candidatos = [g for g in gravados if g['ProdutoFornecedorID'] == achado['ProdutoFornecedorID']
+                              and g['ItemNotaID'] not in usados]
+                # prefere a linha com a mesma quantidade (o mesmo produto pode vir 2x na nota)
+                candidatos.sort(key=lambda g: abs(g['Quantidade'] - qtd_esperada))
+                if not candidatos or candidatos[0]['Quantidade'] <= 0:
+                    resumo['sem_vinculo'] += 1
+                    continue
+                g = candidatos[0]
+                usados.add(g['ItemNotaID'])
+                novo = (total_xml / g['Quantidade']).quantize(Decimal('0.0001'))
+                if abs(novo - g['Custo']) >= Decimal('0.0001'):
+                    alteracoes.append({'ItemNotaID': g['ItemNotaID'], 'NF': cab['NumeroNF'], 'Fornecedor': cab['FornecedorNome'],
+                                       'Descricao': it['DescricaoXML'], 'Quantidade': g['Quantidade'],
+                                       'CustoAtual': g['Custo'], 'CustoNovo': novo})
+        return alteracoes, resumo
+
+    def recalcular_custos_notas_salvas(self):
+        """[MELHORIA ST] Escolhe a pasta de XMLs, mostra a prévia das mudanças e aplica se o usuário confirmar."""
+        pasta = filedialog.askdirectory(title="Pasta com os XMLs das notas JÁ SALVAS", parent=self.root)
+        if not pasta:
+            return
+        self.root.config(cursor="watch"); self.root.update_idletasks()
+        try:
+            alteracoes, resumo = self.montar_recalculo_custos(pasta)
+        except Exception as e:
+            logger.error(f"Erro ao preparar recálculo de custos: {e}", exc_info=True)
+            messagebox.showerror("Erro", f"Não foi possível ler a pasta:\n{e}", parent=self.root)
+            return
+        finally:
+            self.root.config(cursor="")
+        info = (f"{resumo['arquivos']} arquivo(s) lido(s) · {resumo['notas']} nota(s) já salvas conferidas · "
+                f"{resumo['nao_importadas']} ainda não importada(s)")
+        if not alteracoes:
+            messagebox.showinfo("Custos conferidos", f"Nenhum custo precisa mudar. 👍\n\n{info}", parent=self.root)
+            return
+
+        popup = Toplevel(self.root)
+        popup.title("🧾 Recalcular custos de notas já salvas")
+        popup.geometry("1100x560")
+        popup.transient(self.root)
+        frame = ttk.Frame(popup, padding=10)
+        frame.pack(fill=tk.BOTH, expand=True)
+        diferenca = sum(((a['CustoNovo'] - a['CustoAtual']) * a['Quantidade'] for a in alteracoes), Decimal('0'))
+        notas = len({(a['NF'], a['Fornecedor']) for a in alteracoes})
+        ttk.Label(frame, font=("Arial", 11, "bold"), text=(
+            f"{len(alteracoes)} item(ns) em {notas} nota(s) estão com o custo diferente do XML "
+            f"(diferença total: {'+' if diferenca >= 0 else ''}{fmt_reais(diferenca)}).")).pack(anchor="w")
+        ttk.Label(frame, foreground="gray", text=(
+            f"{info}.  Só o CUSTO muda (as quantidades ficam iguais). Contagens com o valor do estoque já "
+            "FECHADO não mudam.")).pack(anchor="w", pady=(0, 6))
+        cols = ('NF', 'Fornecedor', 'Item na nota', 'Qtd', 'Custo atual/unid.', 'Custo novo/unid.', 'Diferença')
+        tree = criar_tree_zebrada(frame, columns=cols, show='headings')
+        for col, larg, anc in (('NF', 70, 'center'), ('Fornecedor', 200, 'w'), ('Item na nota', 330, 'w'), ('Qtd', 70, 'e'),
+                               ('Custo atual/unid.', 120, 'e'), ('Custo novo/unid.', 120, 'e'), ('Diferença', 110, 'e')):
+            tree.heading(col, text=col, command=lambda c=col: self.ordenar_coluna_treeview(tree, c, False))
+            tree.column(col, width=larg, anchor=anc)
+        sb = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=sb.set)
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True); sb.pack(side=tk.LEFT, fill=tk.Y)
+        for a in alteracoes:
+            dif = (a['CustoNovo'] - a['CustoAtual']) * a['Quantidade']
+            tree.insert("", "end", values=(a['NF'], a['Fornecedor'], a['Descricao'], fmt_qtd(a['Quantidade']),
+                                           fmt_reais(a['CustoAtual']), fmt_reais(a['CustoNovo']),
+                                           f"{'+' if dif >= 0 else ''}{fmt_reais(dif)}"))
+
+        def aplicar():
+            if not messagebox.askyesno("Aplicar", f"Gravar os novos custos em {len(alteracoes)} item(ns)?", parent=popup):
+                return
+            ok, msg = database.atualizar_custos_itens([(a['ItemNotaID'], a['CustoNovo']) for a in alteracoes])
+            if ok:
+                self.status(f"Custos recalculados: {msg}")
+                messagebox.showinfo("Pronto", f"{msg}\n\nAbra o '💰 Valor do Estoque' e clique em '🔄 Recalcular' "
+                                    "nas contagens em aberto para ver o efeito.", parent=popup)
+                popup.destroy()
+            else:
+                messagebox.showerror("Erro", msg, parent=popup)
+
+        botoes = ttk.Frame(popup, padding=(10, 0, 10, 10))
+        botoes.pack(fill=tk.X)
+        ttk.Button(botoes, text="✅ Aplicar os novos custos", command=aplicar).pack(side=tk.RIGHT, ipady=3)
+        ttk.Button(botoes, text="Cancelar", command=popup.destroy).pack(side=tk.RIGHT, padx=5, ipady=3)
+        self._janela_recalculo = {'popup': popup, 'tree': tree, 'aplicar': aplicar, 'alteracoes': alteracoes}
+
     def atualizar_resumo_importacao(self):
         """[MELHORIA UX] Atualiza o placar e libera o botão 'Salvar' só quando há o que salvar."""
         pendentes = len(self.itens_xml_nao_vinculados)
@@ -1457,6 +1584,7 @@ class AppGestaoEstoque:
             }
 
             itens = []
+            somas_itens = {k: Decimal('0') for k in ('vST', 'vFCPST', 'vFrete', 'vSeg', 'vOutro', 'vIPI', 'vDesc')}
             detalhes = root.findall('.//det')
             for det in detalhes:
                 prod = det.find('prod')
@@ -1486,7 +1614,14 @@ class AppGestaoEstoque:
                 # 5. Custo Unitário Certo (c/ Impostos Rateados)
                 custo_unit_real = custo_total_item / qtd_xml if qtd_xml > 0 else Decimal('0.0')
 
+                # [MELHORIA ST] guarda cada parte do item para conferir com o TOTAL da nota
+                partes_item = {'vST': vICMSST, 'vFCPST': vFCPST, 'vFrete': vFrete, 'vSeg': vSeg,
+                               'vOutro': vOutro, 'vIPI': vIPI, 'vDesc': vDesc}
+                for chave_parte, valor_parte in partes_item.items():
+                    somas_itens[chave_parte] += valor_parte
+
                 itens.append({
+                    '_vProd': vProd, '_custo_total': custo_total_item,
                     'cProd': prod.findtext('cProd', default=''),
                     'cEAN': (prod.findtext('cEAN', default='') or '').strip(),
                     'DescricaoXML': prod.findtext('xProd', default=''),
@@ -1495,6 +1630,35 @@ class AppGestaoEstoque:
                     'PrecoCustoUnitario': custo_unit_real, # Agora leva o custo REAL!
                     'CFOP': (prod.findtext('CFOP', default='') or '').strip(),
                 })
+
+            # [MELHORIA ST] Algumas notas trazem a ST (ou o frete, seguro, outras despesas,
+            # IPI, desconto) SÓ no TOTAL da nota, sem o valor em cada item. Antes isso ficava
+            # FORA do custo dos produtos. Agora a diferença entre o total da nota e a soma dos
+            # itens é dividida entre os itens, proporcional ao valor de cada um (vProd).
+            # Itens com ST em CST 60 (ST já paga antes) não mudam: o preço já a inclui.
+            ajustes = {}
+            total_vprod = sum((i['_vProd'] for i in itens), Decimal('0'))
+            if total_vprod > 0:
+                for chave_parte in somas_itens:
+                    valor_total = dec(total.findtext(chave_parte, default='0'))
+                    diferenca = valor_total - somas_itens[chave_parte]
+                    # Só ACRESCENTA o que faltou nos itens. Se o total vier menor (ou sem a
+                    # tag), confia nos valores dos itens e não tira nada.
+                    if diferenca >= Decimal('0.01'):
+                        ajustes[chave_parte] = diferenca
+                if ajustes:
+                    sinal = {'vDesc': Decimal('-1')}
+                    for item in itens:
+                        parte = item['_vProd'] / total_vprod
+                        extra = sum((d * sinal.get(k, Decimal('1')) * parte for k, d in ajustes.items()), Decimal('0'))
+                        item['_custo_total'] += extra
+                        if item['Quantidade'] > 0:
+                            item['PrecoCustoUnitario'] = item['_custo_total'] / item['Quantidade']
+                    logger.info(f"NF {dados_nf['NumeroNF']}: valores só no total rateados nos itens: "
+                                + ", ".join(f"{k}={v}" for k, v in ajustes.items()))
+            dados_nf['AjustesRateados'] = ajustes
+            for item in itens:
+                item.pop('_vProd', None); item.pop('_custo_total', None)
 
             return dados_nf, itens
 
@@ -1510,6 +1674,7 @@ class AppGestaoEstoque:
         arquivos_com_falha = 0
         arquivos_repetidos = 0
         notas_ignoradas, itens_ignorados, itens_bonificados = [], [], []  # [MELHORIA VALOR]
+        notas_com_rateio = []  # [MELHORIA ST] notas com ST/frete só no total (rateados nos itens)
         reconhecidos_por_codigo = []  # [MELHORIA] itens reconhecidos pelo código/EAN (descrição mudou)
         for caminho_xml in arquivos_xml:
             try:
@@ -1519,6 +1684,12 @@ class AppGestaoEstoque:
                 num_nf = cabecalho_nf['NumeroNF']
                 if not cnpj or not itens_nf:
                     raise Exception("Arquivo XML não contém CNPJ ou lista de itens.")
+
+                if cabecalho_nf.get('AjustesRateados'):
+                    nomes = {'vST': 'ST', 'vFCPST': 'FCP-ST', 'vFrete': 'frete', 'vSeg': 'seguro',
+                             'vOutro': 'outras despesas', 'vIPI': 'IPI', 'vDesc': 'desconto'}
+                    notas_com_rateio.append(f"NF {num_nf} ({nome_fornecedor}): " + ", ".join(
+                        f"{nomes[k]} {fmt_reais(v)}" for k, v in cabecalho_nf['AjustesRateados'].items()))
 
                 # [MELHORIA VALOR] Nota de devolução não é compra: fica de fora
                 if cabecalho_nf.get('Finalidade') == '4':
@@ -1676,6 +1847,9 @@ class AppGestaoEstoque:
             msg_final += f"\n\nℹ️ {len(itens_ignorados)} item(ns) de comodato/remessa/devolução ignorado(s):\n  • " + "\n  • ".join(itens_ignorados[:5])
         if itens_bonificados:
             msg_final += f"\n\n🎁 {len(itens_bonificados)} item(ns) de BONIFICAÇÃO entram no estoque com custo zero:\n  • " + "\n  • ".join(itens_bonificados[:5])
+        if notas_com_rateio:
+            msg_final += (f"\n\n🧾 {len(notas_com_rateio)} nota(s) traziam ST/frete/etc. só no TOTAL — o valor foi "
+                          "dividido entre os itens e entrou no custo:\n  • " + "\n  • ".join(notas_com_rateio[:5]))
         if reconhecidos_por_codigo:
             msg_final += (f"\n\n🔎 {len(reconhecidos_por_codigo)} item(ns) com a descrição diferente da última nota foram "
                           "reconhecidos pelo código do fornecedor / EAN (não precisaram de novo vínculo).")

@@ -8640,6 +8640,67 @@ def itens_da_nota(nota_id):
         conn.close()
 
 
+def buscar_nota_importada(numero_nf, fornecedor_id):
+    """[MELHORIA ST] NotaID de uma nota já salva (mesmo número e fornecedor), ou None."""
+    conn = get_db_connection()
+    if not conn:
+        return None
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT NotaID FROM NotasFiscaisEntrada WHERE NumeroNF = ? AND FornecedorID = ?", str(numero_nf), fornecedor_id)
+        linha = cursor.fetchone()
+        return linha[0] if linha else None
+    except Exception as e:
+        logger.error(f"Erro ao buscar nota {numero_nf} do fornecedor {fornecedor_id}: {e}", exc_info=True)
+        return None
+    finally:
+        conn.close()
+
+
+def itens_nota_para_recalculo(nota_id):
+    """[MELHORIA ST] Itens gravados de uma nota: [{'ItemNotaID','ProdutoFornecedorID','Quantidade','Custo'}]."""
+    conn = get_db_connection()
+    if not conn:
+        return []
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT ItemNotaID, ProdutoFornecedorID, Quantidade, PrecoCustoUnitario "
+                       "FROM ItensNotaFiscalEntrada WHERE NotaID = ?", nota_id)
+        return [{'ItemNotaID': r[0], 'ProdutoFornecedorID': r[1], 'Quantidade': _dec(r[2]), 'Custo': _dec(r[3])}
+                for r in cursor.fetchall()]
+    except Exception as e:
+        logger.error(f"Erro ao ler itens da nota {nota_id} para recálculo: {e}", exc_info=True)
+        return []
+    finally:
+        conn.close()
+
+
+def atualizar_custos_itens(alteracoes):
+    """
+    [MELHORIA ST] Grava novos custos unitários: alteracoes = [(ItemNotaID, novo_custo), ...].
+    Tudo numa transação só (ou grava tudo, ou nada). Quantidades não mudam.
+    """
+    if not alteracoes:
+        return True, "Nada para alterar."
+    conn = get_db_connection()
+    if not conn:
+        return False, "Falha de conexão com o banco de dados."
+    try:
+        cursor = conn.cursor()
+        for item_id, custo in alteracoes:
+            cursor.execute("UPDATE ItensNotaFiscalEntrada SET PrecoCustoUnitario = ? WHERE ItemNotaID = ?",
+                           _dec(custo).quantize(Decimal('0.0001')), item_id)
+        conn.commit()
+        logger.info(f"Custos recalculados em {len(alteracoes)} item(ns) de notas fiscais.")
+        return True, f"{len(alteracoes)} item(ns) atualizado(s)."
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao atualizar custos dos itens: {e}", exc_info=True)
+        return False, f"Erro ao gravar: {e}"
+    finally:
+        conn.close()
+
+
 def previa_recalculo_vinculo(vinculo_id, novo_fator):
     """
     [MELHORIA] Mostra como ficariam as compras já importadas se o fator mudar.
