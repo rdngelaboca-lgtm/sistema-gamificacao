@@ -76,7 +76,7 @@ import locale    # [DEPURAÇÃO] Movido para o topo (estava no meio do arquivo)
 import config
 import notificador_telegram
 import random
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from collections import deque
 
 # Cache para armazenar (ID_Atribuicao, Data_Hora_Minuto) das tarefas já enviadas
@@ -9884,6 +9884,603 @@ def listar_escala_detalhada_ordenada(data_str):
             conn.close()
     return []
 
+# ==============================================================================
+# == [MELHORIA ESCALA] PAGAMENTO DE FREELANCERS ================================
+# ==============================================================================
+# Regras da loja (todas editáveis em "⚙️ Valores"):
+#   Diária LONGA = 8h20 na loja (7h20 de trabalho + 1h de intervalo remunerado)
+#       seg a sáb R$ 100,00  ·  domingo/feriado R$ 130,00
+#   Diária CURTA = 6h00 na loja (com 15 min de descanso)
+#       seg a sáb R$ 80,00   ·  domingo/feriado R$ 100,00
+#   Hora extra: seg a sáb R$ 12,00/h · domingo/feriado R$ 16,25/h (130 ÷ 8),
+#       contada em BLOCOS de 20 min completos (19 min a mais não contam).
+#   Tipo da diária: vem da ESCALA planejada (até 7h = curta; mais = longa),
+#       e pode ser trocado na correção do turno.
+#   Saiu mais cedo: paga só o tempo trabalhado (proporcional ao minuto).
+#   O intervalo é remunerado: conta-se só entrada -> saída.
+#   Ao marcar como PAGO os valores ficam "congelados".
+_tabelas_pagamento_ok = False
+_CENTAVO = Decimal('0.01')
+
+CONFIG_PAGAMENTO_PADRAO = {
+    'DiariaLongaSemana': Decimal('100'), 'DiariaCurtaSemana': Decimal('80'),
+    'DiariaLongaDomingo': Decimal('130'), 'DiariaCurtaDomingo': Decimal('100'),
+    'MinutosLonga': 500, 'MinutosCurta': 360,
+    'HoraExtraSemana': Decimal('12'), 'HoraExtraDomingo': Decimal('16.25'),
+    'BlocoExtraMinutos': 20, 'LimiteCurtaMinutos': 420,
+}
+_CHAVES_INTEIRAS = ('MinutosLonga', 'MinutosCurta', 'BlocoExtraMinutos', 'LimiteCurtaMinutos')
+
+
+def _garantir_tabelas_pagamento_freelancer():
+    """Cria (uma vez, com COMMIT) as tabelas de valores, feriados e pagamentos."""
+    global _tabelas_pagamento_ok
+    if _tabelas_pagamento_ok:
+        return
+    conn = get_db_connection()
+    if not conn:
+        raise Exception("Falha de conexão com o banco de dados.")
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ParametrosPagamentoFreelancer')
+            CREATE TABLE ParametrosPagamentoFreelancer (
+                Chave NVARCHAR(50) PRIMARY KEY,
+                Valor DECIMAL(12, 4) NOT NULL
+            )
+        """)
+        cur.execute("""
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'FeriadosLoja')
+            CREATE TABLE FeriadosLoja (
+                DataFeriado DATE PRIMARY KEY,
+                Nome NVARCHAR(100) NULL
+            )
+        """)
+        cur.execute("""
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'PagamentosFreelancer')
+            CREATE TABLE PagamentosFreelancer (
+                PagamentoID INT IDENTITY(1,1) PRIMARY KEY,
+                EscalaID INT NULL,
+                DataEscala DATE NOT NULL,
+                FreelancerID INT NULL,
+                NomeFreelancer NVARCHAR(150) NULL,
+                NomePosicao NVARCHAR(100) NULL,
+                EntradaEscala VARCHAR(5) NULL,
+                SaidaEscala VARCHAR(5) NULL,
+                EntradaReal VARCHAR(5) NULL,
+                SaidaReal VARCHAR(5) NULL,
+                TipoDiaria NVARCHAR(10) NULL,
+                TipoDia NVARCHAR(10) NULL,
+                Horas DECIMAL(6, 2) NULL,
+                HorasExtras DECIMAL(6, 2) NULL,
+                ValorDiaria DECIMAL(10, 2) NULL,
+                ValorHoraExtra DECIMAL(10, 2) NULL,
+                ValorExtras DECIMAL(10, 2) NULL,
+                Ajuste DECIMAL(10, 2) NOT NULL DEFAULT 0,
+                ValorTotal DECIMAL(10, 2) NULL,
+                Pago BIT NOT NULL DEFAULT 0,
+                DataPagamento DATE NULL,
+                FormaPagamento NVARCHAR(30) NULL,
+                Observacao NVARCHAR(300) NULL,
+                AtualizadoEm DATETIME NOT NULL DEFAULT GETDATE()
+            )
+        """)
+        # Quem já abriu a versão anterior tem a tabela sem estas 2 colunas: acrescenta.
+        cur.execute("SELECT * FROM PagamentosFreelancer WHERE 1 = 0")
+        existentes = {d[0].lower() for d in (cur.description or [])}
+        for coluna in ('TipoDiaria', 'TipoDia'):
+            if coluna.lower() not in existentes:
+                cur.execute(f"ALTER TABLE PagamentosFreelancer ADD {coluna} NVARCHAR(10) NULL")
+        conn.commit()
+        _tabelas_pagamento_ok = True
+        logger.info("Tabelas de pagamento de freelancers verificadas/criadas.")
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao criar as tabelas de pagamento de freelancers: {e}", exc_info=True)
+        raise
+    finally:
+        conn.close()
+
+
+def buscar_config_pagamento_freelancer():
+    """Valores atuais (os padrões da loja, se nunca foram alterados)."""
+    _garantir_tabelas_pagamento_freelancer()
+    cfg = dict(CONFIG_PAGAMENTO_PADRAO)
+    conn = get_db_connection()
+    if not conn:
+        return cfg
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT Chave, Valor FROM ParametrosPagamentoFreelancer")
+        for chave, valor in cursor.fetchall():
+            if chave in cfg:
+                cfg[chave] = int(_dec(valor)) if chave in _CHAVES_INTEIRAS else _dec(valor).quantize(_CENTAVO)
+        return cfg
+    finally:
+        conn.close()
+
+
+def salvar_config_pagamento_freelancer(novos):
+    """Grava os valores (vale para os turnos AINDA NÃO PAGOS). Devolve (ok, mensagem)."""
+    cfg = dict(CONFIG_PAGAMENTO_PADRAO)
+    for chave in cfg:
+        if chave in novos and novos[chave] is not None:
+            cfg[chave] = int(novos[chave]) if chave in _CHAVES_INTEIRAS else _dec(novos[chave]).quantize(_CENTAVO)
+    if any(_dec(v) < 0 for v in cfg.values()):
+        return False, "Os valores não podem ser negativos."
+    if not (0 < cfg['MinutosCurta'] < cfg['MinutosLonga'] <= 24 * 60):
+        return False, "O tempo da diária curta precisa ser menor que o da longa (e a longa até 24h)."
+    if not (cfg['MinutosCurta'] <= cfg['LimiteCurtaMinutos'] < cfg['MinutosLonga']):
+        return False, "O limite 'até X horas na escala = curta' precisa ficar entre a curta e a longa."
+    if not (1 <= cfg['BlocoExtraMinutos'] <= 120):
+        return False, "O bloco da hora extra precisa ter entre 1 e 120 minutos."
+    _garantir_tabelas_pagamento_freelancer()
+    conn = get_db_connection()
+    if not conn:
+        return False, "Falha de conexão com o banco de dados."
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM ParametrosPagamentoFreelancer")
+        for chave, valor in cfg.items():
+            cursor.execute("INSERT INTO ParametrosPagamentoFreelancer (Chave, Valor) VALUES (?, ?)", chave, _dec(valor))
+        conn.commit()
+        return True, "Valores salvos."
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao salvar valores de pagamento: {e}", exc_info=True)
+        return False, f"Erro ao salvar: {e}"
+    finally:
+        conn.close()
+
+
+# ---------------------------- FERIADOS ----------------------------
+def _pascoa(ano):
+    """Domingo de Páscoa (algoritmo de Meeus/Jones/Butcher)."""
+    a, b, c = ano % 19, ano // 100, ano % 100
+    d, e = b // 4, b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = c // 4, c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    mes = (h + l - 7 * m + 114) // 31
+    dia = ((h + l - 7 * m + 114) % 31) + 1
+    return date(ano, mes, dia)
+
+
+def feriados_nacionais(ano):
+    """Feriados nacionais (lei federal) do ano: [(data, nome)]. Municipais/estaduais: cadastre à mão."""
+    pascoa = _pascoa(ano)
+    lista = [(date(ano, 1, 1), "Confraternização Universal"), (pascoa - timedelta(days=2), "Sexta-feira Santa"),
+             (date(ano, 4, 21), "Tiradentes"), (date(ano, 5, 1), "Dia do Trabalho"),
+             (date(ano, 9, 7), "Independência do Brasil"), (date(ano, 10, 12), "Nossa Senhora Aparecida"),
+             (date(ano, 11, 2), "Finados"), (date(ano, 11, 15), "Proclamação da República"),
+             (date(ano, 12, 25), "Natal")]
+    if ano >= 2024:
+        lista.append((date(ano, 11, 20), "Dia Nacional de Zumbi e da Consciência Negra"))
+    return sorted(lista)
+
+
+def listar_feriados(ano=None):
+    """[(data, nome)] cadastrados (de um ano ou todos)."""
+    _garantir_tabelas_pagamento_freelancer()
+    conn = get_db_connection()
+    if not conn:
+        return []
+    try:
+        cursor = conn.cursor()
+        if ano:
+            cursor.execute("SELECT DataFeriado, Nome FROM FeriadosLoja WHERE DataFeriado >= ? AND DataFeriado <= ?",
+                           f"{int(ano)}-01-01", f"{int(ano)}-12-31")
+        else:
+            cursor.execute("SELECT DataFeriado, Nome FROM FeriadosLoja")
+        return sorted((_como_data(d), n or '') for d, n in cursor.fetchall())
+    finally:
+        conn.close()
+
+
+def salvar_feriados(lista):
+    """Cadastra (ou renomeia) feriados: lista de (data, nome). Devolve (ok, mensagem)."""
+    _garantir_tabelas_pagamento_freelancer()
+    conn = get_db_connection()
+    if not conn:
+        return False, "Falha de conexão com o banco de dados."
+    try:
+        cursor = conn.cursor()
+        novos = 0
+        for dt, nome in lista:
+            dt = _como_data(dt)
+            if not dt:
+                continue
+            cursor.execute("SELECT 1 FROM FeriadosLoja WHERE DataFeriado = ?", dt)
+            if cursor.fetchone():
+                cursor.execute("UPDATE FeriadosLoja SET Nome = ? WHERE DataFeriado = ?", (nome or '')[:100], dt)
+            else:
+                cursor.execute("INSERT INTO FeriadosLoja (DataFeriado, Nome) VALUES (?, ?)", dt, (nome or '')[:100])
+                novos += 1
+        conn.commit()
+        return True, f"{novos} feriado(s) novo(s) cadastrado(s)."
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao salvar feriados: {e}", exc_info=True)
+        return False, f"Erro ao salvar: {e}"
+    finally:
+        conn.close()
+
+
+def excluir_feriado(data_feriado):
+    _garantir_tabelas_pagamento_freelancer()
+    conn = get_db_connection()
+    if not conn:
+        return False
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM FeriadosLoja WHERE DataFeriado = ?", _como_data(data_feriado))
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao excluir feriado: {e}", exc_info=True)
+        return False
+    finally:
+        conn.close()
+
+
+def nome_feriado(data_escala):
+    """Nome do feriado da data (ou None)."""
+    d = _como_data(data_escala)
+    return next((n or 'Feriado' for dt, n in listar_feriados(d.year) if dt == d), None) if d else None
+
+
+# ---------------------------- CÁLCULO ----------------------------
+def _hhmm(valor):
+    """time / datetime / timedelta / 'HH:MM[:SS]' -> 'HH:MM' (ou None)."""
+    if valor is None or valor == '':
+        return None
+    if isinstance(valor, timedelta):
+        minutos = int(valor.total_seconds() // 60) % (24 * 60)
+        return f"{minutos // 60:02d}:{minutos % 60:02d}"
+    if hasattr(valor, 'strftime'):
+        return valor.strftime('%H:%M')
+    texto = str(valor).strip()
+    if len(texto) >= 16 and texto[10] in ' T':      # '1900-01-01 08:00:00'
+        texto = texto[11:]
+    partes = texto.split(':')
+    try:
+        h, m = int(partes[0]), int(partes[1])
+    except (ValueError, IndexError):
+        return None
+    return f"{h:02d}:{m:02d}" if 0 <= h < 24 and 0 <= m < 60 else None
+
+
+def _minutos_turno(entrada, saida):
+    ent, sai = _hhmm(entrada), _hhmm(saida)
+    if not ent or not sai:
+        return None
+    minutos = (int(sai[:2]) * 60 + int(sai[3:])) - (int(ent[:2]) * 60 + int(ent[3:]))
+    return minutos + 24 * 60 if minutos <= 0 else minutos      # passou da meia-noite
+
+
+def calcular_pagamento_turno(entrada, saida, config_pag, ajuste=0, data_escala=None, tipo=None,
+                             entrada_escala=None, saida_escala=None, feriado=None):
+    """
+    Calcula o pagamento de UM turno de freelancer.
+      entrada/saida: horário usado no pagamento (o real, se corrigido; senão o da escala)
+      entrada_escala/saida_escala: horário PLANEJADO (decide se a diária é longa ou curta)
+      tipo: 'longa' / 'curta' para forçar; None = automático pela escala
+      feriado: nome do feriado (ou None). Domingo e feriado usam os valores de domingo.
+    Devolve dicionário (Decimals) ou None se faltar horário.
+    """
+    minutos = _minutos_turno(entrada, saida)
+    if minutos is None:
+        return None
+    cfg = dict(CONFIG_PAGAMENTO_PADRAO, **(config_pag or {}))
+    d = _como_data(data_escala)
+    if feriado:
+        dia = 'Feriado'
+    elif d and d.weekday() == 6:
+        dia = 'Domingo'
+    else:
+        dia = 'Semana'
+    planejado = _minutos_turno(entrada_escala, saida_escala) or minutos
+    if tipo not in ('longa', 'curta'):
+        tipo = 'curta' if planejado <= int(cfg['LimiteCurtaMinutos']) else 'longa'
+    sufixo = 'Semana' if dia == 'Semana' else 'Domingo'
+    diaria = _dec(cfg[f"Diaria{tipo.capitalize()}{sufixo}"]).quantize(_CENTAVO)
+    limite = int(cfg['MinutosLonga'] if tipo == 'longa' else cfg['MinutosCurta'])
+    valor_hora_extra = _dec(cfg[f"HoraExtra{sufixo}"])
+    bloco = max(int(cfg['BlocoExtraMinutos']), 1)
+    proporcional = minutos < limite
+    if proporcional:
+        base = (diaria * minutos / limite).quantize(_CENTAVO, rounding=ROUND_HALF_UP)
+        extras_brutos = extras = 0
+    else:
+        base = diaria
+        extras_brutos = minutos - limite
+        extras = (extras_brutos // bloco) * bloco               # só blocos COMPLETOS
+    valor_extras = (Decimal(extras) / 60 * valor_hora_extra).quantize(_CENTAVO, rounding=ROUND_HALF_UP)
+    ajuste = _dec(ajuste).quantize(_CENTAVO)
+    return {'Minutos': minutos, 'Horas': (Decimal(minutos) / 60).quantize(_CENTAVO),
+            'Tipo': tipo, 'Dia': dia, 'Feriado': feriado, 'MinutosDiaria': limite, 'DiariaCheia': diaria,
+            'Proporcional': proporcional, 'ValorDiaria': base,
+            'MinutosExtrasBrutos': extras_brutos, 'MinutosExtras': extras,
+            'HorasExtras': (Decimal(extras) / 60).quantize(_CENTAVO), 'ValorHoraExtra': valor_hora_extra,
+            'BlocoMinutos': bloco, 'ValorExtras': valor_extras, 'Ajuste': ajuste,
+            'Total': base + valor_extras + ajuste}
+
+
+def _linhas_pagamento_salvas(cursor, data_ini=None, data_fim=None):
+    nomes = ['PagamentoID', 'EscalaID', 'DataEscala', 'FreelancerID', 'NomeFreelancer', 'NomePosicao', 'EntradaEscala',
+             'SaidaEscala', 'EntradaReal', 'SaidaReal', 'TipoDiaria', 'TipoDia', 'Horas', 'HorasExtras', 'ValorDiaria',
+             'ValorHoraExtra', 'ValorExtras', 'Ajuste', 'ValorTotal', 'Pago', 'DataPagamento', 'FormaPagamento', 'Observacao']
+    sql = f"SELECT {', '.join(nomes)} FROM PagamentosFreelancer"
+    params = []
+    if data_ini and data_fim:
+        sql += " WHERE DataEscala >= ? AND DataEscala <= ?"
+        params = [str(data_ini), str(data_fim)]
+    cursor.execute(sql, *params)
+    return [dict(zip(nomes, r)) for r in cursor.fetchall()]
+
+
+def _feriados_periodo(data_ini, data_fim):
+    anos = range(data_ini.year, data_fim.year + 1)
+    return {d: n for ano in anos for d, n in listar_feriados(ano)}
+
+
+def listar_pagamentos_freelancers(data_ini, data_fim, freelancer_id=None, status='todos'):
+    """
+    [MELHORIA ESCALA] Um item por TURNO de freelancer no período, com o valor a pagar.
+      - Pendente: calculado AGORA (valores atuais, horário real e tipo de diária corrigidos).
+      - Pago: valores congelados no dia do pagamento (aparece mesmo se o turno foi excluído).
+    status: 'todos' | 'pendentes' | 'pagos'. Ordenado por data e nome.
+    """
+    _garantir_tabelas_pagamento_freelancer()
+    data_ini, data_fim = _como_data(data_ini), _como_data(data_fim)
+    cfg = buscar_config_pagamento_freelancer()
+    feriados = _feriados_periodo(data_ini, data_fim)
+    conn = get_db_connection()
+    if not conn:
+        return []
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT E.EscalaID, E.DataEscala, E.FreelancerID, FR.Nome, PL.NomePosicao, E.HorarioEntrada, E.HorarioSaida
+            FROM EscalaDiaria E
+            JOIN Freelancers FR ON E.FreelancerID = FR.FreelancerID
+            LEFT JOIN PosicoesLoja PL ON E.PosicaoID = PL.PosicaoID
+            WHERE E.FreelancerID IS NOT NULL AND E.DataEscala >= ? AND E.DataEscala <= ?
+        """, str(data_ini), str(data_fim))
+        turnos = {r[0]: r for r in cursor.fetchall()}
+        salvos = _linhas_pagamento_salvas(cursor, data_ini, data_fim)
+        por_escala = {s['EscalaID']: s for s in salvos if s['EscalaID'] is not None}
+
+        itens = []
+        for escala_id, (eid, dt, fid, nome, posicao, ent, sai) in turnos.items():
+            s = por_escala.get(escala_id) or {}
+            if s.get('Pago'):
+                continue                       # entra abaixo, pelos valores congelados
+            d = _como_data(dt)
+            ent_real, sai_real = s.get('EntradaReal'), s.get('SaidaReal')
+            ajuste = _dec(s.get('Ajuste') or 0)
+            tipo_forcado = s.get('TipoDiaria') if s.get('TipoDiaria') in ('longa', 'curta') else None
+            calc = calcular_pagamento_turno(ent_real or ent, sai_real or sai, cfg, ajuste, d, tipo_forcado,
+                                            ent, sai, feriados.get(d))
+            itens.append({
+                'PagamentoID': s.get('PagamentoID'), 'EscalaID': escala_id, 'Data': d,
+                'FreelancerID': fid, 'Nome': nome or '?', 'Posicao': posicao or '', 'EntradaEscala': _hhmm(ent),
+                'SaidaEscala': _hhmm(sai), 'EntradaReal': _hhmm(ent_real), 'SaidaReal': _hhmm(sai_real),
+                'Corrigido': bool(ent_real or sai_real), 'TipoForcado': tipo_forcado, 'Calculo': calc, 'Ajuste': ajuste,
+                'Total': calc['Total'] if calc else ajuste, 'Pago': False, 'DataPagamento': None,
+                'FormaPagamento': None, 'Observacao': s.get('Observacao') or '', 'TurnoExcluido': False,
+                'SemHorario': calc is None, 'Feriado': feriados.get(d)})
+        for s in salvos:
+            if not s['Pago']:
+                continue
+            d = _como_data(s['DataEscala'])
+            calc = {'Horas': _dec(s['Horas']), 'HorasExtras': _dec(s['HorasExtras']), 'Tipo': s['TipoDiaria'] or '',
+                    'Dia': s['TipoDia'] or '', 'ValorDiaria': _dec(s['ValorDiaria']), 'ValorExtras': _dec(s['ValorExtras']),
+                    'ValorHoraExtra': _dec(s['ValorHoraExtra']), 'Ajuste': _dec(s['Ajuste']), 'Total': _dec(s['ValorTotal']),
+                    'Minutos': int((_dec(s['Horas']) * 60).to_integral_value()),
+                    'MinutosExtras': int((_dec(s['HorasExtras']) * 60).to_integral_value()), 'Proporcional': False}
+            itens.append({
+                'PagamentoID': s['PagamentoID'], 'EscalaID': s['EscalaID'], 'Data': d,
+                'FreelancerID': s['FreelancerID'], 'Nome': s['NomeFreelancer'] or '?', 'Posicao': s['NomePosicao'] or '',
+                'EntradaEscala': s['EntradaEscala'], 'SaidaEscala': s['SaidaEscala'], 'EntradaReal': s['EntradaReal'],
+                'SaidaReal': s['SaidaReal'], 'Corrigido': bool(s['EntradaReal'] or s['SaidaReal']),
+                'TipoForcado': None, 'Calculo': calc,
+                'Ajuste': _dec(s['Ajuste']), 'Total': _dec(s['ValorTotal']), 'Pago': True,
+                'DataPagamento': _como_data(s['DataPagamento']), 'FormaPagamento': s['FormaPagamento'] or '',
+                'Observacao': s['Observacao'] or '', 'TurnoExcluido': s['EscalaID'] not in turnos, 'SemHorario': False,
+                'Feriado': feriados.get(d)})
+        if freelancer_id is not None:
+            itens = [i for i in itens if i['FreelancerID'] == freelancer_id]
+        if status == 'pendentes':
+            itens = [i for i in itens if not i['Pago']]
+        elif status == 'pagos':
+            itens = [i for i in itens if i['Pago']]
+        itens.sort(key=lambda i: (i['Data'] or date.min, str(i['Nome']).lower(), i['EntradaEscala'] or ''))
+        return itens
+    except Exception as e:
+        logger.error(f"Erro ao listar pagamentos de freelancers: {e}", exc_info=True)
+        return []
+    finally:
+        conn.close()
+
+
+def _turno_freelancer(cursor, escala_id):
+    cursor.execute("""
+        SELECT E.EscalaID, E.DataEscala, E.FreelancerID, FR.Nome, PL.NomePosicao, E.HorarioEntrada, E.HorarioSaida
+        FROM EscalaDiaria E
+        JOIN Freelancers FR ON E.FreelancerID = FR.FreelancerID
+        LEFT JOIN PosicoesLoja PL ON E.PosicaoID = PL.PosicaoID
+        WHERE E.EscalaID = ?
+    """, escala_id)
+    return cursor.fetchone()
+
+
+def salvar_correcao_pagamento(escala_id, entrada_real=None, saida_real=None, ajuste=0, observacao='', tipo_diaria=None):
+    """
+    Guarda, para um turno AINDA NÃO PAGO: o horário REAL (se diferente da escala), o tipo
+    de diária ('longa'/'curta'; None = automático), um ajuste em R$ (+ bônus / - desconto)
+    e uma observação. Devolve (ok, mensagem).
+    """
+    _garantir_tabelas_pagamento_freelancer()
+    ent, sai = _hhmm(entrada_real), _hhmm(saida_real)
+    if bool(ent) != bool(sai):
+        return False, "Preencha a entrada E a saída reais (ou deixe as duas vazias para usar a escala)."
+    tipo_diaria = tipo_diaria if tipo_diaria in ('longa', 'curta') else None
+    conn = get_db_connection()
+    if not conn:
+        return False, "Falha de conexão com o banco de dados."
+    try:
+        cursor = conn.cursor()
+        turno = _turno_freelancer(cursor, escala_id)
+        if not turno:
+            return False, "Turno de freelancer não encontrado (foi excluído da escala?)."
+        cursor.execute("SELECT PagamentoID, Pago FROM PagamentosFreelancer WHERE EscalaID = ?", escala_id)
+        existente = cursor.fetchone()
+        if existente and existente[1]:
+            return False, "Este turno já está PAGO. Desfaça o pagamento antes de corrigir."
+        obs = (observacao or '').strip()[:300] or None
+        if existente:
+            cursor.execute("UPDATE PagamentosFreelancer SET EntradaReal = ?, SaidaReal = ?, Ajuste = ?, Observacao = ?, "
+                           "TipoDiaria = ?, AtualizadoEm = GETDATE() WHERE PagamentoID = ?",
+                           ent, sai, _dec(ajuste), obs, tipo_diaria, existente[0])
+        else:
+            cursor.execute("INSERT INTO PagamentosFreelancer (EscalaID, DataEscala, FreelancerID, NomeFreelancer, NomePosicao, "
+                           "EntradaReal, SaidaReal, Ajuste, Observacao, TipoDiaria, Pago) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
+                           escala_id, _como_data(turno[1]), turno[2], turno[3], turno[4], ent, sai, _dec(ajuste), obs, tipo_diaria)
+        conn.commit()
+        return True, "Correção salva."
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao salvar correção de pagamento: {e}", exc_info=True)
+        return False, f"Erro ao salvar: {e}"
+    finally:
+        conn.close()
+
+
+def marcar_pagamentos_pagos(escala_ids, data_pagamento=None, forma_pagamento=''):
+    """
+    Marca os turnos como PAGOS, congelando os valores calculados agora.
+    Tudo numa transação (ou paga todos, ou nenhum). Devolve (ok, mensagem, total_pago).
+    """
+    _garantir_tabelas_pagamento_freelancer()
+    if not escala_ids:
+        return False, "Nenhum turno selecionado.", Decimal('0')
+    cfg = buscar_config_pagamento_freelancer()
+    data_pagamento = _como_data(data_pagamento) or date.today()
+    conn = get_db_connection()
+    if not conn:
+        return False, "Falha de conexão com o banco de dados.", Decimal('0')
+    try:
+        cursor = conn.cursor()
+        total = Decimal('0')
+        for escala_id in escala_ids:
+            turno = _turno_freelancer(cursor, escala_id)
+            if not turno:
+                raise ValueError(f"Turno {escala_id} não encontrado (foi excluído da escala?).")
+            eid, dt, fid, nome, posicao, ent, sai = turno
+            d = _como_data(dt)
+            cursor.execute("SELECT PagamentoID, Pago, EntradaReal, SaidaReal, Ajuste, TipoDiaria FROM PagamentosFreelancer "
+                           "WHERE EscalaID = ?", escala_id)
+            s = cursor.fetchone()
+            if s and s[1]:
+                raise ValueError(f"O turno de {nome} em {d.strftime('%d/%m/%Y')} já está pago.")
+            ent_real, sai_real, ajuste, tipo = (s[2], s[3], _dec(s[4]), s[5]) if s else (None, None, Decimal('0'), None)
+            calc = calcular_pagamento_turno(ent_real or ent, sai_real or sai, cfg, ajuste, d, tipo, ent, sai, nome_feriado(d))
+            if not calc:
+                raise ValueError(f"O turno de {nome} em {d.strftime('%d/%m/%Y')} está sem horário de entrada/saída.")
+            valores = (_hhmm(ent), _hhmm(sai), calc['Tipo'], calc['Dia'], calc['Horas'], calc['HorasExtras'],
+                       calc['ValorDiaria'], calc['ValorHoraExtra'].quantize(_CENTAVO), calc['ValorExtras'], calc['Total'],
+                       data_pagamento, (forma_pagamento or '')[:30] or None)
+            if s:
+                cursor.execute("UPDATE PagamentosFreelancer SET EntradaEscala = ?, SaidaEscala = ?, TipoDiaria = ?, TipoDia = ?, "
+                               "Horas = ?, HorasExtras = ?, ValorDiaria = ?, ValorHoraExtra = ?, ValorExtras = ?, ValorTotal = ?, "
+                               "Pago = 1, DataPagamento = ?, FormaPagamento = ?, NomeFreelancer = ?, NomePosicao = ?, "
+                               "AtualizadoEm = GETDATE() WHERE PagamentoID = ?", *valores, nome, posicao, s[0])
+            else:
+                cursor.execute("INSERT INTO PagamentosFreelancer (EntradaEscala, SaidaEscala, TipoDiaria, TipoDia, Horas, "
+                               "HorasExtras, ValorDiaria, ValorHoraExtra, ValorExtras, ValorTotal, DataPagamento, FormaPagamento, "
+                               "Pago, EscalaID, DataEscala, FreelancerID, NomeFreelancer, NomePosicao, Ajuste) "
+                               "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, 0)",
+                               *valores, escala_id, d, fid, nome, posicao)
+            total += calc['Total']
+        conn.commit()
+        logger.info(f"{len(escala_ids)} turno(s) de freelancer marcados como pagos ({_br(total)}).")
+        return True, f"{len(escala_ids)} turno(s) marcados como pagos.", total
+    except ValueError as e:
+        conn.rollback()
+        return False, str(e), Decimal('0')
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao marcar pagamentos: {e}", exc_info=True)
+        return False, f"Erro ao gravar: {e}", Decimal('0')
+    finally:
+        conn.close()
+
+
+def desfazer_pagamentos(pagamento_ids):
+    """Volta os pagamentos para PENDENTE (mantém o horário real e o ajuste). Devolve (ok, mensagem)."""
+    _garantir_tabelas_pagamento_freelancer()
+    if not pagamento_ids:
+        return False, "Nenhum pagamento selecionado."
+    conn = get_db_connection()
+    if not conn:
+        return False, "Falha de conexão com o banco de dados."
+    try:
+        cursor = conn.cursor()
+        for pid in pagamento_ids:
+            cursor.execute("UPDATE PagamentosFreelancer SET Pago = 0, DataPagamento = NULL, FormaPagamento = NULL, "
+                           "AtualizadoEm = GETDATE() WHERE PagamentoID = ?", pid)
+        # Pagamento de turno que já foi EXCLUÍDO da escala não tem mais o que pagar: some.
+        cursor.execute("DELETE FROM PagamentosFreelancer WHERE Pago = 0 AND (EscalaID IS NULL OR EscalaID NOT IN "
+                       "(SELECT EscalaID FROM EscalaDiaria))")
+        conn.commit()
+        return True, f"{len(pagamento_ids)} pagamento(s) desfeito(s)."
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao desfazer pagamentos: {e}", exc_info=True)
+        return False, f"Erro ao gravar: {e}"
+    finally:
+        conn.close()
+
+
+def turnos_pagos(escala_ids=None, data_escala=None):
+    """EscalaIDs que já estão PAGOS (de uma lista de turnos ou de um dia inteiro)."""
+    try:
+        _garantir_tabelas_pagamento_freelancer()
+    except Exception:
+        return set()
+    conn = get_db_connection()
+    if not conn:
+        return set()
+    try:
+        cursor = conn.cursor()
+        if data_escala is not None:
+            cursor.execute("SELECT EscalaID FROM PagamentosFreelancer WHERE Pago = 1 AND DataEscala = ?", str(_como_data(data_escala)))
+        else:
+            cursor.execute("SELECT EscalaID FROM PagamentosFreelancer WHERE Pago = 1")
+        pagos = {r[0] for r in cursor.fetchall() if r[0] is not None}
+        return pagos if escala_ids is None else {e for e in pagos if e in {int(x) for x in escala_ids}}
+    except Exception as e:
+        logger.error(f"Erro ao consultar turnos pagos: {e}", exc_info=True)
+        return set()
+    finally:
+        conn.close()
+
+
+def total_pendente_por_freelancer(ate=None):
+    """{FreelancerID: (qtd_turnos, total)} do que ainda falta pagar até a data (padrão: hoje)."""
+    ate = _como_data(ate) or date.today()
+    resumo = {}
+    for i in listar_pagamentos_freelancers(date(2000, 1, 1), ate, status='pendentes'):
+        qtd, total = resumo.get(i['FreelancerID'], (0, Decimal('0')))
+        resumo[i['FreelancerID']] = (qtd + 1, total + i['Total'])
+    return resumo
+
+
 def copiar_escala_dia(data_origem, data_destino):
     """
     Copia todos os turnos de um dia específico para outro dia.
@@ -9897,6 +10494,12 @@ def copiar_escala_dia(data_origem, data_destino):
             cursor.execute("SELECT COUNT(*) FROM EscalaDiaria WHERE DataEscala = ?", data_origem)
             if cursor.fetchone()[0] == 0:
                 return False, "Nenhuma escala encontrada na data de origem selecionada."
+
+            # [MELHORIA ESCALA] Não apaga um dia que já tem freelancer PAGO (o turno copiado
+            # apareceria de novo como "a pagar" e o freelancer poderia receber 2 vezes).
+            if turnos_pagos(data_escala=data_destino):
+                return False, ("Este dia já tem turno de freelancer PAGO. Copiar apagaria a escala dele.\n\n"
+                               "Desfaça o pagamento em '💰 Pagamentos' ou ajuste a escala à mão.")
 
             # 2. Limpa o dia de destino para não encavalar turnos
             cursor.execute("DELETE FROM EscalaDiaria WHERE DataEscala = ?", data_destino)

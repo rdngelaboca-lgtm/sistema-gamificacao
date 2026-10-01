@@ -4,6 +4,15 @@
 # VERSÃO DEPURADA
 # Procure por "[DEPURAÇÃO]" para ver cada ponto corrigido e o motivo.
 # Nenhum botão ou tela foi removido; foi ADICIONADO o botão "Excluir" nos Freelancers.
+#
+# [MELHORIA ESCALA] (procure por esta marca):
+#   - 💰 Pagamentos de Freelancers: diária LONGA (8h20) ou CURTA (6h),
+#     valores de seg-sáb e de domingo/feriado, hora extra em blocos de 20 min,
+#     proporcional quando sai mais cedo, correção do horário real, ajuste
+#     (bônus/desconto), marcar como PAGO, recibo para o WhatsApp, Excel e feriados.
+#   - Barra do topo organizada em 2 linhas, ◀ Hoje ▶ para trocar o dia,
+#     resumo do dia (pessoas, vagas, custo de freelancers) e barra de status.
+#   - Proteções: não apaga/copia por cima de turno de freelancer já PAGO.
 # ==============================================================================
 import tkinter as tk
 import logging
@@ -22,6 +31,7 @@ import os
 import webbrowser
 import urllib.parse
 from datetime import datetime, date, timedelta
+from decimal import Decimal, InvalidOperation
 import threading
 import time
 
@@ -74,6 +84,87 @@ def formatar_hora_curta(v):
     if not v:
         return ""
     return v.strftime('%H:%M') if hasattr(v, 'strftime') else str(v)[:5]
+
+
+# ------------------------------------------------------------------------------
+# [MELHORIA ESCALA] Formatação de dinheiro / horas / datas
+# ------------------------------------------------------------------------------
+DIAS_SEMANA = ['segunda-feira', 'terça-feira', 'quarta-feira', 'quinta-feira', 'sexta-feira', 'sábado', 'domingo']
+DIAS_CURTOS = ['seg', 'ter', 'qua', 'qui', 'sex', 'sáb', 'dom']
+
+
+def fmt_reais(valor):
+    """1234.5 -> 'R$ 1.234,50' (e '-R$ 10,00' para negativos)."""
+    try:
+        v = Decimal(str(valor or 0))
+    except (InvalidOperation, ValueError):
+        v = Decimal('0')
+    texto = f"{abs(v):,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
+    return ("-R$ " if v < 0 else "R$ ") + texto
+
+
+def para_decimal_br(texto, nome_campo="valor", permitir_negativo=False):
+    """'120' / '120,50' / 'R$ 1.200,50' / '-10' -> Decimal. ValueError com mensagem clara."""
+    bruto = str(texto or '').replace('R$', '').replace(' ', '').strip()
+    if not bruto:
+        return Decimal('0')
+    if ',' in bruto:
+        bruto = bruto.replace('.', '').replace(',', '.')
+    try:
+        v = Decimal(bruto)
+    except InvalidOperation:
+        raise ValueError(f"'{texto}' não é um valor válido para {nome_campo} (ex: 120,00).")
+    if not v.is_finite() or (v < 0 and not permitir_negativo):
+        raise ValueError(f"{nome_campo} não pode ser negativo.")
+    return v
+
+
+def fmt_horas(horas=None, minutos=None):
+    """9.5 h (ou 570 min) -> '9h30'; 8 -> '8h'."""
+    if minutos is None:
+        minutos = int((Decimal(str(horas or 0)) * 60).to_integral_value())
+    minutos = int(minutos)
+    h, m = divmod(abs(minutos), 60)
+    return f"{'-' if minutos < 0 else ''}{h}h{m:02d}" if m else f"{'-' if minutos < 0 else ''}{h}h"
+
+
+def fmt_data_br(d, com_dia=False):
+    if not d:
+        return "--"
+    if isinstance(d, str):
+        try:
+            d = datetime.strptime(d[:10], '%Y-%m-%d').date()
+        except ValueError:
+            return d
+    texto = d.strftime('%d/%m/%Y')
+    return f"{texto} ({DIAS_CURTOS[d.weekday()]})" if com_dia else texto
+
+
+def nome_tipo_dia(calc):
+    """'longa de domingo' / 'curta (seg a sáb)' / 'longa de feriado'."""
+    tipo = calc.get('Tipo') or ''
+    dia = calc.get('Dia') or ''
+    sufixo = {'Domingo': ' de domingo', 'Feriado': ' de feriado'}.get(dia, ' (seg a sáb)' if dia else '')
+    return f"{tipo}{sufixo}"
+
+
+def texto_calculo(calc):
+    """Explica o valor de um turno numa linha (usado no painel, na correção e no recibo)."""
+    if not calc:
+        return ""
+    if calc.get('Proporcional'):
+        texto = (f"{fmt_horas(minutos=calc['Minutos'])} de {fmt_horas(minutos=calc['MinutosDiaria'])} da diária "
+                 f"{nome_tipo_dia(calc)} ({fmt_reais(calc['DiariaCheia'])}) = {fmt_reais(calc['ValorDiaria'])} (saiu mais cedo)")
+    else:
+        texto = f"{fmt_horas(minutos=calc['Minutos'])}: diária {nome_tipo_dia(calc)} {fmt_reais(calc['ValorDiaria'])}"
+        if calc.get('MinutosExtras'):
+            texto += f" + {fmt_horas(minutos=calc['MinutosExtras'])} extra {fmt_reais(calc['ValorExtras'])}"
+        sobra = (calc.get('MinutosExtrasBrutos') or 0) - (calc.get('MinutosExtras') or 0)
+        if sobra:
+            texto += f" ({sobra} min não fecham bloco de {calc['BlocoMinutos']})"
+    if calc.get('Ajuste'):
+        texto += f" {'+' if calc['Ajuste'] > 0 else ''}{fmt_reais(calc['Ajuste'])} ajuste"
+    return f"{texto} = {fmt_reais(calc['Total'])}"
 
 
 class AppEscalaLoja:
@@ -136,42 +227,67 @@ class AppEscalaLoja:
         self.canvas_grafico.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
         # --- Controles do Topo ---
-        ttk.Label(self.frame_topo, text="Data:").pack(side=tk.LEFT)
-        self.date_entry = DateEntry(self.frame_topo, width=10, date_pattern='dd/mm/yyyy', locale='pt_BR')
-        self.date_entry.pack(side=tk.LEFT, padx=5)
+        # [MELHORIA ESCALA] Organizado em 2 linhas:
+        #   1ª linha = o DIA (data, ◀ Hoje ▶, copiar) e as ações do dia a dia;
+        #   2ª linha = cadastros e configurações + resumo do dia.
+        linha1 = ttk.Frame(self.frame_topo)
+        linha1.pack(fill=tk.X)
+        linha2 = ttk.Frame(self.frame_topo)
+        linha2.pack(fill=tk.X, pady=(6, 0))
+
+        ttk.Label(linha1, text="Data:", font=("Arial", 10, "bold")).pack(side=tk.LEFT)
+        ttk.Button(linha1, text="◀", width=3, command=lambda: self.mudar_dia(-1)).pack(side=tk.LEFT, padx=(5, 0))
+        self.date_entry = DateEntry(linha1, width=10, date_pattern='dd/mm/yyyy', locale='pt_BR')
+        self.date_entry.pack(side=tk.LEFT, padx=3)
         self.date_entry.bind("<<DateEntrySelected>>", self._ao_trocar_data)
+        ttk.Button(linha1, text="▶", width=3, command=lambda: self.mudar_dia(1)).pack(side=tk.LEFT)
+        ttk.Button(linha1, text="Hoje", width=6, command=self.ir_para_hoje).pack(side=tk.LEFT, padx=(3, 0))
+        self.lbl_dia_semana = ttk.Label(linha1, text="", font=("Arial", 10, "bold"), foreground="#0056b3")
+        self.lbl_dia_semana.pack(side=tk.LEFT, padx=6)
         # [NOVO] Botão de Copiar Escala Anterior
-        self.btn_copiar = ttk.Button(self.frame_topo, text="📋 Copiar Escala Anterior", command=self.abrir_dialogo_copiar_escala)
+        self.btn_copiar = ttk.Button(linha1, text="📋 Copiar Escala Anterior", command=self.abrir_dialogo_copiar_escala)
         self.btn_copiar.pack(side=tk.LEFT, padx=5)
 
-        ttk.Separator(self.frame_topo, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=10)
-
-        # [ATUALIZAÇÃO] Botão de Gestão de Freelancers
-        self.btn_free = ttk.Button(self.frame_topo, text="👤 Gerenciar Freelancers", command=self.abrir_gestao_freelancers)
-        self.btn_free.pack(side=tk.LEFT, padx=5)
-
-        self.btn_modo = ttk.Button(self.frame_topo, text="🔧 Configurar Mapa (Setores)", command=self.alternar_modo)
-        self.btn_modo.pack(side=tk.LEFT, padx=5)
-        self.lbl_legenda = ttk.Label(self.frame_topo, text="Modo: ESCALAÇÃO", foreground="green", font=("Arial", 10, "bold"))
-        self.lbl_legenda.pack(side=tk.LEFT, padx=10)
+        ttk.Separator(linha1, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8)
         # Botão Mágico de Automação
-        self.btn_magic = ttk.Button(self.frame_topo, text="🪄 Gerar Intervalos Automáticos", command=self.gerar_intervalos)
-        self.btn_magic.pack(side=tk.LEFT, padx=20)
-
-        # Botão Telegram
-        self.btn_telegram = ttk.Button(self.frame_topo, text="📢 Enviar Escala Telegram", command=self.enviar_escala_telegram)
-        self.btn_telegram.pack(side=tk.LEFT, padx=5)
-        # Botão de Envio em Massa WhatsApp
-        self.btn_wpp_mass = ttk.Button(self.frame_topo, text="📱 Confirmar Escala (WhatsApp)", command=self.enviar_confirmacoes_em_massa)
-        self.btn_wpp_mass.pack(side=tk.LEFT, padx=5)
-        self.btn_config = ttk.Button(self.frame_topo, text="⚙️ Configurações Automação", command=self.abrir_janela_configuracoes)
-        self.btn_config.pack(side=tk.LEFT, padx=5)
-        # Botão Editor de Diretrizes
-        self.btn_diretrizes = ttk.Button(self.frame_topo, text="📝 Editar Diretrizes", command=self.abrir_editor_diretrizes)
-        self.btn_diretrizes.pack(side=tk.LEFT, padx=5)
+        self.btn_magic = ttk.Button(linha1, text="🪄 Gerar Intervalos Automáticos", command=self.gerar_intervalos)
+        self.btn_magic.pack(side=tk.LEFT, padx=3)
         # Botão Gerenciador de Intervalos
-        self.btn_intervalos = ttk.Button(self.frame_topo, text="⏱️ Gerenciar Intervalos", command=self.abrir_gerenciador_intervalos)
-        self.btn_intervalos.pack(side=tk.LEFT, padx=5)
+        self.btn_intervalos = ttk.Button(linha1, text="⏱️ Gerenciar Intervalos", command=self.abrir_gerenciador_intervalos)
+        self.btn_intervalos.pack(side=tk.LEFT, padx=3)
+
+        ttk.Separator(linha1, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8)
+        # Botão Telegram
+        self.btn_telegram = ttk.Button(linha1, text="📢 Enviar Escala Telegram", command=self.enviar_escala_telegram)
+        self.btn_telegram.pack(side=tk.LEFT, padx=3)
+        # Botão de Envio em Massa WhatsApp
+        self.btn_wpp_mass = ttk.Button(linha1, text="📱 Confirmar Escala (WhatsApp)", command=self.enviar_confirmacoes_em_massa)
+        self.btn_wpp_mass.pack(side=tk.LEFT, padx=3)
+
+        # 2ª linha: cadastros / configurações
+        # [MELHORIA ESCALA] Pagamentos de freelancers
+        self.btn_pagamentos = ttk.Button(linha2, text="💰 Pagamentos Freelancers", command=self.abrir_pagamentos_freelancers)
+        self.btn_pagamentos.pack(side=tk.LEFT, padx=(0, 3))
+        # [ATUALIZAÇÃO] Botão de Gestão de Freelancers
+        self.btn_free = ttk.Button(linha2, text="👤 Gerenciar Freelancers", command=self.abrir_gestao_freelancers)
+        self.btn_free.pack(side=tk.LEFT, padx=3)
+        self.btn_modo = ttk.Button(linha2, text="🔧 Configurar Mapa (Setores)", command=self.alternar_modo)
+        self.btn_modo.pack(side=tk.LEFT, padx=3)
+        # Botão Editor de Diretrizes
+        self.btn_diretrizes = ttk.Button(linha2, text="📝 Editar Diretrizes", command=self.abrir_editor_diretrizes)
+        self.btn_diretrizes.pack(side=tk.LEFT, padx=3)
+        self.btn_config = ttk.Button(linha2, text="⚙️ Configurações Automação", command=self.abrir_janela_configuracoes)
+        self.btn_config.pack(side=tk.LEFT, padx=3)
+        self.lbl_legenda = ttk.Label(linha2, text="Modo: ESCALAÇÃO", foreground="green", font=("Arial", 10, "bold"))
+        self.lbl_legenda.pack(side=tk.LEFT, padx=10)
+        # [MELHORIA ESCALA] Resumo do dia (pessoas, vagas, custo de freelancers)
+        self.lbl_resumo_dia = ttk.Label(linha2, text="", font=("Arial", 9, "bold"))
+        self.lbl_resumo_dia.pack(side=tk.RIGHT, padx=5)
+
+        # [MELHORIA ESCALA] Barra de status (mensagens rápidas, sem janelinha para clicar OK)
+        self.lbl_status = tk.Label(root, text="", anchor="w", fg="#555555", font=("Arial", 9))
+        self.lbl_status.pack(fill=tk.X, side=tk.BOTTOM, before=self.frame_inferior)
+        self._id_status = None
 
         # --- Painel Lateral Embutido (Oculto por padrão) ---
         self.frame_lateral = ttk.LabelFrame(self.frame_mapa, text="Selecione uma Posição", width=380)
@@ -243,6 +359,83 @@ class AppEscalaLoja:
         self.redesenhar_marcadores()
         # [CORREÇÃO] Garante que o gráfico seja redesenhado junto com o mapa
         self.atualizar_grafico_fluxo()
+        self.atualizar_resumo_dia()
+
+    # -------------------------------------------------------------------
+    # [MELHORIA ESCALA] Navegação de dias, status e resumo do dia
+    # -------------------------------------------------------------------
+    def mudar_dia(self, passo):
+        """◀ / ▶: dia anterior / próximo."""
+        self.date_entry.set_date(self.date_entry.get_date() + timedelta(days=passo))
+        self._ao_trocar_data()
+
+    def ir_para_hoje(self):
+        self.date_entry.set_date(date.today())
+        self._ao_trocar_data()
+
+    def status(self, mensagem, tipo='ok', segundos=8):
+        """Mensagem rápida no rodapé (some sozinha)."""
+        cores = {'ok': '#1b7a2f', 'info': '#555555', 'aviso': '#b26a00', 'erro': '#c62828'}
+        try:
+            self.lbl_status.config(text=mensagem, fg=cores.get(tipo, '#555555'))
+            if self._id_status:
+                self.root.after_cancel(self._id_status)
+            self._id_status = self.root.after(segundos * 1000, lambda: self.lbl_status.config(text=""))
+        except Exception:
+            pass
+
+    def _config_pagamento(self, recarregar=False):
+        if recarregar or getattr(self, '_cfg_pag_cache', None) is None:
+            try:
+                self._cfg_pag_cache = database.buscar_config_pagamento_freelancer()
+            except Exception as e:
+                logger.warning(f"Não foi possível ler os valores de pagamento de freelancer: {e}")
+                self._cfg_pag_cache = dict(database.CONFIG_PAGAMENTO_PADRAO)
+        return self._cfg_pag_cache
+
+    def _feriado_do_dia(self, data_txt=None):
+        """Nome do feriado do dia selecionado (ou None). Guardado para não ir ao banco toda hora."""
+        data_txt = data_txt or self.data_selecionada
+        cache = self.__dict__.setdefault('_cache_feriados', {})
+        if data_txt not in cache:
+            try:
+                cache[data_txt] = database.nome_feriado(data_txt)
+            except Exception as e:
+                logger.warning(f"Não foi possível consultar feriados: {e}")
+                cache[data_txt] = None
+        return cache[data_txt]
+
+    def _calcular_turno_free(self, entrada, saida, data_txt=None, tipo=None, ajuste=0, ent_escala=None, sai_escala=None):
+        return database.calcular_pagamento_turno(entrada, saida, self._config_pagamento(), ajuste,
+                                                 data_txt or self.data_selecionada, tipo,
+                                                 ent_escala or entrada, sai_escala or saida,
+                                                 self._feriado_do_dia(data_txt))
+
+    def atualizar_resumo_dia(self):
+        """Linha de resumo: quantas pessoas, posições vazias e quanto custam os freelancers do dia."""
+        try:
+            dia = datetime.strptime(self.data_selecionada, '%Y-%m-%d').date()
+            feriado = self._feriado_do_dia()
+            self.lbl_dia_semana.config(text=DIAS_SEMANA[dia.weekday()].capitalize()
+                                       + (" (hoje)" if dia == date.today() else "")
+                                       + (f" · 🎉 {feriado}" if feriado else ""))
+            turnos = [t for lista in self.escala_atual.values() for t in lista]
+            pessoas = len([t for t in turnos if t.NomePessoa])
+            frees = [t for t in turnos if getattr(t, 'FreelancerID', None)]
+            vazias = len([p for p in self.posicoes if not self.escala_atual.get(p[0])])
+            texto = f"👥 {pessoas} na escala   ⭕ {vazias} posição(ões) vazia(s)"
+            if frees:
+                custo = Decimal('0')
+                for t in frees:
+                    calc = self._calcular_turno_free(t.HorarioEntrada, t.HorarioSaida)
+                    custo += calc['Total'] if calc else Decimal('0')
+                pagos = len(database.turnos_pagos(data_escala=self.data_selecionada))
+                texto += f"   🧑‍🍳 {len(frees)} freelancer(s): {fmt_reais(custo)}"
+                if pagos:
+                    texto += f" ({pagos} pago(s))"
+            self.lbl_resumo_dia.config(text=texto)
+        except Exception as e:
+            logger.warning(f"Não foi possível montar o resumo do dia: {e}")
 
     def abrir_dialogo_copiar_escala(self):
         """Abre opções rápidas para clonar escalas de dias anteriores."""
@@ -274,9 +467,9 @@ class AppEscalaLoja:
         def executar_copia(data_origem):
             sucesso, msg = database.copiar_escala_dia(data_origem, self.data_selecionada)
             if sucesso:
-                messagebox.showinfo("Sucesso", msg, parent=popup)
                 popup.destroy()
                 self.carregar_escala_do_dia() # Recarrega a tela com os novos dados copiados
+                self.status(f"Escala de {fmt_data_br(data_origem, True)} copiada para {fmt_data_br(self.data_selecionada, True)}.")
             else:
                 messagebox.showerror("Erro", msg, parent=popup)
 
@@ -780,8 +973,9 @@ class AppEscalaLoja:
     def enviar_escala_telegram(self):
         if not self.data_selecionada: return
 
-        resposta = messagebox.askyesno("Confirmar Envio", 
-            f"Deseja enviar a escala do dia {self.data_selecionada} para o grupo TODOS OS FUNCIONÁRIOS no Telegram?")
+        resposta = messagebox.askyesno("Confirmar Envio",
+            f"Deseja enviar a escala do dia {fmt_data_br(self.data_selecionada, True)} para o grupo TODOS OS FUNCIONÁRIOS no Telegram?",
+            parent=self.root)
 
         if resposta:
             # Desabilita o botão para evitar cliques múltiplos
@@ -823,9 +1017,9 @@ class AppEscalaLoja:
 
         self.btn_telegram.config(state='normal', text="📢 Enviar Escala Telegram")
         if sucesso:
-            messagebox.showinfo("Sucesso", "Escala enviada para o grupo do Telegram!")
+            self.status("Escala enviada para o grupo do Telegram! ✅")
         else:
-            messagebox.showerror("Erro", f"Falha ao enviar Telegram: {erro_msg}")
+            messagebox.showerror("Erro", f"Falha ao enviar Telegram: {erro_msg}", parent=self.root)
 
     # --- NOVO: Envio em Massa WhatsApp ---
     def enviar_confirmacoes_em_massa(self):
@@ -859,14 +1053,14 @@ class AppEscalaLoja:
                     })
 
         if not lista_envio:
-            messagebox.showwarning("Aviso", "Nenhuma pessoa com telefone encontrado na escala de hoje.")
+            messagebox.showwarning("Aviso", "Nenhuma pessoa com telefone encontrada na escala deste dia.", parent=self.root)
             return
 
         # 2. Confirmação
         if not messagebox.askyesno("Confirmação em Massa", 
             f"Encontradas {len(lista_envio)} pessoas com telefone na escala.\n\n"
             "Deseja enviar a confirmação de horário individual para o WhatsApp de cada um via BOT?\n\n"
-            "⚠️ Isso pode levar alguns segundos."):
+            "⚠️ Isso pode levar alguns segundos.", parent=self.root):
             return
 
         # 3. Execução em Thread (Background)
@@ -964,9 +1158,9 @@ class AppEscalaLoja:
         self.btn_wpp_mass.config(state='normal', text="📱 Confirmar Escala (WhatsApp)")
         msg = f"Processo finalizado!\n\n✅ Enviados: {enviados}\n❌ Falhas: {erros}"
         if erros > 0:
-            messagebox.showwarning("Relatório de Envio", msg)
+            messagebox.showwarning("Relatório de Envio", msg, parent=self.root)
         else:
-            messagebox.showinfo("Sucesso", msg)
+            self.status(f"WhatsApp: {enviados} confirmação(ões) enviada(s). ✅")
 
     def abrir_janela_configuracoes(self):
         """Abre a janela Toplevel para editar os parâmetros da automação de escala."""
@@ -1154,7 +1348,7 @@ class AppEscalaLoja:
             self.btn_modo.config(text="✅ Salvar e Voltar")
             self.lbl_legenda.config(text="Modo: CONFIGURAÇÃO (Clique para editar setor)", foreground="red")
         else:
-            self.btn_modo.config(text="🔧 Configurar Mapa")
+            self.btn_modo.config(text="🔧 Configurar Mapa (Setores)")
             self.lbl_legenda.config(text="Modo: ESCALAÇÃO", foreground="green")
             self.carregar_escala_do_dia()
 
@@ -1162,18 +1356,21 @@ class AppEscalaLoja:
         """Abre uma janela para listar, criar e editar freelancers."""
         popup = Toplevel(self.root)
         popup.title("Gerenciar Freelancers")
-        popup.geometry("550x450")
+        popup.geometry("720x450")
         popup.transient(self.root)
 
         # --- Área de Lista ---
         frame_lista = ttk.Frame(popup, padding="10")
         frame_lista.pack(fill=tk.BOTH, expand=True)
 
-        cols = ('ID', 'Nome', 'Telefone')
+        cols = ('ID', 'Nome', 'Telefone', 'A pagar')
         tree = ttk.Treeview(frame_lista, columns=cols, show='headings', selectmode='browse')
         tree.heading('ID', text='ID'); tree.column('ID', width=40, anchor='center')
         tree.heading('Nome', text='Nome'); tree.column('Nome', width=200)
         tree.heading('Telefone', text='Telefone'); tree.column('Telefone', width=150, anchor='center')
+        # [MELHORIA ESCALA] quanto falta pagar a cada freelancer (turnos até hoje)
+        tree.heading('A pagar', text='A pagar (até hoje)'); tree.column('A pagar', width=170, anchor='e')
+        tree.tag_configure('deve', foreground='#b26a00')
         tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         sb = ttk.Scrollbar(frame_lista, orient="vertical", command=tree.yview)
@@ -1183,11 +1380,16 @@ class AppEscalaLoja:
         def carregar_lista():
             for i in tree.get_children(): tree.delete(i)
             frees = database.listar_freelancers() # Reusa função existente
+            try:
+                pendentes = database.total_pendente_por_freelancer()
+            except Exception as e:
+                logger.warning(f"Não foi possível somar o que falta pagar: {e}")
+                pendentes = {}
             for f in frees:
-                # Ajuste dependendo de como o banco retorna (Objeto ou Tupla)
-                # O código existente sugere Objeto (f.Nome), mas drivers as vezes retornam Tupla.
-                # Assumindo Objeto baseado no padrão do projeto:
-                tree.insert("", "end", values=(f.FreelancerID, f.Nome, f.Telefone))
+                qtd, total = pendentes.get(f.FreelancerID, (0, Decimal('0')))
+                a_pagar = f"{fmt_reais(total)} ({qtd} turno{'s' if qtd != 1 else ''})" if qtd else "—"
+                tree.insert("", "end", values=(f.FreelancerID, f.Nome, f.Telefone, a_pagar),
+                            tags=('deve',) if qtd else ())
 
         def novo():
             nome = simpledialog.askstring("Novo", "Nome Completo:", parent=popup)
@@ -1215,7 +1417,10 @@ class AppEscalaLoja:
             f_id = tree.item(selecionado, 'values')[0]
             f_nome = tree.item(selecionado, 'values')[1]
 
-            if messagebox.askyesno("Confirmar Exclusão", f"Tem certeza que deseja excluir o freelancer {f_nome}?\n\nIsso limpará todas as escalas onde ele estiver.", parent=popup):
+            a_pagar = tree.item(selecionado, 'values')[3] if len(tree.item(selecionado, 'values')) > 3 else "—"
+            aviso = (f"\n\n⚠️ Ainda falta pagar {a_pagar} a este freelancer! Excluindo, esses turnos somem "
+                     "da lista de pagamentos (os já PAGOS continuam registrados).") if a_pagar != "—" else ""
+            if messagebox.askyesno("Confirmar Exclusão", f"Tem certeza que deseja excluir o freelancer {f_nome}?\n\nIsso limpará todas as escalas onde ele estiver.{aviso}", parent=popup):
                  # Chama a função de exclusão do banco
                  if database.excluir_freelancer(f_id):
                     carregar_lista()
@@ -1229,7 +1434,7 @@ class AppEscalaLoja:
                 return
 
             dados = tree.item(selecionado, 'values')
-            f_id, f_nome, f_tel = dados
+            f_id, f_nome, f_tel = dados[0], dados[1], dados[2]
 
             novo_nome = simpledialog.askstring("Editar", "Nome Completo:", initialvalue=f_nome, parent=popup)
             if novo_nome:
@@ -1250,6 +1455,15 @@ class AppEscalaLoja:
         # [DEPURAÇÃO] A função excluir() existia, mas o BOTÃO nunca foi criado:
         # não havia como excluir um freelancer pela tela.
         ttk.Button(frame_btns, text="🗑️ Excluir Selecionado", command=excluir).pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
+
+        def ver_pagamentos():
+            sel = tree.focus()
+            fid = int(tree.item(sel, 'values')[0]) if sel else None
+            self.abrir_pagamentos_freelancers(freelancer_id=fid)
+        # [MELHORIA ESCALA]
+        ttk.Button(frame_btns, text="💰 Pagamentos", command=ver_pagamentos).pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
+        tree.bind("<Double-1>", lambda e: editar())
+        self._janela_freelancers = {'popup': popup, 'tree': tree, 'carregar': carregar_lista}
 
         # Carrega dados iniciais
         carregar_lista()
@@ -1294,6 +1508,11 @@ class AppEscalaLoja:
         self.e_int_fim_lat = ttk.Entry(frame_i, width=8)
         self.e_int_fim_lat.pack(side=tk.LEFT)
 
+        # [MELHORIA ESCALA] Prévia do pagamento quando a pessoa é freelancer
+        self.lbl_pag_lateral = tk.Label(self.frame_lateral, text="", fg="#1b5e20", justify=tk.LEFT,
+                                        anchor="w", wraplength=340, font=("Arial", 9, "bold"))
+        self.lbl_pag_lateral.pack(fill=tk.X, padx=10, pady=(4, 2))
+
         ttk.Label(self.frame_lateral, text="Foco do Dia:").pack(anchor="w", padx=10)
         self.txt_foco_lateral = tk.Text(self.frame_lateral, height=3)
         self.txt_foco_lateral.pack(fill=tk.X, padx=10, pady=2)
@@ -1304,6 +1523,12 @@ class AppEscalaLoja:
         self.e_int_ini_lat.bind('<KeyRelease>', self._aplicar_mascara_hora)
         self.e_int_fim_lat.bind('<KeyRelease>', self._aplicar_mascara_hora)
         self.var_ent_lateral.trace_add("write", self._calcular_saida_lateral)
+        # [MELHORIA ESCALA] prévia do valor do freelancer + Enter salva
+        self.var_ent_lateral.trace_add("write", self._previa_pagamento_lateral)
+        self.var_sai_lateral.trace_add("write", self._previa_pagamento_lateral)
+        self.combo_pessoas_lateral.bind("<<ComboboxSelected>>", self._previa_pagamento_lateral)
+        for campo in (self.e_ent_lat, self.e_sai_lat, self.e_int_ini_lat, self.e_int_fim_lat):
+            campo.bind("<Return>", lambda e: self._salvar_lateral())
 
         # Botões
         frame_btn = ttk.Frame(self.frame_lateral)
@@ -1317,6 +1542,24 @@ class AppEscalaLoja:
         ttk.Button(self.frame_lateral, text="❌ Fechar Painel", command=self.frame_lateral.pack_forget).pack(side=tk.BOTTOM, fill=tk.X, padx=10)
 
     # --- LÓGICA DO PAINEL LATERAL ---
+
+    def _previa_pagamento_lateral(self, *args):
+        """[MELHORIA ESCALA] Mostra quanto o freelancer vai receber por este turno."""
+        if not hasattr(self, 'lbl_pag_lateral'):
+            return
+        d = self.mapa_ids_lateral.get(self.combo_pessoas_lateral.get())
+        if not d or d.get('tipo') != 'free':
+            self.lbl_pag_lateral.config(text="")
+            return
+        calc = self._calcular_turno_free(self.var_ent_lateral.get(), self.var_sai_lateral.get())
+        if not calc:
+            self.lbl_pag_lateral.config(text="💰 Preencha entrada e saída para ver o valor.", fg="gray")
+            return
+        texto = "💰 " + texto_calculo(calc)
+        escala_id = self.var_escala_id_edit.get()
+        if escala_id and int(escala_id) in database.turnos_pagos([escala_id]):
+            texto += "   ✅ JÁ PAGO"
+        self.lbl_pag_lateral.config(text=texto, fg="#1b5e20")
 
     def _calcular_saida_lateral(self, *args):
         # [DEPURAÇÃO] Antes o banco era consultado a CADA tecla digitada no campo Entrada.
@@ -1360,6 +1603,7 @@ class AppEscalaLoja:
         self.txt_foco_lateral.delete("1.0", tk.END); self.txt_foco_lateral.insert("1.0", turno.FocoDoDia or "")
 
         self.btn_salvar_lat.config(text="🔄 Atualizar")
+        self._previa_pagamento_lateral()
 
     def _limpar_form_lateral(self):
         self.var_escala_id_edit.set("")
@@ -1368,6 +1612,8 @@ class AppEscalaLoja:
         self.e_int_ini_lat.delete(0, tk.END); self.e_int_fim_lat.delete(0, tk.END)
         self.txt_foco_lateral.delete("1.0", tk.END)
         self.btn_salvar_lat.config(text="✅ Salvar")
+        if hasattr(self, 'lbl_pag_lateral'):
+            self.lbl_pag_lateral.config(text="")
         if self.tree_lateral.selection():
             self.tree_lateral.selection_remove(self.tree_lateral.selection())
 
@@ -1405,6 +1651,15 @@ class AppEscalaLoja:
             return
 
         escala_id = self.var_escala_id_edit.get()
+        # [MELHORIA ESCALA] turno de freelancer já PAGO: avisa que o pagamento não muda sozinho
+        if escala_id and database.turnos_pagos([escala_id]):
+            if not messagebox.askyesno(
+                    "Turno já pago",
+                    "Este turno de freelancer já foi marcado como PAGO.\n\n"
+                    "Mudar a escala NÃO altera o valor pago (fica registrado como foi pago).\n"
+                    "Se precisar refazer o valor, use '💰 Pagamentos' → '↩️ Desfazer pagamento'.\n\n"
+                    "Salvar a alteração na escala mesmo assim?", icon='warning', parent=self.root):
+                return
 
         if database.salvar_escala_dia_v3(
             escala_id if escala_id else None,
@@ -1414,6 +1669,7 @@ class AppEscalaLoja:
         ):
             self.carregar_escala_do_dia()
             self.abrir_janela_escalacao(self.pos_id_selecionada) # Recarrega a lista lateral em tempo real
+            self.status(f"Turno de {selecao.replace('[Fixo] ', '').replace('[Free] ', '')} salvo ({h_ent}–{h_sai}).")
         else:
             messagebox.showerror("Erro", "Não foi possível salvar.\n\nProvável conflito de horário com outro turno desta posição (ou falha no banco).", parent=self.root)
 
@@ -1427,7 +1683,11 @@ class AppEscalaLoja:
         escala_id = item[0]
         nome_pessoa = item[1]
 
-        if messagebox.askyesno("Confirmar Exclusão", f"Remover a escalação de {nome_pessoa}?", parent=self.root):
+        aviso_pago = ""
+        if database.turnos_pagos([escala_id]):   # [MELHORIA ESCALA]
+            aviso_pago = ("\n\n⚠️ Este turno já foi PAGO. O pagamento continua registrado em "
+                          "'💰 Pagamentos' (marcado como 'turno excluído').")
+        if messagebox.askyesno("Confirmar Exclusão", f"Remover a escalação de {nome_pessoa}?{aviso_pago}", parent=self.root):
             if database.excluir_turno_escala(escala_id):
                 self.carregar_escala_do_dia()
                 self.abrir_janela_escalacao(self.pos_id_selecionada)
@@ -1769,6 +2029,706 @@ class AppEscalaLoja:
 
         carregar_lista()
 
+
+    # ===================================================================
+    # == [MELHORIA ESCALA] PAGAMENTOS DE FREELANCERS ====================
+    # ===================================================================
+    FORMAS_PAGAMENTO = ["Pix", "Dinheiro", "Transferência", "Outro"]
+    STATUS_PAGAMENTO = [('pendentes', '⏳ Pendentes'), ('pagos', '✅ Pagos'), ('todos', 'Todos')]
+
+    def abrir_pagamentos_freelancers(self, freelancer_id=None):
+        """
+        Lista os turnos de freelancers do período com o valor calculado
+        (diária + hora extra), permite corrigir o horário real, marcar como pago,
+        desfazer, copiar o recibo para o WhatsApp e exportar para o Excel.
+        """
+        popup = Toplevel(self.root)
+        popup.title("💰 Pagamentos de Freelancers")
+        popup.geometry("1400x680")
+        popup.transient(self.root)
+        estado = {'itens': {}}
+
+        # ---------- Filtros ----------
+        topo = ttk.Frame(popup, padding=(10, 10, 10, 0))
+        topo.pack(fill=tk.X)
+        ttk.Label(topo, text="De:").pack(side=tk.LEFT)
+        de = DateEntry(topo, width=10, date_pattern='dd/mm/yyyy', locale='pt_BR')
+        de.pack(side=tk.LEFT, padx=3)
+        ttk.Label(topo, text="até:").pack(side=tk.LEFT)
+        ate = DateEntry(topo, width=10, date_pattern='dd/mm/yyyy', locale='pt_BR')
+        ate.pack(side=tk.LEFT, padx=3)
+        hoje = date.today()
+        de.set_date(hoje - timedelta(days=hoje.weekday()))      # segunda-feira desta semana
+        ate.set_date(hoje)
+
+        def periodo(rapido):
+            h = date.today()
+            if rapido == 'semana':
+                ini, fim = h - timedelta(days=h.weekday()), h
+            elif rapido == 'semana_passada':
+                ini = h - timedelta(days=h.weekday() + 7)
+                fim = ini + timedelta(days=6)
+            elif rapido == 'mes':
+                ini, fim = h.replace(day=1), h
+            else:                                  # tudo que está pendente
+                ini, fim = date(2000, 1, 1), h
+            de.set_date(ini); ate.set_date(fim)
+            carregar()
+
+        for texto, chave in (("Esta semana", 'semana'), ("Semana passada", 'semana_passada'),
+                             ("Este mês", 'mes'), ("Tudo até hoje", 'tudo')):
+            ttk.Button(topo, text=texto, command=lambda c=chave: periodo(c)).pack(side=tk.LEFT, padx=2)
+        ttk.Label(topo, text="   Freelancer:").pack(side=tk.LEFT)
+        combo_free = ttk.Combobox(topo, state="readonly", width=24)
+        combo_free.pack(side=tk.LEFT, padx=3)
+        ttk.Label(topo, text="Mostrar:").pack(side=tk.LEFT, padx=(8, 0))
+        combo_status = ttk.Combobox(topo, state="readonly", width=12, values=[r for _, r in self.STATUS_PAGAMENTO])
+        combo_status.pack(side=tk.LEFT, padx=3)
+        combo_status.set(self.STATUS_PAGAMENTO[0][1])
+        ttk.Button(topo, text="🔄", width=3, command=lambda: carregar()).pack(side=tk.LEFT, padx=3)
+
+        mapa_free = {"Todos": None}
+        for f in database.listar_freelancers():
+            mapa_free[f"{f.Nome} (ID {f.FreelancerID})"] = f.FreelancerID
+        combo_free['values'] = list(mapa_free)
+        combo_free.set(next((k for k, v in mapa_free.items() if v == freelancer_id), "Todos"))
+        if freelancer_id is not None:      # vindo do cadastro: mostra tudo o que está pendente dele
+            de.set_date(date(2000, 1, 1))
+
+        linha_cfg = ttk.Frame(popup, padding=(10, 6, 10, 0))
+        linha_cfg.pack(fill=tk.X)
+        lbl_cfg = ttk.Label(linha_cfg, text="", foreground="#0056b3")
+        lbl_cfg.pack(side=tk.LEFT)
+        ttk.Button(linha_cfg, text="📅 Feriados",
+                   command=lambda: self.abrir_feriados(popup, ao_salvar=carregar)).pack(side=tk.RIGHT, padx=(5, 0))
+        ttk.Button(linha_cfg, text="⚙️ Valores (diárias / hora extra)",
+                   command=lambda: self.abrir_config_pagamento(popup, ao_salvar=carregar)).pack(side=tk.RIGHT)
+
+        # ---------- Tabela ----------
+        meio = ttk.Frame(popup, padding=10)
+        meio.pack(fill=tk.BOTH, expand=True)
+        cols = ('Data', 'Freelancer', 'Posição', 'Escala', 'Real', 'Horas', 'Diária', 'Valor diária', 'Extras',
+                'Valor extras', 'Ajuste', 'Total', 'Situação')
+        tree = ttk.Treeview(meio, columns=cols, show='headings', selectmode='extended')
+        for col, larg, anc in (('Data', 105, 'center'), ('Freelancer', 150, 'w'), ('Posição', 105, 'w'),
+                               ('Escala', 90, 'center'), ('Real', 90, 'center'), ('Horas', 55, 'center'),
+                               ('Diária', 115, 'w'), ('Valor diária', 85, 'e'), ('Extras', 55, 'center'),
+                               ('Valor extras', 85, 'e'), ('Ajuste', 70, 'e'), ('Total', 90, 'e'), ('Situação', 190, 'w')):
+            tree.heading(col, text=col); tree.column(col, width=larg, anchor=anc)
+        tree.tag_configure('pago', background='#e3f5e1')
+        tree.tag_configure('pendente', background='#fff4cc')
+        tree.tag_configure('problema', background='#ffd6d6')
+        sb = ttk.Scrollbar(meio, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=sb.set)
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb.pack(side=tk.LEFT, fill=tk.Y)
+
+        # Resumo por freelancer (à direita)
+        frame_res = ttk.LabelFrame(meio, text="Por freelancer (duplo clique filtra)", padding=5)
+        frame_res.pack(side=tk.LEFT, fill=tk.Y, padx=(10, 0))
+        tree_res = ttk.Treeview(frame_res, columns=('Nome', 'Turnos', 'Pendente', 'Pago'), show='headings', height=12)
+        for col, larg, anc in (('Nome', 130, 'w'), ('Turnos', 50, 'center'), ('Pendente', 90, 'e'), ('Pago', 90, 'e')):
+            tree_res.heading(col, text=col); tree_res.column(col, width=larg, anchor=anc)
+        tree_res.pack(fill=tk.Y, expand=True)
+
+        rodape = ttk.Frame(popup, padding=(10, 0, 10, 10))
+        rodape.pack(fill=tk.X)
+        lbl_totais = ttk.Label(rodape, text="", font=("Arial", 10, "bold"))
+        lbl_totais.pack(anchor="w", pady=(0, 6))
+        botoes = ttk.Frame(rodape)
+        botoes.pack(fill=tk.X)
+
+        def selecionados():
+            ids = tree.selection() or ()
+            return [estado['itens'][i] for i in ids if i in estado['itens']]
+
+        def atualizar_totais(event=None):
+            itens = list(estado['itens'].values())
+            pend = [i for i in itens if not i['Pago']]
+            pagos = [i for i in itens if i['Pago']]
+            sel = selecionados()
+            texto = (f"⏳ A pagar: {fmt_reais(sum((i['Total'] for i in pend), Decimal('0')))} ({len(pend)} turno(s))     "
+                     f"✅ Pago: {fmt_reais(sum((i['Total'] for i in pagos), Decimal('0')))} ({len(pagos)})")
+            if sel:
+                texto += f"     🔹 Selecionados: {fmt_reais(sum((i['Total'] for i in sel), Decimal('0')))} ({len(sel)})"
+            lbl_totais.config(text=texto)
+
+        def carregar(manter=None):
+            cfg = self._config_pagamento(recarregar=True)
+            self.__dict__['_cache_feriados'] = {}
+            lbl_cfg.config(text=(
+                f"Longa ({fmt_horas(minutos=cfg['MinutosLonga'])}): {fmt_reais(cfg['DiariaLongaSemana'])} seg-sáb · "
+                f"{fmt_reais(cfg['DiariaLongaDomingo'])} dom/feriado     "
+                f"Curta ({fmt_horas(minutos=cfg['MinutosCurta'])}): {fmt_reais(cfg['DiariaCurtaSemana'])} · "
+                f"{fmt_reais(cfg['DiariaCurtaDomingo'])}     Extra: {fmt_reais(cfg['HoraExtraSemana'])}/h · "
+                f"{fmt_reais(cfg['HoraExtraDomingo'])}/h dom/fer, blocos de {cfg['BlocoExtraMinutos']} min"),
+                foreground="#0056b3")
+            status = next((ch for ch, r in self.STATUS_PAGAMENTO if r == combo_status.get()), 'pendentes')
+            fid = mapa_free.get(combo_free.get())
+            try:
+                itens = database.listar_pagamentos_freelancers(de.get_date(), ate.get_date(), fid, status)
+            except Exception as e:
+                logger.error(f"Erro ao carregar pagamentos: {e}", exc_info=True)
+                messagebox.showerror("Erro", f"Não foi possível carregar os pagamentos:\n{e}", parent=popup)
+                itens = []
+            for i in tree.get_children():
+                tree.delete(i)
+            estado['itens'] = {}
+            resumo = {}
+            for n, it in enumerate(itens):
+                iid = f"P{it['PagamentoID']}" if it['Pago'] else f"E{it['EscalaID']}"
+                estado['itens'][iid] = it
+                c = it['Calculo'] or {}
+                if it['Pago']:
+                    sit = f"✅ Pago {fmt_data_br(it['DataPagamento'])}" + (f" ({it['FormaPagamento']})" if it['FormaPagamento'] else "")
+                    if it['TurnoExcluido']:
+                        sit += " · turno excluído"
+                    tag = 'pago'
+                elif it['SemHorario']:
+                    sit, tag = "⚠️ Turno sem horário", 'problema'
+                else:
+                    extras_sit = [t for t, cond in (("horário corrigido", it['Corrigido']),
+                                                     ("saiu cedo", c.get('Proporcional')),
+                                                     ("diária trocada", it.get('TipoForcado'))) if cond]
+                    sit, tag = "⏳ Pendente" + "".join(f" · {t}" for t in extras_sit), 'pendente'
+                escala = f"{it['EntradaEscala'] or '?'}–{it['SaidaEscala'] or '?'}"
+                real = f"{it['EntradaReal']}–{it['SaidaReal']}" if it['Corrigido'] else "= escala"
+                tipo_txt = (nome_tipo_dia(c).replace(' (seg a sáb)', '') + (" (prop.)" if c.get('Proporcional') else "")) if c else "—"
+                data_txt = fmt_data_br(it['Data'], True) + (" 🎉" if it.get('Feriado') else "")
+                tree.insert("", "end", iid=iid, tags=(tag,), values=(
+                    data_txt, it['Nome'], it['Posicao'], escala, real,
+                    fmt_horas(c['Horas']) if c else "—", tipo_txt,
+                    fmt_reais(c['ValorDiaria']) if c else "—", fmt_horas(c['HorasExtras']) if c and c['HorasExtras'] else "—",
+                    fmt_reais(c['ValorExtras']) if c and c['ValorExtras'] else "—",
+                    fmt_reais(it['Ajuste']) if it['Ajuste'] else "—", fmt_reais(it['Total']), sit))
+                r = resumo.setdefault((it['FreelancerID'], it['Nome']), [0, Decimal('0'), Decimal('0')])
+                r[0] += 1
+                r[2 if it['Pago'] else 1] += it['Total']
+            for i in tree_res.get_children():
+                tree_res.delete(i)
+            for (fid_r, nome), (qtd, pend, pago) in sorted(resumo.items(), key=lambda kv: str(kv[0][1]).lower()):
+                tree_res.insert("", "end", iid=f"F{fid_r}", values=(nome, qtd, fmt_reais(pend), fmt_reais(pago)))
+            if manter:
+                for iid in manter:
+                    if tree.exists(iid):
+                        tree.selection_add(iid)
+            atualizar_totais()
+
+        def corrigir(event=None):
+            sel = selecionados()
+            if len(sel) != 1:
+                messagebox.showwarning("Aviso", "Selecione UM turno para corrigir.", parent=popup)
+                return
+            it = sel[0]
+            if it['Pago']:
+                messagebox.showinfo("Turno pago", "Este turno já está PAGO. Para corrigir, primeiro clique em "
+                                    "'↩️ Desfazer pagamento'.", parent=popup)
+                return
+            self.abrir_correcao_pagamento(it, popup, ao_salvar=lambda: carregar(manter=[f"E{it['EscalaID']}"]))
+
+        def pagar():
+            sel = [i for i in selecionados() if not i['Pago']]
+            if not sel:
+                messagebox.showwarning("Aviso", "Selecione os turnos PENDENTES que você pagou "
+                                       "(Ctrl+clique ou Shift+clique para vários).", parent=popup)
+                return
+            if any(i['SemHorario'] for i in sel):
+                messagebox.showwarning("Aviso", "Há turno sem horário de entrada/saída na seleção. Corrija antes de pagar.", parent=popup)
+                return
+            total = sum((i['Total'] for i in sel), Decimal('0'))
+            nomes = sorted({i['Nome'] for i in sel})
+            resposta = self._dialogo_confirmar_pagamento(popup, len(sel), total, nomes)
+            if not resposta:
+                return
+            data_pag, forma = resposta
+            ok, msg, total_pago = database.marcar_pagamentos_pagos([i['EscalaID'] for i in sel], data_pag, forma)
+            if ok:
+                self.status(f"{msg} Total {fmt_reais(total_pago)}.")
+                carregar()
+                self.atualizar_resumo_dia()
+            else:
+                messagebox.showerror("Não foi possível marcar como pago", msg, parent=popup)
+
+        def desfazer():
+            sel = [i for i in selecionados() if i['Pago']]
+            if not sel:
+                messagebox.showwarning("Aviso", "Selecione os turnos PAGOS que quer voltar para pendente.", parent=popup)
+                return
+            total = sum((i['Total'] for i in sel), Decimal('0'))
+            if not messagebox.askyesno("Desfazer pagamento",
+                                       f"Voltar {len(sel)} turno(s) ({fmt_reais(total)}) para PENDENTE?\n\n"
+                                       "Use quando marcou como pago por engano.", parent=popup):
+                return
+            ok, msg = database.desfazer_pagamentos([i['PagamentoID'] for i in sel])
+            if ok:
+                self.status(msg, 'info')
+                carregar()
+                self.atualizar_resumo_dia()
+            else:
+                messagebox.showerror("Erro", msg, parent=popup)
+
+        def recibo():
+            sel = selecionados() or list(estado['itens'].values())
+            nomes = {i['FreelancerID'] for i in sel}
+            if not sel:
+                messagebox.showwarning("Aviso", "Não há turnos na lista.", parent=popup)
+                return
+            if len(nomes) != 1:
+                messagebox.showwarning("Aviso", "O recibo é de UM freelancer: escolha o freelancer no filtro "
+                                       "ou selecione só os turnos dele.", parent=popup)
+                return
+            texto = self.texto_recibo_freelancer(sel)
+            popup.clipboard_clear()
+            popup.clipboard_append(texto)
+            self._ultimo_recibo = texto
+            self.status(f"Recibo de {sel[0]['Nome']} copiado. Cole no WhatsApp com Ctrl+V.")
+            messagebox.showinfo("Recibo copiado", texto + "\n\n(Já está copiado: cole no WhatsApp com Ctrl+V.)", parent=popup)
+
+        def filtrar_por_resumo(event=None):
+            sel = tree_res.focus()
+            if not sel:
+                return
+            fid = int(sel[1:]) if sel[1:].isdigit() else None
+            combo_free.set(next((k for k, v in mapa_free.items() if v == fid), "Todos"))
+            carregar()
+
+        for texto, cmd in (("✏️ Corrigir horário / ajuste", corrigir), ("✅ Marcar como PAGO", pagar),
+                           ("↩️ Desfazer pagamento", desfazer), ("📋 Copiar recibo (WhatsApp)", recibo),
+                           ("📊 Exportar Excel", lambda: self.exportar_pagamentos_excel(list(estado['itens'].values()), popup))):
+            ttk.Button(botoes, text=texto, command=cmd).pack(side=tk.LEFT, padx=(0, 6), ipady=3)
+        ttk.Label(botoes, text="Ctrl+clique / Shift+clique seleciona vários · duplo clique corrige", foreground="gray").pack(side=tk.RIGHT)
+
+        tree.bind("<<TreeviewSelect>>", atualizar_totais)
+        tree.bind("<Double-1>", corrigir)
+        tree_res.bind("<Double-1>", filtrar_por_resumo)
+        for combo in (combo_free, combo_status):
+            combo.bind("<<ComboboxSelected>>", lambda e: carregar())
+        for campo in (de, ate):
+            campo.bind("<<DateEntrySelected>>", lambda e: carregar())
+        carregar()
+        self._janela_pagamentos = {'popup': popup, 'tree': tree, 'tree_res': tree_res, 'carregar': carregar,
+                                   'pagar': pagar, 'desfazer': desfazer, 'corrigir': corrigir, 'recibo': recibo,
+                                   'de': de, 'ate': ate, 'free': combo_free, 'status': combo_status,
+                                   'totais': lbl_totais, 'cfg': lbl_cfg, 'estado': estado, 'periodo': periodo}
+        return popup
+
+    @staticmethod
+    def texto_recibo_freelancer(itens):
+        """Texto para o WhatsApp com os turnos e o total de UM freelancer."""
+        itens = sorted(itens, key=lambda i: (i['Data'] or date.min, i['EntradaEscala'] or ''))
+        nome = itens[0]['Nome']
+        linhas = [f"Olá, {nome.split()[0] if nome else ''}! Segue o resumo dos seus turnos:", ""]
+        for i in itens:
+            c = i['Calculo'] or {}
+            ent = i['EntradaReal'] or i['EntradaEscala'] or '?'
+            sai = i['SaidaReal'] or i['SaidaEscala'] or '?'
+            extra = f" + {fmt_horas(c['HorasExtras'])} extra" if c and c.get('HorasExtras') else ""
+            prop = " (saiu mais cedo, proporcional)" if c and c.get('Proporcional') else ""
+            ajuste = f" {'+' if i['Ajuste'] > 0 else ''}{fmt_reais(i['Ajuste'])} ajuste" if i['Ajuste'] else ""
+            tipo = f" · diária {nome_tipo_dia(c).replace(' (seg a sáb)', '')}" if c and c.get('Tipo') else ""
+            feriado = f" 🎉 {i['Feriado']}" if i.get('Feriado') else ""
+            linhas.append(f"• {fmt_data_br(i['Data'], True)}{feriado} {ent}–{sai} · {fmt_horas(c['Horas']) if c else '?'}"
+                          f"{tipo}{extra}{prop}{ajuste} → {fmt_reais(i['Total'])}" + (" ✅ pago" if i['Pago'] else ""))
+            if i.get('Observacao'):
+                linhas.append(f"   obs: {i['Observacao']}")
+        total = sum((i['Total'] for i in itens), Decimal('0'))
+        pendente = sum((i['Total'] for i in itens if not i['Pago']), Decimal('0'))
+        linhas += ["", f"*Total: {fmt_reais(total)}*"]
+        if pendente and pendente != total:
+            linhas.append(f"A receber: {fmt_reais(pendente)}")
+        empresa = getattr(config, 'NOME_EMPRESA', '') or ''
+        linhas += ["", "Obrigado pelo trabalho! 🙌"] + ([empresa] if empresa else [])
+        return "\n".join(linhas)
+
+    def _dialogo_confirmar_pagamento(self, pai, qtd, total, nomes):
+        """Pergunta a data e a forma de pagamento. Devolve (data, forma) ou None."""
+        dlg = Toplevel(pai)
+        dlg.title("Confirmar pagamento")
+        dlg.geometry("420x260")
+        dlg.transient(pai)
+        frame = ttk.Frame(dlg, padding=15)
+        frame.pack(fill=tk.BOTH, expand=True)
+        quem = ", ".join(nomes[:3]) + (f" e mais {len(nomes) - 3}" if len(nomes) > 3 else "")
+        ttk.Label(frame, text=f"{qtd} turno(s) de {quem}", wraplength=380).pack(anchor="w")
+        ttk.Label(frame, text=f"Total: {fmt_reais(total)}", font=("Arial", 14, "bold"), foreground="#1b7a2f").pack(anchor="w", pady=8)
+        linha = ttk.Frame(frame)
+        linha.pack(fill=tk.X, pady=4)
+        ttk.Label(linha, text="Pago em:").pack(side=tk.LEFT)
+        data_pag = DateEntry(linha, width=10, date_pattern='dd/mm/yyyy', locale='pt_BR')
+        data_pag.set_date(date.today())
+        data_pag.pack(side=tk.LEFT, padx=5)
+        ttk.Label(linha, text="Forma:").pack(side=tk.LEFT, padx=(10, 0))
+        forma = ttk.Combobox(linha, values=self.FORMAS_PAGAMENTO, width=14)
+        forma.set(getattr(self, '_ultima_forma_pag', "Pix"))
+        forma.pack(side=tk.LEFT, padx=5)
+        resultado = {}
+
+        def confirmar():
+            resultado['ok'] = (data_pag.get_date(), forma.get().strip())
+            self._ultima_forma_pag = forma.get().strip() or "Pix"
+            dlg.destroy()
+
+        botoes = ttk.Frame(frame)
+        botoes.pack(fill=tk.X, pady=(15, 0))
+        ttk.Button(botoes, text="✅ Confirmar pagamento", command=confirmar).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 5), ipady=4)
+        ttk.Button(botoes, text="Cancelar", command=dlg.destroy).pack(side=tk.LEFT, expand=True, fill=tk.X, ipady=4)
+        dlg.bind("<Return>", lambda e: confirmar())
+        dlg.bind("<Escape>", lambda e: dlg.destroy())
+        self._janela_confirmar_pag = {'dlg': dlg, 'confirmar': confirmar, 'forma': forma, 'data': data_pag}
+        try:
+            dlg.grab_set()
+            pai.wait_window(dlg)
+        except tk.TclError:
+            pass
+        return resultado.get('ok')
+
+    def abrir_correcao_pagamento(self, item, pai, ao_salvar=None):
+        """Corrige o horário REAL do turno e/ou lança um ajuste (+ bônus / - desconto)."""
+        dlg = Toplevel(pai)
+        dlg.title("Corrigir horário / ajuste")
+        dlg.geometry("500x400")
+        dlg.transient(pai)
+        frame = ttk.Frame(dlg, padding=15)
+        frame.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(frame, text=f"{item['Nome']} · {fmt_data_br(item['Data'], True)} · {item['Posicao']}",
+                  font=("Arial", 10, "bold")).grid(row=0, column=0, columnspan=4, sticky="w")
+        ttk.Label(frame, text=f"Na escala: {item['EntradaEscala'] or '?'} às {item['SaidaEscala'] or '?'}",
+                  foreground="gray").grid(row=1, column=0, columnspan=4, sticky="w", pady=(0, 10))
+        ttk.Label(frame, text="Entrada real:").grid(row=2, column=0, sticky="w")
+        e_ent = ttk.Entry(frame, width=8)
+        e_ent.grid(row=2, column=1, sticky="w", padx=5)
+        ttk.Label(frame, text="Saída real:").grid(row=2, column=2, sticky="w")
+        e_sai = ttk.Entry(frame, width=8)
+        e_sai.grid(row=2, column=3, sticky="w", padx=5)
+        ttk.Label(frame, text="(vazio = usar o horário da escala)", foreground="gray").grid(row=3, column=0, columnspan=4, sticky="w")
+        ttk.Label(frame, text="Ajuste R$:").grid(row=4, column=0, sticky="w", pady=(10, 0))
+        e_aj = ttk.Entry(frame, width=10)
+        e_aj.grid(row=4, column=1, sticky="w", padx=5, pady=(10, 0))
+        ttk.Label(frame, text="(+ bônus / - desconto, ex: -10)", foreground="gray").grid(row=4, column=2, columnspan=2, sticky="w", pady=(10, 0))
+        ttk.Label(frame, text="Observação:").grid(row=5, column=0, sticky="w", pady=(10, 0))
+        e_obs = ttk.Entry(frame, width=40)
+        e_obs.grid(row=5, column=1, columnspan=3, sticky="ew", padx=5, pady=(10, 0))
+        ttk.Label(frame, text="Diária:").grid(row=8, column=0, sticky="w", pady=(10, 0))
+        opcoes_tipo = {"Automático (pela escala)": None, "Longa": 'longa', "Curta": 'curta'}
+        combo_tipo = ttk.Combobox(frame, state="readonly", width=24, values=list(opcoes_tipo))
+        combo_tipo.grid(row=8, column=1, columnspan=3, sticky="w", padx=5, pady=(10, 0))
+        combo_tipo.set(next(k for k, v in opcoes_tipo.items() if v == item.get('TipoForcado')))
+        lbl_prev = ttk.Label(frame, text="", font=("Arial", 10, "bold"), foreground="#1b7a2f", wraplength=460)
+        lbl_prev.grid(row=6, column=0, columnspan=4, sticky="w", pady=12)
+        if item.get('EntradaReal'):
+            e_ent.insert(0, item['EntradaReal']); e_sai.insert(0, item['SaidaReal'] or '')
+        if item.get('Ajuste'):
+            e_aj.insert(0, str(item['Ajuste']).replace('.', ','))
+        if item.get('Observacao'):
+            e_obs.insert(0, item['Observacao'])
+
+        def ler():
+            ent = hora_ou_none(e_ent.get())
+            sai = hora_ou_none(e_sai.get())
+            aj = para_decimal_br(e_aj.get(), "Ajuste", permitir_negativo=True)
+            return ent, sai, aj
+
+        def previa(event=None):
+            if event is not None and getattr(event, 'widget', None) in (e_ent, e_sai):
+                self._aplicar_mascara_hora(event)
+            try:
+                ent, sai, aj = ler()
+            except ValueError as e:
+                lbl_prev.config(text=f"⚠️ {e}", foreground="#c62828")
+                return
+            calc = self._calcular_turno_free(ent or item['EntradaEscala'], sai or item['SaidaEscala'],
+                                             item['Data'].strftime('%Y-%m-%d'), opcoes_tipo.get(combo_tipo.get()), aj,
+                                             item['EntradaEscala'], item['SaidaEscala'])
+            if not calc:
+                lbl_prev.config(text="⚠️ Preencha entrada e saída.", foreground="#c62828")
+                return
+            lbl_prev.config(text=texto_calculo(calc), foreground="#1b7a2f")
+
+        def salvar(event=None):
+            try:
+                ent, sai, aj = ler()
+            except ValueError as e:
+                messagebox.showerror("Valor inválido", f"{e}\n\nHorários no formato HH:MM (ex: 18:30).", parent=dlg)
+                return
+            # horário igual ao da escala não precisa ser guardado como "corrigido"
+            if ent == item['EntradaEscala'] and sai == item['SaidaEscala']:
+                ent = sai = None
+            ok, msg = database.salvar_correcao_pagamento(item['EscalaID'], ent, sai, aj, e_obs.get(),
+                                                         opcoes_tipo.get(combo_tipo.get()))
+            if not ok:
+                messagebox.showerror("Não foi possível salvar", msg, parent=dlg)
+                return
+            self.status(f"Turno de {item['Nome']} em {fmt_data_br(item['Data'])}: {msg.lower()}")
+            dlg.destroy()
+            if ao_salvar:
+                ao_salvar()
+
+        for campo in (e_ent, e_sai, e_aj):
+            campo.bind("<KeyRelease>", previa)
+        combo_tipo.bind("<<ComboboxSelected>>", previa)
+        dlg.bind("<Return>", salvar)
+        dlg.bind("<Escape>", lambda e: dlg.destroy())
+        botoes = ttk.Frame(frame)
+        botoes.grid(row=9, column=0, columnspan=4, sticky="ew", pady=(12, 0))
+        ttk.Button(botoes, text="💾 Salvar", command=salvar).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 5), ipady=3)
+        ttk.Button(botoes, text="Cancelar", command=dlg.destroy).pack(side=tk.LEFT, expand=True, fill=tk.X, ipady=3)
+        previa()
+        e_ent.focus_set()
+        self._janela_correcao = {'dlg': dlg, 'ent': e_ent, 'sai': e_sai, 'ajuste': e_aj, 'obs': e_obs, 'tipo': combo_tipo,
+                                 'previa': lbl_prev, 'salvar': salvar, 'atualizar': previa}
+
+    def abrir_config_pagamento(self, pai=None, ao_salvar=None):
+        """Valores das diárias (longa/curta × seg-sáb/domingo-feriado), hora extra e regras."""
+        pai = pai or self.root
+        cfg = self._config_pagamento(recarregar=True)
+        dlg = Toplevel(pai)
+        dlg.title("⚙️ Valores dos Freelancers")
+        dlg.geometry("620x520")
+        dlg.transient(pai)
+        frame = ttk.Frame(dlg, padding=15)
+        frame.pack(fill=tk.BOTH, expand=True)
+        campos = {}
+
+        def campo(linha, coluna, chave, valor, largura=9):
+            e = ttk.Entry(frame, width=largura, justify="center")
+            e.insert(0, valor)
+            e.grid(row=linha, column=coluna, padx=4, pady=3)
+            campos[chave] = e
+            return e
+
+        def hm(minutos):
+            return f"{int(minutos) // 60}:{int(minutos) % 60:02d}"
+
+        def br(v):
+            return f"{Decimal(str(v)):.2f}".replace('.', ',')
+
+        ttk.Label(frame, text="", width=26).grid(row=0, column=0)
+        for col, titulo in ((1, "Tempo na loja"), (2, "Seg a sáb"), (3, "Dom / feriado")):
+            ttk.Label(frame, text=titulo, font=("Arial", 9, "bold")).grid(row=0, column=col)
+        ttk.Label(frame, text="Diária LONGA (R$):").grid(row=1, column=0, sticky="w")
+        campo(1, 1, 'MinutosLonga', hm(cfg['MinutosLonga']))
+        campo(1, 2, 'DiariaLongaSemana', br(cfg['DiariaLongaSemana']))
+        campo(1, 3, 'DiariaLongaDomingo', br(cfg['DiariaLongaDomingo']))
+        ttk.Label(frame, text="Diária CURTA (R$):").grid(row=2, column=0, sticky="w")
+        campo(2, 1, 'MinutosCurta', hm(cfg['MinutosCurta']))
+        campo(2, 2, 'DiariaCurtaSemana', br(cfg['DiariaCurtaSemana']))
+        campo(2, 3, 'DiariaCurtaDomingo', br(cfg['DiariaCurtaDomingo']))
+        ttk.Label(frame, text="Hora extra (R$ por hora):").grid(row=3, column=0, sticky="w")
+        campo(3, 2, 'HoraExtraSemana', br(cfg['HoraExtraSemana']))
+        campo(3, 3, 'HoraExtraDomingo', br(cfg['HoraExtraDomingo']))
+        ttk.Separator(frame).grid(row=4, column=0, columnspan=4, sticky="ew", pady=8)
+        ttk.Label(frame, text="Hora extra conta em blocos de (min):").grid(row=5, column=0, sticky="w")
+        campo(5, 1, 'BlocoExtraMinutos', str(cfg['BlocoExtraMinutos']))
+        ttk.Label(frame, text="só blocos completos", foreground="gray").grid(row=5, column=2, columnspan=2, sticky="w")
+        ttk.Label(frame, text="Na escala, até (horas) = diária curta:").grid(row=6, column=0, sticky="w")
+        campo(6, 1, 'LimiteCurtaMinutos', hm(cfg['LimiteCurtaMinutos']))
+        ttk.Label(frame, text="acima disso = longa", foreground="gray").grid(row=6, column=2, columnspan=2, sticky="w")
+        lbl_ex = ttk.Label(frame, text="", foreground="#0056b3", wraplength=580, justify="left")
+        lbl_ex.grid(row=7, column=0, columnspan=4, sticky="w", pady=10)
+        ttk.Label(frame, foreground="gray", justify="left", wraplength=580, text=(
+            "• Conta só ENTRADA → SAÍDA (o intervalo é remunerado).\n"
+            "• Saiu antes do tempo da diária: paga proporcional ao tempo trabalhado.\n"
+            "• Domingos e os feriados cadastrados em '📅 Feriados' usam a coluna 'Dom / feriado'.\n"
+            "• Mudar os valores vale para os turnos ainda NÃO pagos.")).grid(row=8, column=0, columnspan=4, sticky="w")
+
+        def minutos_de(texto, nome):
+            t = str(texto).strip().lower().replace('h', ':')
+            try:
+                if ':' in t:
+                    h, m = (t.split(':') + ['0'])[:2]
+                    return int(h or 0) * 60 + int(m or 0)
+                return int((para_decimal_br(t, nome) * 60).to_integral_value())
+            except (ValueError, InvalidOperation):
+                raise ValueError(f"'{texto}' não é um tempo válido para {nome} (ex: 8:20).")
+
+        def ler():
+            novo = {}
+            for chave, e in campos.items():
+                if chave in ('MinutosLonga', 'MinutosCurta', 'LimiteCurtaMinutos'):
+                    novo[chave] = minutos_de(e.get(), "o tempo")
+                elif chave == 'BlocoExtraMinutos':
+                    if not e.get().strip().isdigit():
+                        raise ValueError("O bloco da hora extra deve ser um número inteiro de minutos (ex: 20).")
+                    novo[chave] = int(e.get().strip())
+                else:
+                    novo[chave] = para_decimal_br(e.get(), "o valor")
+            return novo
+
+        def exemplo(event=None):
+            try:
+                novo = ler()
+            except ValueError as e:
+                lbl_ex.config(text=f"⚠️ {e}", foreground="#c62828")
+                return
+            base = datetime(2000, 1, 1, 10, 0)
+            linhas = []
+            for rotulo, data_ex, minutos in (("Segunda", '2026-09-28', novo['MinutosLonga'] + 60),
+                                             ("Domingo", '2026-09-27', novo['MinutosLonga'] + 60),
+                                             ("Sábado", '2026-10-03', novo['MinutosLonga'] - 140)):
+                fim_ex = base + timedelta(minutes=minutos)
+                calc = database.calcular_pagamento_turno(base.strftime('%H:%M'), fim_ex.strftime('%H:%M'), novo, 0, data_ex)
+                if calc:
+                    linhas.append(f"{rotulo} 10:00–{fim_ex.strftime('%H:%M')}: {texto_calculo(calc)}")
+            lbl_ex.config(text="Exemplos:\n" + "\n".join(linhas), foreground="#0056b3")
+
+        def salvar(event=None):
+            try:
+                novo = ler()
+            except ValueError as e:
+                messagebox.showerror("Valor inválido", str(e), parent=dlg)
+                return
+            ok, msg = database.salvar_config_pagamento_freelancer(novo)
+            if not ok:
+                messagebox.showerror("Não foi possível salvar", msg, parent=dlg)
+                return
+            self._config_pagamento(recarregar=True)
+            self.status("Valores dos freelancers salvos.")
+            dlg.destroy()
+            self.atualizar_resumo_dia()
+            if ao_salvar:
+                ao_salvar()
+
+        for e in campos.values():
+            e.bind("<KeyRelease>", exemplo)
+        dlg.bind("<Return>", salvar)
+        botoes = ttk.Frame(frame)
+        botoes.grid(row=9, column=0, columnspan=4, sticky="ew", pady=(15, 0))
+        ttk.Button(botoes, text="💾 Salvar valores", command=salvar).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 5), ipady=3)
+        ttk.Button(botoes, text="📅 Feriados", command=lambda: self.abrir_feriados(dlg)).pack(side=tk.LEFT, ipady=3)
+        exemplo()
+        self._janela_config_pag = {'dlg': dlg, 'campos': campos, 'salvar': salvar, 'exemplo': lbl_ex}
+
+    def abrir_feriados(self, pai=None, ao_salvar=None):
+        """Cadastro dos feriados (pagos com os valores de domingo)."""
+        pai = pai or self.root
+        dlg = Toplevel(pai)
+        dlg.title("📅 Feriados (pagos como domingo)")
+        dlg.geometry("480x520")
+        dlg.transient(pai)
+        frame = ttk.Frame(dlg, padding=10)
+        frame.pack(fill=tk.BOTH, expand=True)
+        topo = ttk.Frame(frame)
+        topo.pack(fill=tk.X)
+        ttk.Label(topo, text="Ano:").pack(side=tk.LEFT)
+        spin_ano = ttk.Spinbox(topo, from_=2020, to=2100, width=6)
+        spin_ano.set(str(date.today().year))
+        spin_ano.pack(side=tk.LEFT, padx=5)
+        tree = ttk.Treeview(frame, columns=('Data', 'Nome'), show='headings', selectmode='extended', height=14)
+        tree.heading('Data', text='Data'); tree.column('Data', width=130, anchor='center')
+        tree.heading('Nome', text='Feriado'); tree.column('Nome', width=290)
+        tree.pack(fill=tk.BOTH, expand=True, pady=8)
+        linha = ttk.Frame(frame)
+        linha.pack(fill=tk.X)
+        nova_data = DateEntry(linha, width=10, date_pattern='dd/mm/yyyy', locale='pt_BR')
+        nova_data.pack(side=tk.LEFT)
+        novo_nome = ttk.Entry(linha, width=26)
+        novo_nome.pack(side=tk.LEFT, padx=5)
+
+        def ano():
+            t = str(spin_ano.get()).strip()
+            return int(t) if t.isdigit() else date.today().year
+
+        def carregar(event=None):
+            for i in tree.get_children():
+                tree.delete(i)
+            for d, n in database.listar_feriados(ano()):
+                tree.insert("", "end", iid=d.isoformat(), values=(fmt_data_br(d, True), n))
+
+        def mudou():
+            self.__dict__['_cache_feriados'] = {}
+            self.atualizar_resumo_dia()
+            if ao_salvar:
+                ao_salvar()
+
+        def adicionar():
+            ok, msg = database.salvar_feriados([(nova_data.get_date(), novo_nome.get().strip() or "Feriado")])
+            if ok:
+                novo_nome.delete(0, tk.END)
+                spin_ano.set(str(nova_data.get_date().year)); carregar(); mudou()
+            else:
+                messagebox.showerror("Erro", msg, parent=dlg)
+
+        def nacionais():
+            lista = database.feriados_nacionais(ano())
+            if not messagebox.askyesno("Feriados nacionais", f"Cadastrar os {len(lista)} feriados nacionais de {ano()}?\n\n"
+                                       + "\n".join(f"{fmt_data_br(d, True)} - {n}" for d, n in lista)
+                                       + "\n\nFeriados do estado e da cidade (ex: aniversário da cidade) "
+                                       "cadastre à mão.", parent=dlg):
+                return
+            ok, msg = database.salvar_feriados(lista)
+            if ok:
+                carregar(); mudou(); self.status(msg)
+            else:
+                messagebox.showerror("Erro", msg, parent=dlg)
+
+        def remover():
+            sel = tree.selection()
+            if not sel:
+                messagebox.showwarning("Aviso", "Selecione o(s) feriado(s) na lista.", parent=dlg)
+                return
+            if messagebox.askyesno("Remover", f"Remover {len(sel)} feriado(s)?", parent=dlg):
+                for iid in sel:
+                    database.excluir_feriado(iid)
+                carregar(); mudou()
+
+        ttk.Button(linha, text="➕ Adicionar", command=adicionar).pack(side=tk.LEFT)
+        botoes = ttk.Frame(frame)
+        botoes.pack(fill=tk.X, pady=(8, 0))
+        ttk.Button(botoes, text="🇧🇷 Cadastrar feriados nacionais do ano", command=nacionais).pack(side=tk.LEFT)
+        ttk.Button(botoes, text="🗑️ Remover selecionados", command=remover).pack(side=tk.RIGHT)
+        spin_ano.bind("<Return>", carregar)
+        spin_ano.bind("<<Increment>>", lambda e: dlg.after(10, carregar))
+        spin_ano.bind("<<Decrement>>", lambda e: dlg.after(10, carregar))
+        carregar()
+        self._janela_feriados = {'dlg': dlg, 'tree': tree, 'ano': spin_ano, 'data': nova_data, 'nome': novo_nome,
+                                 'adicionar': adicionar, 'nacionais': nacionais, 'remover': remover, 'carregar': carregar}
+
+    def exportar_pagamentos_excel(self, itens, pai=None):
+        """Excel (ou CSV, se o Excel não estiver disponível) com os turnos da lista."""
+        from tkinter import filedialog
+        pai = pai or self.root
+        if not itens:
+            messagebox.showwarning("Aviso", "Não há turnos na lista para exportar.", parent=pai)
+            return None
+        caminho = filedialog.asksaveasfilename(parent=pai, title="Salvar pagamentos", defaultextension=".xlsx",
+                                               filetypes=[("Excel", "*.xlsx"), ("CSV", "*.csv")],
+                                               initialfile=f"Pagamentos_Freelancers_{datetime.now():%d-%m-%Y}.xlsx")
+        if not caminho:
+            return None
+        linhas = []
+        for i in itens:
+            c = i['Calculo'] or {}
+            linhas.append({'Data': fmt_data_br(i['Data']), 'Dia': DIAS_CURTOS[i['Data'].weekday()] if i['Data'] else '',
+                           'Freelancer': i['Nome'], 'Posição': i['Posicao'],
+                           'Entrada': i['EntradaReal'] or i['EntradaEscala'], 'Saída': i['SaidaReal'] or i['SaidaEscala'],
+                           'Horário corrigido': 'sim' if i['Corrigido'] else '',
+                           'Diária': nome_tipo_dia(c).replace(' (seg a sáb)', '') if c else '',
+                           'Feriado': i.get('Feriado') or '',
+                           'Horas': float(c.get('Horas', 0) or 0), 'Horas extras': float(c.get('HorasExtras', 0) or 0),
+                           'Valor diária (R$)': float(c.get('ValorDiaria', 0) or 0), 'Extras (R$)': float(c.get('ValorExtras', 0) or 0),
+                           'Ajuste (R$)': float(i['Ajuste'] or 0), 'Total (R$)': float(i['Total'] or 0),
+                           'Situação': 'Pago' if i['Pago'] else 'Pendente',
+                           'Pago em': fmt_data_br(i['DataPagamento']) if i['Pago'] else '',
+                           'Forma': i['FormaPagamento'] or '', 'Observação': i['Observacao'] or ''})
+        try:
+            if caminho.lower().endswith('.csv'):
+                raise ImportError
+            import pandas as pd
+            pd.DataFrame(linhas).to_excel(caminho, index=False, sheet_name='Pagamentos')
+        except ImportError:
+            import csv
+            if not caminho.lower().endswith('.csv'):
+                caminho = os.path.splitext(caminho)[0] + '.csv'
+            with open(caminho, 'w', newline='', encoding='utf-8-sig') as f:
+                w = csv.DictWriter(f, fieldnames=list(linhas[0]), delimiter=';')
+                w.writeheader()
+                w.writerows(linhas)
+        except Exception as e:
+            logger.error(f"Erro ao exportar pagamentos: {e}", exc_info=True)
+            messagebox.showerror("Erro", f"Não foi possível salvar.\n{e}\n\nSe o arquivo estiver aberto no Excel, feche-o.", parent=pai)
+            return None
+        self.status(f"Pagamentos salvos em: {caminho}")
+        return caminho
 
 if __name__ == "__main__":
     root = tk.Tk()
