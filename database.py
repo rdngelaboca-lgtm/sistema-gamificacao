@@ -7516,6 +7516,269 @@ def gerar_sugestao_por_periodo(contagem_id_inicio, contagem_id_fim):
         if conn:
             conn.close()
 
+# ==============================================================================
+# == [MELHORIA SUGESTÃO] NOVO CÁLCULO DA SUGESTÃO DE COMPRAS ==================
+# ==============================================================================
+# Regras (todas explicadas na tela em "🧮 Como calculei"):
+#  1. Cada produto usa a SUA última contagem até o Ponto B. Contagem parcial não zera
+#     quem não foi contado: vale a contagem anterior daquele produto.
+#  2. Contagens do MESMO DIA são somadas (ex: "freezer" + "estoque seco" no mesmo dia).
+#  3. Consumo = estoque na contagem inicial + compras entre as contagens - estoque na
+#     contagem final, dividido pelos dias entre as duas contagens DO PRODUTO.
+#     Ponto A automático = contagem do produto mais perto de N dias antes (padrão 90).
+#  4. Produto com 1 contagem só: consumo aproximado pelas compras dos últimos N dias (≈).
+#  5. Consumo negativo (saiu menos do que entrou + sobrou) NÃO vira zero escondido:
+#     o produto é marcado "⚠️ Conferir" (contagem errada, nota não importada ou vínculo).
+#  6. Estoque de hoje = última contagem + compras depois dela - consumo estimado dos dias
+#     que passaram. Compras com data no dia da contagem já estão DENTRO da contagem.
+#  7. Fornecedores: o da ÚLTIMA compra e o MAIS BARATO dos últimos 12 meses (por unidade
+#     do estoque), com o Qtd/Cx do vínculo para pedir em caixas.
+SUGESTAO_JANELA_PADRAO = 90       # dias de consumo analisados no modo automático
+SUGESTAO_DIAS_MINIMOS = 7         # intervalo mínimo entre 2 contagens para medir consumo
+
+
+def calcular_sugestao_compra(contagem_id_fim, contagem_id_inicio=None, janela_dias=SUGESTAO_JANELA_PADRAO, hoje=None):
+    """
+    [MELHORIA SUGESTÃO] Calcula, para TODOS os produtos, o estoque de hoje, o consumo
+    por dia e os fornecedores (último e mais barato). Não decide quanto comprar: isso é
+    feito na tela, porque depende dos dias a cobrir e do prazo de entrega.
+      contagem_id_inicio: None = automático (últimos `janela_dias` dias)
+                          -1   = todo o histórico de contagens
+                          -2   = desde a PRIMEIRA COMPRA (estoque zero antes da 1ª nota do produto;
+                                 se houver contagem ANTES da 1ª nota, começa por ela)
+                          ID   = a partir daquela contagem (Ponto A fixo)
+    Devolve {'itens': [...], 'DataB', 'DataReferencia', 'Modo', 'JanelaDias'}.
+    Levanta Exception com mensagem clara se o Ponto B não existir.
+    """
+    hoje = _como_data(hoje) or date.today()
+    janela_dias = max(int(janela_dias or SUGESTAO_JANELA_PADRAO), SUGESTAO_DIAS_MINIMOS)
+    conn = get_db_connection()
+    if not conn:
+        raise Exception("Falha de conexão com o banco de dados.")
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT ContagemID, DataContagem FROM ContagensEstoque")
+        datas_contagens = {cid: _como_data(dt) for cid, dt in cursor.fetchall()}
+        if contagem_id_fim not in datas_contagens or not datas_contagens[contagem_id_fim]:
+            raise Exception(f"Contagem Final (Ponto B) ID {contagem_id_fim} não encontrada.")
+        data_b = datas_contagens[contagem_id_fim]
+        modo = ('auto' if contagem_id_inicio is None else 'historico' if contagem_id_inicio == -1
+                else 'primeira_compra' if contagem_id_inicio == -2 else 'fixo')
+        data_a = None
+        if modo == 'fixo':
+            if contagem_id_inicio not in datas_contagens:
+                raise Exception(f"Contagem Inicial (Ponto A) ID {contagem_id_inicio} não encontrada.")
+            if contagem_id_inicio == contagem_id_fim:
+                raise Exception("A Contagem Inicial e a Final não podem ser a mesma. Escolha contagens diferentes "
+                                "ou use o modo automático.")
+            data_a = datas_contagens[contagem_id_inicio]
+            if data_a > data_b:
+                raise Exception("A Contagem Inicial (Ponto A) precisa ser ANTERIOR à Contagem Final (Ponto B).")
+        # Se o Ponto B é a contagem mais recente, a posição é projetada para HOJE
+        # (entram as notas importadas depois da contagem). Se é uma contagem antiga,
+        # a análise fica na data dela (para comparar com o passado).
+        ultima_geral = max((d for d in datas_contagens.values() if d), default=data_b)
+        data_ref = max(hoje, data_b) if data_b >= ultima_geral else data_b
+
+        cursor.execute("SELECT ProdutoID, NomeProduto, UnidadeMedida, EstoqueMinimo, Categoria FROM ProdutosEstoque")
+        produtos = cursor.fetchall()
+
+        # Contagens por produto (somando as do mesmo dia), só até a data do Ponto B
+        cursor.execute("SELECT ContagemID, ProdutoID, QuantidadeContada FROM ItensContagemEstoque WHERE ProdutoID IS NOT NULL")
+        contagens = {}   # pid -> {data: [qtd_total, nº de contagens]}
+        for cid, pid, qtd in cursor.fetchall():
+            dt = datas_contagens.get(cid)
+            if not dt or dt > data_b:
+                continue
+            dia = contagens.setdefault(pid, {}).setdefault(dt, [Decimal('0'), set()])
+            dia[0] += _dec(qtd)
+            dia[1].add(cid)
+
+        # Compras reais (quantidade > 0) com fornecedor e fator do vínculo
+        cursor.execute("""
+            SELECT PF.ProdutoID, NF.DataEmissao, INI.ItemNotaID, INI.Quantidade, INI.PrecoCustoUnitario,
+                   PF.FatorConversao, F.FornecedorID, F.NomeFantasia, F.CNPJ, PF.DescricaoXML
+            FROM ItensNotaFiscalEntrada INI
+            JOIN NotasFiscaisEntrada NF ON INI.NotaID = NF.NotaID
+            JOIN ProdutosFornecedor PF ON INI.ProdutoFornecedorID = PF.ProdutoFornecedorID
+            LEFT JOIN Fornecedores F ON NF.FornecedorID = F.FornecedorID
+            WHERE INI.Quantidade > 0
+        """)
+        compras = {}     # pid -> [(data, item_id, qtd, custo, fator, forn_id, forn_nome, desc)]
+        for pid, dt, item_id, qtd, custo, fator, forn_id, forn_nome, cnpj, desc in cursor.fetchall():
+            dt = _como_data(dt)
+            if not dt or pid is None or (cnpj or '').strip() == CNPJ_FORNECEDOR_INTERNO:
+                continue
+            f = _dec(fator) if fator is not None and _dec(fator) > 0 else Decimal('1')
+            compras.setdefault(pid, []).append((dt, item_id or 0, _dec(qtd), _dec(custo), f, forn_id,
+                                                forn_nome or 'Fornecedor sem nome', desc or ''))
+        for lista in compras.values():
+            lista.sort(key=lambda c: (c[0], c[1]))
+
+        def soma_compras(lista, depois_de, ate):
+            """Compras com data > depois_de e <= ate (None = sem limite)."""
+            return sum((c[2] for c in lista if (depois_de is None or c[0] > depois_de) and c[0] <= ate), Decimal('0'))
+
+        def info_fornecedor(c):
+            return {'FornecedorID': c[5], 'Fornecedor': c[6], 'Fator': c[4], 'CustoUnid': c[3],
+                    'Descricao': c[7], 'Data': c[0]}
+
+        itens = []
+        for pid, nome, un, minimo, categoria in produtos:
+            lista_c = compras.get(pid, [])
+            dias_contados = sorted(contagens.get(pid, {}).items())          # [(data, [qtd, {ids}])]
+            ate_ref = [c for c in lista_c if c[0] <= data_ref]
+            pagas = [c for c in ate_ref if c[3] > 0]          # bonificação (custo 0) não serve de preço
+            ultimo = info_fornecedor((pagas or ate_ref)[-1]) if ate_ref else None
+            ano = [c for c in ate_ref if c[0] > data_ref - timedelta(days=365) and c[3] > 0]
+            barato = info_fornecedor(min(ano, key=lambda c: (c[3], -c[0].toordinal()))) if ano else None
+            compras_janela = soma_compras(lista_c, data_ref - timedelta(days=janela_dias), data_ref)
+            item = {
+                'ProdutoID': pid, 'NomeProduto': nome or f'Produto {pid}', 'Unidade': (un or 'UN').strip() or 'UN',
+                'Categoria': categoria or 'Geral', 'EstoqueMinimo': _dec(minimo),
+                'Contado': bool(dias_contados), 'DataUltimaContagem': None, 'QtdUltimaContagem': None,
+                'ContagensNoDia': 0, 'DataInicio': None, 'QtdInicio': None, 'ComprasPeriodo': Decimal('0'),
+                'DiasPeriodo': 0, 'Consumo': None, 'UsoMedioDiario': Decimal('0'), 'MetodoConsumo': 'sem_dados',
+                'ConsumoNegativo': False, 'ComprasDepois': Decimal('0'), 'DiasDesdeContagem': 0,
+                'InicioPrimeiraCompra': False,
+                'EstoqueHoje': None, 'ContadoNoPontoB': False, 'ComprasJanela': compras_janela,
+                'UltimaCompra': ate_ref[-1][0] if ate_ref else None,
+                'FornecedorUltimo': ultimo, 'FornecedorBarato': barato,
+            }
+            if dias_contados:
+                d_l, (q_l, ids_l) = dias_contados[-1]
+                item.update({'DataUltimaContagem': d_l, 'QtdUltimaContagem': q_l, 'ContagensNoDia': len(ids_l),
+                             'ContadoNoPontoB': d_l == data_b})
+                candidatos = [(d, v[0]) for d, v in dias_contados if d <= d_l - timedelta(days=SUGESTAO_DIAS_MINIMOS)]
+                inicio = None
+                primeira = lista_c[0][0] if lista_c else None
+                if modo == 'primeira_compra' and primeira and primeira <= d_l:
+                    # Estoque ZERO no dia anterior à 1ª nota. Se o produto foi contado ANTES
+                    # dessa nota, a contagem é mais confiável que o "zero" e vira o início.
+                    contados_antes = [c for c in candidatos if c[0] < primeira]
+                    if contados_antes:
+                        inicio = contados_antes[0]
+                    elif (d_l - primeira).days >= 0:
+                        inicio = (primeira - timedelta(days=1), Decimal('0'))
+                        item['InicioPrimeiraCompra'] = True
+                elif candidatos:
+                    if modo == 'historico':
+                        inicio = candidatos[0]
+                    elif modo == 'fixo':
+                        antes = [c for c in candidatos if c[0] <= data_a]
+                        inicio = antes[-1] if antes else candidatos[0]
+                    else:
+                        # automático: a contagem do produto mais PERTO de N dias atrás
+                        alvo = d_l - timedelta(days=janela_dias)
+                        inicio = min(candidatos, key=lambda c: (abs((c[0] - alvo).days), c[0]))
+                if inicio:
+                    d_s, q_s = inicio
+                    entrou = soma_compras(lista_c, d_s, d_l)
+                    consumo = q_s + entrou - q_l
+                    dias = (d_l - d_s).days
+                    item.update({'DataInicio': d_s, 'QtdInicio': q_s, 'ComprasPeriodo': entrou, 'DiasPeriodo': dias,
+                                 'Consumo': consumo, 'MetodoConsumo': 'contagens'})
+                    if consumo < 0:
+                        item['ConsumoNegativo'] = True
+                    else:
+                        item['UsoMedioDiario'] = consumo / dias
+                elif compras_janela > 0:
+                    # Só uma contagem: aproxima o consumo pelo que foi comprado na janela
+                    item.update({'MetodoConsumo': 'compras', 'DiasPeriodo': janela_dias,
+                                 'ComprasPeriodo': compras_janela, 'Consumo': compras_janela,
+                                 'UsoMedioDiario': compras_janela / janela_dias})
+                depois = soma_compras(lista_c, d_l, data_ref)
+                dias_desde = (data_ref - d_l).days
+                estimado = q_l + depois - item['UsoMedioDiario'] * dias_desde
+                item.update({'ComprasDepois': depois, 'DiasDesdeContagem': dias_desde,
+                             'EstoqueHoje': max(estimado, Decimal('0'))})
+            itens.append(item)
+        return {'itens': itens, 'DataB': data_b, 'DataReferencia': data_ref, 'Modo': modo,
+                'DataA': data_a, 'JanelaDias': janela_dias}
+    except Exception as e:
+        logger.error(f"Erro ao calcular a sugestão de compra: {e}", exc_info=True)
+        raise
+    finally:
+        conn.close()
+
+
+def embalagens_por_produto():
+    """
+    [MELHORIA CONTAGEM] Embalagens (caixas) conhecidas de cada produto, tiradas do Qtd/Cx
+    dos vínculos com fornecedores: {ProdutoID: [{'Fator', 'Fornecedores', 'Compras', 'Ultima'}]}
+    Só fatores maiores que 1. A mais usada recentemente vem primeiro.
+    """
+    conn = get_db_connection()
+    if not conn:
+        return {}
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT PF.ProdutoID, PF.FatorConversao, F.NomeFantasia, F.CNPJ, INI.ItemNotaID, NF.DataEmissao
+            FROM ProdutosFornecedor PF
+            LEFT JOIN Fornecedores F ON PF.FornecedorID = F.FornecedorID
+            LEFT JOIN ItensNotaFiscalEntrada INI ON INI.ProdutoFornecedorID = PF.ProdutoFornecedorID AND INI.Quantidade > 0
+            LEFT JOIN NotasFiscaisEntrada NF ON INI.NotaID = NF.NotaID
+            WHERE PF.ProdutoID IS NOT NULL AND PF.FatorConversao > 1
+        """)
+        grupos = {}
+        for pid, fator, forn, cnpj, item_id, dt in cursor.fetchall():
+            if (cnpj or '').strip() == CNPJ_FORNECEDOR_INTERNO:
+                continue
+            f = _dec(fator).normalize()
+            g = grupos.setdefault((pid, f), {'Fator': f, 'Fornecedores': set(), 'Compras': 0, 'Ultima': date.min})
+            if forn:
+                g['Fornecedores'].add(forn)
+            if item_id is not None:
+                g['Compras'] += 1
+                g['Ultima'] = max(g['Ultima'], _como_data(dt) or date.min)
+        resultado = {}
+        for (pid, _), g in grupos.items():
+            g['Fornecedores'] = sorted(g['Fornecedores'])
+            resultado.setdefault(pid, []).append(g)
+        for lista in resultado.values():
+            lista.sort(key=lambda g: (g['Ultima'], g['Compras']), reverse=True)
+        return resultado
+    except Exception as e:
+        logger.error(f"Erro ao listar embalagens por produto: {e}", exc_info=True)
+        return {}
+    finally:
+        conn.close()
+
+
+def ultimas_contagens_por_produto():
+    """
+    [MELHORIA CONTAGEM] Última quantidade contada de cada produto (somando as contagens do
+    mesmo dia): {ProdutoID: (quantidade, data)}. Usada para avisar "contou em caixa?".
+    """
+    conn = get_db_connection()
+    if not conn:
+        return {}
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT C.DataContagem, I.ProdutoID, I.QuantidadeContada
+            FROM ItensContagemEstoque I JOIN ContagensEstoque C ON I.ContagemID = C.ContagemID
+            WHERE I.ProdutoID IS NOT NULL
+        """)
+        por_dia = {}
+        for dt, pid, qtd in cursor.fetchall():
+            d = _como_data(dt)
+            if d:
+                chave = (pid, d)
+                por_dia[chave] = por_dia.get(chave, Decimal('0')) + _dec(qtd)
+        resultado = {}
+        for (pid, d), qtd in por_dia.items():
+            if pid not in resultado or d > resultado[pid][1]:
+                resultado[pid] = (qtd, d)
+        return resultado
+    except Exception as e:
+        logger.error(f"Erro ao buscar últimas contagens: {e}", exc_info=True)
+        return {}
+    finally:
+        conn.close()
+
+
 def buscar_produto_mestre_por_nome(nome_produto):
     
     """Busca um produto mestre pelo seu nome exato e retorna o ID."""

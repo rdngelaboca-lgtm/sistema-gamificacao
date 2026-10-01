@@ -135,7 +135,13 @@ def chave_ordenacao(texto):
     coluna (ex: '1.5 meses' e 'Sem Giro'), o que dava TypeError e a ordenação não funcionava.
     Agora números vêm primeiro (em ordem numérica) e textos depois (em ordem alfabética).
     """
-    limpo = str(texto).replace('R$', '').replace('meses', '').replace('>', '').strip()
+    m = re.match(r'^\s*(\d{2})/(\d{2})/(\d{4})', str(texto))
+    if m:  # [MELHORIA SUGESTÃO] datas dd/mm/aaaa em ordem de calendário
+        try:
+            return (0, float(date(int(m.group(3)), int(m.group(2)), int(m.group(1))).toordinal()), '')
+        except ValueError:
+            pass
+    limpo = str(texto).replace('R$', '').replace('meses', '').replace('>', '').replace('📏', '').replace('≈', '').strip()
     if ',' in limpo:  # formato brasileiro: 1.234,56
         limpo = limpo.replace('.', '').replace(',', '.')
     try:
@@ -220,6 +226,212 @@ def qtd_para_pedido(sugestao, unidade):
     if str(unidade or '').strip().upper() in UNIDADES_FRACIONADAS:
         return s.quantize(Decimal('0.001'))
     return Decimal(math.ceil(s))
+
+
+def calcular_qtd_contagem(texto, fator=1, unidade='UN'):
+    """
+    [MELHORIA CONTAGEM] Lê a quantidade digitada na contagem. Aceita:
+      '36'          -> 36 (na unidade escolhida: se for 'CX de 12', vira 36 x 12)
+      '3+5'         -> com 'CX de 12' escolhida: 3 caixas + 5 soltas = 41
+      '3x12' / '3*12' / '3x12+5' -> conta pronta, sempre em UNIDADES (41)
+    Devolve (total_na_unidade_do_estoque, detalhe_em_texto_ou_None).
+    Levanta ValueError com mensagem clara.
+    """
+    bruto = str(texto or '').strip().lower().replace('×', 'x').replace('*', 'x').replace(' ', '')
+    if not bruto:
+        raise ValueError("Digite a quantidade.")
+    fator = Decimal(str(fator or 1))
+    total, partes, primeira = Decimal('0'), [], True
+    for termo in bruto.split('+'):
+        if not termo:
+            raise ValueError("Quantidade incompleta. Exemplos: 36   ou   3+5   ou   3x12+5")
+        if 'x' in termo:
+            fatores = termo.split('x')
+            if len(fatores) != 2 or not all(fatores):
+                raise ValueError(f"Não entendi '{termo}'. Use, por exemplo, 3x12 (3 caixas de 12).")
+            a = para_decimal(fatores[0], "Quantidade")
+            b = para_decimal(fatores[1], "Quantidade")
+            total += a * b
+            partes.append(f"{fmt_qtd(a)}×{fmt_qtd(b)}")
+        else:
+            n = para_decimal(termo, "Quantidade")
+            if primeira and fator > 1:
+                total += n * fator
+                partes.append(f"{fmt_qtd(n)} cx de {fmt_qtd(fator)}")
+            else:
+                total += n
+                partes.append(f"{fmt_qtd(n)} {unidade} soltas" if fator > 1 else fmt_qtd(n))
+        primeira = False
+    detalhe = " + ".join(partes)
+    simples = re.fullmatch(r'[\d.,]+', bruto) and fator <= 1
+    return total, (None if simples else detalhe)
+
+
+def sugerir_unidade_contagem(total, fator_usado, fatores, anterior, digitado_simples=True):
+    """
+    [MELHORIA CONTAGEM] Detecta o erro "contei em caixa e lancei em unidade" (ou o contrário)
+    comparando com a ÚLTIMA contagem do produto. Só sugere quando a quantidade lançada está
+    MUITO longe da anterior (mais de 3x) e a alternativa fica perto (até 2x).
+    Devolve (quantidade_sugerida, fator_da_sugestao) ou None.
+    """
+    try:
+        anterior = Decimal(str(anterior)) if anterior is not None else None
+    except (InvalidOperation, ValueError):
+        return None
+    if not anterior or anterior <= 0 or total <= 0 or not digitado_simples:
+        return None
+
+    def distancia(x):
+        return abs(math.log(float(x) / float(anterior)))
+
+    if distancia(total) <= math.log(3):
+        return None
+    fator_usado = Decimal(str(fator_usado or 1))
+    if fator_usado <= 1:
+        candidatos = [(total * Decimal(str(f)), Decimal(str(f))) for f in fatores if Decimal(str(f)) > 1]
+    else:
+        candidatos = [(total / fator_usado, Decimal('1'))]
+    if not candidatos:
+        return None
+    melhor = min(candidatos, key=lambda c: distancia(c[0]))
+    return melhor if distancia(melhor[0]) <= math.log(2) else None
+
+
+def _fmt_d(d):
+    return d.strftime('%d/%m/%Y') if d else '--'
+
+
+def calcular_linha_sugestao(item, dias_cobertura, prazo_dias, data_ref, preferir='ultimo'):
+    """
+    [MELHORIA SUGESTÃO] Decide quanto comprar de UM produto e explica a conta.
+      Sugestão = consumo/dia x (prazo de entrega + dias a cobrir) + estoque mínimo - estoque hoje
+    (o prazo entra porque o estoque continua saindo enquanto o pedido não chega).
+    A quantidade é arredondada para CAIXAS do fornecedor escolhido (Qtd/Cx do vínculo).
+    preferir: 'ultimo' = fornecedor da última compra; 'barato' = mais barato em 12 meses.
+    Devolve um dicionário com os números, a situação (cor) e as linhas de explicação.
+    """
+    D0 = Decimal('0')
+    cobertura, prazo = Decimal(int(dias_cobertura)), Decimal(int(prazo_dias))
+    un = item['Unidade']
+    minimo = item['EstoqueMinimo'] or D0
+    umd = item['UsoMedioDiario'] or D0
+    estoque = item['EstoqueHoje']
+    forn = (item.get('FornecedorBarato') if preferir == 'barato' else None) or item.get('FornecedorUltimo')
+    fator = forn['Fator'] if forn and forn.get('Fator') and forn['Fator'] > 0 else Decimal('1')
+    nome = item['NomeProduto']
+    exp = [f"{nome} ({un})"]
+    comprado_recente = (item.get('ComprasJanela') or D0) > 0
+    resultado = {'item': item, 'estoque': estoque, 'umd': umd, 'sugestao': D0, 'qtd_pedido': D0, 'embalagens': D0,
+                 'fator': fator, 'texto_pedido': '', 'fornecedor': forn, 'custo_total': D0, 'acaba_em': None,
+                 'dias_restantes': None, 'comprado_recente': comprado_recente, 'parado': False, 'explicacao': exp}
+
+    if not item['Contado']:
+        resultado.update(situacao="❔ NUNCA CONTADO", tag='nunca')
+        exp.append(f"❔ Este produto NUNCA foi contado até {_fmt_d(item.get('DataUltimaContagem') or data_ref)}: "
+                   "sem contagem não dá para saber o estoque nem o consumo.")
+        if comprado_recente:
+            exp.append(f"   Foram comprados {fmt_qtd(item['ComprasJanela'])} {un} nos últimos dias analisados. "
+                       "Inclua este produto na próxima contagem.")
+        resultado['colunas'] = (nome, un, "nunca", "—", "—", "—", "—", "", forn['Fornecedor'] if forn else "", "❔ NUNCA CONTADO")
+        return resultado
+
+    # ---- Estoque de hoje ----
+    marca = "" if item['ContadoNoPontoB'] else "📏 "
+    q_l, d_l = item['QtdUltimaContagem'], item['DataUltimaContagem']
+    texto_est = f"📦 Estoque hoje ≈ {fmt_qtd(estoque)} {un}: contado {fmt_qtd(q_l)} em {_fmt_d(d_l)}"
+    if item['ContagensNoDia'] > 1:
+        texto_est += f" (soma de {item['ContagensNoDia']} contagens do mesmo dia)"
+    if item['DiasDesdeContagem'] > 0:
+        texto_est += (f" + {fmt_qtd(item['ComprasDepois'])} comprado depois - {fmt_qtd(umd * item['DiasDesdeContagem'])} "
+                      f"de consumo em {item['DiasDesdeContagem']} dia(s)")
+    if not item['ContadoNoPontoB']:
+        texto_est += "   [📏 não foi contado no Ponto B]"
+    exp.append(texto_est)
+
+    # ---- Consumo ----
+    metodo = item['MetodoConsumo']
+    if metodo == 'contagens' and item.get('InicioPrimeiraCompra'):
+        exp.append(f"📉 Consumo: 0 (estoque considerado ZERO antes da 1ª compra, em {_fmt_d(item['DataInicio'] + timedelta(days=1))}) "
+                   f"+ {fmt_qtd(item['ComprasPeriodo'])} comprado - {fmt_qtd(q_l)} contado em {_fmt_d(d_l)} = "
+                   f"{fmt_qtd(item['Consumo'])} {un} em {item['DiasPeriodo']} dias = {fmt_qtd(umd)} {un}/dia "
+                   f"({fmt_qtd(umd * 30)} {un}/mês)")
+    elif metodo == 'contagens':
+        exp.append(f"📉 Consumo: {fmt_qtd(item['QtdInicio'])} contado em {_fmt_d(item['DataInicio'])} + {fmt_qtd(item['ComprasPeriodo'])} "
+                   f"comprado - {fmt_qtd(q_l)} contado em {_fmt_d(d_l)} = {fmt_qtd(item['Consumo'])} {un} em "
+                   f"{item['DiasPeriodo']} dias = {fmt_qtd(umd)} {un}/dia ({fmt_qtd(umd * 30)} {un}/mês)")
+    elif metodo == 'compras':
+        exp.append(f"📉 Consumo ≈ {fmt_qtd(item['ComprasPeriodo'])} {un} comprados nos últimos {item['DiasPeriodo']} dias = "
+                   f"{fmt_qtd(umd)} {un}/dia. Aproximado: o produto só tem 1 contagem (com 2 contagens a conta fica exata).")
+    else:
+        exp.append("📉 Consumo: sem dados (só 1 contagem e nenhuma compra recente) - considerado zero.")
+
+    if item['ConsumoNegativo']:
+        exp.append(f"⚠️ A CONTA NÃO FECHA: {fmt_qtd(item['QtdInicio'])} + {fmt_qtd(item['ComprasPeriodo'])} comprado = "
+                   f"{fmt_qtd(item['QtdInicio'] + item['ComprasPeriodo'])}, mas foram contados {fmt_qtd(q_l)} (sobrou mais do que tinha).")
+        if item.get('InicioPrimeiraCompra'):
+            exp.append("   No modo 'desde a primeira compra' isto também acontece quando JÁ havia estoque antes da "
+                       "1ª nota importada (o sistema supõe zero). Nesse caso, use o modo automático.")
+        exp.append("   Causas comuns: erro na contagem, nota fiscal não importada, vínculo/Qtd-Cx errado ou "
+                   "o mesmo produto cadastrado 2 vezes. Confira antes de comprar.")
+
+    # ---- Sugestão ----
+    necessidade = umd * (prazo + cobertura) + minimo - estoque
+    sugestao = max(necessidade, D0)
+    if fator > 1 and sugestao > 0:
+        embalagens = Decimal(math.ceil(sugestao / fator))
+        qtd = embalagens * fator
+        texto_pedido = f"{fmt_qtd(embalagens)} cx de {fmt_qtd(fator)} ({fmt_qtd(qtd)} {un})"
+    else:
+        qtd = qtd_para_pedido(sugestao, un)
+        embalagens = qtd
+        texto_pedido = f"{fmt_qtd(qtd)} {un}" if qtd > 0 else ""
+    custo_total = qtd * forn['CustoUnid'] if forn and qtd > 0 else D0
+    exp.append(f"🛒 Sugestão: {fmt_qtd(umd)}/dia × ({int(prazo)} de prazo + {int(cobertura)} a cobrir) + mínimo {fmt_qtd(minimo)} "
+               f"- estoque {fmt_qtd(estoque)} = {fmt_qtd(necessidade)} → "
+               + (f"pedir {texto_pedido}" if qtd > 0 else "não precisa comprar"))
+    if forn:
+        qual = "mais barato em 12 meses" if preferir == 'barato' and item.get('FornecedorBarato') else "última compra"
+        exp.append(f"🏪 {forn['Fornecedor']} ({qual}, {_fmt_d(forn['Data'])}): {fmt_reais(forn['CustoUnid'])}/{un}"
+                   + (f" · caixa de {fmt_qtd(fator)}" if fator > 1 else "")
+                   + (f" · total ≈ {fmt_reais(custo_total)}" if qtd > 0 else ""))
+        barato = item.get('FornecedorBarato')
+        if preferir != 'barato' and barato and barato['CustoUnid'] < forn['CustoUnid'] and barato['FornecedorID'] != forn['FornecedorID']:
+            exp.append(f"   💡 Mais barato em 12 meses: {barato['Fornecedor']} a {fmt_reais(barato['CustoUnid'])}/{un} "
+                       f"({_fmt_d(barato['Data'])}).")
+
+    # ---- Duração e situação ----
+    dias_restantes = (estoque / umd) if umd > 0 else None
+    acaba_em = (data_ref + timedelta(days=int(dias_restantes))) if dias_restantes is not None and dias_restantes <= 3650 else None
+    if item['ConsumoNegativo']:
+        situacao, tag = "⚠️ CONFERIR", 'conferir'
+    elif umd <= 0 and sugestao <= 0:
+        situacao, tag = "⚪ SEM GIRO", 'sem_giro'
+    elif (minimo > 0 and estoque <= minimo) or (dias_restantes is not None and dias_restantes < max(7, int(prazo))):
+        situacao, tag = "🔴 CRÍTICO", 'critico'
+    elif sugestao > 0:
+        situacao, tag = "🟡 COMPRAR", 'comprar'
+    else:
+        situacao, tag = "🟢 OK", 'ok'
+    if dias_restantes is not None and dias_restantes > 365:
+        exp.append("⏳ Com o consumo atual, o estoque dura mais de 1 ano.")
+    elif dias_restantes is not None:
+        exp.append(f"⏳ Dura ≈ {fmt_qtd(dias_restantes.quantize(Decimal('0.1')))} dias → acaba por volta de {_fmt_d(acaba_em)}"
+                   + (" (ANTES de um pedido feito hoje chegar!)" if dias_restantes < prazo else ""))
+    if estoque <= 0 and umd > 0:
+        texto_acaba = "Já acabou"
+    elif dias_restantes is not None:
+        texto_acaba = "> 1 ano" if dias_restantes > 365 else _fmt_d(acaba_em)
+    else:
+        texto_acaba = "—"
+    parado = tag == 'sem_giro' and estoque <= 0 and not comprado_recente
+    consumo_txt = ("≈ " if metodo == 'compras' else "") + fmt_qtd((umd * 30).quantize(Decimal('0.001')))
+    resultado.update({
+        'sugestao': sugestao, 'qtd_pedido': qtd, 'embalagens': embalagens, 'texto_pedido': texto_pedido,
+        'custo_total': custo_total, 'acaba_em': acaba_em, 'dias_restantes': dias_restantes,
+        'situacao': situacao, 'tag': tag, 'parado': parado,
+        'colunas': (nome, un, _fmt_d(d_l), marca + fmt_qtd(estoque.quantize(Decimal('0.001'))), consumo_txt, texto_acaba,
+                    fmt_qtd(sugestao.quantize(Decimal('0.001'))), texto_pedido, forn['Fornecedor'] if forn else "", situacao)})
+    return resultado
 
 
 def linhas_do_banco_para_dicts(linhas):
@@ -461,6 +673,7 @@ class AppGestaoEstoque:
             '1.': getattr(self, 'entry_filtro_mestre', None),
             '3.': getattr(self, 'entry_filtro_importacao', None),
             '4.': getattr(self, 'entry_filtro_contagem', None),
+            '5.': getattr(self, 'entry_busca_sugestao', None),
             '8.': self._campo_busca_consultas() if hasattr(self, 'nb_consultas') else None,
         }
         campo = campos.get(self.aba_atual()[:2])
@@ -500,7 +713,8 @@ class AppGestaoEstoque:
 
     def salvar_preferencias(self):
         try:
-            dados = {'geometria': self.root.geometry(), 'aba': self.notebook.index(self.notebook.select())}
+            dados = self.ler_preferencias()   # [MELHORIA SUGESTÃO] mantém as outras preferências
+            dados.update({'geometria': self.root.geometry(), 'aba': self.notebook.index(self.notebook.select())})
             with open(ARQUIVO_PREFERENCIAS, 'w', encoding='utf-8') as f:
                 json.dump(dados, f)
         except Exception as e:  # nunca impede o programa de fechar
@@ -1756,6 +1970,12 @@ class AppGestaoEstoque:
 
             # Configurações da Aba 4
             self.lista_mestre_contagem_nomes = sorted(list(self.mapa_produtos_mestre_contagem.keys()))
+            # [MELHORIA CONTAGEM] caixas conhecidas de cada produto (Qtd/Cx dos vínculos)
+            try:
+                self.embalagens_contagem = getattr(database, 'embalagens_por_produto', lambda: {})() or {}
+            except Exception as e:
+                logger.warning(f"Não foi possível carregar as embalagens para a contagem: {e}")
+                self.embalagens_contagem = {}
             if hasattr(self, 'combo_contagem_produtos'):
                 self.combo_contagem_produtos['values'] = self.lista_mestre_contagem_nomes
         except Exception as e:
@@ -2796,21 +3016,32 @@ class AppGestaoEstoque:
         self.entry_contagem_qtd.bind("<Return>", lambda e: self.adicionar_item_contagem())
         self.entry_contagem_qtd.bind("<KP_Enter>", lambda e: self.adicionar_item_contagem())
         self.entry_contagem_qtd.bind("<Escape>", lambda e: self.entry_filtro_contagem.focus_set())
-        self.lbl_contagem_unidade = ttk.Label(frame_lancamento, text="UN", font=("Arial", 10, "italic"))
-        self.lbl_contagem_unidade.grid(row=3, column=2, sticky="w", padx=5)
+        # [MELHORIA CONTAGEM] "Contado em": unidade do estoque OU caixa do fornecedor.
+        # Ex: escolha "CX de 12" e digite 3 -> lança 36 UN.  "3+5" = 3 caixas + 5 soltas.
+        self.lbl_contagem_unidade = ttk.Label(frame_lancamento, text="UN", font=("Arial", 10, "italic"))  # (compatibilidade)
+        ttk.Label(frame_lancamento, text="Contado em:").grid(row=2, column=2, sticky="w", pady=(5, 0))
+        self.combo_contagem_embalagem = ttk.Combobox(frame_lancamento, state="readonly", width=30)
+        self.combo_contagem_embalagem.grid(row=3, column=2, sticky="w", padx=5)
+        self.combo_contagem_embalagem.bind("<<ComboboxSelected>>", self.ao_escolher_embalagem_contagem)
         btn_adicionar_item = ttk.Button(frame_lancamento, text="Adicionar à Lista", command=self.adicionar_item_contagem)
         btn_adicionar_item.grid(row=3, column=3, sticky="w", padx=10)
+        self.lbl_contagem_conversao = ttk.Label(frame_lancamento, text="", foreground="#0056b3")
+        self.lbl_contagem_conversao.grid(row=4, column=0, columnspan=4, sticky="w", pady=(4, 0))
+        self.entry_contagem_qtd.bind("<KeyRelease>", self.atualizar_previa_contagem)
+        self._opcoes_embalagem = {}
+        self._ultimas_contagens = None
         frame_lista_lancar = ttk.LabelFrame(main_frame, text="2. Itens nesta Contagem (0) — duplo clique corrige a quantidade", padding="10")
         self.frame_lista_lancar = frame_lista_lancar
         frame_lista_lancar.grid(row=1, column=0, sticky="nsew", padx=(0, 5), pady=10)
         frame_lista_lancar.rowconfigure(0, weight=1)
         frame_lista_lancar.columnconfigure(0, weight=1)
-        cols_cont = ('Produto Mestre', 'Qtd Contada', 'UN')
+        cols_cont = ('Produto Mestre', 'Qtd Contada', 'UN', 'Como contou')
         self.tree_contagem_atual = criar_tree_zebrada(frame_lista_lancar, columns=cols_cont, show='headings', selectmode='browse')
         self.tree_contagem_atual.bind("<Double-1>", lambda e: self.editar_item_contagem())
         self.tree_contagem_atual.heading('Produto Mestre', text='Produto'); self.tree_contagem_atual.column('Produto Mestre', width=200)
         self.tree_contagem_atual.heading('Qtd Contada', text='Qtd'); self.tree_contagem_atual.column('Qtd Contada', width=60, anchor='e')
         self.tree_contagem_atual.heading('UN', text='UN'); self.tree_contagem_atual.column('UN', width=40, anchor='center')
+        self.tree_contagem_atual.heading('Como contou', text='Como contou'); self.tree_contagem_atual.column('Como contou', width=150)
         self.tree_contagem_atual.grid(row=0, column=0, sticky="nsew")
         btn_remover_item = ttk.Button(frame_lista_lancar, text="Remover Item Selecionado da Lista", command=self.remover_item_contagem)
         btn_remover_item.grid(row=1, column=0, sticky="w", pady=(10, 0))
@@ -2928,6 +3159,111 @@ class AppGestaoEstoque:
             self.lbl_contagem_unidade.config(text=unidade)
         else:
             self.lbl_contagem_unidade.config(text="UN")
+        self._preencher_embalagens_contagem()
+
+    # -------------------------------------------------------------------
+    # [MELHORIA CONTAGEM] CONTAR EM CAIXAS
+    # -------------------------------------------------------------------
+    TEXTO_OUTRA_EMBALAGEM = "➕ Outra embalagem..."
+
+    def _produto_contagem_atual(self):
+        nome = self.combo_contagem_produtos.get()
+        return (nome, self.mapa_produtos_mestre_contagem[nome]) if nome in self.mapa_produtos_mestre_contagem else (None, None)
+
+    def _preencher_embalagens_contagem(self, escolher_fator=None):
+        """Opções do 'Contado em': a unidade do estoque + as caixas dos fornecedores."""
+        if not hasattr(self, 'combo_contagem_embalagem'):
+            return
+        nome, dados = self._produto_contagem_atual()
+        un = (dados or {}).get('un') or 'UN'
+        opcoes = {f"{un} (unidade do estoque)": Decimal('1')}
+        extras = getattr(self, '_embalagens_extras', {})
+        lista = list((getattr(self, 'embalagens_contagem', {}) or {}).get((dados or {}).get('id'), []))
+        lista += [{'Fator': f, 'Fornecedores': ['digitada por você']} for f in extras.get((dados or {}).get('id'), [])]
+        for emb in lista:
+            fator = Decimal(str(emb['Fator']))
+            forn = ", ".join(emb.get('Fornecedores') or [])[:40]
+            texto = f"📦 CX de {fmt_qtd(fator)} {un}" + (f"  ({forn})" if forn else "")
+            if fator > 1 and fator not in opcoes.values():
+                opcoes[texto] = fator
+        if dados:
+            opcoes[self.TEXTO_OUTRA_EMBALAGEM] = None
+        self._opcoes_embalagem = opcoes
+        self.combo_contagem_embalagem['values'] = list(opcoes)
+        if escolher_fator is None and dados:
+            memoria = self.ler_preferencias().get('embalagem_contagem', {})
+            escolher_fator = memoria.get(str(dados['id'])) if isinstance(memoria, dict) else None
+        alvo = next((t for t, f in opcoes.items() if f is not None and escolher_fator is not None
+                     and f == Decimal(str(escolher_fator))), None)
+        self.combo_contagem_embalagem.set(alvo or next(iter(opcoes)))
+        self.atualizar_previa_contagem()
+
+    def _fator_contagem_atual(self):
+        return self._opcoes_embalagem.get(self.combo_contagem_embalagem.get()) or Decimal('1')
+
+    def ao_escolher_embalagem_contagem(self, event=None):
+        if self.combo_contagem_embalagem.get() == self.TEXTO_OUTRA_EMBALAGEM:
+            nome, dados = self._produto_contagem_atual()
+            texto = simpledialog.askstring(
+                "Outra embalagem", f"{nome}\n\nQuantas {dados['un'] if dados else 'UN'} tem em 1 embalagem?\n(ex: 12)",
+                parent=self.root)
+            try:
+                fator = para_decimal(texto, "Embalagem", permitir_zero=False) if texto is not None else None
+            except ValueError as e:
+                messagebox.showerror("Valor inválido", str(e), parent=self.root)
+                fator = None
+            if fator and fator > 1 and dados:
+                self._embalagens_extras = getattr(self, '_embalagens_extras', {})
+                self._embalagens_extras.setdefault(dados['id'], []).append(fator)
+                self._preencher_embalagens_contagem(escolher_fator=fator)
+            else:
+                self._preencher_embalagens_contagem()
+        self.atualizar_previa_contagem()
+        self.entry_contagem_qtd.focus_set()
+
+    def atualizar_previa_contagem(self, event=None):
+        """Mostra, enquanto digita, quanto vai ser lançado na unidade do estoque."""
+        if not hasattr(self, 'lbl_contagem_conversao'):
+            return
+        nome, dados = self._produto_contagem_atual()
+        texto = self.entry_contagem_qtd.get().strip()
+        fator = self._fator_contagem_atual()
+        un = (dados or {}).get('un') or 'UN'
+        if not dados:
+            self.lbl_contagem_conversao.config(text="")
+            return
+        if not texto:
+            dica = (f"Digite o nº de CAIXAS de {fmt_qtd(fator)} (ex: 3) ou caixas + soltas (ex: 3+5)." if fator > 1 else
+                    "Digite a quantidade. Contou em caixa? Escolha a caixa em 'Contado em' ou digite 3x12.")
+            self.lbl_contagem_conversao.config(text=dica, foreground="gray")
+            return
+        try:
+            total, detalhe = calcular_qtd_contagem(texto, fator, un)
+        except ValueError as e:
+            self.lbl_contagem_conversao.config(text=f"⚠️ {e}", foreground="#c62828")
+            return
+        extra = f"  ({detalhe})" if detalhe else ""
+        self.lbl_contagem_conversao.config(text=f"= {fmt_qtd(total)} {un}{extra}", foreground="#0056b3")
+
+    def _lembrar_embalagem_contagem(self, produto_id, fator):
+        try:
+            dados = self.ler_preferencias()
+            memoria = dados.get('embalagem_contagem') if isinstance(dados.get('embalagem_contagem'), dict) else {}
+            memoria[str(produto_id)] = str(fator)
+            dados['embalagem_contagem'] = memoria
+            with open(ARQUIVO_PREFERENCIAS, 'w', encoding='utf-8') as f:
+                json.dump(dados, f)
+        except Exception as e:
+            logger.warning(f"Não foi possível lembrar a embalagem usada na contagem: {e}")
+
+    def _ultima_contagem_do_produto(self, produto_id):
+        if self._ultimas_contagens is None:
+            try:
+                self._ultimas_contagens = getattr(database, 'ultimas_contagens_por_produto', lambda: {})() or {}
+            except Exception as e:
+                logger.warning(f"Não foi possível ler as últimas contagens: {e}")
+                self._ultimas_contagens = {}
+        return self._ultimas_contagens.get(produto_id)
 
     def _item_contagem_por_id(self, produto_id):
         return next((i for i in self.lista_itens_para_salvar_contagem if i['ProdutoID'] == produto_id), None)
@@ -2938,7 +3274,7 @@ class AppGestaoEstoque:
             self.tree_contagem_atual.delete(i)
         for item in self.lista_itens_para_salvar_contagem:
             self.tree_contagem_atual.insert("", "end", iid=str(item['ProdutoID']), values=(
-                item['NomeProduto'], f"{Decimal(str(item['QuantidadeContada'])):.3f}", item['Unidade']))
+                item['NomeProduto'], fmt_qtd(item['QuantidadeContada']), item['Unidade'], item.get('Detalhe') or ''))
         qtd = len(self.lista_itens_para_salvar_contagem)
         try:
             self.frame_lista_lancar.config(text=f"2. Itens nesta Contagem ({qtd}) — duplo clique corrige a quantidade")
@@ -2956,6 +3292,7 @@ class AppGestaoEstoque:
         self.combo_contagem_produtos.set('')
         self.entry_contagem_qtd.delete(0, tk.END)
         self.lbl_contagem_unidade.config(text="UN")
+        self._preencher_embalagens_contagem()
         self.lbl_contagem_encontrados.config(text="")
         self.entry_filtro_contagem.delete(0, tk.END)
         self.combo_contagem_produtos['values'] = self.lista_mestre_contagem_nomes
@@ -2967,16 +3304,6 @@ class AppGestaoEstoque:
         if not produto_nome or not qtd_str.strip():
             messagebox.showwarning("Aviso", "Selecione um produto e digite a quantidade.", parent=self.root)
             return
-        try:
-            # [MELHORIA UX] aceita "1.234,5" e "1,5" (antes "1.234,5" virava erro)
-            quantidade = para_decimal(qtd_str, "Quantidade")  # [DEPURAÇÃO] recusa 'NaN'/'Infinity'
-        except ValueError:
-            messagebox.showerror("Erro", "A quantidade deve ser um número válido, maior ou igual a zero.", parent=self.root)
-            # Limpa o campo para evitar reenvio de dados inválidos e foca
-            self.entry_contagem_qtd.delete(0, tk.END)
-            self.entry_contagem_qtd.focus_set()
-            return
-
         if produto_nome not in self.mapa_produtos_mestre_contagem:
             messagebox.showwarning("Aviso", "Produto não encontrado. Selecione um item válido da lista.", parent=self.root)
             self.entry_filtro_contagem.focus_set()
@@ -2985,6 +3312,45 @@ class AppGestaoEstoque:
         dados_produto = self.mapa_produtos_mestre_contagem[produto_nome]
         produto_id = dados_produto['id']
         unidade = dados_produto['un']
+        fator = self._fator_contagem_atual()
+        try:
+            # [MELHORIA CONTAGEM] aceita caixas: "3" com 'CX de 12' = 36; "3+5" = 3 cx + 5 soltas; "3x12+5"
+            quantidade, detalhe = calcular_qtd_contagem(qtd_str, fator, unidade)
+        except ValueError as e:
+            messagebox.showerror("Quantidade inválida", str(e), parent=self.root)
+            self.entry_contagem_qtd.focus_set()
+            self.entry_contagem_qtd.select_range(0, tk.END)
+            return
+
+        # [MELHORIA CONTAGEM] "Contou em caixa e lançou em unidade?" (compara com a última contagem)
+        anterior = self._ultima_contagem_do_produto(produto_id)
+        fatores = [e['Fator'] for e in (getattr(self, 'embalagens_contagem', {}) or {}).get(produto_id, [])]
+        fatores += getattr(self, '_embalagens_extras', {}).get(produto_id, [])
+        simples = bool(re.fullmatch(r'\s*[\d.,]+\s*', qtd_str))
+        sugestao = sugerir_unidade_contagem(quantidade, fator, fatores, anterior[0] if anterior else None, simples)
+        if sugestao:
+            alternativa, fator_alt = sugestao
+            como_alt = (f"{qtd_str.strip()} CAIXAS de {fmt_qtd(fator_alt)} = {fmt_qtd(alternativa)} {unidade}" if fator_alt > 1
+                        else f"{qtd_str.strip()} {unidade} (unidades)")
+            resposta = messagebox.askyesnocancel(
+                "Confere a unidade?",
+                f"{produto_nome}\n\nVocê lançou {fmt_qtd(quantidade)} {unidade}"
+                + (f" ({detalhe})" if detalhe else "") + ".\n"
+                f"Na última contagem ({anterior[1].strftime('%d/%m/%Y')}) eram {fmt_qtd(anterior[0])} {unidade}.\n\n"
+                f"Você quis dizer {como_alt}?\n\n"
+                f"SIM = usar {fmt_qtd(alternativa)} {unidade}\n"
+                f"NÃO = manter {fmt_qtd(quantidade)} {unidade}\n"
+                "CANCELAR = voltar e corrigir", parent=self.root)
+            if resposta is None:
+                self.entry_contagem_qtd.focus_set()
+                return
+            if resposta:
+                quantidade = alternativa
+                fator = fator_alt
+                detalhe = f"{qtd_str.strip()} cx de {fmt_qtd(fator_alt)}" if fator_alt > 1 else None
+        memoria = self.ler_preferencias().get('embalagem_contagem', {})
+        if fator > 1 or (isinstance(memoria, dict) and str(produto_id) in memoria):
+            self._lembrar_embalagem_contagem(produto_id, fator)   # na próxima, já vem na mesma caixa
 
         existente = self._item_contagem_por_id(produto_id)
         if existente:
@@ -3002,6 +3368,11 @@ class AppGestaoEstoque:
                 self.entry_contagem_qtd.focus_set()
                 return
             existente['QuantidadeContada'] = anterior + quantidade if resposta else quantidade
+            if resposta:
+                partes = [p for p in (existente.get('Detalhe') or fmt_qtd(anterior), detalhe or fmt_qtd(quantidade)) if p]
+                existente['Detalhe'] = " + ".join(partes) if (existente.get('Detalhe') or detalhe) else None
+            else:
+                existente['Detalhe'] = detalhe
             acao = "somado" if resposta else "substituído"
             msg = f"{produto_nome}: {acao}, agora {fmt_qtd(existente['QuantidadeContada'])} {unidade}."
         else:
@@ -3009,9 +3380,10 @@ class AppGestaoEstoque:
                 'ProdutoID': produto_id,
                 'NomeProduto': produto_nome,
                 'QuantidadeContada': quantidade,
-                'Unidade': unidade
+                'Unidade': unidade,
+                'Detalhe': detalhe,
             })
-            msg = f"{produto_nome}: {fmt_qtd(quantidade)} {unidade} adicionado."
+            msg = f"{produto_nome}: {fmt_qtd(quantidade)} {unidade}" + (f" ({detalhe})" if detalhe else "") + " adicionado."
 
         self._redesenhar_lista_contagem(destacar_id=produto_id)
         self.salvar_rascunho_contagem()
@@ -3028,12 +3400,12 @@ class AppGestaoEstoque:
             return
         texto = simpledialog.askstring(
             "Corrigir quantidade",
-            f"{item['NomeProduto']}\n\nNova quantidade ({item['Unidade']}):",
+            f"{item['NomeProduto']}\n\nNova quantidade em {item['Unidade']}:\n(contou em caixas? digite 3x12 ou 3x12+5)",
             initialvalue=fmt_qtd(item['QuantidadeContada']), parent=self.root)
         if texto is None:
             return
         try:
-            item['QuantidadeContada'] = para_decimal(texto, "Quantidade")
+            item['QuantidadeContada'], item['Detalhe'] = calcular_qtd_contagem(texto, 1, item['Unidade'])
         except ValueError as e:
             messagebox.showerror("Erro", str(e), parent=self.root)
             return
@@ -3085,6 +3457,7 @@ class AppGestaoEstoque:
                 self.lista_itens_para_salvar_contagem.clear()
                 self._redesenhar_lista_contagem()
                 self.apagar_rascunho_contagem()  # [MELHORIA UX] salvo no banco: rascunho não é mais necessário
+                self._ultimas_contagens = None   # [MELHORIA CONTAGEM] recarrega na próxima
                 self.atualizar_lista_contagens_historico()
             else:
                 messagebox.showerror("Erro de Banco", msg, parent=self.root)
@@ -3112,7 +3485,8 @@ class AppGestaoEstoque:
             'data_contagem': data_txt,
             'nome_contagem': self.entry_nome_contagem.get().strip() or 'Geral',
             'itens': [{'ProdutoID': i['ProdutoID'], 'NomeProduto': i['NomeProduto'],
-                       'QuantidadeContada': str(i['QuantidadeContada']), 'Unidade': i['Unidade']}
+                       'QuantidadeContada': str(i['QuantidadeContada']), 'Unidade': i['Unidade'],
+                       'Detalhe': i.get('Detalhe')}
                       for i in self.lista_itens_para_salvar_contagem],
         }
         temporario = ARQUIVO_RASCUNHO_CONTAGEM + '.tmp'
@@ -3142,7 +3516,7 @@ class AppGestaoEstoque:
             for i in dados.get('itens', []):
                 itens.append({'ProdutoID': i['ProdutoID'], 'NomeProduto': i['NomeProduto'],
                               'QuantidadeContada': Decimal(str(i['QuantidadeContada'])),
-                              'Unidade': i.get('Unidade') or 'UN'})
+                              'Unidade': i.get('Unidade') or 'UN', 'Detalhe': i.get('Detalhe')})
         except (OSError, ValueError, KeyError, TypeError, InvalidOperation) as e:
             logger.error(f"Rascunho de contagem ilegível: {e}")
             return
@@ -3460,7 +3834,7 @@ class AppGestaoEstoque:
             # [DEPURAÇÃO] Antes QUALQUER erro (até do banco) aparecia como "Quantidade inválida",
             # e se o banco recusasse, nada avisava. Agora cada caso tem sua mensagem.
             try:
-                qtd = para_decimal(entry_qtd.get(), "Quantidade")
+                qtd = calcular_qtd_contagem(entry_qtd.get(), 1)[0]   # [MELHORIA CONTAGEM] aceita 3x12+5
             except ValueError as ve:
                 messagebox.showerror("Erro", str(ve), parent=popup)
                 return
@@ -3486,15 +3860,16 @@ class AppGestaoEstoque:
 
             edit_win = Toplevel(popup)
             edit_win.title("Alterar/Remover")
-            edit_win.geometry("300x150")
+            edit_win.geometry("320x175")
             edit_win.transient(popup)
 
             ttk.Label(edit_win, text=f"{nome}").pack(pady=5)
+            ttk.Label(edit_win, text="(contou em caixas? digite 3x12 ou 3x12+5)", foreground="gray").pack()
             e_qtd = ttk.Entry(edit_win, justify='center'); e_qtd.pack(pady=5); e_qtd.insert(0, qtd)
 
             def salvar():
                 try:
-                    nova_qtd = para_decimal(e_qtd.get(), "Quantidade")
+                    nova_qtd = calcular_qtd_contagem(e_qtd.get(), 1)[0]   # [MELHORIA CONTAGEM] aceita 3x12+5
 
                     # Tipagem rigorosa para evitar falha na query do banco
                     id_produto_limpo = int(prod_id) if prod_id and str(prod_id).strip() != "" else None
@@ -3986,13 +4361,17 @@ class AppGestaoEstoque:
             for item in dados_banco:
                 custo_puro = float(item['UltimoCusto'] or 0)  # [DEPURAÇÃO] vazio não trava
                 
+                caixas = (getattr(self, 'embalagens_contagem', {}) or {}).get(item['ProdutoID'], [])
                 lista_exportacao.append({
                     'Categoria': limpar_texto(item['Categoria']),
                     'ID': item['ProdutoID'],
                     'Nome do Produto Mestre': limpar_texto(item['NomeProduto']),
                     'UN': limpar_texto(item['UnidadeMedida']),
                     'Custo Unitário (c/ Imposto)': custo_puro,
-                    'CONTAGEM FÍSICA (Quantidade)': '________________' 
+                    # [MELHORIA CONTAGEM] anote caixas fechadas e unidades soltas separadamente
+                    'Caixa de (UN)': " / ".join(fmt_qtd(c['Fator']) for c in caixas[:3]),
+                    'CAIXAS fechadas': '__________',
+                    'UNIDADES (soltas ou total)': '__________',
                 })
 
             df = pd.DataFrame(lista_exportacao)
@@ -4008,300 +4387,381 @@ class AppGestaoEstoque:
             messagebox.showerror("Erro", f"Não foi possível gerar a planilha Excel.\nErro: {e}", parent=self.root)
 
 
+    # ===================================================================
+    # == [MELHORIA SUGESTÃO] ABA 5 - SUGESTÃO DE COMPRA (refeita) =======
+    # ===================================================================
+    OPCAO_A_AUTOMATICO = "🔄 AUTOMÁTICO - consumo dos últimos dias (recomendado)"
+    OPCAO_A_PRIMEIRA_COMPRA = "🧾 DESDE A PRIMEIRA COMPRA (estoque zero antes da 1ª nota)"
+    OPCAO_A_HISTORICO = "⏮️ TODO O HISTÓRICO de contagens"
+    MOSTRAR_SUGESTAO = [
+        ('ativos', '✅ Produtos ativos (contados)'),
+        ('comprar', '🛒 Só o que precisa comprar'),
+        ('conferir', '⚠️ Conferir (conta não fecha)'),
+        ('nunca_recente', '❔ Nunca contados, mas comprados recentemente'),
+        ('parados', '💤 Parados (zerados e sem movimento)'),
+        ('todos', 'Todos os produtos'),
+    ]
+
     def criar_aba_sugestao_compra(self):
         main_frame = ttk.Frame(self.frame_sugestao)
         main_frame.pack(fill=tk.BOTH, expand=True)
         main_frame.rowconfigure(1, weight=1)
         main_frame.columnconfigure(0, weight=1)
+        pref = self.ler_preferencias().get('sugestao', {})
+        pref = pref if isinstance(pref, dict) else {}
 
-        # --- Frame 1: Filtros (REESCRITO) ---
-        frame_filtros = ttk.LabelFrame(main_frame, text="Parâmetros da Sugestão (Baseado em Período de Contagem)", padding="10")
-        frame_filtros.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        # ---------- Parâmetros (mudar aqui exige "Gerar" de novo) ----------
+        frame_filtros = ttk.LabelFrame(main_frame, text="Parâmetros da Sugestão", padding="10")
+        frame_filtros.grid(row=0, column=0, sticky="ew", pady=(0, 6))
         frame_filtros.columnconfigure(1, weight=1)
         frame_filtros.columnconfigure(3, weight=1)
 
-        ttk.Label(frame_filtros, text="Contagem Inicial (Ponto A):").grid(row=0, column=0, sticky="w", padx=5, pady=5)
-        self.combo_contagem_inicio = ttk.Combobox(frame_filtros, state="readonly", width=40)
-        self.combo_contagem_inicio.grid(row=0, column=1, sticky="ew", padx=5, pady=5)
-
-        ttk.Label(frame_filtros, text="Contagem Final (Ponto B):").grid(row=0, column=2, sticky="w", padx=10, pady=5)
+        ttk.Label(frame_filtros, text="Contagem Final (Ponto B):").grid(row=0, column=0, sticky="w", padx=5, pady=4)
         self.combo_contagem_fim = ttk.Combobox(frame_filtros, state="readonly", width=40)
-        self.combo_contagem_fim.grid(row=0, column=3, sticky="ew", padx=5, pady=5)
+        self.combo_contagem_fim.grid(row=0, column=1, sticky="ew", padx=5, pady=4)
+        ttk.Label(frame_filtros, text="Consumo medido (Ponto A):").grid(row=0, column=2, sticky="w", padx=(15, 5), pady=4)
+        frame_a = ttk.Frame(frame_filtros)
+        frame_a.grid(row=0, column=3, sticky="ew", padx=5, pady=4)
+        frame_a.columnconfigure(0, weight=1)
+        self.combo_contagem_inicio = ttk.Combobox(frame_a, state="readonly", width=40)
+        self.combo_contagem_inicio.grid(row=0, column=0, sticky="ew")
+        self.frame_janela_sug = ttk.Frame(frame_a)
+        self.frame_janela_sug.grid(row=0, column=1, sticky="w", padx=(6, 0))
+        ttk.Label(self.frame_janela_sug, text="últimos").pack(side=tk.LEFT)
+        self.spin_janela_sugestao = ttk.Spinbox(self.frame_janela_sug, from_=14, to=365, width=5)
+        self.spin_janela_sugestao.set(str(pref.get('janela', 90)))
+        self.spin_janela_sugestao.pack(side=tk.LEFT, padx=3)
+        ttk.Label(self.frame_janela_sug, text="dias").pack(side=tk.LEFT)
 
-        ttk.Label(frame_filtros, text="Cobrir próximos:").grid(row=1, column=0, sticky="w", padx=5, pady=5)
-        
-        # --- CORREÇÃO DO BUG .pack() ---
-        # Criamos um sub-frame para o spinbox e o label "dias."
-        frame_spin = ttk.Frame(frame_filtros)
-        frame_spin.grid(row=1, column=1, sticky="w") # .grid() para o sub-frame
+        frame_dias = ttk.Frame(frame_filtros)
+        frame_dias.grid(row=1, column=0, columnspan=3, sticky="w", padx=5, pady=4)
+        ttk.Label(frame_dias, text="Comprar para cobrir").pack(side=tk.LEFT)
+        self.spin_dias_cobertura = ttk.Spinbox(frame_dias, from_=1, to=365, width=5)
+        self.spin_dias_cobertura.set(str(pref.get('cobertura', 30)))
+        self.spin_dias_cobertura.pack(side=tk.LEFT, padx=5)
+        ttk.Label(frame_dias, text="dias      Prazo de entrega do fornecedor:").pack(side=tk.LEFT)
+        self.spin_prazo_entrega = ttk.Spinbox(frame_dias, from_=0, to=60, width=4)
+        self.spin_prazo_entrega.set(str(pref.get('prazo', 2)))
+        self.spin_prazo_entrega.pack(side=tk.LEFT, padx=5)
+        ttk.Label(frame_dias, text="dias").pack(side=tk.LEFT)
 
-        self.spin_dias_cobertura = ttk.Spinbox(frame_spin, from_=1, to=365, width=5)
-        self.spin_dias_cobertura.set("30") 
-        self.spin_dias_cobertura.pack(side=tk.LEFT, padx=5) # .pack() dentro do sub-frame
+        btn_gerar_sugestao = ttk.Button(frame_filtros, text="🔄 Gerar Sugestão de Compra", command=self.gerar_sugestao_compra)
+        btn_gerar_sugestao.grid(row=1, column=3, sticky="e", padx=5, pady=4, ipady=4)
 
-        ttk.Label(frame_spin, text="dias.").pack(side=tk.LEFT) # .pack() dentro do sub-frame
-        # --- FIM DA CORREÇÃO ---
-        
-        btn_gerar_sugestao = ttk.Button(frame_filtros, text="Gerar Sugestão de Compra", command=self.gerar_sugestao_compra)
-        btn_gerar_sugestao.grid(row=1, column=2, columnspan=2, sticky="e", padx=5, pady=5, ipady=5)
-
-        ttk.Separator(frame_filtros, orient="horizontal").grid(row=2, column=0, columnspan=4, sticky="ew", pady=10)
-
-        # Filtros Inteligentes
-        ttk.Label(frame_filtros, text="Filtro Categoria:").grid(row=3, column=0, sticky="w", padx=5, pady=5)
-        self.combo_sugestao_categoria = ttk.Combobox(frame_filtros, state="readonly", values=["Todas"] + self.lista_categorias)
-        self.combo_sugestao_categoria.grid(row=3, column=1, sticky="ew", padx=5, pady=5)
+        # ---------- Filtros (aplicados NA HORA, sem gerar de novo) ----------
+        ttk.Separator(frame_filtros, orient="horizontal").grid(row=2, column=0, columnspan=4, sticky="ew", pady=8)
+        linha_f = ttk.Frame(frame_filtros)
+        linha_f.grid(row=3, column=0, columnspan=4, sticky="ew")
+        linha_f.columnconfigure(1, weight=1)
+        ttk.Label(linha_f, text="🔍 Buscar:").grid(row=0, column=0, sticky="w", padx=5)
+        self.entry_busca_sugestao = ttk.Entry(linha_f, width=22)
+        self.entry_busca_sugestao.grid(row=0, column=1, sticky="ew", padx=5)
+        ttk.Label(linha_f, text="Mostrar:").grid(row=0, column=2, sticky="w", padx=(10, 3))
+        self.combo_mostrar_sugestao = ttk.Combobox(linha_f, state="readonly", width=42)
+        self.combo_mostrar_sugestao.grid(row=0, column=3, sticky="w")
+        ttk.Label(linha_f, text="Categoria:").grid(row=0, column=4, sticky="w", padx=(10, 3))
+        self.combo_sugestao_categoria = ttk.Combobox(linha_f, state="readonly", width=18, values=["Todas"] + self.lista_categorias)
+        self.combo_sugestao_categoria.grid(row=0, column=5, sticky="w")
         self.combo_sugestao_categoria.set("Todas")
-
-        ttk.Label(frame_filtros, text="Filtro Fornecedor:").grid(row=3, column=2, sticky="w", padx=10, pady=5)
-        self.combo_sugestao_fornecedor = ttk.Combobox(frame_filtros, state="readonly")
-        self.combo_sugestao_fornecedor.grid(row=3, column=3, sticky="ew", padx=5, pady=5)
+        ttk.Label(linha_f, text="Fornecedor:").grid(row=0, column=6, sticky="w", padx=(10, 3))
+        self.combo_sugestao_fornecedor = ttk.Combobox(linha_f, state="readonly", width=26)
+        self.combo_sugestao_fornecedor.grid(row=0, column=7, sticky="w")
         self.combo_sugestao_fornecedor.set("Todos")
+        self._mostrar_sug_atual = pref.get('mostrar', 'ativos') if pref.get('mostrar') in dict(self.MOSTRAR_SUGESTAO) else 'ativos'
+        self.combo_mostrar_sugestao['values'] = [rot for _, rot in self.MOSTRAR_SUGESTAO]
+        self.combo_mostrar_sugestao.set(dict(self.MOSTRAR_SUGESTAO)[self._mostrar_sug_atual])
 
-        self.var_ocultar_zeros = tk.BooleanVar(value=False)
-        self.check_ocultar_zeros = ttk.Checkbutton(frame_filtros, text="Ocultar itens que não precisam de compra (Sugestão = 0)", variable=self.var_ocultar_zeros)
-        self.check_ocultar_zeros.grid(row=4, column=0, columnspan=2, sticky="w", padx=5, pady=5)
-        # --- FIM DO FRAME DE FILTROS ---
-
-        # Botão Gerenciador de Buffet
-        btn_gerir_buffet = ttk.Button(frame_filtros, text="🍦 Gerenciar Buffet (Top Sabores)", command=self.abrir_gestor_buffet)
-        btn_gerir_buffet.grid(row=4, column=2, columnspan=2, sticky="e", padx=5, pady=5)
-
-        # [MELHORIA UX] Resumo colorido + botão que transforma a sugestão em PEDIDO
         frame_acoes_sug = ttk.Frame(frame_filtros)
-        frame_acoes_sug.grid(row=5, column=0, columnspan=4, sticky="ew", pady=(5, 0))
-        self.lbl_resumo_sugestao = ttk.Label(frame_acoes_sug, text="Clique em 'Gerar Sugestão de Compra' para ver a posição do estoque.",
+        frame_acoes_sug.grid(row=4, column=0, columnspan=4, sticky="ew", pady=(8, 0))
+        self.lbl_resumo_sugestao = ttk.Label(frame_acoes_sug, text="Clique em '🔄 Gerar Sugestão de Compra' para ver a posição do estoque.",
                                              font=("Arial", 10, "bold"))
         self.lbl_resumo_sugestao.pack(side=tk.LEFT)
+        ttk.Button(frame_acoes_sug, text="🍦 Buffet (Top Sabores)", command=self.abrir_gestor_buffet).pack(side=tk.RIGHT, padx=(5, 0), ipady=3)
+        ttk.Button(frame_acoes_sug, text="📊 Exportar Excel", command=self.exportar_sugestao_excel).pack(side=tk.RIGHT, padx=(5, 0), ipady=3)
         ttk.Button(frame_acoes_sug, text="📤 Montar Pedido por Fornecedor",
-                   command=self.abrir_pedido_compra).pack(side=tk.RIGHT, ipady=4)
-        self.dados_sugestao_tela = {}
+                   command=self.abrir_pedido_compra).pack(side=tk.RIGHT, ipady=3)
+        self.lbl_aviso_sugestao = ttk.Label(frame_filtros, text="", foreground="#b26a00", wraplength=1250, justify="left")
+        self.lbl_aviso_sugestao.grid(row=5, column=0, columnspan=4, sticky="w", pady=(4, 0))
 
-        # --- Frame 2: Tabela de Sugestões (Mesma de antes, mas o bind foi movido) ---
-        frame_resultado = ttk.LabelFrame(main_frame, text="Relatório de Posição de Estoque e Sugestão (Duplo-clique para ver histórico de compras)", padding="10")
+        self.dados_sugestao_tela = {}
+        self.linhas_sugestao = {}
+        self.resultado_sugestao = None
+        # compatibilidade com código antigo (o "Ocultar zeros" virou a opção "🛒 Só o que precisa comprar")
+        self.var_ocultar_zeros = tk.BooleanVar(value=False)
+
+        # ---------- Tabela ----------
+        frame_resultado = ttk.LabelFrame(main_frame, text="Posição do Estoque e Sugestão  (clique = ver o cálculo · duplo clique = histórico de compras)", padding="10")
         frame_resultado.grid(row=1, column=0, sticky="nsew")
         frame_resultado.rowconfigure(0, weight=1)
         frame_resultado.columnconfigure(0, weight=1)
-        
-    # [ATUALIZAÇÃO] Adicionada coluna 'Duração (Meses)'
-        cols = ('Produto', 'UN', 'Estoque Atual', 'Total Comprado', 'Consumo Médio/Mês', 'Consumo Médio/Dia', 'Duração (Meses)', 'Sugestão Compra', 'Status')
+        cols = ('Produto', 'UN', 'Última contagem', 'Estoque hoje', 'Consumo/mês', 'Acaba em',
+                'Sugestão', 'Pedir', 'Fornecedor', 'Situação')
         self.tree_sugestao = ttk.Treeview(frame_resultado, columns=cols, show='headings')
-        for col in cols: 
-            # Acopla a função de ordenação inteligente ao clique de cada cabeçalho
-            self.tree_sugestao.heading(
-                col, 
-                text=col, 
-                command=lambda c=col: self.ordenar_coluna_treeview(self.tree_sugestao, c, False)
-            )
-
-        self.tree_sugestao.column('Produto', width=250)
-        self.tree_sugestao.column('UN', width=40, anchor='center')
-        self.tree_sugestao.column('Estoque Atual', width=90, anchor='e')
-        self.tree_sugestao.column('Total Comprado', width=90, anchor='e')
-        self.tree_sugestao.column('Consumo Médio/Mês', width=110, anchor='e')
-        self.tree_sugestao.column('Consumo Médio/Dia', width=110, anchor='e')
-        self.tree_sugestao.column('Duração (Meses)', width=100, anchor='center') # Nova Coluna
-        self.tree_sugestao.column('Sugestão Compra', width=110, anchor='e')
-        self.tree_sugestao.column('Status', width=100)
-
+        for col, larg, anc in (('Produto', 250, 'w'), ('UN', 45, 'center'), ('Última contagem', 105, 'center'),
+                               ('Estoque hoje', 95, 'e'), ('Consumo/mês', 95, 'e'), ('Acaba em', 115, 'center'),
+                               ('Sugestão', 80, 'e'), ('Pedir', 150, 'w'), ('Fornecedor', 170, 'w'), ('Situação', 125, 'w')):
+            self.tree_sugestao.heading(col, text=col, command=lambda c=col: self.ordenar_coluna_treeview(self.tree_sugestao, c, False))
+            self.tree_sugestao.column(col, width=larg, anchor=anc)
         scrollbar = ttk.Scrollbar(frame_resultado, orient="vertical", command=self.tree_sugestao.yview)
         self.tree_sugestao.configure(yscrollcommand=scrollbar.set)
-        
         self.tree_sugestao.grid(row=0, column=0, sticky="nsew")
         scrollbar.grid(row=0, column=1, sticky="ns")
-        
-        self.tree_sugestao.bind("<Double-1>", self.abrir_popup_historico_compras)
-        # [MELHORIA UX] Cores por situação do item
-        self.tree_sugestao.tag_configure('critico', background='#ffd6d6')
-        self.tree_sugestao.tag_configure('comprar', background='#fff4cc')
-        self.tree_sugestao.tag_configure('ok', background='#e3f5e1')
+        for tag, cor in (('critico', '#ffd6d6'), ('comprar', '#fff4cc'), ('ok', '#e3f5e1'), ('conferir', '#ffe0b2'),
+                         ('nunca', '#e3eefc')):
+            self.tree_sugestao.tag_configure(tag, background=cor)
         self.tree_sugestao.tag_configure('sem_giro', background='#eeeeee', foreground='#666666')
+        ttk.Label(frame_resultado, foreground="gray", text=(
+            "📏 = produto NÃO contado no Ponto B (vale a última contagem dele + compras - consumo)   ≈ = consumo estimado pelas compras "
+            "(só 1 contagem)   Estoque hoje = contagem + notas importadas depois - consumo dos dias que passaram")
+        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 0))
+
+        frame_calc = ttk.LabelFrame(main_frame, text="🧮 Como calculei (clique num produto)", padding=(10, 4))
+        frame_calc.grid(row=3, column=0, sticky="ew", pady=(6, 0))
+        self.lbl_calculo_sugestao = ttk.Label(frame_calc, text="Clique num produto da tabela para ver a conta passo a passo.",
+                                              justify="left", font=("Consolas", 9), wraplength=1250)
+        self.lbl_calculo_sugestao.pack(anchor="w", fill=tk.X)
+
+        self.tree_sugestao.bind("<Double-1>", self.abrir_popup_historico_compras)
+        self.tree_sugestao.bind("<<TreeviewSelect>>", self.mostrar_calculo_sugestao)
+        self.entry_busca_sugestao.bind("<KeyRelease>", lambda e: self.renderizar_sugestao())
+        for combo in (self.combo_mostrar_sugestao, self.combo_sugestao_categoria, self.combo_sugestao_fornecedor):
+            combo.bind("<<ComboboxSelected>>", lambda e: self.renderizar_sugestao())
+        self.combo_contagem_inicio.bind("<<ComboboxSelected>>", lambda e: self._ajustar_janela_sugestao())
+        for spin in (self.spin_dias_cobertura, self.spin_prazo_entrega):
+            spin.bind("<Return>", lambda e: self.recalcular_sugestao_na_tela())
+            spin.bind("<<Increment>>", lambda e: self.root.after(10, self.recalcular_sugestao_na_tela))
+            spin.bind("<<Decrement>>", lambda e: self.root.after(10, self.recalcular_sugestao_na_tela))
+            spin.bind("<FocusOut>", lambda e: self.recalcular_sugestao_na_tela())
+
+    def _ajustar_janela_sugestao(self):
+        """Os 'últimos N dias' só aparecem no modo automático."""
+        if self.combo_contagem_inicio.get() == self.OPCAO_A_AUTOMATICO:
+            self.frame_janela_sug.grid()
+        else:
+            self.frame_janela_sug.grid_remove()
+
+    @staticmethod
+    def _inteiro_do_campo(campo, padrao, minimo, maximo):
+        texto = str(campo.get()).strip()
+        if not texto.isdigit() or not (minimo <= int(texto) <= maximo):
+            campo.set(str(padrao))
+            return padrao
+        return int(texto)
+
+    def _parametros_sugestao(self):
+        return {'cobertura': self._inteiro_do_campo(self.spin_dias_cobertura, 30, 1, 365),
+                'prazo': self._inteiro_do_campo(self.spin_prazo_entrega, 2, 0, 60),
+                'janela': self._inteiro_do_campo(self.spin_janela_sugestao, 90, 14, 365)}
 
     def gerar_sugestao_compra(self):
-        """Busca o relatório do banco baseado no período selecionado e calcula a sugestão."""
-        try:
-            # Validação robusta do Spinbox agora em DIAS
-            valor_spin = self.spin_dias_cobertura.get().strip()
-            if not valor_spin.isdigit() or int(valor_spin) <= 0: 
-                dias_para_cobrir = 30 # Padrão seguro de 1 mês
-                self.spin_dias_cobertura.set("30")
-            else:
-                dias_para_cobrir = int(valor_spin)
-
-            # Converte direto para Decimal usando os dias exatos solicitados
-            dias_cobertura = Decimal(dias_para_cobrir)
-
-            str_contagem_inicio = self.combo_contagem_inicio.get()
-            str_contagem_fim = self.combo_contagem_fim.get()
-            
-            if not str_contagem_inicio or not str_contagem_fim:
-                messagebox.showwarning("Aviso", "Selecione uma Contagem Inicial (Ponto A) e uma Contagem Final (Ponto B).", parent=self.root)
-                return
-
-            contagem_id_inicio = self.mapa_contagens_sugestao[str_contagem_inicio]
-            contagem_id_fim = self.mapa_contagens_sugestao[str_contagem_fim]
-
-        except (ValueError, KeyError) as e:
-            messagebox.showerror("Erro de Seleção", f"Parâmetros inválidos. Verifique suas seleções.\n{e}", parent=self.root)
+        """Busca no banco a posição de cada produto e monta a tabela."""
+        params = self._parametros_sugestao()
+        str_fim, str_ini = self.combo_contagem_fim.get(), self.combo_contagem_inicio.get()
+        if not str_fim:
+            messagebox.showwarning("Aviso", "Ainda não há contagem salva. Faça uma contagem na aba 4 primeiro.", parent=self.root)
             return
+        try:
+            id_fim = self.mapa_contagens_sugestao[str_fim]
+            id_ini = self.mapa_contagens_sugestao.get(str_ini)  # None = automático
+        except KeyError as e:
+            messagebox.showerror("Erro de Seleção", f"Contagem inválida. Atualize a aba (F5).\n{e}", parent=self.root)
+            return
+        self.root.config(cursor="watch"); self.root.update_idletasks()
+        try:
+            self.resultado_sugestao = database.calcular_sugestao_compra(id_fim, id_ini, params['janela'])
+        except Exception as e:
+            logger.error(f"Erro ao gerar sugestão de compra: {e}", exc_info=True)
+            messagebox.showerror("Erro ao calcular", str(e), parent=self.root)
+            return
+        finally:
+            self.root.config(cursor="")
+        self._salvar_preferencias_sugestao(params)
+        self.recalcular_sugestao_na_tela()
 
+    def recalcular_sugestao_na_tela(self):
+        """Refaz só a conta (dias a cobrir / prazo) sem ir ao banco de novo."""
+        if not self.resultado_sugestao:
+            return
+        params = self._parametros_sugestao()
+        r = self.resultado_sugestao
+        self.linhas_sugestao = {}
+        self.cache_relatorio_posicao.clear()
+        for item in r['itens']:
+            linha = calcular_linha_sugestao(item, params['cobertura'], params['prazo'], r['DataReferencia'])
+            self.linhas_sugestao[item['ProdutoID']] = linha
+            self.cache_relatorio_posicao[item['ProdutoID']] = item
+        self.renderizar_sugestao()
+
+    def _salvar_preferencias_sugestao(self, params):
+        try:
+            dados = self.ler_preferencias()
+            dados['sugestao'] = dict(params, mostrar=self._mostrar_sug_atual)
+            modo_a = self.combo_contagem_inicio.get()
+            if modo_a in (self.OPCAO_A_AUTOMATICO, self.OPCAO_A_PRIMEIRA_COMPRA, self.OPCAO_A_HISTORICO):
+                dados['sugestao']['modo_a'] = modo_a   # lembra o modo escolhido para a próxima vez
+            with open(ARQUIVO_PREFERENCIAS, 'w', encoding='utf-8') as f:
+                json.dump(dados, f)
+        except Exception as e:
+            logger.warning(f"Não foi possível salvar as preferências da sugestão: {e}")
+
+    def _filtro_mostrar_sugestao(self):
+        rotulo = self.combo_mostrar_sugestao.get()
+        chave = next((ch for ch, rot in self.MOSTRAR_SUGESTAO if rotulo.startswith(rot)), 'ativos')
+        self._mostrar_sug_atual = chave
+        return chave
+
+    @staticmethod
+    def _passa_no_mostrar(chave, linha):
+        if chave == 'todos':
+            return True
+        if chave == 'nunca_recente':
+            return linha['tag'] == 'nunca' and linha['comprado_recente']
+        if chave == 'parados':
+            return linha['parado']
+        if chave == 'comprar':
+            return linha['qtd_pedido'] > 0
+        if chave == 'conferir':
+            return linha['tag'] == 'conferir'
+        return linha['tag'] != 'nunca' and not linha['parado']   # ativos
+
+    def renderizar_sugestao(self):
+        """Desenha a tabela a partir do que já foi calculado (filtros aplicados na hora)."""
         for i in self.tree_sugestao.get_children():
             self.tree_sugestao.delete(i)
         self.dados_sugestao_tela = {}
-        contadores = {'critico': 0, 'comprar': 0, 'ok': 0, 'sem_giro': 0}
+        if not self.linhas_sugestao:
+            return
+        chave = self._filtro_mostrar_sugestao()
+        categoria = self.combo_sugestao_categoria.get() or "Todas"
+        palavras = sem_acento(self.entry_busca_sugestao.get()).split()
+        ids_forn = None
+        forn_txt = self.combo_sugestao_fornecedor.get()
+        m = re.search(r'\(ID: (\d+)\)\s*$', forn_txt or '')
+        if forn_txt and forn_txt != "Todos" and m:
+            ids_forn = database.buscar_ids_produtos_por_fornecedor(int(m.group(1)))
 
+        # Contadores (sobre o filtro de categoria/fornecedor/busca, antes do "Mostrar")
+        contagem_mostrar = {ch: 0 for ch, _ in self.MOSTRAR_SUGESTAO}
+        cont_sit = {'critico': 0, 'comprar': 0, 'ok': 0, 'sem_giro': 0, 'conferir': 0, 'nunca': 0}
+        total_pedido = Decimal('0')
+        visiveis = []
+        for pid, linha in self.linhas_sugestao.items():
+            item = linha['item']
+            if categoria != "Todas" and item['Categoria'] != categoria:
+                continue
+            if ids_forn is not None and pid not in ids_forn:
+                continue
+            if palavras and not all(p in sem_acento(f"{item['NomeProduto']} {pid}") for p in palavras):
+                continue
+            for ch, _ in self.MOSTRAR_SUGESTAO:
+                contagem_mostrar[ch] += 1 if self._passa_no_mostrar(ch, linha) else 0
+            if not self._passa_no_mostrar(chave, linha):
+                continue
+            visiveis.append(linha)
+        ordem = {'critico': 0, 'conferir': 1, 'comprar': 2, 'ok': 3, 'nunca': 4, 'sem_giro': 5}
+        visiveis.sort(key=lambda l: (ordem.get(l['tag'], 9), sem_acento(l['item']['NomeProduto'])))
+        for linha in visiveis:
+            item = linha['item']
+            cont_sit[linha['tag']] += 1
+            total_pedido += linha['custo_total']
+            iid = str(item['ProdutoID'])
+            self.tree_sugestao.insert("", "end", iid=iid, tags=(linha['tag'],), values=linha['colunas'])
+            self.dados_sugestao_tela[item['ProdutoID']] = {
+                'nome': item['NomeProduto'], 'un': item['Unidade'], 'sugestao': linha['sugestao'],
+                'situacao': linha['situacao']}
+
+        rotulos = {ch: f"{rot} ({contagem_mostrar[ch]})" for ch, rot in self.MOSTRAR_SUGESTAO}
+        self.combo_mostrar_sugestao['values'] = [rotulos[ch] for ch, _ in self.MOSTRAR_SUGESTAO]
+        self.combo_mostrar_sugestao.set(rotulos[chave])
+        r = self.resultado_sugestao or {}
+        self.lbl_resumo_sugestao.config(text=(
+            f"🔴 {cont_sit['critico']} crítico(s)   🟡 {cont_sit['comprar']} para comprar   🟢 {cont_sit['ok']} ok   "
+            f"⚠️ {cont_sit['conferir']} conferir   ⚪ {cont_sit['sem_giro']} sem giro      "
+            f"Pedido estimado: {fmt_reais(total_pedido)}"))
+        avisos = []
+        if r.get('DataReferencia') and r.get('DataB') and r['DataReferencia'] > r['DataB']:
+            avisos.append(f"Posição projetada para HOJE ({fmt_data(r['DataReferencia'])}): contagem de {fmt_data(r['DataB'])} "
+                          "+ notas importadas depois - consumo estimado.")
+        if contagem_mostrar['nunca_recente'] and chave != 'nunca_recente':
+            avisos.append(f"❔ {contagem_mostrar['nunca_recente']} produto(s) foram comprados nos últimos "
+                          f"{r.get('JanelaDias', 90)} dias mas NUNCA foram contados (escolha em 'Mostrar' para ver).")
+        self.lbl_aviso_sugestao.config(text="   ".join(avisos))
+        self.status(f"Sugestão: {len(visiveis)} produto(s) na tabela.")
+
+    def mostrar_calculo_sugestao(self, event=None):
+        sel = self.tree_sugestao.focus()
         try:
-            # Chama a função corrigida do database, que já retorna Decimals prontos
-            relatorio_posicao = database.gerar_sugestao_por_periodo(contagem_id_inicio, contagem_id_fim)
-            self.cache_relatorio_posicao.clear()
+            linha = self.linhas_sugestao.get(int(sel)) if sel else None
+        except ValueError:
+            linha = None
+        self.lbl_calculo_sugestao.config(text="\n".join(linha['explicacao']) if linha else
+                                         "Clique num produto da tabela para ver a conta passo a passo.")
 
-            if not relatorio_posicao:
-                messagebox.showinfo("Aviso", "Nenhum produto encontrado ou erro de processamento.", parent=self.root)
-                return
-
-            # Captura o estado dos filtros
-            categoria_filtro = self.combo_sugestao_categoria.get()
-            forn_filtro_str = self.combo_sugestao_fornecedor.get()
-            ocultar_zeros = self.var_ocultar_zeros.get()
-
-            # Se filtrou por fornecedor, busca quais IDs de produto pertencem a ele
-            ids_produtos_fornecedor = None
-            if forn_filtro_str and forn_filtro_str != "Todos":
-                try:
-                    inicio_id = forn_filtro_str.rfind("ID: ")
-                    if inicio_id != -1:
-                        str_id = forn_filtro_str[inicio_id + 4:].replace(")", "").strip()
-                        forn_id = int(str_id)
-                        ids_produtos_fornecedor = database.buscar_ids_produtos_por_fornecedor(forn_id)
-                except (IndexError, ValueError) as e:
-                    logger.warning(f"Falha ao extrair ID do fornecedor do texto '{forn_filtro_str}': {e}")
-                    pass # Continua sem aplicar o filtro em caso de falha de string
-
-            def dec(valor):
-                return Decimal(str(valor)) if valor is not None else Decimal('0')
-
-            ids_na_tela = set()
-            for item in relatorio_posicao:
-                # 1. Filtro de Categoria
-                if categoria_filtro != "Todas" and (item.get('Categoria') or 'Geral') != categoria_filtro:
-                    continue
-                # [DEPURAÇÃO] o mesmo produto 2x na lista dava TclError e a tabela ficava pela metade
-                iid_item = str(item['ProdutoID'])
-                if iid_item in ids_na_tela:
-                    continue
-
-                # 2. Filtro de Fornecedor
-                if ids_produtos_fornecedor is not None and item['ProdutoID'] not in ids_produtos_fornecedor:
-                    continue
-
-                # Armazena no cache para o recurso de duplo-clique (histórico)
-                self.cache_relatorio_posicao[item['ProdutoID']] = item
-
-                # Extração direta dos dados já calculados no database.py
-                nome = item.get('NomeProduto') or ''
-                un = item.get('Unidade') or 'UN'
-                atual = dec(item.get('EstoqueAtual'))
-                umd = dec(item.get('UsoMedioDiario'))
-                minimo = dec(item.get('EstoqueMinimo'))
-                total_comprado = dec(item.get('TotalComprado'))
-
-                # Cálculo de apresentação: Consumo Mensal
-                consumo_mes = umd * 30
-
-                # Cálculo da Sugestão de Compra
-                # Estoque Ideal = (Consumo Diário * Dias a Cobrir) + Estoque de Segurança
-                estoque_ideal = (umd * dias_cobertura) + minimo
-                sugestao_calc = estoque_ideal - atual
-
-                # A sugestão não pode ser negativa
-                sugestao_compra = max(sugestao_calc, Decimal('0.0'))
-
-                # 3. Filtro de Zeros (Ocultar o que não precisa comprar)
-                if ocultar_zeros and sugestao_compra <= 0:
-                    continue
-
-                # --- CÁLCULO DA DURAÇÃO DE ESTOQUE (Visual) ---
-                if consumo_mes > 0:
-                    duracao_val = atual / consumo_mes
-                    if duracao_val > 120: 
-                        duracao_f = "> 120 meses"
-                    else:
-                        duracao_f = f"{duracao_val:.1f} meses"
-                else:
-                    if atual > 0:
-                        duracao_f = "Sem Giro" # Tem estoque mas não vendeu no período
-                    else:
-                        duracao_f = "---" # Zerado e sem venda
-
-                # Formatação para string (3 casas decimais)
-                atual_f = f"{atual:.3f}"
-                total_comprado_f = f"{total_comprado:.3f}"
-                consumo_mes_f = f"{consumo_mes:.3f}"
-                umd_f = f"{umd:.3f}"
-                sugestao_f = f"{sugestao_compra:.3f}"
-
-                # [MELHORIA UX] Situação calculada (antes o banco mandava sempre "OK").
-                #   🔴 CRÍTICO: estoque abaixo do mínimo, ou acaba em menos de 7 dias
-                #   🟡 COMPRAR: precisa comprar para cobrir o período escolhido
-                #   🟢 OK: estoque suficiente   ⚪ SEM GIRO: não teve consumo no período
-                dias_restantes = (atual / umd) if umd > 0 else None
-                if umd <= 0 and sugestao_compra <= 0:
-                    situacao, tag = "⚪ SEM GIRO", 'sem_giro'
-                elif (minimo > 0 and atual <= minimo) or (dias_restantes is not None and dias_restantes < 7):
-                    situacao, tag = "🔴 CRÍTICO", 'critico'
-                elif sugestao_compra > 0:
-                    situacao, tag = "🟡 COMPRAR", 'comprar'
-                else:
-                    situacao, tag = "🟢 OK", 'ok'
-                contadores[tag] += 1
-
-                # Insere na Treeview
-                self.tree_sugestao.insert("", "end", values=(
-                    nome, un, atual_f, total_comprado_f, consumo_mes_f, umd_f, duracao_f, sugestao_f, situacao
-                ), iid=iid_item, tags=(tag,))
-                ids_na_tela.add(iid_item)
-                self.dados_sugestao_tela[item['ProdutoID']] = {
-                    'nome': nome, 'un': un, 'sugestao': sugestao_compra, 'situacao': situacao}
-
-            self.lbl_resumo_sugestao.config(
-                text=f"🔴 {contadores['critico']} crítico(s)   🟡 {contadores['comprar']} para comprar   "
-                     f"🟢 {contadores['ok']} ok   ⚪ {contadores['sem_giro']} sem giro")
-            self.status(f"Sugestão gerada para {dias_para_cobrir} dias: {len(ids_na_tela)} produtos na tabela.")
-
+    def exportar_sugestao_excel(self):
+        """Salva em Excel exatamente o que está na tabela (com os filtros atuais)."""
+        if not self.tree_sugestao.get_children():
+            messagebox.showwarning("Aviso", "Primeiro clique em 'Gerar Sugestão de Compra'.", parent=self.root)
+            return None
+        pd = self._importar_pandas(self.root)
+        if pd is None:
+            return None
+        caminho = filedialog.asksaveasfilename(
+            parent=self.root, title="Salvar Sugestão de Compra", defaultextension=".xlsx",
+            filetypes=[("Arquivos Excel", "*.xlsx")], initialfile=f"Sugestao_Compra_{datetime.now():%d-%m-%Y}.xlsx")
+        if not caminho:
+            return None
+        try:
+            linhas = []
+            for iid in self.tree_sugestao.get_children():
+                l = self.linhas_sugestao[int(iid)]
+                it = l['item']
+                linhas.append({
+                    'Produto': it['NomeProduto'], 'Categoria': it['Categoria'], 'UN': it['Unidade'],
+                    'Última contagem': fmt_data(it['DataUltimaContagem'], vazio=''),
+                    'Estoque hoje': float(l['estoque']) if l['estoque'] is not None else None,
+                    'Consumo por mês': float(l['umd'] * 30), 'Acaba em': fmt_data(l['acaba_em'], vazio=''),
+                    'Sugestão (UN)': float(l['sugestao']), 'Pedir': l['texto_pedido'],
+                    'Fornecedor': (l['fornecedor'] or {}).get('Fornecedor', ''),
+                    'Custo estimado (R$)': float(l['custo_total']), 'Situação': l['situacao'],
+                    'Como calculei': " | ".join(l['explicacao'][1:])})
+            pd.DataFrame(linhas).to_excel(caminho, index=False, sheet_name='Sugestão')
+            self.status(f"Sugestão salva em: {caminho}")
+            messagebox.showinfo("Excel salvo", f"Sugestão salva em:\n{caminho}", parent=self.root)
+            return caminho
         except Exception as e:
-            logger.error(f"Erro ao gerar sugestão de compra (Frontend): {e}", exc_info=True)
-            messagebox.showerror("Erro de Processamento", f"Falha ao exibir relatório:\n{e}", parent=self.root)
+            logger.error(f"Erro ao exportar sugestão: {e}", exc_info=True)
+            messagebox.showerror("Erro", f"Não foi possível salvar o Excel.\n{e}\n\n"
+                                 "Se o arquivo estiver aberto no Excel, feche-o e tente de novo.", parent=self.root)
+            return None
 
     # -------------------------------------------------------------------
     # [MELHORIA UX] PEDIDO DE COMPRA POR FORNECEDOR
     # -------------------------------------------------------------------
-    def montar_pedido_por_fornecedor(self):
+    def montar_pedido_por_fornecedor(self, preferir='ultimo'):
         """
-        Agrupa os itens da sugestão (com quantidade > 0) pelo fornecedor da ÚLTIMA compra.
-        Devolve {fornecedor: [ {nome, un, qtd, custo, total}, ... ]}.
+        Agrupa os itens da tabela que precisam de compra pelo fornecedor escolhido:
+        preferir='ultimo' (fornecedor da última compra) ou 'barato' (mais barato em 12 meses).
+        A quantidade sai em CAIXAS do fornecedor (Qtd/Cx do vínculo).
+        Devolve {fornecedor: [ {nome, un, qtd, embalagens, fator, texto, custo, total, situacao}, ... ]}.
         """
+        params = self._parametros_sugestao()
+        data_ref = (self.resultado_sugestao or {}).get('DataReferencia')
         pedido = {}
-        for produto_id, dados in self.dados_sugestao_tela.items():
-            qtd = qtd_para_pedido(dados['sugestao'], dados['un'])
-            if qtd <= 0:
+        for produto_id in self.dados_sugestao_tela:
+            linha = self.linhas_sugestao.get(produto_id)
+            if not linha:
                 continue
-            fornecedor, custo = "Sem fornecedor (nunca comprado)", Decimal('0')
-            try:
-                historico = database.buscar_historico_compras_produto(produto_id) or []
-                # [MELHORIA VALOR] ignora as "notas fantasmas" do custo manual (quantidade 0,
-                # fornecedor "PRODUÇÃO INTERNA / AVULSO"): ninguém compra desse fornecedor.
-                reais = [h for h in historico
-                         if Decimal(str(getattr(h, 'Quantidade', 0) or 0)) > 0
-                         and 'PRODUÇÃO INTERNA' not in str(getattr(h, 'NomeFantasia', '') or '').upper()]
-                if reais:
-                    ultima = reais[0]  # o banco devolve da mais nova para a mais antiga
-                    fornecedor = getattr(ultima, 'NomeFantasia', None) or fornecedor
-                    custo = Decimal(str(getattr(ultima, 'PrecoCustoUnitario', 0) or 0))
-            except Exception as e:
-                logger.warning(f"Não foi possível ver o último fornecedor do produto {produto_id}: {e}")
-            pedido.setdefault(fornecedor, []).append({
-                'nome': dados['nome'], 'un': dados['un'], 'qtd': qtd,
-                'custo': custo, 'total': qtd * custo, 'situacao': dados.get('situacao', '')})
+            if preferir != 'ultimo':
+                linha = calcular_linha_sugestao(linha['item'], params['cobertura'], params['prazo'], data_ref, preferir)
+            if linha['qtd_pedido'] <= 0:
+                continue
+            forn = linha['fornecedor']
+            nome_forn = forn['Fornecedor'] if forn else "Sem fornecedor (nunca comprado)"
+            pedido.setdefault(nome_forn, []).append({
+                'nome': linha['item']['NomeProduto'], 'un': linha['item']['Unidade'], 'qtd': linha['qtd_pedido'],
+                'embalagens': linha['embalagens'], 'fator': linha['fator'], 'texto': linha['texto_pedido'],
+                'custo': forn['CustoUnid'] if forn else Decimal('0'), 'total': linha['custo_total'],
+                'situacao': linha['situacao']})
         for itens in pedido.values():
             itens.sort(key=lambda i: sem_acento(i['nome']))
         return dict(sorted(pedido.items(), key=lambda kv: (kv[0].startswith("Sem fornecedor"), sem_acento(kv[0]))))
@@ -4313,7 +4773,7 @@ class AppGestaoEstoque:
         linhas = [f"Olá, {fornecedor}! Tudo bem?", "",
                   "Gostaria de fazer o seguinte pedido:", ""]
         for i in itens:
-            linhas.append(f"• {fmt_qtd(i['qtd'])} {i['un']} - {i['nome']}")
+            linhas.append(f"• {i.get('texto') or (fmt_qtd(i['qtd']) + ' ' + i['un'])} - {i['nome']}")
         linhas += ["", "Pode me confirmar a disponibilidade, o valor e o prazo de entrega?", "Obrigado!"]
         if empresa:
             linhas.append(empresa)
@@ -4323,63 +4783,74 @@ class AppGestaoEstoque:
         if not self.dados_sugestao_tela:
             messagebox.showwarning("Aviso", "Primeiro clique em 'Gerar Sugestão de Compra'.", parent=self.root)
             return
-        self.root.config(cursor="watch"); self.root.update_idletasks()
-        try:
-            pedido = self.montar_pedido_por_fornecedor()
-        finally:
-            self.root.config(cursor="")
-        if not pedido:
-            messagebox.showinfo("Nada para comprar", "Pela sugestão atual, nenhum produto precisa ser comprado. 🎉", parent=self.root)
-            return
-        self.ultimo_pedido = pedido
-
         popup = Toplevel(self.root)
         popup.title("📤 Pedido de Compra por Fornecedor")
-        popup.geometry("760x560")
+        popup.geometry("820x600")
         popup.transient(self.root)
         frame = ttk.Frame(popup, padding=10)
         frame.pack(fill=tk.BOTH, expand=True)
-
-        total_geral = sum(i['total'] for itens in pedido.values() for i in itens)
-        ttk.Label(frame, text=f"{len(pedido)} fornecedor(es) · valor estimado {fmt_reais(total_geral)} "
-                              "(pelo último custo pago)", font=("Arial", 10, "bold")).pack(anchor="w")
-        ttk.Label(frame, text="Escolha o fornecedor, confira a mensagem (dá para editar) e clique em Copiar. "
-                              "Depois é só colar no WhatsApp.", foreground="gray").pack(anchor="w", pady=(0, 8))
-
-        opcoes = [f"{f}  ({len(itens)} itens · {fmt_reais(sum(i['total'] for i in itens))})" for f, itens in pedido.items()]
-        mapa = dict(zip(opcoes, pedido.keys()))
-        combo = ttk.Combobox(frame, values=opcoes, state="readonly")
+        var_pref = tk.StringVar(value='ultimo')
+        linha_pref = ttk.Frame(frame)
+        linha_pref.pack(fill=tk.X)
+        ttk.Label(linha_pref, text="Comprar de:").pack(side=tk.LEFT)
+        lbl_total = ttk.Label(frame, text="", font=("Arial", 10, "bold"))
+        lbl_total.pack(anchor="w", pady=(6, 0))
+        ttk.Label(frame, text="Só entram os itens da tabela (com os filtros atuais) que precisam de compra. "
+                              "Escolha o fornecedor, confira a mensagem (dá para editar) e clique em Copiar.",
+                  foreground="gray", wraplength=780, justify="left").pack(anchor="w", pady=(0, 8))
+        combo = ttk.Combobox(frame, state="readonly")
         combo.pack(fill=tk.X)
         texto = tk.Text(frame, height=18, wrap="word", font=("Consolas", 10))
         texto.pack(fill=tk.BOTH, expand=True, pady=8)
+        estado = {'pedido': {}, 'mapa': {}}
+
+        def montar(*_):
+            pedido = self.montar_pedido_por_fornecedor(var_pref.get())
+            estado['pedido'] = pedido
+            self.ultimo_pedido = pedido
+            opcoes = [f"{f}  ({len(itens)} itens · {fmt_reais(sum(i['total'] for i in itens))})" for f, itens in pedido.items()]
+            estado['mapa'] = dict(zip(opcoes, pedido.keys()))
+            combo['values'] = opcoes
+            total = sum((i['total'] for itens in pedido.values() for i in itens), Decimal('0'))
+            lbl_total.config(text=f"{len(pedido)} fornecedor(es) · valor estimado {fmt_reais(total)}")
+            texto.delete("1.0", tk.END)
+            if opcoes:
+                combo.set(opcoes[0]); mostrar()
+            else:
+                combo.set("")
+                texto.insert("1.0", "Pela sugestão atual (com os filtros da tabela), nenhum produto precisa ser comprado. 🎉")
 
         def mostrar(event=None):
-            fornecedor = mapa.get(combo.get())
+            fornecedor = estado['mapa'].get(combo.get())
             if fornecedor is None:
                 return
             texto.delete("1.0", tk.END)
-            texto.insert("1.0", self.texto_pedido_whatsapp(fornecedor, pedido[fornecedor]))
+            texto.insert("1.0", self.texto_pedido_whatsapp(fornecedor, estado['pedido'][fornecedor]))
 
         def copiar():
             conteudo = texto.get("1.0", tk.END).strip()
             popup.clipboard_clear()
             popup.clipboard_append(conteudo)
-            self.status(f"Pedido de '{mapa.get(combo.get(), '')}' copiado. Cole no WhatsApp com Ctrl+V.")
+            self.status(f"Pedido de '{estado['mapa'].get(combo.get(), '')}' copiado. Cole no WhatsApp com Ctrl+V.")
 
-        def salvar_excel():
-            self.exportar_pedido_excel(pedido, popup)
-
+        for valor, rotulo in (('ultimo', "fornecedor da ÚLTIMA compra"), ('barato', "fornecedor MAIS BARATO (últimos 12 meses)")):
+            ttk.Radiobutton(linha_pref, text=rotulo, value=valor, variable=var_pref, command=montar).pack(side=tk.LEFT, padx=8)
         combo.bind("<<ComboboxSelected>>", mostrar)
-        combo.set(opcoes[0]); mostrar()
-
         botoes = ttk.Frame(frame)
         botoes.pack(fill=tk.X)
         ttk.Button(botoes, text="📋 Copiar mensagem", command=copiar).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 5), ipady=4)
-        ttk.Button(botoes, text="💾 Salvar Excel (todos os fornecedores)", command=salvar_excel).pack(side=tk.LEFT, expand=True, fill=tk.X, ipady=4)
+        ttk.Button(botoes, text="💾 Salvar Excel (todos os fornecedores)",
+                   command=lambda: self.exportar_pedido_excel(estado['pedido'], popup)).pack(side=tk.LEFT, expand=True, fill=tk.X, ipady=4)
+        montar()
+        self._janela_pedido = {'popup': popup, 'preferir': var_pref, 'montar': montar, 'texto': texto,
+                               'combo': combo, 'estado': estado, 'total': lbl_total}
 
     def exportar_pedido_excel(self, pedido, janela_pai=None):
         """Excel com uma aba de resumo e uma aba para cada fornecedor."""
         pai = janela_pai or self.root
+        if not pedido:
+            messagebox.showinfo("Nada para salvar", "O pedido está vazio.", parent=pai)
+            return None
         pd = self._importar_pandas(pai)
         if pd is None:
             return None
@@ -4396,7 +4867,8 @@ class AppGestaoEstoque:
             with pd.ExcelWriter(caminho, engine='openpyxl') as escritor:
                 pd.DataFrame(resumo).to_excel(escritor, sheet_name=nome_aba_excel('Resumo', usados), index=False)
                 for fornecedor, itens in pedido.items():
-                    linhas = [{'Produto': i['nome'], 'Quantidade': float(i['qtd']), 'UN': i['un'],
+                    linhas = [{'Produto': i['nome'], 'Pedir': i.get('texto') or f"{fmt_qtd(i['qtd'])} {i['un']}",
+                               'Quantidade': float(i['qtd']), 'UN': i['un'],
                                'Último custo (R$)': float(i['custo']), 'Total estimado (R$)': float(i['total']),
                                'Situação': i['situacao']} for i in itens]
                     pd.DataFrame(linhas).to_excel(escritor, sheet_name=nome_aba_excel(fornecedor, usados), index=False)
@@ -4410,55 +4882,34 @@ class AppGestaoEstoque:
             return None
 
     def popular_combos_contagem_sugestao(self):
-        """Atualiza os combos da Aba 5 com os dados mais recentes da Aba 4."""
+        """Atualiza os combos da Aba 5 com as contagens salvas (mantendo a escolha do usuário)."""
         try:
             contagens = database.listar_contagens_cabecalho() or []
-            # [DEPURAÇÃO] dicionário próprio da aba 5 (antes dividia com a aba 4)
             selecao_ini_antiga = self.combo_contagem_inicio.get()
             selecao_fim_antiga = self.combo_contagem_fim.get()
             self.mapa_contagens_sugestao.clear()
-
-            # Limpa os combos preventivamente
-            self.combo_contagem_inicio.set('')
-            self.combo_contagem_fim.set('')
-            self.combo_contagem_inicio['values'] = []
-            self.combo_contagem_fim['values'] = []
-
-            # --- NOVA OPÇÃO ESPECIAL ---
-            opcao_primeira_compra = "⏮️ DESDE A PRIMEIRA COMPRA (Histórico Completo)"
-            self.mapa_contagens_sugestao[opcao_primeira_compra] = -1 # Código especial -1
-            
+            self.mapa_contagens_sugestao[self.OPCAO_A_AUTOMATICO] = None
+            self.mapa_contagens_sugestao[self.OPCAO_A_PRIMEIRA_COMPRA] = -2
+            self.mapa_contagens_sugestao[self.OPCAO_A_HISTORICO] = -1
             nomes_contagens = []
-            
-            # Adiciona as contagens físicas reais
             for c in contagens:
-                data_f = fmt_data(c.DataContagem)  # [DEPURAÇÃO] data em texto travava os combos
-                nome_contagem_db = getattr(c, 'NomeContagem', 'Geral')
-                if not nome_contagem_db: nome_contagem_db = 'Geral'
-                
-                nome_display = f"ID: {c.ContagemID} - {data_f} - {nome_contagem_db} ({c.NomeCompleto})"
+                nome_contagem_db = getattr(c, 'NomeContagem', None) or 'Geral'
+                nome_display = f"ID: {c.ContagemID} - {fmt_data(c.DataContagem)} - {nome_contagem_db} ({c.NomeCompleto})"
                 nomes_contagens.append(nome_display)
                 self.mapa_contagens_sugestao[nome_display] = c.ContagemID
-
-            # Configura Combo Final (Apenas contagens reais, pois "Hoje" é sempre uma contagem física)
             self.combo_contagem_fim['values'] = nomes_contagens
-            
-            # Configura Combo Inicial (Contagens Reais + Opção Especial no topo)
-            self.combo_contagem_inicio['values'] = [opcao_primeira_compra] + nomes_contagens
-
-            # Lógica inteligente de seleção padrão
-            # [DEPURAÇÃO] Mantém o que o usuário já tinha escolhido (antes, trocar de aba e voltar
-            # apagava a escolha dos combos).
-            if nomes_contagens:
-                self.combo_contagem_fim.set(selecao_fim_antiga if selecao_fim_antiga in self.mapa_contagens_sugestao else nomes_contagens[0])
-                self.combo_contagem_inicio.set(selecao_ini_antiga if selecao_ini_antiga in self.mapa_contagens_sugestao else opcao_primeira_compra)
-
-            # Preenche o filtro de Fornecedores
+            self.combo_contagem_inicio['values'] = [self.OPCAO_A_AUTOMATICO, self.OPCAO_A_PRIMEIRA_COMPRA,
+                                                    self.OPCAO_A_HISTORICO] + nomes_contagens
+            self.combo_contagem_fim.set(selecao_fim_antiga if selecao_fim_antiga in nomes_contagens
+                                        else (nomes_contagens[0] if nomes_contagens else ''))
+            if selecao_ini_antiga not in self.mapa_contagens_sugestao:
+                pref = self.ler_preferencias().get('sugestao', {})
+                selecao_ini_antiga = pref.get('modo_a') if isinstance(pref, dict) else None
+            self.combo_contagem_inicio.set(selecao_ini_antiga if selecao_ini_antiga in self.mapa_contagens_sugestao
+                                           else self.OPCAO_A_AUTOMATICO)
+            self._ajustar_janela_sugestao()
             fornecedores = database.listar_fornecedores() or []
-            nomes_forn = ["Todos"] + [f"{f.NomeFantasia} (ID: {f.FornecedorID})" for f in fornecedores]
-            if hasattr(self, 'combo_sugestao_fornecedor'):
-                self.combo_sugestao_fornecedor['values'] = nomes_forn
-
+            self.combo_sugestao_fornecedor['values'] = ["Todos"] + [f"{f.NomeFantasia} (ID: {f.FornecedorID})" for f in fornecedores]
         except Exception as e:
             logger.error(f"Erro ao popular combos de contagem (Aba 5): {e}", exc_info=True)
 
