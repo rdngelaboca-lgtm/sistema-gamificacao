@@ -8701,6 +8701,121 @@ def atualizar_custos_itens(alteracoes):
         conn.close()
 
 
+def listar_notas_com_diferenca(diferenca_minima=Decimal('0.05')):
+    """
+    [MELHORIA ST - sem XML] Notas em que o VALOR TOTAL DA NOTA (gravado na importação) é
+    MAIOR que a soma dos itens gravados (quantidade x custo). A diferença costuma ser ST,
+    frete etc. que estavam só no total da nota e ficaram fora do custo — mas também pode ser
+    item de comodato ignorado ou item que não foi salvo (por isso o usuário escolhe as notas).
+    """
+    conn = get_db_connection()
+    if not conn:
+        return []
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT NF.NotaID, NF.NumeroNF, NF.DataEmissao, NF.ValorTotalNF, F.FornecedorID, F.NomeFantasia, F.CNPJ
+            FROM NotasFiscaisEntrada NF
+            LEFT JOIN Fornecedores F ON NF.FornecedorID = F.FornecedorID
+        """)
+        notas = {}
+        for nota_id, numero, dt, valor, forn_id, forn, cnpj in cursor.fetchall():
+            if (cnpj or '').strip() == CNPJ_FORNECEDOR_INTERNO:
+                continue
+            notas[nota_id] = {'NotaID': nota_id, 'NumeroNF': numero or '', 'Data': _como_data(dt), 'ValorNF': _dec(valor),
+                              'FornecedorID': forn_id, 'Fornecedor': forn or '?', 'SomaItens': Decimal('0'), 'Itens': 0}
+        cursor.execute("SELECT NotaID, Quantidade, PrecoCustoUnitario FROM ItensNotaFiscalEntrada WHERE Quantidade > 0")
+        for nota_id, qtd, custo in cursor.fetchall():
+            n = notas.get(nota_id)
+            if n:
+                n['SomaItens'] += _dec(qtd) * _dec(custo)
+                n['Itens'] += 1
+        resultado = []
+        for n in notas.values():
+            n['Diferenca'] = n['ValorNF'] - n['SomaItens']
+            if n['Itens'] and n['SomaItens'] > 0 and n['Diferenca'] >= diferenca_minima:
+                n['Percentual'] = n['Diferenca'] / n['SomaItens'] * 100
+                resultado.append(n)
+        return sorted(resultado, key=lambda n: (n['Data'] or date.min, n['NotaID']), reverse=True)
+    except Exception as e:
+        logger.error(f"Erro ao listar notas com diferença: {e}", exc_info=True)
+        return []
+    finally:
+        conn.close()
+
+
+def _itens_rateio(cursor, nota_id):
+    cursor.execute("SELECT NF.ValorTotalNF FROM NotasFiscaisEntrada NF WHERE NF.NotaID = ?", nota_id)
+    linha = cursor.fetchone()
+    valor_nf = _dec(linha[0]) if linha else Decimal('0')
+    cursor.execute("""
+        SELECT INI.ItemNotaID, INI.Quantidade, INI.PrecoCustoUnitario, PF.DescricaoXML, P.NomeProduto
+        FROM ItensNotaFiscalEntrada INI
+        LEFT JOIN ProdutosFornecedor PF ON INI.ProdutoFornecedorID = PF.ProdutoFornecedorID
+        LEFT JOIN ProdutosEstoque P ON PF.ProdutoID = P.ProdutoID
+        WHERE INI.NotaID = ? AND INI.Quantidade > 0
+    """, nota_id)
+    itens = [{'ItemNotaID': r[0], 'Quantidade': _dec(r[1]), 'CustoAtual': _dec(r[2]),
+              'Descricao': r[3] or '', 'Produto': r[4] or ''} for r in cursor.fetchall()]
+    soma = sum((i['Quantidade'] * i['CustoAtual'] for i in itens), Decimal('0'))
+    diferenca = valor_nf - soma
+    # Cada item recebe a diferença proporcional ao seu valor: custo x (valor da nota / soma dos itens).
+    # Bonificação (custo zero) continua zero.
+    fator = (valor_nf / soma) if soma > 0 and diferenca > 0 else Decimal('1')
+    for i in itens:
+        i['CustoNovo'] = (i['CustoAtual'] * fator).quantize(Decimal('0.0001'))
+    return valor_nf, soma, diferenca, itens
+
+
+def previa_rateio_nota(nota_id):
+    """[MELHORIA ST - sem XML] Como os itens da nota ficariam depois do rateio (não grava nada)."""
+    conn = get_db_connection()
+    if not conn:
+        return []
+    try:
+        return _itens_rateio(conn.cursor(), nota_id)[3]
+    except Exception as e:
+        logger.error(f"Erro na prévia de rateio da nota {nota_id}: {e}", exc_info=True)
+        return []
+    finally:
+        conn.close()
+
+
+def ratear_diferenca_nas_notas(nota_ids):
+    """
+    [MELHORIA ST - sem XML] Reparte, nos itens de cada nota escolhida, a diferença entre o
+    valor total da nota e a soma dos itens (proporcional ao valor de cada item).
+    Só o CUSTO muda (quantidades iguais). Fazer de novo não muda nada: depois do ajuste a
+    soma dos itens já bate com o valor da nota. Devolve (sucesso, mensagem).
+    """
+    conn = get_db_connection()
+    if not conn:
+        return False, "Falha de conexão com o banco de dados."
+    try:
+        cursor = conn.cursor()
+        notas_ok, itens_ok, total = 0, 0, Decimal('0')
+        for nota_id in nota_ids:
+            valor_nf, soma, diferenca, itens = _itens_rateio(cursor, nota_id)
+            if diferenca < Decimal('0.01') or soma <= 0:
+                continue
+            for i in itens:
+                if i['CustoNovo'] != i['CustoAtual']:
+                    cursor.execute("UPDATE ItensNotaFiscalEntrada SET PrecoCustoUnitario = ? WHERE ItemNotaID = ?",
+                                   i['CustoNovo'], i['ItemNotaID'])
+                    itens_ok += 1
+            notas_ok += 1
+            total += diferenca
+        conn.commit()
+        logger.info(f"Rateio pelo valor da nota: {notas_ok} nota(s), {itens_ok} item(ns), R$ {total:.2f} incluídos no custo.")
+        return True, f"{notas_ok} nota(s) ajustada(s), {itens_ok} item(ns), R$ {_br(total, 2)} incluídos no custo."
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro no rateio pelo valor da nota: {e}", exc_info=True)
+        return False, f"Erro ao gravar: {e}"
+    finally:
+        conn.close()
+
+
 def previa_recalculo_vinculo(vinculo_id, novo_fator):
     """
     [MELHORIA] Mostra como ficariam as compras já importadas se o fator mudar.

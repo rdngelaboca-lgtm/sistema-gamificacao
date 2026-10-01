@@ -50,7 +50,7 @@ import json
 import re
 from datetime import datetime, date, timedelta
 from tkcalendar import DateEntry
-from decimal import Decimal, InvalidOperation # <-- Adicionado InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 # [DEPURAÇÃO] O "lxml" NÃO faz parte da lista de instalação do projeto. Antes, se ele
 # não estivesse instalado, esta janela inteira não abria. Agora usamos o lxml se existir
@@ -201,6 +201,7 @@ def fmt_reais(valor):
         v = Decimal(str(valor or 0))
     except (InvalidOperation, ValueError):
         v = Decimal('0')
+    v = v.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)  # 9,405 -> 9,41 (arredondamento comercial)
     return "R$ " + f"{v:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
 
 
@@ -1188,6 +1189,9 @@ class AppGestaoEstoque:
         # [MELHORIA ST] Corrige o custo de notas JÁ SALVAS (ex: importadas sem a ST)
         ttk.Button(frame_botoes, text="🧾 Recalcular custos de notas já salvas",
                    command=self.recalcular_custos_notas_salvas).pack(side=tk.LEFT, padx=(5, 0), ipady=10)
+        # [MELHORIA ST] Sem XML: usa o valor total da nota que já está gravado
+        ttk.Button(frame_botoes, text="🧮 Ajustar notas antigas (sem XML)",
+                   command=self.abrir_ajuste_por_valor_da_nota).pack(side=tk.LEFT, padx=(5, 0), ipady=10)
         # [MELHORIA UX] Placar da importação: quanto falta e quanto já está pronto
         self.lbl_resumo_importacao = ttk.Label(frame_botoes, text="Nenhuma pasta carregada ainda.",
                                                font=("Arial", 10, "bold"))
@@ -1471,6 +1475,189 @@ class AppGestaoEstoque:
         ttk.Button(botoes, text="✅ Aplicar os novos custos", command=aplicar).pack(side=tk.RIGHT, ipady=3)
         ttk.Button(botoes, text="Cancelar", command=popup.destroy).pack(side=tk.RIGHT, padx=5, ipady=3)
         self._janela_recalculo = {'popup': popup, 'tree': tree, 'aplicar': aplicar, 'alteracoes': alteracoes}
+
+    def abrir_ajuste_por_valor_da_nota(self):
+        """
+        [MELHORIA ST - sem XML] Para notas antigas importadas sem a ST (ou frete etc.) que vinha
+        só no total. Compara o VALOR TOTAL DA NOTA (gravado na importação) com a soma dos itens
+        e reparte a diferença nos itens, proporcional ao valor de cada um.
+        A diferença também pode ser item de comodato ignorado ou item não salvo, por isso
+        VOCÊ escolhe as notas (filtro por fornecedor, marcar/desmarcar, prévia dos itens).
+        """
+        popup = Toplevel(self.root)
+        popup.title("🧮 Ajustar custos pelo valor total da nota (sem XML)")
+        popup.geometry("1150x700")
+        popup.transient(self.root)
+        estado = {'notas': [], 'marcadas': set()}
+
+        frame = ttk.Frame(popup, padding=10)
+        frame.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(frame, wraplength=1100, justify="left", text=(
+            "Estas notas têm o VALOR TOTAL maior que a soma dos itens gravados. Normalmente a diferença é ST, FCP-ST "
+            "ou frete que vinham só no total da nota e ficaram FORA do custo. Marque (✔) as notas que você sabe que "
+            "têm ST e clique em Aplicar: a diferença é dividida entre os itens, proporcional ao valor de cada um.")).pack(anchor="w")
+        ttk.Label(frame, foreground="#b35c00", wraplength=1100, justify="left", text=(
+            "⚠️ Diferença GRANDE (laranja) pode NÃO ser imposto: nota com item de comodato (ex: freezer) ou nota salva "
+            "incompleta. Na dúvida, clique na nota e confira os itens embaixo.")).pack(anchor="w", pady=(2, 8))
+
+        filtros = ttk.Frame(frame)
+        filtros.pack(fill=tk.X)
+        ttk.Label(filtros, text="Fornecedor:").pack(side=tk.LEFT)
+        combo_forn = ttk.Combobox(filtros, state="readonly", width=40)
+        combo_forn.pack(side=tk.LEFT, padx=5)
+        ttk.Label(filtros, text="Buscar:").pack(side=tk.LEFT, padx=(10, 3))
+        entry_busca = ttk.Entry(filtros, width=20)
+        entry_busca.pack(side=tk.LEFT)
+        lbl_resumo = ttk.Label(filtros, text="", font=("Arial", 10, "bold"))
+        lbl_resumo.pack(side=tk.RIGHT)
+
+        cols = ('✔', 'Data', 'NF', 'Fornecedor', 'Itens', 'Valor da nota', 'Soma dos itens', 'Diferença', '%')
+        frame_notas = ttk.Frame(frame)
+        frame_notas.pack(fill=tk.BOTH, expand=True, pady=6)
+        tree = criar_tree_zebrada(frame_notas, columns=cols, show='headings', selectmode='browse', height=12)
+        for col, larg, anc in (('✔', 35, 'center'), ('Data', 90, 'center'), ('NF', 80, 'center'), ('Fornecedor', 330, 'w'),
+                               ('Itens', 55, 'center'), ('Valor da nota', 120, 'e'), ('Soma dos itens', 120, 'e'),
+                               ('Diferença', 110, 'e'), ('%', 70, 'e')):
+            if col == '✔':
+                tree.heading(col, text=col)
+            else:
+                tree.heading(col, text=col, command=lambda c=col: self.ordenar_coluna_treeview(tree, c, False))
+            tree.column(col, width=larg, anchor=anc)
+        tree.tag_configure('alerta', background='#ffe3b3')
+        tree.tag_configure('marcada', foreground='#1b7a2f')
+        sb = ttk.Scrollbar(frame_notas, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=sb.set)
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True); sb.pack(side=tk.LEFT, fill=tk.Y)
+
+        lbl_itens = ttk.Label(frame, text="Itens da nota selecionada (prévia — nada é gravado até clicar em Aplicar):",
+                              font=("Arial", 10, "bold"))
+        lbl_itens.pack(anchor="w")
+        cols_i = ('Produto', 'Descrição na nota', 'Qtd', 'Custo atual/unid.', 'Custo novo/unid.', 'Acréscimo no item')
+        tree_itens = criar_tree_zebrada(frame, columns=cols_i, show='headings', height=6)
+        for col, larg, anc in (('Produto', 230, 'w'), ('Descrição na nota', 330, 'w'), ('Qtd', 70, 'e'),
+                               ('Custo atual/unid.', 120, 'e'), ('Custo novo/unid.', 120, 'e'), ('Acréscimo no item', 130, 'e')):
+            tree_itens.heading(col, text=col); tree_itens.column(col, width=larg, anchor=anc)
+        tree_itens.pack(fill=tk.X)
+
+        LIMITE_ALERTA = Decimal('40')   # % acima disso: provavelmente não é só imposto
+
+        def carregar():
+            try:
+                estado['notas'] = database.listar_notas_com_diferenca() or []
+            except Exception as e:
+                logger.error(f"Erro ao listar notas com diferença: {e}", exc_info=True)
+                messagebox.showerror("Erro", f"Falha ao ler as notas:\n{e}", parent=popup)
+                estado['notas'] = []
+            ids = {n['NotaID'] for n in estado['notas']}
+            estado['marcadas'] &= ids
+            fornecedores = sorted({n['Fornecedor'] for n in estado['notas']})
+            atual = combo_forn.get()
+            combo_forn['values'] = ['Todos'] + fornecedores
+            combo_forn.set(atual if atual in fornecedores else 'Todos')
+            mostrar()
+
+        def visiveis():
+            forn = combo_forn.get()
+            palavras = sem_acento(entry_busca.get()).split()
+            for n in estado['notas']:
+                if forn and forn != 'Todos' and n['Fornecedor'] != forn:
+                    continue
+                if palavras and not all(p in sem_acento(f"{n['NumeroNF']} {n['Fornecedor']}") for p in palavras):
+                    continue
+                yield n
+
+        def mostrar():
+            sel = tree.focus()
+            for i in tree.get_children():
+                tree.delete(i)
+            for n in visiveis():
+                marcada = n['NotaID'] in estado['marcadas']
+                tags = (('alerta',) if n['Percentual'] > LIMITE_ALERTA else ()) + (('marcada',) if marcada else ())
+                tree.insert("", "end", iid=f"n{n['NotaID']}", tags=tags, values=(
+                    "✔" if marcada else "", n['Data'].strftime('%d/%m/%Y') if n['Data'] else '?', n['NumeroNF'],
+                    n['Fornecedor'], n['Itens'], fmt_reais(n['ValorNF']), fmt_reais(n['SomaItens']),
+                    fmt_reais(n['Diferenca']), f"{n['Percentual']:.1f}%".replace('.', ',')))
+            if sel and tree.exists(sel):
+                tree.focus(sel); tree.selection_set(sel)
+            marcadas = [n for n in estado['notas'] if n['NotaID'] in estado['marcadas']]
+            total = sum((n['Diferenca'] for n in marcadas), Decimal('0'))
+            lbl_resumo.config(text=f"{len(estado['notas'])} nota(s) com diferença · ✔ {len(marcadas)} marcada(s) = {fmt_reais(total)}")
+
+        def nota_da_linha(iid):
+            return next((n for n in estado['notas'] if f"n{n['NotaID']}" == iid), None)
+
+        def mostrar_itens(event=None):
+            for i in tree_itens.get_children():
+                tree_itens.delete(i)
+            n = nota_da_linha(tree.focus() or '')
+            if not n:
+                return
+            for it in database.previa_rateio_nota(n['NotaID']) or []:
+                acrescimo = (it['CustoNovo'] - it['CustoAtual']) * it['Quantidade']
+                tree_itens.insert("", "end", values=(it['Produto'], it['Descricao'], fmt_qtd(it['Quantidade']),
+                                                     fmt_reais(it['CustoAtual']), fmt_reais(it['CustoNovo']),
+                                                     f"+{fmt_reais(acrescimo)}"))
+            lbl_itens.config(text=f"Itens da NF {n['NumeroNF']} — {n['Fornecedor']} (prévia — nada é gravado até clicar em Aplicar):")
+
+        def alternar(event=None):
+            n = nota_da_linha(tree.focus() or '')
+            if not n:
+                return "break"
+            estado['marcadas'].symmetric_difference_update({n['NotaID']})
+            mostrar()
+            return "break"
+
+        def marcar_visiveis(marcar=True):
+            for n in visiveis():
+                if marcar and n['Percentual'] > LIMITE_ALERTA:
+                    continue   # as de diferença grande ficam para conferir uma a uma
+                (estado['marcadas'].add if marcar else estado['marcadas'].discard)(n['NotaID'])
+            mostrar()
+
+        def aplicar():
+            marcadas = [n for n in estado['notas'] if n['NotaID'] in estado['marcadas']]
+            if not marcadas:
+                messagebox.showwarning("Aviso", "Marque (✔) pelo menos uma nota. Dica: duplo clique na nota ou tecla Espaço.", parent=popup)
+                return
+            total = sum((n['Diferenca'] for n in marcadas), Decimal('0'))
+            grandes = sum(1 for n in marcadas if n['Percentual'] > LIMITE_ALERTA)
+            aviso = f"\n\n⚠️ {grandes} delas têm diferença GRANDE (acima de {LIMITE_ALERTA}%). Confira se é mesmo imposto." if grandes else ""
+            if not messagebox.askyesno("Aplicar ajuste",
+                                       f"Incluir {fmt_reais(total)} no custo dos itens de {len(marcadas)} nota(s)?\n\n"
+                                       "Só o CUSTO muda (as quantidades ficam iguais). Contagens com o valor do estoque "
+                                       f"já FECHADO não mudam.{aviso}", icon='warning' if grandes else 'question', parent=popup):
+                return
+            ok, msg = database.ratear_diferenca_nas_notas([n['NotaID'] for n in marcadas])
+            if ok:
+                self.status(f"Ajuste pelo valor da nota: {msg}")
+                messagebox.showinfo("Pronto", f"{msg}\n\nAbra o '💰 Valor do Estoque' e clique em '🔄 Recalcular' nas contagens "
+                                    "em aberto para ver o efeito.", parent=popup)
+                estado['marcadas'].clear()
+                carregar()
+                for i in tree_itens.get_children():
+                    tree_itens.delete(i)
+            else:
+                messagebox.showerror("Erro", msg, parent=popup)
+
+        combo_forn.bind("<<ComboboxSelected>>", lambda e: mostrar())
+        entry_busca.bind("<KeyRelease>", lambda e: mostrar())
+        tree.bind("<<TreeviewSelect>>", mostrar_itens)
+        tree.bind("<Double-1>", alternar)
+        tree.bind("<space>", alternar)
+
+        botoes = ttk.Frame(popup, padding=(10, 0, 10, 10))
+        botoes.pack(fill=tk.X)
+        ttk.Label(botoes, foreground="gray", text="Duplo clique ou Espaço = marcar/desmarcar a nota.").pack(side=tk.LEFT)
+        ttk.Button(botoes, text="✅ Aplicar nas notas marcadas", command=aplicar).pack(side=tk.RIGHT, ipady=3)
+        ttk.Button(botoes, text="Desmarcar todas", command=lambda: marcar_visiveis(False)).pack(side=tk.RIGHT, padx=5, ipady=3)
+        ttk.Button(botoes, text=f"Marcar todas da lista (menos as acima de {LIMITE_ALERTA}%)",
+                   command=lambda: marcar_visiveis(True)).pack(side=tk.RIGHT, padx=5, ipady=3)
+        carregar()
+        if not estado['notas']:
+            messagebox.showinfo("Nada para ajustar", "Nenhuma nota tem o valor total maior que a soma dos itens. 👍", parent=popup)
+        self._janela_ajuste_nota = {'popup': popup, 'tree': tree, 'itens': tree_itens, 'fornecedor': combo_forn,
+                                    'mostrar': mostrar, 'alternar': alternar, 'marcar': marcar_visiveis,
+                                    'aplicar': aplicar, 'resumo': lbl_resumo, 'mostrar_itens': mostrar_itens}
 
     def atualizar_resumo_importacao(self):
         """[MELHORIA UX] Atualiza o placar e libera o botão 'Salvar' só quando há o que salvar."""
