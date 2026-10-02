@@ -120,12 +120,37 @@ ID_GESTOR = getattr(config, 'ID_GESTOR_PADRAO', 2)
 #   API_LIBERAR_DOCUMENTOS_NA_REDE = True
 # ==============================================================================
 
+def _pedido_veio_da_internet():
+    """
+    [APP DE COMPRAS] True se o pedido chegou pelo túnel da internet (Cloudflare).
+    O túnel roda NO PRÓPRIO computador da loja, então para o servidor o pedido parece
+    vir de 127.0.0.1 (o próprio computador). Sem esta verificação, qualquer pessoa na
+    internet passaria pela proteção dos documentos (holerites) como se fosse "local".
+    O Cloudflare sempre acrescenta estes cabeçalhos aos pedidos que passam por ele.
+    """
+    return any(request.headers.get(h) for h in ('Cf-Connecting-Ip', 'Cf-Ray', 'X-Forwarded-For'))
+
+
 def _pedido_do_proprio_computador():
     """True se o pedido veio do mesmo computador onde o servidor está rodando."""
+    if _pedido_veio_da_internet():
+        return False
     try:
         return ipaddress.ip_address(request.remote_addr or '').is_loopback
     except ValueError:
         return False
+
+
+# [APP DE COMPRAS] Pela internet (túnel) só o app de compras fica disponível.
+# O painel da TV, documentos, agendamentos etc. continuam só na rede da loja.
+CAMINHOS_LIBERADOS_NA_INTERNET = tuple(getattr(config, 'TUNEL_CAMINHOS_LIBERADOS', ('/compras', '/api/compras')))
+
+
+@app.before_request
+def bloquear_internet_fora_do_app():
+    if _pedido_veio_da_internet() and not request.path.startswith(CAMINHOS_LIBERADOS_NA_INTERNET):
+        logger.warning(f"Pedido pela internet BLOQUEADO: {request.path}")
+        return jsonify({"status": "erro", "mensagem": "Não encontrado."}), 404
 
 
 def _chave_api_valida():
@@ -1351,6 +1376,291 @@ def verificar_senha_padrao_admin():
                            "Troque-a na tabela UsuariosAdmin (atenção: o reset_admin.py VOLTA a senha para admin123).")
     except Exception as e:
         logger.debug(f"Não foi possível verificar a senha padrão do admin: {e}")
+
+
+# ==============================================================================
+# == [APP DE COMPRAS] APP DO CELULAR PARA A LISTA DE COMPRAS =====================
+# ==============================================================================
+# Endereço no celular: http://IP-DO-COMPUTADOR:5000/compras  (rede da loja)
+#                  ou: https://SEU-ENDERECO-DO-TUNEL/compras  (internet)
+# Login: cada pessoa escolhe o nome e digita o PIN (cadastre com cadastrar_pin_compras.py).
+# Toda a lógica fica no arquivo compras_database.py.
+# ==============================================================================
+import threading
+import time as _time
+try:
+    import compras_database
+except Exception as _erro_import_compras:          # o resto da API continua funcionando
+    compras_database = None
+    logger.error(f"App de compras DESLIGADO: não consegui carregar compras_database.py ({_erro_import_compras})")
+
+PASTA_APP_COMPRAS = os.path.join(BASE_DIR, 'static', 'compras')
+app.permanent_session_lifetime = timedelta(days=getattr(config, 'COMPRAS_DIAS_LOGADO', 30))
+
+# Freio contra quem tenta adivinhar PIN pela internet: no máximo 20 erros por IP a cada 15 min
+_erros_login_por_ip = {}
+LIMITE_ERROS_POR_IP = 20
+JANELA_ERROS_SEGUNDOS = 15 * 60
+
+
+def _ip_do_cliente():
+    return (request.headers.get('Cf-Connecting-Ip') or request.remote_addr or '?').strip()
+
+
+def _ip_bloqueado(ip):
+    agora = _time.time()
+    tentativas = [t for t in _erros_login_por_ip.get(ip, []) if agora - t < JANELA_ERROS_SEGUNDOS]
+    _erros_login_por_ip[ip] = tentativas
+    return len(tentativas) >= LIMITE_ERROS_POR_IP
+
+
+def _resposta_compras(funcao, *args, status_ok=200, **kwargs):
+    """Executa uma função do compras_database e devolve JSON (erro amigável se falhar)."""
+    if compras_database is None:
+        return jsonify({"erro": "O app de compras não está instalado no servidor (falta compras_database.py)."}), 503
+    try:
+        return jsonify(funcao(*args, **kwargs)), status_ok
+    except compras_database.ErroCompras as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        logger.exception(f"Erro no app de compras ({request.path}): {e}")
+        return jsonify({"erro": "Erro no servidor. Tente de novo; se continuar, avise o gestor."}), 500
+
+
+def compras_login(somente_gestor=False):
+    """Protege as rotas do app: precisa ter entrado com o PIN (e ser gestor, se pedido)."""
+    def decorador(f):
+        @wraps(f)
+        def interno(*args, **kwargs):
+            if compras_database is None:
+                return jsonify({"erro": "App de compras indisponível no servidor."}), 503
+            usuario = session.get('compras_usuario')
+            if not usuario:
+                return jsonify({"erro": "Entre com seu PIN.", "login": True}), 401
+            try:
+                atual = compras_database.usuario_ainda_ativo(usuario['id'])
+            except Exception as e:
+                logger.error(f"App de compras: falha ao conferir usuário: {e}")
+                return jsonify({"erro": "Sem conexão com o banco de dados."}), 503
+            if not atual:
+                session.pop('compras_usuario', None)
+                return jsonify({"erro": "Seu acesso ao app foi desativado.", "login": True}), 401
+            usuario['gestor'] = atual['gestor']          # se o gestor mudou o nível, vale na hora
+            if somente_gestor and not usuario['gestor']:
+                return jsonify({"erro": "Só o gestor pode fazer isso."}), 403
+            return f(usuario, *args, **kwargs)
+        return interno
+    return decorador
+
+
+def _avisar_gestor_telegram(texto):
+    """Manda aviso ao grupo do gestor sem travar o celular esperando o Telegram."""
+    chat = getattr(config, 'COMPRAS_CHAT_ID_AVISOS', None) or getattr(config, 'GESTOR_GROUP_CHAT_ID', None)
+    if not chat:
+        return
+    def enviar():
+        try:
+            enviar_telegram_em_partes(chat, texto)
+        except Exception as e:
+            logger.error(f"App de compras: aviso no Telegram falhou: {e}")
+    threading.Thread(target=enviar, daemon=True).start()
+
+
+def _reais(valor):
+    return f"R$ {float(valor or 0):,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
+
+
+# ---------------------------- páginas e arquivos do app ----------------------------
+
+@app.route('/compras')
+@app.route('/compras/')
+def page_app_compras():
+    resposta = app.make_response(render_template('compras_app.html'))
+    resposta.headers['Cache-Control'] = 'no-cache'
+    return resposta
+
+
+@app.route('/compras/sw.js')
+def app_compras_service_worker():
+    """O 'service worker' é o que deixa o app abrir SEM internet."""
+    resposta = send_from_directory(PASTA_APP_COMPRAS, 'sw.js', mimetype='application/javascript')
+    resposta.headers['Cache-Control'] = 'no-cache'
+    resposta.headers['Service-Worker-Allowed'] = '/compras/'
+    return resposta
+
+
+@app.route('/compras/manifest.webmanifest')
+def app_compras_manifest():
+    return send_from_directory(PASTA_APP_COMPRAS, 'manifest.webmanifest', mimetype='application/manifest+json')
+
+
+@app.route('/compras/arquivos/<path:nome>')
+def app_compras_arquivos(nome):
+    return send_from_directory(PASTA_APP_COMPRAS, nome)
+
+
+# ---------------------------- login com PIN ----------------------------
+
+@app.route('/api/compras/usuarios', methods=['GET'])
+def api_compras_usuarios():
+    return _resposta_compras(compras_database.listar_usuarios_app if compras_database else None)
+
+
+@app.route('/api/compras/login', methods=['POST'])
+def api_compras_login():
+    ip = _ip_do_cliente()
+    if _ip_bloqueado(ip):
+        return jsonify({"erro": "Muitas tentativas erradas deste aparelho. Espere 15 minutos."}), 429
+    dados = ler_json() or {}
+    if compras_database is None:
+        return jsonify({"erro": "App de compras indisponível no servidor."}), 503
+    try:
+        usuario = compras_database.verificar_pin(dados.get('funcionario_id'), dados.get('pin'))
+    except compras_database.ErroCompras as e:
+        _erros_login_por_ip.setdefault(ip, []).append(_time.time())
+        logger.warning(f"App de compras: login recusado (funcionário {dados.get('funcionario_id')}, IP {ip}): {e}")
+        return jsonify({"erro": str(e)}), 401
+    except Exception as e:
+        logger.exception(f"App de compras: erro no login: {e}")
+        return jsonify({"erro": "Sem conexão com o banco de dados."}), 503
+    session.pop('compras_usuario', None)
+    session['compras_usuario'] = {'id': usuario['id'], 'nome': usuario['nome'], 'gestor': usuario['gestor']}
+    session.permanent = True
+    logger.info(f"App de compras: login de {usuario['nome']} (IP {ip})")
+    return jsonify({"usuario": session['compras_usuario']})
+
+
+@app.route('/api/compras/logout', methods=['POST'])
+def api_compras_logout():
+    session.pop('compras_usuario', None)
+    return jsonify({"ok": True})
+
+
+@app.route('/api/compras/eu', methods=['GET'])
+@compras_login()
+def api_compras_eu(usuario):
+    return jsonify({"usuario": usuario})
+
+
+# ---------------------------- rotinas ----------------------------
+
+@app.route('/api/compras/rotinas', methods=['GET'])
+@compras_login()
+def api_compras_rotinas(usuario):
+    return _resposta_compras(compras_database.listar_rotinas, incluir_inativas=False)
+
+
+@app.route('/api/compras/rotinas/<int:rotina_id>', methods=['GET'])
+@compras_login()
+def api_compras_rotina(usuario, rotina_id):
+    return _resposta_compras(compras_database.obter_rotina, rotina_id)
+
+
+@app.route('/api/compras/rotinas', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_compras_salvar_rotina(usuario):
+    dados = ler_json()
+    if not dados:
+        return jsonify({"erro": "Dados da rotina não recebidos."}), 400
+    def salvar():
+        rotina_id = compras_database.salvar_rotina(dados)
+        logger.info(f"App de compras: rotina {rotina_id} salva por {usuario['nome']}")
+        return compras_database.obter_rotina(rotina_id)
+    return _resposta_compras(salvar)
+
+
+@app.route('/api/compras/rotinas/<int:rotina_id>', methods=['DELETE'])
+@compras_login(somente_gestor=True)
+def api_compras_apagar_rotina(usuario, rotina_id):
+    return _resposta_compras(lambda: {"ok": compras_database.desativar_rotina(rotina_id)})
+
+
+@app.route('/api/compras/rotinas/<int:rotina_id>/preparar', methods=['GET'])
+@compras_login()
+def api_compras_preparar(usuario, rotina_id):
+    return _resposta_compras(compras_database.preparar_contagem, rotina_id)
+
+
+@app.route('/api/compras/produtos', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_compras_produtos(usuario):
+    return _resposta_compras(compras_database.buscar_produtos, request.args.get('q', ''))
+
+
+@app.route('/api/compras/fornecedores', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_compras_fornecedores(usuario):
+    return _resposta_compras(compras_database.listar_fornecedores_com_compras)
+
+
+# ---------------------------- listas de compra ----------------------------
+
+@app.route('/api/compras/listas', methods=['GET'])
+@compras_login()
+def api_compras_listas(usuario):
+    return _resposta_compras(compras_database.listar_listas)
+
+
+@app.route('/api/compras/listas', methods=['POST'])
+@compras_login()
+def api_compras_criar_lista(usuario):
+    dados = ler_json()
+    if not dados:
+        return jsonify({"erro": "Contagem não recebida."}), 400
+    def criar():
+        lista = compras_database.registrar_lista(dados.get('codigo'), dados.get('rotina_id'), usuario,
+                                                 dados.get('dias'), dados.get('itens'))
+        if lista['status'] == compras_database.ST_AGUARDANDO and not lista.get('ja_existia'):
+            _avisar_gestor_telegram(
+                f"🛒 <b>Lista de compras para aprovar</b>\n"
+                f"{esc(usuario['nome'])} contou <b>{esc(lista['rotina'])}</b> ({lista['qtd_contados']} itens).\n"
+                f"Para comprar: {lista['qtd_comprar']} itens · ≈ {_reais(lista['valor_estimado'])}\n"
+                f"Abra o app de compras para conferir e aprovar.")
+        return lista
+    return _resposta_compras(criar, status_ok=201)
+
+
+@app.route('/api/compras/listas/<codigo>', methods=['GET'])
+@compras_login()
+def api_compras_lista(usuario, codigo):
+    return _resposta_compras(compras_database.obter_lista, codigo)
+
+
+@app.route('/api/compras/listas/<codigo>/itens', methods=['PATCH'])
+@compras_login()
+def api_compras_itens(usuario, codigo):
+    dados = ler_json() or {}
+    return _resposta_compras(compras_database.atualizar_itens, codigo, dados.get('itens') or [], usuario)
+
+
+@app.route('/api/compras/listas/<codigo>/aprovar', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_compras_aprovar(usuario, codigo):
+    return _resposta_compras(compras_database.aprovar_lista, codigo, usuario)
+
+
+@app.route('/api/compras/listas/<codigo>/cancelar', methods=['POST'])
+@compras_login()
+def api_compras_cancelar(usuario, codigo):
+    return _resposta_compras(compras_database.cancelar_lista, codigo, usuario)
+
+
+@app.route('/api/compras/listas/<codigo>/finalizar', methods=['POST'])
+@compras_login()
+def api_compras_finalizar(usuario, codigo):
+    def finalizar():
+        lista = compras_database.finalizar_lista(codigo, usuario)
+        r = lista['resumo']
+        linhas = [f"✅ <b>Compra finalizada</b> · {esc(lista['rotina'])}",
+                  f"Por {esc(usuario['nome'])}: {r['comprados']} item(ns) comprado(s)."]
+        if r['faltaram']:
+            linhas.append("❌ Não tinha: " + esc(', '.join(r['faltaram'])))
+        if r['sem_marcar']:
+            linhas.append("❔ Sem marcar: " + esc(', '.join(r['sem_marcar'])))
+        linhas.append("📥 Lembrete: importe o XML da nota no Gestão de Estoque para lançar preços e estoque.")
+        _avisar_gestor_telegram("\n".join(linhas))
+        return lista
+    return _resposta_compras(finalizar)
 
 
 if __name__ == "__main__":

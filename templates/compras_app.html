@@ -1,0 +1,1152 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<!-- compras_app.html - App de compras da Gela Boca (abre no celular em /compras) -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0E6B63">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Compras">
+<link rel="manifest" href="/compras/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/compras/arquivos/icone-192.png">
+<link rel="icon" href="/compras/arquivos/icone-192.png">
+<title>Gela Boca · Compras</title>
+<style>
+  :root {
+    --fundo: #F3F6F5; --cartao: #FFFFFF; --texto: #16201F; --suave: #55625F; --linha: #DCE3E1; --linha2: #E6ECEA;
+    --verde: #0E6B63; --verde-esc: #0B564F; --verde-claro: #DDEFEC; --verde-borda: #BFD9D4;
+    --laranja: #B3470F; --laranja-esc: #8A3409; --laranja-claro: #FBE7DA; --cinza: #9AA8A5;
+    color-scheme: light;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--fundo); color: var(--texto);
+    font-family: "Figtree", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 16px; }
+  button, input, select { font-family: inherit; font-size: inherit; color: inherit; }
+  button { cursor: pointer; }
+  #app { max-width: 480px; margin: 0 auto; min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; }
+  .topo { padding: 16px 12px 6px; display: flex; align-items: center; gap: 4px; }
+  .topo h1 { font-size: 20px; font-weight: 800; margin: 0; }
+  .topo .sub { font-size: 14px; color: var(--suave); }
+  .icone-btn { width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; border: 0;
+    background: transparent; border-radius: 12px; flex-shrink: 0; }
+  .icone-btn:active { background: var(--linha2); }
+  .corpo { padding: 8px 16px 16px; display: flex; flex-direction: column; gap: 18px; flex: 1; }
+  .rodape { position: sticky; bottom: 0; padding: 12px 16px calc(16px + env(safe-area-inset-bottom)); background: var(--fundo);
+    display: flex; flex-direction: column; gap: 10px; }
+  .cartao { background: var(--cartao); border: 1px solid var(--linha); border-radius: 16px; padding: 14px 16px; }
+  .rotulo { font-size: 13px; font-weight: 700; color: var(--suave); text-transform: uppercase; letter-spacing: .06em; }
+  .titulo-sec { font-size: 15px; font-weight: 700; }
+  .suave { color: var(--suave); }
+  .pequeno { font-size: 14px; }
+  .mini { font-size: 13px; }
+  .btn { display: flex; align-items: center; justify-content: center; gap: 8px; height: 56px; border-radius: 16px; border: 0;
+    background: var(--verde); color: #fff; font-size: 17px; font-weight: 700; width: 100%; text-decoration: none; }
+  .btn:active { background: var(--verde-esc); }
+  .btn[disabled] { background: var(--cinza); }
+  .btn.claro { background: var(--cartao); color: var(--texto); border: 1px solid var(--linha); }
+  .btn.claro:active { background: var(--linha2); }
+  .btn.laranja { background: var(--laranja); }
+  .btn.medio { height: 48px; font-size: 15px; font-weight: 600; border-radius: 14px; }
+  .linha-btns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .pilula { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 700; padding: 6px 11px; border-radius: 999px; }
+  .p-verde { background: var(--verde-claro); color: var(--verde-esc); }
+  .p-laranja { background: var(--laranja-claro); color: var(--laranja-esc); }
+  .p-cinza { background: var(--linha2); color: var(--suave); }
+  .p-escuro { background: var(--texto); color: #fff; }
+  .destaque { background: var(--verde); color: #fff; border-radius: 20px; padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+  .destaque .btn { background: #fff; color: var(--verde-esc); height: 52px; border-radius: 14px; }
+  .lista-cartoes { display: flex; flex-direction: column; gap: 10px; }
+  .item-rotina { display: flex; align-items: center; gap: 14px; width: 100%; text-align: left; }
+  .quadrado { width: 44px; height: 44px; border-radius: 12px; background: #EEF2F1; display: flex; align-items: center;
+    justify-content: center; color: var(--verde); flex-shrink: 0; }
+  .grow { flex: 1; min-width: 0; }
+  .nome { font-size: 16px; font-weight: 700; }
+  .barra { height: 8px; background: var(--linha2); border-radius: 99px; overflow: hidden; }
+  .barra > div { height: 100%; background: var(--verde); }
+  .navbar { position: sticky; bottom: 0; display: grid; grid-template-columns: repeat(3, 1fr); background: #fff;
+    border-top: 1px solid var(--linha); padding: 6px 0 calc(10px + env(safe-area-inset-bottom)); }
+  .navbar button { border: 0; background: transparent; display: flex; flex-direction: column; align-items: center; gap: 3px;
+    font-size: 12px; font-weight: 600; color: var(--suave); padding: 6px 0; min-height: 52px; }
+  .navbar button.ativo { color: var(--verde); font-weight: 800; }
+  .chips { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+  .chip { height: 52px; border-radius: 14px; border: 1px solid var(--linha); background: #fff; font-size: 17px; font-weight: 700; }
+  .chip.sel { background: var(--verde); color: #fff; border-color: var(--verde); }
+  .chips7 { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+  .chips7 .chip { height: 44px; font-size: 14px; border-radius: 12px; }
+  .opcao { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; background: #fff;
+    border: 1px solid var(--linha); border-radius: 16px; padding: 14px 16px; }
+  .opcao.sel { border: 2px solid var(--verde); padding: 13px 15px; }
+  .radio { width: 22px; height: 22px; border-radius: 99px; border: 2px solid var(--cinza); flex-shrink: 0; }
+  .opcao.sel .radio { border: 7px solid var(--verde); }
+  .info { background: var(--verde-claro); color: var(--verde-esc); border-radius: 12px; padding: 12px 14px; font-size: 15px; line-height: 1.4; }
+  .aviso { background: var(--laranja-claro); color: var(--laranja-esc); border-radius: 12px; padding: 12px 14px; font-size: 14px; line-height: 1.4; font-weight: 600; }
+  .faixa { background: var(--laranja-claro); color: var(--laranja-esc); font-size: 13px; font-weight: 700; padding: 8px 16px;
+    display: flex; align-items: center; gap: 8px; }
+  .faixa.ok { background: var(--verde-claro); color: var(--verde-esc); }
+  .progresso { height: 6px; background: #E0E7E5; border-radius: 99px; overflow: hidden; margin: 6px 16px 0; }
+  .progresso > div { height: 100%; background: var(--verde); }
+  .produto-nome { font-size: 30px; font-weight: 800; letter-spacing: -.02em; line-height: 1.12; }
+  .tabela { display: flex; flex-direction: column; gap: 8px; font-size: 15px; }
+  .tabela > div { display: flex; justify-content: space-between; gap: 10px; }
+  .tabela .div { height: 1px; background: var(--linha2); }
+  .segmento { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); background: var(--linha2); border-radius: 12px; padding: 4px; gap: 4px; }
+  .segmento button { height: 40px; border-radius: 9px; border: 0; background: transparent; font-size: 15px; font-weight: 600; color: var(--suave); }
+  .segmento button.sel { background: #fff; color: var(--texto); font-weight: 700; }
+  .contador { display: flex; align-items: center; justify-content: space-between; background: #fff; border: 1px solid var(--linha);
+    border-radius: 20px; padding: 10px; gap: 8px; }
+  .contador .mm { width: 72px; height: 72px; border-radius: 16px; border: 0; background: var(--linha2); display: flex;
+    align-items: center; justify-content: center; flex-shrink: 0; }
+  .contador .mm.mais { background: var(--verde); color: #fff; }
+  .contador input { width: 100%; min-width: 0; text-align: center; font-size: 52px; font-weight: 800; border: 0; outline: none;
+    background: transparent; padding: 0; }
+  .contador input::placeholder { color: #C9D2CF; }
+  .grupo-forn { display: flex; flex-direction: column; gap: 8px; }
+  .grupo-cab { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+  .linhas { background: #fff; border: 1px solid var(--linha); border-radius: 16px; overflow: hidden; }
+  .linhas > .lin { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-top: 1px solid var(--linha2); }
+  .linhas > .lin:first-child { border-top: 0; }
+  .qtd-btn { min-width: 84px; height: 44px; padding: 0 10px; border-radius: 12px; border: 1px solid var(--verde-borda);
+    background: #EEF7F5; color: var(--verde-esc); font-size: 15px; font-weight: 800; flex-shrink: 0; }
+  .qtd-btn[disabled] { border-color: var(--linha); background: #F7F9F8; color: var(--suave); }
+  .check { width: 32px; height: 32px; border-radius: 10px; border: 2px solid var(--cinza); display: flex; align-items: center;
+    justify-content: center; flex-shrink: 0; color: #fff; }
+  .check.on { background: var(--verde); border-color: var(--verde); }
+  .item-carrinho { display: flex; align-items: center; gap: 12px; background: #fff; border: 1px solid var(--linha);
+    border-radius: 16px; padding: 10px 10px 10px 14px; }
+  .item-carrinho.feito { background: #F7F9F8; }
+  .item-carrinho.feito .nome { color: var(--suave); }
+  .item-carrinho.comprado .nome { text-decoration: line-through; }
+  .item-carrinho .toque { display: flex; align-items: center; gap: 14px; flex: 1; min-width: 0; border: 0; background: transparent;
+    text-align: left; padding: 4px 0; min-height: 44px; }
+  .faltou-btn { height: 40px; padding: 0 12px; border-radius: 99px; border: 1px solid var(--linha); background: #fff;
+    font-size: 13px; font-weight: 700; color: var(--suave); flex-shrink: 0; }
+  .faltou-btn.on { background: var(--laranja-claro); border-color: var(--laranja-claro); color: var(--laranja-esc); }
+  .filtros { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 2px; }
+  .filtro { height: 40px; padding: 0 16px; border-radius: 99px; border: 1px solid var(--linha); background: #fff;
+    font-size: 15px; font-weight: 600; white-space: nowrap; }
+  .filtro.sel { background: var(--texto); border-color: var(--texto); color: #fff; font-weight: 700; }
+  .campo { display: flex; flex-direction: column; gap: 6px; }
+  .campo label { font-size: 15px; font-weight: 700; }
+  .campo input, .campo select { height: 48px; border-radius: 12px; border: 1px solid var(--linha); padding: 0 14px; background: #fff; font-size: 16px; }
+  .campo input:focus { outline: 2px solid var(--verde); border-color: var(--verde); }
+  .marcador { display: flex; align-items: center; gap: 10px; padding: 10px 0; font-size: 15px; }
+  .marcador input { width: 22px; height: 22px; accent-color: var(--verde); }
+  .sec-titulo { padding: 10px 14px 6px; font-size: 12px; font-weight: 800; color: var(--suave); text-transform: uppercase;
+    letter-spacing: .06em; background: #F7F9F8; }
+  .vazio { text-align: center; color: var(--suave); padding: 30px 10px; line-height: 1.5; }
+  .pin-pontos { display: flex; justify-content: center; gap: 16px; margin: 6px 0; }
+  .pin-pontos span { width: 16px; height: 16px; border-radius: 99px; border: 2px solid var(--verde); }
+  .pin-pontos span.on { background: var(--verde); }
+  .teclado { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .teclado button { height: 64px; border-radius: 16px; border: 1px solid var(--linha); background: #fff; font-size: 26px; font-weight: 700; }
+  .teclado button:active { background: var(--linha2); }
+  .modal-fundo { position: fixed; inset: 0; background: rgba(22, 32, 31, .45); display: flex; align-items: flex-end;
+    justify-content: center; z-index: 50; }
+  .modal { background: var(--fundo); width: 100%; max-width: 480px; max-height: 88vh; overflow: auto; border-radius: 22px 22px 0 0;
+    padding: 18px 16px calc(18px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 14px; }
+  .toast { position: fixed; left: 50%; bottom: 96px; transform: translateX(-50%); background: var(--texto); color: #fff;
+    padding: 12px 18px; border-radius: 14px; font-size: 15px; font-weight: 600; z-index: 60; max-width: 90vw; text-align: center; }
+  .escuro { background: var(--texto); color: #fff; border-radius: 18px; padding: 18px; display: flex; flex-direction: column; gap: 10px; }
+  .escuro .suave { color: #C6D3D0; }
+  .numero-grande { font-size: 28px; font-weight: 800; }
+  .ordem-btns { display: flex; gap: 2px; }
+  .ordem-btns button { width: 40px; height: 40px; border: 0; background: transparent; border-radius: 10px; color: var(--suave); }
+  .ordem-btns button:active { background: var(--linha2); }
+  .sec-input { height: 36px; border: 1px solid var(--linha); border-radius: 10px; padding: 0 10px; width: 100%; font-size: 14px; }
+  a { color: var(--verde); }
+</style>
+</head>
+<body>
+<div id="app"><div class="vazio">Carregando…</div></div>
+<script>
+'use strict';
+/* =============================================================================
+   APP DE COMPRAS - Gela Boca
+   Tudo que a pessoa faz fica salvo no celular (localStorage) e é enviado ao
+   servidor quando há internet. Assim dá para contar e marcar o carrinho mesmo
+   sem sinal no mercado.
+   ============================================================================= */
+
+// ---------------------------------------------------------------- utilidades
+const CHAVE = 'gb_compras_v1';
+const $app = document.getElementById('app');
+const DIAS_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];            // 1=Dom ... 7=Sáb (padrão do sistema)
+const FRACIONADAS = ['KG', 'G', 'GR', 'L', 'LT', 'ML', 'M'];
+const PRECO_ANTIGO_DIAS = 30;
+
+function esc(t) {
+  return String(t == null ? '' : t).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+}
+function num(v) { const n = parseFloat(String(v).replace(',', '.')); return isFinite(n) ? n : null; }
+function fmtQtd(n) {
+  if (n == null || !isFinite(n)) return '—';
+  return Number(n).toLocaleString('pt-BR', {maximumFractionDigits: 3});
+}
+function fmtReais(n) { return (n == null) ? '—' : Number(n).toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'}); }
+function hojeISO() { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); }
+function dataBR(iso) { if (!iso) return ''; const [a, m, d] = iso.slice(0, 10).split('-'); return `${d}/${m}`; }
+function diasDesde(iso) {
+  if (!iso) return null;
+  const a = new Date(iso.slice(0, 10) + 'T12:00:00'), b = new Date(hojeISO() + 'T12:00:00');
+  return Math.round((b - a) / 86400000);
+}
+function somarDias(n) { const d = new Date(hojeISO() + 'T12:00:00'); d.setDate(d.getDate() + n); return d; }
+function diaSemanaSistema(d) { return d.getDay() + 1; }
+function novoCodigo() {
+  const r = (window.crypto && crypto.getRandomValues) ? Array.from(crypto.getRandomValues(new Uint8Array(8)), b => b.toString(16).padStart(2, '0')).join('')
+                                                     : Math.random().toString(16).slice(2, 18);
+  return 'L' + Date.now().toString(36) + '-' + r;
+}
+function ehFracionada(un) { return FRACIONADAS.includes(String(un || '').trim().toUpperCase()); }
+function textoQtd(qtd, item) {
+  if (!qtd) return '0';
+  const f = item.fator || 1;
+  if (f > 1 && Math.abs(qtd / f - Math.round(qtd / f)) < 1e-6) {
+    const cx = Math.round(qtd / f);
+    return `${cx} cx (${fmtQtd(qtd)} ${esc(item.unidade)})`;
+  }
+  return `${fmtQtd(qtd)} ${esc(item.unidade)}`;
+}
+
+const ICONES = {
+  voltar: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>',
+  fechar: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>',
+  seta: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>',
+  ok: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
+  carrinho: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="20" r="1.4"/><circle cx="18" cy="20" r="1.4"/><path d="M3 4h2l2.4 11.2a1.5 1.5 0 0 0 1.5 1.2h8.6a1.5 1.5 0 0 0 1.5-1.2L21 8H6.2"/></svg>',
+  casa: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11 12 4l9 7"/><path d="M5 10v10h14V10"/></svg>',
+  listas: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6h11"/><path d="M9 12h11"/><path d="M9 18h11"/><path d="M4 6h.01"/><path d="M4 12h.01"/><path d="M4 18h.01"/></svg>',
+  grafico: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 5-6"/></svg>',
+  menos: '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M5 12h14"/></svg>',
+  mais: '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>',
+  busca: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
+  semNet: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 2l20 20"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M5 12.9a10 10 0 0 1 5.2-2.8"/><path d="M12 20h.01"/></svg>',
+  cima: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 15-6-6-6 6"/></svg>',
+  baixo: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>',
+  lixo: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6 6l1 14h10l1-14"/></svg>',
+  enviar: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/></svg>',
+  sair: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>',
+};
+
+// ---------------------------------------------------------------- dados salvos no celular
+let E = carregar();
+function carregar() {
+  try { const t = localStorage.getItem(CHAVE); if (t) return Object.assign(estadoVazio(), JSON.parse(t)); } catch (e) {}
+  return estadoVazio();
+}
+function estadoVazio() { return {usuario: null, rotinas: [], preparos: {}, ida: null, listas: {}, fila: [], erros: []}; }
+function salvar() {
+  try { localStorage.setItem(CHAVE, JSON.stringify(E)); }
+  catch (e) { toast('Memória do celular cheia: não deu para salvar.'); }
+}
+
+// tela atual (não fica salva)
+let T = {nome: 'inicio', p: {}};
+let online = navigator.onLine;
+
+// ---------------------------------------------------------------- conversa com o servidor
+class ErroApi extends Error { constructor(msg, status, extra) { super(msg); this.status = status; this.extra = extra || {}; } }
+async function api(metodo, url, corpo) {
+  let r;
+  try {
+    r = await fetch(url, {method: metodo, credentials: 'same-origin', cache: 'no-store',
+      headers: corpo ? {'Content-Type': 'application/json'} : {}, body: corpo ? JSON.stringify(corpo) : undefined});
+  } catch (e) {
+    marcarOnline(false);
+    throw new ErroApi('Sem internet', 0, {offline: true});
+  }
+  marcarOnline(true);
+  let dados = null;
+  try { dados = await r.json(); } catch (e) {}
+  if (!r.ok) {
+    if (r.status === 401 && dados && dados.login) { E.usuario = null; salvar(); }
+    // 502/503/504 = o túnel não achou o computador da loja: tratamos como "sem conexão"
+    if ([502, 503, 504].includes(r.status) && !(dados && dados.erro)) throw new ErroApi('Servidor da loja fora do ar', 0, {offline: true});
+    throw new ErroApi((dados && (dados.erro || dados.mensagem)) || `Erro ${r.status}`, r.status, dados || {});
+  }
+  return dados;
+}
+function marcarOnline(v) {
+  if (online !== v) { online = v; if (v) sincronizar(); atualizarFaixaRede(); }
+}
+
+// fila de envios: o que foi feito sem internet espera aqui
+function enfileirar(tarefa) {
+  // mudanças no mesmo item da mesma lista: só a última importa
+  if (tarefa.tipo === 'itens') {
+    const pend = E.fila.find(t => t.tipo === 'itens' && t.codigo === tarefa.codigo && !t.enviando);
+    if (pend) {
+      tarefa.corpo.itens.forEach(novo => {
+        const i = pend.corpo.itens.findIndex(x => x.produto_id === novo.produto_id);
+        if (i >= 0) pend.corpo.itens[i] = Object.assign(pend.corpo.itens[i], novo); else pend.corpo.itens.push(novo);
+      });
+      salvar(); sincronizar(); return;
+    }
+  }
+  E.fila.push(tarefa); salvar(); sincronizar();
+}
+let sincronizando = false;
+async function sincronizar() {
+  if (sincronizando || !E.usuario) return;
+  sincronizando = true;
+  let mudou = false;
+  try {
+    while (E.fila.length) {
+      const t = E.fila[0];
+      t.enviando = true;
+      try {
+        const resp = await api(t.metodo, t.url, t.corpo);
+        E.fila.shift(); mudou = true;
+        if (resp && resp.codigo && resp.itens) guardarLista(resp, true);
+      } catch (e) {
+        t.enviando = false;
+        if (e.extra.offline || e.status === 401 || e.status === 429 || e.status >= 500) break;   // tenta de novo depois
+        E.fila.shift(); mudou = true;                                                          // recusado: avisa e segue
+        E.erros.push({quando: new Date().toISOString(), msg: `${t.descricao || 'Envio'}: ${e.message}`});
+        toast(`Não foi enviado: ${e.message}`);
+        if (t.codigo) atualizarLista(t.codigo, true);
+      }
+      salvar();
+    }
+  } finally {
+    sincronizando = false;
+    salvar();
+    if (mudou) redesenharSePreciso();
+    atualizarFaixaRede();
+  }
+}
+function guardarLista(lista, doServidor) {
+  const antiga = E.listas[lista.codigo];
+  // se ainda há marcações do carrinho esperando envio, mantém o que a pessoa marcou
+  const pend = E.fila.filter(t => t.tipo === 'itens' && t.codigo === lista.codigo);
+  pend.forEach(t => t.corpo.itens.forEach(m => {
+    const it = lista.itens.find(i => i.produto_id === m.produto_id);
+    if (it && 'situacao' in m) it.situacao = m.situacao;
+    if (it && 'qtd_pedido' in m) it.qtd_pedido = num(m.qtd_pedido) || 0;
+  }));
+  if (antiga && antiga.local_status && E.fila.some(t => t.codigo === lista.codigo && t.tipo === 'status')) lista.status = antiga.local_status;
+  lista.local = !doServidor;
+  lista.atualizado = new Date().toISOString();
+  E.listas[lista.codigo] = lista;
+  limparListasAntigas();
+}
+function limparListasAntigas() {
+  const cods = Object.keys(E.listas);
+  if (cods.length <= 25) return;
+  cods.sort((a, b) => (E.listas[a].criada_em || '').localeCompare(E.listas[b].criada_em || ''));
+  for (const c of cods.slice(0, cods.length - 25)) {
+    if (!E.fila.some(t => t.codigo === c) && ['finalizada', 'cancelada'].includes(E.listas[c].status)) delete E.listas[c];
+  }
+}
+async function atualizarLista(codigo, silencioso) {
+  try { guardarLista(await api('GET', `/api/compras/listas/${encodeURIComponent(codigo)}`), true); salvar(); redesenharSePreciso(); }
+  catch (e) { if (!silencioso && !e.extra.offline) toast(e.message); }
+}
+function redesenharSePreciso() {
+  // não redesenha a contagem (perderia o que a pessoa está digitando)
+  if (T.nome !== 'contagem') desenhar();
+}
+window.addEventListener('online', () => { online = true; sincronizar(); atualizarFaixaRede(); });
+window.addEventListener('offline', () => { online = false; atualizarFaixaRede(); });
+setInterval(() => { if (E.fila.length) sincronizar(); }, 20000);
+
+// ---------------------------------------------------------------- navegação
+function ir(nome, p) { T = {nome, p: p || {}}; desenhar(); window.scrollTo(0, 0); }
+function desenhar() {
+  if (!E.usuario && T.nome !== 'login') { T = {nome: 'login', p: {}}; setTimeout(carregarUsuarios, 0); }
+  const f = TELAS[T.nome] || TELAS.inicio;
+  $app.innerHTML = f(T.p);
+  if (TELAS_DEPOIS[T.nome]) TELAS_DEPOIS[T.nome](T.p);
+}
+function toast(msg) {
+  const d = document.createElement('div'); d.className = 'toast'; d.setAttribute('role', 'status'); d.textContent = msg;
+  document.body.appendChild(d); setTimeout(() => d.remove(), 3200);
+}
+function faixaRede() {
+  const pend = E.fila.length;
+  if (!online) return `<div class="faixa" id="faixa-rede">${ICONES.semNet} Sem internet · tudo fica salvo e envia depois${pend ? ` (${pend} pendente${pend > 1 ? 's' : ''})` : ''}</div>`;
+  if (pend) return `<div class="faixa" id="faixa-rede">Enviando ${pend} alteraç${pend > 1 ? 'ões' : 'ão'}…</div>`;
+  return '<div id="faixa-rede"></div>';
+}
+function atualizarFaixaRede() {
+  const el = document.getElementById('faixa-rede');
+  if (el) el.outerHTML = faixaRede();
+}
+function topo(titulo, sub, voltar, extra) {
+  return `<div class="topo">
+    ${voltar ? `<button class="icone-btn" data-acao="${voltar}" aria-label="Voltar">${ICONES.voltar}</button>` : ''}
+    <div class="grow"><h1>${esc(titulo)}</h1>${sub ? `<div class="sub">${esc(sub)}</div>` : ''}</div>${extra || ''}</div>`;
+}
+function navbar(ativa) {
+  const b = (id, ic, txt) => `<button class="${ativa === id ? 'ativo' : ''}" data-acao="nav" data-tela="${id}" ${ativa === id ? 'aria-current="page"' : ''}>${ic}${txt}</button>`;
+  return `<nav class="navbar">${b('inicio', ICONES.casa, 'Início')}${b('listas', ICONES.listas, 'Listas')}${b('consumo', ICONES.grafico, 'Consumo')}</nav>`;
+}
+function abrirModal(html) {
+  fecharModal();
+  const fundo = document.createElement('div'); fundo.className = 'modal-fundo'; fundo.id = 'modal';
+  fundo.innerHTML = `<div class="modal" role="dialog" aria-modal="true">${html}</div>`;
+  fundo.addEventListener('click', e => { if (e.target === fundo) fecharModal(); });
+  document.body.appendChild(fundo);
+  const foco = fundo.querySelector('input'); if (foco) setTimeout(() => foco.focus(), 50);
+}
+function fecharModal() { const m = document.getElementById('modal'); if (m) m.remove(); }
+
+// ---------------------------------------------------------------- cálculo da lista (igual ao servidor)
+function escolherFornecedor(precos, permitidos) {
+  if (!precos || !precos.length) return [null, null];
+  let cand = precos.filter(p => !permitidos.length || permitidos.includes(p.fornecedor_id));
+  let aviso = null;
+  if (!cand.length) { cand = precos.slice(); aviso = 'Nunca comprado nos fornecedores desta rotina'; }
+  cand.sort((a, b) => (a.custo - b.custo) || (b.data || '').localeCompare(a.data || ''));
+  return [cand[0], aviso];
+}
+function arredondar(sug, unidade, fator) {
+  if (sug <= 0) return 0;
+  if (fator > 1) return Math.ceil(sug / fator - 1e-9) * fator;
+  if (ehFracionada(unidade)) return Math.round(sug * 1000) / 1000;
+  return Math.ceil(sug - 1e-9);
+}
+function calcularListaLocal(preparo, ida) {
+  const itens = preparo.itens.map(it => {
+    const contado = ida.contagens[it.produto_id];
+    const alertas = [];
+    let estoque;
+    if (contado != null) estoque = contado;
+    else if (it.estoque_estimado != null) { estoque = it.estoque_estimado; alertas.push('Não contado agora: usado o estoque estimado'); }
+    else { estoque = 0; alertas.push('Sem contagem: estoque considerado zero'); }
+    if (it.alerta) alertas.push(it.alerta);
+    const [preco, aviso] = escolherFornecedor(it.precos, preparo.fornecedores || []);
+    if (aviso) alertas.push(aviso);
+    const sug = Math.max((it.consumo_dia || 0) * ((preparo.prazo_dias || 0) + ida.dias) + (it.estoque_minimo || 0) - estoque, 0);
+    const fator = preco && preco.fator > 1 ? preco.fator : 1;
+    const qtd = arredondar(sug, it.unidade, fator);
+    return {produto_id: it.produto_id, ordem: it.ordem, secao: it.secao, nome: it.nome, unidade: it.unidade,
+            qtd_contada: contado == null ? null : contado, estoque, consumo_dia: it.consumo_dia, estoque_minimo: it.estoque_minimo,
+            qtd_sugerida: sug, qtd_pedido: qtd, fator, caixas: fator > 1 ? qtd / fator : null,
+            fornecedor_id: preco ? preco.fornecedor_id : null, fornecedor: preco ? preco.fornecedor : null,
+            custo: preco ? preco.custo : null, data_preco: preco ? preco.data : null, situacao: '', alerta: alertas.join(' · ') || null};
+  });
+  const valor = itens.reduce((s, i) => s + (i.custo && i.qtd_pedido ? i.custo * i.qtd_pedido : 0), 0);
+  return {codigo: ida.codigo, rotina_id: preparo.id, rotina: preparo.nome, funcionario: E.usuario.nome, funcionario_id: E.usuario.id,
+          criada_em: new Date().toISOString(), dias_cobertura: ida.dias, prazo_dias: preparo.prazo_dias,
+          status: E.usuario.gestor ? 'aprovada' : 'aguardando', valor_estimado: Math.round(valor * 100) / 100, itens,
+          qtd_contados: itens.filter(i => i.qtd_contada != null).length, qtd_comprar: itens.filter(i => i.qtd_pedido > 0).length};
+}
+
+// ================================================================= TELAS
+const TELAS = {}, TELAS_DEPOIS = {};
+
+// ---------------------------------------------------------------- login com PIN
+TELAS.login = p => {
+  if (p.usuario) {
+    const pontos = [0, 1, 2, 3].map(i => `<span class="${i < (p.pin || '').length ? 'on' : ''}"></span>`).join('');
+    const teclas = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', '⌫'].map(k => k === '' ? '<span></span>'
+      : `<button data-acao="pin-tecla" data-k="${k}" aria-label="${k === '⌫' ? 'Apagar' : k}">${k}</button>`).join('');
+    return `${topo('Olá, ' + p.usuario.nome, 'Digite seu PIN de 4 números', 'login-trocar')}
+      <div class="corpo" style="justify-content:center">
+        <div class="pin-pontos" aria-label="${(p.pin || '').length} de 4 números digitados">${pontos}</div>
+        ${p.erro ? `<div class="aviso" role="alert">${esc(p.erro)}</div>` : ''}
+        <div class="teclado">${teclas}</div>
+      </div>`;
+  }
+  const lista = (p.usuarios || []).map(u =>
+    `<button class="opcao" data-acao="login-escolher" data-id="${u.id}" data-nome="${esc(u.nome)}">
+       <div class="quadrado" style="border-radius:99px;font-weight:800">${esc(u.nome.slice(0, 1))}</div><div class="nome">${esc(u.nome)}</div></button>`).join('');
+  return `<div class="topo"><div class="grow"><div class="sub">Gela Boca · Compras</div><h1 style="font-size:26px">Quem é você?</h1></div></div>
+    <div class="corpo">
+      ${p.erro ? `<div class="aviso">${esc(p.erro)}</div>` : ''}
+      <div class="lista-cartoes">${lista || (p.carregando ? '<div class="vazio">Carregando…</div>' : '<div class="vazio">Nenhum usuário cadastrado.<br>O gestor cadastra os PINs no computador da loja.</div>')}</div>
+    </div>`;
+};
+async function carregarUsuarios() {
+  T.p.carregando = true; desenhar();
+  try { T.p.usuarios = await api('GET', '/api/compras/usuarios'); T.p.erro = null; }
+  catch (e) { T.p.erro = e.extra.offline ? 'Sem conexão com o computador da loja. Confira a internet.' : e.message; }
+  T.p.carregando = false; desenhar();
+}
+
+// ---------------------------------------------------------------- início
+TELAS.inicio = () => {
+  const u = E.usuario;
+  const hoje = E.rotinas.filter(r => r.hoje);
+  const ida = E.ida;
+  let principal = '';
+  if (ida) {
+    const prep = E.preparos[ida.rotina_id];
+    const total = prep ? prep.itens.length : 0;
+    const feitos = Object.keys(ida.contagens).length;
+    principal = `<div class="destaque"><div><div class="rotulo" style="color:#CDEBE6">Contagem em andamento</div>
+        <div style="font-size:22px;font-weight:800">${esc(prep ? prep.nome : 'Rotina')}</div>
+        <div style="color:#E3F4F1">${feitos} de ${total} itens · para ${ida.dias} dias</div></div>
+        <button class="btn" data-acao="continuar-ida">Continuar contagem ${ICONES.seta}</button></div>`;
+  } else if (hoje.length) {
+    const r = hoje[0];
+    principal = `<div class="destaque"><div><div class="rotulo" style="color:#CDEBE6">Hoje · ${esc(new Date().toLocaleDateString('pt-BR', {weekday: 'long', day: '2-digit', month: '2-digit'}))}</div>
+        <div style="font-size:22px;font-weight:800">${esc(r.nome)}</div>
+        <div style="color:#E3F4F1">${r.qtd_itens} itens para contar</div></div>
+        <button class="btn" data-acao="nova-ida" data-id="${r.id}">Começar contagem ${ICONES.seta}</button></div>`;
+  }
+  const abertas = Object.values(E.listas).filter(l => ['aguardando', 'aprovada'].includes(l.status))
+    .sort((a, b) => (b.criada_em || '').localeCompare(a.criada_em || ''));
+  const cartoesListas = abertas.map(cartaoLista).join('');
+  const rotinas = E.rotinas.map(r => `<button class="cartao item-rotina" data-acao="nova-ida" data-id="${r.id}">
+      <div class="quadrado">${ICONES.carrinho}</div>
+      <div class="grow"><div class="nome">${esc(r.nome)}</div><div class="pequeno suave">${r.qtd_itens} itens · ${esc(textoDias(r.dias_semana))}</div></div>
+      <div class="mini" style="font-weight:800;color:${r.hoje ? 'var(--laranja)' : 'var(--suave)'}">${r.hoje ? 'HOJE' : (r.proxima ? dataBR(r.proxima) : '')}</div></button>`).join('');
+  return `${faixaRede()}
+    <div class="topo" style="padding:20px 16px 4px;align-items:flex-start">
+      <div class="grow"><div class="sub">Gela Boca · Compras</div><h1 style="font-size:26px">Olá, ${esc(u.nome)}</h1></div>
+      <button class="icone-btn" data-acao="sair" aria-label="Sair (trocar de usuário)">${ICONES.sair}</button></div>
+    <div class="corpo">
+      ${principal}
+      ${abertas.length ? `<div class="lista-cartoes"><div class="rotulo">Listas abertas</div>${cartoesListas}</div>` : ''}
+      <div class="lista-cartoes">
+        <div style="display:flex;justify-content:space-between;align-items:baseline"><div class="rotulo">Rotinas de compra</div>
+          ${u.gestor ? '<button class="icone-btn" style="width:auto;padding:0 8px;color:var(--verde);font-weight:700" data-acao="nav" data-tela="rotinas">Gerenciar</button>' : ''}</div>
+        ${rotinas || `<div class="vazio">Nenhuma rotina criada ainda.${u.gestor ? '<br>Toque em <b>Gerenciar</b> para criar a primeira.' : '<br>Peça ao gestor para criar.'}</div>`}
+      </div>
+    </div>${navbar('inicio')}`;
+};
+function textoDias(dias) {
+  if (!dias || !dias.length) return 'sem dia fixo';
+  return dias.map(d => DIAS_SEMANA[d - 1].toLowerCase()).join(', ');
+}
+function cartaoLista(l) {
+  const comprar = l.qtd_comprar != null ? l.qtd_comprar : (l.itens || []).filter(i => i.qtd_pedido > 0).length;
+  const marcados = l.qtd_marcados != null ? l.qtd_marcados : (l.itens || []).filter(i => i.qtd_pedido > 0 && i.situacao).length;
+  const st = {aguardando: ['p-laranja', 'Aguardando aprovação'], aprovada: ['p-verde', 'Aprovada'], finalizada: ['p-cinza', 'Finalizada'],
+              cancelada: ['p-cinza', 'Cancelada']}[l.status] || ['p-cinza', l.status];
+  const pct = comprar ? Math.round(100 * marcados / comprar) : 0;
+  return `<button class="cartao" style="text-align:left;display:flex;flex-direction:column;gap:10px;width:100%" data-acao="abrir-lista" data-codigo="${esc(l.codigo)}">
+    <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;width:100%">
+      <div class="nome">${esc(l.rotina)} · ${dataBR(l.criada_em)}</div><span class="pilula ${st[0]}">${st[1]}</span></div>
+    ${l.status === 'aprovada' ? `<div class="barra" style="width:100%"><div style="width:${pct}%"></div></div>` : ''}
+    <div class="pequeno suave">${esc(l.funcionario || '')} · ${comprar} para comprar${l.status === 'aprovada' ? ` · ${marcados} marcados` : ''}${l.local ? ' · ainda não enviada' : ''}</div></button>`;
+}
+async function carregarInicio() {
+  try { E.rotinas = await api('GET', '/api/compras/rotinas'); salvar(); }
+  catch (e) { if (e.status === 401) return desenhar(); }
+  try {
+    const listas = await api('GET', '/api/compras/listas');
+    // a tela inicial mostra as abertas; os detalhes são buscados ao abrir
+    for (const l of listas) {
+      const atual = E.listas[l.codigo];
+      if (!atual) { E.listas[l.codigo] = Object.assign({itens: null}, l); continue; }
+      if (!atual.local) Object.assign(atual, {status: l.status, qtd_comprar: l.qtd_comprar, qtd_marcados: l.qtd_marcados, valor_estimado: l.valor_estimado});
+    }
+    // lista que sumiu do servidor (ex.: cancelada há muito tempo) e não tem nada pendente
+    salvar();
+  } catch (e) {}
+  if (T.nome === 'inicio') desenhar();
+}
+
+// ---------------------------------------------------------------- nova ida
+TELAS.novaIda = p => {
+  const rot = E.rotinas.find(r => r.id === p.rotina_id) || E.rotinas[0];
+  if (!rot) return `${topo('Nova ida ao mercado', '', 'nav-inicio')}<div class="corpo"><div class="vazio">Nenhuma rotina.</div></div>`;
+  if (p.dias == null) p.dias = rot.dias_cobertura || 7;
+  const opcoes = E.rotinas.map(r => `<button class="opcao ${r.id === rot.id ? 'sel' : ''}" data-acao="ida-rotina" data-id="${r.id}" aria-pressed="${r.id === rot.id}">
+      <div class="radio"></div><div><div class="nome">${esc(r.nome)}</div><div class="pequeno suave">${r.qtd_itens} itens</div></div></button>`).join('');
+  const padrao = [3, 5, 7, 10, 15];
+  const chips = padrao.map(n => `<button class="chip ${p.dias === n ? 'sel' : ''}" data-acao="ida-dias" data-n="${n}" aria-pressed="${p.dias === n}">${n} dias</button>`).join('')
+    + `<button class="chip ${padrao.includes(p.dias) ? '' : 'sel'}" data-acao="ida-dias-outro">${padrao.includes(p.dias) ? 'Outro' : p.dias + ' dias'}</button>`;
+  const ate = somarDias(p.dias);
+  const prazo = rot.prazo_dias ? ` (mais ${rot.prazo_dias} dia${rot.prazo_dias > 1 ? 's' : ''} de prazo de entrega)` : '';
+  return `${topo('Nova ida ao mercado', '', 'nav-inicio')}
+    <div class="corpo">
+      <div class="lista-cartoes"><div class="titulo-sec">Qual rotina?</div>${opcoes}</div>
+      <div class="lista-cartoes"><div class="titulo-sec">Comprar para quantos dias?</div><div class="chips">${chips}</div>
+        <div class="info">A lista vai cobrir até <strong>${esc(ate.toLocaleDateString('pt-BR', {weekday: 'long', day: '2-digit', month: '2-digit'}))}</strong>${esc(prazo)}.</div></div>
+      <div class="lista-cartoes"><div class="titulo-sec">Quem está contando</div>
+        <div class="cartao" style="display:flex;align-items:center;gap:12px"><div class="quadrado" style="border-radius:99px;background:var(--verde);color:#fff;font-weight:800">${esc(E.usuario.nome.slice(0, 1))}</div>
+          <div><div class="nome">${esc(E.usuario.nome)}${E.usuario.gestor ? ' (gestor)' : ''}</div>
+          <div class="pequeno suave">${E.usuario.gestor ? 'A lista sai aprovada direto' : 'A lista vai para o gestor aprovar'}</div></div></div></div>
+    </div>
+    <div class="rodape"><button class="btn" data-acao="ida-comecar" data-id="${rot.id}" ${p.carregando ? 'disabled' : ''}>${p.carregando ? 'Preparando…' : `Começar · ${rot.qtd_itens} itens`}</button></div>`;
+};
+async function comecarIda(rotinaId, dias) {
+  T.p.carregando = true; desenhar();
+  let prep = null;
+  try { prep = await api('GET', `/api/compras/rotinas/${rotinaId}/preparar`); E.preparos[rotinaId] = prep; salvar(); }
+  catch (e) {
+    if (!e.extra.offline) { T.p.carregando = false; desenhar(); return toast(e.message); }
+    prep = E.preparos[rotinaId];
+    if (!prep) { T.p.carregando = false; desenhar(); return toast('Sem internet e esta rotina ainda não foi baixada neste celular.'); }
+    toast('Sem internet: usando os dados salvos de ' + dataBR(prep.gerado_em));
+  }
+  if (!prep.itens.length) { T.p.carregando = false; desenhar(); return toast('Esta rotina não tem itens.'); }
+  E.ida = {codigo: novoCodigo(), rotina_id: rotinaId, dias, idx: 0, contagens: {}, modo: {}, iniciada: new Date().toISOString()};
+  salvar();
+  ir('contagem');
+}
+
+// ---------------------------------------------------------------- contagem item a item
+TELAS.contagem = () => {
+  const ida = E.ida, prep = ida && E.preparos[ida.rotina_id];
+  if (!prep) { E.ida = null; salvar(); return TELAS.inicio(); }
+  const total = prep.itens.length, i = Math.min(ida.idx, total - 1), it = prep.itens[i];
+  const caixa = (it.caixas || [])[0];
+  const modo = caixa && ida.modo[it.produto_id] === 'cx' ? 'cx' : 'un';
+  const valorUn = ida.contagens[it.produto_id];
+  const mostrar = valorUn == null ? '' : fmtQtd(modo === 'cx' ? valorUn / caixa : valorUn).replace(/\./g, '');
+  const linhas = [];
+  if (it.ultima_contagem) linhas.push(['Contagem de ' + dataBR(it.ultima_contagem.data), fmtQtd(it.ultima_contagem.qtd) + ' ' + it.unidade]);
+  if (it.compras_depois) linhas.push(['Comprou depois', '+ ' + fmtQtd(it.compras_depois) + ' ' + it.unidade]);
+  if (it.consumo_dia) linhas.push(['Gasta em média', fmtQtd(it.consumo_dia) + ' ' + it.unidade + '/dia']);
+  const tabela = linhas.map(([a, b]) => `<div><span class="suave">${esc(a)}</span><strong>${esc(b)}</strong></div>`).join('')
+    + (it.estoque_estimado != null ? `<div class="div"></div><div style="color:var(--verde-esc)"><span style="font-weight:600">Deve ter hoje</span><strong>≈ ${fmtQtd(Math.round(it.estoque_estimado))} ${esc(it.unidade)}</strong></div>` : '');
+  const ultimo = i === total - 1;
+  const proximo = ultimo ? 'Ver lista de compras' : 'Próximo: ' + prep.itens[i + 1].nome;
+  return `<div class="topo" style="justify-content:space-between">
+      <button class="icone-btn" data-acao="${i > 0 ? 'cont-anterior' : 'cont-sair'}" aria-label="${i > 0 ? 'Item anterior' : 'Sair da contagem'}">${i > 0 ? ICONES.voltar : ICONES.fechar}</button>
+      <div style="font-weight:700">${i + 1} de ${total}</div>
+      <button class="icone-btn" data-acao="cont-indice" aria-label="Ver todos os itens">${ICONES.busca}</button></div>
+    <div class="progresso"><div style="width:${Math.round(100 * (i + 1) / total)}%"></div></div>
+    <div class="corpo" style="padding-top:18px">
+      <div style="display:flex;flex-direction:column;gap:8px">
+        ${it.secao ? `<span class="pilula p-cinza" style="align-self:flex-start">${esc(it.secao)}</span>` : ''}
+        <div class="produto-nome">${esc(it.nome)}</div></div>
+      ${it.contado_hoje ? `<div class="aviso">Já contado hoje em "${esc(it.contado_hoje.contagens.join(', '))}": ${fmtQtd(it.contado_hoje.qtd)} ${esc(it.unidade)}. No Gestão de Estoque as contagens do mesmo dia são SOMADAS: aqui conte só o que não entrou lá.</div>` : ''}
+      ${tabela ? `<div class="cartao tabela">${tabela}</div>` : '<div class="info">Primeira vez que este item é contado. Depois de duas contagens o app aprende o consumo.</div>'}
+      ${it.alerta && it.ultima_contagem ? `<div class="mini" style="color:var(--laranja);font-weight:700">⚠ ${esc(it.alerta)}</div>` : ''}
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div class="titulo-sec">Quanto tem agora?</div>
+        ${caixa ? `<div class="segmento" role="group" aria-label="Contar em">
+            <button class="${modo === 'un' ? 'sel' : ''}" data-acao="cont-modo" data-m="un" aria-pressed="${modo === 'un'}">${ehFracionada(it.unidade) ? esc(it.unidade) : 'Unidades'}</button>
+            <button class="${modo === 'cx' ? 'sel' : ''}" data-acao="cont-modo" data-m="cx" aria-pressed="${modo === 'cx'}">Caixas (${fmtQtd(caixa)} ${esc(it.unidade)})</button></div>` : ''}
+        <div class="contador">
+          <button class="mm" data-acao="cont-menos" aria-label="Diminuir">${ICONES.menos}</button>
+          <div class="grow" style="display:flex;flex-direction:column;align-items:center">
+            <input id="qtd" inputmode="decimal" autocomplete="off" placeholder="—" value="${esc(mostrar)}" aria-label="Quantidade contada">
+            <div class="pequeno suave" id="qtd-un" style="font-weight:600">${textoUnidadeContagem(valorUn, modo, it, caixa)}</div></div>
+          <button class="mm mais" data-acao="cont-mais" aria-label="Aumentar">${ICONES.mais}</button></div>
+        <div class="linha-btns">
+          <button class="btn claro medio" data-acao="cont-zero">Acabou (0)</button>
+          <button class="btn claro medio" data-acao="cont-pular">Pular por agora</button></div>
+      </div>
+    </div>
+    <div class="rodape">
+      <div class="mini suave" style="text-align:center">Salvo no celular a cada número · funciona sem internet</div>
+      <button class="btn" data-acao="cont-proximo">${esc(proximo)} ${ICONES.seta}</button></div>`;
+};
+function textoUnidadeContagem(valorUn, modo, it, caixa) {
+  if (valorUn == null) return 'sem número = pular';
+  if (modo === 'cx') return `caixas = ${fmtQtd(valorUn)} ${esc(it.unidade)}`;
+  return esc(it.unidade);
+}
+TELAS_DEPOIS.contagem = () => {
+  const campo = document.getElementById('qtd');
+  if (!campo) return;
+  campo.addEventListener('input', () => registrarDigitado(campo.value));
+  campo.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); acoes['cont-proximo'](); } });
+};
+function itemAtual() { const prep = E.preparos[E.ida.rotina_id]; return prep.itens[Math.min(E.ida.idx, prep.itens.length - 1)]; }
+function fatorAtual(it) { const cx = (it.caixas || [])[0]; return cx && E.ida.modo[it.produto_id] === 'cx' ? cx : 1; }
+function registrarDigitado(texto) {
+  const it = itemAtual(), f = fatorAtual(it);
+  const t = String(texto).trim();
+  if (t === '') delete E.ida.contagens[it.produto_id];
+  else {
+    const v = num(t);
+    if (v == null || v < 0 || v > 1000000) { document.getElementById('qtd-un').textContent = 'número inválido'; return; }
+    E.ida.contagens[it.produto_id] = Math.round(v * f * 1000) / 1000;
+  }
+  salvar();
+  const caixa = (it.caixas || [])[0];
+  document.getElementById('qtd-un').innerHTML = textoUnidadeContagem(E.ida.contagens[it.produto_id], f > 1 ? 'cx' : 'un', it, caixa);
+}
+function mudarQtd(delta) {
+  const it = itemAtual(), f = fatorAtual(it);
+  const atual = E.ida.contagens[it.produto_id];
+  const emTela = atual == null ? 0 : atual / f;
+  const novo = Math.max(0, Math.round((emTela + delta) * 1000) / 1000);
+  E.ida.contagens[it.produto_id] = Math.round(novo * f * 1000) / 1000; salvar();
+  const campo = document.getElementById('qtd');
+  campo.value = fmtQtd(novo).replace(/\./g, '');
+  registrarDigitado(campo.value);
+}
+async function terminarContagem() {
+  const ida = E.ida, prep = E.preparos[ida.rotina_id];
+  const corpo = {codigo: ida.codigo, rotina_id: ida.rotina_id, dias: ida.dias,
+                 itens: prep.itens.map(it => ({produto_id: it.produto_id, qtd: ida.contagens[it.produto_id] == null ? null : ida.contagens[it.produto_id]}))};
+  const pulados = prep.itens.filter(it => ida.contagens[it.produto_id] == null).length;
+  if (pulados && !confirm(`${pulados} item(ns) ficaram sem número e vão usar o estoque estimado. Ver a lista assim mesmo?`)) return;
+  abrirModal('<div class="vazio">Calculando a lista…</div>');
+  try {
+    const lista = await api('POST', '/api/compras/listas', corpo);
+    guardarLista(lista, true);
+  } catch (e) {
+    if (!e.extra.offline) { fecharModal(); return toast(e.message); }
+    guardarLista(calcularListaLocal(prep, ida), false);
+    E.fila.push({tipo: 'lista', codigo: ida.codigo, metodo: 'POST', url: '/api/compras/listas', corpo, descricao: 'Contagem de ' + prep.nome});
+    toast('Sem internet: lista calculada no celular. Será enviada quando conectar.');
+  }
+  E.ida = null; salvar(); fecharModal();
+  ir('lista', {codigo: corpo.codigo});
+}
+
+// ---------------------------------------------------------------- lista sugerida
+TELAS.lista = p => {
+  const l = E.listas[p.codigo];
+  if (!l || !l.itens) return `${topo('Lista', '', 'nav-inicio')}<div class="corpo"><div class="vazio">${online ? 'Carregando…' : 'Esta lista não está salva neste celular. Conecte à internet.'}</div></div>`;
+  const comprar = l.itens.filter(i => i.qtd_pedido > 0);
+  const naoPrecisa = l.itens.filter(i => !(i.qtd_pedido > 0));
+  const grupos = agruparPorFornecedor(comprar);
+  const podeQtd = l.status === 'aprovada' || (l.status === 'aguardando' && E.usuario.gestor);
+  const corpoGrupos = grupos.map(g => `<div class="grupo-forn">
+      <div class="grupo-cab"><div class="nome">${esc(g.nome)}</div><div class="pequeno suave" style="font-weight:600">${g.itens.length} ite${g.itens.length > 1 ? 'ns' : 'm'}${g.valor ? ' · ≈ ' + fmtReais(g.valor) : ''}</div></div>
+      <div class="linhas">${g.itens.map(i => linhaItemLista(i, podeQtd, l)).join('')}</div></div>`).join('');
+  const st = {aguardando: `<div class="aviso">${E.usuario.gestor ? 'Contada por ' + esc(l.funcionario) + '. Confira as quantidades e aprove.' : 'Aguardando o gestor aprovar. Você recebe a lista aprovada aqui.'}</div>`,
+              finalizada: '<div class="info">Compra finalizada.</div>', cancelada: '<div class="aviso">Lista cancelada.</div>'}[l.status] || '';
+  let botoes = '';
+  if (l.status === 'aguardando' && E.usuario.gestor) botoes = `<button class="btn" data-acao="lista-aprovar" data-codigo="${esc(l.codigo)}">Aprovar lista</button>`;
+  else if (l.status === 'aguardando') botoes = `<button class="btn claro" data-acao="lista-atualizar" data-codigo="${esc(l.codigo)}">Atualizar situação</button>`;
+  else if (l.status === 'aprovada') botoes = `<button class="btn" data-acao="abrir-carrinho" data-codigo="${esc(l.codigo)}">${comprar.some(i => i.situacao) ? 'Continuar compra' : 'Começar compra'}</button>`;
+  const compartilhar = `<button class="icone-btn" style="width:56px;height:56px;border:1px solid var(--linha);background:#fff;border-radius:16px" data-acao="lista-compartilhar" data-codigo="${esc(l.codigo)}" aria-label="Compartilhar a lista">${ICONES.enviar}</button>`;
+  return `${faixaRede()}${topo('Lista para ' + l.dias_cobertura + ' dias', `${l.rotina} · ${l.qtd_contados != null ? l.qtd_contados : '?'} contados · ${comprar.length} para comprar`, 'nav-inicio')}
+    <div class="corpo">
+      ${l.local ? '<div class="aviso">Calculada no celular, sem internet. Os números podem mudar um pouco quando a lista for enviada.</div>' : ''}
+      ${st}
+      <div class="cartao" style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+        <div><div class="mini suave" style="font-weight:600">Estimativa pelos últimos preços</div><div style="font-size:24px;font-weight:800">≈ ${fmtReais(l.valor_estimado)}</div></div>
+        ${podeQtd ? '<div class="mini suave" style="text-align:right;line-height:1.35">Toque na quantidade<br>para ajustar</div>' : ''}</div>
+      ${corpoGrupos || '<div class="vazio">Nada para comprar nesta lista. 🎉</div>'}
+      ${naoPrecisa.length ? `<details class="cartao"><summary style="font-weight:700;cursor:pointer;min-height:28px">Não precisa comprar (${naoPrecisa.length})</summary>
+          <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px">${naoPrecisa.map(i => `<div class="pequeno"><b>${esc(i.nome)}</b> <span class="suave">· tem ${fmtQtd(i.estoque)} ${esc(i.unidade)}${i.consumo_dia ? ' · dura ~' + Math.floor(i.estoque / i.consumo_dia) + ' dias' : ''}</span>${i.alerta ? `<div class="mini" style="color:var(--laranja)">${esc(i.alerta)}</div>` : ''}</div>`).join('')}</div></details>` : ''}
+      ${['aguardando', 'aprovada'].includes(l.status) && (E.usuario.gestor || l.funcionario_id === E.usuario.id) ? `<button class="btn claro medio" data-acao="lista-cancelar" data-codigo="${esc(l.codigo)}">Cancelar esta lista</button>` : ''}
+    </div>
+    ${botoes ? `<div class="rodape"><div style="display:grid;grid-template-columns:56px minmax(0,1fr);gap:10px">${compartilhar}${botoes}</div></div>` : ''}`;
+};
+function agruparPorFornecedor(itens) {
+  const mapa = new Map();
+  for (const i of itens) {
+    const chave = i.fornecedor || 'Sem preço registrado';
+    if (!mapa.has(chave)) mapa.set(chave, {nome: chave, itens: [], valor: 0});
+    const g = mapa.get(chave); g.itens.push(i); if (i.custo) g.valor += i.custo * i.qtd_pedido;
+  }
+  return [...mapa.values()].sort((a, b) => (a.nome === 'Sem preço registrado') - (b.nome === 'Sem preço registrado') || b.itens.length - a.itens.length);
+}
+function linhaItemLista(i, podeQtd, l) {
+  let preco = 'Nenhuma compra no sistema ainda', cor = 'var(--laranja)', peso = 700;
+  if (i.custo) {
+    const d = diasDesde(i.data_preco);
+    const antigo = d != null && d > PRECO_ANTIGO_DIAS;
+    preco = `${fmtReais(i.custo)}/${esc(i.unidade).toLowerCase()} · ${d === 0 ? 'hoje' : d === 1 ? 'há 1 dia' : 'há ' + d + ' dias'}${antigo ? ' (preço antigo)' : ''}`;
+    cor = antigo ? 'var(--laranja)' : 'var(--suave)'; peso = antigo ? 700 : 500;
+  }
+  const marca = i.situacao === 'comprado' ? ' · <b style="color:var(--verde)">no carrinho</b>' : i.situacao === 'faltou' ? ' · <b style="color:var(--laranja)">não tinha</b>' : '';
+  return `<div class="lin"><div class="grow"><div style="font-size:15px;font-weight:700">${esc(i.nome)}</div>
+      <div class="mini" style="color:${cor};font-weight:${peso}">${preco}${marca}</div>
+      ${i.alerta ? `<div class="mini" style="color:var(--laranja)">${esc(i.alerta)}</div>` : ''}</div>
+    <button class="qtd-btn" data-acao="lista-qtd" data-codigo="${esc(l.codigo)}" data-pid="${i.produto_id}" ${podeQtd ? '' : 'disabled'} aria-label="Quantidade de ${esc(i.nome)}: ${textoQtd(i.qtd_pedido, i)}">${textoQtd(i.qtd_pedido, i)}</button></div>`;
+}
+function textoListaParaCompartilhar(l) {
+  const linhas = [`🛒 ${l.rotina} · para ${l.dias_cobertura} dias`];
+  for (const g of agruparPorFornecedor(l.itens.filter(i => i.qtd_pedido > 0))) {
+    linhas.push('', `*${g.nome}*`);
+    g.itens.forEach(i => linhas.push(`- ${i.nome}: ${textoQtd(i.qtd_pedido, i).replace(/&amp;/g, '&')}`));
+  }
+  linhas.push('', `Estimativa: ${fmtReais(l.valor_estimado)}`);
+  return linhas.join('\n');
+}
+function mudarItensLista(codigo, mudancas, descricao) {
+  const l = E.listas[codigo];
+  mudancas.forEach(m => {
+    const it = l.itens.find(i => i.produto_id === m.produto_id);
+    if (!it) return;
+    if ('situacao' in m) it.situacao = m.situacao;
+    if ('qtd_pedido' in m) it.qtd_pedido = m.qtd_pedido;
+  });
+  l.valor_estimado = Math.round(l.itens.reduce((s, i) => s + (i.custo && i.qtd_pedido ? i.custo * i.qtd_pedido : 0), 0) * 100) / 100;
+  enfileirar({tipo: 'itens', codigo, metodo: 'PATCH', url: `/api/compras/listas/${encodeURIComponent(codigo)}/itens`, corpo: {itens: mudancas}, descricao});
+}
+function mudarStatusLista(codigo, acao, novo, descricao) {
+  const l = E.listas[codigo];
+  l.status = novo; l.local_status = novo;
+  enfileirar({tipo: 'status', codigo, metodo: 'POST', url: `/api/compras/listas/${encodeURIComponent(codigo)}/${acao}`, corpo: {}, descricao});
+}
+
+// ---------------------------------------------------------------- modo carrinho
+TELAS.carrinho = p => {
+  const l = E.listas[p.codigo];
+  if (!l || !l.itens) return TELAS.lista(p);
+  const comprar = l.itens.filter(i => i.qtd_pedido > 0);
+  const grupos = agruparPorFornecedor(comprar);
+  const filtro = p.filtro && grupos.some(g => g.nome === p.filtro) ? p.filtro : null;
+  const mostrar = filtro ? grupos.find(g => g.nome === filtro).itens : comprar;
+  const feitos = comprar.filter(i => i.situacao === 'comprado').length, faltou = comprar.filter(i => i.situacao === 'faltou').length;
+  const filtros = `<div class="filtros">${grupos.map(g => `<button class="filtro ${filtro === g.nome ? 'sel' : ''}" data-acao="car-filtro" data-f="${esc(g.nome)}">${esc(g.nome)} · ${g.itens.length}</button>`).join('')}
+      <button class="filtro ${!filtro ? 'sel' : ''}" data-acao="car-filtro" data-f="">Todos</button></div>`;
+  const itens = mostrar.map(i => `<div class="item-carrinho ${i.situacao ? 'feito ' + i.situacao : ''}">
+      <button class="toque" data-acao="car-marcar" data-pid="${i.produto_id}" aria-pressed="${i.situacao === 'comprado'}">
+        <div class="check ${i.situacao === 'comprado' ? 'on' : ''}">${i.situacao === 'comprado' ? ICONES.ok : ''}</div>
+        <div class="grow"><div class="nome">${esc(i.nome)}</div><div class="pequeno suave">${textoQtd(i.qtd_pedido, i)}${filtro ? '' : ' · ' + esc(i.fornecedor || 'sem preço')}</div></div></button>
+      <button class="faltou-btn ${i.situacao === 'faltou' ? 'on' : ''}" data-acao="car-faltou" data-pid="${i.produto_id}" aria-pressed="${i.situacao === 'faltou'}">Não tinha</button></div>`).join('');
+  return `${faixaRede()}${topo('No carrinho', `${feitos} de ${comprar.length} itens${faltou ? ' · ' + faltou + ' em falta' : ''}`, 'car-voltar')}
+    <div class="corpo">${grupos.length > 1 ? filtros : ''}
+      <div class="lista-cartoes">${itens || '<div class="vazio">Nada para comprar.</div>'}</div>
+      <div class="mini suave" style="text-align:center">Toque no item para marcar · "Não tinha" se faltou no mercado</div></div>
+    <div class="rodape"><button class="btn" data-acao="car-finalizar">Finalizar compra</button></div>`;
+};
+
+// ---------------------------------------------------------------- finalizar
+TELAS.finalizar = p => {
+  const l = E.listas[p.codigo];
+  const comprar = l.itens.filter(i => i.qtd_pedido > 0);
+  const comprados = comprar.filter(i => i.situacao === 'comprado').length;
+  const faltaram = comprar.filter(i => i.situacao === 'faltou');
+  return `${faixaRede()}<div class="corpo" style="padding-top:48px">
+      <div style="display:flex;flex-direction:column;align-items:center;gap:12px;text-align:center">
+        <div class="quadrado" style="width:72px;height:72px;border-radius:99px;background:var(--verde-claro)"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></div>
+        <div style="font-size:26px;font-weight:800">Compra finalizada</div>
+        <div class="suave">${esc(l.rotina)} · ${dataBR(l.criada_em)} · ${esc(E.usuario.nome)}</div></div>
+      <div class="linha-btns">
+        <div class="cartao"><div class="numero-grande">${comprados}</div><div class="pequeno suave" style="font-weight:600">itens comprados</div></div>
+        <div class="cartao"><div class="numero-grande" style="color:var(--laranja)">${faltaram.length}</div><div class="pequeno suave" style="font-weight:600">não tinha</div></div></div>
+      ${faltaram.length ? `<div class="cartao"><div style="font-weight:700">Voltam na próxima contagem:</div><div class="pequeno suave">${esc(faltaram.map(i => i.nome).join(', '))}</div></div>` : ''}
+      <div class="escuro"><div class="rotulo" style="color:#A9C9C3">Falta um passo</div>
+        <div style="font-size:17px;font-weight:700;line-height:1.35">Preços e estoque entram quando a nota for lançada</div>
+        <div class="pequeno suave" style="line-height:1.45">Importe o XML no Gestão de Estoque. O app não soma a compra sozinho, para não contar duas vezes.</div></div>
+      <div class="pequeno suave" style="text-align:center">${online ? 'Resumo enviado ao gestor no Telegram.' : 'O resumo vai para o gestor quando a internet voltar.'}</div>
+    </div>
+    <div class="rodape"><button class="btn" data-acao="nav-inicio">Voltar ao início</button></div>`;
+};
+
+// ---------------------------------------------------------------- listas
+TELAS.listas = () => {
+  const todas = Object.values(E.listas).sort((a, b) => {
+    const ab = ['aguardando', 'aprovada'].includes(a.status), bb = ['aguardando', 'aprovada'].includes(b.status);
+    return (bb - ab) || (b.criada_em || '').localeCompare(a.criada_em || '');
+  });
+  const erros = E.erros.slice(-3).reverse();
+  return `${faixaRede()}${topo('Listas de compra', 'Abertas primeiro')}
+    <div class="corpo">
+      ${erros.length ? `<div class="aviso"><div>Envios recusados pelo servidor:</div>${erros.map(e => `<div class="mini">• ${esc(e.msg)}</div>`).join('')}
+        <button class="btn claro medio" style="margin-top:8px" data-acao="limpar-erros">Entendi</button></div>` : ''}
+      <div class="lista-cartoes">${todas.map(cartaoLista).join('') || '<div class="vazio">Nenhuma lista ainda.</div>'}</div>
+    </div>${navbar('listas')}`;
+};
+
+// ---------------------------------------------------------------- consumo
+TELAS.consumo = p => {
+  const rot = E.rotinas.find(r => r.id === p.rotina_id) || E.rotinas[0];
+  if (!rot) return `${topo('Consumo', '')}<div class="corpo"><div class="vazio">Nenhuma rotina criada.</div></div>${navbar('consumo')}`;
+  const prep = E.preparos[rot.id];
+  const chips = `<div class="filtros">${E.rotinas.map(r => `<button class="filtro ${r.id === rot.id ? 'sel' : ''}" data-acao="consumo-rotina" data-id="${r.id}">${esc(r.nome)}</button>`).join('')}</div>`;
+  let corpo = '<div class="vazio">Carregando…</div>';
+  if (prep) {
+    const itens = prep.itens.map(i => ({...i, dura: i.consumo_dia > 0 && i.estoque_estimado != null ? i.estoque_estimado / i.consumo_dia : null}))
+      .sort((a, b) => (a.dura == null) - (b.dura == null) || (a.dura || 0) - (b.dura || 0));
+    corpo = `<div class="mini suave">Estimativa de ${dataBR(prep.gerado_em)} pela última contagem e pelas notas importadas.</div>
+      <div class="linhas">${itens.map(i => {
+        const dura = i.dura == null ? '<span class="suave">sem dados</span>'
+          : `<b style="color:${i.dura < 3 ? 'var(--laranja)' : 'var(--verde-esc)'}">${i.dura < 1 ? 'acabando' : '~' + Math.floor(i.dura) + ' dias'}</b>`;
+        return `<div class="lin"><div class="grow"><div style="font-weight:700">${esc(i.nome)}</div>
+          <div class="mini suave">${i.consumo_dia ? fmtQtd(i.consumo_dia) + ' ' + esc(i.unidade) + '/dia' : 'consumo desconhecido'} · tem ≈ ${i.estoque_estimado == null ? '?' : fmtQtd(Math.round(i.estoque_estimado * 10) / 10)} ${esc(i.unidade)}</div></div>
+          <div class="pequeno" style="text-align:right">${dura}</div></div>`;
+      }).join('')}</div>`;
+  }
+  return `${faixaRede()}${topo('Consumo', 'Quanto tempo cada item ainda dura')}<div class="corpo">${chips}${corpo}</div>${navbar('consumo')}`;
+};
+async function carregarConsumo(rotinaId) {
+  try { E.preparos[rotinaId] = await api('GET', `/api/compras/rotinas/${rotinaId}/preparar`); salvar(); if (T.nome === 'consumo') desenhar(); }
+  catch (e) { if (!E.preparos[rotinaId] && T.nome === 'consumo') { $app.querySelector('.corpo').insertAdjacentHTML('beforeend', `<div class="aviso">${esc(e.message)}</div>`); } }
+}
+
+// ---------------------------------------------------------------- rotinas (gestor)
+TELAS.rotinas = p => {
+  const lista = (p.rotinas || E.rotinas).map(r => `<button class="cartao item-rotina" data-acao="rotina-editar" data-id="${r.id}">
+      <div class="quadrado">${ICONES.carrinho}</div><div class="grow"><div class="nome">${esc(r.nome)}</div>
+      <div class="pequeno suave">${r.qtd_itens} itens · ${esc(textoDias(r.dias_semana))} · ${r.dias_cobertura} dias</div></div></button>`).join('');
+  return `${topo('Rotinas de compra', 'Só o gestor vê esta tela', 'nav-inicio')}
+    <div class="corpo"><div class="lista-cartoes">${lista || '<div class="vazio">Nenhuma rotina ainda.</div>'}</div></div>
+    <div class="rodape"><button class="btn" data-acao="rotina-nova">Nova rotina</button></div>`;
+};
+TELAS.rotina = p => {
+  const r = p.r;
+  if (!r) return `${topo('Rotina', '', 'nav-rotinas')}<div class="corpo"><div class="vazio">Carregando…</div></div>`;
+  const dias = [1, 2, 3, 4, 5, 6, 7].map(d => `<button class="chip ${r.dias_semana.includes(d) ? 'sel' : ''}" data-acao="rot-dia" data-d="${d}" aria-pressed="${r.dias_semana.includes(d)}">${DIAS_SEMANA[d - 1]}</button>`).join('');
+  const forns = (p.fornecedores || []).map(f => `<label class="marcador"><input type="checkbox" data-acao-change="rot-forn" data-id="${f.id}" ${r.fornecedores.includes(f.id) ? 'checked' : ''}> ${esc(f.nome)} <span class="mini suave">(${f.notas} nota${f.notas > 1 ? 's' : ''})</span></label>`).join('');
+  let secAnterior = null;
+  const itens = r.itens.map((it, k) => {
+    const cab = it.secao !== secAnterior && it.secao ? `<div class="sec-titulo">${esc(it.secao)}</div>` : '';
+    secAnterior = it.secao;
+    return `${cab}<div class="lin" style="flex-wrap:wrap">
+        <div class="grow"><div style="font-weight:700">${esc(it.nome)}</div><div class="mini suave">${esc(it.unidade)}</div></div>
+        <div class="ordem-btns">
+          <button data-acao="rot-subir" data-k="${k}" aria-label="Subir ${esc(it.nome)}" ${k === 0 ? 'disabled' : ''}>${ICONES.cima}</button>
+          <button data-acao="rot-descer" data-k="${k}" aria-label="Descer ${esc(it.nome)}" ${k === r.itens.length - 1 ? 'disabled' : ''}>${ICONES.baixo}</button>
+          <button data-acao="rot-remover" data-k="${k}" aria-label="Tirar ${esc(it.nome)} da rotina">${ICONES.lixo}</button></div>
+        <input class="sec-input" data-acao-change="rot-secao" data-k="${k}" value="${esc(it.secao)}" placeholder="Corredor / seção (ex.: Corredor 3 · Secos)" aria-label="Seção de ${esc(it.nome)}"></div>`;
+  }).join('');
+  return `${topo(r.id ? 'Editar rotina' : 'Nova rotina', '', 'nav-rotinas')}
+    <div class="corpo">
+      <div class="campo"><label for="rot-nome">Nome</label><input id="rot-nome" data-acao-change="rot-nome" value="${esc(r.nome)}" placeholder="Ex.: Mercado semanal" maxlength="100"></div>
+      <div class="lista-cartoes"><div class="titulo-sec">Dias da compra</div><div class="chips7">${dias}</div>
+        <div class="mini suave">No dia marcado a rotina aparece em destaque no início do app.</div></div>
+      <div class="linha-btns">
+        <div class="campo"><label for="rot-cob">Dias a cobrir</label><input id="rot-cob" inputmode="numeric" data-acao-change="rot-cob" value="${r.dias_cobertura}"></div>
+        <div class="campo"><label for="rot-prazo">Prazo de entrega</label><input id="rot-prazo" inputmode="numeric" data-acao-change="rot-prazo" value="${r.prazo_dias}"></div></div>
+      <div class="mini suave" style="margin-top:-8px">Mercado: prazo 0 (você traz na hora). Distribuidor que entrega em 3 dias: prazo 3.</div>
+      <div class="cartao"><div class="titulo-sec">Onde comprar</div>
+        <div class="mini suave">Marque os fornecedores desta rotina. O app sugere o mais barato entre eles. Sem nenhum marcado = todos.</div>
+        ${forns || '<div class="mini suave" style="padding-top:8px">Carregando fornecedores…</div>'}</div>
+      <div class="lista-cartoes"><div style="display:flex;justify-content:space-between;align-items:baseline"><div class="titulo-sec">Itens na ordem do corredor</div><div class="mini suave">${r.itens.length} itens</div></div>
+        <div class="linhas">${itens || '<div class="vazio">Nenhum item ainda.</div>'}</div>
+        <button class="btn claro medio" data-acao="rot-adicionar">+ Adicionar produto do estoque</button></div>
+      ${r.id ? '<button class="btn claro medio" style="color:var(--laranja)" data-acao="rot-apagar">Apagar esta rotina</button>' : ''}
+    </div>
+    <div class="rodape"><button class="btn" data-acao="rot-salvar" ${p.salvando ? 'disabled' : ''}>${p.salvando ? 'Salvando…' : 'Salvar rotina'}</button></div>`;
+};
+function modalBuscaProduto() {
+  abrirModal(`<div style="display:flex;justify-content:space-between;align-items:center"><div class="titulo-sec">Adicionar produto</div>
+      <button class="icone-btn" data-acao="fechar-modal" aria-label="Fechar">${ICONES.fechar}</button></div>
+    <div class="campo"><input id="busca-prod" placeholder="Digite parte do nome (ex.: leite cond)" autocomplete="off" aria-label="Buscar produto"></div>
+    <div class="campo"><input id="busca-secao" placeholder="Seção para os itens adicionados (opcional)" value="${esc(T.p.ultimaSecao || '')}" aria-label="Seção"></div>
+    <div id="busca-res" class="linhas"><div class="vazio">Digite para buscar.</div></div>`);
+  let espera;
+  document.getElementById('busca-prod').addEventListener('input', e => {
+    clearTimeout(espera);
+    espera = setTimeout(async () => {
+      const termo = e.target.value.trim();
+      const res = document.getElementById('busca-res');
+      if (!res) return;
+      if (termo.length < 2) { res.innerHTML = '<div class="vazio">Digite pelo menos 2 letras.</div>'; return; }
+      try {
+        const achados = await api('GET', '/api/compras/produtos?q=' + encodeURIComponent(termo));
+        const ja = new Set(T.p.r.itens.map(i => i.produto_id));
+        res.innerHTML = achados.map(a => `<div class="lin"><div class="grow"><div style="font-weight:700">${esc(a.nome)}</div><div class="mini suave">${esc(a.unidade)} · ${esc(a.categoria)}</div></div>
+          ${ja.has(a.produto_id) ? '<span class="pilula p-cinza">na rotina</span>' : `<button class="qtd-btn" style="min-width:64px" data-acao="rot-incluir" data-pid="${a.produto_id}" data-nome="${esc(a.nome)}" data-un="${esc(a.unidade)}">Incluir</button>`}</div>`).join('')
+          || '<div class="vazio">Nenhum produto com esse nome.</div>';
+      } catch (err) { res.innerHTML = `<div class="vazio">${esc(err.message)}</div>`; }
+    }, 300);
+  });
+}
+
+// ================================================================= AÇÕES (botões)
+const acoes = {
+  'nav': d => {
+    const tela = d.tela;
+    if (tela === 'inicio') { ir('inicio'); carregarInicio(); }
+    else if (tela === 'listas') { ir('listas'); carregarInicio().then(() => { if (T.nome === 'listas') desenhar(); }); }
+    else if (tela === 'consumo') { ir('consumo', {}); if (E.rotinas[0]) carregarConsumo(E.rotinas[0].id); }
+    else if (tela === 'rotinas') { ir('rotinas', {}); }
+  },
+  'nav-inicio': () => acoes.nav({tela: 'inicio'}),
+  'nav-rotinas': () => { ir('rotinas', {}); api('GET', '/api/compras/rotinas').then(r => { E.rotinas = r; salvar(); if (T.nome === 'rotinas') desenhar(); }).catch(() => {}); },
+  'sair': async () => {
+    if (E.ida && !confirm('Há uma contagem em andamento neste celular. Sair mesmo assim? (ela fica salva)')) return;
+    if (E.fila.length && !confirm(`${E.fila.length} alteração(ões) ainda não foram enviadas. Se sair, elas são enviadas quando você (ou outra pessoa) entrar de novo neste celular. Sair?`)) return;
+    try { await api('POST', '/api/compras/logout'); } catch (e) {}
+    E.usuario = null; salvar(); ir('login', {}); carregarUsuarios();
+  },
+  // login
+  'login-escolher': d => { T.p = {usuario: {id: +d.id, nome: d.nome}, pin: '', usuarios: T.p.usuarios}; desenhar(); },
+  'login-trocar': () => { T.p = {usuarios: T.p.usuarios}; desenhar(); },
+  'pin-tecla': async d => {
+    if (T.p.enviando) return;
+    if (d.k === '⌫') T.p.pin = (T.p.pin || '').slice(0, -1);
+    else if ((T.p.pin || '').length < 4) T.p.pin = (T.p.pin || '') + d.k;
+    T.p.erro = null; desenhar();
+    if (T.p.pin.length === 4) {
+      T.p.enviando = true;
+      try {
+        const r = await api('POST', '/api/compras/login', {funcionario_id: T.p.usuario.id, pin: T.p.pin});
+        if (E.usuario && E.usuario.id !== r.usuario.id && E.ida) E.ida = null;   // outra pessoa: não herda a contagem
+        E.usuario = r.usuario; salvar();
+        ir('inicio'); carregarInicio(); sincronizar();
+      } catch (e) { T.p.pin = ''; T.p.erro = e.extra.offline ? 'Sem conexão com o computador da loja.' : e.message; T.p.enviando = false; desenhar(); }
+    }
+  },
+  // nova ida
+  'nova-ida': d => {
+    if (E.ida) { if (!confirm('Já existe uma contagem em andamento. Descartar e começar outra?')) return; E.ida = null; salvar(); }
+    ir('novaIda', {rotina_id: +d.id});
+  },
+  'continuar-ida': () => ir('contagem'),
+  'ida-rotina': d => { T.p.rotina_id = +d.id; T.p.dias = null; desenhar(); },
+  'ida-dias': d => { T.p.dias = +d.n; desenhar(); },
+  'ida-dias-outro': () => {
+    abrirModal(`<div class="titulo-sec">Comprar para quantos dias?</div>
+      <div class="campo"><input id="dias-outro" inputmode="numeric" placeholder="Ex.: 20" aria-label="Número de dias"></div>
+      <button class="btn" data-acao="ida-dias-ok">Usar</button>`);
+  },
+  'ida-dias-ok': () => {
+    const n = parseInt(document.getElementById('dias-outro').value, 10);
+    if (!(n >= 1 && n <= 90)) return toast('Digite de 1 a 90 dias.');
+    fecharModal(); T.p.dias = n; desenhar();
+  },
+  'ida-comecar': d => comecarIda(+d.id, T.p.dias),
+  // contagem
+  'cont-menos': () => mudarQtd(-1),
+  'cont-mais': () => mudarQtd(1),
+  'cont-zero': () => { const it = itemAtual(); E.ida.contagens[it.produto_id] = 0; salvar(); avancar(); },
+  'cont-pular': () => { const it = itemAtual(); delete E.ida.contagens[it.produto_id]; salvar(); avancar(); },
+  'cont-proximo': () => {
+    const campo = document.getElementById('qtd');
+    if (campo && campo.value.trim() !== '' && num(campo.value) == null) return toast('Número inválido.');
+    avancar();
+  },
+  'cont-anterior': () => { E.ida.idx = Math.max(0, E.ida.idx - 1); salvar(); desenhar(); },
+  'cont-sair': () => { toast('A contagem ficou salva. Continue pelo início.'); ir('inicio'); },
+  'cont-modo': d => { const it = itemAtual(); E.ida.modo[it.produto_id] = d.m; salvar(); desenhar(); },
+  'cont-indice': () => {
+    const prep = E.preparos[E.ida.rotina_id];
+    abrirModal(`<div style="display:flex;justify-content:space-between;align-items:center"><div class="titulo-sec">Todos os itens</div>
+      <button class="icone-btn" data-acao="fechar-modal" aria-label="Fechar">${ICONES.fechar}</button></div>
+      <div class="linhas">${prep.itens.map((it, k) => {
+        const v = E.ida.contagens[it.produto_id];
+        return `<button class="lin" style="width:100%;border-left:0;border-right:0;border-bottom:0;background:${k === E.ida.idx ? 'var(--verde-claro)' : '#fff'};text-align:left" data-acao="cont-ir" data-k="${k}">
+          <div class="grow"><div style="font-weight:700">${esc(it.nome)}</div><div class="mini suave">${esc(it.secao || '')}</div></div>
+          <span class="pilula ${v == null ? 'p-cinza' : 'p-verde'}">${v == null ? 'falta' : fmtQtd(v) + ' ' + esc(it.unidade)}</span></button>`;
+      }).join('')}</div>
+      <button class="btn" data-acao="cont-terminar">Ver lista de compras</button>`);
+  },
+  'cont-ir': d => { fecharModal(); E.ida.idx = +d.k; salvar(); desenhar(); },
+  'cont-terminar': () => { fecharModal(); terminarContagem(); },
+  // lista
+  'abrir-lista': d => { ir('lista', {codigo: d.codigo}); if (online) atualizarLista(d.codigo, true); },
+  'lista-atualizar': d => atualizarLista(d.codigo),
+  'lista-qtd': d => {
+    const l = E.listas[d.codigo], it = l.itens.find(i => i.produto_id === +d.pid);
+    const f = it.fator > 1 ? it.fator : 1;
+    abrirModal(`<div class="titulo-sec">${esc(it.nome)}</div>
+      <div class="pequeno suave">Sugestão: ${fmtQtd(Math.round(it.qtd_sugerida * 100) / 100)} ${esc(it.unidade)} · tem ${fmtQtd(it.estoque)} · gasta ${fmtQtd(it.consumo_dia)}/dia</div>
+      <div class="campo"><label for="nova-qtd">Quanto comprar (${f > 1 ? 'caixas de ' + fmtQtd(f) + ' ' + esc(it.unidade) : esc(it.unidade)})</label>
+        <input id="nova-qtd" inputmode="decimal" value="${fmtQtd(it.qtd_pedido / f).replace(/\./g, '')}"></div>
+      <div class="linha-btns"><button class="btn claro" data-acao="fechar-modal">Cancelar</button>
+        <button class="btn" data-acao="lista-qtd-ok" data-codigo="${esc(d.codigo)}" data-pid="${it.produto_id}" data-f="${f}">Salvar</button></div>`);
+  },
+  'lista-qtd-ok': d => {
+    const v = num(document.getElementById('nova-qtd').value);
+    if (v == null || v < 0 || v > 100000) return toast('Quantidade inválida.');
+    fecharModal();
+    mudarItensLista(d.codigo, [{produto_id: +d.pid, qtd_pedido: Math.round(v * (+d.f) * 1000) / 1000}], 'Quantidade');
+    desenhar();
+  },
+  'lista-aprovar': d => { mudarStatusLista(d.codigo, 'aprovar', 'aprovada', 'Aprovação'); toast('Lista aprovada.'); desenhar(); },
+  'lista-cancelar': d => {
+    if (!confirm('Cancelar esta lista? A contagem continua valendo no estoque.')) return;
+    mudarStatusLista(d.codigo, 'cancelar', 'cancelada', 'Cancelamento'); ir('inicio');
+  },
+  'lista-compartilhar': async d => {
+    const texto = textoListaParaCompartilhar(E.listas[d.codigo]);
+    try {
+      if (navigator.share) await navigator.share({text: texto});
+      else { await navigator.clipboard.writeText(texto); toast('Lista copiada. Cole no WhatsApp ou Telegram.'); }
+    } catch (e) { if (e && e.name !== 'AbortError') toast('Não foi possível compartilhar.'); }
+  },
+  'abrir-carrinho': d => ir('carrinho', {codigo: d.codigo}),
+  // carrinho
+  'car-voltar': () => ir('lista', {codigo: T.p.codigo}),
+  'car-filtro': d => { T.p.filtro = d.f || null; desenhar(); },
+  'car-marcar': d => {
+    const it = E.listas[T.p.codigo].itens.find(i => i.produto_id === +d.pid);
+    mudarItensLista(T.p.codigo, [{produto_id: it.produto_id, situacao: it.situacao === 'comprado' ? '' : 'comprado'}], 'Carrinho');
+    if (navigator.vibrate) navigator.vibrate(15);
+    desenhar();
+  },
+  'car-faltou': d => {
+    const it = E.listas[T.p.codigo].itens.find(i => i.produto_id === +d.pid);
+    mudarItensLista(T.p.codigo, [{produto_id: it.produto_id, situacao: it.situacao === 'faltou' ? '' : 'faltou'}], 'Carrinho');
+    desenhar();
+  },
+  'car-finalizar': () => {
+    const l = E.listas[T.p.codigo];
+    const sem = l.itens.filter(i => i.qtd_pedido > 0 && !i.situacao).length;
+    if (sem && !confirm(`${sem} item(ns) sem marcar. Finalizar mesmo assim?`)) return;
+    mudarStatusLista(l.codigo, 'finalizar', 'finalizada', 'Finalizar compra');
+    ir('finalizar', {codigo: l.codigo});
+  },
+  // listas / consumo
+  'limpar-erros': () => { E.erros = []; salvar(); desenhar(); },
+  'consumo-rotina': d => { T.p.rotina_id = +d.id; desenhar(); carregarConsumo(+d.id); },
+  // rotinas (gestor)
+  'rotina-nova': () => {
+    ir('rotina', {r: {id: null, nome: '', dias_semana: [], dias_cobertura: 7, prazo_dias: 0, fornecedores: [], itens: []}});
+    carregarFornecedores();
+  },
+  'rotina-editar': async d => {
+    ir('rotina', {});
+    carregarFornecedores();
+    try { T.p.r = await api('GET', `/api/compras/rotinas/${d.id}`); desenhar(); }
+    catch (e) { toast(e.message); ir('rotinas', {}); }
+  },
+  'rot-dia': d => { const r = T.p.r, n = +d.d; r.dias_semana = r.dias_semana.includes(n) ? r.dias_semana.filter(x => x !== n) : [...r.dias_semana, n].sort(); desenhar(); },
+  'rot-subir': d => { const a = T.p.r.itens, k = +d.k; [a[k - 1], a[k]] = [a[k], a[k - 1]]; desenhar(); },
+  'rot-descer': d => { const a = T.p.r.itens, k = +d.k; [a[k + 1], a[k]] = [a[k], a[k + 1]]; desenhar(); },
+  'rot-remover': d => { T.p.r.itens.splice(+d.k, 1); desenhar(); },
+  'rot-adicionar': () => modalBuscaProduto(),
+  'rot-incluir': (d, el) => {
+    const secao = (document.getElementById('busca-secao') || {}).value || '';
+    T.p.ultimaSecao = secao.trim();
+    T.p.r.itens.push({produto_id: +d.pid, nome: d.nome, unidade: d.un, secao: T.p.ultimaSecao});
+    el.outerHTML = '<span class="pilula p-verde">incluído</span>';
+  },
+  'rot-salvar': async () => {
+    const r = T.p.r;
+    T.p.salvando = true; desenhar();
+    try {
+      const salvo = await api('POST', '/api/compras/rotinas', {id: r.id, nome: r.nome, dias_semana: r.dias_semana, dias_cobertura: r.dias_cobertura,
+        prazo_dias: r.prazo_dias, fornecedores: r.fornecedores, itens: r.itens.map(i => ({produto_id: i.produto_id, secao: i.secao}))});
+      toast('Rotina salva.');
+      delete E.preparos[salvo.id];
+      E.rotinas = await api('GET', '/api/compras/rotinas'); salvar();
+      ir('rotinas', {});
+    } catch (e) { T.p.salvando = false; desenhar(); toast(e.extra.offline ? 'Sem internet: rotina não foi salva.' : e.message); }
+  },
+  'rot-apagar': async () => {
+    if (!confirm('Apagar esta rotina? As listas antigas continuam no histórico.')) return;
+    try { await api('DELETE', `/api/compras/rotinas/${T.p.r.id}`); E.rotinas = await api('GET', '/api/compras/rotinas'); salvar(); ir('rotinas', {}); }
+    catch (e) { toast(e.message); }
+  },
+  'fechar-modal': () => { fecharModal(); if (T.nome === 'rotina') desenhar(); },
+};
+const acoesChange = {
+  'rot-nome': (d, el) => { T.p.r.nome = el.value; },
+  'rot-cob': (d, el) => { T.p.r.dias_cobertura = parseInt(el.value, 10) || 0; },
+  'rot-prazo': (d, el) => { T.p.r.prazo_dias = parseInt(el.value, 10) || 0; },
+  'rot-secao': (d, el) => { T.p.r.itens[+d.k].secao = el.value.trim(); },
+  'rot-forn': (d, el) => { const id = +d.id, f = T.p.r.fornecedores; T.p.r.fornecedores = el.checked ? [...new Set([...f, id])] : f.filter(x => x !== id); },
+};
+async function carregarFornecedores() {
+  try { T.p.fornecedores = await api('GET', '/api/compras/fornecedores'); if (T.nome === 'rotina') desenhar(); } catch (e) {}
+}
+function avancar() {
+  const prep = E.preparos[E.ida.rotina_id];
+  if (E.ida.idx >= prep.itens.length - 1) return terminarContagem();
+  E.ida.idx += 1; salvar(); desenhar(); window.scrollTo(0, 0);
+}
+document.addEventListener('click', e => {
+  const el = e.target.closest('[data-acao]');
+  if (!el || el.disabled) return;
+  const f = acoes[el.dataset.acao];
+  if (f) { e.preventDefault(); f(el.dataset, el); }
+});
+document.addEventListener('change', e => {
+  const el = e.target.closest('[data-acao-change]');
+  if (el && acoesChange[el.dataset.acaoChange]) acoesChange[el.dataset.acaoChange](el.dataset, el);
+});
+document.addEventListener('input', e => {
+  const el = e.target.closest('input[data-acao-change]');
+  if (el && el.type !== 'checkbox' && acoesChange[el.dataset.acaoChange]) acoesChange[el.dataset.acaoChange](el.dataset, el);
+});
+
+// ================================================================= INÍCIO DO APP
+(async function iniciar() {
+  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+    navigator.serviceWorker.register('/compras/sw.js', {scope: '/compras/'}).catch(() => {});
+  }
+  if (!E.usuario) { ir('login', {}); return carregarUsuarios(); }
+  ir('inicio');
+  try {
+    const r = await api('GET', '/api/compras/eu');
+    E.usuario = r.usuario; salvar();
+  } catch (e) {
+    if (!e.extra.offline) { ir('login', {}); return carregarUsuarios(); }
+  }
+  carregarInicio(); sincronizar();
+})();
+</script>
+</body>
+</html>

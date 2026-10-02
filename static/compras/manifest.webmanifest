@@ -1,0 +1,16 @@
+{
+  "name": "Gela Boca · Compras",
+  "short_name": "Compras",
+  "description": "Contagem e lista de compras da Gela Boca",
+  "lang": "pt-BR",
+  "start_url": "/compras/",
+  "scope": "/compras/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#F3F6F5",
+  "theme_color": "#0E6B63",
+  "icons": [
+    {"src": "/compras/arquivos/icone-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+    {"src": "/compras/arquivos/icone-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}
+  ]
+}
