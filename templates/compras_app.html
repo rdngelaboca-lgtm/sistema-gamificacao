@@ -153,6 +153,34 @@
   .ordem-btns button { width: 40px; height: 40px; border: 0; background: transparent; border-radius: 10px; color: var(--suave); }
   .ordem-btns button:active { background: var(--linha2); }
   .sec-input { height: 36px; border: 1px solid var(--linha); border-radius: 10px; padding: 0 10px; width: 100%; font-size: 14px; }
+  .cl-tela { height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+  .cl-lista { flex: 1; overflow-y: auto; padding: 0 16px; display: flex; flex-direction: column; gap: 6px; -webkit-overflow-scrolling: touch; }
+  .cl-sec { font-size: 12px; font-weight: 800; color: var(--suave); text-transform: uppercase; letter-spacing: .06em; padding: 8px 2px 0; }
+  .cl-lin { display: flex; align-items: center; gap: 10px; background: #fff; border: 1px solid var(--linha); border-radius: 14px;
+    padding: 7px 8px 7px 14px; min-height: 52px; text-align: left; width: 100%; flex-shrink: 0; }
+  .cl-lin.sel { border: 2px solid var(--verde); padding: 6px 7px 6px 13px; }
+  .cl-nome { font-size: 15px; font-weight: 700; line-height: 1.2; }
+  .cl-dica { font-size: 12px; color: var(--suave); margin-top: 1px; }
+  .cl-valor { min-width: 80px; height: 40px; border-radius: 10px; background: #EEF2F1; color: var(--cinza); display: flex; align-items: center;
+    justify-content: center; font-size: 18px; font-weight: 800; padding: 0 8px; flex-shrink: 0; white-space: nowrap; }
+  .cl-valor.feito { background: var(--verde-claro); color: var(--verde-esc); }
+  .cl-valor.atual { background: var(--verde); color: #fff; }
+  .cursor { display: inline-block; width: 2px; height: 20px; background: currentColor; margin-left: 2px; animation: pisca 1s steps(1) infinite; }
+  @keyframes pisca { 50% { opacity: 0; } }
+  .cl-teclado { background: #fff; border-top: 1px solid var(--linha); padding: 8px 10px calc(12px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 7px; }
+  .cl-info { display: flex; align-items: center; gap: 8px; padding: 0 4px; font-size: 14px; min-height: 30px; }
+  .cl-info b { font-weight: 700; }
+  .cl-modo { height: 30px; padding: 0 10px; border-radius: 99px; border: 1px solid var(--verde-borda); background: #EEF7F5; color: var(--verde-esc); font-size: 13px; font-weight: 700; flex-shrink: 0; }
+  .cl-teclas { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+  .tecla { height: 52px; border-radius: 12px; border: 0; font-size: 15px; font-weight: 700; touch-action: manipulation; user-select: none; -webkit-user-select: none; }
+  .tecla.num { border: 1px solid var(--linha); background: #fff; font-size: 23px; }
+  .tecla.num:active, .tecla.cinza:active { background: var(--linha2); }
+  .tecla.zero { background: var(--laranja-claro); color: var(--laranja-esc); }
+  .tecla.cinza { background: var(--linha2); }
+  .tecla.ok { background: var(--verde); color: #fff; font-size: 17px; }
+  .tecla.ok:active { background: var(--verde-esc); }
+  .tecla.escura { background: var(--texto); color: #fff; }
+  @media (max-height: 640px) { .tecla { height: 44px; } .cl-lin { min-height: 46px; } }
   a { color: var(--verde); }
 </style>
 </head>
@@ -347,7 +375,7 @@ async function atualizarLista(codigo, silencioso) {
 }
 function redesenharSePreciso() {
   // não redesenha a contagem (perderia o que a pessoa está digitando)
-  if (T.nome !== 'contagem') desenhar();
+  if (T.nome === 'contagem') redesenharContagem(); else desenhar();
 }
 window.addEventListener('online', () => { online = true; sincronizar(); atualizarFaixaRede(); });
 window.addEventListener('offline', () => { online = false; atualizarFaixaRede(); });
@@ -363,6 +391,7 @@ function desenhar() {
 }
 function toast(msg) {
   const d = document.createElement('div'); d.className = 'toast'; d.setAttribute('role', 'status'); d.textContent = msg;
+  if (T.nome === 'contagem') { d.style.bottom = 'auto'; d.style.top = '76px'; }   // não cobre o teclado
   document.body.appendChild(d); setTimeout(() => d.remove(), 3200);
 }
 function faixaRede() {
@@ -583,91 +612,107 @@ async function comecarIda(rotinaId, dias) {
   ir('contagem');
 }
 
-// ---------------------------------------------------------------- contagem item a item
+// ---------------------------------------------------------------- contagem em LISTA com teclado fixo
+// Todos os itens numa tela só. O item da vez fica em verde; o número é digitado no
+// teclado grande de baixo (não abre o teclado do celular) e "OK" pula para o próximo.
 TELAS.contagem = () => {
   const ida = E.ida, prep = ida && E.preparos[ida.rotina_id];
   if (!prep) { E.ida = null; salvar(); return TELAS.inicio(); }
-  const total = prep.itens.length, i = Math.min(ida.idx, total - 1), it = prep.itens[i];
-  const caixa = (it.caixas || [])[0];
-  const modo = caixa && ida.modo[it.produto_id] === 'cx' ? 'cx' : 'un';
-  const valorUn = ida.contagens[it.produto_id];
-  const mostrar = valorUn == null ? '' : fmtQtd(modo === 'cx' ? valorUn / caixa : valorUn).replace(/\./g, '');
-  const linhas = [];
-  if (it.ultima_contagem) linhas.push(['Contagem de ' + dataBR(it.ultima_contagem.data), fmtQtd(it.ultima_contagem.qtd) + ' ' + it.unidade]);
-  if (it.compras_depois) linhas.push(['Comprou depois', '+ ' + fmtQtd(it.compras_depois) + ' ' + it.unidade]);
-  if (it.consumo_dia) linhas.push(['Gasta em média', fmtQtd(it.consumo_dia) + ' ' + it.unidade + '/dia']);
-  const tabela = linhas.map(([a, b]) => `<div><span class="suave">${esc(a)}</span><strong>${esc(b)}</strong></div>`).join('')
-    + (it.estoque_estimado != null ? `<div class="div"></div><div style="color:var(--verde-esc)"><span style="font-weight:600">Deve ter hoje</span><strong>≈ ${fmtQtd(Math.round(it.estoque_estimado))} ${esc(it.unidade)}</strong></div>` : '');
-  const ultimo = i === total - 1;
-  const proximo = ultimo ? 'Ver lista de compras' : 'Próximo: ' + prep.itens[i + 1].nome;
-  return `<div class="topo" style="justify-content:space-between">
-      <button class="icone-btn" data-acao="${i > 0 ? 'cont-anterior' : 'cont-sair'}" aria-label="${i > 0 ? 'Item anterior' : 'Sair da contagem'}">${i > 0 ? ICONES.voltar : ICONES.fechar}</button>
-      <div style="font-weight:700">${i + 1} de ${total}</div>
-      <button class="icone-btn" data-acao="cont-indice" aria-label="Ver todos os itens">${ICONES.busca}</button></div>
-    <div class="progresso"><div style="width:${Math.round(100 * (i + 1) / total)}%"></div></div>
-    <div class="corpo" style="padding-top:18px">
-      <div style="display:flex;flex-direction:column;gap:8px">
-        ${it.secao ? `<span class="pilula p-cinza" style="align-self:flex-start">${esc(it.secao)}</span>` : ''}
-        <div class="produto-nome">${esc(it.nome)}</div></div>
-      ${it.contado_hoje ? `<div class="aviso">Já contado hoje em "${esc(it.contado_hoje.contagens.join(', '))}": ${fmtQtd(it.contado_hoje.qtd)} ${esc(it.unidade)}. No Gestão de Estoque as contagens do mesmo dia são SOMADAS: aqui conte só o que não entrou lá.</div>` : ''}
-      ${tabela ? `<div class="cartao tabela">${tabela}</div>` : '<div class="info">Primeira vez que este item é contado. Depois de duas contagens o app aprende o consumo.</div>'}
-      ${it.alerta && it.ultima_contagem ? `<div class="mini" style="color:var(--laranja);font-weight:700">⚠ ${esc(it.alerta)}</div>` : ''}
-      <div style="display:flex;flex-direction:column;gap:10px">
-        <div class="titulo-sec">Quanto tem agora?</div>
-        ${caixa ? `<div class="segmento" role="group" aria-label="Contar em">
-            <button class="${modo === 'un' ? 'sel' : ''}" data-acao="cont-modo" data-m="un" aria-pressed="${modo === 'un'}">${ehFracionada(it.unidade) ? esc(it.unidade) : 'Unidades'}</button>
-            <button class="${modo === 'cx' ? 'sel' : ''}" data-acao="cont-modo" data-m="cx" aria-pressed="${modo === 'cx'}">Caixas (${fmtQtd(caixa)} ${esc(it.unidade)})</button></div>` : ''}
-        <div class="contador">
-          <button class="mm" data-acao="cont-menos" aria-label="Diminuir">${ICONES.menos}</button>
-          <div class="grow" style="display:flex;flex-direction:column;align-items:center">
-            <input id="qtd" inputmode="decimal" autocomplete="off" placeholder="—" value="${esc(mostrar)}" aria-label="Quantidade contada">
-            <div class="pequeno suave" id="qtd-un" style="font-weight:600">${textoUnidadeContagem(valorUn, modo, it, caixa)}</div></div>
-          <button class="mm mais" data-acao="cont-mais" aria-label="Aumentar">${ICONES.mais}</button></div>
-        <div class="linha-btns">
-          <button class="btn claro medio" data-acao="cont-zero">Acabou (0)</button>
-          <button class="btn claro medio" data-acao="cont-pular">Pular por agora</button></div>
+  const itens = prep.itens, total = itens.length;
+  ida.idx = Math.min(Math.max(ida.idx || 0, 0), total - 1);
+  const feitos = itens.filter(it => ida.contagens[it.produto_id] != null).length;
+  const buf = T.p.buf || '';
+  let secao = null;
+  const linhas = itens.map((it, k) => {
+    const cab = (it.secao || '') !== secao && it.secao ? `<div class="cl-sec">${esc(it.secao)}</div>` : '';
+    secao = it.secao || '';
+    const atual = k === ida.idx, v = ida.contagens[it.produto_id];
+    let valor, cls;
+    if (atual && buf) { valor = esc(buf) + (fatorAtual(it) > 1 ? ' cx' : ''); cls = 'atual'; }
+    else if (v != null) { valor = fmtQtd(v) + ' ' + esc(unCurta(it.unidade)); cls = atual ? 'atual' : 'feito'; }
+    else { valor = '—'; cls = atual ? 'atual' : ''; }
+    return `${cab}<button class="cl-lin ${atual ? 'sel' : ''}" data-acao="cont-ir" data-k="${k}" ${atual ? 'aria-current="true"' : ''}>
+      <div class="grow"><div class="cl-nome">${esc(it.nome)}</div><div class="cl-dica">${dicaContagem(it)}</div></div>
+      <div class="cl-valor ${cls}">${valor}${atual ? '<span class="cursor"></span>' : ''}</div></button>`;
+  }).join('');
+  const it = itens[ida.idx], caixa = (it.caixas || [])[0], modo = fatorAtual(it) > 1 ? 'cx' : 'un';
+  const tecla = (txt, acao, cls, extra) => `<button class="tecla ${cls || ''}" data-acao="${acao}" ${extra || ''}>${txt}</button>`;
+  const num_ = n => tecla(n, 'tec-num', 'num', `data-n="${n}"`);
+  return `<div class="cl-tela">
+    <div class="topo" style="padding-bottom:2px">
+      <button class="icone-btn" data-acao="cont-sair" aria-label="Sair da contagem (fica salva)">${ICONES.fechar}</button>
+      <div class="grow"><h1 style="font-size:18px">${esc(prep.nome)}</h1>
+        <div class="sub mini" style="font-weight:600">${feitos} de ${total} contados · toque num item para ir até ele</div></div></div>
+    <div class="progresso" style="margin-bottom:8px"><div style="width:${Math.round(100 * feitos / total)}%"></div></div>
+    <div class="cl-lista" id="cl-lista">${linhas}<div style="height:8px"></div></div>
+    <div class="cl-teclado">
+      <div class="cl-info">
+        <div class="grow" style="min-width:0"><b>${esc(it.nome)}</b> <span class="suave">· em ${modo === 'cx' ? 'caixas de ' + fmtQtd(caixa) : esc(it.unidade)}</span></div>
+        ${caixa ? `<button class="cl-modo" data-acao="cont-modo" aria-label="Trocar entre unidades e caixas">${modo === 'cx' ? 'usar ' + esc(unCurta(it.unidade)) : 'usar CX ' + fmtQtd(caixa)}</button>`
+                : (it.estoque_estimado != null ? `<span class="mini suave">deve ter ≈ ${fmtQtd(Math.round(it.estoque_estimado * 10) / 10)}</span>` : '')}
       </div>
-    </div>
-    <div class="rodape">
-      <div class="mini suave" style="text-align:center">Salvo no celular a cada número · funciona sem internet</div>
-      <button class="btn" data-acao="cont-proximo">${esc(proximo)} ${ICONES.seta}</button></div>`;
+      ${it.contado_hoje ? `<div class="mini" style="color:var(--laranja-esc);font-weight:700;padding:0 4px">⚠ Já contado hoje em "${esc(it.contado_hoje.contagens.join(', '))}" (${fmtQtd(it.contado_hoje.qtd)}): as contagens do dia são SOMADAS.</div>` : ''}
+      <div class="cl-teclas">
+        ${num_('1')}${num_('2')}${num_('3')}${tecla('Acabou', 'tec-zero', 'zero')}
+        ${num_('4')}${num_('5')}${num_('6')}${tecla('Pular', 'tec-pular', 'cinza')}
+        ${num_('7')}${num_('8')}${num_('9')}${tecla('⌫', 'tec-apagar', 'cinza', 'aria-label="Apagar"')}
+        ${tecla(',', 'tec-virgula', 'num', 'aria-label="Vírgula"')}${num_('0')}${tecla('OK ▸', 'tec-ok', 'ok')}${tecla('Lista', 'cont-terminar', 'escura', 'aria-label="Ver a lista de compras"')}
+      </div>
+    </div></div>`;
 };
-function textoUnidadeContagem(valorUn, modo, it, caixa) {
-  if (valorUn == null) return 'sem número = pular';
-  if (modo === 'cx') return `caixas = ${fmtQtd(valorUn)} ${esc(it.unidade)}`;
-  return esc(it.unidade);
+function unCurta(un) { const u = String(un || 'UN').toUpperCase(); return ['UN', 'UND', 'UNID'].includes(u) ? 'un' : u.toLowerCase(); }
+function dicaContagem(it) {
+  const partes = [];
+  if (it.ultima_contagem) partes.push(`tinha ${fmtQtd(it.ultima_contagem.qtd)} em ${dataBR(it.ultima_contagem.data)}`);
+  else partes.push('primeira contagem');
+  if (it.estoque_estimado != null && it.ultima_contagem && it.consumo_dia) partes.push(`deve ter ≈ ${fmtQtd(Math.round(it.estoque_estimado * 10) / 10)}`);
+  return esc(partes.join(' · '));
 }
 TELAS_DEPOIS.contagem = () => {
-  const campo = document.getElementById('qtd');
-  if (!campo) return;
-  campo.addEventListener('input', () => registrarDigitado(campo.value));
-  campo.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); acoes['cont-proximo'](); } });
+  // mantém a lista parada onde estava e mostra o item da vez
+  const lista = document.getElementById('cl-lista');
+  if (!lista) return;
+  if (T.p.scroll != null) lista.scrollTop = T.p.scroll;
+  const sel = lista.querySelector('.cl-lin.sel');
+  if (sel) {
+    const a = sel.offsetTop - lista.offsetTop, b = a + sel.offsetHeight;
+    if (a < lista.scrollTop + 4) lista.scrollTop = a - 30;
+    else if (b > lista.scrollTop + lista.clientHeight - 4) lista.scrollTop = b - lista.clientHeight + 30;
+  }
+  lista.onscroll = () => { T.p.scroll = lista.scrollTop; };
+  T.p.scroll = lista.scrollTop;
 };
 function itemAtual() { const prep = E.preparos[E.ida.rotina_id]; return prep.itens[Math.min(E.ida.idx, prep.itens.length - 1)]; }
 function fatorAtual(it) { const cx = (it.caixas || [])[0]; return cx && E.ida.modo[it.produto_id] === 'cx' ? cx : 1; }
-function registrarDigitado(texto) {
-  const it = itemAtual(), f = fatorAtual(it);
-  const t = String(texto).trim();
-  if (t === '') delete E.ida.contagens[it.produto_id];
-  else {
-    const v = num(t);
-    if (v == null || v < 0 || v > 1000000) { document.getElementById('qtd-un').textContent = 'número inválido'; return; }
-    E.ida.contagens[it.produto_id] = Math.round(v * f * 1000) / 1000;
+function redesenharContagem() {
+  const lista = document.getElementById('cl-lista');
+  if (lista) T.p.scroll = lista.scrollTop;
+  desenhar();
+}
+function irParaItem(k) { E.ida.idx = k; T.p.buf = ''; salvar(); redesenharContagem(); }
+function proximoItem() {
+  // vai para o próximo item ainda SEM número (dando a volta); se todos têm número, só desce um
+  const prep = E.preparos[E.ida.rotina_id], n = prep.itens.length;
+  for (let passo = 1; passo <= n; passo++) {
+    const k = (E.ida.idx + passo) % n;
+    if (E.ida.contagens[prep.itens[k].produto_id] == null) return irParaItem(k);
   }
-  salvar();
-  const caixa = (it.caixas || [])[0];
-  document.getElementById('qtd-un').innerHTML = textoUnidadeContagem(E.ida.contagens[it.produto_id], f > 1 ? 'cx' : 'un', it, caixa);
+  toast('Todos contados! Toque em "Lista" para ver o que comprar.');
+  if (E.ida.idx < n - 1) return irParaItem(E.ida.idx + 1);
+  T.p.buf = ''; redesenharContagem();
 }
-function mudarQtd(delta) {
-  const it = itemAtual(), f = fatorAtual(it);
-  const atual = E.ida.contagens[it.produto_id];
-  const emTela = atual == null ? 0 : atual / f;
-  const novo = Math.max(0, Math.round((emTela + delta) * 1000) / 1000);
-  E.ida.contagens[it.produto_id] = Math.round(novo * f * 1000) / 1000; salvar();
-  const campo = document.getElementById('qtd');
-  campo.value = fmtQtd(novo).replace(/\./g, '');
-  registrarDigitado(campo.value);
+function confirmarDigitado() {
+  const it = itemAtual(), buf = T.p.buf || '';
+  if (buf) {
+    const v = num(buf);
+    if (v == null || v < 0 || v > 1000000) { toast('Número inválido.'); T.p.buf = ''; return redesenharContagem(); }
+    E.ida.contagens[it.produto_id] = Math.round(v * fatorAtual(it) * 1000) / 1000;
+    salvar();
+  }
+  T.p.buf = '';
+  proximoItem();
 }
+function vibrar() { if (navigator.vibrate) navigator.vibrate(8); }
 async function terminarContagem() {
   const ida = E.ida, prep = E.preparos[ida.rotina_id];
   const corpo = {codigo: ida.codigo, rotina_id: ida.rotina_id, dias: ida.dias,
@@ -1163,33 +1208,20 @@ const acoes = {
     fecharModal(); T.p.dias = n; desenhar();
   },
   'ida-comecar': d => comecarIda(+d.id, T.p.dias),
-  // contagem
-  'cont-menos': () => mudarQtd(-1),
-  'cont-mais': () => mudarQtd(1),
-  'cont-zero': () => { const it = itemAtual(); E.ida.contagens[it.produto_id] = 0; salvar(); avancar(); },
-  'cont-pular': () => { const it = itemAtual(); delete E.ida.contagens[it.produto_id]; salvar(); avancar(); },
-  'cont-proximo': () => {
-    const campo = document.getElementById('qtd');
-    if (campo && campo.value.trim() !== '' && num(campo.value) == null) return toast('Número inválido.');
-    avancar();
+  // contagem (teclado fixo)
+  'tec-num': d => { vibrar(); const b = T.p.buf || ''; if (b.replace(',', '').length < 7) T.p.buf = (b === '0' ? '' : b) + d.n; redesenharContagem(); },
+  'tec-virgula': () => { vibrar(); const b = T.p.buf || ''; if (!b.includes(',')) T.p.buf = (b || '0') + ','; redesenharContagem(); },
+  'tec-apagar': () => { vibrar(); T.p.buf = (T.p.buf || '').slice(0, -1); redesenharContagem(); },
+  'tec-ok': () => { vibrar(); confirmarDigitado(); },
+  'tec-zero': () => { vibrar(); const it = itemAtual(); E.ida.contagens[it.produto_id] = 0; T.p.buf = ''; salvar(); proximoItem(); },
+  'tec-pular': () => { vibrar(); const it = itemAtual(); delete E.ida.contagens[it.produto_id]; T.p.buf = ''; salvar(); proximoItem(); },
+  'cont-ir': d => {
+    if (T.p.buf) confirmarDigitadoSemPular();
+    irParaItem(+d.k);
   },
-  'cont-anterior': () => { E.ida.idx = Math.max(0, E.ida.idx - 1); salvar(); desenhar(); },
   'cont-sair': () => { toast('A contagem ficou salva. Continue pelo início.'); ir('inicio'); },
-  'cont-modo': d => { const it = itemAtual(); E.ida.modo[it.produto_id] = d.m; salvar(); desenhar(); },
-  'cont-indice': () => {
-    const prep = E.preparos[E.ida.rotina_id];
-    abrirModal(`<div style="display:flex;justify-content:space-between;align-items:center"><div class="titulo-sec">Todos os itens</div>
-      <button class="icone-btn" data-acao="fechar-modal" aria-label="Fechar">${ICONES.fechar}</button></div>
-      <div class="linhas">${prep.itens.map((it, k) => {
-        const v = E.ida.contagens[it.produto_id];
-        return `<button class="lin" style="width:100%;border-left:0;border-right:0;border-bottom:0;background:${k === E.ida.idx ? 'var(--verde-claro)' : '#fff'};text-align:left" data-acao="cont-ir" data-k="${k}">
-          <div class="grow"><div style="font-weight:700">${esc(it.nome)}</div><div class="mini suave">${esc(it.secao || '')}</div></div>
-          <span class="pilula ${v == null ? 'p-cinza' : 'p-verde'}">${v == null ? 'falta' : fmtQtd(v) + ' ' + esc(it.unidade)}</span></button>`;
-      }).join('')}</div>
-      <button class="btn" data-acao="cont-terminar">Ver lista de compras</button>`);
-  },
-  'cont-ir': d => { fecharModal(); E.ida.idx = +d.k; salvar(); desenhar(); },
-  'cont-terminar': () => { fecharModal(); terminarContagem(); },
+  'cont-modo': () => { const it = itemAtual(); E.ida.modo[it.produto_id] = fatorAtual(it) > 1 ? 'un' : 'cx'; T.p.buf = ''; salvar(); redesenharContagem(); },
+  'cont-terminar': () => { if (T.p.buf) confirmarDigitadoSemPular(); terminarContagem(); },
   // lista
   'abrir-lista': d => { ir('lista', {codigo: d.codigo}); if (online) atualizarLista(d.codigo, true); },
   'lista-atualizar': d => atualizarLista(d.codigo),
@@ -1367,10 +1399,11 @@ const acoesChange = {
 async function carregarFornecedores() {
   try { T.p.fornecedores = await api('GET', '/api/compras/fornecedores'); if (T.nome === 'rotina') desenhar(); } catch (e) {}
 }
-function avancar() {
-  const prep = E.preparos[E.ida.rotina_id];
-  if (E.ida.idx >= prep.itens.length - 1) return terminarContagem();
-  E.ida.idx += 1; salvar(); desenhar(); window.scrollTo(0, 0);
+function confirmarDigitadoSemPular() {
+  // número digitado e a pessoa tocou em outro item (ou em "Lista"): guarda o número antes
+  const it = itemAtual(), v = num(T.p.buf || '');
+  if (v != null && v >= 0 && v <= 1000000) { E.ida.contagens[it.produto_id] = Math.round(v * fatorAtual(it) * 1000) / 1000; salvar(); }
+  T.p.buf = '';
 }
 document.addEventListener('click', e => {
   const el = e.target.closest('[data-acao]');
