@@ -164,6 +164,7 @@ def so_digitos(texto):
 # ==============================================================================
 import unicodedata
 import math
+import collections
 
 ARQUIVO_RASCUNHO_CONTAGEM = os.path.join(PASTA_DO_PROGRAMA, 'rascunho_contagem.json')
 ARQUIVO_PREFERENCIAS = os.path.join(PASTA_DO_PROGRAMA, 'estoque_preferencias.json')
@@ -174,6 +175,24 @@ def sem_acento(texto):
     """'Açaí Côco' -> 'acai coco' (para a busca achar com ou sem acento)."""
     t = unicodedata.normalize('NFKD', str(texto or ''))
     return ''.join(c for c in t if not unicodedata.combining(c)).lower()
+
+
+def linha_do_clique(tree, event=None):
+    """
+    [DEPURAÇÃO 2] Linha em que o usuário DEU o duplo clique. Antes usava tree.focus(): um
+    duplo clique no CABEÇALHO (para ordenar) agia sobre a última linha clicada.
+    Devolve '' quando o clique não foi numa linha.
+    """
+    if event is not None and hasattr(event, 'y'):
+        try:
+            linha = tree.identify_row(event.y)
+        except Exception:
+            linha = None
+        if isinstance(linha, str):
+            if linha:
+                tree.focus(linha)
+            return linha
+    return tree.focus() or ''
 
 
 def buscar_nomes(termo, nomes):
@@ -316,7 +335,11 @@ def calcular_linha_sugestao(item, dias_cobertura, prazo_dias, data_ref, preferir
     minimo = item['EstoqueMinimo'] or D0
     umd = item['UsoMedioDiario'] or D0
     estoque = item['EstoqueHoje']
-    forn = (item.get('FornecedorBarato') if preferir == 'barato' else None) or item.get('FornecedorUltimo')
+    if isinstance(preferir, tuple) and preferir[0] == 'fornecedor':
+        # [DEPURAÇÃO 2] pedido para um fornecedor escolhido (o do filtro da tela)
+        forn = (item.get('PorFornecedor') or {}).get(preferir[1]) or item.get('FornecedorUltimo')
+    else:
+        forn = (item.get('FornecedorBarato') if preferir == 'barato' else None) or item.get('FornecedorUltimo')
     fator = forn['Fator'] if forn and forn.get('Fator') and forn['Fator'] > 0 else Decimal('1')
     nome = item['NomeProduto']
     exp = [f"{nome} ({un})"]
@@ -984,8 +1007,10 @@ class AppGestaoEstoque:
             if var_un.get() and not unidade:
                 messagebox.showerror("Erro", "Digite a unidade (ex: UN, KG).", parent=popup); return
             if var_min.get():
+                if not entry_min.get().strip():   # [DEPURAÇÃO 2] vazio gravava 0 em todos sem avisar
+                    messagebox.showerror("Erro", "Digite o estoque mínimo (ou desmarque a opção).", parent=popup); return
                 try:
-                    minimo = para_decimal(entry_min.get() or "0", "Estoque mínimo")
+                    minimo = para_decimal(entry_min.get(), "Estoque mínimo")
                 except ValueError as e:
                     messagebox.showerror("Erro", str(e), parent=popup); return
             if categoria is None and unidade is None and minimo is None:
@@ -1010,7 +1035,9 @@ class AppGestaoEstoque:
     def abrir_sugestao_nomes(self):
         """Sugere nomes limpos para os produtos (os selecionados, ou todos da lista) e aplica os aprovados."""
         ids = self._ids_selecionados_catalogo()
-        base = [p for p in getattr(self, '_cache_produtos', []) if not ids or p.ProdutoID in ids]
+        # [DEPURAÇÃO 2] sem seleção = só o que está NA LISTA (respeita busca/filtros), não o catálogo inteiro
+        visiveis = {int(i) for i in self.tree_produtos.get_children()}
+        base = [p for p in getattr(self, '_cache_produtos', []) if (p.ProdutoID in ids if ids else p.ProdutoID in visiveis)]
         sugestoes = []
         for p in base:
             novo = sugerir_nome_limpo(p.NomeProduto)
@@ -1038,7 +1065,8 @@ class AppGestaoEstoque:
         sb = ttk.Scrollbar(f, orient="vertical", command=tree.yview)
         tree.configure(yscrollcommand=sb.set)
         tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, pady=6); sb.pack(side=tk.LEFT, fill=tk.Y, pady=6)
-        marcados = set(s_['ProdutoID'] for s_ in sugestoes)
+        # [DEPURAÇÃO 2] com seleção feita, vem tudo marcado; sem seleção (lista toda), começa desmarcado
+        marcados = set(s_['ProdutoID'] for s_ in sugestoes) if ids else set()
         por_id = {str(s_['ProdutoID']): s_ for s_ in sugestoes}
 
         def mostrar():
@@ -1050,7 +1078,7 @@ class AppGestaoEstoque:
             lbl.config(text=f"{len(sugestoes)} sugestão(ões) · ✔ {len(marcados)} marcada(s)")
 
         def duplo_clique(event=None):
-            sel = tree.focus()
+            sel = linha_do_clique(tree, event)
             if not sel:
                 return
             coluna = tree.identify_column(event.x) if event is not None and hasattr(event, 'x') else '#1'
@@ -1149,7 +1177,7 @@ class AppGestaoEstoque:
                         '' if p['Compras'] is None else p['Compras'], '' if p['Vinculos'] is None else p['Vinculos']))
 
         def definir_manter(event=None):
-            sel = tree.focus()
+            sel = linha_do_clique(tree, event)
             if not sel or not sel.startswith('p'):
                 return
             g, pid = sel[1:].split('_')
@@ -1175,6 +1203,9 @@ class AppGestaoEstoque:
             ok, msg = database.juntar_produtos(alvo['ProdutoID'], [p['ProdutoID'] for p in outros])
             if ok:
                 self.status(msg)
+                # [DEPURAÇÃO 2] se o produto aberto no formulário foi apagado, limpa o formulário
+                if self.produto_selecionado_id in [p['ProdutoID'] for p in outros]:
+                    self.limpar_formulario_produto()
                 self._atualizar_buffet_apos_juntar(alvo['ProdutoID'], [p['ProdutoID'] for p in outros])
                 grupos.remove(g)
                 mostrar()
@@ -1227,12 +1258,13 @@ class AppGestaoEstoque:
             self.lbl_prod_custo.config(text="Custo manual (R$):")
             self.lbl_prod_custo_info.config(text="Opcional: custo para produto sem nota fiscal.", foreground="gray")
         self.produto_selecionado_id = None
+        self._form_produto_id = None
         self.produto_tem_nota = False
         self.custo_carregado_texto = None
 
         # Restaura visuais para Novo Cadastro
         self.form_frame_mestre.config(text="Modo: NOVO CADASTRO")
-        self.btn_prod_salvar.config(text="Salvar Novo")
+        self.btn_prod_salvar.config(text="Salvar Novo", state=tk.NORMAL)
         self.btn_excluir_mestre.config(state=tk.DISABLED) # Oculta botão excluir
 
         self.entry_prod_nome.focus()
@@ -1262,7 +1294,9 @@ class AppGestaoEstoque:
         listbox_frame.pack(fill=tk.BOTH, expand=True, pady=5)
         
         scrollbar = ttk.Scrollbar(listbox_frame, orient="vertical")
-        lista_categorias_ui = tk.Listbox(listbox_frame, yscrollcommand=scrollbar.set, font=("Arial", 11), selectbackground="#0078D7")
+        # [DEPURAÇÃO 2] exportselection=False: selecionar texto no campo não "perde" a categoria marcada
+        lista_categorias_ui = tk.Listbox(listbox_frame, yscrollcommand=scrollbar.set, font=("Arial", 11),
+                                         selectbackground="#0078D7", exportselection=False)
         scrollbar.config(command=lista_categorias_ui.yview)
         
         lista_categorias_ui.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -1317,6 +1351,10 @@ class AppGestaoEstoque:
             if messagebox.askyesno("Confirmar Edição", f"Deseja renomear '{nome_antigo}' para '{novo_nome}'?\n\nISSO ATUALIZARÁ TODOS OS PRODUTOS DESTA CATEGORIA AUTOMATICAMENTE.", parent=popup):
                 sucesso, msg = database.atualizar_categoria_produto(nome_antigo, novo_nome)
                 if sucesso:
+                    # [DEPURAÇÃO 2] o produto aberto no formulário acompanha o nome novo
+                    # (antes a caixinha voltava para "Geral" e, ao salvar, o produto mudava de categoria)
+                    if self.combo_prod_categoria.get() == nome_antigo:
+                        self.combo_prod_categoria.set(novo_nome)
                     self.carregar_categorias_do_banco()
                     self.atualizar_lista_produtos() # Atualiza a tabela principal atrás do popup
                     atualizar_lista_ui()
@@ -1373,7 +1411,7 @@ class AppGestaoEstoque:
                 # Isso criava uma "nota fiscal manual" com a data de HOJE, que passava a ser
                 # o "último custo" e escondia as notas reais importadas depois.
                 # Agora só grava se o valor da caixinha foi realmente alterado.
-                if not getattr(self, 'produto_tem_nota', False) and custo_texto != (self.custo_carregado_texto or ""):
+                if not getattr(self, 'produto_tem_nota', False) and custo_texto and self._custo_mudou(custo_inicial):
                     if database.atualizar_custo_manual_produto(self.produto_selecionado_id, custo_inicial):
                         self.status("Produto e Custo atualizados com sucesso!")  # [MELHORIA UX] rodapé em vez de janelinha
                     else:
@@ -1399,6 +1437,14 @@ class AppGestaoEstoque:
         except Exception as e:
             logger.error(f"Erro ao salvar produto: {e}", exc_info=True)
             messagebox.showerror("Erro de Banco", f"Não foi possível salvar o produto.\nErro: {e}", parent=self.root)
+
+    def _custo_mudou(self, custo_novo):
+        """[DEPURAÇÃO 2] compara NÚMEROS (antes '' x '0.00' contava como mudança e criava uma nota fantasma)."""
+        try:
+            antigo = para_decimal(self.custo_carregado_texto or "0", "Custo")
+        except ValueError:
+            return True
+        return antigo != custo_novo
 
     FILTROS_CATALOGO = [
         ('todos', 'Todos os produtos'),
@@ -1495,11 +1541,22 @@ class AppGestaoEstoque:
         if not selecao: return
         if len(selecao) > 1:
             # [MELHORIA CATÁLOGO] vários produtos selecionados: edição em massa
+            # [DEPURAÇÃO 2] o formulário é esvaziado e Salvar/Excluir ficam travados: antes eles
+            # continuavam valendo para o 1º produto (Delete apagava só ele; "Atualizar" desfazia
+            # a edição em massa nele; e "Salvar" podia criar um produto repetido).
+            self.limpar_formulario_produto(limpar_selecao=False)
             self.form_frame_mestre.config(text=f"✅ {len(selecao)} PRODUTOS SELECIONADOS")
             self.btn_editar_massa.config(text=f"✏️ Editar os {len(selecao)} selecionados")
+            self.btn_prod_salvar.config(state=tk.DISABLED)
+            self.btn_excluir_mestre.config(state=tk.DISABLED)
             return
         self.btn_editar_massa.config(text="✏️ Editar selecionados")
+        self.btn_prod_salvar.config(state=tk.NORMAL)
         selecionado = selecao[0]
+        # [DEPURAÇÃO 2] A lista é redesenhada ao buscar/filtrar/F5 e a seleção é restaurada; isso
+        # recarregava o formulário e APAGAVA o que você estava digitando. Mesmo produto = não recarrega.
+        if self.produto_selecionado_id == int(selecionado) and getattr(self, '_form_produto_id', None) == int(selecionado):
+            return
         dados = self.tree_produtos.item(selecionado, 'values')
         if not dados or len(dados) < 5: return
         produto_id, nome, unidade, categoria, estoque_min = dados[:5]
@@ -1521,7 +1578,8 @@ class AppGestaoEstoque:
         # mas o Valor do Estoque ignorava, sem avisar. Sem nota, continua o custo manual.
         if hasattr(self, 'entry_prod_custo'):
             r = getattr(self, '_cache_resumo_catalogo', {}).get(self.produto_selecionado_id, {})
-            self.produto_tem_nota = bool(r.get('TemNota'))
+            # [DEPURAÇÃO 2] só recebido em BONIFICAÇÃO (custo 0): o custo manual volta a valer
+            self.produto_tem_nota = bool(r.get('TemNota')) and bool(r.get('CustoAtual'))
             self._custo_editavel(True)
             self.entry_prod_custo.delete(0, tk.END)
             if self.produto_tem_nota:
@@ -1539,8 +1597,11 @@ class AppGestaoEstoque:
                 self.entry_prod_custo.insert(0, self.custo_carregado_texto)
                 self.lbl_prod_custo.config(text="Custo manual (R$):")
                 self.lbl_prod_custo_info.config(foreground="gray", text=(
+                    "Só recebido em BONIFICAÇÃO (custo 0): informe aqui o custo para o Valor do Estoque."
+                    if r.get('TemNota') else
                     "Produto nunca comprado por nota: este custo manual é o usado no Valor do Estoque."))
 
+        self._form_produto_id = self.produto_selecionado_id
         # 4. Visuais do Modo de Edição
         self.form_frame_mestre.config(text="🚨 MODO: EDIÇÃO")
         self.btn_prod_salvar.config(text="Atualizar Produto")
@@ -1569,7 +1630,7 @@ class AppGestaoEstoque:
         [MELHORIA CATÁLOGO] Abre a janela única "Vínculos e Auditoria" já filtrada no produto
         (mesmo editor, com prévia do Qtd/Cx e correção das compras antigas).
         """
-        selecionado = self.tree_produtos.focus()
+        selecionado = linha_do_clique(self.tree_produtos, event)
         if not selecionado: return
         dados = self.tree_produtos.item(selecionado, 'values')
         if hasattr(database, 'listar_vinculos_com_resumo'):
@@ -1913,6 +1974,20 @@ class AppGestaoEstoque:
         btn_gerir_vinculos = ttk.Button(main_frame, text="🛠️ Gerenciar / Corrigir Vínculos Salvos", command=self.abrir_gestor_vinculos)
         btn_gerir_vinculos.grid(row=5, column=0, sticky="ew", pady=(0, 10))
 
+    def _pendente_da_linha(self, iid, valores):
+        """
+        [DEPURAÇÃO 2] Item pendente da linha clicada. Antes procurava pelo NOME do fornecedor +
+        descrição: duas filiais com o mesmo nome (CNPJs diferentes) vendendo o mesmo item
+        faziam o vínculo ir para a filial errada.
+        """
+        if str(iid).startswith('pend_'):
+            uid = int(str(iid)[5:])
+            achado = next((i for i in self.itens_xml_nao_vinculados if i.get('_uid') == uid), None)
+            if achado:
+                return achado
+        return next((i for i in self.itens_xml_nao_vinculados
+                     if i['DescricaoXML'] == valores[1] and i['FornecedorNome'] == valores[0]), None)
+
     def sugerir_mestre_por_ean(self, event):
         """
         Ao clicar num item pendente, verifica se o EAN já existe no sistema.
@@ -1925,9 +2000,22 @@ class AppGestaoEstoque:
         # Ordem das colunas: Fornecedor, ProdutoXML, EAN, Qtd, Custo...
         valores = self.tree_vincular.item(selecionado, 'values')
         ean_clicado = valores[2] # O EAN é a terceira coluna (índice 2)
+        # [DEPURAÇÃO 2] trocou de item: limpa o EAN e o Qtd/Cx digitados para o item anterior
+        if getattr(self, '_ultimo_pendente_clicado', None) != selecionado:
+            self._ultimo_pendente_clicado = selecionado
+            for campo, padrao in ((getattr(self, 'entry_ean_importacao', None), ''),
+                                  (getattr(self, 'entry_fator_conversao', None), '1')):
+                if campo is not None:
+                    campo.delete(0, tk.END)
+                    if padrao:
+                        campo.insert(0, padrao)
 
         # 1. Tenta descobrir quem é esse EAN
-        sugestao = database.descobrir_produto_mestre_por_ean(ean_clicado)
+        try:
+            sugestao = database.descobrir_produto_mestre_por_ean(ean_clicado)
+        except Exception as e:
+            logger.error(f"Erro ao procurar o EAN {ean_clicado}: {e}", exc_info=True)
+            sugestao = None
 
         if sugestao:
             nome_mestre, id_mestre = sugestao
@@ -1954,15 +2042,24 @@ class AppGestaoEstoque:
             self.mapa_produtos_mestre_contagem.clear() 
 
             nomes_produtos_mestre = []
+            self._unidade_por_id = {}
+            # [DEPURAÇÃO 2] Dois produtos com o MESMO nome viravam um só na contagem (o 2º
+            # apagava o 1º, que nunca podia ser contado). Agora o repetido leva o ID no nome.
+            # Nome vazio no banco também não derruba mais a lista inteira.
+            def nome_de(p):
+                return (p.NomeProduto or '').strip() or f"Produto {p.ProdutoID}"
+            repetidos = collections.Counter(nome_de(p) for p in produtos)
 
             for p in produtos:
                 # Dados para a Aba 3 (Vínculos)
-                nome_display = f"{p.NomeProduto} (ID: {p.ProdutoID})"
+                nome_display = f"{nome_de(p)} (ID: {p.ProdutoID})"
                 nomes_produtos_mestre.append(nome_display)
                 self.mapa_produtos_mestre[nome_display] = p.ProdutoID
+                self._unidade_por_id[p.ProdutoID] = (p.UnidadeMedida or 'UN')
 
                 # Dados para a Aba 4 (Contagem - Independente de filtros)
-                self.mapa_produtos_mestre_contagem[p.NomeProduto] = {'id': p.ProdutoID, 'un': p.UnidadeMedida}
+                chave = nome_de(p) if repetidos[nome_de(p)] == 1 else nome_display
+                self.mapa_produtos_mestre_contagem[chave] = {'id': p.ProdutoID, 'un': p.UnidadeMedida or 'UN'}
 
             # Configurações da Aba 3
             self.lista_mestre_produtos_nomes = sorted(nomes_produtos_mestre) 
@@ -1980,6 +2077,10 @@ class AppGestaoEstoque:
                 self.combo_contagem_produtos['values'] = self.lista_mestre_contagem_nomes
         except Exception as e:
             logger.error(f"Erro ao carregar produtos mestre no combobox: {e}", exc_info=True)
+
+    def unidade_do_produto(self, produto_id):
+        """Unidade do estoque de um produto pelo ID (UN se não souber)."""
+        return (getattr(self, '_unidade_por_id', {}) or {}).get(produto_id) or 'UN'
 
     def filtrar_combo_importacao(self, event=None):
         # ... (código idêntico ao anterior) ...
@@ -2120,6 +2221,7 @@ class AppGestaoEstoque:
             ok, msg = database.atualizar_custos_itens([(a['ItemNotaID'], a['CustoNovo']) for a in alteracoes])
             if ok:
                 self.status(f"Custos recalculados: {msg}")
+                self.atualizar_lista_produtos()   # [DEPURAÇÃO 2] coluna "Custo atual" do catálogo
                 messagebox.showinfo("Pronto", f"{msg}\n\nAbra o '💰 Valor do Estoque' e clique em '🔄 Recalcular' "
                                     "nas contagens em aberto para ver o efeito.", parent=popup)
                 popup.destroy()
@@ -2153,8 +2255,9 @@ class AppGestaoEstoque:
             "ou frete que vinham só no total da nota e ficaram FORA do custo. Marque (✔) as notas que você sabe que "
             "têm ST e clique em Aplicar: a diferença é dividida entre os itens, proporcional ao valor de cada um.")).pack(anchor="w")
         ttk.Label(frame, foreground="#b35c00", wraplength=1100, justify="left", text=(
-            "⚠️ Diferença GRANDE (laranja) pode NÃO ser imposto: nota com item de comodato (ex: freezer) ou nota salva "
-            "incompleta. Na dúvida, clique na nota e confira os itens embaixo.")).pack(anchor="w", pady=(2, 8))
+            "⚠️ Em LARANJA: diferença grande ou nota com item de BONIFICAÇÃO — pode NÃO ser imposto (comodato, "
+            "bonificação ou nota salva incompleta). Essas não são marcadas no 'Marcar todas': confira os itens embaixo. "
+            "Notas importadas a partir desta versão já descontam sozinhas o valor da bonificação e do comodato.")).pack(anchor="w", pady=(2, 8))
 
         filtros = ttk.Frame(frame)
         filtros.pack(fill=tk.X)
@@ -2228,7 +2331,8 @@ class AppGestaoEstoque:
                 tree.delete(i)
             for n in visiveis():
                 marcada = n['NotaID'] in estado['marcadas']
-                tags = (('alerta',) if n['Percentual'] > LIMITE_ALERTA else ()) + (('marcada',) if marcada else ())
+                duvida = n['Percentual'] > LIMITE_ALERTA or (n.get('ItensCustoZero') and n.get('ImportadaAntes'))
+                tags = (('alerta',) if duvida else ()) + (('marcada',) if marcada else ())
                 tree.insert("", "end", iid=f"n{n['NotaID']}", tags=tags, values=(
                     "✔" if marcada else "", n['Data'].strftime('%d/%m/%Y') if n['Data'] else '?', n['NumeroNF'],
                     n['Fornecedor'], n['Itens'], fmt_reais(n['ValorNF']), fmt_reais(n['SomaItens']),
@@ -2264,10 +2368,18 @@ class AppGestaoEstoque:
             return "break"
 
         def marcar_visiveis(marcar=True):
+            if not marcar:
+                # [DEPURAÇÃO 2] desmarca TODAS (antes só as do filtro atual; as escondidas
+                # continuavam marcadas e eram ajustadas no Aplicar sem você ver)
+                estado['marcadas'].clear()
+                mostrar()
+                return
             for n in visiveis():
-                if marcar and n['Percentual'] > LIMITE_ALERTA:
+                if n['Percentual'] > LIMITE_ALERTA:
                     continue   # as de diferença grande ficam para conferir uma a uma
-                (estado['marcadas'].add if marcar else estado['marcadas'].discard)(n['NotaID'])
+                if n.get('ItensCustoZero') and n.get('ImportadaAntes'):
+                    continue   # [DEPURAÇÃO 2] tem bonificação e é antiga: o valor dela pode estar no total
+                estado['marcadas'].add(n['NotaID'])
             mostrar()
 
         def aplicar():
@@ -2286,6 +2398,7 @@ class AppGestaoEstoque:
             ok, msg = database.ratear_diferenca_nas_notas([n['NotaID'] for n in marcadas])
             if ok:
                 self.status(f"Ajuste pelo valor da nota: {msg}")
+                self.atualizar_lista_produtos()   # [DEPURAÇÃO 2] coluna "Custo atual" do catálogo
                 messagebox.showinfo("Pronto", f"{msg}\n\nAbra o '💰 Valor do Estoque' e clique em '🔄 Recalcular' nas contagens "
                                     "em aberto para ver o efeito.", parent=popup)
                 estado['marcadas'].clear()
@@ -2313,7 +2426,8 @@ class AppGestaoEstoque:
             messagebox.showinfo("Nada para ajustar", "Nenhuma nota tem o valor total maior que a soma dos itens. 👍", parent=popup)
         self._janela_ajuste_nota = {'popup': popup, 'tree': tree, 'itens': tree_itens, 'fornecedor': combo_forn,
                                     'mostrar': mostrar, 'alternar': alternar, 'marcar': marcar_visiveis,
-                                    'aplicar': aplicar, 'resumo': lbl_resumo, 'mostrar_itens': mostrar_itens}
+                                    'aplicar': aplicar, 'resumo': lbl_resumo, 'mostrar_itens': mostrar_itens,
+                                    'estado': estado}
 
     def atualizar_resumo_importacao(self):
         """[MELHORIA UX] Atualiza o placar e libera o botão 'Salvar' só quando há o que salvar."""
@@ -2360,14 +2474,14 @@ class AppGestaoEstoque:
         else:
             self.atualizar_resumo_importacao()
 
-    def _carregar_pasta_xml(self, pasta_selecionada):
+    def _carregar_pasta_xml(self, pasta_selecionada, silencioso=False):
         self.ultima_pasta_xml = pasta_selecionada
         for i in self.tree_vincular.get_children(): self.tree_vincular.delete(i)
         for i in self.tree_prontos.get_children(): self.tree_prontos.delete(i)
         self.itens_xml_nao_vinculados.clear()
         self.dados_notas_processadas.clear()
         try:
-            self.processar_arquivos_xml(pasta_selecionada)
+            self.processar_arquivos_xml(pasta_selecionada, silencioso=silencioso)
         except Exception as e:
             logger.error(f"Erro GERAL ao processar pasta XML: {e}", exc_info=True)
             messagebox.showerror("Erro Crítico no Processamento", f"Ocorreu um erro ao ler os arquivos:\n{e}", parent=self.root)
@@ -2465,6 +2579,7 @@ class AppGestaoEstoque:
 
                 itens.append({
                     '_vProd': vProd, '_custo_total': custo_total_item,
+                    'ValorItemNota': custo_total_item,   # [DEPURAÇÃO 2] valor do item na nota (p/ "fora do estoque")
                     'cProd': prod.findtext('cProd', default=''),
                     'cEAN': (prod.findtext('cEAN', default='') or '').strip(),
                     'DescricaoXML': prod.findtext('xProd', default=''),
@@ -2480,7 +2595,11 @@ class AppGestaoEstoque:
             # itens é dividida entre os itens, proporcional ao valor de cada um (vProd).
             # Itens com ST em CST 60 (ST já paga antes) não mudam: o preço já a inclui.
             ajustes = {}
-            total_vprod = sum((i['_vProd'] for i in itens), Decimal('0'))
+            # [DEPURAÇÃO 2] Rateia só entre os itens que são COMPRA. Antes entravam também os de
+            # comodato/remessa (que depois são descartados) e os de bonificação (que viram custo 0):
+            # a parte deles sumia e os itens comprados ficavam com ST/frete a menos.
+            compraveis = [i for i in itens if tipo_item_por_cfop(i.get('CFOP')) == 'compra'] or itens
+            total_vprod = sum((i['_vProd'] for i in compraveis), Decimal('0'))
             if total_vprod > 0:
                 for chave_parte in somas_itens:
                     valor_total = dec(total.findtext(chave_parte, default='0'))
@@ -2491,7 +2610,7 @@ class AppGestaoEstoque:
                         ajustes[chave_parte] = diferenca
                 if ajustes:
                     sinal = {'vDesc': Decimal('-1')}
-                    for item in itens:
+                    for item in compraveis:
                         parte = item['_vProd'] / total_vprod
                         extra = sum((d * sinal.get(k, Decimal('1')) * parte for k, d in ajustes.items()), Decimal('0'))
                         item['_custo_total'] += extra
@@ -2509,8 +2628,8 @@ class AppGestaoEstoque:
             logger.error(f"Erro ao ler o arquivo XML '{caminho_arquivo_xml}': {e}", exc_info=True)
             raise Exception(f"Falha estrutural no XML: {e}")
 
-    def processar_arquivos_xml(self, pasta_selecionada):
-        # ... (código idêntico ao anterior, agora com pop-up de erro) ...
+    def processar_arquivos_xml(self, pasta_selecionada, silencioso=False):
+        # silencioso=True: relê a pasta sem mostrar o resumo (usado antes de salvar)
         extensoes_permitidas = ('.xml', '.txt')
         arquivos_xml = sorted(os.path.join(pasta_selecionada, f) for f in os.listdir(pasta_selecionada) if f.lower().endswith(extensoes_permitidas))
         notas_processadas_nesta_sessao = {}
@@ -2519,6 +2638,7 @@ class AppGestaoEstoque:
         notas_ignoradas, itens_ignorados, itens_bonificados = [], [], []  # [MELHORIA VALOR]
         notas_com_rateio = []  # [MELHORIA ST] notas com ST/frete só no total (rateados nos itens)
         reconhecidos_por_codigo = []  # [MELHORIA] itens reconhecidos pelo código/EAN (descrição mudou)
+        ja_importadas = []  # [DEPURAÇÃO 2] notas que já estão no banco (não aparecem de novo)
         for caminho_xml in arquivos_xml:
             try:
                 cabecalho_nf, itens_nf = self.ler_xml_nota_fiscal(caminho_xml)
@@ -2540,15 +2660,19 @@ class AppGestaoEstoque:
                     continue
                 # Itens de comodato/remessa/devolução saem; bonificação entra com custo zero
                 itens_filtrados = []
+                valor_fora = Decimal('0')   # [DEPURAÇÃO 2] valor da nota que NÃO é compra paga
                 for it in itens_nf:
                     tipo = tipo_item_por_cfop(it.get('CFOP'))
                     if tipo == 'ignorar':
                         itens_ignorados.append(f"NF {num_nf}: {it['DescricaoXML']} (CFOP {it.get('CFOP')})")
+                        valor_fora += it.get('ValorItemNota', Decimal('0'))
                         continue
                     if tipo == 'bonificacao':
+                        valor_fora += it.get('ValorItemNota', Decimal('0'))
                         it = dict(it, PrecoCustoUnitario=Decimal('0'))
                         itens_bonificados.append(f"NF {num_nf}: {it['DescricaoXML']}")
                     itens_filtrados.append(it)
+                cabecalho_nf['ValorForaDoEstoque'] = valor_fora
                 if not itens_filtrados:
                     notas_ignoradas.append(f"NF {num_nf} ({nome_fornecedor}) - só itens de comodato/remessa")
                     continue
@@ -2571,6 +2695,16 @@ class AppGestaoEstoque:
                 if not fornecedor_id:
                     raise Exception(f"Não foi possível cadastrar o fornecedor {nome_fornecedor} ({cnpj}).")
                 cabecalho_nf['FornecedorID'] = fornecedor_id
+                # [DEPURAÇÃO 2] Nota que JÁ está no banco não volta para a tela (antes os itens
+                # dela apareciam de novo para vincular e só no "Salvar" vinha o aviso).
+                try:
+                    ja_existe = database.verificar_nota_fiscal_existente(num_nf, fornecedor_id)
+                except Exception:
+                    ja_existe = False
+                if ja_existe:
+                    ja_importadas.append(f"NF {num_nf} ({nome_fornecedor})")
+                    notas_processadas_nesta_sessao[chave_nota] = None
+                    continue
                 nota = {
                     'cabecalho': cabecalho_nf,
                     'itens_vinculados': [],
@@ -2611,6 +2745,7 @@ class AppGestaoEstoque:
 
                         item_pronto = item.copy()
                         item_pronto['ProdutoFornecedorID'] = produto_fornecedor_id
+                        item_pronto['FatorUsado'] = fator   # [DEPURAÇÃO 2] guardado em cada item da nota
                         item_pronto['NomeMestre'] = next((k for k, v in self.mapa_produtos_mestre.items() if v == produto_mestre_id), "Desconhecido")
                         # Atualiza para os valores convertidos antes de salvar
                         item_pronto['Quantidade'] = qtd_real 
@@ -2633,7 +2768,9 @@ class AppGestaoEstoque:
 
                     else:
                         nota['itens_pendentes'] += 1
+                        self._seq_pendente = getattr(self, '_seq_pendente', 0) + 1
                         item_pendente = {
+                            '_uid': self._seq_pendente,   # [DEPURAÇÃO 2] identifica a LINHA da tabela
                             'FornecedorID': fornecedor_id,
                             'FornecedorNome': nome_fornecedor,
                             'DescricaoXML': desc_xml,
@@ -2653,28 +2790,31 @@ class AppGestaoEstoque:
                             custo_unit = Decimal(str(item['PrecoCustoUnitario']))
                             custo_total = qtd_xml * custo_unit
 
-                            linhas_pendentes.append((
+                            linhas_pendentes.append((item_pendente['_uid'], (
                                 nome_fornecedor, 
                                 desc_xml, 
                                 item['cEAN'], 
                                 f"{qtd_xml:.2f}".rstrip('0').rstrip('.'), # Qtd formatada
                                 f"R$ {custo_unit:.2f}", 
                                 f"R$ {custo_total:.2f}"
-                            ))
+                            )))
 
                 # Arquivo lido por completo: agora sim registra a nota e mostra na tela
                 notas_processadas_nesta_sessao[chave_nota] = nota
                 self.itens_xml_nao_vinculados.extend(novos_pendentes)
                 for valores in linhas_prontos:
                     self.tree_prontos.insert("", "end", values=valores)
-                for valores in linhas_pendentes:
-                    self.tree_vincular.insert("", "end", values=valores)
+                for uid, valores in linhas_pendentes:
+                    self.tree_vincular.insert("", "end", iid=f"pend_{uid}", values=valores)
 
             except Exception as e:
                 arquivos_com_falha += 1
                 logger.error(f"Falha ao processar o arquivo {caminho_xml}: {e}", exc_info=True)
 
-        self.dados_notas_processadas = list(notas_processadas_nesta_sessao.values())
+        self.dados_notas_processadas = [n for n in notas_processadas_nesta_sessao.values() if n is not None]
+        self._notas_ja_importadas = ja_importadas
+        if silencioso:
+            return
         completas = sum(1 for n in self.dados_notas_processadas if n['itens_pendentes'] == 0)
 
         msg_final = (f"Leitura de XMLs concluída.\n\n"
@@ -2683,6 +2823,9 @@ class AppGestaoEstoque:
                      f"e prontas para salvar (Passo 3).")
         if arquivos_repetidos:
             msg_final += f"\n\nℹ️ {arquivos_repetidos} arquivo(s) eram cópias de notas já lidas e foram ignorados."
+        if ja_importadas:
+            msg_final += (f"\n\n✅ {len(ja_importadas)} nota(s) JÁ estavam salvas no estoque e foram puladas:\n  • "
+                          + "\n  • ".join(ja_importadas[:5]) + ("\n  • ..." if len(ja_importadas) > 5 else ""))
         # [MELHORIA VALOR] Resumo do que NÃO é compra
         if notas_ignoradas:
             msg_final += f"\n\nℹ️ {len(notas_ignoradas)} nota(s) ignorada(s) (não são compra):\n  • " + "\n  • ".join(notas_ignoradas[:5])
@@ -2721,9 +2864,7 @@ class AppGestaoEstoque:
         # valores = ('Fornecedor', 'Produto no XML', ...)
 
         # Busca na lista interna o item que corresponde ao fornecedor e descrição visual
-        item_pendente = next((i for i in self.itens_xml_nao_vinculados 
-                            if i['DescricaoXML'] == valores_visuais[1] 
-                            and i['FornecedorNome'] == valores_visuais[0]), None)
+        item_pendente = self._pendente_da_linha(selecionado_tree, valores_visuais)
 
         if not item_pendente:
             messagebox.showerror("Erro de Sincronia", "O item selecionado não foi encontrado na memória. Tente recarregar a pasta.", parent=self.root)
@@ -2787,7 +2928,9 @@ class AppGestaoEstoque:
         if not custo_xml:
             return True
         try:
-            custo_anterior = Decimal(str(database.buscar_ultimo_custo_por_produto(produto_mestre_id) or 0))
+            # [DEPURAÇÃO 2] último custo PAGO (antes uma bonificação de custo 0 pulava a conferência)
+            buscar = getattr(database, 'ultimo_custo_real_produto', database.buscar_ultimo_custo_por_produto)
+            custo_anterior = Decimal(str(buscar(produto_mestre_id) or 0))
         except Exception:
             return True
         if custo_anterior <= 0:
@@ -2811,6 +2954,15 @@ class AppGestaoEstoque:
         if not self.dados_notas_processadas:
             messagebox.showwarning("Aviso", "Nenhuma nota fiscal foi processada ou não há itens vinculados para salvar.", parent=self.root)
             return
+        # [DEPURAÇÃO 2] Itens vinculados depois da leitura não atualizavam a nota: ela continuava
+        # "incompleta" e, salvando assim, os itens já vinculados ficavam de fora para sempre.
+        # Agora a pasta é relida (sem mensagens) antes de decidir o que está completo.
+        if any(nf.get('itens_pendentes', 0) for nf in self.dados_notas_processadas) \
+                and self.ultima_pasta_xml and os.path.isdir(self.ultima_pasta_xml):
+            self._carregar_pasta_xml(self.ultima_pasta_xml, silencioso=True)
+            if not self.dados_notas_processadas:
+                messagebox.showinfo("Nada para salvar", "Todas as notas da pasta já estão salvas no estoque.", parent=self.root)
+                return
 
         # [DEPURAÇÃO] Uma nota salva NÃO pode ser importada de novo (o banco bloqueia duplicidade).
         # Antes, notas com itens ainda sem vínculo eram salvas pela metade e os itens que
@@ -2908,9 +3060,7 @@ class AppGestaoEstoque:
 
         # [CORREÇÃO] Busca segura pelo conteúdo visual
         valores_visuais = self.tree_vincular.item(selecionado_tree, 'values')
-        item_pendente = next((i for i in self.itens_xml_nao_vinculados 
-                            if i['DescricaoXML'] == valores_visuais[1] 
-                            and i['FornecedorNome'] == valores_visuais[0]), None)
+        item_pendente = self._pendente_da_linha(selecionado_tree, valores_visuais)
 
         if not item_pendente:
             messagebox.showerror("Erro de Sincronia", "O item selecionado não foi encontrado na memória.", parent=self.root)
@@ -3056,6 +3206,10 @@ class AppGestaoEstoque:
         self.entry_nome_contagem = ttk.Entry(frame_salvar, width=20)
         self.entry_nome_contagem.grid(row=0, column=3, sticky="w")
         self.entry_nome_contagem.insert(0, "Geral")
+        # [DEPURAÇÃO 2] o rascunho guarda também a data e o nome quando eles mudam
+        # (antes só ao lançar um item: mudando a data por último, a recuperação voltava a data antiga)
+        self.date_contagem.bind("<<DateEntrySelected>>", lambda e: self.lista_itens_para_salvar_contagem and self.salvar_rascunho_contagem())
+        self.entry_nome_contagem.bind("<KeyRelease>", lambda e: self.lista_itens_para_salvar_contagem and self.salvar_rascunho_contagem())
 
         self.id_funcionario_contagem = getattr(config, 'ID_GESTOR_PADRAO', 2) 
 
@@ -3747,17 +3901,37 @@ class AppGestaoEstoque:
                 id_vinculo_caixa = tree_caixas.item(sel_caixa, 'values')[0]
 
                 try:
-                    qtd_na_caixa = float(para_decimal(entry_fator_caixa.get(), "Unidades na caixa", permitir_zero=False))
+                    qtd_na_caixa = para_decimal(entry_fator_caixa.get(), "Unidades na caixa", permitir_zero=False)
                     nova_qtd_contada = para_decimal(entry_qtd_b.get(), "Quantidade contada")
                 except ValueError as ve: return messagebox.showerror("Erro", f"Valores preenchidos inválidos: {ve}", parent=edit_win)
 
                 if ean_fornecido == "Sem EAN" or not ean_fornecido:
                     return messagebox.showerror("Erro", "Para desmembrar uma caixa, o item avulso deve ter um Código de Barras válido bipado no celular.", parent=edit_win)
 
+                # [DEPURAÇÃO 2] Mostra ANTES tudo o que vai mudar (antes era sem confirmação nenhuma)
+                previa = getattr(database, 'previa_desmembrar_caixa', lambda *a: None)(id_vinculo_caixa, qtd_na_caixa)
+                if previa:
+                    mult = previa['Multiplicador']
+                    if mult == 1:
+                        texto = (f"'{previa['Produto']}' já está em unidades (Qtd/Cx {fmt_qtd(previa['FatorAtual'])}).\n\n"
+                                 f"Só será criado o vínculo do EAN {ean_fornecido} e lançadas {fmt_qtd(nova_qtd_contada)} UN na contagem.")
+                    else:
+                        texto = (f"O produto '{previa['Produto']}' passa a ser contado em UNIDADES (cada caixa = {fmt_qtd(qtd_na_caixa)} UN).\n\n"
+                                 f"Vai mudar (multiplicando por {fmt_qtd(mult)}):\n"
+                                 f"  • {previa['Compras']} compra(s) já importada(s) (quantidade × {fmt_qtd(mult)}, custo ÷ {fmt_qtd(mult)})\n"
+                                 f"  • o Qtd/Cx de {previa['Vinculos']} vínculo(s) deste produto\n"
+                                 f"  • {previa['Contagens'] - previa['Fechadas']} contagem(ns) (quantidade × {fmt_qtd(mult)})"
+                                 + (f"\n  • {previa['Fechadas']} contagem(ns) com valor FECHADO NÃO mudam" if previa['Fechadas'] else "")
+                                 + f"\n  • o nome ganha '(UNIDADE)' e a unidade vira UN\n\n"
+                                 "O valor total de cada compra não muda. Faça backup antes se tiver dúvida.")
+                    if not messagebox.askyesno("Confirmar: desmembrar caixa", texto + "\n\nContinuar?", icon='warning', parent=edit_win):
+                        return
                 sucesso, msg = database.resolver_avulso_fracionando_caixa(contagem_id, nome_avulso, id_vinculo_caixa, ean_fornecido, qtd_na_caixa, nova_qtd_contada)
                 if sucesso:
                     messagebox.showinfo("Sucesso", msg, parent=edit_win)
                     edit_win.destroy(); carregar(); self.carregar_itens_contagem_historico()
+                    # [DEPURAÇÃO 2] o produto mudou de nome/unidade: atualiza as listas do programa
+                    self.atualizar_lista_produtos(); self.popular_combobox_produtos_mestre()
                 else: messagebox.showerror("Erro", msg, parent=edit_win)
 
             ttk.Button(tab_caixa, text="📦 Desmembrar e Confirmar (Opção B)", command=salvar_fracao).pack(pady=15, fill="x", ipady=5)
@@ -3770,10 +3944,18 @@ class AppGestaoEstoque:
         [MELHORIA VALOR] Contagem com valor FECHADO não pode mudar (senão o valor lançado
         no outro sistema deixa de bater com as quantidades). Devolve True se estiver bloqueada.
         """
+        # [DEPURAÇÃO 2] se o banco falhar, NÃO libera (antes uma falha momentânea deixava
+        # editar/consolidar/excluir uma contagem com valor fechado)
         try:
-            fechados = database.listar_valores_estoque_fechados()
-        except Exception:
-            return False
+            try:
+                fechados = database.listar_valores_estoque_fechados(levantar_erro=True)
+            except TypeError:
+                fechados = database.listar_valores_estoque_fechados()
+        except Exception as e:
+            logger.error(f"Não foi possível conferir se a contagem {contagem_id} está fechada: {e}")
+            messagebox.showerror("Banco indisponível", "Não foi possível conferir se esta contagem está com o valor "
+                                 "FECHADO. Por segurança, nada foi alterado. Tente de novo.", parent=janela or self.root)
+            return True
         try:
             chave = int(contagem_id)
         except (TypeError, ValueError):
@@ -3842,6 +4024,24 @@ class AppGestaoEstoque:
             if not mestre_id:
                 messagebox.showerror("Erro", "Produto Mestre não encontrado. Escolha de novo.", parent=popup)
                 return
+            # [DEPURAÇÃO 2] Produto que JÁ está na contagem: antes somava sem avisar (10 + 10 = 20)
+            existente = next((i for i in tree.get_children()
+                              if str(tree.item(i, 'values')[2]) == str(mestre_id)), None)
+            if existente:
+                atual = tree.item(existente, 'values')[1]
+                resposta = messagebox.askyesnocancel(
+                    "Produto já está na contagem",
+                    f"Este produto já tem {atual} nesta contagem.\n\n"
+                    f"SIM = SOMAR {fmt_qtd(qtd)}\nNÃO = SUBSTITUIR por {fmt_qtd(qtd)}\nCANCELAR = não mudar", parent=popup)
+                if resposta is None:
+                    return
+                if resposta is False:
+                    if not database.atualizar_qtd_item_contagem(contagem_id, int(mestre_id), None, qtd):
+                        messagebox.showerror("Erro de Banco", "Não foi possível corrigir o item (veja o log).", parent=popup)
+                        return
+                    entry_qtd.delete(0, tk.END); combo_mestre.set("")
+                    carregar(); self.carregar_itens_contagem_historico()
+                    return
             if not database.adicionar_item_contagem_existente(contagem_id, mestre_id, qtd):
                 messagebox.showerror("Erro de Banco", "Não foi possível inserir o item (veja o log).", parent=popup)
                 return
@@ -3918,8 +4118,10 @@ class AppGestaoEstoque:
 
     def consolidar_contagens_selecionadas(self):
         """
-        Lógica completa de consolidação blindada contra congelamentos (UI Freeze)
-        e falhas de duplicação em grandes volumes de dados.
+        Junta as contagens selecionadas numa só (somando produtos iguais).
+        [DEPURAÇÃO 2] Tudo numa transação no banco (antes: salvava a nova e depois apagava as
+        antigas uma a uma; uma falha no meio deixava o estoque em DOBRO). Mostra as datas e
+        avisa quando são de dias diferentes. O EAN dos itens avulsos é mantido.
         """
         selecionados = self.tree_hist_contagens.selection()
         if len(selecionados) < 2:
@@ -3928,105 +4130,47 @@ class AppGestaoEstoque:
         for item in selecionados:  # [MELHORIA VALOR] consolidar apaga as originais
             if self.contagem_bloqueada(self.tree_hist_contagens.item(item, 'values')[0], "consolidar esta contagem"):
                 return
-
-        if not messagebox.askyesno("Confirmar Consolidação", 
-                                f"Deseja mesclar as {len(selecionados)} contagens selecionadas?\n\n"
-                                "Os itens iguais serão somados em uma ÚNICA contagem (com a data da contagem mais recente), "
-                                "e as contagens originais serão excluídas do histórico.", 
-                                parent=self.root):
+        linhas = [self.tree_hist_contagens.item(i, 'values') for i in selecionados]
+        ids = [int(v[0]) for v in linhas]
+        datas = {data_de_texto_br(v[1]) for v in linhas if data_de_texto_br(v[1])}
+        data_consolidada = max(datas) if datas else date.today()
+        lista = "\n".join(f"  • ID {v[0]} - {v[1]} - {v[2]}" for v in linhas[:10])
+        aviso_datas = ""
+        if len(datas) > 1:
+            aviso_datas = (f"\n\n⚠️ ATENÇÃO: as contagens são de DIAS DIFERENTES. As quantidades serão SOMADAS "
+                           f"e a contagem ficará com a data {data_consolidada.strftime('%d/%m/%Y')}.\n"
+                           "Consolidar serve para juntar partes da MESMA contagem (ex: freezer + estoque seco).")
+        if not messagebox.askyesno("Confirmar Consolidação",
+                                   f"Mesclar estas {len(ids)} contagens?\n{lista}\n\n"
+                                   "Os itens iguais serão somados em uma ÚNICA contagem e as originais serão excluídas."
+                                   + aviso_datas, icon='warning' if aviso_datas else 'question', parent=self.root):
             return
-
         nome_nova_contagem = simpledialog.askstring("Nome da Consolidação", "Digite um nome/referência para a nova contagem (Ex: Balanço Consolidado):", parent=self.root)
-        if not nome_nova_contagem:
+        if not nome_nova_contagem or not nome_nova_contagem.strip():
             return
-
-        # BLINDAGEM 1: Muda o cursor para "Carregando" (Cross-platform seguro)
         try:
-            self.root.config(cursor="watch") # 'watch' funciona no Linux/Lubuntu
+            self.root.config(cursor="watch"); self.root.update_idletasks()
         except Exception:
-            pass # Ignora a falha visual do SO e segue com a regra de negócio
-
-        self.root.update_idletasks() # Força a tela a desenhar antes de travar
-
-        itens_agrupados = {}
-        ids_para_excluir = []
-        datas_selecionadas = []
-
+            pass
         try:
-            for item in selecionados:
-                dados = self.tree_hist_contagens.item(item, 'values')
-                contagem_id = int(dados[0])
-                ids_para_excluir.append(contagem_id)
-                data_cont = data_de_texto_br(dados[1])
-                if data_cont:
-                    datas_selecionadas.append(data_cont)
-
-                itens_da_contagem = database.buscar_itens_contagem(contagem_id)
-
-                for i in itens_da_contagem:
-                    prod_id = getattr(i, 'ProdutoID', None)
-                    avulso = getattr(i, 'NomeAvulso', None)
-                    qtd = Decimal(str(i.QuantidadeContada)) if getattr(i, 'QuantidadeContada', None) is not None else Decimal('0.0')
-
-                    chave_agrupamento = f"PROD_{prod_id}" if prod_id else f"AVULSO_{avulso}"
-
-                    if chave_agrupamento in itens_agrupados:
-                        itens_agrupados[chave_agrupamento]['QuantidadeContada'] += qtd
-                    else:
-                        itens_agrupados[chave_agrupamento] = {
-                            'ProdutoID': prod_id,
-                            'QuantidadeContada': qtd,
-                            'NomeAvulso': avulso,
-                            'EANAvulso': getattr(i, 'EANAvulso', None)
-                        }
-
-                # BLINDAGEM 2: Avisa o Windows que o app não travou a cada volta do loop
-                self.root.update_idletasks()
-
-            lista_para_salvar = list(itens_agrupados.values())
-            # [DEPURAÇÃO] A contagem consolidada recebia a data de HOJE. Consolidar as contagens
-            # do dia 31/01 numa terça-feira qualquer jogava o estoque para a data errada e
-            # bagunçava a Sugestão de Compra e o CMV. Agora usa a data da contagem mais recente.
-            data_consolidada = max(datas_selecionadas) if datas_selecionadas else datetime.now().date()
-            data_consolidada_txt = data_consolidada.strftime('%Y-%m-%d')
-
-            # Executa a transação de salvamento
-            sucesso_salvar, msg = database.salvar_contagem_estoque(
-                data_consolidada_txt, 
-                self.id_funcionario_contagem, 
-                lista_para_salvar, 
-                nome_nova_contagem.strip()
-            )
-
-            if sucesso_salvar:
-                falhas_exclusao = 0
-                # BLINDAGEM 3: Exclusão com tolerância a falhas
-                for cid in ids_para_excluir:
-                    if not database.excluir_contagem_estoque(cid):
-                        falhas_exclusao += 1
-                    self.root.update_idletasks() # Mantém a tela viva durante a limpeza
-
-                if falhas_exclusao == 0:
-                    messagebox.showinfo("Sucesso", f"Contagens consolidadas com sucesso!\n({len(lista_para_salvar)} itens únicos processados)\n"
-                                                   f"Data da nova contagem: {data_consolidada.strftime('%d/%m/%Y')}", parent=self.root)
-                else:
-                    messagebox.showwarning("Aviso de Limpeza", f"A nova contagem consolidada foi criada com sucesso, mas houve falha ao excluir {falhas_exclusao} contagem(ns) antigas.\n\nAtualize a tela e exclua as antigas manualmente para não duplicar o estoque.", parent=self.root)
-
-                self.atualizar_lista_contagens_historico()
-                self.popular_combos_contagem_sugestao()
-                for i in self.tree_hist_itens.get_children(): self.tree_hist_itens.delete(i)
-            else:
-                messagebox.showerror("Erro de Banco", f"Falha ao gerar contagem consolidada:\n{msg}", parent=self.root)
-
+            ok, msg, novo_id = database.consolidar_contagens(ids, data_consolidada.strftime('%Y-%m-%d'),
+                                                             self.id_funcionario_contagem, nome_nova_contagem.strip())
         except Exception as e:
             logger.error(f"Erro crítico ao consolidar contagens: {e}", exc_info=True)
-            messagebox.showerror("Erro Crítico", f"Ocorreu um erro no processamento:\n{e}", parent=self.root)
+            ok, msg = False, str(e)
         finally:
-            # BLINDAGEM 4: SEMPRE restaura o cursor do mouse, mesmo se o banco der erro
             try:
                 self.root.config(cursor="")
             except Exception:
-                pass 
+                pass
+        if not ok:
+            messagebox.showerror("Não foi possível consolidar", msg, parent=self.root)
+            return
+        self.status(f"{msg} Data: {data_consolidada.strftime('%d/%m/%Y')} (ID {novo_id}).")
+        self.atualizar_lista_contagens_historico()
+        self.popular_combos_contagem_sugestao()
+        for i in self.tree_hist_itens.get_children():
+            self.tree_hist_itens.delete(i)
 
     def abrir_relatorio_valoracao(self):
         """
@@ -4179,6 +4323,7 @@ class AppGestaoEstoque:
                 if database.adicionar_item_contagem_existente(contagem_id, a['ProdutoID'], qtd):
                     self.status(f"{a['NomeProduto']}: {fmt_qtd(qtd)} adicionado à contagem.")
                     recarregar()
+                    self.carregar_itens_contagem_historico()   # [DEPURAÇÃO 2] o painel do histórico também
                 else:
                     messagebox.showerror("Erro", "Não foi possível adicionar o item à contagem (veja o log).", parent=popup)
             elif tipo == 'sem_custo':
@@ -4576,6 +4721,7 @@ class AppGestaoEstoque:
         finally:
             self.root.config(cursor="")
         self._salvar_preferencias_sugestao(params)
+        self.__dict__['_cache_ids_forn'] = {}
         self.recalcular_sugestao_na_tela()
 
     def recalcular_sugestao_na_tela(self):
@@ -4635,10 +4781,13 @@ class AppGestaoEstoque:
         categoria = self.combo_sugestao_categoria.get() or "Todas"
         palavras = sem_acento(self.entry_busca_sugestao.get()).split()
         ids_forn = None
-        forn_txt = self.combo_sugestao_fornecedor.get()
-        m = re.search(r'\(ID: (\d+)\)\s*$', forn_txt or '')
-        if forn_txt and forn_txt != "Todos" and m:
-            ids_forn = database.buscar_ids_produtos_por_fornecedor(int(m.group(1)))
+        forn_id = self._fornecedor_filtro_sugestao()
+        if forn_id is not None:
+            # [DEPURAÇÃO 2] consulta UMA vez por fornecedor (antes ia ao banco a cada tecla da busca)
+            cache = self.__dict__.setdefault('_cache_ids_forn', {})
+            if forn_id not in cache:
+                cache[forn_id] = database.buscar_ids_produtos_por_fornecedor(forn_id)
+            ids_forn = cache[forn_id]
 
         # Contadores (sobre o filtro de categoria/fornecedor/busca, antes do "Mostrar")
         contagem_mostrar = {ch: 0 for ch, _ in self.MOSTRAR_SUGESTAO}
@@ -4687,6 +4836,12 @@ class AppGestaoEstoque:
                           f"{r.get('JanelaDias', 90)} dias mas NUNCA foram contados (escolha em 'Mostrar' para ver).")
         self.lbl_aviso_sugestao.config(text="   ".join(avisos))
         self.status(f"Sugestão: {len(visiveis)} produto(s) na tabela.")
+
+    def _fornecedor_filtro_sugestao(self):
+        """ID do fornecedor escolhido no filtro da aba 5 (ou None = Todos)."""
+        forn_txt = self.combo_sugestao_fornecedor.get() if hasattr(self, 'combo_sugestao_fornecedor') else ''
+        m = re.search(r'\(ID: (\d+)\)\s*$', forn_txt or '')
+        return int(m.group(1)) if forn_txt and forn_txt != "Todos" and m else None
 
     def mostrar_calculo_sugestao(self, event=None):
         sel = self.tree_sugestao.focus()
@@ -4789,7 +4944,9 @@ class AppGestaoEstoque:
         popup.transient(self.root)
         frame = ttk.Frame(popup, padding=10)
         frame.pack(fill=tk.BOTH, expand=True)
-        var_pref = tk.StringVar(value='ultimo')
+        forn_filtro = self._fornecedor_filtro_sugestao()
+        nome_filtro = self.combo_sugestao_fornecedor.get().rsplit(' (ID:', 1)[0] if forn_filtro is not None else ''
+        var_pref = tk.StringVar(value='filtro' if forn_filtro is not None else 'ultimo')
         linha_pref = ttk.Frame(frame)
         linha_pref.pack(fill=tk.X)
         ttk.Label(linha_pref, text="Comprar de:").pack(side=tk.LEFT)
@@ -4805,7 +4962,9 @@ class AppGestaoEstoque:
         estado = {'pedido': {}, 'mapa': {}}
 
         def montar(*_):
-            pedido = self.montar_pedido_por_fornecedor(var_pref.get())
+            escolha = var_pref.get()
+            preferir = ('fornecedor', forn_filtro) if escolha == 'filtro' and forn_filtro is not None else escolha
+            pedido = self.montar_pedido_por_fornecedor(preferir)
             estado['pedido'] = pedido
             self.ultimo_pedido = pedido
             opcoes = [f"{f}  ({len(itens)} itens · {fmt_reais(sum(i['total'] for i in itens))})" for f, itens in pedido.items()]
@@ -4833,7 +4992,10 @@ class AppGestaoEstoque:
             popup.clipboard_append(conteudo)
             self.status(f"Pedido de '{estado['mapa'].get(combo.get(), '')}' copiado. Cole no WhatsApp com Ctrl+V.")
 
-        for valor, rotulo in (('ultimo', "fornecedor da ÚLTIMA compra"), ('barato', "fornecedor MAIS BARATO (últimos 12 meses)")):
+        opcoes_pref = [('ultimo', "fornecedor da ÚLTIMA compra"), ('barato', "fornecedor MAIS BARATO (últimos 12 meses)")]
+        if forn_filtro is not None:   # [DEPURAÇÃO 2] filtrou um fornecedor: o pedido pode ir todo para ele
+            opcoes_pref.insert(0, ('filtro', f"o fornecedor do filtro ({nome_filtro[:30]})"))
+        for valor, rotulo in opcoes_pref:
             ttk.Radiobutton(linha_pref, text=rotulo, value=valor, variable=var_pref, command=montar).pack(side=tk.LEFT, padx=8)
         combo.bind("<<ComboboxSelected>>", mostrar)
         botoes = ttk.Frame(frame)
@@ -5004,7 +5166,14 @@ class AppGestaoEstoque:
                 messagebox.showerror("Erro", "Dias e Vagas devem ser números inteiros maiores que zero.", parent=popup)
                 return
 
-            dados = database.gerar_ranking_sabores_buffet(dias, ids_permitidos)
+            dados = list(database.gerar_ranking_sabores_buffet(dias, ids_permitidos) or [])
+            # [DEPURAÇÃO 2] sabores escolhidos que NÃO foram comprados no período também aparecem
+            # (no fim, como rotativos com consumo zero); antes sumiam da lista
+            com_compra = {d.get('ProdutoID') for d in dados}
+            nomes_por_id = {d['id']: n for n, d in self.mapa_produtos_mestre_contagem.items()}
+            for pid in ids_permitidos:
+                if pid not in com_compra and pid in nomes_por_id:
+                    dados.append({'ProdutoID': pid, 'NomeProduto': nomes_por_id[pid], 'TotalComprado': 0, 'UMD': 0})
 
             if not dados:
                 tree.insert("", "end", values=("", "Sem dados de compra neste período.", "Nenhum dos sabores selecionados foi comprado nesses dias.", "", ""))
@@ -5012,7 +5181,7 @@ class AppGestaoEstoque:
 
             for index, item in enumerate(dados):
                 posicao = index + 1
-                if posicao <= vagas:
+                if posicao <= vagas and float(item.get('UMD') or 0) > 0:   # sem compra nunca vira FIXO
                     status, tag = "⭐ FIXO", "fixo"
                 else:
                     status, tag = "🔄 ROTATIVO", "rotativo"
@@ -5082,7 +5251,7 @@ class AppGestaoEstoque:
         gerar_analise()
 
     def abrir_popup_historico_compras(self, event):
-        selecionado = self.tree_sugestao.focus()
+        selecionado = linha_do_clique(self.tree_sugestao, event)   # [DEPURAÇÃO 2] não age no cabeçalho
         if not selecionado: return
         try: produto_id = int(selecionado)
         except ValueError: return
@@ -5128,6 +5297,11 @@ class AppGestaoEstoque:
             try:
                 historico = database.buscar_historico_compras_produto(produto_id)
                 for compra in historico or []:
+                    # [DEPURAÇÃO 2] o custo manual do Catálogo (nota "fantasma" de quantidade 0) não é
+                    # compra: editar aqui transformava o custo manual em compra de verdade
+                    if Decimal(str(getattr(compra, 'Quantidade', 0) or 0)) <= 0 or \
+                            'PRODUÇÃO INTERNA' in str(getattr(compra, 'NomeFantasia', '') or '').upper():
+                        continue
                     data_f = fmt_data(compra.DataEmissao, vazio="--/--/----")
                     qtd_f = fmt_num(compra.Quantidade, 3, "0.000")
                     custo_f = f"R$ {fmt_num(compra.PrecoCustoUnitario, 4, '0.0000')}"
@@ -5163,16 +5337,30 @@ class AppGestaoEstoque:
 
             def salvar():
                 try:
-                    n_qtd = para_decimal(e_qtd.get(), "Quantidade")
+                    # [DEPURAÇÃO 2] quantidade 0 fazia a compra sumir de todos os cálculos
+                    n_qtd = para_decimal(e_qtd.get(), "Quantidade", permitir_zero=False)
                     n_custo = para_decimal(e_custo.get(), "Custo")
-                    
+                    v_qtd = para_decimal(qtd_atual, "Quantidade")
+                    v_custo = para_decimal(custo_atual.replace("R$", ""), "Custo")
+                    if n_qtd == v_qtd and n_custo == v_custo:
+                        edit_win.destroy()   # nada mudou: não grava
+                        return
+                    if not messagebox.askyesno(
+                            "Corrigir compra",
+                            f"NF {num_nf} ({data_nf})\n\n"
+                            f"Quantidade: {fmt_qtd(v_qtd)} → {fmt_qtd(n_qtd)}\n"
+                            f"Custo/unid.: {fmt_reais(v_custo)} → {fmt_reais(n_custo)}\n"
+                            f"Total: {fmt_reais(v_qtd * v_custo)} → {fmt_reais(n_qtd * n_custo)}\n\nConfirmar?",
+                            parent=edit_win):
+                        return
                     if database.atualizar_item_historico_compra(item_nota_id, n_qtd, n_custo):
                         edit_win.destroy()
                         carregar_dados() # Recarrega a tabelinha
                         # Mostra um aviso pro gestor recalcular a tela de trás
                         messagebox.showinfo("Sucesso", "Histórico corrigido!\nClique em 'Gerar Sugestão' novamente para ver a matemática atualizada.", parent=popup)
                     else:
-                        messagebox.showerror("Erro", "Falha ao gravar no banco.", parent=edit_win)
+                        messagebox.showerror("Erro", "Falha ao gravar no banco (a compra pode ter sido apagada; "
+                                             "gere a sugestão de novo).", parent=edit_win)
                 except ValueError as ve:
                     messagebox.showerror("Erro", str(ve), parent=edit_win)
 
@@ -5289,7 +5477,12 @@ class AppGestaoEstoque:
 
     def _mudar_status_solicitacao(self, novo_status, motivo=None):
         try:
-            return database.atualizar_status_solicitacao(self.solicitacao_atual_id, novo_status, motivo)
+            # [DEPURAÇÃO 2] só muda se ainda estiver PENDENTE (outro gestor ou o bot pode ter decidido)
+            try:
+                return database.atualizar_status_solicitacao(self.solicitacao_atual_id, novo_status, motivo,
+                                                             status_esperado='Pendente')
+            except TypeError:
+                return database.atualizar_status_solicitacao(self.solicitacao_atual_id, novo_status, motivo)
         except Exception as e:  # [DEPURAÇÃO] antes um erro do banco derrubava o botão
             logger.error(f"Erro ao atualizar solicitação {self.solicitacao_atual_id}: {e}", exc_info=True)
             return False
@@ -5304,7 +5497,9 @@ class AppGestaoEstoque:
             self.status("Solicitação Aprovada!")  # [MELHORIA UX] rodapé em vez de janelinha
             self.carregar_solicitacoes()
         else:
-            messagebox.showerror("Erro", "Não foi possível aprovar (veja o log).", parent=self.root)
+            messagebox.showerror("Erro", "Não foi possível aprovar. Ela pode já ter sido decidida por outra pessoa "
+                                 "(a lista foi atualizada) ou houve falha no banco (veja o log).", parent=self.root)
+            self.carregar_solicitacoes()
 
     def recusar_solicitacao(self):
         if not self.solicitacao_atual_id:
@@ -5316,7 +5511,9 @@ class AppGestaoEstoque:
                 self.status("Solicitação Recusada.")  # [MELHORIA UX] rodapé em vez de janelinha
                 self.carregar_solicitacoes()  # [DEPURAÇÃO] agora também limpa os detalhes da tela
             else:
-                messagebox.showerror("Erro", "Não foi possível recusar (veja o log).", parent=self.root)
+                messagebox.showerror("Erro", "Não foi possível recusar. Ela pode já ter sido decidida por outra pessoa "
+                                     "(a lista foi atualizada) ou houve falha no banco (veja o log).", parent=self.root)
+                self.carregar_solicitacoes()
 
 # ===================================================================
     # == ABA 6: ADMINISTRAÇÃO / RESET ===================================
@@ -5437,7 +5634,12 @@ class AppGestaoEstoque:
             messagebox.showwarning("Aviso", "Selecione pelo menos uma Nota Fiscal para excluir.", parent=self.root)
             return
         
-        if not messagebox.askyesno("Confirmar Exclusão", f"Você selecionou {len(selecionados)} notas fiscais.\n\nEsta ação apagará o registro da nota e todo o histórico de entrada de estoque associado a ela.\n\nDeseja continuar?", icon='warning', parent=self.root):
+        # [DEPURAÇÃO 2] as "notas" de custo manual do Catálogo também aparecem aqui: avisa antes
+        manuais = [self.tree_admin_nfs.item(i, 'values') for i in selecionados
+                   if 'PRODUÇÃO INTERNA' in str(self.tree_admin_nfs.item(i, 'values')[2]).upper()]
+        aviso_manual = (f"\n\n⚠️ {len(manuais)} delas são o CUSTO MANUAL de produtos (cadastrado no Catálogo). "
+                        "Excluindo, esses produtos ficam SEM custo no Valor do Estoque.") if manuais else ""
+        if not messagebox.askyesno("Confirmar Exclusão", f"Você selecionou {len(selecionados)} notas fiscais.\n\nEsta ação apagará o registro da nota e todo o histórico de entrada de estoque associado a ela.{aviso_manual}\n\nDeseja continuar?", icon='warning', parent=self.root):
             return
 
         sucessos = 0
@@ -5452,6 +5654,7 @@ class AppGestaoEstoque:
         else:
             messagebox.showwarning("Resultado", f"{sucessos} de {len(selecionados)} nota(s) excluída(s) com sucesso.", parent=self.root)
         self.atualizar_lista_nfs_admin()
+        self._invalidar_sugestao()
 
     def excluir_contagens_selecionadas(self):
         selecionados = self.tree_admin_cont.selection()
@@ -5477,6 +5680,7 @@ class AppGestaoEstoque:
         # [DEPURAÇÃO] as abas 4 e 5 continuavam mostrando as contagens apagadas
         self.atualizar_lista_contagens_historico()
         self.popular_combos_contagem_sugestao()
+        self._invalidar_sugestao()   # [DEPURAÇÃO 2]
 
     def resetar_sistema_estoque(self):
             """Executa o reset completo após dupla confirmação."""
@@ -5529,11 +5733,47 @@ class AppGestaoEstoque:
                     for i in self.tree_prontos.get_children(): self.tree_prontos.delete(i)
                     self.itens_xml_nao_vinculados.clear()
                     self.dados_notas_processadas.clear()
+                    self._limpar_estado_apos_reset()
                     
                 else:
                     messagebox.showerror("Erro", "Falha ao resetar o banco. Verifique os logs.", parent=self.root)
             else:
                 messagebox.showinfo("Cancelado", "Ação cancelada. O código de confirmação estava incorreto.", parent=self.root)
+
+    def _invalidar_sugestao(self):
+        """
+        [DEPURAÇÃO 2] Notas/contagens apagadas: a sugestão que estava na tela ficou velha
+        (o pedido sairia com dados que não existem mais). Limpa e pede para gerar de novo.
+        """
+        self.resultado_sugestao = None
+        for nome in ('linhas_sugestao', 'dados_sugestao_tela', 'cache_relatorio_posicao'):
+            if isinstance(getattr(self, nome, None), dict):
+                getattr(self, nome).clear()
+        if hasattr(self, 'tree_sugestao'):
+            for i in self.tree_sugestao.get_children():
+                self.tree_sugestao.delete(i)
+        if hasattr(self, 'lbl_resumo_sugestao'):
+            self.lbl_resumo_sugestao.config(text="Os dados mudaram: clique em '🔄 Gerar Sugestão de Compra' de novo.")
+
+    def _limpar_estado_apos_reset(self):
+        """
+        [DEPURAÇÃO 2] Depois do reset os IDs recomeçam do 1. Tudo o que estava guardado na tela
+        ou em arquivo com os IDs ANTIGOS precisa sair, senão aponta para produtos errados:
+        sugestão de compra (o pedido saía com produtos apagados), consultas, formulário do
+        catálogo, sabores do buffet e rascunho de contagem.
+        """
+        self._invalidar_sugestao()
+        self.historico_consulta = []
+        self.produto_consulta = None
+        self.limpar_formulario_produto()
+        for arquivo in (os.path.join(PASTA_DO_PROGRAMA, 'config_sabores_buffet.json'), ARQUIVO_RASCUNHO_CONTAGEM):
+            try:
+                if os.path.exists(arquivo):
+                    os.makedirs(PASTA_BACKUPS, exist_ok=True)
+                    destino = os.path.join(PASTA_BACKUPS, f"{datetime.now():%Y%m%d_%H%M%S}_antes_reset_{os.path.basename(arquivo)}")
+                    os.replace(arquivo, destino)
+            except OSError as e:
+                logger.warning(f"Não foi possível arquivar {arquivo} depois do reset: {e}")
 
     def backup_estoque_excel(self):
         """
@@ -5545,6 +5785,26 @@ class AppGestaoEstoque:
         except ImportError:
             logger.error("Backup antes do reset: pandas não instalado.")
             return None
+        # [DEPURAÇÃO 2] Backup COMPLETO: todas as tabelas como estão no banco (inclusive os itens
+        # das notas, que antes ficavam de fora). Se qualquer leitura falhar, o backup FALHA
+        # (antes um erro virava uma aba "vazia" e o reset seguia como se estivesse tudo salvo).
+        if hasattr(database, 'exportar_tabelas_estoque'):
+            try:
+                os.makedirs(PASTA_BACKUPS, exist_ok=True)
+                caminho = os.path.join(PASTA_BACKUPS, f"backup_estoque_antes_reset_{datetime.now():%Y-%m-%d_%H%M%S}.xlsx")
+                tabelas = database.exportar_tabelas_estoque()
+                with pd.ExcelWriter(caminho, engine='openpyxl') as escritor:
+                    for tabela, (colunas, linhas) in tabelas.items():
+                        df = pd.DataFrame([list(l) for l in linhas], columns=colunas) if linhas else pd.DataFrame(columns=colunas)
+                        for col in df.columns:
+                            if df[col].dtype == object:
+                                df[col] = df[col].map(lambda v: v if isinstance(v, (str, int, float)) or v is None else str(v))
+                        df.to_excel(escritor, sheet_name=tabela[:31], index=False)
+                logger.info(f"Backup completo do estoque salvo em {caminho}")
+                return caminho
+            except Exception as e:
+                logger.error(f"Falha no backup do estoque antes do reset: {e}", exc_info=True)
+                return None
         try:
             os.makedirs(PASTA_BACKUPS, exist_ok=True)
             caminho = os.path.join(PASTA_BACKUPS, f"backup_estoque_antes_reset_{datetime.now():%Y-%m-%d_%H%M%S}.xlsx")
@@ -5803,7 +6063,7 @@ class AppGestaoEstoque:
                                   foreground="gray"); return
             custo_embalagem = v['UltimoCustoUnid'] * v['Fator']
             embalagens = v['UltimaQtd'] / v['Fator'] if v['UltimaQtd'] else Decimal('0')
-            unidade = self.mapa_produtos_mestre_contagem.get(v['NomeMestre'], {}).get('un', 'UN')
+            unidade = self.unidade_do_produto(v.get('ProdutoID'))
             texto = (f"Última compra: {fmt_qtd(embalagens)} embalagem(ns) de {fmt_reais(custo_embalagem)} (custo na nota).  "
                      f"Com Qtd/Cx {fmt_qtd(novo)} → {fmt_qtd(embalagens * novo)} {unidade} a "
                      f"{fmt_reais(custo_embalagem / novo)} cada (custo por unidade do estoque).")
@@ -5819,6 +6079,12 @@ class AppGestaoEstoque:
         def preencher_edicao(event=None):
             sel, v = selecionado_atual()
             if not v:
+                # [DEPURAÇÃO 2] nada selecionado (ex: vínculo excluído): o editor não fica com o antigo
+                lbl_selecionado.config(text="Selecione um vínculo na lista.")
+                for campo in (entry_fator_edit, entry_ean_edit, entry_ncm_edit, entry_busca_mestre):
+                    campo.delete(0, tk.END)
+                combo_mestre_edit.set("")
+                lbl_previa.config(text="")
                 return
             codigo = f"  •  cód. fornecedor {v['Codigo']}" if v.get('Codigo') else ""
             lbl_selecionado.config(text=f"ID {v['ID']}  •  {v['Fornecedor']}  •  {v['DescricaoXML']}{codigo}")
@@ -5901,6 +6167,14 @@ class AppGestaoEstoque:
             sel, v = selecionado_atual()
             if not v:
                 return
+            # [DEPURAÇÃO 2] conta também o custo manual (nota de quantidade 0): excluir o vínculo dele
+            # apagava o custo do produto
+            itens = getattr(database, 'vinculo_tem_itens', lambda _id: None)(v['ID'])
+            if v['QtdCompras'] == 0 and itens:
+                messagebox.showwarning("Não é possível excluir",
+                                       f"'{v['DescricaoXML']}' guarda o CUSTO MANUAL do produto (cadastrado no Catálogo).\n\n"
+                                       "Excluir apagaria esse custo.", parent=popup)
+                return
             if v['QtdCompras'] > 0:
                 dica = ("Se for um DUPLICADO, use '🧹 Juntar duplicados'." if v.get('Grupo')
                         else "Se o produto está errado, troque o Produto Mestre e clique em 'Salvar Alterações'.")
@@ -5914,9 +6188,9 @@ class AppGestaoEstoque:
                                    "Na próxima importação, o sistema pedirá para vincular novamente.", parent=popup):
                 if database.excluir_vinculo_existente(v['ID']):
                     self.status(f"Vínculo '{v['DescricaoXML']}' excluído.", 'info')
-                    carregar_dados(); mostrar()
+                    recarregar_tudo()   # [DEPURAÇÃO 2] atualiza também o editor e a janela de origem
                 else:
-                    messagebox.showerror("Erro", "Falha ao excluir.", parent=popup)
+                    messagebox.showerror("Erro", "Falha ao excluir (o vínculo pode ter compras; veja o log).", parent=popup)
 
         def ir_para_fator(event=None):
             entry_fator_edit.focus_set(); entry_fator_edit.select_range(0, tk.END)
@@ -5985,7 +6259,13 @@ class AppGestaoEstoque:
         popup.geometry("1050x520")
         popup.transient(pai)
         fator = v['Fator'] if v['Fator'] and v['Fator'] > 0 else Decimal('1')
-        unidade = self.mapa_produtos_mestre_contagem.get(v['NomeMestre'], {}).get('un', 'UN')
+
+        def fator_de(c):
+            """[DEPURAÇÃO 2] Qtd/Cx com que ESTA compra foi importada (antes usava o Qtd/Cx atual
+            do vínculo para todas: depois de trocar o Qtd/Cx, as embalagens e o preço ficavam errados)."""
+            f = c.get('Fator')
+            return f if f and f > 0 else fator
+        unidade = self.unidade_do_produto(v.get('ProdutoID'))
         frame = ttk.Frame(popup, padding=10)
         frame.pack(fill=tk.BOTH, expand=True)
         ttk.Label(frame, font=("Arial", 10, "bold"), text=(
@@ -6021,11 +6301,11 @@ class AppGestaoEstoque:
             for c in database.listar_compras_do_vinculo(v['ID']):
                 iid = str(c['ItemNotaID'])
                 estado['compras'][iid] = c
-                embalagens = c['Quantidade'] / fator
+                embalagens = c['Quantidade'] / fator_de(c)
                 alerta = "💸 Mais caro que a nota inteira!" if c['MaiorQueNota'] else ""
                 tree.insert("", "end", iid=iid, tags=('errado',) if c['MaiorQueNota'] else (), values=(
                     c['NF'], c['Data'].strftime('%d/%m/%Y') if c['Data'] else "—", fmt_qtd(embalagens),
-                    fmt_reais(c['Custo'] * fator), fmt_qtd(c['Quantidade']), fmt_reais(c['Custo']),
+                    fmt_reais(c['Custo'] * fator_de(c)), fmt_qtd(c['Quantidade']), fmt_reais(c['Custo']),
                     fmt_reais(c['TotalItem']), fmt_reais(c['TotalNota']) if c['TotalNota'] > 0 else "—", alerta))
             filhos = tree.get_children()
             alvo = manter if manter and tree.exists(manter) else next(
@@ -6040,9 +6320,9 @@ class AppGestaoEstoque:
             entry_preco.delete(0, tk.END)
             if not c:
                 lbl_sel.config(text="Selecione uma compra na lista."); lbl_sugestao.config(text=""); return
-            embalagens = c['Quantidade'] / fator
+            embalagens = c['Quantidade'] / fator_de(c)
             lbl_sel.config(text=(f"NF {c['NF']} de {c['Data'].strftime('%d/%m/%Y') if c['Data'] else '?'}: "
-                                 f"{fmt_qtd(embalagens)} embalagem(ns) a {fmt_reais(c['Custo'] * fator)} cada "
+                                 f"{fmt_qtd(embalagens)} embalagem(ns) a {fmt_reais(c['Custo'] * fator_de(c))} cada "
                                  f"(total do item {fmt_reais(c['TotalItem'])})"))
             texto = ""
             if c['TotalNota'] > 0 and embalagens > 0:
@@ -6067,8 +6347,8 @@ class AppGestaoEstoque:
             except ValueError as e:
                 messagebox.showerror("Valor inválido", str(e), parent=popup)
                 return
-            novo_custo = (preco_emb / fator).quantize(Decimal('0.0001'))
-            embalagens = c['Quantidade'] / fator
+            novo_custo = (preco_emb / fator_de(c)).quantize(Decimal('0.0001'))
+            embalagens = c['Quantidade'] / fator_de(c)
             novo_total = c['Quantidade'] * novo_custo
             aviso = ""
             if c['TotalNota'] > 0 and novo_total > c['TotalNota'] * Decimal('1.05') + 1:
@@ -6076,7 +6356,7 @@ class AppGestaoEstoque:
                          f"nota inteira ({fmt_reais(c['TotalNota'])}). Confira o valor digitado.")
             if not messagebox.askyesno("Corrigir preço", (
                     f"NF {c['NF']} — {v['DescricaoXML']}\n\n"
-                    f"Preço da embalagem: {fmt_reais(c['Custo'] * fator)}  →  {fmt_reais(preco_emb)}\n"
+                    f"Preço da embalagem: {fmt_reais(c['Custo'] * fator_de(c))}  →  {fmt_reais(preco_emb)}\n"
                     f"Custo por {unidade}: {fmt_reais(c['Custo'])}  →  {fmt_reais(novo_custo)}\n"
                     f"Total do item: {fmt_reais(c['TotalItem'])}  →  {fmt_reais(novo_total)}\n"
                     f"A quantidade ({fmt_qtd(embalagens)} emb. = {fmt_qtd(c['Quantidade'])} {unidade}) não muda.\n\n"
@@ -6472,9 +6752,14 @@ class AppGestaoEstoque:
         """Mostra os cartões, a comparação por fornecedor e o histórico do produto escolhido."""
         if produto_id is None:
             sel = self.tree_consulta_produtos.focus()
-            if not sel:
+            if sel:
+                produto_id = int(sel)
+            elif getattr(self, 'produto_consulta', None) is not None and not recarregar:
+                # [DEPURAÇÃO 2] a lista foi filtrada pela busca (o foco some), mas o produto na tela
+                # continua o mesmo: trocar o período tem que atualizar os cartões dele
+                produto_id = self.produto_consulta
+            else:
                 return
-            produto_id = int(sel)
         if recarregar or self.produto_consulta != produto_id:
             try:
                 self.historico_consulta = database.historico_compras_detalhado(produto_id) or []
@@ -6484,7 +6769,7 @@ class AppGestaoEstoque:
                 return
             self.produto_consulta = produto_id
         nome = next((n for n, d in self.mapa_produtos_mestre_contagem.items() if d['id'] == produto_id), f"Produto {produto_id}")
-        un = self.mapa_produtos_mestre_contagem.get(nome, {}).get('un', 'UN')
+        un = self.unidade_do_produto(produto_id)
         self.nome_produto_consulta = nome
         self.lbl_consulta_produto.config(text=f"📦 {nome}  (ID {produto_id}, {un})")
 
@@ -6496,8 +6781,10 @@ class AppGestaoEstoque:
             self.cartoes_consulta[chave][0].config(text=valor)
             self.cartoes_consulta[chave][1].config(text=detalhe)
 
-        if self.historico_consulta:
-            u = self.historico_consulta[0]
+        # [DEPURAÇÃO 2] último preço PAGO (bonificação de custo 0 mostrava "R$ 0,00")
+        pagos_todos = [r for r in self.historico_consulta if r['CustoUnitario'] > 0]
+        if pagos_todos:
+            u = pagos_todos[0]
             cartao('ultimo', f"{fmt_reais(u['CustoUnitario'])} /{un}",
                    f"{u['Fornecedor'][:28]} · {u['Data'].strftime('%d/%m/%Y') if u['Data'] else '?'}")
         else:

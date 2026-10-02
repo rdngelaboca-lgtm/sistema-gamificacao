@@ -6259,6 +6259,8 @@ def listar_produtos_estoque():
 def atualizar_produto_estoque(produto_id, nome, unidade, estoque_min, categoria='Geral'):
     """Atualiza um produto mestre existente na tabela ProdutosEstoque."""
     conn = get_db_connection()
+    if not conn:  # [DEPURAÇÃO 2] antes devolvia None e a tela dizia "sucesso"
+        raise Exception("Falha de conexão com o banco de dados.")
     if conn:
         try:
             cursor = conn.cursor()
@@ -6280,6 +6282,8 @@ def atualizar_produto_estoque(produto_id, nome, unidade, estoque_min, categoria=
 def excluir_produto_estoque(produto_id):
     """Exclui um produto mestre da tabela ProdutosEstoque."""
     conn = get_db_connection()
+    if not conn:  # [DEPURAÇÃO 2] antes devolvia None e a tela dizia "sucesso"
+        raise Exception("Falha de conexão com o banco de dados.")
     if conn:
         try:
             cursor = conn.cursor()
@@ -6339,6 +6343,8 @@ def listar_fornecedores():
 def atualizar_fornecedor(fornecedor_id, cnpj, nome_fantasia):
     """Atualiza um fornecedor existente."""
     conn = get_db_connection()
+    if not conn:  # [DEPURAÇÃO 2] antes devolvia None e a tela dizia "sucesso"
+        raise Exception("Falha de conexão com o banco de dados.")
     if conn:
         try:
             cursor = conn.cursor()
@@ -6356,6 +6362,8 @@ def atualizar_fornecedor(fornecedor_id, cnpj, nome_fantasia):
 def excluir_fornecedor(fornecedor_id):
     """Exclui um fornecedor."""
     conn = get_db_connection()
+    if not conn:  # [DEPURAÇÃO 2] antes devolvia None e a tela dizia "sucesso"
+        raise Exception("Falha de conexão com o banco de dados.")
     if conn:
         try:
             cursor = conn.cursor()
@@ -6501,6 +6509,60 @@ def criar_vinculo_produto_fornecedor(produto_id_mestre, fornecedor_id, descricao
                 conn.close()
     return None
 
+_colunas_estoque_ok = False
+
+
+def _garantir_colunas_estoque():
+    """
+    [DEPURAÇÃO 2] Acrescenta (uma vez, com COMMIT) duas colunas:
+      - ItensNotaFiscalEntrada.FatorConversaoUsado: o Qtd/Cx usado NA IMPORTAÇÃO daquele item.
+        Antes só existia o Qtd/Cx atual do vínculo: depois de juntar vínculos ou de trocar o
+        Qtd/Cx "só para as próximas notas", recalcular as compras multiplicava itens que já
+        estavam certos (ex: 120 UN viravam 1.440). Os itens antigos recebem o Qtd/Cx atual.
+      - NotasFiscaisEntrada.ValorForaDoEstoque: valor dos itens da nota que NÃO entraram
+        como compra paga (bonificação, comodato/remessa ignorados). Sem isso o "Ajustar
+        notas antigas" achava que esse valor era ST/frete e o somava ao custo.
+    """
+    global _colunas_estoque_ok
+    if _colunas_estoque_ok:
+        return
+    conn = get_db_connection()
+    if not conn:
+        raise Exception("Falha de conexão com o banco de dados.")
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM ItensNotaFiscalEntrada WHERE 1 = 0")
+        if 'fatorconversaousado' not in {d[0].lower() for d in (cur.description or [])}:
+            cur.execute("ALTER TABLE ItensNotaFiscalEntrada ADD FatorConversaoUsado DECIMAL(18, 4) NULL")
+            conn.commit()
+            cur.execute("""
+                UPDATE ItensNotaFiscalEntrada SET FatorConversaoUsado = (
+                    SELECT PF.FatorConversao FROM ProdutosFornecedor PF
+                    WHERE PF.ProdutoFornecedorID = ItensNotaFiscalEntrada.ProdutoFornecedorID)
+                WHERE FatorConversaoUsado IS NULL
+            """)
+            logger.info("Coluna FatorConversaoUsado criada e preenchida com o Qtd/Cx atual dos vínculos.")
+        cur.execute("SELECT * FROM NotasFiscaisEntrada WHERE 1 = 0")
+        if 'valorforadoestoque' not in {d[0].lower() for d in (cur.description or [])}:
+            cur.execute("ALTER TABLE NotasFiscaisEntrada ADD ValorForaDoEstoque DECIMAL(18, 2) NULL")
+        conn.commit()
+        _colunas_estoque_ok = True
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao criar colunas novas do estoque: {e}", exc_info=True)
+        raise
+    finally:
+        conn.close()
+
+
+def _fator_item(fator_usado, fator_vinculo):
+    """Qtd/Cx de um item de nota: o usado na importação; se não houver, o atual do vínculo."""
+    for f in (fator_usado, fator_vinculo):
+        if f is not None and _dec(f) > 0:
+            return _dec(f)
+    return Decimal('1')
+
+
 def salvar_nota_fiscal_completa(dados_nf_cabecalho, lista_itens_nf):
     """
     Salva a Nota Fiscal (cabeçalho e itens) de forma transacional.
@@ -6518,21 +6580,27 @@ def salvar_nota_fiscal_completa(dados_nf_cabecalho, lista_itens_nf):
     if verificar_nota_fiscal_existente(numero_nf, fornecedor_id):
         conn.close()  # [DEPURAÇÃO] Antes a conexão ficava aberta para sempre neste caminho
         return False, f"Nota Fiscal {numero_nf} já foi importada anteriormente para este fornecedor."
-        
+    try:
+        _garantir_colunas_estoque()
+    except Exception as e:
+        conn.close()
+        return False, f"Não foi possível preparar o banco: {e}"
+
     try:
         cursor = conn.cursor()
         
         # 1. Inserir o Cabeçalho da NF
         sql_nf = """
-            INSERT INTO NotasFiscaisEntrada (NumeroNF, FornecedorID, DataEmissao, ValorTotalNF)
-            VALUES (?, ?, ?, ?);
+            INSERT INTO NotasFiscaisEntrada (NumeroNF, FornecedorID, DataEmissao, ValorTotalNF, ValorForaDoEstoque)
+            VALUES (?, ?, ?, ?, ?);
             SELECT SCOPE_IDENTITY();
         """
         cursor.execute(sql_nf, 
                     dados_nf_cabecalho['NumeroNF'], 
                     dados_nf_cabecalho['FornecedorID'], 
                     dados_nf_cabecalho['DataEmissao'], 
-                    dados_nf_cabecalho['ValorTotalNF'])
+                    dados_nf_cabecalho['ValorTotalNF'],
+                    dados_nf_cabecalho.get('ValorForaDoEstoque') or Decimal('0'))
 
         cursor.nextset()
         nova_nota_id = cursor.fetchone()[0]
@@ -6542,12 +6610,13 @@ def salvar_nota_fiscal_completa(dados_nf_cabecalho, lista_itens_nf):
             
         # 2. Inserir os Itens da NF
         sql_item = """
-            INSERT INTO ItensNotaFiscalEntrada (NotaID, ProdutoFornecedorID, Quantidade, PrecoCustoUnitario)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO ItensNotaFiscalEntrada (NotaID, ProdutoFornecedorID, Quantidade, PrecoCustoUnitario, FatorConversaoUsado)
+            VALUES (?, ?, ?, ?, ?)
         """
         # Prepara os dados para executemany (mais rápido)
         itens_para_inserir = [
-            (nova_nota_id, item['ProdutoFornecedorID'], item['Quantidade'], item['PrecoCustoUnitario'])
+            (nova_nota_id, item['ProdutoFornecedorID'], item['Quantidade'], item['PrecoCustoUnitario'],
+             item.get('FatorUsado'))
             for item in lista_itens_nf
         ]
         
@@ -6677,9 +6746,9 @@ def listar_contagens_cabecalho():
         try:
             cursor = conn.cursor()
             sql = """
-                SELECT C.ContagemID, C.DataContagem, F.NomeCompleto, C.NomeContagem
+                SELECT C.ContagemID, C.DataContagem, ISNULL(F.NomeCompleto, '(sem responsável)') AS NomeCompleto, C.NomeContagem
                 FROM ContagensEstoque C
-                JOIN Funcionarios F ON C.FuncionarioID = F.FuncionarioID
+                LEFT JOIN Funcionarios F ON C.FuncionarioID = F.FuncionarioID
                 ORDER BY C.DataContagem DESC
             """
             cursor.execute(sql)
@@ -6704,7 +6773,8 @@ def buscar_itens_contagem(contagem_id):
                     IC.QuantidadeContada, 
                     ISNULL(P.UnidadeMedida, 'UN') as UnidadeMedida,
                     IC.ProdutoID,
-                    IC.NomeAvulso
+                    IC.NomeAvulso,
+                    IC.EANAvulso
                 FROM ItensContagemEstoque IC
                 LEFT JOIN ProdutosEstoque P ON IC.ProdutoID = P.ProdutoID
                 WHERE IC.ContagemID = ?
@@ -6718,6 +6788,58 @@ def buscar_itens_contagem(contagem_id):
         finally:
             if conn: conn.close()
     return []
+
+def consolidar_contagens(ids_contagens, data_contagem, funcionario_id, nome_contagem):
+    """
+    [DEPURAÇÃO 2] Junta várias contagens numa só (somando produtos iguais e avulsos iguais)
+    e apaga as originais — TUDO numa transação. Antes eram passos separados: uma falha no
+    meio deixava a consolidada E as originais (estoque em dobro). Mantém o EAN dos avulsos.
+    Recusa contagens com valor FECHADO. Devolve (sucesso, mensagem, novo_id).
+    """
+    ids = [int(i) for i in ids_contagens]
+    if len(ids) < 2:
+        return False, "Selecione pelo menos duas contagens.", None
+    try:
+        fechadas = set(listar_valores_estoque_fechados(levantar_erro=True))
+    except Exception as e:
+        return False, f"Não foi possível consultar o banco: {e}", None
+    if fechadas & set(ids):
+        return False, "Há contagem com o valor do estoque FECHADO na seleção (reabra antes).", None
+    conn = get_db_connection()
+    if not conn:
+        return False, "Falha de conexão com o banco de dados.", None
+    try:
+        cursor = conn.cursor()
+        marcas = ", ".join("?" for _ in ids)
+        cursor.execute(f"SELECT ProdutoID, NomeAvulso, EANAvulso, QuantidadeContada FROM ItensContagemEstoque "
+                       f"WHERE ContagemID IN ({marcas})", *ids)
+        agrupado = {}
+        for pid, avulso, ean, qtd in cursor.fetchall():
+            chave = ('P', pid) if pid is not None else ('A', (avulso or '').strip().upper())
+            atual = agrupado.setdefault(chave, {'ProdutoID': pid, 'NomeAvulso': avulso, 'EANAvulso': ean, 'Qtd': Decimal('0')})
+            atual['Qtd'] += _dec(qtd)
+            if not atual['EANAvulso'] and ean:
+                atual['EANAvulso'] = ean
+        cursor.execute("INSERT INTO ContagensEstoque (DataContagem, FuncionarioID, NomeContagem) "
+                       "OUTPUT INSERTED.ContagemID VALUES (?, ?, ?)", data_contagem, funcionario_id, nome_contagem)
+        novo_id = cursor.fetchone()[0]
+        for it in agrupado.values():
+            cursor.execute("INSERT INTO ItensContagemEstoque (ContagemID, ProdutoID, QuantidadeContada, NomeAvulso, EANAvulso) "
+                           "VALUES (?, ?, ?, ?, ?)", novo_id, it['ProdutoID'], it['Qtd'],
+                           it['NomeAvulso'] if it['ProdutoID'] is None else None,
+                           it['EANAvulso'] if it['ProdutoID'] is None else None)
+        cursor.execute(f"DELETE FROM ItensContagemEstoque WHERE ContagemID IN ({marcas})", *ids)
+        cursor.execute(f"DELETE FROM ContagensEstoque WHERE ContagemID IN ({marcas})", *ids)
+        conn.commit()
+        logger.info(f"Contagens {ids} consolidadas na contagem {novo_id} ({len(agrupado)} itens).")
+        return True, f"{len(ids)} contagens consolidadas ({len(agrupado)} itens).", novo_id
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao consolidar contagens {ids}: {e}", exc_info=True)
+        return False, f"Erro ao consolidar (nada foi alterado): {e}", None
+    finally:
+        conn.close()
+
 
 def excluir_contagem_estoque(contagem_id):
     """Exclui uma Contagem de Estoque e seus itens."""
@@ -6846,50 +6968,43 @@ def vincular_item_avulso_inteligente(contagem_id, nome_avulso, produto_id_mestre
 
 def resolver_avulso_fracionando_caixa(contagem_id, nome_avulso, id_vinculo_caixa, novo_ean, qtd_na_caixa, qtd_contada):
     """
-    Função híbrida para o Desktop: Cria o vínculo da unidade a partir de uma caixa
-    e, imediatamente após, resolve o item avulso apontando para o Produto Mestre da caixa.
+    Desktop: transforma o produto da caixa em UNIDADE (ver desmembrar_caixa) e resolve o
+    item avulso da contagem — [DEPURAÇÃO 2] agora TUDO numa transação só (antes eram duas:
+    se a 2ª falhasse, o histórico já tinha sido reescrito e uma nova tentativa duplicava o vínculo).
     """
-    # 1. Cria a unidade no banco (Clona o vínculo da caixa, calcula custo/fator e grava o EAN)
-    sucesso_criacao, msg_criacao = criar_unidade_a_partir_de_caixa(id_vinculo_caixa, novo_ean, qtd_na_caixa)
-    if not sucesso_criacao: 
-        return False, msg_criacao
-
-    # 2. Descobre qual é o Produto Mestre dessa caixa recém-desmembrada
-    conn = get_db_connection()
-    produto_id_mestre = None
-    if conn:
-        try:
-            cursor = conn.cursor()
-            cursor.execute("SELECT ProdutoID FROM ProdutosFornecedor WHERE ProdutoFornecedorID = ?", id_vinculo_caixa)
-            res = cursor.fetchone()
-            if res: produto_id_mestre = res[0]
-        finally:
-            conn.close()
-
-    if not produto_id_mestre: 
-        return False, "Unidade criada, mas falha ao localizar o Produto Mestre para a contagem."
-
-    # 3. Resolve o Avulso na Contagem
-    # (Passamos False no final pois o EAN já foi aprendido no passo 1)
-    ok = vincular_item_avulso_inteligente(contagem_id, nome_avulso, produto_id_mestre, qtd_contada, novo_ean, False)
-    if ok: 
-        return True, "Caixa desmembrada, EAN aprendido e Contagem atualizada com sucesso!"
-    
-    return False, "Erro na etapa final de atualizar a contagem."
+    return desmembrar_caixa(id_vinculo_caixa, novo_ean, qtd_na_caixa, contagem_id, nome_avulso, qtd_contada)
 
 def atualizar_qtd_item_contagem(contagem_id, produto_id, nome_avulso, nova_qtd):
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
+            # [DEPURAÇÃO 2] Se o mesmo produto/avulso estiver em 2 linhas da contagem (ex: lançado
+            # pelo celular duas vezes), antes AS DUAS recebiam a nova quantidade e o total dobrava.
+            # Agora as linhas viram UMA só, com a quantidade informada.
             if produto_id:
-                cursor.execute("UPDATE ItensContagemEstoque SET QuantidadeContada = ? WHERE ContagemID = ? AND ProdutoID = ?", nova_qtd, contagem_id, produto_id)
+                cursor.execute("SELECT COUNT(*) FROM ItensContagemEstoque WHERE ContagemID = ? AND ProdutoID = ?", contagem_id, produto_id)
+                if int(cursor.fetchone()[0] or 0) > 1:
+                    cursor.execute("DELETE FROM ItensContagemEstoque WHERE ContagemID = ? AND ProdutoID = ?", contagem_id, produto_id)
+                    cursor.execute("INSERT INTO ItensContagemEstoque (ContagemID, ProdutoID, QuantidadeContada) VALUES (?, ?, ?)",
+                                   contagem_id, produto_id, nova_qtd)
+                else:
+                    cursor.execute("UPDATE ItensContagemEstoque SET QuantidadeContada = ? WHERE ContagemID = ? AND ProdutoID = ?", nova_qtd, contagem_id, produto_id)
             else:
-                cursor.execute("UPDATE ItensContagemEstoque SET QuantidadeContada = ? WHERE ContagemID = ? AND NomeAvulso = ?", nova_qtd, contagem_id, nome_avulso)
+                cursor.execute("SELECT EANAvulso FROM ItensContagemEstoque WHERE ContagemID = ? AND NomeAvulso = ?", contagem_id, nome_avulso)
+                linhas = cursor.fetchall()
+                if len(linhas) > 1:
+                    ean = next((l[0] for l in linhas if l[0]), None)
+                    cursor.execute("DELETE FROM ItensContagemEstoque WHERE ContagemID = ? AND NomeAvulso = ?", contagem_id, nome_avulso)
+                    cursor.execute("INSERT INTO ItensContagemEstoque (ContagemID, ProdutoID, QuantidadeContada, NomeAvulso, EANAvulso) "
+                                   "VALUES (?, NULL, ?, ?, ?)", contagem_id, nova_qtd, nome_avulso, ean)
+                else:
+                    cursor.execute("UPDATE ItensContagemEstoque SET QuantidadeContada = ? WHERE ContagemID = ? AND NomeAvulso = ?", nova_qtd, contagem_id, nome_avulso)
             conn.commit()
             return True
         except Exception as e:
             logger.error(f"Erro ao atualizar qtd na contagem: {e}")
+            conn.rollback()
             return False
         finally:
             conn.close()
@@ -7092,6 +7207,11 @@ def _custos_por_produto(cursor, data_contagem):
         else:
             custo = manuais[pid][1]
             origem = "Custo manual (Catálogo)"
+        # [DEPURAÇÃO 2] Produto que só entrou por BONIFICAÇÃO (custo 0): antes ficava valendo
+        # R$ 0 mesmo depois de informar o custo manual no Catálogo.
+        if custo <= 0 and pid in manuais and manuais[pid][1] > 0:
+            custo = manuais[pid][1]
+            origem = "Custo manual (só recebido em bonificação)"
         resultado[pid] = {'custo': custo, 'origem': origem, 'suspeito': suspeito}
     return resultado, compras
 
@@ -7267,10 +7387,16 @@ def reabrir_valor_estoque(contagem_id):
         conn.close()
 
 
-def listar_valores_estoque_fechados():
-    """Devolve {ContagemID: (ValorTotal, DataFechamento)} das contagens com valor fechado."""
+def listar_valores_estoque_fechados(levantar_erro=False):
+    """
+    Devolve {ContagemID: (ValorTotal, DataFechamento)} das contagens com valor fechado.
+    levantar_erro=True: se o banco falhar, levanta erro (quem protege a contagem não pode
+    concluir "não está fechada" só porque a consulta falhou).
+    """
     conn = get_db_connection()
     if not conn:
+        if levantar_erro:
+            raise Exception("Falha de conexão com o banco de dados.")
         return {}
     try:
         cursor = conn.cursor()
@@ -7279,6 +7405,8 @@ def listar_valores_estoque_fechados():
         return {r[0]: (_dec(r[1]), r[2]) for r in cursor.fetchall()}
     except Exception as e:
         logger.error(f"Erro ao listar valores de estoque fechados: {e}", exc_info=True)
+        if levantar_erro:
+            raise
         return {}
     finally:
         conn.close()
@@ -7632,6 +7760,10 @@ def calcular_sugestao_compra(contagem_id_fim, contagem_id_inicio=None, janela_di
             ultimo = info_fornecedor((pagas or ate_ref)[-1]) if ate_ref else None
             ano = [c for c in ate_ref if c[0] > data_ref - timedelta(days=365) and c[3] > 0]
             barato = info_fornecedor(min(ano, key=lambda c: (c[3], -c[0].toordinal()))) if ano else None
+            # [DEPURAÇÃO 2] última compra de CADA fornecedor (para o pedido do fornecedor filtrado)
+            por_fornecedor = {}
+            for c in (pagas or ate_ref):
+                por_fornecedor[c[5]] = info_fornecedor(c)
             compras_janela = soma_compras(lista_c, data_ref - timedelta(days=janela_dias), data_ref)
             item = {
                 'ProdutoID': pid, 'NomeProduto': nome or f'Produto {pid}', 'Unidade': (un or 'UN').strip() or 'UN',
@@ -7643,7 +7775,7 @@ def calcular_sugestao_compra(contagem_id_fim, contagem_id_inicio=None, janela_di
                 'InicioPrimeiraCompra': False,
                 'EstoqueHoje': None, 'ContadoNoPontoB': False, 'ComprasJanela': compras_janela,
                 'UltimaCompra': ate_ref[-1][0] if ate_ref else None,
-                'FornecedorUltimo': ultimo, 'FornecedorBarato': barato,
+                'FornecedorUltimo': ultimo, 'FornecedorBarato': barato, 'PorFornecedor': por_fornecedor,
             }
             if dias_contados:
                 d_l, (q_l, ids_l) = dias_contados[-1]
@@ -7779,6 +7911,36 @@ def ultimas_contagens_por_produto():
         conn.close()
 
 
+def ultimo_custo_real_produto(produto_id):
+    """
+    [DEPURAÇÃO 2] Custo por unidade da última compra PAGA do produto (sem bonificação de
+    custo 0 e sem o custo manual). Usado para conferir o Qtd/Cx na hora de vincular.
+    """
+    conn = get_db_connection()
+    if not conn:
+        return None
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT INI.PrecoCustoUnitario, NF.DataEmissao, INI.ItemNotaID, F.CNPJ
+            FROM ItensNotaFiscalEntrada INI
+            JOIN NotasFiscaisEntrada NF ON INI.NotaID = NF.NotaID
+            JOIN ProdutosFornecedor PF ON INI.ProdutoFornecedorID = PF.ProdutoFornecedorID
+            LEFT JOIN Fornecedores F ON NF.FornecedorID = F.FornecedorID
+            WHERE PF.ProdutoID = ? AND INI.Quantidade > 0 AND INI.PrecoCustoUnitario > 0
+        """, produto_id)
+        linhas = [r for r in cursor.fetchall() if (r[3] or '').strip() != CNPJ_FORNECEDOR_INTERNO]
+        if not linhas:
+            return None
+        ultima = max(linhas, key=lambda r: (_como_data(r[1]) or date.min, r[2] or 0))
+        return _dec(ultima[0])
+    except Exception as e:
+        logger.error(f"Erro ao buscar o último custo real do produto {produto_id}: {e}", exc_info=True)
+        return None
+    finally:
+        conn.close()
+
+
 def buscar_produto_mestre_por_nome(nome_produto):
     
     """Busca um produto mestre pelo seu nome exato e retorna o ID."""
@@ -7857,6 +8019,9 @@ def atualizar_item_historico_compra(item_nota_id, nova_qtd, novo_custo):
                 WHERE ItemNotaID = ?
             """
             cursor.execute(sql, nova_qtd, novo_custo, item_nota_id)
+            if getattr(cursor, 'rowcount', 1) == 0:   # [DEPURAÇÃO 2] item não existe mais
+                conn.rollback()
+                return False
             conn.commit()
             return True
         except Exception as e:
@@ -8396,19 +8561,21 @@ def resetar_dados_estoque_completo():
     if conn:
         try:
             cursor = conn.cursor()
-            
-            cursor.execute("DELETE FROM ItensNotaFiscalEntrada")
-            cursor.execute("DBCC CHECKIDENT ('ItensNotaFiscalEntrada', RESEED, 0)")
-            cursor.execute("DELETE FROM NotasFiscaisEntrada")
-            cursor.execute("DBCC CHECKIDENT ('NotasFiscaisEntrada', RESEED, 0)")
-            cursor.execute("DELETE FROM ItensContagemEstoque")
-            cursor.execute("DBCC CHECKIDENT ('ItensContagemEstoque', RESEED, 0)")
-            cursor.execute("DELETE FROM ContagensEstoque")
-            cursor.execute("DBCC CHECKIDENT ('ContagensEstoque', RESEED, 0)")
-            cursor.execute("DELETE FROM ProdutosFornecedor")
-            cursor.execute("DBCC CHECKIDENT ('ProdutosFornecedor', RESEED, 0)")
-            cursor.execute("DELETE FROM ProdutosEstoque")
-            cursor.execute("DBCC CHECKIDENT ('ProdutosEstoque', RESEED, 0)")
+            # [DEPURAÇÃO 2] Os "valores fechados" das contagens também saem. Antes ficavam no
+            # banco e a 1ª contagem nova (ID 1 de novo) aparecia FECHADA com o valor antigo.
+            _garantir_tabelas_valor_estoque()
+            cursor.execute("DELETE FROM ValorEstoqueFechamentoItens")
+            cursor.execute("DELETE FROM ValorEstoqueFechamento")
+            for tabela in ('ItensNotaFiscalEntrada', 'NotasFiscaisEntrada', 'ItensContagemEstoque',
+                           'ContagensEstoque', 'ProdutosFornecedor', 'ProdutosEstoque'):
+                cursor.execute(f"SELECT COUNT(*) FROM {tabela}")
+                tinha_linhas = int(cursor.fetchone()[0] or 0) > 0
+                cursor.execute(f"DELETE FROM {tabela}")
+                # [DEPURAÇÃO 2] Só reinicia a numeração de quem tinha linhas. Numa tabela que
+                # nunca foi usada o SQL Server daria o ID 0 ao próximo registro (e "0" é tratado
+                # como "sem ID" em vários lugares).
+                if tinha_linhas:
+                    cursor.execute(f"DBCC CHECKIDENT ('{tabela}', RESEED, 0)")
             conn.commit()
             logger.info("RESET COMPLETO do módulo de estoque executado com sucesso.")
             return True
@@ -8419,6 +8586,33 @@ def resetar_dados_estoque_completo():
         finally:
             conn.close()
     return False
+
+TABELAS_BACKUP_ESTOQUE = ('ProdutosEstoque', 'Fornecedores', 'ProdutosFornecedor', 'NotasFiscaisEntrada',
+                          'ItensNotaFiscalEntrada', 'ContagensEstoque', 'ItensContagemEstoque',
+                          'ValorEstoqueFechamento', 'ValorEstoqueFechamentoItens')
+
+
+def exportar_tabelas_estoque():
+    """
+    [DEPURAÇÃO 2] Lê TODAS as tabelas do estoque como estão no banco (para o backup antes do
+    reset): {tabela: (colunas, linhas)}. Qualquer falha LEVANTA ERRO — um backup pela metade
+    não pode ser tratado como backup.
+    """
+    _garantir_tabelas_valor_estoque()
+    conn = get_db_connection()
+    if not conn:
+        raise Exception("Falha de conexão com o banco de dados.")
+    try:
+        cursor = conn.cursor()
+        resultado = {}
+        for tabela in TABELAS_BACKUP_ESTOQUE:
+            cursor.execute(f"SELECT * FROM {tabela}")
+            colunas = [d[0] for d in cursor.description]
+            resultado[tabela] = (colunas, [tuple(r) for r in cursor.fetchall()])
+        return resultado
+    finally:
+        conn.close()
+
 
 # ===================================================================
 # == MÓDULO DE GERENCIAMENTO DE VÍNCULOS (DE/PARA) ==================
@@ -8525,21 +8719,28 @@ def atualizar_vinculo_existente(vinculo_id, novo_produto_id, novo_fator, recalcu
         try:
             cursor = conn.cursor()
             if recalcular_compras:
+                # [DEPURAÇÃO 2] Cada item é convertido a partir do Qtd/Cx com que FOI importado
+                # (antes usava o Qtd/Cx atual do vínculo para todos: itens vindos de um vínculo
+                # juntado, ou já corrigidos antes, eram multiplicados de novo).
+                _garantir_colunas_estoque()
                 cursor.execute("SELECT FatorConversao FROM ProdutosFornecedor WHERE ProdutoFornecedorID = ?", vinculo_id)
                 linha = cursor.fetchone()
-                fator_antigo = _dec(linha[0]) if linha else Decimal('1')
-                if fator_antigo <= 0:
-                    fator_antigo = Decimal('1')
+                fator_vinculo = _fator_item(None, linha[0] if linha else None)
                 fator_novo = _dec(novo_fator)
-                if fator_novo > 0 and fator_novo != fator_antigo:
-                    cursor.execute("SELECT ItemNotaID, Quantidade, PrecoCustoUnitario FROM ItensNotaFiscalEntrada "
+                if fator_novo > 0:
+                    cursor.execute("SELECT ItemNotaID, Quantidade, PrecoCustoUnitario, FatorConversaoUsado FROM ItensNotaFiscalEntrada "
                                    "WHERE ProdutoFornecedorID = ? AND Quantidade > 0", vinculo_id)
-                    for item_id, qtd, custo in cursor.fetchall():
+                    alterados = 0
+                    for item_id, qtd, custo, usado in cursor.fetchall():
+                        fator_antigo = _fator_item(usado, fator_vinculo)
+                        if fator_antigo == fator_novo:
+                            continue
                         nova_qtd = (_dec(qtd) * fator_novo / fator_antigo).quantize(Decimal('0.001'))
                         novo_custo = (_dec(custo) * fator_antigo / fator_novo).quantize(Decimal('0.0001'))
-                        cursor.execute("UPDATE ItensNotaFiscalEntrada SET Quantidade = ?, PrecoCustoUnitario = ? WHERE ItemNotaID = ?",
-                                       nova_qtd, novo_custo, item_id)
-                    logger.info(f"Vínculo {vinculo_id}: compras recalculadas do fator {fator_antigo} para {fator_novo}.")
+                        cursor.execute("UPDATE ItensNotaFiscalEntrada SET Quantidade = ?, PrecoCustoUnitario = ?, "
+                                       "FatorConversaoUsado = ? WHERE ItemNotaID = ?", nova_qtd, novo_custo, fator_novo, item_id)
+                        alterados += 1
+                    logger.info(f"Vínculo {vinculo_id}: {alterados} compra(s) recalculada(s) para o Qtd/Cx {fator_novo}.")
             sql = """
                 UPDATE ProdutosFornecedor 
                 SET ProdutoID = ?, FatorConversao = ? 
@@ -8680,6 +8881,10 @@ def listar_compras_do_vinculo(vinculo_id):
     [{'ItemNotaID','NotaID','NF','Data','Quantidade','Custo','TotalItem','TotalNota',
       'SomaOutrosItens','MaiorQueNota'}]
     """
+    try:
+        _garantir_colunas_estoque()
+    except Exception:
+        return []
     conn = get_db_connection()
     if not conn:
         return []
@@ -8687,14 +8892,15 @@ def listar_compras_do_vinculo(vinculo_id):
         cursor = conn.cursor()
         cursor.execute("""
             SELECT INI.ItemNotaID, NF.NotaID, NF.NumeroNF, NF.DataEmissao, INI.Quantidade, INI.PrecoCustoUnitario,
-                   NF.ValorTotalNF
+                   NF.ValorTotalNF, INI.FatorConversaoUsado, PF.FatorConversao
             FROM ItensNotaFiscalEntrada INI
             JOIN NotasFiscaisEntrada NF ON INI.NotaID = NF.NotaID
+            LEFT JOIN ProdutosFornecedor PF ON INI.ProdutoFornecedorID = PF.ProdutoFornecedorID
             WHERE INI.ProdutoFornecedorID = ?
         """, vinculo_id)
         linhas = cursor.fetchall()
         resultado = []
-        for item_id, nota_id, nf, dt, qtd, custo, total_nf in linhas:
+        for item_id, nota_id, nf, dt, qtd, custo, total_nf, usado, fator_vinc in linhas:
             cursor.execute("SELECT Quantidade, PrecoCustoUnitario FROM ItensNotaFiscalEntrada "
                            "WHERE NotaID = ? AND ItemNotaID <> ?", nota_id, item_id)
             outros = sum((_dec(q) * _dec(c) for q, c in cursor.fetchall()), Decimal('0'))
@@ -8702,7 +8908,8 @@ def listar_compras_do_vinculo(vinculo_id):
             total_nota = _dec(total_nf) if total_nf is not None else Decimal('0')
             resultado.append({'ItemNotaID': item_id, 'NotaID': nota_id, 'NF': nf, 'Data': _como_data(dt),
                               'Quantidade': q, 'Custo': c, 'TotalItem': q * c, 'TotalNota': total_nota,
-                              'SomaOutrosItens': outros, 'MaiorQueNota': _item_maior_que_nota(q * c, total_nota)})
+                              'SomaOutrosItens': outros, 'MaiorQueNota': _item_maior_que_nota(q * c, total_nota),
+                              'Fator': _fator_item(usado, fator_vinc)})
         resultado.sort(key=lambda r: (r['Data'] or date.min, r['ItemNotaID'] or 0), reverse=True)
         return resultado
     except Exception as e:
@@ -8798,6 +9005,12 @@ def juntar_vinculos(manter_id, remover_ids):
                         cursor.execute(f"UPDATE ProdutosFornecedor SET {campo} = ? WHERE ProdutoFornecedorID = ?", candidato, manter_id)
                         break
         marcas_r = ", ".join("?" for _ in remover_ids)
+        # [DEPURAÇÃO 2] os itens levam junto o Qtd/Cx com que foram importados
+        _garantir_colunas_estoque()
+        cursor.execute(f"""UPDATE ItensNotaFiscalEntrada SET FatorConversaoUsado = (
+                              SELECT PF.FatorConversao FROM ProdutosFornecedor PF
+                              WHERE PF.ProdutoFornecedorID = ItensNotaFiscalEntrada.ProdutoFornecedorID)
+                          WHERE FatorConversaoUsado IS NULL AND ProdutoFornecedorID IN ({marcas_r})""", *remover_ids)
         cursor.execute(f"UPDATE ItensNotaFiscalEntrada SET ProdutoFornecedorID = ? WHERE ProdutoFornecedorID IN ({marcas_r})",
                        manter_id, *remover_ids)
         cursor.execute(f"DELETE FROM ProdutosFornecedor WHERE ProdutoFornecedorID IN ({marcas_r})", *remover_ids)
@@ -8821,6 +9034,10 @@ def historico_compras_detalhado(produto_id):
     da mais nova para a mais antiga. Quantidade e custo já na unidade do estoque;
     'Fator' permite mostrar também como veio na nota (embalagens e custo da embalagem).
     """
+    try:
+        _garantir_colunas_estoque()
+    except Exception:
+        return []
     conn = get_db_connection()
     if not conn:
         return []
@@ -8828,7 +9045,8 @@ def historico_compras_detalhado(produto_id):
         cursor = conn.cursor()
         cursor.execute("""
             SELECT NF.NotaID, NF.NumeroNF, NF.DataEmissao, F.FornecedorID, F.NomeFantasia, F.CNPJ,
-                   PF.DescricaoXML, PF.FatorConversao, INI.Quantidade, INI.PrecoCustoUnitario, INI.ItemNotaID
+                   PF.DescricaoXML, COALESCE(INI.FatorConversaoUsado, PF.FatorConversao), INI.Quantidade,
+                   INI.PrecoCustoUnitario, INI.ItemNotaID
             FROM ItensNotaFiscalEntrada INI
             JOIN NotasFiscaisEntrada NF ON INI.NotaID = NF.NotaID
             JOIN ProdutosFornecedor PF ON INI.ProdutoFornecedorID = PF.ProdutoFornecedorID
@@ -8927,6 +9145,10 @@ def listar_notas_para_consulta():
 
 def itens_da_nota(nota_id):
     """Itens de uma nota fiscal: produto do estoque, descrição na nota, quantidades e custos."""
+    try:
+        _garantir_colunas_estoque()
+    except Exception:
+        return []
     conn = get_db_connection()
     if not conn:
         return []
@@ -8934,7 +9156,7 @@ def itens_da_nota(nota_id):
         cursor = conn.cursor()
         cursor.execute("""
             SELECT INI.ItemNotaID, PF.DescricaoXML, P.ProdutoID, P.NomeProduto, P.UnidadeMedida,
-                   PF.FatorConversao, INI.Quantidade, INI.PrecoCustoUnitario
+                   COALESCE(INI.FatorConversaoUsado, PF.FatorConversao), INI.Quantidade, INI.PrecoCustoUnitario
             FROM ItensNotaFiscalEntrada INI
             LEFT JOIN ProdutosFornecedor PF ON INI.ProdutoFornecedorID = PF.ProdutoFornecedorID
             LEFT JOIN ProdutosEstoque P ON PF.ProdutoID = P.ProdutoID
@@ -9030,23 +9252,31 @@ def listar_notas_com_diferenca(diferenca_minima=Decimal('0.05')):
         return []
     try:
         cursor = conn.cursor()
+        _garantir_colunas_estoque()
         cursor.execute("""
-            SELECT NF.NotaID, NF.NumeroNF, NF.DataEmissao, NF.ValorTotalNF, F.FornecedorID, F.NomeFantasia, F.CNPJ
+            SELECT NF.NotaID, NF.NumeroNF, NF.DataEmissao, NF.ValorTotalNF, F.FornecedorID, F.NomeFantasia, F.CNPJ,
+                   NF.ValorForaDoEstoque
             FROM NotasFiscaisEntrada NF
             LEFT JOIN Fornecedores F ON NF.FornecedorID = F.FornecedorID
         """)
         notas = {}
-        for nota_id, numero, dt, valor, forn_id, forn, cnpj in cursor.fetchall():
+        for nota_id, numero, dt, valor, forn_id, forn, cnpj, fora in cursor.fetchall():
             if (cnpj or '').strip() == CNPJ_FORNECEDOR_INTERNO:
                 continue
-            notas[nota_id] = {'NotaID': nota_id, 'NumeroNF': numero or '', 'Data': _como_data(dt), 'ValorNF': _dec(valor),
-                              'FornecedorID': forn_id, 'Fornecedor': forn or '?', 'SomaItens': Decimal('0'), 'Itens': 0}
+            # [DEPURAÇÃO 2] tira do total da nota o que não é compra paga (bonificação, comodato)
+            notas[nota_id] = {'NotaID': nota_id, 'NumeroNF': numero or '', 'Data': _como_data(dt),
+                              'ValorNF': _dec(valor) - _dec(fora or 0), 'ValorFora': _dec(fora or 0),
+                              'ImportadaAntes': fora is None,
+                              'FornecedorID': forn_id, 'Fornecedor': forn or '?', 'SomaItens': Decimal('0'), 'Itens': 0,
+                              'ItensCustoZero': 0}
         cursor.execute("SELECT NotaID, Quantidade, PrecoCustoUnitario FROM ItensNotaFiscalEntrada WHERE Quantidade > 0")
         for nota_id, qtd, custo in cursor.fetchall():
             n = notas.get(nota_id)
             if n:
                 n['SomaItens'] += _dec(qtd) * _dec(custo)
                 n['Itens'] += 1
+                if _dec(custo) <= 0:
+                    n['ItensCustoZero'] += 1
         resultado = []
         for n in notas.values():
             n['Diferenca'] = n['ValorNF'] - n['SomaItens']
@@ -9062,9 +9292,11 @@ def listar_notas_com_diferenca(diferenca_minima=Decimal('0.05')):
 
 
 def _itens_rateio(cursor, nota_id):
-    cursor.execute("SELECT NF.ValorTotalNF FROM NotasFiscaisEntrada NF WHERE NF.NotaID = ?", nota_id)
+    _garantir_colunas_estoque()
+    cursor.execute("SELECT NF.ValorTotalNF, NF.ValorForaDoEstoque FROM NotasFiscaisEntrada NF WHERE NF.NotaID = ?", nota_id)
     linha = cursor.fetchone()
-    valor_nf = _dec(linha[0]) if linha else Decimal('0')
+    # [DEPURAÇÃO 2] o que não é compra paga (bonificação, comodato) não entra no rateio
+    valor_nf = (_dec(linha[0]) - _dec(linha[1] or 0)) if linha else Decimal('0')
     cursor.execute("""
         SELECT INI.ItemNotaID, INI.Quantidade, INI.PrecoCustoUnitario, PF.DescricaoXML, P.NomeProduto
         FROM ItensNotaFiscalEntrada INI
@@ -9407,6 +9639,10 @@ def previa_recalculo_vinculo(vinculo_id, novo_fator):
     [MELHORIA] Mostra como ficariam as compras já importadas se o fator mudar.
     Devolve (fator_antigo, [ {NF, Data, QtdAtual, CustoAtual, QtdNova, CustoNovo} ]).
     """
+    try:
+        _garantir_colunas_estoque()
+    except Exception:
+        return Decimal('1'), []
     conn = get_db_connection()
     if not conn:
         return Decimal('1'), []
@@ -9414,34 +9650,55 @@ def previa_recalculo_vinculo(vinculo_id, novo_fator):
         cursor = conn.cursor()
         cursor.execute("SELECT FatorConversao FROM ProdutosFornecedor WHERE ProdutoFornecedorID = ?", vinculo_id)
         linha = cursor.fetchone()
-        fator_antigo = _dec(linha[0]) if linha and linha[0] is not None and _dec(linha[0]) > 0 else Decimal('1')
+        fator_vinculo = _fator_item(None, linha[0] if linha else None)
         fator_novo = _dec(novo_fator)
         cursor.execute("""
-            SELECT NF.NumeroNF, NF.DataEmissao, INI.Quantidade, INI.PrecoCustoUnitario
+            SELECT NF.NumeroNF, NF.DataEmissao, INI.Quantidade, INI.PrecoCustoUnitario, INI.FatorConversaoUsado
             FROM ItensNotaFiscalEntrada INI
             JOIN NotasFiscaisEntrada NF ON INI.NotaID = NF.NotaID
             WHERE INI.ProdutoFornecedorID = ? AND INI.Quantidade > 0
             ORDER BY NF.DataEmissao DESC
         """, vinculo_id)
         itens = []
-        for nf, dt, qtd, custo in cursor.fetchall():
+        for nf, dt, qtd, custo, usado in cursor.fetchall():
             q, c = _dec(qtd), _dec(custo)
-            itens.append({'NF': nf, 'Data': _como_data(dt), 'QtdAtual': q, 'CustoAtual': c,
-                          'QtdNova': (q * fator_novo / fator_antigo) if fator_novo > 0 else q,
-                          'CustoNovo': (c * fator_antigo / fator_novo) if fator_novo > 0 else c})
-        return fator_antigo, itens
+            antigo = _fator_item(usado, fator_vinculo)
+            if fator_novo <= 0 or antigo == fator_novo:
+                continue      # [DEPURAÇÃO 2] este item já está no Qtd/Cx novo: não muda
+            itens.append({'NF': nf, 'Data': _como_data(dt), 'QtdAtual': q, 'CustoAtual': c, 'FatorAntigo': antigo,
+                          'QtdNova': q * fator_novo / antigo, 'CustoNovo': c * antigo / fator_novo})
+        return fator_vinculo, itens
     except Exception as e:
         logger.error(f"Erro na prévia de recálculo do vínculo {vinculo_id}: {e}", exc_info=True)
         return Decimal('1'), []
     finally:
         conn.close()
 
+def vinculo_tem_itens(vinculo_id):
+    """Quantos itens de nota (inclusive o custo manual, de quantidade 0) usam o vínculo."""
+    conn = get_db_connection()
+    if not conn:
+        return None
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM ItensNotaFiscalEntrada WHERE ProdutoFornecedorID = ?", vinculo_id)
+        return int(cursor.fetchone()[0] or 0)
+    finally:
+        conn.close()
+
+
 def excluir_vinculo_existente(vinculo_id):
-    """Exclui um vínculo DE/PARA."""
+    """Exclui um vínculo DE/PARA (recusa se algum item de nota ainda usa o vínculo)."""
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
+            # [DEPURAÇÃO 2] Itens de nota apontando para um vínculo apagado somem do estoque
+            # (inclusive o custo manual do Catálogo, que é uma "nota" de quantidade 0).
+            cursor.execute("SELECT COUNT(*) FROM ItensNotaFiscalEntrada WHERE ProdutoFornecedorID = ?", vinculo_id)
+            if int(cursor.fetchone()[0] or 0) > 0:
+                logger.warning(f"Exclusão do vínculo {vinculo_id} recusada: ainda há itens de nota usando-o.")
+                return False
             sql = "DELETE FROM ProdutosFornecedor WHERE ProdutoFornecedorID = ?"
             cursor.execute(sql, vinculo_id)
             conn.commit()
@@ -10565,13 +10822,24 @@ def listar_solicitacoes_pendentes():
             conn.close()
     return []
 
-def atualizar_status_solicitacao(solicitacao_id, novo_status, motivo=None):
+def atualizar_status_solicitacao(solicitacao_id, novo_status, motivo=None, status_esperado=None):
+    """
+    status_esperado: se informado (ex: 'Pendente'), só muda se a solicitação ainda estiver
+    nesse status. Devolve False se outra pessoa (ou o bot) já tinha decidido antes.
+    """
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
             sql = "UPDATE SolicitacoesInternas SET Status = ?, MotivoRecusa = ?, DataConclusao = GETDATE() WHERE SolicitacaoID = ?"
-            cursor.execute(sql, novo_status, motivo, solicitacao_id)
+            params = [novo_status, motivo, solicitacao_id]
+            if status_esperado:
+                sql += " AND Status = ?"
+                params.append(status_esperado)
+            cursor.execute(sql, *params)
+            if status_esperado and getattr(cursor, 'rowcount', 1) == 0:
+                conn.rollback()
+                return False
             conn.commit()
             return True
         finally:
@@ -10917,79 +11185,150 @@ def buscar_produtos_mobile_por_nome(termo):
             conn.close()
     return []
 
-def criar_unidade_a_partir_de_caixa(id_origem, novo_ean, qtd_na_caixa):
+def previa_desmembrar_caixa(id_origem, qtd_na_caixa):
     """
-    (MÁQUINA DO TEMPO) Transforma o Mestre em 'Unidade', atualiza o fator da Caixa,
-    cria o vínculo da unidade e REGRAVA O PASSADO no histórico de compras.
+    [DEPURAÇÃO 2] O que o "desmembrar caixa" vai mudar, para o gestor confirmar antes:
+    {'Produto', 'Unidade', 'FatorAtual', 'Multiplicador', 'Vinculos', 'Compras', 'Contagens', 'Fechadas'}
     """
     conn = get_db_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            qtd_caixa_float = float(qtd_na_caixa)
-            if qtd_caixa_float <= 0: return False, "Quantidade inválida."
+    if not conn:
+        return None
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT PF.ProdutoID, PF.FatorConversao, P.NomeProduto, P.UnidadeMedida FROM ProdutosFornecedor PF "
+                       "JOIN ProdutosEstoque P ON PF.ProdutoID = P.ProdutoID WHERE PF.ProdutoFornecedorID = ?", id_origem)
+        r = cursor.fetchone()
+        if not r:
+            return None
+        pid, fator, nome, un = r
+        fator = _fator_item(None, fator)
+        mult = _dec(qtd_na_caixa) / fator
+        cursor.execute("SELECT COUNT(*) FROM ProdutosFornecedor WHERE ProdutoID = ?", pid)
+        vinculos = int(cursor.fetchone()[0] or 0)
+        cursor.execute("SELECT COUNT(*) FROM ItensNotaFiscalEntrada INI JOIN ProdutosFornecedor PF "
+                       "ON INI.ProdutoFornecedorID = PF.ProdutoFornecedorID WHERE PF.ProdutoID = ? AND INI.Quantidade > 0", pid)
+        compras = int(cursor.fetchone()[0] or 0)
+        cursor.execute("SELECT DISTINCT ContagemID FROM ItensContagemEstoque WHERE ProdutoID = ?", pid)
+        contagens = [x[0] for x in cursor.fetchall()]
+        fechadas = [c for c in contagens if c in listar_valores_estoque_fechados()]
+        return {'ProdutoID': pid, 'Produto': nome, 'Unidade': un or 'UN', 'FatorAtual': fator, 'Multiplicador': mult,
+                'Vinculos': vinculos, 'Compras': compras, 'Contagens': len(contagens), 'Fechadas': len(fechadas)}
+    finally:
+        conn.close()
 
-            # 1. Pega os dados do cadastro da CAIXA (Origem) e o Nome do Mestre Atual
-            sql_origem = """
-                SELECT PF.ProdutoID, PF.FornecedorID, PF.NCM, PF.DescricaoXML, PF.FatorConversao, P.NomeProduto
-                FROM ProdutosFornecedor PF
-                JOIN ProdutosEstoque P ON PF.ProdutoID = P.ProdutoID
-                WHERE PF.ProdutoFornecedorID = ?
-            """
-            cursor.execute(sql_origem, id_origem)
-            dados_caixa = cursor.fetchone()
 
-            if not dados_caixa:
-                return False, "Cadastro origem não encontrado."
+def desmembrar_caixa(id_origem, novo_ean, qtd_na_caixa, contagem_id=None, nome_avulso=None, qtd_contada=None):
+    """
+    (MÁQUINA DO TEMPO) O produto passa a ser controlado em UNIDADES em vez de caixas:
+      - o Qtd/Cx de TODOS os vínculos do produto é multiplicado (a caixa de 72 vira fator 72);
+      - TODAS as compras do produto viram unidades (quantidade x M, custo ÷ M);
+      - TODAS as contagens do produto viram unidades (quantidade x M) — [DEPURAÇÃO 2] antes só
+        as compras de UM vínculo mudavam: as contagens antigas (em caixas) passavam a valer
+        unidades e o consumo/valor ficavam 72x menores;
+      - cria o vínculo da UNIDADE para o EAN bipado (se ainda não existir);
+      - se vier de uma contagem, resolve o item avulso.
+    M = unidades na caixa ÷ Qtd/Cx atual (se já estava em unidades, M = 1 e nada muda).
+    Contagens com valor FECHADO não mudam (o valor fechado é um retrato). Tudo numa transação.
+    Devolve (sucesso, mensagem).
+    """
+    try:
+        qtd_caixa = _dec(qtd_na_caixa)
+    except Exception:
+        return False, "Quantidade inválida."
+    if qtd_caixa <= 0:
+        return False, "Quantidade inválida."
+    try:
+        _garantir_colunas_estoque()
+        fechadas = set(listar_valores_estoque_fechados(levantar_erro=True))
+    except Exception as e:
+        return False, f"Não foi possível consultar o banco: {e}"
+    conn = get_db_connection()
+    if not conn:
+        return False, "Erro de conexão."
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT PF.ProdutoID, PF.FornecedorID, PF.NCM, PF.DescricaoXML, PF.FatorConversao, P.NomeProduto
+            FROM ProdutosFornecedor PF
+            JOIN ProdutosEstoque P ON PF.ProdutoID = P.ProdutoID
+            WHERE PF.ProdutoFornecedorID = ?
+        """, id_origem)
+        dados_caixa = cursor.fetchone()
+        if not dados_caixa:
+            return False, "Cadastro origem não encontrado."
+        prod_id, forn_id, ncm, desc_xml, fator_atual, nome_mestre_atual = dados_caixa
+        fator_atual = _fator_item(None, fator_atual)
+        mult = qtd_caixa / fator_atual
 
-            prod_id, forn_id, ncm, desc_xml, fator_atual, nome_mestre_atual = dados_caixa
-            fator_atual = float(fator_atual) if fator_atual else 1.0
-
-            # 2. Renomeia o Produto Mestre para indicar que agora controla UNIDADES (Se já não tiver)
-            if "(UNIDADE)" not in nome_mestre_atual.upper() and "(UN)" not in nome_mestre_atual.upper():
-                novo_nome_mestre = f"{nome_mestre_atual} (UNIDADE)"
-                cursor.execute("UPDATE ProdutosEstoque SET NomeProduto = ?, UnidadeMedida = 'UN' WHERE ProdutoID = ?", novo_nome_mestre, prod_id)
-
-            # 3. Calcula o multiplicador real para a Máquina do Tempo
-            # Se o fator antes era 1, e agora é 72, multiplicamos por 72.
-            # Se o fator antes era 10, e ele corrigiu pra 72, multiplicamos por 7.2 para arrumar a matemática exata.
-            try:
-                multiplicador = qtd_caixa_float / fator_atual
-            except ZeroDivisionError:
-                multiplicador = qtd_caixa_float
-
-            # 4. A MÁQUINA DO TEMPO: Atualiza TODAS as compras passadas desta caixa
-            if multiplicador != 1.0:
-                sql_maquina_tempo = """
+        if mult != 1:
+            nome = nome_mestre_atual or ''
+            if "(UNIDADE)" not in nome.upper() and "(UN)" not in nome.upper():
+                cursor.execute("UPDATE ProdutosEstoque SET NomeProduto = ?, UnidadeMedida = 'UN' WHERE ProdutoID = ?",
+                               f"{nome} (UNIDADE)", prod_id)
+            else:
+                cursor.execute("UPDATE ProdutosEstoque SET UnidadeMedida = 'UN' WHERE ProdutoID = ?", prod_id)
+            cursor.execute("SELECT ProdutoFornecedorID, FatorConversao, FornecedorID FROM ProdutosFornecedor WHERE ProdutoID = ?", prod_id)
+            vinculos = cursor.fetchall()
+            internos = set()
+            if vinculos:
+                marcas = ", ".join("?" for _ in vinculos)
+                cursor.execute(f"SELECT FornecedorID FROM Fornecedores WHERE CNPJ = ? AND FornecedorID IN ({marcas})",
+                               CNPJ_FORNECEDOR_INTERNO, *[v[2] for v in vinculos])
+                internos = {r[0] for r in cursor.fetchall()}
+            for vid, fator_v, forn_v in vinculos:
+                # compras: quantidade x M, custo / M (o valor de cada compra não muda)
+                cursor.execute("""
                     UPDATE ItensNotaFiscalEntrada
-                    SET Quantidade = Quantidade * ?,
-                        PrecoCustoUnitario = PrecoCustoUnitario / ?
+                    SET Quantidade = Quantidade * ?, PrecoCustoUnitario = PrecoCustoUnitario / ?,
+                        FatorConversaoUsado = COALESCE(FatorConversaoUsado, ?) * ?
                     WHERE ProdutoFornecedorID = ?
-                """
-                cursor.execute(sql_maquina_tempo, multiplicador, multiplicador, id_origem)
-                logger.info(f"MÁQUINA DO TEMPO ativada para Vínculo {id_origem}. Fator {fator_atual} -> {qtd_caixa_float}.")
+                """, mult, mult, _fator_item(None, fator_v), mult, vid)
+                if forn_v not in internos:      # o vínculo do custo manual não tem "caixa"
+                    cursor.execute("UPDATE ProdutosFornecedor SET FatorConversao = ? WHERE ProdutoFornecedorID = ?",
+                                   _fator_item(None, fator_v) * mult, vid)
+            cursor.execute("SELECT DISTINCT ContagemID FROM ItensContagemEstoque WHERE ProdutoID = ?", prod_id)
+            for (cid,) in cursor.fetchall():
+                if cid in fechadas:
+                    continue
+                cursor.execute("UPDATE ItensContagemEstoque SET QuantidadeContada = QuantidadeContada * ? "
+                               "WHERE ContagemID = ? AND ProdutoID = ?", mult, cid, prod_id)
+            logger.info(f"MÁQUINA DO TEMPO: produto {prod_id} convertido para unidades (x{mult}).")
 
-            # 5. Atualiza o Vínculo da CAIXA para o novo Fator (Para compras futuras baterem certo)
-            cursor.execute("UPDATE ProdutosFornecedor SET FatorConversao = ? WHERE ProdutoFornecedorID = ?", qtd_caixa_float, id_origem)
+        # vínculo da UNIDADE para o EAN bipado (não duplica se já existir)
+        if novo_ean and novo_ean != "Sem EAN":
+            cursor.execute("SELECT 1 FROM ProdutosFornecedor WHERE ProdutoID = ? AND EAN = ?", prod_id, novo_ean)
+            if not cursor.fetchone():
+                cursor.execute("""
+                    INSERT INTO ProdutosFornecedor (ProdutoID, FornecedorID, EAN, NCM, FatorConversao, DescricaoXML)
+                    VALUES (?, ?, ?, ?, 1.0, ?)
+                """, prod_id, forn_id, novo_ean, ncm, f"{desc_xml} (VINCULO UNIDADE)")
 
-            # 6. Cria o Novo Vínculo da UNIDADE (Fator 1) para o novo EAN
-            nova_desc_xml = f"{desc_xml} (VINCULO UNIDADE)"
-            sql_insert_unidade = """
-                INSERT INTO ProdutosFornecedor 
-                (ProdutoID, FornecedorID, EAN, NCM, FatorConversao, DescricaoXML)
-                VALUES (?, ?, ?, ?, 1.0, ?)
-            """
-            cursor.execute(sql_insert_unidade, prod_id, forn_id, novo_ean, ncm, nova_desc_xml)
+        # resolve o item avulso da contagem (mesma transação)
+        if contagem_id is not None and nome_avulso is not None:
+            cursor.execute("SELECT 1 FROM ItensContagemEstoque WHERE ContagemID = ? AND ProdutoID = ?", contagem_id, prod_id)
+            if cursor.fetchone():
+                cursor.execute("UPDATE ItensContagemEstoque SET QuantidadeContada = QuantidadeContada + ? "
+                               "WHERE ContagemID = ? AND ProdutoID = ?", _dec(qtd_contada or 0), contagem_id, prod_id)
+                cursor.execute("DELETE FROM ItensContagemEstoque WHERE ContagemID = ? AND NomeAvulso = ?", contagem_id, nome_avulso)
+            else:
+                cursor.execute("UPDATE ItensContagemEstoque SET ProdutoID = ?, QuantidadeContada = ?, NomeAvulso = NULL, "
+                               "EANAvulso = NULL WHERE ContagemID = ? AND NomeAvulso = ?",
+                               prod_id, _dec(qtd_contada or 0), contagem_id, nome_avulso)
+        conn.commit()
+        if contagem_id is not None:
+            return True, "Caixa desmembrada, EAN aprendido e contagem atualizada!"
+        return True, "Desmembramento inteligente e ajuste histórico concluídos!"
+    except Exception as e:
+        logger.error(f"Erro ao desmembrar caixa: {e}", exc_info=True)
+        conn.rollback()
+        return False, f"Erro ao desmembrar (nada foi alterado): {e}"
+    finally:
+        conn.close()
 
-            conn.commit()
-            return True, "Desmembramento inteligente e ajuste histórico concluídos!"
-        except Exception as e:
-            logger.error(f"Erro ao desmembrar caixa inteligente: {e}")
-            conn.rollback()
-            return False, str(e)
-        finally:
-            conn.close()
-    return False, "Erro de conexão."
+
+def criar_unidade_a_partir_de_caixa(id_origem, novo_ean, qtd_na_caixa):
+    """Compatibilidade (app do celular): mesmo que desmembrar_caixa, sem contagem."""
+    return desmembrar_caixa(id_origem, novo_ean, qtd_na_caixa)
 
 def excluir_vinculo_auditoria(vinculo_id):
     """Exclui um cadastro (vínculo) da tabela ProdutosFornecedor."""
@@ -10997,6 +11336,10 @@ def excluir_vinculo_auditoria(vinculo_id):
     if conn:
         try:
             cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM ItensNotaFiscalEntrada WHERE ProdutoFornecedorID = ?", vinculo_id)
+            if int(cursor.fetchone()[0] or 0) > 0:   # [DEPURAÇÃO 2]
+                return False, "Este vínculo tem compras registradas e não pode ser excluído."
+
             sql = "DELETE FROM ProdutosFornecedor WHERE ProdutoFornecedorID = ?"
             cursor.execute(sql, vinculo_id)
             conn.commit()
