@@ -1663,6 +1663,88 @@ def api_compras_finalizar(usuario, codigo):
     return _resposta_compras(finalizar)
 
 
+# ---------------------------- cupom fiscal (QR Code da NFC-e) ----------------------------
+try:
+    import compras_cupom
+except Exception as _erro_import_cupom:
+    compras_cupom = None
+    logger.error(f"Leitura de cupom DESLIGADA: não consegui carregar compras_cupom.py ({_erro_import_cupom})")
+
+
+def _cupom_disponivel():
+    if compras_cupom is None:
+        return jsonify({"erro": "Leitura de cupom não instalada no servidor (falta compras_cupom.py)."}), 503
+    return None
+
+
+def _avisar_cupom_pendente(usuario, cupom):
+    if cupom.get('ja_existia') or usuario.get('gestor') or cupom['status'] != compras_cupom.ST_PENDENTE:
+        return
+    _avisar_gestor_telegram(
+        f"🧾 <b>Cupom lido no app</b> por {esc(usuario['nome'])}\n"
+        f"{esc(cupom['emitente'] or 'Mercado')} · {len(cupom['itens'])} itens · {_reais(cupom['valor_pagar'])}\n"
+        + (f"{cupom['pendentes']} item(ns) para vincular. " if cupom['pendentes'] else "")
+        + "Abra o app de compras para conferir e lançar no estoque.")
+
+
+@app.route('/api/compras/cupons', methods=['GET'])
+@compras_login()
+def api_compras_cupons(usuario):
+    return _cupom_disponivel() or _resposta_compras(compras_cupom.listar_cupons)
+
+
+@app.route('/api/compras/cupons', methods=['POST'])
+@compras_login()
+def api_compras_ler_cupom(usuario):
+    """Recebe o texto do QR Code (lido no celular) OU a foto do QR Code."""
+    bloqueio = _cupom_disponivel()
+    if bloqueio:
+        return bloqueio
+    dados = ler_json() or {}
+    def ler():
+        texto = (dados.get('qr') or '').strip()
+        if not texto and dados.get('foto'):
+            texto = compras_cupom.ler_qr_da_foto(dados['foto'])
+        if not texto:
+            raise compras_database.ErroCompras("Envie a foto ou o link do QR Code.")
+        cupom = compras_cupom.registrar_cupom(texto, usuario, lista_codigo=dados.get('lista_codigo'))
+        _avisar_cupom_pendente(usuario, cupom)
+        return cupom
+    return _resposta_compras(ler, status_ok=201)
+
+
+@app.route('/api/compras/cupons/<int:cupom_id>', methods=['GET'])
+@compras_login()
+def api_compras_cupom(usuario, cupom_id):
+    return _cupom_disponivel() or _resposta_compras(compras_cupom.obter_cupom, cupom_id)
+
+
+@app.route('/api/compras/cupons/<int:cupom_id>', methods=['DELETE'])
+@compras_login()
+def api_compras_apagar_cupom(usuario, cupom_id):
+    return _cupom_disponivel() or _resposta_compras(compras_cupom.apagar_cupom, cupom_id, usuario)
+
+
+@app.route('/api/compras/cupons/<int:cupom_id>/tentar-de-novo', methods=['POST'])
+@compras_login()
+def api_compras_cupom_de_novo(usuario, cupom_id):
+    return _cupom_disponivel() or _resposta_compras(compras_cupom.tentar_de_novo, cupom_id)
+
+
+@app.route('/api/compras/cupons/<int:cupom_id>/itens', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_compras_cupom_item(usuario, cupom_id):
+    dados = ler_json() or {}
+    return _cupom_disponivel() or _resposta_compras(compras_cupom.resolver_item, cupom_id, dados.get('seq'), dados.get('acao'),
+                                                    usuario, produto_id=dados.get('produto_id'), fator=dados.get('fator'))
+
+
+@app.route('/api/compras/cupons/<int:cupom_id>/lancar', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_compras_lancar_cupom(usuario, cupom_id):
+    return _cupom_disponivel() or _resposta_compras(compras_cupom.lancar_cupom, cupom_id, usuario)
+
+
 if __name__ == "__main__":
     # O '0.0.0.0' é o segredo. Ele libera o acesso para a rede inteira.
     logger.info("Iniciando servidor API acessível na rede em modo Produção...")

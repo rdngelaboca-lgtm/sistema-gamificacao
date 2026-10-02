@@ -225,6 +225,8 @@ const ICONES = {
   baixo: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>',
   lixo: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6 6l1 14h10l1-14"/></svg>',
   enviar: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/></svg>',
+  qr: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3z"/><path d="M20 14v7h-6"/></svg>',
+  camera: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h3l2-3h6l2 3h3a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="4"/></svg>',
   sair: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>',
 };
 
@@ -234,7 +236,7 @@ function carregar() {
   try { const t = localStorage.getItem(CHAVE); if (t) return Object.assign(estadoVazio(), JSON.parse(t)); } catch (e) {}
   return estadoVazio();
 }
-function estadoVazio() { return {usuario: null, rotinas: [], preparos: {}, ida: null, listas: {}, fila: [], erros: []}; }
+function estadoVazio() { return {usuario: null, rotinas: [], preparos: {}, ida: null, listas: {}, fila: [], erros: [], cupons: []}; }
 function salvar() {
   try { localStorage.setItem(CHAVE, JSON.stringify(E)); }
   catch (e) { toast('Memória do celular cheia: não deu para salvar.'); }
@@ -298,6 +300,7 @@ async function sincronizar() {
         const resp = await api(t.metodo, t.url, t.corpo);
         E.fila.shift(); mudou = true;
         if (resp && resp.codigo && resp.itens) guardarLista(resp, true);
+        if (resp && resp.chave && resp.itens) { guardarCupom(resp); if (!resp.ja_existia) toast('Cupom enviado: ' + (resp.emitente || 'cupom fiscal')); }
       } catch (e) {
         t.enviando = false;
         if (e.extra.offline || e.status === 401 || e.status === 429 || e.status >= 500) break;   // tenta de novo depois
@@ -806,7 +809,8 @@ TELAS.finalizar = p => {
       ${faltaram.length ? `<div class="cartao"><div style="font-weight:700">Voltam na próxima contagem:</div><div class="pequeno suave">${esc(faltaram.map(i => i.nome).join(', '))}</div></div>` : ''}
       <div class="escuro"><div class="rotulo" style="color:#A9C9C3">Falta um passo</div>
         <div style="font-size:17px;font-weight:700;line-height:1.35">Preços e estoque entram quando a nota for lançada</div>
-        <div class="pequeno suave" style="line-height:1.45">Importe o XML no Gestão de Estoque. O app não soma a compra sozinho, para não contar duas vezes.</div></div>
+        <div class="pequeno suave" style="line-height:1.45">Leia o QR Code do cupom: o app pega itens e preços na SEFAZ e o gestor lança no estoque. Se a nota tiver XML, pode importar no Gestão de Estoque.</div>
+        <button class="btn" style="background:#fff;color:var(--texto);margin-top:4px" data-acao="cupom-ler" data-lista="${esc(l.codigo)}">${ICONES.qr} Ler QR Code do cupom</button></div>
       <div class="pequeno suave" style="text-align:center">${online ? 'Resumo enviado ao gestor no Telegram.' : 'O resumo vai para o gestor quando a internet voltar.'}</div>
     </div>
     <div class="rodape"><button class="btn" data-acao="nav-inicio">Voltar ao início</button></div>`;
@@ -824,6 +828,9 @@ TELAS.listas = () => {
       ${erros.length ? `<div class="aviso"><div>Envios recusados pelo servidor:</div>${erros.map(e => `<div class="mini">• ${esc(e.msg)}</div>`).join('')}
         <button class="btn claro medio" style="margin-top:8px" data-acao="limpar-erros">Entendi</button></div>` : ''}
       <div class="lista-cartoes">${todas.map(cartaoLista).join('') || '<div class="vazio">Nenhuma lista ainda.</div>'}</div>
+      <div class="lista-cartoes"><div class="rotulo">Cupons fiscais</div>
+        <button class="btn claro medio" data-acao="cupom-ler">${ICONES.qr} Ler QR Code de um cupom</button>
+        ${(E.cupons || []).map(cartaoCupom).join('') || '<div class="mini suave" style="text-align:center">Nenhum cupom lido ainda.</div>'}</div>
     </div>${navbar('listas')}`;
 };
 
@@ -923,12 +930,164 @@ function modalBuscaProduto() {
   });
 }
 
+
+// ---------------------------------------------------------------- cupom fiscal (QR Code)
+const ST_CUPOM = {pendente: ['p-laranja', 'Conferir'], importado: ['p-verde', 'Lançado no estoque'], erro: ['p-laranja', 'Erro na SEFAZ'],
+                  ja_lancado: ['p-cinza', 'Já estava no estoque']};
+function guardarCupom(c) {
+  E.cupons = [c].concat((E.cupons || []).filter(x => x.id !== c.id)).slice(0, 40);
+  salvar();
+}
+async function carregarCupons() {
+  try {
+    const lista = await api('GET', '/api/compras/cupons');
+    const det = {}; (E.cupons || []).forEach(c => { det[c.id] = c; });
+    E.cupons = lista.map(c => Object.assign({}, det[c.id] && det[c.id].status === c.status ? det[c.id] : {}, c));
+    salvar();
+  } catch (e) {}
+}
+function cartaoCupom(c) {
+  const st = ST_CUPOM[c.status] || ['p-cinza', c.status];
+  const qtd = c.qtd_itens != null ? c.qtd_itens : (c.itens || []).length;
+  return `<button class="cartao" style="text-align:left;display:flex;flex-direction:column;gap:6px;width:100%" data-acao="cupom-abrir" data-id="${c.id}">
+    <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;width:100%">
+      <div class="nome">${esc(c.emitente || 'Cupom fiscal')}</div><span class="pilula ${st[0]}">${st[1]}</span></div>
+    <div class="pequeno suave">${c.data_emissao ? dataBR(c.data_emissao) + ' · ' : ''}${qtd} itens${c.valor_pagar != null ? ' · ' + fmtReais(c.valor_pagar) : ''}${c.lido_por ? ' · lido por ' + esc(c.lido_por) : ''}</div></button>`;
+}
+TELAS.cupom = p => {
+  const c = (E.cupons || []).find(x => x.id === p.id);
+  if (!c || !c.itens) return `${topo('Cupom fiscal', '', 'cupom-voltar')}<div class="corpo"><div class="vazio">Carregando…</div></div>`;
+  const gestor = E.usuario.gestor, aberto = c.status === 'pendente';
+  const aviso = {
+    pendente: c.pendentes ? `<div class="aviso">${c.pendentes} item(ns) sem produto do estoque. ${gestor ? 'Toque no item para escolher o produto ou marcar "não é do estoque".' : 'O gestor vai conferir e lançar.'}</div>`
+                          : `<div class="info">Todos os itens conferidos. ${gestor ? 'Pode lançar no estoque.' : 'Falta o gestor lançar no estoque.'}</div>`,
+    importado: `<div class="info">Lançado no estoque${c.lancado_por ? ' por ' + esc(c.lancado_por) : ''}. Os preços já valem para o "mais barato".</div>`,
+    erro: `<div class="aviso">${esc(c.erro || 'Não foi possível ler a página da SEFAZ.')}</div>`,
+    ja_lancado: `<div class="info">${esc(c.erro || 'Esta nota já estava no estoque.')}</div>`,
+  }[c.status] || '';
+  const linhas = c.itens.map(i => {
+    let estado;
+    if (i.situacao === 'reconhecido' || i.situacao === 'vinculado') {
+      estado = `<div class="mini" style="color:var(--verde-esc);font-weight:700">✓ ${esc(i.produto)}${i.fator && i.fator !== 1 ? ` · 1 ${esc(i.unidade)} = ${fmtQtd(i.fator)} ${esc(i.unidade_produto)}` : ''}</div>`;
+    } else if (i.situacao === 'ignorado') estado = '<div class="mini suave" style="font-weight:700">Não é do estoque</div>';
+    else estado = aberto ? '<div class="mini" style="color:var(--laranja);font-weight:700">Escolher produto</div>' : '';
+    const conteudo = `<div class="grow"><div style="font-weight:700;font-size:15px">${esc(i.descricao)}</div>
+        <div class="mini suave">${fmtQtd(i.qtd)} ${esc(i.unidade)} × ${fmtReais(i.valor_unit)}${i.codigo ? ' · cód. ' + esc(i.codigo) : ''}</div>${estado}</div>
+      <div class="pequeno" style="font-weight:700;white-space:nowrap">${fmtReais(i.valor_total)}</div>`;
+    return gestor && aberto ? `<button class="lin" style="width:100%;border-left:0;border-right:0;border-bottom:0;background:#fff;text-align:left" data-acao="cupom-item" data-seq="${i.seq}">${conteudo}</button>`
+                            : `<div class="lin">${conteudo}</div>`;
+  }).join('');
+  let botoes = '';
+  if (aberto && gestor) botoes = `<button class="btn" data-acao="cupom-lancar" ${c.pode_lancar ? '' : 'disabled'}>Lançar no estoque</button>`;
+  if (c.status === 'erro') botoes = `<button class="btn" data-acao="cupom-de-novo">Tentar ler de novo</button>`;
+  return `${faixaRede()}${topo(c.emitente || 'Cupom fiscal', `${c.data_emissao ? dataBR(c.data_emissao) + ' · ' : ''}Cupom ${c.numero || ''}${c.lido_por ? ' · lido por ' + c.lido_por : ''}`, 'cupom-voltar')}
+    <div class="corpo">${aviso}
+      ${c.itens.length ? `<div class="cartao" style="display:flex;justify-content:space-between;gap:10px">
+        <div><div class="mini suave" style="font-weight:600">Total pago</div><div style="font-size:24px;font-weight:800">${fmtReais(c.valor_pagar)}</div></div>
+        <div class="pequeno suave" style="text-align:right">${c.itens.length} itens${c.descontos ? '<br>desconto ' + fmtReais(c.descontos) : ''}</div></div>
+      <div class="linhas">${linhas}</div>` : ''}
+      ${c.status !== 'importado' && (gestor || c.lido_por_id === E.usuario.id) ? '<button class="btn claro medio" style="color:var(--laranja)" data-acao="cupom-apagar">Apagar este cupom</button>' : ''}
+    </div>${botoes ? `<div class="rodape">${botoes}</div>` : ''}`;
+};
+function modalLerCupom(listaCodigo) {
+  abrirModal(`<div style="display:flex;justify-content:space-between;align-items:center"><div class="titulo-sec">Ler QR Code do cupom</div>
+      <button class="icone-btn" data-acao="fechar-modal" aria-label="Fechar">${ICONES.fechar}</button></div>
+    <div class="pequeno suave" style="line-height:1.45">Fotografe o QR Code no pé do cupom: bem de perto, com luz, o quadrado inteiro e reto na foto.</div>
+    <label class="btn" style="cursor:pointer">${ICONES.camera} Tirar foto do QR Code
+      <input type="file" accept="image/*" capture="environment" data-acao-change="cupom-foto" data-lista="${esc(listaCodigo || '')}" style="display:none"></label>
+    <div id="cupom-status" class="pequeno" style="text-align:center;min-height:20px" role="status"></div>
+    <details><summary class="pequeno" style="cursor:pointer;font-weight:700;min-height:28px">Prefiro colar o link do QR Code</summary>
+      <div class="pequeno suave" style="margin:8px 0">A câmera do celular também lê o QR: toque em "copiar link" e cole aqui.</div>
+      <div class="campo"><input id="cupom-link" placeholder="https://www.sefaz.mt.gov.br/nfce/consultanfce?p=..." autocomplete="off" aria-label="Link do QR Code"></div>
+      <button class="btn medio" style="margin-top:10px" data-acao="cupom-link" data-lista="${esc(listaCodigo || '')}">Enviar link</button></details>`);
+}
+function statusCupom(t) { const el = document.getElementById('cupom-status'); if (el) el.textContent = t; }
+async function lerQrNoCelular(arquivo) {
+  // Android/Chrome lê o QR sozinho (funciona até sem internet). iPhone: a foto vai para o servidor ler.
+  if (!('BarcodeDetector' in window)) return null;
+  try {
+    const formatos = await BarcodeDetector.getSupportedFormats();
+    if (!formatos.includes('qr_code')) return null;
+    const img = await createImageBitmap(arquivo);
+    const achados = await new BarcodeDetector({formats: ['qr_code']}).detect(img);
+    return achados.length ? achados[0].rawValue : null;
+  } catch (e) { return null; }
+}
+async function reduzirFoto(arquivo) {
+  const img = await createImageBitmap(arquivo);
+  const maior = Math.max(img.width, img.height), escala = Math.min(1, 1800 / maior);
+  const cv = document.createElement('canvas'); cv.width = Math.round(img.width * escala); cv.height = Math.round(img.height * escala);
+  cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+  return cv.toDataURL('image/jpeg', 0.88);
+}
+async function enviarCupom(corpo) {
+  statusCupom('Consultando a SEFAZ… (pode levar alguns segundos)');
+  try {
+    const c = await api('POST', '/api/compras/cupons', corpo);
+    guardarCupom(c); fecharModal();
+    if (c.ja_existia) toast('Este cupom já tinha sido lido.');
+    ir('cupom', {id: c.id, voltar: T.nome === 'finalizar' ? {nome: 'finalizar', p: T.p} : null});
+  } catch (e) {
+    if (e.extra.offline) {
+      if (corpo.foto && corpo.foto.length > 1500000) { statusCupom(''); return toast('Sem internet: tente de novo quando conectar.'); }
+      E.fila.push({tipo: 'cupom', metodo: 'POST', url: '/api/compras/cupons', corpo, descricao: 'Cupom fiscal'}); salvar();
+      fecharModal(); toast('Sem internet: o cupom será enviado quando conectar.');
+    } else statusCupom('⚠ ' + e.message);
+  }
+}
+function sugerirFator(i) {
+  if (!['CX', 'FD', 'PCT', 'PC', 'DZ', 'FARDO'].includes(String(i.unidade).toUpperCase())) return 1;
+  const m = String(i.descricao).match(/(?:CX|C\/|X|FD|PCT?|C)\s*(\d{1,3})\s*(?:UN|U)?\b/i);
+  return m && +m[1] > 1 ? +m[1] : 1;
+}
+function modalItemCupom(seq) {
+  const c = E.cupons.find(x => x.id === T.p.id), i = c.itens.find(x => x.seq === +seq);
+  T.p.sel = i.produto_id ? {produto_id: i.produto_id, nome: i.produto, unidade: i.unidade_produto} : null;
+  const fator = i.fator || sugerirFator(i);
+  abrirModal(`<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px"><div><div class="titulo-sec">${esc(i.descricao)}</div>
+      <div class="mini suave">${fmtQtd(i.qtd)} ${esc(i.unidade)} × ${fmtReais(i.valor_unit)} = ${fmtReais(i.valor_total)}</div></div>
+      <button class="icone-btn" data-acao="fechar-modal" aria-label="Fechar">${ICONES.fechar}</button></div>
+    ${i.situacao === 'reconhecido' ? '<div class="info">Reconhecido sozinho pelo vínculo que já existe. Só mude se estiver errado.</div>' : ''}
+    <div class="campo"><label for="busca-prod">Qual produto do estoque é este?</label>
+      <input id="busca-prod" placeholder="Digite parte do nome" autocomplete="off" value=""></div>
+    <div id="prod-escolhido" class="pequeno" style="font-weight:700;color:var(--verde-esc)">${T.p.sel ? '✓ ' + esc(T.p.sel.nome) : ''}</div>
+    <div id="busca-res" class="linhas" style="max-height:220px;overflow:auto"><div class="vazio" style="padding:14px">Digite para buscar.</div></div>
+    <div class="campo"><label for="fator">1 ${esc(i.unidade)} do cupom = quantas unidades do estoque?</label>
+      <input id="fator" inputmode="decimal" value="${fmtQtd(fator).replace(/\./g, '')}">
+      <div class="mini suave">Ex.: caixa com 20 óleos = 20. Se o cupom já vem em unidades (ou KG para produto em KG) = 1.</div></div>
+    <button class="btn" data-acao="cupom-vincular" data-seq="${i.seq}">Salvar</button>
+    <div class="linha-btns">
+      <button class="btn claro medio" data-acao="cupom-ignorar" data-seq="${i.seq}">Não é do estoque</button>
+      <button class="btn claro medio" data-acao="cupom-desfazer" data-seq="${i.seq}" ${i.acao ? '' : 'disabled'}>Desfazer</button></div>`);
+  let espera;
+  document.getElementById('busca-prod').addEventListener('input', e => {
+    clearTimeout(espera);
+    espera = setTimeout(async () => {
+      const termo = e.target.value.trim(), res = document.getElementById('busca-res');
+      if (!res) return;
+      if (termo.length < 2) { res.innerHTML = '<div class="vazio" style="padding:14px">Digite pelo menos 2 letras.</div>'; return; }
+      try {
+        const achados = await api('GET', '/api/compras/produtos?q=' + encodeURIComponent(termo));
+        res.innerHTML = achados.map(a => `<button class="lin" style="width:100%;border-left:0;border-right:0;border-bottom:0;background:#fff;text-align:left" data-acao="cupom-escolher" data-pid="${a.produto_id}" data-nome="${esc(a.nome)}" data-un="${esc(a.unidade)}">
+            <div class="grow"><div style="font-weight:700">${esc(a.nome)}</div><div class="mini suave">${esc(a.unidade)} · ${esc(a.categoria)}</div></div></button>`).join('')
+          || '<div class="vazio" style="padding:14px">Nenhum produto com esse nome.</div>';
+      } catch (err) { res.innerHTML = `<div class="vazio" style="padding:14px">${esc(err.message)}</div>`; }
+    }, 300);
+  });
+}
+async function acaoItemCupom(corpo) {
+  try {
+    const c = await api('POST', `/api/compras/cupons/${T.p.id}/itens`, corpo);
+    guardarCupom(c); fecharModal(); desenhar();
+  } catch (e) { toast(e.extra.offline ? 'Sem internet: conecte para conferir o cupom.' : e.message); }
+}
+
 // ================================================================= AÇÕES (botões)
 const acoes = {
   'nav': d => {
     const tela = d.tela;
     if (tela === 'inicio') { ir('inicio'); carregarInicio(); }
-    else if (tela === 'listas') { ir('listas'); carregarInicio().then(() => { if (T.nome === 'listas') desenhar(); }); }
+    else if (tela === 'listas') { ir('listas'); carregarInicio().then(carregarCupons).then(() => { if (T.nome === 'listas') desenhar(); }); }
     else if (tela === 'consumo') { ir('consumo', {}); if (E.rotinas[0]) carregarConsumo(E.rotinas[0].id); }
     else if (tela === 'rotinas') { ir('rotinas', {}); }
   },
@@ -1100,9 +1259,61 @@ const acoes = {
     try { await api('DELETE', `/api/compras/rotinas/${T.p.r.id}`); E.rotinas = await api('GET', '/api/compras/rotinas'); salvar(); ir('rotinas', {}); }
     catch (e) { toast(e.message); }
   },
+  // cupom fiscal
+  'cupom-ler': d => modalLerCupom(d.lista),
+  'cupom-link': d => {
+    const t = document.getElementById('cupom-link').value.trim();
+    if (!/^https?:\/\//i.test(t)) return statusCupom('⚠ Cole o link completo (começa com http).');
+    enviarCupom({qr: t, lista_codigo: d.lista || null});
+  },
+  'cupom-abrir': async d => {
+    ir('cupom', {id: +d.id});
+    try { guardarCupom(await api('GET', `/api/compras/cupons/${d.id}`)); if (T.nome === 'cupom') desenhar(); } catch (e) { if (!e.extra.offline) toast(e.message); }
+  },
+  'cupom-voltar': () => { if (T.p.voltar) ir(T.p.voltar.nome, T.p.voltar.p); else acoes.nav({tela: 'listas'}); },
+  'cupom-item': d => modalItemCupom(d.seq),
+  'cupom-escolher': d => {
+    T.p.sel = {produto_id: +d.pid, nome: d.nome, unidade: d.un};
+    document.getElementById('prod-escolhido').textContent = '✓ ' + d.nome;
+    document.getElementById('busca-res').innerHTML = '';
+  },
+  'cupom-vincular': d => {
+    if (!T.p.sel) return toast('Escolha o produto do estoque.');
+    const f = num(document.getElementById('fator').value);
+    if (!(f > 0)) return toast('Quantidade por embalagem inválida.');
+    acaoItemCupom({seq: +d.seq, acao: 'vincular', produto_id: T.p.sel.produto_id, fator: f});
+  },
+  'cupom-ignorar': d => acaoItemCupom({seq: +d.seq, acao: 'ignorar'}),
+  'cupom-desfazer': d => acaoItemCupom({seq: +d.seq, acao: ''}),
+  'cupom-lancar': async () => {
+    const c = E.cupons.find(x => x.id === T.p.id);
+    if (!confirm(`Lançar ${c.itens.filter(i => i.situacao !== 'ignorado').length} item(ns) no estoque como compra de ${c.emitente}?`)) return;
+    try { guardarCupom(await api('POST', `/api/compras/cupons/${T.p.id}/lancar`)); toast('Cupom lançado no estoque.'); desenhar(); }
+    catch (e) { toast(e.extra.offline ? 'Sem internet: conecte para lançar.' : e.message); if (!e.extra.offline) acoes['cupom-abrir']({id: T.p.id}); }
+  },
+  'cupom-de-novo': async () => {
+    toast('Consultando a SEFAZ…');
+    try { guardarCupom(await api('POST', `/api/compras/cupons/${T.p.id}/tentar-de-novo`)); desenhar(); }
+    catch (e) { toast(e.message); }
+  },
+  'cupom-apagar': async () => {
+    if (!confirm('Apagar este cupom do app? (Nada no estoque muda.)')) return;
+    try { await api('DELETE', `/api/compras/cupons/${T.p.id}`); E.cupons = E.cupons.filter(x => x.id !== T.p.id); salvar(); acoes.nav({tela: 'listas'}); }
+    catch (e) { toast(e.message); }
+  },
   'fechar-modal': () => { fecharModal(); if (T.nome === 'rotina') desenhar(); },
 };
 const acoesChange = {
+  'cupom-foto': async (d, el) => {
+    const arq = el.files && el.files[0];
+    if (!arq) return;
+    statusCupom('Procurando o QR Code na foto…');
+    const lista = d.lista || null;
+    const texto = await lerQrNoCelular(arq);
+    if (texto) return enviarCupom({qr: texto, lista_codigo: lista});
+    try { enviarCupom({foto: await reduzirFoto(arq), lista_codigo: lista}); }
+    catch (e) { statusCupom('⚠ Não consegui abrir a foto. Tente de novo.'); }
+  },
   'rot-nome': (d, el) => { T.p.r.nome = el.value; },
   'rot-cob': (d, el) => { T.p.r.dias_cobertura = parseInt(el.value, 10) || 0; },
   'rot-prazo': (d, el) => { T.p.r.prazo_dias = parseInt(el.value, 10) || 0; },
@@ -1129,7 +1340,7 @@ document.addEventListener('change', e => {
 });
 document.addEventListener('input', e => {
   const el = e.target.closest('input[data-acao-change]');
-  if (el && el.type !== 'checkbox' && acoesChange[el.dataset.acaoChange]) acoesChange[el.dataset.acaoChange](el.dataset, el);
+  if (el && el.type !== 'checkbox' && el.type !== 'file' && acoesChange[el.dataset.acaoChange]) acoesChange[el.dataset.acaoChange](el.dataset, el);
 });
 
 // ================================================================= INÍCIO DO APP
