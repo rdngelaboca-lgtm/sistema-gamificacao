@@ -1052,6 +1052,7 @@ function modalItemCupom(seq) {
       <input id="busca-prod" placeholder="Digite parte do nome" autocomplete="off" value=""></div>
     <div id="prod-escolhido" class="pequeno" style="font-weight:700;color:var(--verde-esc)">${T.p.sel ? '✓ ' + esc(T.p.sel.nome) : ''}</div>
     <div id="busca-res" class="linhas" style="max-height:220px;overflow:auto"><div class="vazio" style="padding:14px">Digite para buscar.</div></div>
+    <button class="btn claro medio" data-acao="cupom-novo-produto" data-seq="${i.seq}">Não achou? Cadastrar produto novo</button>
     <div class="campo"><label for="fator">1 ${esc(i.unidade)} do cupom = quantas unidades do estoque?</label>
       <input id="fator" inputmode="decimal" value="${fmtQtd(fator).replace(/\./g, '')}">
       <div class="mini suave">Ex.: caixa com 20 óleos = 20. Se o cupom já vem em unidades (ou KG para produto em KG) = 1.</div></div>
@@ -1074,6 +1075,32 @@ function modalItemCupom(seq) {
       } catch (err) { res.innerHTML = `<div class="vazio" style="padding:14px">${esc(err.message)}</div>`; }
     }, 300);
   });
+}
+
+function sugerirNomeProduto(desc) {
+  // "FLV TOMATE LONGA VIDA KG" -> "Tomate Longa Vida"
+  let t = String(desc || '').replace(/^(FLV|HORT[IF]*|HORTFG|PAD|ACOUG|FRIOS?)\s+/i, '').replace(/\s+(KG|UN|UND|BDJ)$/i, '').trim();
+  return t.toLowerCase().replace(/(^|\s)(\S)/g, (m, e, l) => e + l.toUpperCase()).replace(/(\d)(G|Kg|Ml|L)\b/g, (m, n, u) => n + u.toLowerCase());
+}
+async function modalNovoProduto(seq) {
+  const c = E.cupons.find(x => x.id === T.p.id), i = c.itens.find(x => x.seq === +seq);
+  let categorias = ['Geral'];
+  try { categorias = await api('GET', '/api/compras/categorias'); } catch (e) {}
+  const unCupom = String(i.unidade || 'UN').toUpperCase();
+  const unidades = ['UN', 'KG', 'L', 'CX', 'PCT', 'G', 'ML'];
+  T.p.novoUn = unidades.includes(unCupom) ? unCupom : 'UN';
+  abrirModal(`<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px"><div><div class="titulo-sec">Cadastrar produto novo</div>
+      <div class="mini suave">Do cupom: ${esc(i.descricao)} · ${fmtQtd(i.qtd)} ${esc(i.unidade)}</div></div>
+      <button class="icone-btn" data-acao="fechar-modal" aria-label="Fechar">${ICONES.fechar}</button></div>
+    <div class="campo"><label for="np-nome">Nome no estoque</label><input id="np-nome" maxlength="100" value="${esc(sugerirNomeProduto(i.descricao))}"></div>
+    <div class="campo"><label>Unidade em que o estoque é contado</label>
+      <div class="chips7" style="grid-template-columns:repeat(4,minmax(0,1fr))">${unidades.map(u => `<button class="chip ${u === T.p.novoUn ? 'sel' : ''}" data-acao="np-un" data-u="${u}" aria-pressed="${u === T.p.novoUn}">${u}</button>`).join('')}</div></div>
+    <div class="campo"><label for="np-cat">Categoria</label><select id="np-cat">${categorias.map(k => `<option ${k === 'Geral' ? 'selected' : ''}>${esc(k)}</option>`).join('')}</select></div>
+    <div class="linha-btns">
+      <div class="campo"><label for="np-min">Estoque mínimo</label><input id="np-min" inputmode="decimal" value="0"></div>
+      <div class="campo"><label for="np-fator">1 ${esc(i.unidade)} do cupom =</label><input id="np-fator" inputmode="decimal" value="1"></div></div>
+    <div class="mini suave" id="np-explica">Ex.: cupom em KG e estoque em KG = 1. Caixa com 12 e estoque em UN = 12.</div>
+    <button class="btn" data-acao="np-salvar" data-seq="${i.seq}">Cadastrar e vincular</button>`);
 }
 async function acaoItemCupom(corpo) {
   try {
@@ -1282,6 +1309,23 @@ const acoes = {
     const f = num(document.getElementById('fator').value);
     if (!(f > 0)) return toast('Quantidade por embalagem inválida.');
     acaoItemCupom({seq: +d.seq, acao: 'vincular', produto_id: T.p.sel.produto_id, fator: f});
+  },
+  'cupom-novo-produto': d => modalNovoProduto(d.seq),
+  'np-un': (d, el) => {
+    T.p.novoUn = d.u;
+    el.parentElement.querySelectorAll('.chip').forEach(b => { b.classList.toggle('sel', b.dataset.u === d.u); b.setAttribute('aria-pressed', b.dataset.u === d.u); });
+  },
+  'np-salvar': async (d, el) => {
+    const corpo = {seq: +d.seq, nome: document.getElementById('np-nome').value.trim(), unidade: T.p.novoUn,
+                   categoria: document.getElementById('np-cat').value, estoque_minimo: num(document.getElementById('np-min').value) || 0,
+                   fator: num(document.getElementById('np-fator').value)};
+    if (corpo.nome.length < 3) return toast('Digite o nome do produto.');
+    if (!(corpo.fator > 0)) return toast('A quantidade por embalagem precisa ser maior que zero.');
+    el.disabled = true;
+    try {
+      const c = await api('POST', `/api/compras/cupons/${T.p.id}/itens/novo-produto`, corpo);
+      guardarCupom(c); fecharModal(); toast('Produto cadastrado e vinculado.'); desenhar();
+    } catch (e) { el.disabled = false; toast(e.extra.offline ? 'Sem internet: conecte para cadastrar.' : e.message); }
   },
   'cupom-ignorar': d => acaoItemCupom({seq: +d.seq, acao: 'ignorar'}),
   'cupom-desfazer': d => acaoItemCupom({seq: +d.seq, acao: ''}),

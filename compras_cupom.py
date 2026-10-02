@@ -180,11 +180,24 @@ def _itens_layout_nacional(html):
         un = re.search(r'UN:\s*</strong>\s*([^<]+)', bloco, re.I)
         vun = re.search(r'Vl\.?\s*Unit\.?:\s*</strong>\s*([\d.,]+)', bloco, re.I)
         vtot = re.search(r'class="valor"[^>]*>\s*([\d.,]+)', bloco, re.I)
+        # [MT] a SEFAZ-MT põe espaços especiais (&nbsp;) e marcações diferentes entre o rótulo e o
+        # número: se a busca no HTML falhar, procura no TEXTO limpo do item
+        texto_item = _texto(bloco)
+        if not qtd:
+            qtd = re.search(r'Qtde\.?:?\s*([\d.,]+)', texto_item, re.I)
+        if not un:
+            un = re.search(r'\bUN:\s*([A-Za-z]{1,6})', texto_item)
+        if not vun:
+            vun = re.search(r'Vl\.?\s*Unit\.?:?\s*([\d.,]+)', texto_item, re.I)
         if not (desc and qtd and vtot):
             continue
+        q, total = numero_br(qtd.group(1)), numero_br(vtot.group(1))
+        unit = numero_br(vun.group(1)) if vun else None
+        if unit is None and q and total is not None:
+            unit = (total / q).quantize(Decimal('0.0001'))     # sem o preço unitário: total ÷ quantidade
         itens.append({'descricao': _texto(desc.group(1)), 'codigo': (cod.group(1).strip() if cod else ''),
-                      'qtd': numero_br(qtd.group(1)), 'unidade': (_texto(un.group(1)) if un else 'UN').upper()[:10],
-                      'valor_unit': numero_br(vun.group(1)) if vun else None, 'valor_total': numero_br(vtot.group(1))})
+                      'qtd': q, 'unidade': (_texto(un.group(1)) if un else 'UN').upper()[:10],
+                      'valor_unit': unit, 'valor_total': total})
     return itens
 
 
@@ -562,6 +575,8 @@ def obter_cupom(cupom_id):
     pendentes = 0
     itens = []
     for seq, codigo, desc, qtd, un, vun, vtot, acao, pid, fator in linhas:
+        if vun is None and qtd and _dec(qtd) > 0:
+            vun = _dec(vtot) / _dec(qtd)                       # cupom lido antes da correção do MT
         it = {'seq': seq, 'codigo': codigo or '', 'descricao': desc, 'qtd': _num(qtd), 'unidade': un or '',
               'valor_unit': _num(vun, 4), 'valor_total': _num(vtot, 2), 'acao': acao or ''}
         if acao == ACAO_IGNORAR:
@@ -770,3 +785,57 @@ def apagar_cupom(cupom_id, usuario):
     finally:
         conn.close()
     return {'ok': True}
+
+
+# ==============================================================================
+# == 6) Produto que ainda NÃO existe no estoque =================================
+# ==============================================================================
+
+def listar_categorias():
+    """Categorias do catálogo do Gestão de Estoque (para o produto novo)."""
+    try:
+        categorias = database.listar_categorias_produto() or []
+    except Exception as e:
+        logger.warning(f"Não consegui listar as categorias: {e}")
+        categorias = []
+    return sorted(set(categorias) | {'Geral'}, key=lambda c: cd.database_normalizar(c))
+
+
+def criar_produto_do_cupom(cupom_id, seq, usuario, nome, unidade, categoria='Geral', estoque_minimo=0, fator=1):
+    """
+    Cadastra no catálogo do estoque um produto que veio no cupom e ainda não existia
+    (ex.: tomate) e já deixa o item do cupom vinculado a ele.
+    É o mesmo cadastro do Catálogo do Gestão de Estoque: lá ele aparece igual aos outros.
+    """
+    if not usuario.get('gestor'):
+        raise ErroCompras("Só o gestor cadastra produtos.")
+    nome = re.sub(r'\s+', ' ', str(nome or '')).strip()
+    unidade = re.sub(r'[^A-Za-z]', '', str(unidade or '')).upper()[:10]
+    categoria = (str(categoria or '').strip() or 'Geral')[:100]
+    if len(nome) < 3:
+        raise ErroCompras("Digite o nome do produto (pelo menos 3 letras).")
+    if len(nome) > 100:
+        raise ErroCompras("Nome muito comprido (máximo 100 letras).")
+    if not unidade:
+        raise ErroCompras("Escolha a unidade (UN, KG, L...).")
+    try:
+        minimo = Decimal(str(estoque_minimo or 0).replace(',', '.'))
+    except InvalidOperation:
+        raise ErroCompras("Estoque mínimo inválido.")
+    if not minimo.is_finite() or minimo < 0:
+        raise ErroCompras("Estoque mínimo inválido.")
+    cupom = obter_cupom(cupom_id)
+    if cupom['status'] != ST_PENDENTE:
+        raise ErroCompras("Este cupom não está mais aberto para conferência.")
+    if not any(i['seq'] == int(seq) for i in cupom['itens']):
+        raise ErroCompras("Item do cupom não encontrado.")
+    # não deixa criar o mesmo produto duas vezes (ignora maiúsculas e acentos)
+    alvo = cd.database_normalizar(nome)
+    for p in cd.buscar_produtos(nome, limite=500):
+        if cd.database_normalizar(p['nome']) == alvo:
+            raise ErroCompras(f"Já existe o produto '{p['nome']}' no estoque. Use a busca para escolher ele.")
+    produto_id = database.criar_produto_estoque(nome, unidade, minimo, categoria)
+    if not produto_id:
+        raise ErroCompras("Não consegui cadastrar o produto (veja o log).")
+    logger.info(f"Produto '{nome}' ({unidade}) cadastrado pelo app de compras por {usuario.get('nome')}.")
+    return resolver_item(cupom_id, seq, ACAO_VINCULAR, usuario, produto_id=int(produto_id), fator=fator)

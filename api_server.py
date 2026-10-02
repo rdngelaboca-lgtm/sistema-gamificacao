@@ -1739,6 +1739,23 @@ def api_compras_cupom_item(usuario, cupom_id):
                                                     usuario, produto_id=dados.get('produto_id'), fator=dados.get('fator'))
 
 
+@app.route('/api/compras/cupons/<int:cupom_id>/itens/novo-produto', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_compras_cupom_novo_produto(usuario, cupom_id):
+    """Cadastra no estoque um produto que veio no cupom e ainda não existia, já vinculado."""
+    dados = ler_json() or {}
+    return _cupom_disponivel() or _resposta_compras(
+        compras_cupom.criar_produto_do_cupom, cupom_id, dados.get('seq'), usuario, dados.get('nome'),
+        dados.get('unidade'), categoria=dados.get('categoria'), estoque_minimo=dados.get('estoque_minimo'),
+        fator=dados.get('fator'))
+
+
+@app.route('/api/compras/categorias', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_compras_categorias(usuario):
+    return _cupom_disponivel() or _resposta_compras(compras_cupom.listar_categorias)
+
+
 @app.route('/api/compras/cupons/<int:cupom_id>/lancar', methods=['POST'])
 @compras_login(somente_gestor=True)
 def api_compras_lancar_cupom(usuario, cupom_id):
