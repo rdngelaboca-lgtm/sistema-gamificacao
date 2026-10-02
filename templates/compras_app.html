@@ -181,6 +181,16 @@
   .tecla.ok:active { background: var(--verde-esc); }
   .tecla.escura { background: var(--texto); color: #fff; }
   @media (max-height: 640px) { .tecla { height: 44px; } .cl-lin { min-height: 46px; } }
+  .bip-faixa { position: relative; margin: 0 16px 8px; height: 150px; border-radius: 14px; overflow: hidden; background: #000; flex-shrink: 0; }
+  .bip-faixa video, .bip-modal video { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .bip-linha { position: absolute; left: 10%; right: 10%; top: 50%; height: 2px; background: #FF5A36; box-shadow: 0 0 8px #FF5A36; }
+  .bip-msg { position: absolute; left: 0; right: 0; bottom: 0; padding: 6px 10px; background: rgba(0,0,0,.55); color: #fff; font-size: 13px; font-weight: 600; text-align: center; }
+  .bip-modal { position: relative; height: 220px; border-radius: 14px; overflow: hidden; background: #000; }
+  .bip-btn { height: 40px; padding: 0 12px; border-radius: 99px; border: 1px solid var(--verde-borda); background: #EEF7F5; color: var(--verde-esc);
+    font-size: 14px; font-weight: 700; display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+  .bip-btn.on { background: var(--verde); color: #fff; border-color: var(--verde); }
+  .piscar { animation: piscar 1.2s ease-out; }
+  @keyframes piscar { 0% { box-shadow: 0 0 0 3px var(--verde); } 100% { box-shadow: 0 0 0 0 transparent; } }
   a { color: var(--verde); }
 </style>
 </head>
@@ -253,6 +263,7 @@ const ICONES = {
   baixo: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>',
   lixo: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6 6l1 14h10l1-14"/></svg>',
   enviar: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/></svg>',
+  barras: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 5v14"/><path d="M7 5v14"/><path d="M10 5v14"/><path d="M14 5v14"/><path d="M17 5v14"/><path d="M21 5v14"/></svg>',
   qr: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3z"/><path d="M20 14v7h-6"/></svg>',
   camera: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h3l2-3h6l2 3h3a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="4"/></svg>',
   sair: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>',
@@ -264,7 +275,7 @@ function carregar() {
   try { const t = localStorage.getItem(CHAVE); if (t) return Object.assign(estadoVazio(), JSON.parse(t)); } catch (e) {}
   return estadoVazio();
 }
-function estadoVazio() { return {usuario: null, rotinas: [], preparos: {}, ida: null, listas: {}, fila: [], erros: [], cupons: []}; }
+function estadoVazio() { return {usuario: null, rotinas: [], preparos: {}, ida: null, listas: {}, fila: [], erros: [], cupons: [], codigos: {}, codigosEm: null}; }
 function salvar() {
   try { localStorage.setItem(CHAVE, JSON.stringify(E)); }
   catch (e) { toast('Memória do celular cheia: não deu para salvar.'); }
@@ -378,16 +389,18 @@ function redesenharSePreciso() {
   if (T.nome === 'contagem') redesenharContagem(); else desenhar();
 }
 window.addEventListener('online', () => { online = true; sincronizar(); atualizarFaixaRede(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden && BIP.stream) { bipDesligar(); if (T.p.bip) { T.p.bip = false; desenhar(); } } });
 window.addEventListener('offline', () => { online = false; atualizarFaixaRede(); });
 setInterval(() => { if (E.fila.length) sincronizar(); }, 20000);
 
 // ---------------------------------------------------------------- navegação
-function ir(nome, p) { T = {nome, p: p || {}}; desenhar(); window.scrollTo(0, 0); }
+function ir(nome, p) { if (BIP.stream && !document.getElementById('modal')) bipDesligar(); T = {nome, p: p || {}}; desenhar(); window.scrollTo(0, 0); }
 function desenhar() {
   if (!E.usuario && T.nome !== 'login') { T = {nome: 'login', p: {}}; setTimeout(carregarUsuarios, 0); }
   const f = TELAS[T.nome] || TELAS.inicio;
   $app.innerHTML = f(T.p);
   if (TELAS_DEPOIS[T.nome]) TELAS_DEPOIS[T.nome](T.p);
+  if (T.p.bip) bipConectarVideo();
 }
 function toast(msg) {
   const d = document.createElement('div'); d.className = 'toast'; d.setAttribute('role', 'status'); d.textContent = msg;
@@ -421,7 +434,10 @@ function abrirModal(html) {
   document.body.appendChild(fundo);
   const foco = fundo.querySelector('input'); if (foco) setTimeout(() => foco.focus(), 50);
 }
-function fecharModal() { const m = document.getElementById('modal'); if (m) m.remove(); }
+function fecharModal() {
+  const m = document.getElementById('modal');
+  if (m) { if (m.querySelector('#bip-video') && !T.p.bip) bipDesligar(); m.remove(); }
+}
 
 // ---------------------------------------------------------------- cálculo da lista (igual ao servidor)
 function escolherFornecedor(precos, permitidos) {
@@ -607,8 +623,9 @@ async function comecarIda(rotinaId, dias) {
     toast('Sem internet: usando os dados salvos de ' + dataBR(prep.gerado_em));
   }
   if (!prep.itens.length) { T.p.carregando = false; desenhar(); return toast('Esta rotina não tem itens.'); }
-  E.ida = {codigo: novoCodigo(), rotina_id: rotinaId, dias, idx: 0, contagens: {}, modo: {}, iniciada: new Date().toISOString()};
+  E.ida = {codigo: novoCodigo(), rotina_id: rotinaId, dias, idx: 0, contagens: {}, modo: {}, cx: {}, extras: [], iniciada: new Date().toISOString()};
   salvar();
+  carregarCodigos();
   ir('contagem');
 }
 
@@ -618,7 +635,7 @@ async function comecarIda(rotinaId, dias) {
 TELAS.contagem = () => {
   const ida = E.ida, prep = ida && E.preparos[ida.rotina_id];
   if (!prep) { E.ida = null; salvar(); return TELAS.inicio(); }
-  const itens = prep.itens, total = itens.length;
+  const itens = itensIda(), total = itens.length;
   ida.idx = Math.min(Math.max(ida.idx || 0, 0), total - 1);
   const feitos = itens.filter(it => ida.contagens[it.produto_id] != null).length;
   const buf = T.p.buf || '';
@@ -635,15 +652,17 @@ TELAS.contagem = () => {
       <div class="grow"><div class="cl-nome">${esc(it.nome)}</div><div class="cl-dica">${dicaContagem(it)}</div></div>
       <div class="cl-valor ${cls}">${valor}${atual ? '<span class="cursor"></span>' : ''}</div></button>`;
   }).join('');
-  const it = itens[ida.idx], caixa = (it.caixas || [])[0], modo = fatorAtual(it) > 1 ? 'cx' : 'un';
+  const it = itens[ida.idx], caixa = caixaDe(it), modo = fatorAtual(it) > 1 ? 'cx' : 'un';
   const tecla = (txt, acao, cls, extra) => `<button class="tecla ${cls || ''}" data-acao="${acao}" ${extra || ''}>${txt}</button>`;
   const num_ = n => tecla(n, 'tec-num', 'num', `data-n="${n}"`);
   return `<div class="cl-tela">
     <div class="topo" style="padding-bottom:2px">
       <button class="icone-btn" data-acao="cont-sair" aria-label="Sair da contagem (fica salva)">${ICONES.fechar}</button>
       <div class="grow"><h1 style="font-size:18px">${esc(prep.nome)}</h1>
-        <div class="sub mini" style="font-weight:600">${feitos} de ${total} contados · toque num item para ir até ele</div></div></div>
+        <div class="sub mini" style="font-weight:600">${feitos} de ${total} contados · toque num item para ir até ele</div></div>
+      ${botaoBip()}</div>
     <div class="progresso" style="margin-bottom:8px"><div style="width:${Math.round(100 * feitos / total)}%"></div></div>
+    ${faixaBip()}
     <div class="cl-lista" id="cl-lista">${linhas}<div style="height:8px"></div></div>
     <div class="cl-teclado">
       <div class="cl-info">
@@ -682,8 +701,14 @@ TELAS_DEPOIS.contagem = () => {
   lista.onscroll = () => { T.p.scroll = lista.scrollTop; };
   T.p.scroll = lista.scrollTop;
 };
-function itemAtual() { const prep = E.preparos[E.ida.rotina_id]; return prep.itens[Math.min(E.ida.idx, prep.itens.length - 1)]; }
-function fatorAtual(it) { const cx = (it.caixas || [])[0]; return cx && E.ida.modo[it.produto_id] === 'cx' ? cx : 1; }
+function itensIda() {
+  // itens da rotina + produtos bipados que não estavam nela
+  const prep = E.preparos[E.ida.rotina_id];
+  return prep.itens.concat(E.ida.extras || []);
+}
+function itemAtual() { const itens = itensIda(); return itens[Math.min(E.ida.idx, itens.length - 1)]; }
+function caixaDe(it) { return (E.ida.cx && E.ida.cx[it.produto_id]) || (it.caixas || [])[0] || null; }
+function fatorAtual(it) { const cx = caixaDe(it); return cx && E.ida.modo[it.produto_id] === 'cx' ? cx : 1; }
 function redesenharContagem() {
   const lista = document.getElementById('cl-lista');
   if (lista) T.p.scroll = lista.scrollTop;
@@ -692,10 +717,10 @@ function redesenharContagem() {
 function irParaItem(k) { E.ida.idx = k; T.p.buf = ''; salvar(); redesenharContagem(); }
 function proximoItem() {
   // vai para o próximo item ainda SEM número (dando a volta); se todos têm número, só desce um
-  const prep = E.preparos[E.ida.rotina_id], n = prep.itens.length;
+  const itens = itensIda(), n = itens.length;
   for (let passo = 1; passo <= n; passo++) {
     const k = (E.ida.idx + passo) % n;
-    if (E.ida.contagens[prep.itens[k].produto_id] == null) return irParaItem(k);
+    if (E.ida.contagens[itens[k].produto_id] == null) return irParaItem(k);
   }
   toast('Todos contados! Toque em "Lista" para ver o que comprar.');
   if (E.ida.idx < n - 1) return irParaItem(E.ida.idx + 1);
@@ -716,7 +741,9 @@ function vibrar() { if (navigator.vibrate) navigator.vibrate(8); }
 async function terminarContagem() {
   const ida = E.ida, prep = E.preparos[ida.rotina_id];
   const corpo = {codigo: ida.codigo, rotina_id: ida.rotina_id, dias: ida.dias,
-                 itens: prep.itens.map(it => ({produto_id: it.produto_id, qtd: ida.contagens[it.produto_id] == null ? null : ida.contagens[it.produto_id]}))};
+                 itens: prep.itens.map(it => ({produto_id: it.produto_id, qtd: ida.contagens[it.produto_id] == null ? null : ida.contagens[it.produto_id]}))
+                   .concat((ida.extras || []).filter(it => ida.contagens[it.produto_id] != null)
+                     .map(it => ({produto_id: it.produto_id, qtd: ida.contagens[it.produto_id], extra: true})))};
   const pulados = prep.itens.filter(it => ida.contagens[it.produto_id] == null).length;
   if (pulados && !confirm(`${pulados} item(ns) ficaram sem número e vão usar o estoque estimado. Ver a lista assim mesmo?`)) return;
   abrirModal('<div class="vazio">Calculando a lista…</div>');
@@ -725,7 +752,7 @@ async function terminarContagem() {
     guardarLista(lista, true);
   } catch (e) {
     if (!e.extra.offline) { fecharModal(); return toast(e.message); }
-    guardarLista(calcularListaLocal(prep, ida), false);
+    guardarLista(calcularListaLocal(Object.assign({}, prep, {itens: prep.itens.concat((ida.extras || []).filter(it => ida.contagens[it.produto_id] != null))}), ida), false);
     E.fila.push({tipo: 'lista', codigo: ida.codigo, metodo: 'POST', url: '/api/compras/listas', corpo, descricao: 'Contagem de ' + prep.nome});
     toast('Sem internet: lista calculada no celular. Será enviada quando conectar.');
   }
@@ -825,12 +852,13 @@ TELAS.carrinho = p => {
   const feitos = comprar.filter(i => i.situacao === 'comprado').length, faltou = comprar.filter(i => i.situacao === 'faltou').length;
   const filtros = `<div class="filtros">${grupos.map(g => `<button class="filtro ${filtro === g.nome ? 'sel' : ''}" data-acao="car-filtro" data-f="${esc(g.nome)}">${esc(g.nome)} · ${g.itens.length}</button>`).join('')}
       <button class="filtro ${!filtro ? 'sel' : ''}" data-acao="car-filtro" data-f="">Todos</button></div>`;
-  const itens = mostrar.map(i => `<div class="item-carrinho ${i.situacao ? 'feito ' + i.situacao : ''}">
+  const itens = mostrar.map(i => `<div class="item-carrinho ${i.situacao ? 'feito ' + i.situacao : ''} ${p.piscar === i.produto_id ? 'piscar' : ''}" id="car-${i.produto_id}">
       <button class="toque" data-acao="car-marcar" data-pid="${i.produto_id}" aria-pressed="${i.situacao === 'comprado'}">
         <div class="check ${i.situacao === 'comprado' ? 'on' : ''}">${i.situacao === 'comprado' ? ICONES.ok : ''}</div>
         <div class="grow"><div class="nome">${esc(i.nome)}</div><div class="pequeno suave">${textoQtd(i.qtd_pedido, i)}${filtro ? '' : ' · ' + esc(i.fornecedor || 'sem preço')}</div></div></button>
       <button class="faltou-btn ${i.situacao === 'faltou' ? 'on' : ''}" data-acao="car-faltou" data-pid="${i.produto_id}" aria-pressed="${i.situacao === 'faltou'}">Não tinha</button></div>`).join('');
-  return `${faixaRede()}${topo('No carrinho', `${feitos} de ${comprar.length} itens${faltou ? ' · ' + faltou + ' em falta' : ''}`, 'car-voltar')}
+  return `${faixaRede()}${topo('No carrinho', `${feitos} de ${comprar.length} itens${faltou ? ' · ' + faltou + ' em falta' : ''}`, 'car-voltar', botaoBip())}
+    ${faixaBip()}
     <div class="corpo">${grupos.length > 1 ? filtros : ''}
       <div class="lista-cartoes">${itens || '<div class="vazio">Nada para comprar.</div>'}</div>
       <div class="mini suave" style="text-align:center">Toque no item para marcar · "Não tinha" se faltou no mercado</div></div>
@@ -945,7 +973,7 @@ TELAS.rotina = p => {
         ${forns || '<div class="mini suave" style="padding-top:8px">Carregando fornecedores…</div>'}</div>
       <div class="lista-cartoes"><div style="display:flex;justify-content:space-between;align-items:baseline"><div class="titulo-sec">Itens na ordem do corredor</div><div class="mini suave">${r.itens.length} itens</div></div>
         <div class="linhas">${itens || '<div class="vazio">Nenhum item ainda.</div>'}</div>
-        <button class="btn claro medio" data-acao="rot-adicionar">+ Adicionar produto do estoque</button></div>
+        <div class="linha-btns" style="${bipSuportado() ? '' : 'grid-template-columns:1fr'}"><button class="btn claro medio" data-acao="rot-adicionar">+ Adicionar produto</button>${bipSuportado() ? `<button class="btn claro medio" data-acao="rot-bipar">${ICONES.barras} Bipar produto</button>` : ''}</div></div>
       ${r.id ? '<button class="btn claro medio" style="color:var(--laranja)" data-acao="rot-apagar">Apagar esta rotina</button>' : ''}
     </div>
     <div class="rodape"><button class="btn" data-acao="rot-salvar" ${p.salvando ? 'disabled' : ''}>${p.salvando ? 'Salvando…' : 'Salvar rotina'}</button></div>`;
@@ -1154,6 +1182,189 @@ async function acaoItemCupom(corpo) {
   } catch (e) { toast(e.extra.offline ? 'Sem internet: conecte para conferir o cupom.' : e.message); }
 }
 
+
+// ---------------------------------------------------------------- BIPAR código de barras (Android)
+// Usa o leitor que já vem no Chrome do Android (BarcodeDetector): funciona até sem internet.
+// No iPhone o navegador não tem esse leitor, então o botão nem aparece.
+// Leitor Bluetooth/USB (que "digita" o código e aperta Enter) também funciona, em qualquer celular.
+const BIP = {stream: null, det: null, timer: null, ultimo: '', ultimoEm: 0, ocupado: false};
+function bipSuportado() { return 'BarcodeDetector' in window && !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia); }
+function botaoBip() {
+  if (!bipSuportado()) return '';
+  return `<button class="bip-btn ${T.p.bip ? 'on' : ''}" data-acao="bip-alternar" aria-pressed="${!!T.p.bip}">${ICONES.barras} ${T.p.bip ? 'Fechar' : 'Bipar'}</button>`;
+}
+function faixaBip() {
+  if (!T.p.bip) return '';
+  return `<div class="bip-faixa"><video id="bip-video" playsinline muted autoplay></video><div class="bip-linha"></div>
+    <div class="bip-msg" id="bip-msg">${esc(T.p.bipMsg || 'Aponte para o código de barras')}</div></div>`;
+}
+function bipMensagem(t) { T.p.bipMsg = t; const el = document.getElementById('bip-msg'); if (el) el.textContent = t; }
+async function bipLigar() {
+  if (!window.isSecureContext) { T.p.bip = false; desenhar(); return toast('A câmera só funciona pelo endereço https (o do domínio). No Wi-Fi da loja use o teclado.'); }
+  if (!BIP.stream) {
+    try {
+      BIP.stream = await navigator.mediaDevices.getUserMedia({video: {facingMode: {ideal: 'environment'}, width: {ideal: 1280}, height: {ideal: 720}}, audio: false});
+    } catch (e) {
+      T.p.bip = false; desenhar();
+      return toast(e && e.name === 'NotAllowedError' ? 'Permita o uso da câmera para bipar (cadeado ao lado do endereço).' : 'Não consegui abrir a câmera.');
+    }
+  }
+  if (!BIP.det) {
+    let formatos = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'itf'];
+    try { const ok = await BarcodeDetector.getSupportedFormats(); formatos = formatos.filter(f => ok.includes(f)); } catch (e) {}
+    BIP.det = new BarcodeDetector({formats: formatos});
+  }
+  bipConectarVideo();
+  if (!BIP.timer) BIP.timer = setInterval(bipProcurar, 180);
+}
+function bipConectarVideo() {
+  const v = document.getElementById('bip-video');
+  if (v && BIP.stream && v.srcObject !== BIP.stream) { v.srcObject = BIP.stream; v.play().catch(() => {}); }
+}
+function bipDesligar() {
+  clearInterval(BIP.timer); BIP.timer = null;
+  if (BIP.stream) BIP.stream.getTracks().forEach(t => t.stop());
+  BIP.stream = null;
+}
+async function bipProcurar() {
+  const v = document.getElementById('bip-video');
+  if (!v || BIP.ocupado || v.readyState < 2) return;
+  BIP.ocupado = true;
+  try {
+    const achados = await BIP.det.detect(v);
+    for (const a of achados) {
+      const cod = String(a.rawValue || '').replace(/\D/g, '');
+      if (cod.length < 8) continue;
+      if (cod === BIP.ultimo && Date.now() - BIP.ultimoEm < 2500) break;   // o mesmo código parado na frente da câmera
+      BIP.ultimo = cod; BIP.ultimoEm = Date.now();
+      codigoLido(cod);
+      break;
+    }
+  } catch (e) {} finally { BIP.ocupado = false; }
+}
+let _audio = null;
+function bipe(ok) {
+  try {
+    _audio = _audio || new (window.AudioContext || window.webkitAudioContext)();
+    const o = _audio.createOscillator(), g = _audio.createGain();
+    o.frequency.value = ok ? 1850 : 380; g.gain.value = 0.08;
+    o.connect(g); g.connect(_audio.destination); o.start(); o.stop(_audio.currentTime + (ok ? 0.09 : 0.25));
+  } catch (e) {}
+  if (navigator.vibrate) navigator.vibrate(ok ? 30 : [60, 40, 60]);
+}
+// leitor Bluetooth/USB: digita muito rápido e termina com Enter
+const LEITOR = {buf: '', ultimo: 0};
+document.addEventListener('keydown', e => {
+  const alvo = e.target;
+  if (alvo && (alvo.tagName === 'INPUT' || alvo.tagName === 'TEXTAREA' || alvo.tagName === 'SELECT')) return;
+  const agora = Date.now();
+  if (agora - LEITOR.ultimo > 80) LEITOR.buf = '';
+  LEITOR.ultimo = agora;
+  if (e.key === 'Enter') { if (LEITOR.buf.length >= 8) { e.preventDefault(); codigoLido(LEITOR.buf); } LEITOR.buf = ''; return; }
+  if (/^\d$/.test(e.key)) LEITOR.buf += e.key;
+});
+
+function codigo14(cod) { const d = String(cod || '').replace(/\D/g, ''); return d.length >= 8 && d.length <= 14 ? d.padStart(14, '0') : null; }
+function produtosDoCodigo(cod) { const c = codigo14(cod); return (c && E.codigos && E.codigos[c]) || []; }
+async function acharCodigo(cod) {
+  // não achou no celular? busca a lista nova no servidor uma vez (código pode ter sido cadastrado agora)
+  let r = produtosDoCodigo(cod);
+  if (!r.length) { await carregarCodigos(true); r = produtosDoCodigo(cod); }
+  return r;
+}
+async function carregarCodigos(forcar) {
+  if (!forcar && E.codigosEm && Date.now() - new Date(E.codigosEm).getTime() < 30 * 60000) return;
+  try { E.codigos = await api('GET', '/api/compras/codigos'); E.codigosEm = new Date().toISOString(); salvar(); } catch (e) {}
+}
+function codigoLido(cod) {
+  if (T.nome === 'contagem') return bipContagem(cod);
+  if (T.nome === 'carrinho') return bipCarrinho(cod);
+  if (T.nome === 'rotina' && T.p.r) return bipRotina(cod);
+}
+function codigoDesconhecido(cod, depois) {
+  bipe(false);
+  if (!E.usuario.gestor) { bipMensagem('Código não cadastrado'); return toast(`Código ${cod} não está cadastrado. Procure o item na lista (o gestor pode cadastrar o código).`); }
+  T.p.codigoNovo = {cod, depois};
+  abrirModal(`<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px"><div><div class="titulo-sec">Código novo: ${esc(cod)}</div>
+      <div class="mini suave">Diga uma vez qual produto é. Nas próximas vezes ele é reconhecido sozinho.</div></div>
+      <button class="icone-btn" data-acao="fechar-modal" aria-label="Fechar">${ICONES.fechar}</button></div>
+    <div class="campo"><label for="busca-prod">Qual produto do estoque?</label><input id="busca-prod" placeholder="Digite parte do nome" autocomplete="off"></div>
+    <div id="prod-escolhido" class="pequeno" style="font-weight:700;color:var(--verde-esc)"></div>
+    <div id="busca-res" class="linhas" style="max-height:200px;overflow:auto"><div class="vazio" style="padding:14px">Digite para buscar.</div></div>
+    <div class="campo"><label for="fator">Este código vem em:</label>
+      <input id="fator" inputmode="decimal" value="1">
+      <div class="mini suave">1 = unidade. Se for o código da CAIXA, quantas unidades vêm nela (ex.: 27).</div></div>
+    <button class="btn" data-acao="codigo-salvar">Salvar código</button>`);
+  T.p.sel = null;
+  ligarBuscaProduto('codigo-escolher');
+}
+function ligarBuscaProduto(acao) {
+  let espera;
+  document.getElementById('busca-prod').addEventListener('input', e => {
+    clearTimeout(espera);
+    espera = setTimeout(async () => {
+      const termo = e.target.value.trim(), res = document.getElementById('busca-res');
+      if (!res) return;
+      if (termo.length < 2) { res.innerHTML = '<div class="vazio" style="padding:14px">Digite pelo menos 2 letras.</div>'; return; }
+      try {
+        const achados = await api('GET', '/api/compras/produtos?q=' + encodeURIComponent(termo));
+        res.innerHTML = achados.map(a => `<button class="lin" style="width:100%;border-left:0;border-right:0;border-bottom:0;background:#fff;text-align:left" data-acao="${acao}" data-pid="${a.produto_id}" data-nome="${esc(a.nome)}" data-un="${esc(a.unidade)}">
+            <div class="grow"><div style="font-weight:700">${esc(a.nome)}</div><div class="mini suave">${esc(a.unidade)} · ${esc(a.categoria)}</div></div></button>`).join('')
+          || '<div class="vazio" style="padding:14px">Nenhum produto com esse nome.</div>';
+      } catch (err) { res.innerHTML = `<div class="vazio" style="padding:14px">${esc(err.extra && err.extra.offline ? 'Sem internet.' : err.message)}</div>`; }
+    }, 300);
+  });
+}
+async function bipContagem(cod) {
+  const achados = await acharCodigo(cod);
+  if (!achados.length) return codigoDesconhecido(cod, () => bipContagem(cod));
+  const itens = itensIda();
+  let k = -1, achado = null;
+  for (const a of achados) { k = itens.findIndex(it => it.produto_id === a.produto_id); if (k >= 0) { achado = a; break; } }
+  if (T.p.buf) confirmarDigitadoSemPular();
+  if (k < 0) {
+    const a = achados[0];
+    bipe(true);
+    if (!confirm(`${a.nome} não está nesta rotina. Contar mesmo assim? (entra na contagem e na lista)`)) return;
+    E.ida.extras = E.ida.extras || [];
+    E.ida.extras.push({produto_id: a.produto_id, nome: a.nome, unidade: a.unidade, secao: 'Bipados fora da rotina',
+                       ordem: 9999, caixas: [], precos: [], ultima_contagem: null, estoque_estimado: null, consumo_dia: 0, estoque_minimo: 0});
+    achado = a; k = itensIda().length - 1;
+  }
+  bipe(true);
+  const pid = itensIda()[k].produto_id;
+  E.ida.cx = E.ida.cx || {};
+  if (achado.fator > 1) { E.ida.cx[pid] = achado.fator; E.ida.modo[pid] = 'cx'; toast(`📦 Caixa com ${fmtQtd(achado.fator)}: digite quantas CAIXAS`); }
+  else E.ida.modo[pid] = 'un';
+  bipMensagem('✓ ' + achado.nome);
+  irParaItem(k);
+}
+async function bipCarrinho(cod) {
+  const l = E.listas[T.p.codigo];
+  const achados = await acharCodigo(cod);
+  if (!achados.length) return codigoDesconhecido(cod, () => bipCarrinho(cod));
+  const pids = achados.map(a => a.produto_id);
+  const it = l.itens.find(i => pids.includes(i.produto_id));
+  if (!it) { bipe(false); bipMensagem(achados[0].nome + ': não está na lista'); return toast(`${achados[0].nome} não está nesta lista.`); }
+  if (!(it.qtd_pedido > 0)) { bipe(false); bipMensagem(it.nome + ': não precisava comprar'); return toast(`${it.nome} não estava para comprar (tem ${fmtQtd(it.estoque)} ${it.unidade}).`); }
+  bipe(true);
+  if (it.situacao === 'comprado') { bipMensagem('✓ ' + it.nome + ' (já estava marcado)'); }
+  else { mudarItensLista(T.p.codigo, [{produto_id: it.produto_id, situacao: 'comprado'}], 'Carrinho'); bipMensagem('✓ ' + it.nome); }
+  T.p.piscar = it.produto_id; desenhar();
+  const el = document.getElementById('car-' + it.produto_id); if (el) el.scrollIntoView({block: 'center', behavior: 'smooth'});
+}
+async function bipRotina(cod) {
+  const achados = await acharCodigo(cod);
+  if (!achados.length) return codigoDesconhecido(cod, () => bipRotina(cod));
+  const a = achados[0];
+  if (T.p.r.itens.some(i => i.produto_id === a.produto_id)) { bipe(false); bipMensagem(a.nome + ': já está na rotina'); return; }
+  bipe(true);
+  T.p.r.itens.push({produto_id: a.produto_id, nome: a.nome, unidade: a.unidade, secao: T.p.ultimaSecao || ''});
+  bipMensagem('✓ ' + a.nome + ' incluído');
+  const lista = document.getElementById('bip-incluidos');
+  if (lista) lista.insertAdjacentHTML('afterbegin', `<div class="pequeno" style="font-weight:700;color:var(--verde-esc)">✓ ${esc(a.nome)}</div>`);
+}
+
 // ================================================================= AÇÕES (botões)
 const acoes = {
   'nav': d => {
@@ -1208,6 +1419,41 @@ const acoes = {
     fecharModal(); T.p.dias = n; desenhar();
   },
   'ida-comecar': d => comecarIda(+d.id, T.p.dias),
+  // bipar
+  'bip-alternar': () => {
+    T.p.bip = !T.p.bip; T.p.bipMsg = '';
+    if (T.nome === 'contagem') redesenharContagem(); else desenhar();
+    if (T.p.bip) bipLigar(); else bipDesligar();
+  },
+  'rot-bipar': () => {
+    abrirModal(`<div style="display:flex;justify-content:space-between;align-items:center"><div class="titulo-sec">Bipar produtos para a rotina</div>
+        <button class="icone-btn" data-acao="rot-bipar-fechar" aria-label="Fechar">${ICONES.fechar}</button></div>
+      <div class="campo"><input id="busca-secao" placeholder="Seção dos itens bipados (opcional)" value="${esc(T.p.ultimaSecao || '')}" aria-label="Seção"></div>
+      <div class="bip-modal"><video id="bip-video" playsinline muted autoplay></video><div class="bip-linha"></div>
+        <div class="bip-msg" id="bip-msg">Aponte para o código de barras</div></div>
+      <div id="bip-incluidos" style="display:flex;flex-direction:column;gap:4px;max-height:120px;overflow:auto"></div>
+      <button class="btn" data-acao="rot-bipar-fechar">Pronto</button>`);
+    document.getElementById('busca-secao').addEventListener('input', e => { T.p.ultimaSecao = e.target.value.trim(); });
+    bipLigar();
+  },
+  'rot-bipar-fechar': () => { bipDesligar(); fecharModal(); desenhar(); },
+  'codigo-escolher': d => {
+    T.p.sel = {produto_id: +d.pid, nome: d.nome, unidade: d.un};
+    document.getElementById('prod-escolhido').textContent = '✓ ' + d.nome;
+    document.getElementById('busca-res').innerHTML = '';
+  },
+  'codigo-salvar': async () => {
+    const n = T.p.codigoNovo;
+    if (!T.p.sel) return toast('Escolha o produto.');
+    const f = num(document.getElementById('fator').value);
+    if (!(f > 0)) return toast('Quantidade inválida.');
+    try {
+      const r = await api('POST', '/api/compras/codigos', {codigo: n.cod, produto_id: T.p.sel.produto_id, fator: f});
+      E.codigos[r.codigo] = r.itens; salvar();
+      fecharModal(); toast('Código cadastrado.');
+      if (n.depois) n.depois();
+    } catch (e) { toast(e.extra.offline ? 'Sem internet: conecte para cadastrar o código.' : e.message); }
+  },
   // contagem (teclado fixo)
   'tec-num': d => { vibrar(); const b = T.p.buf || ''; if (b.replace(',', '').length < 7) T.p.buf = (b === '0' ? '' : b) + d.n; redesenharContagem(); },
   'tec-virgula': () => { vibrar(); const b = T.p.buf || ''; if (!b.includes(',')) T.p.buf = (b || '0') + ','; redesenharContagem(); },
@@ -1254,7 +1500,7 @@ const acoes = {
       else { await navigator.clipboard.writeText(texto); toast('Lista copiada. Cole no WhatsApp ou Telegram.'); }
     } catch (e) { if (e && e.name !== 'AbortError') toast('Não foi possível compartilhar.'); }
   },
-  'abrir-carrinho': d => ir('carrinho', {codigo: d.codigo}),
+  'abrir-carrinho': d => { ir('carrinho', {codigo: d.codigo}); carregarCodigos(); },
   // carrinho
   'car-voltar': () => ir('lista', {codigo: T.p.codigo}),
   'car-filtro': d => { T.p.filtro = d.f || null; desenhar(); },
@@ -1281,10 +1527,12 @@ const acoes = {
   'consumo-rotina': d => { T.p.rotina_id = +d.id; desenhar(); carregarConsumo(+d.id); },
   // rotinas (gestor)
   'rotina-nova': () => {
+    carregarCodigos();
     ir('rotina', {r: {id: null, nome: '', dias_semana: [], dias_cobertura: 7, prazo_dias: 0, fornecedores: [], itens: []}});
     carregarFornecedores();
   },
   'rotina-editar': async d => {
+    carregarCodigos();
     ir('rotina', {});
     carregarFornecedores();
     try { T.p.r = await api('GET', `/api/compras/rotinas/${d.id}`); desenhar(); }
@@ -1433,7 +1681,7 @@ document.addEventListener('input', e => {
   } catch (e) {
     if (!e.extra.offline) { ir('login', {}); return carregarUsuarios(); }
   }
-  carregarInicio(); sincronizar();
+  carregarInicio(); sincronizar(); carregarCodigos();
 })();
 </script>
 </body>

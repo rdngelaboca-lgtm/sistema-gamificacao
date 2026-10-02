@@ -1663,6 +1663,23 @@ def api_compras_finalizar(usuario, codigo):
     return _resposta_compras(finalizar)
 
 
+# ---------------------------- códigos de barras (bipar no Android) ----------------------------
+
+@app.route('/api/compras/codigos', methods=['GET'])
+@compras_login()
+def api_compras_codigos(usuario):
+    """Todos os códigos de barras conhecidos (o celular guarda para bipar sem internet)."""
+    return _resposta_compras(compras_database.listar_codigos)
+
+
+@app.route('/api/compras/codigos', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_compras_vincular_codigo(usuario):
+    dados = ler_json() or {}
+    return _resposta_compras(compras_database.vincular_codigo, dados.get('codigo'), dados.get('produto_id'),
+                             dados.get('fator'), usuario)
+
+
 # ---------------------------- cupom fiscal (QR Code da NFC-e) ----------------------------
 try:
     import compras_cupom

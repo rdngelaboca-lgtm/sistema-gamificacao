@@ -875,17 +875,36 @@ def registrar_lista(codigo, rotina_id, usuario, dias, contagens, hoje=None):
 
     rotina = obter_rotina(rotina_id)
     da_rotina = {i['produto_id'] for i in rotina['itens'] if i['existe']}
-    contados = {}
+    contados, extras = {}, {}
     for c in contagens or []:
         try:
             pid = int(c.get('produto_id'))
         except (TypeError, ValueError, AttributeError):
             raise ErroCompras("Item contado sem produto válido.")
-        if pid not in da_rotina:
-            continue                         # produto saiu da rotina enquanto contava: ignora
         q = _qtd_valida(c.get('qtd'))
+        if pid not in da_rotina:
+            # [BIPAR] produto bipado que não está na rotina: entra na contagem e na lista
+            # (só se foi contado e existe no estoque); senão, ignora
+            if q is not None and c.get('extra'):
+                extras[pid] = q
+            continue
         if q is not None:
             contados[pid] = q
+    if extras:
+        conn = _conectar()
+        try:
+            cur = conn.cursor()
+            cur.execute(f"SELECT ProdutoID, NomeProduto, UnidadeMedida FROM ProdutosEstoque WHERE ProdutoID IN ({','.join('?' * len(extras))})",
+                        list(extras))
+            achados = cur.fetchall()
+        finally:
+            conn.close()
+        base = max([i['ordem'] for i in rotina['itens']] + [0]) + 1
+        for k, (pid, nome, un) in enumerate(sorted(achados, key=lambda r: (r[1] or '').lower())):
+            rotina['itens'].append({'produto_id': pid, 'ordem': base + k, 'secao': 'Bipados fora da rotina',
+                                    'nome': nome or f'Produto {pid}', 'unidade': (un or 'UN').strip() or 'UN',
+                                    'categoria': '', 'existe': True})
+            contados[pid] = extras[pid]
 
     conn = _conectar()
     try:
@@ -1134,3 +1153,105 @@ def cancelar_lista(codigo, usuario):
     if cab and not usuario.get('gestor') and cab['funcionario_id'] != usuario.get('id'):
         raise ErroCompras("Só o gestor ou quem fez a contagem pode cancelar a lista.")
     return _mudar_status(codigo, (ST_AGUARDANDO, ST_APROVADA), ST_CANCELADA)
+
+
+# ==============================================================================
+# == Códigos de barras (bipar no Android) ======================================
+# ==============================================================================
+# De onde vêm os códigos:
+#   1) os vínculos do Gestão de Estoque (EAN que veio no XML de cada compra, com o
+#      Qtd/Cx do vínculo: o código da CAIXA já vem com o fator dela);
+#   2) códigos ligados pelo gestor no próprio app (tabela CompraCodigos), quando o
+#      produto foi bipado e o sistema ainda não conhecia o código.
+
+def normalizar_codigo(codigo):
+    """Só números, com zeros à esquerda até 14 (assim EAN-13, UPC-A e GTIN-14 se encontram)."""
+    d = re.sub(r'\D', '', str(codigo or ''))
+    if not 8 <= len(d) <= 14 or not d.strip('0'):
+        return None
+    return d.zfill(14)
+
+
+def _garantir_tabela_codigos(cur):
+    cur.execute("""
+        IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'CompraCodigos')
+        CREATE TABLE CompraCodigos (
+            Codigo VARCHAR(14) NOT NULL PRIMARY KEY,
+            ProdutoID INT NOT NULL,
+            Fator DECIMAL(18, 4) NOT NULL DEFAULT 1,
+            CriadoPor NVARCHAR(150) NULL,
+            CriadoEm DATETIME NULL
+        )
+    """)
+
+
+def listar_codigos():
+    """
+    Mapa {codigo14: [{'produto_id', 'fator', 'nome', 'unidade'}]} para o celular guardar
+    (bipar funciona sem internet). Um código pode apontar para mais de um produto se os
+    vínculos estiverem confusos: o celular pergunta qual é.
+    """
+    conn = _conectar()
+    try:
+        cur = conn.cursor()
+        _garantir_tabela_codigos(cur)
+        conn.commit()
+        cur.execute("""SELECT PF.EAN, PF.ProdutoID, PF.FatorConversao FROM ProdutosFornecedor PF
+                       WHERE PF.ProdutoID IS NOT NULL AND PF.EAN IS NOT NULL AND PF.EAN <> ''""")
+        mapa = {}
+        for ean, pid, fator in cur.fetchall():
+            cod = normalizar_codigo(ean)
+            if not cod:
+                continue
+            f = _dec(fator) if fator is not None and _dec(fator) > 0 else Decimal('1')
+            lista = mapa.setdefault(cod, [])
+            if not any(x[0] == pid and x[1] == f for x in lista):
+                lista.append((pid, f))
+        cur.execute("SELECT Codigo, ProdutoID, Fator FROM CompraCodigos")
+        for cod, pid, fator in cur.fetchall():          # ligado pelo gestor: vale mais que o XML
+            mapa[str(cod).zfill(14)] = [(pid, _dec(fator) if fator else Decimal('1'))]
+        cur.execute("SELECT ProdutoID, NomeProduto, UnidadeMedida FROM ProdutosEstoque")
+        nomes = {p: (n or f'Produto {p}', (u or 'UN').strip() or 'UN') for p, n, u in cur.fetchall()}
+        resultado = {}
+        for cod, lista in mapa.items():
+            itens = [{'produto_id': pid, 'fator': _num(f), 'nome': nomes[pid][0], 'unidade': nomes[pid][1]}
+                     for pid, f in lista if pid in nomes]
+            if itens:
+                resultado[cod] = itens
+        return resultado
+    finally:
+        conn.close()
+
+
+def vincular_codigo(codigo, produto_id, fator, usuario):
+    """O gestor diz que um código bipado (desconhecido) é tal produto (e quantas unidades vêm nele)."""
+    if not usuario.get('gestor'):
+        raise ErroCompras("Só o gestor cadastra códigos de barras.")
+    cod = normalizar_codigo(codigo)
+    if not cod:
+        raise ErroCompras("Código de barras inválido.")
+    try:
+        produto_id = int(produto_id)
+        f = Decimal(str(fator if fator not in (None, '') else 1).replace(',', '.'))
+    except (TypeError, ValueError, InvalidOperation):
+        raise ErroCompras("Produto ou quantidade inválidos.")
+    if not f.is_finite() or f <= 0 or f > 100000:
+        raise ErroCompras("A quantidade por embalagem precisa ser maior que zero.")
+    conn = _conectar()
+    try:
+        cur = conn.cursor()
+        _garantir_tabela_codigos(cur)
+        cur.execute("SELECT 1 FROM ProdutosEstoque WHERE ProdutoID = ?", (produto_id,))
+        if not cur.fetchone():
+            raise ErroCompras("Produto não encontrado no estoque.")
+        cur.execute("DELETE FROM CompraCodigos WHERE Codigo = ?", (cod,))
+        cur.execute("INSERT INTO CompraCodigos (Codigo, ProdutoID, Fator, CriadoPor, CriadoEm) VALUES (?, ?, ?, ?, ?)",
+                    (cod, produto_id, f, usuario.get('nome'), datetime.now()))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    logger.info(f"Código {cod} ligado ao produto {produto_id} (fator {f}) por {usuario.get('nome')}")
+    return {'codigo': cod, 'itens': listar_codigos().get(cod, [])}
