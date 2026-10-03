@@ -1672,6 +1672,17 @@ def api_compras_codigos(usuario):
     return _resposta_compras(compras_database.listar_codigos)
 
 
+@app.route('/api/compras/codigo-foto', methods=['POST'])
+@compras_login()
+def api_compras_codigo_foto(usuario):
+    """Lê o código de barras de uma foto (celular sem leitura ao vivo: Wi-Fi http ou iPhone)."""
+    bloqueio = _cupom_disponivel()
+    if bloqueio:
+        return bloqueio
+    dados = ler_json() or {}
+    return _resposta_compras(lambda: {"codigo": compras_cupom.ler_codigo_barras_da_foto(dados.get('foto') or '')})
+
+
 @app.route('/api/compras/codigos', methods=['POST'])
 @compras_login(somente_gestor=True)
 def api_compras_vincular_codigo(usuario):

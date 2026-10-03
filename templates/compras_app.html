@@ -207,6 +207,7 @@
 
 // ---------------------------------------------------------------- utilidades
 const CHAVE = 'gb_compras_v1';
+const VERSAO_APP = '6';   // aparece no rodapé do início: confira se o celular pegou a versão nova
 const $app = document.getElementById('app');
 const DIAS_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];            // 1=Dom ... 7=Sáb (padrão do sistema)
 const FRACIONADAS = ['KG', 'G', 'GR', 'L', 'LT', 'ML', 'M'];
@@ -553,6 +554,7 @@ TELAS.inicio = () => {
           ${u.gestor ? '<button class="icone-btn" style="width:auto;padding:0 8px;color:var(--verde);font-weight:700" data-acao="nav" data-tela="rotinas">Gerenciar</button>' : ''}</div>
         ${rotinas || `<div class="vazio">Nenhuma rotina criada ainda.${u.gestor ? '<br>Toque em <b>Gerenciar</b> para criar a primeira.' : '<br>Peça ao gestor para criar.'}</div>`}
       </div>
+      <div class="mini suave" style="text-align:center">App de compras · versão ${VERSAO_APP} · ${bipAoVivo() ? 'bipar ao vivo' : 'bipar por foto'}</div>
     </div>${navbar('inicio')}`;
 };
 function textoDias(dias) {
@@ -1188,9 +1190,14 @@ async function acaoItemCupom(corpo) {
 // No iPhone o navegador não tem esse leitor, então o botão nem aparece.
 // Leitor Bluetooth/USB (que "digita" o código e aperta Enter) também funciona, em qualquer celular.
 const BIP = {stream: null, det: null, timer: null, ultimo: '', ultimoEm: 0, ocupado: false};
-function bipSuportado() { return 'BarcodeDetector' in window && !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia); }
+// [DEPURAÇÃO] Antes o botão SUMIA quando o celular não lia ao vivo. Isso acontece sempre que o app
+// é aberto pelo endereço do Wi-Fi da loja (http://192.168...): o Chrome só libera câmera ao vivo e
+// leitor de código no endereço https. Agora o botão aparece sempre:
+//   - leitura AO VIVO: Chrome do Android + endereço https;
+//   - senão, FOTO do código: o computador da loja lê o código na foto (Wi-Fi http e iPhone).
+function bipAoVivo() { return window.isSecureContext && 'BarcodeDetector' in window && !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia); }
+function bipSuportado() { return true; }
 function botaoBip() {
-  if (!bipSuportado()) return '';
   return `<button class="bip-btn ${T.p.bip ? 'on' : ''}" data-acao="bip-alternar" aria-pressed="${!!T.p.bip}">${ICONES.barras} ${T.p.bip ? 'Fechar' : 'Bipar'}</button>`;
 }
 function faixaBip() {
@@ -1241,6 +1248,32 @@ async function bipProcurar() {
       break;
     }
   } catch (e) {} finally { BIP.ocupado = false; }
+}
+
+function bipPorFoto() {
+  // abre a câmera do celular para FOTOGRAFAR o código (precisa ser dentro do toque no botão)
+  let inp = document.getElementById('bip-foto-input');
+  if (!inp) {
+    inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = 'image/*'; inp.setAttribute('capture', 'environment'); inp.id = 'bip-foto-input'; inp.hidden = true;
+    inp.addEventListener('change', async () => {
+      const arq = inp.files && inp.files[0];
+      inp.value = '';
+      if (!arq) return;
+      toast('Lendo o código de barras…');
+      let cod = null;
+      if ('BarcodeDetector' in window) {
+        try { const r = await new BarcodeDetector().detect(await createImageBitmap(arq)); if (r.length) cod = String(r[0].rawValue || '').replace(/\D/g, ''); } catch (e) {}
+      }
+      if (!cod) {
+        try { cod = (await api('POST', '/api/compras/codigo-foto', {foto: await reduzirFoto(arq)})).codigo; }
+        catch (e) { bipe(false); return toast(e.extra && e.extra.offline ? 'Sem internet: procure o item na lista.' : e.message); }
+      }
+      if (cod) codigoLido(cod);
+    });
+    document.body.appendChild(inp);
+  }
+  inp.click();
 }
 let _audio = null;
 function bipe(ok) {
@@ -1363,6 +1396,7 @@ async function bipRotina(cod) {
   bipMensagem('✓ ' + a.nome + ' incluído');
   const lista = document.getElementById('bip-incluidos');
   if (lista) lista.insertAdjacentHTML('afterbegin', `<div class="pequeno" style="font-weight:700;color:var(--verde-esc)">✓ ${esc(a.nome)}</div>`);
+  else { desenhar(); toast('✓ ' + a.nome + ' incluído na rotina'); }   // bip por foto: não há janela aberta
 }
 
 // ================================================================= AÇÕES (botões)
@@ -1421,11 +1455,13 @@ const acoes = {
   'ida-comecar': d => comecarIda(+d.id, T.p.dias),
   // bipar
   'bip-alternar': () => {
+    if (!bipAoVivo() && !T.p.bip) return bipPorFoto();
     T.p.bip = !T.p.bip; T.p.bipMsg = '';
     if (T.nome === 'contagem') redesenharContagem(); else desenhar();
     if (T.p.bip) bipLigar(); else bipDesligar();
   },
   'rot-bipar': () => {
+    if (!bipAoVivo()) return bipPorFoto();
     abrirModal(`<div style="display:flex;justify-content:space-between;align-items:center"><div class="titulo-sec">Bipar produtos para a rotina</div>
         <button class="icone-btn" data-acao="rot-bipar-fechar" aria-label="Fechar">${ICONES.fechar}</button></div>
       <div class="campo"><input id="busca-secao" placeholder="Seção dos itens bipados (opcional)" value="${esc(T.p.ultimaSecao || '')}" aria-label="Seção"></div>

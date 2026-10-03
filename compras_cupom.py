@@ -839,3 +839,52 @@ def criar_produto_do_cupom(cupom_id, seq, usuario, nome, unidade, categoria='Ger
         raise ErroCompras("Não consegui cadastrar o produto (veja o log).")
     logger.info(f"Produto '{nome}' ({unidade}) cadastrado pelo app de compras por {usuario.get('nome')}.")
     return resolver_item(cupom_id, seq, ACAO_VINCULAR, usuario, produto_id=int(produto_id), fator=fator)
+
+
+# ==============================================================================
+# == 7) Código de barras por FOTO (quando o celular não lê ao vivo) ============
+# ==============================================================================
+# A leitura ao vivo pela câmera só existe no Chrome do Android e só no endereço
+# https. No Wi-Fi da loja (http) ou no iPhone, o app tira uma FOTO do código de
+# barras e manda para cá; o OpenCV do computador da loja lê o código.
+
+def ler_codigo_barras_da_foto(dados_imagem):
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:
+        raise ErroCompras("O computador da loja não tem o leitor instalado. Rode: pip install opencv-python-headless")
+    if not hasattr(cv2, 'barcode'):
+        raise ErroCompras("O OpenCV do computador da loja é antigo. Rode: pip install --upgrade opencv-python-headless")
+    if isinstance(dados_imagem, str):
+        if ',' in dados_imagem[:100]:
+            dados_imagem = dados_imagem.split(',', 1)[1]
+        try:
+            dados_imagem = base64.b64decode(dados_imagem, validate=False)
+        except (ValueError, TypeError):
+            raise ErroCompras("Foto inválida.")
+    if not dados_imagem or len(dados_imagem) > 12 * 1024 * 1024:
+        raise ErroCompras("Foto vazia ou grande demais.")
+    img = cv2.imdecode(np.frombuffer(dados_imagem, dtype=np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        raise ErroCompras("Não consegui abrir a foto. Tire outra.")
+    det = cv2.barcode.BarcodeDetector()
+    cinza = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    alt, larg = cinza.shape[:2]
+    tentativas = [img, cinza]
+    for escala in (0.5, 1.5):
+        if max(alt, larg) * escala <= 4000:
+            tentativas.append(cv2.resize(cinza, None, fx=escala, fy=escala,
+                                         interpolation=cv2.INTER_AREA if escala < 1 else cv2.INTER_CUBIC))
+    tentativas.append(cv2.rotate(cinza, cv2.ROTATE_90_CLOCKWISE))       # foto tirada "em pé"
+    for t in tentativas:
+        try:
+            resultado = det.detectAndDecodeWithType(t)
+        except cv2.error:
+            continue
+        textos = resultado[1] if len(resultado) >= 2 else ()
+        for texto in textos or ():
+            digitos = re.sub(r'\D', '', texto or '')
+            if 8 <= len(digitos) <= 14:
+                return digitos
+    raise ErroCompras("Não achei o código de barras na foto. Chegue perto, com luz, com as barras retas e inteiras na foto.")
