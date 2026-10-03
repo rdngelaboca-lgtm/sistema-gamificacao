@@ -181,14 +181,6 @@
   .tecla.ok:active { background: var(--verde-esc); }
   .tecla.escura { background: var(--texto); color: #fff; }
   @media (max-height: 640px) { .tecla { height: 44px; } .cl-lin { min-height: 46px; } }
-  .bip-faixa { position: relative; margin: 0 16px 8px; height: 150px; border-radius: 14px; overflow: hidden; background: #000; flex-shrink: 0; }
-  .bip-faixa video, .bip-modal video { width: 100%; height: 100%; object-fit: cover; display: block; }
-  .bip-linha { position: absolute; left: 10%; right: 10%; top: 50%; height: 2px; background: #FF5A36; box-shadow: 0 0 8px #FF5A36; }
-  .bip-msg { position: absolute; left: 0; right: 0; bottom: 0; padding: 6px 10px; background: rgba(0,0,0,.55); color: #fff; font-size: 13px; font-weight: 600; text-align: center; }
-  .bip-modal { position: relative; height: 220px; border-radius: 14px; overflow: hidden; background: #000; }
-  .bip-btn { height: 40px; padding: 0 12px; border-radius: 99px; border: 1px solid var(--verde-borda); background: #EEF7F5; color: var(--verde-esc);
-    font-size: 14px; font-weight: 700; display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
-  .bip-btn.on { background: var(--verde); color: #fff; border-color: var(--verde); }
   .piscar { animation: piscar 1.2s ease-out; }
   @keyframes piscar { 0% { box-shadow: 0 0 0 3px var(--verde); } 100% { box-shadow: 0 0 0 0 transparent; } }
   a { color: var(--verde); }
@@ -207,7 +199,7 @@
 
 // ---------------------------------------------------------------- utilidades
 const CHAVE = 'gb_compras_v1';
-const VERSAO_APP = '7';   // aparece no rodapé do início: confira se o celular pegou a versão nova
+const VERSAO_APP = '8';   // aparece no rodapé do início: confira se o celular pegou a versão nova
 const $app = document.getElementById('app');
 const DIAS_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];            // 1=Dom ... 7=Sáb (padrão do sistema)
 const FRACIONADAS = ['KG', 'G', 'GR', 'L', 'LT', 'ML', 'M'];
@@ -390,18 +382,16 @@ function redesenharSePreciso() {
   if (T.nome === 'contagem') redesenharContagem(); else desenhar();
 }
 window.addEventListener('online', () => { online = true; sincronizar(); atualizarFaixaRede(); });
-document.addEventListener('visibilitychange', () => { if (document.hidden && BIP.stream) { bipDesligar(); if (T.p.bip) { T.p.bip = false; desenhar(); } } });
 window.addEventListener('offline', () => { online = false; atualizarFaixaRede(); });
 setInterval(() => { if (E.fila.length) sincronizar(); }, 20000);
 
 // ---------------------------------------------------------------- navegação
-function ir(nome, p) { if (BIP.stream && !document.getElementById('modal')) bipDesligar(); T = {nome, p: p || {}}; desenhar(); window.scrollTo(0, 0); }
+function ir(nome, p) { T = {nome, p: p || {}}; desenhar(); window.scrollTo(0, 0); }
 function desenhar() {
   if (!E.usuario && T.nome !== 'login') { T = {nome: 'login', p: {}}; setTimeout(carregarUsuarios, 0); }
   const f = TELAS[T.nome] || TELAS.inicio;
   $app.innerHTML = f(T.p);
   if (TELAS_DEPOIS[T.nome]) TELAS_DEPOIS[T.nome](T.p);
-  if (T.p.bip) bipConectarVideo();
 }
 function toast(msg) {
   const d = document.createElement('div'); d.className = 'toast'; d.setAttribute('role', 'status'); d.textContent = msg;
@@ -437,7 +427,7 @@ function abrirModal(html) {
 }
 function fecharModal() {
   const m = document.getElementById('modal');
-  if (m) { if (m.querySelector('#bip-video') && !T.p.bip) bipDesligar(); m.remove(); }
+  if (m) m.remove();
 }
 
 // ---------------------------------------------------------------- cálculo da lista (igual ao servidor)
@@ -662,10 +652,8 @@ TELAS.contagem = () => {
     <div class="topo" style="padding-bottom:2px">
       <button class="icone-btn" data-acao="cont-sair" aria-label="Sair da contagem (fica salva)">${ICONES.fechar}</button>
       <div class="grow"><h1 style="font-size:18px">${esc(prep.nome)}</h1>
-        <div class="sub mini" style="font-weight:600">${feitos} de ${total} contados · toque num item para ir até ele</div></div>
-      ${botaoBip()}</div>
+        <div class="sub mini" style="font-weight:600">${feitos} de ${total} contados · toque num item para ir até ele</div></div></div>
     <div class="progresso" style="margin-bottom:8px"><div style="width:${Math.round(100 * feitos / total)}%"></div></div>
-    ${faixaBip()}
     <div class="cl-lista" id="cl-lista">${linhas}<div style="height:8px"></div></div>
     <div class="cl-teclado">
       <div class="cl-info">
@@ -860,8 +848,7 @@ TELAS.carrinho = p => {
         <div class="check ${i.situacao === 'comprado' ? 'on' : ''}">${i.situacao === 'comprado' ? ICONES.ok : ''}</div>
         <div class="grow"><div class="nome">${esc(i.nome)}</div><div class="pequeno suave">${textoQtd(i.qtd_pedido, i)}${filtro ? '' : ' · ' + esc(i.fornecedor || 'sem preço')}</div></div></button>
       <button class="faltou-btn ${i.situacao === 'faltou' ? 'on' : ''}" data-acao="car-faltou" data-pid="${i.produto_id}" aria-pressed="${i.situacao === 'faltou'}">Não tinha</button></div>`).join('');
-  return `${faixaRede()}${topo('No carrinho', `${feitos} de ${comprar.length} itens${faltou ? ' · ' + faltou + ' em falta' : ''}`, 'car-voltar', botaoBip())}
-    ${faixaBip()}
+  return `${faixaRede()}${topo('No carrinho', `${feitos} de ${comprar.length} itens${faltou ? ' · ' + faltou + ' em falta' : ''}`, 'car-voltar')}
     <div class="corpo">${grupos.length > 1 ? filtros : ''}
       <div class="lista-cartoes">${itens || '<div class="vazio">Nada para comprar.</div>'}</div>
       <div class="mini suave" style="text-align:center">Toque no item para marcar · "Não tinha" se faltou no mercado</div></div>
@@ -976,7 +963,8 @@ TELAS.rotina = p => {
         ${forns || '<div class="mini suave" style="padding-top:8px">Carregando fornecedores…</div>'}</div>
       <div class="lista-cartoes"><div style="display:flex;justify-content:space-between;align-items:baseline"><div class="titulo-sec">Itens na ordem do corredor</div><div class="mini suave">${r.itens.length} itens</div></div>
         <div class="linhas">${itens || '<div class="vazio">Nenhum item ainda.</div>'}</div>
-        <div class="linha-btns" style="${bipSuportado() ? '' : 'grid-template-columns:1fr'}"><button class="btn claro medio" data-acao="rot-adicionar">+ Adicionar produto</button>${bipSuportado() ? `<button class="btn claro medio" data-acao="rot-bipar">${ICONES.barras} Bipar produto</button>` : ''}</div></div>
+        <button class="btn claro medio" data-acao="rot-adicionar">+ Adicionar produto do estoque</button>
+        <div class="mini suave" style="text-align:center">${ICONES.barras} Com o leitor de código de barras: é só bipar o produto aqui.</div></div>
       ${r.id ? '<button class="btn claro medio" style="color:var(--laranja)" data-acao="rot-apagar">Apagar esta rotina</button>' : ''}
     </div>
     <div class="rodape"><button class="btn" data-acao="rot-salvar" ${p.salvando ? 'disabled' : ''}>${p.salvando ? 'Salvando…' : 'Salvar rotina'}</button></div>`;
@@ -1186,96 +1174,10 @@ async function acaoItemCupom(corpo) {
 }
 
 
-// ---------------------------------------------------------------- BIPAR código de barras (Android)
-// Usa o leitor que já vem no Chrome do Android (BarcodeDetector): funciona até sem internet.
-// No iPhone o navegador não tem esse leitor, então o botão nem aparece.
-// Leitor Bluetooth/USB (que "digita" o código e aperta Enter) também funciona, em qualquer celular.
-const BIP = {stream: null, det: null, timer: null, ultimo: '', ultimoEm: 0, ocupado: false};
-// [DEPURAÇÃO] Antes o botão SUMIA quando o celular não lia ao vivo. Isso acontece sempre que o app
-// é aberto pelo endereço do Wi-Fi da loja (http://192.168...): o Chrome só libera câmera ao vivo e
-// leitor de código no endereço https. Agora o botão aparece sempre:
-//   - leitura AO VIVO: Chrome do Android + endereço https;
-//   - senão, FOTO do código: o computador da loja lê o código na foto (Wi-Fi http e iPhone).
-function bipAoVivo() { return window.isSecureContext && 'BarcodeDetector' in window && !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia); }
-function bipSuportado() { return true; }
-function botaoBip() {
-  return `<button class="bip-btn ${T.p.bip ? 'on' : ''}" data-acao="bip-alternar" aria-pressed="${!!T.p.bip}">${ICONES.barras} ${T.p.bip ? 'Fechar' : 'Bipar'}</button>`;
-}
-function faixaBip() {
-  if (!T.p.bip) return '';
-  return `<div class="bip-faixa"><video id="bip-video" playsinline muted autoplay></video><div class="bip-linha"></div>
-    <div class="bip-msg" id="bip-msg">${esc(T.p.bipMsg || 'Aponte para o código de barras')}</div></div>`;
-}
-function bipMensagem(t) { T.p.bipMsg = t; const el = document.getElementById('bip-msg'); if (el) el.textContent = t; }
-async function bipLigar() {
-  if (!window.isSecureContext) { T.p.bip = false; desenhar(); return toast('A câmera só funciona pelo endereço https (o do domínio). No Wi-Fi da loja use o teclado.'); }
-  if (!BIP.stream) {
-    try {
-      BIP.stream = await navigator.mediaDevices.getUserMedia({video: {facingMode: {ideal: 'environment'}, width: {ideal: 1280}, height: {ideal: 720}}, audio: false});
-    } catch (e) {
-      T.p.bip = false; desenhar();
-      return toast(e && e.name === 'NotAllowedError' ? 'Permita o uso da câmera para bipar (cadeado ao lado do endereço).' : 'Não consegui abrir a câmera.');
-    }
-  }
-  if (!BIP.det) {
-    let formatos = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'itf'];
-    try { const ok = await BarcodeDetector.getSupportedFormats(); formatos = formatos.filter(f => ok.includes(f)); } catch (e) {}
-    BIP.det = new BarcodeDetector({formats: formatos});
-  }
-  bipConectarVideo();
-  if (!BIP.timer) BIP.timer = setInterval(bipProcurar, 180);
-}
-function bipConectarVideo() {
-  const v = document.getElementById('bip-video');
-  if (v && BIP.stream && v.srcObject !== BIP.stream) { v.srcObject = BIP.stream; v.play().catch(() => {}); }
-}
-function bipDesligar() {
-  clearInterval(BIP.timer); BIP.timer = null;
-  if (BIP.stream) BIP.stream.getTracks().forEach(t => t.stop());
-  BIP.stream = null;
-}
-async function bipProcurar() {
-  const v = document.getElementById('bip-video');
-  if (!v || BIP.ocupado || v.readyState < 2) return;
-  BIP.ocupado = true;
-  try {
-    const achados = await BIP.det.detect(v);
-    for (const a of achados) {
-      const cod = String(a.rawValue || '').replace(/\D/g, '');
-      if (cod.length < 8) continue;
-      if (cod === BIP.ultimo && Date.now() - BIP.ultimoEm < 2500) break;   // o mesmo código parado na frente da câmera
-      BIP.ultimo = cod; BIP.ultimoEm = Date.now();
-      codigoLido(cod);
-      break;
-    }
-  } catch (e) {} finally { BIP.ocupado = false; }
-}
-
-function bipPorFoto() {
-  // abre a câmera do celular para FOTOGRAFAR o código (precisa ser dentro do toque no botão)
-  let inp = document.getElementById('bip-foto-input');
-  if (!inp) {
-    inp = document.createElement('input');
-    inp.type = 'file'; inp.accept = 'image/*'; inp.setAttribute('capture', 'environment'); inp.id = 'bip-foto-input'; inp.hidden = true;
-    inp.addEventListener('change', async () => {
-      const arq = inp.files && inp.files[0];
-      inp.value = '';
-      if (!arq) return;
-      toast('Lendo o código de barras…');
-      let cod = null;
-      if ('BarcodeDetector' in window) {
-        try { const r = await new BarcodeDetector().detect(await createImageBitmap(arq)); if (r.length) cod = String(r[0].rawValue || '').replace(/\D/g, ''); } catch (e) {}
-      }
-      if (!cod) {
-        try { cod = (await api('POST', '/api/compras/codigo-foto', {foto: await reduzirFoto(arq)})).codigo; }
-        catch (e) { bipe(false); return toast(e.extra && e.extra.offline ? 'Sem internet: procure o item na lista.' : e.message); }
-      }
-      if (cod) codigoLido(cod);
-    });
-    document.body.appendChild(inp);
-  }
-  inp.click();
-}
+// ---------------------------------------------------------------- LEITOR DE CÓDIGO DE BARRAS (Bluetooth)
+// A câmera do celular foi retirada: o bip é feito pelo leitor Bluetooth (modo teclado/HID),
+// que funciona em Android e iPhone, com ou sem internet.
+function bipMensagem(t) { T.p.bipMsg = t; }
 let _audio = null;
 function bipe(ok) {
   try {
@@ -1292,36 +1194,55 @@ function bipe(ok) {
 // na maioria dos modelos, aperta Enter no fim. Alguns apertam Tab, outros nada:
 // por isso também aceita o código quando os números param de chegar.
 // Uma pessoa digitando é bem mais lenta: o app não confunde com o leitor.
-const LEITOR = {buf: '', ultimo: 0, timer: null, intervalos: []};
+const LEITOR = {buf: '', ultimo: 0, timer: null, intervalos: [], campo: null};
+function campoDeTexto(el) {
+  // campos onde o leitor pode "digitar" sem querer (nome, busca, seção). Campos de número
+  // (dias, prazo, quantidade) ficam de fora: lá a pessoa digita números de propósito.
+  return el && el.tagName === 'INPUT' && !['numeric', 'decimal'].includes(el.getAttribute('inputmode') || '') && el.type !== 'file';
+}
 function leitorEntregar() {
   clearTimeout(LEITOR.timer); LEITOR.timer = null;
-  const cod = LEITOR.buf, rapido = LEITOR.intervalos.length && Math.max(...LEITOR.intervalos) < 120;
-  LEITOR.buf = ''; LEITOR.intervalos = [];
-  if (cod.length >= 8 && cod.length <= 14 && rapido) {
-    if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
-    codigoLido(cod);
-    return true;
+  const cod = LEITOR.buf, campo = LEITOR.campo;
+  const rapido = LEITOR.intervalos.length >= 6 && Math.max(...LEITOR.intervalos) < 120;
+  LEITOR.buf = ''; LEITOR.intervalos = []; LEITOR.campo = null;
+  if (cod.length < 8 || cod.length > 14 || !rapido) return false;
+  // o leitor escreveu (parte d)o código dentro do campo que estava selecionado: tira de lá.
+  // Se a tela foi redesenhada no meio do bip, o campo é outro elemento: acha pelo id.
+  const el = campo && (document.body.contains(campo) ? campo : (campo.id && document.getElementById(campo.id)));
+  if (el && el.id !== 'leitor-campo') {
+    for (let n = cod.length; n > 0; n--) {
+      if (el.value.endsWith(cod.slice(0, n))) {
+        el.value = el.value.slice(0, -n);
+        el.dispatchEvent(new Event('input', {bubbles: true}));
+        break;
+      }
+    }
   }
-  return false;
+  if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
+  codigoLido(cod);
+  return true;
 }
 document.addEventListener('keydown', e => {
   const alvo = e.target;
-  const campo = alvo && (alvo.tagName === 'INPUT' || alvo.tagName === 'TEXTAREA' || alvo.tagName === 'SELECT');
-  if (campo && alvo.id !== 'leitor-campo') return;          // digitando num campo: não atrapalha
+  const ehCampo = alvo && (alvo.tagName === 'INPUT' || alvo.tagName === 'TEXTAREA' || alvo.tagName === 'SELECT');
+  if (ehCampo && !campoDeTexto(alvo)) return;              // campo de número: não interfere
   const agora = Date.now();
-  if (agora - LEITOR.ultimo > 150) { LEITOR.buf = ''; LEITOR.intervalos = []; }
+  if (agora - LEITOR.ultimo > 150) { LEITOR.buf = ''; LEITOR.intervalos = []; LEITOR.campo = null; }
   else if (LEITOR.buf) LEITOR.intervalos.push(agora - LEITOR.ultimo);
   LEITOR.ultimo = agora;
   if (e.key === 'Enter' || e.key === 'Tab') {
-    if (LEITOR.buf.length >= 8) { e.preventDefault(); e.stopPropagation(); leitorEntregar(); }
+    if (LEITOR.buf.length >= 8 && LEITOR.intervalos.length >= 6 && Math.max(...LEITOR.intervalos) < 120) {
+      e.preventDefault(); e.stopPropagation(); leitorEntregar();
+    }
     return;
   }
   if (/^\d$/.test(e.key)) {
     LEITOR.buf += e.key;
-    if (LEITOR.buf.length >= 8) e.preventDefault();       // não deixa os números "apertarem" botões
+    if (ehCampo) LEITOR.campo = alvo;                           // guarda o 1º campo que recebeu números
+    if (!ehCampo && LEITOR.buf.length >= 8) e.preventDefault();   // não deixa os números "apertarem" botões
     clearTimeout(LEITOR.timer);
-    LEITOR.timer = setTimeout(leitorEntregar, 250);         // leitor sem Enter no fim
-  }
+    LEITOR.timer = setTimeout(leitorEntregar, 250);              // leitor que não manda Enter no fim
+  } else if (e.key.length === 1) { LEITOR.buf = ''; LEITOR.intervalos = []; }   // letra no meio: não é código
 }, true);
 
 function codigo14(cod) { const d = String(cod || '').replace(/\D/g, ''); return d.length >= 8 && d.length <= 14 ? d.padStart(14, '0') : null; }
@@ -1520,25 +1441,6 @@ const acoes = {
   // bipar
   'abrir-leitor': () => { ir('leitor', {lidos: []}); carregarCodigos(true); },
   'leitor-cadastrar': d => codigoDesconhecido(d.cod, () => testeLeitor(d.cod)),
-  'bip-alternar': () => {
-    if (!bipAoVivo() && !T.p.bip) return bipPorFoto();
-    T.p.bip = !T.p.bip; T.p.bipMsg = '';
-    if (T.nome === 'contagem') redesenharContagem(); else desenhar();
-    if (T.p.bip) bipLigar(); else bipDesligar();
-  },
-  'rot-bipar': () => {
-    if (!bipAoVivo()) return bipPorFoto();
-    abrirModal(`<div style="display:flex;justify-content:space-between;align-items:center"><div class="titulo-sec">Bipar produtos para a rotina</div>
-        <button class="icone-btn" data-acao="rot-bipar-fechar" aria-label="Fechar">${ICONES.fechar}</button></div>
-      <div class="campo"><input id="busca-secao" placeholder="Seção dos itens bipados (opcional)" value="${esc(T.p.ultimaSecao || '')}" aria-label="Seção"></div>
-      <div class="bip-modal"><video id="bip-video" playsinline muted autoplay></video><div class="bip-linha"></div>
-        <div class="bip-msg" id="bip-msg">Aponte para o código de barras</div></div>
-      <div id="bip-incluidos" style="display:flex;flex-direction:column;gap:4px;max-height:120px;overflow:auto"></div>
-      <button class="btn" data-acao="rot-bipar-fechar">Pronto</button>`);
-    document.getElementById('busca-secao').addEventListener('input', e => { T.p.ultimaSecao = e.target.value.trim(); });
-    bipLigar();
-  },
-  'rot-bipar-fechar': () => { bipDesligar(); fecharModal(); desenhar(); },
   'codigo-escolher': d => {
     T.p.sel = {produto_id: +d.pid, nome: d.nome, unidade: d.un};
     document.getElementById('prod-escolhido').textContent = '✓ ' + d.nome;
