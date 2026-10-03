@@ -1582,7 +1582,7 @@ def api_compras_preparar(usuario, rotina_id):
 
 
 @app.route('/api/compras/produtos', methods=['GET'])
-@compras_login(somente_gestor=True)
+@compras_login()   # [MELHORIA] o funcionário também busca produtos (para incluir na lista)
 def api_compras_produtos(usuario):
     return _resposta_compras(compras_database.buscar_produtos, request.args.get('q', ''))
 
@@ -1631,6 +1631,14 @@ def api_compras_lista(usuario, codigo):
 def api_compras_itens(usuario, codigo):
     dados = ler_json() or {}
     return _resposta_compras(compras_database.atualizar_itens, codigo, dados.get('itens') or [], usuario)
+
+
+@app.route('/api/compras/listas/<codigo>/adicionar', methods=['POST'])
+@compras_login()
+def api_compras_adicionar_item(usuario, codigo):
+    """Inclui na lista um produto que o sistema não sugeriu (ou muda a quantidade dele)."""
+    dados = ler_json() or {}
+    return _resposta_compras(compras_database.adicionar_item, codigo, dados.get('produto_id'), dados.get('qtd'), usuario)
 
 
 @app.route('/api/compras/listas/<codigo>/aprovar', methods=['POST'])

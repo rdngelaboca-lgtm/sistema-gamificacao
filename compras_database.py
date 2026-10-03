@@ -1255,3 +1255,71 @@ def vincular_codigo(codigo, produto_id, fator, usuario):
         conn.close()
     logger.info(f"Código {cod} ligado ao produto {produto_id} (fator {f}) por {usuario.get('nome')}")
     return {'codigo': cod, 'itens': listar_codigos().get(cod, [])}
+
+
+# ==============================================================================
+# == Incluir item na lista "na mão" ===========================================
+# ==============================================================================
+
+def adicionar_item(codigo, produto_id, qtd, usuario):
+    """
+    Coloca na lista um produto que o sistema NÃO sugeriu (ainda está aprendendo o consumo,
+    ou você quer comprar mesmo assim). Se o produto já está na lista, só muda a quantidade.
+    Mesmas regras das quantidades: lista aguardando aprovação = só o gestor mexe.
+    """
+    cab = _buscar_lista_cabecalho(codigo)
+    if not cab or cab['status'] == ST_PROCESSANDO:
+        raise ErroCompras("Lista não encontrada.")
+    if cab['status'] in (ST_FINALIZADA, ST_CANCELADA):
+        raise ErroCompras(f"Esta lista já está {cab['status']} e não pode mais mudar.")
+    if cab['status'] == ST_AGUARDANDO and not usuario.get('gestor'):
+        raise ErroCompras("Só o gestor mexe na lista antes de aprovar.")
+    try:
+        produto_id = int(produto_id)
+    except (TypeError, ValueError):
+        raise ErroCompras("Produto inválido.")
+    q = _qtd_valida(qtd, "Quantidade a comprar")
+    if q is None or q <= 0:
+        raise ErroCompras("Informe quanto comprar.")
+    conn = _conectar()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT 1 FROM CompraListaItens WHERE ListaID = ? AND ProdutoID = ?", (cab['lista_id'], produto_id))
+        if cur.fetchone():
+            cur.execute("UPDATE CompraListaItens SET QtdPedido = ? WHERE ListaID = ? AND ProdutoID = ?",
+                        (q, cab['lista_id'], produto_id))
+        else:
+            cur.execute("SELECT NomeProduto, UnidadeMedida, EstoqueMinimo FROM ProdutosEstoque WHERE ProdutoID = ?", (produto_id,))
+            p = cur.fetchone()
+            if not p:
+                raise ErroCompras("Produto não encontrado no estoque.")
+            permitidos = set()
+            if cab['rotina_id']:
+                cur.execute("SELECT Fornecedores FROM CompraRotinas WHERE RotinaID = ?", (cab['rotina_id'],))
+                r = cur.fetchone()
+                permitidos = set(_ler_ids(r[0])) if r else set()
+            hoje = _como_data(cab['data_contagem']) or date.today()
+            preco, _ = escolher_fornecedor(_precos_por_produto(cur, [produto_id], hoje).get(produto_id, []), permitidos)
+            fator = _dec(preco['Fator']) if preco and _dec(preco['Fator']) > 1 else Decimal('1')
+            cur.execute("SELECT COALESCE(MAX(Ordem), 0) FROM CompraListaItens WHERE ListaID = ?", (cab['lista_id'],))
+            ordem = int(cur.fetchone()[0] or 0) + 1
+            cur.execute("""INSERT INTO CompraListaItens (ListaID, ProdutoID, Ordem, Secao, NomeProduto, Unidade, QtdContada,
+                               EstoqueUsado, ConsumoDia, EstoqueMinimo, QtdSugerida, QtdPedido, Fator, FornecedorID,
+                               FornecedorNome, CustoUnid, DataPreco, Situacao, Alerta)
+                           VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, 0, ?, ?, ?, ?, ?, ?, '', ?)""",
+                        (cab['lista_id'], produto_id, ordem, 'Incluídos na mão', (p[0] or f'Produto {produto_id}')[:255],
+                         ((p[1] or 'UN').strip() or 'UN')[:20], _dec(p[2]), q, fator,
+                         preco['FornecedorID'] if preco else None, preco['Fornecedor'] if preco else None,
+                         preco['CustoUnid'] if preco else None, preco['Data'] if preco else None,
+                         f"Incluído na mão por {usuario.get('nome') or 'alguém'}"[:250]))
+        cur.execute("SELECT QtdPedido, CustoUnid FROM CompraListaItens WHERE ListaID = ?", (cab['lista_id'],))
+        valor = sum((_dec(a) * _dec(b) for a, b in cur.fetchall() if b is not None), Decimal('0'))
+        cur.execute("UPDATE CompraListas SET ValorEstimado = ? WHERE ListaID = ?", (valor.quantize(Decimal('0.01')), cab['lista_id']))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    logger.info(f"Lista {codigo}: produto {produto_id} incluído/ajustado na mão por {usuario.get('nome')} ({q}).")
+    return obter_lista(codigo)

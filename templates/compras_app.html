@@ -183,6 +183,21 @@
   @media (max-height: 640px) { .tecla { height: 44px; } .cl-lin { min-height: 46px; } }
   .piscar { animation: piscar 1.2s ease-out; }
   @keyframes piscar { 0% { box-shadow: 0 0 0 3px var(--verde); } 100% { box-shadow: 0 0 0 0 transparent; } }
+  .stp { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+  .stp button { width: 40px; height: 44px; border-radius: 12px; border: 1px solid var(--verde-borda); background: #EEF7F5; color: var(--verde-esc);
+    font-size: 22px; font-weight: 700; line-height: 1; touch-action: manipulation; }
+  .stp .stp-v, .stp .estatico { width: auto; min-width: 64px; padding: 0 8px; font-size: 16px; font-weight: 800; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; height: 44px; border-radius: 12px; }
+  .stp .estatico { border: 1px solid var(--linha); background: #F7F9F8; color: var(--suave); }
+  .stp-v small, .estatico small { font-size: 11px; font-weight: 600; opacity: .8; }
+  .lin-nome { border: 0; background: transparent; text-align: left; padding: 0; min-width: 0; }
+  .chip-ap { display: inline-block; font-size: 11px; font-weight: 700; color: #5B4A00; background: #FFF1C2; border-radius: 99px; padding: 1px 7px; vertical-align: middle; }
+  .mais-btn { width: 44px; height: 44px; border-radius: 12px; border: 1px solid var(--verde-borda); background: #EEF7F5; color: var(--verde-esc);
+    font-size: 24px; font-weight: 700; flex-shrink: 0; }
+  .item-carrinho { flex-direction: column; align-items: stretch; gap: 2px; padding: 8px 10px 8px 14px; }
+  .item-carrinho .toque { min-height: 40px; padding: 2px 0; }
+  .stp.mini button { width: 36px; height: 38px; font-size: 20px; }
+  .stp.mini .stp-v, .stp.mini .estatico { height: 38px; min-width: 58px; font-size: 15px; }
   a { color: var(--verde); }
 </style>
 </head>
@@ -199,7 +214,7 @@
 
 // ---------------------------------------------------------------- utilidades
 const CHAVE = 'gb_compras_v1';
-const VERSAO_APP = '8';   // aparece no rodapé do início: confira se o celular pegou a versão nova
+const VERSAO_APP = '9';   // aparece no rodapé do início: confira se o celular pegou a versão nova
 const $app = document.getElementById('app');
 const DIAS_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];            // 1=Dom ... 7=Sáb (padrão do sistema)
 const FRACIONADAS = ['KG', 'G', 'GR', 'L', 'LT', 'ML', 'M'];
@@ -308,7 +323,8 @@ function marcarOnline(v) {
 function enfileirar(tarefa) {
   // mudanças no mesmo item da mesma lista: só a última importa
   if (tarefa.tipo === 'itens') {
-    const pend = E.fila.find(t => t.tipo === 'itens' && t.codigo === tarefa.codigo && !t.enviando);
+    const ult = E.fila[E.fila.length - 1];
+    const pend = ult && ult.tipo === 'itens' && ult.codigo === tarefa.codigo && !ult.enviando ? ult : null;
     if (pend) {
       tarefa.corpo.itens.forEach(novo => {
         const i = pend.corpo.itens.findIndex(x => x.produto_id === novo.produto_id);
@@ -386,7 +402,7 @@ window.addEventListener('offline', () => { online = false; atualizarFaixaRede();
 setInterval(() => { if (E.fila.length) sincronizar(); }, 20000);
 
 // ---------------------------------------------------------------- navegação
-function ir(nome, p) { T = {nome, p: p || {}}; desenhar(); window.scrollTo(0, 0); }
+function ir(nome, p) { document.querySelectorAll('.toast').forEach(t => t.remove()); T = {nome, p: p || {}}; desenhar(); window.scrollTo(0, 0); }
 function desenhar() {
   if (!E.usuario && T.nome !== 'login') { T = {nome: 'login', p: {}}; setTimeout(carregarUsuarios, 0); }
   const f = TELAS[T.nome] || TELAS.inicio;
@@ -755,13 +771,17 @@ async function terminarContagem() {
 TELAS.lista = p => {
   const l = E.listas[p.codigo];
   if (!l || !l.itens) return `${topo('Lista', '', 'nav-inicio')}<div class="corpo"><div class="vazio">${online ? 'Carregando…' : 'Esta lista não está salva neste celular. Conecte à internet.'}</div></div>`;
-  const comprar = l.itens.filter(i => i.qtd_pedido > 0);
-  const naoPrecisa = l.itens.filter(i => !(i.qtd_pedido > 0));
+  const pode = podeMexer(l);
+  const comprar = l.itens.filter(i => i.qtd_pedido > 0 || (p.vistos && p.vistos.includes(i.produto_id)));
+  p.vistos = comprar.map(i => i.produto_id);          // o que zerou agora continua na tela (dá para voltar)
+  const naoPrecisa = l.itens.filter(i => !p.vistos.includes(i.produto_id))
+    .map(i => Object.assign({}, i, {dura: i.consumo_dia > 0 && i.estoque != null ? i.estoque / i.consumo_dia : null}))
+    .sort((a, b) => (a.dura == null) - (b.dura == null) || (a.dura || 0) - (b.dura || 0) || a.nome.localeCompare(b.nome));
+  const aprendendo = l.itens.filter(ehAprendendo).length;
   const grupos = agruparPorFornecedor(comprar);
-  const podeQtd = l.status === 'aprovada' || (l.status === 'aguardando' && E.usuario.gestor);
   const corpoGrupos = grupos.map(g => `<div class="grupo-forn">
-      <div class="grupo-cab"><div class="nome">${esc(g.nome)}</div><div class="pequeno suave" style="font-weight:600">${g.itens.length} ite${g.itens.length > 1 ? 'ns' : 'm'}${g.valor ? ' · ≈ ' + fmtReais(g.valor) : ''}</div></div>
-      <div class="linhas">${g.itens.map(i => linhaItemLista(i, podeQtd, l)).join('')}</div></div>`).join('');
+      <div class="grupo-cab"><div class="nome">${esc(g.nome)}</div><div class="pequeno suave" style="font-weight:600;text-align:right">${g.itens.length} ite${g.itens.length > 1 ? 'ns' : 'm'}${g.valor ? ' · ≈ ' + fmtReais(g.valor) : ''}</div></div>
+      <div class="linhas">${g.itens.map(i => linhaItemLista(i, pode, l)).join('')}</div></div>`).join('');
   const st = {aguardando: `<div class="aviso">${E.usuario.gestor ? 'Contada por ' + esc(l.funcionario) + '. Confira as quantidades e aprove.' : 'Aguardando o gestor aprovar. Você recebe a lista aprovada aqui.'}</div>`,
               finalizada: '<div class="info">Compra finalizada.</div>', cancelada: '<div class="aviso">Lista cancelada.</div>'}[l.status] || '';
   let botoes = '';
@@ -769,42 +789,100 @@ TELAS.lista = p => {
   else if (l.status === 'aguardando') botoes = `<button class="btn claro" data-acao="lista-atualizar" data-codigo="${esc(l.codigo)}">Atualizar situação</button>`;
   else if (l.status === 'aprovada') botoes = `<button class="btn" data-acao="abrir-carrinho" data-codigo="${esc(l.codigo)}">${comprar.some(i => i.situacao) ? 'Continuar compra' : 'Começar compra'}</button>`;
   const compartilhar = `<button class="icone-btn" style="width:56px;height:56px;border:1px solid var(--linha);background:#fff;border-radius:16px" data-acao="lista-compartilhar" data-codigo="${esc(l.codigo)}" aria-label="Compartilhar a lista">${ICONES.enviar}</button>`;
-  return `${faixaRede()}${topo('Lista para ' + l.dias_cobertura + ' dias', `${l.rotina} · ${l.qtd_contados != null ? l.qtd_contados : '?'} contados · ${comprar.length} para comprar`, 'nav-inicio')}
+  const filtroNp = (p.buscaNp || '').trim();
+  const npFiltrados = naoPrecisa.filter(i => !filtroNp || normalizarTexto(i.nome).includes(normalizarTexto(filtroNp)));
+  return `${faixaRede()}${topo('Lista para ' + l.dias_cobertura + ' dias', `${l.rotina} · ${l.qtd_contados != null ? l.qtd_contados : '?'} contados · ${comprar.filter(i => i.qtd_pedido > 0).length} para comprar`, 'nav-inicio')}
     <div class="corpo">
       ${l.local ? '<div class="aviso">Calculada no celular, sem internet. Os números podem mudar um pouco quando a lista for enviada.</div>' : ''}
       ${st}
+      ${aprendendo && l.status !== 'finalizada' ? `<div class="info"><b>${aprendendo} itens ainda em aprendizado</b> (o sistema só tem 1 contagem deles). Confira as quantidades: toque no nome do item para ver a conta.</div>` : ''}
       <div class="cartao" style="display:flex;justify-content:space-between;align-items:center;gap:10px">
         <div><div class="mini suave" style="font-weight:600">Estimativa pelos últimos preços</div><div style="font-size:24px;font-weight:800">≈ ${fmtReais(l.valor_estimado)}</div></div>
-        ${podeQtd ? '<div class="mini suave" style="text-align:right;line-height:1.35">Toque na quantidade<br>para ajustar</div>' : ''}</div>
-      ${corpoGrupos || '<div class="vazio">Nada para comprar nesta lista. 🎉</div>'}
-      ${naoPrecisa.length ? `<details class="cartao"><summary style="font-weight:700;cursor:pointer;min-height:28px">Não precisa comprar (${naoPrecisa.length})</summary>
-          <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px">${naoPrecisa.map(i => `<div class="pequeno"><b>${esc(i.nome)}</b> <span class="suave">· tem ${fmtQtd(i.estoque)} ${esc(i.unidade)}${i.consumo_dia ? ' · dura ~' + Math.floor(i.estoque / i.consumo_dia) + ' dias' : ''}</span>${i.alerta ? `<div class="mini" style="color:var(--laranja)">${esc(i.alerta)}</div>` : ''}</div>`).join('')}</div></details>` : ''}
+      </div>
+      ${pode ? `<button class="btn claro medio" data-acao="incluir-item" data-codigo="${esc(l.codigo)}">+ Incluir item na compra (buscar ou bipar)</button>` : ''}
+      ${corpoGrupos || '<div class="vazio">Nada para comprar nesta lista.</div>'}
+      ${naoPrecisa.length ? `<details class="cartao" ${p.npAberto ? 'open' : ''} data-acao-toggle="np">
+          <summary style="font-weight:700;cursor:pointer;min-height:28px">Não precisa comprar (${naoPrecisa.length})${pode ? ' · toque + para comprar mesmo assim' : ''}</summary>
+          <div class="campo" style="margin-top:10px"><input id="busca-np" placeholder="Procurar item…" value="${esc(filtroNp)}" autocomplete="off" aria-label="Procurar item que não precisa comprar"></div>
+          <div class="linhas" style="margin-top:10px;border:0">${npFiltrados.slice(0, 120).map(i => `<div class="lin" style="padding:9px 2px">
+            <button class="grow lin-nome" data-acao="item-conta" data-codigo="${esc(l.codigo)}" data-pid="${i.produto_id}">
+              <div style="font-weight:700;font-size:15px">${esc(i.nome)} ${ehAprendendo(i) ? '<span class="chip-ap">aprendendo</span>' : ''}</div>
+              <div class="mini suave">tem ${i.estoque == null ? '?' : fmtQtd(Math.round(i.estoque * 10) / 10) + ' ' + esc(unCurta(i.unidade))}${i.dura != null ? ' · dura ~' + Math.floor(i.dura) + ' dias' : ''}</div></button>
+            ${pode ? `<button class="mais-btn" data-acao="np-comprar" data-codigo="${esc(l.codigo)}" data-pid="${i.produto_id}" aria-label="Comprar ${esc(i.nome)}">+</button>` : ''}</div>`).join('')
+            || '<div class="mini suave" style="padding:8px 0">Nenhum item com esse nome.</div>'}</div></details>` : ''}
       ${['aguardando', 'aprovada'].includes(l.status) && (E.usuario.gestor || l.funcionario_id === E.usuario.id) ? `<button class="btn claro medio" data-acao="lista-cancelar" data-codigo="${esc(l.codigo)}">Cancelar esta lista</button>` : ''}
     </div>
     ${botoes ? `<div class="rodape"><div style="display:grid;grid-template-columns:56px minmax(0,1fr);gap:10px">${compartilhar}${botoes}</div></div>` : ''}`;
 };
+TELAS_DEPOIS.lista = p => {
+  const b = document.getElementById('busca-np');
+  if (b) b.addEventListener('input', () => {
+    p.buscaNp = b.value; p.npAberto = true;
+    const pos = b.selectionStart; desenhar();
+    const n = document.getElementById('busca-np'); if (n) { n.focus(); n.setSelectionRange(pos, pos); }
+  });
+  const det = document.querySelector('details[data-acao-toggle="np"]');
+  if (det) det.addEventListener('toggle', () => { p.npAberto = det.open; });
+};
+function normalizarTexto(t) { return String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase(); }
+function podeMexer(l) { return l.status === 'aprovada' || (l.status === 'aguardando' && E.usuario.gestor); }
+function ehAprendendo(i) { return /Consumo aproximado|Nunca contado|Sem histórico/.test(i.alerta || ''); }
+function alertaCurto(i) {
+  return (i.alerta || '').split(' · ').filter(a => a && !/Consumo aproximado|Nunca contado|Sem histórico/.test(a)).map(a =>
+    /^Não contado agora/.test(a) ? 'não contado agora' : /^Sem contagem/.test(a) ? 'sem contagem' : /^Conferir/.test(a) ? '⚠ conferir consumo'
+    : /^Nunca comprado nos fornecedores/.test(a) ? 'fornecedor fora da rotina' : /^Incluído na mão por/.test(a) ? a.replace('Incluído na mão por', 'incluído por') : a).join(' · ');
+}
+function passoDe(i) { return i.fator > 1 ? i.fator : 1; }
+function nomeCurto(nome) {
+  if (!nome) return 'Sem preço registrado';
+  const n = normalizarTexto(nome);
+  const marcas = [['sendas', 'Assaí'], ['assai', 'Assaí'], ['atacadao', 'Atacadão'], ['comper', 'Comper'], ['fort atacad', 'Fort Atacadista'],
+                  ['big lar', 'Big Lar'], ['carrefour', 'Carrefour'], ['makro', 'Makro'], ['tenda', 'Tenda']];
+  for (const [chave, curto] of marcas) if (n.includes(chave)) return curto;
+  let t = ' ' + String(nome).toUpperCase().replace(/[.,]/g, ' ') + ' ';
+  const tirar = ['INDUSTRIAL E COMERCIAL', 'INDUSTRIA E COMERCIO', 'COMERCIO E INDUSTRIA', 'COMERCIO DE', 'COMERCIO', 'INDUSTRIA', 'DISTRIBUIDORA DE',
+                 'DISTRIBUIDORA', 'DISTRIBUICAO', 'ATACADISTA', 'ALIMENTOS', 'ALIMENTICIOS', 'PRODUTOS', 'SOBREMESAS', 'EIRELI', 'LTDA', 'EPP', ' ME ',
+                 ' S/A', ' SA ', ' S A ', ' DE ', ' DO ', ' DA ', ' E ', ' LJ\\d+'];
+  for (const x of tirar) t = t.replace(new RegExp(x.replace('/', '\\/'), 'g'), ' ');
+  const palavras = t.trim().split(/\s+/).filter(w => w.length > 1 && !/^LJ\d+$/.test(w));
+  const curto = palavras.slice(0, 2).join(' ') || String(nome);
+  return curto.toLowerCase().replace(/(^|\s)(\S)/g, (m, e, l) => e + l.toUpperCase());
+}
 function agruparPorFornecedor(itens) {
   const mapa = new Map();
   for (const i of itens) {
-    const chave = i.fornecedor || 'Sem preço registrado';
-    if (!mapa.has(chave)) mapa.set(chave, {nome: chave, itens: [], valor: 0});
-    const g = mapa.get(chave); g.itens.push(i); if (i.custo) g.valor += i.custo * i.qtd_pedido;
+    const chave = nomeCurto(i.fornecedor);
+    if (!mapa.has(chave)) mapa.set(chave, {nome: chave, itens: [], valor: 0, feitos: 0});
+    const g = mapa.get(chave); g.itens.push(i); if (i.custo) g.valor += i.custo * (i.qtd_pedido || 0); if (i.situacao) g.feitos++;
   }
   return [...mapa.values()].sort((a, b) => (a.nome === 'Sem preço registrado') - (b.nome === 'Sem preço registrado') || b.itens.length - a.itens.length);
 }
-function linhaItemLista(i, podeQtd, l) {
-  let preco = 'Nenhuma compra no sistema ainda', cor = 'var(--laranja)', peso = 700;
-  if (i.custo) {
-    const d = diasDesde(i.data_preco);
-    const antigo = d != null && d > PRECO_ANTIGO_DIAS;
-    preco = `${fmtReais(i.custo)}/${esc(i.unidade).toLowerCase()} · ${d === 0 ? 'hoje' : d === 1 ? 'há 1 dia' : 'há ' + d + ' dias'}${antigo ? ' (preço antigo)' : ''}`;
-    cor = antigo ? 'var(--laranja)' : 'var(--suave)'; peso = antigo ? 700 : 500;
-  }
+function qtdHTML(i) {
+  const q = i.qtd_pedido || 0, f = passoDe(i);
+  if (!q) return '0';
+  if (f > 1 && Math.abs(q / f - Math.round(q / f)) < 1e-6) return `${Math.round(q / f)} cx<small>${fmtQtd(q)} ${esc(unCurta(i.unidade))}</small>`;
+  return `${fmtQtd(q)}<small>${esc(unCurta(i.unidade))}</small>`;
+}
+function stepper(l, i, pode, mini) {
+  if (!pode) return `<div class="stp ${mini ? 'mini' : ''}"><div class="stp-v estatico">${qtdHTML(i)}</div></div>`;
+  return `<div class="stp ${mini ? 'mini' : ''}"><button data-acao="qtd-menos" data-codigo="${esc(l.codigo)}" data-pid="${i.produto_id}" aria-label="Menos ${esc(i.nome)}">−</button>
+    <button class="stp-v" data-acao="lista-qtd" data-codigo="${esc(l.codigo)}" data-pid="${i.produto_id}" aria-label="Digitar quantidade de ${esc(i.nome)}">${qtdHTML(i)}</button>
+    <button data-acao="qtd-mais" data-codigo="${esc(l.codigo)}" data-pid="${i.produto_id}" aria-label="Mais ${esc(i.nome)}">+</button></div>`;
+}
+function textoPreco(i) {
+  if (!i.custo) return {txt: 'sem preço registrado', cor: 'var(--laranja)'};
+  const d = diasDesde(i.data_preco), antigo = d != null && d > PRECO_ANTIGO_DIAS;
+  return {txt: `${fmtReais(i.custo)}/${esc(unCurta(i.unidade))} · ${d === 0 ? 'hoje' : d === 1 ? 'há 1 dia' : 'há ' + d + ' dias'}`, cor: antigo ? 'var(--laranja)' : 'var(--suave)'};
+}
+function linhaItemLista(i, pode, l) {
+  const pr = textoPreco(i), al = alertaCurto(i);
   const marca = i.situacao === 'comprado' ? ' · <b style="color:var(--verde)">no carrinho</b>' : i.situacao === 'faltou' ? ' · <b style="color:var(--laranja)">não tinha</b>' : '';
-  return `<div class="lin"><div class="grow"><div style="font-size:15px;font-weight:700">${esc(i.nome)}</div>
-      <div class="mini" style="color:${cor};font-weight:${peso}">${preco}${marca}</div>
-      ${i.alerta ? `<div class="mini" style="color:var(--laranja)">${esc(i.alerta)}</div>` : ''}</div>
-    <button class="qtd-btn" data-acao="lista-qtd" data-codigo="${esc(l.codigo)}" data-pid="${i.produto_id}" ${podeQtd ? '' : 'disabled'} aria-label="Quantidade de ${esc(i.nome)}: ${textoQtd(i.qtd_pedido, i)}">${textoQtd(i.qtd_pedido, i)}</button></div>`;
+  return `<div class="lin ${T.p.piscar === i.produto_id ? 'piscar' : ''}" id="li-${i.produto_id}" style="${i.qtd_pedido > 0 ? '' : 'opacity:.55'}">
+    <button class="grow lin-nome" data-acao="item-conta" data-codigo="${esc(l.codigo)}" data-pid="${i.produto_id}">
+      <div style="font-size:15px;font-weight:700">${esc(i.nome)} ${ehAprendendo(i) ? '<span class="chip-ap">aprendendo</span>' : ''}</div>
+      <div class="mini" style="color:${pr.cor};font-weight:600">${pr.txt}${marca}</div>
+      ${al ? `<div class="mini" style="color:var(--laranja)">${esc(al)}</div>` : ''}</button>
+    ${stepper(l, i, pode)}</div>`;
 }
 function textoListaParaCompartilhar(l) {
   const linhas = [`🛒 ${l.rotina} · para ${l.dias_cobertura} dias`];
@@ -836,25 +914,125 @@ function mudarStatusLista(codigo, acao, novo, descricao) {
 TELAS.carrinho = p => {
   const l = E.listas[p.codigo];
   if (!l || !l.itens) return TELAS.lista(p);
-  const comprar = l.itens.filter(i => i.qtd_pedido > 0);
+  const pode = podeMexer(l);
+  const comprar = l.itens.filter(i => i.qtd_pedido > 0 || (p.vistos && p.vistos.includes(i.produto_id)));
+  p.vistos = comprar.map(i => i.produto_id);
+  const ativos = comprar.filter(i => i.qtd_pedido > 0);
   const grupos = agruparPorFornecedor(comprar);
   const filtro = p.filtro && grupos.some(g => g.nome === p.filtro) ? p.filtro : null;
-  const mostrar = filtro ? grupos.find(g => g.nome === filtro).itens : comprar;
-  const feitos = comprar.filter(i => i.situacao === 'comprado').length, faltou = comprar.filter(i => i.situacao === 'faltou').length;
-  const filtros = `<div class="filtros">${grupos.map(g => `<button class="filtro ${filtro === g.nome ? 'sel' : ''}" data-acao="car-filtro" data-f="${esc(g.nome)}">${esc(g.nome)} · ${g.itens.length}</button>`).join('')}
-      <button class="filtro ${!filtro ? 'sel' : ''}" data-acao="car-filtro" data-f="">Todos</button></div>`;
-  const itens = mostrar.map(i => `<div class="item-carrinho ${i.situacao ? 'feito ' + i.situacao : ''} ${p.piscar === i.produto_id ? 'piscar' : ''}" id="car-${i.produto_id}">
-      <button class="toque" data-acao="car-marcar" data-pid="${i.produto_id}" aria-pressed="${i.situacao === 'comprado'}">
-        <div class="check ${i.situacao === 'comprado' ? 'on' : ''}">${i.situacao === 'comprado' ? ICONES.ok : ''}</div>
-        <div class="grow"><div class="nome">${esc(i.nome)}</div><div class="pequeno suave">${textoQtd(i.qtd_pedido, i)}${filtro ? '' : ' · ' + esc(i.fornecedor || 'sem preço')}</div></div></button>
-      <button class="faltou-btn ${i.situacao === 'faltou' ? 'on' : ''}" data-acao="car-faltou" data-pid="${i.produto_id}" aria-pressed="${i.situacao === 'faltou'}">Não tinha</button></div>`).join('');
-  return `${faixaRede()}${topo('No carrinho', `${feitos} de ${comprar.length} itens${faltou ? ' · ' + faltou + ' em falta' : ''}`, 'car-voltar')}
-    <div class="corpo">${grupos.length > 1 ? filtros : ''}
-      <div class="lista-cartoes">${itens || '<div class="vazio">Nada para comprar.</div>'}</div>
-      <div class="mini suave" style="text-align:center">Toque no item para marcar · "Não tinha" se faltou no mercado</div></div>
+  const feitos = ativos.filter(i => i.situacao === 'comprado').length, faltou = ativos.filter(i => i.situacao === 'faltou').length;
+  const valorCarrinho = ativos.filter(i => i.situacao === 'comprado').reduce((s, i) => s + (i.custo ? i.custo * i.qtd_pedido : 0), 0);
+  const valorTotal = ativos.reduce((s, i) => s + (i.custo ? i.custo * i.qtd_pedido : 0), 0);
+  const filtros = grupos.length > 1 ? `<div class="filtros">${grupos.map(g => `<button class="filtro ${filtro === g.nome ? 'sel' : ''}" data-acao="car-filtro" data-f="${esc(g.nome)}">${esc(g.nome)} · ${g.itens.length}</button>`).join('')}
+      <button class="filtro ${!filtro ? 'sel' : ''}" data-acao="car-filtro" data-f="">Todos</button></div>` : '';
+  const item = i => `<div class="item-carrinho ${i.situacao ? 'feito ' + i.situacao : ''} ${p.piscar === i.produto_id ? 'piscar' : ''}" id="car-${i.produto_id}" style="${i.qtd_pedido > 0 ? '' : 'opacity:.55'}">
+      <div style="display:flex;align-items:center;gap:12px;width:100%">
+        <button class="toque" data-acao="car-marcar" data-pid="${i.produto_id}" aria-pressed="${i.situacao === 'comprado'}">
+          <div class="check ${i.situacao === 'comprado' ? 'on' : ''}">${i.situacao === 'comprado' ? ICONES.ok : ''}</div>
+          <div class="grow nome">${esc(i.nome)}</div></button>
+        <button class="faltou-btn ${i.situacao === 'faltou' ? 'on' : ''}" data-acao="car-faltou" data-pid="${i.produto_id}" aria-pressed="${i.situacao === 'faltou'}">Não tinha</button></div>
+      <div style="display:flex;align-items:center;gap:8px;width:100%;padding-left:46px;box-sizing:border-box">
+        <div class="grow mini suave" style="min-width:0">${textoPreco(i).txt}${ehAprendendo(i) ? ' <span class="chip-ap">aprendendo</span>' : ''}</div>
+        ${stepper(l, i, pode, true)}</div></div>`;
+  const corpo = filtro ? grupos.find(g => g.nome === filtro).itens.map(item).join('')
+    : grupos.map(g => `<div class="grupo-cab" style="margin-top:4px"><div class="nome">${esc(g.nome)}</div>
+        <div class="pequeno suave" style="font-weight:600">${g.feitos} de ${g.itens.length}${g.valor ? ' · ≈ ' + fmtReais(g.valor) : ''}</div></div>${g.itens.map(item).join('')}`).join('');
+  return `${faixaRede()}${topo('No carrinho', `${feitos} de ${ativos.length} itens${faltou ? ' · ' + faltou + ' em falta' : ''}`, 'car-voltar')}
+    <div class="corpo">
+      <div class="cartao" style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:12px 14px">
+        <div><div class="mini suave" style="font-weight:600">No carrinho até agora</div>
+          <div style="font-size:20px;font-weight:800">${fmtReais(valorCarrinho)} <span class="pequeno suave" style="font-weight:600">de ≈ ${fmtReais(valorTotal)}</span></div></div>
+        ${pode ? `<button class="btn medio" style="width:auto;padding:0 14px;flex-shrink:0" data-acao="incluir-item" data-codigo="${esc(l.codigo)}">+ Incluir</button>` : ''}</div>
+      ${filtros}
+      <div class="lista-cartoes">${corpo || '<div class="vazio">Nada para comprar.</div>'}</div>
+      <div class="mini suave" style="text-align:center">Toque no item para marcar · − e + mudam a quantidade · bipe com o leitor para marcar ou incluir</div></div>
     <div class="rodape"><button class="btn" data-acao="car-finalizar">Finalizar compra</button></div>`;
 };
 
+// ---------------------------------------------------------------- incluir item / como calculei
+function modalIncluirItem(codigo) {
+  abrirModal(`<div style="display:flex;justify-content:space-between;align-items:center"><div class="titulo-sec">Incluir item na compra</div>
+      <button class="icone-btn" data-acao="fechar-modal" aria-label="Fechar">${ICONES.fechar}</button></div>
+    <div class="mini suave">Busque pelo nome ou bipe o produto com o leitor de código de barras.</div>
+    <div class="campo"><input id="busca-prod" placeholder="Digite parte do nome" autocomplete="off" aria-label="Buscar produto"></div>
+    <div id="busca-res" class="linhas" style="max-height:340px;overflow:auto"><div class="vazio" style="padding:14px">Digite para buscar.</div></div>`);
+  T.p.incluirEm = codigo;
+  ligarBuscaProduto('incluir-escolher');
+}
+function precoLocal(l, pid) {
+  // preço/caixa do item a partir dos dados da contagem salvos no celular (quando houver)
+  const prep = E.preparos[l.rotina_id];
+  const it = prep && prep.itens.find(x => x.produto_id === pid);
+  if (!it || !it.precos || !it.precos.length) return null;
+  const [pr] = escolherFornecedor(it.precos, prep.fornecedores || []);
+  return pr;
+}
+function incluirNaLista(codigo, prod, qtd) {
+  const l = E.listas[codigo];
+  let it = l.itens.find(i => i.produto_id === prod.produto_id);
+  if (it) {
+    const nova = Math.max(it.qtd_pedido || 0, qtd || passoDe(it));
+    mudarItensLista(codigo, [{produto_id: it.produto_id, qtd_pedido: nova}], 'Quantidade');
+  } else {
+    const pr = precoLocal(l, prod.produto_id);
+    const fator = pr && pr.fator > 1 ? pr.fator : 1;
+    it = {produto_id: prod.produto_id, nome: prod.nome, unidade: prod.unidade || 'UN', ordem: 99999, secao: 'Incluídos na mão',
+          qtd_contada: null, estoque: null, consumo_dia: null, estoque_minimo: null, qtd_sugerida: 0, qtd_pedido: qtd || fator,
+          fator, caixas: null, fornecedor_id: pr ? pr.fornecedor_id : null, fornecedor: pr ? pr.fornecedor : null,
+          custo: pr ? pr.custo : null, data_preco: pr ? pr.data : null, situacao: '', alerta: 'Incluído na mão por ' + E.usuario.nome};
+    l.itens.push(it);
+    l.valor_estimado = Math.round(l.itens.reduce((s, i) => s + (i.custo && i.qtd_pedido ? i.custo * i.qtd_pedido : 0), 0) * 100) / 100;
+    enfileirar({tipo: 'adicionar', codigo, metodo: 'POST', url: `/api/compras/listas/${encodeURIComponent(codigo)}/adicionar`,
+                corpo: {produto_id: prod.produto_id, qtd: it.qtd_pedido}, descricao: 'Incluir ' + prod.nome});
+  }
+  T.p.piscar = prod.produto_id;
+  if (T.p.vistos && !T.p.vistos.includes(prod.produto_id)) T.p.vistos.push(prod.produto_id);
+  salvar(); desenhar();
+  const el = document.getElementById((T.nome === 'carrinho' ? 'car-' : 'li-') + prod.produto_id);
+  if (el) el.scrollIntoView({block: 'center', behavior: 'smooth'});
+  toast('✓ ' + prod.nome + ' na compra');
+}
+function mudarQtdLista(codigo, pid, sentido) {
+  const l = E.listas[codigo], it = l.itens.find(i => i.produto_id === pid);
+  if (!it || !podeMexer(l)) return;
+  const passo = passoDe(it);
+  let nova = Math.round(((it.qtd_pedido || 0) + sentido * passo) * 1000) / 1000;
+  if (sentido < 0 && passo > 1) nova = Math.max(0, Math.ceil((it.qtd_pedido || 0) / passo - 1 - 1e-9) * passo);   // volta para caixa inteira
+  nova = Math.max(0, nova);
+  mudarItensLista(codigo, [{produto_id: pid, qtd_pedido: nova}], 'Quantidade');
+  if (navigator.vibrate) navigator.vibrate(8);
+  desenhar();
+}
+function modalComoCalculei(codigo, pid) {
+  const l = E.listas[codigo], i = l.itens.find(x => x.produto_id === pid);
+  const un = esc(unCurta(i.unidade)), dias = (l.dias_cobertura || 0) + (l.prazo_dias || 0);
+  let linhas;
+  if (/^Incluído na mão/.test(i.alerta || '') && i.estoque == null) {
+    linhas = `<div>Este item foi <b>incluído na mão</b>: o sistema não calculou sugestão para ele.</div>`;
+  } else {
+    const cons = i.consumo_dia || 0, precisa = cons * dias, min = i.estoque_minimo || 0;
+    linhas = `
+      <div class="tabela">
+        <div><span class="suave">${i.qtd_contada != null ? 'Contado agora' : 'Estoque estimado'}</span><b>${i.estoque == null ? '?' : fmtQtd(Math.round(i.estoque * 100) / 100) + ' ' + un}</b></div>
+        <div><span class="suave">Gasta por dia ${ehAprendendo(i) ? '(aproximado)' : ''}</span><b>${fmtQtd(Math.round(cons * 1000) / 1000)} ${un}</b></div>
+        <div><span class="suave">Para ${l.dias_cobertura} dias${l.prazo_dias ? ' + ' + l.prazo_dias + ' de prazo' : ''}</span><b>${fmtQtd(Math.round(precisa * 100) / 100)} ${un}</b></div>
+        <div><span class="suave">Estoque mínimo</span><b>+ ${fmtQtd(min)} ${un}</b></div>
+        <div><span class="suave">Menos o que tem</span><b>− ${i.estoque == null ? '?' : fmtQtd(Math.round(i.estoque * 100) / 100)} ${un}</b></div>
+        <div class="div"></div>
+        <div><span style="font-weight:700">Sugestão</span><b>${fmtQtd(Math.round((i.qtd_sugerida || 0) * 100) / 100)} ${un}${passoDe(i) > 1 ? ' → caixas de ' + fmtQtd(passoDe(i)) : ''}</b></div>
+      </div>`;
+  }
+  const pr = textoPreco(i);
+  abrirModal(`<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px"><div><div class="titulo-sec">${esc(i.nome)}</div>
+      <div class="mini suave">Como o app chegou na sugestão</div></div>
+      <button class="icone-btn" data-acao="fechar-modal" aria-label="Fechar">${ICONES.fechar}</button></div>
+    ${ehAprendendo(i) ? '<div class="info">🧠 <b>Em aprendizado:</b> o sistema ainda tem poucas contagens deste item, então o consumo é uma estimativa. Se achar pouco ou muito, ajuste a quantidade: a cada contagem a conta melhora.</div>' : ''}
+    <div class="cartao">${linhas}</div>
+    <div class="pequeno"><b>Preço:</b> <span style="color:${pr.cor}">${pr.txt}</span>${i.fornecedor ? ' · ' + esc(nomeCurto(i.fornecedor)) : ''}</div>
+    ${i.alerta ? `<div class="mini suave">${esc(i.alerta)}</div>` : ''}
+    ${podeMexer(l) ? `<div style="display:flex;justify-content:center">${stepper(l, i, true)}</div>` : ''}
+    <button class="btn claro medio" data-acao="fechar-modal">Fechar</button>`);
+}
 // ---------------------------------------------------------------- finalizar
 TELAS.finalizar = p => {
   const l = E.listas[p.codigo];
@@ -1260,7 +1438,7 @@ async function carregarCodigos(forcar) {
 function codigoLido(cod) {
   if (T.nome === 'leitor') return testeLeitor(cod);
   if (T.nome === 'contagem') return bipContagem(cod);
-  if (T.nome === 'carrinho') return bipCarrinho(cod);
+  if (T.nome === 'carrinho' || T.nome === 'lista') return bipCarrinho(cod);
   if (T.nome === 'rotina' && T.p.r) return bipRotina(cod);
 }
 function codigoDesconhecido(cod, depois) {
@@ -1322,18 +1500,28 @@ async function bipContagem(cod) {
   irParaItem(k);
 }
 async function bipCarrinho(cod) {
+  // também serve para a tela da LISTA: acha o item; se não está para comprar, pergunta se inclui
   const l = E.listas[T.p.codigo];
   const achados = await acharCodigo(cod);
   if (!achados.length) return codigoDesconhecido(cod, () => bipCarrinho(cod));
   const pids = achados.map(a => a.produto_id);
   const it = l.itens.find(i => pids.includes(i.produto_id));
-  if (!it) { bipe(false); bipMensagem(achados[0].nome + ': não está na lista'); return toast(`${achados[0].nome} não está nesta lista.`); }
-  if (!(it.qtd_pedido > 0)) { bipe(false); bipMensagem(it.nome + ': não precisava comprar'); return toast(`${it.nome} não estava para comprar (tem ${fmtQtd(it.estoque)} ${it.unidade}).`); }
+  if (!it || !(it.qtd_pedido > 0)) {
+    bipe(true);
+    const a = achados.find(x => it && x.produto_id === it.produto_id) || achados[0];
+    if (!podeMexer(l)) return toast(`${a.nome} não está para comprar nesta lista.`);
+    if (!confirm(`${a.nome} não está para comprar${it && it.estoque != null ? ' (tem ' + fmtQtd(it.estoque) + ' ' + it.unidade + ')' : ''}. Incluir na compra?`)) return;
+    incluirNaLista(T.p.codigo, {produto_id: a.produto_id, nome: a.nome, unidade: a.unidade}, a.fator > 1 ? a.fator : (it ? passoDe(it) : 1));
+    if (T.nome === 'carrinho') mudarItensLista(T.p.codigo, [{produto_id: a.produto_id, situacao: 'comprado'}], 'Carrinho');
+    return desenhar();
+  }
   bipe(true);
-  if (it.situacao === 'comprado') { bipMensagem('✓ ' + it.nome + ' (já estava marcado)'); }
-  else { mudarItensLista(T.p.codigo, [{produto_id: it.produto_id, situacao: 'comprado'}], 'Carrinho'); bipMensagem('✓ ' + it.nome); }
+  if (T.nome === 'carrinho') {
+    if (it.situacao !== 'comprado') mudarItensLista(T.p.codigo, [{produto_id: it.produto_id, situacao: 'comprado'}], 'Carrinho');
+    else toast('✓ ' + it.nome + ' já estava no carrinho');
+  }
   T.p.piscar = it.produto_id; desenhar();
-  const el = document.getElementById('car-' + it.produto_id); if (el) el.scrollIntoView({block: 'center', behavior: 'smooth'});
+  const el = document.getElementById((T.nome === 'carrinho' ? 'car-' : 'li-') + it.produto_id); if (el) el.scrollIntoView({block: 'center', behavior: 'smooth'});
 }
 async function bipRotina(cod) {
   const achados = await acharCodigo(cod);
@@ -1479,7 +1667,7 @@ const acoes = {
     const l = E.listas[d.codigo], it = l.itens.find(i => i.produto_id === +d.pid);
     const f = it.fator > 1 ? it.fator : 1;
     abrirModal(`<div class="titulo-sec">${esc(it.nome)}</div>
-      <div class="pequeno suave">Sugestão: ${fmtQtd(Math.round(it.qtd_sugerida * 100) / 100)} ${esc(it.unidade)} · tem ${fmtQtd(it.estoque)} · gasta ${fmtQtd(it.consumo_dia)}/dia</div>
+      <div class="pequeno suave">${it.estoque == null ? 'Incluído na mão' : `Sugestão: ${fmtQtd(Math.round((it.qtd_sugerida || 0) * 100) / 100)} ${esc(it.unidade)} · tem ${fmtQtd(it.estoque)} · gasta ${fmtQtd(it.consumo_dia || 0)}/dia`}</div>
       <div class="campo"><label for="nova-qtd">Quanto comprar (${f > 1 ? 'caixas de ' + fmtQtd(f) + ' ' + esc(it.unidade) : esc(it.unidade)})</label>
         <input id="nova-qtd" inputmode="decimal" value="${fmtQtd(it.qtd_pedido / f).replace(/\./g, '')}"></div>
       <div class="linha-btns"><button class="btn claro" data-acao="fechar-modal">Cancelar</button>
@@ -1490,7 +1678,17 @@ const acoes = {
     if (v == null || v < 0 || v > 100000) return toast('Quantidade inválida.');
     fecharModal();
     mudarItensLista(d.codigo, [{produto_id: +d.pid, qtd_pedido: Math.round(v * (+d.f) * 1000) / 1000}], 'Quantidade');
+    if (T.p.vistos && !T.p.vistos.includes(+d.pid)) T.p.vistos.push(+d.pid);
     desenhar();
+  },
+  'qtd-mais': d => mudarQtdLista(d.codigo, +d.pid, 1),
+  'qtd-menos': d => mudarQtdLista(d.codigo, +d.pid, -1),
+  'item-conta': d => modalComoCalculei(d.codigo, +d.pid),
+  'incluir-item': d => modalIncluirItem(d.codigo),
+  'incluir-escolher': d => { fecharModal(); incluirNaLista(T.p.incluirEm, {produto_id: +d.pid, nome: d.nome, unidade: d.un}, null); },
+  'np-comprar': d => {
+    const l = E.listas[d.codigo], it = l.itens.find(i => i.produto_id === +d.pid);
+    incluirNaLista(d.codigo, {produto_id: it.produto_id, nome: it.nome, unidade: it.unidade}, passoDe(it));
   },
   'lista-aprovar': d => { mudarStatusLista(d.codigo, 'aprovar', 'aprovada', 'Aprovação'); toast('Lista aprovada.'); desenhar(); },
   'lista-cancelar': d => {
