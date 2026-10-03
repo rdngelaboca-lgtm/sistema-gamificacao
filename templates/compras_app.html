@@ -207,7 +207,7 @@
 
 // ---------------------------------------------------------------- utilidades
 const CHAVE = 'gb_compras_v1';
-const VERSAO_APP = '6';   // aparece no rodapé do início: confira se o celular pegou a versão nova
+const VERSAO_APP = '7';   // aparece no rodapé do início: confira se o celular pegou a versão nova
 const $app = document.getElementById('app');
 const DIAS_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];            // 1=Dom ... 7=Sáb (padrão do sistema)
 const FRACIONADAS = ['KG', 'G', 'GR', 'L', 'LT', 'ML', 'M'];
@@ -554,7 +554,8 @@ TELAS.inicio = () => {
           ${u.gestor ? '<button class="icone-btn" style="width:auto;padding:0 8px;color:var(--verde);font-weight:700" data-acao="nav" data-tela="rotinas">Gerenciar</button>' : ''}</div>
         ${rotinas || `<div class="vazio">Nenhuma rotina criada ainda.${u.gestor ? '<br>Toque em <b>Gerenciar</b> para criar a primeira.' : '<br>Peça ao gestor para criar.'}</div>`}
       </div>
-      <div class="mini suave" style="text-align:center">App de compras · versão ${VERSAO_APP} · ${bipAoVivo() ? 'bipar ao vivo' : 'bipar por foto'}</div>
+      <button class="btn claro medio" data-acao="abrir-leitor">${ICONES.barras} Testar leitor de código de barras</button>
+      <div class="mini suave" style="text-align:center">App de compras · versão ${VERSAO_APP}</div>
     </div>${navbar('inicio')}`;
 };
 function textoDias(dias) {
@@ -1286,16 +1287,42 @@ function bipe(ok) {
   if (navigator.vibrate) navigator.vibrate(ok ? 30 : [60, 40, 60]);
 }
 // leitor Bluetooth/USB: digita muito rápido e termina com Enter
-const LEITOR = {buf: '', ultimo: 0};
+// ---- LEITOR BLUETOOTH (modo teclado / HID) ----
+// O leitor "digita" o código muito rápido (vários números em poucos milésimos) e,
+// na maioria dos modelos, aperta Enter no fim. Alguns apertam Tab, outros nada:
+// por isso também aceita o código quando os números param de chegar.
+// Uma pessoa digitando é bem mais lenta: o app não confunde com o leitor.
+const LEITOR = {buf: '', ultimo: 0, timer: null, intervalos: []};
+function leitorEntregar() {
+  clearTimeout(LEITOR.timer); LEITOR.timer = null;
+  const cod = LEITOR.buf, rapido = LEITOR.intervalos.length && Math.max(...LEITOR.intervalos) < 120;
+  LEITOR.buf = ''; LEITOR.intervalos = [];
+  if (cod.length >= 8 && cod.length <= 14 && rapido) {
+    if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
+    codigoLido(cod);
+    return true;
+  }
+  return false;
+}
 document.addEventListener('keydown', e => {
   const alvo = e.target;
-  if (alvo && (alvo.tagName === 'INPUT' || alvo.tagName === 'TEXTAREA' || alvo.tagName === 'SELECT')) return;
+  const campo = alvo && (alvo.tagName === 'INPUT' || alvo.tagName === 'TEXTAREA' || alvo.tagName === 'SELECT');
+  if (campo && alvo.id !== 'leitor-campo') return;          // digitando num campo: não atrapalha
   const agora = Date.now();
-  if (agora - LEITOR.ultimo > 80) LEITOR.buf = '';
+  if (agora - LEITOR.ultimo > 150) { LEITOR.buf = ''; LEITOR.intervalos = []; }
+  else if (LEITOR.buf) LEITOR.intervalos.push(agora - LEITOR.ultimo);
   LEITOR.ultimo = agora;
-  if (e.key === 'Enter') { if (LEITOR.buf.length >= 8) { e.preventDefault(); codigoLido(LEITOR.buf); } LEITOR.buf = ''; return; }
-  if (/^\d$/.test(e.key)) LEITOR.buf += e.key;
-});
+  if (e.key === 'Enter' || e.key === 'Tab') {
+    if (LEITOR.buf.length >= 8) { e.preventDefault(); e.stopPropagation(); leitorEntregar(); }
+    return;
+  }
+  if (/^\d$/.test(e.key)) {
+    LEITOR.buf += e.key;
+    if (LEITOR.buf.length >= 8) e.preventDefault();       // não deixa os números "apertarem" botões
+    clearTimeout(LEITOR.timer);
+    LEITOR.timer = setTimeout(leitorEntregar, 250);         // leitor sem Enter no fim
+  }
+}, true);
 
 function codigo14(cod) { const d = String(cod || '').replace(/\D/g, ''); return d.length >= 8 && d.length <= 14 ? d.padStart(14, '0') : null; }
 function produtosDoCodigo(cod) { const c = codigo14(cod); return (c && E.codigos && E.codigos[c]) || []; }
@@ -1310,6 +1337,7 @@ async function carregarCodigos(forcar) {
   try { E.codigos = await api('GET', '/api/compras/codigos'); E.codigosEm = new Date().toISOString(); salvar(); } catch (e) {}
 }
 function codigoLido(cod) {
+  if (T.nome === 'leitor') return testeLeitor(cod);
   if (T.nome === 'contagem') return bipContagem(cod);
   if (T.nome === 'carrinho') return bipCarrinho(cod);
   if (T.nome === 'rotina' && T.p.r) return bipRotina(cod);
@@ -1399,6 +1427,42 @@ async function bipRotina(cod) {
   else { desenhar(); toast('✓ ' + a.nome + ' incluído na rotina'); }   // bip por foto: não há janela aberta
 }
 
+
+// ---------------------------------------------------------------- testar leitor de código de barras
+TELAS.leitor = p => {
+  const lidos = (p.lidos || []).map(l => `<div class="lin"><div class="grow"><div style="font-weight:700;font-variant-numeric:tabular-nums">${esc(l.cod)}</div>
+      <div class="mini" style="color:${l.produtos.length ? 'var(--verde-esc)' : 'var(--laranja)'};font-weight:700">${l.produtos.length
+        ? l.produtos.map(x => '✓ ' + esc(x.nome) + (x.fator > 1 ? ` · caixa com ${fmtQtd(x.fator)}` : '')).join('<br>')
+        : 'Código não cadastrado'}</div></div>
+      ${!l.produtos.length && E.usuario.gestor ? `<button class="qtd-btn" style="min-width:90px" data-acao="leitor-cadastrar" data-cod="${esc(l.cod)}">Cadastrar</button>` : ''}</div>`).join('');
+  return `${topo('Testar leitor', 'Leitor de código de barras Bluetooth', 'nav-inicio')}
+    <div class="corpo">
+      <div class="${p.lidos && p.lidos.length ? 'info' : 'aviso'}" style="text-align:center;font-size:16px">
+        ${p.lidos && p.lidos.length ? '✓ Leitor funcionando! Bipe mais produtos ou volte ao início.' : 'Ligue o leitor e bipe qualquer produto.<br><span class="mini">Não toque em nenhum campo antes de bipar.</span>'}</div>
+      ${lidos ? `<div class="linhas">${lidos}</div>` : ''}
+      <details class="cartao"><summary style="font-weight:700;cursor:pointer;min-height:28px">Não aparece nada ao bipar?</summary>
+        <ol class="pequeno" style="line-height:1.55;padding-left:18px;margin:8px 0 0">
+          <li>O leitor precisa estar no modo <b>teclado (HID)</b>. No manual há um código de barras de configuração para isso: bipe ele.</li>
+          <li>Pareie no celular: <b>Configurações → Bluetooth</b> → escolha o leitor.</li>
+          <li>Teste fora do app: abra o WhatsApp, toque numa conversa e bipe. Os números devem aparecer escritos.</li>
+          <li>Se aparecerem números, volte aqui, <b>não toque em campos</b> e bipe de novo.</li>
+          <li>Ainda não funciona? Digite um código no campo abaixo e toque Enter para testar o resto do app.</li>
+        </ol>
+        <div class="campo" style="margin-top:8px"><input id="leitor-campo" inputmode="numeric" placeholder="Código de barras (teste manual)" aria-label="Código de barras manual"></div>
+      </details>
+    </div>`;
+};
+TELAS_DEPOIS.leitor = () => {
+  const c = document.getElementById('leitor-campo');
+  if (c) c.addEventListener('keydown', e => { if (e.key === 'Enter' && c.value.replace(/\D/g, '').length >= 8) { e.preventDefault(); const v = c.value; c.value = ''; testeLeitor(v.replace(/\D/g, '')); } });
+};
+async function testeLeitor(cod) {
+  const produtos = await acharCodigo(cod);
+  bipe(produtos.length > 0);
+  T.p.lidos = [{cod, produtos}].concat(T.p.lidos || []).slice(0, 15);
+  desenhar();
+}
+
 // ================================================================= AÇÕES (botões)
 const acoes = {
   'nav': d => {
@@ -1454,6 +1518,8 @@ const acoes = {
   },
   'ida-comecar': d => comecarIda(+d.id, T.p.dias),
   // bipar
+  'abrir-leitor': () => { ir('leitor', {lidos: []}); carregarCodigos(true); },
+  'leitor-cadastrar': d => codigoDesconhecido(d.cod, () => testeLeitor(d.cod)),
   'bip-alternar': () => {
     if (!bipAoVivo() && !T.p.bip) return bipPorFoto();
     T.p.bip = !T.p.bip; T.p.bipMsg = '';
