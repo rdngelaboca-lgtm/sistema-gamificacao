@@ -1587,6 +1587,13 @@ def api_compras_produtos(usuario):
     return _resposta_compras(compras_database.buscar_produtos, request.args.get('q', ''))
 
 
+@app.route('/api/compras/produtos/<int:produto_id>/historico', methods=['GET'])
+@compras_login()
+def api_compras_historico_produto(usuario, produto_id):
+    """Vínculos, compras dos últimos 12 meses (todos os fornecedores) e contagens de um produto."""
+    return _resposta_compras(compras_database.historico_produto, produto_id)
+
+
 @app.route('/api/compras/fornecedores', methods=['GET'])
 @compras_login(somente_gestor=True)
 def api_compras_fornecedores(usuario):

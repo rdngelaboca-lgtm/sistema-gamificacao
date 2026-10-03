@@ -699,7 +699,117 @@ def _sugestao_por_produto(contagem_id, hoje):
     except Exception as e:
         logger.error(f"App de compras: falha no cálculo do consumo (contagem {contagem_id}): {e}", exc_info=True)
         raise ErroCompras("Não foi possível calcular o consumo agora (veja o log do servidor).")
-    return {i['ProdutoID']: i for i in resultado['itens']}
+    itens = {i['ProdutoID']: i for i in resultado['itens']}
+    _ajustar_consumo_aprendizado(itens, _como_data(resultado.get('DataReferencia')) or hoje)
+    return itens
+
+
+# [MELHORIA APRENDIZADO] Com só 1 contagem, o Gestão de Estoque estima o consumo pelas
+# compras dos últimos 90 dias. Se o ritmo de compra mudou (ex.: comprou muito há 4 meses e
+# pouco agora), o consumo sai baixo demais e a sugestão vira zero. No app, enquanto o produto
+# está "aprendendo", o consumo usa o MAIOR entre: últimos 90 dias e últimos 12 meses (desde a
+# 1ª compra nesse período). As compras de TODOS os vínculos/fornecedores do produto entram.
+DIAS_CONSUMO_LONGO = 365
+DIAS_MINIMOS_CONSUMO_LONGO = 30
+
+
+def _compras_recentes(cur, pids, ate, dias=DIAS_CONSUMO_LONGO):
+    """{pid: [(data, qtd_em_unidades_do_estoque, custo, fornecedor, descricao, nf)]} dos últimos 'dias'."""
+    if not pids:
+        return {}
+    desde = ate - timedelta(days=dias)
+    cur.execute(f"""
+        SELECT PF.ProdutoID, NF.DataEmissao, INI.Quantidade, INI.PrecoCustoUnitario, F.NomeFantasia, F.CNPJ,
+               PF.DescricaoXML, NF.NumeroNF, PF.ProdutoFornecedorID
+        FROM ItensNotaFiscalEntrada INI
+        JOIN NotasFiscaisEntrada NF ON INI.NotaID = NF.NotaID
+        JOIN ProdutosFornecedor PF ON INI.ProdutoFornecedorID = PF.ProdutoFornecedorID
+        LEFT JOIN Fornecedores F ON NF.FornecedorID = F.FornecedorID
+        WHERE INI.Quantidade > 0 AND PF.ProdutoID IN ({','.join('?' * len(pids))})
+    """, list(pids))
+    res = {}
+    for pid, dt, q, custo, forn, cnpj, desc, nf, vid in cur.fetchall():
+        d = _como_data(dt)
+        if not d or d <= desde or d > ate or (cnpj or '').strip() == database.CNPJ_FORNECEDOR_INTERNO:
+            continue
+        res.setdefault(pid, []).append((d, _dec(q), _dec(custo), forn or 'Fornecedor', desc or '', nf or '', vid))
+    for lista in res.values():
+        lista.sort(key=lambda c: c[0])
+    return res
+
+
+def _taxa_longa(compras, ate):
+    """Consumo/dia pelas compras de até 12 meses: total ÷ dias desde a 1ª compra (mínimo 30 dias)."""
+    if not compras:
+        return Decimal('0'), Decimal('0'), 0
+    total = sum((c[1] for c in compras), Decimal('0'))
+    dias = max((ate - compras[0][0]).days, DIAS_MINIMOS_CONSUMO_LONGO)
+    return total / dias, total, dias
+
+
+def _ajustar_consumo_aprendizado(itens, ate):
+    alvo = [pid for pid, i in itens.items() if i.get('Contado') and i.get('MetodoConsumo') in ('compras', 'sem_dados')]
+    if not alvo:
+        return
+    conn = _conectar()
+    try:
+        compras = _compras_recentes(conn.cursor(), alvo, ate)
+    finally:
+        conn.close()
+    for pid in alvo:
+        i = itens[pid]
+        taxa, total, dias = _taxa_longa(compras.get(pid, []), ate)
+        i['ConsumoLongo'] = {'por_dia': taxa, 'total': total, 'dias': dias}
+        atual = _dec(i.get('UsoMedioDiario'))
+        if taxa > atual:
+            i['UsoMedioDiario'] = taxa
+            i['MetodoConsumo'] = 'compras'
+            i['ConsumoPor12Meses'] = True
+            if i.get('QtdUltimaContagem') is not None:     # estoque de hoje com o consumo novo
+                est = _dec(i['QtdUltimaContagem']) + _dec(i.get('ComprasDepois')) - taxa * int(i.get('DiasDesdeContagem') or 0)
+                i['EstoqueHoje'] = max(est, Decimal('0'))
+
+
+def historico_produto(produto_id, hoje=None):
+    """
+    Tudo que entra na conta de um produto: os vínculos (códigos de todos os fornecedores),
+    as compras dos últimos 12 meses e as últimas contagens. Para conferir no celular.
+    """
+    hoje = _como_data(hoje) or date.today()
+    produto_id = int(produto_id)
+    conn = _conectar()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT NomeProduto, UnidadeMedida FROM ProdutosEstoque WHERE ProdutoID = ?", (produto_id,))
+        p = cur.fetchone()
+        if not p:
+            raise ErroCompras("Produto não encontrado.")
+        cur.execute("""SELECT PF.ProdutoFornecedorID, F.NomeFantasia, PF.DescricaoXML, PF.FatorConversao
+                       FROM ProdutosFornecedor PF LEFT JOIN Fornecedores F ON F.FornecedorID = PF.FornecedorID
+                       WHERE PF.ProdutoID = ?""", (produto_id,))
+        vinculos = [{'id': r[0], 'fornecedor': r[1] or '', 'descricao': r[2] or '', 'fator': _num(r[3] or 1)} for r in cur.fetchall()]
+        compras = _compras_recentes(cur, [produto_id], hoje).get(produto_id, [])
+        cur.execute("""SELECT C.DataContagem, I.QuantidadeContada FROM ItensContagemEstoque I
+                       JOIN ContagensEstoque C ON C.ContagemID = I.ContagemID WHERE I.ProdutoID = ?""", (produto_id,))
+        por_dia = {}
+        for d, q in cur.fetchall():
+            d = _como_data(d)
+            if d:
+                por_dia[d] = por_dia.get(d, Decimal('0')) + _dec(q)
+    finally:
+        conn.close()
+    limite90 = hoje - timedelta(days=90)
+    total90 = sum((c[1] for c in compras if c[0] > limite90), Decimal('0'))
+    taxa, total, dias = _taxa_longa(compras, hoje)
+    return {
+        'produto_id': produto_id, 'nome': p[0], 'unidade': (p[1] or 'UN').strip() or 'UN',
+        'vinculos': vinculos,
+        'compras': [{'data': _iso(c[0]), 'qtd': _num(c[1]), 'custo': _num(c[2], 4), 'fornecedor': c[3], 'descricao': c[4],
+                     'nf': c[5], 'nos_90_dias': c[0] > limite90} for c in reversed(compras)],
+        'contagens': [{'data': _iso(d), 'qtd': _num(q)} for d, q in sorted(por_dia.items(), reverse=True)[:6]],
+        'consumo_90': {'total': _num(total90), 'por_dia': _num(total90 / 90, 4)},
+        'consumo_12m': {'total': _num(total), 'dias': dias, 'por_dia': _num(taxa, 4)},
+    }
 
 
 def _alerta_consumo(info):
@@ -707,6 +817,8 @@ def _alerta_consumo(info):
         return "Nunca contado antes: o consumo ainda não é conhecido"
     if info.get('ConsumoNegativo'):
         return "Conferir: a conta do consumo não fecha (contagem ou nota)"
+    if info.get('ConsumoPor12Meses'):
+        return "Consumo aproximado pelas compras dos últimos 12 meses (só 1 contagem)"
     if info.get('MetodoConsumo') == 'compras':
         return "Consumo aproximado pelas compras (só 1 contagem)"
     if info.get('MetodoConsumo') == 'sem_dados':
