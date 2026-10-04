@@ -214,7 +214,7 @@
 
 // ---------------------------------------------------------------- utilidades
 const CHAVE = 'gb_compras_v1';
-const VERSAO_APP = '10';   // aparece no rodapé do início: confira se o celular pegou a versão nova
+const VERSAO_APP = '11';   // aparece no rodapé do início: confira se o celular pegou a versão nova
 const $app = document.getElementById('app');
 const DIAS_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];            // 1=Dom ... 7=Sáb (padrão do sistema)
 const FRACIONADAS = ['KG', 'G', 'GR', 'L', 'LT', 'ML', 'M'];
@@ -355,7 +355,9 @@ async function sincronizar() {
         E.fila.shift(); mudou = true;                                                          // recusado: avisa e segue
         E.erros.push({quando: new Date().toISOString(), msg: `${t.descricao || 'Envio'}: ${e.message}`});
         toast(`Não foi enviado: ${e.message}`);
-        if (t.codigo) atualizarLista(t.codigo, true);
+        const loc = t.codigo && E.listas[t.codigo];
+        if (t.tipo === 'lista' && loc && loc.local) { loc.status = 'cancelada'; loc.local_status = null; }   // o servidor não aceitou: não fica "aberta" para sempre
+        else if (t.codigo) atualizarLista(t.codigo, true);
       }
       salvar();
     }
@@ -532,7 +534,7 @@ TELAS.inicio = () => {
     const feitos = Object.keys(ida.contagens).length;
     principal = `<div class="destaque"><div><div class="rotulo" style="color:#CDEBE6">Contagem em andamento</div>
         <div style="font-size:22px;font-weight:800">${esc(prep ? prep.nome : 'Rotina')}</div>
-        <div style="color:#E3F4F1">${feitos} de ${total} itens · para ${ida.dias} dias</div></div>
+        <div style="color:#E3F4F1">${feitos} de ${total} itens · para ${ida.dias} dias${ida.dia && ida.dia !== hojeISO() ? ' · começada em ' + dataBR(ida.dia) : ''}${ida.usuario_id && ida.usuario_id !== u.id ? ' · por ' + esc(ida.usuario_nome || 'outra pessoa') : ''}</div></div>
         <button class="btn" data-acao="continuar-ida">Continuar contagem ${ICONES.seta}</button></div>`;
   } else if (hoje.length) {
     const r = hoje[0];
@@ -591,7 +593,14 @@ async function carregarInicio() {
       if (!atual) { E.listas[l.codigo] = Object.assign({itens: null}, l); continue; }
       if (!atual.local) Object.assign(atual, {status: l.status, qtd_comprar: l.qtd_comprar, qtd_marcados: l.qtd_marcados, valor_estimado: l.valor_estimado});
     }
-    // lista que sumiu do servidor (ex.: cancelada há muito tempo) e não tem nada pendente
+    // lista aberta no celular que não veio do servidor (ex.: cancelada por outro celular há muito tempo)
+    const vieram = new Set(listas.map(l => l.codigo));
+    const sumidas = Object.values(E.listas).filter(l => !l.local && !vieram.has(l.codigo) && ['aguardando', 'aprovada'].includes(l.status)
+                                                    && !E.fila.some(t => t.codigo === l.codigo)).slice(0, 5);
+    for (const l of sumidas) {
+      try { guardarLista(await api('GET', `/api/compras/listas/${encodeURIComponent(l.codigo)}`), true); }
+      catch (e) { if (e.status === 400 || e.status === 404) delete E.listas[l.codigo]; }
+    }
     salvar();
   } catch (e) {}
   if (T.nome === 'inicio') desenhar();
@@ -632,7 +641,8 @@ async function comecarIda(rotinaId, dias) {
     toast('Sem internet: usando os dados salvos de ' + dataBR(prep.gerado_em));
   }
   if (!prep.itens.length) { T.p.carregando = false; desenhar(); return toast('Esta rotina não tem itens.'); }
-  E.ida = {codigo: novoCodigo(), rotina_id: rotinaId, dias, idx: 0, contagens: {}, modo: {}, cx: {}, extras: [], iniciada: new Date().toISOString()};
+  E.ida = {codigo: novoCodigo(), rotina_id: rotinaId, dias, idx: 0, contagens: {}, modo: {}, cx: {}, extras: [], iniciada: new Date().toISOString(),
+           dia: hojeISO(), usuario_id: E.usuario.id, usuario_nome: E.usuario.nome};
   salvar();
   carregarCodigos();
   ir('contagem');
@@ -643,7 +653,7 @@ async function comecarIda(rotinaId, dias) {
 // teclado grande de baixo (não abre o teclado do celular) e "OK" pula para o próximo.
 TELAS.contagem = () => {
   const ida = E.ida, prep = ida && E.preparos[ida.rotina_id];
-  if (!prep) { E.ida = null; salvar(); return TELAS.inicio(); }
+  if (!prep || !itensIda().length) { T = {nome: 'inicio', p: {}}; toast('Os dados desta rotina não estão no celular. Conecte à internet e toque em Continuar.'); return TELAS.inicio(); }
   const itens = itensIda(), total = itens.length;
   ida.idx = Math.min(Math.max(ida.idx || 0, 0), total - 1);
   const feitos = itens.filter(it => ida.contagens[it.produto_id] != null).length;
@@ -751,6 +761,8 @@ async function terminarContagem() {
                  itens: prep.itens.map(it => ({produto_id: it.produto_id, qtd: ida.contagens[it.produto_id] == null ? null : ida.contagens[it.produto_id]}))
                    .concat((ida.extras || []).filter(it => ida.contagens[it.produto_id] != null)
                      .map(it => ({produto_id: it.produto_id, qtd: ida.contagens[it.produto_id], extra: true})))};
+  if (ida.dia && ida.dia !== hojeISO() && Object.keys(ida.contagens).length &&
+      !confirm(`Esta contagem foi começada em ${dataBR(ida.dia)}. Os números vão entrar no estoque como contagem de HOJE (${dataBR(hojeISO())}). Se o estoque mudou desde então, descarte e conte de novo. Continuar assim mesmo?`)) return;
   const pulados = prep.itens.filter(it => ida.contagens[it.produto_id] == null).length;
   if (pulados && !confirm(`${pulados} item(ns) ficaram sem número e vão usar o estoque estimado. Ver a lista assim mesmo?`)) return;
   abrirModal('<div class="vazio">Calculando a lista…</div>');
@@ -1124,6 +1136,7 @@ TELAS.consumo = p => {
   return `${faixaRede()}${topo('Consumo', 'Quanto tempo cada item ainda dura')}<div class="corpo">${chips}${corpo}</div>${navbar('consumo')}`;
 };
 async function carregarConsumo(rotinaId) {
+  if (E.ida && E.ida.rotina_id === rotinaId && E.preparos[rotinaId]) return;   // contagem aberta: não troca os itens no meio dela
   try { E.preparos[rotinaId] = await api('GET', `/api/compras/rotinas/${rotinaId}/preparar`); salvar(); if (T.nome === 'consumo') desenhar(); }
   catch (e) { if (!E.preparos[rotinaId] && T.nome === 'consumo') { $app.querySelector('.corpo').insertAdjacentHTML('beforeend', `<div class="aviso">${esc(e.message)}</div>`); } }
 }
@@ -1628,7 +1641,10 @@ const acoes = {
       T.p.enviando = true;
       try {
         const r = await api('POST', '/api/compras/login', {funcionario_id: T.p.usuario.id, pin: T.p.pin});
-        if (E.usuario && E.usuario.id !== r.usuario.id && E.ida) E.ida = null;   // outra pessoa: não herda a contagem
+        const dono = E.ida && (E.ida.usuario_id || (E.usuario && E.usuario.id));
+        if (E.ida && dono && dono !== r.usuario.id &&
+            !confirm(`Há uma contagem em andamento de ${E.ida.usuario_nome || 'outra pessoa'} neste celular. Continuar com ela? (Cancelar = descartar)`)) E.ida = null;
+        if (E.ida) { E.ida.usuario_id = r.usuario.id; E.ida.usuario_nome = r.usuario.nome; }
         E.usuario = r.usuario; salvar();
         ir('inicio'); carregarInicio(); sincronizar();
       } catch (e) { T.p.pin = ''; T.p.erro = e.extra.offline ? 'Sem conexão com o computador da loja.' : e.message; T.p.enviando = false; desenhar(); }
@@ -1639,7 +1655,14 @@ const acoes = {
     if (E.ida) { if (!confirm('Já existe uma contagem em andamento. Descartar e começar outra?')) return; E.ida = null; salvar(); }
     ir('novaIda', {rotina_id: +d.id});
   },
-  'continuar-ida': () => ir('contagem'),
+  'continuar-ida': async () => {
+    const rid = E.ida.rotina_id;
+    if (!E.preparos[rid]) {   // dados da rotina sumiram do celular: baixa de novo (os números digitados continuam guardados)
+      try { E.preparos[rid] = await api('GET', `/api/compras/rotinas/${rid}/preparar`); salvar(); }
+      catch (e) { return toast(e.extra.offline ? 'Sem internet: conecte para continuar esta contagem.' : e.message); }
+    }
+    ir('contagem');
+  },
   'ida-rotina': d => { T.p.rotina_id = +d.id; T.p.dias = null; desenhar(); },
   'ida-dias': d => { T.p.dias = +d.n; desenhar(); },
   'ida-dias-outro': () => {
@@ -1785,7 +1808,7 @@ const acoes = {
       const salvo = await api('POST', '/api/compras/rotinas', {id: r.id, nome: r.nome, dias_semana: r.dias_semana, dias_cobertura: r.dias_cobertura,
         prazo_dias: r.prazo_dias, fornecedores: r.fornecedores, itens: r.itens.map(i => ({produto_id: i.produto_id, secao: i.secao}))});
       toast('Rotina salva.');
-      delete E.preparos[salvo.id];
+      if (!(E.ida && E.ida.rotina_id === salvo.id)) delete E.preparos[salvo.id];   // contagem aberta usa estes dados: não apaga
       E.rotinas = await api('GET', '/api/compras/rotinas'); salvar();
       ir('rotinas', {});
     } catch (e) { T.p.salvando = false; desenhar(); toast(e.extra.offline ? 'Sem internet: rotina não foi salva.' : e.message); }

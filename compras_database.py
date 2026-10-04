@@ -967,6 +967,7 @@ def registrar_lista(codigo, rotina_id, usuario, dias, contagens, hoje=None):
     Gestor: a lista já sai APROVADA. Funcionário: fica AGUARDANDO o gestor.
     Se a mesma rotina já foi contada HOJE pelo app, a contagem anterior é trocada pela nova
     (senão as duas seriam somadas no estoque) e a lista anterior, se aberta, é cancelada.
+    Itens que foram contados na vez anterior e NÃO recontados agora são mantidos na contagem nova.
     """
     hoje = _como_data(hoje) or date.today()
     codigo = str(codigo or '').strip()
@@ -1018,6 +1019,7 @@ def registrar_lista(codigo, rotina_id, usuario, dias, contagens, hoje=None):
                                     'categoria': '', 'existe': True})
             contados[pid] = extras[pid]
 
+    fora_da_lista = {}
     conn = _conectar()
     try:
         cur = conn.cursor()
@@ -1026,21 +1028,32 @@ def registrar_lista(codigo, rotina_id, usuario, dias, contagens, hoje=None):
             cur.execute("DELETE FROM CompraListaItens WHERE ListaID = ?", (lista_id,))
         else:
             fechadas = database.listar_valores_estoque_fechados(levantar_erro=True)
+            herdados = {}                    # contados na vez anterior e NÃO recontados agora
             for cod_ant, cid_ant, st_ant in _contagens_substituidas(cur, rotina_id, hoje, codigo):
                 if st_ant not in (ST_FINALIZADA, ST_CANCELADA):
                     cur.execute("UPDATE CompraListas SET Status = ? WHERE Codigo = ?", (ST_CANCELADA, cod_ant))
                 if cid_ant in fechadas:
                     continue                 # valor do estoque já fechado: não mexe
+                cur.execute("SELECT ProdutoID, QuantidadeContada FROM ItensContagemEstoque WHERE ContagemID = ? AND ProdutoID IS NOT NULL",
+                            (cid_ant,))
+                for pid_ant, q_ant in cur.fetchall():
+                    if pid_ant not in contados and q_ant is not None:
+                        herdados[pid_ant] = _dec(q_ant)      # a contagem mais nova vence se repetir
                 cur.execute("DELETE FROM ItensContagemEstoque WHERE ContagemID = ?", (cid_ant,))
                 cur.execute("DELETE FROM ContagensEstoque WHERE ContagemID = ?", (cid_ant,))
                 cur.execute("UPDATE CompraListas SET ContagemID = NULL WHERE Codigo = ?", (cod_ant,))
+            for pid_ant, q_ant in herdados.items():
+                if pid_ant in da_rotina:
+                    contados[pid_ant] = q_ant          # entra na lista como contado
+                else:
+                    fora_da_lista[pid_ant] = q_ant     # bipado fora da rotina antes: só no estoque
             contagem_id = None
-            if contados:
+            if contados or fora_da_lista:
                 cur.execute("""INSERT INTO ContagensEstoque (DataContagem, FuncionarioID, NomeContagem)
                                OUTPUT INSERTED.ContagemID VALUES (?, ?, ?)""",
                             (hoje, usuario['id'], f"App compras: {rotina['nome']}"[:100]))
                 contagem_id = int(cur.fetchone()[0])
-                for pid, q in contados.items():
+                for pid, q in list(contados.items()) + list(fora_da_lista.items()):
                     cur.execute("""INSERT INTO ItensContagemEstoque (ContagemID, ProdutoID, QuantidadeContada, NomeAvulso, EANAvulso)
                                    VALUES (?, ?, ?, NULL, NULL)""", (contagem_id, pid, q))
             cur.execute("""INSERT INTO CompraListas (Codigo, RotinaID, NomeRotina, FuncionarioID, NomeFuncionario, CriadaEm,
