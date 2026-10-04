@@ -10228,6 +10228,10 @@ def _garantir_tabelas_pagamento_freelancer():
         for coluna in ('TipoDiaria', 'TipoDia'):
             if coluna.lower() not in existentes:
                 cur.execute(f"ALTER TABLE PagamentosFreelancer ADD {coluna} NVARCHAR(10) NULL")
+        # [DIÁRIA NA ESCALA] O gestor escolhe CURTA ou LONGA ao escalar o freelancer
+        # (NULL = automático pela duração, como nos turnos antigos).
+        cur.execute("IF COL_LENGTH('EscalaDiaria', 'TipoDiaria') IS NULL "
+                    "ALTER TABLE EscalaDiaria ADD TipoDiaria NVARCHAR(10) NULL")
         conn.commit()
         _tabelas_pagamento_ok = True
         logger.info("Tabelas de pagamento de freelancers verificadas/criadas.")
@@ -10502,7 +10506,8 @@ def listar_pagamentos_freelancers(data_ini, data_fim, freelancer_id=None, status
     try:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT E.EscalaID, E.DataEscala, E.FreelancerID, FR.Nome, PL.NomePosicao, E.HorarioEntrada, E.HorarioSaida
+            SELECT E.EscalaID, E.DataEscala, E.FreelancerID, FR.Nome, PL.NomePosicao, E.HorarioEntrada, E.HorarioSaida,
+                   E.TipoDiaria
             FROM EscalaDiaria E
             JOIN Freelancers FR ON E.FreelancerID = FR.FreelancerID
             LEFT JOIN PosicoesLoja PL ON E.PosicaoID = PL.PosicaoID
@@ -10513,7 +10518,7 @@ def listar_pagamentos_freelancers(data_ini, data_fim, freelancer_id=None, status
         por_escala = {s['EscalaID']: s for s in salvos if s['EscalaID'] is not None}
 
         itens = []
-        for escala_id, (eid, dt, fid, nome, posicao, ent, sai) in turnos.items():
+        for escala_id, (eid, dt, fid, nome, posicao, ent, sai, tipo_escala) in turnos.items():
             s = por_escala.get(escala_id) or {}
             if s.get('Pago'):
                 continue                       # entra abaixo, pelos valores congelados
@@ -10521,13 +10526,15 @@ def listar_pagamentos_freelancers(data_ini, data_fim, freelancer_id=None, status
             ent_real, sai_real = s.get('EntradaReal'), s.get('SaidaReal')
             ajuste = _dec(s.get('Ajuste') or 0)
             tipo_forcado = s.get('TipoDiaria') if s.get('TipoDiaria') in ('longa', 'curta') else None
-            calc = calcular_pagamento_turno(ent_real or ent, sai_real or sai, cfg, ajuste, d, tipo_forcado,
+            tipo_escala = tipo_escala if tipo_escala in ('longa', 'curta') else None
+            calc = calcular_pagamento_turno(ent_real or ent, sai_real or sai, cfg, ajuste, d, tipo_forcado or tipo_escala,
                                             ent, sai, feriados.get(d))
             itens.append({
                 'PagamentoID': s.get('PagamentoID'), 'EscalaID': escala_id, 'Data': d,
                 'FreelancerID': fid, 'Nome': nome or '?', 'Posicao': posicao or '', 'EntradaEscala': _hhmm(ent),
                 'SaidaEscala': _hhmm(sai), 'EntradaReal': _hhmm(ent_real), 'SaidaReal': _hhmm(sai_real),
-                'Corrigido': bool(ent_real or sai_real), 'TipoForcado': tipo_forcado, 'Calculo': calc, 'Ajuste': ajuste,
+                'Corrigido': bool(ent_real or sai_real), 'TipoForcado': tipo_forcado, 'TipoEscala': tipo_escala,
+                'Calculo': calc, 'Ajuste': ajuste,
                 'Total': calc['Total'] if calc else ajuste, 'Pago': False, 'DataPagamento': None,
                 'FormaPagamento': None, 'Observacao': s.get('Observacao') or '', 'TurnoExcluido': False,
                 'SemHorario': calc is None, 'Feriado': feriados.get(d)})
@@ -10561,6 +10568,39 @@ def listar_pagamentos_freelancers(data_ini, data_fim, freelancer_id=None, status
     except Exception as e:
         logger.error(f"Erro ao listar pagamentos de freelancers: {e}", exc_info=True)
         return []
+    finally:
+        conn.close()
+
+
+def tipo_diaria_da_escala(cursor, escala_id):
+    """'curta' / 'longa' escolhido na escala para o turno (None = automático)."""
+    cursor.execute("SELECT TipoDiaria FROM EscalaDiaria WHERE EscalaID = ?", escala_id)
+    r = cursor.fetchone()
+    return r[0] if r and r[0] in ('longa', 'curta') else None
+
+
+def definir_tipo_diaria_escala(escala_id, tipo):
+    """
+    [DIÁRIA NA ESCALA] Grava a diária escolhida pelo gestor no turno ('curta' / 'longa' / None).
+    Turno já PAGO não muda (o valor pago fica congelado). Devolve (ok, mensagem).
+    """
+    _garantir_tabelas_pagamento_freelancer()
+    tipo = tipo if tipo in ('longa', 'curta') else None
+    conn = get_db_connection()
+    if not conn:
+        return False, "Falha de conexão com o banco de dados."
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1 FROM PagamentosFreelancer WHERE EscalaID = ? AND Pago = 1", escala_id)
+        if cursor.fetchone():
+            return False, "Turno já pago: a diária não foi alterada."
+        cursor.execute("UPDATE EscalaDiaria SET TipoDiaria = ? WHERE EscalaID = ?", tipo, escala_id)
+        conn.commit()
+        return True, "Diária gravada."
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao gravar a diária do turno {escala_id}: {e}", exc_info=True)
+        return False, f"Erro ao gravar a diária: {e}"
     finally:
         conn.close()
 
@@ -10646,6 +10686,8 @@ def marcar_pagamentos_pagos(escala_ids, data_pagamento=None, forma_pagamento='')
             if s and s[1]:
                 raise ValueError(f"O turno de {nome} em {d.strftime('%d/%m/%Y')} já está pago.")
             ent_real, sai_real, ajuste, tipo = (s[2], s[3], _dec(s[4]), s[5]) if s else (None, None, Decimal('0'), None)
+            if tipo not in ('longa', 'curta'):
+                tipo = tipo_diaria_da_escala(cursor, escala_id)
             calc = calcular_pagamento_turno(ent_real or ent, sai_real or sai, cfg, ajuste, d, tipo, ent, sai, nome_feriado(d))
             if not calc:
                 raise ValueError(f"O turno de {nome} em {d.strftime('%d/%m/%Y')} está sem horário de entrada/saída.")
@@ -10762,10 +10804,11 @@ def copiar_escala_dia(data_origem, data_destino):
             cursor.execute("DELETE FROM EscalaDiaria WHERE DataEscala = ?", data_destino)
 
             # 3. Copia tudo em uma única transação usando SELECT INSERT
+            # [DIÁRIA NA ESCALA] a diária escolhida (curta/longa) vai junto na cópia
             sql_copy = """
                 INSERT INTO EscalaDiaria 
-                (DataEscala, PosicaoID, FuncionarioID, FreelancerID, HorarioEntrada, HorarioSaida, InicioIntervalo, FimIntervalo, FocoDoDia)
-                SELECT ?, PosicaoID, FuncionarioID, FreelancerID, HorarioEntrada, HorarioSaida, InicioIntervalo, FimIntervalo, FocoDoDia
+                (DataEscala, PosicaoID, FuncionarioID, FreelancerID, HorarioEntrada, HorarioSaida, InicioIntervalo, FimIntervalo, FocoDoDia, TipoDiaria)
+                SELECT ?, PosicaoID, FuncionarioID, FreelancerID, HorarioEntrada, HorarioSaida, InicioIntervalo, FimIntervalo, FocoDoDia, TipoDiaria
                 FROM EscalaDiaria 
                 WHERE DataEscala = ?
             """

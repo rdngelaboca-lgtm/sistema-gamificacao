@@ -321,7 +321,7 @@ def texto_calculo(calc):
         return ""
     if calc.get('Proporcional'):
         texto = (f"{fmt_horas(minutos=calc['Minutos'])} de {fmt_horas(minutos=calc['MinutosDiaria'])} da diária "
-                 f"{nome_tipo_dia(calc)} ({fmt_reais(calc['DiariaCheia'])}) = {fmt_reais(calc['ValorDiaria'])} (saiu mais cedo)")
+                 f"{nome_tipo_dia(calc)} ({fmt_reais(calc['DiariaCheia'])}) = {fmt_reais(calc['ValorDiaria'])} (proporcional)")
     else:
         texto = f"{fmt_horas(minutos=calc['Minutos'])}: diária {nome_tipo_dia(calc)} {fmt_reais(calc['ValorDiaria'])}"
         if calc.get('MinutosExtras'):
@@ -639,7 +639,7 @@ class AppEscalaLoja:
             if frees:
                 custo = Decimal('0')
                 for t in frees:
-                    calc = self._calcular_turno_free(t.HorarioEntrada, t.HorarioSaida)
+                    calc = self._calcular_turno_free(t.HorarioEntrada, t.HorarioSaida, tipo=getattr(t, 'TipoDiaria', None))
                     custo += calc['Total'] if calc else Decimal('0')
                 pagos = len(database.turnos_pagos(data_escala=self.data_selecionada))
                 texto += f"   🧑‍🍳 {len(frees)} freelancer(s): {fmt_reais(custo)}"
@@ -764,7 +764,8 @@ class AppEscalaLoja:
                     # Se não tiver nome, muda cor para amarelo (alerta)
                     if not dados.NomePessoa: cor = "#FFBB33"
 
-                    nomes_formatados.append(f"{nome_p} ({h_ent}-{h_sai})")
+                    tipo_d = getattr(dados, 'TipoDiaria', None) if getattr(dados, 'FreelancerID', None) else None
+                    nomes_formatados.append(f"{nome_p} ({h_ent}-{h_sai})" + (f" [{tipo_d}]" if tipo_d in ('curta', 'longa') else ""))
 
                 label_final += "\n".join(nomes_formatados)
 
@@ -1737,6 +1738,19 @@ class AppEscalaLoja:
         self.e_int_fim_lat = ttk.Entry(frame_i, width=8)
         self.e_int_fim_lat.pack(side=tk.LEFT)
 
+        # [DIÁRIA NA ESCALA] Freelancer: o gestor escolhe a diária (fica gravada no turno e
+        # é a que o pagamento usa). Já vem marcada a sugestão pela duração do turno.
+        self.var_tipo_diaria = tk.StringVar(value="")
+        self._tipo_diaria_manual = False
+        self.frame_diaria_lat = ttk.Frame(self.frame_lateral)
+        ttk.Label(self.frame_diaria_lat, text="Diária do freelancer:", font=("Arial", 9, "bold")).pack(side=tk.LEFT)
+        self.rb_curta_lat = ttk.Radiobutton(self.frame_diaria_lat, text="Curta", value="curta",
+                                            variable=self.var_tipo_diaria, command=self._escolheu_tipo_diaria)
+        self.rb_curta_lat.pack(side=tk.LEFT, padx=(8, 4))
+        self.rb_longa_lat = ttk.Radiobutton(self.frame_diaria_lat, text="Longa", value="longa",
+                                            variable=self.var_tipo_diaria, command=self._escolheu_tipo_diaria)
+        self.rb_longa_lat.pack(side=tk.LEFT, padx=4)
+
         # [MELHORIA ESCALA] Prévia do pagamento quando a pessoa é freelancer
         self.lbl_pag_lateral = tk.Label(self.frame_lateral, text="", fg="#1b5e20", justify=tk.LEFT,
                                         anchor="w", wraplength=340, font=("Arial", 9, "bold"))
@@ -1779,8 +1793,13 @@ class AppEscalaLoja:
         d = self.mapa_ids_lateral.get(self.combo_pessoas_lateral.get())
         if not d or d.get('tipo') != 'free':
             self.lbl_pag_lateral.config(text="")
+            self.frame_diaria_lat.pack_forget()
             return
-        calc = self._calcular_turno_free(self.var_ent_lateral.get(), self.var_sai_lateral.get())
+        if not self.frame_diaria_lat.winfo_ismapped():
+            self.frame_diaria_lat.pack(fill=tk.X, padx=10, pady=(4, 0), before=self.lbl_pag_lateral)
+        self._sugerir_tipo_diaria()
+        calc = self._calcular_turno_free(self.var_ent_lateral.get(), self.var_sai_lateral.get(),
+                                         tipo=self.var_tipo_diaria.get() or None)
         if not calc:
             self.lbl_pag_lateral.config(text="💰 Preencha entrada e saída para ver o valor.", fg="gray")
             return
@@ -1789,6 +1808,21 @@ class AppEscalaLoja:
         if escala_id and int(escala_id) in database.turnos_pagos([escala_id]):
             texto += "   ✅ JÁ PAGO"
         self.lbl_pag_lateral.config(text=texto, fg="#1b5e20")
+
+    def _escolheu_tipo_diaria(self):
+        """[DIÁRIA NA ESCALA] O gestor clicou em Curta/Longa: a sugestão automática não muda mais."""
+        self._tipo_diaria_manual = True
+        self._previa_pagamento_lateral()
+
+    def _sugerir_tipo_diaria(self):
+        """Enquanto o gestor não escolher, marca Curta/Longa pela duração (mesma regra do pagamento)."""
+        if self._tipo_diaria_manual:
+            return
+        faixa = faixa_turno(self.var_ent_lateral.get(), self.var_sai_lateral.get())
+        if faixa is None:
+            return
+        limite = int(self._config_pagamento().get('LimiteCurtaMinutos', 420))
+        self.var_tipo_diaria.set('curta' if faixa[1] - faixa[0] <= limite else 'longa')
 
     def _calcular_saida_lateral(self, *args):
         # [DEPURAÇÃO] Antes o banco era consultado a CADA tecla digitada no campo Entrada.
@@ -1816,6 +1850,9 @@ class AppEscalaLoja:
         if not turno: return
 
         self.var_escala_id_edit.set(escala_id)
+        tipo_gravado = getattr(turno, 'TipoDiaria', None)
+        self._tipo_diaria_manual = tipo_gravado in ('curta', 'longa')
+        self.var_tipo_diaria.set(tipo_gravado if self._tipo_diaria_manual else "")
 
         nome_combo = ""
         if turno.FuncionarioID:
@@ -1835,6 +1872,8 @@ class AppEscalaLoja:
         self._previa_pagamento_lateral()
 
     def _limpar_form_lateral(self):
+        self._tipo_diaria_manual = False
+        self.var_tipo_diaria.set("")
         self.var_escala_id_edit.set("")
         self.combo_pessoas_lateral.set("")
         self.var_ent_lateral.set("08:00")
@@ -1927,8 +1966,21 @@ class AppEscalaLoja:
             self.txt_foco_lateral.get("1.0", tk.END).strip()
         ):
             self.carregar_escala_do_dia()
+            aviso_diaria = ""
+            if free_id:
+                # [DIÁRIA NA ESCALA] grava Curta/Longa no turno (o pagamento usa esta escolha)
+                tipo = self.var_tipo_diaria.get() or None
+                eid = int(escala_id) if escala_id else next((t.EscalaID for t in self.escala_atual.get(self.pos_id_selecionada, [])
+                                         if t.FreelancerID == free_id and formatar_hora_curta(t.HorarioEntrada) == h_ent), None)
+                if eid:
+                    ok_tipo, msg_tipo = database.definir_tipo_diaria_escala(eid, tipo)
+                    if ok_tipo:
+                        aviso_diaria = f", diária {tipo}" if tipo else ""
+                        self.carregar_escala_do_dia()
+                    else:
+                        aviso_diaria = f" ({msg_tipo})"
             self.abrir_janela_escalacao(self.pos_id_selecionada) # Recarrega a lista lateral em tempo real
-            self.status(f"Turno de {selecao.replace('[Fixo] ', '').replace('[Free] ', '')} salvo ({h_ent}–{h_sai}).")
+            self.status(f"Turno de {nome_pessoa} salvo ({h_ent}–{h_sai}{aviso_diaria}).")
         else:
             messagebox.showerror("Erro", "Não foi possível salvar.\n\nProvável conflito de horário com outro turno desta posição (ou falha no banco).", parent=self.root)
 
@@ -1974,7 +2026,10 @@ class AppEscalaLoja:
         lista_turnos = self.escala_atual.get(pos_id, [])
         for t in lista_turnos:
             fmt = lambda v: v.strftime('%H:%M') if hasattr(v, 'strftime') else str(v)[:5] if v else ""
-            self.tree_lateral.insert("", "end", values=(t.EscalaID, t.NomePessoa, fmt(t.HorarioEntrada), fmt(t.HorarioSaida)))
+            nome_lista = t.NomePessoa or "?"
+            if getattr(t, 'FreelancerID', None) and getattr(t, 'TipoDiaria', None) in ('curta', 'longa'):
+                nome_lista += f" ({t.TipoDiaria})"
+            self.tree_lateral.insert("", "end", values=(t.EscalaID, nome_lista, fmt(t.HorarioEntrada), fmt(t.HorarioSaida)))
 
         # Atualiza o dropdown de funcionários do banco de dados
         self.mapa_ids_lateral = {} 
@@ -2453,7 +2508,7 @@ class AppEscalaLoja:
                     sit, tag = "⚠️ Turno sem horário", 'problema'
                 else:
                     extras_sit = [t for t, cond in (("horário corrigido", it['Corrigido']),
-                                                     ("saiu cedo", c.get('Proporcional')),
+                                                     ("proporcional", c.get('Proporcional')),
                                                      ("diária trocada", it.get('TipoForcado'))) if cond]
                     sit, tag = "⏳ Pendente" + "".join(f" · {t}" for t in extras_sit), 'pendente'
                 escala = f"{it['EntradaEscala'] or '?'}–{it['SaidaEscala'] or '?'}"
@@ -2588,7 +2643,7 @@ class AppEscalaLoja:
             ent = i['EntradaReal'] or i['EntradaEscala'] or '?'
             sai = i['SaidaReal'] or i['SaidaEscala'] or '?'
             extra = f" + {fmt_horas(c['HorasExtras'])} extra" if c and c.get('HorasExtras') else ""
-            prop = " (saiu mais cedo, proporcional)" if c and c.get('Proporcional') else ""
+            prop = " (proporcional)" if c and c.get('Proporcional') else ""
             ajuste = f" {'+' if i['Ajuste'] > 0 else ''}{fmt_reais(i['Ajuste'])} ajuste" if i['Ajuste'] else ""
             tipo = f" · diária {nome_tipo_dia(c).replace(' (seg a sáb)', '')}" if c and c.get('Tipo') else ""
             feriado = f" 🎉 {i['Feriado']}" if i.get('Feriado') else ""
@@ -2674,7 +2729,9 @@ class AppEscalaLoja:
         e_obs = ttk.Entry(frame, width=40)
         e_obs.grid(row=5, column=1, columnspan=3, sticky="ew", padx=5, pady=(10, 0))
         ttk.Label(frame, text="Diária:").grid(row=8, column=0, sticky="w", pady=(10, 0))
-        opcoes_tipo = {"Automático (pela escala)": None, "Longa": 'longa', "Curta": 'curta'}
+        tipo_escala = item.get('TipoEscala')
+        rotulo_escala = f"Como está na escala ({tipo_escala})" if tipo_escala else "Automático (pela duração)"
+        opcoes_tipo = {rotulo_escala: None, "Longa": 'longa', "Curta": 'curta'}
         combo_tipo = ttk.Combobox(frame, state="readonly", width=24, values=list(opcoes_tipo))
         combo_tipo.grid(row=8, column=1, columnspan=3, sticky="w", padx=5, pady=(10, 0))
         combo_tipo.set(next(k for k, v in opcoes_tipo.items() if v == item.get('TipoForcado')))
@@ -2702,7 +2759,7 @@ class AppEscalaLoja:
                 lbl_prev.config(text=f"⚠️ {e}", foreground="#c62828")
                 return
             calc = self._calcular_turno_free(ent or item['EntradaEscala'], sai or item['SaidaEscala'],
-                                             item['Data'].strftime('%Y-%m-%d'), opcoes_tipo.get(combo_tipo.get()), aj,
+                                             item['Data'].strftime('%Y-%m-%d'), opcoes_tipo.get(combo_tipo.get()) or tipo_escala, aj,
                                              item['EntradaEscala'], item['SaidaEscala'])
             if not calc:
                 lbl_prev.config(text="⚠️ Preencha entrada e saída.", foreground="#c62828")
