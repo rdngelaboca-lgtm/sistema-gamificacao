@@ -127,6 +127,107 @@ def tentar_ler(html):
     return True
 
 
+NAVEGADOR_COMPLETO = {
+    'User-Agent': ('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) '
+                   'Chrome/128.0.0.0 Safari/537.36'),
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+    'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+    'Accept-Encoding': 'gzip, deflate',
+    'Upgrade-Insecure-Requests': '1',
+    'Sec-Fetch-Dest': 'document', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Site': 'none', 'Sec-Fetch-User': '?1',
+    'Connection': 'keep-alive',
+}
+
+
+def _sessao_tls(seclevel1=False, tls12=False, conferir=True):
+    """Sessão do requests com a conexão segura (TLS) ajustada de jeitos diferentes."""
+    import ssl
+    from requests.adapters import HTTPAdapter
+
+    ctx = ssl.create_default_context()
+    if seclevel1:
+        ctx.set_ciphers('DEFAULT:@SECLEVEL=1')
+    if tls12:
+        ctx.maximum_version = ssl.TLSVersion.TLSv1_2
+    if not conferir:
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+    class Adaptador(HTTPAdapter):
+        def init_poolmanager(self, *a, **kw):
+            kw['ssl_context'] = ctx
+            return super().init_poolmanager(*a, **kw)
+
+    s = requests.Session()
+    s.mount('https://', Adaptador())
+    s.verify = conferir
+    return s
+
+
+def _tentar_requests(url, sessao, cabecalhos):
+    r = sessao.get(url, headers=cabecalhos, timeout=20, allow_redirects=True)
+    return r.status_code, r.content
+
+
+def _tentar_urllib(url):
+    import urllib.request
+    pedido = urllib.request.Request(url, headers={k: v for k, v in NAVEGADOR_COMPLETO.items() if k != 'Accept-Encoding'})
+    with urllib.request.urlopen(pedido, timeout=20) as r:
+        return r.status, r.read()
+
+
+def _tentar_programa(comando):
+    import subprocess
+    try:
+        p = subprocess.run(comando, capture_output=True, timeout=30)
+    except FileNotFoundError:
+        raise RuntimeError(f"o programa '{comando[0]}' não está instalado")
+    if p.returncode != 0:
+        raise RuntimeError(f"saiu com código {p.returncode}: {p.stderr.decode('utf-8', 'replace').strip()[-300:]}")
+    return 200, p.stdout
+
+
+def testar_conexao(url):
+    """Tenta abrir a página de vários jeitos e mostra quais funcionam. Devolve a 1ª página que abriu."""
+    import ssl
+    import platform
+    try:
+        import urllib3
+        v_urllib3 = urllib3.__version__
+    except Exception:
+        v_urllib3 = '?'
+    linha(f"  Python {platform.python_version()} · requests {requests.__version__} · urllib3 {v_urllib3} · {ssl.OPENSSL_VERSION}")
+    linha("  (cada tentativa espera até 20-30 segundos; pode levar alguns minutos)")
+    ua = NAVEGADOR_COMPLETO['User-Agent']
+    tentativas = [
+        ('A requests + cabeçalhos de navegador', lambda: _tentar_requests(url, requests.Session(), NAVEGADOR_COMPLETO)),
+        ('B requests + conexão "close"', lambda: _tentar_requests(url, requests.Session(), dict(NAVEGADOR_COMPLETO, Connection='close'))),
+        ('C requests + TLS nível 1', lambda: _tentar_requests(url, _sessao_tls(seclevel1=True), NAVEGADOR_COMPLETO)),
+        ('D requests + só TLS 1.2', lambda: _tentar_requests(url, _sessao_tls(seclevel1=True, tls12=True), NAVEGADOR_COMPLETO)),
+        ('E requests + TLS 1.2 sem conferir certificado', lambda: _tentar_requests(url, _sessao_tls(seclevel1=True, tls12=True, conferir=False), NAVEGADOR_COMPLETO)),
+        ('F urllib (Python puro)', lambda: _tentar_urllib(url)),
+        ('G curl', lambda: _tentar_programa(['curl', '-sS', '-L', '--compressed', '-A', ua, '--max-time', '25', url])),
+        ('H curl HTTP/1.1', lambda: _tentar_programa(['curl', '-sS', '-L', '--http1.1', '--compressed', '-A', ua, '--max-time', '25', url])),
+        ('I curl só TLS 1.2', lambda: _tentar_programa(['curl', '-sS', '-L', '--tlsv1.2', '--tls-max', '1.2', '--compressed', '-A', ua, '--max-time', '25', url])),
+        ('J wget', lambda: _tentar_programa(['wget', '-q', '-O', '-', '-U', ua, '--timeout=25', '--tries=1', url])),
+    ]
+    primeira = None
+    for nome, tentar in tentativas:
+        try:
+            status, bruto = tentar()
+        except Exception as e:
+            linha(f"  [falhou] {nome}: {e.__class__.__name__}: ...{str(e)[-220:]}")
+            continue
+        texto = bruto.decode('utf-8', errors='replace')
+        itens = 'tabresult' in texto.lower()
+        linha(f"  [ABRIU ] {nome}: código {status}, {len(bruto)} bytes, tabela de itens: {'SIM' if itens else 'não'}")
+        if primeira is None and status == 200 and bruto:
+            primeira = texto
+    if primeira is None:
+        linha("  Nenhum jeito conseguiu abrir a página a partir deste computador.")
+    return primeira
+
+
 def diagnosticar(entrada):
     sessao = requests.Session()
     sessao.headers.update({'User-Agent': cc.NAVEGADOR, 'Accept': 'text/html,application/xhtml+xml',
@@ -152,7 +253,10 @@ def diagnosticar(entrada):
             return
         html, final = baixar_mostrando(url, sessao)
         if html is None:
-            return
+            linha("\n3) TESTE DE CONEXÃO: tentando abrir a página de outros jeitos")
+            html = testar_conexao(final)
+            if html is None:
+                return
         linha(f"  Página guardada em: {guardar(f'diag_{chave}_qr.html', html)}")
         linha("\n3) RAIO-X DA PÁGINA")
         raio_x(html)
@@ -166,6 +270,9 @@ def diagnosticar(entrada):
         linha(f"  Ainda não sei o endereço da consulta do estado {info['uf']}.")
         return
     html, final = baixar_mostrando(base, sessao)
+    if html is None:
+        linha("\n   TESTE DE CONEXÃO: tentando abrir a página de consulta de outros jeitos")
+        html = testar_conexao(base)
     if html is not None:
         linha(f"  Página guardada em: {guardar(f'diag_{chave}_consulta.html', html)}")
         linha("\n3) RAIO-X DA PÁGINA DE CONSULTA (para descobrir como ela recebe a chave)")
