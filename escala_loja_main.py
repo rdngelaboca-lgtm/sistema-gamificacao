@@ -87,6 +87,173 @@ def formatar_hora_curta(v):
 
 
 # ------------------------------------------------------------------------------
+# [AUDITORIA ESCALA] Regras do dia (conflitos, folga, jornada, intervalo)
+# Funções "puras" (não usam a tela nem o banco): dá para testar sozinhas.
+# ------------------------------------------------------------------------------
+SETOR_TODOS = "Todos os setores"
+LIMITE_JORNADA_DIA_MIN = 10 * 60      # CLT: 8h normais + no máximo 2h extras por dia
+TURNO_EXIGE_INTERVALO_MIN = 6 * 60    # CLT art. 71: acima de 6h precisa de intervalo
+
+
+def minutos_do_horario(v):
+    """time / datetime / timedelta / 'HH:MM[:SS[.fração]]' -> minutos desde 00:00 (ou None)."""
+    if v is None or v == "":
+        return None
+    if isinstance(v, timedelta):
+        return int(v.total_seconds() // 60) % 1440
+    if hasattr(v, 'hour') and hasattr(v, 'minute'):
+        return v.hour * 60 + v.minute
+    m = re.match(r'^\s*(\d{1,2}):(\d{2})', str(v))
+    if not m or int(m.group(1)) > 23 or int(m.group(2)) > 59:
+        return None
+    return int(m.group(1)) * 60 + int(m.group(2))
+
+
+def faixa_turno(ent, sai):
+    """(início, fim) em minutos; turno que vira a meia-noite ganha +24h no fim. None se faltar horário."""
+    a, b = minutos_do_horario(ent), minutos_do_horario(sai)
+    if a is None or b is None:
+        return None
+    if b <= a:
+        b += 1440
+    return a, b
+
+
+def sobrepoe(f1, f2):
+    return f1[0] < f2[1] and f2[0] < f1[1]
+
+
+def hm(minutos):
+    """570 -> '9h30'."""
+    return fmt_horas(minutos=minutos)
+
+
+def problema_intervalo(ent, sai, ini, fim):
+    """Texto do problema do intervalo (fora do turno / fim antes do início) ou None se estiver certo/vazio."""
+    if not ini and not fim:
+        return None
+    if not ini or not fim:
+        return "intervalo só com início ou só com fim"
+    turno = faixa_turno(ent, sai)
+    if turno is None:
+        return None
+    a, b = minutos_do_horario(ini), minutos_do_horario(fim)
+    if a is None or b is None:
+        return "intervalo com horário inválido"
+    # coloca o intervalo dentro da régua do turno (pode ter virado a meia-noite)
+    if a < turno[0]:
+        a += 1440
+    if b < a:
+        b += 1440
+    if b == a:
+        return "intervalo com início igual ao fim"
+    if a < turno[0] or b > turno[1]:
+        return "intervalo fora do horário do turno"
+    return None
+
+
+def chave_pessoa(turno):
+    """Identifica a pessoa do turno: ('func', id) / ('free', id) / None (turno sem ninguém)."""
+    if getattr(turno, 'FuncionarioID', None):
+        return ('func', turno.FuncionarioID)
+    if getattr(turno, 'FreelancerID', None):
+        return ('free', turno.FreelancerID)
+    return None
+
+
+def analisar_escala_do_dia(escala, posicoes, indisponivel=None):
+    """
+    Confere a escala do dia e devolve a lista de alertas [(nivel, texto)], nivel = 'erro' | 'aviso' | 'info'.
+      escala: {PosicaoID: [turnos]}  (como database.buscar_escala_do_dia)
+      posicoes: linhas (PosicaoID, Nome, X, Y, Ativo, Setor) das posições ATIVAS do mapa
+      indisponivel: função(funcionario_id) -> motivo (texto) ou None
+    """
+    nomes_pos = {p[0]: p[1] for p in posicoes}
+    alertas = []
+    por_pessoa = {}
+    sem_intervalo = []
+    for pos_id, turnos in escala.items():
+        nome_pos = nomes_pos.get(pos_id)
+        for t in turnos:
+            pessoa = chave_pessoa(t)
+            nome = t.NomePessoa or "?"
+            ent, sai = formatar_hora_curta(t.HorarioEntrada), formatar_hora_curta(t.HorarioSaida)
+            onde = f"{nome_pos or 'posição removida do mapa'} {ent}-{sai}"
+            if nome_pos is None:
+                alertas.append(('aviso', f"{nome} está numa posição que foi REMOVIDA do mapa ({ent}-{sai}): "
+                                         "não aparece no mapa, mas vai no Telegram/WhatsApp."))
+            if pessoa is None:
+                alertas.append(('aviso', f"Turno SEM pessoa em {onde} (freelancer excluído?). Exclua ou escale alguém."))
+                continue
+            faixa = faixa_turno(t.HorarioEntrada, t.HorarioSaida)
+            if faixa is None:
+                alertas.append(('aviso', f"{nome} está sem horário de entrada/saída ({nome_pos or 'posição removida'})."))
+                continue
+            por_pessoa.setdefault(pessoa, []).append((faixa, nome, onde))
+            prob = problema_intervalo(t.HorarioEntrada, t.HorarioSaida, t.InicioIntervalo, t.FimIntervalo)
+            if prob:
+                alertas.append(('erro', f"{nome}: {prob} ({onde}, intervalo "
+                                        f"{formatar_hora_curta(t.InicioIntervalo) or '?'}-{formatar_hora_curta(t.FimIntervalo) or '?'})."))
+            elif faixa[1] - faixa[0] > TURNO_EXIGE_INTERVALO_MIN and not (t.InicioIntervalo and t.FimIntervalo):
+                sem_intervalo.append(nome)
+            if pessoa[0] == 'func' and indisponivel:
+                motivo = indisponivel(pessoa[1])
+                if motivo:
+                    motivo = str(motivo).replace('⚠️', '').strip().rstrip('!')
+                    alertas.append(('erro', f"{nome} está escalado(a) mas está de FOLGA/AFASTADO(A) ({motivo}) – {onde}."))
+
+    for pessoa, lista in por_pessoa.items():
+        lista.sort()
+        nome = lista[0][1]
+        for i in range(len(lista)):
+            for j in range(i + 1, len(lista)):
+                if sobrepoe(lista[i][0], lista[j][0]):
+                    alertas.append(('erro', f"{nome} está em DOIS lugares ao mesmo tempo: {lista[i][2]} e {lista[j][2]}."))
+        total = sum(f[1] - f[0] for f, _, _ in lista)
+        if total > LIMITE_JORNADA_DIA_MIN:
+            alertas.append(('aviso', f"{nome} soma {hm(total)} no dia ({' + '.join(o for _, _, o in lista)}): "
+                                     f"passa do limite de {hm(LIMITE_JORNADA_DIA_MIN)} (8h + 2h extras)."))
+    if sem_intervalo:
+        nomes = sorted(set(sem_intervalo))
+        alertas.append(('info', f"☕ Turno com mais de 6h ainda SEM intervalo ({len(nomes)} pessoa(s)): {', '.join(nomes)}. "
+                                "Use '🪄 Gerar Intervalos Automáticos' ou '⏱️ Gerenciar Intervalos'."))
+    ordem = {'erro': 0, 'aviso': 1, 'info': 2}
+    alertas.sort(key=lambda a: ordem.get(a[0], 3))
+    return alertas
+
+
+def conflitos_ao_salvar(escala, escala_id, pessoa, ent, sai, nome_pessoa="Esta pessoa", nomes_pos=None):
+    """
+    Antes de salvar um turno: (erros, avisos).
+      erros  = impedem salvar (pessoa em dois lugares ao mesmo tempo)
+      avisos = pedem confirmação (jornada do dia acima de 10h)
+    """
+    nomes_pos = nomes_pos or {}
+    faixa = faixa_turno(ent, sai)
+    erros, avisos = [], []
+    if faixa is None or pessoa is None:
+        return erros, avisos
+    total = faixa[1] - faixa[0]
+    for pos_id, turnos in escala.items():
+        for t in turnos:
+            if escala_id and str(t.EscalaID) == str(escala_id):
+                continue          # é o próprio turno que está sendo editado
+            if chave_pessoa(t) != pessoa:
+                continue
+            f2 = faixa_turno(t.HorarioEntrada, t.HorarioSaida)
+            if f2 is None:
+                continue
+            total += f2[1] - f2[0]
+            if sobrepoe(faixa, f2):
+                erros.append(f"{nome_pessoa} já está escalado(a) em {nomes_pos.get(pos_id, 'outra posição')} "
+                             f"das {formatar_hora_curta(t.HorarioEntrada)} às {formatar_hora_curta(t.HorarioSaida)}.")
+    if total > LIMITE_JORNADA_DIA_MIN:
+        avisos.append(f"{nome_pessoa} vai somar {hm(total)} de trabalho neste dia "
+                      f"(limite: {hm(LIMITE_JORNADA_DIA_MIN)} = 8h + 2h extras).")
+    return erros, avisos
+
+
+# ------------------------------------------------------------------------------
 # [MELHORIA ESCALA] Formatação de dinheiro / horas / datas
 # ------------------------------------------------------------------------------
 DIAS_SEMANA = ['segunda-feira', 'terça-feira', 'quarta-feira', 'quinta-feira', 'sexta-feira', 'sábado', 'domingo']
@@ -213,10 +380,12 @@ class AppEscalaLoja:
 
         self.combo_setor_grafico = ttk.Combobox(self.frame_combo_grafico, state="readonly", height=10, width=20)
         self.combo_setor_grafico.pack(side=tk.LEFT)
-        # Carrega setores do banco dinamicamente + opção Geral
-        setores_db = database.listar_setores_unicos()
-        self.combo_setor_grafico['values'] = ["Geral (Todos)"] + setores_db
-        self.combo_setor_grafico.set("Geral (Todos)")
+        # [AUDITORIA ESCALA] Os setores vinham da tabela de TAREFAS (gamificação), que tem um
+        # setor chamado "Geral". Escolhendo "Geral" o gráfico ficava VAZIO (nenhuma posição do
+        # mapa tem setor "Geral"). Agora a lista vem dos setores das posições do mapa
+        # (preenchida em carregar_escala_do_dia).
+        self.combo_setor_grafico['values'] = [SETOR_TODOS]
+        self.combo_setor_grafico.set(SETOR_TODOS)
         self.combo_setor_grafico.bind("<<ComboboxSelected>>", lambda e: self.atualizar_grafico_fluxo())
 
         # Inicializa o objeto do gráfico
@@ -356,10 +525,53 @@ class AppEscalaLoja:
         self._cache_indisponibilidade = {}  # Dados novos: esquece o cache antigo
         self.posicoes = database.listar_posicoes_loja()
         self.escala_atual = database.buscar_escala_do_dia(self.data_selecionada)
+        # [AUDITORIA ESCALA] Funcionários e "posição fixa" lidos UMA vez por carga.
+        # Antes o mapa consultava o banco a cada redesenho (e a janela redesenha várias
+        # vezes por segundo enquanto é redimensionada), deixando a tela lenta.
+        self._funcionarios_cache = list(database.listar_funcionarios())
+        self._posicao_padrao_cache = {}
+        self._atualizar_setores_grafico()
         self.redesenhar_marcadores()
         # [CORREÇÃO] Garante que o gráfico seja redesenhado junto com o mapa
         self.atualizar_grafico_fluxo()
         self.atualizar_resumo_dia()
+        self.mostrar_alertas_do_dia()
+
+    def _atualizar_setores_grafico(self):
+        """[AUDITORIA ESCALA] Setores do filtro do gráfico = setores das posições do mapa."""
+        setores = sorted({p[5] for p in self.posicoes if p[5]}, key=str.lower)
+        self.combo_setor_grafico['values'] = [SETOR_TODOS] + setores
+        if self.combo_setor_grafico.get() not in self.combo_setor_grafico['values']:
+            self.combo_setor_grafico.set(SETOR_TODOS)
+
+    def _motivo_indisponivel(self, funcionario_id):
+        """Férias / afastamento / folga fixa / domingo de folga do funcionário no dia (texto) ou None."""
+        return self._indisponivel_no_dia(funcionario_id)
+
+    def mostrar_alertas_do_dia(self, extra=None, cor_extra=None):
+        """
+        [AUDITORIA ESCALA] O painel "Alertas de Regras e Conflitos" só era preenchido ao clicar
+        em "Gerar Intervalos": com alguém escalado na folga, em dois lugares ao mesmo tempo
+        ou com 14h no dia, ele continuava dizendo "Sistema pronto.". Agora ele confere a
+        escala sempre que o dia é carregado ou alterado.
+        'extra' = mensagens da calculadora de intervalos (aparecem primeiro).
+        """
+        try:
+            alertas = analisar_escala_do_dia(self.escala_atual, self.posicoes, self._motivo_indisponivel)
+        except Exception as e:
+            logger.error(f"Erro ao conferir a escala do dia: {e}", exc_info=True)
+            alertas = [('aviso', f"Não consegui conferir a escala: {e}")]
+        icones = {'erro': '❌', 'aviso': '⚠️', 'info': ''}
+        linhas = [extra] if extra else []
+        linhas += [f"{icones.get(n, '')} {t}".strip() for n, t in alertas]
+        if len(linhas) > 10:      # o painel tem altura fixa: não deixa a lista sumir pela borda
+            linhas = linhas[:9] + [f"... e mais {len(linhas) - 9} alerta(s)."]
+        if not linhas:
+            self.lbl_alertas.config(text="✅ Nenhum conflito encontrado na escala deste dia.", fg="#1b7a2f")
+            return
+        tem_erro = any(n == 'erro' for n, _ in alertas)
+        cor = cor_extra or ("#c62828" if tem_erro else ("#b26a00" if any(n == 'aviso' for n, _ in alertas) else "#555555"))
+        self.lbl_alertas.config(text="\n".join(linhas), fg=cor)
 
     # -------------------------------------------------------------------
     # [MELHORIA ESCALA] Navegação de dias, status e resumo do dia
@@ -492,7 +704,10 @@ class AppEscalaLoja:
         if dia_semana_hoje == 8: dia_semana_hoje = 1
         # [NOVO] Cria um dicionário rápido na memória com a folga de todos os funcionários 
         # para não travar o mapa fazendo consultas repetidas no banco de dados.
-        mapa_folgas = {f.FuncionarioID: folga_do_funcionario(f) for f in database.listar_funcionarios()}
+        funcionarios = getattr(self, '_funcionarios_cache', None)
+        if funcionarios is None:
+            funcionarios = self._funcionarios_cache = list(database.listar_funcionarios())
+        mapa_folgas = {f.FuncionarioID: folga_do_funcionario(f) for f in funcionarios}
 
         for pos in self.posicoes:
             pos_id, nome, coord_x_db, coord_y_db, _, setor = pos 
@@ -555,7 +770,10 @@ class AppEscalaLoja:
 
             elif not self.modo_edicao:
                 # Lógica de Sugestão (Azul) - Se estiver vazio
-                func_padrao = database.buscar_funcionarios_com_posicao_padrao(pos_id)
+                cache_padrao = self.__dict__.setdefault('_posicao_padrao_cache', {})
+                if pos_id not in cache_padrao:
+                    cache_padrao[pos_id] = database.buscar_funcionarios_com_posicao_padrao(pos_id)
+                func_padrao = cache_padrao[pos_id]
                 if func_padrao:
                     f_id, f_nome, f_folga = func_padrao
                     status_indisponivel = self._indisponivel_no_dia(f_id)
@@ -602,6 +820,8 @@ class AppEscalaLoja:
         if isinstance(valor, str):
             try:
                 # Tenta HH:MM:SS ou HH:MM
+                # [AUDITORIA ESCALA] o driver pode devolver '14:30:00.0000000' (com fração de segundo)
+                valor = valor.strip().split('.')[0]
                 fmt = "%H:%M:%S" if len(valor.split(':')) == 3 else "%H:%M"
                 return datetime.strptime(valor, fmt).time()
             except ValueError:
@@ -648,7 +868,7 @@ class AppEscalaLoja:
 
             # 1. Captura o setor selecionado no filtro
             setor_filtro = self.combo_setor_grafico.get()
-            if not setor_filtro: setor_filtro = "Geral (Todos)"
+            if not setor_filtro: setor_filtro = SETOR_TODOS
 
             # Busca dados brutos (Ent, Sai, IntIni, IntFim, Setor)
             horarios = database.buscar_horarios_ocupacao_hoje(self.data_selecionada, 0)
@@ -671,7 +891,7 @@ class AppEscalaLoja:
                     setor_bd = row[4]
 
                     # --- FILTRO DE SETOR ---
-                    if setor_filtro != "Geral (Todos)":
+                    if setor_filtro != SETOR_TODOS:
                         # Se o setor do funcionário for diferente do filtro, ignora
                         if setor_bd != setor_filtro:
                             continue
@@ -701,7 +921,7 @@ class AppEscalaLoja:
 
             # Desenha o gráfico
             # Cores dinâmicas: Se selecionar um setor específico, usa azul. Se for Geral, usa a lógica verde/vermelho.
-            if setor_filtro == "Geral (Todos)":
+            if setor_filtro == SETOR_TODOS:
                 cores = ['#d9534f' if c < 3 else '#5cb85c' for c in contagem_por_hora]
             else:
                 cores = '#33b5e5' # Azul padrão para setores específicos
@@ -912,6 +1132,14 @@ class AppEscalaLoja:
             messagebox.showwarning("Vazio", "Não há funcionários escalados com horário de entrada/saída para calcular.", parent=self.root)
             return
 
+        # [AUDITORIA ESCALA] O cálculo SUBSTITUI os intervalos já digitados à mão, sem avisar.
+        ja_tem = [d for d in dados_por_turno.values() if d.InicioIntervalo and d.FimIntervalo]
+        if ja_tem and not messagebox.askyesno(
+                "Substituir intervalos?",
+                f"{len(ja_tem)} turno(s) deste dia já têm intervalo (alguns podem ter sido ajustados à mão).\n\n"
+                "O cálculo automático vai SUBSTITUIR esses intervalos.\n\nContinuar?", icon='warning', parent=self.root):
+            return
+
         # 2. Chama o Cérebro Lógico
         try:
             sugestoes, erros = calculadora_logica.calcular_intervalos_automaticos(pessoas_para_calcular, dia_iso)
@@ -920,10 +1148,10 @@ class AppEscalaLoja:
             messagebox.showerror("Erro de Cálculo", f"Falha na calculadora lógica: {e}", parent=self.root)
             return
 
-        # 3. Exibe Erros no Rodapé
-        texto_erros = "\n".join(erros) if erros else "Cálculo concluído sem conflitos."
-        color = "red" if erros else "green"
-        self.lbl_alertas.config(text=texto_erros, fg=color)
+        # 3. Texto do resultado (vai para o painel de alertas depois de recarregar o dia)
+        # [AUDITORIA ESCALA] Antes este texto era escrito no painel e logo em seguida APAGADO
+        # pelo recarregamento do dia. Agora ele aparece junto com os alertas da escala.
+        texto_erros = ("🪄 Intervalos automáticos:\n" + "\n".join(erros)) if erros else "🪄 Intervalos automáticos: cálculo concluído sem conflitos."
 
         # 4. Grava as sugestões (uma por turno, tudo ou nada)
         count_aplicados = 0
@@ -935,6 +1163,7 @@ class AppEscalaLoja:
                 return
 
         self.carregar_escala_do_dia()
+        self.mostrar_alertas_do_dia(extra=texto_erros, cor_extra="#c62828" if erros else None)
 
         if count_aplicados == 0:
             messagebox.showwarning("Nenhum intervalo", "Nenhum intervalo pôde ser agendado automaticamente.\nVeja o motivo nos alertas do rodapé.", parent=self.root)
@@ -1651,6 +1880,36 @@ class AppEscalaLoja:
             return
 
         escala_id = self.var_escala_id_edit.get()
+
+        # [AUDITORIA ESCALA] Regras que antes não eram conferidas ao salvar:
+        nome_pessoa = selecao.replace('[Fixo] ', '').replace('[Free] ', '').replace(' [FOLGA]', '')
+        if h_ent == h_sai:
+            messagebox.showwarning("Aviso", "Entrada e saída não podem ser iguais.", parent=self.root)
+            return
+        prob = problema_intervalo(h_ent, h_sai, h_int_ini, h_int_fim)
+        if prob:
+            messagebox.showwarning("Intervalo inválido", f"O {prob} ({h_ent} às {h_sai}).", parent=self.root)
+            return
+        # 1) a mesma pessoa em duas posições ao mesmo tempo (só era conferido dentro da MESMA posição)
+        nomes_pos = {p[0]: p[1] for p in self.posicoes}
+        pessoa = ('func', func_id) if func_id else ('free', free_id)
+        erros, avisos = conflitos_ao_salvar(self.escala_atual, escala_id, pessoa, h_ent, h_sai, nome_pessoa, nomes_pos)
+        if erros:
+            messagebox.showerror("Conflito de horário", "\n".join(erros) + "\n\nAjuste os horários ou escolha outra pessoa.", parent=self.root)
+            return
+        # 2) escalar quem está de folga/férias: a etiqueta [FOLGA] aparecia, mas salvava sem perguntar
+        turno_antigo = next((t for lista in self.escala_atual.values() for t in lista
+                             if escala_id and str(t.EscalaID) == str(escala_id)), None)
+        pessoa_mudou = turno_antigo is None or chave_pessoa(turno_antigo) != pessoa
+        motivo = self._motivo_indisponivel(func_id) if (func_id and pessoa_mudou) else None
+        if motivo and not messagebox.askyesno(
+                "Funcionário indisponível",
+                f"{nome_pessoa}: {str(motivo).replace('⚠️', '').strip()}\n\nEscalar mesmo assim?", icon='warning', parent=self.root):
+            return
+        # 3) jornada do dia acima de 10h
+        if avisos and not messagebox.askyesno("Jornada longa", "\n".join(avisos) + "\n\nSalvar mesmo assim?",
+                                              icon='warning', parent=self.root):
+            return
         # [MELHORIA ESCALA] turno de freelancer já PAGO: avisa que o pagamento não muda sozinho
         if escala_id and database.turnos_pagos([escala_id]):
             if not messagebox.askyesno(
@@ -1907,6 +2166,12 @@ class AppEscalaLoja:
                 return
             if bool(int_ini) != bool(int_fim):
                 messagebox.showwarning("Aviso", "Preencha o início E o fim do intervalo (ou deixe os dois vazios para remover).", parent=popup)
+                return
+            # [AUDITORIA ESCALA] Aceitava intervalo fora do turno (ex.: turno 15:00-23:20 e intervalo 10:00-11:00)
+            prob = problema_intervalo(meta_dados['h_ent'], meta_dados['h_sai'], int_ini, int_fim)
+            if prob:
+                messagebox.showwarning("Intervalo inválido",
+                                       f"O {prob} ({meta_dados['h_ent']} às {meta_dados['h_sai']}).", parent=popup)
                 return
 
             # Chama a função de salvar existente (v3)
