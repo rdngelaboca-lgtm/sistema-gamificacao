@@ -101,8 +101,17 @@ def endereco_seguro(url):
 # == 2) Baixar e entender a página da SEFAZ ====================================
 # ==============================================================================
 
-def baixar_pagina(url):
-    """Abre a página do cupom na SEFAZ. Segue no máximo 5 redirecionamentos, todos .gov.br."""
+def _decodificar(bruto, codificacao=None):
+    for cod in ('utf-8', codificacao or 'latin-1', 'latin-1'):
+        try:
+            return bruto.decode(cod)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return bruto.decode('utf-8', errors='replace')
+
+
+def _baixar_com_requests(url):
+    """Jeito normal (biblioteca requests). Devolve o texto da página."""
     import requests
     sessao = requests.Session()
     sessao.headers.update({'User-Agent': NAVEGADOR, 'Accept': 'text/html,application/xhtml+xml',
@@ -119,6 +128,10 @@ def baixar_pagina(url):
                 r = sessao.get(atual, timeout=TEMPO_LIMITE_SEFAZ, allow_redirects=False, verify=False)
         except requests.exceptions.Timeout:
             raise ErroCompras("A SEFAZ demorou demais para responder. Tente de novo em alguns minutos.")
+        except requests.exceptions.ConnectionError as e:
+            # [MT] a SEFAZ-MT derruba a conexão https de programas que não abrem a conexão como um navegador
+            logger.warning(f"A SEFAZ derrubou a conexão ({urlparse(atual).hostname}): {e}")
+            raise _ConexaoDerrubada(atual)
         except requests.exceptions.RequestException as e:
             logger.warning(f"Falha ao abrir a página da SEFAZ: {e}")
             raise ErroCompras("Não consegui abrir o site da SEFAZ. O computador da loja está com internet?")
@@ -127,14 +140,54 @@ def baixar_pagina(url):
             continue
         if r.status_code != 200:
             raise ErroCompras(f"O site da SEFAZ respondeu com erro {r.status_code}. Tente de novo mais tarde.")
-        bruto = r.content
-        for cod in ('utf-8', r.encoding or 'latin-1', 'latin-1'):
-            try:
-                return bruto.decode(cod)
-            except (UnicodeDecodeError, LookupError):
-                continue
-        return bruto.decode('utf-8', errors='replace')
+        return _decodificar(r.content, r.encoding)
     raise ErroCompras("O site da SEFAZ redirecionou vezes demais.")
+
+
+class _ConexaoDerrubada(Exception):
+    """A SEFAZ fechou a conexão sem responder (guarda o endereço em que parou)."""
+    def __init__(self, url):
+        super().__init__(url)
+        self.url = url
+
+
+def _baixar_imitando_chrome(url):
+    """
+    Plano B: abre a página com a biblioteca curl_cffi, que faz a conexão segura IGUAL ao
+    Google Chrome. Alguns sites do governo derrubam qualquer outro programa.
+    Instalar no servidor:  pip install curl_cffi
+    """
+    try:
+        from curl_cffi import requests as creq
+    except ImportError:
+        raise ErroCompras("A SEFAZ recusou a conexão do computador da loja. Falta instalar o leitor que "
+                          "imita o navegador: pip install curl_cffi  (depois reinicie o serviço).")
+    atual = endereco_seguro(url.replace('|', '%7C'))
+    for _ in range(6):
+        try:
+            r = creq.get(atual, impersonate='chrome', timeout=TEMPO_LIMITE_SEFAZ, allow_redirects=False,
+                         headers={'Accept-Language': 'pt-BR,pt;q=0.9'})
+        except Exception as e:
+            logger.warning(f"Plano B (imitando o Chrome) também falhou em {atual}: {e}")
+            raise ErroCompras("A SEFAZ recusou a conexão do computador da loja. Tente de novo mais tarde; "
+                              "se continuar, avise o gestor.")
+        local = r.headers.get('Location')
+        if r.status_code in (301, 302, 303, 307, 308) and local:
+            atual = endereco_seguro(urljoin(atual, local))
+            continue
+        if r.status_code != 200:
+            raise ErroCompras(f"O site da SEFAZ respondeu com erro {r.status_code}. Tente de novo mais tarde.")
+        return _decodificar(r.content, r.encoding)
+    raise ErroCompras("O site da SEFAZ redirecionou vezes demais.")
+
+
+def baixar_pagina(url):
+    """Abre a página do cupom na SEFAZ. Segue no máximo 5 redirecionamentos, todos .gov.br."""
+    try:
+        return _baixar_com_requests(url)
+    except _ConexaoDerrubada as e:
+        logger.info("Tentando de novo imitando o Google Chrome (curl_cffi)...")
+        return _baixar_imitando_chrome(e.url)
 
 
 def _texto(fragmento):

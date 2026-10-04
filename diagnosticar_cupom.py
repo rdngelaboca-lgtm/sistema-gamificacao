@@ -187,6 +187,30 @@ def _tentar_programa(comando):
     return 200, p.stdout
 
 
+def _tentar_curl_cffi(url):
+    try:
+        from curl_cffi import requests as creq
+    except ImportError:
+        raise RuntimeError("não instalado (rode: pip install curl_cffi)")
+    r = creq.get(url.replace('|', '%7C'), impersonate='chrome', timeout=25, allow_redirects=True)
+    return r.status_code, r.content
+
+
+def _tentar_playwright(url):
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        raise RuntimeError("não instalado (opcional; só se o K falhar)")
+    with sync_playwright() as p:
+        nav = p.chromium.launch(headless=True)
+        try:
+            pagina = nav.new_page(locale='pt-BR')
+            resp = pagina.goto(url, timeout=30000, wait_until='load')
+            return (resp.status if resp else 200), pagina.content().encode('utf-8')
+        finally:
+            nav.close()
+
+
 def testar_conexao(url):
     """Tenta abrir a página de vários jeitos e mostra quais funcionam. Devolve a 1ª página que abriu."""
     import ssl
@@ -210,6 +234,8 @@ def testar_conexao(url):
         ('H curl HTTP/1.1', lambda: _tentar_programa(['curl', '-sS', '-L', '--http1.1', '--compressed', '-A', ua, '--max-time', '25', url])),
         ('I curl só TLS 1.2', lambda: _tentar_programa(['curl', '-sS', '-L', '--tlsv1.2', '--tls-max', '1.2', '--compressed', '-A', ua, '--max-time', '25', url])),
         ('J wget', lambda: _tentar_programa(['wget', '-q', '-O', '-', '-U', ua, '--timeout=25', '--tries=1', url])),
+        ('K curl_cffi imitando o Chrome', lambda: _tentar_curl_cffi(url)),
+        ('L navegador Chromium de verdade (Playwright)', lambda: _tentar_playwright(url)),
     ]
     primeira = None
     for nome, tentar in tentativas:
