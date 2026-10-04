@@ -6730,6 +6730,7 @@ def salvar_nota_fiscal_completa(dados_nf_cabecalho, lista_itens_nf):
         
         # 3. Se tudo deu certo, commita a transação
         conn.commit()
+        dados_nf_cabecalho['NotaID'] = int(nova_nota_id)   # [ALERTA PREÇO] quem salvou sabe qual nota conferir
         logger.info(f"Nota Fiscal {dados_nf_cabecalho['NumeroNF']} (ID: {nova_nota_id}) e seus {len(itens_para_inserir)} itens foram salvos com sucesso.")
         return True, f"Nota Fiscal {dados_nf_cabecalho['NumeroNF']} salva com sucesso."
 
@@ -6740,6 +6741,97 @@ def salvar_nota_fiscal_completa(dados_nf_cabecalho, lista_itens_nf):
     finally:
         if conn:
             conn.close()
+
+
+# ==============================================================================
+# == [ALERTA PREÇO] Aumento de preço em relação à compra anterior ==============
+# ==============================================================================
+LIMITE_AUMENTO_PRECO_PCT = Decimal('10')   # avisa a partir de 10% de aumento
+
+
+def aumentos_de_preco(nota_ids=None, desde_nota_id=None, desde_data=None, limite_pct=None):
+    """
+    Compras cujo custo (por unidade do ESTOQUE, já convertido pelo fator) subiu em relação
+    à compra PAGA anterior do mesmo produto (de qualquer fornecedor).
+    Filtra as compras conferidas por: nota_ids (lista), desde_nota_id (NotaID maior que) ou
+    desde_data (emitidas a partir de). Bonificação (custo 0) e o fornecedor interno
+    (custo manual) ficam de fora. Um produto aparece uma vez por nota.
+    Devolve uma lista de dicts, do maior aumento para o menor.
+    """
+    limite = Decimal(str(limite_pct)) if limite_pct is not None else LIMITE_AUMENTO_PRECO_PCT
+    desde_data = _como_data(desde_data)
+    nota_ids = {int(n) for n in nota_ids} if nota_ids is not None else None
+    if nota_ids is not None and not nota_ids:
+        return []
+    conn = get_db_connection()
+    if not conn:
+        raise Exception("Falha de conexão com o banco de dados.")
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT PF.ProdutoID, P.NomeProduto, P.UnidadeMedida, NF.DataEmissao, NF.NotaID, INI.ItemNotaID,
+                   INI.PrecoCustoUnitario, F.NomeFantasia, NF.NumeroNF, F.CNPJ, INI.Quantidade
+            FROM ItensNotaFiscalEntrada INI
+            JOIN NotasFiscaisEntrada NF ON INI.NotaID = NF.NotaID
+            JOIN ProdutosFornecedor PF ON INI.ProdutoFornecedorID = PF.ProdutoFornecedorID
+            JOIN ProdutosEstoque P ON PF.ProdutoID = P.ProdutoID
+            JOIN Fornecedores F ON NF.FornecedorID = F.FornecedorID
+        """)
+        linhas = cursor.fetchall()
+    finally:
+        conn.close()
+
+    por_produto = {}
+    for pid, nome, un, dt, nota_id, item_id, custo, forn, num_nf, cnpj, qtd in linhas:
+        custo = _dec(custo)
+        if (cnpj or '').strip() == CNPJ_FORNECEDOR_INTERNO or custo <= 0 or _dec(qtd) <= 0:
+            continue
+        por_produto.setdefault(pid, []).append({
+            'data': _como_data(dt), 'nota_id': int(nota_id), 'item_id': int(item_id or 0), 'custo': custo,
+            'fornecedor': forn or '', 'numero_nf': str(num_nf or ''), 'nome': nome or f'Produto {pid}',
+            'unidade': (un or 'UN').strip() or 'UN'})
+
+    def alvo(c):
+        if nota_ids is not None and c['nota_id'] not in nota_ids:
+            return False
+        if desde_nota_id is not None and c['nota_id'] <= int(desde_nota_id):
+            return False
+        if desde_data and (not c['data'] or c['data'] < desde_data):
+            return False
+        return True
+
+    achados = {}
+    for pid, compras in por_produto.items():
+        compras.sort(key=lambda c: (c['data'] or date.min, c['nota_id'], c['item_id']))
+        for k, c in enumerate(compras):
+            if not alvo(c):
+                continue
+            anterior = next((a for a in reversed(compras[:k]) if a['nota_id'] != c['nota_id']), None)
+            if not anterior:
+                continue
+            pct = (c['custo'] / anterior['custo'] - 1) * 100
+            if pct < limite:
+                continue
+            chave = (c['nota_id'], pid)
+            if chave in achados and achados[chave]['pct'] >= pct:
+                continue
+            achados[chave] = {
+                'produto_id': pid, 'produto': c['nome'], 'unidade': c['unidade'],
+                'custo': c['custo'], 'data': c['data'], 'fornecedor': c['fornecedor'],
+                'nota_id': c['nota_id'], 'numero_nf': c['numero_nf'],
+                'custo_anterior': anterior['custo'], 'data_anterior': anterior['data'],
+                'fornecedor_anterior': anterior['fornecedor'], 'pct': pct.quantize(Decimal('0.1'))}
+    return sorted(achados.values(), key=lambda a: (-a['pct'], a['produto']))
+
+
+def texto_aumento_preco(a):
+    """'Leite condensado subiu 18% (R$ 5,00 → R$ 5,90/UN; antes em 12/09, Atacadão)'."""
+    def reais(v):
+        return f"R$ {v:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
+    antes = a['data_anterior'].strftime('%d/%m') if a.get('data_anterior') else '?'
+    pct = f"{a['pct']:.0f}" if a['pct'] >= 10 else f"{a['pct']:.1f}".replace('.', ',')
+    return (f"{a['produto']} subiu {pct}% ({reais(a['custo_anterior'])} → {reais(a['custo'])}/{a['unidade']}; "
+            f"antes em {antes}, {a['fornecedor_anterior']})")
 
 
 def listar_notas_fiscais_entrada_completa():

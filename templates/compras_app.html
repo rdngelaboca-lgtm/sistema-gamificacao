@@ -1864,7 +1864,14 @@ const acoes = {
   'cupom-lancar': async () => {
     const c = E.cupons.find(x => x.id === T.p.id);
     if (!confirm(`Lançar ${c.itens.filter(i => i.situacao !== 'ignorado').length} item(ns) no estoque como compra de ${c.emitente}?`)) return;
-    try { guardarCupom(await api('POST', `/api/compras/cupons/${T.p.id}/lancar`)); toast('Cupom lançado no estoque.'); desenhar(); }
+    try {
+      const r = await api('POST', `/api/compras/cupons/${T.p.id}/lancar`);
+      guardarCupom(r); toast('Cupom lançado no estoque.'); desenhar();
+      if (r.aumentos && r.aumentos.length) abrirModal(`<div class="titulo-sec">📈 Preços que subiram</div>
+        <div class="mini suave">Comparado com a compra anterior de cada produto:</div>
+        <div class="linhas">${r.aumentos.map(t => `<div class="lin pequeno" style="padding:9px 10px">${esc(t)}</div>`).join('')}</div>
+        <button class="btn claro medio" data-acao="fechar-modal">Entendi</button>`);
+    }
     catch (e) { toast(e.extra.offline ? 'Sem internet: conecte para lançar.' : e.message); if (!e.extra.offline) acoes['cupom-abrir']({id: T.p.id}); }
   },
   'cupom-de-novo': async () => {

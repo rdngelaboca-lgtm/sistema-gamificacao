@@ -8,6 +8,8 @@
 #   • 08:00: fechamento mensal (pódio) nos primeiros dias do mês;
 #   • 09:00: lembrete de comunicados sem "ciente";
 #   • 09:05: "Drop" das tarefas de quem está de folga/férias.
+#   • 08:30: avisos do estoque no Telegram (abaixo do mínimo, acabando, listas esquecidas);
+#   • 08:35 de segunda: resumo dos preços que subiram na semana.
 #
 # Como rodar:  python agendador.py        (para parar: Ctrl+C)
 #
@@ -83,6 +85,8 @@ MAX_MINUTOS_RECUPERAR = 10      # se o robô "travar" alguns minutos, recupera a
 HORARIO_FECHAMENTO = "08:00"
 HORARIO_LEMBRETE_COMUNICADOS = "09:00"
 HORARIO_DROP = "09:05"
+HORARIO_AVISOS_ESTOQUE = "08:30"     # [ALERTAS ESTOQUE] abaixo do mínimo / acabando / listas esquecidas
+HORARIO_RESUMO_PRECOS = "08:35"      # [ALERTAS ESTOQUE] segunda-feira: preços que subiram na semana
 DIAS_PARA_FECHAMENTO = 5        # o fechamento do mês anterior pode rodar do dia 1 ao dia 5
 
 # --- CONTROLE DE CONCORRÊNCIA ---
@@ -241,9 +245,13 @@ def ja_rodou_hoje(nome):
 
 
 def marcar_rodou_hoje(nome):
+    salvar_no_estado(nome, date.today().isoformat())
+
+
+def salvar_no_estado(nome, valor):
     with _trava_estado:
         estado = _ler_estado()
-        estado[nome] = date.today().isoformat()
+        estado[nome] = valor
         try:
             with open(ARQUIVO_ESTADO, 'w', encoding='utf-8') as f:
                 json.dump(estado, f, ensure_ascii=False, indent=2)
@@ -661,6 +669,40 @@ def verificar_e_enviar_lembretes_comunicados(forcar=False):
 
 
 # ==============================================================================
+# == MÓDULO 9: AVISOS DO ESTOQUE (Telegram) ====================================
+# ==============================================================================
+def verificar_avisos_estoque(forcar=False):
+    """Todo dia: abaixo do mínimo, acabando em 2 dias e listas do app esquecidas (alertas_estoque.py)."""
+    if not forcar and ja_rodou_hoje('avisos_estoque'):
+        return
+    import alertas_estoque
+    texto = alertas_estoque.montar_avisos_diarios()
+    if texto and not alertas_estoque.enviar(texto):
+        logger.error("Avisos do estoque: o envio falhou (tenta de novo quando o robô for reiniciado).")
+        return
+    marcar_rodou_hoje('avisos_estoque')
+    logger.info("Avisos do estoque: " + ("enviados." if texto else "nada para avisar hoje."))
+
+
+def verificar_resumo_precos(forcar=False):
+    """Segunda-feira: maiores aumentos de preço das notas importadas desde o último resumo."""
+    if not forcar and (date.today().weekday() != 0 or ja_rodou_hoje('resumo_precos')):
+        return
+    import alertas_estoque
+    desde = _ler_estado().get('resumo_precos_ultima_nota')
+    if desde is None:      # primeira vez: notas emitidas nos últimos 7 dias
+        texto, maior = alertas_estoque.montar_resumo_precos(desde_data=date.today() - timedelta(days=7))
+    else:
+        texto, maior = alertas_estoque.montar_resumo_precos(desde_nota_id=int(desde))
+    if texto and not alertas_estoque.enviar(texto):
+        logger.error("Resumo de preços: o envio falhou (tenta de novo quando o robô for reiniciado).")
+        return
+    salvar_no_estado('resumo_precos_ultima_nota', maior)
+    marcar_rodou_hoje('resumo_precos')
+    logger.info("Resumo de preços: " + ("enviado." if texto else "nenhum aumento na semana."))
+
+
+# ==============================================================================
 # == MÓDULO 8: DOWNLOADS (fotos de entregas e notas fiscais) ===================
 # ==============================================================================
 def _baixar_arquivo_telegram(file_id, pasta, prefixo):
@@ -879,6 +921,8 @@ def configurar_agendamentos():
     schedule.every().day.at(HORARIO_FECHAMENTO).do(executar_com_seguranca, verificar_e_executar_fechamento)
     schedule.every().day.at(HORARIO_LEMBRETE_COMUNICADOS).do(executar_com_seguranca, verificar_e_enviar_lembretes_comunicados)
     schedule.every().day.at(HORARIO_DROP).do(executar_com_seguranca, verificar_e_delegar_tarefas_de_folga)
+    schedule.every().day.at(HORARIO_AVISOS_ESTOQUE).do(executar_com_seguranca, verificar_avisos_estoque)
+    schedule.every().day.at(HORARIO_RESUMO_PRECOS).do(executar_com_seguranca, verificar_resumo_precos)
 
     # Downloads em threads separadas (não travam o relógio do robô)
     schedule.every(1).minutes.do(run_threaded, processar_downloads_pendentes_sync)
@@ -893,6 +937,10 @@ def recuperar_tarefas_do_dia():
         executar_com_seguranca(verificar_e_enviar_lembretes_comunicados)
     if _passou_do_horario(HORARIO_DROP):
         executar_com_seguranca(verificar_e_delegar_tarefas_de_folga)
+    if _passou_do_horario(HORARIO_AVISOS_ESTOQUE, limite_horas=12):
+        executar_com_seguranca(verificar_avisos_estoque)
+    if _passou_do_horario(HORARIO_RESUMO_PRECOS, limite_horas=12):
+        executar_com_seguranca(verificar_resumo_precos)
 
 
 def main():

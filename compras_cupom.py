@@ -810,7 +810,14 @@ def lancar_cupom(cupom_id, usuario):
         raise ErroCompras(msg)
     _mudar_status(cupom_id, ST_IMPORTADO, usuario)
     logger.info(f"Cupom {cupom['chave']} lançado no estoque por {usuario.get('nome')}: {len(itens_nota)} itens.")
-    return obter_cupom(cupom_id)
+    resultado = obter_cupom(cupom_id)
+    resultado['aumentos'] = []
+    if cabecalho.get('NotaID') and hasattr(database, 'aumentos_de_preco'):
+        try:   # [ALERTA PREÇO] o que ficou mais caro que na compra anterior
+            resultado['aumentos'] = [database.texto_aumento_preco(a) for a in database.aumentos_de_preco(nota_ids=[cabecalho['NotaID']])]
+        except Exception as e:
+            logger.error(f"Cupom {cupom_id}: não foi possível conferir aumentos de preço: {e}")
+    return resultado
 
 
 def _mudar_status(cupom_id, status, usuario, erro=None):

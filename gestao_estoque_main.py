@@ -2999,6 +2999,7 @@ class AppGestaoEstoque:
         sucessos = 0
         falhas = 0
         duplicadas = []
+        notas_salvas = []        # [ALERTA PREÇO] IDs das notas que acabaram de entrar
         notas_remanescentes = [nf for nf in self.dados_notas_processadas if nf not in para_salvar]
 
         for nf in para_salvar:
@@ -3008,6 +3009,8 @@ class AppGestaoEstoque:
                 sucesso_db, msg_db = database.salvar_nota_fiscal_completa(cabecalho, itens_para_salvar)
                 if sucesso_db:
                     sucessos += 1
+                    if cabecalho.get('NotaID'):
+                        notas_salvas.append(cabecalho['NotaID'])
                 elif "já foi importada" in (msg_db or ""):
                     # Já está no banco: não adianta manter na tela
                     duplicadas.append(str(cabecalho['NumeroNF']))
@@ -3033,6 +3036,7 @@ class AppGestaoEstoque:
             messagebox.showwarning("Processamento Concluído", texto, parent=self.root)
         else:
             messagebox.showinfo("Processamento Concluído", texto, parent=self.root)
+        self.avisar_aumentos_de_preco(notas_salvas)
 
         # Atualiza a interface visual
         for i in self.tree_prontos.get_children(): 
@@ -3055,6 +3059,26 @@ class AppGestaoEstoque:
         self.atualizar_resumo_importacao()
         if not self.dados_notas_processadas and not self.itens_xml_nao_vinculados:
             self.status("Todas as notas e itens foram processados com sucesso! Tela limpa.")  # [MELHORIA UX] rodapé em vez de janelinha
+
+    def avisar_aumentos_de_preco(self, nota_ids):
+        """[ALERTA PREÇO] Depois de salvar as notas: avisa o que ficou mais caro que na compra anterior."""
+        if not nota_ids or not hasattr(database, 'aumentos_de_preco'):
+            return
+        try:
+            aumentos = database.aumentos_de_preco(nota_ids=nota_ids)
+        except Exception as e:
+            logger.error(f"Não foi possível conferir os aumentos de preço: {e}", exc_info=True)
+            return
+        if not aumentos:
+            return
+        linhas = [f"  • {database.texto_aumento_preco(a)}" for a in aumentos[:15]]
+        if len(aumentos) > 15:
+            linhas.append(f"  … e mais {len(aumentos) - 15} produto(s).")
+        messagebox.showwarning(
+            "Preços que subiram",
+            f"{len(aumentos)} produto(s) ficaram {database.LIMITE_AUMENTO_PRECO_PCT:.0f}% ou mais caros "
+            "do que na compra anterior:\n\n" + "\n".join(linhas) +
+            "\n\nSe algum aumento parecer exagerado, confira o fator (Qtd/Cx) do vínculo.", parent=self.root)
 
     def criar_mestre_e_vincular(self):
         # ... (código idêntico ao anterior) ...
