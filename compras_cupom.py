@@ -464,12 +464,13 @@ def _id_cupom_por_chave(chave):
         conn.close()
 
 
-def _nota_ja_lancada(cnpj, numero):
-    """A mesma nota já está no estoque? (ex.: XML importado no Gestão de Estoque)"""
+def _nota_ja_lancada(cnpj, numero, serie=None, chave=None):
+    """A mesma nota já está no estoque? (ex.: XML importado no Gestão de Estoque)
+    Série e chave evitam confundir cupons de caixas diferentes com o mesmo número."""
     fornecedor_id = database.buscar_fornecedor_por_cnpj(cnpj)
     if not fornecedor_id:
         return False
-    return bool(database.buscar_nota_importada(numero, fornecedor_id))
+    return bool(database.buscar_nota_importada(numero, fornecedor_id, serie, chave))
 
 
 def registrar_cupom(texto_qr, usuario, lista_codigo=None, html=None):
@@ -495,7 +496,7 @@ def registrar_cupom(texto_qr, usuario, lista_codigo=None, html=None):
         return cupom
 
     status, erro, pagina = ST_PENDENTE, None, None
-    if _nota_ja_lancada(info['cnpj'], info['numero']):
+    if _nota_ja_lancada(info['cnpj'], info['numero'], info['serie'], chave):
         status, erro = ST_JA_LANCADO, "Esta nota já está no estoque (provavelmente o XML foi importado)."
     else:
         try:
@@ -753,7 +754,7 @@ def lancar_cupom(cupom_id, usuario):
         raise ErroCompras("Este cupom não está aberto para lançar.")
     if cupom['pendentes']:
         raise ErroCompras(f"Ainda há {cupom['pendentes']} item(ns) sem produto. Vincule ou marque 'não é do estoque'.")
-    if _nota_ja_lancada(cupom['cnpj'], cupom['numero']):
+    if _nota_ja_lancada(cupom['cnpj'], cupom['numero'], cupom.get('serie'), cupom.get('chave')):
         _mudar_status(cupom_id, ST_JA_LANCADO, usuario, "Esta nota já estava no estoque.")
         raise ErroCompras("Esta nota já está no estoque (o XML dela foi importado). Nada foi lançado de novo.")
 
@@ -802,7 +803,8 @@ def lancar_cupom(cupom_id, usuario):
     cabecalho = {'NumeroNF': cupom['numero'], 'FornecedorID': fornecedor_id,
                  'DataEmissao': (data.date() if data else date.today()),
                  'ValorTotalNF': Decimal(str(cupom['valor_pagar'] if cupom['valor_pagar'] is not None else soma)),
-                 'ValorForaDoEstoque': fora.quantize(Decimal('0.01'))}
+                 'ValorForaDoEstoque': fora.quantize(Decimal('0.01')),
+                 'Serie': cupom.get('serie'), 'ChaveAcesso': cupom.get('chave')}
     ok, msg = database.salvar_nota_fiscal_completa(cabecalho, itens_nota)
     if not ok:
         raise ErroCompras(msg)

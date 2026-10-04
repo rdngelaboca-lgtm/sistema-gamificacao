@@ -6279,24 +6279,71 @@ def atualizar_produto_estoque(produto_id, nome, unidade, estoque_min, categoria=
             if conn:
                 conn.close()
 
+class ProdutoComHistorico(ValueError):
+    """O produto tem compras ou contagens: não pode ser apagado (a mensagem explica o que fazer)."""
+
+
 def excluir_produto_estoque(produto_id):
-    """Exclui um produto mestre da tabela ProdutosEstoque."""
+    """
+    Exclui um produto mestre da tabela ProdutosEstoque.
+    [AUDITORIA ESTOQUE] Antes só apagava a linha do produto. Os vínculos com fornecedores
+    ficavam "órfãos" (a próxima nota daquele item entrava num produto que não existe mais)
+    e as rotinas/códigos do App de Compras apontavam para o nada.
+    Agora:
+      - produto com COMPRAS por nota ou que aparece em CONTAGENS não é apagado
+        (levanta ProdutoComHistorico com a explicação; use "Juntar produtos");
+      - sem histórico: apaga junto os vínculos, o custo manual (nota interna de quantidade 0)
+        e as referências do App de Compras, tudo numa transação.
+    """
     conn = get_db_connection()
     if not conn:  # [DEPURAÇÃO 2] antes devolvia None e a tela dizia "sucesso"
         raise Exception("Falha de conexão com o banco de dados.")
-    if conn:
-        try:
-            cursor = conn.cursor()
-            sql = "DELETE FROM ProdutosEstoque WHERE ProdutoID = ?"
-            cursor.execute(sql, produto_id)
-            conn.commit()
-            logger.info(f"Produto mestre ID {produto_id} excluído.")
-        except Exception as e:
-            logger.error(f"ERRO ao excluir produto mestre ID {produto_id}: {e}", exc_info=True)
-            raise e # Lança o erro (provavelmente por restrição de chave estrangeira)
-        finally:
-            if conn:
-                conn.close()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT COUNT(*) FROM ItensNotaFiscalEntrada INI
+            JOIN ProdutosFornecedor PF ON INI.ProdutoFornecedorID = PF.ProdutoFornecedorID
+            WHERE PF.ProdutoID = ? AND INI.Quantidade > 0
+        """, produto_id)
+        compras = int(cursor.fetchone()[0] or 0)
+        cursor.execute("SELECT COUNT(DISTINCT ContagemID) FROM ItensContagemEstoque WHERE ProdutoID = ?", produto_id)
+        contagens = int(cursor.fetchone()[0] or 0)
+        if compras or contagens:
+            partes = [t for t in (f"{compras} compra(s) por nota fiscal" if compras else "",
+                                  f"aparece em {contagens} contagem(ns)" if contagens else "") if t]
+            raise ProdutoComHistorico(
+                f"Este produto tem histórico: {' e '.join(partes)}.\n\n"
+                "Apagar faria essas compras e contagens perderem o produto (o valor do estoque e a "
+                "sugestão de compra ficariam errados).\n\n"
+                "Se ele é um produto REPETIDO, selecione os dois no Catálogo (Ctrl + clique) e use "
+                "'🔗 Juntar produtos duplicados'.")
+        cursor.execute("SELECT ProdutoFornecedorID FROM ProdutosFornecedor WHERE ProdutoID = ?", produto_id)
+        vinculos = [r[0] for r in cursor.fetchall()]
+        if vinculos:
+            marcas = ", ".join("?" for _ in vinculos)
+            # custo manual: notas internas de quantidade 0 deste produto
+            cursor.execute(f"SELECT DISTINCT NotaID FROM ItensNotaFiscalEntrada WHERE ProdutoFornecedorID IN ({marcas})", *vinculos)
+            notas = [r[0] for r in cursor.fetchall()]
+            cursor.execute(f"DELETE FROM ItensNotaFiscalEntrada WHERE ProdutoFornecedorID IN ({marcas})", *vinculos)
+            for nota_id in notas:
+                cursor.execute("SELECT COUNT(*) FROM ItensNotaFiscalEntrada WHERE NotaID = ?", nota_id)
+                if not int(cursor.fetchone()[0] or 0):
+                    cursor.execute("DELETE FROM NotasFiscaisEntrada WHERE NotaID = ? AND FornecedorID IN "
+                                   "(SELECT FornecedorID FROM Fornecedores WHERE CNPJ = ?)", nota_id, CNPJ_FORNECEDOR_INTERNO)
+            cursor.execute(f"DELETE FROM ProdutosFornecedor WHERE ProdutoFornecedorID IN ({marcas})", *vinculos)
+        _trocar_produto_no_app_compras(cursor, [produto_id], None)
+        cursor.execute("DELETE FROM ProdutosEstoque WHERE ProdutoID = ?", produto_id)
+        conn.commit()
+        logger.info(f"Produto mestre ID {produto_id} excluído ({len(vinculos)} vínculo(s) sem compras apagado(s)).")
+    except ProdutoComHistorico:
+        conn.rollback()
+        raise
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"ERRO ao excluir produto mestre ID {produto_id}: {e}", exc_info=True)
+        raise e # Lança o erro (provavelmente por restrição de chave estrangeira)
+    finally:
+        conn.close()
 
 # ===================================================================
 # == FIM DO MÓDULO DE GESTÃO DE ESTOQUE (CATÁLOGO MESTRE) ===========
@@ -6543,8 +6590,15 @@ def _garantir_colunas_estoque():
             """)
             logger.info("Coluna FatorConversaoUsado criada e preenchida com o Qtd/Cx atual dos vínculos.")
         cur.execute("SELECT * FROM NotasFiscaisEntrada WHERE 1 = 0")
-        if 'valorforadoestoque' not in {d[0].lower() for d in (cur.description or [])}:
+        colunas_nf = {d[0].lower() for d in (cur.description or [])}
+        if 'valorforadoestoque' not in colunas_nf:
             cur.execute("ALTER TABLE NotasFiscaisEntrada ADD ValorForaDoEstoque DECIMAL(18, 2) NULL")
+        # [AUDITORIA ESTOQUE] série e chave de acesso: a mesma loja pode ter o MESMO número de nota
+        # em séries diferentes (ex: cada caixa de supermercado tem a sua série)
+        if 'serie' not in colunas_nf:
+            cur.execute("ALTER TABLE NotasFiscaisEntrada ADD Serie VARCHAR(5) NULL")
+        if 'chaveacesso' not in colunas_nf:
+            cur.execute("ALTER TABLE NotasFiscaisEntrada ADD ChaveAcesso VARCHAR(44) NULL")
         conn.commit()
         _colunas_estoque_ok = True
     except Exception as e:
@@ -6553,6 +6607,55 @@ def _garantir_colunas_estoque():
         raise
     finally:
         conn.close()
+
+
+def _serie_normalizada(serie):
+    """'001' -> '1' (a série vem com zeros na chave e sem zeros no XML). Vazio -> None."""
+    texto = str(serie or '').strip()
+    if not texto:
+        return None
+    return str(int(texto)) if texto.isdigit() else texto.upper()
+
+
+def _chave_normalizada(chave):
+    """Chave de acesso com 44 números (ou None)."""
+    digitos = ''.join(ch for ch in str(chave or '') if ch.isdigit())
+    return digitos if len(digitos) == 44 else None
+
+
+def _nota_ja_salva(cursor, numero_nf, fornecedor_id, serie=None, chave=None):
+    """
+    [AUDITORIA ESTOQUE] NotaID da nota já salva, ou None. Antes a nota era reconhecida só pelo
+    NÚMERO + fornecedor: a nota nº 559129 da série 7 era tratada como a nº 559129 da série 2 e
+    nunca entrava no estoque ("já importada"), e o recálculo de custos podia usar o XML de uma
+    nota na outra. Agora, quando as duas notas têm série/chave, elas precisam bater.
+    Notas antigas (salvas sem série) continuam valendo como "já importada" (por segurança).
+    """
+    serie, chave = _serie_normalizada(serie), _chave_normalizada(chave)
+    try:
+        _garantir_colunas_estoque()
+    except Exception as e:
+        logger.warning(f"Colunas de série/chave indisponíveis, comparando só o número da nota: {e}")
+        cursor.execute("SELECT NotaID FROM NotasFiscaisEntrada WHERE NumeroNF = ? AND FornecedorID = ?",
+                       str(numero_nf), fornecedor_id)
+        linha = cursor.fetchone()
+        return linha[0] if linha else None
+    if chave:
+        cursor.execute("SELECT NotaID FROM NotasFiscaisEntrada WHERE ChaveAcesso = ?", chave)
+        linha = cursor.fetchone()
+        if linha:
+            return linha[0]
+    cursor.execute("SELECT NotaID, Serie, ChaveAcesso FROM NotasFiscaisEntrada WHERE NumeroNF = ? AND FornecedorID = ?",
+                   str(numero_nf), fornecedor_id)
+    for nota_id, serie_db, chave_db in cursor.fetchall():
+        chave_db = _chave_normalizada(chave_db)
+        if chave and chave_db and chave_db != chave:
+            continue                      # chaves diferentes: são notas diferentes
+        serie_db = _serie_normalizada(serie_db)
+        if serie and serie_db and serie_db != serie:
+            continue                      # séries diferentes: são notas diferentes
+        return nota_id
+    return None
 
 
 def _fator_item(fator_usado, fator_vinculo):
@@ -6576,10 +6679,8 @@ def salvar_nota_fiscal_completa(dados_nf_cabecalho, lista_itens_nf):
     # 0. IMPLEMENTAÇÃO DO BLOQUEIO DE DUPLICIDADE
     numero_nf = dados_nf_cabecalho['NumeroNF']
     fornecedor_id = dados_nf_cabecalho['FornecedorID']
-
-    if verificar_nota_fiscal_existente(numero_nf, fornecedor_id):
-        conn.close()  # [DEPURAÇÃO] Antes a conexão ficava aberta para sempre neste caminho
-        return False, f"Nota Fiscal {numero_nf} já foi importada anteriormente para este fornecedor."
+    serie = _serie_normalizada(dados_nf_cabecalho.get('Serie'))
+    chave = _chave_normalizada(dados_nf_cabecalho.get('ChaveAcesso'))
     try:
         _garantir_colunas_estoque()
     except Exception as e:
@@ -6588,11 +6689,15 @@ def salvar_nota_fiscal_completa(dados_nf_cabecalho, lista_itens_nf):
 
     try:
         cursor = conn.cursor()
-        
+        # [AUDITORIA ESTOQUE] confere número + série + chave (antes: só número + fornecedor)
+        if _nota_ja_salva(cursor, numero_nf, fornecedor_id, serie, chave):
+            return False, f"Nota Fiscal {numero_nf} já foi importada anteriormente para este fornecedor."
+
         # 1. Inserir o Cabeçalho da NF
         sql_nf = """
-            INSERT INTO NotasFiscaisEntrada (NumeroNF, FornecedorID, DataEmissao, ValorTotalNF, ValorForaDoEstoque)
-            VALUES (?, ?, ?, ?, ?);
+            INSERT INTO NotasFiscaisEntrada (NumeroNF, FornecedorID, DataEmissao, ValorTotalNF, ValorForaDoEstoque,
+                                             Serie, ChaveAcesso)
+            VALUES (?, ?, ?, ?, ?, ?, ?);
             SELECT SCOPE_IDENTITY();
         """
         cursor.execute(sql_nf, 
@@ -6600,7 +6705,8 @@ def salvar_nota_fiscal_completa(dados_nf_cabecalho, lista_itens_nf):
                     dados_nf_cabecalho['FornecedorID'], 
                     dados_nf_cabecalho['DataEmissao'], 
                     dados_nf_cabecalho['ValorTotalNF'],
-                    dados_nf_cabecalho.get('ValorForaDoEstoque') or Decimal('0'))
+                    dados_nf_cabecalho.get('ValorForaDoEstoque') or Decimal('0'),
+                    serie, chave)
 
         cursor.nextset()
         nova_nota_id = cursor.fetchone()[0]
@@ -6915,6 +7021,64 @@ def vincular_item_avulso_contagem(contagem_id, nome_avulso, produto_id_mestre):
             conn.close()
     return False
 
+def _resolver_avulso_na_contagem(cursor, contagem_id, nome_avulso, produto_id, qtd):
+    """
+    [AUDITORIA ESTOQUE] Troca o item avulso da contagem pelo produto, deixando UMA linha só.
+    Antes: se o avulso estava em 2 linhas (ex: bipado 2x no celular), as DUAS recebiam o
+    produto com a quantidade digitada (o estoque dobrava); e se o produto já estava em 2
+    linhas, a quantidade era somada nas duas.
+    Resultado: produto = (o que já havia do produto nesta contagem) + qtd.
+    """
+    cursor.execute("SELECT QuantidadeContada FROM ItensContagemEstoque WHERE ContagemID = ? AND ProdutoID = ?",
+                   contagem_id, produto_id)
+    ja_tinha = sum((_dec(r[0]) for r in cursor.fetchall()), Decimal('0'))
+    cursor.execute("DELETE FROM ItensContagemEstoque WHERE ContagemID = ? AND ProdutoID = ?", contagem_id, produto_id)
+    cursor.execute("DELETE FROM ItensContagemEstoque WHERE ContagemID = ? AND ProdutoID IS NULL AND NomeAvulso = ?",
+                   contagem_id, nome_avulso)
+    cursor.execute("INSERT INTO ItensContagemEstoque (ContagemID, ProdutoID, QuantidadeContada, NomeAvulso, EANAvulso) "
+                   "VALUES (?, ?, ?, NULL, NULL)", contagem_id, produto_id, ja_tinha + _dec(qtd))
+
+
+def contagens_do_dia_por_produto(data_contagem, produto_ids, ignorar_ids=()):
+    """
+    [AUDITORIA ESTOQUE] Produtos que JÁ foram contados nesta data em outras contagens:
+    {ProdutoID: {'qtd': Decimal, 'contagens': ['ID 12 - App compras: Sorvetes', ...]}}.
+    A Sugestão de Compra SOMA as contagens do mesmo dia (contar por área: freezer + depósito);
+    uma RECONTAGEM salva como contagem nova deixaria o estoque em dobro.
+    """
+    ids = [int(p) for p in produto_ids if p is not None]
+    data = _como_data(data_contagem)
+    if not ids or not data:
+        return {}
+    conn = get_db_connection()
+    if not conn:
+        raise Exception("Falha de conexão com o banco de dados.")
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT ContagemID, DataContagem, NomeContagem FROM ContagensEstoque")
+        ignorar = {int(i) for i in ignorar_ids}
+        do_dia = {cid: (nome or 'Geral') for cid, dt, nome in cursor.fetchall()
+                  if _como_data(dt) == data and cid not in ignorar}
+        if not do_dia:
+            return {}
+        resultado = {}
+        marcas_c = ", ".join("?" for _ in do_dia)
+        for inicio in range(0, len(ids), 500):          # limite de parâmetros do SQL Server
+            parte = ids[inicio:inicio + 500]
+            marcas_p = ", ".join("?" for _ in parte)
+            cursor.execute(f"SELECT ContagemID, ProdutoID, QuantidadeContada FROM ItensContagemEstoque "
+                           f"WHERE ContagemID IN ({marcas_c}) AND ProdutoID IN ({marcas_p})", *list(do_dia), *parte)
+            for cid, pid, qtd in cursor.fetchall():
+                r = resultado.setdefault(pid, {'qtd': Decimal('0'), 'contagens': []})
+                r['qtd'] += _dec(qtd)
+                rotulo = f"ID {cid} - {do_dia[cid]}"
+                if rotulo not in r['contagens']:
+                    r['contagens'].append(rotulo)
+        return resultado
+    finally:
+        conn.close()
+
+
 def vincular_item_avulso_inteligente(contagem_id, nome_avulso, produto_id_mestre, nova_qtd, ean, salvar_permanente):
     """
     Substitui o avulso na contagem aplicando a quantidade corrigida.
@@ -6927,14 +7091,7 @@ def vincular_item_avulso_inteligente(contagem_id, nome_avulso, produto_id_mestre
             cursor = conn.cursor()
 
             # 1. TRATA A CONTAGEM FÍSICA (Aplica a quantidade ajustada pelo gestor)
-            cursor.execute("SELECT QuantidadeContada FROM ItensContagemEstoque WHERE ContagemID = ? AND ProdutoID = ?", contagem_id, produto_id_mestre)
-            existente = cursor.fetchone()
-
-            if existente:
-                cursor.execute("UPDATE ItensContagemEstoque SET QuantidadeContada = QuantidadeContada + ? WHERE ContagemID = ? AND ProdutoID = ?", nova_qtd, contagem_id, produto_id_mestre)
-                cursor.execute("DELETE FROM ItensContagemEstoque WHERE ContagemID = ? AND NomeAvulso = ?", contagem_id, nome_avulso)
-            else:
-                cursor.execute("UPDATE ItensContagemEstoque SET ProdutoID = ?, QuantidadeContada = ?, NomeAvulso = NULL, EANAvulso = NULL WHERE ContagemID = ? AND NomeAvulso = ?", produto_id_mestre, nova_qtd, contagem_id, nome_avulso)
+            _resolver_avulso_na_contagem(cursor, contagem_id, nome_avulso, produto_id_mestre, nova_qtd)
 
             # 2. AUTO-APRENDIZAGEM DO SISTEMA (Grava o EAN para o futuro)
             if salvar_permanente and ean and ean != "Sem EAN":
@@ -7195,15 +7352,28 @@ def _custos_por_produto(cursor, data_contagem):
         if len(custos_validos) >= 2 and min(custos_validos) > 0 and max(custos_validos) >= min(custos_validos) * FATOR_CUSTO_SUSPEITO:
             suspeito = (min(custos_validos), max(custos_validos))
 
-        if na_janela:
+        # [AUDITORIA ESTOQUE] Bonificação entra com custo ZERO. Antes, se a ÚLTIMA entrada (ou todas as
+        # entradas dos 90 dias) fosse bonificação, o produto valia R$ 0,00 no estoque, mesmo tendo
+        # compras PAGAS antes. Agora, nesses casos, vale o custo da última compra paga.
+        pagas = [c for c in lista if c[4] > 0]
+        valor_janela = sum(c[3] * c[4] for c in na_janela)
+        if na_janela and valor_janela > 0:
             qtd_total = sum(c[3] for c in na_janela)
-            custo = sum(c[3] * c[4] for c in na_janela) / qtd_total
+            custo = valor_janela / qtd_total
             origem = f"Média ponderada de {len(na_janela)} compra(s) em {JANELA_CUSTO_MEDIO_DIAS} dias"
         elif lista:
-            ultima = max(lista, key=lambda c: (c[0] or date.min, c[1], c[2]))
+            def ordem(c):
+                return (c[0] or date.min, c[1], c[2])
+            mais_recente = max(lista, key=ordem)
+            ultima = max(pagas, key=ordem) if pagas else mais_recente
             custo = ultima[4]
             data_txt = ultima[0].strftime('%d/%m/%Y') if ultima[0] else '?'
-            origem = f"Última compra ({data_txt})"
+            if na_janela and pagas:
+                origem = f"Última compra paga ({data_txt}) — nos {JANELA_CUSTO_MEDIO_DIAS} dias só houve bonificação"
+            elif ultima is not mais_recente:
+                origem = f"Última compra paga ({data_txt}) — a mais recente foi bonificação"
+            else:
+                origem = f"Última compra ({data_txt})"
         else:
             custo = manuais[pid][1]
             origem = "Custo manual (Catálogo)"
@@ -7960,15 +8130,12 @@ def buscar_produto_mestre_por_nome(nome_produto):
                 conn.close()
     return None
 
-def verificar_nota_fiscal_existente(numero_nf, fornecedor_id):
-    """Verifica se uma Nota Fiscal com o mesmo número e fornecedor já foi registrada."""
+def verificar_nota_fiscal_existente(numero_nf, fornecedor_id, serie=None, chave=None):
+    """Verifica se a Nota Fiscal (número + fornecedor + série/chave, quando houver) já foi registrada."""
     conn = get_db_connection()
     if conn:
         try:
-            cursor = conn.cursor()
-            sql = "SELECT COUNT(1) FROM NotasFiscaisEntrada WHERE NumeroNF = ? AND FornecedorID = ?"
-            cursor.execute(sql, numero_nf, fornecedor_id)
-            return cursor.fetchone()[0] > 0
+            return _nota_ja_salva(conn.cursor(), numero_nf, fornecedor_id, serie, chave) is not None
         except Exception as e:
             logger.error(f"ERRO ao verificar duplicidade de NF: {e}", exc_info=True)
             return True # Assume que existe para evitar duplicidade em caso de falha
@@ -9179,16 +9346,13 @@ def itens_da_nota(nota_id):
         conn.close()
 
 
-def buscar_nota_importada(numero_nf, fornecedor_id):
-    """[MELHORIA ST] NotaID de uma nota já salva (mesmo número e fornecedor), ou None."""
+def buscar_nota_importada(numero_nf, fornecedor_id, serie=None, chave=None):
+    """[MELHORIA ST] NotaID de uma nota já salva (mesmo número e fornecedor; mesma série/chave quando houver), ou None."""
     conn = get_db_connection()
     if not conn:
         return None
     try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT NotaID FROM NotasFiscaisEntrada WHERE NumeroNF = ? AND FornecedorID = ?", str(numero_nf), fornecedor_id)
-        linha = cursor.fetchone()
-        return linha[0] if linha else None
+        return _nota_ja_salva(conn.cursor(), numero_nf, fornecedor_id, serie, chave)
     except Exception as e:
         logger.error(f"Erro ao buscar nota {numero_nf} do fornecedor {fornecedor_id}: {e}", exc_info=True)
         return None
@@ -9590,6 +9754,37 @@ def listar_produtos_duplicados():
         conn.close()
 
 
+def _tabela_existe(cursor, nome):
+    cursor.execute("SELECT COUNT(*) FROM sys.tables WHERE name = ?", nome)
+    return int(cursor.fetchone()[0] or 0) > 0
+
+
+def _trocar_produto_no_app_compras(cursor, remover_ids, manter_id=None):
+    """
+    Rotinas (CompraRotinaItens) e códigos de barras (CompraCodigos) do App de Compras:
+    manter_id = produto que fica no lugar (juntar); None = só apaga as referências (excluir).
+    """
+    if _tabela_existe(cursor, 'CompraRotinaItens'):
+        for rid in remover_ids:
+            if manter_id is None:
+                cursor.execute("DELETE FROM CompraRotinaItens WHERE ProdutoID = ?", rid)
+                continue
+            cursor.execute("SELECT RotinaID FROM CompraRotinaItens WHERE ProdutoID = ?", rid)
+            for (rotina_id,) in cursor.fetchall():
+                cursor.execute("SELECT COUNT(*) FROM CompraRotinaItens WHERE RotinaID = ? AND ProdutoID = ?", rotina_id, manter_id)
+                if int(cursor.fetchone()[0] or 0):
+                    cursor.execute("DELETE FROM CompraRotinaItens WHERE RotinaID = ? AND ProdutoID = ?", rotina_id, rid)
+                else:
+                    cursor.execute("UPDATE CompraRotinaItens SET ProdutoID = ? WHERE RotinaID = ? AND ProdutoID = ?",
+                                   manter_id, rotina_id, rid)
+    if _tabela_existe(cursor, 'CompraCodigos'):
+        for rid in remover_ids:
+            if manter_id is None:
+                cursor.execute("DELETE FROM CompraCodigos WHERE ProdutoID = ?", rid)
+            else:
+                cursor.execute("UPDATE CompraCodigos SET ProdutoID = ? WHERE ProdutoID = ?", manter_id, rid)
+
+
 def juntar_produtos(manter_id, remover_ids):
     """
     Junta produtos duplicados do Catálogo num só:
@@ -9609,19 +9804,30 @@ def juntar_produtos(manter_id, remover_ids):
         cursor.execute("SELECT ProdutoID FROM ProdutosEstoque WHERE ProdutoID = ?", manter_id)
         if not cursor.fetchone():
             return False, "O produto a manter não existe mais."
+        todos = [int(manter_id)] + remover_ids
+        marcas = ", ".join("?" for _ in todos)
         for rid in remover_ids:
             cursor.execute("UPDATE ProdutosFornecedor SET ProdutoID = ? WHERE ProdutoID = ?", manter_id, rid)
-            cursor.execute("SELECT ContagemID, QuantidadeContada FROM ItensContagemEstoque WHERE ProdutoID = ?", rid)
-            for cid, qtd in cursor.fetchall():
-                cursor.execute("SELECT QuantidadeContada FROM ItensContagemEstoque WHERE ContagemID = ? AND ProdutoID = ?", cid, manter_id)
-                existe = cursor.fetchone()
-                if existe:
-                    cursor.execute("UPDATE ItensContagemEstoque SET QuantidadeContada = QuantidadeContada + ? "
-                                   "WHERE ContagemID = ? AND ProdutoID = ?", _dec(qtd), cid, manter_id)
-                    cursor.execute("DELETE FROM ItensContagemEstoque WHERE ContagemID = ? AND ProdutoID = ?", cid, rid)
-                else:
-                    cursor.execute("UPDATE ItensContagemEstoque SET ProdutoID = ? WHERE ContagemID = ? AND ProdutoID = ?",
-                                   manter_id, cid, rid)
+        # [AUDITORIA ESTOQUE] Contagens: soma TUDO o que havia dos produtos juntados em cada contagem
+        # numa linha só. Antes, com o mesmo produto em 2 linhas de uma contagem, a soma saía errada
+        # (uma das quantidades entrava 3 vezes).
+        cursor.execute(f"SELECT ContagemID, ProdutoID, QuantidadeContada FROM ItensContagemEstoque "
+                       f"WHERE ProdutoID IN ({marcas})", *todos)
+        por_contagem = {}
+        for cid, pid, qtd in cursor.fetchall():
+            info = por_contagem.setdefault(cid, {'total': Decimal('0'), 'juntar': False})
+            info['total'] += _dec(qtd)
+            info['juntar'] = info['juntar'] or int(pid) != int(manter_id)
+        for cid, info in por_contagem.items():
+            if not info['juntar']:
+                continue
+            cursor.execute(f"DELETE FROM ItensContagemEstoque WHERE ContagemID = ? AND ProdutoID IN ({marcas})", cid, *todos)
+            cursor.execute("INSERT INTO ItensContagemEstoque (ContagemID, ProdutoID, QuantidadeContada, NomeAvulso, EANAvulso) "
+                           "VALUES (?, ?, ?, NULL, NULL)", cid, manter_id, info['total'])
+        # [AUDITORIA ESTOQUE] App de Compras: rotinas e códigos de barras apontavam para o produto
+        # apagado (o item sumia da contagem do app e o código de barras parava de funcionar).
+        _trocar_produto_no_app_compras(cursor, remover_ids, manter_id)
+        for rid in remover_ids:
             cursor.execute("DELETE FROM ProdutosEstoque WHERE ProdutoID = ?", rid)
         conn.commit()
         logger.info(f"Produtos {remover_ids} juntados no produto {manter_id}.")
@@ -11348,15 +11554,7 @@ def desmembrar_caixa(id_origem, novo_ean, qtd_na_caixa, contagem_id=None, nome_a
 
         # resolve o item avulso da contagem (mesma transação)
         if contagem_id is not None and nome_avulso is not None:
-            cursor.execute("SELECT 1 FROM ItensContagemEstoque WHERE ContagemID = ? AND ProdutoID = ?", contagem_id, prod_id)
-            if cursor.fetchone():
-                cursor.execute("UPDATE ItensContagemEstoque SET QuantidadeContada = QuantidadeContada + ? "
-                               "WHERE ContagemID = ? AND ProdutoID = ?", _dec(qtd_contada or 0), contagem_id, prod_id)
-                cursor.execute("DELETE FROM ItensContagemEstoque WHERE ContagemID = ? AND NomeAvulso = ?", contagem_id, nome_avulso)
-            else:
-                cursor.execute("UPDATE ItensContagemEstoque SET ProdutoID = ?, QuantidadeContada = ?, NomeAvulso = NULL, "
-                               "EANAvulso = NULL WHERE ContagemID = ? AND NomeAvulso = ?",
-                               prod_id, _dec(qtd_contada or 0), contagem_id, nome_avulso)
+            _resolver_avulso_na_contagem(cursor, contagem_id, nome_avulso, prod_id, _dec(qtd_contada or 0))
         conn.commit()
         if contagem_id is not None:
             return True, "Caixa desmembrada, EAN aprendido e contagem atualizada!"

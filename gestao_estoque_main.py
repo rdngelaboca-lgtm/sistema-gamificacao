@@ -1620,6 +1620,8 @@ class AppGestaoEstoque:
             self.limpar_formulario_produto()
             self.atualizar_lista_produtos()
             self.popular_combobox_produtos_mestre()
+        except ValueError as e:   # [AUDITORIA ESTOQUE] produto com compras/contagens: explica o que fazer
+            messagebox.showwarning("Produto com histórico", str(e), parent=self.root)
         except Exception as e:
             logger.error(f"Erro ao excluir produto: {e}", exc_info=True)
             messagebox.showerror("Erro de Banco", "Não foi possível excluir o produto.\nVerifique se ele já está vinculado a notas fiscais ou contagens.", parent=self.root)
@@ -2129,7 +2131,8 @@ class AppGestaoEstoque:
             if cab.get('Finalidade') == '4':
                 continue
             fornecedor_id = database.buscar_fornecedor_por_cnpj(cab['FornecedorCNPJ'])
-            nota_id = database.buscar_nota_importada(cab['NumeroNF'], fornecedor_id) if fornecedor_id else None
+            nota_id = (database.buscar_nota_importada(cab['NumeroNF'], fornecedor_id, cab.get('Serie'), cab.get('ChaveAcesso'))
+                       if fornecedor_id else None)
             if not nota_id:
                 resumo['nao_importadas'] += 1
                 continue
@@ -2698,7 +2701,9 @@ class AppGestaoEstoque:
                 # [DEPURAÇÃO 2] Nota que JÁ está no banco não volta para a tela (antes os itens
                 # dela apareciam de novo para vincular e só no "Salvar" vinha o aviso).
                 try:
-                    ja_existe = database.verificar_nota_fiscal_existente(num_nf, fornecedor_id)
+                    # [AUDITORIA ESTOQUE] série e chave: mesmo número em séries diferentes NÃO é a mesma nota
+                    ja_existe = database.verificar_nota_fiscal_existente(num_nf, fornecedor_id, cabecalho_nf.get('Serie'),
+                                                                         cabecalho_nf.get('ChaveAcesso'))
                 except Exception:
                     ja_existe = False
                 if ja_existe:
@@ -3591,11 +3596,32 @@ class AppGestaoEstoque:
         data_contagem = self.date_contagem.get_date().strftime('%Y-%m-%d')
         funcionario_id = self.id_funcionario_contagem 
         nome_cont = self.entry_nome_contagem.get().strip() or "Geral"
+        # [AUDITORIA ESTOQUE] A Sugestão de Compra SOMA as contagens do mesmo dia (para contar por
+        # área: freezer + depósito). Se o produto já foi contado nesta data (ex: pelo App de
+        # Compras) e esta é uma RECONTAGEM, o estoque fica em DOBRO. Antes não havia aviso.
+        aviso = ""
+        try:
+            ja_contados = database.contagens_do_dia_por_produto(
+                data_contagem, [i['ProdutoID'] for i in self.lista_itens_para_salvar_contagem])
+        except Exception as e:
+            logger.warning(f"Não foi possível conferir as contagens do mesmo dia: {e}")
+            ja_contados = {}
+        if ja_contados:
+            nomes = {i['ProdutoID']: (i['NomeProduto'], i['Unidade']) for i in self.lista_itens_para_salvar_contagem}
+            linhas = [f"  • {nomes.get(pid, ('?', ''))[0]}: já tem {fmt_qtd(r['qtd'])} {nomes.get(pid, ('', 'UN'))[1]} "
+                      f"em {', '.join(r['contagens'])}" for pid, r in list(ja_contados.items())[:8]]
+            mais = f"\n  ... e mais {len(ja_contados) - 8}" if len(ja_contados) > 8 else ""
+            aviso = (f"\n\n⚠️ {len(ja_contados)} produto(s) desta lista JÁ FORAM CONTADOS nesta data em outra contagem:\n"
+                     + "\n".join(linhas) + mais +
+                     "\n\nContagens do MESMO DIA são SOMADAS (serve para contar por área: freezer + depósito).\n"
+                     "Se você contou esses produtos DE NOVO (recontagem), NÃO salve: corrija a contagem antiga "
+                     "('✏️ Editar Contagem'), senão o estoque desses produtos fica em DOBRO.")
         # [MELHORIA UX] confirmação com o resumo (evita salvar pela metade por engano)
         if not messagebox.askyesno(
                 "Salvar contagem",
                 f"Salvar a contagem '{nome_cont}' de {self.date_contagem.get_date().strftime('%d/%m/%Y')} "
-                f"com {len(self.lista_itens_para_salvar_contagem)} itens?", parent=self.root):
+                f"com {len(self.lista_itens_para_salvar_contagem)} itens?" + aviso,
+                icon='warning' if aviso else 'question', parent=self.root):
             return
         try:
             sucesso, msg = database.salvar_contagem_estoque(
@@ -3790,9 +3816,17 @@ class AppGestaoEstoque:
                 logger.error(f"Erro ao listar itens avulsos: {e}", exc_info=True)
                 messagebox.showerror("Erro", f"Falha ao carregar os itens avulsos:\n{e}", parent=popup)
                 avulsos = []
+            # [AUDITORIA ESTOQUE] o mesmo avulso bipado 2x na mesma contagem aparecia em 2 linhas; ao
+            # resolver a 1ª, as duas linhas recebiam a quantidade dela. Agora aparece UMA linha com a soma.
+            agrupados = {}
             for av in avulsos or []:
-                tree.insert("", "end", values=(av.ContagemID, fmt_data(av.DataContagem), av.NomeAvulso,
-                                               fmt_num(av.QuantidadeContada, 3, "0.000"), av.EANAvulso or "Sem EAN"))
+                g = agrupados.setdefault((av.ContagemID, av.NomeAvulso), {
+                    'data': av.DataContagem, 'qtd': Decimal('0'), 'ean': None})
+                g['qtd'] += Decimal(str(av.QuantidadeContada or 0))
+                g['ean'] = g['ean'] or (av.EANAvulso or None)
+            for (cid, nome), g in agrupados.items():
+                tree.insert("", "end", values=(cid, fmt_data(g['data']), nome, fmt_num(g['qtd'], 3, "0.000"),
+                                               g['ean'] or "Sem EAN"))
 
         def resolver_clicado(event):
             sel = tree.focus()
@@ -5049,6 +5083,10 @@ class AppGestaoEstoque:
             contagens = database.listar_contagens_cabecalho() or []
             selecao_ini_antiga = self.combo_contagem_inicio.get()
             selecao_fim_antiga = self.combo_contagem_fim.get()
+            # [AUDITORIA ESTOQUE] quem estava na contagem MAIS RECENTE passa para a nova quando outra é
+            # salva (antes o Ponto B ficava na antiga e a sugestão saía com o estoque velho)
+            valores_antigos = list(self.combo_contagem_fim['values'] or [])
+            estava_na_mais_recente = not valores_antigos or selecao_fim_antiga == valores_antigos[0]
             self.mapa_contagens_sugestao.clear()
             self.mapa_contagens_sugestao[self.OPCAO_A_AUTOMATICO] = None
             self.mapa_contagens_sugestao[self.OPCAO_A_PRIMEIRA_COMPRA] = -2
@@ -5062,7 +5100,7 @@ class AppGestaoEstoque:
             self.combo_contagem_fim['values'] = nomes_contagens
             self.combo_contagem_inicio['values'] = [self.OPCAO_A_AUTOMATICO, self.OPCAO_A_PRIMEIRA_COMPRA,
                                                     self.OPCAO_A_HISTORICO] + nomes_contagens
-            self.combo_contagem_fim.set(selecao_fim_antiga if selecao_fim_antiga in nomes_contagens
+            self.combo_contagem_fim.set(selecao_fim_antiga if selecao_fim_antiga in nomes_contagens and not estava_na_mais_recente
                                         else (nomes_contagens[0] if nomes_contagens else ''))
             if selecao_ini_antiga not in self.mapa_contagens_sugestao:
                 pref = self.ler_preferencias().get('sugestao', {})
@@ -5662,7 +5700,24 @@ class AppGestaoEstoque:
             messagebox.showwarning("Aviso", "Selecione pelo menos uma Contagem para excluir.", parent=self.root)
             return
         
-        if not messagebox.askyesno("Confirmar Exclusão", f"Você selecionou {len(selecionados)} contagens.\n\nEsta ação apagará o registro histórico dessa contagem de estoque.\n\nDeseja continuar?", icon='warning', parent=self.root):
+        # [AUDITORIA ESTOQUE] Contagem com o VALOR DO ESTOQUE FECHADO era apagada junto com o valor,
+        # sem nenhum aviso (editar, consolidar e resolver avulsos já protegiam).
+        try:
+            fechados = database.listar_valores_estoque_fechados(levantar_erro=True)
+        except Exception as e:
+            logger.error(f"Não foi possível conferir os valores fechados: {e}")
+            messagebox.showerror("Banco indisponível", "Não foi possível conferir se as contagens têm o valor do estoque "
+                                 "FECHADO. Por segurança, nada foi apagado. Tente de novo.", parent=self.root)
+            return
+        ids_sel = [int(self.tree_admin_cont.item(i, 'values')[0]) for i in selecionados]
+        com_valor = [(cid, fechados[cid][0]) for cid in ids_sel if cid in fechados]
+        aviso = ""
+        if com_valor:
+            aviso = ("\n\n🔒 ATENÇÃO: " + ", ".join(f"ID {cid} ({fmt_reais(v)})" for cid, v in com_valor[:6])
+                     + (" ..." if len(com_valor) > 6 else "")
+                     + " tem(têm) o VALOR DO ESTOQUE FECHADO. Esse valor também será APAGADO.\n"
+                     "Se você já lançou esse valor em outro lugar (contabilidade, planilha), ele deixa de existir aqui.")
+        if not messagebox.askyesno("Confirmar Exclusão", f"Você selecionou {len(selecionados)} contagens.\n\nEsta ação apagará o registro histórico dessa contagem de estoque.{aviso}\n\nDeseja continuar?", icon='warning', parent=self.root):
             return
 
         sucessos = 0
@@ -5677,6 +5732,7 @@ class AppGestaoEstoque:
         else:
             messagebox.showwarning("Resultado", f"{sucessos} de {len(selecionados)} contagem(ns) excluída(s) com sucesso.", parent=self.root)
         self.atualizar_lista_contagens_admin()
+        self._ultimas_contagens = None   # [AUDITORIA ESTOQUE] o aviso "contou em caixa?" usava a contagem apagada
         # [DEPURAÇÃO] as abas 4 e 5 continuavam mostrando as contagens apagadas
         self.atualizar_lista_contagens_historico()
         self.popular_combos_contagem_sugestao()
