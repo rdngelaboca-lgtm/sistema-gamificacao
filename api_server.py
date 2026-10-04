@@ -1587,7 +1587,9 @@ def api_compras_preparar(usuario, rotina_id):
 @app.route('/api/compras/produtos', methods=['GET'])
 @compras_login()   # [MELHORIA] o funcionário também busca produtos (para incluir na lista)
 def api_compras_produtos(usuario):
-    return _resposta_compras(compras_database.buscar_produtos, request.args.get('q', ''))
+    # [CONTAGEM GERAL] todos=1: o catálogo inteiro (botão "incluir todos os produtos" da rotina)
+    return _resposta_compras(compras_database.buscar_produtos, request.args.get('q', ''),
+                             limite=10000 if request.args.get('todos') else 40)
 
 
 @app.route('/api/compras/produtos/<int:produto_id>/historico', methods=['GET'])

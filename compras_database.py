@@ -49,6 +49,7 @@ ST_APROVADA = 'aprovada'        # pronta para comprar (modo carrinho)
 ST_FINALIZADA = 'finalizada'
 ST_CANCELADA = 'cancelada'
 ST_PROCESSANDO = 'processando'  # uso interno: lista sendo gravada
+ST_CONTAGEM = 'contagem'        # [CONTAGEM GERAL] rotina só de contagem: grava o estoque, sem lista de compra
 
 # Situação de cada item no carrinho
 SIT_COMPRADO = 'comprado'
@@ -281,6 +282,8 @@ def garantir_tabelas():
                 PRIMARY KEY (ListaID, ProdutoID)
             )
         """)
+        # [CONTAGEM GERAL] rotina que só conta o estoque (organizada por local), sem lista de compra
+        cur.execute("IF COL_LENGTH('CompraRotinas', 'SoContagem') IS NULL ALTER TABLE CompraRotinas ADD SoContagem BIT NULL")
         conn.commit()
         _tabelas_ok = True
     except Exception as e:
@@ -465,7 +468,7 @@ def listar_rotinas(incluir_inativas=False, hoje=None):
         cur = conn.cursor()
         cur.execute("""
             SELECT R.RotinaID, R.Nome, R.DiasSemana, R.DiasCobertura, R.PrazoDias, R.Fornecedores, R.Ativa,
-                   (SELECT COUNT(*) FROM CompraRotinaItens I WHERE I.RotinaID = R.RotinaID) AS QtdItens
+                   (SELECT COUNT(*) FROM CompraRotinaItens I WHERE I.RotinaID = R.RotinaID) AS QtdItens, R.SoContagem
             FROM CompraRotinas R
             ORDER BY R.Nome
         """)
@@ -477,7 +480,8 @@ def listar_rotinas(incluir_inativas=False, hoje=None):
             prox = _proxima_data(dias, hoje)
             rotinas.append({'id': r[0], 'nome': r[1], 'dias_semana': dias, 'dias_cobertura': int(r[3] or 7),
                             'prazo_dias': int(r[4] or 0), 'fornecedores': _ler_ids(r[5]), 'ativa': bool(r[6]),
-                            'qtd_itens': int(r[7] or 0), 'hoje': prox == hoje, 'proxima': _iso(prox)})
+                            'qtd_itens': int(r[7] or 0), 'hoje': prox == hoje, 'proxima': _iso(prox),
+                            'so_contagem': bool(r[8])})
         rotinas.sort(key=lambda x: (not x['hoje'], x['proxima'] or '9999', x['nome']))
         return rotinas
     finally:
@@ -488,7 +492,7 @@ def obter_rotina(rotina_id):
     conn = _conectar()
     try:
         cur = conn.cursor()
-        cur.execute("""SELECT RotinaID, Nome, DiasSemana, DiasCobertura, PrazoDias, Fornecedores, Ativa
+        cur.execute("""SELECT RotinaID, Nome, DiasSemana, DiasCobertura, PrazoDias, Fornecedores, Ativa, SoContagem
                        FROM CompraRotinas WHERE RotinaID = ?""", (int(rotina_id),))
         r = cur.fetchone()
         if not r:
@@ -505,7 +509,8 @@ def obter_rotina(rotina_id):
                   'categoria': i[5] or '', 'existe': i[3] is not None}
                  for i in cur.fetchall()]
         return {'id': r[0], 'nome': r[1], 'dias_semana': _ler_dias_semana(r[2]), 'dias_cobertura': int(r[3] or 7),
-                'prazo_dias': int(r[4] or 0), 'fornecedores': _ler_ids(r[5]), 'ativa': bool(r[6]), 'itens': itens}
+                'prazo_dias': int(r[4] or 0), 'fornecedores': _ler_ids(r[5]), 'ativa': bool(r[6]),
+                'so_contagem': bool(r[7]), 'itens': itens}
     finally:
         conn.close()
 
@@ -514,7 +519,9 @@ def salvar_rotina(dados):
     """
     Cria (sem 'id') ou altera (com 'id') uma rotina e a lista de itens, na ordem recebida.
     dados = {'id'?, 'nome', 'dias_semana': [1..7], 'dias_cobertura', 'prazo_dias',
-             'fornecedores': [ids], 'itens': [{'produto_id', 'secao'}]}
+             'fornecedores': [ids], 'itens': [{'produto_id', 'secao'}], 'so_contagem'?}
+    so_contagem: rotina de CONTAGEM GERAL (seção = local: freezer 1, estoque seco...): grava o
+    estoque e não gera lista de compra.
     Devolve o ID da rotina.
     """
     nome = str(dados.get('nome') or '').strip()
@@ -554,16 +561,18 @@ def salvar_rotina(dados):
         if faltando:
             raise ErroCompras(f"Produto(s) não encontrado(s) no estoque: {faltando}")
         rotina_id = dados.get('id')
-        valores = (nome, ','.join(map(str, dias)), cobertura, prazo, ','.join(map(str, fornecedores)))
+        valores = (nome, ','.join(map(str, dias)), cobertura, prazo, ','.join(map(str, fornecedores)),
+                   1 if dados.get('so_contagem') else 0)
         if rotina_id:
             cur.execute("""UPDATE CompraRotinas SET Nome = ?, DiasSemana = ?, DiasCobertura = ?, PrazoDias = ?,
-                           Fornecedores = ?, Ativa = 1 WHERE RotinaID = ?""", valores + (int(rotina_id),))
+                           Fornecedores = ?, SoContagem = ?, Ativa = 1 WHERE RotinaID = ?""", valores + (int(rotina_id),))
             if cur.rowcount == 0:
                 raise ErroCompras("Rotina não encontrada (pode ter sido apagada).")
             rotina_id = int(rotina_id)
         else:
-            cur.execute("""INSERT INTO CompraRotinas (Nome, DiasSemana, DiasCobertura, PrazoDias, Fornecedores, Ativa, CriadaEm)
-                           OUTPUT INSERTED.RotinaID VALUES (?, ?, ?, ?, ?, 1, ?)""", valores + (datetime.now(),))
+            cur.execute("""INSERT INTO CompraRotinas (Nome, DiasSemana, DiasCobertura, PrazoDias, Fornecedores, SoContagem,
+                                                     Ativa, CriadaEm)
+                           OUTPUT INSERTED.RotinaID VALUES (?, ?, ?, ?, ?, ?, 1, ?)""", valores + (datetime.now(),))
             rotina_id = int(cur.fetchone()[0])
         cur.execute("DELETE FROM CompraRotinaItens WHERE RotinaID = ?", (rotina_id,))
         for ordem, (pid, secao) in enumerate(itens):
@@ -906,6 +915,16 @@ def preparar_contagem(rotina_id, hoje=None):
 # == Listas de compra ===========================================================
 # ==============================================================================
 
+def _itens_so_contagem(rotina, contados):
+    """[CONTAGEM GERAL] Itens do registro de uma contagem geral: só o que foi contado (nada para comprar)."""
+    return [{'ProdutoID': it['produto_id'], 'Ordem': it['ordem'], 'Secao': it['secao'], 'NomeProduto': it['nome'][:255],
+             'Unidade': it['unidade'][:20], 'QtdContada': contados.get(it['produto_id']), 'EstoqueUsado': None,
+             'ConsumoDia': None, 'EstoqueMinimo': None, 'QtdSugerida': None, 'QtdPedido': Decimal('0'),
+             'Fator': Decimal('1'), 'FornecedorID': None, 'FornecedorNome': None, 'CustoUnid': None,
+             'DataPreco': None, 'Alerta': None}
+            for it in rotina['itens'] if it['existe']]
+
+
 def _calcular_itens(rotina, contados, dias, hoje, contagem_id):
     """Monta os itens da lista (quanto comprar e onde) para a rotina inteira."""
     pids = [i['produto_id'] for i in rotina['itens'] if i['existe']]
@@ -1030,7 +1049,7 @@ def registrar_lista(codigo, rotina_id, usuario, dias, contagens, hoje=None):
             fechadas = database.listar_valores_estoque_fechados(levantar_erro=True)
             herdados = {}                    # contados na vez anterior e NÃO recontados agora
             for cod_ant, cid_ant, st_ant in _contagens_substituidas(cur, rotina_id, hoje, codigo):
-                if st_ant not in (ST_FINALIZADA, ST_CANCELADA):
+                if st_ant not in (ST_FINALIZADA, ST_CANCELADA, ST_CONTAGEM):
                     cur.execute("UPDATE CompraListas SET Status = ? WHERE Codigo = ?", (ST_CANCELADA, cod_ant))
                 if cid_ant in fechadas:
                     continue                 # valor do estoque já fechado: não mexe
@@ -1069,9 +1088,13 @@ def registrar_lista(codigo, rotina_id, usuario, dias, contagens, hoje=None):
     finally:
         conn.close()
 
-    itens = _calcular_itens(rotina, contados, dias, hoje, contagem_id)
+    if rotina.get('so_contagem'):
+        itens = _itens_so_contagem(rotina, contados)
+        status = ST_CONTAGEM
+    else:
+        itens = _calcular_itens(rotina, contados, dias, hoje, contagem_id)
+        status = ST_APROVADA if usuario.get('gestor') else ST_AGUARDANDO
     valor = sum((i['QtdPedido'] * i['CustoUnid'] for i in itens if i['CustoUnid'] and i['QtdPedido'] > 0), Decimal('0'))
-    status = ST_APROVADA if usuario.get('gestor') else ST_AGUARDANDO
     conn = _conectar()
     try:
         cur = conn.cursor()
@@ -1158,8 +1181,8 @@ def listar_listas(limite=30, dias=45, hoje=None):
                    (SELECT COUNT(*) FROM CompraListaItens I WHERE I.ListaID = L.ListaID AND I.QtdPedido > 0 AND I.Situacao <> ''),
                    L.FuncionarioID, L.RotinaID
             FROM CompraListas L
-            WHERE L.Status <> ?
-        """, (ST_PROCESSANDO,))
+            WHERE L.Status <> ? AND L.Status <> ?
+        """, (ST_PROCESSANDO, ST_CONTAGEM))
         listas = []
         limite_data = hoje - timedelta(days=dias)
         for r in cur.fetchall():

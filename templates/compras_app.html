@@ -214,7 +214,7 @@
 
 // ---------------------------------------------------------------- utilidades
 const CHAVE = 'gb_compras_v1';
-const VERSAO_APP = '11';   // aparece no rodapé do início: confira se o celular pegou a versão nova
+const VERSAO_APP = '12';   // aparece no rodapé do início: confira se o celular pegou a versão nova
 const $app = document.getElementById('app');
 const DIAS_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];            // 1=Dom ... 7=Sáb (padrão do sistema)
 const FRACIONADAS = ['KG', 'G', 'GR', 'L', 'LT', 'ML', 'M'];
@@ -369,6 +369,7 @@ async function sincronizar() {
   }
 }
 function guardarLista(lista, doServidor) {
+  if (lista.status === 'contagem') return;          // [CONTAGEM GERAL] não é lista de compra
   const antiga = E.listas[lista.codigo];
   // se ainda há marcações do carrinho esperando envio, mantém o que a pessoa marcou
   const pend = E.fila.filter(t => t.tipo === 'itens' && t.codigo === lista.codigo);
@@ -530,11 +531,11 @@ TELAS.inicio = () => {
   let principal = '';
   if (ida) {
     const prep = E.preparos[ida.rotina_id];
-    const total = prep ? prep.itens.length : 0;
-    const feitos = Object.keys(ida.contagens).length;
+    const total = prep ? itensIda().length : 0;
+    const feitos = prep ? itensIda().filter(it => ida.contagens[it.produto_id] != null).length : Object.keys(ida.contagens).length;
     principal = `<div class="destaque"><div><div class="rotulo" style="color:#CDEBE6">Contagem em andamento</div>
         <div style="font-size:22px;font-weight:800">${esc(prep ? prep.nome : 'Rotina')}</div>
-        <div style="color:#E3F4F1">${feitos} de ${total} itens · para ${ida.dias} dias${ida.dia && ida.dia !== hojeISO() ? ' · começada em ' + dataBR(ida.dia) : ''}${ida.usuario_id && ida.usuario_id !== u.id ? ' · por ' + esc(ida.usuario_nome || 'outra pessoa') : ''}</div></div>
+        <div style="color:#E3F4F1">${feitos} de ${total} itens${ida.secoes && ida.secoes.length ? ' · ' + esc(ida.secoes.join(', ')) : prep && prep.so_contagem ? '' : ' · para ' + ida.dias + ' dias'}${ida.dia && ida.dia !== hojeISO() ? ' · começada em ' + dataBR(ida.dia) : ''}${ida.usuario_id && ida.usuario_id !== u.id ? ' · por ' + esc(ida.usuario_nome || 'outra pessoa') : ''}</div></div>
         <button class="btn" data-acao="continuar-ida">Continuar contagem ${ICONES.seta}</button></div>`;
   } else if (hoje.length) {
     const r = hoje[0];
@@ -548,7 +549,7 @@ TELAS.inicio = () => {
   const cartoesListas = abertas.map(cartaoLista).join('');
   const rotinas = E.rotinas.map(r => `<button class="cartao item-rotina" data-acao="nova-ida" data-id="${r.id}">
       <div class="quadrado">${ICONES.carrinho}</div>
-      <div class="grow"><div class="nome">${esc(r.nome)}</div><div class="pequeno suave">${r.qtd_itens} itens · ${esc(textoDias(r.dias_semana))}</div></div>
+      <div class="grow"><div class="nome">${esc(r.nome)}${r.so_contagem ? ' <span class="chip-ap">só contagem</span>' : ''}</div><div class="pequeno suave">${r.qtd_itens} itens · ${esc(textoDias(r.dias_semana))}</div></div>
       <div class="mini" style="font-weight:800;color:${r.hoje ? 'var(--laranja)' : 'var(--suave)'}">${r.hoje ? 'HOJE' : (r.proxima ? dataBR(r.proxima) : '')}</div></button>`).join('');
   return `${faixaRede()}
     <div class="topo" style="padding:20px 16px 4px;align-items:flex-start">
@@ -618,17 +619,24 @@ TELAS.novaIda = p => {
     + `<button class="chip ${padrao.includes(p.dias) ? '' : 'sel'}" data-acao="ida-dias-outro">${padrao.includes(p.dias) ? 'Outro' : p.dias + ' dias'}</button>`;
   const ate = somarDias(p.dias);
   const prazo = rot.prazo_dias ? ` (mais ${rot.prazo_dias} dia${rot.prazo_dias > 1 ? 's' : ''} de prazo de entrega)` : '';
-  return `${topo('Nova ida ao mercado', '', 'nav-inicio')}
+  // [CONTAGEM GERAL] rotina só de contagem: em vez dos dias, escolhe os LOCAIS que esta pessoa vai contar
+  const locais = p.secoes ? `<div class="lista-cartoes"><div class="titulo-sec">Quais locais você vai contar?</div>
+        <div class="chips">${p.secoes.map(sc => `<button class="chip ${(p.selLocais || []).includes(sc) ? 'sel' : ''}" data-acao="ida-local" data-l="${esc(sc)}" aria-pressed="${(p.selLocais || []).includes(sc)}">${esc(sc)}</button>`).join('')}</div>
+        <div class="info">${(p.selLocais || []).length ? `Vai contar ${p.itensSel} itens.` : 'Nenhum marcado = <strong>todos os locais</strong>.'} Outra pessoa pode contar os outros locais ao mesmo tempo, em outro celular.</div></div>` : '';
+  const blocoDias = rot.so_contagem
+    ? `<div class="info">Contagem geral: os números entram no estoque. <strong>Não gera lista de compra.</strong></div>${locais}`
+    : `<div class="lista-cartoes"><div class="titulo-sec">Comprar para quantos dias?</div><div class="chips">${chips}</div>
+        <div class="info">A lista vai cobrir até <strong>${esc(ate.toLocaleDateString('pt-BR', {weekday: 'long', day: '2-digit', month: '2-digit'}))}</strong>${esc(prazo)}.</div></div>`;
+  return `${topo(rot.so_contagem ? 'Contagem do estoque' : 'Nova ida ao mercado', '', 'nav-inicio')}
     <div class="corpo">
       <div class="lista-cartoes"><div class="titulo-sec">Qual rotina?</div>${opcoes}</div>
-      <div class="lista-cartoes"><div class="titulo-sec">Comprar para quantos dias?</div><div class="chips">${chips}</div>
-        <div class="info">A lista vai cobrir até <strong>${esc(ate.toLocaleDateString('pt-BR', {weekday: 'long', day: '2-digit', month: '2-digit'}))}</strong>${esc(prazo)}.</div></div>
+      ${blocoDias}
       <div class="lista-cartoes"><div class="titulo-sec">Quem está contando</div>
         <div class="cartao" style="display:flex;align-items:center;gap:12px"><div class="quadrado" style="border-radius:99px;background:var(--verde);color:#fff;font-weight:800">${esc(E.usuario.nome.slice(0, 1))}</div>
           <div><div class="nome">${esc(E.usuario.nome)}${E.usuario.gestor ? ' (gestor)' : ''}</div>
-          <div class="pequeno suave">${E.usuario.gestor ? 'A lista sai aprovada direto' : 'A lista vai para o gestor aprovar'}</div></div></div></div>
+          <div class="pequeno suave">${rot.so_contagem ? 'A contagem entra no estoque' : E.usuario.gestor ? 'A lista sai aprovada direto' : 'A lista vai para o gestor aprovar'}</div></div></div></div>
     </div>
-    <div class="rodape"><button class="btn" data-acao="ida-comecar" data-id="${rot.id}" ${p.carregando ? 'disabled' : ''}>${p.carregando ? 'Preparando…' : `Começar · ${rot.qtd_itens} itens`}</button></div>`;
+    <div class="rodape"><button class="btn" data-acao="ida-comecar" data-id="${rot.id}" ${p.carregando ? 'disabled' : ''}>${p.carregando ? 'Preparando…' : p.secoes ? `Começar · ${p.itensSel} itens` : `Começar · ${rot.qtd_itens} itens`}</button></div>`;
 };
 async function comecarIda(rotinaId, dias) {
   T.p.carregando = true; desenhar();
@@ -641,8 +649,15 @@ async function comecarIda(rotinaId, dias) {
     toast('Sem internet: usando os dados salvos de ' + dataBR(prep.gerado_em));
   }
   if (!prep.itens.length) { T.p.carregando = false; desenhar(); return toast('Esta rotina não tem itens.'); }
-  E.ida = {codigo: novoCodigo(), rotina_id: rotinaId, dias, idx: 0, contagens: {}, modo: {}, cx: {}, extras: [], iniciada: new Date().toISOString(),
-           dia: hojeISO(), usuario_id: E.usuario.id, usuario_nome: E.usuario.nome};
+  // [CONTAGEM GERAL] com mais de um local: primeiro escolhe quais locais esta pessoa conta
+  T.p.rotina_id = rotinaId;
+  const secoes = [...new Set(prep.itens.map(i => i.secao || 'Sem local'))];
+  if (prep.so_contagem && secoes.length > 1 && !T.p.secoes) {
+    T.p.secoes = secoes; T.p.selLocais = []; T.p.itensSel = prep.itens.length; T.p.carregando = false; return desenhar();
+  }
+  const sel = prep.so_contagem && T.p.selLocais && T.p.selLocais.length ? T.p.selLocais.slice() : null;
+  E.ida = {codigo: novoCodigo(), rotina_id: rotinaId, dias: prep.so_contagem ? (prep.dias_cobertura || 7) : dias, idx: 0, contagens: {}, modo: {}, cx: {},
+           extras: [], iniciada: new Date().toISOString(), dia: hojeISO(), usuario_id: E.usuario.id, usuario_nome: E.usuario.nome, secoes: sel};
   salvar();
   carregarCodigos();
   ir('contagem');
@@ -692,7 +707,7 @@ TELAS.contagem = () => {
         ${num_('1')}${num_('2')}${num_('3')}${tecla('Acabou', 'tec-zero', 'zero')}
         ${num_('4')}${num_('5')}${num_('6')}${tecla('Pular', 'tec-pular', 'cinza')}
         ${num_('7')}${num_('8')}${num_('9')}${tecla('⌫', 'tec-apagar', 'cinza', 'aria-label="Apagar"')}
-        ${tecla(',', 'tec-virgula', 'num', 'aria-label="Vírgula"')}${num_('0')}${tecla('OK ▸', 'tec-ok', 'ok')}${tecla('Lista', 'cont-terminar', 'escura', 'aria-label="Ver a lista de compras"')}
+        ${tecla(',', 'tec-virgula', 'num', 'aria-label="Vírgula"')}${num_('0')}${tecla('OK ▸', 'tec-ok', 'ok')}${prep.so_contagem ? tecla('Salvar', 'cont-terminar', 'escura', 'aria-label="Salvar a contagem no estoque"') : tecla('Lista', 'cont-terminar', 'escura', 'aria-label="Ver a lista de compras"')}
       </div>
     </div></div>`;
 };
@@ -721,7 +736,8 @@ TELAS_DEPOIS.contagem = () => {
 function itensIda() {
   // itens da rotina + produtos bipados que não estavam nela
   const prep = E.preparos[E.ida.rotina_id];
-  return prep.itens.concat(E.ida.extras || []);
+  const sel = E.ida.secoes;
+  return (sel && sel.length ? prep.itens.filter(i => sel.includes(i.secao || 'Sem local')) : prep.itens).concat(E.ida.extras || []);
 }
 function itemAtual() { const itens = itensIda(); return itens[Math.min(E.ida.idx, itens.length - 1)]; }
 function caixaDe(it) { return (E.ida.cx && E.ida.cx[it.produto_id]) || (it.caixas || [])[0] || null; }
@@ -739,7 +755,7 @@ function proximoItem() {
     const k = (E.ida.idx + passo) % n;
     if (E.ida.contagens[itens[k].produto_id] == null) return irParaItem(k);
   }
-  toast('Todos contados! Toque em "Lista" para ver o que comprar.');
+  toast(E.preparos[E.ida.rotina_id].so_contagem ? 'Todos contados! Toque em "Salvar".' : 'Todos contados! Toque em "Lista" para ver o que comprar.');
   if (E.ida.idx < n - 1) return irParaItem(E.ida.idx + 1);
   T.p.buf = ''; redesenharContagem();
 }
@@ -757,6 +773,7 @@ function confirmarDigitado() {
 function vibrar() { if (navigator.vibrate) navigator.vibrate(8); }
 async function terminarContagem() {
   const ida = E.ida, prep = E.preparos[ida.rotina_id];
+  if (prep.so_contagem) return terminarContagemGeral();
   const corpo = {codigo: ida.codigo, rotina_id: ida.rotina_id, dias: ida.dias,
                  itens: prep.itens.map(it => ({produto_id: it.produto_id, qtd: ida.contagens[it.produto_id] == null ? null : ida.contagens[it.produto_id]}))
                    .concat((ida.extras || []).filter(it => ida.contagens[it.produto_id] != null)
@@ -778,6 +795,41 @@ async function terminarContagem() {
   E.ida = null; salvar(); fecharModal();
   ir('lista', {codigo: corpo.codigo});
 }
+
+// ---------------------------------------------------------------- [CONTAGEM GERAL] terminar e tela final
+async function terminarContagemGeral() {
+  const ida = E.ida, prep = E.preparos[ida.rotina_id], itens = itensIda();
+  const contados = itens.filter(it => ida.contagens[it.produto_id] != null);
+  if (!contados.length) return toast('Nenhum item contado ainda.');
+  const pulados = itens.length - contados.length;
+  if (ida.dia && ida.dia !== hojeISO() &&
+      !confirm(`Esta contagem foi começada em ${dataBR(ida.dia)}. Os números vão entrar no estoque como contagem de HOJE (${dataBR(hojeISO())}). Continuar?`)) return;
+  if (!confirm(`Salvar a contagem no estoque? ${contados.length} item(ns) contado(s)${pulados ? `; ${pulados} sem número ficam como estavam` : ''}.`)) return;
+  // só os itens com número: o que já foi contado hoje (por outra pessoa, em outro local) continua valendo
+  const corpo = {codigo: ida.codigo, rotina_id: ida.rotina_id, dias: ida.dias,
+                 itens: contados.map(it => ({produto_id: it.produto_id, qtd: ida.contagens[it.produto_id], extra: !prep.itens.includes(it) || undefined}))};
+  const resumo = {rotina: prep.nome, contados: contados.length, pulados, locais: ida.secoes, offline: false};
+  abrirModal('<div class="vazio">Salvando a contagem…</div>');
+  try { await api('POST', '/api/compras/listas', corpo); }
+  catch (e) {
+    if (!e.extra.offline) { fecharModal(); return toast(e.message); }
+    E.fila.push({tipo: 'contagem', codigo: ida.codigo, metodo: 'POST', url: '/api/compras/listas', corpo, descricao: 'Contagem de ' + prep.nome});
+    resumo.offline = true;
+  }
+  E.ida = null; salvar(); fecharModal();
+  ir('contagemSalva', resumo);
+}
+TELAS.contagemSalva = p => `${faixaRede()}<div class="corpo" style="padding-top:48px">
+    <div style="display:flex;flex-direction:column;align-items:center;gap:12px;text-align:center">
+      <div class="quadrado" style="width:72px;height:72px;border-radius:99px;background:var(--verde-claro)">${ICONES.ok}</div>
+      <div style="font-size:24px;font-weight:800">${p.offline ? 'Contagem guardada no celular' : 'Contagem salva no estoque'}</div>
+      <div class="suave">${esc(p.rotina)}${p.locais && p.locais.length ? ' · ' + esc(p.locais.join(', ')) : ''}</div></div>
+    <div class="linha-btns">
+      <div class="cartao"><div class="numero-grande">${p.contados}</div><div class="pequeno suave" style="font-weight:600">itens contados</div></div>
+      <div class="cartao"><div class="numero-grande" style="color:var(--suave)">${p.pulados}</div><div class="pequeno suave" style="font-weight:600">sem número</div></div></div>
+    ${p.offline ? '<div class="aviso">Sem internet: será enviada sozinha quando o celular conectar. Não apague o app.</div>'
+                : '<div class="info">Já aparece no Gestão de Estoque. Se outra pessoa contar outro local hoje, as duas partes ficam juntas na mesma contagem.</div>'}
+  </div><div class="rodape"><button class="btn" data-acao="nav-inicio">Voltar ao início</button></div>`;
 
 // ---------------------------------------------------------------- lista sugerida
 TELAS.lista = p => {
@@ -1148,7 +1200,8 @@ TELAS.rotinas = p => {
       <div class="pequeno suave">${r.qtd_itens} itens · ${esc(textoDias(r.dias_semana))} · ${r.dias_cobertura} dias</div></div></button>`).join('');
   return `${topo('Rotinas de compra', 'Só o gestor vê esta tela', 'nav-inicio')}
     <div class="corpo"><div class="lista-cartoes">${lista || '<div class="vazio">Nenhuma rotina ainda.</div>'}</div></div>
-    <div class="rodape"><button class="btn" data-acao="rotina-nova">Nova rotina</button></div>`;
+    <div class="rodape"><div class="linha-btns"><button class="btn claro" data-acao="rotina-nova" data-contagem="1">Nova contagem geral</button>
+      <button class="btn" data-acao="rotina-nova">Nova rotina de compra</button></div></div>`;
 };
 TELAS.rotina = p => {
   const r = p.r;
@@ -1165,23 +1218,28 @@ TELAS.rotina = p => {
           <button data-acao="rot-subir" data-k="${k}" aria-label="Subir ${esc(it.nome)}" ${k === 0 ? 'disabled' : ''}>${ICONES.cima}</button>
           <button data-acao="rot-descer" data-k="${k}" aria-label="Descer ${esc(it.nome)}" ${k === r.itens.length - 1 ? 'disabled' : ''}>${ICONES.baixo}</button>
           <button data-acao="rot-remover" data-k="${k}" aria-label="Tirar ${esc(it.nome)} da rotina">${ICONES.lixo}</button></div>
-        <input class="sec-input" data-acao-change="rot-secao" data-k="${k}" value="${esc(it.secao)}" placeholder="Corredor / seção (ex.: Corredor 3 · Secos)" aria-label="Seção de ${esc(it.nome)}"></div>`;
+        <input class="sec-input" data-acao-change="rot-secao" data-k="${k}" value="${esc(it.secao)}" placeholder="${r.so_contagem ? 'Local (ex.: Freezer 1 · Estoque seco)' : 'Corredor / seção (ex.: Corredor 3 · Secos)'}" aria-label="${r.so_contagem ? 'Local' : 'Seção'} de ${esc(it.nome)}"></div>`;
   }).join('');
+  const compra = !r.so_contagem;
   return `${topo(r.id ? 'Editar rotina' : 'Nova rotina', '', 'nav-rotinas')}
     <div class="corpo">
-      <div class="campo"><label for="rot-nome">Nome</label><input id="rot-nome" data-acao-change="rot-nome" value="${esc(r.nome)}" placeholder="Ex.: Mercado semanal" maxlength="100"></div>
-      <div class="lista-cartoes"><div class="titulo-sec">Dias da compra</div><div class="chips7">${dias}</div>
+      <div class="campo"><label for="rot-nome">Nome</label><input id="rot-nome" data-acao-change="rot-nome" value="${esc(r.nome)}" placeholder="${compra ? 'Ex.: Mercado semanal' : 'Ex.: Contagem geral'}" maxlength="100"></div>
+      <label class="marcador cartao"><input type="checkbox" data-acao-change="rot-so-contagem" ${r.so_contagem ? 'checked' : ''}>
+        <span><b>Só contagem do estoque</b><br><span class="mini suave">Contagem geral da loja, organizada por local (freezer 1, estoque seco…). Não gera lista de compra.</span></span></label>
+      <div class="lista-cartoes"><div class="titulo-sec">${compra ? 'Dias da compra' : 'Dias da contagem'}</div><div class="chips7">${dias}</div>
         <div class="mini suave">No dia marcado a rotina aparece em destaque no início do app.</div></div>
-      <div class="linha-btns">
+      ${compra ? `<div class="linha-btns">
         <div class="campo"><label for="rot-cob">Dias a cobrir</label><input id="rot-cob" inputmode="numeric" data-acao-change="rot-cob" value="${r.dias_cobertura}"></div>
         <div class="campo"><label for="rot-prazo">Prazo de entrega</label><input id="rot-prazo" inputmode="numeric" data-acao-change="rot-prazo" value="${r.prazo_dias}"></div></div>
       <div class="mini suave" style="margin-top:-8px">Mercado: prazo 0 (você traz na hora). Distribuidor que entrega em 3 dias: prazo 3.</div>
       <div class="cartao"><div class="titulo-sec">Onde comprar</div>
         <div class="mini suave">Marque os fornecedores desta rotina. O app sugere o mais barato entre eles. Sem nenhum marcado = todos.</div>
-        ${forns || '<div class="mini suave" style="padding-top:8px">Carregando fornecedores…</div>'}</div>
-      <div class="lista-cartoes"><div style="display:flex;justify-content:space-between;align-items:baseline"><div class="titulo-sec">Itens na ordem do corredor</div><div class="mini suave">${r.itens.length} itens</div></div>
+        ${forns || '<div class="mini suave" style="padding-top:8px">Carregando fornecedores…</div>'}</div>` : ''}
+      <div class="lista-cartoes"><div style="display:flex;justify-content:space-between;align-items:baseline"><div class="titulo-sec">${compra ? 'Itens na ordem do corredor' : 'Itens por local, na ordem de contar'}</div><div class="mini suave">${r.itens.length} itens</div></div>
+        ${compra ? '' : '<div class="mini suave">Escreva o LOCAL de cada item no campo de baixo (ex.: Freezer 1). Na hora de contar, cada pessoa escolhe os locais dela.</div>'}
         <div class="linhas">${itens || '<div class="vazio">Nenhum item ainda.</div>'}</div>
         <button class="btn claro medio" data-acao="rot-adicionar">+ Adicionar produto do estoque</button>
+        <button class="btn claro medio" data-acao="rot-todos">+ Incluir todos os produtos do estoque</button>
         <div class="mini suave" style="text-align:center">${ICONES.barras} Com o leitor de código de barras: é só bipar o produto aqui.</div></div>
       ${r.id ? '<button class="btn claro medio" style="color:var(--laranja)" data-acao="rot-apagar">Apagar esta rotina</button>' : ''}
     </div>
@@ -1663,7 +1721,7 @@ const acoes = {
     }
     ir('contagem');
   },
-  'ida-rotina': d => { T.p.rotina_id = +d.id; T.p.dias = null; desenhar(); },
+  'ida-rotina': d => { T.p.rotina_id = +d.id; T.p.dias = null; T.p.secoes = null; T.p.selLocais = []; desenhar(); },
   'ida-dias': d => { T.p.dias = +d.n; desenhar(); },
   'ida-dias-outro': () => {
     abrirModal(`<div class="titulo-sec">Comprar para quantos dias?</div>
@@ -1676,6 +1734,13 @@ const acoes = {
     fecharModal(); T.p.dias = n; desenhar();
   },
   'ida-comecar': d => comecarIda(+d.id, T.p.dias),
+  'ida-local': d => {     // [CONTAGEM GERAL] marca/desmarca um local
+    const l = d.l, sel = T.p.selLocais || [];
+    T.p.selLocais = sel.includes(l) ? sel.filter(x => x !== l) : [...sel, l];
+    const prep = E.preparos[T.p.rotina_id];
+    T.p.itensSel = prep ? prep.itens.filter(i => !T.p.selLocais.length || T.p.selLocais.includes(i.secao || 'Sem local')).length : 0;
+    desenhar();
+  },
   // bipar
   'abrir-leitor': () => { ir('leitor', {lidos: []}); carregarCodigos(true); },
   'leitor-cadastrar': d => codigoDesconhecido(d.cod, () => testeLeitor(d.cod)),
@@ -1778,9 +1843,10 @@ const acoes = {
   'limpar-erros': () => { E.erros = []; salvar(); desenhar(); },
   'consumo-rotina': d => { T.p.rotina_id = +d.id; desenhar(); carregarConsumo(+d.id); },
   // rotinas (gestor)
-  'rotina-nova': () => {
+  'rotina-nova': d => {
     carregarCodigos();
-    ir('rotina', {r: {id: null, nome: '', dias_semana: [], dias_cobertura: 7, prazo_dias: 0, fornecedores: [], itens: []}});
+    const so = d && d.contagem === '1';
+    ir('rotina', {r: {id: null, nome: so ? 'Contagem geral' : '', dias_semana: [], dias_cobertura: 7, prazo_dias: 0, fornecedores: [], itens: [], so_contagem: so}});
     carregarFornecedores();
   },
   'rotina-editar': async d => {
@@ -1795,6 +1861,18 @@ const acoes = {
   'rot-descer': d => { const a = T.p.r.itens, k = +d.k; [a[k + 1], a[k]] = [a[k], a[k + 1]]; desenhar(); },
   'rot-remover': d => { T.p.r.itens.splice(+d.k, 1); desenhar(); },
   'rot-adicionar': () => modalBuscaProduto(),
+  'rot-todos': async () => {   // [CONTAGEM GERAL] o catálogo inteiro; o local começa como a categoria (dá para trocar)
+    let todos;
+    try { todos = await api('GET', '/api/compras/produtos?todos=1'); }
+    catch (e) { return toast(e.extra.offline ? 'Sem internet.' : e.message); }
+    const ja = new Set(T.p.r.itens.map(i => i.produto_id));
+    const novos = todos.filter(a => !ja.has(a.produto_id));
+    if (!novos.length) return toast('Todos os produtos do estoque já estão na rotina.');
+    if (!confirm(`Incluir ${novos.length} produto(s)? O local de cada um começa igual à categoria (troque depois, se quiser).`)) return;
+    novos.sort((a, b) => (a.categoria || '').localeCompare(b.categoria || '') || a.nome.localeCompare(b.nome));
+    novos.forEach(a => T.p.r.itens.push({produto_id: a.produto_id, nome: a.nome, unidade: a.unidade, secao: a.categoria || ''}));
+    desenhar(); toast(`${novos.length} produto(s) incluído(s). Toque em Salvar.`);
+  },
   'rot-incluir': (d, el) => {
     const secao = (document.getElementById('busca-secao') || {}).value || '';
     T.p.ultimaSecao = secao.trim();
@@ -1806,7 +1884,8 @@ const acoes = {
     T.p.salvando = true; desenhar();
     try {
       const salvo = await api('POST', '/api/compras/rotinas', {id: r.id, nome: r.nome, dias_semana: r.dias_semana, dias_cobertura: r.dias_cobertura,
-        prazo_dias: r.prazo_dias, fornecedores: r.fornecedores, itens: r.itens.map(i => ({produto_id: i.produto_id, secao: i.secao}))});
+        prazo_dias: r.prazo_dias, fornecedores: r.fornecedores, so_contagem: !!r.so_contagem,
+        itens: r.itens.map(i => ({produto_id: i.produto_id, secao: i.secao}))});
       toast('Rotina salva.');
       if (!(E.ida && E.ida.rotina_id === salvo.id)) delete E.preparos[salvo.id];   // contagem aberta usa estes dados: não apaga
       E.rotinas = await api('GET', '/api/compras/rotinas'); salvar();
@@ -1898,6 +1977,7 @@ const acoesChange = {
     catch (e) { statusCupom('⚠ Não consegui abrir a foto. Tente de novo.'); }
   },
   'rot-nome': (d, el) => { T.p.r.nome = el.value; },
+  'rot-so-contagem': (d, el) => { T.p.r.so_contagem = el.checked; desenhar(); },
   'rot-cob': (d, el) => { T.p.r.dias_cobertura = parseInt(el.value, 10) || 0; },
   'rot-prazo': (d, el) => { T.p.r.prazo_dias = parseInt(el.value, 10) || 0; },
   'rot-secao': (d, el) => { T.p.r.itens[+d.k].secao = el.value.trim(); },
