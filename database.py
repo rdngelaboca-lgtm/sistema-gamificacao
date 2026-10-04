@@ -6834,6 +6834,97 @@ def texto_aumento_preco(a):
             f"antes em {antes}, {a['fornecedor_anterior']})")
 
 
+# ==============================================================================
+# == [GRÁFICO PRODUTO] Linha do tempo de um produto ============================
+# ==============================================================================
+def _somar_por_mes(inicio, fim, quantidade, por_mes):
+    """Reparte 'quantidade' (gasta entre inicio e fim) pelos meses, proporcional aos dias."""
+    dias = (fim - inicio).days
+    if dias <= 0:
+        return
+    por_dia = quantidade / dias
+    d = inicio
+    while d < fim:
+        prox_mes = (d.replace(day=1) + timedelta(days=32)).replace(day=1)
+        ate = min(prox_mes, fim)
+        chave = (d.year, d.month)
+        por_mes[chave] = por_mes.get(chave, Decimal('0')) + por_dia * (ate - d).days
+        d = ate
+
+
+def historico_grafico_produto(produto_id, meses=12, hoje=None):
+    """
+    Dados para o gráfico de um produto nos últimos 'meses':
+      compras:   [{'data', 'custo' (por unidade do estoque), 'qtd', 'fornecedor', 'bonificacao'}]
+      contagens: [{'data', 'qtd'}]   (contagens do mesmo dia somadas)
+      meses:     [{'mes': date(ano, mes, 1), 'comprado', 'consumido' (None = sem contagens para calcular)}]
+    O consumo vem das contagens: contado antes + comprado no meio − contado depois,
+    repartido pelos dias entre as duas contagens.
+    """
+    hoje = _como_data(hoje) or date.today()
+    inicio = (hoje.replace(day=1) - timedelta(days=31 * (int(meses) - 1))).replace(day=1)
+    conn = get_db_connection()
+    if not conn:
+        raise Exception("Falha de conexão com o banco de dados.")
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT NomeProduto, UnidadeMedida, EstoqueMinimo FROM ProdutosEstoque WHERE ProdutoID = ?", (int(produto_id),))
+        p = cur.fetchone()
+        if not p:
+            raise ValueError("Produto não encontrado.")
+        cur.execute("""
+            SELECT NF.DataEmissao, INI.Quantidade, INI.PrecoCustoUnitario, F.NomeFantasia, F.CNPJ
+            FROM ItensNotaFiscalEntrada INI
+            JOIN NotasFiscaisEntrada NF ON INI.NotaID = NF.NotaID
+            JOIN ProdutosFornecedor PF ON INI.ProdutoFornecedorID = PF.ProdutoFornecedorID
+            LEFT JOIN Fornecedores F ON NF.FornecedorID = F.FornecedorID
+            WHERE PF.ProdutoID = ?
+        """, (int(produto_id),))
+        compras_todas = []
+        for dt, qtd, custo, forn, cnpj in cur.fetchall():
+            dt, qtd = _como_data(dt), _dec(qtd)
+            if not dt or qtd <= 0 or (cnpj or '').strip() == CNPJ_FORNECEDOR_INTERNO:
+                continue
+            compras_todas.append({'data': dt, 'qtd': qtd, 'custo': _dec(custo), 'fornecedor': forn or 'Sem nome',
+                                  'bonificacao': _dec(custo) <= 0})
+        cur.execute("""SELECT C.DataContagem, I.QuantidadeContada FROM ItensContagemEstoque I
+                       JOIN ContagensEstoque C ON I.ContagemID = C.ContagemID WHERE I.ProdutoID = ?""", (int(produto_id),))
+        por_dia = {}
+        for dt, qtd in cur.fetchall():
+            dt = _como_data(dt)
+            if dt:
+                por_dia[dt] = por_dia.get(dt, Decimal('0')) + _dec(qtd)
+    finally:
+        conn.close()
+
+    compras_todas.sort(key=lambda c: c['data'])
+    contagens = [{'data': d, 'qtd': q} for d, q in sorted(por_dia.items())]
+
+    comprado, consumido = {}, {}
+    for c in compras_todas:
+        if c['data'] >= inicio:
+            chave = (c['data'].year, c['data'].month)
+            comprado[chave] = comprado.get(chave, Decimal('0')) + c['qtd']
+    for a, b in zip(contagens, contagens[1:]):
+        if b['data'] < inicio:
+            continue
+        entrou = sum((c['qtd'] for c in compras_todas if a['data'] < c['data'] <= b['data']), Decimal('0'))
+        gasto = a['qtd'] + entrou - b['qtd']
+        if gasto >= 0:            # conta que não fecha (nota faltando, contagem errada) fica de fora
+            _somar_por_mes(max(a['data'], inicio), b['data'], gasto * Decimal((b['data'] - max(a['data'], inicio)).days)
+                           / Decimal((b['data'] - a['data']).days), consumido)
+
+    lista_meses, d = [], inicio
+    while d <= hoje:
+        chave = (d.year, d.month)
+        lista_meses.append({'mes': d, 'comprado': comprado.get(chave, Decimal('0')), 'consumido': consumido.get(chave)})
+        d = (d + timedelta(days=32)).replace(day=1)
+    return {'produto_id': int(produto_id), 'produto': p[0], 'unidade': (p[1] or 'UN').strip() or 'UN',
+            'estoque_minimo': _dec(p[2]), 'inicio': inicio,
+            'compras': [c for c in compras_todas if c['data'] >= inicio],
+            'contagens': [c for c in contagens if c['data'] >= inicio], 'meses': lista_meses}
+
+
 def listar_notas_fiscais_entrada_completa():
     """Lista todas as notas fiscais de entrada salvas no banco para gestão."""
     conn = get_db_connection()

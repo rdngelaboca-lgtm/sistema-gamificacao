@@ -921,7 +921,9 @@ class AppGestaoEstoque:
         self.btn_editar_massa.pack(side=tk.LEFT)
         ttk.Button(acoes_frame, text="🧹 Sugerir nomes limpos", command=self.abrir_sugestao_nomes).pack(side=tk.LEFT, padx=5)
         ttk.Button(acoes_frame, text="🔗 Juntar produtos duplicados", command=lambda: self.abrir_juntar_produtos()).pack(side=tk.LEFT)
-        ttk.Label(acoes_frame, foreground="gray", text="  Ctrl ou Shift + clique = selecionar vários").pack(side=tk.LEFT)
+        ttk.Button(acoes_frame, text="📈 Gráfico", command=self.abrir_grafico_selecionado).pack(side=tk.LEFT, padx=5)
+        ttk.Button(acoes_frame, text="🔗 Vínculos", command=self.abrir_vinculos_selecionado).pack(side=tk.LEFT)
+        ttk.Label(acoes_frame, foreground="gray", text="  Duplo clique = gráfico · Ctrl/Shift + clique = vários").pack(side=tk.LEFT)
 
         # Tabela
         # [MELHORIA CATÁLOGO] colunas novas (as 5 primeiras continuam na mesma ordem) e
@@ -948,7 +950,7 @@ class AppGestaoEstoque:
 
         # Eventos (Binds)
         self.tree_produtos.bind('<<TreeviewSelect>>', self.selecionar_produto_para_edicao)
-        self.tree_produtos.bind('<Double-1>', self.abrir_popup_vinculos_produto)
+        self.tree_produtos.bind('<Double-1>', self.abrir_grafico_do_clique)   # [GRÁFICO PRODUTO] (vínculos: botão 🔗)
 
         # Rodapé com Indicador
         self.lbl_total_mestre = ttk.Label(lista_frame, text="Carregando...", font=("Arial", 9, "italic"), foreground="gray")
@@ -1625,6 +1627,146 @@ class AppGestaoEstoque:
         except Exception as e:
             logger.error(f"Erro ao excluir produto: {e}", exc_info=True)
             messagebox.showerror("Erro de Banco", "Não foi possível excluir o produto.\nVerifique se ele já está vinculado a notas fiscais ou contagens.", parent=self.root)
+
+    # ===================================================================
+    # == [GRÁFICO PRODUTO] preço pago, estoque contado e consumo por mês ==
+    # ===================================================================
+    def _produto_da_linha(self, linha):
+        if not linha:
+            return None, None
+        dados = self.tree_produtos.item(linha, 'values')
+        return int(dados[0]), dados[1]
+
+    def abrir_grafico_do_clique(self, event):
+        pid, nome = self._produto_da_linha(linha_do_clique(self.tree_produtos, event))
+        if pid:
+            self.abrir_grafico_produto(pid, nome)
+
+    def abrir_grafico_selecionado(self):
+        selecao = self.tree_produtos.selection()
+        if not selecao:
+            messagebox.showinfo("Gráfico", "Selecione um produto na lista.", parent=self.root)
+            return
+        self.abrir_grafico_produto(*self._produto_da_linha(selecao[0]))
+
+    def abrir_vinculos_selecionado(self):
+        selecao = self.tree_produtos.selection()
+        if not selecao:
+            messagebox.showinfo("Vínculos", "Selecione um produto na lista.", parent=self.root)
+            return
+        self._abrir_vinculos(*self._produto_da_linha(selecao[0]), linha=selecao[0])
+
+    def _abrir_vinculos(self, produto_id, nome_produto, linha=None):
+        if hasattr(database, 'listar_vinculos_com_resumo'):
+            self.abrir_gestor_vinculos(produto_id=produto_id, nome_produto=nome_produto, ao_salvar=self.atualizar_lista_produtos)
+        elif linha:
+            self._popup_vinculos_antigo(linha)
+
+    def abrir_grafico_produto(self, produto_id, nome_produto):
+        try:
+            from matplotlib.figure import Figure
+            from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+            import matplotlib.dates as mdates
+        except ImportError:
+            messagebox.showerror("Gráfico", "Falta a biblioteca matplotlib.\nNo terminal: pip install matplotlib", parent=self.root)
+            return
+        janela = Toplevel(self.root)
+        janela.title(f"📈 {nome_produto}")
+        janela.geometry("1000x760")
+        janela.transient(self.root)
+        topo = ttk.Frame(janela, padding=(10, 8))
+        topo.pack(fill=tk.X)
+        ttk.Label(topo, text=nome_produto, font=("Arial", 13, "bold")).pack(side=tk.LEFT)
+        ttk.Button(topo, text="🔗 Vínculos e fatores",
+                   command=lambda: self._abrir_vinculos(produto_id, nome_produto)).pack(side=tk.RIGHT)
+        combo = ttk.Combobox(topo, state="readonly", width=12, values=["6 meses", "12 meses", "24 meses"])
+        combo.set("12 meses")
+        combo.pack(side=tk.RIGHT, padx=8)
+        ttk.Label(topo, text="Período:").pack(side=tk.RIGHT)
+        lbl_resumo = ttk.Label(janela, padding=(10, 0), justify=tk.LEFT, font=("Arial", 10))
+        lbl_resumo.pack(fill=tk.X)
+        fig = Figure(figsize=(10, 6.6), dpi=96)
+        canvas = FigureCanvasTkAgg(fig, master=janela)
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        def reais(v):
+            return f"R$ {v:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
+
+        def desenhar(event=None):
+            meses = int(combo.get().split()[0])
+            try:
+                h = database.historico_grafico_produto(produto_id, meses=meses)
+            except Exception as e:
+                logger.error(f"Gráfico do produto {produto_id}: {e}", exc_info=True)
+                messagebox.showerror("Gráfico", f"Não foi possível montar o gráfico:\n{e}", parent=janela)
+                return
+            un = h['unidade']
+            fig.clear()
+            ax1, ax2, ax3 = fig.subplots(3, 1, sharex=True)
+            fig.subplots_adjust(left=0.08, right=0.98, top=0.95, bottom=0.08, hspace=0.35)
+
+            # 1) preço pago por fornecedor (bonificação fica de fora: custo zero)
+            pagas = [c for c in h['compras'] if not c['bonificacao']]
+            cores = ['#2a7de1', '#e8590c', '#2b8a3e', '#9c36b5', '#c92a2a', '#495057']
+            fornecedores = sorted({c['fornecedor'] for c in pagas})
+            for k, f in enumerate(fornecedores):
+                pts = [c for c in pagas if c['fornecedor'] == f]
+                ax1.plot([c['data'] for c in pts], [float(c['custo']) for c in pts], marker='o', ms=5, lw=1.2,
+                         color=cores[k % len(cores)], label=f[:28])
+            ax1.set_title(f"Preço pago (R$ por {un})", fontsize=10, loc='left')
+            if fornecedores:
+                ax1.legend(fontsize=8, loc='upper left', ncol=min(3, len(fornecedores)))
+            else:
+                ax1.text(0.5, 0.5, "Nenhuma compra paga no período", ha='center', va='center', transform=ax1.transAxes, color='gray')
+
+            # 2) estoque contado
+            if h['contagens']:
+                ax2.plot([c['data'] for c in h['contagens']], [float(c['qtd']) for c in h['contagens']],
+                         marker='s', ms=5, lw=1.2, color='#1c7c74', label='Contado')
+            else:
+                ax2.text(0.5, 0.5, "Nenhuma contagem no período", ha='center', va='center', transform=ax2.transAxes, color='gray')
+            if h['estoque_minimo'] > 0:
+                ax2.axhline(float(h['estoque_minimo']), color='#e8590c', ls='--', lw=1, label='Estoque mínimo')
+                ax2.legend(fontsize=8, loc='upper left')
+            ax2.set_title(f"Estoque contado ({un})", fontsize=10, loc='left')
+
+            # 3) comprado x consumido por mês
+            xs = [m['mes'] + timedelta(days=14) for m in h['meses']]     # barras no meio do mês
+            desloc = timedelta(days=7)
+            ax3.bar([x - desloc for x in xs], [float(m['comprado']) for m in h['meses']], width=13, color='#a5d8ff', label='Comprado')
+            ax3.bar([x + desloc for x in xs], [float(m['consumido'] or 0) for m in h['meses']], width=13, color='#1c7c74', label='Consumido')
+            ax3.set_title(f"Por mês ({un}) · consumo calculado pelas contagens", fontsize=10, loc='left')
+            ax3.legend(fontsize=8, loc='upper left')
+            ax3.xaxis.set_major_locator(mdates.MonthLocator(interval=1 if meses <= 12 else 2))
+            ax3.xaxis.set_major_formatter(mdates.DateFormatter('%m/%y'))
+            for ax in (ax1, ax2, ax3):
+                ax.grid(alpha=0.25)
+                ax.tick_params(labelsize=8)
+            canvas.draw()
+
+            # resumo em texto (o que ajuda a decidir)
+            linhas = []
+            if pagas:
+                ult = pagas[-1]
+                menor = min(pagas, key=lambda c: c['custo'])
+                txt = f"Último preço: {reais(ult['custo'])}/{un} ({ult['fornecedor']}, {ult['data']:%d/%m/%y})"
+                if menor is not ult and menor['custo'] < ult['custo']:
+                    txt += f" · menor no período: {reais(menor['custo'])} ({menor['fornecedor']}, {menor['data']:%d/%m/%y})"
+                if len(pagas) > 1 and pagas[0]['custo'] > 0:
+                    var = (ult['custo'] / pagas[0]['custo'] - 1) * 100
+                    txt += f" · variação no período: {var:+.0f}%"
+                linhas.append(txt)
+            calc = [m['consumido'] for m in h['meses'] if m['consumido'] is not None]
+            if calc:
+                media = sum(calc) / len(calc)
+                linhas.append(f"Consumo médio: {fmt_qtd(media)} {un}/mês (meses com contagem) · "
+                              f"comprado no período: {fmt_qtd(sum(m['comprado'] for m in h['meses']))} {un}")
+            elif not h['contagens']:
+                linhas.append("Sem contagens no período: o consumo por mês aparece quando houver pelo menos 2 contagens.")
+            lbl_resumo.config(text="\n".join(linhas))
+
+        combo.bind("<<ComboboxSelected>>", desenhar)
+        desenhar()
 
     def abrir_popup_vinculos_produto(self, event):
         """
