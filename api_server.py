@@ -149,6 +149,9 @@ CAMINHOS_LIBERADOS_NA_INTERNET = tuple(getattr(config, 'TUNEL_CAMINHOS_LIBERADOS
 @app.before_request
 def bloquear_internet_fora_do_app():
     if _pedido_veio_da_internet() and not request.path.startswith(CAMINHOS_LIBERADOS_NA_INTERNET):
+        if request.path == '/':
+            # Quem digita só compras.kuantisflow.com.br cai direto no app de compras.
+            return redirect('/compras', code=302)
         logger.warning(f"Pedido pela internet BLOQUEADO: {request.path}")
         return jsonify({"status": "erro", "mensagem": "Não encontrado."}), 404
 
