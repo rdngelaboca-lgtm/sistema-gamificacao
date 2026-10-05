@@ -1736,9 +1736,26 @@ def _avisar_cupom_pendente(usuario, cupom):
 
 
 @app.route('/api/compras/cupons', methods=['GET'])
-@compras_login()
+@compras_login(somente_gestor=True)     # [PAINEL DO GESTOR] o histórico de cupons é só do gestor
 def api_compras_cupons(usuario):
     return _cupom_disponivel() or _resposta_compras(compras_cupom.listar_cupons)
+
+
+@app.route('/api/compras/painel', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_compras_painel(usuario):
+    """[PAINEL DO GESTOR] resumo da aba 'Gestão' do app (listas, compras do mês, estoque, preços, cupons)."""
+    def montar():
+        painel = compras_database.painel_gestor()
+        if compras_cupom is not None:
+            try:
+                cupons = compras_cupom.listar_cupons()
+                painel['cupons'] = {'pendentes': sum(1 for c in cupons if c['status'] == compras_cupom.ST_PENDENTE),
+                                    'erro': sum(1 for c in cupons if c['status'] == compras_cupom.ST_ERRO)}
+            except Exception as e:
+                logger.error(f"Painel: cupons: {e}", exc_info=True)
+        return painel
+    return _resposta_compras(montar)
 
 
 @app.route('/api/compras/cupons', methods=['POST'])

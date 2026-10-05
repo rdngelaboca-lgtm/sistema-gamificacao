@@ -214,7 +214,7 @@
 
 // ---------------------------------------------------------------- utilidades
 const CHAVE = 'gb_compras_v1';
-const VERSAO_APP = '14';   // aparece no rodapé do início: confira se o celular pegou a versão nova
+const VERSAO_APP = '15';   // aparece no rodapé do início: confira se o celular pegou a versão nova
 const $app = document.getElementById('app');
 const DIAS_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];            // 1=Dom ... 7=Sáb (padrão do sistema)
 const FRACIONADAS = ['KG', 'G', 'GR', 'L', 'LT', 'ML', 'M'];
@@ -434,7 +434,9 @@ function topo(titulo, sub, voltar, extra) {
 }
 function navbar(ativa) {
   const b = (id, ic, txt) => `<button class="${ativa === id ? 'ativo' : ''}" data-acao="nav" data-tela="${id}" ${ativa === id ? 'aria-current="page"' : ''}>${ic}${txt}</button>`;
-  return `<nav class="navbar">${b('inicio', ICONES.casa, 'Início')}${b('listas', ICONES.listas, 'Listas')}${b('consumo', ICONES.grafico, 'Consumo')}</nav>`;
+  // [PAINEL DO GESTOR] relatórios só para o gestor: o operacional vê Início e Listas
+  const gestao = E.usuario && E.usuario.gestor ? b('gestao', ICONES.grafico, 'Gestão') : '';
+  return `<nav class="navbar">${b('inicio', ICONES.casa, 'Início')}${b('listas', ICONES.listas, 'Listas')}${gestao}</nav>`;
 }
 function abrirModal(html) {
   fecharModal();
@@ -1160,16 +1162,16 @@ TELAS.listas = () => {
       ${erros.length ? `<div class="aviso"><div>Envios recusados pelo servidor:</div>${erros.map(e => `<div class="mini">• ${esc(e.msg)}</div>`).join('')}
         <button class="btn claro medio" style="margin-top:8px" data-acao="limpar-erros">Entendi</button></div>` : ''}
       <div class="lista-cartoes">${todas.map(cartaoLista).join('') || '<div class="vazio">Nenhuma lista ainda.</div>'}</div>
-      <div class="lista-cartoes"><div class="rotulo">Cupons fiscais</div>
+      <div class="lista-cartoes"><div class="rotulo">Cupom fiscal da compra</div>
         <button class="btn claro medio" data-acao="cupom-ler">${ICONES.qr} ${ehComputador() ? 'Lançar cupom fiscal (chave, link ou imagem)' : 'Ler QR Code de um cupom'}</button>
-        ${(E.cupons || []).map(cartaoCupom).join('') || '<div class="mini suave" style="text-align:center">Nenhum cupom lido ainda.</div>'}</div>
+        ${E.usuario.gestor ? '<button class="btn claro medio" data-acao="nav" data-tela="gestao" data-secao="cupons">Ver os cupons lidos (Gestão)</button>' : ''}</div>
     </div>${navbar('listas')}`;
 };
 
 // ---------------------------------------------------------------- consumo
-TELAS.consumo = p => {
+function conteudoConsumo(p) {
   const rot = E.rotinas.find(r => r.id === p.rotina_id) || E.rotinas[0];
-  if (!rot) return `${topo('Consumo', '')}<div class="corpo"><div class="vazio">Nenhuma rotina criada.</div></div>${navbar('consumo')}`;
+  if (!rot) return '<div class="vazio">Nenhuma rotina criada.</div>';
   const prep = E.preparos[rot.id];
   const chips = `<div class="filtros">${E.rotinas.map(r => `<button class="filtro ${r.id === rot.id ? 'sel' : ''}" data-acao="consumo-rotina" data-id="${r.id}">${esc(r.nome)}</button>`).join('')}</div>`;
   let corpo = '<div class="vazio">Carregando…</div>';
@@ -1185,12 +1187,66 @@ TELAS.consumo = p => {
           <div class="pequeno" style="text-align:right">${dura}</div></div>`;
       }).join('')}</div>`;
   }
-  return `${faixaRede()}${topo('Consumo', 'Quanto tempo cada item ainda dura')}<div class="corpo">${chips}${corpo}</div>${navbar('consumo')}`;
+  return `<div class="mini suave">Quanto tempo cada item ainda dura</div>${chips}${corpo}`;
+}
+
+// ---------------------------------------------------------------- [PAINEL DO GESTOR] aba Gestão
+TELAS.gestao = p => {
+  if (!E.usuario.gestor) return TELAS.inicio();
+  const secao = p.secao || 'resumo';
+  const abas = [['resumo', 'Resumo'], ['cupons', 'Cupons fiscais'], ['consumo', 'Consumo']].map(([id, txt]) =>
+    `<button class="filtro ${secao === id ? 'sel' : ''}" data-acao="gestao-secao" data-s="${id}">${txt}</button>`).join('');
+  let corpo;
+  if (secao === 'cupons') {
+    corpo = `<button class="btn claro medio" data-acao="cupom-ler">${ICONES.qr} ${ehComputador() ? 'Lançar cupom fiscal (chave, link ou imagem)' : 'Ler QR Code de um cupom'}</button>
+      ${(E.cupons || []).map(cartaoCupom).join('') || '<div class="mini suave" style="text-align:center">Nenhum cupom lido ainda.</div>'}`;
+  } else if (secao === 'consumo') {
+    corpo = conteudoConsumo(p);
+  } else {
+    corpo = conteudoResumo(E.painel);
+  }
+  return `${faixaRede()}${topo('Gestão', 'Relatórios e conferências (só o gestor vê)')}
+    <div class="corpo"><div class="filtros">${abas}</div>${corpo}</div>${navbar('gestao')}`;
 };
+function conteudoResumo(pn) {
+  if (!pn) return `<div class="vazio">${online ? 'Carregando…' : 'Sem internet: o resumo ainda não foi baixado neste celular.'}</div>`;
+  const card = (titulo, valor, sub, acao, cor) => `<button class="cartao" style="text-align:left;display:flex;flex-direction:column;gap:4px" ${acao || ''}>
+      <div class="mini suave" style="font-weight:700">${titulo}</div><div style="font-size:22px;font-weight:800;color:${cor || 'var(--texto)'}">${valor}</div>
+      ${sub ? `<div class="mini suave">${sub}</div>` : ''}</button>`;
+  const l = pn.listas || {}, ag = l.aguardando || {qtd: 0}, ap = l.aprovada || {qtd: 0}, cp = pn.cupons || {};
+  const comp = pn.compras;
+  const est = pn.estoque;
+  const linhasEst = (arr, fn) => arr.map(a => `<div class="lin" style="padding:8px 10px"><div class="grow pequeno" style="font-weight:700">${esc(a.produto)}</div>
+      <div class="mini" style="text-align:right">${fn(a)}</div></div>`).join('');
+  const comparativo = comp && comp.mes_anterior ? `mês passado: ${fmtReais(comp.mes_anterior)}` : '';
+  return `
+    <div class="linha-btns">
+      ${card('Listas para aprovar', ag.qtd, ag.qtd ? '≈ ' + fmtReais(ag.valor) : 'nenhuma esperando', 'data-acao="nav" data-tela="listas"', ag.qtd ? 'var(--laranja)' : '')}
+      ${card('Compras em andamento', ap.qtd, ap.qtd ? 'listas aprovadas' : 'nenhuma aberta', 'data-acao="nav" data-tela="listas"')}</div>
+    <div class="linha-btns">
+      ${card('Cupons para conferir', cp.pendentes || 0, cp.erro ? `${cp.erro} com erro na SEFAZ` : 'lançar no estoque', 'data-acao="gestao-secao" data-s="cupons"', cp.pendentes ? 'var(--laranja)' : '')}
+      ${card('Compras no mês' + (comp ? ' (' + esc(comp.nome_mes) + ')' : ''), comp ? fmtReais(comp.mes) : '—', comparativo || 'pelas notas lançadas')}</div>
+    ${comp && comp.fornecedores && comp.fornecedores.length ? `<div class="cartao"><div class="titulo-sec">Maiores fornecedores do mês</div>
+      <div class="linhas" style="border:0">${comp.fornecedores.map(f => `<div class="lin" style="padding:7px 2px"><div class="grow pequeno">${esc(nomeCurto(f.nome))}</div><b class="pequeno">${fmtReais(f.valor)}</b></div>`).join('')}</div></div>` : ''}
+    ${est ? `<div class="cartao"><div class="titulo-sec" style="color:var(--laranja)">Devem acabar em até 2 dias (${est.qtd_acabando})</div>
+      ${est.acabando.length ? `<div class="linhas" style="border:0">${linhasEst(est.acabando, a => `tem ≈ ${fmtQtd(a.estoque)} ${esc(unCurta(a.unidade))}<br>${a.dias < 0.5 ? '<b>acabou</b>' : 'dura ~' + fmtQtd(a.dias) + ' dia(s)'}`)}</div>` : '<div class="mini suave">Nenhum item.</div>'}</div>
+    <div class="cartao"><div class="titulo-sec">Abaixo do estoque mínimo (${est.qtd_abaixo})</div>
+      ${est.abaixo.length ? `<div class="linhas" style="border:0">${linhasEst(est.abaixo, a => `tem ≈ ${fmtQtd(a.estoque)}<br>mínimo ${fmtQtd(a.minimo)} ${esc(unCurta(a.unidade))}`)}</div>` : '<div class="mini suave">Nenhum item.</div>'}</div>` : ''}
+    ${pn.aumentos && pn.aumentos.length ? `<div class="cartao"><div class="titulo-sec">Preços que subiram (30 dias)</div>
+      ${pn.aumentos.map(t => `<div class="mini" style="padding:4px 0">• ${esc(t)}</div>`).join('')}</div>` : ''}
+    ${pn.listas_esquecidas && pn.listas_esquecidas.length ? `<div class="aviso"><b>Listas aprovadas e não finalizadas:</b>
+      ${pn.listas_esquecidas.map(x => `<div class="mini">• ${esc(x.rotina)} de ${esc(x.funcionario || '?')} (${x.dias} dias)</div>`).join('')}</div>` : ''}
+    ${(pn.avisos || []).map(a => `<div class="mini suave">⚠ ${esc(a)}</div>`).join('')}
+    <div class="mini suave" style="text-align:center">Atualizado ${pn.gerado_em ? dataBR(pn.gerado_em) + ' ' + pn.gerado_em.slice(11, 16) : ''} · <button class="icone-btn" style="width:auto;display:inline;color:var(--verde);font-weight:700" data-acao="gestao-atualizar">atualizar</button></div>`;
+}
+async function carregarPainel() {
+  try { E.painel = await api('GET', '/api/compras/painel'); salvar(); if (T.nome === 'gestao') desenhar(); }
+  catch (e) { if (!e.extra.offline && T.nome === 'gestao') toast(e.message); }
+}
 async function carregarConsumo(rotinaId) {
   if (E.ida && E.ida.rotina_id === rotinaId && E.preparos[rotinaId]) return;   // contagem aberta: não troca os itens no meio dela
-  try { E.preparos[rotinaId] = await api('GET', `/api/compras/rotinas/${rotinaId}/preparar`); salvar(); if (T.nome === 'consumo') desenhar(); }
-  catch (e) { if (!E.preparos[rotinaId] && T.nome === 'consumo') { $app.querySelector('.corpo').insertAdjacentHTML('beforeend', `<div class="aviso">${esc(e.message)}</div>`); } }
+  try { E.preparos[rotinaId] = await api('GET', `/api/compras/rotinas/${rotinaId}/preparar`); salvar(); if (T.nome === 'gestao') desenhar(); }
+  catch (e) { if (!E.preparos[rotinaId] && T.nome === 'gestao') toast(e.message); }
 }
 
 // ---------------------------------------------------------------- rotinas (gestor)
@@ -1696,8 +1752,14 @@ const acoes = {
   'nav': d => {
     const tela = d.tela;
     if (tela === 'inicio') { ir('inicio'); carregarInicio(); }
-    else if (tela === 'listas') { ir('listas'); carregarInicio().then(carregarCupons).then(() => { if (T.nome === 'listas') desenhar(); }); }
-    else if (tela === 'consumo') { ir('consumo', {}); if (E.rotinas[0]) carregarConsumo(E.rotinas[0].id); }
+    else if (tela === 'listas') { ir('listas'); carregarInicio().then(() => { if (T.nome === 'listas') desenhar(); }); }
+    else if (tela === 'gestao') {
+      if (!E.usuario.gestor) return acoes.nav({tela: 'inicio'});
+      ir('gestao', {secao: d.secao || 'resumo'});
+      if ((d.secao || 'resumo') === 'resumo') carregarPainel();
+      carregarCupons().then(() => { if (T.nome === 'gestao') desenhar(); });
+      if (d.secao === 'consumo' && E.rotinas[0]) carregarConsumo(E.rotinas[0].id);
+    }
     else if (tela === 'rotinas') { ir('rotinas', {}); }
   },
   'nav-inicio': () => acoes.nav({tela: 'inicio'}),
@@ -1863,6 +1925,14 @@ const acoes = {
   // listas / consumo
   'limpar-erros': () => { E.erros = []; salvar(); desenhar(); },
   'consumo-rotina': d => { T.p.rotina_id = +d.id; desenhar(); carregarConsumo(+d.id); },
+  'gestao-secao': d => {
+    if (T.nome !== 'gestao') return acoes.nav({tela: 'gestao', secao: d.s});
+    T.p.secao = d.s; desenhar();
+    if (d.s === 'resumo') carregarPainel();
+    else if (d.s === 'cupons') carregarCupons().then(() => { if (T.nome === 'gestao') desenhar(); });
+    else if (d.s === 'consumo') { const r = E.rotinas.find(x => x.id === T.p.rotina_id) || E.rotinas[0]; if (r) carregarConsumo(r.id); }
+  },
+  'gestao-atualizar': () => { toast('Atualizando…'); carregarPainel(); },
   // rotinas (gestor)
   'rotina-nova': d => {
     carregarCodigos();
@@ -1944,7 +2014,7 @@ const acoes = {
     window.open('https://www.sefaz.mt.gov.br/nfce/consultanfce', '_blank', 'noopener');
     statusCupom(numeros.length === 44 ? 'Chave copiada: cole com Ctrl+V na SEFAZ.' : 'Digite a chave na página da SEFAZ.');
   },
-  'cupom-voltar': () => { if (T.p.voltar) ir(T.p.voltar.nome, T.p.voltar.p); else acoes.nav({tela: 'listas'}); },
+  'cupom-voltar': () => { if (T.p.voltar) ir(T.p.voltar.nome, T.p.voltar.p); else acoes.nav(E.usuario.gestor ? {tela: 'gestao', secao: 'cupons'} : {tela: 'listas'}); },
   'cupom-item': d => modalItemCupom(d.seq),
   'cupom-escolher': d => {
     T.p.sel = {produto_id: +d.pid, nome: d.nome, unidade: d.un};
@@ -1996,7 +2066,7 @@ const acoes = {
   },
   'cupom-apagar': async () => {
     if (!confirm('Apagar este cupom do app? (Nada no estoque muda.)')) return;
-    try { await api('DELETE', `/api/compras/cupons/${T.p.id}`); E.cupons = E.cupons.filter(x => x.id !== T.p.id); salvar(); acoes.nav({tela: 'listas'}); }
+    try { await api('DELETE', `/api/compras/cupons/${T.p.id}`); E.cupons = E.cupons.filter(x => x.id !== T.p.id); salvar(); acoes['cupom-voltar'](); }
     catch (e) { toast(e.message); }
   },
   'fechar-modal': () => { fecharModal(); if (T.nome === 'rotina') desenhar(); },

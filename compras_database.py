@@ -1471,3 +1471,86 @@ def adicionar_item(codigo, produto_id, qtd, usuario):
         conn.close()
     logger.info(f"Lista {codigo}: produto {produto_id} incluído/ajustado na mão por {usuario.get('nome')} ({q}).")
     return obter_lista(codigo)
+
+
+# ==============================================================================
+# == [PAINEL DO GESTOR] resumo para a aba "Gestão" do app ======================
+# ==============================================================================
+def painel_gestor(hoje=None):
+    """
+    Números para o gestor (o operacional não vê): listas por situação, compras do mês pelas
+    notas de entrada, itens acabando / abaixo do mínimo, preços que subiram e listas esquecidas.
+    Cada bloco é independente: se um falhar, os outros aparecem (o erro vai em 'avisos').
+    """
+    hoje = _como_data(hoje) or date.today()
+    painel = {'gerado_em': _iso(datetime.now()), 'avisos': []}
+
+    try:
+        conn = _conectar()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT Status, COUNT(*), SUM(ValorEstimado) FROM CompraListas GROUP BY Status")
+            por_status = {r[0]: {'qtd': int(r[1] or 0), 'valor': _num(r[2] or 0, 2)} for r in cur.fetchall()}
+        finally:
+            conn.close()
+        painel['listas'] = {st: por_status.get(st, {'qtd': 0, 'valor': 0}) for st in (ST_AGUARDANDO, ST_APROVADA)}
+    except Exception as e:
+        logger.error(f"Painel: listas: {e}", exc_info=True)
+        painel['avisos'].append("Listas: não deu para ler agora.")
+
+    try:
+        inicio_mes = hoje.replace(day=1)
+        inicio_ant = (inicio_mes - timedelta(days=1)).replace(day=1)
+        conn = get_db_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute("""SELECT NF.DataEmissao, NF.ValorTotalNF, F.NomeFantasia, F.CNPJ
+                           FROM NotasFiscaisEntrada NF LEFT JOIN Fornecedores F ON NF.FornecedorID = F.FornecedorID
+                           WHERE NF.DataEmissao >= ?""", (inicio_ant,))
+            linhas = cur.fetchall()
+        finally:
+            conn.close()
+        mes, ant, por_forn = Decimal('0'), Decimal('0'), {}
+        for d, valor, nome, cnpj in linhas:
+            d = _como_data(d)
+            if not d or (cnpj or '').strip() == database.CNPJ_FORNECEDOR_INTERNO:
+                continue
+            if d >= inicio_mes:
+                mes += _dec(valor)
+                chave = nome or cnpj or 'Fornecedor'
+                por_forn[chave] = por_forn.get(chave, Decimal('0')) + _dec(valor)
+            elif d >= inicio_ant:
+                ant += _dec(valor)
+        painel['compras'] = {'mes': _num(mes, 2), 'mes_anterior': _num(ant, 2), 'nome_mes': inicio_mes.strftime('%m/%Y'),
+                             'fornecedores': [{'nome': n, 'valor': _num(v, 2)}
+                                              for n, v in sorted(por_forn.items(), key=lambda x: -x[1])[:5]]}
+    except Exception as e:
+        logger.error(f"Painel: compras do mês: {e}", exc_info=True)
+        painel['avisos'].append("Compras do mês: não deu para ler agora.")
+
+    try:
+        import alertas_estoque
+        abaixo, acabando = alertas_estoque.situacao_do_estoque(hoje)
+        def linha(a):
+            return {'produto': a['produto'], 'unidade': a['unidade'], 'estoque': _num(a['estoque'], 1),
+                    'minimo': _num(a['minimo']), 'dias': _num(a['dias'], 1) if a['dias'] is not None else None}
+        painel['estoque'] = {'acabando': [linha(a) for a in acabando[:12]], 'qtd_acabando': len(acabando),
+                             'abaixo': [linha(a) for a in abaixo[:12]], 'qtd_abaixo': len(abaixo)}
+        painel['listas_esquecidas'] = [{'rotina': l['rotina'], 'funcionario': l['funcionario'], 'dias': l['dias']}
+                                       for l in alertas_estoque.listas_esquecidas()]
+    except Exception as e:
+        logger.error(f"Painel: estoque: {e}", exc_info=True)
+        painel['avisos'].append("Estoque: não deu para calcular agora.")
+
+    try:
+        aumentos = database.aumentos_de_preco(desde_data=hoje - timedelta(days=30))
+        vistos, lista = set(), []
+        for a in aumentos:
+            if a['produto_id'] not in vistos:
+                vistos.add(a['produto_id'])
+                lista.append(database.texto_aumento_preco(a))
+        painel['aumentos'] = lista[:10]
+    except Exception as e:
+        logger.error(f"Painel: aumentos de preço: {e}", exc_info=True)
+        painel['avisos'].append("Preços: não deu para ler agora.")
+    return painel
