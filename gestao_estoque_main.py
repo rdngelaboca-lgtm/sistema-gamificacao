@@ -611,6 +611,7 @@ class AppGestaoEstoque:
         self.itens_xml_nao_vinculados = []
         self.dados_notas_processadas = []
         self.ultima_pasta_xml = None       # [DEPURAÇÃO] permite "Reprocessar" sem escolher de novo
+        self.filtro_arquivos_xml = None    # [XML SEFAZ] notas escolhidas na lista (None = a pasta toda)
         self.mapa_produtos_mestre = {}
         self.lista_mestre_produtos_nomes = []
 
@@ -2317,12 +2318,94 @@ class AppGestaoEstoque:
             messagebox.showinfo("Notas da SEFAZ", "Nenhuma nota nova da SEFAZ esperando para entrar no estoque." + extra,
                                 parent=self.root)
             return
-        self._carregar_pasta_xml(pasta)
+        self.abrir_lista_notas_sefaz(pasta, arquivos)
+
+    def abrir_lista_notas_sefaz(self, pasta, arquivos):
+        """[XML SEFAZ] Lista das notas baixadas: escolha UMA (ou algumas) para vincular e salvar."""
+        janela = Toplevel(self.root)
+        janela.title("Notas baixadas da SEFAZ")
+        janela.geometry("1050x520")
+        janela.transient(self.root)
+        frame = ttk.Frame(janela, padding=10)
+        frame.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(frame, text="Escolha a nota que vai lançar agora (duplo clique ou 'Abrir'). "
+                              "Ctrl/Shift + clique para escolher várias.", font=("Arial", 10, "bold")).pack(anchor="w")
+        cols = ('NF', 'Fornecedor', 'Emissão', 'Valor', 'Itens', 'Sem vínculo', 'Situação')
+        tree = criar_tree_zebrada(frame, columns=cols, show='headings', selectmode='extended')
+        for col, larg, anc in (('NF', 90, 'center'), ('Fornecedor', 330, 'w'), ('Emissão', 90, 'center'), ('Valor', 110, 'e'),
+                               ('Itens', 60, 'center'), ('Sem vínculo', 90, 'center'), ('Situação', 200, 'w')):
+            tree.heading(col, text=col, command=lambda c=col: self.ordenar_coluna_treeview(tree, c, False))
+            tree.column(col, width=larg, anchor=anc)
+        tree.tag_configure('pronta', background='#e3f5e1')
+        tree.tag_configure('pendente', background='#fff3e0')
+        tree.pack(fill=tk.BOTH, expand=True, pady=6)
+        notas = []
+        cache_vinc = {}
+        for f in arquivos:
+            try:
+                cab, itens = self.ler_xml_nota_fiscal(os.path.join(pasta, f))
+            except Exception as e:
+                logger.warning(f"XML da SEFAZ {f} não abriu: {e}")
+                continue
+            forn_id = database.buscar_fornecedor_por_cnpj(cab.get('FornecedorCNPJ'))
+            sem = 0
+            for it in itens:
+                if not forn_id:
+                    sem += 1
+                    continue
+                chave = (forn_id, it['DescricaoXML'], it.get('cProd'), it.get('cEAN'))
+                if chave not in cache_vinc:
+                    try:
+                        cache_vinc[chave] = bool(database.buscar_vinculo_inteligente(forn_id, it['DescricaoXML'], it.get('cProd'), it.get('cEAN')))
+                    except Exception:
+                        cache_vinc[chave] = False
+                sem += 0 if cache_vinc[chave] else 1
+            notas.append((cab.get('DataEmissao') or '', f, cab, len(itens), sem, forn_id))
+        notas.sort(key=lambda n: (n[0], n[2].get('FornecedorNome') or ''))
+        for data, f, cab, n_itens, sem, forn_id in notas:
+            try:
+                data_br = datetime.strptime(data, '%Y-%m-%d').strftime('%d/%m/%Y')
+            except ValueError:
+                data_br = data
+            situacao = ("pronta para salvar" if not sem else
+                        "fornecedor novo" if not forn_id else f"falta vincular {sem} item(ns)")
+            tree.insert("", "end", iid=f, tags=('pronta' if not sem else 'pendente',), values=(
+                cab.get('NumeroNF'), cab.get('FornecedorNome'), data_br, fmt_reais(cab.get('ValorTotalNF') or 0),
+                n_itens, sem, situacao))
+        lbl = ttk.Label(frame, foreground="gray", text=(
+            f"{len(notas)} nota(s) esperando · verde = todos os itens já vinculados · laranja = falta vincular. "
+            "Depois de salvar, clique de novo em 'Notas baixadas da SEFAZ' para a próxima."))
+        lbl.pack(anchor="w")
+
+        def abrir(todas=False):
+            escolhidas = list(tree.get_children()) if todas else list(tree.selection())
+            if not escolhidas:
+                messagebox.showinfo("Notas da SEFAZ", "Selecione uma nota na lista.", parent=janela)
+                return
+            janela.destroy()
+            self.filtro_arquivos_xml = set(escolhidas)
+            self._carregar_pasta_xml(pasta)
+            descr = (f"NF {tree_valores[escolhidas[0]][0]} · {tree_valores[escolhidas[0]][1]}" if len(escolhidas) == 1
+                     else f"{len(escolhidas)} notas da SEFAZ")
+            self.status(f"Mostrando só: {descr}. Vincule os itens e salve (botão 4).", 'info', segundos=30)
+
+        tree_valores = {i: tree.item(i, 'values') for i in tree.get_children()}
+        botoes = ttk.Frame(frame)
+        botoes.pack(fill=tk.X, pady=(8, 0))
+        ttk.Button(botoes, text="Abrir nota selecionada", command=abrir).pack(side=tk.LEFT)
+        ttk.Button(botoes, text="Abrir todas", command=lambda: abrir(todas=True)).pack(side=tk.LEFT, padx=6)
+        ttk.Button(botoes, text="Fechar", command=janela.destroy).pack(side=tk.RIGHT)
+        tree.bind("<Double-1>", lambda e: abrir() if linha_do_clique(tree, e) else None)
+        tree.bind("<Return>", lambda e: abrir())
+        filhos = tree.get_children()
+        if filhos:
+            tree.focus(filhos[0]); tree.selection_set(filhos[0]); tree.focus_set()
 
     def abrir_seletor_pasta_xml(self):
         pasta_selecionada = filedialog.askdirectory(title="Selecione a pasta contendo os XMLs", parent=self.root)
         if not pasta_selecionada:
             return
+        self.filtro_arquivos_xml = None          # pasta escolhida à mão: todos os arquivos
         self._carregar_pasta_xml(pasta_selecionada)
 
     def reprocessar_pasta_xml(self):
@@ -2855,7 +2938,9 @@ class AppGestaoEstoque:
     def processar_arquivos_xml(self, pasta_selecionada, silencioso=False):
         # silencioso=True: relê a pasta sem mostrar o resumo (usado antes de salvar)
         extensoes_permitidas = ('.xml', '.txt')
-        arquivos_xml = sorted(os.path.join(pasta_selecionada, f) for f in os.listdir(pasta_selecionada) if f.lower().endswith(extensoes_permitidas))
+        filtro = getattr(self, 'filtro_arquivos_xml', None)   # [XML SEFAZ] só as notas escolhidas na lista
+        arquivos_xml = sorted(os.path.join(pasta_selecionada, f) for f in os.listdir(pasta_selecionada)
+                              if f.lower().endswith(extensoes_permitidas) and (not filtro or f in filtro))
         notas_processadas_nesta_sessao = {}
         arquivos_com_falha = 0
         arquivos_repetidos = 0
