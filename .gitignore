@@ -4,3 +4,9 @@ __pycache__/
 .env
 logs/
 *.log
+# [XML SEFAZ] certificado digital e notas baixadas: NUNCA no GitHub (repositório público)
+*.pfx
+*.p12
+nfe_distribuicao_estado.json
+nfe_distribuicao_estado.json.*
+notas_xml_sefaz/

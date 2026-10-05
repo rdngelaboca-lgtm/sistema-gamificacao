@@ -165,6 +165,7 @@ def so_digitos(texto):
 import unicodedata
 import math
 import collections
+import threading
 
 ARQUIVO_RASCUNHO_CONTAGEM = os.path.join(PASTA_DO_PROGRAMA, 'rascunho_contagem.json')
 ARQUIVO_PREFERENCIAS = os.path.join(PASTA_DO_PROGRAMA, 'estoque_preferencias.json')
@@ -2041,6 +2042,11 @@ class AppGestaoEstoque:
         # [DEPURAÇÃO] Depois de vincular itens, basta clicar aqui (não precisa escolher a pasta de novo)
         btn_reprocessar = ttk.Button(frame_botoes, text="🔄 Reprocessar Pasta Atual", command=self.reprocessar_pasta_xml)
         btn_reprocessar.pack(side=tk.LEFT, padx=(5, 0), ipady=10)
+        # [XML SEFAZ] XMLs baixados sozinhos pelo robô (Distribuição de NF-e com o certificado A1)
+        ttk.Button(frame_botoes, text="Notas baixadas da SEFAZ", command=self.carregar_notas_sefaz).pack(side=tk.LEFT, padx=(5, 0), ipady=10)
+        self.btn_buscar_sefaz = ttk.Button(frame_botoes, text="Buscar na SEFAZ agora",
+                                           command=lambda: self.carregar_notas_sefaz(buscar=True))
+        self.btn_buscar_sefaz.pack(side=tk.LEFT, padx=(5, 0), ipady=10)
         # [MELHORIA ST] Corrige o custo de notas JÁ SALVAS (ex: importadas sem a ST)
         ttk.Button(frame_botoes, text="🧾 Recalcular custos de notas já salvas",
                    command=self.recalcular_custos_notas_salvas).pack(side=tk.LEFT, padx=(5, 0), ipady=10)
@@ -2239,6 +2245,79 @@ class AppGestaoEstoque:
                 self.combo_produtos_mestre.set(filtrados[0])
             else:
                 self.combo_produtos_mestre.set('')
+
+    # ===================================================================
+    # == [XML SEFAZ] notas baixadas automaticamente =====================
+    # ===================================================================
+    def carregar_notas_sefaz(self, buscar=False):
+        """Abre a pasta dos XMLs que o robô baixou da SEFAZ (já sem as notas que estão no estoque).
+        buscar=True: pergunta à SEFAZ agora (em segundo plano) e depois abre a pasta."""
+        try:
+            import nfe_distribuicao as nd
+        except Exception as e:
+            messagebox.showerror("SEFAZ", f"Falta o arquivo nfe_distribuicao.py ou uma biblioteca:\n{e}", parent=self.root)
+            return
+        if buscar:
+            if not nd.configurado():
+                messagebox.showwarning("SEFAZ", "A busca automática ainda não está configurada.\n\n"
+                                       "Coloque no config.py: NFE_CERTIFICADO_PFX, NFE_CERTIFICADO_SENHA e NFE_CNPJ "
+                                       "(veja o começo do arquivo nfe_distribuicao.py).", parent=self.root)
+                return
+            self.btn_buscar_sefaz.state(['disabled'])
+            self.status("Buscando notas na SEFAZ… (pode levar até 1 minuto)")
+            resultado = {}
+
+            def trabalho():
+                try:
+                    resultado['r'] = nd.buscar_notas()
+                except nd.ErroNFe as e:
+                    resultado['erro'] = str(e)
+                except Exception as e:
+                    logger.error(f"Busca na SEFAZ: {e}", exc_info=True)
+                    resultado['erro'] = f"Erro inesperado: {e}"
+
+            def esperar():
+                if t.is_alive():
+                    self.root.after(300, esperar)
+                    return
+                self.btn_buscar_sefaz.state(['!disabled'])
+                self.status("Busca na SEFAZ concluída.", 'info')
+                if 'erro' in resultado:
+                    self.status("A busca na SEFAZ falhou.", 'erro')
+                    messagebox.showerror("SEFAZ", resultado['erro'], parent=self.root)
+                    return
+                messagebox.showinfo("SEFAZ", nd.texto_resumo(resultado['r']), parent=self.root)
+                self.carregar_notas_sefaz()
+
+            t = threading.Thread(target=trabalho, daemon=True)
+            t.start()
+            esperar()
+            return
+
+        pasta = nd.pasta_xml()
+        arquivos = [f for f in os.listdir(pasta) if f.lower().endswith('.xml')]
+        try:   # notas já lançadas vão para a subpasta 'importadas' (a lista fica só com o que falta)
+            ja = database.chaves_ja_importadas([os.path.splitext(f)[0] for f in arquivos])
+            if ja:
+                destino = os.path.join(pasta, 'importadas')
+                os.makedirs(destino, exist_ok=True)
+                for f in arquivos:
+                    if os.path.splitext(f)[0] in ja:
+                        os.replace(os.path.join(pasta, f), os.path.join(destino, f))
+                arquivos = [f for f in arquivos if os.path.splitext(f)[0] not in ja]
+        except Exception as e:
+            logger.warning(f"Não deu para separar os XMLs já importados: {e}")
+        if not arquivos:
+            estado = nd.ler_estado()
+            extra = ""
+            if estado.get('ultima_busca'):
+                extra = f"\n\nÚltima busca na SEFAZ: {datetime.fromisoformat(estado['ultima_busca']):%d/%m %H:%M}."
+            if estado.get('aguardando_xml'):
+                extra += f"\n{len(estado['aguardando_xml'])} nota(s) aguardando a SEFAZ liberar o XML completo."
+            messagebox.showinfo("Notas da SEFAZ", "Nenhuma nota nova da SEFAZ esperando para entrar no estoque." + extra,
+                                parent=self.root)
+            return
+        self._carregar_pasta_xml(pasta)
 
     def abrir_seletor_pasta_xml(self):
         pasta_selecionada = filedialog.askdirectory(title="Selecione a pasta contendo os XMLs", parent=self.root)

@@ -6843,6 +6843,27 @@ def aumentos_de_preco(nota_ids=None, desde_nota_id=None, desde_data=None, limite
     return sorted(achados.values(), key=lambda a: (-a['pct'], a['produto']))
 
 
+def chaves_ja_importadas(chaves):
+    """[XML SEFAZ] Quais destas chaves de acesso já viraram nota de entrada no estoque."""
+    chaves = [c for c in {str(c) for c in chaves} if len(c) == 44 and c.isdigit()]
+    if not chaves:
+        return set()
+    _garantir_colunas_estoque()
+    conn = get_db_connection()
+    if not conn:
+        raise Exception("Falha de conexão com o banco de dados.")
+    try:
+        cursor = conn.cursor()
+        achadas = set()
+        for i in range(0, len(chaves), 500):
+            parte = chaves[i:i + 500]
+            cursor.execute(f"SELECT ChaveAcesso FROM NotasFiscaisEntrada WHERE ChaveAcesso IN ({','.join('?' * len(parte))})", parte)
+            achadas |= {r[0] for r in cursor.fetchall()}
+        return achadas
+    finally:
+        conn.close()
+
+
 def texto_aumento_preco(a):
     """'Leite condensado subiu 18% (R$ 5,00 → R$ 5,90/UN; antes em 12/09, Atacadão)'."""
     def reais(v):

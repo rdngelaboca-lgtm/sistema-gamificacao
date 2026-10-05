@@ -10,6 +10,7 @@
 #   • 09:05: "Drop" das tarefas de quem está de folga/férias.
 #   • 08:30: avisos do estoque no Telegram (abaixo do mínimo, acabando, listas esquecidas);
 #   • 08:35 de segunda: resumo dos preços que subiram na semana.
+#   • de hora em hora: baixa os XMLs das notas de compra da SEFAZ (nfe_distribuicao.py).
 #
 # Como rodar:  python agendador.py        (para parar: Ctrl+C)
 #
@@ -703,6 +704,40 @@ def verificar_resumo_precos(forcar=False):
 
 
 # ==============================================================================
+# == MÓDULO 10: XML DAS NOTAS DE COMPRA (SEFAZ, certificado A1) =================
+# ==============================================================================
+def buscar_xml_sefaz():
+    """De hora em hora: baixa os XMLs novos (nfe_distribuicao.py) e avisa o gestor no Telegram."""
+    import nfe_distribuicao as nd
+    if not nd.configurado():
+        return
+    import alertas_estoque
+    try:
+        r = nd.buscar_notas()
+    except nd.ErroNFe as e:
+        logger.error(f"XML da SEFAZ: {e}")
+        if not ja_rodou_hoje('aviso_erro_sefaz'):          # avisa no máximo 1 vez por dia
+            marcar_rodou_hoje('aviso_erro_sefaz')
+            alertas_estoque.enviar(f"⚠️ <b>Busca automática de XML da SEFAZ</b>\n{esc(e)}")
+        return
+    logger.info("XML da SEFAZ: " + nd.texto_resumo(r).replace("\n", " | "))
+    if r['novas']:
+        linhas = [f"📥 <b>{len(r['novas'])} nota(s) nova(s) da SEFAZ</b>"]
+        linhas += [f"• {esc(n['emitente'] or 'Fornecedor')} · R$ {esc(n['valor'] or '?')}" for n in r['novas'][:25]]
+        linhas.append("Abra o Gestão de Estoque → aba 3 → <b>Notas baixadas da SEFAZ</b> para dar entrada.")
+        alertas_estoque.enviar("\n".join(linhas))
+    if not ja_rodou_hoje('aviso_certificado'):
+        marcar_rodou_hoje('aviso_certificado')
+        try:
+            dias = nd.dias_para_vencer_certificado()
+            if dias <= 30:
+                alertas_estoque.enviar(f"⚠️ O certificado digital A1 vence em <b>{dias} dia(s)</b>. "
+                                       "Renove para a busca de XML continuar funcionando.")
+        except nd.ErroNFe:
+            pass
+
+
+# ==============================================================================
 # == MÓDULO 8: DOWNLOADS (fotos de entregas e notas fiscais) ===================
 # ==============================================================================
 def _baixar_arquivo_telegram(file_id, pasta, prefixo):
@@ -928,6 +963,8 @@ def configurar_agendamentos():
     schedule.every(1).minutes.do(run_threaded, processar_downloads_pendentes_sync)
     schedule.every(1).minutes.do(run_threaded, processar_downloads_notas_fiscais)
     schedule.every(10).minutes.do(run_threaded, reenviar_avisos_de_entregas_pendentes)
+    # [XML SEFAZ] a SEFAZ pede no mínimo 1 hora entre consultas sem novidade
+    schedule.every(1).hours.do(run_threaded, buscar_xml_sefaz)
 
 
 def recuperar_tarefas_do_dia():
