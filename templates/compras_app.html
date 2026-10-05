@@ -214,7 +214,7 @@
 
 // ---------------------------------------------------------------- utilidades
 const CHAVE = 'gb_compras_v1';
-const VERSAO_APP = '12';   // aparece no rodapé do início: confira se o celular pegou a versão nova
+const VERSAO_APP = '13';   // aparece no rodapé do início: confira se o celular pegou a versão nova
 const $app = document.getElementById('app');
 const DIAS_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];            // 1=Dom ... 7=Sáb (padrão do sistema)
 const FRACIONADAS = ['KG', 'G', 'GR', 'L', 'LT', 'ML', 'M'];
@@ -1161,7 +1161,7 @@ TELAS.listas = () => {
         <button class="btn claro medio" style="margin-top:8px" data-acao="limpar-erros">Entendi</button></div>` : ''}
       <div class="lista-cartoes">${todas.map(cartaoLista).join('') || '<div class="vazio">Nenhuma lista ainda.</div>'}</div>
       <div class="lista-cartoes"><div class="rotulo">Cupons fiscais</div>
-        <button class="btn claro medio" data-acao="cupom-ler">${ICONES.qr} Ler QR Code de um cupom</button>
+        <button class="btn claro medio" data-acao="cupom-ler">${ICONES.qr} ${ehComputador() ? 'Lançar cupom fiscal (chave, link ou imagem)' : 'Ler QR Code de um cupom'}</button>
         ${(E.cupons || []).map(cartaoCupom).join('') || '<div class="mini suave" style="text-align:center">Nenhum cupom lido ainda.</div>'}</div>
     </div>${navbar('listas')}`;
 };
@@ -1329,17 +1329,29 @@ TELAS.cupom = p => {
       ${c.status !== 'importado' && (gestor || c.lido_por_id === E.usuario.id) ? '<button class="btn claro medio" style="color:var(--laranja)" data-acao="cupom-apagar">Apagar este cupom</button>' : ''}
     </div>${botoes ? `<div class="rodape">${botoes}</div>` : ''}`;
 };
+function ehComputador() { return !(window.matchMedia && matchMedia('(pointer: coarse)').matches); }
 function modalLerCupom(listaCodigo) {
-  abrirModal(`<div style="display:flex;justify-content:space-between;align-items:center"><div class="titulo-sec">Ler QR Code do cupom</div>
+  // [CUPOM NO COMPUTADOR] no computador não há câmera: link / leitor de QR USB / chave de 44 números / imagem
+  const pc = ehComputador(), lista = esc(listaCodigo || '');
+  const campo = `<div class="campo"><label for="cupom-link">${pc ? 'Link do QR Code ou chave de acesso (44 números)' : 'Ou cole o link do QR Code (ou digite a chave de 44 números)'}</label>
+      <input id="cupom-link" placeholder="https://www.sefaz.mt.gov.br/nfce/consultanfce?p=...  ou  5126 1012 3456 ..." autocomplete="off" data-lista="${lista}"></div>
+    <button class="btn medio" data-acao="cupom-link" data-lista="${lista}">Enviar</button>`;
+  const foto = `<label class="btn ${pc ? 'claro medio' : ''}" style="cursor:pointer">${ICONES.camera} ${pc ? 'Escolher imagem do QR Code (foto ou print)' : 'Tirar foto do QR Code'}
+      <input type="file" accept="image/*" ${pc ? '' : 'capture="environment"'} data-acao-change="cupom-foto" data-lista="${lista}" style="display:none"></label>`;
+  abrirModal(`<div style="display:flex;justify-content:space-between;align-items:center"><div class="titulo-sec">${pc ? 'Lançar cupom fiscal' : 'Ler QR Code do cupom'}</div>
       <button class="icone-btn" data-acao="fechar-modal" aria-label="Fechar">${ICONES.fechar}</button></div>
-    <div class="pequeno suave" style="line-height:1.45">Fotografe o QR Code no pé do cupom: bem de perto, com luz, o quadrado inteiro e reto na foto.</div>
-    <label class="btn" style="cursor:pointer">${ICONES.camera} Tirar foto do QR Code
-      <input type="file" accept="image/*" capture="environment" data-acao-change="cupom-foto" data-lista="${esc(listaCodigo || '')}" style="display:none"></label>
-    <div id="cupom-status" class="pequeno" style="text-align:center;min-height:20px" role="status"></div>
-    <details><summary class="pequeno" style="cursor:pointer;font-weight:700;min-height:28px">Prefiro colar o link do QR Code</summary>
-      <div class="pequeno suave" style="margin:8px 0">A câmera do celular também lê o QR: toque em "copiar link" e cole aqui.</div>
-      <div class="campo"><input id="cupom-link" placeholder="https://www.sefaz.mt.gov.br/nfce/consultanfce?p=..." autocomplete="off" aria-label="Link do QR Code"></div>
-      <button class="btn medio" style="margin-top:10px" data-acao="cupom-link" data-lista="${esc(listaCodigo || '')}">Enviar link</button></details>`);
+    ${pc ? `<div class="pequeno suave" style="line-height:1.5">No computador, escolha um jeito:<br>
+        • <b>Leitor de QR Code USB:</b> clique no campo abaixo e bipe o QR do cupom (envia sozinho).<br>
+        • <b>Chave de acesso:</b> digite os 44 números impressos no cupom (perto de "Consulte pela chave de acesso").<br>
+        • <b>Link:</b> leia o QR com a câmera do celular, mande o link para o computador e cole aqui.<br>
+        • <b>Imagem:</b> foto ou print do QR Code salvo no computador.</div>${campo}${foto}`
+         : `<div class="pequeno suave" style="line-height:1.45">Fotografe o QR Code no pé do cupom: bem de perto, com luz, o quadrado inteiro e reto na foto.</div>${foto}${campo}`}
+    <div id="cupom-status" class="pequeno" style="text-align:center;min-height:20px" role="status"></div>`);
+  const el = document.getElementById('cupom-link');
+  if (el) {
+    el.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); acoes['cupom-link']({lista: listaCodigo || ''}); } });
+    if (pc) setTimeout(() => el.focus(), 60);
+  }
 }
 function statusCupom(t) { const el = document.getElementById('cupom-status'); if (el) el.textContent = t; }
 async function lerQrNoCelular(arquivo) {
@@ -1507,7 +1519,7 @@ document.addEventListener('keydown', e => {
   else if (LEITOR.buf) LEITOR.intervalos.push(agora - LEITOR.ultimo);
   LEITOR.ultimo = agora;
   if (e.key === 'Enter' || e.key === 'Tab') {
-    if (LEITOR.buf.length >= 8 && LEITOR.intervalos.length >= 6 && Math.max(...LEITOR.intervalos) < 120) {
+    if (LEITOR.buf.length >= 8 && LEITOR.buf.length <= 14 && LEITOR.intervalos.length >= 6 && Math.max(...LEITOR.intervalos) < 120) {
       e.preventDefault(); e.stopPropagation(); leitorEntregar();
     }
     return;
@@ -1901,7 +1913,11 @@ const acoes = {
   'cupom-ler': d => modalLerCupom(d.lista),
   'cupom-link': d => {
     const t = document.getElementById('cupom-link').value.trim();
-    if (!/^https?:\/\//i.test(t)) return statusCupom('⚠ Cole o link completo (começa com http).');
+    const numeros = t.replace(/\D/g, '');
+    // link (também o que um leitor USB "digita", às vezes com sinais trocados) ou a chave de 44 números
+    if (!/^https?/i.test(t) && !/sefaz|nfce/i.test(t) && numeros.length !== 44) {
+      return statusCupom(numeros.length && numeros.length < 60 ? `⚠ A chave tem 44 números; você digitou ${numeros.length}.` : '⚠ Cole o link do QR Code ou digite a chave de 44 números.');
+    }
     enviarCupom({qr: t, lista_codigo: d.lista || null});
   },
   'cupom-abrir': async d => {

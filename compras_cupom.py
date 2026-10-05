@@ -77,6 +77,26 @@ def extrair_chave(texto):
     raise ErroCompras("Este QR Code não é de um cupom fiscal (NFC-e).")
 
 
+# [CUPOM NO COMPUTADOR] consulta pública da NFC-e de cada estado (2 primeiros números da chave)
+CONSULTA_POR_UF = {
+    '51': 'https://www.sefaz.mt.gov.br/nfce/consultanfce',
+}
+
+
+def _reconstruir_endereco(texto, chave):
+    """
+    Leitor de QR Code USB com o teclado do computador em outro padrão (ex.: ABNT2 x americano)
+    troca '?', '|', ':' e '/' por outros sinais: o link chega estragado, mas a chave e os
+    números depois dela continuam certos. Remonta o link da consulta com eles.
+    """
+    base = CONSULTA_POR_UF.get(chave[:2])
+    texto = re.sub(r'(?<=\d)[ .](?=\d)', '', str(texto or ''))
+    if not base or chave not in texto:
+        return None
+    partes = [p for p in re.split(r'[^0-9A-Za-z.]+', texto.split(chave, 1)[1]) if p]
+    return f"{base}?p={chave}|{'|'.join(partes)}" if partes else None
+
+
 def dados_da_chave(chave):
     """O que já vem DENTRO da chave: estado, ano/mês, CNPJ do emitente, modelo, série e número."""
     return {'uf': chave[0:2], 'ano_mes': f"20{chave[2:4]}-{chave[4:6]}", 'cnpj': chave[6:20],
@@ -484,8 +504,19 @@ def registrar_cupom(texto_qr, usuario, lista_codigo=None, html=None):
     info = dados_da_chave(chave)
     if info['modelo'] not in ('65', '55'):
         raise ErroCompras("Este QR Code não é de nota fiscal.")
-    if not url:
-        raise ErroCompras("Só a chave não basta: a SEFAZ pede o QR Code completo. Leia o QR Code do cupom.")
+    if url:
+        try:
+            endereco_seguro(url)
+        except ErroCompras:
+            url = None                      # link estragado (leitor USB): tenta remontar abaixo
+    url = url or _reconstruir_endereco(unquote(str(texto_qr or '')), chave)
+    so_chave = not url
+    if so_chave:
+        # [CUPOM NO COMPUTADOR] só a chave de 44 números (digitada): tenta a consulta pública
+        base = CONSULTA_POR_UF.get(info['uf'])
+        if not base:
+            raise ErroCompras("Só com a chave ainda não dá para este estado. Use o link, uma foto ou um leitor do QR Code.")
+        url = f"{base}?p={chave}"
     endereco_seguro(url)
     existente = _id_cupom_por_chave(chave)
     if existente:
@@ -510,6 +541,11 @@ def registrar_cupom(texto_qr, usuario, lista_codigo=None, html=None):
                 raise ErroCompras("A página da SEFAZ mostrou outro cupom. Tente ler de novo.")
         except ErroCompras as e:
             status, erro = ST_ERRO, str(e)
+            if so_chave:                    # não guarda um cupom que nunca vai abrir só com a chave
+                logger.warning(f"Cupom {chave}: a SEFAZ não mostrou o cupom só com a chave ({e}).")
+                raise ErroCompras("A SEFAZ não mostrou este cupom só com a chave. No computador, use o link do QR Code, "
+                                  "uma imagem do QR Code ou um leitor de QR Code USB. "
+                                  f"(Detalhe: {e})")
 
     conn = _conectar()
     try:
