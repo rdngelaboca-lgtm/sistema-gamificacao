@@ -3228,11 +3228,15 @@ def listar_resgates_pendentes():
             try:
                 _garantir_coluna_valor_resgate(cursor)
                 conn.commit()
+                coluna_valor = "R.ValorReais"
             except Exception as e:
+                # [DEPURAÇÃO] sem permissão para criar a coluna: a aba continua abrindo (valor pelos pontos)
+                conn.rollback()
                 logger.error(f"Não foi possível criar a coluna Resgates.ValorReais: {e}")
-            sql = """
+                coluna_valor = "NULL"
+            sql = f"""
                 SELECT R.ResgateID, F.NomeCompleto, P.Nome, R.PontosGastos, R.DataSolicitacao,
-                       R.ValorReais, F.SaldoPontos
+                       {coluna_valor} AS ValorReais, F.SaldoPontos
                 FROM Resgates R
                 JOIN Funcionarios F ON R.FuncionarioID = F.FuncionarioID
                 JOIN ProdutosLoja P ON R.ProdutoID = P.ProdutoID
@@ -3368,10 +3372,16 @@ def registrar_solicitacao_comanda(funcionario_id, valor_reais, pontos_necessario
                 return (False, "Saldo insuficiente para este abate.", None)
 
             # 3. Insere em Resgates como Pendente (com o valor em R$ pedido)
-            _garantir_coluna_valor_resgate(cursor)
-            sql_resgate = ("INSERT INTO Resgates (FuncionarioID, ProdutoID, PontosGastos, Status, ValorReais) "
-                           "VALUES (?, ?, ?, 'Pendente', ?); SELECT SCOPE_IDENTITY();")
-            cursor.execute(sql_resgate, funcionario_id, produto_id, pontos_necessarios, Decimal(str(round(valor_reais, 2))))
+            try:
+                _garantir_coluna_valor_resgate(cursor)
+                sql_resgate = ("INSERT INTO Resgates (FuncionarioID, ProdutoID, PontosGastos, Status, ValorReais) "
+                               "VALUES (?, ?, ?, 'Pendente', ?); SELECT SCOPE_IDENTITY();")
+                cursor.execute(sql_resgate, funcionario_id, produto_id, pontos_necessarios, Decimal(str(round(valor_reais, 2))))
+            except pyodbc.Error as e:
+                # [DEPURAÇÃO] sem a coluna nova o pedido NÃO pode falhar: grava como antes (só os pontos)
+                logger.error(f"Resgate sem o valor em R$ (coluna ValorReais indisponível): {e}")
+                sql_resgate = "INSERT INTO Resgates (FuncionarioID, ProdutoID, PontosGastos, Status) VALUES (?, ?, ?, 'Pendente'); SELECT SCOPE_IDENTITY();"
+                cursor.execute(sql_resgate, funcionario_id, produto_id, pontos_necessarios)
             cursor.nextset()
             resgate_id = cursor.fetchone()[0]
 

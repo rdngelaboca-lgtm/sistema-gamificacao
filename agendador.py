@@ -721,9 +721,13 @@ def buscar_xml_sefaz():
             alertas_estoque.enviar(f"⚠️ <b>Busca automática de XML da SEFAZ</b>\n{esc(e)}")
         return
     logger.info("XML da SEFAZ: " + nd.texto_resumo(r).replace("\n", " | "))
+    if r.get('sem_ciencia') and not ja_rodou_hoje('aviso_ciencia_sefaz'):
+        marcar_rodou_hoje('aviso_ciencia_sefaz')
+        alertas_estoque.enviar(f"⚠️ <b>XML da SEFAZ</b>: {r['sem_ciencia']} nota(s) sem a Ciência da Operação registrada. "
+                               "O robô tenta de novo de hora em hora; se continuar amanhã, avise o Claude (detalhe no log).")
     if r['novas']:
         linhas = [f"📥 <b>{len(r['novas'])} nota(s) nova(s) da SEFAZ</b>"]
-        linhas += [f"• {esc(n['emitente'] or 'Fornecedor')} · R$ {esc(n['valor'] or '?')}" for n in r['novas'][:25]]
+        linhas += [f"• {esc(n['emitente'] or 'Fornecedor')} · {nd._reais(n['valor'])}" for n in r['novas'][:25]]
         linhas.append("Abra o Gestão de Estoque → aba 3 → <b>Notas baixadas da SEFAZ</b> para dar entrada.")
         alertas_estoque.enviar("\n".join(linhas))
     if not ja_rodou_hoje('aviso_certificado'):

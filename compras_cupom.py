@@ -99,7 +99,8 @@ def _reconstruir_endereco(texto, chave):
     if not base or chave not in texto:
         return None
     partes = [p for p in re.split(r'[^0-9A-Za-z.]+', texto.split(chave, 1)[1]) if p]
-    return f"{base}?p={chave}|{'|'.join(partes)}" if partes else None
+    # [DEPURAÇÃO] no QR o que vem depois da chave começa pela versão (ex.: "2"); texto qualquer não vira link
+    return f"{base}?p={chave}|{'|'.join(partes)}" if partes and partes[0].isdigit() else None
 
 
 def dados_da_chave(chave):

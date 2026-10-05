@@ -333,6 +333,8 @@ def _salvar_xml_completo(conteudo):
     chave = (inf.get('Id') or '')[3:] if inf is not None else _texto_de(raiz, 'chNFe')
     if not re.fullmatch(r'\d{44}', chave or ''):
         chave = _texto_de(raiz, 'chNFe')
+    if not re.fullmatch(r'\d{44}', chave or ''):
+        raise ErroNFe("A SEFAZ mandou uma nota sem chave de acesso válida.")
     emit = _filho(raiz, 'emit')
     nome = _texto_de(emit, 'xFant') or _texto_de(emit, 'xNome') if emit is not None else ''
     valor = _texto_de(raiz, 'vNF')
@@ -389,6 +391,7 @@ def buscar_notas(forcar=False, agora=None):
         manifestar = getattr(config, 'NFE_MANIFESTAR_CIENCIA', True)
         aguardando = estado.setdefault('aguardando_xml', {})
         ult = int(estado.get('ult_nsu', 0))
+        tentadas_agora = set()          # ciências enviadas nesta rodada (as que falharem, só na próxima)
         with _arquivos_certificado(pem_cert, pem_chave) as arquivos:
             for _ in range(MAX_LOTES_POR_RODADA):
                 cstat, motivo, ult_ret, max_nsu, docs = consultar_nsu(ult, arquivos)
@@ -396,14 +399,18 @@ def buscar_notas(forcar=False, agora=None):
                     estado['proxima_consulta'] = (agora + ESPERA_SEM_NOVIDADE).isoformat(timespec='minutes')
                     resumo['mensagem'] = ("Nenhuma nota nova na SEFAZ." if cstat == '137'
                                           else "A SEFAZ pediu para esperar 1 hora (consultas demais).")
-                    if ult_ret:
+                    if cstat == '137' and ult_ret:   # [DEPURAÇÃO] no 656 o NSU não anda (não pula documentos)
                         ult = max(ult, ult_ret)
                     break
                 if cstat != '138':
                     raise ErroNFe(f"A SEFAZ respondeu: {cstat} {motivo}")
                 for nsu, schema, conteudo in docs:
                     if schema.startswith('procNFe'):
-                        chave, nome, valor, novo = _salvar_xml_completo(conteudo)
+                        try:
+                            chave, nome, valor, novo = _salvar_xml_completo(conteudo)
+                        except ErroNFe as e:
+                            logger.error(f"SEFAZ: documento NSU {nsu} ignorado: {e}")
+                            continue
                         aguardando.pop(chave, None)
                         if novo:
                             resumo['novas'].append({'chave': chave, 'emitente': nome, 'valor': valor})
@@ -413,14 +420,11 @@ def buscar_notas(forcar=False, agora=None):
                             continue            # cancelada/denegada ou já temos o XML
                         if r['chave'] in aguardando:
                             continue
-                        if manifestar:
-                            ok, msg = manifestar_ciencia(r['chave'], chave_priv, cert, arquivos)
-                            if ok:
-                                resumo['manifestadas'] += 1
-                            else:
-                                logger.warning(f"SEFAZ: ciência da nota {r['chave']} não registrada: {msg}")
                         aguardando[r['chave']] = {'emitente': r['emitente'], 'valor': r['valor'], 'emissao': r['emissao'],
-                                                  'desde': agora.isoformat(timespec='minutes')}
+                                                  'desde': agora.isoformat(timespec='minutes'), 'ciencia': False}
+                        tentadas_agora.add(r['chave'])
+                        if manifestar and _enviar_ciencia(r['chave'], aguardando[r['chave']], chave_priv, cert, arquivos):
+                            resumo['manifestadas'] += 1
                     # eventos (cancelamento, ciência etc.) não precisam de nada
                 ult = max(ult, ult_ret)
                 estado['ult_nsu'] = ult
@@ -430,6 +434,12 @@ def buscar_notas(forcar=False, agora=None):
                     # consultar de novo. Antes consultava logo em seguida e levava o erro 656 (consumo indevido).
                     estado['proxima_consulta'] = (agora + ESPERA_SEM_NOVIDADE).isoformat(timespec='minutes')
                     break
+            # [DEPURAÇÃO] ciência que falhou antes (internet, SEFAZ fora): tenta de novo (até 10 por rodada)
+            if manifestar:
+                pendentes = [c for c, v in aguardando.items() if not v.get('ciencia', False) and c not in tentadas_agora][:10]
+                for ch in pendentes:
+                    if _enviar_ciencia(ch, aguardando[ch], chave_priv, cert, arquivos):
+                        resumo['manifestadas'] += 1
         # nota que nunca chegou completa em 30 dias: esquece (ex.: emitente cancelou)
         limite = agora - timedelta(days=30)
         for ch in [c for c, v in aguardando.items() if datetime.fromisoformat(v['desde']) < limite]:
@@ -438,6 +448,7 @@ def buscar_notas(forcar=False, agora=None):
         estado['ultima_busca'] = agora.isoformat(timespec='minutes')
         _salvar_estado(estado)
         resumo['aguardando'] = len(aguardando)
+        resumo['sem_ciencia'] = sum(1 for v in aguardando.values() if not v.get('ciencia', False))
         if not resumo['mensagem']:
             resumo['mensagem'] = "Busca na SEFAZ concluída."
         return resumo
@@ -447,18 +458,41 @@ def buscar_notas(forcar=False, agora=None):
         _trava.release()
 
 
+def _enviar_ciencia(chave, registro, chave_priv, cert, arquivos):
+    """Manda a Ciência da Operação e anota no registro se foi aceita (erro de rede não derruba a busca)."""
+    try:
+        ok, msg = manifestar_ciencia(chave, chave_priv, cert, arquivos)
+    except ErroNFe as e:
+        ok, msg = False, str(e)
+    registro['ciencia'] = ok
+    if not ok:
+        registro['erro_ciencia'] = msg[:200]
+        logger.warning(f"SEFAZ: ciência da nota {chave} não registrada: {msg}")
+    return ok
+
+
+def _reais(valor):
+    try:
+        return f"R$ {float(valor):,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
+    except (TypeError, ValueError):
+        return "R$ ?"
+
+
 def texto_resumo(resumo):
     """Texto simples para mostrar na tela ou mandar no Telegram."""
     linhas = [resumo['mensagem']]
     if resumo['novas']:
         linhas.append(f"{len(resumo['novas'])} XML(s) novo(s) baixado(s):")
         for n in resumo['novas'][:20]:
-            linhas.append(f"  • {n['emitente'] or 'Fornecedor'} · R$ {n['valor'] or '?'}")
+            linhas.append(f"  • {n['emitente'] or 'Fornecedor'} · {_reais(n['valor'])}")
     if resumo['manifestadas']:
         linhas.append(f"{resumo['manifestadas']} nota(s) nova(s) com 'Ciência da Operação' enviada: "
                       "o XML completo chega numa das próximas buscas.")
     if resumo['aguardando']:
         linhas.append(f"{resumo['aguardando']} nota(s) aguardando o XML completo da SEFAZ.")
+    if resumo.get('sem_ciencia'):
+        linhas.append(f"⚠ {resumo['sem_ciencia']} nota(s) sem a Ciência registrada (a SEFAZ recusou ou estava fora): "
+                      "o sistema tenta de novo na próxima busca. Detalhe no log.")
     return "\n".join(linhas)
 
 

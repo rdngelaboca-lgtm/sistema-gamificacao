@@ -2348,6 +2348,14 @@ class AppGestaoEstoque:
                 logger.warning(f"XML da SEFAZ {f} não abriu: {e}")
                 continue
             forn_id = database.buscar_fornecedor_por_cnpj(cab.get('FornecedorCNPJ'))
+            # [DEPURAÇÃO] nota lançada ANTES (XML importado à mão, sem a chave gravada): não volta para a lista
+            if forn_id and database.buscar_nota_importada(cab.get('NumeroNF'), forn_id, cab.get('Serie'), cab.get('ChaveAcesso')):
+                try:
+                    os.makedirs(os.path.join(pasta, 'importadas'), exist_ok=True)
+                    os.replace(os.path.join(pasta, f), os.path.join(pasta, 'importadas', f))
+                except OSError as e:
+                    logger.warning(f"Não deu para mover {f} para 'importadas': {e}")
+                continue
             sem = 0
             for it in itens:
                 if not forn_id:
@@ -2362,6 +2370,11 @@ class AppGestaoEstoque:
                 sem += 0 if cache_vinc[chave] else 1
             notas.append((cab.get('DataEmissao') or '', f, cab, len(itens), sem, forn_id))
         notas.sort(key=lambda n: (n[0], n[2].get('FornecedorNome') or ''))
+        if not notas:
+            janela.destroy()
+            messagebox.showinfo("Notas da SEFAZ", "Nenhuma nota nova da SEFAZ esperando para entrar no estoque "
+                                "(as que já estavam lançadas foram para a subpasta 'importadas').", parent=self.root)
+            return
         for data, f, cab, n_itens, sem, forn_id in notas:
             try:
                 data_br = datetime.strptime(data, '%Y-%m-%d').strftime('%d/%m/%Y')
