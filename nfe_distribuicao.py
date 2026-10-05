@@ -132,7 +132,11 @@ def _carregar_certificado():
                       + " Confira o caminho completo no config.py.")
     senha = str(getattr(config, 'NFE_CERTIFICADO_SENHA', '') or '').encode('utf-8')
     try:
-        chave, cert, _extras = pkcs12.load_key_and_certificates(bruto, senha)
+        import warnings
+        with warnings.catch_warnings():
+            # certificados de várias certificadoras vêm em BER (e não DER): funciona, só avisa
+            warnings.filterwarnings('ignore', message='PKCS#12 bundle could not be parsed as DER')
+            chave, cert, _extras = pkcs12.load_key_and_certificates(bruto, senha)
     except ValueError:
         raise ErroNFe("Não consegui abrir o certificado: a senha (NFE_CERTIFICADO_SENHA) está errada ou o arquivo não é um .pfx.")
     if not chave or not cert:
