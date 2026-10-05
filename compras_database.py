@@ -1554,3 +1554,51 @@ def painel_gestor(hoje=None):
         logger.error(f"Painel: aumentos de preço: {e}", exc_info=True)
         painel['avisos'].append("Preços: não deu para ler agora.")
     return painel
+
+
+# ==============================================================================
+# == [PREÇOS] histórico de preço de um produto (aba Gestão do app) =============
+# ==============================================================================
+def historico_precos(produto_id, meses=12, hoje=None):
+    """
+    Compras do produto nos últimos 'meses' (todos os fornecedores), com o custo por unidade
+    do ESTOQUE, e um resumo: último preço, menor, maior, média e variação no período,
+    e o último/menor preço de cada fornecedor. Bonificação (custo 0) aparece, mas fica
+    fora das contas de preço.
+    """
+    hoje = _como_data(hoje) or date.today()
+    meses = max(1, min(int(meses or 12), 36))
+    produto_id = int(produto_id)
+    conn = _conectar()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT NomeProduto, UnidadeMedida, Categoria FROM ProdutosEstoque WHERE ProdutoID = ?", (produto_id,))
+        p = cur.fetchone()
+        if not p:
+            raise ErroCompras("Produto não encontrado.")
+        compras = _compras_recentes(cur, [produto_id], hoje, dias=meses * 31).get(produto_id, [])
+    finally:
+        conn.close()
+    lista = [{'data': _iso(d), 'custo': _num(c, 4), 'qtd': _num(q), 'fornecedor': forn, 'descricao': desc, 'nf': nf,
+              'bonificacao': c <= 0} for d, q, c, forn, desc, nf, _vid in compras]
+    pagas = [(d, c, forn) for d, q, c, forn, desc, nf, _vid in compras if c > 0]
+    resumo = None
+    if pagas:
+        ultimo, menor, maior = pagas[-1], min(pagas, key=lambda x: x[1]), max(pagas, key=lambda x: x[1])
+        qtd_total = sum((q for d, q, c, *_ in compras if c > 0), Decimal('0'))
+        valor_total = sum((q * c for d, q, c, *_ in compras if c > 0), Decimal('0'))
+        resumo = {'ultimo': {'custo': _num(ultimo[1], 4), 'data': _iso(ultimo[0]), 'fornecedor': ultimo[2]},
+                  'menor': {'custo': _num(menor[1], 4), 'data': _iso(menor[0]), 'fornecedor': menor[2]},
+                  'maior': {'custo': _num(maior[1], 4), 'data': _iso(maior[0]), 'fornecedor': maior[2]},
+                  'media': _num(valor_total / qtd_total, 4) if qtd_total else None,
+                  'variacao_pct': _num((ultimo[1] / pagas[0][1] - 1) * 100, 1) if len(pagas) > 1 else None,
+                  'compras': len(pagas), 'qtd_total': _num(qtd_total)}
+    por_forn = {}
+    for d, c, forn in pagas:
+        f = por_forn.setdefault(forn, {'fornecedor': forn, 'ultimo': None, 'ultima_data': None, 'menor': None, 'compras': 0})
+        f['compras'] += 1
+        f['ultimo'], f['ultima_data'] = _num(c, 4), _iso(d)
+        f['menor'] = _num(c, 4) if f['menor'] is None else min(f['menor'], _num(c, 4))
+    return {'produto_id': produto_id, 'nome': p[0], 'unidade': (p[1] or 'UN').strip() or 'UN', 'categoria': p[2] or '',
+            'meses': meses, 'compras': lista, 'resumo': resumo,
+            'fornecedores': sorted(por_forn.values(), key=lambda f: (f['ultimo'] or 0))}

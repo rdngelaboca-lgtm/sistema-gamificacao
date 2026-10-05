@@ -214,7 +214,7 @@
 
 // ---------------------------------------------------------------- utilidades
 const CHAVE = 'gb_compras_v1';
-const VERSAO_APP = '15';   // aparece no rodapé do início: confira se o celular pegou a versão nova
+const VERSAO_APP = '16';   // aparece no rodapé do início: confira se o celular pegou a versão nova
 const $app = document.getElementById('app');
 const DIAS_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];            // 1=Dom ... 7=Sáb (padrão do sistema)
 const FRACIONADAS = ['KG', 'G', 'GR', 'L', 'LT', 'ML', 'M'];
@@ -1194,7 +1194,7 @@ function conteudoConsumo(p) {
 TELAS.gestao = p => {
   if (!E.usuario.gestor) return TELAS.inicio();
   const secao = p.secao || 'resumo';
-  const abas = [['resumo', 'Resumo'], ['cupons', 'Cupons fiscais'], ['consumo', 'Consumo']].map(([id, txt]) =>
+  const abas = [['resumo', 'Resumo'], ['precos', 'Preços'], ['cupons', 'Cupons fiscais'], ['consumo', 'Consumo']].map(([id, txt]) =>
     `<button class="filtro ${secao === id ? 'sel' : ''}" data-acao="gestao-secao" data-s="${id}">${txt}</button>`).join('');
   let corpo;
   if (secao === 'cupons') {
@@ -1202,6 +1202,10 @@ TELAS.gestao = p => {
       ${(E.cupons || []).map(cartaoCupom).join('') || '<div class="mini suave" style="text-align:center">Nenhum cupom lido ainda.</div>'}`;
   } else if (secao === 'consumo') {
     corpo = conteudoConsumo(p);
+  } else if (secao === 'precos') {
+    corpo = p.preco ? conteudoPreco(p.preco, p) : `<div class="campo"><label for="busca-preco">Procurar produto</label>
+        <input id="busca-preco" placeholder="Digite parte do nome (ex.: leite cond)" autocomplete="off" value="${esc(p.buscaPreco || '')}"></div>
+      <div id="res-preco" class="linhas">${p.carregandoPreco ? '<div class="vazio">Carregando…</div>' : '<div class="vazio" style="padding:14px">Digite pelo menos 2 letras.</div>'}</div>`;
   } else {
     corpo = conteudoResumo(E.painel);
   }
@@ -1238,6 +1242,74 @@ function conteudoResumo(pn) {
       ${pn.listas_esquecidas.map(x => `<div class="mini">• ${esc(x.rotina)} de ${esc(x.funcionario || '?')} (${x.dias} dias)</div>`).join('')}</div>` : ''}
     ${(pn.avisos || []).map(a => `<div class="mini suave">⚠ ${esc(a)}</div>`).join('')}
     <div class="mini suave" style="text-align:center">Atualizado ${pn.gerado_em ? dataBR(pn.gerado_em) + ' ' + pn.gerado_em.slice(11, 16) : ''} · <button class="icone-btn" style="width:auto;display:inline;color:var(--verde);font-weight:700" data-acao="gestao-atualizar">atualizar</button></div>`;
+}
+// ---------------------------------------------------------------- [PREÇOS] histórico de preço de um produto
+TELAS_DEPOIS.gestao = p => {
+  const b = document.getElementById('busca-preco');
+  if (!b) return;
+  let espera;
+  const buscar = async () => {
+    const termo = b.value.trim(), res = document.getElementById('res-preco');
+    p.buscaPreco = b.value;
+    if (!res) return;
+    if (termo.length < 2) { res.innerHTML = '<div class="vazio" style="padding:14px">Digite pelo menos 2 letras.</div>'; return; }
+    try {
+      const achados = await api('GET', '/api/compras/produtos?q=' + encodeURIComponent(termo));
+      res.innerHTML = achados.map(a => `<button class="lin" style="width:100%;border-left:0;border-right:0;border-bottom:0;background:#fff;text-align:left" data-acao="preco-abrir" data-pid="${a.produto_id}">
+          <div class="grow"><div style="font-weight:700">${esc(a.nome)}</div><div class="mini suave">${esc(a.unidade)} · ${esc(a.categoria)}</div></div>${ICONES.seta}</button>`).join('')
+        || '<div class="vazio" style="padding:14px">Nenhum produto com esse nome.</div>';
+    } catch (err) { res.innerHTML = `<div class="vazio" style="padding:14px">${esc(err.extra && err.extra.offline ? 'Sem internet.' : err.message)}</div>`; }
+  };
+  b.addEventListener('input', () => { clearTimeout(espera); espera = setTimeout(buscar, 300); });
+  if (b.value.trim().length >= 2) buscar();
+  if (!p.preco) setTimeout(() => b.focus(), 50);
+};
+async function carregarPreco(pid, meses) {
+  T.p.carregandoPreco = true; desenhar();
+  try { T.p.preco = await api('GET', `/api/compras/produtos/${pid}/precos?meses=${meses || 12}`); }
+  catch (e) { toast(e.extra.offline ? 'Sem internet: conecte para ver o histórico.' : e.message); }
+  T.p.carregandoPreco = false;
+  if (T.nome === 'gestao') desenhar();
+}
+function graficoPreco(h) {
+  // uma série só (preço pago por unidade do estoque); o título do cartão dá o nome, sem legenda
+  const pts = h.compras.filter(c => !c.bonificacao && c.custo > 0).map(c => ({...c, t: new Date(c.data + 'T12:00:00').getTime()}));
+  if (!pts.length) return '<div class="mini suave">Nenhuma compra paga no período.</div>';
+  const W = 340, H = 170, ml = 52, mr = 12, mt = 12, mb = 26;
+  const ts = pts.map(x => x.t), vs = pts.map(x => x.custo);
+  let t0 = Math.min(...ts), t1 = Math.max(...ts); if (t1 === t0) { t0 -= 86400000 * 15; t1 += 86400000 * 15; }
+  let v0 = Math.min(...vs), v1 = Math.max(...vs); const folga = (v1 - v0) * 0.15 || v1 * 0.1 || 1; v0 = Math.max(0, v0 - folga); v1 += folga;
+  const x = t => ml + (t - t0) / (t1 - t0) * (W - ml - mr), y = v => mt + (1 - (v - v0) / (v1 - v0)) * (H - mt - mb);
+  const grade = [0, 0.5, 1].map(f => { const v = v0 + (v1 - v0) * f; return `<line x1="${ml}" x2="${W - mr}" y1="${y(v)}" y2="${y(v)}" stroke="var(--linha)" stroke-width="1"/>
+      <text x="${ml - 6}" y="${y(v) + 4}" text-anchor="end" font-size="10" fill="var(--suave)">${fmtReais(v).replace('R$', '').trim()}</text>`; }).join('');
+  const datas = [t0, (t0 + t1) / 2, t1].map((t, i) => `<text x="${x(t)}" y="${H - 8}" text-anchor="${['start', 'middle', 'end'][i]}" font-size="10" fill="var(--suave)">${new Date(t).toLocaleDateString('pt-BR', {day: '2-digit', month: '2-digit', year: '2-digit'})}</text>`).join('');
+  const linha = pts.length > 1 ? `<polyline points="${pts.map(q => `${x(q.t).toFixed(1)},${y(q.custo).toFixed(1)}`).join(' ')}" fill="none" stroke="var(--verde)" stroke-width="2" stroke-linejoin="round"/>` : '';
+  const dots = pts.map(q => `<g><title>${dataBR(q.data)}/${q.data.slice(2, 4)} · ${esc(nomeCurto(q.fornecedor))} · ${fmtReais(q.custo)}/${esc(unCurta(h.unidade))}${q.nf ? ' · NF ' + esc(q.nf) : ''}</title>
+      <circle cx="${x(q.t)}" cy="${y(q.custo)}" r="12" fill="transparent"/><circle cx="${x(q.t)}" cy="${y(q.custo)}" r="4" fill="var(--verde)" stroke="#fff" stroke-width="2"/></g>`).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Preço pago por ${esc(h.unidade)} ao longo do tempo">${grade}${datas}${linha}${dots}</svg>
+    <div class="mini suave">Toque num ponto para ver data, fornecedor e preço.</div>`;
+}
+function conteudoPreco(h, p) {
+  const un = esc(unCurta(h.unidade)), r = h.resumo;
+  const chips = [6, 12, 24].map(m => `<button class="filtro ${h.meses === m ? 'sel' : ''}" data-acao="preco-meses" data-m="${m}">${m} meses</button>`).join('');
+  const card = (titulo, v, sub) => `<div class="cartao" style="display:flex;flex-direction:column;gap:2px"><div class="mini suave" style="font-weight:700">${titulo}</div>
+      <div style="font-size:19px;font-weight:800">${v}</div>${sub ? `<div class="mini suave">${sub}</div>` : ''}</div>`;
+  const quando = c => `${esc(nomeCurto(c.fornecedor))} · ${dataBR(c.data)}/${c.data.slice(2, 4)}`;
+  return `<button class="btn claro medio" data-acao="preco-voltar">← Procurar outro produto</button>
+    <div><div class="titulo-sec">${esc(h.nome)}</div><div class="mini suave">${esc(h.categoria)} · preço por ${un} do estoque (já convertido da caixa)</div></div>
+    <div class="filtros">${chips}</div>
+    ${r ? `<div class="linha-btns">${card('Último preço', fmtReais(r.ultimo.custo), quando(r.ultimo))}${card('Média do período', r.media != null ? fmtReais(r.media) : '—', `${r.compras} compra(s)`)}</div>
+      <div class="linha-btns">${card('Menor', fmtReais(r.menor.custo), quando(r.menor))}${card('Maior', fmtReais(r.maior.custo), quando(r.maior))}</div>
+      ${r.variacao_pct != null ? `<div class="info">Do 1º ao último preço do período: <b>${r.variacao_pct > 0 ? '+' : ''}${fmtQtd(r.variacao_pct)}%</b></div>` : ''}` : ''}
+    <div class="cartao"><div class="titulo-sec">Preço pago (R$ por ${un})</div>${graficoPreco(h)}</div>
+    ${h.fornecedores.length ? `<div class="cartao"><div class="titulo-sec">Por fornecedor (mais barato primeiro)</div><div class="linhas" style="border:0">
+      ${h.fornecedores.map(f => `<div class="lin" style="padding:8px 2px"><div class="grow"><div class="pequeno" style="font-weight:700">${esc(nomeCurto(f.fornecedor))}</div>
+        <div class="mini suave">${f.compras} compra(s) · última em ${dataBR(f.ultima_data)} · menor ${fmtReais(f.menor)}</div></div><b class="pequeno">${fmtReais(f.ultimo)}</b></div>`).join('')}</div></div>` : ''}
+    <div class="cartao"><div class="titulo-sec">Compras (mais recentes primeiro)</div><div class="linhas" style="border:0;max-height:360px;overflow:auto">
+      ${h.compras.slice().reverse().map(c => `<div class="lin" style="padding:8px 2px"><div class="grow"><div class="pequeno" style="font-weight:700">${dataBR(c.data)}/${c.data.slice(2, 4)} · ${esc(nomeCurto(c.fornecedor))}</div>
+        <div class="mini suave">${esc(c.descricao)}${c.nf ? ' · NF ' + esc(c.nf) : ''}</div></div>
+        <div class="pequeno" style="text-align:right;white-space:nowrap"><b>${c.bonificacao ? 'bonificação' : fmtReais(c.custo)}</b><br><span class="mini suave">${fmtQtd(c.qtd)} ${un}</span></div></div>`).join('')
+        || '<div class="mini suave" style="padding:10px">Nenhuma compra no período.</div>'}</div></div>`;
 }
 async function carregarPainel() {
   try { E.painel = await api('GET', '/api/compras/painel'); salvar(); if (T.nome === 'gestao') desenhar(); }
@@ -1933,6 +2005,9 @@ const acoes = {
     else if (d.s === 'consumo') { const r = E.rotinas.find(x => x.id === T.p.rotina_id) || E.rotinas[0]; if (r) carregarConsumo(r.id); }
   },
   'gestao-atualizar': () => { toast('Atualizando…'); carregarPainel(); },
+  'preco-abrir': d => { T.p.precoPid = +d.pid; carregarPreco(+d.pid, 12); },
+  'preco-meses': d => carregarPreco(T.p.precoPid, +d.m),
+  'preco-voltar': () => { T.p.preco = null; desenhar(); },
   // rotinas (gestor)
   'rotina-nova': d => {
     carregarCodigos();

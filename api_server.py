@@ -1599,6 +1599,17 @@ def api_compras_historico_produto(usuario, produto_id):
     return _resposta_compras(compras_database.historico_produto, produto_id)
 
 
+@app.route('/api/compras/produtos/<int:produto_id>/precos', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_compras_precos_produto(usuario, produto_id):
+    """[PREÇOS] histórico de preço de um produto (aba Gestão)."""
+    try:
+        meses = int(request.args.get('meses', 12))
+    except ValueError:
+        meses = 12
+    return _resposta_compras(compras_database.historico_precos, produto_id, meses)
+
+
 @app.route('/api/compras/fornecedores', methods=['GET'])
 @compras_login(somente_gestor=True)
 def api_compras_fornecedores(usuario):
