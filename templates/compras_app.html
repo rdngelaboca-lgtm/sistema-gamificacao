@@ -214,7 +214,7 @@
 
 // ---------------------------------------------------------------- utilidades
 const CHAVE = 'gb_compras_v1';
-const VERSAO_APP = '13';   // aparece no rodapé do início: confira se o celular pegou a versão nova
+const VERSAO_APP = '14';   // aparece no rodapé do início: confira se o celular pegou a versão nova
 const $app = document.getElementById('app');
 const DIAS_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];            // 1=Dom ... 7=Sáb (padrão do sistema)
 const FRACIONADAS = ['KG', 'G', 'GR', 'L', 'LT', 'ML', 'M'];
@@ -1342,9 +1342,18 @@ function modalLerCupom(listaCodigo) {
       <button class="icone-btn" data-acao="fechar-modal" aria-label="Fechar">${ICONES.fechar}</button></div>
     ${pc ? `<div class="pequeno suave" style="line-height:1.5">No computador, escolha um jeito:<br>
         • <b>Leitor de QR Code USB:</b> clique no campo abaixo e bipe o QR do cupom (envia sozinho).<br>
-        • <b>Chave de acesso:</b> digite os 44 números impressos no cupom (perto de "Consulte pela chave de acesso").<br>
         • <b>Link:</b> leia o QR com a câmera do celular, mande o link para o computador e cole aqui.<br>
-        • <b>Imagem:</b> foto ou print do QR Code salvo no computador.</div>${campo}${foto}`
+        • <b>Imagem:</b> foto ou print do QR Code salvo no computador.</div>${campo}${foto}
+      <details class="cartao" id="cupom-so-chave"><summary style="font-weight:700;cursor:pointer;min-height:28px">Só tenho a chave de acesso (44 números)</summary>
+        <div class="pequeno" style="line-height:1.55;margin-top:8px">A SEFAZ pede <b>"Não sou um robô"</b> na consulta pela chave, então é feito em 3 passos:<br>
+          <b>1.</b> Toque em <b>Abrir a consulta da SEFAZ</b>, cole a chave (Ctrl+V), marque "Não sou um robô" e confirme.<br>
+          <b>2.</b> Na página que mostra os <b>itens</b> do cupom, aperte <b>Ctrl+S</b> e salve (tipo "Página da Web, somente HTML" ou "completa").<br>
+          <b>3.</b> Volte aqui e toque em <b>Enviar página salva</b>.</div>
+        <div class="linha-btns" style="margin-top:8px">
+          <button class="btn claro medio" data-acao="cupom-abrir-sefaz">Abrir a consulta da SEFAZ</button>
+          <label class="btn medio" style="cursor:pointer">Enviar página salva
+            <input type="file" accept=".html,.htm,text/html" data-acao-change="cupom-pagina" data-lista="${lista}" style="display:none"></label></div>
+      </details>`
          : `<div class="pequeno suave" style="line-height:1.45">Fotografe o QR Code no pé do cupom: bem de perto, com luz, o quadrado inteiro e reto na foto.</div>${foto}${campo}`}
     <div id="cupom-status" class="pequeno" style="text-align:center;min-height:20px" role="status"></div>`);
   const el = document.getElementById('cupom-link');
@@ -1373,7 +1382,7 @@ async function reduzirFoto(arquivo) {
   return cv.toDataURL('image/jpeg', 0.88);
 }
 async function enviarCupom(corpo) {
-  statusCupom('Consultando a SEFAZ… (pode levar alguns segundos)');
+  statusCupom(corpo.pagina ? 'Lendo a página do cupom…' : 'Consultando a SEFAZ… (pode levar alguns segundos)');
   try {
     const c = await api('POST', '/api/compras/cupons', corpo);
     guardarCupom(c); fecharModal();
@@ -1381,7 +1390,7 @@ async function enviarCupom(corpo) {
     ir('cupom', {id: c.id, voltar: T.nome === 'finalizar' ? {nome: 'finalizar', p: T.p} : null});
   } catch (e) {
     if (e.extra.offline) {
-      if (corpo.foto && corpo.foto.length > 1500000) { statusCupom(''); return toast('Sem internet: tente de novo quando conectar.'); }
+      if ((corpo.foto || corpo.pagina || '').length > 1500000) { statusCupom(''); return toast('Sem internet: tente de novo quando conectar.'); }
       E.fila.push({tipo: 'cupom', metodo: 'POST', url: '/api/compras/cupons', corpo, descricao: 'Cupom fiscal'}); salvar();
       fecharModal(); toast('Sem internet: o cupom será enviado quando conectar.');
     } else statusCupom('⚠ ' + e.message);
@@ -1918,11 +1927,22 @@ const acoes = {
     if (!/^https?/i.test(t) && !/sefaz|nfce/i.test(t) && numeros.length !== 44) {
       return statusCupom(numeros.length && numeros.length < 60 ? `⚠ A chave tem 44 números; você digitou ${numeros.length}.` : '⚠ Cole o link do QR Code ou digite a chave de 44 números.');
     }
+    if (numeros.length === 44 && !/[a-z]/i.test(t)) {   // só a chave: a SEFAZ pede "não sou robô" (ver os 3 passos)
+      try { navigator.clipboard.writeText(numeros); } catch (e) {}
+      const det = document.getElementById('cupom-so-chave'); if (det) det.open = true;
+      return statusCupom('Só com a chave a SEFAZ pede "Não sou um robô": siga os 3 passos abaixo (a chave já foi copiada).');
+    }
     enviarCupom({qr: t, lista_codigo: d.lista || null});
   },
   'cupom-abrir': async d => {
     ir('cupom', {id: +d.id});
     try { guardarCupom(await api('GET', `/api/compras/cupons/${d.id}`)); if (T.nome === 'cupom') desenhar(); } catch (e) { if (!e.extra.offline) toast(e.message); }
+  },
+  'cupom-abrir-sefaz': () => {
+    const c = document.getElementById('cupom-link'), numeros = c ? c.value.replace(/\D/g, '') : '';
+    if (numeros.length === 44) { try { navigator.clipboard.writeText(numeros); } catch (e) {} }
+    window.open('https://www.sefaz.mt.gov.br/nfce/consultanfce', '_blank', 'noopener');
+    statusCupom(numeros.length === 44 ? 'Chave copiada: cole com Ctrl+V na SEFAZ.' : 'Digite a chave na página da SEFAZ.');
   },
   'cupom-voltar': () => { if (T.p.voltar) ir(T.p.voltar.nome, T.p.voltar.p); else acoes.nav({tela: 'listas'}); },
   'cupom-item': d => modalItemCupom(d.seq),
@@ -1991,6 +2011,14 @@ const acoesChange = {
     if (texto) return enviarCupom({qr: texto, lista_codigo: lista});
     try { enviarCupom({foto: await reduzirFoto(arq), lista_codigo: lista}); }
     catch (e) { statusCupom('⚠ Não consegui abrir a foto. Tente de novo.'); }
+  },
+  'cupom-pagina': async (d, el) => {   // [CUPOM NO COMPUTADOR] página da SEFAZ salva com Ctrl+S
+    const arq = el.files && el.files[0];
+    el.value = '';
+    if (!arq) return;
+    if (arq.size > 3 * 1024 * 1024) return statusCupom('⚠ Arquivo grande demais: salve só a página do cupom (.html).');
+    statusCupom('Lendo a página salva…');
+    enviarCupom({pagina: await arq.text(), lista_codigo: d.lista || null});
   },
   'rot-nome': (d, el) => { T.p.r.nome = el.value; },
   'rot-so-contagem': (d, el) => { T.p.r.so_contagem = el.checked; desenhar(); },

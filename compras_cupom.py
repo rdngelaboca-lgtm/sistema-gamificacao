@@ -77,7 +77,12 @@ def extrair_chave(texto):
     raise ErroCompras("Este QR Code não é de um cupom fiscal (NFC-e).")
 
 
-# [CUPOM NO COMPUTADOR] consulta pública da NFC-e de cada estado (2 primeiros números da chave)
+# [CUPOM NO COMPUTADOR] consulta pública da NFC-e de cada estado (2 primeiros números da chave).
+# Na SEFAZ-MT a consulta SÓ pela chave pede "Não sou um robô" (reCAPTCHA, confirmado pelo
+# diagnosticar_cupom.py em 05/10/2026): o servidor não consegue abrir sozinho. Nesse caso a
+# pessoa abre a consulta no navegador, salva a página do cupom (Ctrl+S) e envia o arquivo.
+CONSULTA_SO_CHAVE_TEM_CAPTCHA = {'51'}
+TAMANHO_MAX_PAGINA = 3 * 1024 * 1024
 CONSULTA_POR_UF = {
     '51': 'https://www.sefaz.mt.gov.br/nfce/consultanfce',
 }
@@ -493,7 +498,27 @@ def _nota_ja_lancada(cnpj, numero, serie=None, chave=None):
     return bool(database.buscar_nota_importada(numero, fornecedor_id, serie, chave))
 
 
-def registrar_cupom(texto_qr, usuario, lista_codigo=None, html=None):
+def registrar_cupom_da_pagina(pagina_html, usuario, lista_codigo=None):
+    """
+    [CUPOM NO COMPUTADOR] Página do cupom SALVA no navegador (Ctrl+S) depois da consulta pela
+    chave na SEFAZ (a que pede "não sou robô"). A chave sai da própria página.
+    """
+    pagina_html = str(pagina_html or '')
+    if len(pagina_html) > TAMANHO_MAX_PAGINA:
+        raise ErroCompras("Arquivo grande demais. Salve só a página do cupom (Ctrl+S) e envie o arquivo .html.")
+    if 'nfc' not in pagina_html.lower() and 'nota fiscal' not in pagina_html.lower():
+        raise ErroCompras("Este arquivo não parece a página de um cupom fiscal da SEFAZ.")
+    na_caixa = re.search(r'class="chave"[^>]*>([\d\s.]+)<', pagina_html, re.I)    # onde a SEFAZ mostra a chave
+    candidatos = [re.sub(r'\D', '', na_caixa.group(1))] if na_caixa else []
+    candidatos += re.findall(r'(?<!\d)(\d{44})(?!\d)', re.sub(r'(?<=\d)[ .](?=\d)', '', _texto(pagina_html)))
+    candidatos = [c for c in candidatos if len(c) == 44]
+    chave = next((c for c in candidatos if _dv_chave(c[:43]) == int(c[43])), None)
+    if not chave:
+        raise ErroCompras("Não achei a chave de acesso nesta página. Salve a página que mostra os ITENS do cupom.")
+    return registrar_cupom(chave, usuario, lista_codigo=lista_codigo, html=pagina_html, da_pagina_salva=True)
+
+
+def registrar_cupom(texto_qr, usuario, lista_codigo=None, html=None, da_pagina_salva=False):
     """
     Guarda o cupom lido e (se der) os itens da página da SEFAZ.
     Ler o mesmo QR duas vezes não duplica: devolve o cupom já guardado
@@ -512,10 +537,12 @@ def registrar_cupom(texto_qr, usuario, lista_codigo=None, html=None):
     url = url or _reconstruir_endereco(unquote(str(texto_qr or '')), chave)
     so_chave = not url
     if so_chave:
-        # [CUPOM NO COMPUTADOR] só a chave de 44 números (digitada): tenta a consulta pública
+        # [CUPOM NO COMPUTADOR] só a chave de 44 números: a consulta pública pede "não sou robô"
         base = CONSULTA_POR_UF.get(info['uf'])
-        if not base:
-            raise ErroCompras("Só com a chave ainda não dá para este estado. Use o link, uma foto ou um leitor do QR Code.")
+        if not base or (html is None and info['uf'] in CONSULTA_SO_CHAVE_TEM_CAPTCHA):
+            raise ErroCompras("Só com a chave o servidor não consegue: a SEFAZ pede \"Não sou um robô\". "
+                              "Abra a consulta da SEFAZ no navegador, digite a chave, abra o cupom, salve a página "
+                              "(Ctrl+S) e envie o arquivo em \"Enviar página salva\". Ou use o link/imagem/leitor do QR Code.")
         url = f"{base}?p={chave}"
     endereco_seguro(url)
     existente = _id_cupom_por_chave(chave)
@@ -541,6 +568,11 @@ def registrar_cupom(texto_qr, usuario, lista_codigo=None, html=None):
                 raise ErroCompras("A página da SEFAZ mostrou outro cupom. Tente ler de novo.")
         except ErroCompras as e:
             status, erro = ST_ERRO, str(e)
+            if da_pagina_salva:             # página enviada pela pessoa: guarda para o diagnóstico
+                caminho = guardar_para_diagnostico(chave, html)
+                logger.warning(f"Cupom {chave}: página salva não entendida ({e}); guardada em {caminho}.")
+                raise ErroCompras(f"Não consegui ler os itens desta página ({e}). Confira se é a página que mostra "
+                                  "os ITENS do cupom. Se for, avise o Claude: a página ficou guardada para ajuste.")
             if so_chave:                    # não guarda um cupom que nunca vai abrir só com a chave
                 logger.warning(f"Cupom {chave}: a SEFAZ não mostrou o cupom só com a chave ({e}).")
                 raise ErroCompras("A SEFAZ não mostrou este cupom só com a chave. No computador, use o link do QR Code, "

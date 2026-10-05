@@ -1750,6 +1750,10 @@ def api_compras_ler_cupom(usuario):
         return bloqueio
     dados = ler_json() or {}
     def ler():
+        if dados.get('pagina'):      # [CUPOM NO COMPUTADOR] página da SEFAZ salva no navegador (Ctrl+S)
+            cupom = compras_cupom.registrar_cupom_da_pagina(dados['pagina'], usuario, lista_codigo=dados.get('lista_codigo'))
+            _avisar_cupom_pendente(usuario, cupom)
+            return cupom
         texto = (dados.get('qr') or '').strip()
         if not texto and dados.get('foto'):
             texto = compras_cupom.ler_qr_da_foto(dados['foto'])

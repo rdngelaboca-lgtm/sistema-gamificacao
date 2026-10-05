@@ -319,9 +319,19 @@ def main():
     if len(sys.argv) > 1:
         entrada = ' '.join(sys.argv[1:])
     else:
-        linha("Cole o LINK do QR Code do cupom (ou só a CHAVE de 44 números) e aperte Enter:")
+        linha("Cole o LINK do QR Code do cupom (ou só a CHAVE de 44 números, ou o caminho de uma página salva .html) e aperte Enter:")
         entrada = input("> ")
-    diagnosticar(entrada.strip())
+    entrada = entrada.strip().strip('"').strip("'")
+    if os.path.isfile(entrada):
+        # [CUPOM NO COMPUTADOR] página salva no navegador (Ctrl+S) ou guardada em logs/cupons
+        linha(f"\nARQUIVO: {entrada}")
+        with open(entrada, encoding='utf-8', errors='replace') as f:
+            html = f.read()
+        raio_x(html)
+        linha("\nLEITURA DOS ITENS")
+        tentar_ler(html)
+    else:
+        diagnosticar(entrada)
     linha("\nPronto. Copie TUDO o que apareceu acima e mande para o Claude.")
 
 
