@@ -118,6 +118,11 @@ def para_data(valor):
         return None
 
 
+def reais_br(valor):
+    """15.5 -> 'R$ 15,50'   1234.5 -> 'R$ 1.234,50'"""
+    return f"R$ {float(valor or 0):,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
+
+
 def formatar_data_hora(valor, formato="%d/%m/%Y %H:%M"):
     """Formata data/hora com segurança: devolve '---' se estiver vazia em vez de travar a tela."""
     if valor is None:
@@ -821,16 +826,24 @@ class App:
         frame_resgates.rowconfigure(0, weight=1)
         frame_resgates.columnconfigure(0, weight=1)
 
-        cols_resg = ('ID', 'Funcionário', 'Produto', 'Data')
+        # [RESGATES] valor em R$ e pontos de cada pedido, e o total pendente
+        cols_resg = ('ID', 'Funcionário', 'Produto', 'Valor', 'Pontos', 'Data')
         self.tree_resgates_pendentes = ttk.Treeview(frame_resgates, columns=cols_resg, show='headings', selectmode='browse')
-        self.tree_resgates_pendentes.heading('ID', text='ID'); self.tree_resgates_pendentes.column('ID', width=30)
-        self.tree_resgates_pendentes.heading('Funcionário', text='Funcionário'); self.tree_resgates_pendentes.column('Funcionário', width=150)
-        self.tree_resgates_pendentes.heading('Produto', text='Produto'); self.tree_resgates_pendentes.column('Produto', width=150)
-        self.tree_resgates_pendentes.heading('Data', text='Data'); self.tree_resgates_pendentes.column('Data', width=120, anchor='center')
+        for col, titulo, larg, anc in (('ID', 'ID', 45, 'center'), ('Funcionário', 'Funcionário', 170, 'w'),
+                                       ('Produto', 'Produto', 140, 'w'), ('Valor', 'Valor (R$)', 95, 'e'),
+                                       ('Pontos', 'Pontos', 70, 'center'), ('Data', 'Data', 125, 'center')):
+            self.tree_resgates_pendentes.heading(col, text=titulo)
+            self.tree_resgates_pendentes.column(col, width=larg, anchor=anc)
         self.tree_resgates_pendentes.grid(row=0, column=0, sticky="nsew")
+        self.lbl_total_resgates = ttk.Label(frame_resgates, text="", font=("Arial", 10, "bold"))
+        self.lbl_total_resgates.grid(row=1, column=0, sticky="w", pady=(6, 0))
+        self.lbl_detalhe_resgate = ttk.Label(frame_resgates, text="", foreground="#0056b3")
+        self.lbl_detalhe_resgate.grid(row=2, column=0, sticky="w")
+        self.tree_resgates_pendentes.bind("<<TreeviewSelect>>", self.mostrar_detalhe_resgate)
+        self.dados_resgates_pendentes = {}
 
         frame_botoes_resg = ttk.Frame(frame_resgates)
-        frame_botoes_resg.grid(row=1, column=0, pady=10)
+        frame_botoes_resg.grid(row=3, column=0, pady=10)
         ttk.Button(frame_botoes_resg, text="Aprovar Resgate", command=self.aprovar_resgate_selecionado).pack(side=tk.LEFT, padx=5)
         ttk.Button(frame_botoes_resg, text="Recusar Resgate", command=self.recusar_resgate_selecionado).pack(side=tk.LEFT, padx=5)
 
@@ -1876,9 +1889,42 @@ class App:
 
         for i in self.tree_resgates_pendentes.get_children(): self.tree_resgates_pendentes.delete(i)
         resgates = database.listar_resgates_pendentes()
+        self.dados_resgates_pendentes = {}
+        total = 0.0
         for r in resgates:
             data_f = formatar_data_hora(r.DataSolicitacao)  # [DEPURAÇÃO] data vazia não trava a aba
-            self.tree_resgates_pendentes.insert("", "end", values=(r.ResgateID, r.NomeCompleto, r.Nome, data_f))
+            valor, exato = self.valor_do_resgate(r)
+            total += valor
+            texto_valor = reais_br(valor) if exato else f"≈ {reais_br(valor)}"
+            iid = str(r.ResgateID)
+            self.dados_resgates_pendentes[iid] = {'valor': valor, 'exato': exato, 'pontos': r.PontosGastos or 0,
+                                                  'nome': r.NomeCompleto, 'produto': r.Nome,
+                                                  'saldo': getattr(r, 'SaldoPontos', None)}
+            self.tree_resgates_pendentes.insert("", "end", iid=iid, values=(
+                r.ResgateID, r.NomeCompleto, r.Nome, texto_valor, r.PontosGastos, data_f))
+        n = len(resgates)
+        self.lbl_total_resgates.config(text=(f"{n} pedido(s) pendente(s) · total {reais_br(total)}" if n
+                                             else "Nenhum resgate pendente."))
+        self.lbl_detalhe_resgate.config(text="")
+
+    @staticmethod
+    def valor_do_resgate(r):
+        """(valor em R$, exato?). Abate de comanda guarda o valor pedido; nos antigos e nos
+        produtos da loja, o valor é calculado pelos pontos (TAXA_CONVERSAO_PONTO_REAL)."""
+        valor = getattr(r, 'ValorReais', None)
+        if valor is not None:
+            return float(valor), True
+        taxa = float(getattr(config, 'TAXA_CONVERSAO_PONTO_REAL', 0.03) or 0)
+        return round(float(r.PontosGastos or 0) * taxa, 2), False
+
+    def mostrar_detalhe_resgate(self, event=None):
+        d = self.dados_resgates_pendentes.get(self.tree_resgates_pendentes.focus())
+        if not d:
+            self.lbl_detalhe_resgate.config(text=""); return
+        txt = f"{d['nome']}: {d['produto']} de {reais_br(d['valor'])}{'' if d['exato'] else ' (calculado pelos pontos)'} · {d['pontos']} pontos"
+        if d['saldo'] is not None:
+            txt += f" · saldo depois do pedido: {d['saldo']} pontos"
+        self.lbl_detalhe_resgate.config(text=txt)
 
     def aprovar_resgate_selecionado(self):
         selecionado = self.tree_resgates_pendentes.focus()
@@ -1888,7 +1934,11 @@ class App:
 
         dados_resgate = self.tree_resgates_pendentes.item(selecionado, 'values')
         resgate_id = dados_resgate[0]
-        
+        d = self.dados_resgates_pendentes.get(selecionado) or {}
+        if d and not messagebox.askyesno("Aprovar resgate", f"Aprovar {d['produto']} de {reais_br(d['valor'])} "
+                                         f"({d['pontos']} pontos) para {d['nome']}?", parent=self.root):
+            return
+
         sucesso = database.aprovar_resgate(resgate_id, ID_GESTOR)
 
         if sucesso:
@@ -1896,7 +1946,8 @@ class App:
             if dados_notificacao:
                 # [DEPURAÇÃO] O envio é em HTML: os ** apareciam como asteriscos. Agora <b> + esc().
                 mensagem = (f"✅ <b>Seu resgate foi APROVADO!</b> ✅\n\n"
-                            f"🎁 <b>Produto:</b> {esc(dados_notificacao.Nome)}\n\n"
+                            f"🎁 <b>Produto:</b> {esc(dados_notificacao.Nome)}\n"
+                            + (f"💰 <b>Valor:</b> {reais_br(d['valor'])}\n" if d else "") + "\n"
                             "Procure seu gestor para combinar a retirada do seu prêmio. Parabéns!")
                 notificador_telegram.enviar_mensagem(dados_notificacao.ChatIDTelegram, mensagem)
 

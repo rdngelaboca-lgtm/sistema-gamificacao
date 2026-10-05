@@ -3208,14 +3208,31 @@ def solicitar_resgate(funcionario_id, produto_id):
     # [DEPURAÇÃO] Antes, sem conexão a função devolvia None e o bot quebrava.
     return (False, "Não foi possível conectar ao banco de dados. Tente novamente.", None)
 
+_coluna_valor_resgate_ok = False
+
+
+def _garantir_coluna_valor_resgate(cursor):
+    """[RESGATES] Guarda o valor em R$ pedido no abate de comanda (antes só os pontos ficavam gravados)."""
+    global _coluna_valor_resgate_ok
+    if not _coluna_valor_resgate_ok:
+        cursor.execute("IF COL_LENGTH('Resgates', 'ValorReais') IS NULL ALTER TABLE Resgates ADD ValorReais DECIMAL(10, 2) NULL")
+        _coluna_valor_resgate_ok = True
+
+
 def listar_resgates_pendentes():
-    """Busca todos os resgates com status 'Pendente' para o gestor aprovar."""
+    """Busca todos os resgates com status 'Pendente' para o gestor aprovar (com o valor em R$ e o saldo)."""
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
+            try:
+                _garantir_coluna_valor_resgate(cursor)
+                conn.commit()
+            except Exception as e:
+                logger.error(f"Não foi possível criar a coluna Resgates.ValorReais: {e}")
             sql = """
-                SELECT R.ResgateID, F.NomeCompleto, P.Nome, R.PontosGastos, R.DataSolicitacao
+                SELECT R.ResgateID, F.NomeCompleto, P.Nome, R.PontosGastos, R.DataSolicitacao,
+                       R.ValorReais, F.SaldoPontos
                 FROM Resgates R
                 JOIN Funcionarios F ON R.FuncionarioID = F.FuncionarioID
                 JOIN ProdutosLoja P ON R.ProdutoID = P.ProdutoID
@@ -3350,9 +3367,11 @@ def registrar_solicitacao_comanda(funcionario_id, valor_reais, pontos_necessario
                 conn.rollback()
                 return (False, "Saldo insuficiente para este abate.", None)
 
-            # 3. Insere em Resgates como Pendente
-            sql_resgate = "INSERT INTO Resgates (FuncionarioID, ProdutoID, PontosGastos, Status) VALUES (?, ?, ?, 'Pendente'); SELECT SCOPE_IDENTITY();"
-            cursor.execute(sql_resgate, funcionario_id, produto_id, pontos_necessarios)
+            # 3. Insere em Resgates como Pendente (com o valor em R$ pedido)
+            _garantir_coluna_valor_resgate(cursor)
+            sql_resgate = ("INSERT INTO Resgates (FuncionarioID, ProdutoID, PontosGastos, Status, ValorReais) "
+                           "VALUES (?, ?, ?, 'Pendente', ?); SELECT SCOPE_IDENTITY();")
+            cursor.execute(sql_resgate, funcionario_id, produto_id, pontos_necessarios, Decimal(str(round(valor_reais, 2))))
             cursor.nextset()
             resgate_id = cursor.fetchone()[0]
 
