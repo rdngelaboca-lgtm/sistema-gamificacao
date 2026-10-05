@@ -2320,6 +2320,17 @@ class AppGestaoEstoque:
             return
         self.abrir_lista_notas_sefaz(pasta, arquivos)
 
+    @staticmethod
+    def _arquivar_xml_sefaz(pasta, arquivo):
+        """Move o XML para a subpasta 'importadas' (sai da lista de notas da SEFAZ)."""
+        try:
+            os.makedirs(os.path.join(pasta, 'importadas'), exist_ok=True)
+            os.replace(os.path.join(pasta, arquivo), os.path.join(pasta, 'importadas', arquivo))
+            return True
+        except OSError as e:
+            logger.warning(f"Não deu para mover {arquivo} para 'importadas': {e}")
+            return False
+
     def abrir_lista_notas_sefaz(self, pasta, arquivos):
         """[XML SEFAZ] Lista das notas baixadas: escolha UMA (ou algumas) para vincular e salvar."""
         janela = Toplevel(self.root)
@@ -2341,21 +2352,33 @@ class AppGestaoEstoque:
         tree.pack(fill=tk.BOTH, expand=True, pady=6)
         notas = []
         cache_vinc = {}
+        lidas = []
         for f in arquivos:
             try:
                 cab, itens = self.ler_xml_nota_fiscal(os.path.join(pasta, f))
             except Exception as e:
                 logger.warning(f"XML da SEFAZ {f} não abriu: {e}")
                 continue
-            forn_id = database.buscar_fornecedor_por_cnpj(cab.get('FornecedorCNPJ'))
-            # [DEPURAÇÃO] nota lançada ANTES (XML importado à mão, sem a chave gravada): não volta para a lista
-            if forn_id and database.buscar_nota_importada(cab.get('NumeroNF'), forn_id, cab.get('Serie'), cab.get('ChaveAcesso')):
-                try:
-                    os.makedirs(os.path.join(pasta, 'importadas'), exist_ok=True)
-                    os.replace(os.path.join(pasta, f), os.path.join(pasta, 'importadas', f))
-                except OSError as e:
-                    logger.warning(f"Não deu para mover {f} para 'importadas': {e}")
+            lidas.append((f, cab, itens))
+        # [DEPURAÇÃO] notas lançadas ANTES (XML importado à mão, sem a chave gravada, fornecedor cadastrado
+        # 2 vezes ou com CNPJ com pontos): confere TODAS de uma vez pelo CNPJ + número e tira da lista
+        try:
+            lancadas = database.notas_ja_lancadas([(cab.get('ChaveAcesso') or f, cab.get('FornecedorCNPJ'), cab.get('NumeroNF'),
+                                                    cab.get('Serie')) for f, cab, _ in lidas])
+        except Exception as e:
+            logger.error(f"Não deu para conferir as notas já lançadas: {e}", exc_info=True)
+            lancadas = set()
+        movidas = 0
+        for f, cab, itens in lidas:
+            if (cab.get('ChaveAcesso') or f) in lancadas:
+                self._arquivar_xml_sefaz(pasta, f)
+                movidas += 1
+        if movidas:
+            logger.info(f"Notas da SEFAZ: {movidas} nota(s) já lançada(s) foram para 'importadas'.")
+        for f, cab, itens in lidas:
+            if (cab.get('ChaveAcesso') or f) in lancadas:
                 continue
+            forn_id = database.buscar_fornecedor_por_cnpj(cab.get('FornecedorCNPJ'))
             sem = 0
             for it in itens:
                 if not forn_id:
@@ -2386,6 +2409,7 @@ class AppGestaoEstoque:
                 cab.get('NumeroNF'), cab.get('FornecedorNome'), data_br, fmt_reais(cab.get('ValorTotalNF') or 0),
                 n_itens, sem, situacao))
         lbl = ttk.Label(frame, foreground="gray", text=(
+            (f"{movidas} já lançada(s) saíram da lista · " if movidas else "") +
             f"{len(notas)} nota(s) esperando · verde = todos os itens já vinculados · laranja = falta vincular. "
             "Depois de salvar, clique de novo em 'Notas baixadas da SEFAZ' para a próxima."))
         lbl.pack(anchor="w")
@@ -2407,6 +2431,24 @@ class AppGestaoEstoque:
         botoes.pack(fill=tk.X, pady=(8, 0))
         ttk.Button(botoes, text="Abrir nota selecionada", command=abrir).pack(side=tk.LEFT)
         ttk.Button(botoes, text="Abrir todas", command=lambda: abrir(todas=True)).pack(side=tk.LEFT, padx=6)
+
+        def tirar_da_lista():
+            """Nota lançada de outro jeito (ex.: digitada à mão) ou que não é compra: sai da lista sem entrar no estoque."""
+            escolhidas = list(tree.selection())
+            if not escolhidas:
+                messagebox.showinfo("Notas da SEFAZ", "Selecione a(s) nota(s) na lista.", parent=janela)
+                return
+            nomes = "\n".join(f"  • NF {tree_valores[i][0]} - {tree_valores[i][1]}" for i in escolhidas[:10])
+            if not messagebox.askyesno("Tirar da lista", f"Tirar {len(escolhidas)} nota(s) da lista SEM lançar no estoque?\n\n{nomes}"
+                                       "\n\nUse só para nota que JÁ está no estoque (lançada de outro jeito) ou que não é compra. "
+                                       "O XML fica guardado na subpasta 'importadas'.", parent=janela):
+                return
+            for i in escolhidas:
+                if self._arquivar_xml_sefaz(pasta, i):
+                    tree.delete(i)
+            lbl.config(text=f"{len(tree.get_children())} nota(s) esperando.")
+
+        ttk.Button(botoes, text="Já está no estoque: tirar da lista", command=tirar_da_lista).pack(side=tk.LEFT, padx=(18, 0))
         ttk.Button(botoes, text="Fechar", command=janela.destroy).pack(side=tk.RIGHT)
         tree.bind("<Double-1>", lambda e: abrir() if linha_do_clique(tree, e) else None)
         tree.bind("<Return>", lambda e: abrir())

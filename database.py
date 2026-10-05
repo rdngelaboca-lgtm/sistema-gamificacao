@@ -6874,6 +6874,66 @@ def chaves_ja_importadas(chaves):
         conn.close()
 
 
+def notas_ja_lancadas(notas):
+    """
+    [XML SEFAZ] Quais destas notas já estão no estoque. notas = [(chave, cnpj, numero, serie)].
+    Confere pela chave e também pelo CNPJ (só os números) + número da nota (sem zeros à esquerda),
+    para achar as notas lançadas ANTES (sem chave gravada), mesmo se o fornecedor estiver
+    cadastrado duas vezes ou com o CNPJ escrito com pontos. Série diferente = nota diferente.
+    Devolve o conjunto das CHAVES já lançadas.
+    """
+    def so_digitos(t):
+        return ''.join(ch for ch in str(t or '') if ch.isdigit())
+
+    def numero(t):
+        d = so_digitos(t)
+        return str(int(d)) if d else str(t or '').strip()
+
+    if not notas:
+        return set()
+    try:
+        _garantir_colunas_estoque()
+        com_serie = True
+    except Exception:
+        com_serie = False
+    conn = get_db_connection()
+    if not conn:
+        raise Exception("Falha de conexão com o banco de dados.")
+    try:
+        cursor = conn.cursor()
+        if com_serie:
+            cursor.execute("""SELECT NF.NumeroNF, NF.Serie, NF.ChaveAcesso, F.CNPJ FROM NotasFiscaisEntrada NF
+                              LEFT JOIN Fornecedores F ON NF.FornecedorID = F.FornecedorID""")
+            linhas = cursor.fetchall()
+        else:
+            cursor.execute("""SELECT NF.NumeroNF, NULL, NULL, F.CNPJ FROM NotasFiscaisEntrada NF
+                              LEFT JOIN Fornecedores F ON NF.FornecedorID = F.FornecedorID""")
+            linhas = cursor.fetchall()
+    finally:
+        conn.close()
+    por_chave = set()
+    por_numero = {}
+    for num, serie, chave, cnpj in linhas:
+        ch = _chave_normalizada(chave)
+        if ch:
+            por_chave.add(ch)
+        por_numero.setdefault((so_digitos(cnpj), numero(num)), []).append((_serie_normalizada(serie), ch))
+    lancadas = set()
+    for chave, cnpj, num, serie in notas:
+        ch, serie = _chave_normalizada(chave), _serie_normalizada(serie)
+        if ch and ch in por_chave:
+            lancadas.add(chave)
+            continue
+        for serie_db, chave_db in por_numero.get((so_digitos(cnpj), numero(num)), []):
+            if ch and chave_db and chave_db != ch:
+                continue
+            if serie and serie_db and serie_db != serie:
+                continue
+            lancadas.add(chave)
+            break
+    return lancadas
+
+
 def texto_aumento_preco(a):
     """'Leite condensado subiu 18% (R$ 5,00 → R$ 5,90/UN; antes em 12/09, Atacadão)'."""
     def reais(v):
