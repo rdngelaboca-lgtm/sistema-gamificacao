@@ -116,12 +116,20 @@ def _carregar_certificado():
     """Devolve (chave_privada, certificado, pem_cert_bytes, pem_chave_bytes)."""
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.serialization import pkcs12
-    caminho = getattr(config, 'NFE_CERTIFICADO_PFX', '')
+    caminho = os.path.expanduser(str(getattr(config, 'NFE_CERTIFICADO_PFX', '') or '').strip())
+    if caminho and not os.path.isabs(caminho):          # caminho sem a pasta: procura ao lado do programa
+        caminho = os.path.join(PASTA_DO_PROGRAMA, caminho)
     try:
         with open(caminho, 'rb') as f:
             bruto = f.read()
     except OSError:
-        raise ErroNFe(f"Não achei o certificado no caminho do NFE_CERTIFICADO_PFX ({os.path.basename(str(caminho))}).")
+        # [SEGURANÇA] não mostra o NOME do arquivo (às vezes o nome do .pfx traz a senha)
+        pasta = os.path.dirname(caminho) or PASTA_DO_PROGRAMA
+        existe = os.path.isdir(pasta)
+        raise ErroNFe("Não achei o arquivo do certificado do NFE_CERTIFICADO_PFX. "
+                      + (f"A pasta {pasta} existe, mas o arquivo não está nela com esse nome exato."
+                         if existe else f"A pasta {pasta} não existe.")
+                      + " Confira o caminho completo no config.py.")
     senha = str(getattr(config, 'NFE_CERTIFICADO_SENHA', '') or '').encode('utf-8')
     try:
         chave, cert, _extras = pkcs12.load_key_and_certificates(bruto, senha)
