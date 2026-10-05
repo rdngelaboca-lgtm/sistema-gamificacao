@@ -426,6 +426,9 @@ def buscar_notas(forcar=False, agora=None):
                 estado['ult_nsu'] = ult
                 _salvar_estado(estado)
                 if ult >= max_nsu:
+                    # [SEFAZ] chegou ao fim da fila (ultNSU = maxNSU): a regra manda esperar 1 hora para
+                    # consultar de novo. Antes consultava logo em seguida e levava o erro 656 (consumo indevido).
+                    estado['proxima_consulta'] = (agora + ESPERA_SEM_NOVIDADE).isoformat(timespec='minutes')
                     break
         # nota que nunca chegou completa em 30 dias: esquece (ex.: emitente cancelou)
         limite = agora - timedelta(days=30)
