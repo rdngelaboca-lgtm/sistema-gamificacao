@@ -174,6 +174,8 @@ def ler_nota(caminho):
     dados = {'chave': chave, 'numero': (ide.findtext('nNF') or '').strip(), 'serie': (ide.findtext('serie') or '').strip(),
              'cnpj': re.sub(r'\D', '', emit.findtext('CNPJ') or emit.findtext('CPF') or ''),
              'fornecedor': (emit.findtext('xFant') or emit.findtext('xNome') or '').strip(),
+             'razao': (emit.findtext('xNome') or '').strip(),
+             'fantasia_xml': (emit.findtext('xFant') or '').strip(),
              'emissao': emissao, 'valor': _dec_xml(total.findtext('vNF') if total is not None else 0),
              'finalidade': (ide.findtext('finNFe') or '1').strip(), 'itens': itens}
     _cache_xml[caminho] = (mtime, dados)
@@ -196,12 +198,44 @@ def _status_gravados():
         conn.close()
 
 
+def _nomes_cadastrados():
+    """{CNPJ (só números): nome no cadastro de Fornecedores do Gestão de Estoque}."""
+    try:
+        conn = database.get_db_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT CNPJ, NomeFantasia FROM Fornecedores")
+            return {re.sub(r'\D', '', str(c or '')): (nome or '').strip() for c, nome in cur.fetchall() if nome}
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning(f"Recebimento: não deu para ler os nomes dos fornecedores: {e}")
+        return {}
+
+
+def _simplificar(t):
+    return re.sub(r'[^A-Z0-9]', '', str(t or '').upper())
+
+
+def nome_fornecedor(cnpj, razao, fantasia_xml='', nomes=None):
+    """
+    Nome que aparece no app: o do cadastro de Fornecedores (editável no Gestão de Estoque);
+    se lá estiver só a razão social (gravada sozinha na 1ª nota), o nome fantasia do XML.
+    """
+    nomes = _nomes_cadastrados() if nomes is None else nomes
+    cadastrado = nomes.get(re.sub(r'\D', '', str(cnpj or '')), '')
+    if cadastrado and _simplificar(cadastrado) != _simplificar(razao):
+        return cadastrado
+    return fantasia_xml or cadastrado or razao or 'Fornecedor'
+
+
 def listar_recebimentos(hoje=None):
     """Notas para conferir (emitidas nos últimos DIAS_PENDENTE dias) e as conferidas há pouco."""
     hoje = _como_data(hoje) or date.today()
     gravados = _status_gravados()
     pendentes, feitas, conferidas = [], [], []
     vistas = set()
+    nomes = _nomes_cadastrados()
     limite = hoje - timedelta(days=DIAS_PENDENTE)
     for sub in ('', 'importadas'):
         pasta = os.path.join(_pasta(), sub)
@@ -219,7 +253,8 @@ def listar_recebimentos(hoje=None):
                 continue
             vistas.add(n['chave'])
             g = gravados.get(n['chave'])
-            resumo = {'chave': n['chave'], 'numero': n['numero'], 'fornecedor': n['fornecedor'], 'emissao': n['emissao'],
+            resumo = {'chave': n['chave'], 'numero': n['numero'], 'emissao': n['emissao'],
+                      'fornecedor': nome_fornecedor(n['cnpj'], n.get('razao') or n['fornecedor'], n.get('fantasia_xml', ''), nomes),
                       'valor': _num(n['valor'], 2), 'qtd_itens': len(n['itens']),
                       'status': g['status'] if g else ST_AGUARDANDO,
                       'conferido_por': g['por'] if g else None, 'conferido_em': _iso(g['em']) if g else None}
@@ -243,10 +278,10 @@ def listar_recebimentos(hoje=None):
     pendentes.sort(key=lambda r: r['emissao'] or '', reverse=True)
     feitas.sort(key=lambda r: r['conferido_em'] or '', reverse=True)
     return {'pendentes': pendentes, 'conferidas': feitas, 'dias': DIAS_PENDENTE,
-            'aguardando_xml': _aguardando_xml(hoje, vistas)}
+            'aguardando_xml': _aguardando_xml(hoje, vistas, nomes)}
 
 
-def _aguardando_xml(hoje, vistas):
+def _aguardando_xml(hoje, vistas, nomes=None):
     """[DEPURAÇÃO] Notas que a SEFAZ já avisou (só o resumo) e cujo XML completo ainda não chegou:
     antes ficavam invisíveis no app. Não dá para conferir ainda, mas a pessoa sabe que existem."""
     try:
@@ -265,7 +300,7 @@ def _aguardando_xml(hoje, vistas):
             valor = _num(Decimal(str(v.get('valor') or 0)), 2)
         except InvalidOperation:
             valor = None
-        lista.append({'chave': chave, 'numero': str(int(chave[25:34])), 'fornecedor': v.get('emitente') or '',
+        lista.append({'chave': chave, 'numero': str(int(chave[25:34])), 'fornecedor': nome_fornecedor(chave[6:20], v.get('emitente') or '', '', nomes),
                       'emissao': v.get('emissao') or '', 'valor': valor, 'ciencia': bool(v.get('ciencia'))})
     lista.sort(key=lambda r: r['emissao'], reverse=True)
     return lista
@@ -350,7 +385,8 @@ def obter_recebimento(chave):
     fechada = bool(cab) and cab[0] in (ST_CONFERIDA, ST_DIVERGENCIA)
     # item que não chegou (conferido 0) não entra no estoque: não precisa de vínculo para lançar
     falta = [i for i in itens if i['tipo'] != 'ignorar' and not i['produto'] and not (fechada and not i['conferido'])]
-    return {'chave': n['chave'], 'numero': n['numero'], 'serie': n['serie'], 'fornecedor': n['fornecedor'], 'cnpj': n['cnpj'],
+    return {'chave': n['chave'], 'numero': n['numero'], 'serie': n['serie'], 'cnpj': n['cnpj'], 'razao': n.get('razao') or n['fornecedor'],
+            'fornecedor': nome_fornecedor(n['cnpj'], n.get('razao') or n['fornecedor'], n.get('fantasia_xml', '')),
             'emissao': n['emissao'], 'valor': _num(n['valor'], 2), 'itens': itens,
             'lancada': lancada, 'falta_vincular': len(falta),
             'status': cab[0] if cab else ST_AGUARDANDO, 'conferido_por': cab[1] if cab else None,
