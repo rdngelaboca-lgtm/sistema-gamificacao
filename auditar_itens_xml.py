@@ -3,6 +3,8 @@
 # ==============================================================================
 # Uso:  python3 auditar_itens_xml.py              (todas as notas baixadas da SEFAZ)
 #       python3 auditar_itens_xml.py 79272        (só a nota com esse número)
+#       python3 auditar_itens_xml.py --vincular   (pergunta, item por item, qual produto do estoque é
+#                                                  cada item SEM VÍNCULO e grava o vínculo)
 #       python3 auditar_itens_xml.py --completar  (lança no estoque os itens que ficaram de fora;
 #                                                  mostra tudo e pede confirmação antes de gravar)
 #
@@ -114,6 +116,7 @@ def completar(cur, conn, nota_id, faltando):
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith('--')]
     modo_completar = '--completar' in sys.argv
+    modo_vincular = '--vincular' in sys.argv
     so_numero = so_digitos(args[0]).lstrip('0') if args else None
     pasta = nd.pasta_xml()
     arquivos = []
@@ -175,8 +178,11 @@ def main():
             esperados = [i for i in esperados if conf['itens'].get(i['NItem'], Decimal('1')) > 0]
         cur.execute("SELECT Quantidade, PrecoCustoUnitario FROM ItensNotaFiscalEntrada WHERE NotaID = ?", (nota_id,))
         gravados = cur.fetchall()
-        faltando = itens_faltando(cur, database.buscar_fornecedor_por_cnpj(cab['FornecedorCNPJ']), esperados, nota_id, conf) \
-            if len(gravados) < len(esperados) else []
+        forn_id = database.buscar_fornecedor_por_cnpj(cab['FornecedorCNPJ'])
+        faltando = itens_faltando(cur, forn_id, esperados, nota_id, conf) if len(gravados) < len(esperados) else []
+        unidades = {i['n']: i['unidade'] for i in rec['itens']}
+        for it, _, _ in faltando:
+            it['Unidade'], it['FornecedorID'] = unidades.get(it['NItem'], 'UN'), forn_id
         if faltando:
             cur.execute("SELECT DataEmissao FROM NotasFiscaisEntrada WHERE NotaID = ?", (nota_id,))
             emissao = str((cur.fetchone() or [''])[0] or '')[:10]
@@ -208,9 +214,13 @@ def main():
             print("  • " + a)
         if len(avisos) > 40:
             print(f"  … e mais {len(avisos) - 40}")
-    if modo_completar:
+    if modo_vincular:
+        _vincular_tudo(para_completar)
+    elif modo_completar:
         _completar_tudo(cur, conn, para_completar)
     elif para_completar:
+        if any(not v for _, _, f in para_completar for _, v, _ in f):
+            print("\nPara vincular os itens SEM VÍNCULO (pergunta um por um):\n   python3 auditar_itens_xml.py --vincular")
         print("\nPara lançar no estoque os itens que ficaram de fora (os que já têm vínculo):"
               "\n   python3 auditar_itens_xml.py --completar")
     conn.close()
@@ -247,3 +257,107 @@ def _completar_tudo(cur, conn, para_completar):
 
 if __name__ == '__main__':
     main()
+
+
+# ------------------------------------------------------------------------------
+# --vincular: diz qual produto do estoque é cada item sem vínculo
+# ------------------------------------------------------------------------------
+def _perguntar(texto):
+    try:
+        return input(texto).strip()
+    except EOFError:
+        return 'sair'
+
+
+def _fator_sugerido(desc):
+    """'C/100' ou '50UN'/'50U' na descrição; medidas como 20X20 ou 37X26 não contam."""
+    d = desc.upper()
+    m = re.search(r'C/\s*(\d{1,4})\b', d) or re.search(r'\b(\d{1,4})\s*(?:UN|UND|UNID|U)\b', d)
+    return int(m.group(1)) if m and int(m.group(1)) > 1 else 1
+
+
+def _vincular_tudo(para_completar):
+    import compras_database as cd
+    pendentes, vistos = [], set()
+    for _, _, faltando in para_completar:
+        for it, v, _ in faltando:
+            chave = (it['FornecedorID'], it['DescricaoXML'])
+            if not v and it.get('FornecedorID') and chave not in vistos:
+                vistos.add(chave)
+                pendentes.append(it)
+    print(f"\n=== VINCULAR: {len(pendentes)} item(ns) sem vínculo ===")
+    if not pendentes:
+        print("Nada para vincular. Rode:  python3 auditar_itens_xml.py --completar")
+        return
+    print("Para cada item: digite parte do NOME do produto do estoque para procurar.\n"
+          "  N = cadastrar produto novo   ·   P = pular este item   ·   SAIR = parar\n")
+    feitos = 0
+    for k, it in enumerate(pendentes, 1):
+        un = it.get('Unidade') or 'UN'
+        print(f"--- [{k}/{len(pendentes)}] {it['DescricaoXML']}  (cód. {it.get('cProd') or '-'} · na nota em {un} · "
+              f"R$ {_dec(it['PrecoCustoUnitario']):.2f} por {un})")
+        produto = None
+        while produto is None:
+            r = _perguntar("Procurar produto (ou N / P / SAIR): ")
+            if r.upper() == 'SAIR':
+                print(f"\nParou. {feitos} vínculo(s) gravado(s).")
+                return
+            if r.upper() == 'P' or not r:
+                break
+            if r.upper() == 'N':
+                nome = _perguntar(f"Nome do produto novo [{it['DescricaoXML'][:60].title()}]: ") or it['DescricaoXML'][:60].title()
+                if any(cd.database_normalizar(p['nome']) == cd.database_normalizar(nome) for p in cd.buscar_produtos(nome, limite=500)):
+                    print("  Já existe um produto com esse nome: procure por ele.")
+                    continue
+                unidade = (_perguntar("Unidade em que o ESTOQUE é contado (UN, KG, L, CX, PCT) [UN]: ") or 'UN').upper()[:10]
+                categoria = _perguntar("Categoria [Geral]: ") or 'Geral'
+                pid = database.criar_produto_estoque(nome[:100], unidade, 0, categoria[:100])
+                if not pid:
+                    print("  Não consegui cadastrar o produto (veja o log).")
+                    continue
+                produto = (int(pid), nome, unidade)
+                break
+            achados = cd.buscar_produtos(r, limite=15)
+            if not achados:
+                print("  Nenhum produto com esse nome. Tente outra palavra, ou N para cadastrar.")
+                continue
+            for i, p in enumerate(achados, 1):
+                print(f"   {i:2d}) {p['nome']}  ({p['unidade']} · {p['categoria']})")
+            esc = _perguntar("Número do produto (ENTER = procurar de novo): ")
+            if esc.isdigit() and 1 <= int(esc) <= len(achados):
+                p = achados[int(esc) - 1]
+                produto = (p['produto_id'], p['nome'], p['unidade'])
+        if produto is None:
+            continue
+        sug = _fator_sugerido(it['DescricaoXML'])
+        while True:
+            txt = _perguntar(f"Quantos {produto[2]} de '{produto[1]}' vêm em 1 {un} da nota? [{sug}]: ") or str(sug)
+            try:
+                fator = Decimal(txt.replace(',', '.'))
+                if fator > 0:
+                    break
+            except Exception:
+                pass
+            print("  Digite um número maior que zero.")
+        custo = _dec(it['PrecoCustoUnitario']) / fator
+        try:
+            anterior = _dec(database.ultimo_custo_real_produto(produto[0]) or 0)
+        except Exception:
+            anterior = Decimal('0')
+        aviso = ""
+        if anterior > 0 and not (Decimal('0.34') < custo / anterior < Decimal('3')):
+            aviso = f"\n   ATENÇÃO: a última compra custou R$ {anterior:.{2 if anterior >= 1 else 4}f} por {produto[2]} (confira o número acima)"
+        print(f"  → {it['DescricaoXML'][:40]} = {produto[1]}, 1 {un} = {fator.normalize():f} {produto[2]} "
+              f"(custo R$ {custo:.{2 if custo >= 1 else 4}f} por {produto[2]}){aviso}")
+        if _perguntar("Gravar este vínculo? (S/N) [S]: ").upper() not in ('', 'S', 'SIM'):
+            print("  Não gravado.")
+            continue
+        novo = database.criar_vinculo_produto_fornecedor(
+            produto_id_mestre=produto[0], fornecedor_id=it['FornecedorID'], descricao_xml=it['DescricaoXML'][:255],
+            cProd=(it.get('cProd') or None), cEAN=it.get('cEAN') or '', NCM=it.get('NCM') or '', fator_conversao=fator)
+        if novo:
+            feitos += 1
+            print("  ✓ Vínculo gravado.")
+        else:
+            print("  Não consegui gravar o vínculo (veja o log).")
+    print(f"\nPronto: {feitos} vínculo(s) gravado(s). Agora rode:  python3 auditar_itens_xml.py --completar")
