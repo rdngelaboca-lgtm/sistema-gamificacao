@@ -214,7 +214,7 @@
 
 // ---------------------------------------------------------------- utilidades
 const CHAVE = 'gb_compras_v1';
-const VERSAO_APP = '17';   // aparece no rodapé do início: confira se o celular pegou a versão nova
+const VERSAO_APP = '18';   // aparece no rodapé do início: confira se o celular pegou a versão nova
 const $app = document.getElementById('app');
 const DIAS_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];            // 1=Dom ... 7=Sáb (padrão do sistema)
 const FRACIONADAS = ['KG', 'G', 'GR', 'L', 'LT', 'ML', 'M'];
@@ -1256,7 +1256,9 @@ function cartaoRecebimento(r) {
   return `<button class="cartao" style="text-align:left;display:flex;flex-direction:column;gap:6px;width:100%" data-acao="receb-abrir" data-chave="${esc(r.chave)}">
     <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;width:100%">
       <div class="nome">${esc(r.fornecedor)}</div><span class="pilula ${st[0]}">${st[1]}</span></div>
-    <div class="pequeno suave">NF ${esc(r.numero)} · ${dataBR(r.emissao)} · ${r.qtd_itens} itens · ${fmtReais(r.valor)}${r.conferido_por ? ' · ' + esc(r.conferido_por) : ''}</div></button>`;
+    <div class="pequeno suave">NF ${esc(r.numero)} · ${dataBR(r.emissao)} · ${r.qtd_itens} itens · ${fmtReais(r.valor)}${r.conferido_por ? ' · ' + esc(r.conferido_por) : ''}</div>
+    ${r.lancada === true ? '<div class="mini" style="font-weight:700;color:var(--verde-esc)">✓ No estoque</div>'
+      : r.lancada === false ? '<div class="mini" style="font-weight:700;color:var(--laranja)">Ainda não entrou no estoque</div>' : ''}</button>`;
 }
 TELAS.receber = () => {
   const d = E.recebimentos;
@@ -1296,7 +1298,8 @@ TELAS.conferencia = p => {
     return `<div class="lin ${p.piscar === i.n ? 'piscar' : ''}" id="ri-${i.n}" style="border-left:4px solid ${cor[sit]}">
       <div class="grow"><div style="font-weight:700;font-size:15px">${esc(i.descricao)}</div>
         <div class="mini suave">${i.ean ? 'EAN ' + esc(i.ean.replace(/^0+/, '')) : 'sem código de barras na nota'}${i.codigos.length ? '' : ' · <b style="color:var(--laranja)">bipe e cadastre o código</b>'}${i.ncm ? ' · NCM ' + esc(i.ncm) : ''}</div>
-        <div class="mini" style="font-weight:700;color:${cor[sit]}">${sit === 'ok' ? '✓ ' : sit === 'mais' ? '⚠ a mais: ' : ''}${fmtQtd(Math.round(i.q * 1000) / 1000)} de ${fmtQtd(i.qtd)} ${esc(i.unidade)}${extra}</div></div>
+        <div class="mini" style="font-weight:700;color:${cor[sit]}">${sit === 'ok' ? '✓ ' : sit === 'mais' ? '⚠ a mais: ' : ''}${fmtQtd(Math.round(i.q * 1000) / 1000)} de ${fmtQtd(i.qtd)} ${esc(i.unidade)}${extra}</div>
+        ${linhaEstoqueReceb(n, i)}</div>
       ${fechada ? '' : `<div class="stp mini"><button data-acao="receb-menos" data-n="${i.n}" aria-label="Menos ${esc(i.descricao)}">−</button>
         <button class="stp-v" data-acao="receb-digitar" data-n="${i.n}">${fmtQtd(Math.round(i.q * 1000) / 1000)}</button>
         <button data-acao="receb-mais" data-n="${i.n}" aria-label="Mais ${esc(i.descricao)}">+</button></div>`}</div>`;
@@ -1304,7 +1307,8 @@ TELAS.conferencia = p => {
   const st = ST_RECEB[n.status] || ['p-cinza', n.status];
   return `${faixaRede()}${topo(n.fornecedor, `NF ${n.numero} · ${dataBR(n.emissao)} · ${fmtReais(n.valor)}`, 'receb-voltar')}
     <div class="corpo">
-      ${fechada ? `<div class="info"><span class="pilula ${st[0]}">${st[1]}</span> por ${esc(n.conferido_por || '?')}${n.observacao ? '<br>Obs.: ' + esc(n.observacao) : ''}</div>`
+      ${fechada ? `<div class="info"><span class="pilula ${st[0]}">${st[1]}</span> por ${esc(n.conferido_por || '?')}${n.observacao ? '<br>Obs.: ' + esc(n.observacao) : ''}</div>
+                  ${quadroEstoqueReceb(n)}`
                 : `<div class="cartao" style="display:flex;justify-content:space-between;align-items:center;gap:10px">
                     <div><div class="mini suave" style="font-weight:600">Itens conferidos</div><div style="font-size:22px;font-weight:800">${ok} de ${itens.length}</div></div>
                     <div class="mini suave" style="text-align:right">${ICONES.barras}<br>Bipe os produtos</div></div>
@@ -1312,6 +1316,7 @@ TELAS.conferencia = p => {
                   ${ehComputador() ? `<div class="campo"><input id="receb-cod" inputmode="numeric" placeholder="Leitor USB ou digite o código e Enter" autocomplete="off" aria-label="Código de barras"></div>` : ''}`}
       ${p.bipMsg ? `<div class="mini" style="text-align:center;font-weight:700">${esc(p.bipMsg)}</div>` : ''}
       <div class="linhas">${linhas}</div>
+      ${!fechada && E.usuario.gestor && n.falta_vincular && !n.lancada ? `<div class="mini suave">${n.falta_vincular} item(ns) sem vínculo com o estoque: toque em <b>Vincular</b> no item (pode ser antes ou depois de conferir).</div>` : ''}
       ${!fechada && E.usuario.gestor ? '<button class="btn claro medio" data-acao="receb-dispensar">Dispensar (tirar da lista sem conferir)</button>' : ''}
     </div>
     ${fechada ? '' : '<div class="rodape"><button class="btn" data-acao="receb-finalizar">Finalizar conferência</button></div>'}`;
@@ -1376,6 +1381,88 @@ async function ligarCodigoAoItem(nItem, soEscolher) {
     somarRecebido(nItem, porBip);
   }
 }
+// [LANÇAMENTO] produto do estoque de cada item, vincular pelo app e lançar no estoque
+function linhaEstoqueReceb(n, i) {
+  if (i.tipo === 'ignorar') return '<div class="mini suave">Não entra no estoque (comodato/remessa)</div>';
+  const bonif = i.tipo === 'bonificacao' ? ' · bonificação (custo zero)' : '';
+  if (i.produto) {
+    const conv = i.produto.fator !== 1 ? ` · 1 ${esc(i.unidade)} = ${fmtQtd(i.produto.fator)} ${esc(i.produto.unidade || 'UN')}` : '';
+    return `<div class="mini" style="color:var(--verde-esc)">→ ${esc(i.produto.nome || 'produto do estoque')}${conv}${bonif}</div>`;
+  }
+  if (n.lancada) return '';
+  return E.usuario.gestor
+    ? `<button class="btn claro" style="min-height:34px;padding:4px 12px;font-size:13px;margin-top:4px;width:auto" data-acao="receb-vincular" data-n="${i.n}">Vincular ao estoque</button>`
+    : `<div class="mini" style="color:var(--laranja)">sem vínculo com o estoque (o gestor vincula)${bonif}</div>`;
+}
+function quadroEstoqueReceb(n) {
+  if (n.status !== 'conferida' && n.status !== 'divergencia') return '';
+  if (n.lancada) return '<div class="info" style="border-color:var(--verde)"><b>✓ Já entrou no estoque.</b></div>';
+  const falta = n.falta_vincular || 0;
+  return `<div class="aviso"><b>Ainda não entrou no estoque.</b>
+      ${falta ? `<div class="mini">Falta vincular ${falta} item(ns) ao produto do estoque${E.usuario.gestor ? ': toque em <b>Vincular ao estoque</b> no item.' : ' (o gestor faz isso).'}</div>` : ''}
+      <div class="mini">Entra com a quantidade que CHEGOU (a conferida).</div></div>
+    ${E.usuario.gestor ? `<button class="btn" data-acao="receb-lancar" ${falta ? 'disabled' : ''}>Lançar no estoque</button>` : ''}`;
+}
+function fatorSugeridoReceb(i) {
+  if (i.qtd_trib && i.qtd && i.unidade_trib && i.unidade_trib !== i.unidade && i.qtd_trib > i.qtd) return Math.round(i.qtd_trib / i.qtd * 1000) / 1000;
+  return sugerirFator(i);
+}
+function modalVincularReceb(nItem) {
+  const n = E.notasReceb[T.p.chave], i = n.itens.find(x => x.n === nItem);
+  T.p.sel = null;
+  abrirModal(`<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px"><div><div class="titulo-sec">${esc(i.descricao)}</div>
+      <div class="mini suave">Nota: ${fmtQtd(i.qtd)} ${esc(i.unidade)}${i.qtd_trib && i.unidade_trib && i.unidade_trib !== i.unidade ? ' = ' + fmtQtd(i.qtd_trib) + ' ' + esc(i.unidade_trib) : ''}${i.cprod ? ' · cód. ' + esc(i.cprod) : ''}</div></div>
+      <button class="icone-btn" data-acao="fechar-modal" aria-label="Fechar">${ICONES.fechar}</button></div>
+    <div class="campo"><label for="busca-prod">Qual produto do estoque é este?</label>
+      <input id="busca-prod" placeholder="Digite parte do nome" autocomplete="off" value=""></div>
+    <div id="prod-escolhido" class="pequeno" style="font-weight:700;color:var(--verde-esc)"></div>
+    <div id="busca-res" class="linhas" style="max-height:220px;overflow:auto"><div class="vazio" style="padding:14px">Digite para buscar.</div></div>
+    <button class="btn claro medio" data-acao="receb-novo-produto" data-n="${i.n}">Não achou? Cadastrar produto novo</button>
+    <div class="campo"><label for="fator">1 ${esc(i.unidade)} da nota = quantas unidades do estoque?</label>
+      <input id="fator" inputmode="decimal" value="${fmtQtd(fatorSugeridoReceb(i)).replace(/\./g, '')}">
+      <div class="mini suave">Ex.: caixa com 25 copos e estoque em UN = 25. Se a nota já vem na mesma unidade do estoque = 1.</div></div>
+    <button class="btn" data-acao="receb-vincular-salvar" data-n="${i.n}">Salvar vínculo</button>
+    <div class="mini suave">O vínculo vale também para o Gestão de Estoque e para as próximas notas deste fornecedor.</div>`);
+  ligarBuscaProduto('cupom-escolher');
+}
+async function salvarVinculoReceb(corpo, el) {
+  const chave = T.p.chave;
+  if (el) el.disabled = true;
+  try {
+    let r = await api('POST', `/api/compras/recebimentos/${chave}/vincular`, corpo);
+    if (r.confirmar) {
+      if (!confirm(r.confirmar)) { if (el) el.disabled = false; return; }
+      r = await api('POST', `/api/compras/recebimentos/${chave}/vincular`, {...corpo, confirmado: true});
+    }
+    E.notasReceb[chave] = r; salvar(); fecharModal(); toast('Vínculo salvo.'); desenhar();
+  } catch (e) { if (el) el.disabled = false; toast(e.extra.offline ? 'Sem internet: conecte para vincular.' : e.message); }
+}
+async function modalNovoProdutoReceb(nItem) {
+  const n = E.notasReceb[T.p.chave], i = n.itens.find(x => x.n === nItem);
+  let categorias = ['Geral'];
+  try { categorias = await api('GET', '/api/compras/categorias'); } catch (e) {}
+  const unidades = ['UN', 'KG', 'L', 'CX', 'PCT', 'G', 'ML'];
+  T.p.novoUn = unidades.includes(String(i.unidade_trib || '').toUpperCase()) ? String(i.unidade_trib).toUpperCase() : 'UN';
+  abrirModal(`<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px"><div><div class="titulo-sec">Cadastrar produto novo</div>
+      <div class="mini suave">Da nota: ${esc(i.descricao)} · ${fmtQtd(i.qtd)} ${esc(i.unidade)}</div></div>
+      <button class="icone-btn" data-acao="fechar-modal" aria-label="Fechar">${ICONES.fechar}</button></div>
+    <div class="campo"><label for="np-nome">Nome no estoque</label><input id="np-nome" maxlength="100" value="${esc(sugerirNomeProduto(i.descricao))}"></div>
+    <div class="campo"><label>Unidade em que o estoque é contado</label>
+      <div class="chips7" style="grid-template-columns:repeat(4,minmax(0,1fr))">${unidades.map(u => `<button class="chip ${u === T.p.novoUn ? 'sel' : ''}" data-acao="np-un" data-u="${u}" aria-pressed="${u === T.p.novoUn}">${u}</button>`).join('')}</div></div>
+    <div class="campo"><label for="np-cat">Categoria</label><select id="np-cat">${categorias.map(k => `<option ${k === 'Geral' ? 'selected' : ''}>${esc(k)}</option>`).join('')}</select></div>
+    <div class="linha-btns">
+      <div class="campo"><label for="np-min">Estoque mínimo</label><input id="np-min" inputmode="decimal" value="0"></div>
+      <div class="campo"><label for="np-fator">1 ${esc(i.unidade)} da nota =</label><input id="np-fator" inputmode="decimal" value="${fmtQtd(fatorSugeridoReceb(i)).replace(/\./g, '')}"></div></div>
+    <div class="mini suave">Ex.: nota em caixa com 25 e estoque em UN = 25.</div>
+    <button class="btn" data-acao="receb-np-salvar" data-n="${i.n}">Cadastrar e vincular</button>`);
+}
+function mostrarAumentos(aumentos) {
+  if (!aumentos || !aumentos.length) return;
+  abrirModal(`<div class="titulo-sec">📈 Preços que subiram</div>
+    <div class="mini suave">Comparado com a compra anterior de cada produto:</div>
+    <div class="linhas">${aumentos.map(t => `<div class="lin pequeno" style="padding:9px 10px">${esc(t)}</div>`).join('')}</div>
+    <button class="btn claro medio" data-acao="fechar-modal">Entendi</button>`);
+}
 function finalizarRecebimento() {
   const n = E.notasReceb[T.p.chave], loc = E.receb[n.chave];
   const div = n.itens.map(i => ({...i, q: qtdRecebida(n.chave, i.n)})).filter(i => situacaoItem(i, i.q) !== 'ok');
@@ -1391,9 +1478,12 @@ async function enviarRecebimento() {
                  observacao: (document.getElementById('receb-obs') || {}).value || ''};
   loc.finalizada = true; salvar(); fecharModal();
   try {
-    E.notasReceb[n.chave] = await api('POST', `/api/compras/recebimentos/${n.chave}/finalizar`, corpo);
+    const r = E.notasReceb[n.chave] = await api('POST', `/api/compras/recebimentos/${n.chave}/finalizar`, corpo);
     loc.enviado = true; salvar();
-    toast('Conferência enviada ao gestor.');
+    const l = r.lancamento || {};
+    toast(l.ok ? (l.ja_estava ? 'Conferência enviada (a nota já estava no estoque).' : 'Conferência enviada e lançada no estoque. ✅')
+               : 'Conferência enviada. Ainda não entrou no estoque' + (l.motivo ? ': ' + l.motivo : '.'));
+    if (E.usuario.gestor && l.ok && !l.ja_estava) setTimeout(() => mostrarAumentos(r.aumentos), 300);
   } catch (e) {
     if (!e.extra.offline) { loc.finalizada = false; salvar(); return toast(e.message); }
     enfileirar({tipo: 'recebimento', chave: n.chave, metodo: 'POST', url: `/api/compras/recebimentos/${n.chave}/finalizar`, corpo, descricao: 'Conferência NF ' + n.numero});
@@ -2178,6 +2268,37 @@ const acoes = {
   },
   'receb-ligar': d => ligarCodigoAoItem(+d.n, !!d.so),
   'receb-finalizar': () => finalizarRecebimento(),
+  'receb-vincular': d => modalVincularReceb(+d.n),
+  'receb-vincular-salvar': (d, el) => {
+    if (!T.p.sel) return toast('Escolha o produto do estoque.');
+    const f = num(document.getElementById('fator').value);
+    if (!(f > 0)) return toast('Quantidade por embalagem inválida.');
+    salvarVinculoReceb({n: +d.n, produto_id: T.p.sel.produto_id, fator: f}, el);
+  },
+  'receb-novo-produto': d => modalNovoProdutoReceb(+d.n),
+  'receb-np-salvar': async (d, el) => {
+    const corpo = {n: +d.n, nome: document.getElementById('np-nome').value.trim(), unidade: T.p.novoUn,
+                   categoria: document.getElementById('np-cat').value, estoque_minimo: num(document.getElementById('np-min').value) || 0,
+                   fator: num(document.getElementById('np-fator').value)};
+    if (corpo.nome.length < 3) return toast('Digite o nome do produto.');
+    if (!(corpo.fator > 0)) return toast('A quantidade por embalagem precisa ser maior que zero.');
+    el.disabled = true;
+    try {
+      E.notasReceb[T.p.chave] = await api('POST', `/api/compras/recebimentos/${T.p.chave}/novo-produto`, corpo);
+      salvar(); fecharModal(); toast('Produto cadastrado e vinculado.'); desenhar();
+    } catch (e) { el.disabled = false; toast(e.extra.offline ? 'Sem internet: conecte para cadastrar.' : e.message); }
+  },
+  'receb-lancar': async (d, el) => {
+    const n = E.notasReceb[T.p.chave];
+    if (!confirm(`Lançar a NF ${n.numero} de ${n.fornecedor} no estoque com a quantidade que chegou?`)) return;
+    el.disabled = true;
+    try {
+      const r = await api('POST', `/api/compras/recebimentos/${n.chave}/lancar`);
+      E.notasReceb[n.chave] = r; salvar();
+      toast(r.ja_estava ? 'A nota já estava no estoque.' : 'Lançada no estoque. ✅'); desenhar();
+      mostrarAumentos(r.aumentos); carregarRecebimentos();
+    } catch (e) { el.disabled = false; toast(e.extra.offline ? 'Sem internet: conecte para lançar.' : e.message); }
+  },
   'receb-enviar': () => enviarRecebimento(),
   'receb-dispensar': async () => {
     const n = E.notasReceb[T.p.chave];

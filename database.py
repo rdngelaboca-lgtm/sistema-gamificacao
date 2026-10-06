@@ -6914,6 +6914,43 @@ def chaves_ja_importadas(chaves):
         conn.close()
 
 
+def conferencias_recebimento(chaves):
+    """
+    [RECEBIMENTO] Conferência feita no app de compras para estas chaves de acesso:
+    {chave: {'status', 'por', 'itens': {NItem: quantidade que chegou (unidade da nota)}}}.
+    Só entram as notas conferidas (com ou sem divergência). Sem a tabela = {}.
+    """
+    chaves = [c for c in {str(c) for c in chaves or []} if len(c) == 44 and c.isdigit()]
+    if not chaves:
+        return {}
+    conn = get_db_connection()
+    if not conn:
+        return {}
+    try:
+        cursor = conn.cursor()
+        if not _tabela_existe(cursor, 'RecebimentoNotas'):
+            return {}
+        resultado = {}
+        for i in range(0, len(chaves), 500):
+            parte = chaves[i:i + 500]
+            marcas = ','.join('?' * len(parte))
+            cursor.execute(f"SELECT Chave, Status, ConferidoPor FROM RecebimentoNotas WHERE Chave IN ({marcas}) "
+                           "AND Status IN ('conferida', 'divergencia')", parte)
+            for chave, status, por in cursor.fetchall():
+                resultado[chave] = {'status': status, 'por': por, 'itens': {}}
+            if resultado:
+                cursor.execute(f"SELECT Chave, NItem, QtdConferida FROM RecebimentoItens WHERE Chave IN ({marcas})", parte)
+                for chave, n_item, qtd in cursor.fetchall():
+                    if chave in resultado:
+                        resultado[chave]['itens'][int(n_item)] = _dec(qtd or 0)
+        return resultado
+    except Exception as e:
+        logger.error(f"Erro ao ler as conferências de recebimento: {e}", exc_info=True)
+        return {}
+    finally:
+        conn.close()
+
+
 def notas_ja_lancadas(notas):
     """
     [XML SEFAZ] Quais destas notas já estão no estoque. notas = [(chave, cnpj, numero, serie)].

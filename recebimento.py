@@ -8,6 +8,11 @@
 # (fica guardado para as próximas notas do mesmo fornecedor).
 # No fim, o que faltou / veio a mais vai para o gestor no Telegram.
 #
+# [LANÇAMENTO] Ao finalizar, se todos os itens já têm vínculo (DE/PARA), a nota entra
+# sozinha no estoque com a quantidade que CHEGOU (mesmas regras de custo do Gestão de
+# Estoque: nota_xml.py). Item sem vínculo: o gestor vincula no app (ou no computador)
+# e toca em "Lançar no estoque". O vínculo feito no app é o mesmo do computador.
+#
 # Os XMLs ficam na pasta do nfe_distribuicao (e na subpasta 'importadas', depois que
 # a nota entra no estoque pelo Gestão de Estoque): a conferência não depende disso.
 # ==============================================================================
@@ -20,6 +25,7 @@ from decimal import Decimal, InvalidOperation
 
 import config
 import database
+from nota_xml import tipo_item_por_cfop
 from compras_database import ErroCompras, _conectar, _iso, _num, _dec, _como_data, _como_datahora, normalizar_codigo
 
 logger = logging.getLogger(__name__)
@@ -30,6 +36,7 @@ ST_DIVERGENCIA = 'divergencia'
 ST_DISPENSADA = 'dispensada'
 DIAS_PENDENTE = int(getattr(config, 'RECEBIMENTO_DIAS', 20) or 20)   # notas emitidas há mais tempo não aparecem
 DIAS_CONFERIDAS = 7
+DIAS_SEM_LANCAR = 60      # nota conferida e ainda fora do estoque continua aparecendo até 60 dias
 
 _tabelas_ok = False
 _cache_xml = {}        # caminho -> (mtime, dados): não relê os mesmos XMLs a cada abertura da lista
@@ -151,6 +158,8 @@ def ler_nota(caminho):
             'descricao': (prod.findtext('xProd') or '').strip(),
             'cprod': (prod.findtext('cProd') or '').strip(),
             'ean': normalizar_codigo(prod.findtext('cEAN')),
+            'ean_xml': (prod.findtext('cEAN') or '').strip(),      # como veio (é o que o vínculo guarda)
+            'cfop': (prod.findtext('CFOP') or '').strip(),
             'ean_trib': normalizar_codigo(prod.findtext('cEANTrib')),
             'ncm': (prod.findtext('NCM') or '').strip(),
             'unidade': (prod.findtext('uCom') or 'UN').strip().upper()[:10],
@@ -188,7 +197,7 @@ def listar_recebimentos(hoje=None):
     """Notas para conferir (emitidas nos últimos DIAS_PENDENTE dias) e as conferidas há pouco."""
     hoje = _como_data(hoje) or date.today()
     gravados = _status_gravados()
-    pendentes, feitas = [], []
+    pendentes, feitas, conferidas = [], [], []
     limite = hoje - timedelta(days=DIAS_PENDENTE)
     for sub in ('', 'importadas'):
         pasta = os.path.join(_pasta(), sub)
@@ -213,8 +222,16 @@ def listar_recebimentos(hoje=None):
             if resumo['status'] == ST_AGUARDANDO:
                 if emissao and emissao >= limite:
                     pendentes.append(resumo)
+            elif g and g['em'] and resumo['status'] in (ST_CONFERIDA, ST_DIVERGENCIA) \
+                    and g['em'].date() >= hoje - timedelta(days=DIAS_SEM_LANCAR):
+                conferidas.append((resumo, n, g['em']))   # recentes, ou ainda fora do estoque (até 60 dias)
             elif g and g['em'] and g['em'].date() >= hoje - timedelta(days=DIAS_CONFERIDAS):
                 feitas.append(resumo)
+    lancadas = _chaves_lancadas([n for _, n, _ in conferidas])
+    for resumo, n, em in conferidas:
+        resumo['lancada'] = n['chave'] in lancadas
+        if not resumo['lancada'] or em.date() >= hoje - timedelta(days=DIAS_CONFERIDAS):
+            feitas.append(resumo)
     pendentes.sort(key=lambda r: r['emissao'] or '', reverse=True)
     feitas.sort(key=lambda r: r['conferido_em'] or '', reverse=True)
     return {'pendentes': pendentes, 'conferidas': feitas, 'dias': DIAS_PENDENTE}
@@ -264,22 +281,29 @@ def obter_recebimento(chave):
         produto = None
         if forn_id:
             try:
-                v = database.buscar_vinculo_inteligente(forn_id, it['descricao'], it['cprod'], it['ean'])
+                v = database.buscar_vinculo_inteligente(forn_id, it['descricao'], it['cprod'], it['ean_xml'])
             except Exception:
                 v = None
             if v and v.get('ProdutoID'):
                 fator_v = Decimal(str(v.get('Fator') or 1)) or Decimal('1')
+                if fator_v <= 0:
+                    fator_v = Decimal('1')
                 produto = {'id': v['ProdutoID'], 'fator': _num(fator_v)}
                 if por_produto is None:
                     por_produto = _codigos_por_produto()
                 for cod, fator_c in por_produto.get(v['ProdutoID'], []):
                     soma(cod, fator_c / fator_v, 'produto do estoque')   # ex.: unidade bipada numa nota em caixas
         itens.append({'n': it['n'], 'descricao': it['descricao'], 'cprod': it['cprod'], 'ncm': it['ncm'],
+                      'tipo': tipo_item_por_cfop(it['cfop']),
                       'unidade': it['unidade'], 'qtd': _num(it['qtd']), 'unidade_trib': it['unidade_trib'],
                       'qtd_trib': _num(it['qtd_trib']), 'ean': it['ean'], 'produto': produto,
                       'codigos': list(codigos.values()), 'conferido': _num(conferidos[it['n']]) if it['n'] in conferidos else None})
+    _nomes_dos_produtos(itens)
+    lancada = n['chave'] in _chaves_lancadas([n])
+    falta = [i for i in itens if i['tipo'] != 'ignorar' and not i['produto']]
     return {'chave': n['chave'], 'numero': n['numero'], 'serie': n['serie'], 'fornecedor': n['fornecedor'], 'cnpj': n['cnpj'],
             'emissao': n['emissao'], 'valor': _num(n['valor'], 2), 'itens': itens,
+            'lancada': lancada, 'falta_vincular': len(falta),
             'status': cab[0] if cab else ST_AGUARDANDO, 'conferido_por': cab[1] if cab else None,
             'conferido_em': _iso(_como_datahora(cab[2])) if cab else None, 'observacao': cab[3] if cab else None}
 
@@ -330,6 +354,8 @@ def finalizar(chave, quantidades, observacao, usuario):
     divergencias = []
     for it in n['itens']:
         c = conferido.get(it['n'], Decimal('0'))
+        if it['n'] in conferido and abs(c - it['qtd']) <= Decimal('0.001'):
+            conferido[it['n']] = c = it['qtd']        # 6 bips de 1/6 de caixa = 1 caixa (sem sobra de arredondamento)
         if abs(c - it['qtd']) > Decimal('0.001'):
             divergencias.append({'n': it['n'], 'descricao': it['descricao'], 'unidade': it['unidade'], 'nota': _num(it['qtd']),
                                  'conferido': _num(c), 'tipo': 'faltou' if c < it['qtd'] else 'a mais'})
@@ -373,7 +399,7 @@ def _guardar_ncm(n):
                 ncm = database.ncm_valido(it['ncm'])
                 if not ncm:
                     continue
-                v = database.buscar_vinculo_inteligente(forn_id, it['descricao'], it['cprod'], it['ean'])
+                v = database.buscar_vinculo_inteligente(forn_id, it['descricao'], it['cprod'], it['ean_xml'])
                 if v and v.get('ProdutoID'):
                     cur.execute("UPDATE ProdutosEstoque SET NCM = ? WHERE ProdutoID = ? AND (NCM IS NULL OR NCM = '')",
                                 (ncm, v['ProdutoID']))
@@ -400,3 +426,238 @@ def dispensar(chave, usuario):
     finally:
         conn.close()
     return {'ok': True}
+
+
+# ------------------------------------------------------------------------------
+# [LANÇAMENTO] Vincular itens pelo app e dar entrada no estoque
+# ------------------------------------------------------------------------------
+def _chaves_lancadas(notas):
+    """Quais destas notas (dicts do ler_nota) já estão no estoque (pela chave ou CNPJ + número)."""
+    if not notas:
+        return set()
+    try:
+        return database.notas_ja_lancadas([(n['chave'], n['cnpj'], n['numero'], n['serie']) for n in notas])
+    except Exception as e:
+        logger.warning(f"Recebimento: não deu para conferir as notas já lançadas: {e}")
+        return set()
+
+
+def _nomes_dos_produtos(itens):
+    ids = {i['produto']['id'] for i in itens if i['produto']}
+    if not ids:
+        return
+    conn = database.get_db_connection()
+    try:
+        cur = conn.cursor()
+        lista = list(ids)
+        cur.execute(f"SELECT ProdutoID, NomeProduto, UnidadeMedida FROM ProdutosEstoque WHERE ProdutoID IN ({','.join('?' * len(lista))})",
+                    lista)
+        nomes = {r[0]: (r[1], (r[2] or 'UN').strip() or 'UN') for r in cur.fetchall()}
+    finally:
+        conn.close()
+    for i in itens:
+        if i['produto'] and i['produto']['id'] in nomes:
+            i['produto']['nome'], i['produto']['unidade'] = nomes[i['produto']['id']]
+
+
+def _fornecedor_da_nota(n, criar=False):
+    forn_id = database.buscar_fornecedor_por_cnpj(n['cnpj'])
+    if not forn_id and criar:
+        database.criar_fornecedor(n['cnpj'], n['fornecedor'][:150])
+        forn_id = database.buscar_fornecedor_por_cnpj(n['cnpj'])
+        if not forn_id:
+            raise ErroCompras(f"Não consegui cadastrar o fornecedor {n['fornecedor']}.")
+    return forn_id
+
+
+def _fator(valor):
+    try:
+        f = Decimal(str(valor or 1).replace(',', '.'))
+    except InvalidOperation:
+        raise ErroCompras("Quantidade por embalagem inválida.")
+    if not f.is_finite() or not Decimal('0.0001') <= f <= Decimal('100000'):
+        raise ErroCompras("Quantidade por embalagem inválida.")
+    return f
+
+
+def _reais(valor):
+    texto = f"{Decimal(str(valor)).quantize(Decimal('0.01')):,.2f}"
+    return 'R$ ' + texto.replace(',', 'X').replace('.', ',').replace('X', '.')
+
+
+def vincular_item(chave, n_item, produto_id, fator, usuario, confirmado=False):
+    """
+    Gestor: diz qual produto do estoque é o item da nota e quantas unidades do estoque vêm
+    em 1 unidade da nota. Grava o MESMO vínculo (DE/PARA) que o Gestão de Estoque usa.
+    Se o custo por unidade ficar muito diferente da última compra, devolve {'confirmar': texto}
+    sem gravar (fator errado distorce o valor do estoque); com confirmado=True grava assim mesmo.
+    """
+    if not usuario.get('gestor'):
+        raise ErroCompras("Só o gestor vincula produtos.")
+    import nota_xml
+    caminho = _caminho_da_chave(chave)
+    n = ler_nota(caminho)
+    item = next((i for i in n['itens'] if i['n'] == int(n_item or 0)), None)
+    if not item:
+        raise ErroCompras("Item não encontrado na nota.")
+    try:
+        produto_id = int(produto_id)
+    except (TypeError, ValueError):
+        raise ErroCompras("Escolha o produto do estoque.")
+    fator = _fator(fator)
+    forn_id = _fornecedor_da_nota(n, criar=True)
+    if database.buscar_vinculo_inteligente(forn_id, item['descricao'], item['cprod'], item['ean_xml']):
+        raise ErroCompras("Este item já está vinculado. Para trocar, use a tela Vínculos do Gestão de Estoque.")
+    conn = database.get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT NomeProduto FROM ProdutosEstoque WHERE ProdutoID = ?", (produto_id,))
+        linha = cur.fetchone()
+    finally:
+        conn.close()
+    if not linha:
+        raise ErroCompras("Produto do estoque não encontrado.")
+    if not confirmado:
+        try:
+            _, itens_xml = nota_xml.ler_xml_nota_fiscal(caminho)
+            custo_xml = next((Decimal(str(i['PrecoCustoUnitario'])) for i in itens_xml if i['NItem'] == item['n']), Decimal('0'))
+            anterior = Decimal(str(database.ultimo_custo_real_produto(produto_id) or 0))
+        except Exception:
+            custo_xml = anterior = Decimal('0')
+        if custo_xml > 0 and anterior > 0:
+            novo = custo_xml / fator
+            razao = novo / anterior
+            if not Decimal('0.34') < razao < Decimal('3'):
+                sugerido = (custo_xml / anterior).quantize(Decimal('1'))
+                return {'confirmar': (f"Com {qtd_br(fator)} por {item['unidade']}, o custo de {linha[0]} vai ficar "
+                                      f"{_reais(novo)} por unidade, mas a última compra custou {_reais(anterior)}."
+                                      + (f" Para ficar parecido, seria perto de {sugerido} por {item['unidade']}." if sugerido > 0 else "")
+                                      + "\n\nUm número errado distorce o valor do estoque. Gravar assim mesmo?")}
+    novo_id = database.criar_vinculo_produto_fornecedor(
+        produto_id_mestre=produto_id, fornecedor_id=forn_id, descricao_xml=item['descricao'][:255],
+        cProd=(item['cprod'] or None), cEAN=item['ean_xml'] or '', NCM=item['ncm'] or '', fator_conversao=fator)
+    if not novo_id:
+        raise ErroCompras("Não consegui gravar o vínculo (veja o log).")
+    logger.info(f"Recebimento: '{item['descricao']}' de {n['fornecedor']} vinculado a {linha[0]} (x{fator}) por {usuario.get('nome')}.")
+    return obter_recebimento(chave)
+
+
+def criar_produto_do_item(chave, n_item, usuario, nome, unidade, categoria='Geral', estoque_minimo=0, fator=1):
+    """Gestor: cadastra no catálogo um produto que veio na nota e ainda não existia, já vinculado."""
+    if not usuario.get('gestor'):
+        raise ErroCompras("Só o gestor cadastra produtos.")
+    import compras_database as cd
+    nome = re.sub(r'\s+', ' ', str(nome or '')).strip()
+    unidade = re.sub(r'[^A-Za-z]', '', str(unidade or '')).upper()[:10]
+    categoria = (str(categoria or '').strip() or 'Geral')[:100]
+    if len(nome) < 3:
+        raise ErroCompras("Digite o nome do produto (pelo menos 3 letras).")
+    if len(nome) > 100:
+        raise ErroCompras("Nome muito comprido (máximo 100 letras).")
+    if not unidade:
+        raise ErroCompras("Escolha a unidade (UN, KG, L...).")
+    try:
+        minimo = Decimal(str(estoque_minimo or 0).replace(',', '.'))
+    except InvalidOperation:
+        raise ErroCompras("Estoque mínimo inválido.")
+    if not minimo.is_finite() or minimo < 0:
+        raise ErroCompras("Estoque mínimo inválido.")
+    fator = _fator(fator)
+    n = ler_nota(_caminho_da_chave(chave))
+    if not any(i['n'] == int(n_item or 0) for i in n['itens']):
+        raise ErroCompras("Item não encontrado na nota.")
+    alvo = cd.database_normalizar(nome)
+    for p in cd.buscar_produtos(nome, limite=500):
+        if cd.database_normalizar(p['nome']) == alvo:
+            raise ErroCompras(f"Já existe o produto '{p['nome']}' no estoque. Use a busca para escolher ele.")
+    produto_id = database.criar_produto_estoque(nome, unidade, minimo, categoria)
+    if not produto_id:
+        raise ErroCompras("Não consegui cadastrar o produto (veja o log).")
+    logger.info(f"Produto '{nome}' ({unidade}) cadastrado pelo recebimento por {usuario.get('nome')}.")
+    return vincular_item(chave, n_item, int(produto_id), fator, usuario, confirmado=True)
+
+
+def lancar_no_estoque(chave, usuario):
+    """
+    Dá entrada da nota CONFERIDA no estoque, com a quantidade que chegou (opção do gestor:
+    o estoque fica igual à prateleira; a diferença fica registrada na conferência).
+    Custo = o da nota (com ST/frete/rateios); bonificação entra com custo zero; comodato e
+    remessa ficam de fora. Item que não chegou nada não entra.
+    Devolve a nota (obter_recebimento) com 'aumentos' (preços que subiram).
+    Erro (ErroCompras) se faltar vínculo ou se a nota não foi conferida.
+    """
+    import nota_xml
+    caminho = _caminho_da_chave(chave)
+    n = ler_nota(caminho)
+    if n['finalidade'] == '4':
+        raise ErroCompras("Nota de devolução não entra no estoque.")
+    conf = database.conferencias_recebimento([n['chave']]).get(n['chave'])
+    if not conf:
+        raise ErroCompras("Finalize a conferência antes de lançar no estoque.")
+    if n['chave'] in _chaves_lancadas([n]):
+        r = obter_recebimento(chave)
+        r['aumentos'], r['ja_estava'] = [], True
+        return r
+    cab, itens = nota_xml.ler_xml_nota_fiscal(caminho)
+    fora, compraveis = Decimal('0'), []
+    for it in itens:
+        tipo = nota_xml.tipo_item_por_cfop(it.get('CFOP'))
+        if tipo == 'ignorar':
+            fora += it['ValorItemNota']
+            continue
+        if tipo == 'bonificacao':
+            fora += it['ValorItemNota']
+            it = dict(it, PrecoCustoUnitario=Decimal('0'))
+        compraveis.append(it)
+    compraveis, a_menos = nota_xml.aplicar_conferencia(compraveis, conf['itens'])
+    fora += a_menos
+    forn_id = _fornecedor_da_nota(n, criar=True)
+    prontos, faltam = [], []
+    for it in compraveis:
+        v = database.buscar_vinculo_inteligente(forn_id, it['DescricaoXML'], it.get('cProd'), it.get('cEAN'))
+        if not v or not v.get('ProdutoFornecedorID'):
+            faltam.append(it['DescricaoXML'])
+            continue
+        fator = Decimal(str(v.get('Fator') or 1))
+        if fator <= 0:
+            fator = Decimal('1')
+        prontos.append({'ProdutoFornecedorID': v['ProdutoFornecedorID'], 'Quantidade': nota_xml.qtd_estoque(it, fator),
+                        'PrecoCustoUnitario': it['PrecoCustoUnitario'] / fator, 'FatorUsado': fator, 'NCM': it.get('NCM')})
+    if faltam:
+        raise ErroCompras(f"Falta vincular {len(faltam)} item(ns) para lançar no estoque: " + "; ".join(faltam[:5])
+                          + ("…" if len(faltam) > 5 else ""))
+    if not prontos:
+        raise ErroCompras("Nenhum item desta nota chegou: nada para lançar no estoque.")
+    cab['FornecedorID'] = forn_id
+    cab['ValorForaDoEstoque'] = fora.quantize(Decimal('0.01'))
+    ok, msg = database.salvar_nota_fiscal_completa(cab, prontos)
+    if not ok:
+        if 'já foi importada' not in (msg or ''):
+            raise ErroCompras(msg or "Não consegui lançar a nota no estoque.")
+        logger.info(f"Recebimento: NF {n['numero']} já estava no estoque.")
+    else:
+        logger.info(f"Recebimento: NF {n['numero']} de {n['fornecedor']} lançada no estoque por {usuario.get('nome')} "
+                    f"({len(prontos)} itens, quantidade conferida).")
+        _arquivar(caminho)
+    aumentos = []
+    if cab.get('NotaID') and hasattr(database, 'aumentos_de_preco'):
+        try:   # [ALERTA PREÇO] o que ficou mais caro que na compra anterior
+            aumentos = [database.texto_aumento_preco(a) for a in database.aumentos_de_preco(nota_ids=[cab['NotaID']])]
+        except Exception as e:
+            logger.error(f"Recebimento: não deu para conferir aumentos de preço: {e}")
+    r = obter_recebimento(chave)
+    r['aumentos'] = aumentos
+    return r
+
+
+def _arquivar(caminho):
+    """XML da nota que entrou no estoque vai para a subpasta 'importadas' (como faz o Gestão de Estoque)."""
+    pasta, nome = os.path.split(caminho)
+    if os.path.basename(pasta) == 'importadas':
+        return
+    try:
+        os.makedirs(os.path.join(pasta, 'importadas'), exist_ok=True)
+        os.replace(caminho, os.path.join(pasta, 'importadas', nome))
+        _cache_xml.pop(caminho, None)
+    except OSError as e:
+        logger.warning(f"Recebimento: não deu para mover {nome} para 'importadas': {e}")

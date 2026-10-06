@@ -487,22 +487,11 @@ def nome_aba_excel(nome, usados):
     return nome_final
 
 
-# [MELHORIA VALOR] Tipo da operação de cada item da nota (CFOP, últimos 3 dígitos).
-# Bonificação / brinde / amostra grátis: a mercadoria entra no estoque com CUSTO ZERO
-# (não foi paga). Comodato (ex: freezer emprestado pela fábrica), remessas, conserto,
-# vasilhame e devoluções NÃO são compra: esses itens são ignorados.
-CFOP_BONIFICACAO = {'910', '911'}
-CFOP_IGNORAR = {'908', '909', '912', '913', '915', '916', '920', '921', '201', '202', '410', '411'}
-
-
-def tipo_item_por_cfop(cfop):
-    """'compra', 'bonificacao' ou 'ignorar'."""
-    final = so_digitos(cfop)[-3:]
-    if final in CFOP_BONIFICACAO:
-        return 'bonificacao'
-    if final in CFOP_IGNORAR:
-        return 'ignorar'
-    return 'compra'
+# [MELHORIA VALOR] Tipo da operação de cada item (CFOP): bonificação entra com custo zero,
+# comodato/remessa/devolução ficam de fora. As regras ficam em nota_xml.py (o app de
+# compras usa as mesmas para lançar a nota conferida no recebimento).
+from nota_xml import CFOP_BONIFICACAO, CFOP_IGNORAR, tipo_item_por_cfop   # noqa: E402
+import nota_xml   # noqa: E402
 
 
 # [MELHORIA CATÁLOGO] Sugestão de nome "limpo" para produtos criados a partir do XML
@@ -2335,16 +2324,17 @@ class AppGestaoEstoque:
         """[XML SEFAZ] Lista das notas baixadas: escolha UMA (ou algumas) para vincular e salvar."""
         janela = Toplevel(self.root)
         janela.title("Notas baixadas da SEFAZ")
-        janela.geometry("1050x520")
+        janela.geometry("1100x520")
         janela.transient(self.root)
         frame = ttk.Frame(janela, padding=10)
         frame.pack(fill=tk.BOTH, expand=True)
         ttk.Label(frame, text="Escolha a nota que vai lançar agora (duplo clique ou 'Abrir'). "
                               "Ctrl/Shift + clique para escolher várias.", font=("Arial", 10, "bold")).pack(anchor="w")
-        cols = ('NF', 'Fornecedor', 'Emissão', 'Valor', 'Itens', 'Sem vínculo', 'Situação')
+        cols = ('NF', 'Fornecedor', 'Emissão', 'Valor', 'Itens', 'Sem vínculo', 'Conferência', 'Situação')
         tree = criar_tree_zebrada(frame, columns=cols, show='headings', selectmode='extended')
-        for col, larg, anc in (('NF', 90, 'center'), ('Fornecedor', 330, 'w'), ('Emissão', 90, 'center'), ('Valor', 110, 'e'),
-                               ('Itens', 60, 'center'), ('Sem vínculo', 90, 'center'), ('Situação', 200, 'w')):
+        for col, larg, anc in (('NF', 80, 'center'), ('Fornecedor', 290, 'w'), ('Emissão', 85, 'center'), ('Valor', 100, 'e'),
+                               ('Itens', 50, 'center'), ('Sem vínculo', 80, 'center'), ('Conferência', 150, 'w'),
+                               ('Situação', 170, 'w')):
             tree.heading(col, text=col, command=lambda c=col: self.ordenar_coluna_treeview(tree, c, False))
             tree.column(col, width=larg, anchor=anc)
         tree.tag_configure('pronta', background='#e3f5e1')
@@ -2393,6 +2383,12 @@ class AppGestaoEstoque:
                 sem += 0 if cache_vinc[chave] else 1
             notas.append((cab.get('DataEmissao') or '', f, cab, len(itens), sem, forn_id))
         notas.sort(key=lambda n: (n[0], n[2].get('FornecedorNome') or ''))
+        conferencias = {}   # [RECEBIMENTO] conferidas no app de compras
+        if notas and hasattr(database, 'conferencias_recebimento'):
+            try:
+                conferencias = database.conferencias_recebimento([n[2].get('ChaveAcesso') for n in notas])
+            except Exception as e:
+                logger.error(f"Não deu para ler as conferências do app: {e}", exc_info=True)
         if not notas:
             janela.destroy()
             messagebox.showinfo("Notas da SEFAZ", "Nenhuma nota nova da SEFAZ esperando para entrar no estoque "
@@ -2405,12 +2401,17 @@ class AppGestaoEstoque:
                 data_br = data
             situacao = ("pronta para salvar" if not sem else
                         "fornecedor novo" if not forn_id else f"falta vincular {sem} item(ns)")
+            conf = conferencias.get(cab.get('ChaveAcesso'))
+            txt_conf = ("não conferida" if not conf else
+                        ("com divergência" if conf['status'] == 'divergencia' else "conferida")
+                        + (f" ({conf['por']})" if conf.get('por') else ""))
             tree.insert("", "end", iid=f, tags=('pronta' if not sem else 'pendente',), values=(
                 cab.get('NumeroNF'), cab.get('FornecedorNome'), data_br, fmt_reais(cab.get('ValorTotalNF') or 0),
-                n_itens, sem, situacao))
+                n_itens, sem, txt_conf, situacao))
         lbl = ttk.Label(frame, foreground="gray", text=(
             (f"{movidas} já lançada(s) saíram da lista · " if movidas else "") +
             f"{len(notas)} nota(s) esperando · verde = todos os itens já vinculados · laranja = falta vincular. "
+            "Nota conferida no app entra com a quantidade que chegou. "
             "Depois de salvar, clique de novo em 'Notas baixadas da SEFAZ' para a próxima."))
         lbl.pack(anchor="w")
 
@@ -2855,140 +2856,8 @@ class AppGestaoEstoque:
             self.tree_vincular.selection_set(pendentes[0])
 
     def ler_xml_nota_fiscal(self, caminho_arquivo_xml):
-        def dec(texto):
-            """Número do XML -> Decimal (tag vazia vale 0)."""
-            texto = (texto or '').strip()
-            return Decimal(texto) if texto else Decimal('0')
-
-        try:
-            if USANDO_LXML:
-                # resolve_entities=False: não deixa um XML malicioso ler arquivos do computador
-                parser = ET.XMLParser(remove_blank_text=True, resolve_entities=False)
-                tree = ET.parse(caminho_arquivo_xml, parser)
-            else:
-                tree = ET.parse(caminho_arquivo_xml)
-            root = tree.getroot()
-
-            # Remove namespaces para facilitar a busca das tags
-            # [DEPURAÇÃO] getiterator() está obsoleto (foi removido do Python); iter() é o correto
-            for elem in root.iter():
-                if not isinstance(elem.tag, str): continue  # comentários do XML
-                i = elem.tag.find('}')
-                if i >= 0:
-                    elem.tag = elem.tag[i+1:]
-
-            # Busca direta sem namespace (mais robusto)
-            ide = root.find('.//ide')
-            emit = root.find('.//emit')
-            total = root.find('.//total/ICMSTot')
-
-            if ide is None or emit is None or total is None:
-                raise Exception("Estrutura do XML inválida (tags essenciais não encontradas após limpeza).")
-
-            inf_nfe = root.find('.//infNFe')
-            chave = (inf_nfe.get('Id') or '').replace('NFe', '') if inf_nfe is not None else ''
-
-            dados_nf = {
-                'NumeroNF': (ide.findtext('nNF', default='') or '').strip(),
-                'Serie': (ide.findtext('serie', default='') or '').strip(),
-                'ChaveAcesso': chave,
-                # Alguns XMLs usam dhEmi, outros dEmi. Tenta ambos.
-                'DataEmissao': (ide.findtext('dhEmi') or ide.findtext('dEmi') or datetime.now().strftime('%Y-%m-%dT')).split('T')[0],
-                'ValorTotalNF': dec(total.findtext('vNF', default='0.0')),
-                # [DEPURAÇÃO] Produtor rural emite NF-e com CPF (não CNPJ). Antes o arquivo era recusado.
-                'FornecedorCNPJ': so_digitos(emit.findtext('CNPJ', default='') or emit.findtext('CPF', default='')),
-                'FornecedorNome': (emit.findtext('xNome', default='') or '').strip(),
-                # [MELHORIA VALOR] finNFe=4 é nota de DEVOLUÇÃO (não é compra)
-                'Finalidade': (ide.findtext('finNFe', default='1') or '1').strip(),
-            }
-
-            itens = []
-            somas_itens = {k: Decimal('0') for k in ('vST', 'vFCPST', 'vFrete', 'vSeg', 'vOutro', 'vIPI', 'vDesc')}
-            detalhes = root.findall('.//det')
-            for det in detalhes:
-                prod = det.find('prod')
-                if prod is None: continue
-
-                # 1. Quantidade comprada
-                qtd_xml = dec(prod.findtext('qCom', default='0.0'))
-
-                # 2. Valores brutos e rateios do produto
-                vProd = dec(prod.findtext('vProd', default='0.0')) # Valor total bruto dos itens
-                vFrete = dec(prod.findtext('vFrete', default='0.0'))
-                vSeg = dec(prod.findtext('vSeg', default='0.0'))
-                vOutro = dec(prod.findtext('vOutro', default='0.0'))
-                vDesc = dec(prod.findtext('vDesc', default='0.0'))
-
-                # 3. Impostos agregados (Substituição Tributária e IPI)
-                # O './/' faz o robô varrer profundamente qualquer tag de imposto procurando a ST
-                vICMSST = dec(det.findtext('.//vICMSST', default='0.0'))
-                vIPI = dec(det.findtext('.//vIPI', default='0.0'))
-                # [MELHORIA VALOR] FCP-ST (Fundo de Combate à Pobreza cobrado junto com a ST)
-                # também é pago na compra e faz parte do custo.
-                vFCPST = dec(det.findtext('.//vFCPST', default='0.0'))
-
-                # 4. Cálculo do Custo Real de Aquisição Contábil
-                custo_total_item = vProd + vICMSST + vFCPST + vIPI + vFrete + vSeg + vOutro - vDesc
-                
-                # 5. Custo Unitário Certo (c/ Impostos Rateados)
-                custo_unit_real = custo_total_item / qtd_xml if qtd_xml > 0 else Decimal('0.0')
-
-                # [MELHORIA ST] guarda cada parte do item para conferir com o TOTAL da nota
-                partes_item = {'vST': vICMSST, 'vFCPST': vFCPST, 'vFrete': vFrete, 'vSeg': vSeg,
-                               'vOutro': vOutro, 'vIPI': vIPI, 'vDesc': vDesc}
-                for chave_parte, valor_parte in partes_item.items():
-                    somas_itens[chave_parte] += valor_parte
-
-                itens.append({
-                    '_vProd': vProd, '_custo_total': custo_total_item,
-                    'ValorItemNota': custo_total_item,   # [DEPURAÇÃO 2] valor do item na nota (p/ "fora do estoque")
-                    'cProd': prod.findtext('cProd', default=''),
-                    'cEAN': (prod.findtext('cEAN', default='') or '').strip(),
-                    'DescricaoXML': prod.findtext('xProd', default=''),
-                    'NCM': prod.findtext('NCM', default=''),
-                    'Quantidade': qtd_xml,
-                    'PrecoCustoUnitario': custo_unit_real, # Agora leva o custo REAL!
-                    'CFOP': (prod.findtext('CFOP', default='') or '').strip(),
-                })
-
-            # [MELHORIA ST] Algumas notas trazem a ST (ou o frete, seguro, outras despesas,
-            # IPI, desconto) SÓ no TOTAL da nota, sem o valor em cada item. Antes isso ficava
-            # FORA do custo dos produtos. Agora a diferença entre o total da nota e a soma dos
-            # itens é dividida entre os itens, proporcional ao valor de cada um (vProd).
-            # Itens com ST em CST 60 (ST já paga antes) não mudam: o preço já a inclui.
-            ajustes = {}
-            # [DEPURAÇÃO 2] Rateia só entre os itens que são COMPRA. Antes entravam também os de
-            # comodato/remessa (que depois são descartados) e os de bonificação (que viram custo 0):
-            # a parte deles sumia e os itens comprados ficavam com ST/frete a menos.
-            compraveis = [i for i in itens if tipo_item_por_cfop(i.get('CFOP')) == 'compra'] or itens
-            total_vprod = sum((i['_vProd'] for i in compraveis), Decimal('0'))
-            if total_vprod > 0:
-                for chave_parte in somas_itens:
-                    valor_total = dec(total.findtext(chave_parte, default='0'))
-                    diferenca = valor_total - somas_itens[chave_parte]
-                    # Só ACRESCENTA o que faltou nos itens. Se o total vier menor (ou sem a
-                    # tag), confia nos valores dos itens e não tira nada.
-                    if diferenca >= Decimal('0.01'):
-                        ajustes[chave_parte] = diferenca
-                if ajustes:
-                    sinal = {'vDesc': Decimal('-1')}
-                    for item in compraveis:
-                        parte = item['_vProd'] / total_vprod
-                        extra = sum((d * sinal.get(k, Decimal('1')) * parte for k, d in ajustes.items()), Decimal('0'))
-                        item['_custo_total'] += extra
-                        if item['Quantidade'] > 0:
-                            item['PrecoCustoUnitario'] = item['_custo_total'] / item['Quantidade']
-                    logger.info(f"NF {dados_nf['NumeroNF']}: valores só no total rateados nos itens: "
-                                + ", ".join(f"{k}={v}" for k, v in ajustes.items()))
-            dados_nf['AjustesRateados'] = ajustes
-            for item in itens:
-                item.pop('_vProd', None); item.pop('_custo_total', None)
-
-            return dados_nf, itens
-
-        except Exception as e:
-            logger.error(f"Erro ao ler o arquivo XML '{caminho_arquivo_xml}': {e}", exc_info=True)
-            raise Exception(f"Falha estrutural no XML: {e}")
+        """Cabeçalho e itens do XML, com o custo real (ST, FCP-ST, IPI, frete, rateios). Ver nota_xml.py."""
+        return nota_xml.ler_xml_nota_fiscal(caminho_arquivo_xml)
 
     def processar_arquivos_xml(self, pasta_selecionada, silencioso=False):
         # silencioso=True: relê a pasta sem mostrar o resumo (usado antes de salvar)
@@ -3003,6 +2872,7 @@ class AppGestaoEstoque:
         notas_com_rateio = []  # [MELHORIA ST] notas com ST/frete só no total (rateados nos itens)
         reconhecidos_por_codigo = []  # [MELHORIA] itens reconhecidos pelo código/EAN (descrição mudou)
         ja_importadas = []  # [DEPURAÇÃO 2] notas que já estão no banco (não aparecem de novo)
+        com_conferencia = []  # [RECEBIMENTO] notas conferidas no app: entram com a quantidade que chegou
         for caminho_xml in arquivos_xml:
             try:
                 cabecalho_nf, itens_nf = self.ler_xml_nota_fiscal(caminho_xml)
@@ -3036,10 +2906,21 @@ class AppGestaoEstoque:
                         it = dict(it, PrecoCustoUnitario=Decimal('0'))
                         itens_bonificados.append(f"NF {num_nf}: {it['DescricaoXML']}")
                     itens_filtrados.append(it)
-                cabecalho_nf['ValorForaDoEstoque'] = valor_fora
                 if not itens_filtrados:
                     notas_ignoradas.append(f"NF {num_nf} ({nome_fornecedor}) - só itens de comodato/remessa")
                     continue
+                # [RECEBIMENTO] conferida no app de compras: entra o que CHEGOU (não o que a nota diz)
+                conferencia = self._conferencia_da_nota(cabecalho_nf.get('ChaveAcesso'))
+                if conferencia:
+                    itens_filtrados, a_menos = nota_xml.aplicar_conferencia(itens_filtrados, conferencia['itens'])
+                    valor_fora += a_menos
+                    com_conferencia.append(f"NF {num_nf} ({nome_fornecedor}) - "
+                                           + ("com divergência" if conferencia['status'] == 'divergencia' else "confere com a nota")
+                                           + (f", por {conferencia['por']}" if conferencia.get('por') else ""))
+                    if not itens_filtrados:
+                        notas_ignoradas.append(f"NF {num_nf} ({nome_fornecedor}) - na conferência do app não chegou nenhum item")
+                        continue
+                cabecalho_nf['ValorForaDoEstoque'] = valor_fora
                 itens_nf = itens_filtrados
 
                 # [DEPURAÇÃO] Antes as notas eram separadas SÓ pelo número. Duas notas nº 123 de
@@ -3106,7 +2987,7 @@ class AppGestaoEstoque:
                         qtd_xml = item['Quantidade'] # Ex: 1 (caixa)
                         custo_xml = item['PrecoCustoUnitario'] # Ex: 60.00 (caixa)
 
-                        qtd_real = qtd_xml * fator # Ex: 1 * 6 = 6 Unidades
+                        qtd_real = nota_xml.qtd_estoque(item, fator) # Ex: 1 * 6 = 6 Unidades
                         custo_real = custo_xml / fator # Ex: 60 / 6 = 10.00 Unidade
 
                         item_pronto = item.copy()
@@ -3202,10 +3083,13 @@ class AppGestaoEstoque:
         if notas_com_rateio:
             msg_final += (f"\n\n🧾 {len(notas_com_rateio)} nota(s) traziam ST/frete/etc. só no TOTAL — o valor foi "
                           "dividido entre os itens e entrou no custo:\n  • " + "\n  • ".join(notas_com_rateio[:5]))
+        if com_conferencia:
+            msg_final += (f"\n\n📦 {len(com_conferencia)} nota(s) foram conferidas no app de compras e entram com a "
+                          "quantidade que CHEGOU:\n  • " + "\n  • ".join(com_conferencia[:5]))
         if reconhecidos_por_codigo:
             msg_final += (f"\n\n🔎 {len(reconhecidos_por_codigo)} item(ns) com a descrição diferente da última nota foram "
                           "reconhecidos pelo código do fornecedor / EAN (não precisaram de novo vínculo).")
-        for lista in (notas_ignoradas, itens_ignorados, itens_bonificados, reconhecidos_por_codigo):
+        for lista in (notas_ignoradas, itens_ignorados, itens_bonificados, reconhecidos_por_codigo, com_conferencia):
             for linha in lista:
                 logger.info(f"[importação XML] {linha}")
 
@@ -3214,6 +3098,16 @@ class AppGestaoEstoque:
             messagebox.showwarning("Processamento Concluído com Avisos", msg_final, parent=self.root)
         else:
             messagebox.showinfo("Processamento Concluído", msg_final, parent=self.root)
+
+    def _conferencia_da_nota(self, chave):
+        """[RECEBIMENTO] Conferência feita no app para esta nota ({'status','por','itens'}) ou None."""
+        if not chave or not hasattr(database, 'conferencias_recebimento'):
+            return None
+        try:
+            return database.conferencias_recebimento([chave]).get(chave)
+        except Exception as e:
+            logger.error(f"Não deu para ler a conferência da nota {chave}: {e}", exc_info=True)
+            return None
 
     def vincular_produto_selecionado(self):
         # ... (código idêntico ao anterior) ...

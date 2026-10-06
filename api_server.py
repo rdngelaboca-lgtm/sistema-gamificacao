@@ -1885,6 +1885,7 @@ def api_compras_recebimento_finalizar(usuario, chave):
     dados = ler_json() or {}
 
     def finalizar():
+        ja_estava = bool(recebimento.obter_recebimento(chave).get('lancada'))
         r = recebimento.finalizar(chave, dados.get('itens'), dados.get('observacao'), usuario)
         linhas = [f"📦 <b>Mercadoria recebida</b> · {esc(r['fornecedor'])} · NF {esc(r['numero'])}",
                   f"Conferida por {esc(usuario['nome'])}: " + ("tudo certo ✅" if not r['divergencias']
@@ -1894,9 +1895,70 @@ def api_compras_recebimento_finalizar(usuario, chave):
                           f"chegou {recebimento.qtd_br(d['conferido'])} ({d['tipo']})")
         if r.get('observacao'):
             linhas.append(f"Obs.: {esc(r['observacao'])}")
+        # [LANÇAMENTO] tudo vinculado: já entra no estoque com a quantidade que chegou
+        divergencias = r['divergencias']
+        if ja_estava:
+            r['lancamento'] = {'ok': True, 'ja_estava': True}
+            linhas.append("ℹ️ Esta nota já estava no estoque (não foi lançada de novo)."
+                          + (" Se ela entrou pelo computador antes da conferência, entrou com a quantidade da nota: "
+                             "acerte a diferença na próxima contagem." if divergencias else ""))
+        else:
+            try:
+                lancada = recebimento.lancar_no_estoque(chave, usuario)
+                r = dict(lancada, divergencias=divergencias)
+                r['lancamento'] = {'ok': True}
+                linhas.append("✅ Lançada no estoque com a quantidade que chegou.")
+                if lancada.get('aumentos'):
+                    linhas.append("📈 Preços que subiram:")
+                    linhas += [f"• {esc(t)}" for t in lancada['aumentos'][:10]]
+            except compras_database.ErroCompras as e:
+                r['lancamento'] = {'ok': False, 'motivo': str(e)}
+                linhas.append(f"⏳ Ainda NÃO entrou no estoque: {esc(str(e))}\n"
+                              "Vincule no app (aba Receber) e toque em <b>Lançar no estoque</b>, ou lance pelo Gestão de Estoque.")
+            except Exception as e:
+                logger.exception(f"Recebimento: erro ao lançar a NF {r.get('numero')} no estoque: {e}")
+                r['lancamento'] = {'ok': False, 'motivo': 'Erro no servidor ao lançar no estoque (veja o log).'}
+                linhas.append("⚠️ Erro ao lançar no estoque (veja o log do servidor). Lance pelo app ou pelo Gestão de Estoque.")
         _avisar_gestor_telegram("\n".join(linhas))
         return r
     return _resposta_compras(finalizar)
+
+
+@app.route('/api/compras/recebimentos/<chave>/vincular', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_compras_recebimento_vincular(usuario, chave):
+    dados = ler_json() or {}
+    return _recebimento_disponivel() or _resposta_compras(recebimento.vincular_item, chave, dados.get('n'), dados.get('produto_id'),
+                                                          dados.get('fator'), usuario, confirmado=bool(dados.get('confirmado')))
+
+
+@app.route('/api/compras/recebimentos/<chave>/novo-produto', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_compras_recebimento_novo_produto(usuario, chave):
+    dados = ler_json() or {}
+    return _recebimento_disponivel() or _resposta_compras(
+        recebimento.criar_produto_do_item, chave, dados.get('n'), usuario, dados.get('nome'), dados.get('unidade'),
+        categoria=dados.get('categoria'), estoque_minimo=dados.get('estoque_minimo'), fator=dados.get('fator'))
+
+
+@app.route('/api/compras/recebimentos/<chave>/lancar', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_compras_recebimento_lancar(usuario, chave):
+    bloqueio = _recebimento_disponivel()
+    if bloqueio:
+        return bloqueio
+
+    def lancar():
+        r = recebimento.lancar_no_estoque(chave, usuario)
+        if not r.get('ja_estava'):
+            linhas = [f"✅ <b>Lançada no estoque</b> · {esc(r['fornecedor'])} · NF {esc(r['numero'])} (por {esc(usuario['nome'])}, "
+                      "com a quantidade conferida)"]
+            if r.get('aumentos'):
+                linhas.append("📈 Preços que subiram:")
+                linhas += [f"• {esc(t)}" for t in r['aumentos'][:10]]
+            _avisar_gestor_telegram("\n".join(linhas))
+        return r
+    return _resposta_compras(lancar)
 
 
 @app.route('/api/compras/recebimentos/<chave>/dispensar', methods=['POST'])
