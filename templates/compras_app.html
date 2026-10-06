@@ -66,7 +66,7 @@
   .navbar { position: sticky; bottom: 0; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; background: #fff;
     border-top: 1px solid var(--linha); padding: 6px 0 calc(10px + env(safe-area-inset-bottom)); }
   .navbar button { border: 0; background: transparent; display: flex; flex-direction: column; align-items: center; gap: 3px;
-    font-size: 12px; font-weight: 600; color: var(--suave); padding: 6px 0; min-height: 52px; }
+    font-size: 11px; font-weight: 600; color: var(--suave); padding: 6px 0; min-height: 52px; min-width: 0; white-space: nowrap; }
   .navbar button.ativo { color: var(--verde); font-weight: 800; }
   .chips { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
   .chips-livre { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -254,7 +254,7 @@
 
 // ---------------------------------------------------------------- utilidades
 const CHAVE = 'gb_compras_v1';
-const VERSAO_APP = '28';   // aparece no rodapé do início: confira se o celular pegou a versão nova
+const VERSAO_APP = '29';   // aparece no rodapé do início: confira se o celular pegou a versão nova
 const $app = document.getElementById('app');
 const DIAS_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];            // 1=Dom ... 7=Sáb (padrão do sistema)
 const FRACIONADAS = ['KG', 'G', 'GR', 'L', 'LT', 'ML', 'M'];
@@ -312,6 +312,7 @@ const ICONES = {
   baixo: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>',
   lixo: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6 6l1 14h10l1-14"/></svg>',
   enviar: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/></svg>',
+  prancheta: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4h6v3H9z"/><path d="M8.5 12l2 2 4-4"/><path d="M9 17h6"/></svg>',
   caixa: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/></svg>',
   barras: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 5v14"/><path d="M7 5v14"/><path d="M10 5v14"/><path d="M14 5v14"/><path d="M17 5v14"/><path d="M21 5v14"/></svg>',
   qr: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3z"/><path d="M20 14v7h-6"/></svg>',
@@ -326,7 +327,7 @@ function carregar() {
   return estadoVazio();
 }
 function estadoVazio() { return {usuario: null, rotinas: [], preparos: {}, ida: null, listas: {}, fila: [], erros: [], cupons: [], codigos: {}, codigosEm: null,
-                               recebimentos: null, notasReceb: {}, receb: {}, orcamentos: null}; }
+                               recebimentos: null, notasReceb: {}, receb: {}, orcamentos: null, estoque: null}; }
 function salvar() {
   try { localStorage.setItem(CHAVE, JSON.stringify(E)); }
   catch (e) { toast('Memória do celular cheia: não deu para salvar.'); }
@@ -486,8 +487,8 @@ function navbar(ativa) {
   const b = (id, ic, txt) => `<button class="${ativa === id ? 'ativo' : ''}" data-acao="nav" data-tela="${id}" ${ativa === id ? 'aria-current="page"' : ''}>${ic}${txt}</button>`;
   // [PAINEL DO GESTOR] relatórios só para o gestor: o operacional vê Início e Listas
   const gestor = E.usuario && E.usuario.gestor;
-  const gestao = gestor ? b('orcamentos', ICONES.orcamento, 'Orçamentos') + b('gestao', ICONES.grafico, 'Gestão') : '';
-  return `<nav class="navbar">${b('inicio', ICONES.casa, 'Início')}${b('listas', ICONES.listas, 'Listas')}${b('receber', ICONES.caixa, 'Receber')}${gestao}</nav>`;
+  const gestao = gestor ? b('orcamentos', ICONES.orcamento, 'Orçar') + b('gestao', ICONES.grafico, 'Gestão') : '';
+  return `<nav class="navbar">${b('inicio', ICONES.casa, 'Início')}${b('estoque', ICONES.prancheta, 'Estoque')}${b('listas', ICONES.listas, 'Listas')}${b('receber', ICONES.caixa, 'Receber')}${gestao}</nav>`;
 }
 function abrirModal(html) {
   fecharModal();
@@ -580,10 +581,17 @@ async function carregarUsuarios() {
 // ---------------------------------------------------------------- início
 TELAS.inicio = () => {
   const u = E.usuario;
-  const hoje = E.rotinas.filter(r => r.hoje);
+  // [SEPARAÇÃO] o Início é da contagem para LISTA DE COMPRAS; a contagem de estoque (balanço) fica na aba Estoque
+  const compra = E.rotinas.filter(r => !r.so_contagem);
+  const hoje = compra.filter(r => r.hoje);
   const ida = E.ida;
+  const idaEstoque = ida && E.preparos[ida.rotina_id] && E.preparos[ida.rotina_id].so_contagem;
   let principal = '';
-  if (ida) {
+  if (idaEstoque) {
+    principal = `<div class="cartao" style="display:flex;gap:10px;align-items:center"><div class="grow"><div class="nome">Contagem de estoque em andamento</div>
+        <div class="mini suave">${esc(E.preparos[ida.rotina_id].nome)}${ida.categorias ? ' · ' + esc(ida.categorias.join(', ')) : ''}</div></div>
+        <button class="btn claro" style="width:auto;min-height:40px;padding:4px 14px" data-acao="continuar-ida">Continuar</button></div>`;
+  } else if (ida) {
     const prep = E.preparos[ida.rotina_id];
     const total = prep ? linhasIda().length : 0;
     const feitos = prep ? linhasIda().filter(l => valorLinha(l) != null).length : Object.keys(ida.contagens).length;
@@ -612,8 +620,8 @@ TELAS.inicio = () => {
                             extra: orcDiferenca ? `${orcDiferenca} com diferença` : ''});
   const tilesHtml = tiles.map(t => `<button class="tile ${t.n && t.alerta ? 'tile-alerta' : ''}" ${t.acao}>
       <div class="tile-n">${t.n == null ? '…' : t.n}</div><div class="tile-t">${t.titulo}</div>${t.extra ? `<div class="mini" style="color:var(--laranja);font-weight:700">${t.extra}</div>` : ''}</button>`).join('');
-  const deHoje = E.rotinas.filter(r => r.hoje && !(ida && ida.rotina_id === r.id) && !(r === hoje[0] && !ida));
-  const outras = E.rotinas.filter(r => !r.hoje);
+  const deHoje = compra.filter(r => r.hoje && !(ida && ida.rotina_id === r.id) && !(r === hoje[0] && !ida));
+  const outras = compra.filter(r => !r.hoje);
   const cartaoRotina = r => `<button class="cartao item-rotina" data-acao="nova-ida" data-id="${r.id}">
       <div class="quadrado">${ICONES.carrinho}</div>
       <div class="grow"><div class="nome">${esc(r.nome)}${r.so_contagem ? ' <span class="chip-ap">só contagem</span>' : ''}</div><div class="pequeno suave">${r.qtd_itens} itens · ${esc(textoDias(r.dias_semana))}</div></div>
@@ -631,16 +639,11 @@ TELAS.inicio = () => {
         ${u.gestor ? `<button class="btn claro medio" data-acao="orc-novo-inicio">${ICONES.orcamento} Novo orçamento</button>`
                    : `<button class="btn claro medio" data-acao="nav" data-tela="listas">${ICONES.listas} Minhas listas</button>`}</div>
       ${deHoje.length ? `<div class="lista-cartoes"><div class="rotulo">Outras contagens de hoje</div>${deHoje.map(cartaoRotina).join('')}</div>` : ''}
-      ${u.gestor && E.rotinas.some(r => r.so_contagem) ? `<div class="lista-cartoes"><div class="rotulo">Balanço (só o gestor)</div>
-        ${E.rotinas.filter(r => r.so_contagem).map(r => `<div class="cartao" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <div class="grow nome" style="min-width:120px">${esc(r.nome)}</div>
-          <button class="btn claro" style="min-height:38px;width:auto;padding:4px 12px;font-size:14px" data-acao="balanco-abrir" data-id="${r.id}">Acompanhar</button>
-          <button class="btn claro" style="min-height:38px;width:auto;padding:4px 12px;font-size:14px" data-acao="dif-abrir" data-id="${r.id}">Diferenças R$</button></div>`).join('')}</div>` : ''}
       <details class="cartao" ${T.p.rotinasAbertas ? 'open' : ''} data-acao-toggle="rotinas">
         <summary style="font-weight:700;cursor:pointer;min-height:28px;display:flex;justify-content:space-between;align-items:center">
-          <span>Começar outra contagem (${outras.length + E.rotinas.filter(r => r.hoje).length})</span>
+          <span>Contagem para lista de compras (${compra.length})</span>
           ${u.gestor ? '<span class="link-btn" data-acao="nav" data-tela="rotinas">Gerenciar</span>' : ''}</summary>
-        <div class="lista-cartoes" style="margin-top:10px">${E.rotinas.map(cartaoRotina).join('')
+        <div class="lista-cartoes" style="margin-top:10px">${compra.map(cartaoRotina).join('')
           || `<div class="vazio">Nenhuma rotina criada ainda.${u.gestor ? '<br>Toque em <b>Gerenciar</b> para criar a primeira.' : '<br>Peça ao gestor para criar.'}</div>`}</div>
       </details>
       <div class="mini suave" style="text-align:center"><button class="link-btn" style="color:var(--suave)" data-acao="abrir-leitor">Testar leitor de código de barras</button> · versão ${VERSAO_APP}</div>
@@ -699,8 +702,8 @@ TELAS.novaIda = p => {
   const rot = E.rotinas.find(r => r.id === p.rotina_id) || E.rotinas[0];
   if (!rot) return `${topo('Nova ida ao mercado', '', 'nav-inicio')}<div class="corpo"><div class="vazio">Nenhuma rotina.</div></div>`;
   if (p.dias == null) p.dias = rot.dias_cobertura || 7;
-  const opcoes = E.rotinas.map(r => `<button class="opcao ${r.id === rot.id ? 'sel' : ''}" data-acao="ida-rotina" data-id="${r.id}" aria-pressed="${r.id === rot.id}">
-      <div class="radio"></div><div><div class="nome">${esc(r.nome)}</div><div class="pequeno suave">${r.qtd_itens} itens</div></div></button>`).join('');
+  const opcoes = E.rotinas.filter(r => !!r.so_contagem === !!rot.so_contagem).map(r => `<button class="opcao ${r.id === rot.id ? 'sel' : ''}" data-acao="ida-rotina" data-id="${r.id}" aria-pressed="${r.id === rot.id}">
+      <div class="radio"></div><div><div class="nome">${esc(r.nome)}</div><div class="pequeno suave">${r.automatica ? 'todos os produtos do cadastro · ' : ''}${r.qtd_itens} itens</div></div></button>`).join('');
   const padrao = [3, 5, 7, 10, 15];
   const chips = padrao.map(n => `<button class="chip ${p.dias === n ? 'sel' : ''}" data-acao="ida-dias" data-n="${n}" aria-pressed="${p.dias === n}">${n} dias</button>`).join('')
     + `<button class="chip ${padrao.includes(p.dias) ? '' : 'sel'}" data-acao="ida-dias-outro">${padrao.includes(p.dias) ? 'Outro' : p.dias + ' dias'}</button>`;
@@ -719,7 +722,7 @@ TELAS.novaIda = p => {
     ? `<div class="info">Contagem geral: os números entram no estoque. <strong>Não gera lista de compra.</strong></div>${locais}`
     : `<div class="lista-cartoes"><div class="titulo-sec">Comprar para quantos dias?</div><div class="chips">${chips}</div>
         <div class="info">A lista vai cobrir até <strong>${esc(ate.toLocaleDateString('pt-BR', {weekday: 'long', day: '2-digit', month: '2-digit'}))}</strong>${esc(prazo)}.</div></div>`;
-  return `${topo(rot.so_contagem ? 'Contagem do estoque' : 'Nova ida ao mercado', '', 'nav-inicio')}
+  return `${topo(rot.so_contagem ? 'Contagem de estoque' : 'Contagem para lista de compras', '', rot.so_contagem ? 'nav-estoque' : 'nav-inicio')}
     <div class="corpo">
       <div class="lista-cartoes"><div class="titulo-sec">Qual rotina?</div>${opcoes}</div>
       ${p.secoes ? '' : blocoCats}
@@ -1036,7 +1039,7 @@ async function carregarBalanco() {
 }
 TELAS.balanco = p => {
   const d = p.d;
-  if (!d) return `${topo('Balanço', 'Carregando…', 'nav-inicio')}<div class="corpo">${p.erro ? `<div class="aviso">${esc(p.erro)}</div>` : '<div class="vazio">Carregando…</div>'}</div>`;
+  if (!d) return `${topo('Balanço', 'Carregando…', 'nav-estoque')}<div class="corpo">${p.erro ? `<div class="aviso">${esc(p.erro)}</div>` : '<div class="vazio">Carregando…</div>'}</div>`;
   const pct = d.total ? Math.round(100 * d.feitos / d.total) : 0;
   const pessoas = d.pessoas.length ? d.pessoas.map(x => `<div class="lin"><div class="grow"><div style="font-weight:700">${esc(x.nome)}</div>
       <div class="mini suave">${x.local ? 'em ' + esc(nomeLocal(x.local)) + ' · ' : ''}${x.feitos} de ${x.total} contados</div></div>
@@ -1053,7 +1056,7 @@ TELAS.balanco = p => {
         <div class="mini" style="margin-top:4px">${l.pendentes.map(esc).join(' · ')}${l.mais_pendentes ? ` e mais ${l.mais_pendentes}` : ''}</div></details>` : ''}</div>`;
   }).join('');
   const hora = (d.atualizado || '').slice(11, 16);
-  return `${faixaRede()}${topo(d.rotina.nome, `Balanço de hoje · atualizado ${hora}`, 'nav-inicio')}
+  return `${faixaRede()}${topo(d.rotina.nome, `Balanço de hoje · atualizado ${hora}`, 'nav-estoque')}
     <div class="corpo">
       ${p.erro ? `<div class="aviso">${esc(p.erro)}</div>` : ''}
       <div class="cartao"><div style="display:flex;justify-content:space-between;align-items:baseline"><div class="titulo-sec">Andamento</div>
@@ -1141,6 +1144,52 @@ async function terminarContagem() {
   ir('lista', {codigo: corpo.codigo});
 }
 
+// [ABA ESTOQUE] contagem de estoque / balanço, separada da contagem para lista de compras
+async function carregarEstoque() {
+  try {
+    E.estoque = await api('GET', '/api/compras/estoque'); salvar();
+    if (!E.rotinas.some(r => r.id === E.estoque.id)) { E.rotinas = await api('GET', '/api/compras/rotinas'); salvar(); }
+  } catch (e) {}
+  if (T.nome === 'estoque') desenhar();
+}
+TELAS.estoque = p => {
+  const u = E.usuario, ida = E.ida, est = E.estoque, sel = p.selCats || [];
+  const prepIda = ida && E.preparos[ida.rotina_id];
+  let andamento = '';
+  if (ida && prepIda && prepIda.so_contagem) {
+    const linhas = linhasIda(), feitos = linhas.filter(l => valorLinha(l) != null).length;
+    andamento = `<div class="destaque"><div><div class="rotulo" style="color:#CDEBE6">Contagem em andamento</div>
+        <div style="font-size:22px;font-weight:800">${esc(prepIda.nome)}${ida.categorias ? ' · ' + esc(ida.categorias.join(', ')) : ''}</div>
+        <div style="color:#E3F4F1">${feitos} de ${linhas.length} itens${ida.secoes && ida.secoes.length ? ' · ' + esc(ida.secoes.join(', ')) : ''}${ida.usuario_id && ida.usuario_id !== u.id ? ' · por ' + esc(ida.usuario_nome || 'outra pessoa') : ''}</div></div>
+        <button class="btn" data-acao="continuar-ida">Continuar contagem ${ICONES.seta}</button></div>`;
+  } else if (ida) {
+    andamento = '<div class="info mini">Há uma contagem para lista de compras em andamento (continue pelo Início).</div>';
+  }
+  const nSel = est ? est.categorias.filter(c => sel.includes(c.nome)).reduce((n, c) => n + c.qtd, 0) : 0;
+  const porCategoria = !est ? `<div class="vazio">${online ? 'Carregando as categorias…' : 'Sem internet: conecte para ver as categorias.'}</div>`
+    : `<div class="chips chips-livre">${est.categorias.map(c => `<button class="chip ${sel.includes(c.nome) ? 'sel' : ''}" data-acao="est-cat" data-c="${esc(c.nome)}" aria-pressed="${sel.includes(c.nome)}">${esc(c.nome)} <span class="mini" style="opacity:.75">${c.qtd}</span></button>`).join('')}</div>
+      <div class="info">${sel.length ? `Vai contar os <strong>${nSel} produtos</strong> de ${esc(sel.join(', '))} (todos do cadastro, mesmo os que não estão em nenhuma rotina).` : `Marque uma ou mais categorias. Nenhuma marcada = <strong>todos os ${est.total} produtos</strong>.`}</div>
+      <button class="btn" data-acao="est-comecar">${sel.length ? `Contar ${esc(sel.join(', '))}` : 'Contar todos os produtos'} ${ICONES.seta}</button>`;
+  const gerais = E.rotinas.filter(r => r.so_contagem && !r.automatica);
+  const cartao = r => `<button class="cartao item-rotina" data-acao="nova-ida" data-id="${r.id}">
+      <div class="quadrado">${ICONES.prancheta}</div>
+      <div class="grow"><div class="nome">${esc(r.nome)}</div><div class="pequeno suave">${r.qtd_itens} itens · por local</div></div>${ICONES.seta}</button>`;
+  const gestorBal = u.gestor ? `<div class="lista-cartoes"><div class="rotulo">Acompanhar (só o gestor)</div>
+      ${E.rotinas.filter(r => r.so_contagem).map(r => `<div class="cartao"><div class="nome" style="margin-bottom:8px">${esc(r.nome)}</div>
+        <div class="linha-btns"><button class="btn claro medio" data-acao="balanco-abrir" data-id="${r.id}">Ao vivo</button>
+        <button class="btn claro medio" data-acao="dif-abrir" data-id="${r.id}">Diferenças R$</button></div></div>`).join('')
+        || '<div class="mini suave">Nenhuma contagem ainda.</div>'}</div>` : '';
+  return `${faixaRede()}${topo('Contagem de estoque', 'Balanço · os números entram no estoque (não gera lista de compra)')}
+    <div class="corpo">
+      ${andamento}
+      <div class="cartao lista-cartoes"><div class="titulo-sec">Contar por categoria</div>${porCategoria}</div>
+      <div class="lista-cartoes"><div class="rotulo">Balanço por local</div>
+        ${gerais.map(cartao).join('') || `<div class="vazio">${u.gestor ? 'Nenhuma contagem por local ainda.<br>Crie uma com os locais (freezer, estoque seco…) para várias pessoas contarem juntas.' : 'Nenhuma contagem por local ainda (o gestor cria).'}</div>`}
+        ${u.gestor ? '<div class="linha-btns"><button class="btn claro medio" data-acao="rotina-nova" data-contagem="1">Nova contagem por local</button><button class="btn claro medio" data-acao="nav-rotinas">Gerenciar</button></div>' : ''}</div>
+      ${gestorBal}
+    </div>${navbar('estoque')}`;
+};
+
 // ---------------------------------------------------------------- [CONTAGEM GERAL] terminar e tela final
 async function terminarContagemGeral() {
   const ida = E.ida, prep = E.preparos[ida.rotina_id], itens = itensIda();
@@ -1173,7 +1222,7 @@ TELAS.contagemSalva = p => `${faixaRede()}<div class="corpo" style="padding-top:
       <div class="cartao"><div class="numero-grande" style="color:var(--suave)">${p.pulados}</div><div class="pequeno suave" style="font-weight:600">sem número</div></div></div>
     ${p.offline ? '<div class="aviso">Sem internet: será enviada sozinha quando o celular conectar. Não apague o app.</div>'
                 : '<div class="info">Já aparece no Gestão de Estoque. Se outra pessoa contar outro local hoje, as duas partes ficam juntas na mesma contagem.</div>'}
-  </div><div class="rodape"><button class="btn" data-acao="nav-inicio">Voltar ao início</button></div>`;
+  </div><div class="rodape"><button class="btn" data-acao="nav-estoque">Voltar para Estoque</button></div>`;
 
 // ---------------------------------------------------------------- lista sugerida
 TELAS.lista = p => {
@@ -2165,11 +2214,14 @@ async function carregarConsumo(rotinaId) {
 
 // ---------------------------------------------------------------- rotinas (gestor)
 TELAS.rotinas = p => {
-  const lista = (p.rotinas || E.rotinas).map(r => `<button class="cartao item-rotina" data-acao="rotina-editar" data-id="${r.id}">
+  const item = r => `<button class="cartao item-rotina" data-acao="rotina-editar" data-id="${r.id}">
       <div class="quadrado">${ICONES.carrinho}</div><div class="grow"><div class="nome">${esc(r.nome)}</div>
-      <div class="pequeno suave">${r.qtd_itens} itens · ${esc(textoDias(r.dias_semana))} · ${r.dias_cobertura} dias</div></div></button>`).join('');
-  return `${topo('Rotinas de compra', 'Só o gestor vê esta tela', 'nav-inicio')}
-    <div class="corpo"><div class="lista-cartoes">${lista || '<div class="vazio">Nenhuma rotina ainda.</div>'}</div></div>
+      <div class="pequeno suave">${r.so_contagem ? (r.automatica ? 'automática: todos os produtos · aqui você muda os locais' : r.qtd_itens + ' itens · por local') : `${r.qtd_itens} itens · ${esc(textoDias(r.dias_semana))} · ${r.dias_cobertura} dias`}</div></div></button>`;
+  const todas = p.rotinas || E.rotinas;
+  const compra = todas.filter(r => !r.so_contagem).map(item).join(''), estoque = todas.filter(r => r.so_contagem).map(item).join('');
+  return `${topo('Rotinas', 'Só o gestor vê esta tela', 'nav-inicio')}
+    <div class="corpo"><div class="lista-cartoes"><div class="rotulo">Contagem para lista de compras</div>${compra || '<div class="vazio">Nenhuma rotina de compra ainda.</div>'}</div>
+      <div class="lista-cartoes"><div class="rotulo">Contagem de estoque (aba Estoque)</div>${estoque || '<div class="vazio">Nenhuma contagem de estoque ainda.</div>'}</div></div>
     <div class="rodape"><div class="linha-btns"><button class="btn claro" data-acao="rotina-nova" data-contagem="1">Nova contagem geral</button>
       <button class="btn" data-acao="rotina-nova">Nova rotina de compra</button></div></div>`;
 };
@@ -2781,12 +2833,25 @@ const acoes = {
       if (d.secao === 'consumo' && E.rotinas[0]) carregarConsumo(E.rotinas[0].id);
     }
     else if (tela === 'rotinas') { ir('rotinas', {}); }
+    else if (tela === 'estoque') { ir('estoque', {selCats: []}); carregarEstoque(); }
     else if (tela === 'orcamentos') {
       if (!E.usuario.gestor) return acoes.nav({tela: 'inicio'});
       ir('orcamentos'); carregarOrcamentos();
     }
   },
   'nav-inicio': () => acoes.nav({tela: 'inicio'}),
+  'nav-estoque': () => acoes.nav({tela: 'estoque'}),
+  'est-cat': d => { const sel = T.p.selCats || []; T.p.selCats = sel.includes(d.c) ? sel.filter(x => x !== d.c) : [...sel, d.c]; desenhar(); },
+  'est-comecar': () => {       // [ABA ESTOQUE] contar só as categorias escolhidas, do cadastro inteiro
+    const est = E.estoque, sel = (T.p.selCats || []).slice();
+    if (!est) return toast('Conecte à internet para carregar as categorias.');
+    if (!sel.length && !confirm(`Contar TODOS os ${est.total} produtos do cadastro?`)) return;
+    if (E.ida) { if (!confirm('Já existe uma contagem em andamento. Descartar e começar outra?')) return; descartarIda(); }
+    if (!E.rotinas.some(r => r.id === est.id)) E.rotinas.push({id: est.id, nome: est.nome, so_contagem: true, automatica: true, qtd_itens: est.total,
+                                                               dias_semana: [], dias_cobertura: 7, categorias: est.categorias.map(c => c.nome)});
+    ir('novaIda', {rotina_id: est.id, selCats: sel});
+    comecarIda(est.id);
+  },
   'listas-filtro': d => { T.p.filtro = d.f; desenhar(); },
   'orc-novo-inicio': () => { ir('orcamentos'); carregarOrcamentos(); modalFornecedorOrc(); },
   'nav-rotinas': () => { ir('rotinas', {}); api('GET', '/api/compras/rotinas').then(r => { E.rotinas = r; salvar(); if (T.nome === 'rotinas') desenhar(); }).catch(() => {}); },
@@ -2886,7 +2951,7 @@ const acoes = {
   'balanco-abrir': d => { ir('balanco', {rid: +d.id}); carregarBalanco(); },
   'dif-abrir': d => { ir('diferencas', {rid: +d.id, de: T.nome === 'balanco' ? T.p : null}); carregarDiferencas(); },
   'dif-dia': d => { T.p.dia = d.dia; carregarDiferencas(); },
-  'dif-voltar': () => { const de = T.p.de; if (de) { T = {nome: 'balanco', p: de}; desenhar(); carregarBalanco(); } else ir('inicio'); },
+  'dif-voltar': () => { const de = T.p.de; if (de) { T = {nome: 'balanco', p: de}; desenhar(); carregarBalanco(); } else acoes.nav({tela: 'estoque'}); },
   'cont-local': d => { if (T.p.buf) confirmarDigitadoSemPular(); T.p.scroll = null; irParaItem(+d.k); },
   'cont-revisar': () => { if (T.p.buf) confirmarDigitadoSemPular(); redesenharContagem(); revisarContagem(); },
   'cont-ir-rev': d => { fecharModal(); T.p.scroll = null; irParaItem(+d.k); },
@@ -2894,7 +2959,10 @@ const acoes = {
     if (T.p.buf) confirmarDigitadoSemPular();
     irParaItem(+d.k);
   },
-  'cont-sair': () => { toast('A contagem ficou salva. Continue pelo início.'); ir('inicio'); },
+  'cont-sair': () => {
+    const estoque = E.ida && E.preparos[E.ida.rotina_id] && E.preparos[E.ida.rotina_id].so_contagem;
+    toast(`A contagem ficou salva. Continue pela aba ${estoque ? 'Estoque' : 'Início'}.`); acoes.nav({tela: estoque ? 'estoque' : 'inicio'});
+  },
   'cont-modo': () => { const it = itemAtual(); E.ida.modo[it.produto_id] = fatorAtual(it) > 1 ? 'un' : 'cx'; T.p.buf = ''; salvar(); redesenharContagem(); },
   'cont-terminar': () => { if (T.p.buf) confirmarDigitadoSemPular(); fecharModal(); terminarContagem(); },
   // lista

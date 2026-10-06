@@ -304,6 +304,8 @@ def garantir_tabelas():
         """)
         # [CONTAGEM GERAL] rotina que só conta o estoque (organizada por local), sem lista de compra
         cur.execute("IF COL_LENGTH('CompraRotinas', 'SoContagem') IS NULL ALTER TABLE CompraRotinas ADD SoContagem BIT NULL")
+        # [ABA ESTOQUE] rotina automática "Estoque completo" (todos os produtos do cadastro)
+        cur.execute("IF COL_LENGTH('CompraRotinas', 'Automatica') IS NULL ALTER TABLE CompraRotinas ADD Automatica BIT NULL")
         # [VÁRIOS LOCAIS] o mesmo produto em mais de um local ("Freezer 1|Estoque seco") e a contagem de cada local
         cur.execute("""
             IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'CompraContagemLocais')
@@ -526,7 +528,8 @@ def listar_rotinas(incluir_inativas=False, hoje=None):
         cur = conn.cursor()
         cur.execute("""
             SELECT R.RotinaID, R.Nome, R.DiasSemana, R.DiasCobertura, R.PrazoDias, R.Fornecedores, R.Ativa,
-                   (SELECT COUNT(*) FROM CompraRotinaItens I WHERE I.RotinaID = R.RotinaID) AS QtdItens, R.SoContagem
+                   (SELECT COUNT(*) FROM CompraRotinaItens I WHERE I.RotinaID = R.RotinaID) AS QtdItens, R.SoContagem,
+                   R.Automatica
             FROM CompraRotinas R
             ORDER BY R.Nome
         """)
@@ -546,7 +549,7 @@ def listar_rotinas(incluir_inativas=False, hoje=None):
             rotinas.append({'id': r[0], 'nome': r[1], 'dias_semana': dias, 'dias_cobertura': int(r[3] or 7),
                             'prazo_dias': int(r[4] or 0), 'fornecedores': _ler_ids(r[5]), 'ativa': bool(r[6]),
                             'qtd_itens': int(r[7] or 0), 'hoje': prox == hoje, 'proxima': _iso(prox),
-                            'so_contagem': bool(r[8]),
+                            'so_contagem': bool(r[8]), 'automatica': bool(r[9]),
                             'categorias': sorted(categorias.get(r[0], set()), key=lambda c: c.lower())})
         rotinas.sort(key=lambda x: (not x['hoje'], x['proxima'] or '9999', x['nome']))
         return rotinas
@@ -679,6 +682,70 @@ def desativar_rotina(rotina_id):
         return cur.rowcount > 0
     finally:
         conn.close()
+
+
+# ==============================================================================
+# == [ABA ESTOQUE] "Estoque completo": todos os produtos, para contar por categoria
+# ==============================================================================
+NOME_ESTOQUE_COMPLETO = 'Estoque completo'
+
+
+def estoque_completo():
+    """
+    Garante a rotina automática de CONTAGEM com TODOS os produtos do cadastro (para contar só
+    uma categoria, ex.: Brinquedos, mesmo que nenhuma rotina tenha esses produtos). Produto novo
+    no cadastro entra sozinho; apagado sai. O local de cada produto: o que ele já tem nesta rotina
+    (o gestor pode mudar), senão o de outra contagem geral, senão a categoria.
+    Devolve {'id', 'nome', 'total', 'categorias': [{'nome', 'qtd'}]}.
+    """
+    garantir_tabelas()
+    conn = _conectar()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT RotinaID, Ativa FROM CompraRotinas WHERE Automatica = 1 ORDER BY RotinaID")
+        r = cur.fetchone()
+        if r:
+            rotina_id = int(r[0])
+            if not r[1]:
+                cur.execute("UPDATE CompraRotinas SET Ativa = 1 WHERE RotinaID = ?", (rotina_id,))
+        else:
+            cur.execute("""INSERT INTO CompraRotinas (Nome, DiasSemana, DiasCobertura, PrazoDias, Fornecedores, SoContagem,
+                                                     Ativa, CriadaEm, Automatica)
+                           OUTPUT INSERTED.RotinaID VALUES (?, '', 7, 0, '', 1, 1, ?, 1)""",
+                        (NOME_ESTOQUE_COMPLETO, datetime.now()))
+            rotina_id = int(cur.fetchone()[0])
+        cur.execute("SELECT ProdutoID, NomeProduto, Categoria FROM ProdutosEstoque")
+        produtos = {pid: (nome or '', categoria_do(cat)) for pid, nome, cat in cur.fetchall()}
+        cur.execute("SELECT ProdutoID, Ordem FROM CompraRotinaItens WHERE RotinaID = ?", (rotina_id,))
+        atuais = {pid: ordem or 0 for pid, ordem in cur.fetchall()}
+        apagados = [pid for pid in atuais if pid not in produtos]
+        for pid in apagados:
+            cur.execute("DELETE FROM CompraRotinaItens WHERE RotinaID = ? AND ProdutoID = ?", (rotina_id, pid))
+        novos = sorted((pid for pid in produtos if pid not in atuais), key=lambda p: (produtos[p][1].lower(), produtos[p][0].lower()))
+        if novos:
+            # local já usado numa contagem geral do gestor (Freezer 1, Estoque seco...)
+            cur.execute("""SELECT I.ProdutoID, I.Secao FROM CompraRotinaItens I JOIN CompraRotinas R ON R.RotinaID = I.RotinaID
+                           WHERE R.SoContagem = 1 AND R.Ativa = 1 AND R.RotinaID <> ? AND I.Secao IS NOT NULL""", (rotina_id,))
+            local_de = {}
+            for pid, secao in cur.fetchall():
+                local_de.setdefault(pid, secao)
+            base = max(atuais.values(), default=-1) + 1
+            for k, pid in enumerate(novos):
+                cur.execute("INSERT INTO CompraRotinaItens (RotinaID, ProdutoID, Ordem, Secao) VALUES (?, ?, ?, ?)",
+                            (rotina_id, pid, base + k, (local_de.get(pid) or re.sub(r'[|;,]', ' -', produtos[pid][1]))[:_tam_secao]))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    if novos or apagados:
+        logger.info(f"Estoque completo: +{len(novos)} produto(s), -{len(apagados)}.")
+    qtd = {}
+    for _, cat in produtos.values():
+        qtd[cat] = qtd.get(cat, 0) + 1
+    return {'id': rotina_id, 'nome': NOME_ESTOQUE_COMPLETO, 'total': len(produtos),
+            'categorias': [{'nome': c, 'qtd': n} for c, n in sorted(qtd.items(), key=lambda x: x[0].lower())]}
 
 
 def buscar_produtos(termo='', limite=40):

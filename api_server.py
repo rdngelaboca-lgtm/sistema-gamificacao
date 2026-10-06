@@ -1584,6 +1584,13 @@ def api_compras_preparar(usuario, rotina_id):
     return _resposta_compras(compras_database.preparar_contagem, rotina_id)
 
 
+@app.route('/api/compras/estoque', methods=['GET'])
+@compras_login()
+def api_compras_estoque_completo(usuario):
+    """[ABA ESTOQUE] rotina automática com todos os produtos e as categorias (para contar só uma)."""
+    return _resposta_compras(compras_database.estoque_completo)
+
+
 # [PAINEL DO BALANÇO] o celular avisa o que já contou; o gestor acompanha e vê as diferenças em R$
 @app.route('/api/compras/contagem/andamento', methods=['POST'])
 @compras_login()
