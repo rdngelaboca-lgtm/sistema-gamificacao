@@ -120,6 +120,24 @@ def _ler_ids(texto):
     return [int(p) for p in str(texto or '').split(',') if p.strip().isdigit()]
 
 
+SEM_LOCAL = ''
+MAX_LOCAIS = 10
+
+
+def locais_do_texto(texto):
+    """[VÁRIOS LOCAIS] 'Freezer 1, Estoque seco' (ou com | ou ;) -> ['Freezer 1', 'Estoque seco']."""
+    if isinstance(texto, (list, tuple)):
+        partes = [str(x) for x in texto]
+    else:
+        partes = re.split(r'[|;,]', str(texto or ''))
+    locais = []
+    for x in partes:
+        x = re.sub(r'\s+', ' ', x).strip()[:80]
+        if x and x.lower() not in [l.lower() for l in locais]:
+            locais.append(x)
+    return locais[:MAX_LOCAIS]
+
+
 def _qtd_valida(valor, nome="Quantidade"):
     """Converte o que veio do celular em Decimal >= 0 (ou None = item pulado)."""
     if valor is None or (isinstance(valor, str) and not valor.strip()):
@@ -284,7 +302,25 @@ def garantir_tabelas():
         """)
         # [CONTAGEM GERAL] rotina que só conta o estoque (organizada por local), sem lista de compra
         cur.execute("IF COL_LENGTH('CompraRotinas', 'SoContagem') IS NULL ALTER TABLE CompraRotinas ADD SoContagem BIT NULL")
+        # [VÁRIOS LOCAIS] o mesmo produto em mais de um local ("Freezer 1|Estoque seco") e a contagem de cada local
+        cur.execute("""
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'CompraContagemLocais')
+            CREATE TABLE CompraContagemLocais (
+                ContagemID INT NOT NULL,
+                ProdutoID INT NOT NULL,
+                Local NVARCHAR(80) NOT NULL,
+                Qtd DECIMAL(18, 3) NOT NULL,
+                ContadoPor NVARCHAR(150) NULL,
+                PRIMARY KEY (ContagemID, ProdutoID, Local)
+            )
+        """)
         conn.commit()
+        try:
+            cur.execute("IF COL_LENGTH('CompraRotinaItens', 'Secao') < 800 ALTER TABLE CompraRotinaItens ALTER COLUMN Secao NVARCHAR(400) NULL")
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            logger.warning(f"App de compras: não deu para aumentar o campo de locais da rotina: {e}")
         _tabelas_ok = True
     except Exception as e:
         conn.rollback()
@@ -504,10 +540,12 @@ def obter_rotina(rotina_id):
             WHERE I.RotinaID = ?
             ORDER BY I.Ordem, I.ProdutoID
         """, (int(rotina_id),))
-        itens = [{'produto_id': i[0], 'ordem': i[1], 'secao': i[2] or '',
-                  'nome': i[3] or f'Produto {i[0]} (apagado do estoque)', 'unidade': (i[4] or 'UN').strip() or 'UN',
-                  'categoria': i[5] or '', 'existe': i[3] is not None}
-                 for i in cur.fetchall()]
+        itens = []
+        for i in cur.fetchall():
+            locais = locais_do_texto(i[2])
+            itens.append({'produto_id': i[0], 'ordem': i[1], 'secao': locais[0] if locais else '', 'locais': locais,
+                          'nome': i[3] or f'Produto {i[0]} (apagado do estoque)', 'unidade': (i[4] or 'UN').strip() or 'UN',
+                          'categoria': i[5] or '', 'existe': i[3] is not None})
         return {'id': r[0], 'nome': r[1], 'dias_semana': _ler_dias_semana(r[2]), 'dias_cobertura': int(r[3] or 7),
                 'prazo_dias': int(r[4] or 0), 'fornecedores': _ler_ids(r[5]), 'ativa': bool(r[6]),
                 'so_contagem': bool(r[7]), 'itens': itens}
@@ -547,7 +585,8 @@ def salvar_rotina(dados):
         if pid in vistos:
             continue
         vistos.add(pid)
-        itens.append((pid, str(it.get('secao') or '').strip()[:80]))
+        locais = locais_do_texto(it.get('locais') if it.get('locais') else it.get('secao'))
+        itens.append((pid, '|'.join(locais)[:400]))
     if not itens:
         raise ErroCompras("Coloque pelo menos um produto na rotina.")
 
@@ -857,6 +896,25 @@ def _contagens_de_hoje(cur, produtos, hoje, ignorar_ids):
     return resultado
 
 
+def _breakdown(cur, contagem_id):
+    """{ProdutoID: {local: (qtd, quem contou)}} gravado para uma contagem (vazio se ela é antiga, sem locais)."""
+    cur.execute("SELECT ProdutoID, Local, Qtd, ContadoPor FROM CompraContagemLocais WHERE ContagemID = ?", (contagem_id,))
+    resultado = {}
+    for pid, local, q, por in cur.fetchall():
+        resultado.setdefault(pid, {})[local or SEM_LOCAL] = (_dec(q), por)
+    return resultado
+
+
+def _locais_contados_hoje(cur, anteriores):
+    """[VÁRIOS LOCAIS] {pid: {local: {'qtd', 'por'}}} das contagens de HOJE desta rotina (para o celular mostrar)."""
+    resultado = {}
+    for cod, cid, _ in sorted(anteriores, key=lambda x: x[1] or 0):
+        for pid, locais in _breakdown(cur, cid).items():
+            for local, (q, por) in locais.items():
+                resultado.setdefault(pid, {})[local] = {'qtd': _num(q), 'por': por or '?'}
+    return resultado
+
+
 def _contagens_substituidas(cur, rotina_id, hoje, ignorar_codigo=None):
     """Contagens que o app já fez HOJE para esta mesma rotina (serão trocadas pela nova)."""
     cur.execute("SELECT Codigo, ContagemID, DataContagem, Status FROM CompraListas WHERE RotinaID = ? AND ContagemID IS NOT NULL",
@@ -880,8 +938,10 @@ def preparar_contagem(rotina_id, hoje=None):
         ultima = _ultima_contagem_id(cur)
         minimos = _minimos(cur, pids)
         precos = _precos_por_produto(cur, pids, hoje)
-        substituidas = {cid for _, cid, _ in _contagens_substituidas(cur, rotina_id, hoje)}
+        anteriores = _contagens_substituidas(cur, rotina_id, hoje)
+        substituidas = {cid for _, cid, _ in anteriores}
         hoje_outras = _contagens_de_hoje(cur, pids, hoje, substituidas)
+        hoje_locais = _locais_contados_hoje(cur, anteriores)
     finally:
         conn.close()
     sug = _sugestao_por_produto(ultima, hoje)
@@ -893,6 +953,8 @@ def preparar_contagem(rotina_id, hoje=None):
         ja = hoje_outras.get(pid)
         itens.append({
             'produto_id': pid, 'nome': it['nome'], 'unidade': it['unidade'], 'secao': it['secao'], 'ordem': it['ordem'],
+            'locais': it['locais'],
+            'hoje_locais': hoje_locais.get(pid),     # [VÁRIOS LOCAIS] já contado hoje nesta rotina (outra pessoa/celular)
             'estoque_minimo': _num(minimos.get(pid, Decimal('0'))),
             'ultima_contagem': {'data': _iso(info.get('DataUltimaContagem')), 'qtd': _num(info.get('QtdUltimaContagem'))}
                                if info.get('Contado') else None,
@@ -1008,12 +1070,22 @@ def registrar_lista(codigo, rotina_id, usuario, dias, contagens, hoje=None):
     rotina = obter_rotina(rotina_id)
     da_rotina = {i['produto_id'] for i in rotina['itens'] if i['existe']}
     contados, extras = {}, {}
+    por_local = {}     # [VÁRIOS LOCAIS] {pid: {local: qtd}} do que foi contado agora
     for c in contagens or []:
         try:
             pid = int(c.get('produto_id'))
         except (TypeError, ValueError, AttributeError):
             raise ErroCompras("Item contado sem produto válido.")
         q = _qtd_valida(c.get('qtd'))
+        if isinstance(c.get('locais'), dict) and c['locais']:
+            locais = {}
+            for local, ql in c['locais'].items():
+                ql = _qtd_valida(ql)
+                if ql is not None:
+                    locais[str(local or '').strip()[:80]] = ql
+            if locais:
+                q = sum(locais.values(), Decimal('0'))     # o total é a soma dos locais
+                por_local[pid] = {local: (ql, usuario.get('nome')) for local, ql in locais.items()}
         if pid not in da_rotina:
             # [BIPAR] produto bipado que não está na rotina: entra na contagem e na lista
             # (só se foi contado e existe no estoque); senão, ignora
@@ -1048,7 +1120,8 @@ def registrar_lista(codigo, rotina_id, usuario, dias, contagens, hoje=None):
         else:
             fechadas = database.listar_valores_estoque_fechados(levantar_erro=True)
             herdados = {}                    # contados na vez anterior e NÃO recontados agora
-            for cod_ant, cid_ant, st_ant in _contagens_substituidas(cur, rotina_id, hoje, codigo):
+            locais_ant = {}                  # [VÁRIOS LOCAIS] {pid: {local: qtd}} das contagens de hoje
+            for cod_ant, cid_ant, st_ant in sorted(_contagens_substituidas(cur, rotina_id, hoje, codigo), key=lambda x: x[1] or 0):
                 if st_ant not in (ST_FINALIZADA, ST_CANCELADA, ST_CONTAGEM):
                     cur.execute("UPDATE CompraListas SET Status = ? WHERE Codigo = ?", (ST_CANCELADA, cod_ant))
                 if cid_ant in fechadas:
@@ -1058,6 +1131,9 @@ def registrar_lista(codigo, rotina_id, usuario, dias, contagens, hoje=None):
                 for pid_ant, q_ant in cur.fetchall():
                     if pid_ant not in contados and q_ant is not None:
                         herdados[pid_ant] = _dec(q_ant)      # a contagem mais nova vence se repetir
+                for pid_ant, locais in _breakdown(cur, cid_ant).items():
+                    locais_ant.setdefault(pid_ant, {}).update(locais)
+                cur.execute("DELETE FROM CompraContagemLocais WHERE ContagemID = ?", (cid_ant,))
                 cur.execute("DELETE FROM ItensContagemEstoque WHERE ContagemID = ?", (cid_ant,))
                 cur.execute("DELETE FROM ContagensEstoque WHERE ContagemID = ?", (cid_ant,))
                 cur.execute("UPDATE CompraListas SET ContagemID = NULL WHERE Codigo = ?", (cod_ant,))
@@ -1066,6 +1142,24 @@ def registrar_lista(codigo, rotina_id, usuario, dias, contagens, hoje=None):
                     contados[pid_ant] = q_ant          # entra na lista como contado
                 else:
                     fora_da_lista[pid_ant] = q_ant     # bipado fora da rotina antes: só no estoque
+            # [VÁRIOS LOCAIS] outra pessoa contou OUTRO local do mesmo produto hoje: SOMA (o mesmo local, vale o mais novo).
+            # Antes a contagem mais nova trocava o número inteiro e o outro local se perdia.
+            detalhe = {}
+            for pid, ant in locais_ant.items():
+                if pid in por_local:
+                    detalhe[pid] = dict(ant, **por_local[pid])
+                elif pid in herdados:
+                    detalhe[pid] = dict(ant)
+            for pid, locais in por_local.items():
+                detalhe.setdefault(pid, dict(locais))
+            for pid, locais in detalhe.items():
+                total = sum((ql for ql, _ in locais.values()), Decimal('0'))
+                if pid in contados:
+                    contados[pid] = total
+                elif pid in fora_da_lista:
+                    fora_da_lista[pid] = total
+                elif pid in extras:
+                    extras[pid] = total
             contagem_id = None
             if contados or fora_da_lista:
                 cur.execute("""INSERT INTO ContagensEstoque (DataContagem, FuncionarioID, NomeContagem)
@@ -1075,6 +1169,11 @@ def registrar_lista(codigo, rotina_id, usuario, dias, contagens, hoje=None):
                 for pid, q in list(contados.items()) + list(fora_da_lista.items()):
                     cur.execute("""INSERT INTO ItensContagemEstoque (ContagemID, ProdutoID, QuantidadeContada, NomeAvulso, EANAvulso)
                                    VALUES (?, ?, ?, NULL, NULL)""", (contagem_id, pid, q))
+                for pid, locais in detalhe.items():
+                    if pid in contados or pid in fora_da_lista:
+                        for local, (ql, por) in locais.items():
+                            cur.execute("INSERT INTO CompraContagemLocais (ContagemID, ProdutoID, Local, Qtd, ContadoPor) VALUES (?, ?, ?, ?, ?)",
+                                        (contagem_id, pid, local, ql, (por or '')[:150] or None))
             cur.execute("""INSERT INTO CompraListas (Codigo, RotinaID, NomeRotina, FuncionarioID, NomeFuncionario, CriadaEm,
                                                     DataContagem, DiasCobertura, PrazoDias, Status, ContagemID)
                            OUTPUT INSERTED.ListaID VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
