@@ -1654,7 +1654,7 @@ def api_compras_criar_lista(usuario):
         return jsonify({"erro": "Contagem não recebida."}), 400
     def criar():
         lista = compras_database.registrar_lista(dados.get('codigo'), dados.get('rotina_id'), usuario,
-                                                 dados.get('dias'), dados.get('itens'))
+                                                 dados.get('dias'), dados.get('itens'), categorias=dados.get('categorias'))
         if lista['status'] == compras_database.ST_AGUARDANDO and not lista.get('ja_existia'):
             _avisar_gestor_telegram(
                 f"🛒 <b>Lista de compras para aprovar</b>\n"
@@ -2071,6 +2071,10 @@ def api_compras_orcamento_texto(usuario, orcamento_id):
 @compras_login(somente_gestor=True)
 def api_compras_orcamento_acao(usuario, orcamento_id, acao):
     funcoes = {'enviado': orcamentos.marcar_enviado, 'cancelar': orcamentos.cancelar, 'reabrir': orcamentos.reabrir} if orcamentos else {}
+    if acao in ('fornecedor', 'copiar'):         # trocar o fornecedor / mandar o mesmo pedido a outro fornecedor
+        dados = ler_json() or {}
+        funcao = orcamentos.trocar_fornecedor if acao == 'fornecedor' else orcamentos.copiar_para
+        return _orcamentos_disponivel() or _resposta_compras(funcao, orcamento_id, dados.get('fornecedor_id'), usuario)
     if acao == 'nota':
         dados = ler_json() or {}
         return _orcamentos_disponivel() or _resposta_compras(orcamentos.ligar_nota, orcamento_id, dados.get('chave'), usuario)
@@ -2082,7 +2086,8 @@ def api_compras_orcamento_acao(usuario, orcamento_id, acao):
 @app.route('/api/compras/orcamentos/<int:orcamento_id>/notas', methods=['GET'])
 @compras_login(somente_gestor=True)
 def api_compras_orcamento_notas(usuario, orcamento_id):
-    return _orcamentos_disponivel() or _resposta_compras(orcamentos.notas_candidatas, orcamento_id)
+    return _orcamentos_disponivel() or _resposta_compras(orcamentos.notas_candidatas, orcamento_id,
+                                                         todos=request.args.get('todos') == '1')
 
 
 @app.route('/api/compras/listas/<codigo>/orcamentos', methods=['POST'])

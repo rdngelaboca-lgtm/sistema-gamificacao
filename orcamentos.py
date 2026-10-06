@@ -469,8 +469,11 @@ def _chaves_ligadas(cur, exceto=None):
     return {r[1] for r in cur.fetchall() if r[0] != exceto}
 
 
-def notas_candidatas(orcamento_id):
-    """Notas do mesmo fornecedor (CNPJ) dos últimos 60 dias que ainda não estão ligadas a outro orçamento."""
+def notas_candidatas(orcamento_id, todos=False):
+    """
+    Notas do mesmo fornecedor (CNPJ) dos últimos 60 dias que ainda não estão ligadas a outro orçamento.
+    todos=True: de QUALQUER fornecedor (comprou de outro: ao ligar, o orçamento passa para o fornecedor da nota).
+    """
     import recebimento
     conn = _conexao()
     try:
@@ -484,12 +487,13 @@ def notas_candidatas(orcamento_id):
     lista = []
     for n in _notas_xml():
         emissao = _como_data(n['emissao'])
-        if n['cnpj'] != cab['cnpj'] or n['chave'] in ligadas or (emissao and emissao < limite):
+        if (n['cnpj'] != cab['cnpj'] and not todos) or n['chave'] in ligadas or (emissao and emissao < limite):
             continue
         lista.append({'chave': n['chave'], 'numero': n['numero'], 'emissao': n['emissao'], 'valor': _num(n['valor'], 2),
-                      'qtd_itens': len(n['itens']), 'ligada': n['chave'] == cab['chave_nota'],
+                      'qtd_itens': len(n['itens']), 'ligada': n['chave'] == cab['chave_nota'], 'outro_fornecedor': n['cnpj'] != cab['cnpj'],
                       'fornecedor': recebimento.nome_fornecedor(n['cnpj'], n.get('razao') or n['fornecedor'], n.get('fantasia_xml', ''), nomes)})
     lista.sort(key=lambda x: x['emissao'], reverse=True)
+    lista.sort(key=lambda x: x['outro_fornecedor'])          # as do fornecedor do orçamento primeiro
     return lista
 
 
@@ -516,6 +520,14 @@ def ligar_nota(orcamento_id, chave, usuario):
                 raise ErroCompras("Nota inválida.")
             if chave in _chaves_ligadas(cur, exceto=int(orcamento_id)):
                 raise ErroCompras("Esta nota já está ligada a outro orçamento.")
+            nota = next((n for n in _notas_xml() if n['chave'] == chave), None)
+            if nota and nota['cnpj'] != cab['cnpj']:
+                # [TROCAR FORNECEDOR] comprou de outro fornecedor: o orçamento passa a ser dele
+                import recebimento
+                fid = database.buscar_fornecedor_por_cnpj(nota['cnpj'])
+                novo = _fornecedor(fid) if fid else {'id': None, 'cnpj': nota['cnpj'], 'nome': recebimento.nome_fornecedor(
+                    nota['cnpj'], nota.get('razao') or nota['fornecedor'], nota.get('fantasia_xml', ''), recebimento._nomes_cadastrados())}
+                _aplicar_fornecedor(cur, orcamento_id, novo)
             cur.execute("""UPDATE CompraOrcamentos SET ChaveNota = ?, VinculadoEm = ?, VinculadoPor = ?, Status = ?,
                            EnviadoEm = COALESCE(EnviadoEm, ?), AvisadoEm = ? WHERE OrcamentoID = ?""",
                         (chave, datetime.now(), usuario.get('nome'), ST_RECEBIDO, datetime.now(), datetime.now(), int(orcamento_id)))
@@ -524,6 +536,80 @@ def ligar_nota(orcamento_id, chave, usuario):
         conn.close()
     logger.info(f"Orçamento {orcamento_id}: nota {'ligada ' + chave if chave else 'desligada'} por {usuario.get('nome')}.")
     return obter_orcamento(orcamento_id)
+
+
+# ------------------------------------------------------------------------------
+# [TROCAR FORNECEDOR] comprou de outro fornecedor / mandar o mesmo pedido a outro
+# ------------------------------------------------------------------------------
+def _aplicar_fornecedor(cur, orcamento_id, fornecedor):
+    """Passa o orçamento para outro fornecedor: nome, CNPJ e, em cada item, a embalagem e a descrição dele."""
+    cur.execute("UPDATE CompraOrcamentos SET FornecedorID = ?, Fornecedor = ?, CNPJ = ?, NotasRecusadas = NULL WHERE OrcamentoID = ?",
+                (fornecedor['id'], (fornecedor['nome'] or '')[:150], (fornecedor['cnpj'] or '')[:14], int(orcamento_id)))
+    for i in _itens(cur, orcamento_id):
+        d = _dados_do_produto(cur, i['produto_id'], fornecedor['id']) if fornecedor['id'] else \
+            {'fator': Decimal('1'), 'descricao': None, 'codigo': None}
+        cur.execute("""UPDATE CompraOrcamentoItens SET Fator = ?, DescricaoFornecedor = ?, CodigoFornecedor = ?
+                       WHERE OrcamentoID = ? AND ProdutoID = ?""",
+                    (d['fator'], d['descricao'] and d['descricao'][:255], d['codigo'] and d['codigo'][:60],
+                     int(orcamento_id), i['produto_id']))
+
+
+def trocar_fornecedor(orcamento_id, fornecedor_id, usuario):
+    """
+    Muda o fornecedor do orçamento (ex.: pediu ao Atacadão mas comprou no Assaí). Os itens, as
+    quantidades e os preços combinados ficam; a nota passa a ser procurada pelo CNPJ do novo.
+    """
+    if not fornecedor_id:
+        raise ErroCompras("Escolha o fornecedor.")
+    fornecedor = _fornecedor(fornecedor_id)
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        cab = _cabecalho(cur, orcamento_id)
+        _editavel(cab)
+        if cab['fornecedor_id'] == fornecedor['id']:
+            return obter_orcamento(orcamento_id)
+        _aplicar_fornecedor(cur, orcamento_id, fornecedor)
+        conn.commit()
+    finally:
+        conn.close()
+    logger.info(f"Orçamento {orcamento_id}: fornecedor {cab['fornecedor']} -> {fornecedor['nome']} ({usuario.get('nome')}).")
+    if cab['status'] == ST_ENVIADO:
+        try:
+            vincular_automatico()            # a nota do novo fornecedor pode já ter chegado
+        except Exception as e:
+            logger.warning(f"Orçamento {orcamento_id}: não deu para procurar a nota agora: {e}")
+    return obter_orcamento(orcamento_id)
+
+
+def copiar_para(orcamento_id, fornecedor_id, usuario):
+    """Novo orçamento (rascunho) com os mesmos produtos e quantidades para OUTRO fornecedor (para comparar preços)."""
+    if not fornecedor_id:
+        raise ErroCompras("Escolha o fornecedor.")
+    fornecedor = _fornecedor(fornecedor_id)
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        cab = _cabecalho(cur, orcamento_id)
+        itens = _itens(cur, orcamento_id)
+        if not itens:
+            raise ErroCompras("Este orçamento não tem produtos para copiar.")
+        novo = _novo(cur, fornecedor, usuario, cab['lista'])
+        for ordem, i in enumerate(itens):
+            d = _dados_do_produto(cur, i['produto_id'], fornecedor['id'])
+            # o preço é o último pago a ESTE fornecedor (o combinado com o outro não vale aqui)
+            cur.execute("""INSERT INTO CompraOrcamentoItens (OrcamentoID, ProdutoID, Ordem, NomeProduto, Unidade, Qtd, Fator, Preco,
+                                                             DescricaoFornecedor, CodigoFornecedor)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (novo, i['produto_id'], ordem, i['nome'][:255], i['unidade'][:20], i['qtd'], d['fator'], d['preco'],
+                         d['descricao'] and d['descricao'][:255], d['codigo'] and d['codigo'][:60]))
+        if cab['observacao']:
+            cur.execute("UPDATE CompraOrcamentos SET Observacao = ? WHERE OrcamentoID = ?", (cab['observacao'][:500], novo))
+        conn.commit()
+    finally:
+        conn.close()
+    logger.info(f"Orçamento {orcamento_id} copiado para {fornecedor['nome']} (nº {novo}) por {usuario.get('nome')}.")
+    return obter_orcamento(novo)
 
 
 def vincular_automatico(notas=None):

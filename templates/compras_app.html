@@ -69,6 +69,8 @@
     font-size: 12px; font-weight: 600; color: var(--suave); padding: 6px 0; min-height: 52px; }
   .navbar button.ativo { color: var(--verde); font-weight: 800; }
   .chips { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+  .chips-livre { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chips-livre .chip { height: 44px; padding: 0 14px; font-size: 15px; }
   .chip { height: 52px; border-radius: 14px; border: 1px solid var(--linha); background: #fff; font-size: 17px; font-weight: 700; }
   .chip.sel { background: var(--verde); color: #fff; border-color: var(--verde); }
   .chips7 { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
@@ -252,7 +254,7 @@
 
 // ---------------------------------------------------------------- utilidades
 const CHAVE = 'gb_compras_v1';
-const VERSAO_APP = '26';   // aparece no rodapé do início: confira se o celular pegou a versão nova
+const VERSAO_APP = '27';   // aparece no rodapé do início: confira se o celular pegou a versão nova
 const $app = document.getElementById('app');
 const DIAS_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];            // 1=Dom ... 7=Sáb (padrão do sistema)
 const FRACIONADAS = ['KG', 'G', 'GR', 'L', 'LT', 'ML', 'M'];
@@ -708,6 +710,11 @@ TELAS.novaIda = p => {
   const locais = p.secoes ? `<div class="lista-cartoes"><div class="titulo-sec">Quais locais você vai contar?</div>
         <div class="chips">${p.secoes.map(sc => `<button class="chip ${(p.selLocais || []).includes(sc) ? 'sel' : ''}" data-acao="ida-local" data-l="${esc(sc)}" aria-pressed="${(p.selLocais || []).includes(sc)}">${esc(sc)}</button>`).join('')}</div>
         <div class="info">${(p.selLocais || []).length ? `Vai contar ${p.itensSel} itens.` : 'Nenhum marcado = <strong>todos os locais</strong>.'} Outra pessoa pode contar os outros locais ao mesmo tempo, em outro celular.</div></div>` : '';
+  // [CATEGORIAS] contar só algumas categorias da rotina (ex.: só Brinquedos)
+  const cats = rot.categorias || [], selCats = p.selCats || [];
+  const blocoCats = cats.length > 1 ? `<div class="lista-cartoes"><div class="titulo-sec">Quais categorias entram?</div>
+        <div class="chips chips-livre">${cats.map(c => `<button class="chip ${selCats.includes(c) ? 'sel' : ''}" data-acao="ida-cat" data-c="${esc(c)}" aria-pressed="${selCats.includes(c)}">${esc(c)}</button>`).join('')}</div>
+        <div class="info">${selCats.length ? `Só <strong>${esc(selCats.join(', '))}</strong> entra${rot.so_contagem ? ' na contagem' : ' na contagem e na lista de compra'}.` : 'Nenhuma marcada = <strong>todas as categorias</strong>.'}</div></div>` : '';
   const blocoDias = rot.so_contagem
     ? `<div class="info">Contagem geral: os números entram no estoque. <strong>Não gera lista de compra.</strong></div>${locais}`
     : `<div class="lista-cartoes"><div class="titulo-sec">Comprar para quantos dias?</div><div class="chips">${chips}</div>
@@ -715,13 +722,14 @@ TELAS.novaIda = p => {
   return `${topo(rot.so_contagem ? 'Contagem do estoque' : 'Nova ida ao mercado', '', 'nav-inicio')}
     <div class="corpo">
       <div class="lista-cartoes"><div class="titulo-sec">Qual rotina?</div>${opcoes}</div>
+      ${p.secoes ? '' : blocoCats}
       ${blocoDias}
       <div class="lista-cartoes"><div class="titulo-sec">Quem está contando</div>
         <div class="cartao" style="display:flex;align-items:center;gap:12px"><div class="quadrado" style="border-radius:99px;background:var(--verde);color:#fff;font-weight:800">${esc(E.usuario.nome.slice(0, 1))}</div>
           <div><div class="nome">${esc(E.usuario.nome)}${E.usuario.gestor ? ' (gestor)' : ''}</div>
           <div class="pequeno suave">${rot.so_contagem ? 'A contagem entra no estoque' : E.usuario.gestor ? 'A lista sai aprovada direto' : 'A lista vai para o gestor aprovar'}</div></div></div></div>
     </div>
-    <div class="rodape"><button class="btn" data-acao="ida-comecar" data-id="${rot.id}" ${p.carregando ? 'disabled' : ''}>${p.carregando ? 'Preparando…' : p.secoes ? `Começar · ${p.itensSel} itens` : `Começar · ${rot.qtd_itens} itens`}</button></div>`;
+    <div class="rodape"><button class="btn" data-acao="ida-comecar" data-id="${rot.id}" ${p.carregando ? 'disabled' : ''}>${p.carregando ? 'Preparando…' : p.secoes ? `Começar · ${p.itensSel} itens` : selCats.length ? `Começar · só ${esc(selCats.join(', '))}` : `Começar · ${rot.qtd_itens} itens`}</button></div>`;
 };
 async function comecarIda(rotinaId, dias) {
   T.p.carregando = true; desenhar();
@@ -734,15 +742,19 @@ async function comecarIda(rotinaId, dias) {
     toast('Sem internet: usando os dados salvos de ' + dataBR(prep.gerado_em));
   }
   if (!prep.itens.length) { T.p.carregando = false; desenhar(); return toast('Esta rotina não tem itens.'); }
+  const cats = (T.p.selCats || []).filter(c => prep.itens.some(i => i.categoria === c));
+  const daIda = itensDasCategorias(prep.itens, cats);
+  if (!daIda.length) { T.p.carregando = false; desenhar(); return toast('Nenhum produto nessas categorias.'); }
   // [CONTAGEM GERAL] com mais de um local: primeiro escolhe quais locais esta pessoa conta
   T.p.rotina_id = rotinaId;
-  const secoes = [...new Set(prep.itens.flatMap(i => locaisDoItem(i).map(nomeLocal)))];
+  const secoes = [...new Set(daIda.flatMap(i => locaisDoItem(i).map(nomeLocal)))];
   if (prep.so_contagem && secoes.length > 1 && !T.p.secoes) {
-    T.p.secoes = secoes; T.p.selLocais = []; T.p.itensSel = prep.itens.reduce((n, i) => n + locaisDoItem(i).length, 0); T.p.carregando = false; return desenhar();
+    T.p.secoes = secoes; T.p.selLocais = []; T.p.itensSel = daIda.reduce((n, i) => n + locaisDoItem(i).length, 0); T.p.carregando = false; return desenhar();
   }
   const sel = prep.so_contagem && T.p.selLocais && T.p.selLocais.length ? T.p.selLocais.slice() : null;
   E.ida = {codigo: novoCodigo(), rotina_id: rotinaId, dias: prep.so_contagem ? (prep.dias_cobertura || 7) : dias, idx: 0, contagens: {}, porLocal: {}, modo: {}, cx: {},
-           extras: [], iniciada: new Date().toISOString(), dia: hojeISO(), usuario_id: E.usuario.id, usuario_nome: E.usuario.nome, secoes: sel};
+           extras: [], iniciada: new Date().toISOString(), dia: hojeISO(), usuario_id: E.usuario.id, usuario_nome: E.usuario.nome, secoes: sel,
+           categorias: cats.length ? cats : null};
   salvar();
   carregarCodigos();
   ir('contagem');
@@ -754,6 +766,8 @@ async function comecarIda(rotinaId, dias) {
 // [CONTAGEM 2] linhas = produto x local. O mesmo produto pode estar em vários locais: cada local
 // tem o seu número e o estoque recebe a SOMA. "+ Somar" junta mais um tanto no mesmo local.
 const LOCAL_FORA = 'Bipados fora da rotina';
+// [CATEGORIAS] só os produtos das categorias escolhidas (nenhuma = todos)
+function itensDasCategorias(itens, cats) { return cats && cats.length ? itens.filter(i => cats.includes(i.categoria || 'Geral')) : itens; }
 function locaisDoItem(it) { return it.locais && it.locais.length ? it.locais : [it.secao || '']; }
 function nomeLocal(l) { return l || 'Sem local'; }
 function normalizarIda() {
@@ -771,7 +785,7 @@ function normalizarIda() {
 function linhasIda() {
   normalizarIda();
   const prep = E.preparos[E.ida.rotina_id], sel = E.ida.secoes;
-  const todos = prep.itens.concat(E.ida.extras || []);
+  const todos = itensDasCategorias(prep.itens, E.ida.categorias).concat(E.ida.extras || []);
   const ordem = [];
   todos.forEach(it => locaisDoItem(it).forEach(l => { if (!ordem.includes(l)) ordem.push(l); }));
   const linhas = [];
@@ -872,7 +886,7 @@ TELAS.contagem = () => {
   return `<div class="cl-tela">
     <div class="topo" style="padding:10px 10px 2px">
       <button class="icone-btn" data-acao="cont-sair" aria-label="Sair da contagem (fica salva)">${ICONES.fechar}</button>
-      <div class="grow" style="min-width:0"><h1 style="font-size:17px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(prep.nome)}</h1>
+      <div class="grow" style="min-width:0"><h1 style="font-size:17px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(prep.nome)}${ida.categorias ? ' · ' + esc(ida.categorias.join(', ')) : ''}</h1>
         <div class="sub mini" style="font-weight:600">${feitos} de ${total} contados</div></div>
       <button class="cl-revisar" data-acao="cont-revisar">${prep.so_contagem ? 'Revisar e salvar' : 'Ver lista'}</button></div>
     <div class="progresso" style="margin:4px 12px 6px"><div style="width:${Math.round(100 * feitos / total)}%"></div></div>
@@ -1100,8 +1114,9 @@ async function terminarContagem() {
   const ida = E.ida, prep = E.preparos[ida.rotina_id];
   if (prep.so_contagem) return terminarContagemGeral();
   normalizarIda();
-  const corpo = {codigo: ida.codigo, rotina_id: ida.rotina_id, dias: ida.dias,
-                 itens: itensParaEnviar(prep.itens)
+  const daIda = itensDasCategorias(prep.itens, ida.categorias);
+  const corpo = {codigo: ida.codigo, rotina_id: ida.rotina_id, dias: ida.dias, categorias: ida.categorias || undefined,
+                 itens: itensParaEnviar(daIda)
                    .concat(itensParaEnviar((ida.extras || []).filter(it => totalProduto(it.produto_id) != null)).map(x => Object.assign(x, {extra: true})))};
   if (ida.dia && ida.dia !== hojeISO() && Object.keys(ida.contagens).length &&
       !confirm(`Esta contagem foi começada em ${dataBR(ida.dia)}. Os números vão entrar no estoque como contagem de HOJE (${dataBR(hojeISO())}). Se o estoque mudou desde então, descarte e conte de novo. Continuar assim mesmo?`)) return;
@@ -1111,7 +1126,7 @@ async function terminarContagem() {
     guardarLista(lista, true);
   } catch (e) {
     if (!e.extra.offline) { fecharModal(); return toast(e.message); }
-    guardarLista(calcularListaLocal(Object.assign({}, prep, {itens: prep.itens.concat((ida.extras || []).filter(it => ida.contagens[it.produto_id] != null))}), ida), false);
+    guardarLista(calcularListaLocal(Object.assign({}, prep, {nome: prep.nome + (ida.categorias ? ` (${ida.categorias.join(', ')})` : ''), itens: daIda.concat((ida.extras || []).filter(it => ida.contagens[it.produto_id] != null))}), ida), false);
     E.fila.push({tipo: 'lista', codigo: ida.codigo, metodo: 'POST', url: '/api/compras/listas', corpo, descricao: 'Contagem de ' + prep.nome});
     toast('Sem internet: lista calculada no celular. Será enviada quando conectar.');
   }
@@ -1128,7 +1143,7 @@ async function terminarContagemGeral() {
   if (ida.dia && ida.dia !== hojeISO() &&
       !confirm(`Esta contagem foi começada em ${dataBR(ida.dia)}. Os números vão entrar no estoque como contagem de HOJE (${dataBR(hojeISO())}). Continuar?`)) return;
   // só os itens com número, com o número de CADA local: o servidor soma com o que outra pessoa contou em outro local hoje
-  const corpo = {codigo: ida.codigo, rotina_id: ida.rotina_id, dias: ida.dias,
+  const corpo = {codigo: ida.codigo, rotina_id: ida.rotina_id, dias: ida.dias, categorias: ida.categorias || undefined,
                  itens: itensParaEnviar(contados).map((x, i) => Object.assign(x, {extra: !prep.itens.includes(contados[i]) || undefined}))};
   const resumo = {rotina: prep.nome, contados: contados.length, pulados, locais: ida.secoes, offline: false};
   abrirModal('<div class="vazio">Salvando a contagem…</div>');
@@ -1957,6 +1972,9 @@ TELAS.orcamento = p => {
       <div class="cartao" style="display:flex;justify-content:space-between;align-items:center"><div class="mini suave" style="font-weight:600">Total estimado</div><div style="font-size:20px;font-weight:800">≈ ${fmtReais(total)}</div></div>
       ${editavel ? `<div class="campo"><label for="orc-obs">Observação para o fornecedor</label>
         <input id="orc-obs" maxlength="400" value="${esc(o.observacao || '')}" placeholder="Ex.: entregar até sexta" autocomplete="off"></div>` : (o.observacao ? `<div class="mini suave">Obs.: ${esc(o.observacao)}</div>` : '')}` : ''}
+      ${o.itens.length || editavel ? `<div class="linha-btns">
+        ${o.itens.length ? '<button class="btn claro medio" data-acao="orc-copiar">Mandar para outro fornecedor</button>' : ''}
+        ${editavel ? '<button class="btn claro medio" data-acao="orc-trocar">Comprei de outro fornecedor</button>' : ''}</div>` : ''}
       ${editavel ? '<button class="btn claro medio" data-acao="orc-cancelar">Cancelar orçamento</button>' : ''}
       ${o.status === 'cancelado' ? '<button class="btn claro medio" data-acao="orc-reabrir">Reabrir (voltar a rascunho)</button>' : ''}
     </div>
@@ -1995,13 +2013,19 @@ function mudarQtdOrc(pid, delta) {
   if (novo <= 0) return toast('Para tirar o item, toque na lixeira.');
   i.qtd = novo; salvarOrcamento(); desenhar();
 }
-async function modalFornecedorOrc() {
+// modo: 'criar' (novo orçamento), 'trocar' (comprou de outro) ou 'copiar' (mandar o mesmo pedido a outro)
+async function modalFornecedorOrc(modo) {
   let forns = [];
   try { forns = await api('GET', '/api/compras/orcamentos/fornecedores'); }
-  catch (e) { return toast(e.extra.offline ? 'Sem internet: conecte para criar o orçamento.' : e.message); }
-  T.p.forns = forns;
-  abrirModal(`<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px"><div class="titulo-sec">Novo orçamento: qual fornecedor?</div>
+  catch (e) { return toast(e.extra.offline ? 'Sem internet: conecte para escolher o fornecedor.' : e.message); }
+  T.p.modoForn = modo || 'criar';
+  T.p.forns = modo && T.p.o ? forns.filter(f => f.id !== T.p.o.fornecedor_id) : forns;
+  const titulo = {criar: 'Novo orçamento: qual fornecedor?', trocar: 'Comprou de qual fornecedor?', copiar: 'Mandar este pedido para qual fornecedor?'}[T.p.modoForn];
+  const dica = {trocar: 'O orçamento passa para o fornecedor escolhido (itens, quantidades e preços combinados ficam). A nota passa a ser procurada no CNPJ dele.',
+                copiar: 'Cria um orçamento novo com os mesmos produtos e quantidades, com o último preço pago a esse fornecedor. Este aqui continua igual.'}[T.p.modoForn];
+  abrirModal(`<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px"><div class="titulo-sec">${titulo}</div>
       <button class="icone-btn" data-acao="fechar-modal" aria-label="Fechar">${ICONES.fechar}</button></div>
+    ${dica ? `<div class="mini suave">${dica}</div>` : ''}
     <div class="campo"><input id="busca-forn" placeholder="Procurar fornecedor" autocomplete="off" aria-label="Procurar fornecedor"></div>
     <div id="lista-forn" class="linhas" style="max-height:380px;overflow:auto">${listaFornOrc('')}</div>`);
   document.getElementById('busca-forn').addEventListener('input', e => { document.getElementById('lista-forn').innerHTML = listaFornOrc(e.target.value); });
@@ -2009,7 +2033,8 @@ async function modalFornecedorOrc() {
 function listaFornOrc(termo) {
   const t = normalizarTexto(termo || '');
   const achados = (T.p.forns || []).filter(f => !t || normalizarTexto(f.nome).includes(t)).slice(0, 80);
-  return achados.map(f => `<button class="lin" style="width:100%;border-left:0;border-right:0;border-bottom:0;background:#fff;text-align:left" data-acao="orc-criar" data-id="${f.id}">
+  const acao = {criar: 'orc-criar', trocar: 'orc-trocar-forn', copiar: 'orc-copiar-forn'}[T.p.modoForn || 'criar'];
+  return achados.map(f => `<button class="lin" style="width:100%;border-left:0;border-right:0;border-bottom:0;background:#fff;text-align:left" data-acao="${acao}" data-id="${f.id}" data-nome="${esc(f.nome)}">
       <div class="grow"><div style="font-weight:700">${esc(f.nome)}</div><div class="mini suave">${f.notas ? f.notas + ' nota(s) de compra' : 'sem compras com nota'}</div></div></button>`).join('')
     || '<div class="vazio" style="padding:14px">Nenhum fornecedor com esse nome.</div>';
 }
@@ -2033,16 +2058,17 @@ async function compartilharOrcamento() {
     catch (e) { toast(e.message); }
   }
 }
-async function modalNotaOrc() {
+async function modalNotaOrc(todos) {
   let notas = [];
-  try { notas = await api('GET', `/api/compras/orcamentos/${T.p.o.id}/notas`); }
+  try { notas = await api('GET', `/api/compras/orcamentos/${T.p.o.id}/notas${todos ? '?todos=1' : ''}`); }
   catch (e) { return toast(e.extra.offline ? 'Sem internet.' : e.message); }
   abrirModal(`<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px"><div><div class="titulo-sec">Qual nota é deste orçamento?</div>
-      <div class="mini suave">Notas de ${esc(T.p.o.fornecedor)} dos últimos 60 dias.</div></div>
+      <div class="mini suave">${todos ? 'Notas de todos os fornecedores' : 'Notas de ' + esc(T.p.o.fornecedor)} dos últimos 60 dias.</div></div>
       <button class="icone-btn" data-acao="fechar-modal" aria-label="Fechar">${ICONES.fechar}</button></div>
-    <div class="linhas" style="max-height:380px;overflow:auto">${notas.map(n => `<button class="lin" style="width:100%;border-left:0;border-right:0;border-bottom:0;background:#fff;text-align:left" data-acao="orc-ligar" data-chave="${esc(n.chave)}">
-      <div class="grow"><div style="font-weight:700">NF ${esc(n.numero)} · ${dataBR(n.emissao)}</div><div class="mini suave">${n.qtd_itens} itens · ${fmtReais(n.valor)}</div></div></button>`).join('')
-      || '<div class="vazio" style="padding:14px">Nenhuma nota deste fornecedor ainda. Ela aparece aqui quando o XML chegar.</div>'}</div>`);
+    <div class="linhas" style="max-height:380px;overflow:auto">${notas.map(n => `<button class="lin" style="width:100%;border-left:0;border-right:0;border-bottom:0;background:#fff;text-align:left" data-acao="orc-ligar" data-chave="${esc(n.chave)}" ${n.outro_fornecedor ? `data-outro="${esc(n.fornecedor)}"` : ''}>
+      <div class="grow"><div style="font-weight:700">NF ${esc(n.numero)} · ${dataBR(n.emissao)}</div><div class="mini suave">${n.outro_fornecedor ? '<b>' + esc(n.fornecedor) + '</b> · ' : ''}${n.qtd_itens} itens · ${fmtReais(n.valor)}</div></div></button>`).join('')
+      || `<div class="vazio" style="padding:14px">${todos ? 'Nenhuma nota livre nos últimos 60 dias.' : 'Nenhuma nota deste fornecedor ainda. Ela aparece aqui quando o XML chegar.'}</div>`}</div>
+    ${todos ? '' : '<button class="btn claro medio" data-acao="orc-notas-todas">Comprei de outro fornecedor: ver notas de todos</button>'}`);
 }
 async function acaoOrc(metodo, url, corpo, msg) {
   try { T.p.o = await api(metodo, url, corpo); fecharModal(); if (msg) toast(msg); desenhar(); }
@@ -2789,7 +2815,12 @@ const acoes = {
     }
     ir('contagem');
   },
-  'ida-rotina': d => { T.p.rotina_id = +d.id; T.p.dias = null; T.p.secoes = null; T.p.selLocais = []; desenhar(); },
+  'ida-rotina': d => { T.p.rotina_id = +d.id; T.p.dias = null; T.p.secoes = null; T.p.selLocais = []; T.p.selCats = []; desenhar(); },
+  'ida-cat': d => {       // [CATEGORIAS] marca/desmarca uma categoria
+    const sel = T.p.selCats || [];
+    T.p.selCats = sel.includes(d.c) ? sel.filter(x => x !== d.c) : [...sel, d.c];
+    desenhar();
+  },
   'ida-dias': d => { T.p.dias = +d.n; desenhar(); },
   'ida-dias-outro': () => {
     abrirModal(`<div class="titulo-sec">Comprar para quantos dias?</div>
@@ -2806,7 +2837,7 @@ const acoes = {
     const l = d.l, sel = T.p.selLocais || [];
     T.p.selLocais = sel.includes(l) ? sel.filter(x => x !== l) : [...sel, l];
     const prep = E.preparos[T.p.rotina_id];
-    T.p.itensSel = prep ? prep.itens.reduce((n, i) => n + locaisDoItem(i).filter(l => !T.p.selLocais.length || T.p.selLocais.includes(nomeLocal(l))).length, 0) : 0;
+    T.p.itensSel = prep ? itensDasCategorias(prep.itens, T.p.selCats).reduce((n, i) => n + locaisDoItem(i).filter(l => !T.p.selLocais.length || T.p.selLocais.includes(nomeLocal(l))).length, 0) : 0;
     desenhar();
   },
   // bipar
@@ -2943,6 +2974,23 @@ const acoes = {
   'orc-abrir': d => abrirOrcamento(d.id),
   'orc-voltar': () => { clearTimeout(esperaOrc); if (T.p.salvando) salvarOrcamento(true); acoes.nav({tela: 'orcamentos'}); },
   'orc-novo': () => modalFornecedorOrc(),
+  'orc-trocar': () => modalFornecedorOrc('trocar'),
+  'orc-copiar': () => modalFornecedorOrc('copiar'),
+  'orc-trocar-forn': async d => {
+    if (!confirm(`Passar este orçamento para ${d.nome}?`)) return;
+    clearTimeout(esperaOrc);
+    if (T.p.salvando) await salvarOrcamento(true);
+    acaoOrc('POST', `/api/compras/orcamentos/${T.p.o.id}/fornecedor`, {fornecedor_id: +d.id}, `Agora o orçamento é de ${d.nome}.`);
+  },
+  'orc-copiar-forn': async d => {
+    clearTimeout(esperaOrc);
+    if (T.p.salvando) await salvarOrcamento(true);
+    try {
+      const o = await api('POST', `/api/compras/orcamentos/${T.p.o.id}/copiar`, {fornecedor_id: +d.id});
+      fecharModal(); toast(`Orçamento nº ${o.id} criado para ${d.nome}: confira e compartilhe.`); ir('orcamento', {id: o.id, o});
+    } catch (e) { toast(e.extra.offline ? 'Sem internet.' : e.message); }
+  },
+  'orc-notas-todas': () => modalNotaOrc(true),
   'orc-criar': async d => {
     try { const o = await api('POST', '/api/compras/orcamentos', {fornecedor_id: +d.id}); fecharModal(); ir('orcamento', {id: o.id, o}); }
     catch (e) { toast(e.extra.offline ? 'Sem internet.' : e.message); }
@@ -2986,7 +3034,7 @@ const acoes = {
   'orc-cancelar': () => { if (confirm('Cancelar este orçamento?')) acaoOrc('POST', `/api/compras/orcamentos/${T.p.o.id}/cancelar`, null, 'Orçamento cancelado.'); },
   'orc-reabrir': () => acaoOrc('POST', `/api/compras/orcamentos/${T.p.o.id}/reabrir`, null, 'Orçamento reaberto.'),
   'orc-escolher-nota': () => modalNotaOrc(),
-  'orc-ligar': d => acaoOrc('POST', `/api/compras/orcamentos/${T.p.o.id}/nota`, {chave: d.chave}, 'Nota ligada ao orçamento.'),
+  'orc-ligar': d => (!d.outro || confirm(`Esta nota é de ${d.outro}. O orçamento passa para ${d.outro} e a nota é ligada. Continuar?`)) && acaoOrc('POST', `/api/compras/orcamentos/${T.p.o.id}/nota`, {chave: d.chave}, 'Nota ligada ao orçamento.'),
   'orc-desligar': () => { if (confirm('Desligar esta nota do orçamento? Ela não será ligada de novo sozinha.')) acaoOrc('POST', `/api/compras/orcamentos/${T.p.o.id}/nota`, {chave: ''}, 'Nota desligada.'); },
   'lista-orcamentos': async (d, el) => {
     if (!confirm('Gerar um orçamento para cada fornecedor sugerido nesta lista? Você revisa cada um antes de enviar.')) return;

@@ -511,6 +511,11 @@ def _proxima_data(dias_semana, hoje):
     return None
 
 
+def categoria_do(texto):
+    """Categoria do produto (vazia = 'Geral', igual ao Gestão de Estoque)."""
+    return (texto or '').strip() or 'Geral'
+
+
 def listar_rotinas(incluir_inativas=False, hoje=None):
     hoje = _como_data(hoje) or date.today()
     conn = _conectar()
@@ -522,8 +527,15 @@ def listar_rotinas(incluir_inativas=False, hoje=None):
             FROM CompraRotinas R
             ORDER BY R.Nome
         """)
+        linhas = cur.fetchall()
+        # [CATEGORIAS] categorias dos produtos de cada rotina (para contar só algumas, ex.: só Brinquedos)
+        cur.execute("""SELECT DISTINCT I.RotinaID, P.Categoria FROM CompraRotinaItens I
+                       JOIN ProdutosEstoque P ON P.ProdutoID = I.ProdutoID""")
+        categorias = {}
+        for rid, cat in cur.fetchall():
+            categorias.setdefault(rid, set()).add(categoria_do(cat))
         rotinas = []
-        for r in cur.fetchall():
+        for r in linhas:
             if not r[6] and not incluir_inativas:
                 continue
             dias = _ler_dias_semana(r[2])
@@ -531,7 +543,8 @@ def listar_rotinas(incluir_inativas=False, hoje=None):
             rotinas.append({'id': r[0], 'nome': r[1], 'dias_semana': dias, 'dias_cobertura': int(r[3] or 7),
                             'prazo_dias': int(r[4] or 0), 'fornecedores': _ler_ids(r[5]), 'ativa': bool(r[6]),
                             'qtd_itens': int(r[7] or 0), 'hoje': prox == hoje, 'proxima': _iso(prox),
-                            'so_contagem': bool(r[8])})
+                            'so_contagem': bool(r[8]),
+                            'categorias': sorted(categorias.get(r[0], set()), key=lambda c: c.lower())})
         rotinas.sort(key=lambda x: (not x['hoje'], x['proxima'] or '9999', x['nome']))
         return rotinas
     finally:
@@ -967,7 +980,7 @@ def preparar_contagem(rotina_id, hoje=None):
         ja = hoje_outras.get(pid)
         itens.append({
             'produto_id': pid, 'nome': it['nome'], 'unidade': it['unidade'], 'secao': it['secao'], 'ordem': it['ordem'],
-            'locais': it['locais'],
+            'locais': it['locais'], 'categoria': categoria_do(it.get('categoria')),
             'hoje_locais': hoje_locais.get(pid),     # [VÁRIOS LOCAIS] já contado hoje nesta rotina (outra pessoa/celular)
             'estoque_minimo': _num(minimos.get(pid, Decimal('0'))),
             'ultima_contagem': {'data': _iso(info.get('DataUltimaContagem')), 'qtd': _num(info.get('QtdUltimaContagem'))}
@@ -1052,7 +1065,7 @@ def _calcular_itens(rotina, contados, dias, hoje, contagem_id):
     return itens
 
 
-def registrar_lista(codigo, rotina_id, usuario, dias, contagens, hoje=None):
+def registrar_lista(codigo, rotina_id, usuario, dias, contagens, hoje=None, categorias=None):
     """
     Grava a contagem feita no celular e cria a lista de compras.
       codigo: identificador criado pelo celular (se o celular reenviar por causa de internet
@@ -1063,6 +1076,8 @@ def registrar_lista(codigo, rotina_id, usuario, dias, contagens, hoje=None):
     Se a mesma rotina já foi contada HOJE pelo app, a contagem anterior é trocada pela nova
     (senão as duas seriam somadas no estoque) e a lista anterior, se aberta, é cancelada.
     Itens que foram contados na vez anterior e NÃO recontados agora são mantidos na contagem nova.
+    categorias: [CATEGORIAS] contou só estas categorias da rotina (ex.: ['Brinquedos']): a lista
+              só tem os produtos delas e leva o nome "Rotina (Brinquedos)".
     """
     hoje = _como_data(hoje) or date.today()
     codigo = str(codigo or '').strip()
@@ -1082,6 +1097,12 @@ def registrar_lista(codigo, rotina_id, usuario, dias, contagens, hoje=None):
         return lista
 
     rotina = obter_rotina(rotina_id)
+    cats = sorted({categoria_do(c)[:60] for c in categorias if str(c or '').strip()}) if isinstance(categorias, list) else []
+    if cats:
+        rotina['itens'] = [i for i in rotina['itens'] if categoria_do(i.get('categoria')) in cats]
+        if not rotina['itens']:
+            raise ErroCompras("Nenhum produto da rotina nessas categorias.")
+        rotina['nome'] = f"{rotina['nome']} ({', '.join(cats)})"[:100]
     da_rotina = {i['produto_id'] for i in rotina['itens'] if i['existe']}
     contados, extras = {}, {}
     por_local = {}     # [VÁRIOS LOCAIS] {pid: {local: qtd}} do que foi contado agora
@@ -1135,9 +1156,14 @@ def registrar_lista(codigo, rotina_id, usuario, dias, contagens, hoje=None):
             fechadas = database.listar_valores_estoque_fechados(levantar_erro=True)
             herdados = {}                    # contados na vez anterior e NÃO recontados agora
             locais_ant = {}                  # [VÁRIOS LOCAIS] {pid: {local: qtd}} das contagens de hoje
-            for cod_ant, cid_ant, st_ant in sorted(_contagens_substituidas(cur, rotina_id, hoje, codigo), key=lambda x: x[1] or 0):
-                if st_ant not in (ST_FINALIZADA, ST_CANCELADA, ST_CONTAGEM):
+            # a lista aberta de hoje da mesma rotina é trocada pela nova. [CATEGORIAS] a de OUTRAS categorias
+            # (ex.: só Brinquedos, quando agora contou Descartáveis) continua valendo.
+            cur.execute("SELECT Codigo, DataContagem, Status, NomeRotina FROM CompraListas WHERE RotinaID = ?", (int(rotina_id),))
+            for cod_ant, d_ant, st_ant, nome_ant in cur.fetchall():
+                if (cod_ant != codigo and _como_data(d_ant) == hoje and nome_ant == rotina['nome']
+                        and st_ant not in (ST_FINALIZADA, ST_CANCELADA, ST_CONTAGEM)):
                     cur.execute("UPDATE CompraListas SET Status = ? WHERE Codigo = ?", (ST_CANCELADA, cod_ant))
+            for cod_ant, cid_ant, st_ant in sorted(_contagens_substituidas(cur, rotina_id, hoje, codigo), key=lambda x: x[1] or 0):
                 if cid_ant in fechadas:
                     continue                 # valor do estoque já fechado: não mexe
                 cur.execute("SELECT ProdutoID, QuantidadeContada FROM ItensContagemEstoque WHERE ContagemID = ? AND ProdutoID IS NOT NULL",
