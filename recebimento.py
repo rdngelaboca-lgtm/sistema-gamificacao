@@ -19,6 +19,7 @@
 import logging
 import os
 import re
+import threading
 import xml.etree.ElementTree as ET
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -39,6 +40,8 @@ DIAS_CONFERIDAS = 7
 DIAS_SEM_LANCAR = 60      # nota conferida e ainda fora do estoque continua aparecendo até 60 dias
 
 _tabelas_ok = False
+_trava_lancamento = threading.Lock()   # [DEPURAÇÃO] dois toques em "Lançar" ao mesmo tempo não lançam a nota 2 vezes
+QTD_MAXIMA = Decimal('1000000')
 _cache_xml = {}        # caminho -> (mtime, dados): não relê os mesmos XMLs a cada abertura da lista
 
 
@@ -198,6 +201,7 @@ def listar_recebimentos(hoje=None):
     hoje = _como_data(hoje) or date.today()
     gravados = _status_gravados()
     pendentes, feitas, conferidas = [], [], []
+    vistas = set()
     limite = hoje - timedelta(days=DIAS_PENDENTE)
     for sub in ('', 'importadas'):
         pasta = os.path.join(_pasta(), sub)
@@ -211,8 +215,9 @@ def listar_recebimentos(hoje=None):
             except Exception as e:
                 logger.warning(f"Recebimento: XML {nome} não abriu: {e}")
                 continue
-            if n['finalidade'] == '4':               # devolução: não é mercadoria chegando
+            if n['finalidade'] == '4' or n['chave'] in vistas:   # devolução; ou o mesmo XML nas duas pastas
                 continue
+            vistas.add(n['chave'])
             g = gravados.get(n['chave'])
             resumo = {'chave': n['chave'], 'numero': n['numero'], 'fornecedor': n['fornecedor'], 'emissao': n['emissao'],
                       'valor': _num(n['valor'], 2), 'qtd_itens': len(n['itens']),
@@ -221,13 +226,16 @@ def listar_recebimentos(hoje=None):
             emissao = _como_data(n['emissao'])
             if resumo['status'] == ST_AGUARDANDO:
                 if emissao and emissao >= limite:
-                    pendentes.append(resumo)
+                    pendentes.append((resumo, n))
             elif g and g['em'] and resumo['status'] in (ST_CONFERIDA, ST_DIVERGENCIA) \
                     and g['em'].date() >= hoje - timedelta(days=DIAS_SEM_LANCAR):
                 conferidas.append((resumo, n, g['em']))   # recentes, ou ainda fora do estoque (até 60 dias)
             elif g and g['em'] and g['em'].date() >= hoje - timedelta(days=DIAS_CONFERIDAS):
                 feitas.append(resumo)
-    lancadas = _chaves_lancadas([n for _, n, _ in conferidas])
+    lancadas = _chaves_lancadas([n for _, n, _ in conferidas] + [n for _, n in pendentes])
+    for resumo, n in pendentes:
+        resumo['lancada'] = n['chave'] in lancadas   # já entrou pelo computador: o app avisa no cartão
+    pendentes = [r for r, _ in pendentes]
     for resumo, n, em in conferidas:
         resumo['lancada'] = n['chave'] in lancadas
         if not resumo['lancada'] or em.date() >= hoje - timedelta(days=DIAS_CONFERIDAS):
@@ -300,7 +308,9 @@ def obter_recebimento(chave):
                       'codigos': list(codigos.values()), 'conferido': _num(conferidos[it['n']]) if it['n'] in conferidos else None})
     _nomes_dos_produtos(itens)
     lancada = n['chave'] in _chaves_lancadas([n])
-    falta = [i for i in itens if i['tipo'] != 'ignorar' and not i['produto']]
+    fechada = bool(cab) and cab[0] in (ST_CONFERIDA, ST_DIVERGENCIA)
+    # item que não chegou (conferido 0) não entra no estoque: não precisa de vínculo para lançar
+    falta = [i for i in itens if i['tipo'] != 'ignorar' and not i['produto'] and not (fechada and not i['conferido'])]
     return {'chave': n['chave'], 'numero': n['numero'], 'serie': n['serie'], 'fornecedor': n['fornecedor'], 'cnpj': n['cnpj'],
             'emissao': n['emissao'], 'valor': _num(n['valor'], 2), 'itens': itens,
             'lancada': lancada, 'falta_vincular': len(falta),
@@ -328,8 +338,9 @@ def cadastrar_codigo(chave, n_item, codigo, por_bip, usuario):
     conn = _conexao()
     try:
         cur = conn.cursor()
-        cur.execute("DELETE FROM RecebimentoCodigos WHERE CNPJ = ? AND CodigoFornecedor = ? AND Codigo = ?",
-                    (n['cnpj'], item['cprod'][:60], cod))
+        # [DEPURAÇÃO] um código é de UM item: ligado no item errado e depois no certo, sai do errado
+        # (antes ficava nos dois e todo bip perguntava qual era)
+        cur.execute("DELETE FROM RecebimentoCodigos WHERE CNPJ = ? AND Codigo = ?", (n['cnpj'], cod))
         cur.execute("""INSERT INTO RecebimentoCodigos (CNPJ, CodigoFornecedor, Codigo, PorBip, CriadoPor, CriadoEm)
                        VALUES (?, ?, ?, ?, ?, ?)""", (n['cnpj'], item['cprod'][:60], cod, por_bip, usuario.get('nome'), datetime.now()))
         conn.commit()
@@ -348,7 +359,10 @@ def finalizar(chave, quantidades, observacao, usuario):
     conferido = {}
     for q in quantidades or []:
         try:
-            conferido[int(q.get('n'))] = max(Decimal(str(q.get('qtd') or 0)), Decimal('0'))
+            valor = Decimal(str(q.get('qtd') or 0))
+            if not valor.is_finite() or valor > QTD_MAXIMA:      # [DEPURAÇÃO] 'Infinity'/'NaN' quebravam a gravação
+                raise InvalidOperation
+            conferido[int(q.get('n'))] = max(valor, Decimal('0'))
         except (TypeError, ValueError, InvalidOperation, AttributeError):
             raise ErroCompras("Quantidade conferida inválida.")
     divergencias = []
@@ -360,6 +374,19 @@ def finalizar(chave, quantidades, observacao, usuario):
             divergencias.append({'n': it['n'], 'descricao': it['descricao'], 'unidade': it['unidade'], 'nota': _num(it['qtd']),
                                  'conferido': _num(c), 'tipo': 'faltou' if c < it['qtd'] else 'a mais'})
     status = ST_DIVERGENCIA if divergencias else ST_CONFERIDA
+    anterior = _conferencia_gravada(n['chave'])
+    if anterior:
+        mesma = all(abs(anterior['itens'].get(it['n'], Decimal('0')) - conferido.get(it['n'], Decimal('0'))) <= Decimal('0.0001')
+                    for it in n['itens'])
+        if mesma:
+            # [DEPURAÇÃO] a mesma conferência chegando de novo (fila do celular que perdeu a resposta): não regrava
+            resultado = obter_recebimento(chave)
+            resultado['divergencias'], resultado['repetida'] = divergencias, True
+            return resultado
+        if n['chave'] in _chaves_lancadas([n]):
+            # [DEPURAÇÃO] antes regravava: a conferência ficava diferente do que entrou no estoque
+            raise ErroCompras(f"Esta nota já foi conferida por {anterior['por'] or 'outra pessoa'} e já entrou no estoque: "
+                              "a conferência não pode mais ser mudada. Acerte a diferença na próxima contagem.")
     conn = _conexao()
     try:
         cur = conn.cursor()
@@ -383,6 +410,21 @@ def finalizar(chave, quantidades, observacao, usuario):
     resultado = obter_recebimento(chave)
     resultado['divergencias'] = divergencias
     return resultado
+
+
+def _conferencia_gravada(chave):
+    """Conferência já gravada desta nota ({'status','por','itens'}) ou None (aguardando/dispensada)."""
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT Status, ConferidoPor FROM RecebimentoNotas WHERE Chave = ?", (chave,))
+        cab = cur.fetchone()
+        if not cab or cab[0] not in (ST_CONFERIDA, ST_DIVERGENCIA):
+            return None
+        cur.execute("SELECT NItem, QtdConferida FROM RecebimentoItens WHERE Chave = ?", (chave,))
+        return {'status': cab[0], 'por': cab[1], 'itens': {int(r[0]): _dec(r[1] or 0) for r in cur.fetchall()}}
+    finally:
+        conn.close()
 
 
 def _guardar_ncm(n):
@@ -413,6 +455,10 @@ def _guardar_ncm(n):
 def dispensar(chave, usuario):
     """Gestor: tira a nota da lista sem conferir (ex.: nota antiga, mercadoria já guardada)."""
     n = ler_nota(_caminho_da_chave(chave))
+    anterior = _conferencia_gravada(n['chave'])
+    if anterior:
+        # [DEPURAÇÃO] antes apagava a conferência de uma nota já conferida (e até já lançada no estoque)
+        raise ErroCompras(f"Esta nota já foi conferida por {anterior['por'] or 'outra pessoa'}: não dá para dispensar.")
     conn = _conexao()
     try:
         cur = conn.cursor()
@@ -586,6 +632,11 @@ def lancar_no_estoque(chave, usuario):
     Devolve a nota (obter_recebimento) com 'aumentos' (preços que subiram).
     Erro (ErroCompras) se faltar vínculo ou se a nota não foi conferida.
     """
+    with _trava_lancamento:
+        return _lancar_no_estoque(chave, usuario)
+
+
+def _lancar_no_estoque(chave, usuario):
     import nota_xml
     caminho = _caminho_da_chave(chave)
     n = ler_nota(caminho)

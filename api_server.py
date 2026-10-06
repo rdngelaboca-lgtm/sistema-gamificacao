@@ -1887,6 +1887,11 @@ def api_compras_recebimento_finalizar(usuario, chave):
     def finalizar():
         ja_estava = bool(recebimento.obter_recebimento(chave).get('lancada'))
         r = recebimento.finalizar(chave, dados.get('itens'), dados.get('observacao'), usuario)
+        if r.get('repetida'):
+            # [DEPURAÇÃO] a mesma conferência reenviada pela fila do celular: sem Telegram repetido
+            r['lancamento'] = {'ok': True, 'ja_estava': True} if r.get('lancada') else \
+                {'ok': False, 'motivo': 'esta conferência já tinha sido recebida; falta lançar no estoque.'}
+            return r
         linhas = [f"📦 <b>Mercadoria recebida</b> · {esc(r['fornecedor'])} · NF {esc(r['numero'])}",
                   f"Conferida por {esc(usuario['nome'])}: " + ("tudo certo ✅" if not r['divergencias']
                                                               else f"<b>{len(r['divergencias'])} divergência(s)</b> ⚠️")]

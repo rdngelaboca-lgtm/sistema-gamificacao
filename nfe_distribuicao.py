@@ -326,6 +326,11 @@ def manifestar_ciencia(chave_nfe, chave_privada, certificado, arquivos_cert):
 # ------------------------------------------------------------------------------
 # Guardar os documentos
 # ------------------------------------------------------------------------------
+def _ja_temos_xml(chave):
+    """O XML desta nota já está na pasta ou na subpasta 'importadas' (nota que já entrou no estoque)."""
+    return any(os.path.exists(os.path.join(pasta_xml(), sub, f"{chave}.xml")) for sub in ('', 'importadas'))
+
+
 def _salvar_xml_completo(conteudo):
     """procNFe -> <pasta>/<chave>.xml. Devolve (chave, emitente, valor, novo?)."""
     raiz = _xml(conteudo)
@@ -339,7 +344,7 @@ def _salvar_xml_completo(conteudo):
     nome = _texto_de(emit, 'xFant') or _texto_de(emit, 'xNome') if emit is not None else ''
     valor = _texto_de(raiz, 'vNF')
     caminho = os.path.join(pasta_xml(), f"{chave}.xml")
-    novo = not os.path.exists(caminho)
+    novo = not _ja_temos_xml(chave)     # [DEPURAÇÃO] nota já lançada (em 'importadas') não volta para a pasta
     if novo:
         with open(caminho, 'wb') as f:
             f.write(conteudo)
@@ -416,7 +421,7 @@ def buscar_notas(forcar=False, agora=None):
                             resumo['novas'].append({'chave': chave, 'emitente': nome, 'valor': valor})
                     elif schema.startswith('resNFe'):
                         r = _ler_resumo(conteudo)
-                        if r['situacao'] != '1' or not r['chave'] or os.path.exists(os.path.join(pasta_xml(), f"{r['chave']}.xml")):
+                        if r['situacao'] != '1' or not r['chave'] or _ja_temos_xml(r['chave']):
                             continue            # cancelada/denegada ou já temos o XML
                         if r['chave'] in aguardando:
                             continue

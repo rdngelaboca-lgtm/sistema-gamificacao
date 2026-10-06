@@ -214,7 +214,7 @@
 
 // ---------------------------------------------------------------- utilidades
 const CHAVE = 'gb_compras_v1';
-const VERSAO_APP = '18';   // aparece no rodapé do início: confira se o celular pegou a versão nova
+const VERSAO_APP = '19';   // aparece no rodapé do início: confira se o celular pegou a versão nova
 const $app = document.getElementById('app');
 const DIAS_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];            // 1=Dom ... 7=Sáb (padrão do sistema)
 const FRACIONADAS = ['KG', 'G', 'GR', 'L', 'LT', 'ML', 'M'];
@@ -351,7 +351,12 @@ async function sincronizar() {
         E.fila.shift(); mudou = true;
         if (resp && resp.codigo && resp.itens) guardarLista(resp, true);
         if (resp && resp.chave && resp.itens && 'emitente' in resp) { guardarCupom(resp); if (!resp.ja_existia) toast('Cupom enviado: ' + (resp.emitente || 'cupom fiscal')); }
-        if (t.tipo === 'recebimento' && E.receb[t.chave]) { E.receb[t.chave].enviado = true; toast('Conferência enviada: NF ' + (resp.numero || '')); }
+        if (t.tipo === 'recebimento' && E.receb[t.chave]) {
+          E.receb[t.chave].enviado = true;
+          if (resp && resp.itens) E.notasReceb[t.chave] = resp;
+          const l = (resp && resp.lancamento) || {};
+          toast(`Conferência enviada: NF ${resp.numero || ''}` + (l.ok ? (l.ja_estava ? '' : ' · lançada no estoque ✅') : ' · ainda não entrou no estoque'));
+        }
       } catch (e) {
         t.enviando = false;
         if (e.extra.offline || e.status === 401 || e.status === 429 || e.status >= 500) break;   // tenta de novo depois
@@ -359,6 +364,7 @@ async function sincronizar() {
         E.erros.push({quando: new Date().toISOString(), msg: `${t.descricao || 'Envio'}: ${e.message}`});
         toast(`Não foi enviado: ${e.message}`);
         const loc = t.codigo && E.listas[t.codigo];
+        if (t.tipo === 'recebimento' && E.receb[t.chave]) E.receb[t.chave].finalizada = false;   // recusada: a nota volta a ficar aberta (não fica "Enviando…" para sempre)
         if (t.tipo === 'lista' && loc && loc.local) { loc.status = 'cancelada'; loc.local_status = null; }   // o servidor não aceitou: não fica "aberta" para sempre
         else if (t.codigo) atualizarLista(t.codigo, true);
       }
@@ -1270,7 +1276,7 @@ TELAS.receber = () => {
     <div class="corpo"><div class="info pequeno">Quando a entrega chegar, abra a nota e bipe os produtos com o leitor de código de barras.</div>${corpo}</div>${navbar('receber')}`;
 };
 async function carregarRecebimentos() {
-  try { E.recebimentos = await api('GET', '/api/compras/recebimentos'); salvar(); if (T.nome === 'receber') desenhar(); }
+  try { E.recebimentos = await api('GET', '/api/compras/recebimentos'); limparRecebimentosAntigos(); salvar(); if (T.nome === 'receber') desenhar(); }
   catch (e) { if (!e.extra.offline && T.nome === 'receber') toast(e.message); }
 }
 async function abrirRecebimento(chave) {
@@ -1279,17 +1285,26 @@ async function abrirRecebimento(chave) {
   catch (e) { if (!E.notasReceb[chave]) { toast(e.extra.offline ? 'Sem internet e esta nota não está no celular.' : e.message); return ir('receber'); } }
   const loc = E.receb[chave] = E.receb[chave] || {qtd: {}, finalizada: false};
   const n = E.notasReceb[chave];
-  if (n.status !== 'aguardando' && !loc.finalizada && !Object.keys(loc.qtd).length) n.itens.forEach(i => { if (i.conferido != null) loc.qtd[i.n] = i.conferido; });
   salvar();
   if (T.nome === 'conferencia') desenhar();
 }
+function limparRecebimentosAntigos() {
+  // [DEPURAÇÃO] cada nota aberta ficava guardada no celular para sempre (até encher a memória e o app parar de salvar)
+  const d = E.recebimentos, vivas = new Set([...d.pendentes, ...d.conferidas].map(r => r.chave));
+  const naFila = new Set(E.fila.filter(t => t.tipo === 'recebimento').map(t => t.chave));
+  for (const c of Object.keys(E.notasReceb)) if (!vivas.has(c) && !naFila.has(c)) delete E.notasReceb[c];
+  for (const c of Object.keys(E.receb)) if (!vivas.has(c) && !naFila.has(c)) delete E.receb[c];
+}
+function enviandoReceb(chave) { const l = E.receb[chave]; return !!(l && l.finalizada && !l.enviado); }
 function qtdRecebida(chave, n) { const l = E.receb[chave]; return (l && l.qtd[n]) || 0; }
-function situacaoItem(i, q) { return Math.abs(q - i.qtd) < 0.01 ? 'ok' : q > i.qtd ? 'mais' : q > 0 ? 'parcial' : 'nada'; }
+function situacaoItem(i, q) { return Math.abs(q - i.qtd) <= 0.001 ? 'ok' : q > i.qtd ? 'mais' : q > 0 ? 'parcial' : 'nada'; }
 TELAS.conferencia = p => {
   const n = E.notasReceb[p.chave];
   if (!n) return `${topo('Conferência', '', 'receb-voltar')}<div class="corpo"><div class="vazio">Carregando…</div></div>`;
-  const fechada = n.status !== 'aguardando';
-  const itens = n.itens.map(i => ({...i, q: qtdRecebida(n.chave, i.n)}));
+  const enviando = n.status === 'aguardando' && enviandoReceb(n.chave);
+  const fechada = n.status !== 'aguardando' || enviando;
+  // [DEPURAÇÃO] nota já conferida mostra o que foi GRAVADO (antes mostrava a contagem deste celular, que podia ser outra)
+  const itens = n.itens.map(i => ({...i, q: n.status !== 'aguardando' ? (i.conferido || 0) : qtdRecebida(n.chave, i.n)}));
   const ok = itens.filter(i => situacaoItem(i, i.q) === 'ok').length;
   const cor = {ok: 'var(--verde)', mais: '#b3261e', parcial: 'var(--laranja)', nada: 'var(--suave)'};
   const linhas = itens.map(i => {
@@ -1307,7 +1322,8 @@ TELAS.conferencia = p => {
   const st = ST_RECEB[n.status] || ['p-cinza', n.status];
   return `${faixaRede()}${topo(n.fornecedor, `NF ${n.numero} · ${dataBR(n.emissao)} · ${fmtReais(n.valor)}`, 'receb-voltar')}
     <div class="corpo">
-      ${fechada ? `<div class="info"><span class="pilula ${st[0]}">${st[1]}</span> por ${esc(n.conferido_por || '?')}${n.observacao ? '<br>Obs.: ' + esc(n.observacao) : ''}</div>
+      ${enviando ? '<div class="aviso"><b>Conferência finalizada neste celular.</b><div class="mini">Será enviada assim que tiver internet.</div></div>'
+        : fechada ? `<div class="info"><span class="pilula ${st[0]}">${st[1]}</span> por ${esc(n.conferido_por || '?')}${n.observacao ? '<br>Obs.: ' + esc(n.observacao) : ''}</div>
                   ${quadroEstoqueReceb(n)}`
                 : `<div class="cartao" style="display:flex;justify-content:space-between;align-items:center;gap:10px">
                     <div><div class="mini suave" style="font-weight:600">Itens conferidos</div><div style="font-size:22px;font-weight:800">${ok} de ${itens.length}</div></div>
@@ -1336,7 +1352,7 @@ function somarRecebido(n, delta) {
 }
 function bipConferencia(cod) {
   const n = E.notasReceb[T.p.chave];
-  if (!n || n.status !== 'aguardando') return;
+  if (!n || n.status !== 'aguardando' || enviandoReceb(n.chave)) return;
   const c = codigo14(cod);
   const achados = n.itens.filter(i => i.codigos.some(x => x.codigo === c));
   if (achados.length === 1) {
@@ -1376,8 +1392,9 @@ async function ligarCodigoAoItem(nItem, soEscolher) {
     T.p.bipMsg = '✓ ' + it.descricao;
     somarRecebido(nItem, porBip);
   } catch (e) {
-    if (!e.extra.offline) return toast(e.message);
-    fecharModal(); toast('Sem internet: contei este bip, mas o código não foi cadastrado.');
+    // [DEPURAÇÃO] antes, se o servidor recusasse o código, o bip que a pessoa fez se perdia
+    fecharModal(); toast(e.extra.offline ? 'Sem internet: contei este bip, mas o código não foi cadastrado.'
+                                         : `Contei este bip, mas o código não foi guardado: ${e.message}`);
     somarRecebido(nItem, porBip);
   }
 }
