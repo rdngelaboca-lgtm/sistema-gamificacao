@@ -1929,6 +1929,12 @@ def api_compras_recebimento_finalizar(usuario, chave):
     return _resposta_compras(finalizar)
 
 
+@app.route('/api/compras/recebimentos/<chave>/buscar-sefaz', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_compras_recebimento_buscar_sefaz(usuario, chave):
+    return _recebimento_disponivel() or _resposta_compras(recebimento.buscar_xml_na_sefaz, chave, usuario)
+
+
 @app.route('/api/compras/recebimentos/<chave>/vincular', methods=['POST'])
 @compras_login(somente_gestor=True)
 def api_compras_recebimento_vincular(usuario, chave):

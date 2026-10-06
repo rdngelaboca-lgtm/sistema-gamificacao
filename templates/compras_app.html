@@ -63,7 +63,7 @@
   .nome { font-size: 16px; font-weight: 700; }
   .barra { height: 8px; background: var(--linha2); border-radius: 99px; overflow: hidden; }
   .barra > div { height: 100%; background: var(--verde); }
-  .navbar { position: sticky; bottom: 0; display: grid; grid-template-columns: repeat(3, 1fr); background: #fff;
+  .navbar { position: sticky; bottom: 0; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; background: #fff;
     border-top: 1px solid var(--linha); padding: 6px 0 calc(10px + env(safe-area-inset-bottom)); }
   .navbar button { border: 0; background: transparent; display: flex; flex-direction: column; align-items: center; gap: 3px;
     font-size: 12px; font-weight: 600; color: var(--suave); padding: 6px 0; min-height: 52px; }
@@ -214,7 +214,7 @@
 
 // ---------------------------------------------------------------- utilidades
 const CHAVE = 'gb_compras_v1';
-const VERSAO_APP = '19';   // aparece no rodapé do início: confira se o celular pegou a versão nova
+const VERSAO_APP = '20';   // aparece no rodapé do início: confira se o celular pegou a versão nova
 const $app = document.getElementById('app');
 const DIAS_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];            // 1=Dom ... 7=Sáb (padrão do sistema)
 const FRACIONADAS = ['KG', 'G', 'GR', 'L', 'LT', 'ML', 'M'];
@@ -1264,13 +1264,23 @@ function cartaoRecebimento(r) {
       <div class="nome">${esc(r.fornecedor)}</div><span class="pilula ${st[0]}">${st[1]}</span></div>
     <div class="pequeno suave">NF ${esc(r.numero)} · ${dataBR(r.emissao)} · ${r.qtd_itens} itens · ${fmtReais(r.valor)}${r.conferido_por ? ' · ' + esc(r.conferido_por) : ''}</div>
     ${r.lancada === true ? '<div class="mini" style="font-weight:700;color:var(--verde-esc)">✓ No estoque</div>'
-      : r.lancada === false ? '<div class="mini" style="font-weight:700;color:var(--laranja)">Ainda não entrou no estoque</div>' : ''}</button>`;
+      : r.lancada === false && ['conferida', 'divergencia'].includes(r.status) ? '<div class="mini" style="font-weight:700;color:var(--laranja)">Ainda não entrou no estoque</div>' : ''}</button>`;
+}
+function cartaoAguardandoXml(r) {
+  return `<div class="cartao" style="display:flex;flex-direction:column;gap:6px">
+    <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;width:100%">
+      <div class="nome">${esc(r.fornecedor || 'Fornecedor')}</div><span class="pilula p-cinza">Esperando XML</span></div>
+    <div class="pequeno suave">NF ${esc(r.numero)} · ${dataBR(r.emissao)}${r.valor != null ? ' · ' + fmtReais(r.valor) : ''}${r.ciencia ? '' : ' · ciência ainda não aceita'}</div>
+    ${E.usuario.gestor ? `<button class="btn claro" style="min-height:36px;padding:4px 12px;font-size:13px;width:auto;align-self:flex-start" data-acao="receb-buscar-sefaz" data-chave="${esc(r.chave)}">Buscar agora na SEFAZ</button>` : ''}</div>`;
 }
 TELAS.receber = () => {
   const d = E.recebimentos;
   const corpo = !d ? `<div class="vazio">${online ? 'Carregando…' : 'Sem internet: a lista ainda não foi baixada neste celular.'}</div>`
     : `<div class="lista-cartoes"><div class="rotulo">Para conferir (${d.pendentes.length})</div>
         ${d.pendentes.map(cartaoRecebimento).join('') || `<div class="vazio">Nenhuma nota esperando conferência.<br><span class="mini">Aparecem aqui as notas emitidas nos últimos ${d.dias} dias.</span></div>`}</div>
+      ${(d.aguardando_xml || []).length ? `<div class="lista-cartoes"><div class="rotulo">Esperando o XML da SEFAZ (${d.aguardando_xml.length})</div>
+        <div class="mini suave">O fornecedor já emitiu, mas a SEFAZ ainda não liberou a nota completa. Ela aparece em "Para conferir" quando chegar.</div>
+        ${d.aguardando_xml.map(cartaoAguardandoXml).join('')}</div>` : ''}
       ${d.conferidas.length ? `<div class="lista-cartoes"><div class="rotulo">Conferidas nos últimos dias</div>${d.conferidas.map(cartaoRecebimento).join('')}</div>` : ''}`;
   return `${faixaRede()}${topo('Receber mercadoria', 'Notas que os fornecedores emitiram para a loja')}
     <div class="corpo"><div class="info pequeno">Quando a entrega chegar, abra a nota e bipe os produtos com o leitor de código de barras.</div>${corpo}</div>${navbar('receber')}`;
@@ -2286,6 +2296,15 @@ const acoes = {
   'receb-ligar': d => ligarCodigoAoItem(+d.n, !!d.so),
   'receb-finalizar': () => finalizarRecebimento(),
   'receb-vincular': d => modalVincularReceb(+d.n),
+  'receb-buscar-sefaz': async (d, el) => {
+    el.disabled = true; el.textContent = 'Buscando…';
+    try {
+      const r = await api('POST', `/api/compras/recebimentos/${d.chave}/buscar-sefaz`);
+      toast(r.mensagem);
+      if (['baixada', 'ja_temos'].includes(r.situacao)) { await carregarRecebimentos(); return; }
+    } catch (e) { toast(e.extra.offline ? 'Sem internet: conecte para buscar.' : e.message); }
+    el.disabled = false; el.textContent = 'Buscar agora na SEFAZ';
+  },
   'receb-vincular-salvar': (d, el) => {
     if (!T.p.sel) return toast('Escolha o produto do estoque.');
     const f = num(document.getElementById('fator').value);

@@ -23,6 +23,7 @@
 #   NFE_PASTA_XML         = 'notas_xml_sefaz'              (opcional)
 #
 # Testar à mão:   python nfe_distribuicao.py          (busca agora e mostra o resumo)
+# Uma nota só, pela chave de acesso (44 números do DANFE): procurar_nota.py
 # ==============================================================================
 import base64
 import gzip
@@ -233,6 +234,17 @@ def consultar_nsu(ult_nsu, arquivos_cert):
              f'<distDFeInt xmlns="{NS_NFE}" versao="1.01"><tpAmb>{_ambiente()}</tpAmb>'
              f'<cUFAutor>{str(getattr(config, "NFE_UF", "51"))}</cUFAutor><CNPJ>{_cnpj()}</CNPJ>'
              f'<distNSU><ultNSU>{int(ult_nsu):015d}</ultNSU></distNSU></distDFeInt></nfeDadosMsg></nfeDistDFeInteresse>')
+    bruto = _soap(URLS[_ambiente()]['dist'],
+                  'http://www.portalfiscal.inf.br/nfe/wsdl/NFeDistribuicaoDFe/nfeDistDFeInteresse', corpo, arquivos_cert)
+    return interpretar_retorno_dist(bruto)
+
+
+def consultar_chave(chave, arquivos_cert):
+    """Uma consulta 'consChNFe' (uma nota pela chave). Mesmo retorno da consultar_nsu."""
+    corpo = (f'<nfeDistDFeInteresse xmlns="http://www.portalfiscal.inf.br/nfe/wsdl/NFeDistribuicaoDFe"><nfeDadosMsg>'
+             f'<distDFeInt xmlns="{NS_NFE}" versao="1.01"><tpAmb>{_ambiente()}</tpAmb>'
+             f'<cUFAutor>{str(getattr(config, "NFE_UF", "51"))}</cUFAutor><CNPJ>{_cnpj()}</CNPJ>'
+             f'<consChNFe><chNFe>{chave}</chNFe></consChNFe></distDFeInt></nfeDadosMsg></nfeDistDFeInteresse>')
     bruto = _soap(URLS[_ambiente()]['dist'],
                   'http://www.portalfiscal.inf.br/nfe/wsdl/NFeDistribuicaoDFe/nfeDistDFeInteresse', corpo, arquivos_cert)
     return interpretar_retorno_dist(bruto)
@@ -457,6 +469,94 @@ def buscar_notas(forcar=False, agora=None):
         if not resumo['mensagem']:
             resumo['mensagem'] = "Busca na SEFAZ concluída."
         return resumo
+    finally:
+        if trava_arquivo:
+            trava_arquivo.close()
+        _trava.release()
+
+
+# ------------------------------------------------------------------------------
+# Uma nota só, pela chave (quando ela não chegou pela fila normal)
+# ------------------------------------------------------------------------------
+ESPERA_ENTRE_CONSULTAS_CHAVE = timedelta(minutes=5)
+MOTIVOS_CHAVE = {
+    '137': "A SEFAZ ainda não tem documento desta nota para a loja. Se a nota acabou de ser emitida, espere algumas horas.",
+    '632': "A SEFAZ diz que esta nota é antiga demais para baixar pelo serviço automático (mais de 90 dias).",
+    '640': "Esta nota NÃO foi emitida para o CNPJ da loja (confira o destinatário no DANFE).",
+    '641': "A SEFAZ não libera esta nota para download.",
+    '653': "Esta nota foi CANCELADA pelo fornecedor.",
+    '654': "Esta nota foi DENEGADA pela SEFAZ.",
+}
+
+
+def buscar_por_chave(chave, agora=None):
+    """
+    Busca UMA nota direto na SEFAZ pela chave de acesso (consChNFe). Devolve
+    {'situacao': 'baixada'|'ciencia'|'ja_temos'|'recusada'|'vazio', 'mensagem': texto}.
+      baixada  -> XML salvo na pasta (já aparece no app / no Gestão de Estoque)
+      ciencia  -> a SEFAZ só mandou o resumo: a Ciência foi enviada, tente de novo em alguns minutos
+    """
+    agora = agora or datetime.now()
+    chave = re.sub(r'\D', '', str(chave or ''))
+    if len(chave) != 44:
+        raise ErroNFe("A chave de acesso tem 44 números (fica embaixo do código de barras do DANFE).")
+    if _ja_temos_xml(chave):
+        return {'situacao': 'ja_temos', 'mensagem': "O XML desta nota já está no servidor."}
+    if not configurado():
+        raise ErroNFe("Busca na SEFAZ desligada: falta NFE_CERTIFICADO_PFX, NFE_CERTIFICADO_SENHA e NFE_CNPJ no config.py.")
+    if not _trava.acquire(blocking=False):
+        raise ErroNFe("Já existe uma busca na SEFAZ em andamento. Tente em 1 minuto.")
+    trava_arquivo = None
+    try:
+        try:
+            import fcntl
+            trava_arquivo = open(ARQUIVO_ESTADO + '.lock', 'w')
+            fcntl.flock(trava_arquivo, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except ImportError:
+            pass
+        except OSError:
+            raise ErroNFe("Já existe uma busca na SEFAZ em andamento (pelo robô). Tente em 1 minuto.")
+        estado = ler_estado()
+        aguardando = estado.setdefault('aguardando_xml', {})
+        consultas = estado.setdefault('consultas_chave', {})
+        ultima = consultas.get(chave)
+        if ultima and datetime.fromisoformat(ultima) + ESPERA_ENTRE_CONSULTAS_CHAVE > agora:
+            falta = int((datetime.fromisoformat(ultima) + ESPERA_ENTRE_CONSULTAS_CHAVE - agora).total_seconds() // 60) + 1
+            raise ErroNFe(f"Esta nota foi consultada há pouco. Tente de novo em {falta} minuto(s) (a SEFAZ bloqueia quem consulta demais).")
+        consultas[chave] = agora.isoformat(timespec='minutes')
+        for ch in [c for c, q in consultas.items() if datetime.fromisoformat(q) < agora - timedelta(days=2)]:
+            consultas.pop(ch)
+        _salvar_estado(estado)
+        chave_priv, cert, pem_cert, pem_chave = _carregar_certificado()
+        with _arquivos_certificado(pem_cert, pem_chave) as arquivos:
+            cstat, motivo, _, _, docs = consultar_chave(chave, arquivos)
+            if cstat == '656':
+                raise ErroNFe("A SEFAZ pediu para esperar 1 hora (consultas demais). Tente mais tarde.")
+            if cstat != '138':
+                return {'situacao': 'recusada' if cstat != '137' else 'vazio',
+                        'mensagem': MOTIVOS_CHAVE.get(cstat, f"A SEFAZ respondeu: {cstat} {motivo}")}
+            for _, schema, conteudo in docs:
+                if schema.startswith('procNFe'):
+                    ch, nome, valor, _ = _salvar_xml_completo(conteudo)
+                    aguardando.pop(ch, None)
+                    _salvar_estado(estado)
+                    logger.info(f"SEFAZ: nota {ch} baixada pela chave.")
+                    return {'situacao': 'baixada', 'mensagem': f"XML baixado: {nome or 'fornecedor'} · {_reais(valor)}."}
+            for _, schema, conteudo in docs:
+                if schema.startswith('resNFe'):
+                    r = _ler_resumo(conteudo)
+                    if r['situacao'] != '1':
+                        return {'situacao': 'recusada', 'mensagem': "Esta nota está cancelada ou denegada na SEFAZ."}
+                    registro = aguardando.setdefault(chave, {'emitente': r['emitente'], 'valor': r['valor'], 'emissao': r['emissao'],
+                                                             'desde': agora.isoformat(timespec='minutes'), 'ciencia': False})
+                    ok = _enviar_ciencia(chave, registro, chave_priv, cert, arquivos)
+                    _salvar_estado(estado)
+                    return {'situacao': 'ciencia',
+                            'mensagem': ("A SEFAZ só mandou o resumo da nota. " +
+                                         ("A Ciência da Operação foi enviada agora: tente de novo em uns 10 minutos."
+                                          if ok else f"A Ciência NÃO foi aceita ({registro.get('erro_ciencia', '?')}).")
+                                         + " O robô também tenta sozinho a cada hora.")}
+        return {'situacao': 'vazio', 'mensagem': "A SEFAZ não devolveu nenhum documento para esta chave."}
     finally:
         if trava_arquivo:
             trava_arquivo.close()

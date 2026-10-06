@@ -242,7 +242,46 @@ def listar_recebimentos(hoje=None):
             feitas.append(resumo)
     pendentes.sort(key=lambda r: r['emissao'] or '', reverse=True)
     feitas.sort(key=lambda r: r['conferido_em'] or '', reverse=True)
-    return {'pendentes': pendentes, 'conferidas': feitas, 'dias': DIAS_PENDENTE}
+    return {'pendentes': pendentes, 'conferidas': feitas, 'dias': DIAS_PENDENTE,
+            'aguardando_xml': _aguardando_xml(hoje, vistas)}
+
+
+def _aguardando_xml(hoje, vistas):
+    """[DEPURAÇÃO] Notas que a SEFAZ já avisou (só o resumo) e cujo XML completo ainda não chegou:
+    antes ficavam invisíveis no app. Não dá para conferir ainda, mas a pessoa sabe que existem."""
+    try:
+        import nfe_distribuicao
+        estado = nfe_distribuicao.ler_estado()
+    except Exception as e:
+        logger.warning(f"Recebimento: não deu para ler as notas esperando XML: {e}")
+        return []
+    limite = hoje - timedelta(days=DIAS_PENDENTE)
+    lista = []
+    for chave, v in (estado.get('aguardando_xml') or {}).items():
+        emissao = _como_data(v.get('emissao'))
+        if chave in vistas or (emissao and emissao < limite) or not re.fullmatch(r'\d{44}', chave):
+            continue
+        try:
+            valor = _num(Decimal(str(v.get('valor') or 0)), 2)
+        except InvalidOperation:
+            valor = None
+        lista.append({'chave': chave, 'numero': str(int(chave[25:34])), 'fornecedor': v.get('emitente') or '',
+                      'emissao': v.get('emissao') or '', 'valor': valor, 'ciencia': bool(v.get('ciencia'))})
+    lista.sort(key=lambda r: r['emissao'], reverse=True)
+    return lista
+
+
+def buscar_xml_na_sefaz(chave, usuario):
+    """Gestor: busca o XML de uma nota que só tem o resumo (consulta pela chave)."""
+    if not re.fullmatch(r'\d{44}', str(chave or '')):
+        raise ErroCompras("Nota inválida.")
+    import nfe_distribuicao
+    try:
+        r = nfe_distribuicao.buscar_por_chave(chave)
+    except nfe_distribuicao.ErroNFe as e:
+        raise ErroCompras(str(e))
+    logger.info(f"Recebimento: {usuario.get('nome')} buscou a nota {chave} na SEFAZ: {r['situacao']}.")
+    return r
 
 
 # ------------------------------------------------------------------------------
