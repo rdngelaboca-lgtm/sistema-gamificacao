@@ -192,6 +192,12 @@
   .tile-t { font-size: 14px; font-weight: 700; }
   .tile-alerta { border-color: var(--laranja); background: var(--laranja-claro); }
   .tile-alerta .tile-n { color: var(--laranja-esc); }
+  .qr-tela { position: fixed; inset: 0; background: #000; z-index: 60; display: flex; flex-direction: column; }
+  .qr-tela video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .qr-mira { position: absolute; left: 50%; top: 45%; width: min(70vw, 300px); aspect-ratio: 1; transform: translate(-50%, -50%);
+    border: 3px solid #fff; border-radius: 20px; box-shadow: 0 0 0 100vmax rgba(0,0,0,.45); }
+  .qr-topo { position: absolute; top: calc(18px + env(safe-area-inset-top)); left: 0; right: 0; text-align: center; color: #fff; font-weight: 700; font-size: 17px; }
+  .qr-rodape { position: absolute; left: 16px; right: 16px; bottom: calc(20px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 10px; }
   .link-btn { border: 0; background: none; padding: 0; color: var(--verde); font-weight: 700; text-decoration: underline; text-align: left; }
   .stp button { width: 40px; height: 44px; border-radius: 12px; border: 1px solid var(--verde-borda); background: #EEF7F5; color: var(--verde-esc);
     font-size: 22px; font-weight: 700; line-height: 1; touch-action: manipulation; }
@@ -223,7 +229,7 @@
 
 // ---------------------------------------------------------------- utilidades
 const CHAVE = 'gb_compras_v1';
-const VERSAO_APP = '23';   // aparece no rodapé do início: confira se o celular pegou a versão nova
+const VERSAO_APP = '24';   // aparece no rodapé do início: confira se o celular pegou a versão nova
 const $app = document.getElementById('app');
 const DIAS_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];            // 1=Dom ... 7=Sáb (padrão do sistema)
 const FRACIONADAS = ['KG', 'G', 'GR', 'L', 'LT', 'ML', 'M'];
@@ -460,6 +466,7 @@ function navbar(ativa) {
 }
 function abrirModal(html) {
   fecharModal();
+  pararLeitorQr();
   const fundo = document.createElement('div'); fundo.className = 'modal-fundo'; fundo.id = 'modal';
   fundo.innerHTML = `<div class="modal" role="dialog" aria-modal="true">${html}</div>`;
   fundo.addEventListener('click', e => { if (e.target === fundo) fecharModal(); });
@@ -2016,7 +2023,11 @@ function modalLerCupom(listaCodigo) {
           <label class="btn medio" style="cursor:pointer">Enviar página salva
             <input type="file" accept=".html,.htm,text/html" data-acao-change="cupom-pagina" data-lista="${lista}" style="display:none"></label></div>
       </details>`
-         : `<div class="pequeno suave" style="line-height:1.45">Fotografe o QR Code no pé do cupom: bem de perto, com luz, o quadrado inteiro e reto na foto.</div>${foto}${campo}`}
+         : (cameraAoVivoDisponivel()
+             ? `<button class="btn" data-acao="cupom-ao-vivo" data-lista="${lista}">${ICONES.qr} Ler QR Code com a câmera</button>
+                <div class="pequeno suave" style="line-height:1.45;text-align:center">A câmera abre e lê sozinha: é só apontar para o QR Code no pé do cupom.</div>
+                ${foto.replace('class="btn "', 'class="btn claro medio"')}${campo}`
+             : `<div class="pequeno suave" style="line-height:1.45">Fotografe o QR Code no pé do cupom: bem de perto, com luz, o quadrado inteiro e reto na foto.</div>${foto}${campo}`)}
     <div id="cupom-status" class="pequeno" style="text-align:center;min-height:20px" role="status"></div>`);
   const el = document.getElementById('cupom-link');
   if (el) {
@@ -2025,16 +2036,106 @@ function modalLerCupom(listaCodigo) {
   }
 }
 function statusCupom(t) { const el = document.getElementById('cupom-status'); if (el) el.textContent = t; }
-async function lerQrNoCelular(arquivo) {
-  // Android/Chrome lê o QR sozinho (funciona até sem internet). iPhone: a foto vai para o servidor ler.
-  if (!('BarcodeDetector' in window)) return null;
+// [QR NO CELULAR] o próprio celular lê o QR Code (jsQR embutido no app: qualquer celular, até sem internet).
+// Antes só o Chrome do Android lia; nos outros a foto ia para o servidor, que precisava do OpenCV instalado.
+let promessaJsQR = null;
+function carregarJsQR() {
+  if (window.jsQR) return Promise.resolve(window.jsQR);
+  if (!promessaJsQR) promessaJsQR = new Promise((ok, erro) => {
+    const sc = document.createElement('script'); sc.src = '/compras/arquivos/jsQR.js';
+    sc.onload = () => window.jsQR ? ok(window.jsQR) : erro(new Error('jsQR'));
+    sc.onerror = () => { promessaJsQR = null; erro(new Error('jsQR')); };
+    document.head.appendChild(sc);
+  });
+  return promessaJsQR;
+}
+async function detectorNativo() {
   try {
+    if (!('BarcodeDetector' in window)) return null;
     const formatos = await BarcodeDetector.getSupportedFormats();
-    if (!formatos.includes('qr_code')) return null;
-    const img = await createImageBitmap(arquivo);
-    const achados = await new BarcodeDetector({formats: ['qr_code']}).detect(img);
-    return achados.length ? achados[0].rawValue : null;
+    return formatos.includes('qr_code') ? new BarcodeDetector({formats: ['qr_code']}) : null;
   } catch (e) { return null; }
+}
+function qrDoCanvas(jsQR, cv, ctx, fonte, largura, altura, tentativas) {
+  cv.width = largura; cv.height = altura;
+  ctx.drawImage(fonte, 0, 0, largura, altura);
+  const dados = ctx.getImageData(0, 0, largura, altura);
+  const r = jsQR(dados.data, largura, altura, {inversionAttempts: tentativas || 'attemptBoth'});
+  return r && r.data ? r.data : null;
+}
+async function lerQrNoCelular(arquivo) {
+  let img;
+  try { img = await createImageBitmap(arquivo); } catch (e) { return null; }
+  const nativo = await detectorNativo();
+  if (nativo) { try { const a = await nativo.detect(img); if (a.length) return a[0].rawValue; } catch (e) {} }
+  let jsQR;
+  try { jsQR = await carregarJsQR(); } catch (e) { return null; }
+  const cv = document.createElement('canvas'), ctx = cv.getContext('2d', {willReadFrequently: true});
+  const maior = Math.max(img.width, img.height);
+  // a foto do celular é enorme e o QR do cupom é pequeno: tenta em vários tamanhos
+  for (const alvo of [1000, 1600, 700, 2200, 500]) {
+    const esc = Math.min(1, alvo / maior);
+    const texto = qrDoCanvas(jsQR, cv, ctx, img, Math.round(img.width * esc), Math.round(img.height * esc));
+    if (texto) return texto;
+    if (esc === 1) break;
+  }
+  return null;
+}
+function cameraAoVivoDisponivel() { return !!(window.isSecureContext && navigator.mediaDevices && navigator.mediaDevices.getUserMedia); }
+let leitorQr = null;   // {stream, parar}
+function pararLeitorQr() { if (leitorQr) { leitorQr.parar(); leitorQr = null; } }
+async function lerQrAoVivo(aoLer) {
+  // abre a câmera DENTRO do app e lê o QR assim que ele aparece (sem tirar foto)
+  pararLeitorQr();
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({video: {facingMode: {ideal: 'environment'}, width: {ideal: 1280}, height: {ideal: 720}}, audio: false});
+  } catch (e) {
+    statusCupom(e && e.name === 'NotAllowedError' ? '⚠ O app não tem permissão para usar a câmera. Libere nas configurações do navegador, ou use "Tirar foto".'
+                                                  : '⚠ Não consegui abrir a câmera. Use "Tirar foto".');
+    return;
+  }
+  const tela = document.createElement('div'); tela.className = 'qr-tela'; tela.id = 'qr-tela';
+  tela.innerHTML = `<video playsinline muted autoplay></video><div class="qr-mira"></div>
+    <div class="qr-topo">Aponte para o QR Code do cupom</div>
+    <div class="qr-rodape"><div id="qr-dica" class="pequeno" style="color:#fff;text-align:center;min-height:20px"></div>
+      <button class="btn claro" id="qr-cancelar">Cancelar</button></div>`;
+  document.body.appendChild(tela);
+  const video = tela.querySelector('video'); video.srcObject = stream;
+  let ativo = true;
+  const parar = () => { ativo = false; stream.getTracks().forEach(t => t.stop()); tela.remove(); };
+  leitorQr = {stream, parar};
+  tela.querySelector('#qr-cancelar').addEventListener('click', pararLeitorQr);
+  try { await video.play(); } catch (e) {}
+  const nativo = await detectorNativo();
+  let jsQR = null;
+  if (!nativo) { try { jsQR = await carregarJsQR(); } catch (e) { document.getElementById('qr-dica').textContent = 'Leitor de QR não carregou: use "Tirar foto".'; } }
+  const cv = document.createElement('canvas'), ctx = cv.getContext('2d', {willReadFrequently: true});
+  const inicio = Date.now();
+  const passo = async () => {
+    if (!ativo) return;
+    let texto = null;
+    if (video.readyState >= 2 && video.videoWidth) {
+      try {
+        if (nativo) { const a = await nativo.detect(video); if (a.length) texto = a[0].rawValue; }
+        else if (jsQR) {
+          // só o meio da imagem (onde fica a mira), em tamanho menor: rápido mesmo em celular simples
+          const lado = Math.min(video.videoWidth, video.videoHeight) * 0.8, x = (video.videoWidth - lado) / 2, y = (video.videoHeight - lado) / 2;
+          const t = Math.min(640, Math.round(lado));
+          cv.width = t; cv.height = t; ctx.drawImage(video, x, y, lado, lado, 0, 0, t, t);
+          const r = jsQR(ctx.getImageData(0, 0, t, t).data, t, t, {inversionAttempts: 'dontInvert'});
+          if (r && r.data) texto = r.data;
+        }
+      } catch (e) {}
+    }
+    if (texto) {
+      if (navigator.vibrate) navigator.vibrate(60);
+      pararLeitorQr(); aoLer(texto); return;
+    }
+    if (Date.now() - inicio > 12000) { const d = document.getElementById('qr-dica'); if (d) d.textContent = 'Chegue mais perto, com luz, e segure firme. Ou cancele e use "Tirar foto".'; }
+    setTimeout(passo, nativo ? 150 : 120);
+  };
+  passo();
 }
 async function reduzirFoto(arquivo) {
   const img = await createImageBitmap(arquivo);
@@ -2740,6 +2841,7 @@ const acoes = {
   },
   // cupom fiscal
   'cupom-ler': d => modalLerCupom(d.lista),
+  'cupom-ao-vivo': d => lerQrAoVivo(texto => { statusCupom('QR Code lido!'); enviarCupom({qr: texto, lista_codigo: d.lista || null}); }),
   'cupom-link': d => {
     const t = document.getElementById('cupom-link').value.trim();
     const numeros = t.replace(/\D/g, '');
@@ -2825,10 +2927,12 @@ const acoesChange = {
   'cupom-foto': async (d, el) => {
     const arq = el.files && el.files[0];
     if (!arq) return;
+    el.value = '';
     statusCupom('Procurando o QR Code na foto…');
     const lista = d.lista || null;
     const texto = await lerQrNoCelular(arq);
     if (texto) return enviarCupom({qr: texto, lista_codigo: lista});
+    statusCupom('Não achei o QR na foto: tentando no servidor…');
     try { enviarCupom({foto: await reduzirFoto(arq), lista_codigo: lista}); }
     catch (e) { statusCupom('⚠ Não consegui abrir a foto. Tente de novo.'); }
   },
