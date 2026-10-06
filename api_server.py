@@ -1842,6 +1842,69 @@ def api_compras_lancar_cupom(usuario, cupom_id):
     return _cupom_disponivel() or _resposta_compras(compras_cupom.lancar_cupom, cupom_id, usuario)
 
 
+# ---------------------------- recebimento: conferência da mercadoria (XML da SEFAZ) ----------------------------
+try:
+    import recebimento
+except Exception as _erro_import_receb:
+    recebimento = None
+    logger.error(f"Conferência de recebimento DESLIGADA: não consegui carregar recebimento.py ({_erro_import_receb})")
+
+
+def _recebimento_disponivel():
+    if recebimento is None:
+        return jsonify({"erro": "Conferência de recebimento não instalada no servidor (falta recebimento.py)."}), 503
+    return None
+
+
+@app.route('/api/compras/recebimentos', methods=['GET'])
+@compras_login()
+def api_compras_recebimentos(usuario):
+    return _recebimento_disponivel() or _resposta_compras(recebimento.listar_recebimentos)
+
+
+@app.route('/api/compras/recebimentos/<chave>', methods=['GET'])
+@compras_login()
+def api_compras_recebimento(usuario, chave):
+    return _recebimento_disponivel() or _resposta_compras(recebimento.obter_recebimento, chave)
+
+
+@app.route('/api/compras/recebimentos/<chave>/codigo', methods=['POST'])
+@compras_login()
+def api_compras_recebimento_codigo(usuario, chave):
+    dados = ler_json() or {}
+    return _recebimento_disponivel() or _resposta_compras(recebimento.cadastrar_codigo, chave, dados.get('n'),
+                                                          dados.get('codigo'), dados.get('por_bip'), usuario)
+
+
+@app.route('/api/compras/recebimentos/<chave>/finalizar', methods=['POST'])
+@compras_login()
+def api_compras_recebimento_finalizar(usuario, chave):
+    bloqueio = _recebimento_disponivel()
+    if bloqueio:
+        return bloqueio
+    dados = ler_json() or {}
+
+    def finalizar():
+        r = recebimento.finalizar(chave, dados.get('itens'), dados.get('observacao'), usuario)
+        linhas = [f"📦 <b>Mercadoria recebida</b> · {esc(r['fornecedor'])} · NF {esc(r['numero'])}",
+                  f"Conferida por {esc(usuario['nome'])}: " + ("tudo certo ✅" if not r['divergencias']
+                                                              else f"<b>{len(r['divergencias'])} divergência(s)</b> ⚠️")]
+        for d in r['divergencias'][:20]:
+            linhas.append(f"• {esc(d['descricao'])}: nota {recebimento.qtd_br(d['nota'])} {esc(d['unidade'])}, "
+                          f"chegou {recebimento.qtd_br(d['conferido'])} ({d['tipo']})")
+        if r.get('observacao'):
+            linhas.append(f"Obs.: {esc(r['observacao'])}")
+        _avisar_gestor_telegram("\n".join(linhas))
+        return r
+    return _resposta_compras(finalizar)
+
+
+@app.route('/api/compras/recebimentos/<chave>/dispensar', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_compras_recebimento_dispensar(usuario, chave):
+    return _recebimento_disponivel() or _resposta_compras(recebimento.dispensar, chave, usuario)
+
+
 if __name__ == "__main__":
     # O '0.0.0.0' é o segredo. Ele libera o acesso para a rede inteira.
     logger.info("Iniciando servidor API acessível na rede em modo Produção...")

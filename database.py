@@ -6628,6 +6628,12 @@ def _garantir_colunas_estoque():
             cur.execute("ALTER TABLE NotasFiscaisEntrada ADD Serie VARCHAR(5) NULL")
         if 'chaveacesso' not in colunas_nf:
             cur.execute("ALTER TABLE NotasFiscaisEntrada ADD ChaveAcesso VARCHAR(44) NULL")
+        # [NCM] o NCM (classificação fiscal) passa a ficar também no PRODUTO do estoque
+        cur.execute("SELECT * FROM ProdutosEstoque WHERE 1 = 0")
+        if 'ncm' not in {d[0].lower() for d in (cur.description or [])}:
+            cur.execute("ALTER TABLE ProdutosEstoque ADD NCM VARCHAR(10) NULL")
+            conn.commit()
+            _preencher_ncm_dos_produtos(cur)
         conn.commit()
         _colunas_estoque_ok = True
     except Exception as e:
@@ -6636,6 +6642,39 @@ def _garantir_colunas_estoque():
         raise
     finally:
         conn.close()
+
+
+def ncm_valido(ncm):
+    """NCM com 8 números (o '00000000' de produto fantasma não conta). Senão None."""
+    d = ''.join(ch for ch in str(ncm or '') if ch.isdigit())
+    return d if len(d) == 8 and d != '00000000' else None
+
+
+def _preencher_ncm_dos_produtos(cur):
+    """[NCM] Uma vez: produto sem NCM recebe o NCM mais usado nos vínculos dele (vindo dos XMLs)."""
+    cur.execute("SELECT ProdutoID, NCM FROM ProdutosFornecedor WHERE ProdutoID IS NOT NULL")
+    contagem = {}
+    for pid, ncm in cur.fetchall():
+        ncm = ncm_valido(ncm)
+        if ncm:
+            contagem.setdefault(pid, {}).setdefault(ncm, 0)
+            contagem[pid][ncm] += 1
+    for pid, por_ncm in contagem.items():
+        melhor = max(por_ncm.items(), key=lambda x: x[1])[0]
+        cur.execute("UPDATE ProdutosEstoque SET NCM = ? WHERE ProdutoID = ? AND (NCM IS NULL OR NCM = '')", melhor, pid)
+    logger.info(f"NCM preenchido em {len(contagem)} produto(s) a partir dos vínculos.")
+
+
+def _guardar_ncm_dos_itens(cursor, itens):
+    """[NCM] Ao salvar uma nota: o vínculo fica com o NCM do XML e o produto, se ainda não tinha, também."""
+    for item in itens:
+        ncm = ncm_valido(item.get('NCM'))
+        if not ncm or not item.get('ProdutoFornecedorID'):
+            continue
+        cursor.execute("UPDATE ProdutosFornecedor SET NCM = ? WHERE ProdutoFornecedorID = ?", ncm, item['ProdutoFornecedorID'])
+        cursor.execute("""UPDATE ProdutosEstoque SET NCM = ? WHERE (NCM IS NULL OR NCM = '') AND ProdutoID =
+                          (SELECT ProdutoID FROM ProdutosFornecedor WHERE ProdutoFornecedorID = ?)""",
+                       ncm, item['ProdutoFornecedorID'])
 
 
 def _serie_normalizada(serie):
@@ -6756,7 +6795,8 @@ def salvar_nota_fiscal_completa(dados_nf_cabecalho, lista_itens_nf):
         ]
         
         cursor.executemany(sql_item, itens_para_inserir)
-        
+        _guardar_ncm_dos_itens(cursor, lista_itens_nf)   # [NCM]
+
         # 3. Se tudo deu certo, commita a transação
         conn.commit()
         dados_nf_cabecalho['NotaID'] = int(nova_nota_id)   # [ALERTA PREÇO] quem salvou sabe qual nota conferir

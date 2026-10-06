@@ -214,7 +214,7 @@
 
 // ---------------------------------------------------------------- utilidades
 const CHAVE = 'gb_compras_v1';
-const VERSAO_APP = '16';   // aparece no rodapé do início: confira se o celular pegou a versão nova
+const VERSAO_APP = '17';   // aparece no rodapé do início: confira se o celular pegou a versão nova
 const $app = document.getElementById('app');
 const DIAS_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];            // 1=Dom ... 7=Sáb (padrão do sistema)
 const FRACIONADAS = ['KG', 'G', 'GR', 'L', 'LT', 'ML', 'M'];
@@ -271,6 +271,7 @@ const ICONES = {
   baixo: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>',
   lixo: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6 6l1 14h10l1-14"/></svg>',
   enviar: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/></svg>',
+  caixa: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/></svg>',
   barras: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 5v14"/><path d="M7 5v14"/><path d="M10 5v14"/><path d="M14 5v14"/><path d="M17 5v14"/><path d="M21 5v14"/></svg>',
   qr: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3z"/><path d="M20 14v7h-6"/></svg>',
   camera: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h3l2-3h6l2 3h3a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="4"/></svg>',
@@ -283,7 +284,8 @@ function carregar() {
   try { const t = localStorage.getItem(CHAVE); if (t) return Object.assign(estadoVazio(), JSON.parse(t)); } catch (e) {}
   return estadoVazio();
 }
-function estadoVazio() { return {usuario: null, rotinas: [], preparos: {}, ida: null, listas: {}, fila: [], erros: [], cupons: [], codigos: {}, codigosEm: null}; }
+function estadoVazio() { return {usuario: null, rotinas: [], preparos: {}, ida: null, listas: {}, fila: [], erros: [], cupons: [], codigos: {}, codigosEm: null,
+                               recebimentos: null, notasReceb: {}, receb: {}}; }
 function salvar() {
   try { localStorage.setItem(CHAVE, JSON.stringify(E)); }
   catch (e) { toast('Memória do celular cheia: não deu para salvar.'); }
@@ -348,7 +350,8 @@ async function sincronizar() {
         const resp = await api(t.metodo, t.url, t.corpo);
         E.fila.shift(); mudou = true;
         if (resp && resp.codigo && resp.itens) guardarLista(resp, true);
-        if (resp && resp.chave && resp.itens) { guardarCupom(resp); if (!resp.ja_existia) toast('Cupom enviado: ' + (resp.emitente || 'cupom fiscal')); }
+        if (resp && resp.chave && resp.itens && 'emitente' in resp) { guardarCupom(resp); if (!resp.ja_existia) toast('Cupom enviado: ' + (resp.emitente || 'cupom fiscal')); }
+        if (t.tipo === 'recebimento' && E.receb[t.chave]) { E.receb[t.chave].enviado = true; toast('Conferência enviada: NF ' + (resp.numero || '')); }
       } catch (e) {
         t.enviando = false;
         if (e.extra.offline || e.status === 401 || e.status === 429 || e.status >= 500) break;   // tenta de novo depois
@@ -436,7 +439,7 @@ function navbar(ativa) {
   const b = (id, ic, txt) => `<button class="${ativa === id ? 'ativo' : ''}" data-acao="nav" data-tela="${id}" ${ativa === id ? 'aria-current="page"' : ''}>${ic}${txt}</button>`;
   // [PAINEL DO GESTOR] relatórios só para o gestor: o operacional vê Início e Listas
   const gestao = E.usuario && E.usuario.gestor ? b('gestao', ICONES.grafico, 'Gestão') : '';
-  return `<nav class="navbar">${b('inicio', ICONES.casa, 'Início')}${b('listas', ICONES.listas, 'Listas')}${gestao}</nav>`;
+  return `<nav class="navbar">${b('inicio', ICONES.casa, 'Início')}${b('listas', ICONES.listas, 'Listas')}${b('receber', ICONES.caixa, 'Receber')}${gestao}</nav>`;
 }
 function abrirModal(html) {
   fecharModal();
@@ -1243,6 +1246,162 @@ function conteudoResumo(pn) {
     ${(pn.avisos || []).map(a => `<div class="mini suave">⚠ ${esc(a)}</div>`).join('')}
     <div class="mini suave" style="text-align:center">Atualizado ${pn.gerado_em ? dataBR(pn.gerado_em) + ' ' + pn.gerado_em.slice(11, 16) : ''} · <button class="icone-btn" style="width:auto;display:inline;color:var(--verde);font-weight:700" data-acao="gestao-atualizar">atualizar</button></div>`;
 }
+// ---------------------------------------------------------------- [RECEBIMENTO] conferência da mercadoria que chega
+const ST_RECEB = {aguardando: ['p-laranja', 'Aguardando conferência'], conferida: ['p-verde', 'Conferida'],
+                  divergencia: ['p-laranja', 'Com divergência'], dispensada: ['p-cinza', 'Dispensada']};
+function cartaoRecebimento(r) {
+  const loc = E.receb[r.chave];
+  const st = loc && !loc.enviado && loc.finalizada ? ['p-cinza', 'Enviando…'] : loc && !loc.finalizada && Object.keys(loc.qtd || {}).length && r.status === 'aguardando'
+    ? ['p-laranja', 'Em conferência'] : (ST_RECEB[r.status] || ['p-cinza', r.status]);
+  return `<button class="cartao" style="text-align:left;display:flex;flex-direction:column;gap:6px;width:100%" data-acao="receb-abrir" data-chave="${esc(r.chave)}">
+    <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;width:100%">
+      <div class="nome">${esc(r.fornecedor)}</div><span class="pilula ${st[0]}">${st[1]}</span></div>
+    <div class="pequeno suave">NF ${esc(r.numero)} · ${dataBR(r.emissao)} · ${r.qtd_itens} itens · ${fmtReais(r.valor)}${r.conferido_por ? ' · ' + esc(r.conferido_por) : ''}</div></button>`;
+}
+TELAS.receber = () => {
+  const d = E.recebimentos;
+  const corpo = !d ? `<div class="vazio">${online ? 'Carregando…' : 'Sem internet: a lista ainda não foi baixada neste celular.'}</div>`
+    : `<div class="lista-cartoes"><div class="rotulo">Para conferir (${d.pendentes.length})</div>
+        ${d.pendentes.map(cartaoRecebimento).join('') || `<div class="vazio">Nenhuma nota esperando conferência.<br><span class="mini">Aparecem aqui as notas emitidas nos últimos ${d.dias} dias.</span></div>`}</div>
+      ${d.conferidas.length ? `<div class="lista-cartoes"><div class="rotulo">Conferidas nos últimos dias</div>${d.conferidas.map(cartaoRecebimento).join('')}</div>` : ''}`;
+  return `${faixaRede()}${topo('Receber mercadoria', 'Notas que os fornecedores emitiram para a loja')}
+    <div class="corpo"><div class="info pequeno">Quando a entrega chegar, abra a nota e bipe os produtos com o leitor de código de barras.</div>${corpo}</div>${navbar('receber')}`;
+};
+async function carregarRecebimentos() {
+  try { E.recebimentos = await api('GET', '/api/compras/recebimentos'); salvar(); if (T.nome === 'receber') desenhar(); }
+  catch (e) { if (!e.extra.offline && T.nome === 'receber') toast(e.message); }
+}
+async function abrirRecebimento(chave) {
+  ir('conferencia', {chave});
+  try { E.notasReceb[chave] = await api('GET', `/api/compras/recebimentos/${chave}`); salvar(); }
+  catch (e) { if (!E.notasReceb[chave]) { toast(e.extra.offline ? 'Sem internet e esta nota não está no celular.' : e.message); return ir('receber'); } }
+  const loc = E.receb[chave] = E.receb[chave] || {qtd: {}, finalizada: false};
+  const n = E.notasReceb[chave];
+  if (n.status !== 'aguardando' && !loc.finalizada && !Object.keys(loc.qtd).length) n.itens.forEach(i => { if (i.conferido != null) loc.qtd[i.n] = i.conferido; });
+  salvar();
+  if (T.nome === 'conferencia') desenhar();
+}
+function qtdRecebida(chave, n) { const l = E.receb[chave]; return (l && l.qtd[n]) || 0; }
+function situacaoItem(i, q) { return Math.abs(q - i.qtd) < 0.01 ? 'ok' : q > i.qtd ? 'mais' : q > 0 ? 'parcial' : 'nada'; }
+TELAS.conferencia = p => {
+  const n = E.notasReceb[p.chave];
+  if (!n) return `${topo('Conferência', '', 'receb-voltar')}<div class="corpo"><div class="vazio">Carregando…</div></div>`;
+  const fechada = n.status !== 'aguardando';
+  const itens = n.itens.map(i => ({...i, q: qtdRecebida(n.chave, i.n)}));
+  const ok = itens.filter(i => situacaoItem(i, i.q) === 'ok').length;
+  const cor = {ok: 'var(--verde)', mais: '#b3261e', parcial: 'var(--laranja)', nada: 'var(--suave)'};
+  const linhas = itens.map(i => {
+    const sit = situacaoItem(i, i.q);
+    const extra = i.qtd_trib && i.unidade_trib && i.unidade_trib !== i.unidade ? ` (${fmtQtd(i.qtd_trib)} ${esc(i.unidade_trib)})` : '';
+    return `<div class="lin ${p.piscar === i.n ? 'piscar' : ''}" id="ri-${i.n}" style="border-left:4px solid ${cor[sit]}">
+      <div class="grow"><div style="font-weight:700;font-size:15px">${esc(i.descricao)}</div>
+        <div class="mini suave">${i.ean ? 'EAN ' + esc(i.ean.replace(/^0+/, '')) : 'sem código de barras na nota'}${i.codigos.length ? '' : ' · <b style="color:var(--laranja)">bipe e cadastre o código</b>'}${i.ncm ? ' · NCM ' + esc(i.ncm) : ''}</div>
+        <div class="mini" style="font-weight:700;color:${cor[sit]}">${sit === 'ok' ? '✓ ' : sit === 'mais' ? '⚠ a mais: ' : ''}${fmtQtd(Math.round(i.q * 1000) / 1000)} de ${fmtQtd(i.qtd)} ${esc(i.unidade)}${extra}</div></div>
+      ${fechada ? '' : `<div class="stp mini"><button data-acao="receb-menos" data-n="${i.n}" aria-label="Menos ${esc(i.descricao)}">−</button>
+        <button class="stp-v" data-acao="receb-digitar" data-n="${i.n}">${fmtQtd(Math.round(i.q * 1000) / 1000)}</button>
+        <button data-acao="receb-mais" data-n="${i.n}" aria-label="Mais ${esc(i.descricao)}">+</button></div>`}</div>`;
+  }).join('');
+  const st = ST_RECEB[n.status] || ['p-cinza', n.status];
+  return `${faixaRede()}${topo(n.fornecedor, `NF ${n.numero} · ${dataBR(n.emissao)} · ${fmtReais(n.valor)}`, 'receb-voltar')}
+    <div class="corpo">
+      ${fechada ? `<div class="info"><span class="pilula ${st[0]}">${st[1]}</span> por ${esc(n.conferido_por || '?')}${n.observacao ? '<br>Obs.: ' + esc(n.observacao) : ''}</div>`
+                : `<div class="cartao" style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+                    <div><div class="mini suave" style="font-weight:600">Itens conferidos</div><div style="font-size:22px;font-weight:800">${ok} de ${itens.length}</div></div>
+                    <div class="mini suave" style="text-align:right">${ICONES.barras}<br>Bipe os produtos</div></div>
+                  <div class="progresso"><div style="width:${Math.round(100 * ok / Math.max(itens.length, 1))}%"></div></div>
+                  ${ehComputador() ? `<div class="campo"><input id="receb-cod" inputmode="numeric" placeholder="Leitor USB ou digite o código e Enter" autocomplete="off" aria-label="Código de barras"></div>` : ''}`}
+      ${p.bipMsg ? `<div class="mini" style="text-align:center;font-weight:700">${esc(p.bipMsg)}</div>` : ''}
+      <div class="linhas">${linhas}</div>
+      ${!fechada && E.usuario.gestor ? '<button class="btn claro medio" data-acao="receb-dispensar">Dispensar (tirar da lista sem conferir)</button>' : ''}
+    </div>
+    ${fechada ? '' : '<div class="rodape"><button class="btn" data-acao="receb-finalizar">Finalizar conferência</button></div>'}`;
+};
+TELAS_DEPOIS.conferencia = p => {
+  const c = document.getElementById('receb-cod');
+  if (c) {
+    c.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); const v = c.value.replace(/\D/g, ''); c.value = ''; if (v.length >= 8) bipConferencia(v); } });
+    setTimeout(() => c.focus(), 50);
+  }
+  if (p.piscar) { const el = document.getElementById('ri-' + p.piscar); if (el) el.scrollIntoView({block: 'center'}); }
+};
+function somarRecebido(n, delta) {
+  const p = T.p, loc = E.receb[p.chave];
+  loc.qtd[n] = Math.max(0, Math.round(((loc.qtd[n] || 0) + delta) * 1e6) / 1e6);
+  p.piscar = n; salvar(); desenhar();
+}
+function bipConferencia(cod) {
+  const n = E.notasReceb[T.p.chave];
+  if (!n || n.status !== 'aguardando') return;
+  const c = codigo14(cod);
+  const achados = n.itens.filter(i => i.codigos.some(x => x.codigo === c));
+  if (achados.length === 1) {
+    const it = achados[0], porBip = it.codigos.find(x => x.codigo === c).por_bip;
+    bipe(true); T.p.bipMsg = `✓ ${it.descricao}${porBip !== 1 ? ` (+${fmtQtd(Math.round(porBip * 1000) / 1000)} ${it.unidade})` : ''}`;
+    return somarRecebido(it.n, porBip);
+  }
+  bipe(false);
+  if (achados.length > 1) return escolherItemDoCodigo(cod, achados, true);
+  escolherItemDoCodigo(cod, n.itens, false);
+}
+function escolherItemDoCodigo(cod, itens, soEscolher) {
+  T.p.codNovo = cod;
+  abrirModal(`<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px"><div><div class="titulo-sec">${soEscolher ? 'Qual destes itens?' : 'Código novo: ' + esc(cod)}</div>
+      <div class="mini suave">${soEscolher ? 'Este código serve para mais de um item da nota.' : 'Este código ainda não é conhecido. Toque no item da nota que você bipou: nas próximas vezes ele é reconhecido sozinho.'}</div></div>
+      <button class="icone-btn" data-acao="fechar-modal" aria-label="Fechar">${ICONES.fechar}</button></div>
+    ${soEscolher ? '' : `<div class="campo"><label for="receb-porbip">1 bip deste código vale:</label>
+      <select id="receb-porbip"><option value="1">1 unidade da nota (ex.: 1 caixa, se a nota é em caixas)</option><option value="dentro">uma unidade de DENTRO da embalagem</option></select></div>`}
+    <div class="linhas" style="max-height:320px;overflow:auto">${itens.map(i => `<button class="lin" style="width:100%;border-left:0;border-right:0;border-bottom:0;background:#fff;text-align:left" data-acao="receb-ligar" data-n="${i.n}" data-so="${soEscolher ? 1 : ''}">
+      <div class="grow"><div style="font-weight:700">${esc(i.descricao)}</div><div class="mini suave">${fmtQtd(i.qtd)} ${esc(i.unidade)}${i.qtd_trib && i.unidade_trib !== i.unidade ? ' = ' + fmtQtd(i.qtd_trib) + ' ' + esc(i.unidade_trib) : ''}${i.codigos.length ? '' : ' · sem código'}</div></div></button>`).join('')}</div>
+    ${soEscolher ? '' : '<button class="btn claro medio" data-acao="fechar-modal">Não é desta nota</button>'}`);
+}
+async function ligarCodigoAoItem(nItem, soEscolher) {
+  const n = E.notasReceb[T.p.chave], it = n.itens.find(i => i.n === nItem), cod = T.p.codNovo;
+  if (soEscolher) { fecharModal(); const pb = it.codigos.find(x => x.codigo === codigo14(cod)).por_bip; return somarRecebido(nItem, pb); }
+  let porBip = 1;
+  const sel = document.getElementById('receb-porbip');
+  if (sel && sel.value === 'dentro') {
+    const sugestao = it.qtd_trib && it.qtd ? Math.round(it.qtd_trib / it.qtd * 1000) / 1000 : '';
+    const q = num(prompt(`Quantas unidades vêm em 1 ${it.unidade} de "${it.descricao}"?`, sugestao) || '');
+    if (!(q > 0)) return toast('Quantidade inválida.');
+    porBip = 1 / q;
+  }
+  try {
+    E.notasReceb[n.chave] = await api('POST', `/api/compras/recebimentos/${n.chave}/codigo`, {n: nItem, codigo: cod, por_bip: porBip});
+    salvar(); fecharModal(); bipe(true); toast('Código cadastrado.');
+    T.p.bipMsg = '✓ ' + it.descricao;
+    somarRecebido(nItem, porBip);
+  } catch (e) {
+    if (!e.extra.offline) return toast(e.message);
+    fecharModal(); toast('Sem internet: contei este bip, mas o código não foi cadastrado.');
+    somarRecebido(nItem, porBip);
+  }
+}
+function finalizarRecebimento() {
+  const n = E.notasReceb[T.p.chave], loc = E.receb[n.chave];
+  const div = n.itens.map(i => ({...i, q: qtdRecebida(n.chave, i.n)})).filter(i => situacaoItem(i, i.q) !== 'ok');
+  abrirModal(`<div class="titulo-sec">Finalizar conferência</div>
+    ${div.length ? `<div class="aviso"><b>${div.length} item(ns) com diferença:</b>${div.map(i => `<div class="mini">• ${esc(i.descricao)}: nota ${fmtQtd(i.qtd)}, chegou ${fmtQtd(Math.round(i.q * 1000) / 1000)} ${esc(i.unidade)}</div>`).join('')}</div>`
+                 : '<div class="info">Tudo confere com a nota. ✅</div>'}
+    <div class="campo"><label for="receb-obs">Observação (opcional)</label><input id="receb-obs" maxlength="400" placeholder="Ex.: 1 caixa amassada, entregador Fulano" autocomplete="off"></div>
+    <div class="linha-btns"><button class="btn claro" data-acao="fechar-modal">Voltar</button><button class="btn" data-acao="receb-enviar">Enviar</button></div>`);
+}
+async function enviarRecebimento() {
+  const n = E.notasReceb[T.p.chave], loc = E.receb[n.chave];
+  const corpo = {itens: n.itens.map(i => ({n: i.n, qtd: Math.round(qtdRecebida(n.chave, i.n) * 1e6) / 1e6})),
+                 observacao: (document.getElementById('receb-obs') || {}).value || ''};
+  loc.finalizada = true; salvar(); fecharModal();
+  try {
+    E.notasReceb[n.chave] = await api('POST', `/api/compras/recebimentos/${n.chave}/finalizar`, corpo);
+    loc.enviado = true; salvar();
+    toast('Conferência enviada ao gestor.');
+  } catch (e) {
+    if (!e.extra.offline) { loc.finalizada = false; salvar(); return toast(e.message); }
+    enfileirar({tipo: 'recebimento', chave: n.chave, metodo: 'POST', url: `/api/compras/recebimentos/${n.chave}/finalizar`, corpo, descricao: 'Conferência NF ' + n.numero});
+    toast('Sem internet: a conferência será enviada quando conectar.');
+  }
+  ir('receber'); carregarRecebimentos();
+}
+
 // ---------------------------------------------------------------- [PREÇOS] histórico de preço de um produto
 TELAS_DEPOIS.gestao = p => {
   const b = document.getElementById('busca-preco');
@@ -1687,6 +1846,7 @@ function codigoLido(cod) {
   if (T.nome === 'contagem') return bipContagem(cod);
   if (T.nome === 'carrinho' || T.nome === 'lista') return bipCarrinho(cod);
   if (T.nome === 'rotina' && T.p.r) return bipRotina(cod);
+  if (T.nome === 'conferencia') return bipConferencia(cod);
 }
 function codigoDesconhecido(cod, depois) {
   bipe(false);
@@ -1824,6 +1984,7 @@ const acoes = {
   'nav': d => {
     const tela = d.tela;
     if (tela === 'inicio') { ir('inicio'); carregarInicio(); }
+    else if (tela === 'receber') { ir('receber'); carregarRecebimentos(); carregarCodigos(); }
     else if (tela === 'listas') { ir('listas'); carregarInicio().then(() => { if (T.nome === 'listas') desenhar(); }); }
     else if (tela === 'gestao') {
       if (!E.usuario.gestor) return acoes.nav({tela: 'inicio'});
@@ -2005,6 +2166,25 @@ const acoes = {
     else if (d.s === 'consumo') { const r = E.rotinas.find(x => x.id === T.p.rotina_id) || E.rotinas[0]; if (r) carregarConsumo(r.id); }
   },
   'gestao-atualizar': () => { toast('Atualizando…'); carregarPainel(); },
+  'receb-abrir': d => abrirRecebimento(d.chave),
+  'receb-voltar': () => { ir('receber'); carregarRecebimentos(); },
+  'receb-mais': d => somarRecebido(+d.n, 1),
+  'receb-menos': d => somarRecebido(+d.n, -1),
+  'receb-digitar': d => {
+    const n = E.notasReceb[T.p.chave], it = n.itens.find(i => i.n === +d.n);
+    const v = num(prompt(`Quanto chegou de "${it.descricao}"? (em ${it.unidade}; a nota diz ${fmtQtd(it.qtd)})`, fmtQtd(qtdRecebida(n.chave, it.n))) || '');
+    if (v == null || v < 0) return;
+    E.receb[n.chave].qtd[it.n] = v; T.p.piscar = it.n; salvar(); desenhar();
+  },
+  'receb-ligar': d => ligarCodigoAoItem(+d.n, !!d.so),
+  'receb-finalizar': () => finalizarRecebimento(),
+  'receb-enviar': () => enviarRecebimento(),
+  'receb-dispensar': async () => {
+    const n = E.notasReceb[T.p.chave];
+    if (!confirm(`Tirar a NF ${n.numero} (${n.fornecedor}) da lista SEM conferir?`)) return;
+    try { await api('POST', `/api/compras/recebimentos/${n.chave}/dispensar`); toast('Nota dispensada.'); ir('receber'); carregarRecebimentos(); }
+    catch (e) { toast(e.extra.offline ? 'Sem internet.' : e.message); }
+  },
   'preco-abrir': d => { T.p.precoPid = +d.pid; carregarPreco(+d.pid, 12); },
   'preco-meses': d => carregarPreco(T.p.precoPid, +d.m),
   'preco-voltar': () => { T.p.preco = null; desenhar(); },
