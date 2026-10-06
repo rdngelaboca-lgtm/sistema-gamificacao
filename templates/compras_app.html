@@ -169,6 +169,15 @@
   .cl-chip-local { display: inline-block; background: var(--verde-claro); color: var(--verde-esc); font-weight: 700; border-radius: 6px; padding: 0 6px; }
   .cl-total { display: inline-block; background: var(--texto); color: #fff; font-weight: 700; border-radius: 6px; padding: 0 6px; }
   .cl-lin.ok .cl-nome { color: var(--suave); }
+  .bal-local.pronto { border-color: var(--verde-borda); background: #F4FAF8; }
+  .dif-resumo { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .dif-resumo .cartao { padding: 10px; min-width: 0; }
+  .dif-grande { font-size: 15px; font-weight: 800; line-height: 1.25; }
+  .neg { color: #B42318; } .pos { color: var(--verde-esc); }
+  .dif-valor { font-weight: 800; white-space: nowrap; }
+  .linhas > .dif-lin { display: block; padding: 10px 14px; }
+  .dif-lin summary { display: flex; align-items: center; gap: 10px; cursor: pointer; list-style: none; }
+  .dif-lin summary::-webkit-details-marker { display: none; }
   .tecla.somar { background: #EEF7F5; color: var(--verde-esc); border: 1px solid var(--verde-borda); font-size: 14px; }
   .cl-lin { display: flex; align-items: center; gap: 10px; background: #fff; border: 1px solid var(--linha); border-radius: 14px;
     padding: 7px 8px 7px 14px; min-height: 52px; text-align: left; width: 100%; flex-shrink: 0; }
@@ -243,7 +252,7 @@
 
 // ---------------------------------------------------------------- utilidades
 const CHAVE = 'gb_compras_v1';
-const VERSAO_APP = '25';   // aparece no rodapé do início: confira se o celular pegou a versão nova
+const VERSAO_APP = '26';   // aparece no rodapé do início: confira se o celular pegou a versão nova
 const $app = document.getElementById('app');
 const DIAS_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];            // 1=Dom ... 7=Sáb (padrão do sistema)
 const FRACIONADAS = ['KG', 'G', 'GR', 'L', 'LT', 'ML', 'M'];
@@ -620,6 +629,11 @@ TELAS.inicio = () => {
         ${u.gestor ? `<button class="btn claro medio" data-acao="orc-novo-inicio">${ICONES.orcamento} Novo orçamento</button>`
                    : `<button class="btn claro medio" data-acao="nav" data-tela="listas">${ICONES.listas} Minhas listas</button>`}</div>
       ${deHoje.length ? `<div class="lista-cartoes"><div class="rotulo">Outras contagens de hoje</div>${deHoje.map(cartaoRotina).join('')}</div>` : ''}
+      ${u.gestor && E.rotinas.some(r => r.so_contagem) ? `<div class="lista-cartoes"><div class="rotulo">Balanço (só o gestor)</div>
+        ${E.rotinas.filter(r => r.so_contagem).map(r => `<div class="cartao" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <div class="grow nome" style="min-width:120px">${esc(r.nome)}</div>
+          <button class="btn claro" style="min-height:38px;width:auto;padding:4px 12px;font-size:14px" data-acao="balanco-abrir" data-id="${r.id}">Acompanhar</button>
+          <button class="btn claro" style="min-height:38px;width:auto;padding:4px 12px;font-size:14px" data-acao="dif-abrir" data-id="${r.id}">Diferenças R$</button></div>`).join('')}</div>` : ''}
       <details class="cartao" ${T.p.rotinasAbertas ? 'open' : ''} data-acao-toggle="rotinas">
         <summary style="font-weight:700;cursor:pointer;min-height:28px;display:flex;justify-content:space-between;align-items:center">
           <span>Começar outra contagem (${outras.length + E.rotinas.filter(r => r.hoje).length})</span>
@@ -794,16 +808,19 @@ function outroContouHoje(l) {
   const h = l.it.hoje_locais && l.it.hoje_locais[l.local];
   return h && h.por !== E.usuario.nome ? h : null;
 }
+// [CONTAGEM CEGA] quem conta não vê o número anterior nem o esperado (para não ser influenciado). Só o gestor vê.
+function contagemCega() { return !(E.usuario && E.usuario.gestor); }
 function dicaContagem(l) {
   const it = l.it, partes = [];
   const outros = locaisDoItem(it).filter(x => x !== l.local);
   const h = outroContouHoje(l);
-  if (h && valorLinha(l) == null) partes.push(`${h.por} já contou aqui hoje: ${fmtQtd(h.qtd)}`);
+  if (h && valorLinha(l) == null) partes.push(contagemCega() ? `${h.por} já contou aqui hoje` : `${h.por} já contou aqui hoje: ${fmtQtd(h.qtd)}`);
   if (outros.length) partes.push('também em ' + outros.map(x => {
     const v = (E.ida.porLocal[it.produto_id] || {})[x];
     return nomeLocal(x) + (v != null ? ` (${fmtQtd(v)})` : '');
   }).join(', '));
-  if (!partes.length) partes.push(it.ultima_contagem ? `tinha ${fmtQtd(it.ultima_contagem.qtd)} em ${dataBR(it.ultima_contagem.data)}` : 'primeira contagem');
+  if (!partes.length && !contagemCega()) partes.push(it.ultima_contagem ? `tinha ${fmtQtd(it.ultima_contagem.qtd)} em ${dataBR(it.ultima_contagem.data)}` : 'primeira contagem');
+  if (!partes.length) partes.push(it.unidade ? 'contar em ' + unCurta(it.unidade) : '');
   return esc(partes.join(' · '));
 }
 function progressoLocais(linhas) {
@@ -848,7 +865,7 @@ TELAS.contagem = () => {
   const caixa = caixaDe(it), modo = fatorAtual(it) > 1 ? 'cx' : 'un';
   const totalLocais = locaisDoItem(it).length > 1 && totalProduto(it.produto_id) != null
     ? `<span class="cl-total">total ${fmtQtd(totalProduto(it.produto_id))} ${esc(unCurta(it.unidade))}</span>` : '';
-  const info2 = [it.ultima_contagem ? `tinha ${fmtQtd(it.ultima_contagem.qtd)}` : '',
+  const info2 = contagemCega() ? '' : [it.ultima_contagem ? `tinha ${fmtQtd(it.ultima_contagem.qtd)}` : '',
                  it.estoque_estimado != null && it.ultima_contagem && it.consumo_dia ? `deve ter ≈ ${fmtQtd(Math.round(it.estoque_estimado * 10) / 10)}` : ''].filter(Boolean).join(' · ');
   const tecla = (txt, acao, cls, extra) => `<button class="tecla ${cls || ''}" data-acao="${acao}" ${extra || ''}>${txt}</button>`;
   const num_ = n => tecla(n, 'tec-num', 'num', `data-n="${n}"`);
@@ -867,7 +884,7 @@ TELAS.contagem = () => {
           <div class="mini suave">${variosLocais || atual.local ? `<span class="cl-chip-local">${esc(nomeLocal(atual.local))}</span> ` : ''}em ${modo === 'cx' ? 'caixas de ' + fmtQtd(caixa) : esc(it.unidade)}${info2 ? ' · ' + info2 : ''} ${totalLocais}</div></div>
         ${caixa ? `<button class="cl-modo" data-acao="cont-modo" aria-label="Trocar entre unidades e caixas">${modo === 'cx' ? 'usar ' + esc(unCurta(it.unidade)) : 'usar CX ' + fmtQtd(caixa)}</button>` : ''}
       </div>
-      ${it.contado_hoje ? `<div class="mini" style="color:var(--laranja-esc);font-weight:700;padding:0 4px">⚠ Já contado hoje em "${esc(it.contado_hoje.contagens.join(', '))}" (${fmtQtd(it.contado_hoje.qtd)}): as contagens do dia são SOMADAS.</div>` : ''}
+      ${it.contado_hoje ? `<div class="mini" style="color:var(--laranja-esc);font-weight:700;padding:0 4px">⚠ Já contado hoje em "${esc(it.contado_hoje.contagens.join(', '))}"${contagemCega() ? '' : ` (${fmtQtd(it.contado_hoje.qtd)})`}: as contagens do dia são SOMADAS.</div>` : ''}
       <div class="cl-teclas">
         ${num_('1')}${num_('2')}${num_('3')}${tecla('⌫', 'tec-apagar', 'cinza', 'aria-label="Apagar"')}
         ${num_('4')}${num_('5')}${num_('6')}${tecla('Acabou', 'tec-zero', 'zero')}
@@ -876,7 +893,29 @@ TELAS.contagem = () => {
       </div>
     </div></div>`;
 };
+// [PAINEL DO BALANÇO] avisa o servidor o que este celular já contou (no máximo a cada 8 s; sem internet, deixa para depois)
+let andamentoEnviado = {em: 0, chave: ''}, andamentoTimer = null;
+function avisarAndamento() {
+  const ida = E.ida, prep = ida && E.preparos[ida.rotina_id];
+  if (!prep || !prep.so_contagem || !online) return;
+  const linhas = linhasIda(), contados = {};
+  linhas.forEach(l => { if (valorLinha(l) != null) (contados[l.local] = contados[l.local] || []).push(l.it.produto_id); });
+  const atual = linhaAtual(), corpo = {codigo: ida.codigo, rotina_id: ida.rotina_id, local: atual ? atual.local : '', total: linhas.length, contados};
+  const chave = JSON.stringify(corpo);
+  if (chave === andamentoEnviado.chave) return;
+  const espera = 8000 - (Date.now() - andamentoEnviado.em);
+  clearTimeout(andamentoTimer);
+  if (espera > 0 && andamentoEnviado.em) { andamentoTimer = setTimeout(avisarAndamento, espera); return; }
+  andamentoEnviado = {em: Date.now(), chave};
+  api('POST', '/api/compras/contagem/andamento', corpo).catch(() => { andamentoEnviado.chave = ''; });
+}
+function descartarIda() {
+  const codigo = E.ida && E.ida.codigo;
+  E.ida = null; salvar(); clearTimeout(andamentoTimer); andamentoEnviado = {em: 0, chave: ''};
+  if (codigo) api('POST', '/api/compras/contagem/andamento', {codigo, encerrar: true}).catch(() => {});
+}
 TELAS_DEPOIS.contagem = () => {
+  avisarAndamento();
   // mantém a lista parada onde estava e mostra o item da vez
   const lista = document.getElementById('cl-lista');
   if (!lista) return;
@@ -946,7 +985,7 @@ function revisarContagem() {
     .filter(x => x.t != null && x.it.estoque_estimado != null && x.it.ultima_contagem && x.it.consumo_dia)
     .filter(x => { const d = Math.abs(x.t - x.it.estoque_estimado); return d >= 3 && d / Math.max(x.it.estoque_estimado, 1) >= 0.5; })
     .map(x => { const l = linhas.find(y => y.it.produto_id === x.it.produto_id);
-      return `<div class="mini">• <button class="link-btn" data-acao="cont-ir-rev" data-k="${l.k}">${esc(x.it.nome)}</button>: contou ${fmtQtd(x.t)}, devia ter ≈ ${fmtQtd(Math.round(x.it.estoque_estimado * 10) / 10)}</div>`; }).join('');
+      return `<div class="mini">• <button class="link-btn" data-acao="cont-ir-rev" data-k="${l.k}">${esc(x.it.nome)}</button>: contou ${fmtQtd(x.t)}${contagemCega() ? '' : `, devia ter ≈ ${fmtQtd(Math.round(x.it.estoque_estimado * 10) / 10)}`}</div>`; }).join('');
   const somas = itensIda().filter(it => Object.keys(ida.porLocal[it.produto_id] || {}).length > 1)
     .map(it => `<div class="mini">• ${esc(it.nome)}: ${Object.entries(ida.porLocal[it.produto_id]).map(([l, v]) => `${esc(nomeLocal(l))} ${fmtQtd(v)}`).join(' + ')} = <b>${fmtQtd(totalProduto(it.produto_id))}</b></div>`).join('');
   const feitos = linhas.filter(l => valorLinha(l) != null).length;
@@ -967,6 +1006,95 @@ function itensParaEnviar(itens) {
     return {produto_id: it.produto_id, qtd: t, locais: t != null && m && Object.keys(m).length ? Object.assign({}, m) : undefined};
   });
 }
+// [PAINEL DO BALANÇO] o gestor acompanha ao vivo: quem conta qual local e o que falta (atualiza a cada 10 s)
+let painelTimer = null;
+async function carregarBalanco() {
+  const rid = T.p.rid;
+  try { const d = await api('GET', `/api/compras/rotinas/${rid}/painel`); if (T.nome === 'balanco' && T.p.rid === rid) { T.p.d = d; T.p.erro = null; desenhar(); } }
+  catch (e) { if (T.nome === 'balanco') { T.p.erro = e.extra.offline ? 'Sem internet: mostrando o último que chegou.' : e.message; desenhar(); } }
+}
+TELAS.balanco = p => {
+  const d = p.d;
+  if (!d) return `${topo('Balanço', 'Carregando…', 'nav-inicio')}<div class="corpo">${p.erro ? `<div class="aviso">${esc(p.erro)}</div>` : '<div class="vazio">Carregando…</div>'}</div>`;
+  const pct = d.total ? Math.round(100 * d.feitos / d.total) : 0;
+  const pessoas = d.pessoas.length ? d.pessoas.map(x => `<div class="lin"><div class="grow"><div style="font-weight:700">${esc(x.nome)}</div>
+      <div class="mini suave">${x.local ? 'em ' + esc(nomeLocal(x.local)) + ' · ' : ''}${x.feitos} de ${x.total} contados</div></div>
+      <span class="pilula ${x.parado ? 'p-laranja' : 'p-verde'}">${x.parado ? `parado ${x.minutos} min` : (x.minutos ? `há ${x.minutos} min` : 'agora')}</span></div>`).join('')
+    : '<div class="lin"><div class="mini suave">Ninguém contando agora.</div></div>';
+  const locais = d.locais.map((l, i) => {
+    const pronto = l.feitos === l.total;
+    return `<div class="cartao bal-local ${pronto ? 'pronto' : ''}">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px"><div class="nome">${esc(nomeLocal(l.local))}</div>
+        <div style="font-weight:800">${pronto ? '✓ ' : ''}${l.feitos}/${l.total}</div></div>
+      <div class="progresso" style="margin:6px 0"><div style="width:${l.total ? Math.round(100 * l.feitos / l.total) : 0}%"></div></div>
+      <div class="mini suave">${l.contando_agora.length ? `<b style="color:var(--verde-esc)">Contando agora: ${esc(l.contando_agora.join(', '))}</b>` : (pronto ? 'Terminado' : 'Ninguém aqui agora')}${l.quem.length ? ' · contaram: ' + l.quem.map(q => `${esc(q.nome)} (${q.itens})`).join(', ') : ''}</div>
+      ${l.pendentes.length ? `<details ${(p.abertos || {})[i] ? 'open' : ''} data-i="${i}" class="bal-falta"><summary class="mini" style="font-weight:700;cursor:pointer">Falta contar ${l.total - l.feitos}</summary>
+        <div class="mini" style="margin-top:4px">${l.pendentes.map(esc).join(' · ')}${l.mais_pendentes ? ` e mais ${l.mais_pendentes}` : ''}</div></details>` : ''}</div>`;
+  }).join('');
+  const hora = (d.atualizado || '').slice(11, 16);
+  return `${faixaRede()}${topo(d.rotina.nome, `Balanço de hoje · atualizado ${hora}`, 'nav-inicio')}
+    <div class="corpo">
+      ${p.erro ? `<div class="aviso">${esc(p.erro)}</div>` : ''}
+      <div class="cartao"><div style="display:flex;justify-content:space-between;align-items:baseline"><div class="titulo-sec">Andamento</div>
+        <div style="font-size:22px;font-weight:800">${pct}%</div></div>
+        <div class="progresso" style="margin:8px 0 4px;height:10px"><div style="width:${pct}%"></div></div>
+        <div class="mini suave">${d.feitos} de ${d.total} itens com número${d.salvas ? ` · ${d.salvas} contagem(ns) já salva(s) no estoque hoje` : ''}. Atualiza sozinho a cada 10 segundos.</div></div>
+      <div class="lista-cartoes"><div class="rotulo">Quem está contando</div><div class="linhas">${pessoas}</div></div>
+      <div class="lista-cartoes"><div class="rotulo">Locais</div>${locais}</div>
+      <button class="btn claro medio" data-acao="dif-abrir" data-id="${d.rotina.id}">Ver diferenças em R$ (contado × esperado)</button>
+    </div>`;
+};
+TELAS_DEPOIS.balanco = p => {
+  document.querySelectorAll('details.bal-falta').forEach(det => det.addEventListener('toggle', () => { p.abertos = p.abertos || {}; p.abertos[det.dataset.i] = det.open; }));
+  if (!painelTimer) painelTimer = setInterval(() => {
+    if (T.nome !== 'balanco') { clearInterval(painelTimer); painelTimer = null; return; }
+    if (document.visibilityState === 'visible') carregarBalanco();
+  }, 10000);
+};
+
+// [DIFERENÇAS EM R$] contado × esperado do balanço, separando o que faltou e o que sobrou
+async function carregarDiferencas() {
+  const rid = T.p.rid, dia = T.p.dia;
+  T.p.carregando = true; desenhar();
+  try {
+    const d = await api('GET', `/api/compras/rotinas/${rid}/diferencas${dia ? '?dia=' + dia : ''}`);
+    if (T.nome === 'diferencas' && T.p.rid === rid) { T.p.d = d; T.p.dia = d.dia; T.p.erro = null; }
+  } catch (e) { T.p.erro = e.extra.offline ? 'Sem internet.' : e.message; }
+  T.p.carregando = false; if (T.nome === 'diferencas') desenhar();
+}
+function linhaDif(l) {
+  const un = unCurta(l.unidade), dif = l.diferenca;
+  const b = l.base;
+  return `<details class="lin dif-lin"><summary>
+      <div class="grow" style="min-width:0"><div style="font-weight:700">${esc(l.nome)}</div>
+        <div class="mini suave">esperado ≈ ${fmtQtd(Math.round(l.esperado * 10) / 10)} · contou ${fmtQtd(l.contado)} → <b>${dif > 0 ? '+' : ''}${fmtQtd(Math.round(dif * 10) / 10)} ${esc(un)}</b></div></div>
+      <div class="dif-valor ${dif < 0 ? 'neg' : 'pos'}">${l.valor == null ? 'sem preço' : (l.valor > 0 ? '+' : '') + fmtReais(l.valor)}</div></summary>
+    <div class="mini" style="padding:2px 0 6px">Tinha ${fmtQtd(b.tinha)} em ${dataBR(b.em)}${b.entrou ? ` + entrou ${fmtQtd(b.entrou)} de nota` : ''} − consumo médio ${fmtQtd(b.consumo_dia)}/dia × ${b.dias} dias = ${fmtQtd(Math.round(l.esperado * 10) / 10)}${l.custo != null ? ` · custo ${fmtReais(l.custo)}/${esc(un)}` : ''}</div></details>`;
+}
+TELAS.diferencas = p => {
+  const d = p.d, voltar = 'dif-voltar';
+  if (!d) return `${topo('Diferenças do balanço', '', voltar)}<div class="corpo">${p.erro ? `<div class="aviso">${esc(p.erro)}</div>` : '<div class="vazio">Calculando…</div>'}</div>`;
+  const dias = d.dias.length > 1 ? `<div class="chips">${d.dias.map(x => `<button class="chip ${x === d.dia ? 'sel' : ''}" data-acao="dif-dia" data-dia="${x}" aria-pressed="${x === d.dia}">${dataBR(x)}</button>`).join('')}</div>` : '';
+  const bloco = (titulo, itens, total, cls) => itens.length ? `<div class="lista-cartoes"><div class="rotulo" style="display:flex;justify-content:space-between"><span>${titulo} (${itens.length})</span><span class="dif-valor ${cls}">${fmtReais(total)}</span></div>
+      <div class="linhas">${itens.map(linhaDif).join('')}</div></div>` : '';
+  return `${faixaRede()}${topo('Diferenças do balanço', `${esc(d.rotina.nome)} · ${dataBR(d.dia)}`, voltar)}
+    <div class="corpo">
+      ${p.erro ? `<div class="aviso">${esc(p.erro)}</div>` : ''}${dias}
+      <div class="dif-resumo">
+        <div class="cartao"><div class="mini suave">Faltou</div><div class="dif-grande neg">${fmtReais(d.total_perdas)}</div></div>
+        <div class="cartao"><div class="mini suave">Sobrou</div><div class="dif-grande pos">${fmtReais(d.total_sobras)}</div></div>
+        <div class="cartao"><div class="mini suave">Saldo</div><div class="dif-grande ${d.saldo < 0 ? 'neg' : 'pos'}">${fmtReais(d.saldo)}</div></div></div>
+      <div class="info mini">Esperado = última contagem + o que entrou de nota − consumo médio por dia. É uma <b>estimativa</b> (o sistema não tem as vendas por produto): diferença pequena é normal. Olhe primeiro os valores maiores. Toque num item para ver a conta.${d.sem_custo ? ` ${d.sem_custo} item(ns) sem preço de compra ficam fora do total.` : ''}</div>
+      ${bloco('Faltou (perdeu)', d.perdas, d.total_perdas, 'neg')}
+      ${bloco('Sobrou', d.sobras, d.total_sobras, 'pos')}
+      ${!d.perdas.length && !d.sobras.length ? '<div class="vazio">Nenhuma diferença fora do normal.</div>' : ''}
+      ${d.bateu.length ? `<details class="cartao"><summary style="font-weight:700;cursor:pointer">Bateram com o esperado (${d.bateu.length})</summary>
+        <div class="mini" style="margin-top:6px">${d.bateu.map(l => esc(l.nome)).join(' · ')}</div></details>` : ''}
+      ${d.sem_base.length ? `<details class="cartao"><summary style="font-weight:700;cursor:pointer">Sem base para comparar (${d.sem_base.length})</summary>
+        <div class="mini" style="margin-top:6px">${d.sem_base.map(l => `${esc(l.nome)}: ${esc(l.motivo)}`).join('<br>')}</div></details>` : ''}
+    </div>`;
+};
+
 function vibrar() { if (navigator.vibrate) navigator.vibrate(8); }
 async function terminarContagem() {
   const ida = E.ida, prep = E.preparos[ida.rotina_id];
@@ -2641,7 +2769,7 @@ const acoes = {
         const r = await api('POST', '/api/compras/login', {funcionario_id: T.p.usuario.id, pin: T.p.pin});
         const dono = E.ida && (E.ida.usuario_id || (E.usuario && E.usuario.id));
         if (E.ida && dono && dono !== r.usuario.id &&
-            !confirm(`Há uma contagem em andamento de ${E.ida.usuario_nome || 'outra pessoa'} neste celular. Continuar com ela? (Cancelar = descartar)`)) E.ida = null;
+            !confirm(`Há uma contagem em andamento de ${E.ida.usuario_nome || 'outra pessoa'} neste celular. Continuar com ela? (Cancelar = descartar)`)) descartarIda();
         if (E.ida) { E.ida.usuario_id = r.usuario.id; E.ida.usuario_nome = r.usuario.nome; }
         E.usuario = r.usuario; salvar();
         ir('inicio'); carregarInicio(); sincronizar();
@@ -2650,7 +2778,7 @@ const acoes = {
   },
   // nova ida
   'nova-ida': d => {
-    if (E.ida) { if (!confirm('Já existe uma contagem em andamento. Descartar e começar outra?')) return; E.ida = null; salvar(); }
+    if (E.ida) { if (!confirm('Já existe uma contagem em andamento. Descartar e começar outra?')) return; descartarIda(); }
     ir('novaIda', {rotina_id: +d.id});
   },
   'continuar-ida': async () => {
@@ -2709,6 +2837,10 @@ const acoes = {
   'tec-zero': () => { vibrar(); gravarLinha(linhaAtual(), 0); T.p.buf = ''; proximoItem(); },
   'tec-pular': () => { vibrar(); gravarLinha(linhaAtual(), null); T.p.buf = ''; proximoItem(); },
   'tec-somar': () => { vibrar(); somarDigitado(); },
+  'balanco-abrir': d => { ir('balanco', {rid: +d.id}); carregarBalanco(); },
+  'dif-abrir': d => { ir('diferencas', {rid: +d.id, de: T.nome === 'balanco' ? T.p : null}); carregarDiferencas(); },
+  'dif-dia': d => { T.p.dia = d.dia; carregarDiferencas(); },
+  'dif-voltar': () => { const de = T.p.de; if (de) { T = {nome: 'balanco', p: de}; desenhar(); carregarBalanco(); } else ir('inicio'); },
   'cont-local': d => { if (T.p.buf) confirmarDigitadoSemPular(); T.p.scroll = null; irParaItem(+d.k); },
   'cont-revisar': () => { if (T.p.buf) confirmarDigitadoSemPular(); redesenharContagem(); revisarContagem(); },
   'cont-ir-rev': d => { fecharModal(); T.p.scroll = null; irParaItem(+d.k); },

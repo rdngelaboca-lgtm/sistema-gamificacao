@@ -21,6 +21,7 @@
 
 import hashlib
 import hmac
+import json
 import logging
 import math
 import re
@@ -312,6 +313,19 @@ def garantir_tabelas():
                 Qtd DECIMAL(18, 3) NOT NULL,
                 ContadoPor NVARCHAR(150) NULL,
                 PRIMARY KEY (ContagemID, ProdutoID, Local)
+            )
+        """)
+        # [PAINEL DO BALANÇO] o que cada celular está contando agora (o celular manda de tempos em tempos)
+        cur.execute("""
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'CompraContagemAndamento')
+            CREATE TABLE CompraContagemAndamento (
+                Codigo VARCHAR(40) NOT NULL PRIMARY KEY,
+                RotinaID INT NOT NULL,
+                Dia DATE NOT NULL,
+                FuncionarioID INT NULL,
+                Usuario NVARCHAR(150) NULL,
+                Dados NVARCHAR(MAX) NULL,
+                Atualizado DATETIME NOT NULL
             )
         """)
         conn.commit()
@@ -1186,6 +1200,7 @@ def registrar_lista(codigo, rotina_id, usuario, dias, contagens, hoje=None):
         raise
     finally:
         conn.close()
+    encerrar_andamento(codigo)              # [PAINEL DO BALANÇO] terminou: sai do "contando agora"
 
     if rotina.get('so_contagem'):
         itens = _itens_so_contagem(rotina, contados)
@@ -1575,6 +1590,241 @@ def adicionar_item(codigo, produto_id, qtd, usuario):
 # ==============================================================================
 # == [PAINEL DO GESTOR] resumo para a aba "Gestão" do app ======================
 # ==============================================================================
+
+# ==============================================================================
+# == [PAINEL DO BALANÇO] quem está contando o quê, e o que falta ================
+# ==============================================================================
+ANDAMENTO_PARADO_MIN = 10        # sem notícia do celular há mais que isso: "parado"
+MAX_PRODUTOS_ANDAMENTO = 5000
+
+
+def registrar_andamento(codigo, rotina_id, usuario, dados, agora=None):
+    """
+    O celular avisa o que já contou: dados = {'local': local em que está agora,
+    'contados': {local: [ProdutoID, ...]}, 'total': nº de linhas que escolheu contar}.
+    Grava por cima do aviso anterior do mesmo celular (mesmo código de contagem).
+    """
+    agora = agora or datetime.now()
+    codigo = str(codigo or '').strip()
+    if not re.fullmatch(r'[A-Za-z0-9-]{8,40}', codigo):
+        raise ErroCompras("Código da contagem inválido.")
+    try:
+        rotina_id = int(rotina_id)
+    except (TypeError, ValueError):
+        raise ErroCompras("Rotina inválida.")
+    dados = dados if isinstance(dados, dict) else {}
+    contados, n = {}, 0
+    for local, pids in (dados.get('contados') or {}).items() if isinstance(dados.get('contados'), dict) else []:
+        lista = []
+        for pid in pids if isinstance(pids, list) else []:
+            try:
+                lista.append(int(pid))
+            except (TypeError, ValueError):
+                continue
+        n += len(lista)
+        if n > MAX_PRODUTOS_ANDAMENTO:
+            raise ErroCompras("Contagem grande demais.")
+        contados[str(local or '').strip()[:80]] = sorted(set(lista))
+    try:
+        total = max(0, min(int(dados.get('total') or 0), MAX_PRODUTOS_ANDAMENTO))
+    except (TypeError, ValueError):
+        total = 0
+    texto = json.dumps({'local': str(dados.get('local') or '').strip()[:80], 'contados': contados, 'total': total})
+    garantir_tabelas()
+    conn = _conectar()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM CompraContagemAndamento WHERE Codigo = ? OR Dia < ?", (codigo, agora.date()))
+        cur.execute("""INSERT INTO CompraContagemAndamento (Codigo, RotinaID, Dia, FuncionarioID, Usuario, Dados, Atualizado)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (codigo, rotina_id, agora.date(), usuario.get('id'), (usuario.get('nome') or '')[:150], texto, agora))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return {'ok': True}
+
+
+def encerrar_andamento(codigo):
+    """A contagem foi salva ou descartada: some do painel. Nunca atrapalha quem chamou."""
+    try:
+        garantir_tabelas()
+        conn = _conectar()
+        try:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM CompraContagemAndamento WHERE Codigo = ?", (str(codigo or '')[:40],))
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning(f"App de compras: não deu para tirar a contagem {codigo} do painel: {e}")
+    return {'ok': True}
+
+
+def painel_balanco(rotina_id, agora=None):
+    """
+    Para o gestor acompanhar o balanço AO VIVO: em cada local, quantos itens já têm número
+    (salvos hoje + o que os celulares estão contando agora), quem está lá e o que falta.
+    """
+    agora = agora or datetime.now()
+    hoje = agora.date()
+    rotina = obter_rotina(rotina_id)
+    garantir_tabelas()
+    conn = _conectar()
+    try:
+        cur = conn.cursor()
+        anteriores = _contagens_substituidas(cur, rotina_id, hoje)
+        salvos_locais = _locais_contados_hoje(cur, anteriores)          # {pid: {local: {qtd, por}}}
+        salvos = set()
+        for _, cid, _ in anteriores:
+            cur.execute("SELECT ProdutoID FROM ItensContagemEstoque WHERE ContagemID = ? AND ProdutoID IS NOT NULL", (cid,))
+            salvos.update(r[0] for r in cur.fetchall())
+        cur.execute("SELECT Codigo, Usuario, Dados, Atualizado FROM CompraContagemAndamento WHERE RotinaID = ? AND Dia = ?",
+                    (int(rotina_id), hoje))
+        andamento = []
+        for cod, nome, texto, quando in cur.fetchall():
+            try:
+                d = json.loads(texto or '{}')
+            except ValueError:
+                d = {}
+            quando = _como_datahora(quando) or agora
+            andamento.append({'codigo': cod, 'nome': nome or '?', 'local': d.get('local') or '', 'total': d.get('total') or 0,
+                              'contados': {l: set(v) for l, v in (d.get('contados') or {}).items()},
+                              'minutos': max(0, int((agora - quando).total_seconds() // 60))})
+    finally:
+        conn.close()
+
+    locais = {}       # local -> {'itens': [(pid, nome)]}
+    for it in rotina['itens']:
+        if not it['existe']:
+            continue
+        for local in (it.get('locais') or [it.get('secao') or SEM_LOCAL]):
+            locais.setdefault(local, []).append((it['produto_id'], it['nome']))
+    resultado = []
+    for local, itens in locais.items():
+        feitos, quem = set(), {}
+        for pid, _ in itens:
+            no_local = (salvos_locais.get(pid) or {}).get(local)
+            if no_local:
+                feitos.add(pid)
+                quem[no_local['por']] = quem.get(no_local['por'], 0) + 1
+            elif pid in salvos and not salvos_locais.get(pid):
+                feitos.add(pid)                # salvo sem o detalhe por local (versão antiga do app)
+        agora_aqui = []
+        for a in andamento:
+            meus = a['contados'].get(local, set()) & {pid for pid, _ in itens}
+            if meus:
+                quem[a['nome']] = quem.get(a['nome'], 0) + len(meus - feitos)
+            feitos |= meus
+            if a['local'] == local and a['minutos'] < ANDAMENTO_PARADO_MIN:
+                agora_aqui.append(a['nome'])
+        pendentes = [nome for pid, nome in itens if pid not in feitos]
+        resultado.append({'local': local, 'total': len(itens), 'feitos': len(itens) - len(pendentes),
+                          'pendentes': pendentes[:40], 'mais_pendentes': max(0, len(pendentes) - 40),
+                          'contando_agora': sorted(set(agora_aqui)),
+                          'quem': [{'nome': n, 'itens': q} for n, q in sorted(quem.items(), key=lambda x: -x[1]) if q]})
+    total = sum(l['total'] for l in resultado)
+    feitos = sum(l['feitos'] for l in resultado)
+    return {'rotina': {'id': rotina['id'], 'nome': rotina['nome']}, 'dia': _iso(hoje), 'atualizado': _iso(agora),
+            'total': total, 'feitos': feitos, 'locais': resultado,
+            'pessoas': [{'nome': a['nome'], 'local': a['local'], 'feitos': sum(len(v) for v in a['contados'].values()),
+                         'total': a['total'], 'minutos': a['minutos'], 'parado': a['minutos'] >= ANDAMENTO_PARADO_MIN}
+                        for a in sorted(andamento, key=lambda a: a['nome'])],
+            'salvas': len(anteriores)}
+
+
+# ==============================================================================
+# == [DIFERENÇAS EM R$] contado x esperado no balanço ===========================
+# ==============================================================================
+# "Esperado" = última contagem ANTES do balanço + o que entrou de nota desde então
+#              − consumo médio por dia × dias. Não há registro de vendas por produto,
+# então o esperado é uma ESTIMATA: diferença pequena é normal (o consumo varia).
+TOLERANCIA_DIF = Decimal('0.05')       # até 5% (ou meia unidade) conta como "bateu"
+
+
+def diferencas_balanco(rotina_id, dia=None):
+    rotina = obter_rotina(rotina_id)
+    conn = _conectar()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT DataContagem, ContagemID FROM CompraListas WHERE RotinaID = ? AND ContagemID IS NOT NULL",
+                    (int(rotina_id),))
+        por_dia = {}
+        for d, cid in cur.fetchall():
+            d = _como_data(d)
+            if d:
+                por_dia.setdefault(d, set()).add(cid)
+        if not por_dia:
+            raise ErroCompras("Esta rotina ainda não tem contagem salva.")
+        dia = _como_data(dia) or max(por_dia)
+        if dia not in por_dia:
+            raise ErroCompras(f"Não há contagem desta rotina em {dia.strftime('%d/%m/%Y')}.")
+        cur.execute("SELECT ContagemID, DataContagem FROM ContagensEstoque")
+        datas = {cid: _como_data(d) for cid, d in cur.fetchall()}
+        do_dia = [cid for cid, d in datas.items() if d == dia]
+        cur.execute(f"""SELECT ProdutoID FROM ItensContagemEstoque WHERE ProdutoID IS NOT NULL
+                        AND ContagemID IN ({','.join('?' * len(por_dia[dia]))})""", list(por_dia[dia]))
+        pids = sorted({r[0] for r in cur.fetchall()})
+        contado = {}
+        if pids and do_dia:
+            # o estoque soma todas as contagens do mesmo dia (igual ao Gestão de Estoque)
+            cur.execute(f"""SELECT ProdutoID, QuantidadeContada FROM ItensContagemEstoque
+                            WHERE ContagemID IN ({','.join('?' * len(do_dia))}) AND ProdutoID IN ({','.join('?' * len(pids))})""",
+                        do_dia + pids)
+            for pid, q in cur.fetchall():
+                contado[pid] = contado.get(pid, Decimal('0')) + _dec(q)
+        antes = [(d, cid) for cid, d in datas.items() if d and d < dia]
+        compras = _compras_recentes(cur, pids, dia)
+        nomes = {}
+        if pids:
+            cur.execute(f"SELECT ProdutoID, NomeProduto, UnidadeMedida FROM ProdutosEstoque WHERE ProdutoID IN ({','.join('?' * len(pids))})",
+                        pids)
+            nomes = {pid: (nome or f'Produto {pid}', (un or 'UN').strip() or 'UN') for pid, nome, un in cur.fetchall()}
+    finally:
+        conn.close()
+    sug = _sugestao_por_produto(max(antes)[1], dia) if antes else {}
+
+    perdas, sobras, bateu, sem_base = [], [], [], []
+    for pid in pids:
+        nome, un = nomes.get(pid, (f'Produto {pid}', 'UN'))
+        info = sug.get(pid) or {}
+        lista = compras.get(pid, [])
+        pagas = [c for c in lista if c[2] > 0]
+        custo = pagas[-1][2] if pagas else None
+        linha = {'produto_id': pid, 'nome': nome, 'unidade': un, 'contado': _num(contado.get(pid, Decimal('0'))),
+                 'custo': _num(custo, 4) if custo is not None else None}
+        d_l = _como_data(info.get('DataUltimaContagem'))
+        if not info.get('Contado') or not d_l or info.get('ConsumoNegativo') or info.get('MetodoConsumo') == 'sem_dados':
+            linha['motivo'] = 'nunca tinha sido contado' if not info.get('Contado') else 'ainda sem consumo médio confiável'
+            sem_base.append(linha)
+            continue
+        entrou = sum((c[1] for c in lista if d_l < c[0] <= dia), Decimal('0'))
+        uso = _dec(info.get('UsoMedioDiario'))
+        dias = (dia - d_l).days
+        esperado = max(_dec(info.get('QtdUltimaContagem')) + entrou - uso * dias, Decimal('0'))
+        dif = contado.get(pid, Decimal('0')) - esperado
+        linha.update({'esperado': _num(esperado), 'diferenca': _num(dif),
+                      'valor': _num(dif * custo, 2) if custo is not None else None,
+                      'base': {'tinha': _num(info.get('QtdUltimaContagem')), 'em': _iso(d_l), 'entrou': _num(entrou),
+                               'consumo_dia': _num(uso, 3), 'dias': dias}})
+        if abs(dif) <= max(Decimal('0.5'), esperado * TOLERANCIA_DIF):
+            bateu.append(linha)
+        elif dif < 0:
+            perdas.append(linha)
+        else:
+            sobras.append(linha)
+    perdas.sort(key=lambda l: (l['valor'] if l['valor'] is not None else 0, l['diferenca']))
+    sobras.sort(key=lambda l: (-(l['valor'] or 0), -l['diferenca']))
+    soma = lambda ls: _num(sum((_dec(l['valor']) for l in ls if l['valor'] is not None), Decimal('0')), 2)
+    return {'rotina': {'id': rotina['id'], 'nome': rotina['nome']}, 'dia': _iso(dia),
+            'dias': [_iso(d) for d in sorted(por_dia, reverse=True)[:12]],
+            'perdas': perdas, 'sobras': sobras, 'bateu': bateu, 'sem_base': sem_base,
+            'total_perdas': soma(perdas), 'total_sobras': soma(sobras),
+            'saldo': _num(_dec(soma(perdas)) + _dec(soma(sobras)), 2),
+            'sem_custo': sum(1 for l in perdas + sobras if l['valor'] is None)}
+
 def painel_gestor(hoje=None):
     """
     Números para o gestor (o operacional não vê): listas por situação, compras do mês pelas

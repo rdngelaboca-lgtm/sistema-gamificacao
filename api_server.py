@@ -1584,6 +1584,28 @@ def api_compras_preparar(usuario, rotina_id):
     return _resposta_compras(compras_database.preparar_contagem, rotina_id)
 
 
+# [PAINEL DO BALANÇO] o celular avisa o que já contou; o gestor acompanha e vê as diferenças em R$
+@app.route('/api/compras/contagem/andamento', methods=['POST'])
+@compras_login()
+def api_compras_contagem_andamento(usuario):
+    dados = ler_json() or {}
+    if dados.get('encerrar'):
+        return _resposta_compras(compras_database.encerrar_andamento, dados.get('codigo'))
+    return _resposta_compras(compras_database.registrar_andamento, dados.get('codigo'), dados.get('rotina_id'), usuario, dados)
+
+
+@app.route('/api/compras/rotinas/<int:rotina_id>/painel', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_compras_painel_balanco(usuario, rotina_id):
+    return _resposta_compras(compras_database.painel_balanco, rotina_id)
+
+
+@app.route('/api/compras/rotinas/<int:rotina_id>/diferencas', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_compras_diferencas(usuario, rotina_id):
+    return _resposta_compras(compras_database.diferencas_balanco, rotina_id, request.args.get('dia'))
+
+
 @app.route('/api/compras/produtos', methods=['GET'])
 @compras_login()   # [MELHORIA] o funcionário também busca produtos (para incluir na lista)
 def api_compras_produtos(usuario):
