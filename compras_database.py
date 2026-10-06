@@ -140,6 +140,21 @@ def locais_do_texto(texto):
     return locais[:MAX_LOCAIS]
 
 
+MAX_PARAMETROS_IN = 900   # o SQL Server aceita até 2100 parâmetros por consulta
+
+
+def _em(coluna, ids):
+    """
+    'coluna IN (?, ?, ...)' e os parâmetros. Com muitos ids (cadastro inteiro: 1000+ produtos) devolve
+    '1 = 1' sem parâmetros: a consulta traz tudo e quem chamou usa só os ids que pediu (todas as
+    chamadas guardam o resultado num dicionário por ProdutoID).
+    """
+    ids = list(ids)
+    if len(ids) > MAX_PARAMETROS_IN:
+        return '1 = 1', []
+    return f"{coluna} IN ({','.join('?' * len(ids))})", ids
+
+
 def _qtd_valida(valor, nome="Quantidade"):
     """Converte o que veio do celular em Decimal >= 0 (ou None = item pulado)."""
     if valor is None or (isinstance(valor, str) and not valor.strip()):
@@ -641,7 +656,8 @@ def salvar_rotina(dados):
     try:
         cur = conn.cursor()
         marcas = ','.join('?' * len(itens))
-        cur.execute(f"SELECT ProdutoID FROM ProdutosEstoque WHERE ProdutoID IN ({marcas})", [p for p, _ in itens])
+        filtro, params = _em('ProdutoID', [p for p, _ in itens])
+        cur.execute(f"SELECT ProdutoID FROM ProdutosEstoque WHERE {filtro}", params)
         existentes = {r[0] for r in cur.fetchall()}
         faltando = [p for p, _ in itens if p not in existentes]
         if faltando:
@@ -805,7 +821,6 @@ def _precos_por_produto(cur, produtos, data_ref):
     """
     if not produtos:
         return {}
-    marcas = ','.join('?' * len(produtos))
     cur.execute(f"""
         SELECT PF.ProdutoID, NF.DataEmissao, INI.ItemNotaID, INI.PrecoCustoUnitario, PF.FatorConversao,
                F.FornecedorID, F.NomeFantasia, F.CNPJ
@@ -813,8 +828,8 @@ def _precos_por_produto(cur, produtos, data_ref):
         JOIN NotasFiscaisEntrada NF ON INI.NotaID = NF.NotaID
         JOIN ProdutosFornecedor PF ON INI.ProdutoFornecedorID = PF.ProdutoFornecedorID
         LEFT JOIN Fornecedores F ON NF.FornecedorID = F.FornecedorID
-        WHERE INI.Quantidade > 0 AND INI.PrecoCustoUnitario > 0 AND PF.ProdutoID IN ({marcas})
-    """, list(produtos))
+        WHERE INI.Quantidade > 0 AND INI.PrecoCustoUnitario > 0 AND {_em('PF.ProdutoID', produtos)[0]}
+    """, _em('PF.ProdutoID', produtos)[1])
     limite = data_ref - timedelta(days=PRECO_VALIDO_DIAS)
     ultimo = {}   # (pid, forn) -> (data, item_id, custo, fator, nome)
     for pid, dt, item_id, custo, fator, forn_id, forn_nome, cnpj in cur.fetchall():
@@ -838,8 +853,8 @@ def _minimos(cur, pids):
     """Estoque mínimo de cada produto (cadastro do Gestão de Estoque)."""
     if not pids:
         return {}
-    cur.execute(f"SELECT ProdutoID, EstoqueMinimo FROM ProdutosEstoque WHERE ProdutoID IN ({','.join('?' * len(pids))})",
-                list(pids))
+    filtro, params = _em('ProdutoID', pids)
+    cur.execute(f"SELECT ProdutoID, EstoqueMinimo FROM ProdutosEstoque WHERE {filtro}", params)
     return {r[0]: _dec(r[1]) for r in cur.fetchall()}
 
 
@@ -884,8 +899,8 @@ def _compras_recentes(cur, pids, ate, dias=DIAS_CONSUMO_LONGO):
         JOIN NotasFiscaisEntrada NF ON INI.NotaID = NF.NotaID
         JOIN ProdutosFornecedor PF ON INI.ProdutoFornecedorID = PF.ProdutoFornecedorID
         LEFT JOIN Fornecedores F ON NF.FornecedorID = F.FornecedorID
-        WHERE INI.Quantidade > 0 AND PF.ProdutoID IN ({','.join('?' * len(pids))})
-    """, list(pids))
+        WHERE INI.Quantidade > 0 AND {_em('PF.ProdutoID', pids)[0]}
+    """, _em('PF.ProdutoID', pids)[1])
     res = {}
     for pid, dt, q, custo, forn, cnpj, desc, nf, vid in cur.fetchall():
         d = _como_data(dt)
@@ -996,8 +1011,8 @@ def _contagens_de_hoje(cur, produtos, hoje, ignorar_ids):
     marcas_c = ','.join('?' * len(de_hoje))
     marcas_p = ','.join('?' * len(produtos))
     cur.execute(f"""SELECT ContagemID, ProdutoID, QuantidadeContada FROM ItensContagemEstoque
-                    WHERE ContagemID IN ({marcas_c}) AND ProdutoID IN ({marcas_p})""",
-                list(de_hoje) + list(produtos))
+                    WHERE ContagemID IN ({marcas_c}) AND {_em('ProdutoID', produtos)[0]}""",
+                list(de_hoje) + _em('ProdutoID', produtos)[1])
     resultado = {}
     for cid, pid, q in cur.fetchall():
         r = resultado.setdefault(pid, {'qtd': Decimal('0'), 'contagens': []})
@@ -1899,16 +1914,16 @@ def diferencas_balanco(rotina_id, dia=None):
         if pids and do_dia:
             # o estoque soma todas as contagens do mesmo dia (igual ao Gestão de Estoque)
             cur.execute(f"""SELECT ProdutoID, QuantidadeContada FROM ItensContagemEstoque
-                            WHERE ContagemID IN ({','.join('?' * len(do_dia))}) AND ProdutoID IN ({','.join('?' * len(pids))})""",
-                        do_dia + pids)
+                            WHERE ContagemID IN ({','.join('?' * len(do_dia))}) AND {_em('ProdutoID', pids)[0]}""",
+                        do_dia + _em('ProdutoID', pids)[1])
             for pid, q in cur.fetchall():
                 contado[pid] = contado.get(pid, Decimal('0')) + _dec(q)
         antes = [(d, cid) for cid, d in datas.items() if d and d < dia]
         compras = _compras_recentes(cur, pids, dia)
         nomes = {}
         if pids:
-            cur.execute(f"SELECT ProdutoID, NomeProduto, UnidadeMedida FROM ProdutosEstoque WHERE ProdutoID IN ({','.join('?' * len(pids))})",
-                        pids)
+            filtro, params = _em('ProdutoID', pids)
+            cur.execute(f"SELECT ProdutoID, NomeProduto, UnidadeMedida FROM ProdutosEstoque WHERE {filtro}", params)
             nomes = {pid: (nome or f'Produto {pid}', (un or 'UN').strip() or 'UN') for pid, nome, un in cur.fetchall()}
     finally:
         conn.close()

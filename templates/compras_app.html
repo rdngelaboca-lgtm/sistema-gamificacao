@@ -254,7 +254,7 @@
 
 // ---------------------------------------------------------------- utilidades
 const CHAVE = 'gb_compras_v1';
-const VERSAO_APP = '30';   // aparece no rodapé do início: confira se o celular pegou a versão nova
+const VERSAO_APP = '31';   // aparece no rodapé do início: confira se o celular pegou a versão nova
 const $app = document.getElementById('app');
 const DIAS_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];            // 1=Dom ... 7=Sáb (padrão do sistema)
 const FRACIONADAS = ['KG', 'G', 'GR', 'L', 'LT', 'ML', 'M'];
@@ -327,7 +327,7 @@ function carregar() {
   return estadoVazio();
 }
 function estadoVazio() { return {usuario: null, rotinas: [], preparos: {}, ida: null, listas: {}, fila: [], erros: [], cupons: [], codigos: {}, codigosEm: null,
-                               recebimentos: null, notasReceb: {}, receb: {}, orcamentos: null, estoque: null}; }
+                               recebimentos: null, notasReceb: {}, receb: {}, orcamentos: null, estoque: null, idaPausada: null}; }
 function salvar() {
   try { localStorage.setItem(CHAVE, JSON.stringify(E)); }
   catch (e) { toast('Memória do celular cheia: não deu para salvar.'); }
@@ -584,29 +584,29 @@ TELAS.inicio = () => {
   // [SEPARAÇÃO] o Início é da contagem para LISTA DE COMPRAS; a contagem de estoque (balanço) fica na aba Estoque
   const compra = E.rotinas.filter(r => !r.so_contagem);
   const hoje = compra.filter(r => r.hoje);
-  const ida = E.ida;
-  const idaEstoque = ida && E.preparos[ida.rotina_id] && E.preparos[ida.rotina_id].so_contagem;
+  const ida = idaDoTipo('compra'), idaEst = idaDoTipo('estoque');
   let principal = '';
-  if (idaEstoque) {
+  if (idaEst) {
+    const pe = progressoDaIda(idaEst), prepE = E.preparos[idaEst.rotina_id];
     principal = `<div class="cartao" style="display:flex;gap:10px;align-items:center"><div class="grow"><div class="nome">Contagem de estoque em andamento</div>
-        <div class="mini suave">${esc(E.preparos[ida.rotina_id].nome)}${ida.categorias ? ' · ' + esc(ida.categorias.join(', ')) : ''}</div></div>
-        <button class="btn claro" style="width:auto;min-height:40px;padding:4px 14px" data-acao="continuar-ida">Continuar</button></div>`;
-  } else if (ida) {
+        <div class="mini suave">${esc(prepE ? prepE.nome : 'Estoque')}${idaEst.categorias ? ' · ' + esc(idaEst.categorias.join(', ')) : ''} · ${pe.feitos}${pe.total != null ? ' de ' + pe.total : ''} contados</div></div>
+        <button class="btn claro" style="width:auto;min-height:40px;padding:4px 14px" data-acao="continuar-ida" data-tipo="estoque">Continuar</button></div>`;
+  }
+  if (ida) {
     const prep = E.preparos[ida.rotina_id];
-    const linhas = prep ? linhasIda() : null;
-    const feitos = linhas ? linhas.filter(l => valorLinha(l) != null).length : Object.keys(ida.contagens || {}).length;
+    const pr = progressoDaIda(ida), linhas = pr.total != null ? {length: pr.total} : null, feitos = pr.feitos;
     const rot = E.rotinas.find(r => r.id === ida.rotina_id);
-    principal = `<div class="destaque"><div><div class="rotulo" style="color:#CDEBE6">Contagem em andamento</div>
+    principal += `<div class="destaque"><div><div class="rotulo" style="color:#CDEBE6">Contagem em andamento</div>
         <div style="font-size:22px;font-weight:800">${esc(prep ? prep.nome : rot ? rot.nome : 'Rotina')}</div>
         <div style="color:#E3F4F1">${linhas ? `${feitos} de ${linhas.length} itens` : `${feitos} ${feitos === 1 ? 'item contado' : 'itens contados'}`}${ida.secoes && ida.secoes.length ? ' · ' + esc(ida.secoes.join(', ')) : prep && prep.so_contagem ? '' : ' · para ' + ida.dias + ' dias'}${ida.dia && ida.dia !== hojeISO() ? ' · começada em ' + dataBR(ida.dia) : ''}${ida.usuario_id && ida.usuario_id !== u.id ? ' · por ' + esc(ida.usuario_nome || 'outra pessoa') : ''}</div></div>
-        <button class="btn" data-acao="continuar-ida">Continuar contagem ${ICONES.seta}</button>
-        <button class="link-btn" style="color:#E3F4F1;align-self:center" data-acao="ida-descartar">Descartar esta contagem</button></div>`;
+        <button class="btn" data-acao="continuar-ida" data-tipo="compra">Continuar contagem ${ICONES.seta}</button>
+        <button class="link-btn" style="color:#E3F4F1;align-self:center" data-acao="ida-descartar" data-tipo="compra">Descartar esta contagem</button></div>`;
   } else if (hoje.length) {
     // a rotina de hoje que ainda NÃO foi contada vem primeiro; se todas já foram, mostra a lista feita
     const r = hoje.find(x => !listaDeHoje(x.id)) || hoje[0];
     const feita = listaDeHoje(r.id);
     const dataHoje = esc(new Date().toLocaleDateString('pt-BR', {weekday: 'long', day: '2-digit', month: '2-digit'}));
-    principal = feita
+    principal += feita
       ? `<div class="destaque"><div><div class="rotulo" style="color:#CDEBE6">Hoje · ${dataHoje}</div>
           <div style="font-size:22px;font-weight:800">${esc(r.nome)} ✓</div>
           <div style="color:#E3F4F1">Já contada hoje${feita.funcionario ? ' por ' + esc(feita.funcionario) : ''} · ${feita.status === 'aguardando' ? 'esperando aprovação' : feita.status === 'finalizada' ? 'compra finalizada' : 'lista aprovada'}</div></div>
@@ -782,7 +782,7 @@ async function comecarIda(rotinaId, dias) {
   }
   const sel = prep.so_contagem && T.p.selLocais && T.p.selLocais.length ? T.p.selLocais.slice() : null;
   E.ida = {codigo: novoCodigo(), rotina_id: rotinaId, dias: prep.so_contagem ? (prep.dias_cobertura || 7) : dias, idx: 0, contagens: {}, porLocal: {}, modo: {}, cx: {},
-           extras: [], iniciada: new Date().toISOString(), dia: hojeISO(), usuario_id: E.usuario.id, usuario_nome: E.usuario.nome, secoes: sel,
+           extras: [], iniciada: new Date().toISOString(), dia: hojeISO(), usuario_id: E.usuario.id, usuario_nome: E.usuario.nome, secoes: sel, tipo: prep.so_contagem ? 'estoque' : 'compra',
            categorias: cats.length ? cats : null};
   salvar();
   carregarCodigos();
@@ -811,18 +811,68 @@ function normalizarIda() {
     ida.porLocal[pid] = {[it ? locaisDoItem(it)[0] : '']: ida.contagens[pid]};
   });
 }
+// [DESEMPENHO] com o cadastro inteiro (1000+ produtos) as linhas são montadas UMA vez e reaproveitadas
+let memoLinhas = {ida: null, prep: null, chave: '', linhas: null};
 function linhasIda() {
   normalizarIda();
-  const prep = E.preparos[E.ida.rotina_id], sel = E.ida.secoes;
-  const todos = itensDasCategorias(prep.itens, E.ida.categorias).concat(E.ida.extras || []);
-  const ordem = [];
-  todos.forEach(it => locaisDoItem(it).forEach(l => { if (!ordem.includes(l)) ordem.push(l); }));
+  const ida = E.ida, prep = E.preparos[ida.rotina_id], sel = ida.secoes;
+  const chave = [prep.gerado_em, prep.itens.length, JSON.stringify(sel || null), JSON.stringify(ida.categorias || null), (ida.extras || []).length].join('|');
+  if (memoLinhas.ida === ida && memoLinhas.prep === prep && memoLinhas.chave === chave) return memoLinhas.linhas;
+  const todos = itensDasCategorias(prep.itens, ida.categorias).concat(ida.extras || []);
+  const porLocal = new Map();          // local -> itens, na ordem em que o local aparece
+  todos.forEach(it => locaisDoItem(it).forEach(l => { if (!porLocal.has(l)) porLocal.set(l, []); porLocal.get(l).push(it); }));
   const linhas = [];
-  ordem.forEach(l => {
+  porLocal.forEach((itens, l) => {
     if (sel && sel.length && !sel.includes(nomeLocal(l)) && l !== LOCAL_FORA) return;
-    todos.forEach(it => { if (locaisDoItem(it).includes(l)) linhas.push({it, local: l, k: linhas.length}); });
+    itens.forEach(it => linhas.push({it, local: l, k: linhas.length}));
   });
+  memoLinhas = {ida, prep, chave, linhas};
   return linhas;
+}
+// O celular guarda até DUAS contagens: uma para lista de compras e uma de estoque. A que não está
+// em uso fica em E.idaPausada e volta quando a outra termina (antes, começar uma apagava a outra).
+function tipoIda(ida) {
+  if (!ida) return null;
+  const prep = E.preparos[ida.rotina_id];
+  if (prep) return prep.so_contagem ? 'estoque' : 'compra';
+  if (ida.tipo) return ida.tipo;
+  const r = E.rotinas.find(x => x.id === ida.rotina_id);
+  return r && r.so_contagem ? 'estoque' : 'compra';
+}
+function idaDoTipo(tipo) { return [E.ida, E.idaPausada].find(i => i && tipoIda(i) === tipo) || null; }
+function abrirEspacoPara(tipo) {
+  // devolve true se pode começar uma contagem nova deste tipo
+  if (E.ida && tipoIda(E.ida) !== tipo) {
+    if (E.idaPausada) {                        // já há uma deste tipo guardada: só cabe uma de cada
+      const p = progressoDaIda(E.idaPausada);
+      if (!confirm(`Já existe uma contagem ${tipo === 'estoque' ? 'de estoque' : 'para lista de compras'} guardada (${p.feitos} contados). Descartar e começar outra?`)) return false;
+      encerrarAndamentoDe(E.idaPausada); E.idaPausada = null;
+    }
+    E.idaPausada = E.ida; E.ida = null; salvar();
+    toast(`A contagem ${tipoIda(E.idaPausada) === 'estoque' ? 'de estoque' : 'para lista de compras'} ficou guardada: continue depois.`);
+    return true;
+  }
+  if (E.ida) {
+    const p = progressoDaIda(E.ida);
+    if (!confirm(`Já existe uma contagem ${tipo === 'estoque' ? 'de estoque' : 'para lista de compras'} em andamento (${p.feitos} contados). Descartar e começar outra?`)) return false;
+    descartarIda();
+  }
+  return true;
+}
+function trazerIda(tipo) {
+  // deixa em uso (E.ida) a contagem deste tipo
+  if (E.ida && tipoIda(E.ida) === tipo) return true;
+  if (E.idaPausada && tipoIda(E.idaPausada) === tipo) { [E.ida, E.idaPausada] = [E.idaPausada, E.ida]; salvar(); return true; }
+  return false;
+}
+function retomarIdaGuardada() { if (!E.ida && E.idaPausada) { E.ida = E.idaPausada; E.idaPausada = null; salvar(); } }
+function encerrarAndamentoDe(ida) {
+  if (ida && ida.codigo) api('POST', '/api/compras/contagem/andamento', {codigo: ida.codigo, encerrar: true}).catch(() => {});
+}
+function comIda(ida, fn) { const antes = E.ida; E.ida = ida; try { return fn(); } finally { E.ida = antes; } }
+function progressoDaIda(ida) {
+  if (!E.preparos[ida.rotina_id]) return {total: null, feitos: Object.keys(ida.contagens || {}).length};
+  return comIda(ida, () => { const ls = linhasIda(); return {total: ls.length, feitos: ls.filter(l => valorLinha(l) != null).length}; });
 }
 function itensIda() {
   // produtos (sem repetir) das linhas desta contagem
@@ -881,7 +931,7 @@ TELAS.contagem = () => {
   const linhas = linhasIda(), total = linhas.length;
   if (!total) { T = {nome: 'inicio', p: {}}; toast('Nenhum item nos locais escolhidos.'); return TELAS.inicio(); }
   ida.idx = Math.min(Math.max(ida.idx || 0, 0), total - 1);
-  const atual = linhas[ida.idx], it = atual.it;
+  const atual = linhas[ida.idx];
   const feitos = linhas.filter(l => valorLinha(l) != null).length;
   const buf = T.p.buf || '';
   const locais = progressoLocais(linhas);
@@ -889,45 +939,24 @@ TELAS.contagem = () => {
   let localAnt = null;
   const htmlLinhas = linhas.map(l => {
     let cab = '';
-    if (l.local !== localAnt && (variosLocais || l.local)) {
-      const pl = locais.find(x => x.local === l.local);
-      cab = `<div class="cl-sec" id="sec-${l.k}"><span>${esc(nomeLocal(l.local))}</span><span>${pl.feitos === pl.total ? '✓ ' : ''}${pl.feitos}/${pl.total}</span></div>`;
-    }
+    if (l.local !== localAnt && (variosLocais || l.local)) cab = htmlSecLocal(locais.find(x => x.local === l.local));
     localAnt = l.local;
-    const sel = l.k === ida.idx, v = valorLinha(l);
-    let valor, cls;
-    if (sel && buf) { valor = esc(buf) + (fatorAtual(l.it) > 1 ? ' cx' : ''); cls = 'atual'; }
-    else if (v != null) { valor = fmtQtd(v) + ' ' + esc(unCurta(l.it.unidade)); cls = sel ? 'atual' : 'feito'; }
-    else { valor = '—'; cls = sel ? 'atual' : ''; }
-    return `${cab}<button class="cl-lin ${sel ? 'sel' : ''} ${v != null && !sel ? 'ok' : ''}" data-acao="cont-ir" data-k="${l.k}" ${sel ? 'aria-current="true"' : ''}>
-      <div class="grow" style="min-width:0"><div class="cl-nome">${esc(l.it.nome)}</div><div class="cl-dica">${dicaContagem(l)}</div></div>
-      <div class="cl-valor ${cls}">${valor}${sel ? '<span class="cursor"></span>' : ''}</div></button>`;
+    return cab + htmlLinhaContagem(l, l.k === ida.idx, buf);
   }).join('');
-  const abas = variosLocais ? `<div class="cl-abas">${locais.map(pl => `<button class="cl-aba ${pl.local === atual.local ? 'sel' : ''} ${pl.feitos === pl.total ? 'pronto' : ''}" data-acao="cont-local" data-k="${pl.pendente != null ? pl.pendente : pl.primeira}">
-      ${esc(nomeLocal(pl.local))} <b>${pl.feitos === pl.total ? '✓' : pl.feitos + '/' + pl.total}</b></button>`).join('')}</div>` : '';
-  const caixa = caixaDe(it), modo = fatorAtual(it) > 1 ? 'cx' : 'un';
-  const totalLocais = locaisDoItem(it).length > 1 && totalProduto(it.produto_id) != null
-    ? `<span class="cl-total">total ${fmtQtd(totalProduto(it.produto_id))} ${esc(unCurta(it.unidade))}</span>` : '';
-  const info2 = contagemCega() ? '' : [it.ultima_contagem ? `tinha ${fmtQtd(it.ultima_contagem.qtd)}` : '',
-                 it.estoque_estimado != null && it.ultima_contagem && it.consumo_dia ? `deve ter ≈ ${fmtQtd(Math.round(it.estoque_estimado * 10) / 10)}` : ''].filter(Boolean).join(' · ');
+  const abas = variosLocais ? htmlAbasLocais(locais, atual) : '';
   const tecla = (txt, acao, cls, extra) => `<button class="tecla ${cls || ''}" data-acao="${acao}" ${extra || ''}>${txt}</button>`;
   const num_ = n => tecla(n, 'tec-num', 'num', `data-n="${n}"`);
   return `<div class="cl-tela">
     <div class="topo" style="padding:10px 10px 2px">
       <button class="icone-btn" data-acao="cont-sair" aria-label="Sair da contagem (fica salva)">${ICONES.fechar}</button>
       <div class="grow" style="min-width:0"><h1 style="font-size:17px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(prep.nome)}${ida.categorias ? ' · ' + esc(ida.categorias.join(', ')) : ''}</h1>
-        <div class="sub mini" style="font-weight:600">${feitos} de ${total} contados</div></div>
+        <div class="sub mini" style="font-weight:600" id="cl-cont">${feitos} de ${total} contados</div></div>
       <button class="cl-revisar" data-acao="cont-revisar">${prep.so_contagem ? 'Revisar e salvar' : 'Ver lista'}</button></div>
-    <div class="progresso" style="margin:4px 12px 6px"><div style="width:${Math.round(100 * feitos / total)}%"></div></div>
+    <div class="progresso" style="margin:4px 12px 6px"><div id="cl-prog" style="width:${Math.round(100 * feitos / total)}%"></div></div>
     ${abas}
     <div class="cl-lista" id="cl-lista">${htmlLinhas}<div style="height:8px"></div></div>
     <div class="cl-teclado">
-      <div class="cl-info">
-        <div class="grow" style="min-width:0"><div class="cl-info-nome">${esc(it.nome)}</div>
-          <div class="mini suave">${variosLocais || atual.local ? `<span class="cl-chip-local">${esc(nomeLocal(atual.local))}</span> ` : ''}em ${modo === 'cx' ? 'caixas de ' + fmtQtd(caixa) : esc(it.unidade)}${info2 ? ' · ' + info2 : ''} ${totalLocais}</div></div>
-        ${caixa ? `<button class="cl-modo" data-acao="cont-modo" aria-label="Trocar entre unidades e caixas">${modo === 'cx' ? 'usar ' + esc(unCurta(it.unidade)) : 'usar CX ' + fmtQtd(caixa)}</button>` : ''}
-      </div>
-      ${it.contado_hoje ? `<div class="mini" style="color:var(--laranja-esc);font-weight:700;padding:0 4px">⚠ Já contado hoje em "${esc(it.contado_hoje.contagens.join(', '))}"${contagemCega() ? '' : ` (${fmtQtd(it.contado_hoje.qtd)})`}: as contagens do dia são SOMADAS.</div>` : ''}
+      <div id="cl-info-box">${htmlInfoItem(atual, variosLocais)}</div>
       <div class="cl-teclas">
         ${num_('1')}${num_('2')}${num_('3')}${tecla('⌫', 'tec-apagar', 'cinza', 'aria-label="Apagar"')}
         ${num_('4')}${num_('5')}${num_('6')}${tecla('Acabou', 'tec-zero', 'zero')}
@@ -936,6 +965,74 @@ TELAS.contagem = () => {
       </div>
     </div></div>`;
 };
+function htmlLinhaContagem(l, sel, buf) {
+  const v = valorLinha(l);
+  let valor, cls;
+  if (sel && buf) { valor = esc(buf) + (fatorAtual(l.it) > 1 ? ' cx' : ''); cls = 'atual'; }
+  else if (v != null) { valor = fmtQtd(v) + ' ' + esc(unCurta(l.it.unidade)); cls = sel ? 'atual' : 'feito'; }
+  else { valor = '—'; cls = sel ? 'atual' : ''; }
+  return `<button class="cl-lin ${sel ? 'sel' : ''} ${v != null && !sel ? 'ok' : ''}" data-acao="cont-ir" data-k="${l.k}" ${sel ? 'aria-current="true"' : ''}>
+      <div class="grow" style="min-width:0"><div class="cl-nome">${esc(l.it.nome)}</div><div class="cl-dica">${dicaContagem(l)}</div></div>
+      <div class="cl-valor ${cls}">${valor}${sel ? '<span class="cursor"></span>' : ''}</div></button>`;
+}
+function htmlSecLocal(pl) {
+  return `<div class="cl-sec"><span>${esc(nomeLocal(pl.local))}</span><span>${pl.feitos === pl.total ? '✓ ' : ''}${pl.feitos}/${pl.total}</span></div>`;
+}
+function htmlAbasLocais(locais, atual) {
+  return `<div class="cl-abas" id="cl-abas">${locais.map(pl => `<button class="cl-aba ${pl.local === atual.local ? 'sel' : ''} ${pl.feitos === pl.total ? 'pronto' : ''}" data-acao="cont-local" data-k="${pl.pendente != null ? pl.pendente : pl.primeira}">
+      ${esc(nomeLocal(pl.local))} <b>${pl.feitos === pl.total ? '✓' : pl.feitos + '/' + pl.total}</b></button>`).join('')}</div>`;
+}
+function htmlInfoItem(atual, variosLocais) {
+  const it = atual.it, caixa = caixaDe(it), modo = fatorAtual(it) > 1 ? 'cx' : 'un';
+  const totalLocais = locaisDoItem(it).length > 1 && totalProduto(it.produto_id) != null
+    ? `<span class="cl-total">total ${fmtQtd(totalProduto(it.produto_id))} ${esc(unCurta(it.unidade))}</span>` : '';
+  const info2 = contagemCega() ? '' : [it.ultima_contagem ? `tinha ${fmtQtd(it.ultima_contagem.qtd)}` : '',
+                 it.estoque_estimado != null && it.ultima_contagem && it.consumo_dia ? `deve ter ≈ ${fmtQtd(Math.round(it.estoque_estimado * 10) / 10)}` : ''].filter(Boolean).join(' · ');
+  return `<div class="cl-info">
+        <div class="grow" style="min-width:0"><div class="cl-info-nome">${esc(it.nome)}</div>
+          <div class="mini suave">${variosLocais || atual.local ? `<span class="cl-chip-local">${esc(nomeLocal(atual.local))}</span> ` : ''}em ${modo === 'cx' ? 'caixas de ' + fmtQtd(caixa) : esc(it.unidade)}${info2 ? ' · ' + info2 : ''} ${totalLocais}</div></div>
+        ${caixa ? `<button class="cl-modo" data-acao="cont-modo" aria-label="Trocar entre unidades e caixas">${modo === 'cx' ? 'usar ' + esc(unCurta(it.unidade)) : 'usar CX ' + fmtQtd(caixa)}</button>` : ''}
+      </div>
+      ${it.contado_hoje ? `<div class="mini" style="color:var(--laranja-esc);font-weight:700;padding:0 4px">⚠ Já contado hoje em "${esc(it.contado_hoje.contagens.join(', '))}"${contagemCega() ? '' : ` (${fmtQtd(it.contado_hoje.qtd)})`}: as contagens do dia são SOMADAS.</div>` : ''}`;
+}
+// [DESEMPENHO] digitar um número ou passar para o próximo troca só o que mudou (a linha de antes, a da vez,
+// os contadores e o quadro do item), sem redesenhar a lista inteira
+function desenharContagemParcial() {
+  const ida = E.ida, lista = document.getElementById('cl-lista');
+  if (!ida || !lista || T.nome !== 'contagem' || !E.preparos[ida.rotina_id]) return false;
+  const linhas = linhasIda();
+  if (T.p.desenhada !== ida.codigo + ':' + linhas.length || !linhas.length) return false;
+  ida.idx = Math.min(Math.max(ida.idx || 0, 0), linhas.length - 1);
+  const atual = linhas[ida.idx], antes = linhas[T.p.selDesenhada] || atual;
+  const pids = new Set([atual.it.produto_id, antes.it.produto_id]);
+  for (const l of linhas) {
+    if (!pids.has(l.it.produto_id)) continue;     // o mesmo produto em outro local: a dica "também em…" muda
+    const el = lista.querySelector(`.cl-lin[data-k="${l.k}"]`);
+    if (el) el.outerHTML = htmlLinhaContagem(l, l.k === ida.idx, T.p.buf || '');
+  }
+  const locais = progressoLocais(linhas), feitos = locais.reduce((n, pl) => n + pl.feitos, 0);
+  lista.querySelectorAll('.cl-sec').forEach((el, i) => { if (locais[i]) el.outerHTML = htmlSecLocal(locais[i]); });
+  const abas = document.getElementById('cl-abas');
+  if (abas) abas.outerHTML = htmlAbasLocais(locais, atual);
+  document.getElementById('cl-cont').textContent = `${feitos} de ${linhas.length} contados`;
+  document.getElementById('cl-prog').style.width = Math.round(100 * feitos / linhas.length) + '%';
+  document.getElementById('cl-info-box').innerHTML = htmlInfoItem(atual, locais.length > 1);
+  T.p.selDesenhada = ida.idx;
+  if (antes !== atual) mostrarLinhaDaVez(lista);
+  avisarAndamento();
+  return true;
+}
+function mostrarLinhaDaVez(lista) {
+  const sel = lista.querySelector('.cl-lin.sel');
+  if (sel) {
+    const a = sel.offsetTop - lista.offsetTop, b = a + sel.offsetHeight;
+    if (a < lista.scrollTop + 34) lista.scrollTop = a - 40;
+    else if (b > lista.scrollTop + lista.clientHeight - 4) lista.scrollTop = b - lista.clientHeight + 30;
+  }
+  T.p.scroll = lista.scrollTop;
+  const aba = document.querySelector('.cl-aba.sel');
+  if (aba && aba.scrollIntoView) aba.scrollIntoView({block: 'nearest', inline: 'center'});
+}
 // [PAINEL DO BALANÇO] avisa o servidor o que este celular já contou (no máximo a cada 8 s; sem internet, deixa para depois)
 let andamentoEnviado = {em: 0, chave: ''}, andamentoTimer = null;
 function avisarAndamento() {
@@ -953,9 +1050,9 @@ function avisarAndamento() {
   api('POST', '/api/compras/contagem/andamento', corpo).catch(() => { andamentoEnviado.chave = ''; });
 }
 function descartarIda() {
-  const codigo = E.ida && E.ida.codigo;
+  const ida = E.ida;
   E.ida = null; salvar(); clearTimeout(andamentoTimer); andamentoEnviado = {em: 0, chave: ''};
-  if (codigo) api('POST', '/api/compras/contagem/andamento', {codigo, encerrar: true}).catch(() => {});
+  encerrarAndamentoDe(ida);
 }
 TELAS_DEPOIS.contagem = () => {
   avisarAndamento();
@@ -963,18 +1060,13 @@ TELAS_DEPOIS.contagem = () => {
   const lista = document.getElementById('cl-lista');
   if (!lista) return;
   if (T.p.scroll != null) lista.scrollTop = T.p.scroll;
-  const sel = lista.querySelector('.cl-lin.sel');
-  if (sel) {
-    const a = sel.offsetTop - lista.offsetTop, b = a + sel.offsetHeight;
-    if (a < lista.scrollTop + 34) lista.scrollTop = a - 40;
-    else if (b > lista.scrollTop + lista.clientHeight - 4) lista.scrollTop = b - lista.clientHeight + 30;
-  }
+  mostrarLinhaDaVez(lista);
   lista.onscroll = () => { T.p.scroll = lista.scrollTop; };
-  T.p.scroll = lista.scrollTop;
-  const aba = document.querySelector('.cl-aba.sel');
-  if (aba && aba.scrollIntoView) aba.scrollIntoView({block: 'nearest', inline: 'center'});
+  T.p.desenhada = E.ida.codigo + ':' + linhasIda().length;   // o que está na tela (para o desenho parcial)
+  T.p.selDesenhada = E.ida.idx;
 };
 function redesenharContagem() {
+  if (desenharContagemParcial()) return;
   const lista = document.getElementById('cl-lista');
   if (lista) T.p.scroll = lista.scrollTop;
   desenhar();
@@ -1162,7 +1254,7 @@ async function terminarContagem() {
     E.fila.push({tipo: 'lista', codigo: ida.codigo, metodo: 'POST', url: '/api/compras/listas', corpo, descricao: 'Contagem de ' + prep.nome});
     toast('Sem internet: lista calculada no celular. Será enviada quando conectar.');
   }
-  E.ida = null; salvar(); fecharModal();
+  E.ida = null; retomarIdaGuardada(); salvar(); fecharModal();
   ir('lista', {codigo: corpo.codigo});
 }
 
@@ -1170,25 +1262,27 @@ async function terminarContagem() {
 async function carregarEstoque() {
   try {
     E.estoque = await api('GET', '/api/compras/estoque'); salvar();
+    if (T.nome === 'estoque') T.p.erro = null;
     if (!E.rotinas.some(r => r.id === E.estoque.id)) { E.rotinas = await api('GET', '/api/compras/rotinas'); salvar(); }
-  } catch (e) {}
+  } catch (e) {
+    if (T.nome === 'estoque' && !e.extra.offline) T.p.erro = 'Não deu para carregar as categorias: ' + e.message;
+  }
   if (T.nome === 'estoque') desenhar();
 }
 TELAS.estoque = p => {
-  const u = E.usuario, ida = E.ida, est = E.estoque, sel = p.selCats || [];
+  const u = E.usuario, ida = idaDoTipo('estoque'), est = E.estoque, sel = p.selCats || [];
   const prepIda = ida && E.preparos[ida.rotina_id];
   let andamento = '';
-  if (ida && prepIda && prepIda.so_contagem) {
-    const linhas = linhasIda(), feitos = linhas.filter(l => valorLinha(l) != null).length;
+  if (ida) {
+    const pr = progressoDaIda(ida);
     andamento = `<div class="destaque"><div><div class="rotulo" style="color:#CDEBE6">Contagem em andamento</div>
-        <div style="font-size:22px;font-weight:800">${esc(prepIda.nome)}${ida.categorias ? ' · ' + esc(ida.categorias.join(', ')) : ''}</div>
-        <div style="color:#E3F4F1">${feitos} de ${linhas.length} itens${ida.secoes && ida.secoes.length ? ' · ' + esc(ida.secoes.join(', ')) : ''}${ida.usuario_id && ida.usuario_id !== u.id ? ' · por ' + esc(ida.usuario_nome || 'outra pessoa') : ''}</div></div>
-        <button class="btn" data-acao="continuar-ida">Continuar contagem ${ICONES.seta}</button></div>`;
-  } else if (ida) {
-    andamento = '<div class="info mini">Há uma contagem para lista de compras em andamento (continue pelo Início).</div>';
+        <div style="font-size:22px;font-weight:800">${esc(prepIda ? prepIda.nome : 'Estoque')}${ida.categorias ? ' · ' + esc(ida.categorias.join(', ')) : ''}</div>
+        <div style="color:#E3F4F1">${pr.feitos}${pr.total != null ? ' de ' + pr.total : ''} itens${ida.secoes && ida.secoes.length ? ' · ' + esc(ida.secoes.join(', ')) : ''}${ida.usuario_id && ida.usuario_id !== u.id ? ' · por ' + esc(ida.usuario_nome || 'outra pessoa') : ''}</div></div>
+        <button class="btn" data-acao="continuar-ida" data-tipo="estoque">Continuar contagem ${ICONES.seta}</button>
+        <button class="link-btn" style="color:#E3F4F1;align-self:center" data-acao="ida-descartar" data-tipo="estoque">Descartar esta contagem</button></div>`;
   }
   const nSel = est ? est.categorias.filter(c => sel.includes(c.nome)).reduce((n, c) => n + c.qtd, 0) : 0;
-  const porCategoria = !est ? `<div class="vazio">${online ? 'Carregando as categorias…' : 'Sem internet: conecte para ver as categorias.'}</div>`
+  const porCategoria = !est ? `<div class="vazio">${p.erro ? esc(p.erro) + '<br><button class="link-btn" data-acao="nav-estoque">Tentar de novo</button>' : online ? 'Carregando as categorias…' : 'Sem internet: conecte para ver as categorias.'}</div>`
     : `<div class="chips chips-livre">${est.categorias.map(c => `<button class="chip ${sel.includes(c.nome) ? 'sel' : ''}" data-acao="est-cat" data-c="${esc(c.nome)}" aria-pressed="${sel.includes(c.nome)}">${esc(c.nome)} <span class="mini" style="opacity:.75">${c.qtd}</span></button>`).join('')}</div>
       <div class="info">${sel.length ? `Vai contar os <strong>${nSel} produtos</strong> de ${esc(sel.join(', '))} (todos do cadastro, mesmo os que não estão em nenhuma rotina).` : `Marque uma ou mais categorias. Nenhuma marcada = <strong>todos os ${est.total} produtos</strong>.`}</div>
       <button class="btn" data-acao="est-comecar">${sel.length ? `Contar ${esc(sel.join(', '))}` : 'Contar todos os produtos'} ${ICONES.seta}</button>`;
@@ -1231,7 +1325,7 @@ async function terminarContagemGeral() {
     E.fila.push({tipo: 'contagem', codigo: ida.codigo, metodo: 'POST', url: '/api/compras/listas', corpo, descricao: 'Contagem de ' + prep.nome});
     resumo.offline = true;
   }
-  E.ida = null; salvar(); fecharModal();
+  E.ida = null; retomarIdaGuardada(); salvar(); fecharModal();
   ir('contagemSalva', resumo);
 }
 TELAS.contagemSalva = p => `${faixaRede()}<div class="corpo" style="padding-top:48px">
@@ -2868,7 +2962,7 @@ const acoes = {
     const est = E.estoque, sel = (T.p.selCats || []).slice();
     if (!est) return toast('Conecte à internet para carregar as categorias.');
     if (!sel.length && !confirm(`Contar TODOS os ${est.total} produtos do cadastro?`)) return;
-    if (E.ida) { if (!confirm('Já existe uma contagem em andamento. Descartar e começar outra?')) return; descartarIda(); }
+    if (!abrirEspacoPara('estoque')) return;
     if (!E.rotinas.some(r => r.id === est.id)) E.rotinas.push({id: est.id, nome: est.nome, so_contagem: true, automatica: true, qtd_itens: est.total,
                                                                dias_semana: [], dias_cobertura: 7, categorias: est.categorias.map(c => c.nome)});
     ir('novaIda', {rotina_id: est.id, selCats: sel});
@@ -2906,15 +3000,19 @@ const acoes = {
   },
   // nova ida
   'nova-ida': d => {
-    if (E.ida) { if (!confirm('Já existe uma contagem em andamento. Descartar e começar outra?')) return; descartarIda(); }
+    const r = E.rotinas.find(x => x.id === +d.id);
+    if (!abrirEspacoPara(r && r.so_contagem ? 'estoque' : 'compra')) return;
     ir('novaIda', {rotina_id: +d.id});
   },
-  'ida-descartar': () => {
+  'ida-descartar': d => {
+    if (d.tipo) trazerIda(d.tipo);
     const ida = E.ida, feitos = ida ? Object.keys(ida.contagens || {}).length : 0;
     if (!ida || !confirm(`Descartar esta contagem?${feitos ? ` Os ${feitos} número(s) já digitados serão apagados.` : ''}`)) return;
-    descartarIda(); toast('Contagem descartada.'); desenhar();
+    descartarIda(); retomarIdaGuardada(); toast('Contagem descartada.'); desenhar();
   },
-  'continuar-ida': async () => {
+  'continuar-ida': async d => {
+    if (d && d.tipo) trazerIda(d.tipo);
+    if (!E.ida) return toast('Esta contagem não está mais no celular.');
     const rid = E.ida.rotina_id;
     if (!E.preparos[rid]) {   // dados da rotina sumiram do celular: baixa de novo (os números digitados continuam guardados)
       try { E.preparos[rid] = await api('GET', `/api/compras/rotinas/${rid}/preparar`); salvar(); }
