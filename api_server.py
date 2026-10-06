@@ -1984,6 +1984,91 @@ def api_compras_recebimento_dispensar(usuario, chave):
     return _recebimento_disponivel() or _resposta_compras(recebimento.dispensar, chave, usuario)
 
 
+# ---------------------------- orçamentos / pedidos aos fornecedores (gestor) ----------------------------
+try:
+    import orcamentos
+except Exception as _erro_import_orc:
+    orcamentos = None
+    logger.error(f"Orçamentos DESLIGADOS: não consegui carregar orcamentos.py ({_erro_import_orc})")
+
+
+def _orcamentos_disponivel():
+    if orcamentos is None:
+        return jsonify({"erro": "Orçamentos não instalados no servidor (falta orcamentos.py)."}), 503
+    return None
+
+
+@app.route('/api/compras/orcamentos/fornecedores', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_compras_orcamento_fornecedores(usuario):
+    return _orcamentos_disponivel() or _resposta_compras(orcamentos.listar_fornecedores)
+
+
+@app.route('/api/compras/orcamentos', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_compras_orcamentos(usuario):
+    return _orcamentos_disponivel() or _resposta_compras(orcamentos.listar_orcamentos)
+
+
+@app.route('/api/compras/orcamentos', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_compras_orcamento_criar(usuario):
+    dados = ler_json() or {}
+    return _orcamentos_disponivel() or _resposta_compras(orcamentos.criar_orcamento, dados.get('fornecedor_id'), usuario)
+
+
+@app.route('/api/compras/orcamentos/<int:orcamento_id>', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_compras_orcamento(usuario, orcamento_id):
+    return _orcamentos_disponivel() or _resposta_compras(orcamentos.obter_orcamento, orcamento_id)
+
+
+@app.route('/api/compras/orcamentos/<int:orcamento_id>', methods=['PUT'])
+@compras_login(somente_gestor=True)
+def api_compras_orcamento_salvar(usuario, orcamento_id):
+    dados = ler_json() or {}
+    return _orcamentos_disponivel() or _resposta_compras(orcamentos.salvar_orcamento, orcamento_id, dados.get('itens'),
+                                                         dados.get('observacao'), usuario)
+
+
+@app.route('/api/compras/orcamentos/<int:orcamento_id>/itens', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_compras_orcamento_item(usuario, orcamento_id):
+    dados = ler_json() or {}
+    return _orcamentos_disponivel() or _resposta_compras(orcamentos.adicionar_produto, orcamento_id, dados.get('produto_id'), usuario)
+
+
+@app.route('/api/compras/orcamentos/<int:orcamento_id>/texto', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_compras_orcamento_texto(usuario, orcamento_id):
+    return _orcamentos_disponivel() or _resposta_compras(orcamentos.texto_orcamento, orcamento_id,
+                                                         com_precos=request.args.get('precos') == '1')
+
+
+@app.route('/api/compras/orcamentos/<int:orcamento_id>/<acao>', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_compras_orcamento_acao(usuario, orcamento_id, acao):
+    funcoes = {'enviado': orcamentos.marcar_enviado, 'cancelar': orcamentos.cancelar, 'reabrir': orcamentos.reabrir} if orcamentos else {}
+    if acao == 'nota':
+        dados = ler_json() or {}
+        return _orcamentos_disponivel() or _resposta_compras(orcamentos.ligar_nota, orcamento_id, dados.get('chave'), usuario)
+    if acao not in funcoes:
+        return _orcamentos_disponivel() or (jsonify({"erro": "Ação inválida."}), 404)
+    return _resposta_compras(funcoes[acao], orcamento_id, usuario)
+
+
+@app.route('/api/compras/orcamentos/<int:orcamento_id>/notas', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_compras_orcamento_notas(usuario, orcamento_id):
+    return _orcamentos_disponivel() or _resposta_compras(orcamentos.notas_candidatas, orcamento_id)
+
+
+@app.route('/api/compras/listas/<codigo>/orcamentos', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_compras_lista_orcamentos(usuario, codigo):
+    return _orcamentos_disponivel() or _resposta_compras(orcamentos.gerar_da_lista, codigo, usuario)
+
+
 if __name__ == "__main__":
     # O '0.0.0.0' é o segredo. Ele libera o acesso para a rede inteira.
     logger.info("Iniciando servidor API acessível na rede em modo Produção...")

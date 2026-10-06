@@ -184,6 +184,15 @@
   .piscar { animation: piscar 1.2s ease-out; }
   @keyframes piscar { 0% { box-shadow: 0 0 0 3px var(--verde); } 100% { box-shadow: 0 0 0 0 transparent; } }
   .stp { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+  .tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .tile { background: var(--cartao); border: 1px solid var(--linha); border-radius: 16px; padding: 12px 14px; text-align: left;
+    display: flex; flex-direction: column; gap: 2px; min-height: 92px; }
+  .tile:active { background: var(--linha2); }
+  .tile-n { font-size: 28px; font-weight: 800; color: var(--suave); }
+  .tile-t { font-size: 14px; font-weight: 700; }
+  .tile-alerta { border-color: var(--laranja); background: var(--laranja-claro); }
+  .tile-alerta .tile-n { color: var(--laranja-esc); }
+  .link-btn { border: 0; background: none; padding: 0; color: var(--verde); font-weight: 700; text-decoration: underline; text-align: left; }
   .stp button { width: 40px; height: 44px; border-radius: 12px; border: 1px solid var(--verde-borda); background: #EEF7F5; color: var(--verde-esc);
     font-size: 22px; font-weight: 700; line-height: 1; touch-action: manipulation; }
   .stp .stp-v, .stp .estatico { width: auto; min-width: 64px; padding: 0 8px; font-size: 16px; font-weight: 800; display: flex; flex-direction: column;
@@ -214,7 +223,7 @@
 
 // ---------------------------------------------------------------- utilidades
 const CHAVE = 'gb_compras_v1';
-const VERSAO_APP = '21';   // aparece no rodapé do início: confira se o celular pegou a versão nova
+const VERSAO_APP = '23';   // aparece no rodapé do início: confira se o celular pegou a versão nova
 const $app = document.getElementById('app');
 const DIAS_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];            // 1=Dom ... 7=Sáb (padrão do sistema)
 const FRACIONADAS = ['KG', 'G', 'GR', 'L', 'LT', 'ML', 'M'];
@@ -255,6 +264,7 @@ function textoQtd(qtd, item) {
 }
 
 const ICONES = {
+  orcamento: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 3v2h6V3"/><path d="M9 10h6"/><path d="M9 14h6"/><path d="M9 18h3"/></svg>',
   voltar: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>',
   fechar: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>',
   seta: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>',
@@ -285,7 +295,7 @@ function carregar() {
   return estadoVazio();
 }
 function estadoVazio() { return {usuario: null, rotinas: [], preparos: {}, ida: null, listas: {}, fila: [], erros: [], cupons: [], codigos: {}, codigosEm: null,
-                               recebimentos: null, notasReceb: {}, receb: {}}; }
+                               recebimentos: null, notasReceb: {}, receb: {}, orcamentos: null}; }
 function salvar() {
   try { localStorage.setItem(CHAVE, JSON.stringify(E)); }
   catch (e) { toast('Memória do celular cheia: não deu para salvar.'); }
@@ -444,7 +454,8 @@ function topo(titulo, sub, voltar, extra) {
 function navbar(ativa) {
   const b = (id, ic, txt) => `<button class="${ativa === id ? 'ativo' : ''}" data-acao="nav" data-tela="${id}" ${ativa === id ? 'aria-current="page"' : ''}>${ic}${txt}</button>`;
   // [PAINEL DO GESTOR] relatórios só para o gestor: o operacional vê Início e Listas
-  const gestao = E.usuario && E.usuario.gestor ? b('gestao', ICONES.grafico, 'Gestão') : '';
+  const gestor = E.usuario && E.usuario.gestor;
+  const gestao = gestor ? b('orcamentos', ICONES.orcamento, 'Orçamentos') + b('gestao', ICONES.grafico, 'Gestão') : '';
   return `<nav class="navbar">${b('inicio', ICONES.casa, 'Início')}${b('listas', ICONES.listas, 'Listas')}${b('receber', ICONES.caixa, 'Receber')}${gestao}</nav>`;
 }
 function abrirModal(html) {
@@ -555,28 +566,52 @@ TELAS.inicio = () => {
         <div style="color:#E3F4F1">${r.qtd_itens} itens para contar</div></div>
         <button class="btn" data-acao="nova-ida" data-id="${r.id}">Começar contagem ${ICONES.seta}</button></div>`;
   }
-  const abertas = Object.values(E.listas).filter(l => ['aguardando', 'aprovada'].includes(l.status))
-    .sort((a, b) => (b.criada_em || '').localeCompare(a.criada_em || ''));
-  const cartoesListas = abertas.map(cartaoLista).join('');
-  const rotinas = E.rotinas.map(r => `<button class="cartao item-rotina" data-acao="nova-ida" data-id="${r.id}">
+  // [ORGANIZAÇÃO] o Início mostra o que tem para fazer agora; as listas ficam na aba Listas
+  const contar = st => Object.values(E.listas).filter(l => l.status === st).length;
+  const receber = E.recebimentos ? E.recebimentos.pendentes.length : null;
+  const orcEsperando = u.gestor && E.orcamentos ? E.orcamentos.filter(o => o.status === 'enviado').length : null;
+  const orcDiferenca = u.gestor && E.orcamentos ? E.orcamentos.filter(o => o.status === 'recebido' && !o.tudo_certo).length : 0;
+  const tiles = [
+    {n: contar('aguardando'), titulo: u.gestor ? 'Listas para aprovar' : 'Esperando aprovação', acao: 'data-acao="nav" data-tela="listas" data-filtro="aguardando"', alerta: u.gestor},
+    {n: contar('aprovada'), titulo: 'Listas para comprar', acao: 'data-acao="nav" data-tela="listas" data-filtro="aprovada"', alerta: true},
+    {n: receber, titulo: 'Entregas para conferir', acao: 'data-acao="nav" data-tela="receber"', alerta: true},
+  ];
+  if (u.gestor) tiles.push({n: orcEsperando, titulo: 'Orçamentos esperando nota', acao: 'data-acao="nav" data-tela="orcamentos"', alerta: false,
+                            extra: orcDiferenca ? `${orcDiferenca} com diferença` : ''});
+  const tilesHtml = tiles.map(t => `<button class="tile ${t.n && t.alerta ? 'tile-alerta' : ''}" ${t.acao}>
+      <div class="tile-n">${t.n == null ? '…' : t.n}</div><div class="tile-t">${t.titulo}</div>${t.extra ? `<div class="mini" style="color:var(--laranja);font-weight:700">${t.extra}</div>` : ''}</button>`).join('');
+  const deHoje = E.rotinas.filter(r => r.hoje && !(ida && ida.rotina_id === r.id) && !(r === hoje[0] && !ida));
+  const outras = E.rotinas.filter(r => !r.hoje);
+  const cartaoRotina = r => `<button class="cartao item-rotina" data-acao="nova-ida" data-id="${r.id}">
       <div class="quadrado">${ICONES.carrinho}</div>
       <div class="grow"><div class="nome">${esc(r.nome)}${r.so_contagem ? ' <span class="chip-ap">só contagem</span>' : ''}</div><div class="pequeno suave">${r.qtd_itens} itens · ${esc(textoDias(r.dias_semana))}</div></div>
-      <div class="mini" style="font-weight:800;color:${r.hoje ? 'var(--laranja)' : 'var(--suave)'}">${r.hoje ? 'HOJE' : (r.proxima ? dataBR(r.proxima) : '')}</div></button>`).join('');
+      <div class="mini" style="font-weight:800;color:${r.hoje ? 'var(--laranja)' : 'var(--suave)'}">${r.hoje ? 'HOJE' : (r.proxima ? dataBR(r.proxima) : '')}</div></button>`;
   return `${faixaRede()}
     <div class="topo" style="padding:20px 16px 4px;align-items:flex-start">
       <div class="grow"><div class="sub">Gela Boca · Compras</div><h1 style="font-size:26px">Olá, ${esc(u.nome)}</h1></div>
       <button class="icone-btn" data-acao="sair" aria-label="Sair (trocar de usuário)">${ICONES.sair}</button></div>
     <div class="corpo">
       ${principal}
-      ${abertas.length ? `<div class="lista-cartoes"><div class="rotulo">Listas abertas</div>${cartoesListas}</div>` : ''}
-      <div class="lista-cartoes">
-        <div style="display:flex;justify-content:space-between;align-items:baseline"><div class="rotulo">Rotinas de compra</div>
-          ${u.gestor ? '<button class="icone-btn" style="width:auto;padding:0 8px;color:var(--verde);font-weight:700" data-acao="nav" data-tela="rotinas">Gerenciar</button>' : ''}</div>
-        ${rotinas || `<div class="vazio">Nenhuma rotina criada ainda.${u.gestor ? '<br>Toque em <b>Gerenciar</b> para criar a primeira.' : '<br>Peça ao gestor para criar.'}</div>`}
-      </div>
-      <button class="btn claro medio" data-acao="abrir-leitor">${ICONES.barras} Testar leitor de código de barras</button>
-      <div class="mini suave" style="text-align:center">App de compras · versão ${VERSAO_APP}</div>
+      <div class="lista-cartoes"><div class="rotulo">Para fazer agora</div>
+        <div class="tiles">${tilesHtml}</div></div>
+      <div class="linha-btns">
+        <button class="btn claro medio" data-acao="cupom-ler">${ICONES.qr} Cupom fiscal</button>
+        ${u.gestor ? `<button class="btn claro medio" data-acao="orc-novo-inicio">${ICONES.orcamento} Novo orçamento</button>`
+                   : `<button class="btn claro medio" data-acao="nav" data-tela="listas">${ICONES.listas} Minhas listas</button>`}</div>
+      ${deHoje.length ? `<div class="lista-cartoes"><div class="rotulo">Outras contagens de hoje</div>${deHoje.map(cartaoRotina).join('')}</div>` : ''}
+      <details class="cartao" ${T.p.rotinasAbertas ? 'open' : ''} data-acao-toggle="rotinas">
+        <summary style="font-weight:700;cursor:pointer;min-height:28px;display:flex;justify-content:space-between;align-items:center">
+          <span>Começar outra contagem (${outras.length + E.rotinas.filter(r => r.hoje).length})</span>
+          ${u.gestor ? '<span class="link-btn" data-acao="nav" data-tela="rotinas">Gerenciar</span>' : ''}</summary>
+        <div class="lista-cartoes" style="margin-top:10px">${E.rotinas.map(cartaoRotina).join('')
+          || `<div class="vazio">Nenhuma rotina criada ainda.${u.gestor ? '<br>Toque em <b>Gerenciar</b> para criar a primeira.' : '<br>Peça ao gestor para criar.'}</div>`}</div>
+      </details>
+      <div class="mini suave" style="text-align:center"><button class="link-btn" style="color:var(--suave)" data-acao="abrir-leitor">Testar leitor de código de barras</button> · versão ${VERSAO_APP}</div>
     </div>${navbar('inicio')}`;
+};
+TELAS_DEPOIS.inicio = p => {
+  const det = document.querySelector('details[data-acao-toggle="rotinas"]');
+  if (det) det.addEventListener('toggle', () => { p.rotinasAbertas = det.open; });
 };
 function textoDias(dias) {
   if (!dias || !dias.length) return 'sem dia fixo';
@@ -595,6 +630,10 @@ function cartaoLista(l) {
     <div class="pequeno suave">${esc(l.funcionario || '')} · ${comprar} para comprar${l.status === 'aprovada' ? ` · ${marcados} marcados` : ''}${l.local ? ' · ainda não enviada' : ''}</div></button>`;
 }
 async function carregarInicio() {
+  if (T.nome === 'inicio') {                     // números do "Para fazer agora"
+    carregarRecebimentos().then(() => { if (T.nome === 'inicio') desenhar(); });
+    if (E.usuario && E.usuario.gestor) carregarOrcamentos().then(() => { if (T.nome === 'inicio') desenhar(); });
+  }
   try { E.rotinas = await api('GET', '/api/compras/rotinas'); salvar(); }
   catch (e) { if (e.status === 401) return desenhar(); }
   try {
@@ -885,6 +924,7 @@ TELAS.lista = p => {
               <div class="mini suave">tem ${i.estoque == null ? '?' : fmtQtd(Math.round(i.estoque * 10) / 10) + ' ' + esc(unCurta(i.unidade))}${i.dura != null ? ' · dura ~' + Math.floor(i.dura) + ' dias' : ''}</div></button>
             ${pode ? `<button class="mais-btn" data-acao="np-comprar" data-codigo="${esc(l.codigo)}" data-pid="${i.produto_id}" aria-label="Comprar ${esc(i.nome)}">+</button>` : ''}</div>`).join('')
             || '<div class="mini suave" style="padding:8px 0">Nenhum item com esse nome.</div>'}</div></details>` : ''}
+      ${['aguardando', 'aprovada'].includes(l.status) && E.usuario.gestor && !l.local ? `<button class="btn claro medio" data-acao="lista-orcamentos" data-codigo="${esc(l.codigo)}">${ICONES.orcamento} Gerar orçamentos por fornecedor</button>` : ''}
       ${['aguardando', 'aprovada'].includes(l.status) && (E.usuario.gestor || l.funcionario_id === E.usuario.id) ? `<button class="btn claro medio" data-acao="lista-cancelar" data-codigo="${esc(l.codigo)}">Cancelar esta lista</button>` : ''}
     </div>
     ${botoes ? `<div class="rodape"><div style="display:grid;grid-template-columns:56px minmax(0,1fr);gap:10px">${compartilhar}${botoes}</div></div>` : ''}`;
@@ -1160,20 +1200,34 @@ TELAS.finalizar = p => {
 };
 
 // ---------------------------------------------------------------- listas
-TELAS.listas = () => {
-  const todas = Object.values(E.listas).sort((a, b) => {
-    const ab = ['aguardando', 'aprovada'].includes(a.status), bb = ['aguardando', 'aprovada'].includes(b.status);
-    return (bb - ab) || (b.criada_em || '').localeCompare(a.criada_em || '');
-  });
+const FILTROS_LISTAS = [['abertas', 'Abertas', l => ['aguardando', 'aprovada'].includes(l.status)],
+                        ['aguardando', 'Para aprovar', l => l.status === 'aguardando'], ['aprovada', 'Para comprar', l => l.status === 'aprovada'],
+                        ['finalizada', 'Finalizadas', l => l.status === 'finalizada'], ['cancelada', 'Canceladas', l => l.status === 'cancelada']];
+TELAS.listas = p => {
+  const filtro = FILTROS_LISTAS.find(f => f[0] === p.filtro) || FILTROS_LISTAS[0];
+  const todas = Object.values(E.listas);
+  const lista = todas.filter(filtro[2]).sort((a, b) => (b.criada_em || '').localeCompare(a.criada_em || ''));
+  // agrupa por quando foi criada
+  const hoje = hojeISO(), semana = new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10);
+  const grupos = [['Hoje', l => (l.criada_em || '').slice(0, 10) === hoje], ['Últimos 7 dias', l => (l.criada_em || '').slice(0, 10) >= semana],
+                  ['Mais antigas', () => true]];
+  const usados = new Set();
+  const corpo = grupos.map(([nome, f]) => {
+    const itens = lista.filter(l => !usados.has(l.codigo) && f(l));
+    itens.forEach(l => usados.add(l.codigo));
+    return itens.length ? `<div class="lista-cartoes"><div class="rotulo">${nome}</div>${itens.map(cartaoLista).join('')}</div>` : '';
+  }).join('');
   const erros = E.erros.slice(-3).reverse();
-  return `${faixaRede()}${topo('Listas de compra', 'Abertas primeiro')}
+  return `${faixaRede()}${topo('Listas de compra', '', null, `<button class="btn claro" style="height:40px;width:auto;padding:0 12px;font-size:14px" data-acao="cupom-ler">${ICONES.qr} Cupom</button>`)}
     <div class="corpo">
       ${erros.length ? `<div class="aviso"><div>Envios recusados pelo servidor:</div>${erros.map(e => `<div class="mini">• ${esc(e.msg)}</div>`).join('')}
         <button class="btn claro medio" style="margin-top:8px" data-acao="limpar-erros">Entendi</button></div>` : ''}
-      <div class="lista-cartoes">${todas.map(cartaoLista).join('') || '<div class="vazio">Nenhuma lista ainda.</div>'}</div>
-      <div class="lista-cartoes"><div class="rotulo">Cupom fiscal da compra</div>
-        <button class="btn claro medio" data-acao="cupom-ler">${ICONES.qr} ${ehComputador() ? 'Lançar cupom fiscal (chave, link ou imagem)' : 'Ler QR Code de um cupom'}</button>
-        ${E.usuario.gestor ? '<button class="btn claro medio" data-acao="nav" data-tela="gestao" data-secao="cupons">Ver os cupons lidos (Gestão)</button>' : ''}</div>
+      <div class="filtros">${FILTROS_LISTAS.map(([id, nome, f]) => {
+        const n = todas.filter(f).length;
+        return `<button class="filtro ${id === filtro[0] ? 'sel' : ''}" data-acao="listas-filtro" data-f="${id}">${nome}${id !== 'finalizada' && id !== 'cancelada' ? ` (${n})` : ''}</button>`;
+      }).join('')}</div>
+      ${corpo || `<div class="vazio">${filtro[0] === 'abertas' ? 'Nenhuma lista aberta.<br><span class="mini">As listas aparecem aqui depois da contagem.</span>' : 'Nenhuma lista aqui.'}</div>`}
+      ${E.usuario.gestor ? '<button class="link-btn" style="align-self:center" data-acao="nav" data-tela="gestao" data-secao="cupons">Ver os cupons fiscais lidos (Gestão)</button>' : ''}
     </div>${navbar('listas')}`;
 };
 
@@ -1340,6 +1394,10 @@ TELAS.conferencia = p => {
                     <div class="mini suave" style="text-align:right">${ICONES.barras}<br>Bipe os produtos</div></div>
                   <div class="progresso"><div style="width:${Math.round(100 * ok / Math.max(itens.length, 1))}%"></div></div>
                   ${ehComputador() ? `<div class="campo"><input id="receb-cod" inputmode="numeric" placeholder="Leitor USB ou digite o código e Enter" autocomplete="off" aria-label="Código de barras"></div>` : ''}`}
+      ${n.orcamento ? `<${E.usuario.gestor ? 'button data-acao="orc-abrir" data-id="' + n.orcamento.id + '"' : 'div'} class="${n.orcamento.tudo_certo ? 'info' : 'aviso'}" style="text-align:left;width:100%">
+          <b>Orçamento nº ${n.orcamento.id}:</b> ${esc(n.orcamento.resumo)}
+          ${n.orcamento.diferencas.map(x => `<div class="mini">• ${esc(x.nome)}: pedido ${fmtQtd(x.pedido)}, nota ${fmtQtd(x.nota)} ${esc(x.unidade)}${x.preco === 'mais_caro' ? ' · mais caro (+' + fmtQtd(x.pct) + '%)' : x.preco === 'mais_barato' ? ' · mais barato (' + fmtQtd(x.pct) + '%)' : ''}</div>`).join('')}
+          ${n.orcamento.nao_pedidos.map(x => `<div class="mini">• ${esc(x.nome)}: veio sem pedir</div>`).join('')}</${E.usuario.gestor ? 'button' : 'div'}>` : ''}
       ${p.bipMsg ? `<div class="mini" style="text-align:center;font-weight:700">${esc(p.bipMsg)}</div>` : ''}
       <div class="linhas">${linhas}</div>
       ${!fechada && E.usuario.gestor && n.falta_vincular && !n.lancada ? `<div class="mini suave">${n.falta_vincular} item(ns) sem vínculo com o estoque: toque em <b>Vincular</b> no item (pode ser antes ou depois de conferir).</div>` : ''}
@@ -1518,6 +1576,205 @@ async function enviarRecebimento() {
     toast('Sem internet: a conferência será enviada quando conectar.');
   }
   ir('receber'); carregarRecebimentos();
+}
+
+// ---------------------------------------------------------------- [ORÇAMENTOS] pedidos aos fornecedores (gestor)
+const ST_ORC = {rascunho: ['p-cinza', 'Rascunho'], enviado: ['p-laranja', 'Esperando a nota'], recebido: ['p-verde', 'Nota chegou'],
+                cancelado: ['p-cinza', 'Cancelado']};
+function cartaoOrcamento(o) {
+  const st = o.status === 'recebido' && !o.tudo_certo ? ['p-laranja', 'Nota chegou'] : (ST_ORC[o.status] || ['p-cinza', o.status]);
+  return `<button class="cartao" style="text-align:left;display:flex;flex-direction:column;gap:6px;width:100%" data-acao="orc-abrir" data-id="${o.id}">
+    <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;width:100%">
+      <div class="nome">${esc(o.fornecedor)}</div><span class="pilula ${st[0]}">${st[1]}</span></div>
+    <div class="pequeno suave">nº ${o.id} · ${o.qtd_itens} ite${o.qtd_itens === 1 ? 'm' : 'ns'}${o.valor ? ' · ≈ ' + fmtReais(o.valor) : ''} · ${o.enviado_em ? 'enviado ' + dataBR(o.enviado_em) : 'criado ' + dataBR(o.criado_em)}</div>
+    ${o.nota ? `<div class="mini" style="font-weight:700;color:${o.tudo_certo ? 'var(--verde-esc)' : 'var(--laranja)'}">NF ${esc(o.nota.numero || '?')}: ${esc(o.resumo || '')}</div>` : ''}</button>`;
+}
+TELAS.orcamentos = () => {
+  const l = E.orcamentos;
+  const secao = (titulo, sts, vazio) => {
+    const itens = (l || []).filter(o => sts.includes(o.status));
+    return itens.length ? `<div class="lista-cartoes"><div class="rotulo">${titulo} (${itens.length})</div>${itens.map(cartaoOrcamento).join('')}</div>` : (vazio || '');
+  };
+  const corpo = !l ? `<div class="vazio">${online ? 'Carregando…' : 'Sem internet: conecte para ver os orçamentos.'}</div>`
+    : (l.length ? secao('Rascunhos (ainda não enviados)', ['rascunho']) + secao('Enviados · esperando a nota', ['enviado'])
+                  + secao('A nota chegou', ['recebido']) + secao('Cancelados', ['cancelado'])
+                : '<div class="vazio">Nenhum orçamento ainda.<br><span class="mini">Toque em <b>Novo orçamento</b>, ou abra uma lista aprovada e toque em <b>Gerar orçamentos</b>.</span></div>');
+  return `${faixaRede()}${topo('Orçamentos', 'Pedidos aos fornecedores')}
+    <div class="corpo">
+      <button class="btn" data-acao="orc-novo">+ Novo orçamento</button>
+      <div class="info pequeno">Quando a nota do fornecedor chegar, o sistema liga a nota ao orçamento e mostra o que veio diferente: quantidade e preço.</div>
+      ${corpo}</div>${navbar('orcamentos')}`;
+};
+async function carregarOrcamentos() {
+  try { E.orcamentos = await api('GET', '/api/compras/orcamentos'); salvar(); if (T.nome === 'orcamentos') desenhar(); }
+  catch (e) { if (!e.extra.offline && T.nome === 'orcamentos') toast(e.message); }
+}
+async function abrirOrcamento(id) {
+  fecharModal();
+  ir('orcamento', {id: +id});
+  try { T.p.o = await api('GET', `/api/compras/orcamentos/${id}`); }
+  catch (e) { toast(e.extra.offline ? 'Sem internet: conecte para abrir o orçamento.' : e.message); return acoes.nav({tela: 'orcamentos'}); }
+  if (T.nome === 'orcamento' && T.p.id === +id) desenhar();
+}
+function qtdOrcTexto(i) {
+  return i.fator > 1 ? `${fmtQtd(Math.round(i.qtd / i.fator * 1000) / 1000)} emb. (${fmtQtd(i.qtd)} ${esc(i.unidade)})` : `${fmtQtd(i.qtd)} ${esc(i.unidade)}`;
+}
+function linhaItemOrc(i, editavel) {
+  const porEmb = i.fator > 1;
+  const preco = i.preco == null ? 'sem preço' : fmtReais(porEmb ? i.preco * i.fator : i.preco) + (porEmb ? ' / emb.' : ' / ' + esc(i.unidade));
+  return `<div class="lin" style="align-items:flex-start">
+    <div class="grow"><div style="font-weight:700;font-size:15px">${esc(i.nome)}</div>
+      ${i.descricao_fornecedor ? `<div class="mini suave">${esc(i.descricao_fornecedor)}${i.codigo_fornecedor ? ' · cód. ' + esc(i.codigo_fornecedor) : ''}</div>` : '<div class="mini suave">sem vínculo com este fornecedor (vai pelo nome do estoque)</div>'}
+      <div class="mini" style="margin-top:4px">${editavel ? `<button class="link-btn" data-acao="orc-preco" data-pid="${i.produto_id}">${preco} ✎</button>` : preco}${i.preco != null ? ' · ' + fmtReais(i.preco * i.qtd) : ''}</div>
+      ${porEmb ? `<div class="mini suave">1 emb. = ${fmtQtd(i.fator)} ${esc(i.unidade)}</div>` : ''}</div>
+    ${editavel ? `<div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
+      <div class="stp mini"><button data-acao="orc-menos" data-pid="${i.produto_id}" aria-label="Menos ${esc(i.nome)}">−</button>
+        <button class="stp-v" data-acao="orc-digitar" data-pid="${i.produto_id}">${fmtQtd(porEmb ? Math.round(i.qtd / i.fator * 1000) / 1000 : i.qtd)}</button>
+        <button data-acao="orc-mais" data-pid="${i.produto_id}" aria-label="Mais ${esc(i.nome)}">+</button></div>
+      <div class="mini suave">${porEmb ? 'emb.' : esc(i.unidade)}</div>
+      <button class="icone-btn" style="width:36px;height:36px" data-acao="orc-remover" data-pid="${i.produto_id}" aria-label="Tirar ${esc(i.nome)}">${ICONES.lixo}</button></div>`
+      : `<div class="pequeno" style="font-weight:700;text-align:right">${qtdOrcTexto(i)}</div>`}</div>`;
+}
+const SIT_ORC = {ok: ['var(--verde-esc)', '✓ veio certo'], faltou: ['var(--laranja)', 'veio a menos'], nao_veio: ['#b3261e', 'não veio'],
+                 a_mais: ['var(--laranja)', 'veio a mais']};
+function comparacaoOrc(o) {
+  const c = o.comparacao;
+  if (!c) return o.nota && o.nota.erro ? `<div class="aviso">${esc(o.nota.erro)}</div>` : '';
+  const r = c.resumo;
+  const linhas = c.linhas.map(l => {
+    const s = SIT_ORC[l.situacao] || ['var(--suave)', l.situacao];
+    const precoTxt = l.preco_nota == null ? (l.bonificacao ? 'bonificação' : '') :
+      `${fmtReais(l.preco_pedido == null ? null : l.preco_pedido * l.fator)} → <b style="color:${l.preco === 'mais_caro' ? '#b3261e' : l.preco === 'mais_barato' ? 'var(--verde-esc)' : 'inherit'}">${fmtReais(l.preco_nota * l.fator)}</b>${l.pct != null && l.preco !== 'igual' ? ` (${l.pct > 0 ? '+' : ''}${fmtQtd(l.pct)}%)` : l.preco === 'igual' ? ' (igual)' : ''}${l.fator > 1 ? ' / emb.' : ''}`;
+    return `<div class="lin" style="border-left:4px solid ${s[0]}"><div class="grow">
+      <div style="font-weight:700">${esc(l.nome)}</div>
+      <div class="mini">pedido ${fmtQtd(l.pedido)} · nota ${fmtQtd(l.nota)}${l.chegou != null ? ' · chegou ' + fmtQtd(l.chegou) : ''} ${esc(l.unidade)} · <b style="color:${s[0]}">${s[1]}</b></div>
+      ${precoTxt ? `<div class="mini">${precoTxt}</div>` : ''}</div></div>`;
+  }).join('');
+  const extras = c.nao_pedidos.map(x => `<div class="lin" style="border-left:4px solid var(--laranja)"><div class="grow"><div style="font-weight:700">${esc(x.nome)}</div>
+      <div class="mini">veio ${fmtQtd(x.nota)} ${esc(x.unidade)} sem pedir · ${fmtReais(x.valor)}</div></div></div>`).join('');
+  const semV = c.sem_vinculo.map(x => `<div class="lin"><div class="grow"><div style="font-weight:700">${esc(x.descricao)}</div>
+      <div class="mini suave">${fmtQtd(x.qtd)} na nota · ${fmtReais(x.valor)} · sem vínculo: vincule na conferência (aba Receber)</div></div></div>`).join('');
+  return `<div class="${r.tudo_certo ? 'info' : 'aviso'}"><b>${r.tudo_certo ? 'Veio tudo como pedido ✅' : 'Diferenças entre o pedido e a nota'}</b>
+      ${r.diferenca_valor ? `<div class="mini">Preço: ${r.diferenca_valor > 0 ? 'pagando ' + fmtReais(r.diferenca_valor) + ' a mais' : 'economia de ' + fmtReais(-r.diferenca_valor)} que o combinado.</div>` : ''}
+      <div class="mini suave">Preço da nota com impostos (ST, IPI, frete), por embalagem do fornecedor.</div></div>
+    <div class="linhas">${linhas}</div>
+    ${extras ? `<div class="rotulo">Veio sem pedir</div><div class="linhas">${extras}</div>` : ''}
+    ${semV ? `<div class="rotulo">Na nota, sem vínculo com o estoque</div><div class="linhas">${semV}</div>` : ''}`;
+}
+TELAS.orcamento = p => {
+  const o = p.o;
+  if (!o) return `${topo('Orçamento', '', 'orc-voltar')}<div class="corpo"><div class="vazio">Carregando…</div></div>`;
+  const editavel = ['rascunho', 'enviado'].includes(o.status);
+  const st = ST_ORC[o.status] || ['p-cinza', o.status];
+  const total = o.itens.reduce((s, i) => s + (i.preco != null ? i.preco * i.qtd : 0), 0);
+  let cabNota = '';
+  if (o.status === 'enviado') cabNota = `<div class="cartao"><div class="titulo-sec">Esperando a nota do fornecedor</div>
+      <div class="mini suave">Enviado em ${dataBR(o.enviado_em)}. Quando o XML da nota chegar, o sistema liga sozinho a nota a este orçamento.</div>
+      <button class="btn claro medio" style="margin-top:10px" data-acao="orc-escolher-nota">Escolher a nota à mão</button></div>`;
+  if (o.status === 'recebido' && o.nota) cabNota = `<div class="cartao" style="display:flex;justify-content:space-between;gap:10px;align-items:center">
+      <div><div class="titulo-sec">NF ${esc(o.nota.numero || '?')}${o.nota.emissao ? ' · ' + dataBR(o.nota.emissao) : ''}</div>
+        <div class="mini suave">${o.nota.valor != null ? fmtReais(o.nota.valor) + ' · ' : ''}ligada ${o.vinculado_por === 'automático' ? 'automaticamente' : 'por ' + esc(o.vinculado_por || '?')}${o.nota.conferida ? ' · conferida no Receber' : ''}</div></div>
+      <button class="link-btn" data-acao="orc-desligar">Não é esta nota</button></div>`;
+  return `${faixaRede()}${topo(o.fornecedor, `Orçamento nº ${o.id}`, 'orc-voltar', `<span class="pilula ${st[0]}">${st[1]}</span>`)}
+    <div class="corpo">
+      ${cabNota}
+      ${o.status === 'recebido' ? comparacaoOrc(o) : ''}
+      ${o.status !== 'recebido' ? `<div class="lista-cartoes"><div class="rotulo">Itens (${o.itens.length})${p.salvando ? ' · salvando…' : ''}</div>
+        <div class="linhas">${o.itens.map(i => linhaItemOrc(i, editavel)).join('') || '<div class="vazio" style="padding:14px">Nenhum produto ainda.</div>'}</div>
+        ${editavel ? '<button class="btn claro medio" data-acao="orc-add">+ Adicionar produto</button>' : ''}</div>
+      <div class="cartao" style="display:flex;justify-content:space-between;align-items:center"><div class="mini suave" style="font-weight:600">Total estimado</div><div style="font-size:20px;font-weight:800">≈ ${fmtReais(total)}</div></div>
+      ${editavel ? `<div class="campo"><label for="orc-obs">Observação para o fornecedor</label>
+        <input id="orc-obs" maxlength="400" value="${esc(o.observacao || '')}" placeholder="Ex.: entregar até sexta" autocomplete="off"></div>` : (o.observacao ? `<div class="mini suave">Obs.: ${esc(o.observacao)}</div>` : '')}` : ''}
+      ${editavel ? '<button class="btn claro medio" data-acao="orc-cancelar">Cancelar orçamento</button>' : ''}
+      ${o.status === 'cancelado' ? '<button class="btn claro medio" data-acao="orc-reabrir">Reabrir (voltar a rascunho)</button>' : ''}
+    </div>
+    ${editavel ? `<div class="rodape">
+      <label class="mini" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="orc-precos" ${p.comPrecos ? 'checked' : ''}> Mandar os preços no texto</label>
+      <button class="btn" data-acao="orc-compartilhar" ${o.itens.length ? '' : 'disabled'}>${ICONES.enviar} ${o.status === 'enviado' ? 'Compartilhar de novo' : 'Compartilhar com o fornecedor'}</button></div>` : ''}`;
+};
+TELAS_DEPOIS.orcamento = p => {
+  const obs = document.getElementById('orc-obs');
+  if (obs) obs.addEventListener('change', () => { p.o.observacao = obs.value; salvarOrcamento(); });
+  const pr = document.getElementById('orc-precos');
+  if (pr) pr.addEventListener('change', () => { p.comPrecos = pr.checked; });
+};
+let esperaOrc = null;
+function salvarOrcamento(imediato) {
+  const p = T.p;
+  if (!p.o) return;
+  clearTimeout(esperaOrc);
+  const id = p.o.id;
+  const enviar = async () => {
+    const o = T.nome === 'orcamento' && T.p.id === id ? T.p.o : null;
+    if (!o) return;
+    try {
+      const novo = await api('PUT', `/api/compras/orcamentos/${id}`, {itens: o.itens.map(i => ({produto_id: i.produto_id, qtd: i.qtd, preco: i.preco})), observacao: o.observacao});
+      if (T.nome === 'orcamento' && T.p.id === id) { T.p.o = novo; T.p.salvando = false; desenhar(); }
+    } catch (e) { toast(e.extra.offline ? 'Sem internet: a mudança NÃO foi salva.' : e.message); if (T.p.id === id) { T.p.salvando = false; abrirOrcamento(id); } }
+  };
+  p.salvando = true;
+  if (imediato) return enviar();
+  esperaOrc = setTimeout(enviar, 700);
+}
+function itemOrc(pid) { return T.p.o.itens.find(i => i.produto_id === +pid); }
+function mudarQtdOrc(pid, delta) {
+  const i = itemOrc(pid), passo = i.fator > 1 ? i.fator : 1;
+  const novo = Math.round((i.qtd + delta * passo) * 1000) / 1000;
+  if (novo <= 0) return toast('Para tirar o item, toque na lixeira.');
+  i.qtd = novo; salvarOrcamento(); desenhar();
+}
+async function modalFornecedorOrc() {
+  let forns = [];
+  try { forns = await api('GET', '/api/compras/orcamentos/fornecedores'); }
+  catch (e) { return toast(e.extra.offline ? 'Sem internet: conecte para criar o orçamento.' : e.message); }
+  T.p.forns = forns;
+  abrirModal(`<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px"><div class="titulo-sec">Novo orçamento: qual fornecedor?</div>
+      <button class="icone-btn" data-acao="fechar-modal" aria-label="Fechar">${ICONES.fechar}</button></div>
+    <div class="campo"><input id="busca-forn" placeholder="Procurar fornecedor" autocomplete="off" aria-label="Procurar fornecedor"></div>
+    <div id="lista-forn" class="linhas" style="max-height:380px;overflow:auto">${listaFornOrc('')}</div>`);
+  document.getElementById('busca-forn').addEventListener('input', e => { document.getElementById('lista-forn').innerHTML = listaFornOrc(e.target.value); });
+}
+function listaFornOrc(termo) {
+  const t = normalizarTexto(termo || '');
+  const achados = (T.p.forns || []).filter(f => !t || normalizarTexto(f.nome).includes(t)).slice(0, 80);
+  return achados.map(f => `<button class="lin" style="width:100%;border-left:0;border-right:0;border-bottom:0;background:#fff;text-align:left" data-acao="orc-criar" data-id="${f.id}">
+      <div class="grow"><div style="font-weight:700">${esc(f.nome)}</div><div class="mini suave">${f.notas ? f.notas + ' nota(s) de compra' : 'sem compras com nota'}</div></div></button>`).join('')
+    || '<div class="vazio" style="padding:14px">Nenhum fornecedor com esse nome.</div>';
+}
+async function compartilharOrcamento() {
+  const o = T.p.o;
+  clearTimeout(esperaOrc);
+  if (T.p.salvando) await salvarOrcamento(true);
+  let texto;
+  try { texto = (await api('GET', `/api/compras/orcamentos/${o.id}/texto${T.p.comPrecos ? '?precos=1' : ''}`)).texto; }
+  catch (e) { return toast(e.extra.offline ? 'Sem internet: conecte para enviar.' : e.message); }
+  try {
+    if (navigator.share) await navigator.share({text: texto});
+    else { await navigator.clipboard.writeText(texto); toast('Texto copiado: cole no WhatsApp ou no e-mail do fornecedor.'); }
+  } catch (e) {
+    if (e && e.name === 'AbortError') return;
+    abrirModal(`<div class="titulo-sec">Copie o texto e mande ao fornecedor</div><textarea style="width:100%;min-height:220px" readonly>${esc(texto)}</textarea>
+      <button class="btn claro medio" data-acao="fechar-modal">Fechar</button>`);
+  }
+  if (o.status === 'rascunho' && confirm('O orçamento foi enviado ao fornecedor? (fica "esperando a nota")')) {
+    try { T.p.o = await api('POST', `/api/compras/orcamentos/${o.id}/enviado`); toast('Orçamento enviado: esperando a nota.'); desenhar(); }
+    catch (e) { toast(e.message); }
+  }
+}
+async function modalNotaOrc() {
+  let notas = [];
+  try { notas = await api('GET', `/api/compras/orcamentos/${T.p.o.id}/notas`); }
+  catch (e) { return toast(e.extra.offline ? 'Sem internet.' : e.message); }
+  abrirModal(`<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px"><div><div class="titulo-sec">Qual nota é deste orçamento?</div>
+      <div class="mini suave">Notas de ${esc(T.p.o.fornecedor)} dos últimos 60 dias.</div></div>
+      <button class="icone-btn" data-acao="fechar-modal" aria-label="Fechar">${ICONES.fechar}</button></div>
+    <div class="linhas" style="max-height:380px;overflow:auto">${notas.map(n => `<button class="lin" style="width:100%;border-left:0;border-right:0;border-bottom:0;background:#fff;text-align:left" data-acao="orc-ligar" data-chave="${esc(n.chave)}">
+      <div class="grow"><div style="font-weight:700">NF ${esc(n.numero)} · ${dataBR(n.emissao)}</div><div class="mini suave">${n.qtd_itens} itens · ${fmtReais(n.valor)}</div></div></button>`).join('')
+      || '<div class="vazio" style="padding:14px">Nenhuma nota deste fornecedor ainda. Ela aparece aqui quando o XML chegar.</div>'}</div>`);
+}
+async function acaoOrc(metodo, url, corpo, msg) {
+  try { T.p.o = await api(metodo, url, corpo); fecharModal(); if (msg) toast(msg); desenhar(); }
+  catch (e) { toast(e.extra.offline ? 'Sem internet.' : e.message); }
 }
 
 // ---------------------------------------------------------------- [PREÇOS] histórico de preço de um produto
@@ -2103,7 +2360,7 @@ const acoes = {
     const tela = d.tela;
     if (tela === 'inicio') { ir('inicio'); carregarInicio(); }
     else if (tela === 'receber') { ir('receber'); carregarRecebimentos(); carregarCodigos(); }
-    else if (tela === 'listas') { ir('listas'); carregarInicio().then(() => { if (T.nome === 'listas') desenhar(); }); }
+    else if (tela === 'listas') { ir('listas', {filtro: d.filtro || 'abertas'}); carregarInicio().then(() => { if (T.nome === 'listas') desenhar(); }); }
     else if (tela === 'gestao') {
       if (!E.usuario.gestor) return acoes.nav({tela: 'inicio'});
       ir('gestao', {secao: d.secao || 'resumo'});
@@ -2112,8 +2369,14 @@ const acoes = {
       if (d.secao === 'consumo' && E.rotinas[0]) carregarConsumo(E.rotinas[0].id);
     }
     else if (tela === 'rotinas') { ir('rotinas', {}); }
+    else if (tela === 'orcamentos') {
+      if (!E.usuario.gestor) return acoes.nav({tela: 'inicio'});
+      ir('orcamentos'); carregarOrcamentos();
+    }
   },
   'nav-inicio': () => acoes.nav({tela: 'inicio'}),
+  'listas-filtro': d => { T.p.filtro = d.f; desenhar(); },
+  'orc-novo-inicio': () => { ir('orcamentos'); carregarOrcamentos(); modalFornecedorOrc(); },
   'nav-rotinas': () => { ir('rotinas', {}); api('GET', '/api/compras/rotinas').then(r => { E.rotinas = r; salvar(); if (T.nome === 'rotinas') desenhar(); }).catch(() => {}); },
   'sair': async () => {
     if (E.ida && !confirm('Há uma contagem em andamento neste celular. Sair mesmo assim? (ela fica salva)')) return;
@@ -2297,6 +2560,68 @@ const acoes = {
   'receb-ligar': d => ligarCodigoAoItem(+d.n, !!d.so),
   'receb-finalizar': () => finalizarRecebimento(),
   'receb-vincular': d => modalVincularReceb(+d.n),
+  // [ORÇAMENTOS]
+  'orc-abrir': d => abrirOrcamento(d.id),
+  'orc-voltar': () => { clearTimeout(esperaOrc); if (T.p.salvando) salvarOrcamento(true); acoes.nav({tela: 'orcamentos'}); },
+  'orc-novo': () => modalFornecedorOrc(),
+  'orc-criar': async d => {
+    try { const o = await api('POST', '/api/compras/orcamentos', {fornecedor_id: +d.id}); fecharModal(); ir('orcamento', {id: o.id, o}); }
+    catch (e) { toast(e.extra.offline ? 'Sem internet.' : e.message); }
+  },
+  'orc-mais': d => mudarQtdOrc(d.pid, 1),
+  'orc-menos': d => mudarQtdOrc(d.pid, -1),
+  'orc-digitar': d => {
+    const i = itemOrc(d.pid), emb = i.fator > 1;
+    const v = num(prompt(`Quantas ${emb ? 'embalagens (de ' + fmtQtd(i.fator) + ' ' + i.unidade + ')' : i.unidade} de "${i.nome}"?`, fmtQtd(emb ? i.qtd / i.fator : i.qtd)) || '');
+    if (v == null) return;
+    if (!(v > 0)) return toast('Quantidade precisa ser maior que zero.');
+    i.qtd = Math.round(v * (emb ? i.fator : 1) * 1000) / 1000; salvarOrcamento(); desenhar();
+  },
+  'orc-preco': d => {
+    const i = itemOrc(d.pid), emb = i.fator > 1;
+    const atual = i.preco == null ? '' : (emb ? i.preco * i.fator : i.preco).toFixed(2).replace('.', ',');
+    const r = prompt(`Preço combinado ${emb ? 'por embalagem (' + fmtQtd(i.fator) + ' ' + i.unidade + ')' : 'por ' + i.unidade} de "${i.nome}" (deixe vazio = sem preço):`, atual);
+    if (r == null) return;
+    if (!r.trim()) i.preco = null;
+    else { const v = num(r.replace(/\./g, '').replace(',', '.')); if (v == null || v < 0) return toast('Preço inválido.'); i.preco = emb ? v / i.fator : v; }
+    salvarOrcamento(); desenhar();
+  },
+  'orc-remover': d => {
+    const i = itemOrc(d.pid);
+    if (!confirm(`Tirar "${i.nome}" do orçamento?`)) return;
+    T.p.o.itens = T.p.o.itens.filter(x => x !== i); salvarOrcamento(); desenhar();
+  },
+  'orc-add': () => {
+    abrirModal(`<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px"><div class="titulo-sec">Adicionar produto</div>
+        <button class="icone-btn" data-acao="fechar-modal" aria-label="Fechar">${ICONES.fechar}</button></div>
+      <div class="campo"><input id="busca-prod" placeholder="Digite parte do nome" autocomplete="off" aria-label="Procurar produto"></div>
+      <div id="busca-res" class="linhas" style="max-height:340px;overflow:auto"><div class="vazio" style="padding:14px">Digite para buscar.</div></div>`);
+    ligarBuscaProduto('orc-add-escolher');
+  },
+  'orc-add-escolher': async d => {
+    clearTimeout(esperaOrc);
+    if (T.p.salvando) await salvarOrcamento(true);
+    acaoOrc('POST', `/api/compras/orcamentos/${T.p.o.id}/itens`, {produto_id: +d.pid}, d.nome + ' adicionado.');
+  },
+  'orc-compartilhar': () => compartilharOrcamento(),
+  'orc-cancelar': () => { if (confirm('Cancelar este orçamento?')) acaoOrc('POST', `/api/compras/orcamentos/${T.p.o.id}/cancelar`, null, 'Orçamento cancelado.'); },
+  'orc-reabrir': () => acaoOrc('POST', `/api/compras/orcamentos/${T.p.o.id}/reabrir`, null, 'Orçamento reaberto.'),
+  'orc-escolher-nota': () => modalNotaOrc(),
+  'orc-ligar': d => acaoOrc('POST', `/api/compras/orcamentos/${T.p.o.id}/nota`, {chave: d.chave}, 'Nota ligada ao orçamento.'),
+  'orc-desligar': () => { if (confirm('Desligar esta nota do orçamento? Ela não será ligada de novo sozinha.')) acaoOrc('POST', `/api/compras/orcamentos/${T.p.o.id}/nota`, {chave: ''}, 'Nota desligada.'); },
+  'lista-orcamentos': async (d, el) => {
+    if (!confirm('Gerar um orçamento para cada fornecedor sugerido nesta lista? Você revisa cada um antes de enviar.')) return;
+    el.disabled = true;
+    try {
+      const r = await api('POST', `/api/compras/listas/${encodeURIComponent(d.codigo)}/orcamentos`);
+      abrirModal(`<div class="titulo-sec">${r.criados.length} orçamento(s) criado(s)</div>
+        <div class="linhas">${r.criados.map(c => `<button class="lin" style="width:100%;border-left:0;border-right:0;border-bottom:0;background:#fff;text-align:left" data-acao="orc-abrir" data-id="${c.id}">
+          <div class="grow"><div style="font-weight:700">${esc(c.fornecedor)}</div><div class="mini suave">nº ${c.id} · ${c.itens} ite${c.itens === 1 ? 'm' : 'ns'} · toque para revisar e enviar</div></div></button>`).join('')}</div>
+        ${r.sem_fornecedor.length ? `<div class="aviso mini"><b>Sem fornecedor sugerido (fora dos orçamentos):</b> ${r.sem_fornecedor.map(esc).join(', ')}</div>` : ''}
+        <button class="btn claro medio" data-acao="fechar-modal">Fechar</button>`);
+    } catch (e) { toast(e.extra.offline ? 'Sem internet.' : e.message); }
+    el.disabled = false;
+  },
   'receb-reabrir': async (d, el) => {
     const n = E.notasReceb[T.p.chave];
     if (!confirm(`Reabrir a conferência da NF ${n.numero}? Ela volta para "Para conferir" com as quantidades já contadas, para corrigir e finalizar de novo.`)) return;

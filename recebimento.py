@@ -382,13 +382,19 @@ def obter_recebimento(chave):
                       'codigos': list(codigos.values()), 'conferido': _num(conferidos[it['n']]) if it['n'] in conferidos else None})
     _nomes_dos_produtos(itens)
     lancada = n['chave'] in _chaves_lancadas([n])
+    orcamento = None
+    try:                                     # [ORÇAMENTOS] pedido ligado a esta nota (o que veio diferente)
+        import orcamentos
+        orcamento = orcamentos.orcamento_da_nota(n['chave'])
+    except ImportError:
+        pass
     fechada = bool(cab) and cab[0] in (ST_CONFERIDA, ST_DIVERGENCIA)
     # item que não chegou (conferido 0) não entra no estoque: não precisa de vínculo para lançar
     falta = [i for i in itens if i['tipo'] != 'ignorar' and not i['produto'] and not (fechada and not i['conferido'])]
     return {'chave': n['chave'], 'numero': n['numero'], 'serie': n['serie'], 'cnpj': n['cnpj'], 'razao': n.get('razao') or n['fornecedor'],
             'fornecedor': nome_fornecedor(n['cnpj'], n.get('razao') or n['fornecedor'], n.get('fantasia_xml', '')),
             'emissao': n['emissao'], 'valor': _num(n['valor'], 2), 'itens': itens,
-            'lancada': lancada, 'falta_vincular': len(falta),
+            'lancada': lancada, 'falta_vincular': len(falta), 'orcamento': orcamento,
             'status': cab[0] if cab else ST_AGUARDANDO, 'conferido_por': cab[1] if cab else None,
             'conferido_em': _iso(_como_datahora(cab[2])) if cab else None, 'observacao': cab[3] if cab else None}
 

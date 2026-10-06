@@ -730,6 +730,14 @@ def buscar_xml_sefaz():
         linhas += [f"• {esc(n['emitente'] or 'Fornecedor')} · {nd._reais(n['valor'])}" for n in r['novas'][:25]]
         linhas.append("Abra o Gestão de Estoque → aba 3 → <b>Notas baixadas da SEFAZ</b> para dar entrada.")
         alertas_estoque.enviar("\n".join(linhas))
+    try:                                       # [ORÇAMENTOS] nota chegou para um orçamento enviado: avisa o que veio diferente
+        import orcamentos
+        for _, texto in orcamentos.avisos_pendentes():
+            alertas_estoque.enviar(texto)
+    except ImportError:
+        pass
+    except Exception as e:
+        logger.error(f"Orçamentos: aviso das notas que chegaram falhou: {e}", exc_info=True)
     if not ja_rodou_hoje('aviso_certificado'):
         marcar_rodou_hoje('aviso_certificado')
         try:
