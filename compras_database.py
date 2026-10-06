@@ -123,6 +123,7 @@ def _ler_ids(texto):
 
 SEM_LOCAL = ''
 MAX_LOCAIS = 10
+_tam_secao = 80          # [VÁRIOS LOCAIS] vira 400 quando o campo da rotina foi aumentado (garantir_tabelas)
 
 
 def locais_do_texto(texto):
@@ -329,9 +330,11 @@ def garantir_tabelas():
             )
         """)
         conn.commit()
+        global _tam_secao
         try:
             cur.execute("IF COL_LENGTH('CompraRotinaItens', 'Secao') < 800 ALTER TABLE CompraRotinaItens ALTER COLUMN Secao NVARCHAR(400) NULL")
             conn.commit()
+            _tam_secao = 400
         except Exception as e:
             conn.rollback()
             logger.warning(f"App de compras: não deu para aumentar o campo de locais da rotina: {e}")
@@ -569,7 +572,13 @@ def obter_rotina(rotina_id):
         """, (int(rotina_id),))
         itens = []
         for i in cur.fetchall():
-            locais = locais_do_texto(i[2])
+            # [VÁRIOS LOCAIS] só na contagem geral; na rotina de COMPRA o texto é o corredor inteiro
+            # (ex.: "Corredor 3, Secos" é UM lugar só)
+            if r[7]:
+                locais = locais_do_texto(i[2])
+            else:
+                corredor = re.sub(r'\s*\|\s*', ', ', str(i[2] or '')).strip()
+                locais = [corredor] if corredor else []
             itens.append({'produto_id': i[0], 'ordem': i[1], 'secao': locais[0] if locais else '', 'locais': locais,
                           'nome': i[3] or f'Produto {i[0]} (apagado do estoque)', 'unidade': (i[4] or 'UN').strip() or 'UN',
                           'categoria': i[5] or '', 'existe': i[3] is not None})
@@ -603,6 +612,8 @@ def salvar_rotina(dados):
         raise ErroCompras(f"Dias a cobrir: de 1 a {DIAS_COBERTURA_MAX}. Prazo: de 0 a 60.")
     dias = _ler_dias_semana(','.join(str(d) for d in (dados.get('dias_semana') or [])))
     fornecedores = sorted({int(f) for f in (dados.get('fornecedores') or []) if str(f).isdigit()})
+    garantir_tabelas()
+    so_contagem = bool(dados.get('so_contagem'))
     itens, vistos = [], set()
     for it in dados.get('itens') or []:
         try:
@@ -612,8 +623,14 @@ def salvar_rotina(dados):
         if pid in vistos:
             continue
         vistos.add(pid)
-        locais = locais_do_texto(it.get('locais') if it.get('locais') else it.get('secao'))
-        itens.append((pid, '|'.join(locais)[:400]))
+        if so_contagem:
+            locais = locais_do_texto(it.get('locais') if it.get('locais') else it.get('secao'))
+            secao = '|'.join(locais)
+            if len(secao) > _tam_secao:
+                raise ErroCompras(f"Locais demais num produto (máximo {_tam_secao} letras somando todos). Encurte os nomes.")
+        else:
+            secao = re.sub(r'\s+', ' ', str(it.get('secao') or '')).strip()[:80]
+        itens.append((pid, secao))
     if not itens:
         raise ErroCompras("Coloque pelo menos um produto na rotina.")
 
@@ -932,6 +949,20 @@ def _breakdown(cur, contagem_id):
     return resultado
 
 
+def _juntar_locais(*mapas):
+    """
+    [VÁRIOS LOCAIS] Junta {local: valor} na ordem (o último vence). 'Freezer 1' e 'freezer 1 ' são o
+    MESMO local: o SQL Server não diferencia maiúsculas nem espaço no fim, e gravar os dois daria erro.
+    """
+    juntos = {}
+    for m in mapas:
+        for local, v in (m or {}).items():
+            chave = str(local or '').strip().lower()
+            juntos.pop(chave, None)
+            juntos[chave] = (str(local or '').strip(), v)
+    return {nome: v for nome, v in juntos.values()}
+
+
 def _locais_contados_hoje(cur, anteriores):
     """[VÁRIOS LOCAIS] {pid: {local: {'qtd', 'por'}}} das contagens de HOJE desta rotina (para o celular mostrar)."""
     resultado = {}
@@ -1097,7 +1128,7 @@ def registrar_lista(codigo, rotina_id, usuario, dias, contagens, hoje=None, cate
         return lista
 
     rotina = obter_rotina(rotina_id)
-    cats = sorted({categoria_do(c)[:60] for c in categorias if str(c or '').strip()}) if isinstance(categorias, list) else []
+    cats = sorted({categoria_do(str(c)) for c in categorias[:100] if c is not None and str(c).strip()}) if isinstance(categorias, list) else []
     if cats:
         rotina['itens'] = [i for i in rotina['itens'] if categoria_do(i.get('categoria')) in cats]
         if not rotina['itens']:
@@ -1118,6 +1149,7 @@ def registrar_lista(codigo, rotina_id, usuario, dias, contagens, hoje=None, cate
                 ql = _qtd_valida(ql)
                 if ql is not None:
                     locais[str(local or '').strip()[:80]] = ql
+            locais = _juntar_locais(locais)
             if locais:
                 q = sum(locais.values(), Decimal('0'))     # o total é a soma dos locais
                 por_local[pid] = {local: (ql, usuario.get('nome')) for local, ql in locais.items()}
@@ -1172,7 +1204,7 @@ def registrar_lista(codigo, rotina_id, usuario, dias, contagens, hoje=None, cate
                     if pid_ant not in contados and q_ant is not None:
                         herdados[pid_ant] = _dec(q_ant)      # a contagem mais nova vence se repetir
                 for pid_ant, locais in _breakdown(cur, cid_ant).items():
-                    locais_ant.setdefault(pid_ant, {}).update(locais)
+                    locais_ant[pid_ant] = _juntar_locais(locais_ant.get(pid_ant), locais)
                 cur.execute("DELETE FROM CompraContagemLocais WHERE ContagemID = ?", (cid_ant,))
                 cur.execute("DELETE FROM ItensContagemEstoque WHERE ContagemID = ?", (cid_ant,))
                 cur.execute("DELETE FROM ContagensEstoque WHERE ContagemID = ?", (cid_ant,))
@@ -1187,11 +1219,11 @@ def registrar_lista(codigo, rotina_id, usuario, dias, contagens, hoje=None, cate
             detalhe = {}
             for pid, ant in locais_ant.items():
                 if pid in por_local:
-                    detalhe[pid] = dict(ant, **por_local[pid])
+                    detalhe[pid] = _juntar_locais(ant, por_local[pid])
                 elif pid in herdados:
                     detalhe[pid] = dict(ant)
             for pid, locais in por_local.items():
-                detalhe.setdefault(pid, dict(locais))
+                detalhe.setdefault(pid, _juntar_locais(locais))
             for pid, locais in detalhe.items():
                 total = sum((ql for ql, _ in locais.values()), Decimal('0'))
                 if pid in contados:
@@ -1660,6 +1692,9 @@ def registrar_andamento(codigo, rotina_id, usuario, dados, agora=None):
     conn = _conectar()
     try:
         cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM CompraListas WHERE Codigo = ?", (codigo,))
+        if cur.fetchone()[0]:
+            return {'ok': True, 'ja_salva': True}   # chegou depois de salvar (internet lenta): ignora
         cur.execute("DELETE FROM CompraContagemAndamento WHERE Codigo = ? OR Dia < ?", (codigo, agora.date()))
         cur.execute("""INSERT INTO CompraContagemAndamento (Codigo, RotinaID, Dia, FuncionarioID, Usuario, Dados, Atualizado)
                        VALUES (?, ?, ?, ?, ?, ?, ?)""",

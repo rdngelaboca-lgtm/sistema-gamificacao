@@ -2072,9 +2072,11 @@ def api_compras_orcamento_texto(usuario, orcamento_id):
 def api_compras_orcamento_acao(usuario, orcamento_id, acao):
     funcoes = {'enviado': orcamentos.marcar_enviado, 'cancelar': orcamentos.cancelar, 'reabrir': orcamentos.reabrir} if orcamentos else {}
     if acao in ('fornecedor', 'copiar'):         # trocar o fornecedor / mandar o mesmo pedido a outro fornecedor
+        if _orcamentos_disponivel():
+            return _orcamentos_disponivel()
         dados = ler_json() or {}
         funcao = orcamentos.trocar_fornecedor if acao == 'fornecedor' else orcamentos.copiar_para
-        return _orcamentos_disponivel() or _resposta_compras(funcao, orcamento_id, dados.get('fornecedor_id'), usuario)
+        return _resposta_compras(funcao, orcamento_id, dados.get('fornecedor_id'), usuario)
     if acao == 'nota':
         dados = ler_json() or {}
         return _orcamentos_disponivel() or _resposta_compras(orcamentos.ligar_nota, orcamento_id, dados.get('chave'), usuario)

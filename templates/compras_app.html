@@ -254,7 +254,7 @@
 
 // ---------------------------------------------------------------- utilidades
 const CHAVE = 'gb_compras_v1';
-const VERSAO_APP = '27';   // aparece no rodapé do início: confira se o celular pegou a versão nova
+const VERSAO_APP = '28';   // aparece no rodapé do início: confira se o celular pegou a versão nova
 const $app = document.getElementById('app');
 const DIAS_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];            // 1=Dom ... 7=Sáb (padrão do sistema)
 const FRACIONADAS = ['KG', 'G', 'GR', 'L', 'LT', 'ML', 'M'];
@@ -743,6 +743,10 @@ async function comecarIda(rotinaId, dias) {
   }
   if (!prep.itens.length) { T.p.carregando = false; desenhar(); return toast('Esta rotina não tem itens.'); }
   const cats = (T.p.selCats || []).filter(c => prep.itens.some(i => i.categoria === c));
+  if ((T.p.selCats || []).length && !cats.length) {
+    T.p.carregando = false; desenhar();
+    return toast('Os dados desta rotina no celular são antigos (sem as categorias). Conecte à internet para contar só uma categoria.');
+  }
   const daIda = itensDasCategorias(prep.itens, cats);
   if (!daIda.length) { T.p.carregando = false; desenhar(); return toast('Nenhum produto nessas categorias.'); }
   // [CONTAGEM GERAL] com mais de um local: primeiro escolhe quais locais esta pessoa conta
@@ -995,8 +999,11 @@ function revisarContagem() {
     return `<div class="lin" style="padding:9px 10px"><div class="grow"><div style="font-weight:700">${esc(nomeLocal(pl.local))} · ${pl.feitos} de ${pl.total} ${pl.feitos === pl.total ? '✓' : ''}</div>
       ${pend.length ? `<div class="mini suave">Sem número: ${pend.slice(0, 6).map(l => `<button class="link-btn" data-acao="cont-ir-rev" data-k="${l.k}">${esc(l.it.nome)}</button>`).join(', ')}${pend.length > 6 ? ` e mais ${pend.length - 6}` : ''}</div>` : ''}</div></div>`;
   }).join('');
+  // só compara com o esperado (que é do produto INTEIRO) quando todos os locais dele estão nesta contagem e têm número;
+  // contando só o Estoque seco de um produto que também fica no Depósito, o total ainda está incompleto
+  const completo = it => locaisDoItem(it).every(loc => linhas.some(l => l.it === it && l.local === loc && valorLinha(l) != null));
   const conferir = itensIda().map(it => ({it, t: totalProduto(it.produto_id)}))
-    .filter(x => x.t != null && x.it.estoque_estimado != null && x.it.ultima_contagem && x.it.consumo_dia)
+    .filter(x => x.t != null && completo(x.it) && x.it.estoque_estimado != null && x.it.ultima_contagem && x.it.consumo_dia)
     .filter(x => { const d = Math.abs(x.t - x.it.estoque_estimado); return d >= 3 && d / Math.max(x.it.estoque_estimado, 1) >= 0.5; })
     .map(x => { const l = linhas.find(y => y.it.produto_id === x.it.produto_id);
       return `<div class="mini">• <button class="link-btn" data-acao="cont-ir-rev" data-k="${l.k}">${esc(x.it.nome)}</button>: contou ${fmtQtd(x.t)}${contagemCega() ? '' : `, devia ter ≈ ${fmtQtd(Math.round(x.it.estoque_estimado * 10) / 10)}`}</div>`; }).join('');
@@ -1958,6 +1965,9 @@ TELAS.orcamento = p => {
   if (o.status === 'enviado') cabNota = `<div class="cartao"><div class="titulo-sec">Esperando a nota do fornecedor</div>
       <div class="mini suave">Enviado em ${dataBR(o.enviado_em)}. Quando o XML da nota chegar, o sistema liga sozinho a nota a este orçamento.</div>
       <button class="btn claro medio" style="margin-top:10px" data-acao="orc-escolher-nota">Escolher a nota à mão</button></div>`;
+  if (o.status === 'rascunho' && o.itens.length) cabNota = `<div class="cartao" style="display:flex;justify-content:space-between;gap:10px;align-items:center">
+      <div class="mini suave">Já comprou e a nota chegou?</div>
+      <button class="link-btn" data-acao="orc-escolher-nota">Escolher a nota</button></div>`;
   if (o.status === 'recebido' && o.nota) cabNota = `<div class="cartao" style="display:flex;justify-content:space-between;gap:10px;align-items:center">
       <div><div class="titulo-sec">NF ${esc(o.nota.numero || '?')}${o.nota.emissao ? ' · ' + dataBR(o.nota.emissao) : ''}</div>
         <div class="mini suave">${o.nota.valor != null ? fmtReais(o.nota.valor) + ' · ' : ''}ligada ${o.vinculado_por === 'automático' ? 'automaticamente' : 'por ' + esc(o.vinculado_por || '?')}${o.nota.conferida ? ' · conferida no Receber' : ''}</div></div>
@@ -2664,7 +2674,12 @@ async function bipContagem(cod) {
   if (k < 0) {
     const a = achados[0];
     bipe(true);
-    if (!confirm(`${a.nome} não está nesta rotina. Contar mesmo assim? (entra na contagem e na lista)`)) return;
+    const daRotina = E.preparos[E.ida.rotina_id].itens.find(i => i.produto_id === a.produto_id);
+    const onde = daRotina && (E.ida.categorias && !E.ida.categorias.includes(daRotina.categoria || 'Geral')
+      ? `é da categoria ${daRotina.categoria}` : `fica em ${locaisDoItem(daRotina).map(nomeLocal).join(', ')}`);
+    if (!confirm(daRotina
+        ? `${a.nome} ${onde} (fora do que você está contando). Achou aqui? Contar mesmo assim? (soma com o que for contado lá)`
+        : `${a.nome} não está nesta rotina. Contar mesmo assim? (entra na contagem e na lista)`)) return;
     E.ida.extras = E.ida.extras || [];
     E.ida.extras.push({produto_id: a.produto_id, nome: a.nome, unidade: a.unidade, secao: LOCAL_FORA,
                        ordem: 9999, caixas: [], precos: [], ultima_contagem: null, estoque_estimado: null, consumo_dia: 0, estoque_minimo: 0});
