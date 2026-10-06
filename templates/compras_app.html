@@ -254,7 +254,7 @@
 
 // ---------------------------------------------------------------- utilidades
 const CHAVE = 'gb_compras_v1';
-const VERSAO_APP = '29';   // aparece no rodapé do início: confira se o celular pegou a versão nova
+const VERSAO_APP = '30';   // aparece no rodapé do início: confira se o celular pegou a versão nova
 const $app = document.getElementById('app');
 const DIAS_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];            // 1=Dom ... 7=Sáb (padrão do sistema)
 const FRACIONADAS = ['KG', 'G', 'GR', 'L', 'LT', 'ML', 'M'];
@@ -593,18 +593,29 @@ TELAS.inicio = () => {
         <button class="btn claro" style="width:auto;min-height:40px;padding:4px 14px" data-acao="continuar-ida">Continuar</button></div>`;
   } else if (ida) {
     const prep = E.preparos[ida.rotina_id];
-    const total = prep ? linhasIda().length : 0;
-    const feitos = prep ? linhasIda().filter(l => valorLinha(l) != null).length : Object.keys(ida.contagens).length;
+    const linhas = prep ? linhasIda() : null;
+    const feitos = linhas ? linhas.filter(l => valorLinha(l) != null).length : Object.keys(ida.contagens || {}).length;
+    const rot = E.rotinas.find(r => r.id === ida.rotina_id);
     principal = `<div class="destaque"><div><div class="rotulo" style="color:#CDEBE6">Contagem em andamento</div>
-        <div style="font-size:22px;font-weight:800">${esc(prep ? prep.nome : 'Rotina')}</div>
-        <div style="color:#E3F4F1">${feitos} de ${total} itens${ida.secoes && ida.secoes.length ? ' · ' + esc(ida.secoes.join(', ')) : prep && prep.so_contagem ? '' : ' · para ' + ida.dias + ' dias'}${ida.dia && ida.dia !== hojeISO() ? ' · começada em ' + dataBR(ida.dia) : ''}${ida.usuario_id && ida.usuario_id !== u.id ? ' · por ' + esc(ida.usuario_nome || 'outra pessoa') : ''}</div></div>
-        <button class="btn" data-acao="continuar-ida">Continuar contagem ${ICONES.seta}</button></div>`;
+        <div style="font-size:22px;font-weight:800">${esc(prep ? prep.nome : rot ? rot.nome : 'Rotina')}</div>
+        <div style="color:#E3F4F1">${linhas ? `${feitos} de ${linhas.length} itens` : `${feitos} ${feitos === 1 ? 'item contado' : 'itens contados'}`}${ida.secoes && ida.secoes.length ? ' · ' + esc(ida.secoes.join(', ')) : prep && prep.so_contagem ? '' : ' · para ' + ida.dias + ' dias'}${ida.dia && ida.dia !== hojeISO() ? ' · começada em ' + dataBR(ida.dia) : ''}${ida.usuario_id && ida.usuario_id !== u.id ? ' · por ' + esc(ida.usuario_nome || 'outra pessoa') : ''}</div></div>
+        <button class="btn" data-acao="continuar-ida">Continuar contagem ${ICONES.seta}</button>
+        <button class="link-btn" style="color:#E3F4F1;align-self:center" data-acao="ida-descartar">Descartar esta contagem</button></div>`;
   } else if (hoje.length) {
-    const r = hoje[0];
-    principal = `<div class="destaque"><div><div class="rotulo" style="color:#CDEBE6">Hoje · ${esc(new Date().toLocaleDateString('pt-BR', {weekday: 'long', day: '2-digit', month: '2-digit'}))}</div>
-        <div style="font-size:22px;font-weight:800">${esc(r.nome)}</div>
-        <div style="color:#E3F4F1">${r.qtd_itens} itens para contar</div></div>
-        <button class="btn" data-acao="nova-ida" data-id="${r.id}">Começar contagem ${ICONES.seta}</button></div>`;
+    // a rotina de hoje que ainda NÃO foi contada vem primeiro; se todas já foram, mostra a lista feita
+    const r = hoje.find(x => !listaDeHoje(x.id)) || hoje[0];
+    const feita = listaDeHoje(r.id);
+    const dataHoje = esc(new Date().toLocaleDateString('pt-BR', {weekday: 'long', day: '2-digit', month: '2-digit'}));
+    principal = feita
+      ? `<div class="destaque"><div><div class="rotulo" style="color:#CDEBE6">Hoje · ${dataHoje}</div>
+          <div style="font-size:22px;font-weight:800">${esc(r.nome)} ✓</div>
+          <div style="color:#E3F4F1">Já contada hoje${feita.funcionario ? ' por ' + esc(feita.funcionario) : ''} · ${feita.status === 'aguardando' ? 'esperando aprovação' : feita.status === 'finalizada' ? 'compra finalizada' : 'lista aprovada'}</div></div>
+          <button class="btn" data-acao="abrir-lista" data-codigo="${esc(feita.codigo)}">Ver a lista ${ICONES.seta}</button>
+          <button class="link-btn" style="color:#E3F4F1;align-self:center" data-acao="nova-ida" data-id="${r.id}">Contar de novo</button></div>`
+      : `<div class="destaque"><div><div class="rotulo" style="color:#CDEBE6">Hoje · ${dataHoje}</div>
+          <div style="font-size:22px;font-weight:800">${esc(r.nome)}</div>
+          <div style="color:#E3F4F1">${r.qtd_itens} itens para contar</div></div>
+          <button class="btn" data-acao="nova-ida" data-id="${r.id}">Começar contagem ${ICONES.seta}</button></div>`;
   }
   // [ORGANIZAÇÃO] o Início mostra o que tem para fazer agora; as listas ficam na aba Listas
   const contar = st => Object.values(E.listas).filter(l => l.status === st).length;
@@ -620,12 +631,13 @@ TELAS.inicio = () => {
                             extra: orcDiferenca ? `${orcDiferenca} com diferença` : ''});
   const tilesHtml = tiles.map(t => `<button class="tile ${t.n && t.alerta ? 'tile-alerta' : ''}" ${t.acao}>
       <div class="tile-n">${t.n == null ? '…' : t.n}</div><div class="tile-t">${t.titulo}</div>${t.extra ? `<div class="mini" style="color:var(--laranja);font-weight:700">${t.extra}</div>` : ''}</button>`).join('');
-  const deHoje = compra.filter(r => r.hoje && !(ida && ida.rotina_id === r.id) && !(r === hoje[0] && !ida));
+  const destaqueId = !ida && hoje.length ? (hoje.find(x => !listaDeHoje(x.id)) || hoje[0]).id : null;
+  const deHoje = compra.filter(r => r.hoje && !(ida && ida.rotina_id === r.id) && r.id !== destaqueId);
   const outras = compra.filter(r => !r.hoje);
   const cartaoRotina = r => `<button class="cartao item-rotina" data-acao="nova-ida" data-id="${r.id}">
       <div class="quadrado">${ICONES.carrinho}</div>
-      <div class="grow"><div class="nome">${esc(r.nome)}${r.so_contagem ? ' <span class="chip-ap">só contagem</span>' : ''}</div><div class="pequeno suave">${r.qtd_itens} itens · ${esc(textoDias(r.dias_semana))}</div></div>
-      <div class="mini" style="font-weight:800;color:${r.hoje ? 'var(--laranja)' : 'var(--suave)'}">${r.hoje ? 'HOJE' : (r.proxima ? dataBR(r.proxima) : '')}</div></button>`;
+      <div class="grow"><div class="nome">${esc(r.nome)}</div><div class="pequeno suave">${r.qtd_itens} itens · ${esc(textoDias(r.dias_semana))}</div></div>
+      <div class="mini" style="font-weight:800;color:${r.hoje && !listaDeHoje(r.id) ? 'var(--laranja)' : 'var(--suave)'}">${r.hoje ? (listaDeHoje(r.id) ? 'HOJE ✓' : 'HOJE') : (r.proxima ? dataBR(r.proxima) : '')}</div></button>`;
   return `${faixaRede()}
     <div class="topo" style="padding:20px 16px 4px;align-items:flex-start">
       <div class="grow"><div class="sub">Gela Boca · Compras</div><h1 style="font-size:26px">Olá, ${esc(u.nome)}</h1></div>
@@ -649,6 +661,11 @@ TELAS.inicio = () => {
       <div class="mini suave" style="text-align:center"><button class="link-btn" style="color:var(--suave)" data-acao="abrir-leitor">Testar leitor de código de barras</button> · versão ${VERSAO_APP}</div>
     </div>${navbar('inicio')}`;
 };
+// lista de compra feita HOJE para esta rotina (não conta a cancelada)
+function listaDeHoje(rotinaId) {
+  return Object.values(E.listas).filter(l => l.rotina_id === rotinaId && (l.criada_em || '').slice(0, 10) === hojeISO() && l.status !== 'cancelada')
+    .sort((a, b) => (b.criada_em || '').localeCompare(a.criada_em || ''))[0] || null;
+}
 TELAS_DEPOIS.inicio = p => {
   const det = document.querySelector('details[data-acao-toggle="rotinas"]');
   if (det) det.addEventListener('toggle', () => { p.rotinasAbertas = det.open; });
@@ -669,7 +686,12 @@ function cartaoLista(l) {
     ${l.status === 'aprovada' ? `<div class="barra" style="width:100%"><div style="width:${pct}%"></div></div>` : ''}
     <div class="pequeno suave">${esc(l.funcionario || '')} · ${comprar} para comprar${l.status === 'aprovada' ? ` · ${marcados} marcados` : ''}${l.local ? ' · ainda não enviada' : ''}</div></button>`;
 }
+let inicioCarregadoEm = 0;
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && E.usuario && T.nome === 'inicio' && Date.now() - inicioCarregadoEm > 60000) carregarInicio();
+});
 async function carregarInicio() {
+  inicioCarregadoEm = Date.now();
   if (T.nome === 'inicio') {                     // números do "Para fazer agora"
     carregarRecebimentos().then(() => { if (T.nome === 'inicio') desenhar(); });
     if (E.usuario && E.usuario.gestor) carregarOrcamentos().then(() => { if (T.nome === 'inicio') desenhar(); });
@@ -2886,6 +2908,11 @@ const acoes = {
   'nova-ida': d => {
     if (E.ida) { if (!confirm('Já existe uma contagem em andamento. Descartar e começar outra?')) return; descartarIda(); }
     ir('novaIda', {rotina_id: +d.id});
+  },
+  'ida-descartar': () => {
+    const ida = E.ida, feitos = ida ? Object.keys(ida.contagens || {}).length : 0;
+    if (!ida || !confirm(`Descartar esta contagem?${feitos ? ` Os ${feitos} número(s) já digitados serão apagados.` : ''}`)) return;
+    descartarIda(); toast('Contagem descartada.'); desenhar();
   },
   'continuar-ida': async () => {
     const rid = E.ida.rotina_id;
