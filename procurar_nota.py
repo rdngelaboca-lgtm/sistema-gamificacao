@@ -14,6 +14,7 @@ import re
 import sys
 from datetime import date, datetime
 
+import database
 import nfe_distribuicao as nd
 import recebimento
 
@@ -49,6 +50,28 @@ def xmls_baixados(numero, chave=None):
                 except Exception as e:
                     print(f"   (o XML {f[:12]}… não abriu: {e})")
     return achados
+
+
+def notas_no_estoque(numero, chave=None):
+    """[(data, fornecedor, chave_gravada)] das notas lançadas no estoque com esse número (ou essa chave)."""
+    conn = database.get_db_connection()
+    if not conn:
+        return []
+    try:
+        cur = conn.cursor()
+        cur.execute("""SELECT NF.NumeroNF, NF.DataEmissao, F.NomeFantasia, NF.ChaveAcesso FROM NotasFiscaisEntrada NF
+                       LEFT JOIN Fornecedores F ON F.FornecedorID = NF.FornecedorID WHERE NF.NumeroNF LIKE ?""", (f"%{numero}",))
+        achadas = []
+        for num, data, forn, ch in cur.fetchall():
+            ch = so_digitos(ch)
+            if so_digitos(num).lstrip('0') == numero and (not chave or not ch or ch == chave):
+                achadas.append((str(data or '')[:10], forn or '?', ch if len(ch) == 44 else None))
+        return achadas
+    except Exception as e:
+        print(f"   (não deu para olhar o estoque: {e})")
+        return []
+    finally:
+        conn.close()
 
 
 def explicar_no_app(n):
@@ -120,8 +143,29 @@ def main():
                 buscar_na_sefaz(ch)
         return
 
-    # 3) nada ainda
-    print("3) A NOTA AINDA NÃO CHEGOU no servidor (nem o XML, nem o resumo da SEFAZ).")
+    # 3) lançada no computador com um XML de outra pasta (o app não tem o XML)
+    no_estoque = notas_no_estoque(numero, chave)
+    if no_estoque:
+        for data, forn, ch in no_estoque:
+            print(f"3) A NOTA ESTÁ NO ESTOQUE: {forn} · emitida {data_br(data)} (lançada pelo computador)")
+        print("   Mas o XML dela não está na pasta da SEFAZ (foi importada de outro lugar, ex.: e-mail):\n"
+              "   por isso não aparece no app para conferir. Baixando o XML ela aparece em 'Para conferir'\n"
+              "   (a conferência fica registrada; o estoque não muda de novo).")
+        ch = next((c for _, _, c in no_estoque if c), None) or chave
+        if ch:
+            if input("   Baixar o XML da SEFAZ agora? (S/N) [S]: ").strip().upper() in ('', 'S', 'SIM'):
+                buscar_na_sefaz(ch)
+            return
+        chave = so_digitos(input("   A chave não está gravada. Digite a CHAVE DE ACESSO do DANFE (44 números),\n"
+                                 "   ou só ENTER para sair: "))
+        if len(chave) == 44:
+            buscar_na_sefaz(chave)
+        elif chave:
+            print("   A chave tem 44 números. Confira e rode de novo:  python3 procurar_nota.py CHAVE")
+        return
+
+    # 4) nada ainda
+    print("4) A NOTA AINDA NÃO CHEGOU no servidor (nem o XML, nem o resumo da SEFAZ).")
     ultima, proxima = estado.get('ultima_busca'), estado.get('proxima_consulta')
     print(f"   Última busca do robô: {ultima.replace('T', ' ') if ultima else 'nunca'}"
           + (f" · próxima: {proxima.replace('T', ' ')}" if proxima else ""))

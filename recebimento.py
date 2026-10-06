@@ -491,6 +491,30 @@ def _guardar_ncm(n):
         logger.warning(f"Recebimento: NCM não guardado: {e}")
 
 
+def reabrir(chave, usuario):
+    """
+    Gestor: volta uma nota conferida para "aguardando conferência" (ex.: conferiram errado).
+    Só enquanto ela NÃO entrou no estoque: depois disso a conferência fica como está.
+    Também desfaz o "dispensar".
+    """
+    if not usuario.get('gestor'):
+        raise ErroCompras("Só o gestor reabre a conferência.")
+    n = ler_nota(_caminho_da_chave(chave))
+    if n['chave'] in _chaves_lancadas([n]) and _conferencia_gravada(n['chave']):
+        raise ErroCompras("Esta nota já entrou no estoque com a quantidade conferida: não dá para reabrir. "
+                          "Acerte a diferença na próxima contagem.")
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM RecebimentoItens WHERE Chave = ?", (n['chave'],))
+        cur.execute("DELETE FROM RecebimentoNotas WHERE Chave = ?", (n['chave'],))
+        conn.commit()
+    finally:
+        conn.close()
+    logger.info(f"Recebimento: NF {n['numero']} de {n['fornecedor']} reaberta para conferência por {usuario.get('nome')}.")
+    return obter_recebimento(chave)
+
+
 def dispensar(chave, usuario):
     """Gestor: tira a nota da lista sem conferir (ex.: nota antiga, mercadoria já guardada)."""
     n = ler_nota(_caminho_da_chave(chave))

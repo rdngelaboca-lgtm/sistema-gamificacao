@@ -2876,6 +2876,7 @@ class AppGestaoEstoque:
         for caminho_xml in arquivos_xml:
             try:
                 cabecalho_nf, itens_nf = self.ler_xml_nota_fiscal(caminho_xml)
+                cabecalho_nf['_ArquivoXML'] = caminho_xml   # [RECEBIMENTO] cópia para o app conferir
                 cnpj = cabecalho_nf['FornecedorCNPJ']
                 nome_fornecedor = cabecalho_nf['FornecedorNome']
                 num_nf = cabecalho_nf['NumeroNF']
@@ -3099,6 +3100,25 @@ class AppGestaoEstoque:
         else:
             messagebox.showinfo("Processamento Concluído", msg_final, parent=self.root)
 
+    def _guardar_xml_para_conferencia(self, cabecalho):
+        """
+        [RECEBIMENTO] Nota importada de um XML de OUTRA pasta (e-mail, download manual): guarda uma
+        cópia na pasta da SEFAZ ('importadas'). Sem isso a nota não aparecia no app para conferir.
+        """
+        origem, chave = cabecalho.get('_ArquivoXML'), so_digitos(cabecalho.get('ChaveAcesso'))
+        if not origem or len(chave) != 44 or not os.path.isfile(origem):
+            return
+        try:
+            import shutil
+            import nfe_distribuicao as nd
+            if nd._ja_temos_xml(chave):
+                return
+            destino = os.path.join(nd.pasta_xml(), 'importadas')
+            os.makedirs(destino, exist_ok=True)
+            shutil.copyfile(origem, os.path.join(destino, f"{chave}.xml"))
+        except Exception as e:
+            logger.warning(f"Não deu para guardar a cópia do XML da NF {cabecalho.get('NumeroNF')} para o app: {e}")
+
     def _conferencia_da_nota(self, chave):
         """[RECEBIMENTO] Conferência feita no app para esta nota ({'status','por','itens'}) ou None."""
         if not chave or not hasattr(database, 'conferencias_recebimento'):
@@ -3266,6 +3286,7 @@ class AppGestaoEstoque:
                     sucessos += 1
                     if cabecalho.get('NotaID'):
                         notas_salvas.append(cabecalho['NotaID'])
+                    self._guardar_xml_para_conferencia(cabecalho)
                 elif "já foi importada" in (msg_db or ""):
                     # Já está no banco: não adianta manter na tela
                     duplicadas.append(str(cabecalho['NumeroNF']))

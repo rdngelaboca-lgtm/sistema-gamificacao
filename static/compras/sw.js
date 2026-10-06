@@ -2,7 +2,7 @@
 // Guarda uma cópia do app no celular para ele ABRIR mesmo sem internet.
 // Os dados (contagens, listas) não passam por aqui: o próprio app guarda e envia depois.
 // Ao mudar o app (compras_app.html), aumente o número da versão abaixo.
-const VERSAO = 'gb-compras-v20';
+const VERSAO = 'gb-compras-v21';
 const ARQUIVOS = ['/compras/', '/compras/manifest.webmanifest', '/compras/arquivos/icone-192.png', '/compras/arquivos/icone-512.png'];
 
 self.addEventListener('install', evento => {

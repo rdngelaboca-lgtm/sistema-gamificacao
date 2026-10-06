@@ -23,6 +23,7 @@
 #   NFE_PASTA_XML         = 'notas_xml_sefaz'              (opcional)
 #
 # Testar à mão:   python nfe_distribuicao.py          (busca agora e mostra o resumo)
+# Notas puladas:  python nfe_distribuicao.py reler    (relê a fila dos últimos 90 dias, 1 vez)
 # Uma nota só, pela chave de acesso (44 números do DANFE): procurar_nota.py
 # ==============================================================================
 import base64
@@ -601,12 +602,32 @@ def texto_resumo(resumo):
     return "\n".join(linhas)
 
 
+def reler_desde_o_inicio():
+    """
+    [DEPURAÇÃO] Volta a fila da SEFAZ para o começo (últimos 90 dias). Serve para recuperar notas
+    que a 1ª versão do robô PULOU quando a SEFAZ respondia 656 (consultas demais). Notas que já
+    estão na pasta são ignoradas; as que faltam são baixadas (ou recebem a Ciência e chegam depois).
+    Guarda uma cópia do estado antigo em nfe_distribuicao_estado.json.antes_de_reler.
+    """
+    estado = ler_estado()
+    if os.path.exists(ARQUIVO_ESTADO):
+        with open(ARQUIVO_ESTADO, encoding='utf-8') as f, open(ARQUIVO_ESTADO + '.antes_de_reler', 'w', encoding='utf-8') as g:
+            g.write(f.read())
+    estado['ult_nsu'] = 0
+    estado.pop('proxima_consulta', None)
+    _salvar_estado(estado)
+    logger.info("SEFAZ: fila voltou para o começo (reler).")
+
+
 if __name__ == "__main__":
     import sys
     logging.basicConfig(level=logging.INFO)
     try:
         print(f"Certificado vence em {dias_para_vencer_certificado()} dia(s).")
-        r = buscar_notas(forcar='forcar' in sys.argv)
+        if 'reler' in sys.argv:
+            reler_desde_o_inicio()
+            print("Relendo a fila da SEFAZ desde o começo (últimos 90 dias)…")
+        r = buscar_notas(forcar='forcar' in sys.argv or 'reler' in sys.argv)
         print(texto_resumo(r))
         print(f"XMLs na pasta: {pasta_xml()}")
     except ErroNFe as e:

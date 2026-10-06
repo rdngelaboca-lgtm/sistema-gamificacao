@@ -214,7 +214,7 @@
 
 // ---------------------------------------------------------------- utilidades
 const CHAVE = 'gb_compras_v1';
-const VERSAO_APP = '20';   // aparece no rodapé do início: confira se o celular pegou a versão nova
+const VERSAO_APP = '21';   // aparece no rodapé do início: confira se o celular pegou a versão nova
 const $app = document.getElementById('app');
 const DIAS_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];            // 1=Dom ... 7=Sáb (padrão do sistema)
 const FRACIONADAS = ['KG', 'G', 'GR', 'L', 'LT', 'ML', 'M'];
@@ -1344,6 +1344,7 @@ TELAS.conferencia = p => {
       <div class="linhas">${linhas}</div>
       ${!fechada && E.usuario.gestor && n.falta_vincular && !n.lancada ? `<div class="mini suave">${n.falta_vincular} item(ns) sem vínculo com o estoque: toque em <b>Vincular</b> no item (pode ser antes ou depois de conferir).</div>` : ''}
       ${!fechada && E.usuario.gestor ? '<button class="btn claro medio" data-acao="receb-dispensar">Dispensar (tirar da lista sem conferir)</button>' : ''}
+      ${fechada && !enviando && E.usuario.gestor && !(n.lancada && n.status !== 'dispensada') ? '<button class="btn claro medio" data-acao="receb-reabrir">Reabrir conferência</button>' : ''}
     </div>
     ${fechada ? '' : '<div class="rodape"><button class="btn" data-acao="receb-finalizar">Finalizar conferência</button></div>'}`;
 };
@@ -2296,6 +2297,18 @@ const acoes = {
   'receb-ligar': d => ligarCodigoAoItem(+d.n, !!d.so),
   'receb-finalizar': () => finalizarRecebimento(),
   'receb-vincular': d => modalVincularReceb(+d.n),
+  'receb-reabrir': async (d, el) => {
+    const n = E.notasReceb[T.p.chave];
+    if (!confirm(`Reabrir a conferência da NF ${n.numero}? Ela volta para "Para conferir" com as quantidades já contadas, para corrigir e finalizar de novo.`)) return;
+    const contadas = {};
+    n.itens.forEach(i => { if (i.conferido) contadas[i.n] = i.conferido; });
+    el.disabled = true;
+    try {
+      E.notasReceb[n.chave] = await api('POST', `/api/compras/recebimentos/${n.chave}/reabrir`);
+      E.receb[n.chave] = {qtd: contadas, finalizada: false};
+      salvar(); toast('Conferência reaberta.'); desenhar(); carregarRecebimentos();
+    } catch (e) { el.disabled = false; toast(e.extra.offline ? 'Sem internet: conecte para reabrir.' : e.message); }
+  },
   'receb-buscar-sefaz': async (d, el) => {
     el.disabled = true; el.textContent = 'Buscando…';
     try {
