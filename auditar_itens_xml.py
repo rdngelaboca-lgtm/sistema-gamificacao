@@ -255,9 +255,6 @@ def _completar_tudo(cur, conn, para_completar):
     print(f"Pronto: {total} item(ns) lançado(s). Rode de novo sem --completar para conferir.")
 
 
-if __name__ == '__main__':
-    main()
-
 
 # ------------------------------------------------------------------------------
 # --vincular: diz qual produto do estoque é cada item sem vínculo
@@ -361,3 +358,7 @@ def _vincular_tudo(para_completar):
         else:
             print("  Não consegui gravar o vínculo (veja o log).")
     print(f"\nPronto: {feitos} vínculo(s) gravado(s). Agora rode:  python3 auditar_itens_xml.py --completar")
+
+
+if __name__ == '__main__':
+    main()
