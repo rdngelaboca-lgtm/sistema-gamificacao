@@ -2010,7 +2010,14 @@ def api_compras_recebimento_lancar(usuario, chave):
 @app.route('/api/compras/recebimentos/<chave>/dispensar', methods=['POST'])
 @compras_login(somente_gestor=True)
 def api_compras_recebimento_dispensar(usuario, chave):
-    return _recebimento_disponivel() or _resposta_compras(recebimento.dispensar, chave, usuario)
+    sempre = bool((ler_json() or {}).get('sempre'))
+    return _recebimento_disponivel() or _resposta_compras(recebimento.dispensar, chave, usuario, sempre=sempre)
+
+
+@app.route('/api/compras/recebimentos/ignorados/<cnpj>/mostrar', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_compras_recebimento_mostrar_fornecedor(usuario, cnpj):
+    return _recebimento_disponivel() or _resposta_compras(recebimento.voltar_a_mostrar, cnpj, usuario)
 
 
 # ---------------------------- orçamentos / pedidos aos fornecedores (gestor) ----------------------------

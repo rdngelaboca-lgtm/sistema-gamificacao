@@ -79,6 +79,11 @@ def explicar_no_app(n):
     lista = recebimento.listar_recebimentos()
     if any(r['chave'] == n['chave'] for r in lista['pendentes']):
         return "APARECE no app em 'Para conferir'. No celular: saia da aba Receber e entre de novo (ou feche e abra o app)."
+    if any(r['chave'] == n['chave'] for r in lista.get('no_estoque', [])):
+        return "APARECE no app em 'Já no estoque (lançadas no computador)': dá para conferir, mas não conta como pendente."
+    if n['cnpj'] in {f['cnpj'] for f in lista.get('ignorados', [])}:
+        return ("NÃO APARECE porque o gestor marcou este fornecedor como 'não é mercadoria do estoque'. Para voltar a mostrar:\n"
+                "   no app, aba Receber, lá embaixo em 'Fornecedores que não aparecem', toque em 'Voltar a mostrar'.")
     if any(r['chave'] == n['chave'] for r in lista['conferidas']):
         return "APARECE no app em 'Conferidas nos últimos dias' (já foi conferida ou dispensada)."
     if n['finalidade'] == '4':

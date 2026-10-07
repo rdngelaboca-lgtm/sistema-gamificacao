@@ -98,6 +98,16 @@ def garantir_tabelas():
                 PRIMARY KEY (CNPJ, CodigoFornecedor, Codigo)
             )
         """)
+        # [IGNORAR FORNECEDOR] quem não vende mercadoria para o estoque (uniforme, gráfica, manutenção...)
+        cur.execute("""
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'RecebimentoFornecedoresIgnorados')
+            CREATE TABLE RecebimentoFornecedoresIgnorados (
+                CNPJ VARCHAR(14) NOT NULL PRIMARY KEY,
+                Fornecedor NVARCHAR(150) NULL,
+                CriadoPor NVARCHAR(150) NULL,
+                CriadoEm DATETIME NULL
+            )
+        """)
         conn.commit()
         _tabelas_ok = True
     finally:
@@ -198,6 +208,31 @@ def _status_gravados():
         conn.close()
 
 
+def _fornecedores_ignorados():
+    """{CNPJ: nome} dos fornecedores cujas notas não aparecem para conferir (não vendem mercadoria do estoque)."""
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT CNPJ, Fornecedor FROM RecebimentoFornecedoresIgnorados")
+        return {c: (f or c) for c, f in cur.fetchall()}
+    finally:
+        conn.close()
+
+
+def voltar_a_mostrar(cnpj, usuario):
+    """Gestor: as notas deste fornecedor voltam a aparecer para conferir."""
+    cnpj = re.sub(r'\D', '', str(cnpj or ''))
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM RecebimentoFornecedoresIgnorados WHERE CNPJ = ?", (cnpj,))
+        conn.commit()
+    finally:
+        conn.close()
+    logger.info(f"Recebimento: {usuario.get('nome')} voltou a mostrar as notas do CNPJ {cnpj}.")
+    return {'ok': True}
+
+
 def _nomes_cadastrados():
     """{CNPJ (só números): nome no cadastro de Fornecedores do Gestão de Estoque}."""
     try:
@@ -233,7 +268,9 @@ def listar_recebimentos(hoje=None):
     """Notas para conferir (emitidas nos últimos DIAS_PENDENTE dias) e as conferidas há pouco."""
     hoje = _como_data(hoje) or date.today()
     gravados = _status_gravados()
+    ignorados = _fornecedores_ignorados()
     pendentes, feitas, conferidas = [], [], []
+    qtd_ignoradas = 0
     vistas = set()
     nomes = _nomes_cadastrados()
     limite = hoje - timedelta(days=DIAS_PENDENTE)
@@ -261,24 +298,34 @@ def listar_recebimentos(hoje=None):
             emissao = _como_data(n['emissao'])
             if resumo['status'] == ST_AGUARDANDO:
                 if emissao and emissao >= limite:
-                    pendentes.append((resumo, n))
+                    if n['cnpj'] in ignorados:
+                        qtd_ignoradas += 1     # fornecedor que não vende mercadoria do estoque
+                    else:
+                        pendentes.append((resumo, n))
             elif g and g['em'] and resumo['status'] in (ST_CONFERIDA, ST_DIVERGENCIA) \
                     and g['em'].date() >= hoje - timedelta(days=DIAS_SEM_LANCAR):
                 conferidas.append((resumo, n, g['em']))   # recentes, ou ainda fora do estoque (até 60 dias)
             elif g and g['em'] and g['em'].date() >= hoje - timedelta(days=DIAS_CONFERIDAS):
-                feitas.append(resumo)
+                if not (resumo['status'] == ST_DISPENSADA and n['cnpj'] in ignorados):   # fornecedor escondido: some de vez
+                    feitas.append(resumo)
     lancadas = _chaves_lancadas([n for _, n, _ in conferidas] + [n for _, n in pendentes])
     for resumo, n in pendentes:
         resumo['lancada'] = n['chave'] in lancadas   # já entrou pelo computador: o app avisa no cartão
-    pendentes = [r for r, _ in pendentes]
+    # [DEPURAÇÃO] nota já lançada no estoque pelo computador não é "entrega esperando conferência":
+    # fica numa lista à parte (dá para conferir, mas não conta como pendente)
+    no_estoque = [r for r, _ in pendentes if r['lancada']]
+    pendentes = [r for r, _ in pendentes if not r['lancada']]
     for resumo, n, em in conferidas:
         resumo['lancada'] = n['chave'] in lancadas
         if not resumo['lancada'] or em.date() >= hoje - timedelta(days=DIAS_CONFERIDAS):
             feitas.append(resumo)
     pendentes.sort(key=lambda r: r['emissao'] or '', reverse=True)
+    no_estoque.sort(key=lambda r: r['emissao'] or '', reverse=True)
     feitas.sort(key=lambda r: r['conferido_em'] or '', reverse=True)
-    return {'pendentes': pendentes, 'conferidas': feitas, 'dias': DIAS_PENDENTE,
-            'aguardando_xml': _aguardando_xml(hoje, vistas, nomes)}
+    return {'pendentes': pendentes, 'no_estoque': no_estoque, 'conferidas': feitas, 'dias': DIAS_PENDENTE,
+            'aguardando_xml': [a for a in _aguardando_xml(hoje, vistas, nomes) if a['chave'][6:20] not in ignorados],
+            'ignorados': [{'cnpj': c, 'fornecedor': nome_fornecedor(c, f, '', nomes)} for c, f in sorted(ignorados.items(), key=lambda x: x[1])],
+            'qtd_ignoradas': qtd_ignoradas}
 
 
 def _aguardando_xml(hoje, vistas, nomes=None):
@@ -557,8 +604,12 @@ def reabrir(chave, usuario):
     return obter_recebimento(chave)
 
 
-def dispensar(chave, usuario):
-    """Gestor: tira a nota da lista sem conferir (ex.: nota antiga, mercadoria já guardada)."""
+def dispensar(chave, usuario, sempre=False):
+    """
+    Gestor: tira a nota da lista sem conferir (ex.: nota antiga, mercadoria já guardada).
+    sempre=True: o fornecedor não vende mercadoria do estoque (uniforme, gráfica...): as próximas
+    notas dele também não aparecem (dá para desfazer em "Fornecedores que não aparecem").
+    """
     n = ler_nota(_caminho_da_chave(chave))
     anterior = _conferencia_gravada(n['chave'])
     if anterior:
@@ -573,6 +624,11 @@ def dispensar(chave, usuario):
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (n['chave'], n['numero'][:20], n['cnpj'][:14], n['fornecedor'][:150], _como_data(n['emissao']), n['valor'],
                      ST_DISPENSADA, usuario.get('id'), usuario.get('nome'), datetime.now(), 'Dispensada sem conferência'))
+        if sempre and n['cnpj']:
+            cur.execute("DELETE FROM RecebimentoFornecedoresIgnorados WHERE CNPJ = ?", (n['cnpj'][:14],))
+            cur.execute("INSERT INTO RecebimentoFornecedoresIgnorados (CNPJ, Fornecedor, CriadoPor, CriadoEm) VALUES (?, ?, ?, ?)",
+                        (n['cnpj'][:14], n['fornecedor'][:150], usuario.get('nome'), datetime.now()))
+            logger.info(f"Recebimento: {usuario.get('nome')} deixou de mostrar as notas de {n['fornecedor']} ({n['cnpj']}).")
         conn.commit()
     finally:
         conn.close()

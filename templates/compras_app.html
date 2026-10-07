@@ -254,7 +254,7 @@
 
 // ---------------------------------------------------------------- utilidades
 const CHAVE = 'gb_compras_v1';
-const VERSAO_APP = '32';   // aparece no rodapé do início: confira se o celular pegou a versão nova
+const VERSAO_APP = '33';   // aparece no rodapé do início: confira se o celular pegou a versão nova
 const $app = document.getElementById('app');
 const DIAS_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];            // 1=Dom ... 7=Sáb (padrão do sistema)
 const FRACIONADAS = ['KG', 'G', 'GR', 'L', 'LT', 'ML', 'M'];
@@ -1779,7 +1779,7 @@ function cartaoRecebimento(r) {
   return `<button class="cartao" style="text-align:left;display:flex;flex-direction:column;gap:6px;width:100%" data-acao="receb-abrir" data-chave="${esc(r.chave)}">
     <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;width:100%">
       <div class="nome">${esc(r.fornecedor)}</div><span class="pilula ${st[0]}">${st[1]}</span></div>
-    <div class="pequeno suave">NF ${esc(r.numero)} · ${dataBR(r.emissao)} · ${r.qtd_itens} itens · ${fmtReais(r.valor)}${r.conferido_por ? ' · ' + esc(r.conferido_por) : ''}</div>
+    <div class="pequeno suave">NF ${esc(r.numero)} · ${dataBR(r.emissao)} · ${r.qtd_itens} ${r.qtd_itens === 1 ? 'item' : 'itens'} · ${fmtReais(r.valor)}${r.conferido_por ? ' · ' + esc(r.conferido_por) : ''}</div>
     ${r.lancada === true ? '<div class="mini" style="font-weight:700;color:var(--verde-esc)">✓ No estoque</div>'
       : r.lancada === false && ['conferida', 'divergencia'].includes(r.status) ? '<div class="mini" style="font-weight:700;color:var(--laranja)">Ainda não entrou no estoque</div>' : ''}</button>`;
 }
@@ -1798,7 +1798,14 @@ TELAS.receber = () => {
       ${(d.aguardando_xml || []).length ? `<div class="lista-cartoes"><div class="rotulo">Esperando o XML da SEFAZ (${d.aguardando_xml.length})</div>
         <div class="mini suave">O fornecedor já emitiu, mas a SEFAZ ainda não liberou a nota completa. Ela aparece em "Para conferir" quando chegar.</div>
         ${d.aguardando_xml.map(cartaoAguardandoXml).join('')}</div>` : ''}
-      ${d.conferidas.length ? `<div class="lista-cartoes"><div class="rotulo">Conferidas nos últimos dias</div>${d.conferidas.map(cartaoRecebimento).join('')}</div>` : ''}`;
+      ${(d.no_estoque || []).length ? `<details class="cartao"><summary style="font-weight:700;cursor:pointer;min-height:28px">Já no estoque, lançadas no computador (${d.no_estoque.length})</summary>
+        <div class="mini suave" style="margin:6px 0">Não precisam de conferência para entrar no estoque (já entraram). Se quiser conferir a entrega, abra a nota.</div>
+        <div class="lista-cartoes">${d.no_estoque.map(cartaoRecebimento).join('')}</div></details>` : ''}
+      ${d.conferidas.length ? `<div class="lista-cartoes"><div class="rotulo">Conferidas nos últimos dias</div>${d.conferidas.map(cartaoRecebimento).join('')}</div>` : ''}
+      ${E.usuario.gestor && (d.ignorados || []).length ? `<details class="cartao"><summary style="font-weight:700;cursor:pointer;min-height:28px">Fornecedores que não aparecem (${d.ignorados.length})${d.qtd_ignoradas ? ` · ${d.qtd_ignoradas} nota(s) escondida(s)` : ''}</summary>
+        <div class="mini suave" style="margin:6px 0">Marcados como "não é mercadoria do estoque" (uniforme, gráfica, manutenção…). As notas deles não aparecem para conferir.</div>
+        <div class="linhas">${d.ignorados.map(f => `<div class="lin"><div class="grow" style="font-weight:700">${esc(f.fornecedor)}</div>
+          <button class="link-btn" data-acao="receb-mostrar-forn" data-cnpj="${esc(f.cnpj)}" data-nome="${esc(f.fornecedor)}">Voltar a mostrar</button></div>`).join('')}</div></details>` : ''}`;
   return `${faixaRede()}${topo('Receber mercadoria', 'Notas que os fornecedores emitiram para a loja')}
     <div class="corpo"><div class="info pequeno">Quando a entrega chegar, abra a nota e bipe os produtos com o leitor de código de barras.</div>${corpo}</div>${navbar('receber')}`;
 };
@@ -1817,7 +1824,7 @@ async function abrirRecebimento(chave) {
 }
 function limparRecebimentosAntigos() {
   // [DEPURAÇÃO] cada nota aberta ficava guardada no celular para sempre (até encher a memória e o app parar de salvar)
-  const d = E.recebimentos, vivas = new Set([...d.pendentes, ...d.conferidas].map(r => r.chave));
+  const d = E.recebimentos, vivas = new Set([...d.pendentes, ...(d.no_estoque || []), ...d.conferidas].map(r => r.chave));
   const naFila = new Set(E.fila.filter(t => t.tipo === 'recebimento').map(t => t.chave));
   for (const c of Object.keys(E.notasReceb)) if (!vivas.has(c) && !naFila.has(c)) delete E.notasReceb[c];
   for (const c of Object.keys(E.receb)) if (!vivas.has(c) && !naFila.has(c)) delete E.receb[c];
@@ -3314,10 +3321,26 @@ const acoes = {
     } catch (e) { el.disabled = false; toast(e.extra.offline ? 'Sem internet: conecte para lançar.' : e.message); }
   },
   'receb-enviar': () => enviarRecebimento(),
-  'receb-dispensar': async () => {
+  'receb-dispensar': () => {
     const n = E.notasReceb[T.p.chave];
-    if (!confirm(`Tirar a NF ${n.numero} (${n.fornecedor}) da lista SEM conferir?`)) return;
-    try { await api('POST', `/api/compras/recebimentos/${n.chave}/dispensar`); toast('Nota dispensada.'); ir('receber'); carregarRecebimentos(); }
+    abrirModal(`<div class="titulo-sec">Tirar a NF ${esc(n.numero)} da lista sem conferir?</div>
+      <div class="mini suave">${esc(n.fornecedor)}</div>
+      <label class="cartao" style="display:flex;gap:10px;align-items:flex-start;cursor:pointer">
+        <input type="checkbox" id="dispensar-sempre" style="width:22px;height:22px;flex-shrink:0;margin-top:2px">
+        <span><b>Este fornecedor não vende mercadoria do estoque</b><br><span class="mini suave">(uniforme, gráfica, manutenção, energia…) Não mostrar mais as notas dele. Dá para desfazer lá embaixo na aba Receber.</span></span></label>
+      <div class="linha-btns"><button class="btn claro medio" data-acao="fechar-modal">Voltar</button>
+        <button class="btn medio" data-acao="receb-dispensar-ok">Tirar da lista</button></div>`);
+  },
+  'receb-dispensar-ok': async () => {
+    const n = E.notasReceb[T.p.chave], cx = document.getElementById('dispensar-sempre'), sempre = !!(cx && cx.checked);
+    try {
+      await api('POST', `/api/compras/recebimentos/${n.chave}/dispensar`, {sempre});
+      fecharModal(); toast(sempre ? `As notas de ${n.fornecedor} não aparecem mais.` : 'Nota dispensada.'); ir('receber'); carregarRecebimentos();
+    } catch (e) { toast(e.extra.offline ? 'Sem internet.' : e.message); }
+  },
+  'receb-mostrar-forn': async d => {
+    if (!confirm(`Voltar a mostrar as notas de ${d.nome}?`)) return;
+    try { await api('POST', `/api/compras/recebimentos/ignorados/${encodeURIComponent(d.cnpj)}/mostrar`); toast('Pronto: as notas voltam a aparecer.'); carregarRecebimentos(); }
     catch (e) { toast(e.extra.offline ? 'Sem internet.' : e.message); }
   },
   'preco-abrir': d => { T.p.precoPid = +d.pid; carregarPreco(+d.pid, 12); },
