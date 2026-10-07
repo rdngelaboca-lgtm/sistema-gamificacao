@@ -254,7 +254,7 @@
 
 // ---------------------------------------------------------------- utilidades
 const CHAVE = 'gb_compras_v1';
-const VERSAO_APP = '34';   // aparece no rodapé do início: confira se o celular pegou a versão nova
+const VERSAO_APP = '35';   // aparece no rodapé do início: confira se o celular pegou a versão nova
 const $app = document.getElementById('app');
 const DIAS_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];            // 1=Dom ... 7=Sáb (padrão do sistema)
 const FRACIONADAS = ['KG', 'G', 'GR', 'L', 'LT', 'ML', 'M'];
@@ -1748,7 +1748,12 @@ function conteudoResumo(pn) {
   const est = pn.estoque;
   const linhasEst = (arr, fn) => arr.map(a => `<div class="lin" style="padding:8px 10px"><div class="grow pequeno" style="font-weight:700">${esc(a.produto)}</div>
       <div class="mini" style="text-align:right">${fn(a)}</div></div>`).join('');
-  const comparativo = comp && comp.mes_anterior ? `mês passado: ${fmtReais(comp.mes_anterior)}` : '';
+  // mesmo período do mês passado (dia 1 até hoje): comparar com o mês passado INTEIRO enganava
+  let comparativo = '';
+  if (comp && comp.mes_anterior_ate != null && comp.mes_anterior) {
+    const pct = comp.mes_anterior_ate > 0 ? Math.round((comp.mes - comp.mes_anterior_ate) / comp.mes_anterior_ate * 100) : null;
+    comparativo = `dia 1 a ${comp.dia_corte} do mês passado: ${fmtReais(comp.mes_anterior_ate)}${pct != null ? ` (${pct > 0 ? '+' : ''}${pct}%)` : ''}<br>mês passado inteiro: ${fmtReais(comp.mes_anterior)}`;
+  } else if (comp && comp.mes_anterior) comparativo = `mês passado: ${fmtReais(comp.mes_anterior)}`;
   return `
     <div class="linha-btns">
       ${card('Listas para aprovar', ag.qtd, ag.qtd ? '≈ ' + fmtReais(ag.valor) : 'nenhuma esperando', 'data-acao="nav" data-tela="listas"', ag.qtd ? 'var(--laranja)' : '')}
@@ -2334,7 +2339,8 @@ async function carregarPainel() {
   catch (e) { if (!e.extra.offline && T.nome === 'gestao') toast(e.message); }
 }
 async function carregarConsumo(rotinaId) {
-  if (E.ida && E.ida.rotina_id === rotinaId && E.preparos[rotinaId]) return;   // contagem aberta: não troca os itens no meio dela
+  // contagem aberta (em uso ou guardada): não troca os itens no meio dela
+  if ([E.ida, E.idaPausada].some(i => i && i.rotina_id === rotinaId) && E.preparos[rotinaId]) return;
   try { E.preparos[rotinaId] = await api('GET', `/api/compras/rotinas/${rotinaId}/preparar`); salvar(); if (T.nome === 'gestao') desenhar(); }
   catch (e) { if (!E.preparos[rotinaId] && T.nome === 'gestao') toast(e.message); }
 }

@@ -2002,7 +2002,11 @@ def painel_gestor(hoje=None):
             linhas = cur.fetchall()
         finally:
             conn.close()
-        mes, ant, por_forn = Decimal('0'), Decimal('0'), {}
+        # [DEPURAÇÃO] comparar o mês que está correndo (ex.: dia 1 a 7) com o mês passado INTEIRO parecia
+        # uma queda enorme. Agora também vai o mês passado ATÉ o mesmo dia.
+        fim_ant = inicio_mes - timedelta(days=1)
+        corte_ant = inicio_ant.replace(day=min(hoje.day, fim_ant.day))
+        mes, ant, ant_ate, por_forn = Decimal('0'), Decimal('0'), Decimal('0'), {}
         for d, valor, nome, cnpj in linhas:
             d = _como_data(d)
             if not d or (cnpj or '').strip() == database.CNPJ_FORNECEDOR_INTERNO:
@@ -2013,7 +2017,10 @@ def painel_gestor(hoje=None):
                 por_forn[chave] = por_forn.get(chave, Decimal('0')) + _dec(valor)
             elif d >= inicio_ant:
                 ant += _dec(valor)
+                if d <= corte_ant:
+                    ant_ate += _dec(valor)
         painel['compras'] = {'mes': _num(mes, 2), 'mes_anterior': _num(ant, 2), 'nome_mes': inicio_mes.strftime('%m/%Y'),
+                             'mes_anterior_ate': _num(ant_ate, 2), 'dia_corte': hoje.day,
                              'fornecedores': [{'nome': n, 'valor': _num(v, 2)}
                                               for n, v in sorted(por_forn.items(), key=lambda x: -x[1])[:5]]}
     except Exception as e:
