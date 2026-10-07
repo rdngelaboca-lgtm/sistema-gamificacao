@@ -123,7 +123,7 @@
   .faltou-btn { height: 40px; padding: 0 12px; border-radius: 99px; border: 1px solid var(--linha); background: #fff;
     font-size: 13px; font-weight: 700; color: var(--suave); flex-shrink: 0; }
   .faltou-btn.on { background: var(--laranja-claro); border-color: var(--laranja-claro); color: var(--laranja-esc); }
-  .filtros { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 2px; }
+  .filtros { display: flex; gap: 8px; flex-wrap: wrap; padding-bottom: 2px; }
   .filtro { height: 40px; padding: 0 16px; border-radius: 99px; border: 1px solid var(--linha); background: #fff;
     font-size: 15px; font-weight: 600; white-space: nowrap; }
   .filtro.sel { background: var(--texto); border-color: var(--texto); color: #fff; font-weight: 700; }
@@ -254,7 +254,7 @@
 
 // ---------------------------------------------------------------- utilidades
 const CHAVE = 'gb_compras_v1';
-const VERSAO_APP = '31';   // aparece no rodapé do início: confira se o celular pegou a versão nova
+const VERSAO_APP = '32';   // aparece no rodapé do início: confira se o celular pegou a versão nova
 const $app = document.getElementById('app');
 const DIAS_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];            // 1=Dom ... 7=Sáb (padrão do sistema)
 const FRACIONADAS = ['KG', 'G', 'GR', 'L', 'LT', 'ML', 'M'];
@@ -675,8 +675,9 @@ function textoDias(dias) {
   return dias.map(d => DIAS_SEMANA[d - 1].toLowerCase()).join(', ');
 }
 function cartaoLista(l) {
-  const comprar = l.qtd_comprar != null ? l.qtd_comprar : (l.itens || []).filter(i => i.qtd_pedido > 0).length;
-  const marcados = l.qtd_marcados != null ? l.qtd_marcados : (l.itens || []).filter(i => i.qtd_pedido > 0 && i.situacao).length;
+  // com os itens no celular, conta por eles (as marcações do carrinho ainda não enviadas já aparecem)
+  const comprar = l.itens ? l.itens.filter(i => i.qtd_pedido > 0).length : (l.qtd_comprar || 0);
+  const marcados = l.itens ? l.itens.filter(i => i.qtd_pedido > 0 && i.situacao).length : (l.qtd_marcados || 0);
   const st = {aguardando: ['p-laranja', 'Aguardando aprovação'], aprovada: ['p-verde', 'Aprovada'], finalizada: ['p-cinza', 'Finalizada'],
               cancelada: ['p-cinza', 'Cancelada']}[l.status] || ['p-cinza', l.status];
   const pct = comprar ? Math.round(100 * marcados / comprar) : 0;
@@ -704,7 +705,9 @@ async function carregarInicio() {
     for (const l of listas) {
       const atual = E.listas[l.codigo];
       if (!atual) { E.listas[l.codigo] = Object.assign({itens: null}, l); continue; }
-      if (!atual.local) Object.assign(atual, {status: l.status, qtd_comprar: l.qtd_comprar, qtd_marcados: l.qtd_marcados, valor_estimado: l.valor_estimado});
+      if (atual.local || E.fila.some(t => t.codigo === l.codigo)) continue;   // ainda há mudança deste celular para enviar: vale a do celular
+      if (atual.itens && l.status !== atual.status) { atualizarLista(l.codigo, true); continue; }   // mudou no servidor: busca a lista inteira
+      Object.assign(atual, {status: l.status, qtd_comprar: l.qtd_comprar, qtd_marcados: l.qtd_marcados, valor_estimado: l.valor_estimado});
     }
     // lista aberta no celular que não veio do servidor (ex.: cancelada por outro celular há muito tempo)
     const vieram = new Set(listas.map(l => l.codigo));
@@ -1343,7 +1346,7 @@ TELAS.contagemSalva = p => `${faixaRede()}<div class="corpo" style="padding-top:
 // ---------------------------------------------------------------- lista sugerida
 TELAS.lista = p => {
   const l = E.listas[p.codigo];
-  if (!l || !l.itens) return `${topo('Lista', '', 'nav-inicio')}<div class="corpo"><div class="vazio">${online ? 'Carregando…' : 'Esta lista não está salva neste celular. Conecte à internet.'}</div></div>`;
+  if (!l || !l.itens) return `${topo('Lista', '', 'lista-voltar')}<div class="corpo"><div class="vazio">${online ? 'Carregando…' : 'Esta lista não está salva neste celular. Conecte à internet.'}</div></div>`;
   const pode = podeMexer(l);
   const comprar = l.itens.filter(i => i.qtd_pedido > 0 || (p.vistos && p.vistos.includes(i.produto_id)));
   p.vistos = comprar.map(i => i.produto_id);          // o que zerou agora continua na tela (dá para voltar)
@@ -1364,7 +1367,7 @@ TELAS.lista = p => {
   const compartilhar = `<button class="icone-btn" style="width:56px;height:56px;border:1px solid var(--linha);background:#fff;border-radius:16px" data-acao="lista-compartilhar" data-codigo="${esc(l.codigo)}" aria-label="Compartilhar a lista">${ICONES.enviar}</button>`;
   const filtroNp = (p.buscaNp || '').trim();
   const npFiltrados = naoPrecisa.filter(i => !filtroNp || normalizarTexto(i.nome).includes(normalizarTexto(filtroNp)));
-  return `${faixaRede()}${topo('Lista para ' + l.dias_cobertura + ' dias', `${l.rotina} · ${l.qtd_contados != null ? l.qtd_contados : '?'} contados · ${comprar.filter(i => i.qtd_pedido > 0).length} para comprar`, 'nav-inicio')}
+  return `${faixaRede()}${topo('Lista para ' + l.dias_cobertura + ' dias', `${l.rotina} · ${l.qtd_contados != null ? l.qtd_contados : '?'} contados · ${comprar.filter(i => i.qtd_pedido > 0).length} para comprar`, 'lista-voltar')}
     <div class="corpo">
       ${l.local ? '<div class="aviso">Calculada no celular, sem internet. Os números podem mudar um pouco quando a lista for enviada.</div>' : ''}
       ${st}
@@ -1655,10 +1658,11 @@ TELAS.finalizar = p => {
         <button class="btn" style="background:#fff;color:var(--texto);margin-top:4px" data-acao="cupom-ler" data-lista="${esc(l.codigo)}">${ICONES.qr} Ler QR Code do cupom</button></div>
       <div class="pequeno suave" style="text-align:center">${online ? 'Resumo enviado ao gestor no Telegram.' : 'O resumo vai para o gestor quando a internet voltar.'}</div>
     </div>
-    <div class="rodape"><button class="btn" data-acao="nav-inicio">Voltar ao início</button></div>`;
+    <div class="rodape"><button class="btn" data-acao="lista-voltar">Voltar às listas</button></div>`;
 };
 
 // ---------------------------------------------------------------- listas
+let filtroListas = 'abertas';
 const FILTROS_LISTAS = [['abertas', 'Abertas', l => ['aguardando', 'aprovada'].includes(l.status)],
                         ['aguardando', 'Para aprovar', l => l.status === 'aguardando'], ['aprovada', 'Para comprar', l => l.status === 'aprovada'],
                         ['finalizada', 'Finalizadas', l => l.status === 'finalizada'], ['cancelada', 'Canceladas', l => l.status === 'cancelada']];
@@ -2940,7 +2944,7 @@ const acoes = {
     const tela = d.tela;
     if (tela === 'inicio') { ir('inicio'); carregarInicio(); }
     else if (tela === 'receber') { ir('receber'); carregarRecebimentos(); carregarCodigos(); }
-    else if (tela === 'listas') { ir('listas', {filtro: d.filtro || 'abertas'}); carregarInicio().then(() => { if (T.nome === 'listas') desenhar(); }); }
+    else if (tela === 'listas') { filtroListas = d.filtro || 'abertas'; ir('listas', {filtro: filtroListas}); carregarInicio().then(() => { if (T.nome === 'listas') desenhar(); }); }
     else if (tela === 'gestao') {
       if (!E.usuario.gestor) return acoes.nav({tela: 'inicio'});
       ir('gestao', {secao: d.secao || 'resumo'});
@@ -2968,7 +2972,8 @@ const acoes = {
     ir('novaIda', {rotina_id: est.id, selCats: sel});
     comecarIda(est.id);
   },
-  'listas-filtro': d => { T.p.filtro = d.f; desenhar(); },
+  'listas-filtro': d => { T.p.filtro = filtroListas = d.f; desenhar(); },
+  'lista-voltar': () => acoes.nav({tela: 'listas', filtro: filtroListas}),
   'orc-novo-inicio': () => { ir('orcamentos'); carregarOrcamentos(); modalFornecedorOrc(); },
   'nav-rotinas': () => { ir('rotinas', {}); api('GET', '/api/compras/rotinas').then(r => { E.rotinas = r; salvar(); if (T.nome === 'rotinas') desenhar(); }).catch(() => {}); },
   'sair': async () => {
@@ -3123,7 +3128,7 @@ const acoes = {
   'lista-aprovar': d => { mudarStatusLista(d.codigo, 'aprovar', 'aprovada', 'Aprovação'); toast('Lista aprovada.'); desenhar(); },
   'lista-cancelar': d => {
     if (!confirm('Cancelar esta lista? A contagem continua valendo no estoque.')) return;
-    mudarStatusLista(d.codigo, 'cancelar', 'cancelada', 'Cancelamento'); ir('inicio');
+    mudarStatusLista(d.codigo, 'cancelar', 'cancelada', 'Cancelamento'); toast('Lista cancelada.'); acoes.nav({tela: 'listas', filtro: filtroListas});
   },
   'lista-compartilhar': async d => {
     const texto = textoListaParaCompartilhar(E.listas[d.codigo]);
