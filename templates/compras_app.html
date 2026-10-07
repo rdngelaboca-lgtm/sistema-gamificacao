@@ -172,6 +172,10 @@
   .cl-total { display: inline-block; background: var(--texto); color: #fff; font-weight: 700; border-radius: 6px; padding: 0 6px; }
   .cl-lin.ok .cl-nome { color: var(--suave); }
   .bal-local.pronto { border-color: var(--verde-borda); background: #F4FAF8; }
+  .rel-barra { height: 6px; background: #E0E7E5; border-radius: 99px; overflow: hidden; margin: 6px 0 2px; }
+  .rel-barra > div { height: 100%; background: var(--verde); }
+  .rel-cat summary { list-style: none; cursor: pointer; }
+  .rel-cat summary::-webkit-details-marker { display: none; }
   .dif-resumo { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
   .dif-resumo .cartao { padding: 10px; min-width: 0; }
   .dif-grande { font-size: 15px; font-weight: 800; line-height: 1.25; }
@@ -254,7 +258,7 @@
 
 // ---------------------------------------------------------------- utilidades
 const CHAVE = 'gb_compras_v1';
-const VERSAO_APP = '35';   // aparece no rodapé do início: confira se o celular pegou a versão nova
+const VERSAO_APP = '36';   // aparece no rodapé do início: confira se o celular pegou a versão nova
 const $app = document.getElementById('app');
 const DIAS_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];            // 1=Dom ... 7=Sáb (padrão do sistema)
 const FRACIONADAS = ['KG', 'G', 'GR', 'L', 'LT', 'ML', 'M'];
@@ -1720,7 +1724,8 @@ function conteudoConsumo(p) {
 TELAS.gestao = p => {
   if (!E.usuario.gestor) return TELAS.inicio();
   const secao = p.secao || 'resumo';
-  const abas = [['resumo', 'Resumo'], ['precos', 'Preços'], ['cupons', 'Cupons fiscais'], ['consumo', 'Consumo']].map(([id, txt]) =>
+  const abas = [['resumo', 'Resumo'], ['categorias', 'Por categoria'], ['inflacao', 'Inflação'], ['barato', 'Mais barato'],
+                ['precos', 'Preços'], ['cupons', 'Cupons fiscais'], ['consumo', 'Consumo']].map(([id, txt]) =>
     `<button class="filtro ${secao === id ? 'sel' : ''}" data-acao="gestao-secao" data-s="${id}">${txt}</button>`).join('');
   let corpo;
   if (secao === 'cupons') {
@@ -1728,6 +1733,12 @@ TELAS.gestao = p => {
       ${(E.cupons || []).map(cartaoCupom).join('') || '<div class="mini suave" style="text-align:center">Nenhum cupom lido ainda.</div>'}`;
   } else if (secao === 'consumo') {
     corpo = conteudoConsumo(p);
+  } else if (secao === 'categorias') {
+    corpo = conteudoCategorias(p);
+  } else if (secao === 'inflacao') {
+    corpo = conteudoInflacao(p);
+  } else if (secao === 'barato') {
+    corpo = conteudoBarato(p);
   } else if (secao === 'precos') {
     corpo = p.preco ? conteudoPreco(p.preco, p) : `<div class="campo"><label for="busca-preco">Procurar produto</label>
         <input id="busca-preco" placeholder="Digite parte do nome (ex.: leite cond)" autocomplete="off" value="${esc(p.buscaPreco || '')}"></div>
@@ -1738,6 +1749,85 @@ TELAS.gestao = p => {
   return `${faixaRede()}${topo('Gestão', 'Relatórios e conferências (só o gestor vê)')}
     <div class="corpo"><div class="filtros">${abas}</div>${corpo}</div>${navbar('gestao')}`;
 };
+// ---------------------------------------------------------------- [RELATÓRIOS] categoria, inflação, onde comprar mais barato
+const NOMES_MES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+function nomeMes(ym) { const [a, m] = ym.split('-'); return `${NOMES_MES[+m - 1]}/${a.slice(2)}`; }
+async function carregarRelatorio(nome, mes) {
+  const chave = nome + ':' + (mes || '');
+  T.p.relErro = null; T.p.relCarregando = chave; desenhar();
+  try {
+    const d = await api('GET', `/api/compras/relatorios/${nome}${mes ? '?mes=' + mes : ''}`);
+    if (T.nome === 'gestao') { T.p.rel = T.p.rel || {}; T.p.rel[chave] = d; }
+  } catch (e) { if (T.nome === 'gestao') T.p.relErro = e.extra.offline ? 'Sem internet: conecte para ver o relatório.' : e.message; }
+  if (T.nome === 'gestao') { T.p.relCarregando = null; desenhar(); }
+}
+function dadosRel(p, nome, comMes) {
+  const chave = nome + ':' + (comMes ? p.mesRel || '' : '');
+  const d = (p.rel || {})[chave];
+  if (d) return {d};
+  if (p.relErro) return {html: `<div class="aviso">${esc(p.relErro)}</div><button class="btn claro medio" data-acao="rel-recarregar">Tentar de novo</button>`};
+  return {html: '<div class="vazio">Calculando…</div>'};
+}
+function chipsMeses(d) {
+  return `<div class="filtros">${d.meses.map(m => `<button class="filtro ${m === d.mes ? 'sel' : ''}" data-acao="rel-mes" data-m="${m}">${nomeMes(m)}</button>`).join('')}</div>`;
+}
+function variacao(pct, subirRuim = true) {
+  if (pct == null) return '<span class="mini suave">—</span>';
+  const ruim = subirRuim ? pct > 0 : pct < 0;
+  return `<b style="color:${Math.abs(pct) < 1 ? 'var(--suave)' : ruim ? '#b3261e' : 'var(--verde-esc)'}">${pct > 0 ? '+' : ''}${fmtQtd(pct)}%</b>`;
+}
+function periodoTxt(d) { return d.aberto ? `dia 1 a ${+d.fim.slice(8)}` : 'mês inteiro'; }
+function conteudoCategorias(p) {
+  const r = dadosRel(p, 'categorias', true);
+  if (!r.d) return r.html;
+  const d = r.d;
+  const linhas = d.categorias.map(c => `<details class="cartao rel-cat"><summary>
+      <div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline"><div class="nome grow">${esc(c.categoria)}</div>
+        <div style="text-align:right;white-space:nowrap"><b>${fmtReais(c.valor)}</b> ${variacao(c.pct)}</div></div>
+      <div class="rel-barra"><div style="width:${Math.min(100, c.parte)}%"></div></div>
+      <div class="mini suave">${fmtQtd(c.parte)}% do total · antes: ${fmtReais(c.anterior)}</div></summary>
+      <div class="linhas" style="margin-top:8px">${c.produtos.map(x => `<div class="lin" style="padding:7px 10px"><div class="grow pequeno">${esc(x.nome)}<div class="mini suave">${fmtQtd(x.qtd)} ${esc(unCurta(x.unidade))}</div></div><b class="pequeno">${fmtReais(x.valor)}</b></div>`).join('')
+        || '<div class="mini suave" style="padding:8px">Nada comprado neste período.</div>'}</div></details>`).join('');
+  return `${chipsMeses(d)}
+    <div class="cartao"><div class="mini suave" style="font-weight:700">Gasto em ${nomeMes(d.mes)} (${periodoTxt(d)})</div>
+      <div style="font-size:24px;font-weight:800">${fmtReais(d.total)} ${variacao(d.pct)}</div>
+      <div class="mini suave">mesmo período do mês anterior: ${fmtReais(d.total_ant)}${d.fora_do_estoque ? ` · fora do estoque (frete, itens sem produto): ${fmtReais(d.fora_do_estoque)}` : ''}</div></div>
+    ${linhas || '<div class="vazio">Nenhuma compra neste período.</div>'}
+    <div class="mini suave">Pelas notas lançadas no estoque, com impostos. Toque numa categoria para ver os produtos.</div>`;
+}
+function conteudoInflacao(p) {
+  const r = dadosRel(p, 'inflacao', false);
+  if (!r.d) return r.html;
+  const d = r.d;
+  const cesta = [['3', '3 meses'], ['6', '6 meses'], ['12', '12 meses']].map(([k, t]) => `<div class="cartao" style="padding:10px;text-align:center">
+      <div class="mini suave">${t}</div><div style="font-size:18px">${variacao(d.cesta[k])}</div></div>`).join('');
+  const linhas = d.produtos.map(x => `<button class="lin" style="width:100%;border-left:0;border-right:0;border-bottom:0;background:#fff;text-align:left" data-acao="rel-preco" data-pid="${x.produto_id}">
+      <div class="grow" style="min-width:0"><div style="font-weight:700">${esc(x.nome)}</div>
+        <div class="mini suave">${fmtReais(x.preco)}/${esc(unCurta(x.unidade))} hoje · ${esc(x.categoria)}</div></div>
+      <div class="mini" style="text-align:right;white-space:nowrap;line-height:1.5">3m ${variacao(x.p3)}<br>6m ${variacao(x.p6)}<br>12m ${variacao(x.p12)}</div></button>`).join('');
+  return `<div class="mini suave" style="font-weight:700">Sua cesta (os ${d.produtos.length} produtos em que você mais gasta) subiu:</div>
+    <div class="dif-resumo">${cesta}</div>
+    <div class="linhas">${linhas || '<div class="vazio">Ainda não há compras suficientes.</div>'}</div>
+    <div class="mini suave">Preço médio pago por unidade do estoque (com impostos) nos últimos 30 dias, comparado com o de 3, 6 e 12 meses atrás. Toque num produto para ver o histórico.</div>`;
+}
+function conteudoBarato(p) {
+  const r = dadosRel(p, 'mais-barato', true);
+  if (!r.d) return r.html;
+  const d = r.d;
+  const linhas = d.produtos.map(x => `<details class="cartao rel-cat"><summary>
+      <div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline"><div class="nome grow">${esc(x.nome)}</div>
+        ${x.economia ? `<b style="color:var(--verde-esc);white-space:nowrap">− ${fmtReais(x.economia)}</b>` : ''}</div>
+      <div class="mini">Comprou ${fmtQtd(x.qtd)} ${esc(unCurta(x.unidade))} em ${esc(x.comprou_em.map(nomeCurto).join(', '))} a ${fmtReais(x.preco_medio)}/${esc(unCurta(x.unidade))}</div>
+      ${x.mais_barato ? `<div class="mini" style="color:var(--verde-esc)">${esc(nomeCurto(x.mais_barato.fornecedor))} tinha a ${fmtReais(x.mais_barato.preco)} (${dataBR(x.mais_barato.data)})</div>` : '<div class="mini suave">já comprou no mais barato</div>'}</summary>
+      <div class="mini suave" style="margin-top:8px">Último preço em cada fornecedor (90 dias):</div>
+      <div class="linhas">${x.precos.map(pr => `<div class="lin" style="padding:6px 10px"><div class="grow pequeno">${esc(nomeCurto(pr.fornecedor))}</div><div class="pequeno">${fmtReais(pr.preco)} <span class="mini suave">${dataBR(pr.data)}</span></div></div>`).join('')}</div></details>`).join('');
+  return `${chipsMeses(d)}
+    <div class="cartao"><div class="mini suave" style="font-weight:700">${nomeMes(d.mes)} (${periodoTxt(d)}): comprando sempre no fornecedor mais barato</div>
+      <div style="font-size:24px;font-weight:800;color:${d.economia ? 'var(--verde-esc)' : 'var(--texto)'}">${d.economia ? 'daria para economizar ' + fmtReais(d.economia) : 'você já comprou no mais barato'}</div>
+      <div class="mini suave">${d.com_economia} produto(s) com preço menor em outro fornecedor · gasto analisado: ${fmtReais(d.gasto)}</div></div>
+    ${linhas || '<div class="vazio">Nenhum produto comprado em mais de um fornecedor neste período.</div>'}
+    <div class="mini suave">Compara cada compra com a última compra de OUTRO fornecedor nos 60 dias antes, por unidade do estoque, com impostos. Não considera pedido mínimo, frete ou prazo.</div>`;
+}
 function conteudoResumo(pn) {
   if (!pn) return `<div class="vazio">${online ? 'Carregando…' : 'Sem internet: o resumo ainda não foi baixado neste celular.'}</div>`;
   const card = (titulo, valor, sub, acao, cor) => `<button class="cartao" style="text-align:left;display:flex;flex-direction:column;gap:4px" ${acao || ''}>
@@ -3181,7 +3271,16 @@ const acoes = {
     if (d.s === 'resumo') carregarPainel();
     else if (d.s === 'cupons') carregarCupons().then(() => { if (T.nome === 'gestao') desenhar(); });
     else if (d.s === 'consumo') { const r = E.rotinas.find(x => x.id === T.p.rotina_id) || E.rotinas[0]; if (r) carregarConsumo(r.id); }
+    else if (d.s === 'categorias') carregarRelatorio('categorias', T.p.mesRel);
+    else if (d.s === 'inflacao') carregarRelatorio('inflacao');
+    else if (d.s === 'barato') carregarRelatorio('mais-barato', T.p.mesRel);
   },
+  'rel-mes': d => { T.p.mesRel = d.m === hojeISO().slice(0, 7) ? '' : d.m; acoes['rel-recarregar'](); },
+  'rel-recarregar': () => {
+    const nome = {categorias: 'categorias', inflacao: 'inflacao', barato: 'mais-barato'}[T.p.secao];
+    if (nome) carregarRelatorio(nome, nome === 'inflacao' ? '' : T.p.mesRel);
+  },
+  'rel-preco': d => { T.p.secao = 'precos'; acoes['preco-abrir'](d); },
   'gestao-atualizar': () => { toast('Atualizando…'); carregarPainel(); },
   'receb-abrir': d => abrirRecebimento(d.chave),
   'receb-voltar': () => { ir('receber'); carregarRecebimentos(); },

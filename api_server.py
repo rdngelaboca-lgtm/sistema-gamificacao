@@ -2112,6 +2112,28 @@ def api_compras_lista_orcamentos(usuario, codigo):
     return _orcamentos_disponivel() or _resposta_compras(orcamentos.gerar_da_lista, codigo, usuario)
 
 
+# ---------------------------- [RELATÓRIOS] aba Gestão (gestor) ----------------------------
+try:
+    import relatorios
+except Exception as _erro_import_rel:
+    relatorios = None
+    logger.error(f"Relatórios DESLIGADOS: não consegui carregar relatorios.py ({_erro_import_rel})")
+
+
+@app.route('/api/compras/relatorios/<nome>', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_compras_relatorio(usuario, nome):
+    if relatorios is None:
+        return jsonify({"erro": "Relatórios não instalados no servidor (falta relatorios.py)."}), 503
+    if nome == 'categorias':
+        return _resposta_compras(relatorios.gasto_por_categoria, request.args.get('mes'))
+    if nome == 'inflacao':
+        return _resposta_compras(relatorios.inflacao)
+    if nome == 'mais-barato':
+        return _resposta_compras(relatorios.onde_mais_barato, request.args.get('mes'))
+    return jsonify({"erro": "Relatório desconhecido."}), 404
+
+
 if __name__ == "__main__":
     # O '0.0.0.0' é o segredo. Ele libera o acesso para a rede inteira.
     logger.info("Iniciando servidor API acessível na rede em modo Produção...")
