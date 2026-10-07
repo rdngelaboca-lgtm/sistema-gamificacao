@@ -1273,7 +1273,7 @@ class AppGestaoEstoque:
         """Abre uma janela pop-up para criar, editar e excluir categorias do sistema."""
         popup = Toplevel(self.root)
         popup.title("Gerenciador de Categorias")
-        popup.geometry("400x500")
+        popup.geometry("420x640")
         popup.transient(self.root) # Mantém a janela sempre à frente da principal
         popup.grab_set() # Impede que o usuário clique fora enquanto não fechar
 
@@ -1307,12 +1307,51 @@ class AppGestaoEstoque:
         entry_cat = ttk.Entry(frame, font=("Arial", 11))
         entry_cat.pack(fill=tk.X, pady=2)
 
+        # [ROYALTIES] custo adicional da categoria (ex.: Sorvetes +45% pagos em nota de royalties à parte)
+        custos_adic = {'atual': database.custos_adicionais_categorias()}
+        frame_pct = ttk.LabelFrame(frame, text=" Custo adicional da categoria (royalties) ", padding=8)
+        frame_pct.pack(fill=tk.X, pady=(10, 2))
+        linha_pct = ttk.Frame(frame_pct)
+        linha_pct.pack(fill=tk.X)
+        ttk.Label(linha_pct, text="% sobre o custo da nota:").pack(side=tk.LEFT)
+        entry_pct = ttk.Entry(linha_pct, width=8, font=("Arial", 11))
+        entry_pct.pack(side=tk.LEFT, padx=6)
+        lbl_pct = ttk.Label(frame_pct, text="Selecione uma categoria. Ex.: Sorvetes 45 → custo real = custo da nota + 45%.",
+                            foreground="gray", wraplength=360, font=("Arial", 8))
+        lbl_pct.pack(anchor="w", pady=(4, 0))
+
+        def mostrar_pct(nome):
+            entry_pct.delete(0, tk.END)
+            pct = custos_adic['atual'].get(nome)
+            if pct:
+                entry_pct.insert(0, fmt_num(pct, 2, "0"))
+                lbl_pct.config(text=f"{nome}: custo real = custo da nota + {fmt_num(pct, 2, '0')}% (Catálogo, Valor do Estoque, sugestão de compra e app).")
+            else:
+                lbl_pct.config(text=f"{nome}: sem custo adicional. Digite o % e clique em Salvar %.")
+
+        def acao_salvar_pct():
+            selecao = lista_categorias_ui.curselection()
+            if not selecao:
+                return messagebox.showwarning("Aviso", "Selecione a categoria na lista.", parent=popup)
+            nome = lista_categorias_ui.get(selecao[0])
+            ok, msg = database.definir_custo_adicional_categoria(nome, entry_pct.get().strip() or '0')
+            if not ok:
+                return messagebox.showerror("Erro", msg, parent=popup)
+            custos_adic['atual'] = database.custos_adicionais_categorias()
+            mostrar_pct(nome)
+            self.atualizar_lista_produtos()          # a coluna "Custo atual" já sai com o %
+            messagebox.showinfo("Pronto", msg + "\n\nNo '💰 Valor do Estoque', clique em '🔄 Recalcular' nas contagens "
+                                "abertas para usar o custo novo (as fechadas não mudam).", parent=popup)
+
+        ttk.Button(linha_pct, text="💾 Salvar %", command=acao_salvar_pct).pack(side=tk.LEFT, padx=4)
+
         def on_select(event):
             # Preenche o input quando clica num item da lista
             selecao = lista_categorias_ui.curselection()
             if selecao:
                 entry_cat.delete(0, tk.END)
                 entry_cat.insert(0, lista_categorias_ui.get(selecao[0]))
+                mostrar_pct(lista_categorias_ui.get(selecao[0]))
 
         lista_categorias_ui.bind('<<ListboxSelect>>', on_select)
 

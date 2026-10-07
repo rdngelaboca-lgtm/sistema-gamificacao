@@ -152,7 +152,9 @@ def _dados_do_produto(cur, produto_id, fornecedor_id, hoje=None):
         precos = cdb._precos_por_produto(cur, [int(produto_id)], hoje or date.today()).get(int(produto_id), [])
         deste = next((x for x in precos if x['FornecedorID'] == int(fornecedor_id)), None)
         if deste:
-            dados['preco'] = deste['CustoUnid']
+            # [ROYALTIES] o orçamento guarda o preço DO FORNECEDOR (o que se combina e o que vem na nota);
+            # o custo com royalties aparece à parte
+            dados['preco'] = deste['CustoUnid'] / database._fatores_custo_adicional(cur).get(int(produto_id), Decimal('1'))
     return dados
 
 
@@ -228,6 +230,16 @@ def obter_orcamento(orcamento_id):
         conn.close()
     cab['itens'] = [_item_json(i) for i in itens]
     cab['valor'] = _num(sum((i['preco'] * i['qtd'] for i in itens if i['preco'] is not None), Decimal('0')), 2)
+    # [ROYALTIES] custo real (preço do fornecedor + % da categoria, ex.: Sorvetes +45%)
+    fatores = database.fatores_custo_adicional()
+    valor_real = Decimal('0')
+    for i, j in zip(itens, cab['itens']):
+        f = fatores.get(i['produto_id'], Decimal('1'))
+        j['royalty_pct'] = _num((f - 1) * 100, 2) if f != 1 else None
+        j['preco_real'] = _num(i['preco'] * f, 4) if i['preco'] is not None and f != 1 else None
+        if i['preco'] is not None:
+            valor_real += i['preco'] * i['qtd'] * f
+    cab['valor_real'] = _num(valor_real, 2) if fatores and any(j['royalty_pct'] for j in cab['itens']) else None
     cab['nota'] = None
     cab['comparacao'] = None
     if cab['chave_nota']:
@@ -384,6 +396,7 @@ def gerar_da_lista(codigo, usuario):
                 sem_fornecedor += [i['nome'] for i in itens]
                 continue
             novo = _novo(cur, fornecedor, usuario, lista_codigo=str(codigo))
+            fatores = database._fatores_custo_adicional(cur)   # [ROYALTIES] a lista tem o custo real; o orçamento, o do fornecedor
             for ordem, i in enumerate(itens):
                 d = _dados_do_produto(cur, i['produto_id'], forn_id)
                 fator = Decimal(str(i['fator'] or 1)) if i['fator'] and i['fator'] > 0 else d['fator']
@@ -391,7 +404,7 @@ def gerar_da_lista(codigo, usuario):
                                                                  DescricaoFornecedor, CodigoFornecedor)
                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                             (novo, i['produto_id'], ordem, d['nome'][:255], d['unidade'][:20], Decimal(str(i['qtd_pedido'])), fator,
-                             Decimal(str(i['custo'])) if i['custo'] is not None else d['preco'],
+                             (Decimal(str(i['custo'])) / fatores.get(i['produto_id'], Decimal('1'))) if i['custo'] is not None else d['preco'],
                              d['descricao'] and d['descricao'][:255], d['codigo'] and d['codigo'][:60]))
             criados.append({'id': novo, 'fornecedor': fornecedor['nome'], 'itens': len(itens)})
         conn.commit()

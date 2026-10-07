@@ -832,13 +832,15 @@ def _precos_por_produto(cur, produtos, data_ref):
     """, _em('PF.ProdutoID', produtos)[1])
     limite = data_ref - timedelta(days=PRECO_VALIDO_DIAS)
     ultimo = {}   # (pid, forn) -> (data, item_id, custo, fator, nome)
-    for pid, dt, item_id, custo, fator, forn_id, forn_nome, cnpj in cur.fetchall():
+    linhas = cur.fetchall()
+    fatores = database._fatores_custo_adicional(cur)    # [ROYALTIES] custo real = nota + % da categoria
+    for pid, dt, item_id, custo, fator, forn_id, forn_nome, cnpj in linhas:
         d = _como_data(dt)
         if not d or d < limite or d > data_ref or forn_id is None or (cnpj or '').strip() == database.CNPJ_FORNECEDOR_INTERNO:
             continue
         chave = (pid, forn_id)
         if chave not in ultimo or (d, item_id or 0) > ultimo[chave][:2]:
-            ultimo[chave] = (d, item_id or 0, _dec(custo), _dec(fator) if fator is not None else Decimal('1'),
+            ultimo[chave] = (d, item_id or 0, _dec(custo) * fatores.get(pid, Decimal('1')), _dec(fator) if fator is not None else Decimal('1'),
                              forn_nome or f'Fornecedor {forn_id}')
     precos = {}
     for (pid, forn_id), (d, _, custo, fator, nome) in ultimo.items():
@@ -902,11 +904,13 @@ def _compras_recentes(cur, pids, ate, dias=DIAS_CONSUMO_LONGO):
         WHERE INI.Quantidade > 0 AND {_em('PF.ProdutoID', pids)[0]}
     """, _em('PF.ProdutoID', pids)[1])
     res = {}
-    for pid, dt, q, custo, forn, cnpj, desc, nf, vid in cur.fetchall():
+    linhas = cur.fetchall()
+    fatores = database._fatores_custo_adicional(cur)    # [ROYALTIES]
+    for pid, dt, q, custo, forn, cnpj, desc, nf, vid in linhas:
         d = _como_data(dt)
         if not d or d <= desde or d > ate or (cnpj or '').strip() == database.CNPJ_FORNECEDOR_INTERNO:
             continue
-        res.setdefault(pid, []).append((d, _dec(q), _dec(custo), forn or 'Fornecedor', desc or '', nf or '', vid))
+        res.setdefault(pid, []).append((d, _dec(q), _dec(custo) * fatores.get(pid, Decimal('1')), forn or 'Fornecedor', desc or '', nf or '', vid))
     for lista in res.values():
         lista.sort(key=lambda c: c[0])
     return res
@@ -1968,6 +1972,36 @@ def diferencas_balanco(rotina_id, dia=None):
             'saldo': _num(_dec(soma(perdas)) + _dec(soma(sobras)), 2),
             'sem_custo': sum(1 for l in perdas + sobras if l['valor'] is None)}
 
+def _royalties_por_periodo(inicio_ant, inicio_mes, corte_ant):
+    """[ROYALTIES] (do mês, do mês anterior, do mês anterior até o mesmo dia) = valor das notas × % da categoria."""
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        fatores = database._fatores_custo_adicional(cur)
+        if not fatores:
+            return Decimal('0'), Decimal('0'), Decimal('0')
+        cur.execute("""SELECT NF.DataEmissao, PF.ProdutoID, INI.Quantidade, INI.PrecoCustoUnitario, F.CNPJ
+                       FROM ItensNotaFiscalEntrada INI JOIN NotasFiscaisEntrada NF ON INI.NotaID = NF.NotaID
+                       JOIN ProdutosFornecedor PF ON INI.ProdutoFornecedorID = PF.ProdutoFornecedorID
+                       LEFT JOIN Fornecedores F ON NF.FornecedorID = F.FornecedorID
+                       WHERE INI.Quantidade > 0 AND NF.DataEmissao >= ?""", (inicio_ant,))
+        mes = ant = ant_ate = Decimal('0')
+        for d, pid, q, custo, cnpj in cur.fetchall():
+            d, f = _como_data(d), fatores.get(pid)
+            if not d or not f or (cnpj or '').strip() == database.CNPJ_FORNECEDOR_INTERNO:
+                continue
+            v = _dec(q) * _dec(custo) * (f - 1)
+            if d >= inicio_mes:
+                mes += v
+            else:
+                ant += v
+                if d <= corte_ant:
+                    ant_ate += v
+        return mes, ant, ant_ate
+    finally:
+        conn.close()
+
+
 def painel_gestor(hoje=None):
     """
     Números para o gestor (o operacional não vê): listas por situação, compras do mês pelas
@@ -2007,6 +2041,8 @@ def painel_gestor(hoje=None):
         fim_ant = inicio_mes - timedelta(days=1)
         corte_ant = inicio_ant.replace(day=min(hoje.day, fim_ant.day))
         mes, ant, ant_ate, por_forn = Decimal('0'), Decimal('0'), Decimal('0'), {}
+        # [ROYALTIES] as notas não trazem os royalties (nota à parte, não importada): soma pelo % da categoria
+        roy_mes, roy_ant, roy_ant_ate = _royalties_por_periodo(inicio_ant, inicio_mes, corte_ant)
         for d, valor, nome, cnpj in linhas:
             d = _como_data(d)
             if not d or (cnpj or '').strip() == database.CNPJ_FORNECEDOR_INTERNO:
@@ -2019,8 +2055,11 @@ def painel_gestor(hoje=None):
                 ant += _dec(valor)
                 if d <= corte_ant:
                     ant_ate += _dec(valor)
+        if roy_mes:
+            por_forn['Royalties (estimado)'] = roy_mes
+        mes, ant, ant_ate = mes + roy_mes, ant + roy_ant, ant_ate + roy_ant_ate
         painel['compras'] = {'mes': _num(mes, 2), 'mes_anterior': _num(ant, 2), 'nome_mes': inicio_mes.strftime('%m/%Y'),
-                             'mes_anterior_ate': _num(ant_ate, 2), 'dia_corte': hoje.day,
+                             'mes_anterior_ate': _num(ant_ate, 2), 'dia_corte': hoje.day, 'royalties': _num(roy_mes, 2),
                              'fornecedores': [{'nome': n, 'valor': _num(v, 2)}
                                               for n, v in sorted(por_forn.items(), key=lambda x: -x[1])[:5]]}
     except Exception as e:

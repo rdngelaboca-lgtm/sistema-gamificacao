@@ -6156,6 +6156,96 @@ def verificar_migracao_categorias_estoque():
 # Executa imediatamente ao iniciar o módulo
 verificar_migracao_categorias_estoque()
 
+
+def verificar_migracao_custo_adicional():
+    """[ROYALTIES] coluna do % de custo adicional da categoria (migração separada: não depende da outra dar certo)."""
+    conn = get_db_connection()
+    if not conn:
+        return
+    try:
+        cursor = conn.cursor()
+        cursor.execute("IF COL_LENGTH('CategoriasProduto', 'CustoAdicionalPct') IS NULL ALTER TABLE CategoriasProduto ADD CustoAdicionalPct DECIMAL(9, 4) NULL")
+        conn.commit()
+    except Exception as e:
+        logger.error(f"Erro ao criar a coluna de custo adicional das categorias: {e}")
+    finally:
+        conn.close()
+
+
+verificar_migracao_custo_adicional()
+
+# ==============================================================================
+# == [ROYALTIES] custo adicional por categoria =================================
+# ==============================================================================
+# Ex.: os sorvetes da franquia pagam +45% de royalties numa nota à parte (que não é importada).
+# O custo REAL do produto = custo da nota × (1 + 45%). As notas continuam gravadas com o valor
+# do XML (as telas de nota/vínculo e as correções usam esse valor); o % entra nos CÁLCULOS de
+# custo: Catálogo, Valor do Estoque, sugestão de compra, gráfico, alertas, app e relatórios.
+def _fatores_custo_adicional(cursor):
+    """{ProdutoID: Decimal(1 + %/100)} dos produtos de categorias com custo adicional."""
+    try:
+        cursor.execute("""SELECT P.ProdutoID, C.CustoAdicionalPct FROM ProdutosEstoque P
+                          JOIN CategoriasProduto C ON C.NomeCategoria = P.Categoria
+                          WHERE C.CustoAdicionalPct IS NOT NULL AND C.CustoAdicionalPct > 0""")
+        return {pid: Decimal('1') + _dec(pct) / Decimal('100') for pid, pct in cursor.fetchall()}
+    except Exception as e:
+        logger.warning(f"Custo adicional das categorias não lido (fica sem): {e}")
+        return {}
+
+
+def fatores_custo_adicional():
+    """Igual a _fatores_custo_adicional, com a própria conexão (para os outros módulos)."""
+    conn = get_db_connection()
+    if not conn:
+        return {}
+    try:
+        return _fatores_custo_adicional(conn.cursor())
+    finally:
+        conn.close()
+
+
+def custos_adicionais_categorias():
+    """{NomeCategoria: Decimal(%)} das categorias com custo adicional."""
+    conn = get_db_connection()
+    if not conn:
+        return {}
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT NomeCategoria, CustoAdicionalPct FROM CategoriasProduto WHERE CustoAdicionalPct IS NOT NULL AND CustoAdicionalPct > 0")
+        return {nome: _dec(pct) for nome, pct in cursor.fetchall()}
+    except Exception as e:
+        logger.warning(f"Custo adicional das categorias não lido: {e}")
+        return {}
+    finally:
+        conn.close()
+
+
+def definir_custo_adicional_categoria(nome_categoria, percentual):
+    """Grava o % de custo adicional da categoria (0 ou vazio = sem custo adicional). Devolve (ok, mensagem)."""
+    try:
+        pct = _dec(str(percentual).replace(',', '.').replace('%', '').strip() or '0')
+    except Exception:
+        return False, "Percentual inválido."
+    if pct < 0 or pct > 500:
+        return False, "Percentual deve ficar entre 0 e 500."
+    conn = get_db_connection()
+    if not conn:
+        return False, "Falha de conexão."
+    try:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE CategoriasProduto SET CustoAdicionalPct = ? WHERE NomeCategoria = ?", (pct if pct > 0 else None, nome_categoria))
+        if cursor.rowcount == 0:
+            return False, "Categoria não encontrada."
+        conn.commit()
+        logger.info(f"Custo adicional da categoria {nome_categoria}: {pct}%")
+        return True, (f"{nome_categoria}: custo real = custo da nota + {pct.normalize()}%." if pct > 0 else f"{nome_categoria}: sem custo adicional.")
+    except Exception as e:
+        conn.rollback()
+        return False, str(e)
+    finally:
+        conn.close()
+
+
 def listar_categorias_produto():
     """Retorna a lista de nomes de categorias em ordem alfabética."""
     conn = get_db_connection()
@@ -6847,12 +6937,13 @@ def aumentos_de_preco(nota_ids=None, desde_nota_id=None, desde_data=None, limite
             JOIN Fornecedores F ON NF.FornecedorID = F.FornecedorID
         """)
         linhas = cursor.fetchall()
+        fatores = _fatores_custo_adicional(cursor)       # [ROYALTIES]
     finally:
         conn.close()
 
     por_produto = {}
     for pid, nome, un, dt, nota_id, item_id, custo, forn, num_nf, cnpj, qtd in linhas:
-        custo = _dec(custo)
+        custo = _dec(custo) * fatores.get(pid, Decimal('1'))
         if (cnpj or '').strip() == CNPJ_FORNECEDOR_INTERNO or custo <= 0 or _dec(qtd) <= 0:
             continue
         por_produto.setdefault(pid, []).append({
@@ -7068,11 +7159,13 @@ def historico_grafico_produto(produto_id, meses=12, hoje=None):
             WHERE PF.ProdutoID = ?
         """, (int(produto_id),))
         compras_todas = []
-        for dt, qtd, custo, forn, cnpj in cur.fetchall():
+        linhas_compras = cur.fetchall()
+        fator = _fatores_custo_adicional(cur).get(int(produto_id), Decimal('1'))   # [ROYALTIES]
+        for dt, qtd, custo, forn, cnpj in linhas_compras:
             dt, qtd = _como_data(dt), _dec(qtd)
             if not dt or qtd <= 0 or (cnpj or '').strip() == CNPJ_FORNECEDOR_INTERNO:
                 continue
-            compras_todas.append({'data': dt, 'qtd': qtd, 'custo': _dec(custo), 'fornecedor': forn or 'Sem nome',
+            compras_todas.append({'data': dt, 'qtd': qtd, 'custo': _dec(custo) * fator, 'fornecedor': forn or 'Sem nome',
                                   'bonificacao': _dec(custo) <= 0})
         cur.execute("""SELECT C.DataContagem, I.QuantidadeContada FROM ItensContagemEstoque I
                        JOIN ContagensEstoque C ON I.ContagemID = C.ContagemID WHERE I.ProdutoID = ?""", (int(produto_id),))
@@ -7691,10 +7784,12 @@ def _custos_por_produto(cursor, data_contagem):
         WHERE PF.ProdutoID IS NOT NULL AND NF.DataEmissao < ?
     """, data_contagem + timedelta(days=1))  # "< dia seguinte": inclui notas do próprio dia, mesmo com hora
     compras = {}
-    for pid, dt, nota_id, item_id, qtd, custo, cnpj in cursor.fetchall():
+    linhas_compras = cursor.fetchall()
+    fatores = _fatores_custo_adicional(cursor)           # [ROYALTIES] custo da nota + % da categoria
+    for pid, dt, nota_id, item_id, qtd, custo, cnpj in linhas_compras:
         if (cnpj or '').strip() == CNPJ_FORNECEDOR_INTERNO or _dec(qtd) <= 0:
             continue
-        compras.setdefault(pid, []).append((_como_data(dt), nota_id or 0, item_id or 0, _dec(qtd), _dec(custo)))
+        compras.setdefault(pid, []).append((_como_data(dt), nota_id or 0, item_id or 0, _dec(qtd), _dec(custo) * fatores.get(pid, Decimal('1'))))
 
     # Custo manual (notas fantasmas): vale só para quem NUNCA foi comprado por nota
     cursor.execute("""
@@ -7752,6 +7847,8 @@ def _custos_por_produto(cursor, data_contagem):
         if custo <= 0 and pid in manuais and manuais[pid][1] > 0:
             custo = manuais[pid][1]
             origem = "Custo manual (só recebido em bonificação)"
+        if pid in fatores and pid in compras and not origem.startswith('Custo manual'):
+            origem += f" + {((fatores[pid] - 1) * 100).normalize():f}% de custo adicional da categoria (royalties)"
         resultado[pid] = {'custo': custo, 'origem': origem, 'suspeito': suspeito}
     return resultado, compras
 
@@ -8273,12 +8370,14 @@ def calcular_sugestao_compra(contagem_id_fim, contagem_id_inicio=None, janela_di
             WHERE INI.Quantidade > 0
         """)
         compras = {}     # pid -> [(data, item_id, qtd, custo, fator, forn_id, forn_nome, desc)]
-        for pid, dt, item_id, qtd, custo, fator, forn_id, forn_nome, cnpj, desc in cursor.fetchall():
+        linhas_compras = cursor.fetchall()
+        fatores_adic = _fatores_custo_adicional(cursor)  # [ROYALTIES]
+        for pid, dt, item_id, qtd, custo, fator, forn_id, forn_nome, cnpj, desc in linhas_compras:
             dt = _como_data(dt)
             if not dt or pid is None or (cnpj or '').strip() == CNPJ_FORNECEDOR_INTERNO:
                 continue
             f = _dec(fator) if fator is not None and _dec(fator) > 0 else Decimal('1')
-            compras.setdefault(pid, []).append((dt, item_id or 0, _dec(qtd), _dec(custo), f, forn_id,
+            compras.setdefault(pid, []).append((dt, item_id or 0, _dec(qtd), _dec(custo) * fatores_adic.get(pid, Decimal('1')), f, forn_id,
                                                 forn_nome or 'Fornecedor sem nome', desc or ''))
         for lista in compras.values():
             lista.sort(key=lambda c: (c[0], c[1]))
@@ -9925,10 +10024,12 @@ def resumo_catalogo():
             WHERE PF.ProdutoID IS NOT NULL AND INI.Quantidade > 0
         """)
         compras = {}
-        for pid, dt, nota_id, qtd, custo, forn, cnpj in cursor.fetchall():
+        linhas_compras = cursor.fetchall()
+        fatores = _fatores_custo_adicional(cursor)       # [ROYALTIES]
+        for pid, dt, nota_id, qtd, custo, forn, cnpj in linhas_compras:
             if (cnpj or '').strip() == CNPJ_FORNECEDOR_INTERNO:
                 continue
-            compras.setdefault(pid, []).append((_como_data(dt) or date.min, nota_id or 0, _dec(qtd), _dec(custo), forn or '?'))
+            compras.setdefault(pid, []).append((_como_data(dt) or date.min, nota_id or 0, _dec(qtd), _dec(custo) * fatores.get(pid, Decimal('1')), forn or '?'))
         cursor.execute("""
             SELECT IC.ProdutoID, C.DataContagem, C.ContagemID, IC.QuantidadeContada
             FROM ItensContagemEstoque IC JOIN ContagensEstoque C ON IC.ContagemID = C.ContagemID

@@ -44,6 +44,7 @@ def _compras(desde):
             WHERE INI.Quantidade > 0 AND NF.DataEmissao >= ?
         """, (desde,))
         linhas = cur.fetchall()
+        fatores = database._fatores_custo_adicional(cur)   # [ROYALTIES] custo real = nota + % da categoria
     finally:
         conn.close()
     itens = []
@@ -51,8 +52,10 @@ def _compras(desde):
         d = _como_data(d)
         if not d or pid is None or (cnpj or '').strip() == database.CNPJ_FORNECEDOR_INTERNO:
             continue
-        q, custo = _dec(q), _dec(custo)
-        itens.append({'data': d, 'qtd': q, 'custo': custo, 'valor': q * custo, 'produto_id': pid,
+        f = fatores.get(pid, Decimal('1'))
+        q, custo_nota = _dec(q), _dec(custo)
+        custo = custo_nota * f
+        itens.append({'data': d, 'qtd': q, 'custo': custo, 'valor': q * custo, 'royalties': q * custo_nota * (f - 1), 'produto_id': pid,
                       'fornecedor_id': fid, 'fornecedor': (fnome or 'Fornecedor').strip(), 'nome': nome or f'Produto {pid}',
                       'categoria': categoria_do(cat), 'unidade': (un or 'UN').strip() or 'UN'})
     return itens
@@ -129,6 +132,7 @@ def gasto_por_categoria(mes=None, hoje=None):
             c['anterior'] += i['valor']
     total = sum((c['atual'] for c in cats.values()), Decimal('0'))
     total_ant = sum((c['anterior'] for c in cats.values()), Decimal('0'))
+    royalties = sum((i['royalties'] for i in itens if inicio <= i['data'] <= fim), Decimal('0'))
     lista = []
     for nome, c in cats.items():
         if not c['atual'] and not c['anterior']:
@@ -140,9 +144,10 @@ def gasto_por_categoria(mes=None, hoje=None):
                                    for p in produtos]})
     lista.sort(key=lambda x: (-x['valor'], -x['anterior']))
     # o que está nas notas mas não é item do estoque (frete à parte, itens "fora do estoque", notas sem vínculo)
-    outros = _total_notas(inicio, fim) - total
+    outros = _total_notas(inicio, fim) - (total - royalties)   # as notas não têm os royalties
     return {'inicio': inicio.isoformat(), 'fim': fim.isoformat(), 'inicio_ant': inicio_ant.isoformat(), 'fim_ant': fim_ant.isoformat(),
             'aberto': aberto, 'total': _num(total, 2), 'total_ant': _num(total_ant, 2), 'pct': _pct(total, total_ant),
+            'royalties': _num(royalties, 2),
             'fora_do_estoque': _num(outros, 2) if outros > Decimal('0.5') else 0,
             'categorias': lista, 'meses': _meses_recentes(hoje), 'mes': inicio.strftime('%Y-%m')}
 
