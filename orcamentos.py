@@ -672,12 +672,18 @@ def comparar(cab, itens):
         fator = _dec(v.get('Fator') or 1)
         fator = fator if fator > 0 else Decimal('1')
         a = veio.setdefault(v['ProdutoID'], {'qtd': Decimal('0'), 'valor': Decimal('0'), 'chegou': None, 'bonificacao': False,
-                                             'descricao': it['DescricaoXML']})
+                                             'descricao': it['DescricaoXML'], 'qtd_paga': Decimal('0'), 'qtd_bonus': Decimal('0'),
+                                             'valor_sem_impostos': Decimal('0')})
         a['qtd'] += it['Quantidade'] * fator
         if tipo == 'bonificacao':
+            # [DEPURAÇÃO] bonificação separada: antes uma linha de bonificação apagava a comparação de preço
+            # do produto inteiro e contava como "veio a mais"
             a['bonificacao'] = True
+            a['qtd_bonus'] += it['Quantidade'] * fator
         else:
+            a['qtd_paga'] += it['Quantidade'] * fator
             a['valor'] += it['Quantidade'] * it['PrecoCustoUnitario']
+            a['valor_sem_impostos'] += it.get('ValorSemImpostos', it['Quantidade'] * it['PrecoCustoUnitario'])
         if conf:
             a['chegou'] = (a['chegou'] or Decimal('0')) + conf['itens'].get(it['NItem'], Decimal('0')) * fator
     linhas = []
@@ -687,8 +693,8 @@ def comparar(cab, itens):
     for i in itens:
         pedidos.add(i['produto_id'])
         a = veio.get(i['produto_id'])
-        qtd_nota = a['qtd'] if a else Decimal('0')
-        if not a:
+        qtd_nota = a['qtd_paga'] if a else Decimal('0')      # o que foi COMPRADO (a bonificação vem à parte)
+        if not a or (qtd_nota <= 0 and a['qtd_bonus'] <= 0):
             sq = 'nao_veio'
         elif qtd_nota + QTD_TOLERANCIA < i['qtd']:
             sq = 'faltou'
@@ -697,14 +703,17 @@ def comparar(cab, itens):
         else:
             sq = 'ok'
         resumo['ok' if sq == 'ok' else sq] += 1
-        preco_nota = sp = pct = None
-        if a and a['qtd'] > 0:
-            pagos = a['qtd'] if not a['bonificacao'] else None
-            if pagos:
-                preco_nota = a['valor'] / a['qtd']
+        preco_nota = preco_sem = sp = pct = None
+        so_impostos = False
+        if a and a['qtd_paga'] > 0:
+            preco_nota = a['valor'] / a['qtd_paga']
+            preco_sem = a['valor_sem_impostos'] / a['qtd_paga']
         if preco_nota is not None and i['preco'] is not None and i['preco'] > 0:
             pct = (preco_nota - i['preco']) / i['preco'] * 100
             sp = 'igual' if abs(pct) < PRECO_IGUAL_PCT else ('mais_caro' if pct > 0 else 'mais_barato')
+            # o preço combinado costuma vir SEM ST/IPI: se bate com o preço da mercadoria, a diferença é só imposto
+            if sp == 'mais_caro' and preco_sem is not None and abs(preco_sem - i['preco']) / i['preco'] * 100 < PRECO_IGUAL_PCT:
+                sp, so_impostos = 'igual', True
             if sp != 'igual':
                 resumo[sp] += 1
                 diferenca_valor += (preco_nota - i['preco']) * qtd_nota
@@ -712,7 +721,9 @@ def comparar(cab, itens):
                        'pedido': _num(i['qtd']), 'nota': _num(qtd_nota), 'chegou': _num(a['chegou']) if a and a['chegou'] is not None else None,
                        'situacao': sq, 'preco_pedido': _num(i['preco'], 4) if i['preco'] is not None else None,
                        'preco_nota': _num(preco_nota, 4) if preco_nota is not None else None,
-                       'preco': sp, 'pct': _num(pct, 1) if pct is not None else None, 'bonificacao': bool(a and a['bonificacao'])})
+                       'preco': sp, 'pct': _num(pct, 1) if pct is not None else None, 'bonificacao': bool(a and a['bonificacao']),
+                       'bonificacao_qtd': _num(a['qtd_bonus']) if a and a['qtd_bonus'] else None,
+                       'preco_sem_impostos': _num(preco_sem, 4) if preco_sem is not None else None, 'so_impostos': so_impostos})
     nao_pedidos = []
     if veio:
         conn = database.get_db_connection()

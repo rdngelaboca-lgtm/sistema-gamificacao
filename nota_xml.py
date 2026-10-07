@@ -128,6 +128,7 @@ def ler_xml_nota_fiscal(caminho_arquivo_xml):
             itens.append({
                 '_vProd': vProd, '_custo_total': custo_total_item,
                 'ValorItemNota': custo_total_item,   # valor do item na nota (p/ "fora do estoque")
+                'ValorSemImpostos': vProd - vDesc,   # só a mercadoria (sem ST/IPI/frete): o preço que o fornecedor costuma passar
                 'NItem': n_item,                     # nº do item na nota (liga com a conferência do app)
                 'cProd': prod.findtext('cProd', default=''),
                 'cEAN': (prod.findtext('cEAN', default='') or '').strip(),
