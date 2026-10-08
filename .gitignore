@@ -10,3 +10,6 @@ logs/
 nfe_distribuicao_estado.json
 nfe_distribuicao_estado.json.*
 notas_xml_sefaz/
+
+# [SEGURANÇA] chave que assina o login (gerada no servidor; nunca no GitHub)
+chave_sessoes.key

@@ -1,0 +1,706 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0E6B63">
+<title>Gela Boca · Gestão · Escala</title>
+<style>
+  :root {
+    --fundo: #F3F6F5; --cartao: #FFFFFF; --texto: #16201F; --suave: #55625F; --linha: #DCE3E1; --linha2: #E6ECEA;
+    --verde: #0E6B63; --verde-esc: #0B564F; --verde-claro: #DDEFEC; --laranja: #B3470F; --laranja-claro: #FBE7DA;
+    --erro: #c62828; --aviso: #b26a00; color-scheme: light;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--fundo); color: var(--texto);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 15px; }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  [hidden] { display: none !important; }
+  .mini { font-size: 13px; } .suave { color: var(--suave); }
+  .btn { border: 1px solid var(--linha); background: var(--cartao); border-radius: 10px; padding: 7px 12px; font-weight: 600;
+    display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .btn:hover { background: var(--linha2); }
+  .btn.prim { background: var(--verde); color: #fff; border-color: var(--verde); }
+  .btn.prim:hover { background: var(--verde-esc); }
+  .btn.perigo { color: var(--erro); }
+  .btn[disabled] { opacity: .55; cursor: default; }
+  .btn.ico { padding: 7px 10px; }
+  .btn .curto { display: none; }
+  input[type=text], input[type=date], input[type=password], select, textarea {
+    border: 1px solid var(--linha); border-radius: 8px; padding: 7px 9px; background: #fff; }
+  input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px solid var(--verde); outline-offset: 1px; }
+
+  /* ---------- topo ---------- */
+  header { background: var(--verde); color: #fff; display: flex; align-items: center; gap: 14px; padding: 8px 16px; flex-wrap: wrap; }
+  header .marca { font-weight: 800; font-size: 17px; }
+  header nav a { color: #fff; text-decoration: none; padding: 6px 10px; border-radius: 8px; font-weight: 600; }
+  header nav a.ativo { background: rgba(255,255,255,.18); }
+  header .dir { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  header .dir a, header .dir button { color: #fff; background: transparent; border: 1px solid rgba(255,255,255,.4);
+    border-radius: 8px; padding: 5px 10px; text-decoration: none; font-weight: 600; }
+
+  .barra { background: var(--cartao); border-bottom: 1px solid var(--linha); padding: 8px 16px; display: flex; flex-direction: column; gap: 8px; }
+  .barra .linha { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .barra .sep { width: 1px; height: 26px; background: var(--linha); margin: 0 4px; }
+  #titulo-dia { font-weight: 700; color: #0056b3; }
+  #resumo { font-weight: 700; font-size: 14px; }
+  .alternar { margin-left: auto; display: inline-flex; border: 1px solid var(--linha); border-radius: 10px; overflow: hidden; }
+  .alternar button { border: 0; background: #fff; padding: 6px 12px; font-weight: 600; }
+  .alternar button.sel { background: var(--verde-claro); color: var(--verde-esc); }
+
+  /* ---------- área principal ---------- */
+  .area { display: flex; gap: 12px; padding: 12px 16px; align-items: flex-start; }
+  .vista { flex: 1; min-width: 0; }
+  #mapa-rolagem { background: #e0e0e0; border: 1px solid var(--linha); border-radius: 10px; overflow: auto; }
+  #mapa-caixa { position: relative; }
+  #mapa { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+  #mapa img { position: absolute; left: 0; top: 0; user-select: none; -webkit-user-drag: none; }
+  .bola-pos { position: absolute; width: 30px; height: 30px; border-radius: 50%; border: 2px solid #fff; transform: translate(-50%, -50%);
+    box-shadow: 0 1px 4px rgba(0,0,0,.35); padding: 0; }
+  .bola-pos.sel { outline: 3px solid #0056b3; outline-offset: 2px; }
+  .rotulo-pos { position: absolute; transform: translateX(-50%); font-size: 10.5px; font-weight: 700; line-height: 1.25;
+    text-align: center; white-space: nowrap; background: rgba(255,255,255,.78); border-radius: 4px; padding: 1px 4px; cursor: pointer; }
+  .rotulo-pos:hover, .rotulo-pos.sel { z-index: 5; background: #fff; box-shadow: 0 1px 6px #0003; }
+  .bola-pos:hover { z-index: 6; }
+  .setor-pos { position: absolute; transform: translate(-50%, -100%); font-size: 10px; color: blue; white-space: nowrap; }
+
+  .grupo-setor { margin-bottom: 14px; }
+  .grupo-setor h4 { margin: 0 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--suave); }
+  .cartoes { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px; }
+  .cartao-pos { display: flex; gap: 10px; align-items: flex-start; text-align: left; background: #fff; border: 1px solid var(--linha);
+    border-radius: 12px; padding: 10px 12px; }
+  .cartao-pos.sel { border-color: #0056b3; box-shadow: 0 0 0 2px #0056b333; }
+  .cartao-pos .bola { width: 16px; height: 16px; border-radius: 50%; flex-shrink: 0; margin-top: 2px; border: 1px solid #0002; }
+
+  /* ---------- painel de escalar ---------- */
+  #painel { width: 380px; flex-shrink: 0; background: #fff; border: 1px solid var(--linha); border-radius: 12px; padding: 12px;
+    display: flex; flex-direction: column; gap: 8px; position: sticky; top: 8px; max-height: calc(100vh - 16px); overflow: auto; }
+  #painel .cab { display: flex; align-items: center; gap: 8px; }
+  #painel .cab b { flex: 1; font-size: 16px; }
+  #painel label { font-size: 13px; font-weight: 700; color: var(--suave); }
+  #painel .duas { display: flex; gap: 8px; align-items: center; }
+  #painel .duas input { width: 90px; text-align: center; }
+  #painel textarea { width: 100%; min-height: 60px; resize: vertical; }
+  #painel select { width: 100%; }
+  table.turnos { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.turnos th { text-align: left; color: var(--suave); font-weight: 600; border-bottom: 1px solid var(--linha); padding: 4px; }
+  table.turnos td { padding: 6px 4px; border-bottom: 1px solid var(--linha2); }
+  table.turnos tr.lin { cursor: pointer; } table.turnos tr.lin:hover td { background: var(--linha2); }
+  table.turnos tr.sel td { background: var(--verde-claro); }
+  #previa-pag { font-weight: 700; color: #1b5e20; font-size: 13px; min-height: 1em; }
+  .botoes { display: flex; gap: 6px; } .botoes .btn { flex: 1; justify-content: center; }
+
+  /* ---------- rodapé: alertas e fluxo ---------- */
+  .inferior { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 0 16px 70px; }
+  .caixa { background: #fff; border: 1px solid var(--linha); border-radius: 12px; padding: 10px 12px; }
+  .caixa h3 { margin: 0 0 6px; font-size: 14px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  #alertas { margin: 0; padding: 0; list-style: none; font-size: 13px; display: flex; flex-direction: column; gap: 4px; }
+  #alertas li { white-space: pre-line; }
+  .n-erro { color: var(--erro); } .n-aviso { color: var(--aviso); } .n-info { color: #555; } .n-ok { color: #1b7a2f; }
+  #grafico svg { width: 100%; height: auto; display: block; }
+
+  #status { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); background: #263238; color: #fff; padding: 9px 16px;
+    border-radius: 10px; font-weight: 600; max-width: 92vw; box-shadow: 0 4px 14px #0004; z-index: 50; }
+  #status.erro { background: var(--erro); } #status.aviso { background: var(--aviso); }
+
+  /* ---------- janelas (modal) ---------- */
+  #fundo-modal { position: fixed; inset: 0; background: #0006; z-index: 40; display: flex; align-items: center; justify-content: center; padding: 12px; }
+  #modal { background: #fff; border-radius: 14px; padding: 16px; width: min(900px, 100%); max-height: 92vh; overflow: auto; }
+  #modal h3 { margin: 0 0 10px; }
+  .tabela-rolagem { max-height: 50vh; overflow: auto; border: 1px solid var(--linha); border-radius: 8px; }
+  table.grade { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.grade th { position: sticky; top: 0; background: #f7f9f8; text-align: left; padding: 6px; border-bottom: 1px solid var(--linha); }
+  table.grade td { padding: 6px; border-bottom: 1px solid var(--linha2); }
+  table.grade tr { cursor: pointer; } table.grade tr.sel td { background: var(--verde-claro); }
+  table.grade tr.def td { color: #1b7a2f; } table.grade tr.pend td { color: var(--erro); }
+  .editor-int { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-top: 10px; }
+  .editor-int input { width: 90px; text-align: center; font-size: 16px; }
+  .progresso { height: 12px; background: var(--linha2); border-radius: 6px; overflow: hidden; margin: 10px 0; }
+  .progresso div { height: 100%; background: var(--verde); width: 0; transition: width .3s; }
+
+  /* ---------- login ---------- */
+  #login { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 16px; }
+  #login form { background: #fff; border: 1px solid var(--linha); border-radius: 16px; padding: 22px; width: min(340px, 100%);
+    display: flex; flex-direction: column; gap: 10px; }
+  #login h2 { margin: 0; } #login input, #login select { width: 100%; padding: 10px; font-size: 16px; }
+  #login .btn { justify-content: center; padding: 11px; }
+  #erro-login { color: var(--erro); min-height: 1.2em; }
+
+  @media (max-width: 1000px) {
+    #painel { position: fixed; right: 0; top: 0; bottom: 0; width: min(420px, 100%); max-height: none; border-radius: 0; z-index: 30;
+      box-shadow: -4px 0 18px #0003; }
+    .inferior { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 700px) {
+    .area, .barra, .inferior { padding-left: 10px; padding-right: 10px; }
+    .barra .sep { display: none; }
+    .barra .acoes .btn .txt { display: none; }
+    .barra .acoes .btn .curto { display: inline; }
+    .alternar { margin-left: 0; }
+    header { padding: 8px 10px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="login" hidden>
+  <form id="form-login">
+    <h2>Gela Boca · Gestão</h2>
+    <div class="suave mini">Entre com o mesmo nome e PIN do app de compras (só gestor).</div>
+    <select id="login-usuario" aria-label="Seu nome"></select>
+    <input id="login-pin" type="password" inputmode="numeric" autocomplete="current-password" placeholder="PIN" maxlength="8" aria-label="PIN">
+    <button class="btn prim" type="submit">Entrar</button>
+    <div id="erro-login"></div>
+    <div id="sem-permissao" hidden>
+      <div class="n-erro">Só o gestor pode usar a Gestão.</div>
+      <button class="btn" type="button" id="btn-trocar">Entrar com outro nome</button>
+    </div>
+  </form>
+</div>
+
+<div id="app" hidden>
+  <header>
+    <span class="marca">Gela Boca · Gestão</span>
+    <nav><a href="/gestao/escala" class="ativo">🗓️ Escala</a></nav>
+    <div class="dir">
+      <span id="quem" class="mini"></span>
+      <a href="/compras/" title="Voltar ao app de compras">📱 App</a>
+      <button id="btn-sair" type="button" title="Sair (também sai do app de compras neste aparelho)">Sair</button>
+    </div>
+  </header>
+
+  <section class="barra">
+    <div class="linha">
+      <b>Data:</b>
+      <button class="btn ico" id="dia-ant" title="Dia anterior">◀</button>
+      <input type="date" id="data" aria-label="Data da escala">
+      <button class="btn ico" id="dia-prox" title="Próximo dia">▶</button>
+      <button class="btn" id="hoje">Hoje</button>
+      <span id="titulo-dia"></span>
+      <button class="btn ico" id="atualizar" title="Atualizar">🔄</button>
+    </div>
+    <div class="linha acoes">
+      <button class="btn" id="btn-copiar">📋 <span class="txt">Copiar escala anterior</span><span class="curto">Copiar</span></button>
+      <span class="sep"></span>
+      <button class="btn" id="btn-auto">🪄 <span class="txt">Gerar intervalos automáticos</span><span class="curto">Auto</span></button>
+      <button class="btn" id="btn-intervalos">⏱️ <span class="txt">Gerenciar intervalos</span><span class="curto">Intervalos</span></button>
+      <span class="sep"></span>
+      <button class="btn" id="btn-telegram">📢 <span class="txt">Enviar escala Telegram</span><span class="curto">Telegram</span></button>
+      <button class="btn" id="btn-whatsapp">📱 <span class="txt">Confirmar escala (WhatsApp)</span><span class="curto">WhatsApp</span></button>
+    </div>
+    <div class="linha">
+      <span id="resumo"></span>
+      <div class="alternar" role="group" aria-label="Ver como">
+        <button id="ver-mapa" type="button">🗺️ Mapa</button><button id="ver-lista" type="button">📋 Lista</button>
+      </div>
+    </div>
+  </section>
+
+  <main class="area">
+    <div class="vista" id="vista-mapa">
+      <div id="mapa-rolagem"><div id="mapa-caixa"><div id="mapa"></div></div></div>
+      <div class="mini suave" style="margin-top:4px">Clique numa posição para escalar. Verde = escalado · vermelho = vazio ·
+        azul = fixo disponível · laranja = escalado de folga · amarelo = turno sem pessoa.</div>
+    </div>
+    <div class="vista" id="vista-lista" hidden></div>
+
+    <aside id="painel" hidden>
+      <div class="cab"><b id="painel-titulo">Escalando</b><button class="btn ico" id="fechar-painel" title="Fechar painel">✕</button></div>
+      <table class="turnos"><thead><tr><th>Nome</th><th>Ent</th><th>Sai</th><th>Intervalo</th></tr></thead><tbody id="turnos-pos"></tbody></table>
+      <label for="pessoa">Funcionário / Freelancer:</label>
+      <select id="pessoa"></select>
+      <div class="duas"><label for="ent">Entrada:</label><input id="ent" inputmode="numeric" maxlength="5" placeholder="08:00">
+        <label for="sai">Saída:</label><input id="sai" inputmode="numeric" maxlength="5" placeholder="16:00"></div>
+      <label>Intervalo (início – fim):</label>
+      <div class="duas"><input id="ini" inputmode="numeric" maxlength="5" aria-label="Início do intervalo">
+        <span>–</span><input id="fim" inputmode="numeric" maxlength="5" aria-label="Fim do intervalo"></div>
+      <div id="diaria" hidden><b class="mini">Diária do freelancer:</b>
+        <label style="font-weight:600;color:inherit"><input type="radio" name="diaria" value="curta"> Curta</label>
+        <label style="font-weight:600;color:inherit"><input type="radio" name="diaria" value="longa"> Longa</label></div>
+      <div id="previa-pag"></div>
+      <label for="foco">Foco do dia:</label>
+      <textarea id="foco" rows="3"></textarea>
+      <div class="botoes">
+        <button class="btn" id="btn-limpar">✨ Limpar</button>
+        <button class="btn perigo" id="btn-excluir">🗑️ Excluir</button>
+        <button class="btn prim" id="btn-salvar">✅ Salvar</button>
+      </div>
+      <div class="mini suave">Enter nos horários salva.</div>
+    </aside>
+  </main>
+
+  <section class="inferior">
+    <div class="caixa"><h3>⚠️ Alertas de regras e conflitos</h3><ul id="alertas"></ul></div>
+    <div class="caixa"><h3>Fluxo do setor: <select id="setor-fluxo" aria-label="Setor do gráfico"></select></h3><div id="grafico"></div></div>
+  </section>
+</div>
+
+<div id="fundo-modal" hidden><div id="modal" role="dialog" aria-modal="true"></div></div>
+<div id="status" hidden></div>
+
+<script>
+'use strict';
+const $ = s => document.querySelector(s);
+const esc = t => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+const HOJE = () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); };
+const S = {usuario: null, data: HOJE(), dia: null, vista: null, pos: null, turno: null, tipoManual: false, extra: null,
+           setorFluxo: null, prevTimer: null};
+
+function lerLocal(k, padrao) { try { return localStorage.getItem(k) || padrao; } catch (e) { return padrao; } }
+function gravarLocal(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+function dataBR(iso, comDia) {
+  const [a, m, d] = iso.split('-');
+  const dias = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'];
+  return `${d}/${m}/${a}` + (comDia ? ` (${dias[new Date(+a, +m - 1, +d).getDay()]})` : '');
+}
+function somarDias(iso, n) {
+  const [a, m, d] = iso.split('-').map(Number);
+  const x = new Date(a, m - 1, d + n);
+  return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
+}
+
+let idStatus = null;
+function status(msg, tipo) {
+  const el = $('#status');
+  el.textContent = msg; el.className = tipo || ''; el.hidden = false;
+  clearTimeout(idStatus); idStatus = setTimeout(() => { el.hidden = true; }, 8000);
+}
+
+class ErroApi extends Error { constructor(m, st, d) { super(m); this.status = st; this.dados = d || {}; } }
+async function api(metodo, url, corpo) {
+  let r;
+  try {
+    r = await fetch(url, {method: metodo, credentials: 'same-origin', cache: 'no-store',
+      headers: corpo ? {'Content-Type': 'application/json'} : {}, body: corpo ? JSON.stringify(corpo) : undefined});
+  } catch (e) { throw new ErroApi('Sem conexão com o servidor da loja.', 0); }
+  let d = null;
+  try { d = await r.json(); } catch (e) {}
+  if (!r.ok) {
+    if (r.status === 401) { mostrarLogin(); }
+    if (r.status === 403) { mostrarLogin(true); }
+    throw new ErroApi((d && d.erro) || `Erro ${r.status}`, r.status, d);
+  }
+  return d;
+}
+// Ação que pode voltar com perguntas ("Escalar mesmo assim?"): pergunta e manda de novo
+async function comPerguntas(url, corpo) {
+  const confirmar = [];
+  for (let i = 0; i < 5; i++) {
+    const r = await api('POST', url, Object.assign({}, corpo, {confirmar}));
+    if (!r.perguntas) return r;
+    for (const p of r.perguntas) {
+      if (!confirm(`${p.titulo}\n\n${p.texto}`)) return null;
+      confirmar.push(p.chave);
+    }
+  }
+  return null;
+}
+function falhou(e) { alert(e.message || String(e)); }
+
+// ------------------------------------------------------------------ login
+async function mostrarLogin(semPermissao) {
+  $('#app').hidden = true; $('#login').hidden = false;
+  $('#sem-permissao').hidden = !semPermissao;
+  if (!$('#login-usuario').options.length) {
+    try {
+      const lista = await api('GET', '/api/compras/usuarios');
+      $('#login-usuario').innerHTML = '<option value="">Seu nome…</option>' + lista.map(u => `<option value="${u.id}">${esc(u.nome)}</option>`).join('');
+    } catch (e) { $('#erro-login').textContent = e.message; }
+  }
+}
+$('#form-login').addEventListener('submit', async ev => {
+  ev.preventDefault();
+  $('#erro-login').textContent = '';
+  const id = $('#login-usuario').value, pin = $('#login-pin').value.trim();
+  if (!id || !pin) { $('#erro-login').textContent = 'Escolha seu nome e digite o PIN.'; return; }
+  try {
+    const r = await api('POST', '/api/compras/login', {funcionario_id: +id, pin});
+    $('#login-pin').value = '';
+    if (!r.usuario.gestor) { $('#sem-permissao').hidden = false; return; }
+    iniciarApp(r.usuario);
+  } catch (e) { $('#erro-login').textContent = e.message; }
+});
+$('#btn-trocar').onclick = async () => { try { await api('POST', '/api/compras/logout'); } catch (e) {} $('#sem-permissao').hidden = true; };
+$('#btn-sair').onclick = async () => {
+  if (!confirm('Sair da Gestão? (neste aparelho também sai do app de compras)')) return;
+  try { await api('POST', '/api/compras/logout'); } catch (e) {}
+  S.usuario = null; mostrarLogin();
+};
+
+async function iniciar() {
+  const q = new URLSearchParams(location.search).get('data');
+  if (q && /^\d{4}-\d{2}-\d{2}$/.test(q)) S.data = q;
+  try {
+    const r = await api('GET', '/api/compras/eu');
+    if (!r.usuario.gestor) return mostrarLogin(true);
+    iniciarApp(r.usuario);
+  } catch (e) { if (e.status !== 401 && e.status !== 403) { mostrarLogin(); $('#erro-login').textContent = e.message; } }
+}
+function iniciarApp(usuario) {
+  S.usuario = usuario;
+  $('#login').hidden = true; $('#app').hidden = false;
+  $('#quem').textContent = '👤 ' + usuario.nome;
+  S.vista = lerLocal('gestao_vista', innerWidth < 700 ? 'lista' : 'mapa');
+  carregarDia();
+}
+
+// ------------------------------------------------------------------ o dia
+async function carregarDia(manterPainel) {
+  $('#data').value = S.data;
+  history.replaceState(null, '', `/gestao/escala?data=${S.data}`);
+  try {
+    S.dia = await api('GET', `/api/gestao/escala/dia?data=${S.data}`);
+  } catch (e) {
+    if (e.status !== 401 && e.status !== 403) {
+      $('#alertas').innerHTML = `<li class="n-erro">❌ Não consegui carregar a escala: ${esc(e.message)}</li>`;
+    }
+    return;
+  }
+  desenhar();
+  if (manterPainel && S.pos != null && S.dia.posicoes.some(p => p.id === S.pos)) abrirPainel(S.pos);
+  else fecharPainel();
+}
+function mudarDia(nova) {
+  if (!nova) return;
+  S.data = nova; S.extra = null; S.pos = null;
+  fecharPainel(); carregarDia();
+}
+$('#data').addEventListener('change', e => mudarDia(e.target.value));
+$('#dia-ant').onclick = () => mudarDia(somarDias(S.data, -1));
+$('#dia-prox').onclick = () => mudarDia(somarDias(S.data, 1));
+$('#hoje').onclick = () => mudarDia(HOJE());
+$('#atualizar').onclick = () => { S.extra = null; carregarDia(true); };
+
+function desenhar() {
+  const d = S.dia;
+  $('#titulo-dia').textContent = d.titulo;
+  $('#resumo').textContent = d.resumo;
+  $('#ver-mapa').classList.toggle('sel', S.vista === 'mapa');
+  $('#ver-lista').classList.toggle('sel', S.vista === 'lista');
+  $('#vista-mapa').hidden = S.vista !== 'mapa';
+  $('#vista-lista').hidden = S.vista !== 'lista';
+  if (S.vista === 'mapa') desenharMapa(); else desenharLista();
+  desenharAlertas();
+  desenharFluxo();
+}
+$('#ver-mapa').onclick = () => { S.vista = 'mapa'; gravarLocal('gestao_vista', 'mapa'); desenhar(); };
+$('#ver-lista').onclick = () => { S.vista = 'lista'; gravarLocal('gestao_vista', 'lista'); desenhar(); };
+
+// O mapa é desenhado como no PC: a imagem da loja esticada em 1180x600 no canto de cima e as
+// posições em pixels (antigas) ou em proporção da área do mapa do PC (tamanho gravado pelo PC).
+function desenharMapa() {
+  const d = S.dia, t = d.tela;
+  let W = t.imagem_largura, H = t.imagem_altura;
+  for (const p of d.posicoes) { W = Math.max(W, p.x + 90); H = Math.max(H, p.y + 80); }
+  const disp = $('#mapa-rolagem').clientWidth - 2;
+  const escala = disp < 700 ? Math.max(disp / W, 0.72) : Math.min(disp / W, 1.5);
+  const caixa = $('#mapa-caixa'), mapa = $('#mapa');
+  caixa.style.width = (W * escala) + 'px'; caixa.style.height = (H * escala) + 'px';
+  mapa.style.width = W + 'px'; mapa.style.height = H + 'px'; mapa.style.transform = `scale(${escala})`;
+  mapa.innerHTML = `<img src="/gestao/mapa.png" alt="Mapa da loja" width="${t.imagem_largura}" height="${t.imagem_altura}"
+      style="width:${t.imagem_largura}px;height:${t.imagem_altura}px">` +
+    d.posicoes.map(p => `
+      ${p.setor ? `<div class="setor-pos" style="left:${p.x}px;top:${p.y - 17}px">[${esc(p.setor)}]</div>` : ''}
+      <button class="bola-pos ${S.pos === p.id ? 'sel' : ''}" data-pos="${p.id}" title="${esc(p.nome)}"
+        style="left:${p.x}px;top:${p.y}px;background:${esc(p.cor)}"></button>
+      <div class="rotulo-pos ${S.pos === p.id ? 'sel' : ''}" data-pos="${p.id}" style="left:${p.x}px;top:${p.y + 18}px"><b>${esc(p.nome)}</b>${p.linhas.map(l => '<br>' + esc(l)).join('')}</div>`).join('');
+}
+function desenharLista() {
+  const grupos = {};
+  for (const p of S.dia.posicoes) (grupos[p.setor || 'Sem setor'] = grupos[p.setor || 'Sem setor'] || []).push(p);
+  const nomes = Object.keys(grupos).sort((a, b) => a.localeCompare(b, 'pt'));
+  $('#vista-lista').innerHTML = nomes.map(g => `<div class="grupo-setor"><h4>${esc(g)}</h4><div class="cartoes">${
+    grupos[g].sort((a, b) => a.nome.localeCompare(b.nome, 'pt')).map(p => `
+      <button class="cartao-pos ${S.pos === p.id ? 'sel' : ''}" data-pos="${p.id}">
+        <span class="bola" style="background:${esc(p.cor)}"></span>
+        <span><b>${esc(p.nome)}</b>${p.linhas.map(l => `<div class="mini">${esc(l)}</div>`).join('')}</span></button>`).join('')
+  }</div></div>`).join('') || '<div class="suave">Nenhuma posição no mapa ainda.</div>';
+}
+document.addEventListener('click', e => {
+  const alvo = e.target.closest('[data-pos]');
+  if (alvo && !e.target.closest('#painel')) abrirPainel(+alvo.dataset.pos);
+});
+let idResize = null;
+addEventListener('resize', () => { clearTimeout(idResize); idResize = setTimeout(() => { if (S.dia && S.vista === 'mapa') desenharMapa(); }, 150); });
+
+function desenharAlertas() {
+  const linhas = [];
+  if (S.extra) linhas.push(`<li class="${S.extra.erro ? 'n-erro' : 'n-info'}">${esc(S.extra.texto)}</li>`);
+  const ic = {erro: '❌', aviso: '⚠️', info: ''};
+  for (const a of S.dia.alertas) linhas.push(`<li class="n-${a.nivel}">${ic[a.nivel] || ''} ${esc(a.texto)}</li>`);
+  $('#alertas').innerHTML = linhas.join('') || '<li class="n-ok">✅ Nenhum conflito encontrado na escala deste dia.</li>';
+}
+function desenharFluxo() {
+  const f = S.dia.fluxo, todos = S.dia.setor_todos;
+  const opcoes = [todos].concat(f.setores);
+  if (!opcoes.includes(S.setorFluxo)) S.setorFluxo = todos;
+  $('#setor-fluxo').innerHTML = opcoes.map(o => `<option ${o === S.setorFluxo ? 'selected' : ''}>${esc(o)}</option>`).join('');
+  const vals = f.series[S.setorFluxo] || [];
+  const W = 680, H = 170, base = 140, larg = W / vals.length, max = Math.max(3, ...vals);
+  const barras = vals.map((v, i) => {
+    const h = v / max * 110, x = i * larg + larg * .15, w = larg * .7;
+    const cor = S.setorFluxo === todos ? (v < 3 ? '#d9534f' : '#5cb85c') : '#33b5e5';
+    return `<rect x="${x}" y="${base - h}" width="${w}" height="${h}" fill="${cor}" rx="2"></rect>
+      ${v > 0 ? `<text x="${x + w / 2}" y="${base - h - 4}" text-anchor="middle" font-size="12" font-weight="700">${v}</text>` : ''}
+      <text x="${x + w / 2}" y="${base + 16}" text-anchor="middle" font-size="11" fill="#555">${f.horas[i]}h</text>`;
+  }).join('');
+  $('#grafico').innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Pessoas trabalhando por hora">
+    <line x1="0" y1="${base}" x2="${W}" y2="${base}" stroke="#ccc"></line>${barras}</svg>
+    <div class="mini suave">Pessoas trabalhando em cada hora (sem quem está no intervalo).${S.setorFluxo === todos ? ' Vermelho = menos de 3.' : ''}</div>`;
+}
+$('#setor-fluxo').addEventListener('change', e => { S.setorFluxo = e.target.value; desenharFluxo(); });
+
+// ------------------------------------------------------------------ painel de escalar
+function posAtual() { return S.dia && S.dia.posicoes.find(p => p.id === S.pos); }
+function abrirPainel(posId) {
+  S.pos = posId;
+  const p = posAtual();
+  if (!p) return;
+  $('#painel').hidden = false;
+  $('#painel-titulo').textContent = 'Escalando: ' + p.nome;
+  $('#turnos-pos').innerHTML = p.turnos.map(t => `<tr class="lin" data-turno="${t.id}"><td>${esc(t.nome || '?')}${
+      t.tipo_diaria ? ` <span class="mini suave">(${t.tipo_diaria})</span>` : ''}${t.pago ? ' <span class="mini" title="Já pago">✅</span>' : ''}</td>
+      <td>${esc(t.entrada)}</td><td>${esc(t.saida)}</td><td>${t.int_ini ? esc(t.int_ini + '–' + t.int_fim) : ''}</td></tr>`).join('')
+    || '<tr><td colspan="4" class="suave">Ninguém escalado nesta posição.</td></tr>';
+  const func = S.dia.pessoas.filter(x => x.tipo === 'func'), free = S.dia.pessoas.filter(x => x.tipo === 'free');
+  $('#pessoa').innerHTML = '<option value="">(Vazio)</option>' +
+    `<optgroup label="Funcionários">${func.map(x => `<option value="${x.chave}" title="${esc(x.folga || '')}">${esc(x.rotulo)}</option>`).join('')}</optgroup>` +
+    (free.length ? `<optgroup label="Freelancers">${free.map(x => `<option value="${x.chave}">${esc(x.rotulo)}</option>`).join('')}</optgroup>` : '');
+  limparForm();
+  if (S.vista === 'mapa') document.querySelectorAll('.bola-pos, .rotulo-pos').forEach(b => b.classList.toggle('sel', +b.dataset.pos === posId));
+  else document.querySelectorAll('.cartao-pos').forEach(b => b.classList.toggle('sel', +b.dataset.pos === posId));
+}
+function fecharPainel() {
+  $('#painel').hidden = true; S.pos = null; S.turno = null;
+  document.querySelectorAll('.bola-pos.sel, .rotulo-pos.sel, .cartao-pos.sel').forEach(b => b.classList.remove('sel'));
+}
+$('#fechar-painel').onclick = fecharPainel;
+
+function hhmm(minutos) { minutos = ((Math.round(minutos) % 1440) + 1440) % 1440; return `${String(Math.floor(minutos / 60)).padStart(2, '0')}:${String(minutos % 60).padStart(2, '0')}`; }
+function saidaPelaJornada() {
+  const v = $('#ent').value;
+  if (/^\d{2}:\d{2}$/.test(v)) {
+    const [h, m] = v.split(':').map(Number);
+    if (h < 24 && m < 60) $('#sai').value = hhmm(h * 60 + m + S.dia.config.jornada_horas * 60);
+  }
+}
+function limparForm() {
+  S.turno = null; S.tipoManual = false;
+  $('#pessoa').value = ''; $('#ent').value = '08:00'; saidaPelaJornada();
+  $('#ini').value = ''; $('#fim').value = ''; $('#foco').value = '';
+  document.querySelectorAll('input[name=diaria]').forEach(r => { r.checked = false; });
+  $('#btn-salvar').textContent = '✅ Salvar';
+  document.querySelectorAll('#turnos-pos tr.sel').forEach(r => r.classList.remove('sel'));
+  atualizarPrevia();
+}
+$('#btn-limpar').onclick = limparForm;
+$('#turnos-pos').addEventListener('click', e => {
+  const tr = e.target.closest('tr[data-turno]');
+  if (!tr) return;
+  const t = posAtual().turnos.find(x => x.id === +tr.dataset.turno);
+  if (!t) return;
+  S.turno = t;
+  document.querySelectorAll('#turnos-pos tr').forEach(r => r.classList.toggle('sel', r === tr));
+  $('#pessoa').value = t.pessoa || '';
+  $('#ent').value = t.entrada; $('#sai').value = t.saida; $('#ini').value = t.int_ini; $('#fim').value = t.int_fim;
+  $('#foco').value = t.foco;
+  S.tipoManual = t.tipo_diaria === 'curta' || t.tipo_diaria === 'longa';
+  document.querySelectorAll('input[name=diaria]').forEach(r => { r.checked = r.value === t.tipo_diaria; });
+  $('#btn-salvar').textContent = '🔄 Atualizar';
+  atualizarPrevia();
+});
+
+// máscara HH:MM (como no PC): só números, os dois pontos entram sozinhos
+function mascara(e) {
+  if (e.inputType && e.inputType.startsWith('delete')) return;
+  const el = e.target;
+  let dig = el.value.replace(/\D/g, '').slice(0, 4);
+  if (dig.length >= 3) dig = dig.slice(0, 2) + ':' + dig.slice(2);
+  if (el.value !== dig) el.value = dig;
+}
+for (const id of ['#ent', '#sai', '#ini', '#fim']) {
+  $(id).addEventListener('input', mascara);
+  $(id).addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); salvarTurno(); } });
+}
+$('#ent').addEventListener('input', () => { saidaPelaJornada(); atualizarPrevia(); });
+$('#sai').addEventListener('input', atualizarPrevia);
+$('#pessoa').addEventListener('change', () => { S.tipoManual = false; atualizarPrevia(); });
+document.querySelectorAll('input[name=diaria]').forEach(r => r.addEventListener('change', () => { S.tipoManual = true; atualizarPrevia(); }));
+
+function ehFree() { return ($('#pessoa').value || '').startsWith('free:'); }
+function tipoDiaria() { const r = document.querySelector('input[name=diaria]:checked'); return r ? r.value : null; }
+function atualizarPrevia() {
+  $('#diaria').hidden = !ehFree();
+  if (!ehFree()) { $('#previa-pag').textContent = ''; return; }
+  clearTimeout(S.prevTimer);
+  S.prevTimer = setTimeout(async () => {
+    try {
+      const r = await api('POST', '/api/gestao/escala/previa-freelancer', {data: S.data, entrada: $('#ent').value,
+        saida: $('#sai').value, tipo_diaria: S.tipoManual ? tipoDiaria() : null, escala_id: S.turno ? S.turno.id : null});
+      if (!S.tipoManual && r.sugerida) document.querySelectorAll('input[name=diaria]').forEach(x => { x.checked = x.value === r.sugerida; });
+      $('#previa-pag').textContent = r.texto;
+    } catch (e) { $('#previa-pag').textContent = ''; }
+  }, 250);
+}
+
+let salvando = false;
+async function salvarTurno() {
+  if (salvando || S.pos == null) return;
+  if (!$('#pessoa').value) { alert('Selecione um funcionário ou freelancer.'); return; }
+  salvando = true; $('#btn-salvar').disabled = true;
+  try {
+    const r = await comPerguntas('/api/gestao/escala/turno', {data: S.data, posicao_id: S.pos, escala_id: S.turno ? S.turno.id : null,
+      pessoa: $('#pessoa').value, entrada: $('#ent').value, saida: $('#sai').value, int_ini: $('#ini').value,
+      int_fim: $('#fim').value, foco: $('#foco').value, tipo_diaria: ehFree() ? tipoDiaria() : null});
+    if (r && r.ok) { status(r.mensagem); S.extra = null; await carregarDia(true); }
+  } catch (e) { falhou(e); }
+  salvando = false; $('#btn-salvar').disabled = false;
+}
+$('#btn-salvar').onclick = salvarTurno;
+$('#btn-excluir').onclick = async () => {
+  if (!S.turno) { alert('Selecione um turno na lista para excluir.'); return; }
+  if (!S.turno.pago && !confirm(`Remover a escalação de ${S.turno.nome || '?'}?`)) return;
+  try {
+    const r = await comPerguntas(`/api/gestao/escala/turno/${S.turno.id}/excluir`, {data: S.data});
+    if (r && r.ok) { status(r.mensagem); await carregarDia(true); }
+  } catch (e) { falhou(e); }
+};
+
+// ------------------------------------------------------------------ janelas
+function abrirModal(html, aoFechar) {
+  $('#modal').innerHTML = html + '<div style="text-align:right;margin-top:12px"><button class="btn" id="fechar-modal">Fechar</button></div>';
+  $('#fundo-modal').hidden = false;
+  S.aoFecharModal = aoFechar || null;
+  $('#fechar-modal').onclick = fecharModal;
+}
+function fecharModal() {
+  $('#fundo-modal').hidden = true; $('#modal').innerHTML = '';
+  const f = S.aoFecharModal; S.aoFecharModal = null;
+  if (f) f();
+}
+$('#fundo-modal').addEventListener('click', e => { if (e.target.id === 'fundo-modal') fecharModal(); });
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  if (!$('#fundo-modal').hidden) fecharModal(); else if (!$('#painel').hidden) fecharPainel();
+});
+
+// Copiar escala
+$('#btn-copiar').onclick = () => {
+  abrirModal(`<h3>📋 Copiar escala para ${esc(dataBR(S.data, true))}</h3>
+    <p>Copiar a escala de qual dia?</p>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <button class="btn prim" data-copiar="ontem">Copiar de ontem (${esc(dataBR(somarDias(S.data, -1), true))})</button>
+      <button class="btn prim" data-copiar="semana">Copiar semana passada (${esc(dataBR(somarDias(S.data, -7), true))})</button></div>
+    <p class="mini suave">Se este dia já tiver gente escalada, a escala dele será substituída (o sistema pergunta antes).</p>`);
+  document.querySelectorAll('[data-copiar]').forEach(b => b.onclick = async () => {
+    try {
+      const r = await comPerguntas('/api/gestao/escala/copiar', {data: S.data, origem: b.dataset.copiar});
+      if (r && r.ok) { fecharModal(); status(r.mensagem); S.extra = null; carregarDia(); }
+    } catch (e) { falhou(e); }
+  });
+};
+
+// Intervalos automáticos
+$('#btn-auto').onclick = async () => {
+  const b = $('#btn-auto'); b.disabled = true;
+  try {
+    const r = await comPerguntas('/api/gestao/escala/intervalos/gerar', {data: S.data});
+    if (r && r.ok) {
+      await carregarDia(true);
+      S.extra = {texto: r.texto, erro: r.erros.length > 0}; desenharAlertas();
+      if (!r.aplicados) alert('Nenhum intervalo pôde ser agendado automaticamente.\nVeja o motivo nos alertas.');
+      else if (r.erros.length) alert(`${r.aplicados} intervalos agendados, mas houve conflitos!\nVerifique os alertas.`);
+      else status(`${r.aplicados} intervalos agendados com sucesso!`);
+    }
+  } catch (e) { falhou(e); }
+  b.disabled = false;
+};
+
+// Gerenciar intervalos
+$('#btn-intervalos').onclick = async () => {
+  let lista;
+  try { lista = (await api('GET', `/api/gestao/escala/intervalos?data=${S.data}`)).turnos; } catch (e) { return falhou(e); }
+  const dataJanela = S.data;
+  const st = {sel: null};
+  abrirModal(`<h3>⏱️ Gerenciar intervalos — ${esc(dataBR(dataJanela, true))}</h3>
+    <div class="tabela-rolagem"><table class="grade"><thead><tr><th>Setor</th><th>Posição</th><th>Funcionário</th>
+      <th>Entrada</th><th>Saída</th><th>Início int.</th><th>Fim int.</th></tr></thead><tbody id="tab-int"></tbody></table></div>
+    <div class="editor-int"><div style="flex:1 1 100%;font-weight:700;color:#0056b3" id="int-nome">Selecione alguém na lista…</div>
+      <label>Início do intervalo<br><input id="int-ini" inputmode="numeric" maxlength="5"></label>
+      <label>Fim do intervalo<br><input id="int-fim" inputmode="numeric" maxlength="5"></label>
+      <button class="btn prim" id="int-salvar">✅ SALVAR (Enter)</button></div>
+    <div class="mini suave" style="margin-top:6px">Verde = já tem intervalo · vermelho = sem intervalo. Deixe os dois vazios para remover.</div>`,
+    () => carregarDia(true));
+  const linhaHtml = t => `<td>${esc(t.setor)}</td><td>${esc(t.posicao)}</td><td>${esc(t.nome)}</td><td>${esc(t.entrada)}</td>
+      <td>${esc(t.saida)}</td><td>${esc(t.int_ini)}</td><td>${esc(t.int_fim)}</td>`;
+  $('#tab-int').innerHTML = lista.map((t, i) => `<tr data-i="${i}" class="${t.definido ? 'def' : 'pend'}">${linhaHtml(t)}</tr>`).join('')
+    || '<tr><td colspan="7" class="suave">Ninguém escalado neste dia.</td></tr>';
+  function selecionar(i) {
+    st.sel = i;
+    document.querySelectorAll('#tab-int tr').forEach(r => r.classList.toggle('sel', +r.dataset.i === i));
+    const t = lista[i];
+    $('#int-nome').textContent = `${t.nome} (${t.setor} - ${t.posicao}) | Turno: ${t.entrada} às ${t.saida}`;
+    $('#int-ini').value = t.int_ini; $('#int-fim').value = t.int_fim;
+    $('#int-ini').focus(); $('#int-ini').select();
+    const tr = document.querySelector(`#tab-int tr[data-i="${i}"]`); if (tr) tr.scrollIntoView({block: 'nearest'});
+  }
+  $('#tab-int').onclick = e => { const tr = e.target.closest('tr[data-i]'); if (tr) selecionar(+tr.dataset.i); };
+  for (const id of ['#int-ini', '#int-fim']) $(id).addEventListener('input', mascara);
+  $('#int-ini').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('#int-fim').focus(); $('#int-fim').select(); } });
+  $('#int-fim').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); salvarInt(); } });
+  $('#int-salvar').onclick = salvarInt;
+  async function salvarInt() {
+    if (st.sel == null) return;
+    const t = lista[st.sel];
+    try {
+      const r = await api('POST', '/api/gestao/escala/intervalos/salvar', {data: dataJanela, escala_id: t.id,
+        int_ini: $('#int-ini').value, int_fim: $('#int-fim').value});
+      t.int_ini = r.int_ini; t.int_fim = r.int_fim; t.definido = !!r.int_ini;
+      const tr = document.querySelector(`#tab-int tr[data-i="${st.sel}"]`);
+      tr.innerHTML = linhaHtml(t); tr.className = t.definido ? 'def' : 'pend';
+      if (st.sel + 1 < lista.length) selecionar(st.sel + 1);
+      else { tr.classList.add('sel'); alert('Último da lista editado!'); }
+    } catch (e) { falhou(e); }
+  }
+};
+
+// Telegram
+$('#btn-telegram').onclick = async () => {
+  if (!confirm(`Deseja enviar a escala do dia ${dataBR(S.data, true)} para o grupo TODOS OS FUNCIONÁRIOS no Telegram?`)) return;
+  const b = $('#btn-telegram'); b.disabled = true;
+  try { const r = await api('POST', '/api/gestao/escala/telegram', {data: S.data}); status(r.mensagem); }
+  catch (e) { alert('Falha ao enviar Telegram: ' + e.message); }
+  b.disabled = false;
+};
+
+// WhatsApp (o envio roda no servidor: dá para fechar a página)
+$('#btn-whatsapp').onclick = async () => {
+  let pv;
+  try { pv = await api('GET', `/api/gestao/escala/whatsapp/previa?data=${S.data}`); } catch (e) { return falhou(e); }
+  if (!pv.pessoas) { alert('Nenhuma pessoa com telefone encontrada na escala deste dia.'); return; }
+  if (!confirm(`Encontradas ${pv.pessoas} pessoas com telefone na escala.\n\nDeseja enviar a confirmação de horário individual ` +
+               `para o WhatsApp de cada um via BOT?\n\n⚠️ Isso pode levar alguns segundos (pode fechar esta página: o envio continua no servidor).`)) return;
+  let job;
+  try { job = await api('POST', '/api/gestao/escala/whatsapp', {data: S.data}); } catch (e) { return falhou(e); }
+  abrirModal(`<h3>📱 Confirmando a escala no WhatsApp</h3><div id="wpp-txt">Enviando…</div>
+    <div class="progresso"><div id="wpp-barra"></div></div><div class="mini suave">Pode fechar: o envio continua no servidor.</div>`);
+  const tick = async () => {
+    try { job = await api('GET', `/api/gestao/escala/whatsapp/${job.id}`); } catch (e) { return; }
+    if (!$('#wpp-txt')) return;                       // janela fechada
+    $('#wpp-barra').style.width = (job.total ? 100 * job.feitos / job.total : 100) + '%';
+    if (job.terminado) {
+      $('#wpp-txt').innerHTML = `<b>Processo finalizado!</b><br>✅ Enviados: ${job.enviados}<br>❌ Falhas: ${job.erros}`;
+      if (!job.erros) status(`WhatsApp: ${job.enviados} confirmação(ões) enviada(s). ✅`);
+      return;
+    }
+    $('#wpp-txt').textContent = `Enviando ${Math.min(job.feitos + 1, job.total)} de ${job.total}…`;
+    setTimeout(tick, 1000);
+  };
+  tick();
+};
+
+iniciar();
+</script>
+</body>
+</html>

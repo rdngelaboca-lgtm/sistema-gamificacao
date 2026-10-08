@@ -258,7 +258,7 @@
 
 // ---------------------------------------------------------------- utilidades
 const CHAVE = 'gb_compras_v1';
-const VERSAO_APP = '37';   // aparece no rodapé do início: confira se o celular pegou a versão nova
+const VERSAO_APP = '38';   // aparece no rodapé do início: confira se o celular pegou a versão nova
 const $app = document.getElementById('app');
 const DIAS_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];            // 1=Dom ... 7=Sáb (padrão do sistema)
 const FRACIONADAS = ['KG', 'G', 'GR', 'L', 'LT', 'ML', 'M'];
@@ -1746,8 +1746,10 @@ TELAS.gestao = p => {
   } else {
     corpo = conteudoResumo(E.painel);
   }
+  // [GESTÃO WEB] atalho para a Escala da loja (Gestão no navegador; abre na loja e fora dela)
+  const atalhoEscala = `<a class="btn claro medio" href="/gestao/escala">🗓️ Escala da loja</a>`;
   return `${faixaRede()}${topo('Gestão', 'Relatórios e conferências (só o gestor vê)')}
-    <div class="corpo"><div class="filtros">${abas}</div>${corpo}</div>${navbar('gestao')}`;
+    <div class="corpo">${atalhoEscala}<div class="filtros">${abas}</div>${corpo}</div>${navbar('gestao')}`;
 };
 // ---------------------------------------------------------------- [RELATÓRIOS] categoria, inflação, onde comprar mais barato
 const NOMES_MES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];

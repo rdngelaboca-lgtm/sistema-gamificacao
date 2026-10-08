@@ -14,7 +14,7 @@ usado a versão Web em paralelo por alguns dias.
   compras (`/compras`, celular) continua como está.
 - Os programas do PC continuam funcionando durante toda a migração.
 
-Legenda: ✅ já existe na Web/app (só conferir) · 🟡 existe em parte · ⬜ falta fazer
+Legenda: ✅ já existe na Web/app (só conferir) · 🧪 pronto na Web, falta vocês usarem e aprovarem · 🟡 existe em parte · ⬜ falta fazer
 
 ---
 
@@ -125,29 +125,29 @@ mas não deixa **mexer**. Os funcionários usam o bot do Telegram (continua igua
 Levantamento completo do programa (10/10/2026): 43 funções. O painel da TV mostra só o mapa,
 o fluxo e as pausas de **hoje**, sem deixar mexer. Na Web fica em **Gestão › Escala**.
 
-### Entrega 1 — Escala do dia
+### Entrega 1 — Escala do dia (instalada em 10/2026: Gestão › Escala)
 | Função | Status |
 |---|---|
-| 1. Data: calendário, ◀ ▶, Hoje; dia da semana, "(hoje)" e 🎉 feriado | ⬜ |
-| 2. Mapa da loja (imagem) com as posições no mesmo lugar do PC; cores: verde escalado, vermelho vazio, azul fixo sugerido, laranja de folga, amarelo turno sem pessoa | 🟡 |
-| 3. Em cada posição: nomes e horários, [curta]/[longa] do freelancer, [FOLGA], (Fixo), setor | ⬜ |
-| 4. Resumo do dia: pessoas, posições vazias, custo dos freelancers e quantos já pagos | ⬜ |
-| 5. Alertas do dia: 2 lugares ao mesmo tempo, folga/férias/afastamento, sem horário, turno sem pessoa, posição removida, mais de 10h no dia, intervalo errado, mais de 6h sem intervalo | ⬜ |
-| 6. Gráfico do fluxo: pessoas por hora (7h–23h) sem quem está no intervalo, filtro por setor, vermelho com menos de 3 | 🟡 |
-| 7. Clicar na posição abre o painel com os turnos dela (vários turnos por posição) | ⬜ |
-| 8. Escolher funcionário (com [FOLGA] marcado) ou freelancer | ⬜ |
-| 9. Entrada, saída (preenchida pela jornada padrão) e intervalo, com máscara HH:MM | ⬜ |
-| 10. Freelancer: diária Curta/Longa (sugerida pela duração, dá para trocar) e prévia do valor (✅ já pago) | ⬜ |
-| 11. Foco do dia (texto do turno) | ⬜ |
-| 12. Salvar / atualizar / limpar / excluir turno; Enter salva | ⬜ |
-| 13. Conferências ao salvar: horário válido, entrada ≠ saída, intervalo completo e dentro do turno, mesma pessoa em 2 lugares (bloqueia), funcionário de folga/férias (pergunta), mais de 10h (pergunta), turno de freelancer já pago (avisa) | ⬜ |
-| 14. Excluir turno já pago: avisa que o pagamento continua registrado | ⬜ |
-| 15. 📋 Copiar escala de ontem / da semana passada (avisa que substitui a do dia) | ⬜ |
-| 16. 🪄 Gerar intervalos automáticos (pergunta antes de substituir os feitos à mão, mostra conflitos) | ⬜ |
-| 17. ⏱️ Gerenciar intervalos: lista do dia por setor e horário, verde/vermelho, Enter salva e passa para o próximo | ⬜ |
-| 18. 📢 Enviar a escala no grupo do Telegram (com confirmação) | ⬜ |
-| 19. 📱 Confirmar escala no WhatsApp: mensagem a cada pessoa (data, posição, horário, intervalo) + diretriz do setor; resumo enviados/falhas | ⬜ |
-| 20. Mensagens rápidas de status | ⬜ |
+| 1. Data: calendário, ◀ ▶, Hoje; dia da semana, "(hoje)" e 🎉 feriado | 🧪 |
+| 2. Mapa da loja (imagem) com as posições no mesmo lugar do PC; cores: verde escalado, vermelho vazio, azul fixo sugerido, laranja de folga, amarelo turno sem pessoa | 🧪 |
+| 3. Em cada posição: nomes e horários, [curta]/[longa] do freelancer, [FOLGA], (Fixo), setor | 🧪 |
+| 4. Resumo do dia: pessoas, posições vazias, custo dos freelancers e quantos já pagos | 🧪 |
+| 5. Alertas do dia: 2 lugares ao mesmo tempo, folga/férias/afastamento, sem horário, turno sem pessoa, posição removida, mais de 10h no dia, intervalo errado, mais de 6h sem intervalo | 🧪 |
+| 6. Gráfico do fluxo: pessoas por hora (7h–23h) sem quem está no intervalo, filtro por setor, vermelho com menos de 3 | 🧪 |
+| 7. Clicar na posição abre o painel com os turnos dela (vários turnos por posição) | 🧪 |
+| 8. Escolher funcionário (com [FOLGA] marcado) ou freelancer | 🧪 |
+| 9. Entrada, saída (preenchida pela jornada padrão) e intervalo, com máscara HH:MM | 🧪 |
+| 10. Freelancer: diária Curta/Longa (sugerida pela duração, dá para trocar) e prévia do valor (✅ já pago) | 🧪 |
+| 11. Foco do dia (texto do turno) | 🧪 |
+| 12. Salvar / atualizar / limpar / excluir turno; Enter salva | 🧪 |
+| 13. Conferências ao salvar: horário válido, entrada ≠ saída, intervalo completo e dentro do turno, mesma pessoa em 2 lugares (bloqueia), funcionário de folga/férias (pergunta), mais de 10h (pergunta), turno de freelancer já pago (avisa) | 🧪 |
+| 14. Excluir turno já pago: avisa que o pagamento continua registrado | 🧪 |
+| 15. 📋 Copiar escala de ontem / da semana passada (avisa que substitui a do dia) | 🧪 |
+| 16. 🪄 Gerar intervalos automáticos (pergunta antes de substituir os feitos à mão, mostra conflitos) | 🧪 |
+| 17. ⏱️ Gerenciar intervalos: lista do dia por setor e horário, verde/vermelho, Enter salva e passa para o próximo | 🧪 |
+| 18. 📢 Enviar a escala no grupo do Telegram (com confirmação) | 🧪 |
+| 19. 📱 Confirmar escala no WhatsApp: mensagem a cada pessoa (data, posição, horário, intervalo) + diretriz do setor; resumo enviados/falhas | 🧪 |
+| 20. Mensagens rápidas de status | 🧪 |
 
 ### Entrega 2 — Cadastros e configurações
 | Função | Status |
@@ -227,7 +227,7 @@ Dados sensíveis: fica **por último**, com a segurança já testada.
 ## Etapas (ordem combinada — atualizada em 10/10/2026)
 
 0. ✅ Inventário (este arquivo).
-1. **Base** — área `/gestao` (só rede da loja; a internet continua só com `/compras`), login
+1. 🧪 **Base** — área `/gestao` (só rede da loja; a internet continua só com `/compras`), login
    das 2 contas (senha guardada de forma segura, sessão que expira, bloqueio após tentativas
    erradas, registro de quem fez o quê). Vai junto com a Entrega 1 da Escala.
 2. **Escala da Loja** — Entrega 1 (escala do dia) → Entrega 2 (cadastros e configurações) →
@@ -248,15 +248,18 @@ Cada etapa: construir → testar → usar em paralelo com o PC → marcar ✅ aq
 - No computador do servidor: `http://localhost:5000/gestao`
 - Nos outros computadores/celulares da loja (mesma rede): `http://IP-DO-SERVIDOR:5000/gestao`
   (o mesmo endereço do painel da TV, trocando o final por `/gestao`).
-- Pela internet: bloqueado (só o app de compras abre por fora).
+- Pelo app de compras: aba **Gestão › 🗓️ Escala da loja** (abre direto, sem pedir o PIN de novo).
+- Pela internet (fora da loja): liberado para a Gestão desde 10/2026, a pedido do Rodrigo — só gestor,
+  com o login do app (nome + PIN, bloqueio após erros). Para fechar: `GESTAO_PELA_INTERNET = False` no config.py.
+- Login: o mesmo do app de compras (nome + PIN); só quem é gestor no app entra.
 
 ## Resumo da contagem
 
-| Programa | Funções | ✅ | 🟡 | ⬜ |
-|---|---|---|---|---|
-| Gestão de Estoque | 41 | 8 | 8 | 25 |
-| Painel do Gestor | 17 | 0 | 5 | 12 |
-| Escala da Loja | 43 | 0 | 2 | 41 |
-| Gestão de Pessoas | 8 | 0 | 1 | 7 |
-| Agendamentos | 5 | 3 | 1 | 1 |
-| **Total** | **114** | **11** | **17** | **86** |
+| Programa | Funções | ✅ | 🧪 | 🟡 | ⬜ |
+|---|---|---|---|---|---|
+| Gestão de Estoque | 41 | 8 | 0 | 8 | 25 |
+| Painel do Gestor | 17 | 0 | 0 | 5 | 12 |
+| Escala da Loja | 43 | 0 | 20 | 0 | 23 |
+| Gestão de Pessoas | 8 | 0 | 0 | 1 | 7 |
+| Agendamentos | 5 | 3 | 0 | 1 | 1 |
+| **Total** | **114** | **11** | **20** | **15** | **68** |

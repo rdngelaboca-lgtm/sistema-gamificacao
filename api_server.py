@@ -89,9 +89,42 @@ import re
 import notificador_whatsapp
 
 app = Flask(__name__)
+
+
+def _chave_das_sessoes():
+    """
+    [SEGURANÇA] Chave que assina o login (cookie de sessão). Antes vinha do config.py, que está
+    no GitHub PÚBLICO: com ela, qualquer pessoa conseguia fabricar um login de gestor no app
+    pela internet sem saber o PIN. Agora a chave é sorteada no próprio servidor na primeira vez
+    e fica no arquivo 'chave_sessoes.key' (fora do GitHub). Apagar o arquivo = todos entram de novo.
+    """
+    import secrets
+    caminho = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'chave_sessoes.key')
+    try:
+        with open(caminho, encoding='utf-8') as f:
+            chave = f.read().strip()
+        if len(chave) >= 32:
+            return chave
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        logger.error(f"Não consegui ler {caminho}: {e}")
+    chave = secrets.token_hex(32)
+    try:
+        fd = os.open(caminho, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            f.write(chave)
+        logger.info("Chave nova das sessões criada (chave_sessoes.key). Todos precisam entrar de novo uma vez.")
+    except FileExistsError:            # outro processo criou ao mesmo tempo: usa a dele
+        with open(caminho, encoding='utf-8') as f:
+            chave = f.read().strip() or chave
+    except Exception as e:             # sem permissão de gravar: usa uma chave só desta execução
+        logger.error(f"Não consegui gravar {caminho} ({e}); a chave vale até o servidor reiniciar.")
+    return chave
+
+
 # Configuração de Segurança de Sessão
-app.secret_key = config.SECRET_KEY_FLASK
-# Se der erro de chave não encontrada, use temporariamente: app.secret_key = "chave_provisoria_segura"
+app.secret_key = _chave_das_sessoes()
 # [DEPURAÇÃO] Limite de tamanho dos arquivos enviados (antes era ilimitado: um arquivo
 # gigante podia encher o disco do servidor). Ajustável no config.py.
 app.config['MAX_CONTENT_LENGTH'] = getattr(config, 'API_TAMANHO_MAX_UPLOAD_MB', 20) * 1024 * 1024
@@ -144,6 +177,11 @@ def _pedido_do_proprio_computador():
 # [APP DE COMPRAS] Pela internet (túnel) só o app de compras fica disponível.
 # O painel da TV, documentos, agendamentos etc. continuam só na rede da loja.
 CAMINHOS_LIBERADOS_NA_INTERNET = tuple(getattr(config, 'TUNEL_CAMINHOS_LIBERADOS', ('/compras', '/api/compras')))
+# [GESTÃO WEB] A área de Gestão (escala...) também abre pela internet, como pediu o Rodrigo:
+# só gestor, com o mesmo login do app (PIN com bloqueio após erros). Para fechar de novo,
+# coloque no config.py:  GESTAO_PELA_INTERNET = False
+if getattr(config, 'GESTAO_PELA_INTERNET', True):
+    CAMINHOS_LIBERADOS_NA_INTERNET += ('/gestao', '/api/gestao')
 
 
 @app.before_request
@@ -2132,6 +2170,129 @@ def api_compras_relatorio(usuario, nome):
     if nome == 'mais-barato':
         return _resposta_compras(relatorios.onde_mais_barato, request.args.get('mes'))
     return jsonify({"erro": "Relatório desconhecido."}), 404
+
+
+
+# ==============================================================================
+# == [GESTÃO WEB] Gestão › Escala (o programa escala_loja_main.py no navegador) ==
+# ==============================================================================
+# Só GESTOR, com o mesmo login do app de compras (nome + PIN). Abre na rede da loja
+# e pela internet (ver GESTAO_PELA_INTERNET). Tudo o que muda fica no log com o nome.
+try:
+    import gestao_escala
+except Exception as _erro_import_gestao:
+    gestao_escala = None
+    logger.error(f"Gestão › Escala DESLIGADA: não consegui carregar gestao_escala.py ({_erro_import_gestao})")
+
+
+def _resposta_gestao(funcao, *args, **kwargs):
+    if gestao_escala is None:
+        return jsonify({"erro": "A Escala na Web não está instalada no servidor (falta gestao_escala.py)."}), 503
+    try:
+        return jsonify(funcao(*args, **kwargs)), 200
+    except gestao_escala.ErroEscala as e:
+        return jsonify({"erro": str(e)}), e.status
+    except Exception as e:
+        logger.exception(f"Erro na Gestão ({request.path}): {e}")
+        return jsonify({"erro": "Erro no servidor. Tente de novo; se continuar, veja o log."}), 500
+
+
+@app.route('/gestao')
+@app.route('/gestao/')
+def pagina_gestao():
+    return redirect('/gestao/escala')
+
+
+@app.route('/gestao/escala')
+def pagina_gestao_escala():
+    """A página cuida do login (mesmo nome + PIN do app; só gestor)."""
+    resposta = app.make_response(render_template('gestao.html'))
+    resposta.headers['Cache-Control'] = 'no-store'
+    return resposta
+
+
+@app.route('/gestao/mapa.png')
+def gestao_mapa_imagem():
+    usuario = session.get('compras_usuario')
+    if not usuario or not usuario.get('gestor'):
+        return jsonify({"erro": "Entre com seu PIN."}), 401
+    pasta = os.path.dirname(os.path.abspath(__file__))
+    for caminho in (os.path.join(pasta, 'layout_loja.png'), os.path.join(pasta, 'static', 'img', 'layout_loja.png')):
+        if os.path.isfile(caminho):
+            return send_from_directory(os.path.dirname(caminho), os.path.basename(caminho), mimetype='image/png')
+    return jsonify({"erro": "Imagem do mapa (layout_loja.png) não encontrada."}), 404
+
+
+@app.route('/api/gestao/escala/dia', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_escala_dia(usuario):
+    return _resposta_gestao(gestao_escala.dia, request.args.get('data'))
+
+
+@app.route('/api/gestao/escala/previa-freelancer', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_escala_previa_free(usuario):
+    return _resposta_gestao(gestao_escala.previa_freelancer, ler_json() or {})
+
+
+@app.route('/api/gestao/escala/turno', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_escala_turno(usuario):
+    return _resposta_gestao(gestao_escala.salvar_turno, ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/escala/turno/<int:escala_id>/excluir', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_escala_excluir(usuario, escala_id):
+    return _resposta_gestao(gestao_escala.excluir_turno, escala_id, ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/escala/copiar', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_escala_copiar(usuario):
+    return _resposta_gestao(gestao_escala.copiar, ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/escala/intervalos', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_escala_intervalos(usuario):
+    return _resposta_gestao(gestao_escala.listar_intervalos, request.args.get('data'))
+
+
+@app.route('/api/gestao/escala/intervalos/gerar', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_escala_intervalos_gerar(usuario):
+    return _resposta_gestao(gestao_escala.gerar_intervalos, ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/escala/intervalos/salvar', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_escala_intervalos_salvar(usuario):
+    return _resposta_gestao(gestao_escala.salvar_intervalo, ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/escala/telegram', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_escala_telegram(usuario):
+    return _resposta_gestao(gestao_escala.enviar_telegram, ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/escala/whatsapp/previa', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_escala_whatsapp_previa(usuario):
+    return _resposta_gestao(gestao_escala.previa_whatsapp, request.args.get('data'))
+
+
+@app.route('/api/gestao/escala/whatsapp', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_escala_whatsapp(usuario):
+    return _resposta_gestao(gestao_escala.iniciar_whatsapp, ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/escala/whatsapp/<job_id>', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_escala_whatsapp_andamento(usuario, job_id):
+    return _resposta_gestao(gestao_escala.andamento_whatsapp, job_id)
 
 
 if __name__ == "__main__":

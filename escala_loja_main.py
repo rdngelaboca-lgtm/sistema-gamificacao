@@ -37,301 +37,16 @@ import time
 
 logger = logging.getLogger(__name__)
 
-# [DEPURAÇÃO] Padrão de horário aceito nos campos (00:00 até 23:59)
-PADRAO_HORA = re.compile(r'^([01]\d|2[0-3]):[0-5]\d$')
-
-
-def hora_ou_none(texto):
-    """
-    Devolve 'HH:MM' válido ou None se o campo estiver vazio.
-    Lança ValueError se o texto estiver preenchido com formato errado.
-
-    [DEPURAÇÃO] Antes o texto vazio '' ia direto para o banco. No SQL Server,
-    '' convertido para TIME vira 00:00 (MEIA-NOITE): um intervalo apagado virava
-    "intervalo de 00:00 às 00:00" e bagunçava o gráfico e as mensagens.
-    """
-    texto = (texto or "").strip()
-    if not texto:
-        return None
-    if not PADRAO_HORA.match(texto):
-        raise ValueError(texto)
-    return texto
-
-
-def normalizar_folga(valor):
-    """Converte o dia de folga (1=Dom..7=Sáb) para número. None/0/texto inválido = sem folga."""
-    try:
-        valor = int(valor)
-    except (TypeError, ValueError):
-        return None
-    return valor if valor > 0 else None  # 0 = "sem folga definida"
-
-
-def folga_do_funcionario(func):
-    """
-    [DEPURAÇÃO] O código procurava o campo 'DiaFolga', mas a coluna do banco se chama
-    'DiaDeFolga'. Resultado: o aviso "[FOLGA]" no mapa NUNCA aparecia. Esta função
-    lê o nome certo (e aceita o antigo, por segurança).
-    """
-    valor = getattr(func, 'DiaDeFolga', None)
-    if valor is None:
-        valor = getattr(func, 'DiaFolga', None)
-    return normalizar_folga(valor)
-
-
-def formatar_hora_curta(v):
-    """HH:MM a partir de time/datetime/texto; '' se vazio."""
-    if not v:
-        return ""
-    return v.strftime('%H:%M') if hasattr(v, 'strftime') else str(v)[:5]
-
-
-# ------------------------------------------------------------------------------
-# [AUDITORIA ESCALA] Regras do dia (conflitos, folga, jornada, intervalo)
-# Funções "puras" (não usam a tela nem o banco): dá para testar sozinhas.
-# ------------------------------------------------------------------------------
-SETOR_TODOS = "Todos os setores"
-LIMITE_JORNADA_DIA_MIN = 10 * 60      # CLT: 8h normais + no máximo 2h extras por dia
-TURNO_EXIGE_INTERVALO_MIN = 6 * 60    # CLT art. 71: acima de 6h precisa de intervalo
-
-
-def minutos_do_horario(v):
-    """time / datetime / timedelta / 'HH:MM[:SS[.fração]]' -> minutos desde 00:00 (ou None)."""
-    if v is None or v == "":
-        return None
-    if isinstance(v, timedelta):
-        return int(v.total_seconds() // 60) % 1440
-    if hasattr(v, 'hour') and hasattr(v, 'minute'):
-        return v.hour * 60 + v.minute
-    m = re.match(r'^\s*(\d{1,2}):(\d{2})', str(v))
-    if not m or int(m.group(1)) > 23 or int(m.group(2)) > 59:
-        return None
-    return int(m.group(1)) * 60 + int(m.group(2))
-
-
-def faixa_turno(ent, sai):
-    """(início, fim) em minutos; turno que vira a meia-noite ganha +24h no fim. None se faltar horário."""
-    a, b = minutos_do_horario(ent), minutos_do_horario(sai)
-    if a is None or b is None:
-        return None
-    if b <= a:
-        b += 1440
-    return a, b
-
-
-def sobrepoe(f1, f2):
-    return f1[0] < f2[1] and f2[0] < f1[1]
-
-
-def hm(minutos):
-    """570 -> '9h30'."""
-    return fmt_horas(minutos=minutos)
-
-
-def problema_intervalo(ent, sai, ini, fim):
-    """Texto do problema do intervalo (fora do turno / fim antes do início) ou None se estiver certo/vazio."""
-    if not ini and not fim:
-        return None
-    if not ini or not fim:
-        return "intervalo só com início ou só com fim"
-    turno = faixa_turno(ent, sai)
-    if turno is None:
-        return None
-    a, b = minutos_do_horario(ini), minutos_do_horario(fim)
-    if a is None or b is None:
-        return "intervalo com horário inválido"
-    # coloca o intervalo dentro da régua do turno (pode ter virado a meia-noite)
-    if a < turno[0]:
-        a += 1440
-    if b < a:
-        b += 1440
-    if b == a:
-        return "intervalo com início igual ao fim"
-    if a < turno[0] or b > turno[1]:
-        return "intervalo fora do horário do turno"
-    return None
-
-
-def chave_pessoa(turno):
-    """Identifica a pessoa do turno: ('func', id) / ('free', id) / None (turno sem ninguém)."""
-    if getattr(turno, 'FuncionarioID', None):
-        return ('func', turno.FuncionarioID)
-    if getattr(turno, 'FreelancerID', None):
-        return ('free', turno.FreelancerID)
-    return None
-
-
-def analisar_escala_do_dia(escala, posicoes, indisponivel=None):
-    """
-    Confere a escala do dia e devolve a lista de alertas [(nivel, texto)], nivel = 'erro' | 'aviso' | 'info'.
-      escala: {PosicaoID: [turnos]}  (como database.buscar_escala_do_dia)
-      posicoes: linhas (PosicaoID, Nome, X, Y, Ativo, Setor) das posições ATIVAS do mapa
-      indisponivel: função(funcionario_id) -> motivo (texto) ou None
-    """
-    nomes_pos = {p[0]: p[1] for p in posicoes}
-    alertas = []
-    por_pessoa = {}
-    sem_intervalo = []
-    for pos_id, turnos in escala.items():
-        nome_pos = nomes_pos.get(pos_id)
-        for t in turnos:
-            pessoa = chave_pessoa(t)
-            nome = t.NomePessoa or "?"
-            ent, sai = formatar_hora_curta(t.HorarioEntrada), formatar_hora_curta(t.HorarioSaida)
-            onde = f"{nome_pos or 'posição removida do mapa'} {ent}-{sai}"
-            if nome_pos is None:
-                alertas.append(('aviso', f"{nome} está numa posição que foi REMOVIDA do mapa ({ent}-{sai}): "
-                                         "não aparece no mapa, mas vai no Telegram/WhatsApp."))
-            if pessoa is None:
-                alertas.append(('aviso', f"Turno SEM pessoa em {onde} (freelancer excluído?). Exclua ou escale alguém."))
-                continue
-            faixa = faixa_turno(t.HorarioEntrada, t.HorarioSaida)
-            if faixa is None:
-                alertas.append(('aviso', f"{nome} está sem horário de entrada/saída ({nome_pos or 'posição removida'})."))
-                continue
-            por_pessoa.setdefault(pessoa, []).append((faixa, nome, onde))
-            prob = problema_intervalo(t.HorarioEntrada, t.HorarioSaida, t.InicioIntervalo, t.FimIntervalo)
-            if prob:
-                alertas.append(('erro', f"{nome}: {prob} ({onde}, intervalo "
-                                        f"{formatar_hora_curta(t.InicioIntervalo) or '?'}-{formatar_hora_curta(t.FimIntervalo) or '?'})."))
-            elif faixa[1] - faixa[0] > TURNO_EXIGE_INTERVALO_MIN and not (t.InicioIntervalo and t.FimIntervalo):
-                sem_intervalo.append(nome)
-            if pessoa[0] == 'func' and indisponivel:
-                motivo = indisponivel(pessoa[1])
-                if motivo:
-                    motivo = str(motivo).replace('⚠️', '').strip().rstrip('!')
-                    alertas.append(('erro', f"{nome} está escalado(a) mas está de FOLGA/AFASTADO(A) ({motivo}) – {onde}."))
-
-    for pessoa, lista in por_pessoa.items():
-        lista.sort()
-        nome = lista[0][1]
-        for i in range(len(lista)):
-            for j in range(i + 1, len(lista)):
-                if sobrepoe(lista[i][0], lista[j][0]):
-                    alertas.append(('erro', f"{nome} está em DOIS lugares ao mesmo tempo: {lista[i][2]} e {lista[j][2]}."))
-        total = sum(f[1] - f[0] for f, _, _ in lista)
-        if total > LIMITE_JORNADA_DIA_MIN:
-            alertas.append(('aviso', f"{nome} soma {hm(total)} no dia ({' + '.join(o for _, _, o in lista)}): "
-                                     f"passa do limite de {hm(LIMITE_JORNADA_DIA_MIN)} (8h + 2h extras)."))
-    if sem_intervalo:
-        nomes = sorted(set(sem_intervalo))
-        alertas.append(('info', f"☕ Turno com mais de 6h ainda SEM intervalo ({len(nomes)} pessoa(s)): {', '.join(nomes)}. "
-                                "Use '🪄 Gerar Intervalos Automáticos' ou '⏱️ Gerenciar Intervalos'."))
-    ordem = {'erro': 0, 'aviso': 1, 'info': 2}
-    alertas.sort(key=lambda a: ordem.get(a[0], 3))
-    return alertas
-
-
-def conflitos_ao_salvar(escala, escala_id, pessoa, ent, sai, nome_pessoa="Esta pessoa", nomes_pos=None):
-    """
-    Antes de salvar um turno: (erros, avisos).
-      erros  = impedem salvar (pessoa em dois lugares ao mesmo tempo)
-      avisos = pedem confirmação (jornada do dia acima de 10h)
-    """
-    nomes_pos = nomes_pos or {}
-    faixa = faixa_turno(ent, sai)
-    erros, avisos = [], []
-    if faixa is None or pessoa is None:
-        return erros, avisos
-    total = faixa[1] - faixa[0]
-    for pos_id, turnos in escala.items():
-        for t in turnos:
-            if escala_id and str(t.EscalaID) == str(escala_id):
-                continue          # é o próprio turno que está sendo editado
-            if chave_pessoa(t) != pessoa:
-                continue
-            f2 = faixa_turno(t.HorarioEntrada, t.HorarioSaida)
-            if f2 is None:
-                continue
-            total += f2[1] - f2[0]
-            if sobrepoe(faixa, f2):
-                erros.append(f"{nome_pessoa} já está escalado(a) em {nomes_pos.get(pos_id, 'outra posição')} "
-                             f"das {formatar_hora_curta(t.HorarioEntrada)} às {formatar_hora_curta(t.HorarioSaida)}.")
-    if total > LIMITE_JORNADA_DIA_MIN:
-        avisos.append(f"{nome_pessoa} vai somar {hm(total)} de trabalho neste dia "
-                      f"(limite: {hm(LIMITE_JORNADA_DIA_MIN)} = 8h + 2h extras).")
-    return erros, avisos
-
-
-# ------------------------------------------------------------------------------
-# [MELHORIA ESCALA] Formatação de dinheiro / horas / datas
-# ------------------------------------------------------------------------------
-DIAS_SEMANA = ['segunda-feira', 'terça-feira', 'quarta-feira', 'quinta-feira', 'sexta-feira', 'sábado', 'domingo']
-DIAS_CURTOS = ['seg', 'ter', 'qua', 'qui', 'sex', 'sáb', 'dom']
-
-
-def fmt_reais(valor):
-    """1234.5 -> 'R$ 1.234,50' (e '-R$ 10,00' para negativos)."""
-    try:
-        v = Decimal(str(valor or 0))
-    except (InvalidOperation, ValueError):
-        v = Decimal('0')
-    texto = f"{abs(v):,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
-    return ("-R$ " if v < 0 else "R$ ") + texto
-
-
-def para_decimal_br(texto, nome_campo="valor", permitir_negativo=False):
-    """'120' / '120,50' / 'R$ 1.200,50' / '-10' -> Decimal. ValueError com mensagem clara."""
-    bruto = str(texto or '').replace('R$', '').replace(' ', '').strip()
-    if not bruto:
-        return Decimal('0')
-    if ',' in bruto:
-        bruto = bruto.replace('.', '').replace(',', '.')
-    try:
-        v = Decimal(bruto)
-    except InvalidOperation:
-        raise ValueError(f"'{texto}' não é um valor válido para {nome_campo} (ex: 120,00).")
-    if not v.is_finite() or (v < 0 and not permitir_negativo):
-        raise ValueError(f"{nome_campo} não pode ser negativo.")
-    return v
-
-
-def fmt_horas(horas=None, minutos=None):
-    """9.5 h (ou 570 min) -> '9h30'; 8 -> '8h'."""
-    if minutos is None:
-        minutos = int((Decimal(str(horas or 0)) * 60).to_integral_value())
-    minutos = int(minutos)
-    h, m = divmod(abs(minutos), 60)
-    return f"{'-' if minutos < 0 else ''}{h}h{m:02d}" if m else f"{'-' if minutos < 0 else ''}{h}h"
-
-
-def fmt_data_br(d, com_dia=False):
-    if not d:
-        return "--"
-    if isinstance(d, str):
-        try:
-            d = datetime.strptime(d[:10], '%Y-%m-%d').date()
-        except ValueError:
-            return d
-    texto = d.strftime('%d/%m/%Y')
-    return f"{texto} ({DIAS_CURTOS[d.weekday()]})" if com_dia else texto
-
-
-def nome_tipo_dia(calc):
-    """'longa de domingo' / 'curta (seg a sáb)' / 'longa de feriado'."""
-    tipo = calc.get('Tipo') or ''
-    dia = calc.get('Dia') or ''
-    sufixo = {'Domingo': ' de domingo', 'Feriado': ' de feriado'}.get(dia, ' (seg a sáb)' if dia else '')
-    return f"{tipo}{sufixo}"
-
-
-def texto_calculo(calc):
-    """Explica o valor de um turno numa linha (usado no painel, na correção e no recibo)."""
-    if not calc:
-        return ""
-    if calc.get('Proporcional'):
-        texto = (f"{fmt_horas(minutos=calc['Minutos'])} de {fmt_horas(minutos=calc['MinutosDiaria'])} da diária "
-                 f"{nome_tipo_dia(calc)} ({fmt_reais(calc['DiariaCheia'])}) = {fmt_reais(calc['ValorDiaria'])} (proporcional)")
-    else:
-        texto = f"{fmt_horas(minutos=calc['Minutos'])}: diária {nome_tipo_dia(calc)} {fmt_reais(calc['ValorDiaria'])}"
-        if calc.get('MinutosExtras'):
-            texto += f" + {fmt_horas(minutos=calc['MinutosExtras'])} extra {fmt_reais(calc['ValorExtras'])}"
-        sobra = (calc.get('MinutosExtrasBrutos') or 0) - (calc.get('MinutosExtras') or 0)
-        if sobra:
-            texto += f" ({sobra} min não fecham bloco de {calc['BlocoMinutos']})"
-    if calc.get('Ajuste'):
-        texto += f" {'+' if calc['Ajuste'] > 0 else ''}{fmt_reais(calc['Ajuste'])} ajuste"
-    return f"{texto} = {fmt_reais(calc['Total'])}"
+# [GESTÃO WEB] As regras da escala (conflitos, folga, jornada, intervalo, cores do mapa,
+# fluxo, mensagens) ficam em escala_regras.py e valem igual para o PC e para a Web.
+from escala_regras import (  # noqa: E402
+    PADRAO_HORA, hora_ou_none, normalizar_folga, folga_do_funcionario, formatar_hora_curta,
+    SETOR_TODOS, LIMITE_JORNADA_DIA_MIN, TURNO_EXIGE_INTERVALO_MIN, minutos_do_horario, faixa_turno,
+    sobrepoe, hm, problema_intervalo, chave_pessoa, analisar_escala_do_dia, conflitos_ao_salvar,
+    DIAS_SEMANA, DIAS_CURTOS, fmt_reais, para_decimal_br, fmt_horas, fmt_data_br, nome_tipo_dia,
+    texto_calculo, SETORES_MAPA, MAPA_IMAGEM_LARGURA, MAPA_IMAGEM_ALTURA, parse_horario, dia_semana_banco,
+    rotulo_e_cor_posicao, fluxo_por_hora, HORAS_FLUXO, pessoas_para_intervalos, gravar_intervalos,
+    lista_envio_whatsapp, enviar_confirmacoes_whatsapp)
 
 
 class AppEscalaLoja:
@@ -700,93 +415,38 @@ class AppEscalaLoja:
         self.canvas.delete("texto_marcador")
         self.canvas.delete("setor_tag")
 
-        dia_semana_hoje = datetime.strptime(self.data_selecionada, '%Y-%m-%d').isoweekday() + 1
-        if dia_semana_hoje == 8: dia_semana_hoje = 1
-        # [NOVO] Cria um dicionário rápido na memória com a folga de todos os funcionários 
-        # para não travar o mapa fazendo consultas repetidas no banco de dados.
+        dia_db = dia_semana_banco(datetime.strptime(self.data_selecionada, '%Y-%m-%d').date())
+        # Folga de todos os funcionários lida uma vez (o mapa redesenha várias vezes por segundo)
         funcionarios = getattr(self, '_funcionarios_cache', None)
         if funcionarios is None:
             funcionarios = self._funcionarios_cache = list(database.listar_funcionarios())
         mapa_folgas = {f.FuncionarioID: folga_do_funcionario(f) for f in funcionarios}
+        cache_padrao = self.__dict__.setdefault('_posicao_padrao_cache', {})
+
+        # Captura o tamanho atual do canvas para renderização responsiva
+        W = self.canvas.winfo_width() if self.canvas.winfo_width() > 1 else MAPA_IMAGEM_LARGURA
+        H = self.canvas.winfo_height() if self.canvas.winfo_height() > 1 else MAPA_IMAGEM_ALTURA
+        self._registrar_tamanho_mapa(W, H)
 
         for pos in self.posicoes:
-            pos_id, nome, coord_x_db, coord_y_db, _, setor = pos 
-
-            # Captura o tamanho atual do canvas para renderização responsiva
-            W = self.canvas.winfo_width() if self.canvas.winfo_width() > 1 else 1180
-            H = self.canvas.winfo_height() if self.canvas.winfo_height() > 1 else 600
-
-            # --- LÓGICA HÍBRIDA DE SEGURANÇA (PIXELS VS PERCENTUAL) ---
-            # Se o valor no banco for maior que 1, tratamos como pixel fixo (legado).
-            # Se for menor ou igual a 1, aplicamos a escala responsiva (novo).
+            pos_id, nome, coord_x_db, coord_y_db, _, setor = pos
+            # Valor > 1 = pixel fixo (legado); <= 1 = proporção da área do mapa (novo)
             try:
-                val_x = float(coord_x_db)
-                val_y = float(coord_y_db)
-
-                if val_x > 1.0:
-                    x, y = val_x, val_y
-                else:
-                    x, y = val_x * W, val_y * H
+                val_x, val_y = float(coord_x_db), float(coord_y_db)
+                x, y = (val_x, val_y) if val_x > 1.0 else (val_x * W, val_y * H)
             except (ValueError, TypeError):
-                continue # Pula se as coordenadas estiverem corrompidas no banco
-            # ----------------------------------------------------------
+                continue  # coordenadas corrompidas no banco
 
-            label_final = f"{nome}\n"
-            cor = "#ff4444" # Vermelho (Vazio) padrão
-            
-            # --- LÓGICA MULTI-TURNO ---
             lista_turnos = self.escala_atual.get(pos_id, [])
-            
-            if lista_turnos:
-                # Se tem alguém escalado (um ou mais)
-                cor = "#00C851" # Verde
-
-                # Monta a lista de nomes e horários
-                nomes_formatados = []
-                for dados in lista_turnos:
-                    nome_p = dados.NomePessoa if dados.NomePessoa else "?"
-
-                    # --- NOVA VERIFICAÇÃO DE FOLGA DIRETO NO MAPA ---
-                    if dados.FuncionarioID:
-                        folga_fixa = mapa_folgas.get(dados.FuncionarioID)
-                        # Se o dia do calendário bater com o dia de folga do funcionário escalado
-                        # [DEPURAÇÃO] Agora também avisa férias/afastamento e domingo de folga (6x1)
-                        indisponivel = folga_fixa == dia_semana_hoje or self._indisponivel_no_dia(dados.FuncionarioID)
-                        if indisponivel:
-                            nome_p = f"⚠️ {nome_p} [FOLGA]"
-                            cor = "#FF8800" # Muda a bolinha para Laranja (Alerta de Conflito)
-                    # ------------------------------------------------
-
-                    # Formata horário curto (Ex: 13-18)
-                    h_ent = str(dados.HorarioEntrada)[:5] if dados.HorarioEntrada else ""
-                    h_sai = str(dados.HorarioSaida)[:5] if dados.HorarioSaida else ""
-
-                    # Se não tiver nome, muda cor para amarelo (alerta)
-                    if not dados.NomePessoa: cor = "#FFBB33"
-
-                    tipo_d = getattr(dados, 'TipoDiaria', None) if getattr(dados, 'FreelancerID', None) else None
-                    nomes_formatados.append(f"{nome_p} ({h_ent}-{h_sai})" + (f" [{tipo_d}]" if tipo_d in ('curta', 'longa') else ""))
-
-                label_final += "\n".join(nomes_formatados)
-
-            elif not self.modo_edicao:
-                # Lógica de Sugestão (Azul) - Se estiver vazio
-                cache_padrao = self.__dict__.setdefault('_posicao_padrao_cache', {})
+            fixo = None
+            if not lista_turnos and not self.modo_edicao:
                 if pos_id not in cache_padrao:
                     cache_padrao[pos_id] = database.buscar_funcionarios_com_posicao_padrao(pos_id)
-                func_padrao = cache_padrao[pos_id]
-                if func_padrao:
-                    f_id, f_nome, f_folga = func_padrao
-                    status_indisponivel = self._indisponivel_no_dia(f_id)
-
-                    if not status_indisponivel and normalizar_folga(f_folga) != dia_semana_hoje:
-                        label_final += f"{f_nome} (Fixo)"
-                        cor = "#33b5e5" # Azul
-                    else:
-                        label_final += "(Vazio)"
-            else:
-                label_final += "(Vazio)"
-
+                fixo = cache_padrao[pos_id]
+            # [GESTÃO WEB] cor e texto vêm de escala_regras (a Web mostra igual)
+            cor, linhas = rotulo_e_cor_posicao(nome, lista_turnos, mapa_folgas, self._indisponivel_no_dia,
+                                               dia_db, fixo, self.modo_edicao)
+            label_final = "\n".join(linhas)
             tag = f"pos_{pos_id}"
 
             # Desenha Marcador (Bolinha)
@@ -803,38 +463,45 @@ class AppEscalaLoja:
 
         self.canvas.tag_lower("fundo")
 
+    def _registrar_tamanho_mapa(self, largura, altura):
+        """
+        [GESTÃO WEB] As posições novas são guardadas em PROPORÇÃO da área do mapa desta janela.
+        A versão Web precisa saber esse tamanho para pôr as bolinhas no mesmo lugar: grava no
+        banco (só quando o tamanho muda e fica parado 2 segundos).
+        """
+        if largura < 300 or altura < 200:
+            return
+        # Com o painel lateral aberto a área do mapa fica mais estreita: guarda só a visão normal
+        if self.frame_lateral.winfo_ismapped():
+            return
+        if getattr(self, '_tamanho_mapa_gravado', None) == (largura, altura):
+            return
+        if getattr(self, '_id_tamanho_mapa', None):
+            try:
+                self.root.after_cancel(self._id_tamanho_mapa)
+            except Exception:
+                pass
+
+        def gravar():
+            self._id_tamanho_mapa = None
+            try:
+                # confere de novo na hora de gravar (o painel pode ter aberto nesses 2 segundos)
+                if self.frame_lateral.winfo_ismapped():
+                    return
+                larg, alt = self.canvas.winfo_width(), self.canvas.winfo_height()
+                if larg < 300 or alt < 200 or getattr(self, '_tamanho_mapa_gravado', None) == (larg, alt):
+                    return
+                if database.registrar_tamanho_mapa_escala(larg, alt):
+                    self._tamanho_mapa_gravado = (larg, alt)
+            except Exception as e:
+                logger.warning(f"Não deu para guardar o tamanho do mapa: {e}")
+        self._id_tamanho_mapa = self.root.after(2000, gravar)
+
     @staticmethod
     def _parse_horario_seguro(valor):
-        """Converte string, datetime, time ou timedelta para time object de forma segura."""
-        if valor is None: return None
+        """Converte string, datetime, time ou timedelta para time (escala_regras.parse_horario)."""
+        return parse_horario(valor)
 
-        # [CORREÇÃO] Tratamento para timedelta (comum em retornos SQL TIME via ODBC)
-        if isinstance(valor, timedelta):
-            total_seconds = int(valor.total_seconds())
-            hours = total_seconds // 3600
-            minutes = (total_seconds % 3600) // 60
-            # Cria um tempo dummy para extrair o objeto .time()
-            return (datetime.min + timedelta(hours=hours, minutes=minutes)).time()
-
-        if hasattr(valor, 'time'): return valor.time() # Já é datetime
-
-        if isinstance(valor, str):
-            try:
-                # Tenta HH:MM:SS ou HH:MM
-                # [AUDITORIA ESCALA] o driver pode devolver '14:30:00.0000000' (com fração de segundo)
-                valor = valor.strip().split('.')[0]
-                fmt = "%H:%M:%S" if len(valor.split(':')) == 3 else "%H:%M"
-                return datetime.strptime(valor, fmt).time()
-            except ValueError:
-                return None
-
-        # Se já for objeto time puro (importação local para evitar erro de referência se não estiver no topo)
-        from datetime import time as dt_time
-        if isinstance(valor, dt_time):
-            return valor
-
-        return None # Tipo desconhecido
-    
     @staticmethod
     def _aplicar_mascara_hora(event):
         """
@@ -873,52 +540,9 @@ class AppEscalaLoja:
 
             # Busca dados brutos (Ent, Sai, IntIni, IntFim, Setor)
             horarios = database.buscar_horarios_ocupacao_hoje(self.data_selecionada, 0)
-
-            horas_eixo = range(7, 24) # 07:00 as 23:00
-            contagem_por_hora = []
-
-            # (A função para_time foi removida daqui pois agora usamos self._parse_horario_seguro)
-
-            for h in horas_eixo:
-                momento = datetime.strptime(f"{h}:00", "%H:%M").time()
-                qtd_pessoas = 0
-
-                for row in horarios:
-                    # Usa a nova ferramenta universal criada na Etapa 1
-                    ent = self._parse_horario_seguro(row[0])
-                    sai = self._parse_horario_seguro(row[1])
-                    int_ini = self._parse_horario_seguro(row[2])
-                    int_fim = self._parse_horario_seguro(row[3])
-                    setor_bd = row[4]
-
-                    # --- FILTRO DE SETOR ---
-                    if setor_filtro != SETOR_TODOS:
-                        # Se o setor do funcionário for diferente do filtro, ignora
-                        if setor_bd != setor_filtro:
-                            continue
-
-                    if not ent or not sai: continue
-
-                    # 1. Verifica Turno
-                    no_turno = False
-                    if ent <= sai:
-                        if ent <= momento < sai: no_turno = True
-                    else:
-                        if momento >= ent or momento < sai: no_turno = True
-
-                    if no_turno:
-                        # 2. Verifica Intervalo (Desconto)
-                        no_intervalo = False
-                        if int_ini and int_fim:
-                            if int_ini <= int_fim:
-                                if int_ini <= momento < int_fim: no_intervalo = True
-                            else:
-                                if momento >= int_ini or momento < int_fim: no_intervalo = True
-
-                        if not no_intervalo:
-                            qtd_pessoas += 1
-
-                contagem_por_hora.append(qtd_pessoas)
+            horas_eixo = HORAS_FLUXO  # 07:00 as 23:00
+            # [GESTÃO WEB] mesma conta da Web (escala_regras.fluxo_por_hora)
+            contagem_por_hora = fluxo_por_hora(horarios, setor_filtro)
 
             # Desenha o gráfico
             # Cores dinâmicas: Se selecionar um setor específico, usa azul. Se for Geral, usa a lógica verde/vermelho.
@@ -989,7 +613,7 @@ class AppEscalaLoja:
 
         ttk.Label(popup, text="Setor (Para Intervalo Automático):").pack(pady=5)
         # Adicionados: Limpeza e Camara Fria
-        setores = ["Varanda", "Frente Loja", "Salão", "Caixa", "Buffet", "Cozinha", "Limpeza", "Camara Fria"]
+        setores = SETORES_MAPA
         combo_setor = ttk.Combobox(popup, values=setores, state="readonly")
         combo_setor.pack(pady=5)
 
@@ -1042,7 +666,7 @@ class AppEscalaLoja:
 
         ttk.Label(popup, text="Setor:").pack()
         # Lista atualizada
-        combo_setor = ttk.Combobox(popup, values=["Varanda", "Frente Loja", "Salão", "Caixa", "Buffet", "Cozinha", "Limpeza", "Camara Fria"])
+        combo_setor = ttk.Combobox(popup, values=SETORES_MAPA)
         combo_setor.pack()
 
         def confirmar():
@@ -1094,40 +718,11 @@ class AppEscalaLoja:
             return
 
         # 1. Coleta dados da tela e do banco
-        pessoas_para_calcular = []
-        dados_por_turno = {}  # EscalaID -> dados do turno (para montar o que salvar)
-
         dia_obj = self.date_entry.get_date()
-
         # Converter isoweekday (Seg=1...Dom=7) para o padrão do Banco (Dom=1...Sab=7)
-        dia_iso = (dia_obj.isoweekday() % 7) + 1
-
-        for pos_id, turnos in self.escala_atual.items():
-            # Busca o setor da posição correspondente
-            setor = next((p[5] for p in self.posicoes if p[0] == pos_id), "Geral")
-
-            for dados in turnos:
-                # Validação rigorosa para evitar falhas na calculadora lógica
-                if dados.HorarioEntrada and dados.HorarioSaida and dados.NomePessoa:
-                    t_ent = self._parse_horario_seguro(dados.HorarioEntrada)
-                    t_sai = self._parse_horario_seguro(dados.HorarioSaida)
-
-                    if t_ent and t_sai:
-                        dt_entrada = datetime.combine(dia_obj, t_ent)
-                        dt_saida = datetime.combine(dia_obj, t_sai)
-                        if dt_saida <= dt_entrada:
-                            dt_saida += timedelta(days=1)  # Turno que vira a meia-noite
-
-                        pessoas_para_calcular.append({
-                            'id_posicao': dados.EscalaID,  # ID do TURNO (único por pessoa)
-                            'nome': dados.NomePessoa,
-                            'setor': setor,
-                            'entrada': dt_entrada,
-                            'saida': dt_saida
-                        })
-                        dados_por_turno[dados.EscalaID] = dados
-                    else:
-                        logger.warning(f"Horário inválido ignorado na posição {pos_id}: {dados.NomePessoa}")
+        dia_iso = dia_semana_banco(dia_obj)
+        # [GESTÃO WEB] mesmo preparo da Web (escala_regras.pessoas_para_intervalos)
+        pessoas_para_calcular, dados_por_turno = pessoas_para_intervalos(self.escala_atual, self.posicoes, dia_obj)
 
         if not pessoas_para_calcular:
             messagebox.showwarning("Vazio", "Não há funcionários escalados com horário de entrada/saída para calcular.", parent=self.root)
@@ -1174,31 +769,8 @@ class AppEscalaLoja:
             messagebox.showinfo("Sucesso", f"{count_aplicados} intervalos agendados com sucesso!", parent=self.root)
 
     def _salvar_intervalos_por_turno(self, sugestoes):
-        """
-        [DEPURAÇÃO - NOVA] Grava {EscalaID: (inicio, fim)} numa única transação.
-        A função antiga do banco (salvar_escalas_em_lote) atualiza pela POSIÇÃO e por isso
-        aplicava o mesmo intervalo a todos os turnos daquela posição no dia.
-        """
-        conn = database.get_db_connection()
-        if not conn:
-            return False
-        try:
-            cursor = conn.cursor()
-            for escala_id, (ini, fim) in sugestoes.items():
-                cursor.execute(
-                    "UPDATE EscalaDiaria SET InicioIntervalo = ?, FimIntervalo = ? WHERE EscalaID = ?",
-                    ini.strftime('%H:%M'), fim.strftime('%H:%M'), escala_id
-                )
-            conn.commit()
-            logger.info(f"{len(sugestoes)} intervalo(s) gravado(s) para {self.data_selecionada}.")
-            return True
-        except Exception as e:
-            logger.error(f"Erro ao gravar intervalos em lote: {e}", exc_info=True)
-            conn.rollback()
-            return False
-        finally:
-            conn.close()
-
+        """Grava {EscalaID: (inicio, fim)} numa única transação (escala_regras.gravar_intervalos)."""
+        return gravar_intervalos(sugestoes)
 
     def enviar_escala_telegram(self):
         if not self.data_selecionada: return
@@ -1258,29 +830,8 @@ class AppEscalaLoja:
         # Snapshot (Cópia de segurança) para evitar conflito se o usuário mudar a data na tela
         data_snapshot = self.data_selecionada
         escala_dia = database.buscar_escala_do_dia(data_snapshot)
-        lista_envio = []
-
-        # Cruzamento de dados: Escala + Nome da Posição
-        for pos_id, turnos in escala_dia.items():
-            # CORREÇÃO: 'turnos' é uma lista (v2 Multi-Turno), precisamos iterar sobre ela
-            for dados in turnos:
-                # Verifica se tem pessoa e telefone cadastrado no banco
-                if dados.NomePessoa and dados.TelefonePessoa:
-                    # Busca dados da posição na memória (p[1]=Nome, p[5]=Setor)
-                    dados_pos_memoria = next((p for p in self.posicoes if p[0] == pos_id), None)
-                    nome_posicao = dados_pos_memoria[1] if dados_pos_memoria else "Posição"
-                    setor_posicao = dados_pos_memoria[5] if dados_pos_memoria else None
-
-                    lista_envio.append({
-                        'nome': dados.NomePessoa,
-                        'telefone': dados.TelefonePessoa,
-                        'posicao': nome_posicao,
-                        'setor': setor_posicao, # <--- NOVO CAMPO
-                        'entrada': dados.HorarioEntrada,
-                        'saida': dados.HorarioSaida,
-                        'int_ini': dados.InicioIntervalo,
-                        'int_fim': dados.FimIntervalo
-                    })
+        # [GESTÃO WEB] mesma lista da Web (escala_regras.lista_envio_whatsapp)
+        lista_envio = lista_envio_whatsapp(escala_dia, self.posicoes)
 
         if not lista_envio:
             messagebox.showwarning("Aviso", "Nenhuma pessoa com telefone encontrada na escala deste dia.", parent=self.root)
@@ -1297,89 +848,10 @@ class AppEscalaLoja:
         self.btn_wpp_mass.config(state='disabled', text="Enviando...")
 
         def run_envio():
-            # [DEPURAÇÃO] Os print() deste envio viraram logger: agora ficam gravados em logs/
-            enviados = 0
-            erros = 0
-
-            # MAPA DE TRADUÇÃO ESPECÍFICO
-            # Define apenas as exceções. Se não estiver aqui, o sistema busca pelo nome original.
-            MAPA_FUNCAO_DIRETRIZ = {
-                'Frente Loja': 'Atendimento',  # Quem está na Frente Loja recebe diretriz de Atendimento
-                'Recepção': 'Atendimento',     # Quem está na Recepção recebe diretriz de Atendimento
-                # 'Caixa' NÃO ESTÁ AQUI, então Caixa buscará diretriz de "Caixa" (comportamento padrão)
-            }
-
-            for item in lista_envio:
-                try:
-                    # Formatação de Horário Segura
-                    fmt = lambda v: v.strftime('%H:%M') if hasattr(v, 'strftime') else str(v)[:5]
-                    horario_str = f"{fmt(item['entrada'])} às {fmt(item['saida'])}"
-                    # [DEPURAÇÃO] Usava self.data_selecionada: se o gestor mudasse a data no calendário
-                    # durante o envio (que demora), as mensagens seguintes saíam com a DATA ERRADA.
-                    data_fmt = datetime.strptime(data_snapshot, '%Y-%m-%d').strftime('%d/%m')
-
-                    # Lógica para adicionar o intervalo se ele existir
-                    intervalo_str = ""
-                    if item['int_ini'] and item['int_fim']:
-                        intervalo_str = f"\n☕ Intervalo: *{fmt(item['int_ini'])} às {fmt(item['int_fim'])}*"
-
-                    mensagem = (
-                        f"Olá, *{item['nome']}*! 👋\n"
-                        f"Confirmação de Escala:\n"
-                        f"📅 Data: *{data_fmt}*\n"
-                        f"📍 Posição: *{item['posicao']}*\n"
-                        f"⏰ Horário: *{horario_str}*{intervalo_str}\n\n"
-                        f"Bom trabalho!"
-                    )
-
-                    # Envia a mensagem principal (Horário)
-                    ok, resp_msg = notificador_whatsapp.enviar_mensagem_whatsapp(item['telefone'], mensagem)
-                    
-                    if ok:
-                        enviados += 1
-                        # --- LÓGICA DA SEGUNDA MENSAGEM (FOCO DO SETOR) ---
-                        # Verifica se o setor existe e não é vazio
-                        setor_origem = item['setor']
-                        
-                        if setor_origem:
-                            # APLICA A TRADUÇÃO AQUI
-                            # Se estiver no dicionário, traduz. Se não, usa o original.
-                            setor_para_buscar = MAPA_FUNCAO_DIRETRIZ.get(setor_origem, setor_origem)
-                            
-                            try:
-                                # Busca a descrição no banco usando o NOME (TRADUZIDO OU ORIGINAL)
-                                descricao_setor = database.buscar_descricao_setor(setor_para_buscar)
-                                
-                                if descricao_setor and descricao_setor.strip():
-                                    time.sleep(2) # Pausa aumentada para 2s para garantir a ordem de chegada
-                                    
-                                    # Usa o nome do setor (traduzido ou original) no título da mensagem
-                                    msg_foco = f"🎯 *Diretrizes do Setor ({setor_para_buscar}):*\n\n{descricao_setor}"
-                                    
-                                    # Envia a segunda mensagem (Diretriz)
-                                    ok_foco, resp_foco = notificador_whatsapp.enviar_mensagem_whatsapp(item['telefone'], msg_foco)
-                                    
-                                    if ok_foco:
-                                        logger.info(f"[WPP] Diretriz de '{setor_para_buscar}' (origem: {setor_origem}) enviada para {item['nome']}.")
-                                    else:
-                                        logger.error(f"[WPP] Falha ao enviar diretriz para {item['nome']}: {resp_foco}")
-                                else:
-                                    logger.warning(f"[WPP] Sem diretriz cadastrada para '{setor_para_buscar}' (origem: {setor_origem}) no banco.")
-                            except Exception as e_foco:
-                                logger.error(f"[WPP] Erro ao processar foco do setor para {item['nome']}: {e_foco}")
-                        else:
-                            logger.warning(f"[WPP] {item['nome']} não tem setor definido na posição.")
-                    else:
-                        logger.error(f"[WPP] Falha ao enviar mensagem principal para {item['nome']}: {resp_msg}")
-                        erros += 1
-
-                    time.sleep(1.5) # Delay de segurança para a API (Anti-Spam)
-
-                except Exception as e:
-                    logger.error(f"[WPP] Erro ao processar envio para {item['nome']}: {e}", exc_info=True)
-                    erros += 1
-
-            # Callback para UI
+            # [GESTÃO WEB] mensagens e diretriz do setor iguais às da Web (escala_regras)
+            enviados, erros = enviar_confirmacoes_whatsapp(
+                lista_envio, data_snapshot, notificador_whatsapp.enviar_mensagem_whatsapp,
+                database.buscar_descricao_setor)
             self.root.after(0, lambda: self._finalizar_envio_wpp(enviados, erros))
 
         threading.Thread(target=run_envio, daemon=True).start()

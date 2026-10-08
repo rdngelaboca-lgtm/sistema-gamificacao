@@ -2944,6 +2944,48 @@ def buscar_funcionarios_de_folga_hoje(dia_da_semana):
             conn.close()
     return []
 
+def motivo_indisponibilidade(dia_folga_semanal, dom_folga_mensal, inicio_afast, fim_afast, data_verificacao):
+    """
+    Férias/afastamento, folga fixa da semana ou domingo de folga (6x1) do funcionário no dia:
+    texto do motivo ou None (disponível). [GESTÃO WEB] separado de verificar_status_disponibilidade
+    para a Web conferir todos os funcionários sem ir ao banco uma vez por pessoa.
+    """
+    # Conversão da data de verificação
+    if isinstance(data_verificacao, str):
+        dt_check = datetime.strptime(data_verificacao[:10], '%Y-%m-%d').date()
+    elif isinstance(data_verificacao, datetime):
+        dt_check = data_verificacao.date()
+    else:
+        dt_check = data_verificacao
+
+    # [DEPURAÇÃO] O banco pode devolver datas como datetime ou texto;
+    # comparar 'date' com 'datetime' (ou com texto) gerava TypeError e a função "engolia" o erro.
+    inicio_afast = _como_data(inicio_afast) if inicio_afast else None
+    fim_afast = _como_data(fim_afast) if fim_afast else None
+
+    # 1. Verifica Afastamento (Férias/Atestado)
+    if inicio_afast and fim_afast:
+        if inicio_afast <= dt_check <= fim_afast:
+            return "⚠️ Funcionário em Férias/Afastamento!"
+
+    # 2. Verifica Folga Semanal Fixa
+    # Python weekday: 0=Seg ... 6=Dom. SQL (nosso padrão): 1=Dom ... 7=Sab
+    dia_semana_sql = (dt_check.weekday() + 1) % 7 + 1
+    # [DEPURAÇÃO] DiaDeFolga pode vir como texto ('3') e 3 != '3' em Python.
+    if dia_semana_sql == _para_int(dia_folga_semanal, -1):
+        return "⚠️ Dia de Folga Fixa Semanal!"
+
+    # 3. Verifica Domingo de Folga (6x1)
+    dom_folga_mensal = _para_int(dom_folga_mensal, 0)
+    if dia_semana_sql == 1 and dom_folga_mensal > 0:
+        # Calcula qual ocorrência de domingo é este no mês
+        ocorrencia = (dt_check.day - 1) // 7 + 1
+        if ocorrencia == dom_folga_mensal:
+            return f"⚠️ Domingo de Folga ({dom_folga_mensal}º do mês)!"
+
+    return None  # Disponível
+
+
 def verificar_status_disponibilidade(pessoa_id, data_verificacao, tipo='func'):
     """
     Verifica disponibilidade para Funcionários (Folgas/Férias) ou Freelancers (Conflitos).
@@ -2981,41 +3023,8 @@ def verificar_status_disponibilidade(pessoa_id, data_verificacao, tipo='func'):
             if not row: return None
 
             dia_folga_semanal, dom_folga_mensal, inicio_afast, fim_afast = row
-
-            # Conversão da data de verificação
-            if isinstance(data_verificacao, str):
-                dt_check = datetime.strptime(data_verificacao[:10], '%Y-%m-%d').date()
-            elif isinstance(data_verificacao, datetime):
-                dt_check = data_verificacao.date()
-            else:
-                dt_check = data_verificacao
-
-            # [DEPURAÇÃO] O banco pode devolver datas como datetime ou texto;
-            # comparar 'date' com 'datetime' gerava TypeError e a função "engolia" o erro.
-            inicio_afast = _get_date_part(inicio_afast) if inicio_afast else None
-            fim_afast = _get_date_part(fim_afast) if fim_afast else None
-
-            # 1. Verifica Afastamento (Férias/Atestado)
-            if inicio_afast and fim_afast:
-                if inicio_afast <= dt_check <= fim_afast:
-                    return "⚠️ Funcionário em Férias/Afastamento!"
-
-            # 2. Verifica Folga Semanal Fixa
-            # Python weekday: 0=Seg ... 6=Dom. SQL (nosso padrão): 1=Dom ... 7=Sab
-            dia_semana_sql = (dt_check.weekday() + 1) % 7 + 1
-            # [DEPURAÇÃO] DiaDeFolga pode vir como texto ('3') e 3 != '3' em Python.
-            if dia_semana_sql == _para_int(dia_folga_semanal, -1):
-                return "⚠️ Dia de Folga Fixa Semanal!"
-
-            # 3. Verifica Domingo de Folga (6x1)
-            dom_folga_mensal = _para_int(dom_folga_mensal, 0)
-            if dia_semana_sql == 1 and dom_folga_mensal > 0:
-                # Calcula qual ocorrência de domingo é este no mês
-                ocorrencia = (dt_check.day - 1) // 7 + 1
-                if ocorrencia == dom_folga_mensal:
-                    return f"⚠️ Domingo de Folga ({dom_folga_mensal}º do mês)!"
-
-            return None # Disponível
+            return motivo_indisponibilidade(dia_folga_semanal, dom_folga_mensal, inicio_afast, fim_afast,
+                                            data_verificacao)
         except Exception as e:
             logger.error(f"Erro ao verificar disponibilidade: {e}")
             return None
@@ -8667,6 +8676,65 @@ def atualizar_item_historico_compra(item_nota_id, nova_qtd, novo_custo):
         finally:
             conn.close()
     return False
+
+_colunas_mapa_escala_ok = False
+
+
+def _garantir_colunas_mapa_escala(cursor):
+    """Cria (uma vez por execução) as colunas do tamanho do mapa em ConfiguracoesEscala."""
+    global _colunas_mapa_escala_ok
+    if _colunas_mapa_escala_ok:
+        return
+    for coluna in ('MapaTelaLargura', 'MapaTelaAltura'):
+        cursor.execute(f"IF COL_LENGTH('ConfiguracoesEscala', '{coluna}') IS NULL "
+                       f"ALTER TABLE ConfiguracoesEscala ADD {coluna} INT NULL")
+    _colunas_mapa_escala_ok = True     # quem chama faz o commit logo em seguida
+
+
+def registrar_tamanho_mapa_escala(largura, altura):
+    """
+    [GESTÃO WEB] Tamanho (pixels) da área do mapa no programa da Escala do PC. As posições
+    são guardadas em PROPORÇÃO dessa área; a Web usa o mesmo tamanho para desenhar igual.
+    """
+    conn = get_db_connection()
+    if not conn:
+        return False
+    try:
+        cursor = conn.cursor()
+        _garantir_colunas_mapa_escala(cursor)
+        conn.commit()
+        cursor.execute("UPDATE ConfiguracoesEscala SET MapaTelaLargura = ?, MapaTelaAltura = ?",
+                       int(largura), int(altura))
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        logger.warning(f"Não deu para guardar o tamanho do mapa da escala: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def tamanho_mapa_escala():
+    """[GESTÃO WEB] (largura, altura) da área do mapa no PC, ou None se o PC ainda não gravou."""
+    conn = get_db_connection()
+    if not conn:
+        return None
+    try:
+        cursor = conn.cursor()
+        _garantir_colunas_mapa_escala(cursor)
+        conn.commit()
+        cursor.execute("SELECT MapaTelaLargura, MapaTelaAltura FROM ConfiguracoesEscala")
+        for larg, alt in cursor.fetchall():
+            if larg and alt and int(larg) >= 300 and int(alt) >= 200:
+                return int(larg), int(alt)
+        return None
+    except Exception as e:
+        logger.warning(f"Não deu para ler o tamanho do mapa da escala: {e}")
+        return None
+    finally:
+        conn.close()
+
 
 def buscar_configuracoes_escala():
     """Busca o único registro de configurações de escala, incluindo Jornada Padrão."""
