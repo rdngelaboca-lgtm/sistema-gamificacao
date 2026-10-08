@@ -6278,7 +6278,7 @@ class AppGestaoEstoque:
           - editor único: produto, fator (com prévia), EAN e NCM; corrigir o fator
             oferece corrigir também as compras já importadas;
           - "🧹 Juntar duplicados": une vínculos repetidos sem perder nenhuma compra;
-          - Enter salva; duplo clique vai para o fator; Delete exclui (se não tiver compras).
+          - Enter salva; duplo clique abre "Corrigir quantidade / preço"; Delete exclui (se não tiver compras).
         ao_salvar: função chamada depois de cada alteração (ex: recalcular o Valor do Estoque).
         """
         popup = Toplevel(self.root)
@@ -6324,7 +6324,7 @@ class AppGestaoEstoque:
                 'Custo/Unid.', 'Custo Emb.', 'Compras', 'Última compra', 'Problemas')
         titulos = {'Produto Mestre': 'Produto do estoque', 'Custo/Unid.': 'Custo/unid.',
                    'Custo Emb.': 'Custo emb.', 'Última compra': 'Últ. compra'}
-        tree_vinculos = criar_tree_zebrada(frame_lista, columns=cols, show='headings', selectmode='browse', height=12)
+        tree_vinculos = criar_tree_zebrada(frame_lista, columns=cols, show='headings', selectmode='browse', height=8)
         for col, larg, anc, estica in (('ID', 50, 'center', False), ('Fornecedor', 150, 'w', True), ('Descrição no XML', 240, 'w', True),
                                        ('Produto Mestre', 230, 'w', True), ('EAN', 130, 'center', False), ('Qtd/Cx', 60, 'center', False),
                                        ('Custo/Unid.', 95, 'e', False), ('Custo Emb.', 95, 'e', False), ('Compras', 75, 'center', False),
@@ -6343,16 +6343,19 @@ class AppGestaoEstoque:
         tree_vinculos.grid(row=0, column=0, sticky="nsew")
         sb.grid(row=0, column=1, sticky="ns")
         sb_h.grid(row=1, column=0, sticky="ew")
-        ttk.Label(popup, foreground="gray", padding=(10, 0), text=(
+        # [AUDITORIA VÍNCULOS] legenda e editor ficam presos embaixo (antes, em tela de 768 de altura,
+        # a lista empurrava o fim do editor para fora da janela)
+        lbl_legenda = ttk.Label(popup, foreground="gray", padding=(10, 0), text=(
             "Cores: vermelho = fator ou custo provavelmente errado · lilás = duplicado · laranja = sem produto.   "
-            "Custo/Unid. = por unidade do SEU estoque; Custo embalagem = como veio na nota (Custo/Unid. × Qtd/Cx).")).pack(anchor="w")
+            "Custo/Unid. = por unidade do SEU estoque; Custo embalagem = como veio na nota (Custo/Unid. × Qtd/Cx)."))
+        lbl_legenda.pack(anchor="w", side=tk.BOTTOM, before=frame_lista)
 
         # ---------- Edição ----------
         # [MELHORIA VÍNCULOS] o produto do estoque é escolhido numa BUSCA com lista de resultados
         # (nome, EAN ou ID) e sugestões pelo nome do XML. Antes: um campo pequeno + uma lista
         # suspensa com todos os produtos, onde era fácil escolher o vizinho errado.
         frame_edit = ttk.LabelFrame(popup, text="Editar o vínculo selecionado", padding="10")
-        frame_edit.pack(fill=tk.X, padx=10, pady=(6, 10))
+        frame_edit.pack(fill=tk.X, padx=10, pady=(6, 10), side=tk.BOTTOM, before=lbl_legenda)
         frame_edit.columnconfigure(0, weight=1)
         lbl_selecionado = ttk.Label(frame_edit, text="Selecione um vínculo na lista.", font=("Arial", 10, "bold"))
         lbl_selecionado.grid(row=0, column=0, sticky="w", pady=(0, 6))
@@ -6366,7 +6369,7 @@ class AppGestaoEstoque:
                                      "(Enter ou duplo clique)", foreground="gray").grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 2))
         entry_busca_mestre = ttk.Entry(frame_mestre)
         entry_busca_mestre.grid(row=2, column=0, columnspan=2, sticky="ew")
-        lista_mestre = tk.Listbox(frame_mestre, height=6, activestyle='dotbox', exportselection=False, font=("Arial", 10))
+        lista_mestre = tk.Listbox(frame_mestre, height=5, activestyle='dotbox', exportselection=False, font=("Arial", 10))
         lista_mestre.grid(row=3, column=0, sticky="ew", pady=(2, 0))
         sb_mestre = ttk.Scrollbar(frame_mestre, orient="vertical", command=lista_mestre.yview)
         sb_mestre.grid(row=3, column=1, sticky="ns", pady=(2, 0))
@@ -6374,7 +6377,7 @@ class AppGestaoEstoque:
 
         frame_campos = ttk.Frame(frame_edit)
         frame_campos.grid(row=1, column=1, sticky="nw")
-        ttk.Label(frame_campos, text="Qtd/Cx (Fator):").grid(row=0, column=0, sticky="w")
+        ttk.Label(frame_campos, text="Unidades por embalagem (Qtd/Cx):").grid(row=0, column=0, sticky="w")
         entry_fator_edit = ttk.Entry(frame_campos, width=9)
         entry_fator_edit.grid(row=1, column=0, sticky="w", padx=(0, 10))
         ttk.Label(frame_campos, text="EAN (código de barras):").grid(row=0, column=1, sticky="w")
@@ -6388,6 +6391,11 @@ class AppGestaoEstoque:
 
         lbl_previa = ttk.Label(frame_edit, text="", foreground="#0056b3", wraplength=1200, justify=tk.LEFT)
         lbl_previa.grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        # [AUDITORIA VÍNCULOS] diz qual parte da tela resolve cada problema (a tela confundia)
+        ttk.Label(frame_edit, foreground="gray", wraplength=1200, justify=tk.LEFT, text=(
+            "Nota importada com QUANTIDADE ou PREÇO errado?  Clique em '✏️ Corrigir quantidade / preço' (ou dê duplo clique no "
+            "item da lista).   Os campos acima mudam o VÍNCULO: o produto do estoque e quantas unidades vêm em cada embalagem "
+            "nas próximas notas.")).grid(row=3, column=0, columnspan=2, sticky="w", pady=(6, 0))
         combo_mestre_edit = None   # (trocado pela busca acima)
 
         # ---------- Funções ----------
@@ -6442,9 +6450,10 @@ class AppGestaoEstoque:
                 texto = sem_acento(f"{v['Fornecedor']} {v['DescricaoXML']} {v['NomeMestre']} {v['EAN']} {v.get('Codigo', '')} {v['ID']}")
                 if palavras and not all(p in texto for p in palavras):
                     continue
-                tem_compra = v['UltimoCustoUnid'] is not None
-                custo = fmt_reais(v['UltimoCustoUnid']) if tem_compra else "—"
-                custo_emb = fmt_reais(v['UltimoCustoUnid'] * v['Fator']) if tem_compra else "—"
+                # [AUDITORIA VÍNCULOS] custo da última compra PAGA, com o Qtd/Cx com que ELA entrou
+                tem_compra = v['UltimoCustoUnid'] is not None and not v.get('SoBonificacao')
+                custo = fmt_reais(v['UltimoCustoUnid']) if tem_compra else ("bonificação" if v.get('SoBonificacao') else "—")
+                custo_emb = fmt_reais(v['UltimoCustoUnid'] * v.get('UltimoFator', v['Fator'])) if tem_compra else "—"
                 data = v['UltimaData'].strftime('%d/%m/%Y') if v['UltimaData'] else "—"
                 tag = ('suspeito',) if ('suspeito' in probs or 'custo_errado' in probs) else ('orfao',) if 'orfao' in probs else ('duplicado',) if 'duplicado' in probs else ()
                 grupo_txt = f"duplicado (grupo {v['Grupo']})" if v.get('Grupo') else icones['duplicado']
@@ -6656,24 +6665,40 @@ class AppGestaoEstoque:
             try:
                 novo = para_decimal(entry_fator_edit.get(), "Fator", permitir_zero=False)
             except ValueError:
-                lbl_previa.config(text="⚠️ Digite um número maior que zero no Qtd/Cx (ex: 12).", foreground="#c62828"); return
-            if not v['UltimoCustoUnid']:
-                lbl_previa.config(text="Ainda não há compras por este vínculo: o fator vale para as próximas notas.",
+                lbl_previa.config(text="⚠️ Digite um número maior que zero em 'Unidades por embalagem' (ex: 12).",
+                                  foreground="#c62828"); return
+            if v.get('SoBonificacao'):
+                lbl_previa.config(text="Só há bonificações (custo zero) por este vínculo: o Qtd/Cx vale para as próximas notas.",
                                   foreground="gray"); return
-            custo_embalagem = v['UltimoCustoUnid'] * v['Fator']
-            embalagens = v['UltimaQtd'] / v['Fator'] if v['UltimaQtd'] else Decimal('0')
+            if not v['UltimoCustoUnid']:
+                lbl_previa.config(text="Ainda não há compras por este vínculo: o Qtd/Cx vale para as próximas notas.",
+                                  foreground="gray"); return
+            # [AUDITORIA VÍNCULOS] usa o Qtd/Cx com que a última compra ENTROU (antes: o atual do vínculo,
+            # que mostrava "0,375 embalagem de R$ 886,96" quando o Qtd/Cx tinha mudado)
+            fator_ult = v.get('UltimoFator') or v['Fator']
+            custo_embalagem = v['UltimoCustoUnid'] * fator_ult
+            embalagens = v['UltimaQtd'] / fator_ult if v['UltimaQtd'] else Decimal('0')
             unidade = self.unidade_do_produto(v.get('ProdutoID'))
-            texto = (f"Última compra: {fmt_qtd(embalagens)} embalagem(ns) de {fmt_reais(custo_embalagem)} (custo na nota).  "
-                     f"Com Qtd/Cx {fmt_qtd(novo)} → {fmt_qtd(embalagens * novo)} {unidade} a "
-                     f"{fmt_reais(custo_embalagem / novo)} cada (custo por unidade do estoque).")
+            texto = (f"Última compra paga: {fmt_qtd(embalagens)} embalagem(ns) de {fmt_reais(custo_embalagem)} → "
+                     f"{fmt_qtd(v['UltimaQtd'] or 0)} {unidade} a {fmt_reais(v['UltimoCustoUnid'])} cada.")
+            if novo != fator_ult:
+                texto += (f"  Com {fmt_qtd(novo)} por embalagem → {fmt_qtd(embalagens * novo)} {unidade} a "
+                          f"{fmt_reais(custo_embalagem / novo)} cada.")
             ref = v.get('CustoReferencia')
             if ref:
                 texto += f"  Normal deste produto: ~{fmt_reais(ref)} por {unidade}."
+            cor = "#0056b3"
+            avisos = []
             if v.get('CustoErrado'):
-                texto = ("💸 Uma compra deste vínculo custa MAIS QUE A NOTA INTEIRA: o PREÇO foi gravado errado "
-                         "(o Qtd/Cx não é o problema). Clique em 'Compras / corrigir custo'.\n") + texto
-                lbl_previa.config(text=texto, foreground="#c62828"); return
-            lbl_previa.config(text=texto, foreground="#0056b3")
+                avisos.append("💸 Uma compra deste vínculo custa MAIS QUE A NOTA INTEIRA: o PREÇO foi gravado errado.")
+            if v.get('MotivoSuspeito'):
+                avisos.append(f"⚠️ Por que 'fator?': {v['MotivoSuspeito']}")
+            elif v.get('ComprasOutroFator'):
+                avisos.append(f"ℹ️ {v['ComprasOutroFator']} compra(s) entraram com outro Qtd/Cx.")
+            if avisos:
+                texto = "  ".join(avisos) + "  → Clique em '✏️ Corrigir quantidade / preço'.\n" + texto
+                cor = "#c62828" if (v.get('CustoErrado') or v.get('MotivoSuspeito')) else cor
+            lbl_previa.config(text=texto, foreground=cor)
 
         def preencher_edicao(event=None):
             sel, v = selecionado_atual()
@@ -6722,8 +6747,10 @@ class AppGestaoEstoque:
             novo_ncm = entry_ncm_edit.get().strip()
 
             recalcular = False
+            previa = []
             if novo_fator != v['Fator'] and v['QtdCompras'] > 0:
                 fator_antigo, previa = database.previa_recalculo_vinculo(v['ID'], novo_fator)
+            if previa:   # [AUDITORIA VÍNCULOS] antes perguntava até quando nenhuma compra mudava ("Existem 0 compra(s)")
                 exemplos = "\n".join(
                     f"  • NF {p['NF']} ({p['Data'].strftime('%d/%m/%Y') if p['Data'] else '?'}): "
                     f"{fmt_qtd(p['QtdAtual'])} a {fmt_reais(p['CustoAtual'])}  →  "
@@ -6805,7 +6832,6 @@ class AppGestaoEstoque:
         for campo in (entry_fator_edit, entry_ean_edit, entry_ncm_edit):
             campo.bind("<Return>", salvar_alteracao)
         tree_vinculos.bind("<<TreeviewSelect>>", preencher_edicao)
-        tree_vinculos.bind("<Double-1>", ir_para_fator)
         tree_vinculos.bind("<Delete>", lambda e: excluir_vinculo())
 
         btn_salvar = ttk.Button(frame_botoes_edit, text="Salvar alterações", command=salvar_alteracao)
@@ -6821,7 +6847,9 @@ class AppGestaoEstoque:
                 messagebox.showwarning("Aviso", "Selecione um vínculo na lista.", parent=popup)
                 return
             if not v['QtdCompras']:
-                messagebox.showinfo("Sem compras", "Este vínculo ainda não tem compras registradas.", parent=popup)
+                messagebox.showinfo("Sem compras", "Este vínculo ainda não tem compras registradas: não há quantidade nem "
+                                    "preço para corrigir. As 'Unidades por embalagem' valem para as próximas notas.",
+                                    parent=popup)
                 return
             def depois():
                 carregar_dados(); mostrar(manter=sel); preencher_edicao()
@@ -6832,9 +6860,22 @@ class AppGestaoEstoque:
                         logger.warning(f"Falha ao atualizar a janela de origem após corrigir custo: {e}")
             self.abrir_compras_do_vinculo(v, popup, ao_mudar=depois)
 
-        # [MELHORIA] ver as compras do vínculo e corrigir um PREÇO gravado errado
-        btn_compras = ttk.Button(frame_edit, text="Compras / corrigir custo", command=abrir_compras)
+        # [AUDITORIA VÍNCULOS] corrigir a QUANTIDADE e o PREÇO das compras (antes "Compras / corrigir custo",
+        # que só mudava o preço)
+        btn_compras = ttk.Button(frame_edit, text="✏️ Corrigir quantidade / preço", command=abrir_compras)
         btn_compras.grid(row=0, column=1, sticky="e")
+
+        def duplo_clique(event=None):
+            """[AUDITORIA VÍNCULOS] duplo clique abre a correção das compras (sem compras: vai para o Qtd/Cx)."""
+            linha = linha_do_clique(tree_vinculos, event)
+            if not linha:
+                return
+            v = estado['dados'].get(linha)
+            if v and v['QtdCompras']:
+                abrir_compras()
+            else:
+                ir_para_fator()
+        tree_vinculos.bind("<Double-1>", duplo_clique)
 
         if produto_id is not None:
             lbl_produto.config(text=f"Mostrando só os vínculos de: {nome_produto or produto_id}")
@@ -6852,147 +6893,434 @@ class AppGestaoEstoque:
                                  'previa': lbl_previa, 'salvar': salvar_alteracao, 'excluir': excluir_vinculo,
                                  'problema': combo_problema, 'opcoes': lambda: estado['opcoes'],
                                  'mostrar': mostrar, 'mostrar_todos': mostrar_todos,
-                                 'contador': lbl_contador, 'btn_juntar': btn_juntar, 'compras': abrir_compras}
+                                 'contador': lbl_contador, 'btn_juntar': btn_juntar, 'compras': abrir_compras,
+                                 'duplo_clique': duplo_clique}
+
+    def _item_da_compra_no_xml(self, v, compra):
+        """
+        [AUDITORIA VÍNCULOS] Procura, no XML da nota (pasta da SEFAZ), o item desta compra.
+        Devolve {'Quantidade' (na unidade da nota; a da conferência do app, se houver),
+        'QuantidadeNota', 'Preco' (custo real de 1 unidade da nota, com ST/IPI/frete), 'Bonificacao',
+        'Conferida'} ou None quando o XML não está na pasta.
+        O item é achado pela descrição / código / EAN do vínculo; empatando, pelo TOTAL do item
+        (quantidade x custo não muda quando só o Qtd/Cx está errado).
+        """
+        chave = so_digitos(compra.get('ChaveAcesso'))
+        if len(chave) != 44:
+            return None
+        try:
+            import nfe_distribuicao as nd
+            pasta = nd.pasta_xml()
+        except Exception as e:   # sem as bibliotecas da SEFAZ: a pasta é a mesma, ao lado do programa
+            logger.info(f"nfe_distribuicao indisponível ({e}); usando a pasta configurada.")
+            pasta = getattr(config, 'NFE_PASTA_XML', None) or 'notas_xml_sefaz'
+            if not os.path.isabs(pasta):
+                pasta = os.path.join(os.path.dirname(os.path.abspath(__file__)), pasta)
+        caminho = next((c for c in (os.path.join(pasta, f"{chave}.xml"), os.path.join(pasta, 'importadas', f"{chave}.xml"))
+                        if os.path.isfile(c)), None)
+        if not caminho:
+            return None
+        try:
+            _cab, itens = nota_xml.ler_xml_nota_fiscal(caminho)
+        except Exception as e:
+            logger.warning(f"XML {chave} ilegível: {e}")
+            return None
+        desc, cod, ean = (v.get('DescricaoXML') or '').strip(), (v.get('Codigo') or '').strip(), (v.get('EAN') or '').strip()
+
+        def pontos(it):
+            p = 0
+            if desc and (it.get('DescricaoXML') or '').strip() == desc:
+                p += 4
+            if cod and str(it.get('cProd') or '').strip() == cod:
+                p += 2
+            if ean and (it.get('cEAN') or '').strip() == ean:
+                p += 1
+            return p
+        candidatos = [it for it in itens if pontos(it) > 0]
+        if not candidatos:
+            return None
+        bonif = bool(compra.get('Bonificacao'))
+        total = compra['Quantidade'] * compra['Custo']
+        it = min(candidatos, key=lambda it: (
+            -pontos(it), (tipo_item_por_cfop(it.get('CFOP')) == 'bonificacao') != bonif,
+            abs(Decimal(str(it['Quantidade'])) * Decimal(str(it['PrecoCustoUnitario'])) - total)))
+        qtd_nota = Decimal(str(it['Quantidade']))
+        conf = self._conferencia_da_nota(chave)
+        chegou = conf['itens'].get(it.get('NItem')) if conf else None
+        return {'Quantidade': chegou if chegou is not None else qtd_nota, 'QuantidadeNota': qtd_nota,
+                'Preco': Decimal(str(it['PrecoCustoUnitario'])),
+                'Bonificacao': tipo_item_por_cfop(it.get('CFOP')) == 'bonificacao', 'Conferida': chegou is not None}
 
     def abrir_compras_do_vinculo(self, v, janela_pai=None, ao_mudar=None):
         """
-        [MELHORIA] Mostra todas as compras de um vínculo (nota, data, embalagens, preço da
-        embalagem, total do item x total da nota) e deixa corrigir o PREÇO de uma compra
-        gravado errado (ex: R$ 840.000,00 no lugar de R$ 84,00). A quantidade não muda.
-        O usuário digita o preço da EMBALAGEM como está no DANFE (papel da nota).
+        [AUDITORIA VÍNCULOS] "Corrigir quantidade e preço": todas as compras de um vínculo e um
+        formulário igual à NOTA para consertar a selecionada:
+            embalagens  x  unidades por embalagem (Qtd/Cx)  x  preço de 1 embalagem
+        com o resultado ao vivo ("Vai ficar: 24 UN a R$ 13,86"). Antes só dava para corrigir o
+        PREÇO: compra com a quantidade / Qtd/Cx errado não tinha conserto.
+        Ajudas: sugestão quando o custo está ~N vezes o normal do produto, valores do XML da nota
+        (se estiver na pasta da SEFAZ) e "usar o Qtd/Cx do vínculo em todas as compras".
         """
         pai = janela_pai or self.root
         popup = Toplevel(pai)
-        popup.title(f"🧾 Compras de: {v['DescricaoXML']}")
-        popup.geometry("1050x520")
+        popup.title(f"Corrigir quantidade e preço: {v['DescricaoXML']}")
+        larg_tela, alt_tela = popup.winfo_screenwidth(), popup.winfo_screenheight()
+        popup.geometry(f"{min(1180, larg_tela - 40)}x{min(700, alt_tela - 80)}+20+20")
+        popup.minsize(900, 560)
         popup.transient(pai)
-        fator = v['Fator'] if v['Fator'] and v['Fator'] > 0 else Decimal('1')
+        fator_inicial = v['Fator'] if v['Fator'] and v['Fator'] > 0 else Decimal('1')
+        estado = {'compras': {}, 'fator_vinculo': fator_inicial, 'xml': {}, 'exatos': {}, 'acao_dica': None}
+        unidade = self.unidade_do_produto(v.get('ProdutoID'))
 
         def fator_de(c):
-            """[DEPURAÇÃO 2] Qtd/Cx com que ESTA compra foi importada (antes usava o Qtd/Cx atual
-            do vínculo para todas: depois de trocar o Qtd/Cx, as embalagens e o preço ficavam errados)."""
+            """Qtd/Cx com que ESTA compra foi importada."""
             f = c.get('Fator')
-            return f if f and f > 0 else fator
-        unidade = self.unidade_do_produto(v.get('ProdutoID'))
-        frame = ttk.Frame(popup, padding=10)
+            return f if f and f > 0 else estado['fator_vinculo']
+
+        frame = ttk.Frame(popup, padding=(10, 10, 10, 4))
         frame.pack(fill=tk.BOTH, expand=True)
         ttk.Label(frame, font=("Arial", 10, "bold"), text=(
-            f"{v['Fornecedor']}  •  {v['DescricaoXML']}  →  {v['NomeMestre']}  (Qtd/Cx {fmt_qtd(fator)})")).pack(anchor="w")
-        ttk.Label(frame, foreground="gray", text=(
-            "Selecione a compra com o preço errado, digite o preço CERTO de UMA embalagem (como está no DANFE) e clique em Corrigir. "
-            "Só o preço muda; a quantidade fica igual.")).pack(anchor="w", pady=(0, 6))
+            f"{v['Fornecedor']}  •  {v['DescricaoXML']}  →  {v['NomeMestre']}")).pack(anchor="w")
+        lbl_fator_vinc = ttk.Label(frame, foreground="#0056b3")
+        lbl_fator_vinc.pack(anchor="w")
+        ttk.Label(frame, foreground="gray", wraplength=1100, justify=tk.LEFT, text=(
+            "1) Escolha a compra na lista.  2) Digite como está na NOTA: quantas embalagens vieram, quantas unidades tem "
+            "cada embalagem e o preço de 1 embalagem.  3) Confira o 'Vai ficar' e clique em 'Salvar esta compra'.")).pack(
+            anchor="w", pady=(2, 6))
 
-        cols = ('NF', 'Data', 'Embalagens', 'Preço embalagem', f'Qtd ({unidade})', f'Custo/{unidade}',
+        cols = ('NF', 'Data', 'Embalagens', 'Qtd/Cx', 'Preço emb.', 'No estoque', f'Custo/{unidade}',
                 'Total do item', 'Total da nota', 'Alerta')
-        tree = criar_tree_zebrada(frame, columns=cols, show='headings', selectmode='browse')
-        for col, larg, anc in zip(cols, (70, 90, 85, 120, 85, 110, 120, 120, 200),
-                                  ('center', 'center', 'center', 'e', 'center', 'e', 'e', 'e', 'w')):
-            tree.heading(col, text=col); tree.column(col, width=larg, anchor=anc)
+        frame_lista = ttk.Frame(frame)
+        frame_lista.pack(fill=tk.BOTH, expand=True)
+        tree = criar_tree_zebrada(frame_lista, columns=cols, show='headings', selectmode='browse', height=8)
+        for col, larg, anc in zip(cols, (60, 90, 95, 60, 105, 100, 95, 110, 110, 300),
+                                  ('center', 'center', 'center', 'center', 'e', 'center', 'e', 'e', 'e', 'w')):
+            tree.heading(col, text=col); tree.column(col, width=larg, minwidth=40, anchor=anc, stretch=(col == 'Alerta'))
         tree.tag_configure('errado', background='#ffd6d6')
-        tree.pack(fill=tk.BOTH, expand=True)
+        tree.tag_configure('diferente', background='#fff4c2')
+        sb = ttk.Scrollbar(frame_lista, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=sb.set)
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb.pack(side=tk.LEFT, fill=tk.Y)
 
-        frame_corr = ttk.LabelFrame(popup, text="Corrigir o preço da compra selecionada", padding=10)
-        frame_corr.pack(fill=tk.X, padx=10, pady=(0, 10))
+        frame_corr = ttk.LabelFrame(popup, text="Corrigir a compra selecionada (digite como está na nota)", padding=10)
+        frame_corr.pack(fill=tk.X, padx=10, pady=(4, 4))
         lbl_sel = ttk.Label(frame_corr, text="Selecione uma compra na lista.", font=("Arial", 10, "bold"))
-        lbl_sel.grid(row=0, column=0, columnspan=4, sticky="w")
-        ttk.Label(frame_corr, text="Preço CERTO de 1 embalagem (R$):").grid(row=1, column=0, sticky="w", pady=(6, 0))
+        lbl_sel.grid(row=0, column=0, columnspan=6, sticky="w")
+        ttk.Label(frame_corr, text="Embalagens (qtd. na nota):").grid(row=1, column=0, sticky="w", pady=(8, 0))
+        ttk.Label(frame_corr, text="Unidades por embalagem (Qtd/Cx):").grid(row=1, column=2, sticky="w", pady=(8, 0))
+        ttk.Label(frame_corr, text="Preço de 1 embalagem (R$, com impostos):").grid(row=1, column=4, sticky="w", pady=(8, 0))
+        entry_emb = ttk.Entry(frame_corr, width=12)
+        entry_emb.grid(row=2, column=0, sticky="w")
+        ttk.Label(frame_corr, text="×", font=("Arial", 12, "bold")).grid(row=2, column=1, padx=8)
+        entry_fator = ttk.Entry(frame_corr, width=12)
+        entry_fator.grid(row=2, column=2, sticky="w")
+        ttk.Label(frame_corr, text="×", font=("Arial", 12, "bold")).grid(row=2, column=3, padx=8)
         entry_preco = ttk.Entry(frame_corr, width=14)
-        entry_preco.grid(row=1, column=1, sticky="w", padx=5, pady=(6, 0))
-        lbl_sugestao = ttk.Label(frame_corr, text="", foreground="#0056b3")
-        lbl_sugestao.grid(row=2, column=0, columnspan=4, sticky="w", pady=(6, 0))
-        estado = {'compras': {}}
+        entry_preco.grid(row=2, column=4, sticky="w")
+        lbl_resultado = ttk.Label(frame_corr, text="", font=("Arial", 10, "bold"), wraplength=1100, justify=tk.LEFT)
+        lbl_resultado.grid(row=3, column=0, columnspan=6, sticky="w", pady=(8, 0))
+        lbl_dica = ttk.Label(frame_corr, text="", foreground="#0056b3", wraplength=900, justify=tk.LEFT)
+        lbl_dica.grid(row=4, column=0, columnspan=5, sticky="w", pady=(6, 0))
+        btn_dica = ttk.Button(frame_corr, text="Usar sugestão", command=lambda: usar_dica())
+        lbl_xml = ttk.Label(frame_corr, text="", foreground="#1b5e20", wraplength=900, justify=tk.LEFT)
+        lbl_xml.grid(row=5, column=0, columnspan=5, sticky="w", pady=(4, 0))
+        btn_xml = ttk.Button(frame_corr, text="Usar valores do XML", command=lambda: usar_xml())
+
+        frame_rodape = ttk.Frame(popup, padding=(10, 0, 10, 10))
+        frame_rodape.pack(fill=tk.X)
+        btn_todas = ttk.Button(frame_rodape, text="", command=lambda: aplicar_em_todas())
+        btn_todas.pack(side=tk.LEFT)
+        ttk.Button(frame_rodape, text="Fechar", command=popup.destroy).pack(side=tk.RIGHT)
+        btn_salvar = ttk.Button(frame_rodape, text="💾 Salvar esta compra", command=lambda: salvar())
+        btn_salvar.pack(side=tk.RIGHT, padx=8)
+
+        def alerta_de(c):
+            if c['MaiorQueNota']:
+                return "💸 Mais caro que a nota inteira!", 'errado'
+            if c['Bonificacao']:
+                return "bonificação (custo zero)", ()
+            if c['ForaDoNormal'] and c.get('Referencia'):
+                razao = c['Custo'] / c['Referencia']
+                vezes = f"{fmt_qtd(razao.quantize(Decimal('0.1')))}x o normal" if razao >= 1 else \
+                    f"{fmt_qtd((1 / razao).quantize(Decimal('0.1')))}x menor que o normal"
+                return f"⚠️ custo {vezes}: Qtd/Cx errado?", 'errado'
+            if fator_de(c) != estado['fator_vinculo']:
+                return f"entrou com Qtd/Cx {fmt_qtd(fator_de(c))} (o vínculo usa {fmt_qtd(estado['fator_vinculo'])})", 'diferente'
+            return "", ()
 
         def carregar(manter=None):
             for i in tree.get_children():
                 tree.delete(i)
             estado['compras'] = {}
+            lbl_fator_vinc.config(text=f"Qtd/Cx do vínculo (vale para as próximas notas): {fmt_qtd(estado['fator_vinculo'])} "
+                                       f"{unidade} por embalagem.")
             for c in database.listar_compras_do_vinculo(v['ID']):
                 iid = str(c['ItemNotaID'])
                 estado['compras'][iid] = c
-                embalagens = c['Quantidade'] / fator_de(c)
-                alerta = "💸 Mais caro que a nota inteira!" if c['MaiorQueNota'] else ""
-                tree.insert("", "end", iid=iid, tags=('errado',) if c['MaiorQueNota'] else (), values=(
-                    c['NF'], c['Data'].strftime('%d/%m/%Y') if c['Data'] else "—", fmt_qtd(embalagens),
-                    fmt_reais(c['Custo'] * fator_de(c)), fmt_qtd(c['Quantidade']), fmt_reais(c['Custo']),
+                f = fator_de(c)
+                alerta, tag = alerta_de(c)
+                tree.insert("", "end", iid=iid, tags=(tag,) if tag else (), values=(
+                    c['NF'], c['Data'].strftime('%d/%m/%Y') if c['Data'] else "—", fmt_qtd(c['Quantidade'] / f), fmt_qtd(f),
+                    fmt_reais(c['Custo'] * f), f"{fmt_qtd(c['Quantidade'])} {unidade}", fmt_reais(c['Custo']),
                     fmt_reais(c['TotalItem']), fmt_reais(c['TotalNota']) if c['TotalNota'] > 0 else "—", alerta))
+            outras = sum(1 for c in estado['compras'].values() if fator_de(c) != estado['fator_vinculo'])
+            btn_todas.config(text=f"Usar o Qtd/Cx {fmt_qtd(estado['fator_vinculo'])} em todas as compras ({outras} diferente(s))")
+            btn_todas.state(['!disabled'] if outras else ['disabled'])
             filhos = tree.get_children()
+            if not filhos:
+                lbl_sel.config(text="Nenhuma compra encontrada para este vínculo.")
             alvo = manter if manter and tree.exists(manter) else next(
-                (i for i in filhos if estado['compras'][i]['MaiorQueNota']), filhos[0] if filhos else None)
+                (i for i in filhos if estado['compras'][i]['MaiorQueNota']),
+                next((i for i in filhos if estado['compras'][i]['ForaDoNormal']), filhos[0] if filhos else None))
             if alvo:
                 tree.focus(alvo); tree.selection_set(alvo); tree.see(alvo)
             preencher()
 
+        def compra_atual():
+            return estado['compras'].get(tree.focus())
+
+        def escrever(entry, texto):
+            entry.delete(0, tk.END); entry.insert(0, texto)
+
         def preencher(event=None):
-            sel = tree.focus()
-            c = estado['compras'].get(sel)
-            entry_preco.delete(0, tk.END)
+            c = compra_atual()
+            for e in (entry_emb, entry_fator, entry_preco):
+                e.delete(0, tk.END)
+            btn_dica.grid_remove(); btn_xml.grid_remove()
+            lbl_dica.config(text=""); lbl_xml.config(text=""); lbl_resultado.config(text="")
+            estado['acao_dica'] = None
             if not c:
-                lbl_sel.config(text="Selecione uma compra na lista."); lbl_sugestao.config(text=""); return
-            embalagens = c['Quantidade'] / fator_de(c)
-            lbl_sel.config(text=(f"NF {c['NF']} de {c['Data'].strftime('%d/%m/%Y') if c['Data'] else '?'}: "
-                                 f"{fmt_qtd(embalagens)} embalagem(ns) a {fmt_reais(c['Custo'] * fator_de(c))} cada "
-                                 f"(total do item {fmt_reais(c['TotalItem'])})"))
-            texto = ""
-            if c['TotalNota'] > 0 and embalagens > 0:
+                return
+            f = fator_de(c)
+            emb, preco = c['Quantidade'] / f, c['Custo'] * f
+            # o que foi preenchido aqui vale EXATO (sem o arredondamento da tela) enquanto não for mudado
+            estado['exatos'] = {'emb': (fmt_qtd(emb), emb), 'fator': (fmt_qtd(f), f),
+                                'preco': (self._fmt_preco(preco), preco)}
+            escrever(entry_emb, estado['exatos']['emb'][0])
+            escrever(entry_fator, estado['exatos']['fator'][0])
+            escrever(entry_preco, estado['exatos']['preco'][0])
+            lbl_sel.config(text=(f"Como está:  NF {c['NF']} de {c['Data'].strftime('%d/%m/%Y') if c['Data'] else '?'}  —  "
+                                 f"{fmt_qtd(emb)} embalagem(ns) × {fmt_qtd(f)} = {fmt_qtd(c['Quantidade'])} {unidade} "
+                                 f"a {fmt_reais(c['Custo'])} cada  (total do item {fmt_reais(c['TotalItem'])})"))
+            montar_dica(c)
+            montar_xml(c)
+            atualizar_resultado()
+
+        def montar_dica(c):
+            f = fator_de(c)
+            emb = c['Quantidade'] / f
+            if c['MaiorQueNota'] and c['TotalNota'] > 0 and emb > 0:
                 sobra = c['TotalNota'] - c['SomaOutrosItens']
                 if sobra > 0:
-                    sugestao = (sobra / embalagens).quantize(Decimal('0.01'))
-                    texto = (f"💡 Pelo total da nota ({fmt_reais(c['TotalNota'])}) menos os outros itens "
-                             f"({fmt_reais(c['SomaOutrosItens'])}), sobram {fmt_reais(sobra)} para este item = "
-                             f"~{fmt_reais(sugestao)} por embalagem (pode incluir frete/ST). Confira no DANFE.")
-                    if c['MaiorQueNota']:
-                        entry_preco.insert(0, fmt_reais(sugestao).replace('R$', '').strip())
-            lbl_sugestao.config(text=texto)
+                    preco = (sobra / emb).quantize(Decimal('0.01'))
+                    lbl_dica.config(text=(f"💡 Pelo total da nota ({fmt_reais(c['TotalNota'])}) menos os outros itens "
+                                          f"({fmt_reais(c['SomaOutrosItens'])}), sobram {fmt_reais(sobra)} para este item = "
+                                          f"~{fmt_reais(preco)} por embalagem. Confira no DANFE."))
+                    estado['acao_dica'] = {'preco': preco}
+            elif c.get('Multiplicador'):
+                k = c['Multiplicador']
+                nova_qtd, novo_custo = c['Quantidade'] * k, c['Custo'] / k
+                # mostra do jeito da nota: mantém as embalagens (Qtd/Cx x k) ou usa o Qtd/Cx do vínculo
+                emb_b, f_b = emb, f * k
+                emb_a, f_a = nova_qtd / estado['fator_vinculo'], estado['fator_vinculo']
+                inteiro = lambda x: abs(x - x.to_integral_value()) < Decimal('0.001')
+                emb_s, f_s = (emb_b, f_b) if inteiro(emb_b) and inteiro(f_b) else (emb_a, f_a)
+                lbl_dica.config(text=(
+                    f"💡 O custo desta compra ({fmt_reais(c['Custo'])} por {unidade}) está "
+                    f"~{fmt_qtd((c['Custo'] / c['Referencia']).quantize(Decimal('0.1')))}x "
+                    f"o normal deste produto ({fmt_reais(c['Referencia'])}): parece que entrou com o Qtd/Cx errado. "
+                    f"Sugestão: {fmt_qtd(emb_s)} embalagem(ns) × {fmt_qtd(f_s)} = {fmt_qtd(nova_qtd)} {unidade} a "
+                    f"{fmt_reais(novo_custo)} cada (o total não muda)."))
+                estado['acao_dica'] = {'emb': emb_s, 'fator': f_s, 'preco': novo_custo * f_s}
+            if estado['acao_dica']:
+                btn_dica.grid(row=4, column=5, sticky="e", padx=(8, 0))
 
-        def corrigir(event=None):
-            sel = tree.focus()
-            c = estado['compras'].get(sel)
+        def montar_xml(c):
+            iid = str(c['ItemNotaID'])
+            if iid not in estado['xml']:
+                try:
+                    estado['xml'][iid] = self._item_da_compra_no_xml(v, c)
+                except Exception as e:
+                    logger.warning(f"Falha ao ler o XML da compra {iid}: {e}")
+                    estado['xml'][iid] = None
+            x = estado['xml'][iid]
+            if not x:
+                lbl_xml.config(text="📄 O XML desta nota não está na pasta da SEFAZ: confira no DANFE (papel da nota).",
+                               foreground="gray")
+                return
+            extra = (f"  (na conferência do app chegaram {fmt_qtd(x['Quantidade'])} de {fmt_qtd(x['QuantidadeNota'])})"
+                     if x['Conferida'] and x['Quantidade'] != x['QuantidadeNota'] else "")
+            lbl_xml.config(text=(f"📄 No XML da nota: {fmt_qtd(x['QuantidadeNota'])} embalagem(ns) × "
+                                 f"{fmt_reais(x['Preco'])} = {fmt_reais(x['QuantidadeNota'] * x['Preco'])}"
+                                 f"{' (bonificação)' if x['Bonificacao'] else ''}{extra}"), foreground="#1b5e20")
+            btn_xml.grid(row=5, column=5, sticky="e", padx=(8, 0))
+
+        def valor(entry, chave, nome, permitir_zero):
+            """Número digitado; se o campo não foi mexido, o valor EXATO que estava gravado."""
+            texto = entry.get().strip()
+            original = estado['exatos'].get(chave)
+            if original and texto == original[0]:
+                return original[1]
+            return para_decimal(texto, nome, permitir_zero=permitir_zero)
+
+        def ler_campos():
+            emb = valor(entry_emb, 'emb', "Embalagens", False)
+            f = valor(entry_fator, 'fator', "Unidades por embalagem", False)
+            preco = valor(entry_preco, 'preco', "Preço de 1 embalagem", True)
+            return emb, f, preco
+
+        def atualizar_resultado(event=None):
+            c = compra_atual()
             if not c:
-                messagebox.showwarning("Aviso", "Selecione a compra que quer corrigir.", parent=popup)
+                lbl_resultado.config(text=""); return
+            if estado['exatos'] and all(e.get().strip() == estado['exatos'][k][0] for e, k in
+                                        ((entry_emb, 'emb'), (entry_fator, 'fator'), (entry_preco, 'preco'))):
+                lbl_resultado.config(text="Vai ficar:  igual ao que está gravado. Mude os campos acima (ou use uma das ajudas abaixo).",
+                                     foreground="gray")
                 return
             try:
-                preco_emb = para_decimal(entry_preco.get(), "Preço da embalagem", permitir_zero=False)
+                emb, f, preco = ler_campos()
             except ValueError as e:
-                messagebox.showerror("Valor inválido", str(e), parent=popup)
+                lbl_resultado.config(text=f"⚠️ {e}", foreground="#c62828"); return
+            qtd, custo, total = emb * f, preco / f, emb * preco
+            texto = (f"Vai ficar:  {fmt_qtd(emb)} × {fmt_qtd(f)} = {fmt_qtd(qtd)} {unidade} a {fmt_reais(custo)} cada  "
+                     f"·  total do item {fmt_reais(total)}")
+            cor = "#1b5e20"
+            if abs(total - c['TotalItem']) < Decimal('0.02'):
+                texto += "  (igual ao de antes)"
+            else:
+                texto += f"  (antes {fmt_reais(c['TotalItem'])}: confira no DANFE)"
+                cor = "#e65100"
+            if preco == 0:
+                texto += "  ·  custo zero = bonificação"
+            if c['TotalNota'] > 0 and total > c['TotalNota'] * Decimal('1.05') + 1:
+                texto += f"\n⚠️ Continua mais caro que a nota inteira ({fmt_reais(c['TotalNota'])}). Confira o valor digitado."
+                cor = "#c62828"
+            elif c['ForaDoNormal'] and custo > 0 and database._fora_do_normal(custo, c['Referencia']):
+                # só quando a compra JÁ estava fora do normal: se a referência é a própria compra errada
+                # (ex: o único preço do produto), o aviso enganaria quem está corrigindo certo
+                texto += f"\n⚠️ O custo por {unidade} continua muito longe do normal ({fmt_reais(c['Referencia'])})."
+                cor = "#c62828"
+            lbl_resultado.config(text=texto, foreground=cor)
+
+        def usar_dica():
+            d = estado['acao_dica']
+            if not d:
                 return
-            novo_custo = (preco_emb / fator_de(c)).quantize(Decimal('0.0001'))
-            embalagens = c['Quantidade'] / fator_de(c)
-            novo_total = c['Quantidade'] * novo_custo
-            aviso = ""
-            if c['TotalNota'] > 0 and novo_total > c['TotalNota'] * Decimal('1.05') + 1:
-                aviso = (f"\n\n⚠️ ATENÇÃO: mesmo assim o item ({fmt_reais(novo_total)}) continua mais caro que a "
-                         f"nota inteira ({fmt_reais(c['TotalNota'])}). Confira o valor digitado.")
-            if not messagebox.askyesno("Corrigir preço", (
-                    f"NF {c['NF']} — {v['DescricaoXML']}\n\n"
-                    f"Preço da embalagem: {fmt_reais(c['Custo'] * fator_de(c))}  →  {fmt_reais(preco_emb)}\n"
-                    f"Custo por {unidade}: {fmt_reais(c['Custo'])}  →  {fmt_reais(novo_custo)}\n"
-                    f"Total do item: {fmt_reais(c['TotalItem'])}  →  {fmt_reais(novo_total)}\n"
-                    f"A quantidade ({fmt_qtd(embalagens)} emb. = {fmt_qtd(c['Quantidade'])} {unidade}) não muda.\n\n"
-                    f"Contagens com o valor do estoque já FECHADO não mudam.{aviso}\n\nConfirmar?"), parent=popup):
+            if 'emb' in d:
+                escrever(entry_emb, fmt_qtd(d['emb']))
+                escrever(entry_fator, fmt_qtd(d['fator']))
+            escrever(entry_preco, self._fmt_preco(d['preco']))
+            atualizar_resultado()
+
+        def usar_xml():
+            c = compra_atual()
+            x = estado['xml'].get(str(c['ItemNotaID'])) if c else None
+            if not x:
                 return
-            ok, msg = database.atualizar_custos_itens([(c['ItemNotaID'], novo_custo)])
-            if not ok:
-                messagebox.showerror("Erro", msg, parent=popup)
-                return
-            self.status(f"Preço corrigido: NF {c['NF']} • {v['DescricaoXML']} → {fmt_reais(preco_emb)} por embalagem.")
-            carregar(manter=sel)
+            escrever(entry_emb, fmt_qtd(x['Quantidade']))
+            escrever(entry_preco, self._fmt_preco(Decimal('0') if c['Bonificacao'] else x['Preco']))
+            atualizar_resultado()
+
+        def depois_de_mudar(manter):
+            carregar(manter=manter)
             if ao_mudar:
                 try:
                     ao_mudar()
                 except Exception as e:
                     logger.warning(f"Falha ao atualizar a janela de vínculos: {e}")
-            messagebox.showinfo("Pronto", "Preço corrigido! 👍\n\nSe houver contagem em aberto no '💰 Valor do Estoque', "
-                                "clique em '🔄 Recalcular' para ver o efeito.", parent=popup)
 
-        btn_corrigir = ttk.Button(frame_corr, text="💾 Corrigir preço", command=corrigir)
-        btn_corrigir.grid(row=1, column=2, padx=10, pady=(6, 0))
-        ttk.Button(frame_corr, text="Fechar", command=popup.destroy).grid(row=1, column=3, pady=(6, 0))
+        def salvar(event=None):
+            c = compra_atual()
+            if not c:
+                messagebox.showwarning("Aviso", "Selecione a compra que quer corrigir.", parent=popup)
+                return "break"
+            try:
+                emb, f, preco = ler_campos()
+            except ValueError as e:
+                messagebox.showerror("Valor inválido", str(e), parent=popup)
+                return "break"
+            qtd, custo = emb * f, preco / f
+            if (abs(qtd - c['Quantidade']) < Decimal('0.0005') and abs(custo - c['Custo']) < Decimal('0.00005')
+                    and f == fator_de(c)):
+                messagebox.showinfo("Nada mudou", "Os valores são os mesmos que já estão gravados.", parent=popup)
+                return "break"
+            total = emb * preco
+            aviso = ""
+            if abs(total - c['TotalItem']) >= Decimal('0.02'):
+                aviso = f"\n\n⚠️ O TOTAL do item muda de {fmt_reais(c['TotalItem'])} para {fmt_reais(total)}. Confira no DANFE."
+            if not messagebox.askyesno("Corrigir esta compra", (
+                    f"NF {c['NF']} — {v['DescricaoXML']}\n\n"
+                    f"Como está:  {fmt_qtd(c['Quantidade'])} {unidade} a {fmt_reais(c['Custo'])}\n"
+                    f"Vai ficar:  {fmt_qtd(emb)} × {fmt_qtd(f)} = {fmt_qtd(qtd)} {unidade} a {fmt_reais(custo)}{aviso}\n\n"
+                    "Contagens com o valor do estoque já FECHADO não mudam.\n\nConfirmar?"), parent=popup):
+                return "break"
+            ok, msg = database.corrigir_compra(c['ItemNotaID'], qtd, custo, f)
+            if not ok:
+                messagebox.showerror("Erro", msg, parent=popup)
+                return "break"
+            sel = str(c['ItemNotaID'])
+            self.status(f"Compra corrigida: NF {c['NF']} • {v['DescricaoXML']} → {fmt_qtd(qtd)} {unidade} a {fmt_reais(custo)}.")
+            if f != estado['fator_vinculo'] and messagebox.askyesno(
+                    "Próximas notas",
+                    f"Esta compra ficou com {fmt_qtd(f)} {unidade} por embalagem, mas o vínculo usa {fmt_qtd(estado['fator_vinculo'])}.\n\n"
+                    f"Usar {fmt_qtd(f)} também nas PRÓXIMAS notas deste item?", parent=popup):
+                if database.atualizar_vinculo_existente(v['ID'], v['ProdutoID'], f, recalcular_compras=False):
+                    estado['fator_vinculo'] = v['Fator'] = f
+                    _, previa = database.previa_recalculo_vinculo(v['ID'], f)
+                    if previa and messagebox.askyesno(
+                            "Outras compras",
+                            f"{len(previa)} outra(s) compra(s) deste item entraram com outro Qtd/Cx.\n\n"
+                            f"Passar todas para {fmt_qtd(f)} {unidade} por embalagem? (o total de cada uma não muda)",
+                            parent=popup):
+                        database.atualizar_vinculo_existente(v['ID'], v['ProdutoID'], f, recalcular_compras=True)
+                else:
+                    messagebox.showerror("Erro", "A compra foi corrigida, mas o Qtd/Cx do vínculo não mudou (veja o log).",
+                                         parent=popup)
+            depois_de_mudar(sel)
+            messagebox.showinfo("Pronto", "Compra corrigida! 👍\n\nSe houver contagem em aberto no '💰 Valor do Estoque', "
+                                "clique em '🔄 Recalcular' para ver o efeito.", parent=popup)
+            return "break"
+
+        def aplicar_em_todas():
+            fator = estado['fator_vinculo']
+            _, previa = database.previa_recalculo_vinculo(v['ID'], fator)
+            if not previa:
+                messagebox.showinfo("Nada a mudar", f"Todas as compras já estão com Qtd/Cx {fmt_qtd(fator)}.", parent=popup)
+                return
+            exemplos = "\n".join(
+                f"  • NF {p['NF']}: {fmt_qtd(p['QtdAtual'])} a {fmt_reais(p['CustoAtual'])}  →  "
+                f"{fmt_qtd(p['QtdNova'])} a {fmt_reais(p['CustoNovo'])}" for p in previa[:6])
+            mais = f"\n  ... e mais {len(previa) - 6}" if len(previa) > 6 else ""
+            if not messagebox.askyesno("Usar o Qtd/Cx em todas as compras", (
+                    f"{len(previa)} compra(s) entraram com outro Qtd/Cx e vão passar para {fmt_qtd(fator)} {unidade} "
+                    f"por embalagem:\n{exemplos}{mais}\n\nO total de cada compra não muda. Confirmar?"), parent=popup):
+                return
+            if database.atualizar_vinculo_existente(v['ID'], v['ProdutoID'], fator, recalcular_compras=True):
+                self.status(f"{len(previa)} compra(s) de '{v['DescricaoXML']}' passaram para Qtd/Cx {fmt_qtd(fator)}.")
+                depois_de_mudar(tree.focus())
+            else:
+                messagebox.showerror("Erro", "Falha ao corrigir as compras (veja o log).", parent=popup)
+
         tree.bind("<<TreeviewSelect>>", preencher)
-        entry_preco.bind("<Return>", corrigir)
+        for e in (entry_emb, entry_fator, entry_preco):
+            e.bind("<KeyRelease>", atualizar_resultado)
+            e.bind("<Return>", salvar)
         carregar()
-        entry_preco.focus_set()
-        self._janela_compras = {'popup': popup, 'tree': tree, 'preco': entry_preco, 'corrigir': corrigir,
-                                'sugestao': lbl_sugestao, 'selecionado': lbl_sel}
+        entry_emb.focus_set()
+        self._janela_compras = {'popup': popup, 'tree': tree, 'emb': entry_emb, 'fator': entry_fator, 'preco': entry_preco,
+                                'salvar': salvar, 'corrigir': salvar, 'dica': lbl_dica, 'sugestao': lbl_dica,
+                                'usar_dica': usar_dica, 'xml': lbl_xml, 'usar_xml': usar_xml, 'resultado': lbl_resultado,
+                                'selecionado': lbl_sel, 'todas': aplicar_em_todas, 'btn_todas': btn_todas,
+                                'fator_vinculo': lbl_fator_vinc}
+
+    @staticmethod
+    def _fmt_preco(valor):
+        """Preço para um campo de digitação: 2 casas (4 se tiver centavos quebrados), com vírgula."""
+        v = Decimal(str(valor))
+        casas = Decimal('0.01') if v == v.quantize(Decimal('0.01')) else Decimal('0.0001')
+        return f"{v.quantize(casas, rounding=ROUND_HALF_UP):f}".replace('.', ',')
 
     def abrir_juntar_duplicados(self, janela_pai=None, ao_mudar=None):
         """

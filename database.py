@@ -9406,6 +9406,12 @@ def listar_vinculos_com_resumo():
     embalagem (custo x fator) e se o vínculo parece ter o fator errado.
     Devolve uma lista de dicionários.
     """
+    # [AUDITORIA VÍNCULOS] prepara a coluna do Qtd/Cx usado ANTES de abrir a conexão da leitura
+    try:
+        _garantir_colunas_estoque()
+        col_usado = "INI.FatorConversaoUsado"
+    except Exception:
+        col_usado = "NULL"
     conn = get_db_connection()
     if not conn:
         return []
@@ -9419,17 +9425,18 @@ def listar_vinculos_com_resumo():
             LEFT JOIN ProdutosEstoque P ON PF.ProdutoID = P.ProdutoID
         """)
         vinculos = cursor.fetchall()
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT INI.ProdutoFornecedorID, NF.DataEmissao, NF.NotaID, INI.ItemNotaID, INI.Quantidade, INI.PrecoCustoUnitario,
-                   NF.ValorTotalNF
+                   NF.ValorTotalNF, {col_usado}
             FROM ItensNotaFiscalEntrada INI
             JOIN NotasFiscaisEntrada NF ON INI.NotaID = NF.NotaID
             WHERE INI.Quantidade > 0
         """)
         compras = {}
         custo_errado = set()   # [MELHORIA] vínculos com alguma compra que custa mais que a NOTA INTEIRA
-        for pf, dt, nota_id, item_id, qtd, custo, total_nf in cursor.fetchall():
-            compras.setdefault(pf, []).append((_como_data(dt) or date.min, nota_id or 0, item_id or 0, _dec(qtd), _dec(custo)))
+        for pf, dt, nota_id, item_id, qtd, custo, total_nf, usado in cursor.fetchall():
+            compras.setdefault(pf, []).append((_como_data(dt) or date.min, nota_id or 0, item_id or 0, _dec(qtd), _dec(custo),
+                                               usado))
             if _item_maior_que_nota(_dec(qtd) * _dec(custo), total_nf):
                 custo_errado.add(pf)
 
@@ -9437,8 +9444,11 @@ def listar_vinculos_com_resumo():
         for pf, forn, desc, pid, nome_mestre, fator, ean, cnpj, ncm, codigo, forn_id in vinculos:
             fator = _dec(fator) if fator is not None and _dec(fator) > 0 else Decimal('1')
             lista = sorted(compras.get(pf, []))
-            ultima = lista[-1] if lista else None
-            custos = [c[4] for c in lista if c[4] > 0]
+            # [AUDITORIA VÍNCULOS] o custo mostrado é o da última compra PAGA: uma bonificação (custo 0)
+            # no fim mostrava "R$ 0,00" e a prévia dizia "ainda não há compras"
+            pagas = [c for c in lista if c[4] > 0]
+            ultima = pagas[-1] if pagas else (lista[-1] if lista else None)
+            custos = [c[4] for c in pagas]
             resultado.append({
                 'ID': pf, 'Fornecedor': forn or 'FORNECEDOR DELETADO', 'DescricaoXML': desc or 'Sem Descrição',
                 'ProdutoID': pid, 'NomeMestre': nome_mestre or ('PRODUTO DELETADO (ÓRFÃO)' if pid else 'SEM PRODUTO'),
@@ -9446,9 +9456,15 @@ def listar_vinculos_com_resumo():
                 'NCM': ncm or '', 'Codigo': codigo or '', 'FornecedorID': forn_id,
                 'Orfao': bool(pid) and not nome_mestre, 'SemProduto': not pid,
                 'QtdCompras': len(lista),
-                'UltimaData': ultima[0] if ultima and ultima[0] != date.min else None,
+                'UltimaData': lista[-1][0] if lista and lista[-1][0] != date.min else None,
                 'UltimaQtd': ultima[3] if ultima else None,          # já na unidade do estoque
                 'UltimoCustoUnid': ultima[4] if ultima else None,    # por unidade do estoque
+                # [AUDITORIA VÍNCULOS] Qtd/Cx com que a última compra FOI importada (a prévia e o
+                # "custo emb." usavam o Qtd/Cx atual do vínculo: 0,375 embalagem de R$ 886,96)
+                'UltimoFator': _fator_item(ultima[5], fator) if ultima else fator,
+                'SoBonificacao': bool(lista) and not pagas,
+                'ComprasOutroFator': sum(1 for c in lista if _fator_item(c[5], fator) != fator),
+                'CustoMin': min(custos) if custos else None, 'CustoMax': max(custos) if custos else None,
                 'VariacaoPropria': bool(len(custos) >= 2 and max(custos) >= min(custos) * FATOR_CUSTO_SUSPEITO),
                 'CustoErrado': pf in custo_errado,
             })
@@ -9480,6 +9496,9 @@ def listar_vinculos_com_resumo():
                 if v['UltimoCustoUnid'] >= ref * FATOR_CUSTO_SUSPEITO or v['UltimoCustoUnid'] * FATOR_CUSTO_SUSPEITO <= ref:
                     v['Suspeito'] = True
             v['CustoReferencia'] = ref
+            # [AUDITORIA VÍNCULOS] o "fator?" agora diz POR QUE está marcado
+            v['ComprasForaDoNormal'] = sum(1 for c in compras.get(v['ID'], []) if ref and _fora_do_normal(c[4], ref))
+            v['MotivoSuspeito'] = _motivo_suspeito(v) if v['Suspeito'] else ''
 
         # [MELHORIA] Grupos de duplicados (mesmo fornecedor + mesmo produto + mesmo código ou EAN)
         grupos = _agrupar_duplicados(resultado)
@@ -9500,6 +9519,51 @@ def listar_vinculos_com_resumo():
         conn.close()
 
 
+def _fora_do_normal(custo, referencia):
+    """[AUDITORIA VÍNCULOS] Custo por unidade 3x maior ou 3x menor que o normal do produto."""
+    custo, referencia = _dec(custo), _dec(referencia)
+    return custo > 0 and referencia > 0 and (custo >= referencia * FATOR_CUSTO_SUSPEITO
+                                              or custo * FATOR_CUSTO_SUSPEITO <= referencia)
+
+
+def _motivo_suspeito(v):
+    """[AUDITORIA VÍNCULOS] Explica em português por que o vínculo ficou com 'fator?'."""
+    def r(x):
+        return f"R$ {_dec(x):,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
+    ref, n, fora = v.get('CustoReferencia'), v.get('QtdCompras') or 0, v.get('ComprasForaDoNormal') or 0
+    if ref and fora:
+        return (f"{fora} de {n} compra(s) com custo por unidade muito diferente do normal deste produto "
+                f"(~{r(ref)}). Provável Qtd/Cx errado nessas compras.")
+    if v.get('VariacaoPropria') and v.get('CustoMin') is not None:
+        return (f"As compras deste item têm custos por unidade muito diferentes entre si "
+                f"(de {r(v['CustoMin'])} a {r(v['CustoMax'])}). Alguma entrou com o Qtd/Cx errado.")
+    if ref and v.get('UltimoCustoUnid'):
+        return f"O custo da última compra ({r(v['UltimoCustoUnid'])}) está muito longe do normal deste produto (~{r(ref)})."
+    return "Custo por unidade fora do normal."
+
+
+def sugestao_qtd_cx(custo, referencia, tolerancia=Decimal('0.12')):
+    """
+    [AUDITORIA VÍNCULOS] Quando o custo por unidade de uma compra é ~N vezes o normal do produto,
+    a compra quase sempre entrou com o Qtd/Cx errado (ex: 3 caixas de 8 gravadas como 3 UN a
+    R$ 110,87, quando o normal é R$ 13,86). Devolve o multiplicador da QUANTIDADE que conserta:
+    8 (multiplica a quantidade por 8 e divide o custo por 8), 1/2 (o contrário) ou None.
+    O total do item não muda.
+    """
+    custo, referencia = _dec(custo), _dec(referencia)
+    if custo <= 0 or referencia <= 0:
+        return None
+    razao = custo / referencia
+    if razao >= 2:
+        k = razao.quantize(Decimal('1'), rounding=ROUND_HALF_UP)
+        return k if k >= 2 and abs(razao - k) <= k * tolerancia else None
+    inversa = referencia / custo
+    if inversa >= 2:
+        m = inversa.quantize(Decimal('1'), rounding=ROUND_HALF_UP)
+        return Decimal('1') / m if m >= 2 and abs(inversa - m) <= m * tolerancia else None
+    return None
+
+
 def _item_maior_que_nota(total_item, total_nota):
     """
     [MELHORIA] True quando UM item custa mais que a NOTA INTEIRA (impossível: é erro de
@@ -9513,9 +9577,13 @@ def _item_maior_que_nota(total_item, total_nota):
 def listar_compras_do_vinculo(vinculo_id):
     """
     [MELHORIA] Todas as compras (itens de nota) de um vínculo, da mais nova para a mais
-    antiga, com o que é preciso para conferir e corrigir o custo:
+    antiga, com o que é preciso para conferir e corrigir quantidade e custo:
     [{'ItemNotaID','NotaID','NF','Data','Quantidade','Custo','TotalItem','TotalNota',
-      'SomaOutrosItens','MaiorQueNota'}]
+      'SomaOutrosItens','MaiorQueNota','Fator','ChaveAcesso','Bonificacao','Referencia',
+      'ForaDoNormal','Multiplicador'}]
+    [AUDITORIA VÍNCULOS] só compras de verdade (quantidade > 0: o custo manual do Catálogo
+    aparecia como "0 embalagens"); 'Referencia' = custo normal do produto e 'Multiplicador'
+    = quanto multiplicar a QUANTIDADE para a compra voltar ao normal (Qtd/Cx errado).
     """
     try:
         _garantir_colunas_estoque()
@@ -9528,15 +9596,17 @@ def listar_compras_do_vinculo(vinculo_id):
         cursor = conn.cursor()
         cursor.execute("""
             SELECT INI.ItemNotaID, NF.NotaID, NF.NumeroNF, NF.DataEmissao, INI.Quantidade, INI.PrecoCustoUnitario,
-                   NF.ValorTotalNF, INI.FatorConversaoUsado, PF.FatorConversao
+                   NF.ValorTotalNF, INI.FatorConversaoUsado, PF.FatorConversao, NF.ChaveAcesso, PF.ProdutoID
             FROM ItensNotaFiscalEntrada INI
             JOIN NotasFiscaisEntrada NF ON INI.NotaID = NF.NotaID
             LEFT JOIN ProdutosFornecedor PF ON INI.ProdutoFornecedorID = PF.ProdutoFornecedorID
-            WHERE INI.ProdutoFornecedorID = ?
+            WHERE INI.ProdutoFornecedorID = ? AND INI.Quantidade > 0
         """, vinculo_id)
         linhas = cursor.fetchall()
+        produto_id = linhas[0][10] if linhas else None
+        referencia = _custo_referencia_produto(cursor, produto_id) if produto_id else None
         resultado = []
-        for item_id, nota_id, nf, dt, qtd, custo, total_nf, usado, fator_vinc in linhas:
+        for item_id, nota_id, nf, dt, qtd, custo, total_nf, usado, fator_vinc, chave, _pid in linhas:
             cursor.execute("SELECT Quantidade, PrecoCustoUnitario FROM ItensNotaFiscalEntrada "
                            "WHERE NotaID = ? AND ItemNotaID <> ?", nota_id, item_id)
             outros = sum((_dec(q) * _dec(c) for q, c in cursor.fetchall()), Decimal('0'))
@@ -9545,12 +9615,88 @@ def listar_compras_do_vinculo(vinculo_id):
             resultado.append({'ItemNotaID': item_id, 'NotaID': nota_id, 'NF': nf, 'Data': _como_data(dt),
                               'Quantidade': q, 'Custo': c, 'TotalItem': q * c, 'TotalNota': total_nota,
                               'SomaOutrosItens': outros, 'MaiorQueNota': _item_maior_que_nota(q * c, total_nota),
-                              'Fator': _fator_item(usado, fator_vinc)})
+                              'Fator': _fator_item(usado, fator_vinc), 'ChaveAcesso': (chave or '').strip(),
+                              'Bonificacao': c <= 0, 'Referencia': referencia,
+                              'ForaDoNormal': bool(referencia) and _fora_do_normal(c, referencia),
+                              'Multiplicador': sugestao_qtd_cx(c, referencia) if referencia else None})
         resultado.sort(key=lambda r: (r['Data'] or date.min, r['ItemNotaID'] or 0), reverse=True)
         return resultado
     except Exception as e:
         logger.error(f"Erro ao listar compras do vínculo {vinculo_id}: {e}", exc_info=True)
         return []
+    finally:
+        conn.close()
+
+
+def _custo_referencia_produto(cursor, produto_id):
+    """
+    Custo "normal" por unidade de um produto: mediana PONDERADA PELA QUANTIDADE de todas as
+    compras pagas (sem o fornecedor interno). Igual à referência da tela de vínculos: uma compra
+    com Qtd/Cx errado costuma ter poucas unidades e por isso não puxa a referência.
+    """
+    cursor.execute("""
+        SELECT INI.PrecoCustoUnitario, INI.Quantidade
+        FROM ItensNotaFiscalEntrada INI
+        JOIN ProdutosFornecedor PF ON INI.ProdutoFornecedorID = PF.ProdutoFornecedorID
+        LEFT JOIN Fornecedores F ON PF.FornecedorID = F.FornecedorID
+        WHERE PF.ProdutoID = ? AND INI.Quantidade > 0 AND INI.PrecoCustoUnitario > 0
+          AND (F.CNPJ IS NULL OR LTRIM(RTRIM(F.CNPJ)) <> ?)
+    """, produto_id, CNPJ_FORNECEDOR_INTERNO)
+    lista = sorted((_dec(c), _dec(q)) for c, q in cursor.fetchall())
+    if not lista:
+        return None
+    metade, acumulado = sum(q for _, q in lista) / 2, Decimal('0')
+    for custo, qtd in lista:
+        acumulado += qtd
+        if acumulado >= metade:
+            return custo
+    return lista[-1][0]
+
+
+def corrigir_compra(item_id, quantidade, custo_unitario, fator_usado):
+    """
+    [AUDITORIA VÍNCULOS] Corrige UMA compra importada errada: quantidade (na unidade do estoque),
+    custo por unidade do estoque e o Qtd/Cx com que ela deve ser lida. Antes só dava para mudar o
+    PREÇO (a quantidade e o Qtd/Cx da compra não tinham como ser consertados).
+    Devolve (ok, mensagem). O valor anterior fica no log.
+    """
+    try:
+        qtd, custo, fator = _dec(quantidade), _dec(custo_unitario), _dec(fator_usado)
+    except Exception:
+        return False, "Valores inválidos."
+    if qtd <= 0:
+        return False, "A quantidade precisa ser maior que zero."
+    if custo < 0:
+        return False, "O custo não pode ser negativo."
+    if fator <= 0:
+        return False, "O Qtd/Cx precisa ser maior que zero."
+    try:
+        _garantir_colunas_estoque()
+    except Exception as e:
+        return False, f"Não foi possível preparar o banco: {e}"
+    conn = get_db_connection()
+    if not conn:
+        return False, "Falha de conexão com o banco de dados."
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT Quantidade, PrecoCustoUnitario, FatorConversaoUsado FROM ItensNotaFiscalEntrada "
+                       "WHERE ItemNotaID = ?", item_id)
+        antes = cursor.fetchone()
+        if not antes:
+            return False, "Compra não encontrada (pode ter sido apagada)."
+        if _dec(antes[0]) <= 0:
+            return False, "Este item é o custo manual do Catálogo, não uma compra."
+        cursor.execute("UPDATE ItensNotaFiscalEntrada SET Quantidade = ?, PrecoCustoUnitario = ?, FatorConversaoUsado = ? "
+                       "WHERE ItemNotaID = ?", qtd.quantize(Decimal('0.001')), custo.quantize(Decimal('0.0001')),
+                       fator, item_id)
+        conn.commit()
+        logger.info(f"Compra {item_id} corrigida: qtd {antes[0]} -> {qtd}, custo {antes[1]} -> {custo}, "
+                    f"Qtd/Cx {antes[2]} -> {fator}.")
+        return True, "Compra corrigida."
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao corrigir a compra {item_id}: {e}", exc_info=True)
+        return False, f"Erro ao gravar: {e}"
     finally:
         conn.close()
 
