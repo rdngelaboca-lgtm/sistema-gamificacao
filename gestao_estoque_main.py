@@ -6,36 +6,10 @@ import logging.handlers
 import sys
 import file_utils
 import os
+import log_config
 
-LOG_FILENAME = 'gamificacao_sistema.log'
-LOG_FOLDER = 'logs'
-LOG_LEVEL = logging.INFO
-LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
-LOG_MAX_BYTES = 10 * 1024 * 1024
-LOG_BACKUP_COUNT = 5
-
-log_dir = os.path.join(os.path.dirname(__file__), LOG_FOLDER)
-if not os.path.exists(log_dir):
-    try:
-        os.makedirs(log_dir)
-        print(f"Pasta de logs criada em: {log_dir}")
-    except OSError as e:
-        print(f"Erro ao criar pasta de logs '{log_dir}': {e}", file=sys.stderr)
-        log_dir = os.path.dirname(__file__)
-
-log_filepath = os.path.join(log_dir, LOG_FILENAME)
-file_handler = logging.handlers.RotatingFileHandler(
-    log_filepath, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT, encoding='utf-8'
-)
-file_handler.setLevel(LOG_LEVEL)
-file_formatter = logging.Formatter(LOG_FORMAT)
-file_handler.setFormatter(file_formatter)
-console_handler = logging.StreamHandler(sys.stdout)
-console_handler.setLevel(LOG_LEVEL)
-console_formatter = logging.Formatter(LOG_FORMAT)
-console_handler.setFormatter(console_formatter)
-logging.getLogger('').handlers = []
-logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT, handlers=[file_handler, console_handler])
+# [F-20] Um arquivo de log só por programa: o database.py usa a mesma configuração e não abre outro.
+log_config.configurar_log()
 logger = logging.getLogger(__name__)
 logger.info(f"*** Logging configurado para o módulo: {__name__} ***")
 # ==============================================================================
@@ -166,6 +140,7 @@ import unicodedata
 import math
 import collections
 import threading
+import time
 
 ARQUIVO_RASCUNHO_CONTAGEM = os.path.join(PASTA_DO_PROGRAMA, 'rascunho_contagem.json')
 ARQUIVO_PREFERENCIAS = os.path.join(PASTA_DO_PROGRAMA, 'estoque_preferencias.json')
@@ -415,7 +390,9 @@ def calcular_linha_sugestao(item, dias_cobertura, prazo_dias, data_ref, preferir
                + (f"pedir {texto_pedido}" if qtd > 0 else "não precisa comprar"))
     if forn:
         qual = "mais barato em 12 meses" if preferir == 'barato' and item.get('FornecedorBarato') else "última compra"
+        roy = item.get('RoyaltiesPct')   # [F-29] o custo da sugestão é o CUSTO REAL (nota + royalties)
         exp.append(f"🏪 {forn['Fornecedor']} ({qual}, {_fmt_d(forn['Data'])}): {fmt_reais(forn['CustoUnid'])}/{un}"
+                   + (f" (custo real: preço da nota + {fmt_qtd(roy)}% de royalties)" if roy else "")
                    + (f" · caixa de {fmt_qtd(fator)}" if fator > 1 else "")
                    + (f" · total ≈ {fmt_reais(custo_total)}" if qtd > 0 else ""))
         barato = item.get('FornecedorBarato')
@@ -661,11 +638,42 @@ class AppGestaoEstoque:
             pass
         logger.info(f"[status] {texto}")
 
+    def falha_banco(self, onde, erro, janela=None):
+        """
+        [F-15] Uma leitura do banco falhou. Antes as listas ficavam VAZIAS sem aviso (parecia que
+        não havia dados). Agora: mensagem vermelha no rodapé e uma janela de aviso (no máximo uma
+        a cada minuto, para não encher a tela quando o banco cai e várias listas falham juntas).
+        """
+        logger.error(f"Falha ao ler {onde} no banco: {erro}", exc_info=isinstance(erro, BaseException))
+        texto = (f"Não consegui ler {onde} no banco de dados. A lista pode estar vazia ou incompleta. "
+                 "Confira a rede/servidor e aperte F5.")
+        self.status(texto, 'erro', 30)
+        agora = time.monotonic()
+        if agora - getattr(self, '_ultimo_aviso_banco', -1e9) >= 60:
+            self._ultimo_aviso_banco = agora
+            try:
+                messagebox.showerror("Banco de dados não respondeu", f"{texto}\n\nDetalhe: {erro}",
+                                     parent=janela or self.root)
+            except tk.TclError:
+                pass
+
     def aba_atual(self):
+        """Texto da aba aberta (só para mostrar; as DECISÕES usam frame_da_aba_atual)."""
         try:
             return self.notebook.tab(self.notebook.select(), "text")
         except tk.TclError:
             return ''
+
+    def frame_da_aba_atual(self):
+        """
+        [F-25] O Frame da aba aberta. As decisões ("qual lista recarregar", "onde fica a busca")
+        comparam o próprio Frame, e não mais o TEXTO da aba: renomear uma aba não quebra nada
+        (já tinha quebrado: a aba 7 nunca atualizava porque o texto mudou).
+        """
+        try:
+            return self.notebook.nametowidget(self.notebook.select())
+        except (tk.TclError, KeyError):
+            return None
 
     def configurar_atalhos(self):
         """Ctrl+F = ir para a busca da aba; F5 = atualizar a aba; Delete = excluir o selecionado."""
@@ -683,14 +691,15 @@ class AppGestaoEstoque:
             tree.bind("<Delete>", lambda e, f=acao: f())
 
     def atalho_buscar(self, event=None):
+        aba = self.frame_da_aba_atual()     # [F-25] pela aba, não pelo texto dela
         campos = {
-            '1.': getattr(self, 'entry_filtro_mestre', None),
-            '3.': getattr(self, 'entry_filtro_importacao', None),
-            '4.': getattr(self, 'entry_filtro_contagem', None),
-            '5.': getattr(self, 'entry_busca_sugestao', None),
-            '8.': self._campo_busca_consultas() if hasattr(self, 'nb_consultas') else None,
+            self.frame_produtos: getattr(self, 'entry_filtro_mestre', None),
+            self.frame_importacao: getattr(self, 'entry_filtro_importacao', None),
+            self.frame_contagem: getattr(self, 'entry_filtro_contagem', None),
+            self.frame_sugestao: getattr(self, 'entry_busca_sugestao', None),
+            self.frame_consultas: self._campo_busca_consultas() if hasattr(self, 'nb_consultas') else None,
         }
-        campo = campos.get(self.aba_atual()[:2])
+        campo = campos.get(aba)
         if campo is not None:
             campo.focus_set()
             campo.select_range(0, tk.END)
@@ -753,7 +762,7 @@ class AppGestaoEstoque:
     def carregar_categorias_do_banco(self):
         """Busca as categorias dinâmicas do banco e atualiza todos os Comboboxes do sistema."""
         try:
-            categorias_db = database.listar_categorias_produto()
+            categorias_db = database.listar_categorias_produto(levantar_erro=True)   # [F-15]
             # Se por algum motivo o banco retornar vazio, usa um fallback seguro
             if not categorias_db:
                 categorias_db = ["Geral"]
@@ -788,29 +797,28 @@ class AppGestaoEstoque:
                     self.combo_sugestao_categoria.set("Todas")
                     
         except Exception as e:
-            logger.error(f"Erro ao carregar categorias do banco no Tkinter: {e}", exc_info=True)
+            self.falha_banco("as categorias", e)   # [F-15]
 
     def on_tab_changed(self, event):
         """Atualiza os dados das abas quando elas são selecionadas."""
-        try:
-            tab_selecionada = self.notebook.tab(self.notebook.select(), "text")
-        except tk.TclError:
+        # [F-25] decide pelo FRAME da aba (antes: pelo texto '5. Sugestão de Compra' etc.)
+        aba = self.frame_da_aba_atual()
+        if aba is None:
             return
-
-        if tab_selecionada == '5. Sugestão de Compra':
+        if aba is self.frame_sugestao:
             self.popular_combos_contagem_sugestao()
-        elif tab_selecionada == '4. Lançar Contagem Física':
+        elif aba is self.frame_contagem:
             self.atualizar_lista_contagens_historico()
-        elif tab_selecionada == '1. Catálogo Mestre':
+        elif aba is self.frame_produtos:
             self.atualizar_lista_produtos()
-        elif tab_selecionada == '2. Fornecedores':
+        elif aba is self.frame_fornecedores:
             self.atualizar_lista_fornecedores()
-        elif tab_selecionada == '6. Administração / Reset':
+        elif aba is self.frame_admin:
             self.atualizar_lista_nfs_admin()
             self.atualizar_lista_contagens_admin()
-        elif tab_selecionada.startswith('8.'):
+        elif aba is self.frame_consultas:
             self.atualizar_consultas()  # [MELHORIA] notas/produtos novos aparecem ao abrir a aba
-        elif tab_selecionada.startswith('7.'):
+        elif aba is self.frame_solicitacoes:
             # [DEPURAÇÃO] comparava com '7. Aprovar Compras/Manutenção', mas a aba se chama
             # '7. Solicitações (Líderes)' -> a lista NUNCA atualizava sozinha.
             self.carregar_solicitacoes()
@@ -924,7 +932,8 @@ class AppGestaoEstoque:
         self.tree_produtos = ttk.Treeview(lista_frame, columns=cols, show='headings', selectmode='extended')
         for col, titulo, larg, anc in (('ID', 'ID', 45, 'center'), ('Nome', 'Nome', 260, 'w'), ('Unidade', 'UN', 40, 'center'),
                                        ('Categoria', 'Categoria', 110, 'w'), ('Estoque Mínimo', 'Est. Mínimo', 75, 'e'),
-                                       ('Custo atual', 'Custo atual', 90, 'e'), ('Última compra', 'Última compra', 90, 'center'),
+                                       # [F-29] os dois em CUSTO REAL (nota + royalties da categoria), como o Valor do Estoque
+                                       ('Custo atual', 'Custo real', 90, 'e'), ('Última compra', 'Última compra', 90, 'center'),
                                        ('Mais barato (12m)', 'Mais barato (12m)', 200, 'w'),
                                        ('Última contagem', 'Última contagem', 120, 'e'), ('Situação', 'Situação', 110, 'w')):
             self.tree_produtos.heading(col, text=titulo, command=lambda c=col: self.ordenar_coluna_treeview(self.tree_produtos, c, False))
@@ -1127,7 +1136,10 @@ class AppGestaoEstoque:
                         for p in self._cache_produtos if p.ProdutoID in ids]
             grupos = [{'Grupo': 1, 'Motivo': 'selecionados por você', 'Produtos': produtos, 'ManterID': min(ids)}]
         else:
-            grupos = database.listar_produtos_duplicados() if hasattr(database, 'listar_produtos_duplicados') else []
+            try:
+                grupos = database.listar_produtos_duplicados(levantar_erro=True)   # [F-15]
+            except Exception as e:
+                return self.falha_banco("os produtos duplicados", e)
         if not grupos:
             messagebox.showinfo("Duplicados", "Não encontrei produtos duplicados (mesmo nome ou mesmo EAN). 👍\n\n"
                                 "Dica: para juntar dois produtos de nomes diferentes, selecione os dois na lista "
@@ -1488,12 +1500,9 @@ class AppGestaoEstoque:
     ]
 
     def _carregar_cache_catalogo(self):
-        self._cache_produtos = database.listar_produtos_estoque() or []
-        try:
-            self._cache_resumo_catalogo = database.resumo_catalogo() if hasattr(database, 'resumo_catalogo') else {}
-        except Exception as e:
-            logger.error(f"Erro ao carregar resumo do catálogo: {e}", exc_info=True)
-            self._cache_resumo_catalogo = {}
+        # [F-15] falha do banco sobe (atualizar_lista_produtos avisa); antes a lista ficava vazia calada
+        self._cache_produtos = database.listar_produtos_estoque(levantar_erro=True) or []
+        self._cache_resumo_catalogo = database.resumo_catalogo(levantar_erro=True)
 
     def situacao_produto(self, p, r):
         """Lista de situações do produto (para a coluna 'Situação' e o filtro 'Mostrar')."""
@@ -1522,7 +1531,7 @@ class AppGestaoEstoque:
             try:
                 self._carregar_cache_catalogo()
             except Exception as e:
-                logger.error(f"Erro ao atualizar lista de produtos: {e}", exc_info=True)
+                self.falha_banco("o catálogo de produtos", e)   # [F-15]
                 return
         selecionados = set(self.tree_produtos.selection())
         for i in self.tree_produtos.get_children():
@@ -1551,7 +1560,8 @@ class AppGestaoEstoque:
                 barato = (f"{r['MaisBaratoFornecedor'][:22]} {fmt_reais(r['MaisBaratoCusto'])}"
                           if r.get('MaisBaratoFornecedor') and r.get('QtdFornecedores', 0) > 1 else
                           (r.get('FornecedorUltimo') or '—'))
-                contagem = (f"{fmt_qtd(r['UltContagemQtd'])} {un} ({r['UltContagemData'].strftime('%d/%m')})"
+                contagem = (f"{fmt_qtd(r['UltContagemQtd'])} {un} ({r['UltContagemData'].strftime('%d/%m')}"
+                            + (f", soma de {r['UltContagemVarias']} contagens" if (r.get('UltContagemVarias') or 0) > 1 else "") + ")"
                             if r.get('UltContagemData') and r.get('UltContagemQtd') is not None else '—')
                 situacao = " ".join(t for t in (icones[x] for x in sit) if t)
                 # [DEPURAÇÃO] EstoqueMinimo vazio (NULL) no banco fazia a LISTA INTEIRA sumir
@@ -1743,7 +1753,7 @@ class AppGestaoEstoque:
                 pts = [c for c in pagas if c['fornecedor'] == f]
                 ax1.plot([c['data'] for c in pts], [float(c['custo']) for c in pts], marker='o', ms=5, lw=1.2,
                          color=cores[k % len(cores)], label=f[:28])
-            ax1.set_title(f"Preço pago (R$ por {un})", fontsize=10, loc='left')
+            ax1.set_title(f"Custo real pago (R$ por {un}, nota + royalties da categoria)", fontsize=10, loc='left')
             if fornecedores:
                 ax1.legend(fontsize=8, loc='upper left', ncol=min(3, len(fornecedores)))
             else:
@@ -2020,11 +2030,11 @@ class AppGestaoEstoque:
         for i in self.tree_fornecedores.get_children():
             self.tree_fornecedores.delete(i)
         try:
-            fornecedores = database.listar_fornecedores()
+            fornecedores = database.listar_fornecedores(levantar_erro=True)   # [F-15]
             for f in fornecedores or []:
                 self.tree_fornecedores.insert("", "end", values=(f.FornecedorID, f.NomeFantasia or '', f.CNPJ or ''))
         except Exception as e:
-            logger.error(f"Erro ao atualizar lista de fornecedores: {e}", exc_info=True)
+            self.falha_banco("os fornecedores", e)
 
     def selecionar_fornecedor_para_edicao(self, event=None):
         selecao = self.tree_fornecedores.selection()   # [DEPURAÇÃO] seleção, não foco
@@ -2213,7 +2223,7 @@ class AppGestaoEstoque:
 
     def popular_combobox_produtos_mestre(self):
         try:
-            produtos = database.listar_produtos_estoque()
+            produtos = database.listar_produtos_estoque(levantar_erro=True)   # [F-15]
 
             # Limpa memórias globais
             self.mapa_produtos_mestre.clear()
@@ -2255,7 +2265,7 @@ class AppGestaoEstoque:
             if hasattr(self, 'combo_contagem_produtos'):
                 self.combo_contagem_produtos['values'] = self.lista_mestre_contagem_nomes
         except Exception as e:
-            logger.error(f"Erro ao carregar produtos mestre no combobox: {e}", exc_info=True)
+            self.falha_banco("a lista de produtos", e)   # [F-15]
 
     def unidade_do_produto(self, produto_id):
         """Unidade do estoque de um produto pelo ID (UN se não souber)."""
@@ -2335,7 +2345,7 @@ class AppGestaoEstoque:
                         os.replace(os.path.join(pasta, f), os.path.join(destino, f))
                 arquivos = [f for f in arquivos if os.path.splitext(f)[0] not in ja]
         except Exception as e:
-            logger.warning(f"Não deu para separar os XMLs já importados: {e}")
+            self.falha_banco("as notas já importadas", e)     # [F-15]
         if not arquivos:
             estado = nd.ler_estado()
             extra = ""
@@ -2382,6 +2392,7 @@ class AppGestaoEstoque:
         notas = []
         cache_vinc = {}
         lidas = []
+        falha_vinculos = None
         for f in arquivos:
             try:
                 cab, itens = self.ler_xml_nota_fiscal(os.path.join(pasta, f))
@@ -2394,9 +2405,12 @@ class AppGestaoEstoque:
         try:
             lancadas = database.notas_ja_lancadas([(cab.get('ChaveAcesso') or f, cab.get('FornecedorCNPJ'), cab.get('NumeroNF'),
                                                     cab.get('Serie')) for f, cab, _ in lidas])
+            # [F-06] nota salva INCOMPLETA continua na lista, marcada "faltam N itens"
+            incompletas = database.notas_incompletas() if hasattr(database, 'notas_incompletas') else {}
+            lancadas = {c for c in lancadas if c not in incompletas}
         except Exception as e:
-            logger.error(f"Não deu para conferir as notas já lançadas: {e}", exc_info=True)
-            lancadas = set()
+            self.falha_banco("as notas já lançadas", e, janela)     # [F-15]
+            lancadas, incompletas = set(), {}
         movidas = 0
         for f, cab, itens in lidas:
             if (cab.get('ChaveAcesso') or f) in lancadas:
@@ -2416,18 +2430,22 @@ class AppGestaoEstoque:
                 chave = (forn_id, it['DescricaoXML'], it.get('cProd'), it.get('cEAN'))
                 if chave not in cache_vinc:
                     try:
-                        cache_vinc[chave] = bool(database.buscar_vinculo_inteligente(forn_id, it['DescricaoXML'], it.get('cProd'), it.get('cEAN')))
-                    except Exception:
+                        cache_vinc[chave] = bool(database.buscar_vinculo_inteligente(forn_id, it['DescricaoXML'], it.get('cProd'), it.get('cEAN'),
+                                                                                     levantar_erro=True))
+                    except Exception as e:
                         cache_vinc[chave] = False
+                        falha_vinculos = e
                 sem += 0 if cache_vinc[chave] else 1
             notas.append((cab.get('DataEmissao') or '', f, cab, len(itens), sem, forn_id))
         notas.sort(key=lambda n: (n[0], n[2].get('FornecedorNome') or ''))
+        if falha_vinculos is not None:
+            self.falha_banco("os vínculos das notas (a coluna 'Sem vínculo' pode estar errada)", falha_vinculos, janela)
         conferencias = {}   # [RECEBIMENTO] conferidas no app de compras
         if notas and hasattr(database, 'conferencias_recebimento'):
             try:
-                conferencias = database.conferencias_recebimento([n[2].get('ChaveAcesso') for n in notas])
+                conferencias = database.conferencias_recebimento([n[2].get('ChaveAcesso') for n in notas], levantar_erro=True)
             except Exception as e:
-                logger.error(f"Não deu para ler as conferências do app: {e}", exc_info=True)
+                self.falha_banco("as conferências do app", e, janela)     # [F-15]
         if not notas:
             janela.destroy()
             messagebox.showinfo("Notas da SEFAZ", "Nenhuma nota nova da SEFAZ esperando para entrar no estoque "
@@ -2440,11 +2458,14 @@ class AppGestaoEstoque:
                 data_br = data
             situacao = ("pronta para salvar" if not sem else
                         "fornecedor novo" if not forn_id else f"falta vincular {sem} item(ns)")
+            faltam = incompletas.get(so_digitos(cab.get('ChaveAcesso')))
+            if faltam:     # [F-06]
+                situacao = f"salva INCOMPLETA: faltam {faltam} item(ns)"
             conf = conferencias.get(cab.get('ChaveAcesso'))
             txt_conf = ("não conferida" if not conf else
                         ("com divergência" if conf['status'] == 'divergencia' else "conferida")
                         + (f" ({conf['por']})" if conf.get('por') else ""))
-            tree.insert("", "end", iid=f, tags=('pronta' if not sem else 'pendente',), values=(
+            tree.insert("", "end", iid=f, tags=('pronta' if not sem and not faltam else 'pendente',), values=(
                 cab.get('NumeroNF'), cab.get('FornecedorNome'), data_br, fmt_reais(cab.get('ValorTotalNF') or 0),
                 n_itens, sem, txt_conf, situacao))
         lbl = ttk.Label(frame, foreground="gray", text=(
@@ -2704,7 +2725,7 @@ class AppGestaoEstoque:
 
         def carregar():
             try:
-                estado['notas'] = database.listar_notas_com_diferenca() or []
+                estado['notas'] = database.listar_notas_com_diferenca(levantar_erro=True) or []   # [F-15]
             except Exception as e:
                 logger.error(f"Erro ao listar notas com diferença: {e}", exc_info=True)
                 messagebox.showerror("Erro", f"Falha ao ler as notas:\n{e}", parent=popup)
@@ -2912,6 +2933,7 @@ class AppGestaoEstoque:
         reconhecidos_por_codigo = []  # [MELHORIA] itens reconhecidos pelo código/EAN (descrição mudou)
         ja_importadas = []  # [DEPURAÇÃO 2] notas que já estão no banco (não aparecem de novo)
         com_conferencia = []  # [RECEBIMENTO] notas conferidas no app: entram com a quantidade que chegou
+        para_completar = []  # [F-06] notas salvas INCOMPLETAS: voltam só com os itens que faltam
         for caminho_xml in arquivos_xml:
             try:
                 cabecalho_nf, itens_nf = self.ler_xml_nota_fiscal(caminho_xml)
@@ -2982,20 +3004,27 @@ class AppGestaoEstoque:
                 cabecalho_nf['FornecedorID'] = fornecedor_id
                 # [DEPURAÇÃO 2] Nota que JÁ está no banco não volta para a tela (antes os itens
                 # dela apareciam de novo para vincular e só no "Salvar" vinha o aviso).
-                try:
-                    # [AUDITORIA ESTOQUE] série e chave: mesmo número em séries diferentes NÃO é a mesma nota
-                    ja_existe = database.verificar_nota_fiscal_existente(num_nf, fornecedor_id, cabecalho_nf.get('Serie'),
-                                                                         cabecalho_nf.get('ChaveAcesso'))
-                except Exception:
-                    ja_existe = False
+                # [AUDITORIA ESTOQUE] série e chave: mesmo número em séries diferentes NÃO é a mesma nota
+                # [F-15] se o banco falhar, o erro sobe e o arquivo conta como "falha" (antes a nota
+                # era tratada como nova, ou como "já importada" sem ter entrado)
+                ja_existe = database.verificar_nota_fiscal_existente(num_nf, fornecedor_id, cabecalho_nf.get('Serie'),
+                                                                     cabecalho_nf.get('ChaveAcesso'))
+                nota_a_completar = None
                 if ja_existe:
-                    ja_importadas.append(f"NF {num_nf} ({nome_fornecedor})")
-                    notas_processadas_nesta_sessao[chave_nota] = None
-                    continue
+                    # [F-06] nota salva incompleta: volta só com os itens que ainda não entraram
+                    faltam = self._itens_que_faltam_na_nota(cabecalho_nf, fornecedor_id, itens_nf)
+                    if not faltam:
+                        ja_importadas.append(f"NF {num_nf} ({nome_fornecedor})")
+                        notas_processadas_nesta_sessao[chave_nota] = None
+                        continue
+                    nota_a_completar, itens_nf = faltam
+                    cabecalho_nf['NotaID'] = nota_a_completar
+                    para_completar.append(f"NF {num_nf} ({nome_fornecedor}) - faltam {len(itens_nf)} item(ns)")
                 nota = {
                     'cabecalho': cabecalho_nf,
                     'itens_vinculados': [],
                     'itens_pendentes': 0,   # [DEPURAÇÃO] quantos itens desta nota ainda não têm vínculo
+                    'completar': nota_a_completar,   # [F-06] NotaID da nota já salva que vai receber os itens
                 }
                 # [DEPURAÇÃO] As linhas só vão para a tela DEPOIS que o arquivo inteiro foi lido.
                 # Antes, um erro no meio do arquivo deixava meia nota na lista "Prontos para Salvar".
@@ -3006,7 +3035,9 @@ class AppGestaoEstoque:
                     # descrição muda (lote/validade no nome). Antes cada variação virava um
                     # vínculo novo (duplicado) e o item caía de novo nos pendentes.
                     if hasattr(database, 'buscar_vinculo_inteligente'):
-                        achado = database.buscar_vinculo_inteligente(fornecedor_id, desc_xml, item.get('cProd'), item.get('cEAN'))
+                        # [F-15] falha do banco: o arquivo falha (antes o item virava "pendente" calado)
+                        achado = database.buscar_vinculo_inteligente(fornecedor_id, desc_xml, item.get('cProd'), item.get('cEAN'),
+                                                                     levantar_erro=True)
                         vinculo_existente = (achado['ProdutoFornecedorID'], achado['ProdutoID'], achado['Fator']) if achado else None
                         if achado and achado['Como'] != 'descricao':
                             reconhecidos_por_codigo.append(f"NF {num_nf}: {desc_xml}")
@@ -3049,7 +3080,7 @@ class AppGestaoEstoque:
                             txt_qtd += f" (Conv. x{fator.normalize():f})"
 
                         linhas_prontos.append((
-                            num_nf, nome_fornecedor, item_pronto['NomeMestre'],
+                            f"{num_nf} (completar)" if nota_a_completar else num_nf, nome_fornecedor, item_pronto['NomeMestre'],
                             txt_qtd, f"{custo_real:.4f}", f"{custo_total_nota:.2f}"
                         ))
 
@@ -3113,6 +3144,9 @@ class AppGestaoEstoque:
         if ja_importadas:
             msg_final += (f"\n\n✅ {len(ja_importadas)} nota(s) JÁ estavam salvas no estoque e foram puladas:\n  • "
                           + "\n  • ".join(ja_importadas[:5]) + ("\n  • ..." if len(ja_importadas) > 5 else ""))
+        if para_completar:
+            msg_final += (f"\n\n🧩 {len(para_completar)} nota(s) foram salvas INCOMPLETAS antes. Só os itens que faltam "
+                          "aparecem agora; ao salvar, eles entram na MESMA nota:\n  • " + "\n  • ".join(para_completar[:5]))
         # [MELHORIA VALOR] Resumo do que NÃO é compra
         if notas_ignoradas:
             msg_final += f"\n\nℹ️ {len(notas_ignoradas)} nota(s) ignorada(s) (não são compra):\n  • " + "\n  • ".join(notas_ignoradas[:5])
@@ -3139,10 +3173,50 @@ class AppGestaoEstoque:
         else:
             messagebox.showinfo("Processamento Concluído", msg_final, parent=self.root)
 
-    def _guardar_xml_para_conferencia(self, cabecalho):
+    def _itens_que_faltam_na_nota(self, cabecalho, fornecedor_id, itens):
+        """
+        [F-06] Nota JÁ salva: devolve (NotaID, itens do XML que ainda NÃO entraram) ou None
+        (nada falta, ou não dá para saber sem chutar).
+        - Nota salva por esta versão: cada item guarda o número dele no XML (NItem) -> conta exata.
+        - Nota antiga (sem NItem): só completa quando a conta fecha sem dúvida: cada item gravado
+          casa com um item do XML pelo vínculo, e sobram exatamente (itens do XML - itens gravados).
+        Falha do banco LEVANTA erro (o arquivo conta como falha e é lido de novo depois).
+        """
+        nota_id = database.buscar_nota_importada(cabecalho.get('NumeroNF'), fornecedor_id, cabecalho.get('Serie'),
+                                                 cabecalho.get('ChaveAcesso'), levantar_erro=True)
+        if not nota_id:
+            return None
+        salvos = database.itens_salvos_da_nota(nota_id)
+        if not salvos:
+            return None
+        gravados = salvos['itens']
+        if gravados and all(g['NItem'] for g in gravados):
+            feitos = {g['NItem'] for g in gravados}
+            faltam = [it for it in itens if int(it.get('NItem') or 0) not in feitos]
+        else:
+            if len(itens) <= len(gravados):
+                return None
+            restantes, faltam = list(gravados), []
+            for it in itens:
+                v = database.buscar_vinculo_inteligente(fornecedor_id, it['DescricaoXML'], it.get('cProd'), it.get('cEAN'),
+                                                        levantar_erro=True)
+                par = next((g for g in restantes if v and g['ProdutoFornecedorID'] == v['ProdutoFornecedorID']), None)
+                if par:
+                    restantes.remove(par)
+                else:
+                    faltam.append(it)
+            if restantes or len(faltam) != len(itens) - len(gravados):
+                logger.warning(f"NF {cabecalho.get('NumeroNF')}: nota antiga com itens de fora, mas não dá para saber "
+                               "com certeza quais. Fica como já importada.")
+                return None
+        return (nota_id, faltam) if faltam else None
+
+    def _guardar_xml_para_conferencia(self, cabecalho, incompleta=False):
         """
         [RECEBIMENTO] Nota importada de um XML de OUTRA pasta (e-mail, download manual): guarda uma
         cópia na pasta da SEFAZ ('importadas'). Sem isso a nota não aparecia no app para conferir.
+        [F-06] Nota salva INCOMPLETA: a cópia fica na pasta principal (não em 'importadas'), para
+        aparecer em "Notas baixadas da SEFAZ" como "faltam N itens" e ser completada depois.
         """
         origem, chave = cabecalho.get('_ArquivoXML'), so_digitos(cabecalho.get('ChaveAcesso'))
         if not origem or len(chave) != 44 or not os.path.isfile(origem):
@@ -3150,9 +3224,9 @@ class AppGestaoEstoque:
         try:
             import shutil
             import nfe_distribuicao as nd
-            if nd._ja_temos_xml(chave):
+            if nd.ja_temos_xml(chave):
                 return
-            destino = os.path.join(nd.pasta_xml(), 'importadas')
+            destino = nd.pasta_xml() if incompleta else os.path.join(nd.pasta_xml(), 'importadas')
             os.makedirs(destino, exist_ok=True)
             shutil.copyfile(origem, os.path.join(destino, f"{chave}.xml"))
         except Exception as e:
@@ -3162,11 +3236,9 @@ class AppGestaoEstoque:
         """[RECEBIMENTO] Conferência feita no app para esta nota ({'status','por','itens'}) ou None."""
         if not chave or not hasattr(database, 'conferencias_recebimento'):
             return None
-        try:
-            return database.conferencias_recebimento([chave]).get(chave)
-        except Exception as e:
-            logger.error(f"Não deu para ler a conferência da nota {chave}: {e}", exc_info=True)
-            return None
+        # [F-15] se o banco falhar, a nota NÃO pode entrar com a quantidade da nota em vez da que
+        # chegou: o erro sobe e o arquivo conta como "falha" (tenta de novo depois)
+        return database.conferencias_recebimento([chave], levantar_erro=True).get(chave)
 
     def vincular_produto_selecionado(self):
         # ... (código idêntico ao anterior) ...
@@ -3294,11 +3366,13 @@ class AppGestaoEstoque:
         if incompletas:
             lista = "\n".join(f"  • NF {nf['cabecalho']['NumeroNF']} - {nf['cabecalho']['FornecedorNome']} "
                               f"({nf['itens_pendentes']} item(ns) sem vínculo)" for nf in incompletas[:10])
+            # [F-06] os itens sem vínculo NÃO se perdem mais: a nota fica marcada "faltam N itens"
             resposta = messagebox.askyesno(
                 "Notas Incompletas",
                 f"{len(incompletas)} nota(s) ainda têm itens sem vínculo:\n{lista}\n\n"
-                "Se salvar agora, esses itens NUNCA mais poderão entrar pelo XML "
-                "(a nota ficará marcada como importada).\n\n"
+                "Se salvar agora, entram só os itens já vinculados. Os outros NÃO se perdem: a nota fica "
+                "marcada 'faltam N itens', continua em 'Notas baixadas da SEFAZ' e volta ao ler a pasta; "
+                "depois de vincular, é só salvar de novo que eles entram na MESMA nota.\n\n"
                 "SIM = salvar também as incompletas (só os itens já vinculados)\n"
                 "NÃO = salvar só as completas; as incompletas ficam aguardando",
                 icon='warning', parent=self.root)
@@ -3319,13 +3393,19 @@ class AppGestaoEstoque:
         for nf in para_salvar:
             cabecalho = nf['cabecalho']
             itens_para_salvar = nf['itens_vinculados']
+            pendentes = int(nf.get('itens_pendentes', 0) or 0)
             try:
-                sucesso_db, msg_db = database.salvar_nota_fiscal_completa(cabecalho, itens_para_salvar)
+                if nf.get('completar'):
+                    # [F-06] nota que já estava salva incompleta: os itens entram na MESMA nota
+                    sucesso_db, msg_db, _ = database.completar_nota_fiscal(nf['completar'], itens_para_salvar, pendentes)
+                else:
+                    cabecalho['ItensPendentes'] = pendentes      # [F-06] para completar depois
+                    sucesso_db, msg_db = database.salvar_nota_fiscal_completa(cabecalho, itens_para_salvar)
                 if sucesso_db:
                     sucessos += 1
                     if cabecalho.get('NotaID'):
                         notas_salvas.append(cabecalho['NotaID'])
-                    self._guardar_xml_para_conferencia(cabecalho)
+                    self._guardar_xml_para_conferencia(cabecalho, incompleta=pendentes > 0)
                 elif "já foi importada" in (msg_db or ""):
                     # Já está no banco: não adianta manter na tela
                     duplicadas.append(str(cabecalho['NumeroNF']))
@@ -4084,12 +4164,8 @@ class AppGestaoEstoque:
         nomes_contagens = []
         
         try:
-            contagens = database.listar_contagens_cabecalho()
-            try:
-                fechados = database.listar_valores_estoque_fechados()
-            except Exception as e:
-                logger.warning(f"Não foi possível ler os valores fechados: {e}")
-                fechados = {}
+            contagens = database.listar_contagens_cabecalho(levantar_erro=True)   # [F-15]
+            fechados = database.listar_valores_estoque_fechados(levantar_erro=True)
             for c in contagens:
                 # Tratamento seguro para compatibilidade Date vs String
                 data_f = fmt_data(c.DataContagem)
@@ -4106,7 +4182,7 @@ class AppGestaoEstoque:
                 self.mapa_contagens_historico[nome_display] = c.ContagemID
 
         except Exception as e:
-            logger.error(f"Erro ao atualizar histórico de contagens: {e}", exc_info=True)
+            self.falha_banco("o histórico de contagens", e)   # [F-15]
 
     def carregar_itens_contagem_historico(self, event=None):
         # ... (código idêntico ao anterior) ...
@@ -4117,11 +4193,11 @@ class AppGestaoEstoque:
             return
         contagem_id = self.tree_hist_contagens.item(selecionado, 'values')[0]
         try:
-            itens = database.buscar_itens_contagem(contagem_id)
+            itens = database.buscar_itens_contagem(contagem_id, levantar_erro=True)   # [F-15]
             for item in itens or []:
                 self.tree_hist_itens.insert("", "end", values=(item.NomeProduto, fmt_num(item.QuantidadeContada, 3, "0.000"), item.UnidadeMedida))
         except Exception as e:
-            logger.error(f"Erro ao carregar itens do histórico (ContagemID {contagem_id}): {e}", exc_info=True)
+            self.falha_banco(f"os itens da contagem {contagem_id}", e)
 
     def abrir_gerenciador_avulsos(self):
         """Abre janela para resolver itens marcados como avulsos em qualquer contagem."""
@@ -4163,15 +4239,21 @@ class AppGestaoEstoque:
                     'data': av.DataContagem, 'qtd': Decimal('0'), 'ean': None})
                 g['qtd'] += Decimal(str(av.QuantidadeContada or 0))
                 g['ean'] = g['ean'] or (av.EANAvulso or None)
+            dados_avulsos.clear()
             for (cid, nome), g in agrupados.items():
-                tree.insert("", "end", values=(cid, fmt_data(g['data']), nome, fmt_num(g['qtd'], 3, "0.000"),
-                                               g['ean'] or "Sem EAN"))
+                iid = tree.insert("", "end", values=(cid, fmt_data(g['data']), nome, fmt_num(g['qtd'], 3, "0.000"),
+                                                     g['ean'] or "Sem EAN"))
+                dados_avulsos[iid] = {'cid': cid, 'nome': nome, 'qtd': g['qtd'], 'ean': g['ean'] or ''}
+
+        dados_avulsos = {}   # [F-25/F-26] valores exatos do banco (a tabela mostra texto formatado)
 
         def resolver_clicado(event):
             sel = tree.focus()
-            if not sel: return
-            vals = tree.item(sel, 'values')
-            contagem_id, nome_avulso, qtd_contada, ean_fornecido = vals[0], vals[2], vals[3], vals[4]
+            if not sel or sel not in dados_avulsos: return
+            d = dados_avulsos[sel]
+            contagem_id, nome_avulso, qtd_contada = d['cid'], d['nome'], fmt_qtd(d['qtd'])
+            # [F-25] EAN de verdade (só números) ou "" — antes a tela comparava com o texto "Sem EAN"
+            ean_fornecido = database.ean_valido(d['ean']) or ''
             if self.contagem_bloqueada(contagem_id, "resolver este item avulso", popup):
                 return
 
@@ -4181,7 +4263,7 @@ class AppGestaoEstoque:
             edit_win.transient(popup)
 
             ttk.Label(edit_win, text=f"Item Contado: {nome_avulso}", font=("Arial", 11, "bold")).pack(pady=(10,2), padx=10, anchor="w")
-            ttk.Label(edit_win, text=f"Qtd Original: {qtd_contada} | EAN Bipado: {ean_fornecido}", font=("Arial", 9), foreground="blue").pack(pady=(0,10), padx=10, anchor="w")
+            ttk.Label(edit_win, text=f"Qtd Original: {qtd_contada} | EAN Bipado: {ean_fornecido or 'sem código de barras'}", font=("Arial", 9), foreground="blue").pack(pady=(0,10), padx=10, anchor="w")
 
             notebook_res = ttk.Notebook(edit_win)
             notebook_res.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
@@ -4203,7 +4285,7 @@ class AppGestaoEstoque:
 
             var_salvar_ean = tk.BooleanVar(value=True)
             check_ean = ttk.Checkbutton(tab_direto, text=f"Aprender EAN {ean_fornecido} para não dar erro na próxima vez?", variable=var_salvar_ean)
-            if ean_fornecido != "Sem EAN": check_ean.pack(anchor="w", pady=10)
+            if ean_fornecido: check_ean.pack(anchor="w", pady=10)
 
             def salvar_direto():
                 sel_mestre = combo_mestre.get()
@@ -4213,7 +4295,7 @@ class AppGestaoEstoque:
 
                 mestre_id = self.mapa_produtos_mestre.get(sel_mestre)
                 if not mestre_id: return messagebox.showerror("Erro", "Produto Mestre não encontrado. Escolha de novo.", parent=edit_win)
-                salvar_perm = var_salvar_ean.get() if ean_fornecido != "Sem EAN" else False
+                salvar_perm = var_salvar_ean.get() if ean_fornecido else False
 
                 if database.vincular_item_avulso_inteligente(contagem_id, nome_avulso, mestre_id, nova_qtd, ean_fornecido, salvar_perm):
                     messagebox.showinfo("Sucesso", "Item integrado com sucesso!", parent=edit_win)
@@ -4278,7 +4360,7 @@ class AppGestaoEstoque:
                     nova_qtd_contada = para_decimal(entry_qtd_b.get(), "Quantidade contada")
                 except ValueError as ve: return messagebox.showerror("Erro", f"Valores preenchidos inválidos: {ve}", parent=edit_win)
 
-                if ean_fornecido == "Sem EAN" or not ean_fornecido:
+                if not ean_fornecido:
                     return messagebox.showerror("Erro", "Para desmembrar uma caixa, o item avulso deve ter um Código de Barras válido bipado no celular.", parent=edit_win)
 
                 # [DEPURAÇÃO 2] Mostra ANTES tudo o que vai mudar (antes era sem confirmação nenhuma)
@@ -4295,6 +4377,10 @@ class AppGestaoEstoque:
                                  f"  • o Qtd/Cx de {previa['Vinculos']} vínculo(s) deste produto\n"
                                  f"  • {previa['Contagens'] - previa['Fechadas']} contagem(ns) (quantidade × {fmt_qtd(mult)})"
                                  + (f"\n  • {previa['Fechadas']} contagem(ns) com valor FECHADO NÃO mudam" if previa['Fechadas'] else "")
+                                 + (f"\n  • o estoque mínimo: {fmt_qtd(previa['EstoqueMinimo'])} → {fmt_qtd(previa['EstoqueMinimo'] * mult)} UN"
+                                    if previa.get('EstoqueMinimo') else "")
+                                 + (f"\n  • {previa['CodigosApp']} código(s) de barras do App de Compras (cada bip vale × {fmt_qtd(mult)})"
+                                    if previa.get('CodigosApp') else "")
                                  + f"\n  • o nome ganha '(UNIDADE)' e a unidade vira UN\n\n"
                                  "O valor total de cada compra não muda. Faça backup antes se tiver dúvida.")
                     if not messagebox.askyesno("Confirmar: desmembrar caixa", texto + "\n\nContinuar?", icon='warning', parent=edit_win):
@@ -4376,7 +4462,10 @@ class AppGestaoEstoque:
 
         def carregar():
             for i in tree.get_children(): tree.delete(i)
-            itens = database.buscar_itens_contagem(contagem_id)
+            try:
+                itens = database.buscar_itens_contagem(contagem_id, levantar_erro=True)   # [F-15]
+            except Exception as e:
+                return self.falha_banco(f"os itens da contagem {contagem_id}", e, popup)
             for item in itens or []:
                 # Retorno do banco agora tem 5 posicoes: Nome, Qtd, UN, ProdutoID, NomeAvulso
                 tree.insert("", "end", values=(item.NomeProduto, fmt_num(item.QuantidadeContada, 3, "0.000"), item.ProdutoID or "", item.NomeAvulso or ""))
@@ -4652,9 +4741,11 @@ class AppGestaoEstoque:
                 'avulsos': ("📦 Avulso", "não entra no valor → duplo clique para resolver"),
                 'sem_custo': ("💲 Sem custo", "vai valer R$ 0,00 → duplo clique para informar o custo"),
                 'custo_suspeito': ("🔍 Custo suspeito", "{Detalhe} → duplo clique para ver os vínculos"),
+                # [F-12] produto contado só na OUTRA contagem do mesmo dia (ex: Freezer x Depósito)
+                'outra_contagem_do_dia': ("📋 Outra contagem do dia", "{Detalhe}: não entra neste valor → duplo clique"),
             }
             for tipo, lista in av.items():
-                rotulo, modelo = textos[tipo]
+                rotulo, modelo = textos.get(tipo, ("⚠️ Aviso", "{Detalhe}"))
                 for a in lista:
                     iid = tree_av.insert("", "end", values=(rotulo, a['NomeProduto'], modelo.format(Detalhe=a.get('Detalhe', ''))))
                     mapa_avisos[iid] = (tipo, a)
@@ -4722,6 +4813,15 @@ class AppGestaoEstoque:
             elif tipo == 'custo_suspeito':
                 # [MELHORIA UX] abre direto nos vínculos DESTE produto; ao salvar, o valor é recalculado
                 self.abrir_gestor_vinculos(produto_id=a['ProdutoID'], nome_produto=a['NomeProduto'], ao_salvar=recarregar)
+            elif tipo == 'outra_contagem_do_dia':
+                outras = ", ".join(f"ID {o['id']} ({o['nome']})" for o in (estado['dados'] or {}).get('outras_do_dia', []))
+                messagebox.showinfo(
+                    "Contado em outra contagem do mesmo dia",
+                    f"{a['NomeProduto']}: {a.get('Detalhe', '')}.\n\n"
+                    "A Sugestão de Compra e o Catálogo SOMAM as contagens do mesmo dia, mas o Valor do Estoque é "
+                    f"de UMA contagem: este produto não entra neste total.\n\nOutras contagens deste dia: {outras}.\n\n"
+                    "Para ter um valor só do estoque inteiro: feche esta janela, selecione as contagens do dia no "
+                    "histórico (Ctrl + clique) e use '🗜️ Consolidar Selecionadas'.", parent=popup)
 
         tree_av.bind("<Double-1>", resolver_aviso)
 
@@ -4739,7 +4839,9 @@ class AppGestaoEstoque:
                          f"  • {len(av['nao_contados'])} produto(s) não contado(s)\n"
                          f"  • {len(av['avulsos'])} item(ns) avulso(s)\n"
                          f"  • {len(av['sem_custo'])} produto(s) sem custo\n"
-                         f"  • {len(av['custo_suspeito'])} custo(s) suspeito(s)\n\n") + texto
+                         f"  • {len(av['custo_suspeito'])} custo(s) suspeito(s)\n"
+                         + (f"  • {len(av.get('outra_contagem_do_dia', []))} produto(s) contado(s) só em OUTRA contagem do dia "
+                            "(não entram neste valor)\n" if av.get('outra_contagem_do_dia') else "") + "\n") + texto
             if not messagebox.askyesno("Fechar valor do estoque", texto, icon='warning' if qtd_avisos else 'question', parent=popup):
                 return
             ok, msg, total = database.fechar_valor_estoque(contagem_id)
@@ -4885,7 +4987,8 @@ class AppGestaoEstoque:
                     'ID': item['ProdutoID'],
                     'Nome do Produto Mestre': limpar_texto(item['NomeProduto']),
                     'UN': limpar_texto(item['UnidadeMedida']),
-                    'Custo Unitário (c/ Imposto)': custo_puro,
+                    # [F-29] o mesmo "Custo real" do Catálogo e do Valor do Estoque
+                    'Custo real (nota + impostos + royalties)': custo_puro,
                     # [MELHORIA CONTAGEM] anote caixas fechadas e unidades soltas separadamente
                     'Caixa de (UN)': " / ".join(fmt_qtd(c['Fator']) for c in caixas[:3]),
                     'CAIXAS fechadas': '__________',
@@ -5159,7 +5262,11 @@ class AppGestaoEstoque:
             # [DEPURAÇÃO 2] consulta UMA vez por fornecedor (antes ia ao banco a cada tecla da busca)
             cache = self.__dict__.setdefault('_cache_ids_forn', {})
             if forn_id not in cache:
-                cache[forn_id] = database.buscar_ids_produtos_por_fornecedor(forn_id)
+                try:
+                    cache[forn_id] = database.buscar_ids_produtos_por_fornecedor(forn_id, levantar_erro=True)   # [F-15]
+                except Exception as e:
+                    self.falha_banco("os produtos do fornecedor", e)
+                    cache[forn_id] = set()
             ids_forn = cache[forn_id]
 
         # Contadores (sobre o filtro de categoria/fornecedor/busca, antes do "Mostrar")
@@ -5419,7 +5526,7 @@ class AppGestaoEstoque:
     def popular_combos_contagem_sugestao(self):
         """Atualiza os combos da Aba 5 com as contagens salvas (mantendo a escolha do usuário)."""
         try:
-            contagens = database.listar_contagens_cabecalho() or []
+            contagens = database.listar_contagens_cabecalho(levantar_erro=True) or []   # [F-15]
             selecao_ini_antiga = self.combo_contagem_inicio.get()
             selecao_fim_antiga = self.combo_contagem_fim.get()
             # [AUDITORIA ESTOQUE] quem estava na contagem MAIS RECENTE passa para a nova quando outra é
@@ -5447,10 +5554,10 @@ class AppGestaoEstoque:
             self.combo_contagem_inicio.set(selecao_ini_antiga if selecao_ini_antiga in self.mapa_contagens_sugestao
                                            else self.OPCAO_A_AUTOMATICO)
             self._ajustar_janela_sugestao()
-            fornecedores = database.listar_fornecedores() or []
+            fornecedores = database.listar_fornecedores(levantar_erro=True) or []   # [F-15]
             self.combo_sugestao_fornecedor['values'] = ["Todos"] + [f"{f.NomeFantasia} (ID: {f.FornecedorID})" for f in fornecedores]
         except Exception as e:
-            logger.error(f"Erro ao popular combos de contagem (Aba 5): {e}", exc_info=True)
+            self.falha_banco("as contagens para a sugestão", e)
 
 
     def abrir_gestor_buffet(self):
@@ -5591,7 +5698,10 @@ class AppGestaoEstoque:
             sb_list.pack(side=tk.RIGHT, fill=tk.Y)
 
             # Busca todos os produtos do estoque e organiza em ordem alfabética
-            produtos = database.listar_produtos_estoque() or []
+            try:
+                produtos = database.listar_produtos_estoque(levantar_erro=True) or []   # [F-15]
+            except Exception as e:
+                return self.falha_banco("os produtos", e, win_sel)
             produtos_ordenados = sorted(produtos, key=lambda x: (x.NomeProduto or '').lower())
 
             mapa_indice_id = {}
@@ -5669,30 +5779,38 @@ class AppGestaoEstoque:
         tree_hist.grid(row=1, column=0, sticky="nsew")
         sb.grid(row=1, column=1, sticky="ns")
 
+        compras_exatas = {}   # [F-07] iid -> valores EXATOS do banco (a tela mostra arredondado)
+
         def carregar_dados():
             for i in tree_hist.get_children(): tree_hist.delete(i)
+            compras_exatas.clear()
             try:
-                historico = database.buscar_historico_compras_produto(produto_id)
+                historico = database.buscar_historico_compras_produto(produto_id, levantar_erro=True)
                 for compra in historico or []:
                     # [DEPURAÇÃO 2] o custo manual do Catálogo (nota "fantasma" de quantidade 0) não é
-                    # compra: editar aqui transformava o custo manual em compra de verdade
+                    # compra: editar aqui transformava o custo manual em compra de verdade.
+                    # [F-25] o fornecedor interno é reconhecido pelo CNPJ (antes: pelo NOME "PRODUÇÃO INTERNA")
                     if Decimal(str(getattr(compra, 'Quantidade', 0) or 0)) <= 0 or \
-                            'PRODUÇÃO INTERNA' in str(getattr(compra, 'NomeFantasia', '') or '').upper():
+                            database.e_fornecedor_interno(getattr(compra, 'CNPJ', None)):
                         continue
                     data_f = fmt_data(compra.DataEmissao, vazio="--/--/----")
                     qtd_f = fmt_num(compra.Quantidade, 3, "0.000")
                     custo_f = f"R$ {fmt_num(compra.PrecoCustoUnitario, 4, '0.0000')}"
                     item_id = compra.ItemNotaID # O ID que criamos no banco
 
-                    tree_hist.insert("", "end", values=(data_f, compra.NumeroNF, compra.NomeFantasia, qtd_f, custo_f, item_id))
+                    iid = tree_hist.insert("", "end", values=(data_f, compra.NumeroNF, compra.NomeFantasia, qtd_f, custo_f, item_id))
+                    compras_exatas[iid] = {'item': item_id, 'qtd': Decimal(str(compra.Quantidade or 0)),
+                                           'custo': Decimal(str(compra.PrecoCustoUnitario or 0)),
+                                           'fator': Decimal(str(getattr(compra, 'FatorUsado', None) or 1))}
             except Exception as e:
-                messagebox.showerror("Erro", f"Falha ao carregar histórico: {e}", parent=popup)
+                messagebox.showerror("Erro", f"Falha ao carregar histórico (o banco respondeu?): {e}", parent=popup)
 
         def editar_linha(event_tree):
             sel = tree_hist.focus()
-            if not sel: return
+            if not sel or sel not in compras_exatas: return
             vals = tree_hist.item(sel, 'values')
-            data_nf, num_nf, qtd_atual, custo_atual, item_nota_id = vals[0], vals[1], vals[3], vals[4], vals[5]
+            data_nf, num_nf, qtd_atual, custo_atual = vals[0], vals[1], vals[3], vals[4]
+            exata = compras_exatas[sel]
 
             edit_win = Toplevel(popup)
             edit_win.title(f"Corrigir NF {num_nf} ({data_nf})")
@@ -5717,8 +5835,12 @@ class AppGestaoEstoque:
                     # [DEPURAÇÃO 2] quantidade 0 fazia a compra sumir de todos os cálculos
                     n_qtd = para_decimal(e_qtd.get(), "Quantidade", permitir_zero=False)
                     n_custo = para_decimal(e_custo.get(), "Custo")
-                    v_qtd = para_decimal(qtd_atual, "Quantidade")
-                    v_custo = para_decimal(custo_atual.replace("R$", ""), "Custo")
+                    # [F-07] os valores antigos vêm do banco (exatos), não do texto da tabela
+                    v_qtd, v_custo = exata['qtd'], exata['custo']
+                    if e_qtd.get().strip() == qtd_atual.strip():
+                        n_qtd = v_qtd          # campo não mexido: mantém o valor exato
+                    if e_custo.get().replace("R$", "").strip() == custo_atual.replace("R$", "").strip():
+                        n_custo = v_custo
                     if n_qtd == v_qtd and n_custo == v_custo:
                         edit_win.destroy()   # nada mudou: não grava
                         return
@@ -5730,14 +5852,16 @@ class AppGestaoEstoque:
                             f"Total: {fmt_reais(v_qtd * v_custo)} → {fmt_reais(n_qtd * n_custo)}\n\nConfirmar?",
                             parent=edit_win):
                         return
-                    if database.atualizar_item_historico_compra(item_nota_id, n_qtd, n_custo):
+                    # [F-07] o MESMO caminho da tela de vínculos ("Corrigir quantidade e preço"):
+                    # valida, guarda o Qtd/Cx com que a compra entrou e deixa o valor antigo no log
+                    ok, msg = database.corrigir_compra(exata['item'], n_qtd, n_custo, exata['fator'])
+                    if ok:
                         edit_win.destroy()
                         carregar_dados() # Recarrega a tabelinha
                         # Mostra um aviso pro gestor recalcular a tela de trás
                         messagebox.showinfo("Sucesso", "Histórico corrigido!\nClique em 'Gerar Sugestão' novamente para ver a matemática atualizada.", parent=popup)
                     else:
-                        messagebox.showerror("Erro", "Falha ao gravar no banco (a compra pode ter sido apagada; "
-                                             "gere a sugestão de novo).", parent=edit_win)
+                        messagebox.showerror("Erro", msg, parent=edit_win)
                 except ValueError as ve:
                     messagebox.showerror("Erro", str(ve), parent=edit_win)
 
@@ -5981,19 +6105,22 @@ class AppGestaoEstoque:
 
     def atualizar_lista_nfs_admin(self):
         for i in self.tree_admin_nfs.get_children(): self.tree_admin_nfs.delete(i)
+        self._info_nfs_admin = {}     # iid -> {'chave', 'interna'} ([F-05] e [F-25])
         try:
-            nfs = database.listar_notas_fiscais_entrada_completa()
+            nfs = database.listar_notas_fiscais_entrada_completa(levantar_erro=True)
             for nf in nfs or []:
-                # nf = (NotaID, NumeroNF, NomeFantasia, DataEmissao, ValorTotalNF, QtdItens)
+                # nf = (NotaID, NumeroNF, NomeFantasia, DataEmissao, ValorTotalNF, QtdItens, ChaveAcesso, CNPJ, ItensPendentes)
                 # [DEPURAÇÃO] data em texto ou valor vazio faziam a lista inteira sumir
-                self.tree_admin_nfs.insert("", "end", values=(nf[0], nf[1], nf[2], fmt_data(nf[3]), fmt_num(nf[4], 2, "0.00"), nf[5]))
+                iid = self.tree_admin_nfs.insert("", "end", values=(nf[0], nf[1], nf[2], fmt_data(nf[3]), fmt_num(nf[4], 2, "0.00"), nf[5]))
+                self._info_nfs_admin[iid] = {'chave': (nf[6] if len(nf) > 6 else None) or '',
+                                             'interna': database.e_fornecedor_interno(nf[7] if len(nf) > 7 else None)}
         except Exception as e:
-            logger.error(f"Erro lista admin NF: {e}", exc_info=True)
+            self.falha_banco("as notas fiscais", e)
 
     def atualizar_lista_contagens_admin(self):
         for i in self.tree_admin_cont.get_children(): self.tree_admin_cont.delete(i)
         try:
-            contagens = database.listar_contagens_cabecalho()
+            contagens = database.listar_contagens_cabecalho(levantar_erro=True)   # [F-15]
             for c in contagens or []:
                 data_fmt = fmt_data(c.DataContagem)
 
@@ -6003,7 +6130,7 @@ class AppGestaoEstoque:
 
                 self.tree_admin_cont.insert("", "end", values=(c.ContagemID, data_fmt, nome_contagem_db, c.NomeCompleto))
         except Exception as e:
-            logger.error(f"Erro lista admin Contagem: {e}", exc_info=True)
+            self.falha_banco("as contagens", e)   # [F-15]
 
     def excluir_nfs_selecionadas(self):
         selecionados = self.tree_admin_nfs.selection()
@@ -6012,24 +6139,37 @@ class AppGestaoEstoque:
             return
         
         # [DEPURAÇÃO 2] as "notas" de custo manual do Catálogo também aparecem aqui: avisa antes
-        manuais = [self.tree_admin_nfs.item(i, 'values') for i in selecionados
-                   if 'PRODUÇÃO INTERNA' in str(self.tree_admin_nfs.item(i, 'values')[2]).upper()]
+        # [F-25] reconhecidas pelo CNPJ do fornecedor interno (antes: pelo NOME "PRODUÇÃO INTERNA")
+        info = getattr(self, '_info_nfs_admin', {})
+        manuais = [i for i in selecionados if info.get(i, {}).get('interna')]
         aviso_manual = (f"\n\n⚠️ {len(manuais)} delas são o CUSTO MANUAL de produtos (cadastrado no Catálogo). "
                         "Excluindo, esses produtos ficam SEM custo no Valor do Estoque.") if manuais else ""
         if not messagebox.askyesno("Confirmar Exclusão", f"Você selecionou {len(selecionados)} notas fiscais.\n\nEsta ação apagará o registro da nota e todo o histórico de entrada de estoque associado a ela.{aviso_manual}\n\nDeseja continuar?", icon='warning', parent=self.root):
             return
 
-        sucessos = 0
+        sucessos, devolvidos = 0, 0
         for item in selecionados:
             dados = self.tree_admin_nfs.item(item, 'values')
             nota_id = dados[0]
             if database.excluir_nota_fiscal_entrada(nota_id):
                 sucessos += 1
-        
+                # [F-05] o XML sai de 'importadas' e volta para "Notas baixadas da SEFAZ": a nota
+                # pode ser lançada de novo (antes ficava escondida para sempre)
+                chave = info.get(item, {}).get('chave')
+                if chave and not info.get(item, {}).get('interna'):
+                    try:
+                        import nfe_distribuicao as nd
+                        if nd.devolver_para_lista(chave):
+                            devolvidos += 1
+                    except Exception as e:
+                        logger.warning(f"Nota {nota_id} excluída, mas o XML não voltou para a lista: {e}")
+
+        texto_xml = (f" {devolvidos} XML(s) voltaram para 'Notas baixadas da SEFAZ' (aba 3) para lançar de novo."
+                     if devolvidos else "")
         if sucessos == len(selecionados):
-            self.status(f"{sucessos} de {len(selecionados)} nota(s) excluída(s) com sucesso.")  # [MELHORIA UX] rodapé em vez de janelinha
+            self.status(f"{sucessos} de {len(selecionados)} nota(s) excluída(s) com sucesso.{texto_xml}", segundos=20)  # [MELHORIA UX] rodapé em vez de janelinha
         else:
-            messagebox.showwarning("Resultado", f"{sucessos} de {len(selecionados)} nota(s) excluída(s) com sucesso.", parent=self.root)
+            messagebox.showwarning("Resultado", f"{sucessos} de {len(selecionados)} nota(s) excluída(s) com sucesso.{texto_xml}", parent=self.root)
         self.atualizar_lista_nfs_admin()
         self._invalidar_sugestao()
 
@@ -6086,7 +6226,11 @@ class AppGestaoEstoque:
                                     "- Todos os Produtos Mestre\n"
                                     "- Todos os Vínculos criados\n"
                                     "- Todo o histórico de Notas Fiscais\n"
-                                    "- Todo o histórico de Contagens\n\n"
+                                    "- Todo o histórico de Contagens\n"
+                                    "- No App de Compras: os itens das rotinas, os códigos de barras e a contagem\n"
+                                    "  por local; listas e orçamentos em andamento são cancelados\n"
+                                    "  (listas, orçamentos e cupons já fechados ficam como histórico)\n\n"
+                                    "Os números (IDs) NÃO recomeçam do 1: nada antigo é 'herdado' pelos produtos novos.\n\n"
                                     "Essa ação NÃO PODE ser desfeita.", 
                                     icon='warning', default='no', parent=self.root):
                 return
@@ -6401,10 +6545,9 @@ class AppGestaoEstoque:
         # ---------- Funções ----------
         def carregar_dados():
             try:
-                lista = database.listar_vinculos_com_resumo()
+                lista = database.listar_vinculos_com_resumo(levantar_erro=True)   # [F-15]
             except Exception as e:
-                logger.error(f"Erro ao carregar vínculos: {e}", exc_info=True)
-                messagebox.showerror("Erro de Carregamento", f"Falha ao ler os vínculos: {e}", parent=popup)
+                self.falha_banco("os vínculos", e, popup)
                 lista = []
             estado['dados'] = {str(v['ID']): v for v in lista}
             carregar_produtos()
@@ -6496,9 +6639,9 @@ class AppGestaoEstoque:
         # ---------- [MELHORIA VÍNCULOS] escolha do produto do estoque ----------
         def carregar_produtos():
             try:
-                produtos = database.listar_produtos_estoque()
+                produtos = database.listar_produtos_estoque(levantar_erro=True)   # [F-15]
             except Exception as e:
-                logger.error(f"Erro ao listar produtos: {e}", exc_info=True)
+                self.falha_banco("os produtos", e, popup)
                 produtos = []
             estado['produtos'] = {p.ProdutoID: {'id': p.ProdutoID, 'nome': (p.NomeProduto or '').strip() or f"Produto {p.ProdutoID}",
                                                 'un': (p.UnidadeMedida or 'UN').strip() or 'UN',
@@ -7055,7 +7198,12 @@ class AppGestaoEstoque:
             estado['compras'] = {}
             lbl_fator_vinc.config(text=f"Qtd/Cx do vínculo (vale para as próximas notas): {fmt_qtd(estado['fator_vinculo'])} "
                                        f"{unidade} por embalagem.")
-            for c in database.listar_compras_do_vinculo(v['ID']):
+            try:
+                compras = database.listar_compras_do_vinculo(v['ID'], levantar_erro=True)   # [F-15]
+            except Exception as e:
+                self.falha_banco("as compras do vínculo", e, janela)
+                compras = []
+            for c in compras:
                 iid = str(c['ItemNotaID'])
                 estado['compras'][iid] = c
                 f = fator_de(c)
@@ -7360,10 +7508,9 @@ class AppGestaoEstoque:
             for i in tree.get_children():
                 tree.delete(i)
             try:
-                grupos = database.listar_grupos_duplicados()
+                grupos = database.listar_grupos_duplicados(levantar_erro=True)   # [F-15]
             except Exception as e:
-                logger.error(f"Erro ao listar duplicados: {e}", exc_info=True)
-                messagebox.showerror("Erro", f"Falha ao listar duplicados:\n{e}", parent=popup)
+                self.falha_banco("os vínculos duplicados", e, popup)
                 grupos = []
             estado['grupos'] = {g['Grupo']: g for g in grupos}
             for g in grupos:
@@ -7674,9 +7821,9 @@ class AppGestaoEstoque:
     # -------------------------- dados --------------------------
     def atualizar_consultas(self):
         try:
-            self.cache_consulta_notas = database.listar_notas_para_consulta() or []
+            self.cache_consulta_notas = database.listar_notas_para_consulta(levantar_erro=True) or []   # [F-15]
         except Exception as e:
-            logger.error(f"Erro ao carregar notas para consulta: {e}", exc_info=True)
+            self.falha_banco("as notas fiscais (Consultas)", e)
             self.cache_consulta_notas = []
         self.listar_produtos_consulta()
         self.listar_notas_consulta()
@@ -7721,16 +7868,19 @@ class AppGestaoEstoque:
                 return
         if recarregar or self.produto_consulta != produto_id:
             try:
-                self.historico_consulta = database.historico_compras_detalhado(produto_id) or []
+                # [F-15] falha avisa; [F-29] custo real (nota + royalties), igual ao Catálogo e ao Valor do Estoque
+                self.historico_consulta = database.historico_compras_detalhado(produto_id, levantar_erro=True,
+                                                                               com_royalties=True) or []
             except Exception as e:
-                logger.error(f"Erro ao consultar histórico do produto {produto_id}: {e}", exc_info=True)
-                messagebox.showerror("Erro", f"Não foi possível carregar o histórico:\n{e}", parent=self.root)
+                self.falha_banco("o histórico de compras do produto", e)
                 return
             self.produto_consulta = produto_id
         nome = next((n for n, d in self.mapa_produtos_mestre_contagem.items() if d['id'] == produto_id), f"Produto {produto_id}")
         un = self.unidade_do_produto(produto_id)
         self.nome_produto_consulta = nome
-        self.lbl_consulta_produto.config(text=f"📦 {nome}  (ID {produto_id}, {un})")
+        roy = next((r.get('RoyaltiesPct') for r in self.historico_consulta if r.get('RoyaltiesPct')), None)
+        self.lbl_consulta_produto.config(text=f"📦 {nome}  (ID {produto_id}, {un})"
+                                         + (f"  ·  custo real = preço da nota + {fmt_qtd(roy)}% de royalties" if roy else ""))
 
         desde = self._data_inicio_periodo(self.combo_periodo_consulta.get())
         periodo = [r for r in self.historico_consulta if not desde or (r['Data'] and r['Data'] >= desde)]
@@ -7829,9 +7979,9 @@ class AppGestaoEstoque:
         nota_id = int(sel[1:])
         nota = next((n for n in self.cache_consulta_notas if n['NotaID'] == nota_id), None)
         try:
-            itens = database.itens_da_nota(nota_id) or []
+            itens = database.itens_da_nota(nota_id, levantar_erro=True) or []   # [F-15]
         except Exception as e:
-            logger.error(f"Erro ao carregar itens da nota {nota_id}: {e}", exc_info=True)
+            self.falha_banco(f"os itens da nota", e)
             itens = []
         self.itens_nota_consulta = itens
         self.nota_consulta_atual = nota

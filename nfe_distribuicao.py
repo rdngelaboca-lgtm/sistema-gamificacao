@@ -344,6 +344,27 @@ def _ja_temos_xml(chave):
     return any(os.path.exists(os.path.join(pasta_xml(), sub, f"{chave}.xml")) for sub in ('', 'importadas'))
 
 
+def ja_temos_xml(chave):
+    """Versão pública de _ja_temos_xml (o Gestão de Estoque usa)."""
+    return _ja_temos_xml(chave)
+
+
+def devolver_para_lista(chave):
+    """
+    [F-05] Nota EXCLUÍDA do estoque: o XML sai da subpasta 'importadas' e volta para a pasta,
+    para aparecer de novo em "Notas baixadas da SEFAZ" (e no app) e poder ser lançada outra vez.
+    Devolve True se o XML está de volta na pasta.
+    """
+    chave = re.sub(r'\D', '', str(chave or ''))
+    if len(chave) != 44:
+        return False
+    origem = os.path.join(pasta_xml(), 'importadas', f"{chave}.xml")
+    destino = os.path.join(pasta_xml(), f"{chave}.xml")
+    if os.path.exists(origem):
+        os.replace(origem, destino)
+    return os.path.exists(destino)
+
+
 def _salvar_xml_completo(conteudo):
     """procNFe -> <pasta>/<chave>.xml. Devolve (chave, emitente, valor, novo?)."""
     raiz = _xml(conteudo)

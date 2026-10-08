@@ -1264,8 +1264,8 @@ aberta (F-22).
 - ⚠ Não trata, embora todas tenham `ProdutoID`:
   - `CompraListaItens` e `CompraContagemLocais` (`compras_database.py`);
   - `CompraOrcamentoItens` (`orcamentos.py`);
-  - `CompraCupomItens` (`compras_cupom.py`);
-  - `Recebimento*` (`recebimento.py`).
+  - `CompraCupomItens` (`compras_cupom.py`).
+- (As tabelas `Recebimento*` guardam a chave da nota e o código do fornecedor, **não** o produto.)
 
 #### J) Valor do Estoque (`:7677–8064`)
 **`_custos_por_produto(cursor, data)` `:7780`** → `(resultado, compras)`.
@@ -1690,40 +1690,39 @@ Cada ponto diz o que acontece e onde. Nenhuma correção foi feita.
 
 ### 4.1 Integridade de dados
 
-- **F-01 — O reset recomeça os IDs, mas o app de compras continua apontando para os IDs antigos.**
+- **F-01 — O reset recomeça os IDs, mas o app de compras continua apontando para os IDs antigos.** ✅ *Corrigido — ver seção 5.*
   - `resetar_dados_estoque_completo` (`database.py:9279`) apaga produtos, notas e contagens e faz
     `RESEED 0`.
   - Ficam intactas: `CompraRotinaItens`, `CompraCodigos`, `CompraListaItens`, `CompraListas.ContagemID`,
-    `CompraContagemLocais`, `CompraOrcamentoItens`, `CompraCupomItens` e `Recebimento*`.
+    `CompraContagemLocais`, `CompraOrcamentoItens` e `CompraCupomItens`.
   - O novo produto **ID 1** "herda" rotinas, códigos de barras, orçamentos e locais do antigo ID 1. A
     nova contagem ID 1 herda a divisão por locais da antiga.
 
-- **F-02 — Juntar e excluir produto só corrigem 2 tabelas do app.**
+- **F-02 — Juntar e excluir produto só corrigem 2 tabelas do app.** ✅ *Corrigido — ver seção 5.*
   - `_trocar_produto_no_app_compras` trata `CompraRotinaItens` e `CompraCodigos`.
-  - Listas, locais de contagem, orçamentos, cupons e recebimento ficam com o `ProdutoID` de um produto
-    apagado.
+  - Listas, locais de contagem, orçamentos e cupons ficam com o `ProdutoID` de um produto apagado.
   - Excluir ou consolidar contagens no PC também não limpa `CompraContagemLocais` nem
     `CompraListas.ContagemID`.
 
 - **F-03 — Juntar produtos com unidades diferentes soma as contagens sem converter.**
   `juntar_produtos` `:10527`; a tela só avisa.
 
-- **F-04 — "Desmembrar caixa" reescreve o histórico inteiro do produto, mas não tudo.**
+- **F-04 — "Desmembrar caixa" reescreve o histórico inteiro do produto, mas não tudo.** ✅ *Corrigido — ver seção 5.*
   - Converte compras, vínculos e contagens não fechadas.
   - **Não** converte `EstoqueMinimo` (que passa a valer M vezes menos) nem nada do app.
   - Acrescenta "(UNIDADE)" ao nome.
   - O M é calculado pelo Qtd/Cx do vínculo de **origem** e aplicado a todos (`:12229`).
 
-- **F-05 — Excluir nota fiscal deixa o XML "importado".**
+- **F-05 — Excluir nota fiscal deixa o XML "importado".** ✅ *Corrigido — ver seção 5.*
   - O arquivo fica em `importadas/`, então a nota some do estoque e não volta para a lista da SEFAZ.
   - A nota fantasma do custo manual também pode ser excluída por aqui: o aviso depende do **nome** do
     fornecedor.
   - Excluir várias notas não é transacional.
 
-- **F-06 — Salvar nota incompleta perde os itens pendentes para sempre.** A nota fica marcada como
+- **F-06 — Salvar nota incompleta perde os itens pendentes para sempre.** ✅ *Corrigido — ver seção 5.* A nota fica marcada como
   importada (`salvar_notas_processadas` `:3272`). Só a correção manual da compra resolve.
 
-- **F-07 — Dois caminhos diferentes para corrigir uma compra.**
+- **F-07 — Dois caminhos diferentes para corrigir uma compra.** ✅ *Corrigido — ver seção 5.*
 
   | Caminho | Validação | Fator usado | Valor antigo no log |
   |---|---|---|---|
@@ -1749,7 +1748,7 @@ Cada ponto diz o que acontece e onde. Nenhuma correção foi feita.
     (`:3558`).
   - O rascunho local não confere se os produtos ainda existem.
 
-- **F-12 — "Duas contagens no mesmo dia" tem regras diferentes em cada tela.**
+- **F-12 — "Duas contagens no mesmo dia" tem regras diferentes em cada tela.** ✅ *Corrigido — ver seção 5.*
 
   | Tela / função | Regra |
   |---|---|
@@ -1770,7 +1769,7 @@ Cada ponto diz o que acontece e onde. Nenhuma correção foi feita.
 
 ### 4.2 Falhas silenciosas e respostas enganosas
 
-- **F-15 — Banco fora do ar não é tratado do mesmo jeito.**
+- **F-15 — Banco fora do ar não é tratado do mesmo jeito.** ✅ *Corrigido — ver seção 5.*
 
   | Função | Resultado quando o banco falha |
   |---|---|
@@ -1796,7 +1795,7 @@ Cada ponto diz o que acontece e onde. Nenhuma correção foi feita.
 
 ### 4.3 Efeitos colaterais e infraestrutura
 
-- **F-20 — Log configurado duas vezes no mesmo processo.**
+- **F-20 — Log configurado duas vezes no mesmo processo.** ✅ *Corrigido — ver seção 5.*
   - `gestao_estoque_main.py:37` e `database.py:58` zeram os handlers do logger raiz e criam **dois**
     `RotatingFileHandler` para o mesmo arquivo.
   - O 1º sai do logger mas não é fechado, e o arquivo fica aberto.
@@ -1825,7 +1824,7 @@ Cada ponto diz o que acontece e onde. Nenhuma correção foi feita.
 
 ### 4.4 Acoplamento por texto e valores mágicos
 
-- **F-25 — Decisões tomadas por texto.**
+- **F-25 — Decisões tomadas por texto.** ✅ *Corrigido — ver seção 5.*
   - Nome da aba (`aba_atual`, `on_tab_changed`, atalhos).
   - Opções do Ponto A, convertidas nos números mágicos `None`/`-1`/`-2` que o banco interpreta.
   - Prefixo do combo "Mostrar".
@@ -1854,7 +1853,7 @@ Cada ponto diz o que acontece e onde. Nenhuma correção foi feita.
 
 ### 4.5 Regras de custo que divergem entre telas
 
-- **F-29 — "Último custo" tem pelo menos 6 definições.**
+- **F-29 — "Último custo" tem pelo menos 6 definições.** ✅ *Corrigido — ver seção 5.*
 
   | Função / tela | O que entende por "último custo" |
   |---|---|
@@ -1955,5 +1954,153 @@ Cada ponto diz o que acontece e onde. Nenhuma correção foi feita.
 
 ---
 
+## 5. Correções aplicadas (F-01, F-02, F-04, F-05, F-06, F-07, F-12, F-15, F-20, F-25, F-29)
+
+As seções 2 a 4 descrevem o código **antes** destas correções. O que mudou está aqui.
+
+### F-01 — Reset
+- `resetar_dados_estoque_completo` **não faz mais `DBCC CHECKIDENT RESEED`**. Os IDs continuam de onde
+  pararam, então um produto ou contagem novo nunca reaproveita o número de um antigo.
+- Na mesma transação, limpa o App de Compras:
+  - apaga `CompraRotinaItens`, `CompraCodigos`, `CompraContagemLocais` e `CompraContagemAndamento`;
+  - zera `CompraListas.ContagemID`;
+  - **cancela** as listas (`aguardando`/`aprovada`/`processando`) e os orçamentos (`rascunho`/`enviado`)
+    em andamento;
+  - desvincula os itens de cupom.
+- Listas, orçamentos e cupons já fechados ficam como histórico (guardam o nome do produto).
+- `TABELAS_BACKUP_ESTOQUE` passou a incluir `CategoriasProduto` e as tabelas do app que o reset mexe.
+  `exportar_tabelas_estoque` pula as que não existem.
+- A confirmação na tela explica tudo isso.
+
+### F-02 — Juntar, excluir e contagens × App de Compras
+- `_trocar_produto_no_app_compras` cobre as **6** tabelas com `ProdutoID`: `CompraRotinaItens`,
+  `CompraCodigos`, `CompraListaItens`, `CompraContagemLocais`, `CompraOrcamentoItens` e
+  `CompraCupomItens`.
+  - **Juntar:** passa as linhas para o produto mantido. Se ele já está na mesma
+    lista/orçamento/local/rotina, soma as quantidades numa linha só (`_mover_linha_do_produto`).
+  - **Excluir:** apaga rotina, código e local, e desvincula o cupom.
+- `excluir_produto_estoque` recusa (`ProdutoComHistorico`) quando o produto está numa lista ou orçamento
+  **em andamento** (`_uso_aberto_no_app`) e cita qual.
+- Contagens:
+  - `consolidar_contagens` leva a divisão por local e a `CompraListas.ContagemID` para a contagem nova
+    (`_mover_contagem_no_app`);
+  - `excluir_contagem_estoque` limpa as duas;
+  - editar, somar, remover ou resolver avulso no PC descarta a divisão por local daquele produto
+    (`_descartar_locais_da_contagem`), porque ela não somaria mais o total;
+  - `_conferir_locais` é a rede de segurança: só mantém a divisão que bate com o total.
+- `adicionar_item_contagem_existente` junta linhas repetidas do produto numa só (antes somava a
+  quantidade em todas).
+
+### F-04 — Desmembrar caixa
+- Converte também:
+  - `EstoqueMinimo` (× M);
+  - `CompraCodigos.Fator` do produto (o bip da caixa passa a valer M unidades);
+  - `CompraContagemLocais.Qtd` das contagens não fechadas.
+- `previa_desmembrar_caixa` mostra o mínimo e os códigos do app. Lê os valores fechados uma vez só
+  (antes: uma conexão por contagem).
+
+### F-05 — Excluir nota fiscal
+- Ao excluir pela Administração, `nfe_distribuicao.devolver_para_lista(chave)` move
+  `importadas/<chave>.xml` de volta para a pasta. A nota reaparece em "Notas baixadas da SEFAZ" e no
+  app para ser lançada de novo.
+- `listar_notas_fiscais_entrada_completa` traz `ChaveAcesso`, `CNPJ` e `ItensPendentes` no fim (LEFT
+  JOIN: nota de fornecedor apagado também aparece).
+
+### F-06 — Nota salva incompleta
+- Colunas novas (criadas por `_garantir_colunas_estoque`):
+  - `ItensNotaFiscalEntrada.NItem`: o número do item no XML;
+  - `NotasFiscaisEntrada.ItensPendentes`: quantos itens ficaram de fora.
+  - O PC e o app (`recebimento.py`) gravam o `NItem`.
+- **Ao ler a pasta**, uma nota já salva passa por `_itens_que_faltam_na_nota`:
+  - se tem `NItem`, a conta é exata;
+  - se é uma nota antiga, só completa quando cada item gravado casa com um item do XML e sobra
+    exatamente a diferença (senão fica como "já importada").
+  - Só os itens que faltam aparecem, marcados "NF (completar)".
+- **Ao salvar**, `completar_nota_fiscal(nota_id, itens, pendentes)` grava os itens na **mesma** nota,
+  sem duplicar (`NItem`).
+- **Lista da SEFAZ:**
+  - mostra "salva INCOMPLETA: faltam N item(ns)" (`notas_incompletas()`);
+  - `chaves_ja_importadas` ignora as notas incompletas, então o XML continua na lista;
+  - nota incompleta vinda de outra pasta tem a cópia guardada na pasta principal, não em `importadas`.
+
+### F-07 — Um caminho só para corrigir compra
+- `atualizar_item_historico_compra` virou um atalho para `corrigir_compra`: valida, mantém o Qtd/Cx com
+  que a compra entrou, recusa o custo manual e deixa o valor antigo no log.
+- A janela de histórico da Sugestão chama `corrigir_compra` com os valores **exatos** do banco (não o
+  texto da tabela).
+- `buscar_historico_compras_produto` traz `FatorUsado` e `CNPJ`.
+
+### F-12 — Contagens do mesmo dia
+- `resumo_catalogo` soma as contagens do dia (`UltContagemVarias` = quantas).
+- `calcular_valor_estoque`:
+  - a "contagem anterior" soma todas as contagens daquele dia;
+  - o produto contado só na **outra** contagem do mesmo dia vira o aviso `outra_contagem_do_dia` (não é
+    "não contado");
+  - `outras_do_dia` lista as outras contagens.
+- A tela explica e sugere Consolidar.
+
+### F-15 — Banco fora do ar
+- **Novo parâmetro `levantar_erro=False`** (sem ele o comportamento é o de antes, para o app e a API) em:
+  - `listar_produtos_estoque`, `listar_fornecedores`, `listar_categorias_produto`;
+  - `listar_contagens_cabecalho`, `buscar_itens_contagem`, `resumo_catalogo`;
+  - `listar_vinculos_com_resumo`, `listar_grupos_duplicados`, `listar_compras_do_vinculo`,
+    `listar_produtos_duplicados`;
+  - `historico_compras_detalhado`, `listar_notas_para_consulta`, `itens_da_nota`,
+    `listar_notas_com_diferenca`;
+  - `buscar_ids_produtos_por_fornecedor`, `conferencias_recebimento`, `buscar_vinculo_inteligente`;
+  - `buscar_nota_importada`, `buscar_historico_compras_produto`,
+    `listar_notas_fiscais_entrada_completa`, `buscar_produtos_para_folha_contagem`.
+- `verificar_nota_fiscal_existente` **levanta erro** (antes respondia "já existe").
+- Na tela, `falha_banco(onde, erro)` põe uma mensagem vermelha no rodapé e abre no máximo uma janela por
+  minuto.
+- **Na importação**, a falha do banco (verificar nota, vínculo, conferência do app) faz o arquivo contar
+  como "falha" e ser lido de novo depois. Antes a nota podia entrar com a quantidade errada ou ser dada
+  como "já importada".
+
+### F-20 — Log
+- Novo `log_config.py` com `configurar_log()`:
+  - se já existe um handler gravando em `logs/gamificacao_sistema.log` (de qualquer módulo), não faz
+    nada;
+  - senão fecha os antigos e cria um só.
+- `database.py` e `gestao_estoque_main.py` usam essa função. Os outros programas que configuram antes
+  de importar o `database` também deixam de ter 2 arquivos abertos.
+
+### F-25 — Decisões pelo texto
+- **Abas:** `frame_da_aba_atual()`. `on_tab_changed` e `atalho_buscar` comparam o **Frame**, não o
+  texto.
+- **Fornecedor interno:** `e_fornecedor_interno(cnpj)` (pelo CNPJ) em todo lugar.
+  - Constante `NOME_FORNECEDOR_INTERNO`.
+  - O literal `"00000000000000"` só aparece na constante.
+- **EAN:** `ean_valido(ean)` em vez de comparar com `"Sem EAN"` / `"SEM GTIN"`. Vale para
+  `descobrir_produto_mestre_por_ean`, `vincular_item_avulso_inteligente`, `desmembrar_caixa` e a janela
+  de avulsos, que guarda os valores exatos por linha.
+
+### F-29 — Custos: a regra única
+- **Custo real (nota + % de royalties da categoria)** é o padrão em todas as telas de custo do produto:
+  - Valor do Estoque;
+  - Catálogo ("Custo real" e "Mais barato", agora por ID do fornecedor);
+  - **Folha de contagem** (antes: a entrada mais recente de qualquer tipo);
+  - Sugestão/Pedido (a explicação mostra o %);
+  - Gráfico, Alerta de aumento;
+  - **Consultas > Produto** (`historico_compras_detalhado(..., com_royalties=True)`, guarda `PrecoNota`);
+  - App de Compras.
+- **Preço da nota (sem royalties)** só onde se mostra ou corrige a própria nota, ou se compara com o
+  XML: conferência do Qtd/Cx, Vínculos, "Corrigir quantidade e preço", histórico da Sugestão, Consultas >
+  Nota, orçamento enviado ao fornecedor.
+- **"Último preço pago"** tem uma definição só, `ultimos_precos_pagos(ids, com_royalties)`: a última
+  compra **paga**, sem bonificação nem custo manual. Usada por:
+  - `ultimo_custo_real_produto`;
+  - `buscar_ultimo_custo_por_produto` (que cai para `custo_manual_produto` se nunca houve compra paga e
+    devolve sempre `Decimal`);
+  - `buscar_produtos_mobile_por_nome` (por vínculo).
+- `custos_atuais(data)` é o custo real para quem está fora do `database`.
+
+### Testes
+- `repro_forensics.py` reproduziu 12 falhas antes e 0 depois.
+- `teste_forensics_banco.py` (banco) e `teste_forensics_tela.py` (Tkinter) cobrem cada ponto.
+- Toda a suíte anterior passou: banco, telas do PC, app de compras e Gestão Web no navegador.
+
+---
+
 *Documento gerado por leitura integral do código. Para mudar qualquer ponto acima, peça a correção
-pelo número (ex.: "corrigir F-01 e F-02").*
+pelo número (ex.: "corrigir F-03").*

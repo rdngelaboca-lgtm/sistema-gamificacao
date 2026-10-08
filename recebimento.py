@@ -834,7 +834,8 @@ def _lancar_no_estoque(chave, usuario):
         if fator <= 0:
             fator = Decimal('1')
         prontos.append({'ProdutoFornecedorID': v['ProdutoFornecedorID'], 'Quantidade': nota_xml.qtd_estoque(it, fator),
-                        'PrecoCustoUnitario': it['PrecoCustoUnitario'] / fator, 'FatorUsado': fator, 'NCM': it.get('NCM')})
+                        'PrecoCustoUnitario': it['PrecoCustoUnitario'] / fator, 'FatorUsado': fator, 'NCM': it.get('NCM'),
+                        'NItem': it.get('NItem')})   # [F-06] número do item no XML
     if faltam:
         raise ErroCompras(f"Falta vincular {len(faltam)} item(ns) para lançar no estoque: " + "; ".join(faltam[:5])
                           + ("…" if len(faltam) > 5 else ""))
