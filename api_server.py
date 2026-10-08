@@ -149,6 +149,9 @@ CAMINHOS_LIBERADOS_NA_INTERNET = tuple(getattr(config, 'TUNEL_CAMINHOS_LIBERADOS
 @app.before_request
 def bloquear_internet_fora_do_app():
     if _pedido_veio_da_internet() and not request.path.startswith(CAMINHOS_LIBERADOS_NA_INTERNET):
+        if request.path == '/':
+            # Quem digita só compras.kuantisflow.com.br cai direto no app de compras.
+            return redirect('/compras', code=302)
         logger.warning(f"Pedido pela internet BLOQUEADO: {request.path}")
         return jsonify({"status": "erro", "mensagem": "Não encontrado."}), 404
 
@@ -1581,10 +1584,41 @@ def api_compras_preparar(usuario, rotina_id):
     return _resposta_compras(compras_database.preparar_contagem, rotina_id)
 
 
+@app.route('/api/compras/estoque', methods=['GET'])
+@compras_login()
+def api_compras_estoque_completo(usuario):
+    """[ABA ESTOQUE] rotina automática com todos os produtos e as categorias (para contar só uma)."""
+    return _resposta_compras(compras_database.estoque_completo)
+
+
+# [PAINEL DO BALANÇO] o celular avisa o que já contou; o gestor acompanha e vê as diferenças em R$
+@app.route('/api/compras/contagem/andamento', methods=['POST'])
+@compras_login()
+def api_compras_contagem_andamento(usuario):
+    dados = ler_json() or {}
+    if dados.get('encerrar'):
+        return _resposta_compras(compras_database.encerrar_andamento, dados.get('codigo'))
+    return _resposta_compras(compras_database.registrar_andamento, dados.get('codigo'), dados.get('rotina_id'), usuario, dados)
+
+
+@app.route('/api/compras/rotinas/<int:rotina_id>/painel', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_compras_painel_balanco(usuario, rotina_id):
+    return _resposta_compras(compras_database.painel_balanco, rotina_id)
+
+
+@app.route('/api/compras/rotinas/<int:rotina_id>/diferencas', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_compras_diferencas(usuario, rotina_id):
+    return _resposta_compras(compras_database.diferencas_balanco, rotina_id, request.args.get('dia'))
+
+
 @app.route('/api/compras/produtos', methods=['GET'])
 @compras_login()   # [MELHORIA] o funcionário também busca produtos (para incluir na lista)
 def api_compras_produtos(usuario):
-    return _resposta_compras(compras_database.buscar_produtos, request.args.get('q', ''))
+    # [CONTAGEM GERAL] todos=1: o catálogo inteiro (botão "incluir todos os produtos" da rotina)
+    return _resposta_compras(compras_database.buscar_produtos, request.args.get('q', ''),
+                             limite=10000 if request.args.get('todos') else 40)
 
 
 @app.route('/api/compras/produtos/<int:produto_id>/historico', methods=['GET'])
@@ -1592,6 +1626,17 @@ def api_compras_produtos(usuario):
 def api_compras_historico_produto(usuario, produto_id):
     """Vínculos, compras dos últimos 12 meses (todos os fornecedores) e contagens de um produto."""
     return _resposta_compras(compras_database.historico_produto, produto_id)
+
+
+@app.route('/api/compras/produtos/<int:produto_id>/precos', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_compras_precos_produto(usuario, produto_id):
+    """[PREÇOS] histórico de preço de um produto (aba Gestão)."""
+    try:
+        meses = int(request.args.get('meses', 12))
+    except ValueError:
+        meses = 12
+    return _resposta_compras(compras_database.historico_precos, produto_id, meses)
 
 
 @app.route('/api/compras/fornecedores', methods=['GET'])
@@ -1616,7 +1661,7 @@ def api_compras_criar_lista(usuario):
         return jsonify({"erro": "Contagem não recebida."}), 400
     def criar():
         lista = compras_database.registrar_lista(dados.get('codigo'), dados.get('rotina_id'), usuario,
-                                                 dados.get('dias'), dados.get('itens'))
+                                                 dados.get('dias'), dados.get('itens'), categorias=dados.get('categorias'))
         if lista['status'] == compras_database.ST_AGUARDANDO and not lista.get('ja_existia'):
             _avisar_gestor_telegram(
                 f"🛒 <b>Lista de compras para aprovar</b>\n"
@@ -1731,9 +1776,26 @@ def _avisar_cupom_pendente(usuario, cupom):
 
 
 @app.route('/api/compras/cupons', methods=['GET'])
-@compras_login()
+@compras_login(somente_gestor=True)     # [PAINEL DO GESTOR] o histórico de cupons é só do gestor
 def api_compras_cupons(usuario):
     return _cupom_disponivel() or _resposta_compras(compras_cupom.listar_cupons)
+
+
+@app.route('/api/compras/painel', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_compras_painel(usuario):
+    """[PAINEL DO GESTOR] resumo da aba 'Gestão' do app (listas, compras do mês, estoque, preços, cupons)."""
+    def montar():
+        painel = compras_database.painel_gestor()
+        if compras_cupom is not None:
+            try:
+                cupons = compras_cupom.listar_cupons()
+                painel['cupons'] = {'pendentes': sum(1 for c in cupons if c['status'] == compras_cupom.ST_PENDENTE),
+                                    'erro': sum(1 for c in cupons if c['status'] == compras_cupom.ST_ERRO)}
+            except Exception as e:
+                logger.error(f"Painel: cupons: {e}", exc_info=True)
+        return painel
+    return _resposta_compras(montar)
 
 
 @app.route('/api/compras/cupons', methods=['POST'])
@@ -1745,6 +1807,10 @@ def api_compras_ler_cupom(usuario):
         return bloqueio
     dados = ler_json() or {}
     def ler():
+        if dados.get('pagina'):      # [CUPOM NO COMPUTADOR] página da SEFAZ salva no navegador (Ctrl+S)
+            cupom = compras_cupom.registrar_cupom_da_pagina(dados['pagina'], usuario, lista_codigo=dados.get('lista_codigo'))
+            _avisar_cupom_pendente(usuario, cupom)
+            return cupom
         texto = (dados.get('qr') or '').strip()
         if not texto and dados.get('foto'):
             texto = compras_cupom.ler_qr_da_foto(dados['foto'])
@@ -1803,6 +1869,269 @@ def api_compras_categorias(usuario):
 @compras_login(somente_gestor=True)
 def api_compras_lancar_cupom(usuario, cupom_id):
     return _cupom_disponivel() or _resposta_compras(compras_cupom.lancar_cupom, cupom_id, usuario)
+
+
+# ---------------------------- recebimento: conferência da mercadoria (XML da SEFAZ) ----------------------------
+try:
+    import recebimento
+except Exception as _erro_import_receb:
+    recebimento = None
+    logger.error(f"Conferência de recebimento DESLIGADA: não consegui carregar recebimento.py ({_erro_import_receb})")
+
+
+def _recebimento_disponivel():
+    if recebimento is None:
+        return jsonify({"erro": "Conferência de recebimento não instalada no servidor (falta recebimento.py)."}), 503
+    return None
+
+
+@app.route('/api/compras/recebimentos', methods=['GET'])
+@compras_login()
+def api_compras_recebimentos(usuario):
+    return _recebimento_disponivel() or _resposta_compras(recebimento.listar_recebimentos)
+
+
+@app.route('/api/compras/recebimentos/<chave>', methods=['GET'])
+@compras_login()
+def api_compras_recebimento(usuario, chave):
+    return _recebimento_disponivel() or _resposta_compras(recebimento.obter_recebimento, chave)
+
+
+@app.route('/api/compras/recebimentos/<chave>/codigo', methods=['POST'])
+@compras_login()
+def api_compras_recebimento_codigo(usuario, chave):
+    dados = ler_json() or {}
+    return _recebimento_disponivel() or _resposta_compras(recebimento.cadastrar_codigo, chave, dados.get('n'),
+                                                          dados.get('codigo'), dados.get('por_bip'), usuario)
+
+
+@app.route('/api/compras/recebimentos/<chave>/finalizar', methods=['POST'])
+@compras_login()
+def api_compras_recebimento_finalizar(usuario, chave):
+    bloqueio = _recebimento_disponivel()
+    if bloqueio:
+        return bloqueio
+    dados = ler_json() or {}
+
+    def finalizar():
+        ja_estava = bool(recebimento.obter_recebimento(chave).get('lancada'))
+        r = recebimento.finalizar(chave, dados.get('itens'), dados.get('observacao'), usuario)
+        if r.get('repetida'):
+            # [DEPURAÇÃO] a mesma conferência reenviada pela fila do celular: sem Telegram repetido
+            r['lancamento'] = {'ok': True, 'ja_estava': True} if r.get('lancada') else \
+                {'ok': False, 'motivo': 'esta conferência já tinha sido recebida; falta lançar no estoque.'}
+            return r
+        linhas = [f"📦 <b>Mercadoria recebida</b> · {esc(r['fornecedor'])} · NF {esc(r['numero'])}",
+                  f"Conferida por {esc(usuario['nome'])}: " + ("tudo certo ✅" if not r['divergencias']
+                                                              else f"<b>{len(r['divergencias'])} divergência(s)</b> ⚠️")]
+        for d in r['divergencias'][:20]:
+            linhas.append(f"• {esc(d['descricao'])}: nota {recebimento.qtd_br(d['nota'])} {esc(d['unidade'])}, "
+                          f"chegou {recebimento.qtd_br(d['conferido'])} ({d['tipo']})")
+        if r.get('observacao'):
+            linhas.append(f"Obs.: {esc(r['observacao'])}")
+        # [LANÇAMENTO] tudo vinculado: já entra no estoque com a quantidade que chegou
+        divergencias = r['divergencias']
+        if ja_estava:
+            r['lancamento'] = {'ok': True, 'ja_estava': True}
+            linhas.append("ℹ️ Esta nota já estava no estoque (não foi lançada de novo)."
+                          + (" Se ela entrou pelo computador antes da conferência, entrou com a quantidade da nota: "
+                             "acerte a diferença na próxima contagem." if divergencias else ""))
+        else:
+            try:
+                lancada = recebimento.lancar_no_estoque(chave, usuario)
+                r = dict(lancada, divergencias=divergencias)
+                r['lancamento'] = {'ok': True}
+                linhas.append("✅ Lançada no estoque com a quantidade que chegou.")
+                if lancada.get('aumentos'):
+                    linhas.append("📈 Preços que subiram:")
+                    linhas += [f"• {esc(t)}" for t in lancada['aumentos'][:10]]
+            except compras_database.ErroCompras as e:
+                r['lancamento'] = {'ok': False, 'motivo': str(e)}
+                linhas.append(f"⏳ Ainda NÃO entrou no estoque: {esc(str(e))}\n"
+                              "Vincule no app (aba Receber) e toque em <b>Lançar no estoque</b>, ou lance pelo Gestão de Estoque.")
+            except Exception as e:
+                logger.exception(f"Recebimento: erro ao lançar a NF {r.get('numero')} no estoque: {e}")
+                r['lancamento'] = {'ok': False, 'motivo': 'Erro no servidor ao lançar no estoque (veja o log).'}
+                linhas.append("⚠️ Erro ao lançar no estoque (veja o log do servidor). Lance pelo app ou pelo Gestão de Estoque.")
+        _avisar_gestor_telegram("\n".join(linhas))
+        return r
+    return _resposta_compras(finalizar)
+
+
+@app.route('/api/compras/recebimentos/<chave>/reabrir', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_compras_recebimento_reabrir(usuario, chave):
+    return _recebimento_disponivel() or _resposta_compras(recebimento.reabrir, chave, usuario)
+
+
+@app.route('/api/compras/recebimentos/<chave>/buscar-sefaz', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_compras_recebimento_buscar_sefaz(usuario, chave):
+    return _recebimento_disponivel() or _resposta_compras(recebimento.buscar_xml_na_sefaz, chave, usuario)
+
+
+@app.route('/api/compras/recebimentos/<chave>/vincular', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_compras_recebimento_vincular(usuario, chave):
+    dados = ler_json() or {}
+    return _recebimento_disponivel() or _resposta_compras(recebimento.vincular_item, chave, dados.get('n'), dados.get('produto_id'),
+                                                          dados.get('fator'), usuario, confirmado=bool(dados.get('confirmado')))
+
+
+@app.route('/api/compras/recebimentos/<chave>/novo-produto', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_compras_recebimento_novo_produto(usuario, chave):
+    dados = ler_json() or {}
+    return _recebimento_disponivel() or _resposta_compras(
+        recebimento.criar_produto_do_item, chave, dados.get('n'), usuario, dados.get('nome'), dados.get('unidade'),
+        categoria=dados.get('categoria'), estoque_minimo=dados.get('estoque_minimo'), fator=dados.get('fator'))
+
+
+@app.route('/api/compras/recebimentos/<chave>/lancar', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_compras_recebimento_lancar(usuario, chave):
+    bloqueio = _recebimento_disponivel()
+    if bloqueio:
+        return bloqueio
+
+    def lancar():
+        r = recebimento.lancar_no_estoque(chave, usuario)
+        if not r.get('ja_estava'):
+            linhas = [f"✅ <b>Lançada no estoque</b> · {esc(r['fornecedor'])} · NF {esc(r['numero'])} (por {esc(usuario['nome'])}, "
+                      "com a quantidade conferida)"]
+            if r.get('aumentos'):
+                linhas.append("📈 Preços que subiram:")
+                linhas += [f"• {esc(t)}" for t in r['aumentos'][:10]]
+            _avisar_gestor_telegram("\n".join(linhas))
+        return r
+    return _resposta_compras(lancar)
+
+
+@app.route('/api/compras/recebimentos/<chave>/dispensar', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_compras_recebimento_dispensar(usuario, chave):
+    sempre = bool((ler_json() or {}).get('sempre'))
+    return _recebimento_disponivel() or _resposta_compras(recebimento.dispensar, chave, usuario, sempre=sempre)
+
+
+@app.route('/api/compras/recebimentos/ignorados/<cnpj>/mostrar', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_compras_recebimento_mostrar_fornecedor(usuario, cnpj):
+    return _recebimento_disponivel() or _resposta_compras(recebimento.voltar_a_mostrar, cnpj, usuario)
+
+
+# ---------------------------- orçamentos / pedidos aos fornecedores (gestor) ----------------------------
+try:
+    import orcamentos
+except Exception as _erro_import_orc:
+    orcamentos = None
+    logger.error(f"Orçamentos DESLIGADOS: não consegui carregar orcamentos.py ({_erro_import_orc})")
+
+
+def _orcamentos_disponivel():
+    if orcamentos is None:
+        return jsonify({"erro": "Orçamentos não instalados no servidor (falta orcamentos.py)."}), 503
+    return None
+
+
+@app.route('/api/compras/orcamentos/fornecedores', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_compras_orcamento_fornecedores(usuario):
+    return _orcamentos_disponivel() or _resposta_compras(orcamentos.listar_fornecedores)
+
+
+@app.route('/api/compras/orcamentos', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_compras_orcamentos(usuario):
+    return _orcamentos_disponivel() or _resposta_compras(orcamentos.listar_orcamentos)
+
+
+@app.route('/api/compras/orcamentos', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_compras_orcamento_criar(usuario):
+    dados = ler_json() or {}
+    return _orcamentos_disponivel() or _resposta_compras(orcamentos.criar_orcamento, dados.get('fornecedor_id'), usuario)
+
+
+@app.route('/api/compras/orcamentos/<int:orcamento_id>', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_compras_orcamento(usuario, orcamento_id):
+    return _orcamentos_disponivel() or _resposta_compras(orcamentos.obter_orcamento, orcamento_id)
+
+
+@app.route('/api/compras/orcamentos/<int:orcamento_id>', methods=['PUT'])
+@compras_login(somente_gestor=True)
+def api_compras_orcamento_salvar(usuario, orcamento_id):
+    dados = ler_json() or {}
+    return _orcamentos_disponivel() or _resposta_compras(orcamentos.salvar_orcamento, orcamento_id, dados.get('itens'),
+                                                         dados.get('observacao'), usuario)
+
+
+@app.route('/api/compras/orcamentos/<int:orcamento_id>/itens', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_compras_orcamento_item(usuario, orcamento_id):
+    dados = ler_json() or {}
+    return _orcamentos_disponivel() or _resposta_compras(orcamentos.adicionar_produto, orcamento_id, dados.get('produto_id'), usuario)
+
+
+@app.route('/api/compras/orcamentos/<int:orcamento_id>/texto', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_compras_orcamento_texto(usuario, orcamento_id):
+    return _orcamentos_disponivel() or _resposta_compras(orcamentos.texto_orcamento, orcamento_id,
+                                                         com_precos=request.args.get('precos') == '1')
+
+
+@app.route('/api/compras/orcamentos/<int:orcamento_id>/<acao>', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_compras_orcamento_acao(usuario, orcamento_id, acao):
+    funcoes = {'enviado': orcamentos.marcar_enviado, 'cancelar': orcamentos.cancelar, 'reabrir': orcamentos.reabrir} if orcamentos else {}
+    if acao in ('fornecedor', 'copiar'):         # trocar o fornecedor / mandar o mesmo pedido a outro fornecedor
+        if _orcamentos_disponivel():
+            return _orcamentos_disponivel()
+        dados = ler_json() or {}
+        funcao = orcamentos.trocar_fornecedor if acao == 'fornecedor' else orcamentos.copiar_para
+        return _resposta_compras(funcao, orcamento_id, dados.get('fornecedor_id'), usuario)
+    if acao == 'nota':
+        dados = ler_json() or {}
+        return _orcamentos_disponivel() or _resposta_compras(orcamentos.ligar_nota, orcamento_id, dados.get('chave'), usuario)
+    if acao not in funcoes:
+        return _orcamentos_disponivel() or (jsonify({"erro": "Ação inválida."}), 404)
+    return _resposta_compras(funcoes[acao], orcamento_id, usuario)
+
+
+@app.route('/api/compras/orcamentos/<int:orcamento_id>/notas', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_compras_orcamento_notas(usuario, orcamento_id):
+    return _orcamentos_disponivel() or _resposta_compras(orcamentos.notas_candidatas, orcamento_id,
+                                                         todos=request.args.get('todos') == '1')
+
+
+@app.route('/api/compras/listas/<codigo>/orcamentos', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_compras_lista_orcamentos(usuario, codigo):
+    return _orcamentos_disponivel() or _resposta_compras(orcamentos.gerar_da_lista, codigo, usuario)
+
+
+# ---------------------------- [RELATÓRIOS] aba Gestão (gestor) ----------------------------
+try:
+    import relatorios
+except Exception as _erro_import_rel:
+    relatorios = None
+    logger.error(f"Relatórios DESLIGADOS: não consegui carregar relatorios.py ({_erro_import_rel})")
+
+
+@app.route('/api/compras/relatorios/<nome>', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_compras_relatorio(usuario, nome):
+    if relatorios is None:
+        return jsonify({"erro": "Relatórios não instalados no servidor (falta relatorios.py)."}), 503
+    if nome == 'categorias':
+        return _resposta_compras(relatorios.gasto_por_categoria, request.args.get('mes'))
+    if nome == 'inflacao':
+        return _resposta_compras(relatorios.inflacao)
+    if nome == 'mais-barato':
+        return _resposta_compras(relatorios.onde_mais_barato, request.args.get('mes'))
+    return jsonify({"erro": "Relatório desconhecido."}), 404
 
 
 if __name__ == "__main__":

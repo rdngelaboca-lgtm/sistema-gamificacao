@@ -165,6 +165,7 @@ def so_digitos(texto):
 import unicodedata
 import math
 import collections
+import threading
 
 ARQUIVO_RASCUNHO_CONTAGEM = os.path.join(PASTA_DO_PROGRAMA, 'rascunho_contagem.json')
 ARQUIVO_PREFERENCIAS = os.path.join(PASTA_DO_PROGRAMA, 'estoque_preferencias.json')
@@ -486,22 +487,11 @@ def nome_aba_excel(nome, usados):
     return nome_final
 
 
-# [MELHORIA VALOR] Tipo da operação de cada item da nota (CFOP, últimos 3 dígitos).
-# Bonificação / brinde / amostra grátis: a mercadoria entra no estoque com CUSTO ZERO
-# (não foi paga). Comodato (ex: freezer emprestado pela fábrica), remessas, conserto,
-# vasilhame e devoluções NÃO são compra: esses itens são ignorados.
-CFOP_BONIFICACAO = {'910', '911'}
-CFOP_IGNORAR = {'908', '909', '912', '913', '915', '916', '920', '921', '201', '202', '410', '411'}
-
-
-def tipo_item_por_cfop(cfop):
-    """'compra', 'bonificacao' ou 'ignorar'."""
-    final = so_digitos(cfop)[-3:]
-    if final in CFOP_BONIFICACAO:
-        return 'bonificacao'
-    if final in CFOP_IGNORAR:
-        return 'ignorar'
-    return 'compra'
+# [MELHORIA VALOR] Tipo da operação de cada item (CFOP): bonificação entra com custo zero,
+# comodato/remessa/devolução ficam de fora. As regras ficam em nota_xml.py (o app de
+# compras usa as mesmas para lançar a nota conferida no recebimento).
+from nota_xml import CFOP_BONIFICACAO, CFOP_IGNORAR, tipo_item_por_cfop   # noqa: E402
+import nota_xml   # noqa: E402
 
 
 # [MELHORIA CATÁLOGO] Sugestão de nome "limpo" para produtos criados a partir do XML
@@ -539,6 +529,22 @@ def sugerir_nome_limpo(nome):
     return ' '.join(palavras)
 
 
+def quebrar_linhas_na_largura(container, *rotulos):
+    """[AUDITORIA VÍNCULOS] O texto dos rótulos quebra na largura do container (com largura fixa,
+    o fim do texto sumia em janela menor)."""
+    def ajustar(event):
+        for r in rotulos:
+            r.config(wraplength=max(300, event.width - 30))
+    container.bind('<Configure>', ajustar, add='+')
+
+
+def _tag_tem_fundo(tree, tag):
+    try:
+        return bool(str(tree.tag_configure(tag, 'background') or '').strip())
+    except tk.TclError:
+        return False
+
+
 def criar_tree_zebrada(pai, **kwargs):
     """
     [MELHORIA UX] Cria uma tabela (Treeview) com linhas alternadas cinza/branco,
@@ -552,7 +558,13 @@ def criar_tree_zebrada(pai, **kwargs):
         tags = kw.get('tags', ())
         if isinstance(tags, str):
             tags = (tags,) if tags else ()
-        kw['tags'] = tuple(tags) + ('zebra_impar' if qtd % 2 else 'zebra_par',)
+        tags = tuple(tags)
+        # [AUDITORIA VÍNCULOS] No Tk a tag criada PRIMEIRO ganha. As tags zebra são criadas aqui,
+        # antes das de destaque (vermelho, lilás...), e cobriam a cor delas: nenhuma linha
+        # destacada aparecia colorida. Linha que já tem fundo próprio não leva a zebra.
+        if not any(_tag_tem_fundo(tree, t) for t in tags):
+            tags += ('zebra_impar' if qtd % 2 else 'zebra_par',)
+        kw['tags'] = tags
         return insert_original(parent, index, *args, **kw)
 
     tree.insert = insert_zebrado
@@ -610,6 +622,7 @@ class AppGestaoEstoque:
         self.itens_xml_nao_vinculados = []
         self.dados_notas_processadas = []
         self.ultima_pasta_xml = None       # [DEPURAÇÃO] permite "Reprocessar" sem escolher de novo
+        self.filtro_arquivos_xml = None    # [XML SEFAZ] notas escolhidas na lista (None = a pasta toda)
         self.mapa_produtos_mestre = {}
         self.lista_mestre_produtos_nomes = []
 
@@ -921,7 +934,9 @@ class AppGestaoEstoque:
         self.btn_editar_massa.pack(side=tk.LEFT)
         ttk.Button(acoes_frame, text="🧹 Sugerir nomes limpos", command=self.abrir_sugestao_nomes).pack(side=tk.LEFT, padx=5)
         ttk.Button(acoes_frame, text="🔗 Juntar produtos duplicados", command=lambda: self.abrir_juntar_produtos()).pack(side=tk.LEFT)
-        ttk.Label(acoes_frame, foreground="gray", text="  Ctrl ou Shift + clique = selecionar vários").pack(side=tk.LEFT)
+        ttk.Button(acoes_frame, text="📈 Gráfico", command=self.abrir_grafico_selecionado).pack(side=tk.LEFT, padx=5)
+        ttk.Button(acoes_frame, text="🔗 Vínculos", command=self.abrir_vinculos_selecionado).pack(side=tk.LEFT)
+        ttk.Label(acoes_frame, foreground="gray", text="  Duplo clique = gráfico · Ctrl/Shift + clique = vários").pack(side=tk.LEFT)
 
         # Tabela
         # [MELHORIA CATÁLOGO] colunas novas (as 5 primeiras continuam na mesma ordem) e
@@ -948,7 +963,7 @@ class AppGestaoEstoque:
 
         # Eventos (Binds)
         self.tree_produtos.bind('<<TreeviewSelect>>', self.selecionar_produto_para_edicao)
-        self.tree_produtos.bind('<Double-1>', self.abrir_popup_vinculos_produto)
+        self.tree_produtos.bind('<Double-1>', self.abrir_grafico_do_clique)   # [GRÁFICO PRODUTO] (vínculos: botão 🔗)
 
         # Rodapé com Indicador
         self.lbl_total_mestre = ttk.Label(lista_frame, text="Carregando...", font=("Arial", 9, "italic"), foreground="gray")
@@ -1280,7 +1295,7 @@ class AppGestaoEstoque:
         """Abre uma janela pop-up para criar, editar e excluir categorias do sistema."""
         popup = Toplevel(self.root)
         popup.title("Gerenciador de Categorias")
-        popup.geometry("400x500")
+        popup.geometry("420x640")
         popup.transient(self.root) # Mantém a janela sempre à frente da principal
         popup.grab_set() # Impede que o usuário clique fora enquanto não fechar
 
@@ -1314,12 +1329,51 @@ class AppGestaoEstoque:
         entry_cat = ttk.Entry(frame, font=("Arial", 11))
         entry_cat.pack(fill=tk.X, pady=2)
 
+        # [ROYALTIES] custo adicional da categoria (ex.: Sorvetes +45% pagos em nota de royalties à parte)
+        custos_adic = {'atual': database.custos_adicionais_categorias()}
+        frame_pct = ttk.LabelFrame(frame, text=" Custo adicional da categoria (royalties) ", padding=8)
+        frame_pct.pack(fill=tk.X, pady=(10, 2))
+        linha_pct = ttk.Frame(frame_pct)
+        linha_pct.pack(fill=tk.X)
+        ttk.Label(linha_pct, text="% sobre o custo da nota:").pack(side=tk.LEFT)
+        entry_pct = ttk.Entry(linha_pct, width=8, font=("Arial", 11))
+        entry_pct.pack(side=tk.LEFT, padx=6)
+        lbl_pct = ttk.Label(frame_pct, text="Selecione uma categoria. Ex.: Sorvetes 45 → custo real = custo da nota + 45%.",
+                            foreground="gray", wraplength=360, font=("Arial", 8))
+        lbl_pct.pack(anchor="w", pady=(4, 0))
+
+        def mostrar_pct(nome):
+            entry_pct.delete(0, tk.END)
+            pct = custos_adic['atual'].get(nome)
+            if pct:
+                entry_pct.insert(0, fmt_num(pct, 2, "0"))
+                lbl_pct.config(text=f"{nome}: custo real = custo da nota + {fmt_num(pct, 2, '0')}% (Catálogo, Valor do Estoque, sugestão de compra e app).")
+            else:
+                lbl_pct.config(text=f"{nome}: sem custo adicional. Digite o % e clique em Salvar %.")
+
+        def acao_salvar_pct():
+            selecao = lista_categorias_ui.curselection()
+            if not selecao:
+                return messagebox.showwarning("Aviso", "Selecione a categoria na lista.", parent=popup)
+            nome = lista_categorias_ui.get(selecao[0])
+            ok, msg = database.definir_custo_adicional_categoria(nome, entry_pct.get().strip() or '0')
+            if not ok:
+                return messagebox.showerror("Erro", msg, parent=popup)
+            custos_adic['atual'] = database.custos_adicionais_categorias()
+            mostrar_pct(nome)
+            self.atualizar_lista_produtos()          # a coluna "Custo atual" já sai com o %
+            messagebox.showinfo("Pronto", msg + "\n\nNo '💰 Valor do Estoque', clique em '🔄 Recalcular' nas contagens "
+                                "abertas para usar o custo novo (as fechadas não mudam).", parent=popup)
+
+        ttk.Button(linha_pct, text="💾 Salvar %", command=acao_salvar_pct).pack(side=tk.LEFT, padx=4)
+
         def on_select(event):
             # Preenche o input quando clica num item da lista
             selecao = lista_categorias_ui.curselection()
             if selecao:
                 entry_cat.delete(0, tk.END)
                 entry_cat.insert(0, lista_categorias_ui.get(selecao[0]))
+                mostrar_pct(lista_categorias_ui.get(selecao[0]))
 
         lista_categorias_ui.bind('<<ListboxSelect>>', on_select)
 
@@ -1620,9 +1674,151 @@ class AppGestaoEstoque:
             self.limpar_formulario_produto()
             self.atualizar_lista_produtos()
             self.popular_combobox_produtos_mestre()
+        except ValueError as e:   # [AUDITORIA ESTOQUE] produto com compras/contagens: explica o que fazer
+            messagebox.showwarning("Produto com histórico", str(e), parent=self.root)
         except Exception as e:
             logger.error(f"Erro ao excluir produto: {e}", exc_info=True)
             messagebox.showerror("Erro de Banco", "Não foi possível excluir o produto.\nVerifique se ele já está vinculado a notas fiscais ou contagens.", parent=self.root)
+
+    # ===================================================================
+    # == [GRÁFICO PRODUTO] preço pago, estoque contado e consumo por mês ==
+    # ===================================================================
+    def _produto_da_linha(self, linha):
+        if not linha:
+            return None, None
+        dados = self.tree_produtos.item(linha, 'values')
+        return int(dados[0]), dados[1]
+
+    def abrir_grafico_do_clique(self, event):
+        pid, nome = self._produto_da_linha(linha_do_clique(self.tree_produtos, event))
+        if pid:
+            self.abrir_grafico_produto(pid, nome)
+
+    def abrir_grafico_selecionado(self):
+        selecao = self.tree_produtos.selection()
+        if not selecao:
+            messagebox.showinfo("Gráfico", "Selecione um produto na lista.", parent=self.root)
+            return
+        self.abrir_grafico_produto(*self._produto_da_linha(selecao[0]))
+
+    def abrir_vinculos_selecionado(self):
+        selecao = self.tree_produtos.selection()
+        if not selecao:
+            messagebox.showinfo("Vínculos", "Selecione um produto na lista.", parent=self.root)
+            return
+        self._abrir_vinculos(*self._produto_da_linha(selecao[0]), linha=selecao[0])
+
+    def _abrir_vinculos(self, produto_id, nome_produto, linha=None):
+        if hasattr(database, 'listar_vinculos_com_resumo'):
+            self.abrir_gestor_vinculos(produto_id=produto_id, nome_produto=nome_produto, ao_salvar=self.atualizar_lista_produtos)
+        elif linha:
+            self._popup_vinculos_antigo(linha)
+
+    def abrir_grafico_produto(self, produto_id, nome_produto):
+        try:
+            from matplotlib.figure import Figure
+            from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+            import matplotlib.dates as mdates
+        except ImportError:
+            messagebox.showerror("Gráfico", "Falta a biblioteca matplotlib.\nNo terminal: pip install matplotlib", parent=self.root)
+            return
+        janela = Toplevel(self.root)
+        janela.title(f"📈 {nome_produto}")
+        janela.geometry("1000x760")
+        janela.transient(self.root)
+        topo = ttk.Frame(janela, padding=(10, 8))
+        topo.pack(fill=tk.X)
+        ttk.Label(topo, text=nome_produto, font=("Arial", 13, "bold")).pack(side=tk.LEFT)
+        ttk.Button(topo, text="🔗 Vínculos e fatores",
+                   command=lambda: self._abrir_vinculos(produto_id, nome_produto)).pack(side=tk.RIGHT)
+        combo = ttk.Combobox(topo, state="readonly", width=12, values=["6 meses", "12 meses", "24 meses"])
+        combo.set("12 meses")
+        combo.pack(side=tk.RIGHT, padx=8)
+        ttk.Label(topo, text="Período:").pack(side=tk.RIGHT)
+        lbl_resumo = ttk.Label(janela, padding=(10, 0), justify=tk.LEFT, font=("Arial", 10))
+        lbl_resumo.pack(fill=tk.X)
+        fig = Figure(figsize=(10, 6.6), dpi=96)
+        canvas = FigureCanvasTkAgg(fig, master=janela)
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        def reais(v):
+            return f"R$ {v:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
+
+        def desenhar(event=None):
+            meses = int(combo.get().split()[0])
+            try:
+                h = database.historico_grafico_produto(produto_id, meses=meses)
+            except Exception as e:
+                logger.error(f"Gráfico do produto {produto_id}: {e}", exc_info=True)
+                messagebox.showerror("Gráfico", f"Não foi possível montar o gráfico:\n{e}", parent=janela)
+                return
+            un = h['unidade']
+            fig.clear()
+            ax1, ax2, ax3 = fig.subplots(3, 1, sharex=True)
+            fig.subplots_adjust(left=0.08, right=0.98, top=0.95, bottom=0.08, hspace=0.35)
+
+            # 1) preço pago por fornecedor (bonificação fica de fora: custo zero)
+            pagas = [c for c in h['compras'] if not c['bonificacao']]
+            cores = ['#2a7de1', '#e8590c', '#2b8a3e', '#9c36b5', '#c92a2a', '#495057']
+            fornecedores = sorted({c['fornecedor'] for c in pagas})
+            for k, f in enumerate(fornecedores):
+                pts = [c for c in pagas if c['fornecedor'] == f]
+                ax1.plot([c['data'] for c in pts], [float(c['custo']) for c in pts], marker='o', ms=5, lw=1.2,
+                         color=cores[k % len(cores)], label=f[:28])
+            ax1.set_title(f"Preço pago (R$ por {un})", fontsize=10, loc='left')
+            if fornecedores:
+                ax1.legend(fontsize=8, loc='upper left', ncol=min(3, len(fornecedores)))
+            else:
+                ax1.text(0.5, 0.5, "Nenhuma compra paga no período", ha='center', va='center', transform=ax1.transAxes, color='gray')
+
+            # 2) estoque contado
+            if h['contagens']:
+                ax2.plot([c['data'] for c in h['contagens']], [float(c['qtd']) for c in h['contagens']],
+                         marker='s', ms=5, lw=1.2, color='#1c7c74', label='Contado')
+            else:
+                ax2.text(0.5, 0.5, "Nenhuma contagem no período", ha='center', va='center', transform=ax2.transAxes, color='gray')
+            if h['estoque_minimo'] > 0:
+                ax2.axhline(float(h['estoque_minimo']), color='#e8590c', ls='--', lw=1, label='Estoque mínimo')
+                ax2.legend(fontsize=8, loc='upper left')
+            ax2.set_title(f"Estoque contado ({un})", fontsize=10, loc='left')
+
+            # 3) comprado x consumido por mês
+            xs = [m['mes'] + timedelta(days=14) for m in h['meses']]     # barras no meio do mês
+            desloc = timedelta(days=7)
+            ax3.bar([x - desloc for x in xs], [float(m['comprado']) for m in h['meses']], width=13, color='#a5d8ff', label='Comprado')
+            ax3.bar([x + desloc for x in xs], [float(m['consumido'] or 0) for m in h['meses']], width=13, color='#1c7c74', label='Consumido')
+            ax3.set_title(f"Por mês ({un}) · consumo calculado pelas contagens", fontsize=10, loc='left')
+            ax3.legend(fontsize=8, loc='upper left')
+            ax3.xaxis.set_major_locator(mdates.MonthLocator(interval=1 if meses <= 12 else 2))
+            ax3.xaxis.set_major_formatter(mdates.DateFormatter('%m/%y'))
+            for ax in (ax1, ax2, ax3):
+                ax.grid(alpha=0.25)
+                ax.tick_params(labelsize=8)
+            canvas.draw()
+
+            # resumo em texto (o que ajuda a decidir)
+            linhas = []
+            if pagas:
+                ult = pagas[-1]
+                menor = min(pagas, key=lambda c: c['custo'])
+                txt = f"Último preço: {reais(ult['custo'])}/{un} ({ult['fornecedor']}, {ult['data']:%d/%m/%y})"
+                if menor is not ult and menor['custo'] < ult['custo']:
+                    txt += f" · menor no período: {reais(menor['custo'])} ({menor['fornecedor']}, {menor['data']:%d/%m/%y})"
+                if len(pagas) > 1 and pagas[0]['custo'] > 0:
+                    var = (ult['custo'] / pagas[0]['custo'] - 1) * 100
+                    txt += f" · variação no período: {var:+.0f}%"
+                linhas.append(txt)
+            calc = [m['consumido'] for m in h['meses'] if m['consumido'] is not None]
+            if calc:
+                media = sum(calc) / len(calc)
+                linhas.append(f"Consumo médio: {fmt_qtd(media)} {un}/mês (meses com contagem) · "
+                              f"comprado no período: {fmt_qtd(sum(m['comprado'] for m in h['meses']))} {un}")
+            elif not h['contagens']:
+                linhas.append("Sem contagens no período: o consumo por mês aparece quando houver pelo menos 2 contagens.")
+            lbl_resumo.config(text="\n".join(linhas))
+
+        combo.bind("<<ComboboxSelected>>", desenhar)
+        desenhar()
 
     def abrir_popup_vinculos_produto(self, event):
         """
@@ -1897,6 +2093,11 @@ class AppGestaoEstoque:
         # [DEPURAÇÃO] Depois de vincular itens, basta clicar aqui (não precisa escolher a pasta de novo)
         btn_reprocessar = ttk.Button(frame_botoes, text="🔄 Reprocessar Pasta Atual", command=self.reprocessar_pasta_xml)
         btn_reprocessar.pack(side=tk.LEFT, padx=(5, 0), ipady=10)
+        # [XML SEFAZ] XMLs baixados sozinhos pelo robô (Distribuição de NF-e com o certificado A1)
+        ttk.Button(frame_botoes, text="Notas baixadas da SEFAZ", command=self.carregar_notas_sefaz).pack(side=tk.LEFT, padx=(5, 0), ipady=10)
+        self.btn_buscar_sefaz = ttk.Button(frame_botoes, text="Buscar na SEFAZ agora",
+                                           command=lambda: self.carregar_notas_sefaz(buscar=True))
+        self.btn_buscar_sefaz.pack(side=tk.LEFT, padx=(5, 0), ipady=10)
         # [MELHORIA ST] Corrige o custo de notas JÁ SALVAS (ex: importadas sem a ST)
         ttk.Button(frame_botoes, text="🧾 Recalcular custos de notas já salvas",
                    command=self.recalcular_custos_notas_salvas).pack(side=tk.LEFT, padx=(5, 0), ipady=10)
@@ -2096,10 +2297,232 @@ class AppGestaoEstoque:
             else:
                 self.combo_produtos_mestre.set('')
 
+    # ===================================================================
+    # == [XML SEFAZ] notas baixadas automaticamente =====================
+    # ===================================================================
+    def carregar_notas_sefaz(self, buscar=False):
+        """Abre a pasta dos XMLs que o robô baixou da SEFAZ (já sem as notas que estão no estoque).
+        buscar=True: pergunta à SEFAZ agora (em segundo plano) e depois abre a pasta."""
+        try:
+            import nfe_distribuicao as nd
+        except Exception as e:
+            messagebox.showerror("SEFAZ", f"Falta o arquivo nfe_distribuicao.py ou uma biblioteca:\n{e}", parent=self.root)
+            return
+        if buscar:
+            if not nd.configurado():
+                messagebox.showwarning("SEFAZ", "A busca automática ainda não está configurada.\n\n"
+                                       "Coloque no config.py: NFE_CERTIFICADO_PFX, NFE_CERTIFICADO_SENHA e NFE_CNPJ "
+                                       "(veja o começo do arquivo nfe_distribuicao.py).", parent=self.root)
+                return
+            self.btn_buscar_sefaz.state(['disabled'])
+            self.status("Buscando notas na SEFAZ… (pode levar até 1 minuto)")
+            resultado = {}
+
+            def trabalho():
+                try:
+                    resultado['r'] = nd.buscar_notas()
+                except nd.ErroNFe as e:
+                    resultado['erro'] = str(e)
+                except Exception as e:
+                    logger.error(f"Busca na SEFAZ: {e}", exc_info=True)
+                    resultado['erro'] = f"Erro inesperado: {e}"
+
+            def esperar():
+                if t.is_alive():
+                    self.root.after(300, esperar)
+                    return
+                self.btn_buscar_sefaz.state(['!disabled'])
+                self.status("Busca na SEFAZ concluída.", 'info')
+                if 'erro' in resultado:
+                    self.status("A busca na SEFAZ falhou.", 'erro')
+                    messagebox.showerror("SEFAZ", resultado['erro'], parent=self.root)
+                    return
+                messagebox.showinfo("SEFAZ", nd.texto_resumo(resultado['r']), parent=self.root)
+                self.carregar_notas_sefaz()
+
+            t = threading.Thread(target=trabalho, daemon=True)
+            t.start()
+            esperar()
+            return
+
+        pasta = nd.pasta_xml()
+        arquivos = [f for f in os.listdir(pasta) if f.lower().endswith('.xml')]
+        try:   # notas já lançadas vão para a subpasta 'importadas' (a lista fica só com o que falta)
+            ja = database.chaves_ja_importadas([os.path.splitext(f)[0] for f in arquivos])
+            if ja:
+                destino = os.path.join(pasta, 'importadas')
+                os.makedirs(destino, exist_ok=True)
+                for f in arquivos:
+                    if os.path.splitext(f)[0] in ja:
+                        os.replace(os.path.join(pasta, f), os.path.join(destino, f))
+                arquivos = [f for f in arquivos if os.path.splitext(f)[0] not in ja]
+        except Exception as e:
+            logger.warning(f"Não deu para separar os XMLs já importados: {e}")
+        if not arquivos:
+            estado = nd.ler_estado()
+            extra = ""
+            if estado.get('ultima_busca'):
+                extra = f"\n\nÚltima busca na SEFAZ: {datetime.fromisoformat(estado['ultima_busca']):%d/%m %H:%M}."
+            if estado.get('aguardando_xml'):
+                extra += f"\n{len(estado['aguardando_xml'])} nota(s) aguardando a SEFAZ liberar o XML completo."
+            messagebox.showinfo("Notas da SEFAZ", "Nenhuma nota nova da SEFAZ esperando para entrar no estoque." + extra,
+                                parent=self.root)
+            return
+        self.abrir_lista_notas_sefaz(pasta, arquivos)
+
+    @staticmethod
+    def _arquivar_xml_sefaz(pasta, arquivo):
+        """Move o XML para a subpasta 'importadas' (sai da lista de notas da SEFAZ)."""
+        try:
+            os.makedirs(os.path.join(pasta, 'importadas'), exist_ok=True)
+            os.replace(os.path.join(pasta, arquivo), os.path.join(pasta, 'importadas', arquivo))
+            return True
+        except OSError as e:
+            logger.warning(f"Não deu para mover {arquivo} para 'importadas': {e}")
+            return False
+
+    def abrir_lista_notas_sefaz(self, pasta, arquivos):
+        """[XML SEFAZ] Lista das notas baixadas: escolha UMA (ou algumas) para vincular e salvar."""
+        janela = Toplevel(self.root)
+        janela.title("Notas baixadas da SEFAZ")
+        janela.geometry("1100x520")
+        janela.transient(self.root)
+        frame = ttk.Frame(janela, padding=10)
+        frame.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(frame, text="Escolha a nota que vai lançar agora (duplo clique ou 'Abrir'). "
+                              "Ctrl/Shift + clique para escolher várias.", font=("Arial", 10, "bold")).pack(anchor="w")
+        cols = ('NF', 'Fornecedor', 'Emissão', 'Valor', 'Itens', 'Sem vínculo', 'Conferência', 'Situação')
+        tree = criar_tree_zebrada(frame, columns=cols, show='headings', selectmode='extended')
+        for col, larg, anc in (('NF', 80, 'center'), ('Fornecedor', 290, 'w'), ('Emissão', 85, 'center'), ('Valor', 100, 'e'),
+                               ('Itens', 50, 'center'), ('Sem vínculo', 80, 'center'), ('Conferência', 150, 'w'),
+                               ('Situação', 170, 'w')):
+            tree.heading(col, text=col, command=lambda c=col: self.ordenar_coluna_treeview(tree, c, False))
+            tree.column(col, width=larg, anchor=anc)
+        tree.tag_configure('pronta', background='#e3f5e1')
+        tree.tag_configure('pendente', background='#fff3e0')
+        tree.pack(fill=tk.BOTH, expand=True, pady=6)
+        notas = []
+        cache_vinc = {}
+        lidas = []
+        for f in arquivos:
+            try:
+                cab, itens = self.ler_xml_nota_fiscal(os.path.join(pasta, f))
+            except Exception as e:
+                logger.warning(f"XML da SEFAZ {f} não abriu: {e}")
+                continue
+            lidas.append((f, cab, itens))
+        # [DEPURAÇÃO] notas lançadas ANTES (XML importado à mão, sem a chave gravada, fornecedor cadastrado
+        # 2 vezes ou com CNPJ com pontos): confere TODAS de uma vez pelo CNPJ + número e tira da lista
+        try:
+            lancadas = database.notas_ja_lancadas([(cab.get('ChaveAcesso') or f, cab.get('FornecedorCNPJ'), cab.get('NumeroNF'),
+                                                    cab.get('Serie')) for f, cab, _ in lidas])
+        except Exception as e:
+            logger.error(f"Não deu para conferir as notas já lançadas: {e}", exc_info=True)
+            lancadas = set()
+        movidas = 0
+        for f, cab, itens in lidas:
+            if (cab.get('ChaveAcesso') or f) in lancadas:
+                self._arquivar_xml_sefaz(pasta, f)
+                movidas += 1
+        if movidas:
+            logger.info(f"Notas da SEFAZ: {movidas} nota(s) já lançada(s) foram para 'importadas'.")
+        for f, cab, itens in lidas:
+            if (cab.get('ChaveAcesso') or f) in lancadas:
+                continue
+            forn_id = database.buscar_fornecedor_por_cnpj(cab.get('FornecedorCNPJ'))
+            sem = 0
+            for it in itens:
+                if not forn_id:
+                    sem += 1
+                    continue
+                chave = (forn_id, it['DescricaoXML'], it.get('cProd'), it.get('cEAN'))
+                if chave not in cache_vinc:
+                    try:
+                        cache_vinc[chave] = bool(database.buscar_vinculo_inteligente(forn_id, it['DescricaoXML'], it.get('cProd'), it.get('cEAN')))
+                    except Exception:
+                        cache_vinc[chave] = False
+                sem += 0 if cache_vinc[chave] else 1
+            notas.append((cab.get('DataEmissao') or '', f, cab, len(itens), sem, forn_id))
+        notas.sort(key=lambda n: (n[0], n[2].get('FornecedorNome') or ''))
+        conferencias = {}   # [RECEBIMENTO] conferidas no app de compras
+        if notas and hasattr(database, 'conferencias_recebimento'):
+            try:
+                conferencias = database.conferencias_recebimento([n[2].get('ChaveAcesso') for n in notas])
+            except Exception as e:
+                logger.error(f"Não deu para ler as conferências do app: {e}", exc_info=True)
+        if not notas:
+            janela.destroy()
+            messagebox.showinfo("Notas da SEFAZ", "Nenhuma nota nova da SEFAZ esperando para entrar no estoque "
+                                "(as que já estavam lançadas foram para a subpasta 'importadas').", parent=self.root)
+            return
+        for data, f, cab, n_itens, sem, forn_id in notas:
+            try:
+                data_br = datetime.strptime(data, '%Y-%m-%d').strftime('%d/%m/%Y')
+            except ValueError:
+                data_br = data
+            situacao = ("pronta para salvar" if not sem else
+                        "fornecedor novo" if not forn_id else f"falta vincular {sem} item(ns)")
+            conf = conferencias.get(cab.get('ChaveAcesso'))
+            txt_conf = ("não conferida" if not conf else
+                        ("com divergência" if conf['status'] == 'divergencia' else "conferida")
+                        + (f" ({conf['por']})" if conf.get('por') else ""))
+            tree.insert("", "end", iid=f, tags=('pronta' if not sem else 'pendente',), values=(
+                cab.get('NumeroNF'), cab.get('FornecedorNome'), data_br, fmt_reais(cab.get('ValorTotalNF') or 0),
+                n_itens, sem, txt_conf, situacao))
+        lbl = ttk.Label(frame, foreground="gray", text=(
+            (f"{movidas} já lançada(s) saíram da lista · " if movidas else "") +
+            f"{len(notas)} nota(s) esperando · verde = todos os itens já vinculados · laranja = falta vincular. "
+            "Nota conferida no app entra com a quantidade que chegou. "
+            "Depois de salvar, clique de novo em 'Notas baixadas da SEFAZ' para a próxima."))
+        lbl.pack(anchor="w")
+
+        def abrir(todas=False):
+            escolhidas = list(tree.get_children()) if todas else list(tree.selection())
+            if not escolhidas:
+                messagebox.showinfo("Notas da SEFAZ", "Selecione uma nota na lista.", parent=janela)
+                return
+            janela.destroy()
+            self.filtro_arquivos_xml = set(escolhidas)
+            self._carregar_pasta_xml(pasta)
+            descr = (f"NF {tree_valores[escolhidas[0]][0]} · {tree_valores[escolhidas[0]][1]}" if len(escolhidas) == 1
+                     else f"{len(escolhidas)} notas da SEFAZ")
+            self.status(f"Mostrando só: {descr}. Vincule os itens e salve (botão 4).", 'info', segundos=30)
+
+        tree_valores = {i: tree.item(i, 'values') for i in tree.get_children()}
+        botoes = ttk.Frame(frame)
+        botoes.pack(fill=tk.X, pady=(8, 0))
+        ttk.Button(botoes, text="Abrir nota selecionada", command=abrir).pack(side=tk.LEFT)
+        ttk.Button(botoes, text="Abrir todas", command=lambda: abrir(todas=True)).pack(side=tk.LEFT, padx=6)
+
+        def tirar_da_lista():
+            """Nota lançada de outro jeito (ex.: digitada à mão) ou que não é compra: sai da lista sem entrar no estoque."""
+            escolhidas = list(tree.selection())
+            if not escolhidas:
+                messagebox.showinfo("Notas da SEFAZ", "Selecione a(s) nota(s) na lista.", parent=janela)
+                return
+            nomes = "\n".join(f"  • NF {tree_valores[i][0]} - {tree_valores[i][1]}" for i in escolhidas[:10])
+            if not messagebox.askyesno("Tirar da lista", f"Tirar {len(escolhidas)} nota(s) da lista SEM lançar no estoque?\n\n{nomes}"
+                                       "\n\nUse só para nota que JÁ está no estoque (lançada de outro jeito) ou que não é compra. "
+                                       "O XML fica guardado na subpasta 'importadas'.", parent=janela):
+                return
+            for i in escolhidas:
+                if self._arquivar_xml_sefaz(pasta, i):
+                    tree.delete(i)
+            lbl.config(text=f"{len(tree.get_children())} nota(s) esperando.")
+
+        ttk.Button(botoes, text="Já está no estoque: tirar da lista", command=tirar_da_lista).pack(side=tk.LEFT, padx=(18, 0))
+        ttk.Button(botoes, text="Fechar", command=janela.destroy).pack(side=tk.RIGHT)
+        tree.bind("<Double-1>", lambda e: abrir() if linha_do_clique(tree, e) else None)
+        tree.bind("<Return>", lambda e: abrir())
+        filhos = tree.get_children()
+        if filhos:
+            tree.focus(filhos[0]); tree.selection_set(filhos[0]); tree.focus_set()
+
     def abrir_seletor_pasta_xml(self):
         pasta_selecionada = filedialog.askdirectory(title="Selecione a pasta contendo os XMLs", parent=self.root)
         if not pasta_selecionada:
             return
+        self.filtro_arquivos_xml = None          # pasta escolhida à mão: todos os arquivos
         self._carregar_pasta_xml(pasta_selecionada)
 
     def reprocessar_pasta_xml(self):
@@ -2129,7 +2552,8 @@ class AppGestaoEstoque:
             if cab.get('Finalidade') == '4':
                 continue
             fornecedor_id = database.buscar_fornecedor_por_cnpj(cab['FornecedorCNPJ'])
-            nota_id = database.buscar_nota_importada(cab['NumeroNF'], fornecedor_id) if fornecedor_id else None
+            nota_id = (database.buscar_nota_importada(cab['NumeroNF'], fornecedor_id, cab.get('Serie'), cab.get('ChaveAcesso'))
+                       if fornecedor_id else None)
             if not nota_id:
                 resumo['nao_importadas'] += 1
                 continue
@@ -2493,145 +2917,15 @@ class AppGestaoEstoque:
             self.tree_vincular.selection_set(pendentes[0])
 
     def ler_xml_nota_fiscal(self, caminho_arquivo_xml):
-        def dec(texto):
-            """Número do XML -> Decimal (tag vazia vale 0)."""
-            texto = (texto or '').strip()
-            return Decimal(texto) if texto else Decimal('0')
-
-        try:
-            if USANDO_LXML:
-                # resolve_entities=False: não deixa um XML malicioso ler arquivos do computador
-                parser = ET.XMLParser(remove_blank_text=True, resolve_entities=False)
-                tree = ET.parse(caminho_arquivo_xml, parser)
-            else:
-                tree = ET.parse(caminho_arquivo_xml)
-            root = tree.getroot()
-
-            # Remove namespaces para facilitar a busca das tags
-            # [DEPURAÇÃO] getiterator() está obsoleto (foi removido do Python); iter() é o correto
-            for elem in root.iter():
-                if not isinstance(elem.tag, str): continue  # comentários do XML
-                i = elem.tag.find('}')
-                if i >= 0:
-                    elem.tag = elem.tag[i+1:]
-
-            # Busca direta sem namespace (mais robusto)
-            ide = root.find('.//ide')
-            emit = root.find('.//emit')
-            total = root.find('.//total/ICMSTot')
-
-            if ide is None or emit is None or total is None:
-                raise Exception("Estrutura do XML inválida (tags essenciais não encontradas após limpeza).")
-
-            inf_nfe = root.find('.//infNFe')
-            chave = (inf_nfe.get('Id') or '').replace('NFe', '') if inf_nfe is not None else ''
-
-            dados_nf = {
-                'NumeroNF': (ide.findtext('nNF', default='') or '').strip(),
-                'Serie': (ide.findtext('serie', default='') or '').strip(),
-                'ChaveAcesso': chave,
-                # Alguns XMLs usam dhEmi, outros dEmi. Tenta ambos.
-                'DataEmissao': (ide.findtext('dhEmi') or ide.findtext('dEmi') or datetime.now().strftime('%Y-%m-%dT')).split('T')[0],
-                'ValorTotalNF': dec(total.findtext('vNF', default='0.0')),
-                # [DEPURAÇÃO] Produtor rural emite NF-e com CPF (não CNPJ). Antes o arquivo era recusado.
-                'FornecedorCNPJ': so_digitos(emit.findtext('CNPJ', default='') or emit.findtext('CPF', default='')),
-                'FornecedorNome': (emit.findtext('xNome', default='') or '').strip(),
-                # [MELHORIA VALOR] finNFe=4 é nota de DEVOLUÇÃO (não é compra)
-                'Finalidade': (ide.findtext('finNFe', default='1') or '1').strip(),
-            }
-
-            itens = []
-            somas_itens = {k: Decimal('0') for k in ('vST', 'vFCPST', 'vFrete', 'vSeg', 'vOutro', 'vIPI', 'vDesc')}
-            detalhes = root.findall('.//det')
-            for det in detalhes:
-                prod = det.find('prod')
-                if prod is None: continue
-
-                # 1. Quantidade comprada
-                qtd_xml = dec(prod.findtext('qCom', default='0.0'))
-
-                # 2. Valores brutos e rateios do produto
-                vProd = dec(prod.findtext('vProd', default='0.0')) # Valor total bruto dos itens
-                vFrete = dec(prod.findtext('vFrete', default='0.0'))
-                vSeg = dec(prod.findtext('vSeg', default='0.0'))
-                vOutro = dec(prod.findtext('vOutro', default='0.0'))
-                vDesc = dec(prod.findtext('vDesc', default='0.0'))
-
-                # 3. Impostos agregados (Substituição Tributária e IPI)
-                # O './/' faz o robô varrer profundamente qualquer tag de imposto procurando a ST
-                vICMSST = dec(det.findtext('.//vICMSST', default='0.0'))
-                vIPI = dec(det.findtext('.//vIPI', default='0.0'))
-                # [MELHORIA VALOR] FCP-ST (Fundo de Combate à Pobreza cobrado junto com a ST)
-                # também é pago na compra e faz parte do custo.
-                vFCPST = dec(det.findtext('.//vFCPST', default='0.0'))
-
-                # 4. Cálculo do Custo Real de Aquisição Contábil
-                custo_total_item = vProd + vICMSST + vFCPST + vIPI + vFrete + vSeg + vOutro - vDesc
-                
-                # 5. Custo Unitário Certo (c/ Impostos Rateados)
-                custo_unit_real = custo_total_item / qtd_xml if qtd_xml > 0 else Decimal('0.0')
-
-                # [MELHORIA ST] guarda cada parte do item para conferir com o TOTAL da nota
-                partes_item = {'vST': vICMSST, 'vFCPST': vFCPST, 'vFrete': vFrete, 'vSeg': vSeg,
-                               'vOutro': vOutro, 'vIPI': vIPI, 'vDesc': vDesc}
-                for chave_parte, valor_parte in partes_item.items():
-                    somas_itens[chave_parte] += valor_parte
-
-                itens.append({
-                    '_vProd': vProd, '_custo_total': custo_total_item,
-                    'ValorItemNota': custo_total_item,   # [DEPURAÇÃO 2] valor do item na nota (p/ "fora do estoque")
-                    'cProd': prod.findtext('cProd', default=''),
-                    'cEAN': (prod.findtext('cEAN', default='') or '').strip(),
-                    'DescricaoXML': prod.findtext('xProd', default=''),
-                    'NCM': prod.findtext('NCM', default=''),
-                    'Quantidade': qtd_xml,
-                    'PrecoCustoUnitario': custo_unit_real, # Agora leva o custo REAL!
-                    'CFOP': (prod.findtext('CFOP', default='') or '').strip(),
-                })
-
-            # [MELHORIA ST] Algumas notas trazem a ST (ou o frete, seguro, outras despesas,
-            # IPI, desconto) SÓ no TOTAL da nota, sem o valor em cada item. Antes isso ficava
-            # FORA do custo dos produtos. Agora a diferença entre o total da nota e a soma dos
-            # itens é dividida entre os itens, proporcional ao valor de cada um (vProd).
-            # Itens com ST em CST 60 (ST já paga antes) não mudam: o preço já a inclui.
-            ajustes = {}
-            # [DEPURAÇÃO 2] Rateia só entre os itens que são COMPRA. Antes entravam também os de
-            # comodato/remessa (que depois são descartados) e os de bonificação (que viram custo 0):
-            # a parte deles sumia e os itens comprados ficavam com ST/frete a menos.
-            compraveis = [i for i in itens if tipo_item_por_cfop(i.get('CFOP')) == 'compra'] or itens
-            total_vprod = sum((i['_vProd'] for i in compraveis), Decimal('0'))
-            if total_vprod > 0:
-                for chave_parte in somas_itens:
-                    valor_total = dec(total.findtext(chave_parte, default='0'))
-                    diferenca = valor_total - somas_itens[chave_parte]
-                    # Só ACRESCENTA o que faltou nos itens. Se o total vier menor (ou sem a
-                    # tag), confia nos valores dos itens e não tira nada.
-                    if diferenca >= Decimal('0.01'):
-                        ajustes[chave_parte] = diferenca
-                if ajustes:
-                    sinal = {'vDesc': Decimal('-1')}
-                    for item in compraveis:
-                        parte = item['_vProd'] / total_vprod
-                        extra = sum((d * sinal.get(k, Decimal('1')) * parte for k, d in ajustes.items()), Decimal('0'))
-                        item['_custo_total'] += extra
-                        if item['Quantidade'] > 0:
-                            item['PrecoCustoUnitario'] = item['_custo_total'] / item['Quantidade']
-                    logger.info(f"NF {dados_nf['NumeroNF']}: valores só no total rateados nos itens: "
-                                + ", ".join(f"{k}={v}" for k, v in ajustes.items()))
-            dados_nf['AjustesRateados'] = ajustes
-            for item in itens:
-                item.pop('_vProd', None); item.pop('_custo_total', None)
-
-            return dados_nf, itens
-
-        except Exception as e:
-            logger.error(f"Erro ao ler o arquivo XML '{caminho_arquivo_xml}': {e}", exc_info=True)
-            raise Exception(f"Falha estrutural no XML: {e}")
+        """Cabeçalho e itens do XML, com o custo real (ST, FCP-ST, IPI, frete, rateios). Ver nota_xml.py."""
+        return nota_xml.ler_xml_nota_fiscal(caminho_arquivo_xml)
 
     def processar_arquivos_xml(self, pasta_selecionada, silencioso=False):
         # silencioso=True: relê a pasta sem mostrar o resumo (usado antes de salvar)
         extensoes_permitidas = ('.xml', '.txt')
-        arquivos_xml = sorted(os.path.join(pasta_selecionada, f) for f in os.listdir(pasta_selecionada) if f.lower().endswith(extensoes_permitidas))
+        filtro = getattr(self, 'filtro_arquivos_xml', None)   # [XML SEFAZ] só as notas escolhidas na lista
+        arquivos_xml = sorted(os.path.join(pasta_selecionada, f) for f in os.listdir(pasta_selecionada)
+                              if f.lower().endswith(extensoes_permitidas) and (not filtro or f in filtro))
         notas_processadas_nesta_sessao = {}
         arquivos_com_falha = 0
         arquivos_repetidos = 0
@@ -2639,9 +2933,11 @@ class AppGestaoEstoque:
         notas_com_rateio = []  # [MELHORIA ST] notas com ST/frete só no total (rateados nos itens)
         reconhecidos_por_codigo = []  # [MELHORIA] itens reconhecidos pelo código/EAN (descrição mudou)
         ja_importadas = []  # [DEPURAÇÃO 2] notas que já estão no banco (não aparecem de novo)
+        com_conferencia = []  # [RECEBIMENTO] notas conferidas no app: entram com a quantidade que chegou
         for caminho_xml in arquivos_xml:
             try:
                 cabecalho_nf, itens_nf = self.ler_xml_nota_fiscal(caminho_xml)
+                cabecalho_nf['_ArquivoXML'] = caminho_xml   # [RECEBIMENTO] cópia para o app conferir
                 cnpj = cabecalho_nf['FornecedorCNPJ']
                 nome_fornecedor = cabecalho_nf['FornecedorNome']
                 num_nf = cabecalho_nf['NumeroNF']
@@ -2672,10 +2968,21 @@ class AppGestaoEstoque:
                         it = dict(it, PrecoCustoUnitario=Decimal('0'))
                         itens_bonificados.append(f"NF {num_nf}: {it['DescricaoXML']}")
                     itens_filtrados.append(it)
-                cabecalho_nf['ValorForaDoEstoque'] = valor_fora
                 if not itens_filtrados:
                     notas_ignoradas.append(f"NF {num_nf} ({nome_fornecedor}) - só itens de comodato/remessa")
                     continue
+                # [RECEBIMENTO] conferida no app de compras: entra o que CHEGOU (não o que a nota diz)
+                conferencia = self._conferencia_da_nota(cabecalho_nf.get('ChaveAcesso'))
+                if conferencia:
+                    itens_filtrados, a_menos = nota_xml.aplicar_conferencia(itens_filtrados, conferencia['itens'])
+                    valor_fora += a_menos
+                    com_conferencia.append(f"NF {num_nf} ({nome_fornecedor}) - "
+                                           + ("com divergência" if conferencia['status'] == 'divergencia' else "confere com a nota")
+                                           + (f", por {conferencia['por']}" if conferencia.get('por') else ""))
+                    if not itens_filtrados:
+                        notas_ignoradas.append(f"NF {num_nf} ({nome_fornecedor}) - na conferência do app não chegou nenhum item")
+                        continue
+                cabecalho_nf['ValorForaDoEstoque'] = valor_fora
                 itens_nf = itens_filtrados
 
                 # [DEPURAÇÃO] Antes as notas eram separadas SÓ pelo número. Duas notas nº 123 de
@@ -2698,7 +3005,9 @@ class AppGestaoEstoque:
                 # [DEPURAÇÃO 2] Nota que JÁ está no banco não volta para a tela (antes os itens
                 # dela apareciam de novo para vincular e só no "Salvar" vinha o aviso).
                 try:
-                    ja_existe = database.verificar_nota_fiscal_existente(num_nf, fornecedor_id)
+                    # [AUDITORIA ESTOQUE] série e chave: mesmo número em séries diferentes NÃO é a mesma nota
+                    ja_existe = database.verificar_nota_fiscal_existente(num_nf, fornecedor_id, cabecalho_nf.get('Serie'),
+                                                                         cabecalho_nf.get('ChaveAcesso'))
                 except Exception:
                     ja_existe = False
                 if ja_existe:
@@ -2740,7 +3049,7 @@ class AppGestaoEstoque:
                         qtd_xml = item['Quantidade'] # Ex: 1 (caixa)
                         custo_xml = item['PrecoCustoUnitario'] # Ex: 60.00 (caixa)
 
-                        qtd_real = qtd_xml * fator # Ex: 1 * 6 = 6 Unidades
+                        qtd_real = nota_xml.qtd_estoque(item, fator) # Ex: 1 * 6 = 6 Unidades
                         custo_real = custo_xml / fator # Ex: 60 / 6 = 10.00 Unidade
 
                         item_pronto = item.copy()
@@ -2836,10 +3145,13 @@ class AppGestaoEstoque:
         if notas_com_rateio:
             msg_final += (f"\n\n🧾 {len(notas_com_rateio)} nota(s) traziam ST/frete/etc. só no TOTAL — o valor foi "
                           "dividido entre os itens e entrou no custo:\n  • " + "\n  • ".join(notas_com_rateio[:5]))
+        if com_conferencia:
+            msg_final += (f"\n\n📦 {len(com_conferencia)} nota(s) foram conferidas no app de compras e entram com a "
+                          "quantidade que CHEGOU:\n  • " + "\n  • ".join(com_conferencia[:5]))
         if reconhecidos_por_codigo:
             msg_final += (f"\n\n🔎 {len(reconhecidos_por_codigo)} item(ns) com a descrição diferente da última nota foram "
                           "reconhecidos pelo código do fornecedor / EAN (não precisaram de novo vínculo).")
-        for lista in (notas_ignoradas, itens_ignorados, itens_bonificados, reconhecidos_por_codigo):
+        for lista in (notas_ignoradas, itens_ignorados, itens_bonificados, reconhecidos_por_codigo, com_conferencia):
             for linha in lista:
                 logger.info(f"[importação XML] {linha}")
 
@@ -2848,6 +3160,35 @@ class AppGestaoEstoque:
             messagebox.showwarning("Processamento Concluído com Avisos", msg_final, parent=self.root)
         else:
             messagebox.showinfo("Processamento Concluído", msg_final, parent=self.root)
+
+    def _guardar_xml_para_conferencia(self, cabecalho):
+        """
+        [RECEBIMENTO] Nota importada de um XML de OUTRA pasta (e-mail, download manual): guarda uma
+        cópia na pasta da SEFAZ ('importadas'). Sem isso a nota não aparecia no app para conferir.
+        """
+        origem, chave = cabecalho.get('_ArquivoXML'), so_digitos(cabecalho.get('ChaveAcesso'))
+        if not origem or len(chave) != 44 or not os.path.isfile(origem):
+            return
+        try:
+            import shutil
+            import nfe_distribuicao as nd
+            if nd._ja_temos_xml(chave):
+                return
+            destino = os.path.join(nd.pasta_xml(), 'importadas')
+            os.makedirs(destino, exist_ok=True)
+            shutil.copyfile(origem, os.path.join(destino, f"{chave}.xml"))
+        except Exception as e:
+            logger.warning(f"Não deu para guardar a cópia do XML da NF {cabecalho.get('NumeroNF')} para o app: {e}")
+
+    def _conferencia_da_nota(self, chave):
+        """[RECEBIMENTO] Conferência feita no app para esta nota ({'status','por','itens'}) ou None."""
+        if not chave or not hasattr(database, 'conferencias_recebimento'):
+            return None
+        try:
+            return database.conferencias_recebimento([chave]).get(chave)
+        except Exception as e:
+            logger.error(f"Não deu para ler a conferência da nota {chave}: {e}", exc_info=True)
+            return None
 
     def vincular_produto_selecionado(self):
         # ... (código idêntico ao anterior) ...
@@ -2994,6 +3335,7 @@ class AppGestaoEstoque:
         sucessos = 0
         falhas = 0
         duplicadas = []
+        notas_salvas = []        # [ALERTA PREÇO] IDs das notas que acabaram de entrar
         notas_remanescentes = [nf for nf in self.dados_notas_processadas if nf not in para_salvar]
 
         for nf in para_salvar:
@@ -3003,6 +3345,9 @@ class AppGestaoEstoque:
                 sucesso_db, msg_db = database.salvar_nota_fiscal_completa(cabecalho, itens_para_salvar)
                 if sucesso_db:
                     sucessos += 1
+                    if cabecalho.get('NotaID'):
+                        notas_salvas.append(cabecalho['NotaID'])
+                    self._guardar_xml_para_conferencia(cabecalho)
                 elif "já foi importada" in (msg_db or ""):
                     # Já está no banco: não adianta manter na tela
                     duplicadas.append(str(cabecalho['NumeroNF']))
@@ -3028,6 +3373,7 @@ class AppGestaoEstoque:
             messagebox.showwarning("Processamento Concluído", texto, parent=self.root)
         else:
             messagebox.showinfo("Processamento Concluído", texto, parent=self.root)
+        self.avisar_aumentos_de_preco(notas_salvas)
 
         # Atualiza a interface visual
         for i in self.tree_prontos.get_children(): 
@@ -3050,6 +3396,26 @@ class AppGestaoEstoque:
         self.atualizar_resumo_importacao()
         if not self.dados_notas_processadas and not self.itens_xml_nao_vinculados:
             self.status("Todas as notas e itens foram processados com sucesso! Tela limpa.")  # [MELHORIA UX] rodapé em vez de janelinha
+
+    def avisar_aumentos_de_preco(self, nota_ids):
+        """[ALERTA PREÇO] Depois de salvar as notas: avisa o que ficou mais caro que na compra anterior."""
+        if not nota_ids or not hasattr(database, 'aumentos_de_preco'):
+            return
+        try:
+            aumentos = database.aumentos_de_preco(nota_ids=nota_ids)
+        except Exception as e:
+            logger.error(f"Não foi possível conferir os aumentos de preço: {e}", exc_info=True)
+            return
+        if not aumentos:
+            return
+        linhas = [f"  • {database.texto_aumento_preco(a)}" for a in aumentos[:15]]
+        if len(aumentos) > 15:
+            linhas.append(f"  … e mais {len(aumentos) - 15} produto(s).")
+        messagebox.showwarning(
+            "Preços que subiram",
+            f"{len(aumentos)} produto(s) ficaram {database.LIMITE_AUMENTO_PRECO_PCT:.0f}% ou mais caros "
+            "do que na compra anterior:\n\n" + "\n".join(linhas) +
+            "\n\nSe algum aumento parecer exagerado, confira o fator (Qtd/Cx) do vínculo.", parent=self.root)
 
     def criar_mestre_e_vincular(self):
         # ... (código idêntico ao anterior) ...
@@ -3591,11 +3957,32 @@ class AppGestaoEstoque:
         data_contagem = self.date_contagem.get_date().strftime('%Y-%m-%d')
         funcionario_id = self.id_funcionario_contagem 
         nome_cont = self.entry_nome_contagem.get().strip() or "Geral"
+        # [AUDITORIA ESTOQUE] A Sugestão de Compra SOMA as contagens do mesmo dia (para contar por
+        # área: freezer + depósito). Se o produto já foi contado nesta data (ex: pelo App de
+        # Compras) e esta é uma RECONTAGEM, o estoque fica em DOBRO. Antes não havia aviso.
+        aviso = ""
+        try:
+            ja_contados = database.contagens_do_dia_por_produto(
+                data_contagem, [i['ProdutoID'] for i in self.lista_itens_para_salvar_contagem])
+        except Exception as e:
+            logger.warning(f"Não foi possível conferir as contagens do mesmo dia: {e}")
+            ja_contados = {}
+        if ja_contados:
+            nomes = {i['ProdutoID']: (i['NomeProduto'], i['Unidade']) for i in self.lista_itens_para_salvar_contagem}
+            linhas = [f"  • {nomes.get(pid, ('?', ''))[0]}: já tem {fmt_qtd(r['qtd'])} {nomes.get(pid, ('', 'UN'))[1]} "
+                      f"em {', '.join(r['contagens'])}" for pid, r in list(ja_contados.items())[:8]]
+            mais = f"\n  ... e mais {len(ja_contados) - 8}" if len(ja_contados) > 8 else ""
+            aviso = (f"\n\n⚠️ {len(ja_contados)} produto(s) desta lista JÁ FORAM CONTADOS nesta data em outra contagem:\n"
+                     + "\n".join(linhas) + mais +
+                     "\n\nContagens do MESMO DIA são SOMADAS (serve para contar por área: freezer + depósito).\n"
+                     "Se você contou esses produtos DE NOVO (recontagem), NÃO salve: corrija a contagem antiga "
+                     "('✏️ Editar Contagem'), senão o estoque desses produtos fica em DOBRO.")
         # [MELHORIA UX] confirmação com o resumo (evita salvar pela metade por engano)
         if not messagebox.askyesno(
                 "Salvar contagem",
                 f"Salvar a contagem '{nome_cont}' de {self.date_contagem.get_date().strftime('%d/%m/%Y')} "
-                f"com {len(self.lista_itens_para_salvar_contagem)} itens?", parent=self.root):
+                f"com {len(self.lista_itens_para_salvar_contagem)} itens?" + aviso,
+                icon='warning' if aviso else 'question', parent=self.root):
             return
         try:
             sucesso, msg = database.salvar_contagem_estoque(
@@ -3790,9 +4177,17 @@ class AppGestaoEstoque:
                 logger.error(f"Erro ao listar itens avulsos: {e}", exc_info=True)
                 messagebox.showerror("Erro", f"Falha ao carregar os itens avulsos:\n{e}", parent=popup)
                 avulsos = []
+            # [AUDITORIA ESTOQUE] o mesmo avulso bipado 2x na mesma contagem aparecia em 2 linhas; ao
+            # resolver a 1ª, as duas linhas recebiam a quantidade dela. Agora aparece UMA linha com a soma.
+            agrupados = {}
             for av in avulsos or []:
-                tree.insert("", "end", values=(av.ContagemID, fmt_data(av.DataContagem), av.NomeAvulso,
-                                               fmt_num(av.QuantidadeContada, 3, "0.000"), av.EANAvulso or "Sem EAN"))
+                g = agrupados.setdefault((av.ContagemID, av.NomeAvulso), {
+                    'data': av.DataContagem, 'qtd': Decimal('0'), 'ean': None})
+                g['qtd'] += Decimal(str(av.QuantidadeContada or 0))
+                g['ean'] = g['ean'] or (av.EANAvulso or None)
+            for (cid, nome), g in agrupados.items():
+                tree.insert("", "end", values=(cid, fmt_data(g['data']), nome, fmt_num(g['qtd'], 3, "0.000"),
+                                               g['ean'] or "Sem EAN"))
 
         def resolver_clicado(event):
             sel = tree.focus()
@@ -5049,6 +5444,10 @@ class AppGestaoEstoque:
             contagens = database.listar_contagens_cabecalho() or []
             selecao_ini_antiga = self.combo_contagem_inicio.get()
             selecao_fim_antiga = self.combo_contagem_fim.get()
+            # [AUDITORIA ESTOQUE] quem estava na contagem MAIS RECENTE passa para a nova quando outra é
+            # salva (antes o Ponto B ficava na antiga e a sugestão saía com o estoque velho)
+            valores_antigos = list(self.combo_contagem_fim['values'] or [])
+            estava_na_mais_recente = not valores_antigos or selecao_fim_antiga == valores_antigos[0]
             self.mapa_contagens_sugestao.clear()
             self.mapa_contagens_sugestao[self.OPCAO_A_AUTOMATICO] = None
             self.mapa_contagens_sugestao[self.OPCAO_A_PRIMEIRA_COMPRA] = -2
@@ -5062,7 +5461,7 @@ class AppGestaoEstoque:
             self.combo_contagem_fim['values'] = nomes_contagens
             self.combo_contagem_inicio['values'] = [self.OPCAO_A_AUTOMATICO, self.OPCAO_A_PRIMEIRA_COMPRA,
                                                     self.OPCAO_A_HISTORICO] + nomes_contagens
-            self.combo_contagem_fim.set(selecao_fim_antiga if selecao_fim_antiga in nomes_contagens
+            self.combo_contagem_fim.set(selecao_fim_antiga if selecao_fim_antiga in nomes_contagens and not estava_na_mais_recente
                                         else (nomes_contagens[0] if nomes_contagens else ''))
             if selecao_ini_antiga not in self.mapa_contagens_sugestao:
                 pref = self.ler_preferencias().get('sugestao', {})
@@ -5662,7 +6061,24 @@ class AppGestaoEstoque:
             messagebox.showwarning("Aviso", "Selecione pelo menos uma Contagem para excluir.", parent=self.root)
             return
         
-        if not messagebox.askyesno("Confirmar Exclusão", f"Você selecionou {len(selecionados)} contagens.\n\nEsta ação apagará o registro histórico dessa contagem de estoque.\n\nDeseja continuar?", icon='warning', parent=self.root):
+        # [AUDITORIA ESTOQUE] Contagem com o VALOR DO ESTOQUE FECHADO era apagada junto com o valor,
+        # sem nenhum aviso (editar, consolidar e resolver avulsos já protegiam).
+        try:
+            fechados = database.listar_valores_estoque_fechados(levantar_erro=True)
+        except Exception as e:
+            logger.error(f"Não foi possível conferir os valores fechados: {e}")
+            messagebox.showerror("Banco indisponível", "Não foi possível conferir se as contagens têm o valor do estoque "
+                                 "FECHADO. Por segurança, nada foi apagado. Tente de novo.", parent=self.root)
+            return
+        ids_sel = [int(self.tree_admin_cont.item(i, 'values')[0]) for i in selecionados]
+        com_valor = [(cid, fechados[cid][0]) for cid in ids_sel if cid in fechados]
+        aviso = ""
+        if com_valor:
+            aviso = ("\n\n🔒 ATENÇÃO: " + ", ".join(f"ID {cid} ({fmt_reais(v)})" for cid, v in com_valor[:6])
+                     + (" ..." if len(com_valor) > 6 else "")
+                     + " tem(têm) o VALOR DO ESTOQUE FECHADO. Esse valor também será APAGADO.\n"
+                     "Se você já lançou esse valor em outro lugar (contabilidade, planilha), ele deixa de existir aqui.")
+        if not messagebox.askyesno("Confirmar Exclusão", f"Você selecionou {len(selecionados)} contagens.\n\nEsta ação apagará o registro histórico dessa contagem de estoque.{aviso}\n\nDeseja continuar?", icon='warning', parent=self.root):
             return
 
         sucessos = 0
@@ -5677,6 +6093,7 @@ class AppGestaoEstoque:
         else:
             messagebox.showwarning("Resultado", f"{sucessos} de {len(selecionados)} contagem(ns) excluída(s) com sucesso.", parent=self.root)
         self.atualizar_lista_contagens_admin()
+        self._ultimas_contagens = None   # [AUDITORIA ESTOQUE] o aviso "contou em caixa?" usava a contagem apagada
         # [DEPURAÇÃO] as abas 4 e 5 continuavam mostrando as contagens apagadas
         self.atualizar_lista_contagens_historico()
         self.popular_combos_contagem_sugestao()
@@ -5840,13 +6257,13 @@ class AppGestaoEstoque:
     # ===================================================================
     FILTROS_PROBLEMA = [
         ('todos', 'Todos os vínculos'),
-        ('qualquer', '❗ Precisa de atenção (duplicado, fator/custo suspeito, sem produto)'),
-        ('duplicado', '🔁 Duplicados'),
-        ('suspeito', '🔴 Fator suspeito'),
-        ('custo_errado', '💸 Custo maior que a nota inteira'),
-        ('sem_ean', '🏷️ Sem EAN'),
-        ('sem_compras', '💤 Sem compras'),
-        ('orfao', '⚠️ Sem produto / produto excluído'),
+        ('qualquer', 'Precisa de atenção'),   # duplicado, fator/custo suspeito ou sem produto
+        ('duplicado', 'Duplicados'),
+        ('suspeito', 'Fator suspeito'),
+        ('custo_errado', 'Custo maior que a nota inteira'),
+        ('sem_ean', 'Sem EAN'),
+        ('sem_compras', 'Sem compras'),
+        ('orfao', 'Sem produto / produto excluído'),
     ]
 
     # Só estes contam como "precisa de atenção". Sem EAN / sem compras são informativos
@@ -5878,99 +6295,157 @@ class AppGestaoEstoque:
         [MELHORIA UX] Vínculos e Auditoria de Cadastros (DE/PARA):
           - aberto a partir de um aviso, já vem FILTRADO no produto em questão;
           - filtro por PROBLEMA: duplicados, fator suspeito, sem EAN, sem compras, órfãos;
-          - custo por unidade do estoque E custo da embalagem na nota, lado a lado;
           - busca sem acento, por várias palavras (fornecedor, XML, produto, EAN, código);
-          - editor único: produto, fator (com prévia), EAN e NCM; corrigir o fator
-            oferece corrigir também as compras já importadas;
-          - "🧹 Juntar duplicados": une vínculos repetidos sem perder nenhuma compra;
-          - Enter salva; duplo clique vai para o fator; Delete exclui (se não tiver compras).
+          - "Juntar duplicados": une vínculos repetidos sem perder nenhuma compra.
+        [AUDITORIA VÍNCULOS] Lista em cima e, embaixo (sempre visível; a divisória pode ser
+        arrastada), duas abas para o vínculo selecionado:
+          - "Cadastro": produto do estoque, Qtd/Cx (com prévia e correção das compras antigas), EAN, NCM;
+          - "Compras": cada compra como veio na nota (qtd, Qtd/Cx, valor), EDITÁVEL.
+        Antes o editor ficava cortado no pé da janela, a quantidade da nota não aparecia nem
+        podia ser editada, e trocar de linha descartava o que tinha sido digitado.
+        Duplo clique: nas colunas de compra abre a aba Compras; nas outras vai para o Qtd/Cx.
         ao_salvar: função chamada depois de cada alteração (ex: recalcular o Valor do Estoque).
         """
         popup = Toplevel(self.root)
         popup.title("Vínculos e Auditoria de Cadastros")
-        popup.geometry("1320x740")
+        larg_tela, alt_tela = popup.winfo_screenwidth(), popup.winfo_screenheight()
+        popup.geometry(f"{min(1500, larg_tela - 40)}x{min(860, alt_tela - 80)}+10+10")
+        popup.minsize(900, 560)
         popup.transient(self.root)
-        estado = {'dados': {}, 'produto_id': produto_id}
-        rotulos = dict(self.FILTROS_PROBLEMA)
-        icones = {'duplicado': '🔁', 'suspeito': '🔴', 'custo_errado': '💸', 'sem_ean': '🏷️', 'sem_compras': '💤', 'orfao': '⚠️'}
+        # 'editando' = ID do vínculo que está no editor (pode continuar nele mesmo se a busca o esconder)
+        estado = {'dados': {}, 'produto_id': produto_id, 'mestre_novo': None, 'produtos': {}, 'ids_lista': [],
+                  'editando': None, 'foto': None, 'ordem': None}
+        # [MELHORIA VÍNCULOS] problemas escritos por extenso (os emojis viravam quadradinhos no Linux)
+        icones = {'duplicado': 'duplicado', 'suspeito': 'fator?', 'custo_errado': 'CUSTO ERRADO', 'sem_ean': 'sem EAN',
+                  'sem_compras': 'sem compras', 'orfao': 'SEM PRODUTO'}
 
-        # ---------- Topo: filtros ----------
-        frame_topo = ttk.Frame(popup, padding=(10, 10, 10, 0))
+        # ---------- Topo: filtros (duas linhas, para caber em tela pequena) ----------
+        frame_topo = ttk.Frame(popup, padding=(10, 8, 10, 0))
         frame_topo.pack(fill=tk.X)
-        ttk.Label(frame_topo, text="🔍 Buscar:").pack(side=tk.LEFT)
-        entry_filtro = ttk.Entry(frame_topo, width=34)
+        linha1 = ttk.Frame(frame_topo)
+        linha1.pack(fill=tk.X)
+        ttk.Label(linha1, text="Buscar:").pack(side=tk.LEFT)
+        entry_filtro = ttk.Entry(linha1, width=28)
         entry_filtro.pack(side=tk.LEFT, padx=5)
-        ttk.Label(frame_topo, text="Mostrar:").pack(side=tk.LEFT, padx=(10, 3))
-        combo_problema = ttk.Combobox(frame_topo, state="readonly", width=34)
+        ttk.Label(linha1, text="Fornecedor:").pack(side=tk.LEFT, padx=(8, 3))
+        combo_fornecedor = ttk.Combobox(linha1, state="readonly", width=28)
+        combo_fornecedor.pack(side=tk.LEFT)
+        ttk.Label(linha1, text="Mostrar:").pack(side=tk.LEFT, padx=(8, 3))
+        combo_problema = ttk.Combobox(linha1, state="readonly", width=30)
         combo_problema.pack(side=tk.LEFT)
-        btn_juntar = ttk.Button(frame_topo, text="🧹 Juntar duplicados", command=lambda: self.abrir_juntar_duplicados(popup, ao_mudar=recarregar_tudo))
-        btn_juntar.pack(side=tk.LEFT, padx=10)
-        lbl_contador = ttk.Label(frame_topo, text="", foreground="gray")
+        linha2 = ttk.Frame(frame_topo, padding=(0, 6, 0, 0))
+        linha2.pack(fill=tk.X)
+        btn_limpar = ttk.Button(linha2, text="Limpar filtros", command=lambda: limpar_filtros())
+        btn_limpar.pack(side=tk.LEFT)
+        btn_juntar = ttk.Button(linha2, text="Juntar duplicados", command=lambda: self.abrir_juntar_duplicados(popup, ao_mudar=recarregar_tudo))
+        btn_juntar.pack(side=tk.LEFT, padx=8)
+        lbl_produto = ttk.Label(linha2, text="", font=("Arial", 10, "bold"), foreground="#0056b3")
+        lbl_produto.pack(side=tk.LEFT, padx=(8, 0))
+        btn_todos = ttk.Button(linha2, text="Mostrar todos os vínculos", command=lambda: mostrar_todos())
+        lbl_contador = ttk.Label(linha2, text="", foreground="gray")
         lbl_contador.pack(side=tk.RIGHT)
 
-        frame_produto = ttk.Frame(popup, padding=(10, 4, 10, 0))
-        frame_produto.pack(fill=tk.X)
-        lbl_produto = ttk.Label(frame_produto, text="", font=("Arial", 10, "bold"), foreground="#0056b3")
-        lbl_produto.pack(side=tk.LEFT)
-        btn_todos = ttk.Button(frame_produto, text="Mostrar todos os vínculos", command=lambda: mostrar_todos())
+        # ---------- Lista (em cima) + editor (embaixo), com divisória arrastável ----------
+        # A lista tem peso 1 e o editor peso 0: se a janela for pequena, quem encolhe é a lista
+        # (antes era o editor, que sumia no pé da janela).
+        divisoria = ttk.PanedWindow(popup, orient=tk.VERTICAL)
+        divisoria.pack(fill=tk.BOTH, expand=True, padx=10, pady=(6, 10))
+        frame_lista = ttk.Frame(divisoria)
+        frame_baixo = ttk.Frame(divisoria, padding=(0, 6, 0, 0))
+        divisoria.add(frame_lista, weight=1)
+        divisoria.add(frame_baixo, weight=0)
 
-        # ---------- Lista ----------
-        frame_lista = ttk.Frame(popup, padding="10")
-        frame_lista.pack(fill=tk.BOTH, expand=True)
-        cols = ('ID', 'Fornecedor', 'Descrição no XML', 'Produto Mestre', 'EAN', 'Qtd/Cx',
-                'Custo/Unid.', 'Custo Emb.', 'Compras', 'Última compra', 'Problemas')
-        titulos = {'Produto Mestre': 'Produto Mestre (Seu Estoque)', 'Custo/Unid.': 'Custo/Unid. estoque',
-                   'Custo Emb.': 'Custo embalagem'}
-        tree_vinculos = criar_tree_zebrada(frame_lista, columns=cols, show='headings', selectmode='browse')
-        for col, larg, anc in (('ID', 50, 'center'), ('Fornecedor', 160, 'w'), ('Descrição no XML', 250, 'w'),
-                               ('Produto Mestre', 230, 'w'), ('EAN', 110, 'center'), ('Qtd/Cx', 55, 'center'),
-                               ('Custo/Unid.', 95, 'e'), ('Custo Emb.', 95, 'e'), ('Compras', 60, 'center'),
-                               ('Última compra', 90, 'center'), ('Problemas', 80, 'center')):
-            tree_vinculos.heading(col, text=titulos.get(col, col),
-                                  command=lambda c=col: self.ordenar_coluna_treeview(tree_vinculos, c, False))
-            tree_vinculos.column(col, width=larg, anchor=anc)
+        cols = ('Problemas', 'Fornecedor', 'Descrição no XML', 'Produto Mestre', 'Qtd/Cx', 'Qtd na nota',
+                'Valor na nota', 'Custo/Unid.', 'Compras', 'Última compra', 'EAN', 'ID')
+        titulos = {'Produto Mestre': 'Produto do estoque', 'Custo/Unid.': 'Custo/unid.', 'Última compra': 'Últ. compra',
+                   'Qtd na nota': 'Qtd na nota', 'Valor na nota': 'Valor na nota'}
+        colunas_de_compra = ('Qtd na nota', 'Valor na nota', 'Custo/Unid.', 'Compras', 'Última compra')
+        tree_vinculos = criar_tree_zebrada(frame_lista, columns=cols, show='headings', selectmode='browse', height=8)
+        for col, larg, anc, estica in (('Problemas', 160, 'w', False), ('Fornecedor', 130, 'w', True),
+                                       ('Descrição no XML', 220, 'w', True), ('Produto Mestre', 210, 'w', True),
+                                       ('Qtd/Cx', 55, 'center', False), ('Qtd na nota', 80, 'center', False),
+                                       ('Valor na nota', 95, 'e', False), ('Custo/Unid.', 90, 'e', False),
+                                       ('Compras', 65, 'center', False), ('Última compra', 85, 'center', False),
+                                       ('EAN', 120, 'center', False), ('ID', 50, 'center', False)):
+            tree_vinculos.heading(col, text=titulos.get(col, col), command=lambda c=col: ordenar(c))
+            tree_vinculos.column(col, width=larg, minwidth=40, anchor=anc, stretch=estica)
         tree_vinculos.tag_configure('orfao', background='#ffe3b3')
         tree_vinculos.tag_configure('duplicado', background='#ece4ff')
         tree_vinculos.tag_configure('suspeito', background='#ffd6d6')
         sb = ttk.Scrollbar(frame_lista, orient="vertical", command=tree_vinculos.yview)
-        tree_vinculos.configure(yscrollcommand=sb.set)
-        tree_vinculos.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        sb.pack(side=tk.RIGHT, fill=tk.Y)
-        ttk.Label(popup, foreground="gray", padding=(10, 0), text=(
-            "🔴 vermelho = fator ou custo provavelmente errado (💸 = item mais caro que a nota inteira)   "
-            "🔁 lilás = duplicado   ⚠️ laranja = sem produto   ·   Custo/Unid. = por unidade do SEU estoque; "
-            "Custo embalagem = como veio na nota (Custo/Unid. × Qtd/Cx)")).pack(anchor="w")
+        sb_h = ttk.Scrollbar(frame_lista, orient="horizontal", command=tree_vinculos.xview)
+        tree_vinculos.configure(yscrollcommand=sb.set, xscrollcommand=sb_h.set)
+        frame_lista.columnconfigure(0, weight=1)
+        frame_lista.rowconfigure(0, weight=1)
+        tree_vinculos.grid(row=0, column=0, sticky="nsew")
+        sb.grid(row=0, column=1, sticky="ns")
+        sb_h.grid(row=1, column=0, sticky="ew")
+        legenda = ttk.Label(frame_lista, foreground="gray", wraplength=1300, justify=tk.LEFT, text=(
+            "Cores: vermelho = Qtd/Cx ou valor provavelmente errado · lilás = duplicado · laranja = sem produto.   "
+            "Qtd na nota / Valor na nota = a ÚLTIMA compra como veio na nota (embalagens e preço de 1 embalagem); "
+            "Custo/unid. = por unidade do SEU estoque (Valor na nota ÷ Qtd/Cx).   "
+            "Duplo clique numa coluna de compra abre a aba Compras."))
+        legenda.grid(row=2, column=0, columnspan=2, sticky="w")
+        quebrar_linhas_na_largura(frame_lista, legenda)
 
-        # ---------- Edição ----------
-        frame_edit = ttk.LabelFrame(popup, text="Editar Vínculo Selecionado", padding="10")
-        frame_edit.pack(fill=tk.X, padx=10, pady=10)
-        frame_edit.columnconfigure(0, weight=1)
-        lbl_selecionado = ttk.Label(frame_edit, text="Selecione um vínculo na lista.", font=("Arial", 10, "bold"))
-        lbl_selecionado.grid(row=0, column=0, columnspan=6, sticky="w", pady=(0, 6))
+        # ---------- Editor do vínculo selecionado ----------
+        frame_baixo.columnconfigure(0, weight=1)
+        frame_baixo.rowconfigure(1, weight=1)
+        lbl_selecionado = ttk.Label(frame_baixo, text="Selecione um vínculo na lista.", font=("Arial", 10, "bold"))
+        lbl_selecionado.grid(row=0, column=0, sticky="w", pady=(0, 4))
+        abas = ttk.Notebook(frame_baixo)
+        abas.grid(row=1, column=0, sticky="nsew")
+        aba_cadastro = ttk.Frame(abas, padding=8)
+        aba_compras = ttk.Frame(abas, padding=8)
+        abas.add(aba_cadastro, text="Cadastro: produto, Qtd/Cx, EAN, NCM")
+        abas.add(aba_compras, text="Compras: qtd e valor da nota")
 
-        ttk.Label(frame_edit, text="Produto Mestre (digite para buscar):").grid(row=1, column=0, sticky="w")
-        frame_mestre = ttk.Frame(frame_edit)
-        frame_mestre.grid(row=2, column=0, sticky="ew", padx=(0, 10))
-        frame_mestre.columnconfigure(1, weight=1)
-        entry_busca_mestre = ttk.Entry(frame_mestre, width=16)
-        entry_busca_mestre.grid(row=0, column=0, sticky="w", padx=(0, 5))
-        combo_mestre_edit = ttk.Combobox(frame_mestre, values=self.lista_mestre_produtos_nomes, state="readonly")
-        combo_mestre_edit.grid(row=0, column=1, sticky="ew")
+        # [MELHORIA VÍNCULOS] o produto do estoque é escolhido numa BUSCA com lista de resultados
+        # (nome, EAN ou ID) e sugestões pelo nome do XML.
+        aba_cadastro.columnconfigure(0, weight=1)
+        frame_mestre = ttk.Frame(aba_cadastro)
+        frame_mestre.grid(row=0, column=0, sticky="nsew", padx=(0, 14))
+        frame_mestre.columnconfigure(0, weight=1)
+        lbl_mestre_atual = ttk.Label(frame_mestre, text="", font=("Arial", 10, "bold"), foreground="#1b5e20")
+        lbl_mestre_atual.grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(frame_mestre, text="Trocar o produto do estoque: digite parte do nome, o EAN ou o ID e escolha na lista "
+                                     "(Enter ou duplo clique)", foreground="gray").grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 2))
+        entry_busca_mestre = ttk.Entry(frame_mestre)
+        entry_busca_mestre.grid(row=2, column=0, columnspan=2, sticky="ew")
+        lista_mestre = tk.Listbox(frame_mestre, height=5, activestyle='dotbox', exportselection=False, font=("Arial", 10))
+        lista_mestre.grid(row=3, column=0, sticky="ew", pady=(2, 0))
+        sb_mestre = ttk.Scrollbar(frame_mestre, orient="vertical", command=lista_mestre.yview)
+        sb_mestre.grid(row=3, column=1, sticky="ns", pady=(2, 0))
+        lista_mestre.configure(yscrollcommand=sb_mestre.set)
 
-        ttk.Label(frame_edit, text="Qtd/Cx (Fator):").grid(row=1, column=1, sticky="w")
-        entry_fator_edit = ttk.Entry(frame_edit, width=8)
-        entry_fator_edit.grid(row=2, column=1, sticky="w", padx=(0, 10))
-        ttk.Label(frame_edit, text="EAN (código de barras):").grid(row=1, column=2, sticky="w")
-        entry_ean_edit = ttk.Entry(frame_edit, width=16)
-        entry_ean_edit.grid(row=2, column=2, sticky="w", padx=(0, 10))
-        ttk.Label(frame_edit, text="NCM:").grid(row=1, column=3, sticky="w")
-        entry_ncm_edit = ttk.Entry(frame_edit, width=10)
-        entry_ncm_edit.grid(row=2, column=3, sticky="w", padx=(0, 10))
+        frame_campos = ttk.Frame(aba_cadastro)
+        frame_campos.grid(row=0, column=1, sticky="nw")
+        ttk.Label(frame_campos, text="Qtd/Cx (Fator):").grid(row=0, column=0, sticky="w")
+        entry_fator_edit = ttk.Entry(frame_campos, width=9)
+        entry_fator_edit.grid(row=1, column=0, sticky="w", padx=(0, 10))
+        ttk.Label(frame_campos, text="EAN (código de barras):").grid(row=0, column=1, sticky="w")
+        entry_ean_edit = ttk.Entry(frame_campos, width=17)
+        entry_ean_edit.grid(row=1, column=1, sticky="w", padx=(0, 10))
+        ttk.Label(frame_campos, text="NCM:").grid(row=0, column=2, sticky="w")
+        entry_ncm_edit = ttk.Entry(frame_campos, width=11)
+        entry_ncm_edit.grid(row=1, column=2, sticky="w")
+        frame_botoes_edit = ttk.Frame(frame_campos)
+        frame_botoes_edit.grid(row=2, column=0, columnspan=3, sticky="w", pady=(10, 0))
 
-        lbl_previa = ttk.Label(frame_edit, text="", foreground="#0056b3")
-        lbl_previa.grid(row=3, column=0, columnspan=6, sticky="w", pady=(6, 0))
+        lbl_previa = ttk.Label(aba_cadastro, text="", foreground="#0056b3", wraplength=1200, justify=tk.LEFT)
+        lbl_previa.grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        quebrar_linhas_na_largura(aba_cadastro, lbl_previa)
+
+        painel_compras = self.montar_painel_compras(aba_compras, ao_mudar=lambda: depois_de_salvar_compra())
 
         # ---------- Funções ----------
+        def chamar_ao_salvar():
+            if ao_salvar:
+                try:
+                    ao_salvar()
+                except Exception as e:
+                    logger.warning(f"Falha ao atualizar a janela de origem: {e}")
+
         def carregar_dados():
             try:
                 lista = database.listar_vinculos_com_resumo()
@@ -5979,6 +6454,11 @@ class AppGestaoEstoque:
                 messagebox.showerror("Erro de Carregamento", f"Falha ao ler os vínculos: {e}", parent=popup)
                 lista = []
             estado['dados'] = {str(v['ID']): v for v in lista}
+            carregar_produtos()
+            fornecedores = sorted({v['Fornecedor'] for v in lista if v.get('Fornecedor')}, key=sem_acento)
+            combo_fornecedor['values'] = ["Todos"] + fornecedores
+            if combo_fornecedor.get() not in combo_fornecedor['values']:
+                combo_fornecedor.set("Todos")
             # Opções do filtro com a quantidade de cada problema
             contagem = {chave: 0 for chave, _ in self.FILTROS_PROBLEMA}
             for v in lista:
@@ -5992,19 +6472,37 @@ class AppGestaoEstoque:
             combo_problema['values'] = list(estado['opcoes'])
             combo_problema.set(next(k for k, ch in estado['opcoes'].items() if ch == atual))
             grupos = len({v['Grupo'] for v in lista if v.get('Grupo')})
-            btn_juntar.config(text=f"🧹 Juntar duplicados ({grupos} grupo(s))")
+            btn_juntar.config(text=f"Juntar duplicados ({grupos} grupo(s))")
             btn_juntar.state(['!disabled'] if grupos else ['disabled'])
 
+        def linha_da_lista(v):
+            """Valores de uma linha da lista. Qtd e valor 'na nota' usam o Qtd/Cx DAQUELA compra."""
+            probs = self.problemas_do_vinculo(v)
+            tem_compra = bool(v['QtdCompras']) and v['UltimoCustoUnid'] is not None
+            fator_ult = v.get('UltimoFator') or v['Fator']
+            qtd_nota = fmt_qtd(v['UltimaQtd'] / fator_ult) if tem_compra and v['UltimaQtd'] is not None else "—"
+            valor_nota = fmt_reais(v['UltimoCustoUnid'] * fator_ult) if tem_compra else "—"
+            custo = fmt_reais(v['UltimoCustoUnid']) if tem_compra else "—"
+            data = v['UltimaData'].strftime('%d/%m/%Y') if v['UltimaData'] else "—"
+            tag = ('suspeito',) if ('suspeito' in probs or 'custo_errado' in probs) else ('orfao',) if 'orfao' in probs else ('duplicado',) if 'duplicado' in probs else ()
+            grupo_txt = f"duplicado (grupo {v['Grupo']})" if v.get('Grupo') else icones['duplicado']
+            probs_txt = ", ".join(icones[p] if p != 'duplicado' else grupo_txt for p in probs)
+            return tag, (probs_txt, v['Fornecedor'], v['DescricaoXML'], v['NomeMestre'], fmt_qtd(v['Fator']), qtd_nota,
+                         valor_nota, custo, v['QtdCompras'], data, v['EAN'], v['ID'])
+
         def mostrar(manter=None):
-            manter = manter or tree_vinculos.focus()
+            manter = manter or estado['editando'] or tree_vinculos.focus()
             for i in tree_vinculos.get_children():
                 tree_vinculos.delete(i)
             palavras = sem_acento(entry_filtro.get()).split()
             filtro_prob = estado['opcoes'].get(combo_problema.get(), 'todos') if estado.get('opcoes') else 'todos'
             estado['filtro_problema'] = filtro_prob
-            n = 0
+            forn = combo_fornecedor.get()
+            linhas = []
             for iid, v in estado['dados'].items():
                 if estado['produto_id'] is not None and v['ProdutoID'] != estado['produto_id']:
+                    continue
+                if forn and forn != "Todos" and v['Fornecedor'] != forn:
                     continue
                 probs = self.problemas_do_vinculo(v)
                 if filtro_prob == 'qualquer' and not any(p in self.PROBLEMAS_GRAVES for p in probs):
@@ -6014,31 +6512,50 @@ class AppGestaoEstoque:
                 texto = sem_acento(f"{v['Fornecedor']} {v['DescricaoXML']} {v['NomeMestre']} {v['EAN']} {v.get('Codigo', '')} {v['ID']}")
                 if palavras and not all(p in texto for p in palavras):
                     continue
-                tem_compra = v['UltimoCustoUnid'] is not None
-                custo = fmt_reais(v['UltimoCustoUnid']) if tem_compra else "—"
-                custo_emb = fmt_reais(v['UltimoCustoUnid'] * v['Fator']) if tem_compra else "—"
-                data = v['UltimaData'].strftime('%d/%m/%Y') if v['UltimaData'] else "—"
-                tag = ('suspeito',) if ('suspeito' in probs or 'custo_errado' in probs) else ('orfao',) if 'orfao' in probs else ('duplicado',) if 'duplicado' in probs else ()
-                grupo_txt = f"{icones['duplicado']}{v['Grupo']}" if v.get('Grupo') else ''
-                probs_txt = " ".join(icones[p] if p != 'duplicado' else grupo_txt for p in probs)
-                tree_vinculos.insert("", "end", iid=iid, tags=tag, values=(
-                    v['ID'], v['Fornecedor'], v['DescricaoXML'], v['NomeMestre'], v['EAN'], fmt_qtd(v['Fator']),
-                    custo, custo_emb, v['QtdCompras'], data, probs_txt))
-                n += 1
+                linhas.append((iid,) + linha_da_lista(v))
+            # [AUDITORIA VÍNCULOS] a ordem escolhida no cabeçalho continua valendo depois de buscar ou salvar
+            # (antes a lista voltava para a ordem do banco a cada tecla). Inserir já ordenado mantém a zebra.
+            if estado['ordem']:
+                col, reverso = estado['ordem']
+                i_col = cols.index(col)
+                linhas.sort(key=lambda l: chave_ordenacao(l[2][i_col]), reverse=reverso)
+            for iid, tag, valores in linhas:
+                tree_vinculos.insert("", "end", iid=iid, tags=tag, values=valores)
+            for col in cols:
+                seta = ""
+                if estado['ordem'] and estado['ordem'][0] == col:
+                    seta = " ▼" if estado['ordem'][1] else " ▲"
+                tree_vinculos.heading(col, text=titulos.get(col, col) + seta)
+            n = len(linhas)
             lbl_contador.config(text=f"{n} de {len(estado['dados'])} vínculo(s) na lista")
             if manter and tree_vinculos.exists(manter):
                 tree_vinculos.focus(manter); tree_vinculos.selection_set(manter); tree_vinculos.see(manter)
-            elif n == 1:
+            elif n == 1 and not estado['editando']:
                 unico = tree_vinculos.get_children()[0]
                 tree_vinculos.focus(unico); tree_vinculos.selection_set(unico)
 
-        def recarregar_tudo():
-            carregar_dados(); mostrar(); preencher_edicao()
-            if ao_salvar:
-                try:
-                    ao_salvar()
-                except Exception as e:
-                    logger.warning(f"Falha ao atualizar a janela de origem: {e}")
+        def ordenar(col):
+            atual = estado['ordem']
+            estado['ordem'] = (col, bool(atual and atual[0] == col and not atual[1]))
+            mostrar()
+
+        def recarregar_tudo(manter=None):
+            carregar_dados(); mostrar(manter=manter); preencher_edicao()
+            chamar_ao_salvar()
+
+        def depois_de_salvar_compra():
+            """Uma compra foi corrigida na aba Compras: atualiza a lista e a prévia SEM mexer no que
+            está digitado na aba Cadastro."""
+            carregar_dados(); mostrar(manter=estado['editando'])
+            sel, v = selecionado_atual()
+            if v:
+                painel_compras['carregar'](v)
+                mostrar_mestre_escolhido()
+                atualizar_previa()
+                abas.tab(aba_compras, text=f"Compras: qtd e valor da nota ({v['QtdCompras']})")
+            else:
+                preencher_edicao()
+            chamar_ao_salvar()
 
         def mostrar_todos():
             estado['produto_id'] = None
@@ -6046,9 +6563,203 @@ class AppGestaoEstoque:
             btn_todos.pack_forget()
             mostrar()
 
+        def limpar_filtros():
+            entry_filtro.delete(0, tk.END)
+            combo_fornecedor.set("Todos")
+            combo_problema.set(next(k for k, ch in estado['opcoes'].items() if ch == 'todos'))
+            if estado['produto_id'] is not None:
+                mostrar_todos()
+            else:
+                mostrar()
+            entry_filtro.focus_set()
+
+        # ---------- [MELHORIA VÍNCULOS] escolha do produto do estoque ----------
+        def carregar_produtos():
+            try:
+                produtos = database.listar_produtos_estoque()
+            except Exception as e:
+                logger.error(f"Erro ao listar produtos: {e}", exc_info=True)
+                produtos = []
+            estado['produtos'] = {p.ProdutoID: {'id': p.ProdutoID, 'nome': (p.NomeProduto or '').strip() or f"Produto {p.ProdutoID}",
+                                                'un': (p.UnidadeMedida or 'UN').strip() or 'UN',
+                                                'cat': (getattr(p, 'Categoria', None) or 'Geral')}
+                                  for p in produtos}
+
+        def texto_produto(pid):
+            p = estado['produtos'].get(pid)
+            return f"{p['nome']}  ·  {p['un']}  ·  {p['cat']}  ·  ID {pid}" if p else f"Produto {pid} (não existe mais)"
+
+        def mostrar_mestre_escolhido():
+            sel, v = selecionado_atual()
+            if not v:
+                lbl_mestre_atual.config(text="", foreground="#1b5e20")
+                return
+            novo = estado['mestre_novo']
+            if novo is not None and novo != v['ProdutoID']:
+                lbl_mestre_atual.config(text=f"Vai mudar para:  {texto_produto(novo)}   (clique em Salvar alterações)",
+                                        foreground="#e65100")
+            elif v['ProdutoID'] is None or v['ProdutoID'] not in estado['produtos']:
+                lbl_mestre_atual.config(text="Sem produto do estoque: escolha um abaixo.", foreground="#c62828")
+            else:
+                lbl_mestre_atual.config(text=f"Produto do estoque:  {texto_produto(v['ProdutoID'])}", foreground="#1b5e20")
+
+        def palavras_chave(texto):
+            return {p for p in sem_acento(texto).replace('/', ' ').replace('-', ' ').split()
+                    if len(p) >= 3 or any(c.isdigit() for c in p)}
+
+        def sugestoes(v):
+            """Produtos parecidos: mesmo EAN em outro vínculo e nomes com mais palavras em comum com o XML."""
+            ids, saida = set(), []
+            ean = (v.get('EAN') or '').strip()
+            if ean:
+                for w in estado['dados'].values():
+                    if (w is not v and (w.get('EAN') or '').strip() == ean and w['ProdutoID'] in estado['produtos']
+                            and w['ProdutoID'] not in ids):
+                        ids.add(w['ProdutoID'])
+                        saida.append((w['ProdutoID'], 'mesmo EAN'))
+            alvo = palavras_chave(sugerir_nome_limpo(v.get('DescricaoXML') or ''))
+            pontos = []
+            for pid, p in estado['produtos'].items():
+                comum = len(alvo & palavras_chave(p['nome']))
+                if comum and pid not in ids:
+                    pontos.append((-comum, sem_acento(p['nome']), pid))
+            for _, _, pid in sorted(pontos)[:8]:
+                saida.append((pid, 'nome parecido'))
+            return saida
+
+        def preencher_lista_mestre(event=None):
+            if event is not None and getattr(event, 'keysym', '') in ('Return', 'Up', 'Down', 'Escape'):
+                return
+            lista_mestre.delete(0, tk.END)
+            estado['ids_lista'] = []
+            sel, v = selecionado_atual()
+            termo = entry_busca_mestre.get().strip()
+            if termo:
+                achados = []
+                digitos = re.sub(r'\D', '', termo)
+                if digitos and digitos == termo.replace(' ', ''):
+                    if int(digitos) in estado['produtos']:
+                        achados.append(int(digitos))                       # ID do produto
+                    for w in estado['dados'].values():                     # EAN de algum vínculo
+                        if (len(digitos) >= 8 and (w.get('EAN') or '').strip().endswith(digitos)
+                                and w['ProdutoID'] in estado['produtos'] and w['ProdutoID'] not in achados):
+                            achados.append(w['ProdutoID'])
+                palavras = sem_acento(termo).split()
+                por_nome = [pid for pid, p in estado['produtos'].items()
+                            if pid not in achados and all(pal in sem_acento(f"{p['nome']} {p['cat']}") for pal in palavras)]
+                inicio = sem_acento(termo)
+                por_nome.sort(key=lambda pid: (not sem_acento(estado['produtos'][pid]['nome']).startswith(inicio),
+                                               sem_acento(estado['produtos'][pid]['nome'])))
+                for pid in (achados + por_nome)[:200]:
+                    marca = "  (atual)" if v and pid == v['ProdutoID'] else ""
+                    lista_mestre.insert(tk.END, texto_produto(pid) + marca)
+                    estado['ids_lista'].append(pid)
+                if not estado['ids_lista']:
+                    lista_mestre.insert(tk.END, "Nenhum produto encontrado. Se ele ainda não existe, use 'Criar produto novo'.")
+            elif v:
+                for pid, motivo in sugestoes(v):
+                    marca = "  (atual)" if pid == v['ProdutoID'] else ""
+                    lista_mestre.insert(tk.END, f"Sugestão ({motivo}):  {texto_produto(pid)}{marca}")
+                    estado['ids_lista'].append(pid)
+                if not estado['ids_lista']:
+                    lista_mestre.insert(tk.END, "Digite acima para procurar o produto certo.")
+            if estado['ids_lista']:
+                lista_mestre.selection_set(0)
+                lista_mestre.activate(0)
+
+        def escolher_mestre(event=None):
+            idx = lista_mestre.curselection()
+            sel, v = selecionado_atual()
+            if not v or not idx or idx[0] >= len(estado['ids_lista']):
+                return "break"
+            estado['mestre_novo'] = estado['ids_lista'][idx[0]]
+            mostrar_mestre_escolhido()
+            entry_busca_mestre.delete(0, tk.END)
+            preencher_lista_mestre()
+            entry_fator_edit.focus_set()
+            entry_fator_edit.select_range(0, tk.END)
+            return "break"
+
+        def navegar_lista_mestre(event):
+            if not estado['ids_lista']:
+                return "break"
+            atual = lista_mestre.curselection()
+            i = atual[0] if atual else -1
+            i = min(i + 1, len(estado['ids_lista']) - 1) if event.keysym == 'Down' else max(i - 1, 0)
+            lista_mestre.selection_clear(0, tk.END)
+            lista_mestre.selection_set(i)
+            lista_mestre.activate(i)
+            lista_mestre.see(i)
+            return "break"
+
+        def criar_produto_novo():
+            """Cria um produto no estoque a partir da descrição do XML e liga este vínculo a ele."""
+            sel, v = selecionado_atual()
+            if not v:
+                messagebox.showwarning("Aviso", "Selecione um vínculo na lista.", parent=popup)
+                return
+            if tem_alteracao():
+                # [AUDITORIA VÍNCULOS] antes o Qtd/Cx/EAN digitados eram descartados sem aviso
+                messagebox.showwarning("Alterações não salvas",
+                                       "Este vínculo tem alterações não salvas (produto, Qtd/Cx, EAN ou NCM).\n\n"
+                                       "Clique em 'Salvar alterações' ou 'Desfazer' antes de criar o produto novo.", parent=popup)
+                return
+            base = estado['produtos'].get(v['ProdutoID']) or {}
+            un, cat = base.get('un', 'UN'), base.get('cat', 'Geral')
+            nome = simpledialog.askstring(
+                "Criar produto novo",
+                f"Nome do produto novo no estoque (a partir de '{v['DescricaoXML']}'):\n"
+                f"Unidade: {un} · Categoria: {cat} (dá para mudar depois no Catálogo)",
+                initialvalue=sugerir_nome_limpo(v['DescricaoXML']), parent=popup)
+            nome = (nome or '').strip()
+            if not nome:
+                return
+            if any(sem_acento(p['nome']) == sem_acento(nome) for p in estado['produtos'].values()):
+                messagebox.showwarning("Já existe", f"Já existe um produto chamado '{nome}'. Procure por ele na busca.", parent=popup)
+                return
+            aviso = (f"\n\nAs {v['QtdCompras']} compra(s) deste vínculo passam para o produto novo "
+                     "(as contagens antigas continuam no produto atual)." if v['QtdCompras'] else "")
+            if not messagebox.askyesno("Criar produto novo", f"Criar '{nome}' e ligar este vínculo a ele?{aviso}", parent=popup):
+                return
+            try:
+                novo_id = database.criar_produto_estoque(nome=nome, unidade=un, estoque_min=Decimal('0'), categoria=cat)
+                if not novo_id:
+                    raise Exception("o banco não devolveu o ID do produto")
+                trocou = database.atualizar_vinculo_existente(v['ID'], novo_id, v['Fator'], recalcular_compras=False,
+                                                             novo_ean=v.get('EAN') or '', novo_ncm=v.get('NCM') or '')
+            except Exception as e:
+                logger.error(f"Erro ao criar produto pelo vínculo {v['ID']}: {e}", exc_info=True)
+                messagebox.showerror("Erro", f"Não foi possível criar o produto:\n{e}", parent=popup)
+                return
+            if trocou:
+                self.status(f"Produto '{nome}' criado e ligado ao vínculo '{v['DescricaoXML']}'.")
+            else:
+                # [AUDITORIA VÍNCULOS] antes mostrava o erro E a mensagem de sucesso
+                messagebox.showerror("Erro", f"O produto '{nome}' foi criado, mas o vínculo NÃO foi trocado (veja o log).\n\n"
+                                     "Procure o produto na busca e escolha-o para este vínculo.", parent=popup)
+            try:
+                self.popular_combobox_produtos_mestre()
+            except Exception as e:
+                logger.warning(f"Falha ao atualizar a lista de produtos: {e}")
+            recarregar_tudo(manter=sel)
+
         def selecionado_atual():
-            sel = tree_vinculos.focus()
-            return (sel, estado['dados'].get(sel)) if sel else (None, None)
+            """O vínculo que está no EDITOR (não necessariamente visível na lista filtrada)."""
+            iid = estado['editando']
+            v = estado['dados'].get(iid) if iid else None
+            return (iid, v) if v else (None, None)
+
+        def valores_editor():
+            sel, v = selecionado_atual()
+            try:
+                fator = para_decimal(entry_fator_edit.get(), "Fator")
+            except ValueError:
+                fator = entry_fator_edit.get().strip()
+            mestre = estado['mestre_novo'] if v and estado['mestre_novo'] != v['ProdutoID'] else None
+            return (fator, entry_ean_edit.get().strip(), entry_ncm_edit.get().strip(), mestre)
+
+        def tem_alteracao():
+            return estado['foto'] is not None and selecionado_atual()[1] is not None and valores_editor() != estado['foto']
 
         def atualizar_previa(event=None):
             sel, v = selecionado_atual()
@@ -6057,22 +6768,29 @@ class AppGestaoEstoque:
             try:
                 novo = para_decimal(entry_fator_edit.get(), "Fator", permitir_zero=False)
             except ValueError:
-                lbl_previa.config(text="⚠️ Digite um número maior que zero no Qtd/Cx (ex: 12).", foreground="#c62828"); return
-            if not v['UltimoCustoUnid']:
-                lbl_previa.config(text="Ainda não há compras por este vínculo: o fator vale para as próximas notas.",
+                lbl_previa.config(text="Digite um número maior que zero no Qtd/Cx (ex: 12).", foreground="#c62828"); return
+            # [AUDITORIA VÍNCULOS] "sem compras" pelo número de compras (antes uma bonificação, de
+            # custo 0, aparecia como "ainda não há compras")
+            if not v['QtdCompras'] or v['UltimoCustoUnid'] is None:
+                lbl_previa.config(text="Ainda não há compras por este vínculo: o Qtd/Cx vale para as próximas notas.",
                                   foreground="gray"); return
-            custo_embalagem = v['UltimoCustoUnid'] * v['Fator']
-            embalagens = v['UltimaQtd'] / v['Fator'] if v['UltimaQtd'] else Decimal('0')
             unidade = self.unidade_do_produto(v.get('ProdutoID'))
-            texto = (f"Última compra: {fmt_qtd(embalagens)} embalagem(ns) de {fmt_reais(custo_embalagem)} (custo na nota).  "
-                     f"Com Qtd/Cx {fmt_qtd(novo)} → {fmt_qtd(embalagens * novo)} {unidade} a "
-                     f"{fmt_reais(custo_embalagem / novo)} cada (custo por unidade do estoque).")
+            # [AUDITORIA VÍNCULOS] a última compra no Qtd/Cx com que FOI importada (antes usava o atual)
+            fator_ult = v.get('UltimoFator') or v['Fator']
+            embalagens = (v['UltimaQtd'] or Decimal('0')) / fator_ult
+            custo_embalagem = v['UltimoCustoUnid'] * fator_ult
+            bonif = " (bonificação)" if v['UltimoCustoUnid'] == 0 else ""
+            texto = (f"Última compra: {fmt_qtd(embalagens)} embalagem(ns) de {fmt_reais(custo_embalagem)}{bonif} com Qtd/Cx "
+                     f"{fmt_qtd(fator_ult)} = {fmt_qtd(v['UltimaQtd'] or 0)} {unidade} a {fmt_reais(v['UltimoCustoUnid'])} cada.")
+            if novo != fator_ult:
+                texto += (f"  Com Qtd/Cx {fmt_qtd(novo)}: {fmt_qtd(embalagens * novo)} {unidade} a "
+                          f"{fmt_reais(custo_embalagem / novo)} cada.")
             ref = v.get('CustoReferencia')
             if ref:
                 texto += f"  Normal deste produto: ~{fmt_reais(ref)} por {unidade}."
             if v.get('CustoErrado'):
-                texto = ("💸 Uma compra deste vínculo custa MAIS QUE A NOTA INTEIRA: o PREÇO foi gravado errado "
-                         "(o Qtd/Cx não é o problema). Clique em '🧾 Compras / corrigir custo'.\n") + texto
+                texto = ("Uma compra deste vínculo custa MAIS QUE A NOTA INTEIRA: o VALOR foi gravado errado "
+                         "(o Qtd/Cx não é o problema). Corrija na aba 'Compras: qtd e valor da nota'.\n") + texto
                 lbl_previa.config(text=texto, foreground="#c62828"); return
             lbl_previa.config(text=texto, foreground="#0056b3")
 
@@ -6080,87 +6798,137 @@ class AppGestaoEstoque:
             sel, v = selecionado_atual()
             if not v:
                 # [DEPURAÇÃO 2] nada selecionado (ex: vínculo excluído): o editor não fica com o antigo
+                estado['editando'] = None
                 lbl_selecionado.config(text="Selecione um vínculo na lista.")
                 for campo in (entry_fator_edit, entry_ean_edit, entry_ncm_edit, entry_busca_mestre):
                     campo.delete(0, tk.END)
-                combo_mestre_edit.set("")
+                estado['mestre_novo'] = None
+                estado['foto'] = None
+                mostrar_mestre_escolhido()
+                preencher_lista_mestre()
                 lbl_previa.config(text="")
+                painel_compras['carregar'](None)
+                abas.tab(aba_compras, text="Compras: qtd e valor da nota")
                 return
             codigo = f"  •  cód. fornecedor {v['Codigo']}" if v.get('Codigo') else ""
-            lbl_selecionado.config(text=f"ID {v['ID']}  •  {v['Fornecedor']}  •  {v['DescricaoXML']}{codigo}")
-            # [DEPURAÇÃO] só aceita o nome EXATO do mestre (antes "Sal" virava "Bacon Salgado")
-            prefixo = f"{v['NomeMestre']} (ID: "
-            candidatos = [n for n in self.lista_mestre_produtos_nomes if n.startswith(prefixo)]
-            if v['ProdutoID'] is not None:
-                exato = f"{v['NomeMestre']} (ID: {v['ProdutoID']})"
-                candidatos = [exato] if exato in self.lista_mestre_produtos_nomes else candidatos
-            combo_mestre_edit['values'] = self.lista_mestre_produtos_nomes
-            combo_mestre_edit.set(candidatos[0] if len(candidatos) == 1 else "")
+            lbl_selecionado.config(text=f"Editando: {v['DescricaoXML']}  •  {v['Fornecedor']}  •  ID {v['ID']}{codigo}")
+            estado['mestre_novo'] = None        # trocou de vínculo: esquece a escolha não salva
             entry_busca_mestre.delete(0, tk.END)
+            mostrar_mestre_escolhido()
+            preencher_lista_mestre()
             for campo, valor in ((entry_fator_edit, fmt_qtd(v['Fator'])), (entry_ean_edit, v['EAN']), (entry_ncm_edit, v.get('NCM', ''))):
                 campo.delete(0, tk.END); campo.insert(0, valor)
+            estado['foto'] = valores_editor()
             atualizar_previa()
+            painel_compras['carregar'](v)
+            abas.tab(aba_compras, text=f"Compras: qtd e valor da nota ({v['QtdCompras']})")
 
-        def filtrar_mestre(event=None):
-            if event is not None and getattr(event, 'keysym', '') in ('Return', 'Tab', 'Up', 'Down'):
+        def voltar_para(iid):
+            if iid and tree_vinculos.exists(iid):
+                tree_vinculos.focus(iid); tree_vinculos.selection_set(iid); tree_vinculos.see(iid)
+            else:
+                tree_vinculos.selection_set(())
+
+        def ao_selecionar(event=None):
+            """[AUDITORIA VÍNCULOS] Trocar de linha não descarta mais, sem perguntar, o que foi digitado."""
+            novo = tree_vinculos.focus()
+            if not novo or novo == estado['editando']:
                 return
-            achados = buscar_nomes(entry_busca_mestre.get(), self.lista_mestre_produtos_nomes)
-            combo_mestre_edit['values'] = achados
-            if achados and entry_busca_mestre.get().strip():
-                combo_mestre_edit.set(achados[0])
+            sel, v_antigo = selecionado_atual()
+            if v_antigo:
+                if not painel_compras['pode_sair']():
+                    voltar_para(sel); return
+                if tem_alteracao():
+                    resposta = messagebox.askyesnocancel(
+                        "Alterações não salvas",
+                        f"Você alterou o vínculo '{v_antigo['DescricaoXML']}' e não salvou.\n\n"
+                        "SIM = salvar agora\nNÃO = descartar as alterações\nCANCELAR = voltar para ele", parent=popup)
+                    if resposta is None:
+                        voltar_para(sel); return
+                    if resposta:
+                        if not salvar_vinculo(depois=novo):
+                            voltar_para(sel)
+                        return
+            estado['editando'] = novo
+            preencher_edicao()
 
-        def salvar_alteracao(event=None):
+        def salvar_vinculo(depois=None):
+            """Grava produto, Qtd/Cx, EAN e NCM do vínculo do editor. Devolve True se gravou.
+            depois: vínculo a abrir no editor depois de salvar (troca de linha com 'Salvar agora')."""
             sel, v = selecionado_atual()
             if not v:
                 messagebox.showwarning("Aviso", "Selecione um vínculo na lista.", parent=popup)
-                return
-            novo_mestre_nome = combo_mestre_edit.get()
-            novo_mestre_id = self.mapa_produtos_mestre.get(novo_mestre_nome)
-            if not novo_mestre_id:
-                messagebox.showerror("Erro", "Selecione um Produto Mestre válido.", parent=popup)
-                return
+                return False
+            if not painel_compras['pode_sair']():
+                return False
+            novo_mestre_id = estado['mestre_novo'] if estado['mestre_novo'] is not None else v['ProdutoID']
+            if novo_mestre_id is None or novo_mestre_id not in estado['produtos']:
+                abas.select(aba_cadastro)
+                messagebox.showerror("Erro", "Escolha o produto do estoque: digite o nome na busca e escolha na lista.", parent=popup)
+                entry_busca_mestre.focus_set()
+                return False
             try:
                 novo_fator = para_decimal(entry_fator_edit.get(), "Fator", permitir_zero=False)
             except ValueError:
+                abas.select(aba_cadastro)
                 messagebox.showerror("Erro", "Qtd/Cx (fator) inválido. Use um número maior que 0.", parent=popup)
-                return
+                return False
+            if novo_mestre_id != v['ProdutoID'] and v['QtdCompras'] and not messagebox.askyesno(
+                    "Trocar o produto do estoque",
+                    f"'{v['DescricaoXML']}' vai passar de\n  {v['NomeMestre'] or '(sem produto)'}\npara\n  "
+                    f"{estado['produtos'][novo_mestre_id]['nome']}\n\n"
+                    f"As {v['QtdCompras']} compra(s) deste vínculo vão junto. Confirmar?", parent=popup):
+                return False
             novo_ean = entry_ean_edit.get().strip()
             novo_ncm = entry_ncm_edit.get().strip()
 
             recalcular = False
             if novo_fator != v['Fator'] and v['QtdCompras'] > 0:
                 fator_antigo, previa = database.previa_recalculo_vinculo(v['ID'], novo_fator)
-                exemplos = "\n".join(
-                    f"  • NF {p['NF']} ({p['Data'].strftime('%d/%m/%Y') if p['Data'] else '?'}): "
-                    f"{fmt_qtd(p['QtdAtual'])} a {fmt_reais(p['CustoAtual'])}  →  "
-                    f"{fmt_qtd(p['QtdNova'])} a {fmt_reais(p['CustoNovo'])}" for p in previa[:5])
-                mais = f"\n  ... e mais {len(previa) - 5}" if len(previa) > 5 else ""
-                resposta = messagebox.askyesnocancel(
-                    "Corrigir também as compras já importadas?",
-                    f"O Qtd/Cx vai mudar de {fmt_qtd(fator_antigo)} para {fmt_qtd(novo_fator)}.\n\n"
-                    f"Existem {len(previa)} compra(s) já importada(s) com o fator antigo:\n{exemplos}{mais}\n\n"
-                    "SIM = corrigir também essas compras (recomendado se o fator estava ERRADO;\n"
-                    "         o valor total de cada nota não muda)\n"
-                    "NÃO = mudar só para as PRÓXIMAS notas\n"
-                    "CANCELAR = não salvar\n\n"
-                    "Obs.: contagens com o valor do estoque já FECHADO não mudam.",
-                    parent=popup)
-                if resposta is None:
-                    return
-                recalcular = bool(resposta)
+                if previa is None:
+                    # [AUDITORIA VÍNCULOS] antes um erro aqui virava "vai mudar de 1 para X, 0 compras"
+                    messagebox.showerror("Erro", "Não foi possível conferir as compras deste vínculo (veja o log).\n\n"
+                                         "Nada foi salvo.", parent=popup)
+                    return False
+                if previa:   # (lista vazia = as compras já estão neste Qtd/Cx: não há o que perguntar)
+                    exemplos = "\n".join(
+                        f"  • NF {p['NF']} ({p['Data'].strftime('%d/%m/%Y') if p['Data'] else '?'}): "
+                        f"{fmt_qtd(p['QtdAtual'])} a {fmt_reais(p['CustoAtual'])}  →  "
+                        f"{fmt_qtd(p['QtdNova'])} a {fmt_reais(p['CustoNovo'])}" for p in previa[:5])
+                    mais = f"\n  ... e mais {len(previa) - 5}" if len(previa) > 5 else ""
+                    resposta = messagebox.askyesnocancel(
+                        "Corrigir também as compras já importadas?",
+                        f"O Qtd/Cx vai mudar de {fmt_qtd(fator_antigo)} para {fmt_qtd(novo_fator)}.\n\n"
+                        f"Existem {len(previa)} compra(s) já importada(s) com outro Qtd/Cx:\n{exemplos}{mais}\n\n"
+                        "SIM = corrigir também essas compras (recomendado se o fator estava ERRADO;\n"
+                        "         o valor total de cada nota não muda)\n"
+                        "NÃO = mudar só para as PRÓXIMAS notas\n"
+                        "CANCELAR = não salvar\n\n"
+                        "Obs.: contagens com o valor do estoque já FECHADO não mudam.",
+                        parent=popup)
+                    if resposta is None:
+                        return False
+                    recalcular = bool(resposta)
 
-            if database.atualizar_vinculo_existente(v['ID'], novo_mestre_id, novo_fator, recalcular_compras=recalcular,
-                                                    novo_ean=novo_ean, novo_ncm=novo_ncm):
-                extra = " e compras antigas corrigidas" if recalcular else ""
-                self.status(f"Vínculo '{v['DescricaoXML']}' salvo (Qtd/Cx {fmt_qtd(novo_fator)}{extra}).")
-                carregar_dados(); mostrar(manter=sel); preencher_edicao()
-                if ao_salvar:
-                    try:
-                        ao_salvar()
-                    except Exception as e:
-                        logger.warning(f"Falha ao atualizar a janela de origem após salvar vínculo: {e}")
-            else:
+            if not database.atualizar_vinculo_existente(v['ID'], novo_mestre_id, novo_fator, recalcular_compras=recalcular,
+                                                        novo_ean=novo_ean, novo_ncm=novo_ncm):
                 messagebox.showerror("Erro", "Falha ao atualizar (veja o log).", parent=popup)
+                return False
+            extra = " e compras antigas corrigidas" if recalcular else ""
+            self.status(f"Vínculo '{v['DescricaoXML']}' salvo (Qtd/Cx {fmt_qtd(novo_fator)}{extra}).")
+            estado['mestre_novo'] = None
+            estado['foto'] = None
+            if depois:
+                estado['editando'] = depois
+            recarregar_tudo(manter=estado['editando'])
+            return True
+
+        def salvar_alteracao(event=None):
+            salvar_vinculo()
+            return "break"
+
+        def desfazer_alteracao(event=None):
+            preencher_edicao()
             return "break"
 
         def excluir_vinculo():
@@ -6169,15 +6937,19 @@ class AppGestaoEstoque:
                 return
             # [DEPURAÇÃO 2] conta também o custo manual (nota de quantidade 0): excluir o vínculo dele
             # apagava o custo do produto
-            itens = getattr(database, 'vinculo_tem_itens', lambda _id: None)(v['ID'])
+            try:
+                itens = getattr(database, 'vinculo_tem_itens', lambda _id: None)(v['ID'])
+            except Exception as e:
+                logger.error(f"Erro ao conferir os itens do vínculo {v['ID']}: {e}", exc_info=True)
+                itens = None
             if v['QtdCompras'] == 0 and itens:
                 messagebox.showwarning("Não é possível excluir",
                                        f"'{v['DescricaoXML']}' guarda o CUSTO MANUAL do produto (cadastrado no Catálogo).\n\n"
                                        "Excluir apagaria esse custo.", parent=popup)
                 return
             if v['QtdCompras'] > 0:
-                dica = ("Se for um DUPLICADO, use '🧹 Juntar duplicados'." if v.get('Grupo')
-                        else "Se o produto está errado, troque o Produto Mestre e clique em 'Salvar Alterações'.")
+                dica = ("Se for um DUPLICADO, use 'Juntar duplicados'." if v.get('Grupo')
+                        else "Se o produto está errado, escolha outro na busca (ou 'Criar produto novo') e clique em 'Salvar alterações'.")
                 messagebox.showwarning(
                     "Não é possível excluir",
                     f"'{v['DescricaoXML']}' já tem {v['QtdCompras']} compra(s) registrada(s).\n\n"
@@ -6188,48 +6960,76 @@ class AppGestaoEstoque:
                                    "Na próxima importação, o sistema pedirá para vincular novamente.", parent=popup):
                 if database.excluir_vinculo_existente(v['ID']):
                     self.status(f"Vínculo '{v['DescricaoXML']}' excluído.", 'info')
+                    estado['editando'] = None
+                    estado['foto'] = None
                     recarregar_tudo()   # [DEPURAÇÃO 2] atualiza também o editor e a janela de origem
                 else:
                     messagebox.showerror("Erro", "Falha ao excluir (o vínculo pode ter compras; veja o log).", parent=popup)
 
         def ir_para_fator(event=None):
+            abas.select(aba_cadastro)
             entry_fator_edit.focus_set(); entry_fator_edit.select_range(0, tk.END)
 
+        def duplo_clique(event):
+            linha = linha_do_clique(tree_vinculos, event)
+            if not linha:
+                return
+            ao_selecionar()
+            if estado['editando'] != linha:
+                return "break"           # o usuário preferiu ficar no vínculo anterior
+            try:
+                coluna = cols[int(tree_vinculos.identify_column(event.x).lstrip('#')) - 1]
+            except (ValueError, IndexError):
+                coluna = ''
+            v = estado['dados'].get(linha)
+            if coluna in colunas_de_compra and v and v['QtdCompras']:
+                abas.select(aba_compras)
+                painel_compras['focar']()
+            else:
+                ir_para_fator()
+            return "break"
+
+        def fechar():
+            sel, v = selecionado_atual()
+            if v:
+                if not painel_compras['pode_sair']():
+                    return
+                if tem_alteracao():
+                    resposta = messagebox.askyesnocancel(
+                        "Alterações não salvas", f"Você alterou o vínculo '{v['DescricaoXML']}' e não salvou.\n\n"
+                        "SIM = salvar e fechar\nNÃO = fechar sem salvar\nCANCELAR = continuar editando", parent=popup)
+                    if resposta is None or (resposta and not salvar_vinculo()):
+                        return
+            popup.destroy()
+
         entry_filtro.bind("<KeyRelease>", lambda e: mostrar())
+        entry_filtro.bind("<Escape>", lambda e: limpar_filtros())
         combo_problema.bind("<<ComboboxSelected>>", lambda e: mostrar())
-        entry_busca_mestre.bind("<KeyRelease>", filtrar_mestre)
+        combo_fornecedor.bind("<<ComboboxSelected>>", lambda e: mostrar())
+        entry_busca_mestre.bind("<KeyRelease>", preencher_lista_mestre)
+        entry_busca_mestre.bind("<Return>", escolher_mestre)
+        entry_busca_mestre.bind("<Down>", navegar_lista_mestre)
+        entry_busca_mestre.bind("<Up>", navegar_lista_mestre)
+        entry_busca_mestre.bind("<Escape>", lambda e: (entry_busca_mestre.delete(0, tk.END), preencher_lista_mestre()))
+        lista_mestre.bind("<Double-1>", escolher_mestre)
+        lista_mestre.bind("<Return>", escolher_mestre)
         entry_fator_edit.bind("<KeyRelease>", atualizar_previa)
         for campo in (entry_fator_edit, entry_ean_edit, entry_ncm_edit):
             campo.bind("<Return>", salvar_alteracao)
-        tree_vinculos.bind("<<TreeviewSelect>>", preencher_edicao)
-        tree_vinculos.bind("<Double-1>", ir_para_fator)
+            campo.bind("<Escape>", desfazer_alteracao)
+        tree_vinculos.bind("<<TreeviewSelect>>", ao_selecionar)
+        tree_vinculos.bind("<Double-1>", duplo_clique)
         tree_vinculos.bind("<Delete>", lambda e: excluir_vinculo())
+        popup.protocol("WM_DELETE_WINDOW", fechar)
 
-        btn_salvar = ttk.Button(frame_edit, text="💾 Salvar Alterações", command=salvar_alteracao)
-        btn_salvar.grid(row=2, column=4, padx=10)
-        btn_excluir = ttk.Button(frame_edit, text="🗑️ Excluir Vínculo", command=excluir_vinculo)
-        btn_excluir.grid(row=2, column=5, padx=(0, 5))
-
-        def abrir_compras():
-            sel, v = selecionado_atual()
-            if not v:
-                messagebox.showwarning("Aviso", "Selecione um vínculo na lista.", parent=popup)
-                return
-            if not v['QtdCompras']:
-                messagebox.showinfo("Sem compras", "Este vínculo ainda não tem compras registradas.", parent=popup)
-                return
-            def depois():
-                carregar_dados(); mostrar(manter=sel); preencher_edicao()
-                if ao_salvar:
-                    try:
-                        ao_salvar()
-                    except Exception as e:
-                        logger.warning(f"Falha ao atualizar a janela de origem após corrigir custo: {e}")
-            self.abrir_compras_do_vinculo(v, popup, ao_mudar=depois)
-
-        # [MELHORIA] ver as compras do vínculo e corrigir um PREÇO gravado errado
-        btn_compras = ttk.Button(frame_edit, text="🧾 Compras / corrigir custo", command=abrir_compras)
-        btn_compras.grid(row=0, column=4, columnspan=2, sticky="e", padx=(0, 5))
+        btn_salvar = ttk.Button(frame_botoes_edit, text="Salvar alterações", command=salvar_alteracao)
+        btn_salvar.pack(side=tk.LEFT)
+        btn_desfazer = ttk.Button(frame_botoes_edit, text="Desfazer", command=desfazer_alteracao)
+        btn_desfazer.pack(side=tk.LEFT, padx=6)
+        btn_criar = ttk.Button(frame_botoes_edit, text="Criar produto novo", command=criar_produto_novo)
+        btn_criar.pack(side=tk.LEFT)
+        btn_excluir = ttk.Button(frame_botoes_edit, text="Excluir vínculo", command=excluir_vinculo)
+        btn_excluir.pack(side=tk.LEFT, padx=6)
 
         if produto_id is not None:
             lbl_produto.config(text=f"Mostrando só os vínculos de: {nome_produto or produto_id}")
@@ -6237,154 +7037,360 @@ class AppGestaoEstoque:
             estado['filtro_problema'] = 'todos'
         carregar_dados()
         mostrar()
+        preencher_edicao()
         entry_filtro.focus_set()
         self._janela_vinculos = {'popup': popup, 'tree': tree_vinculos, 'filtro': entry_filtro,
                                  'fator': entry_fator_edit, 'ean': entry_ean_edit, 'ncm': entry_ncm_edit,
-                                 'combo': combo_mestre_edit, 'busca_mestre': entry_busca_mestre,
-                                 'previa': lbl_previa, 'salvar': salvar_alteracao, 'excluir': excluir_vinculo,
-                                 'problema': combo_problema, 'opcoes': lambda: estado['opcoes'],
-                                 'mostrar': mostrar, 'mostrar_todos': mostrar_todos,
-                                 'contador': lbl_contador, 'btn_juntar': btn_juntar, 'compras': abrir_compras}
+                                 'busca_mestre': entry_busca_mestre, 'abas': abas, 'aba_cadastro': aba_cadastro,
+                                 'aba_compras': aba_compras, 'compras': painel_compras,
+                                 'lista_mestre': lista_mestre, 'escolher_mestre': escolher_mestre,
+                                 'mestre_atual': lbl_mestre_atual, 'criar_produto': criar_produto_novo,
+                                 'fornecedor': combo_fornecedor, 'limpar': limpar_filtros, 'estado': estado,
+                                 'previa': lbl_previa, 'salvar': salvar_alteracao, 'salvar_vinculo': salvar_vinculo,
+                                 'excluir': excluir_vinculo, 'problema': combo_problema, 'opcoes': lambda: estado['opcoes'],
+                                 'mostrar': mostrar, 'mostrar_todos': mostrar_todos, 'ordenar': ordenar,
+                                 'tem_alteracao': tem_alteracao, 'ao_selecionar': ao_selecionar, 'fechar': fechar,
+                                 'duplo_clique': duplo_clique,
+                                 'contador': lbl_contador, 'btn_juntar': btn_juntar, 'selecionado': lbl_selecionado}
 
-    def abrir_compras_do_vinculo(self, v, janela_pai=None, ao_mudar=None):
+    def montar_painel_compras(self, pai, ao_mudar=None):
         """
-        [MELHORIA] Mostra todas as compras de um vínculo (nota, data, embalagens, preço da
-        embalagem, total do item x total da nota) e deixa corrigir o PREÇO de uma compra
-        gravado errado (ex: R$ 840.000,00 no lugar de R$ 84,00). A quantidade não muda.
-        O usuário digita o preço da EMBALAGEM como está no DANFE (papel da nota).
+        [AUDITORIA VÍNCULOS] Aba "Compras: qtd e valor da nota" da tela de vínculos.
+        Mostra cada compra do vínculo COMO VEIO NA NOTA e deixa corrigir:
+          - a QUANTIDADE (embalagens, como no DANFE),
+          - o Qtd/Cx DAQUELA compra (ex: uma nota veio com caixa de 6 e as outras com 8),
+          - o VALOR (preço de 1 embalagem, ou o total do item, que recalcula o preço).
+        Antes só dava para corrigir o preço, numa janela separada, com o campo vazio.
+        No estoque fica: quantidade = embalagens x Qtd/Cx; custo = valor da embalagem / Qtd/Cx.
+        Devolve {'carregar': fn(v), 'focar': fn(), 'pode_sair': fn() -> bool, ...}.
         """
-        pai = janela_pai or self.root
-        popup = Toplevel(pai)
-        popup.title(f"🧾 Compras de: {v['DescricaoXML']}")
-        popup.geometry("1050x520")
-        popup.transient(pai)
-        fator = v['Fator'] if v['Fator'] and v['Fator'] > 0 else Decimal('1')
+        estado = {'v': None, 'compras': {}, 'item': None, 'foto': None, 'ultimo_valor': 'preco',
+                  'sugestao': None, 'un': 'UN'}
+        pai.columnconfigure(0, weight=1)
+        pai.rowconfigure(1, weight=1)
+        lbl_info = ttk.Label(pai, text="", foreground="gray", wraplength=1200, justify=tk.LEFT)
+        lbl_info.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 4))
 
-        def fator_de(c):
-            """[DEPURAÇÃO 2] Qtd/Cx com que ESTA compra foi importada (antes usava o Qtd/Cx atual
-            do vínculo para todas: depois de trocar o Qtd/Cx, as embalagens e o preço ficavam errados)."""
-            f = c.get('Fator')
-            return f if f and f > 0 else fator
-        unidade = self.unidade_do_produto(v.get('ProdutoID'))
-        frame = ttk.Frame(popup, padding=10)
-        frame.pack(fill=tk.BOTH, expand=True)
-        ttk.Label(frame, font=("Arial", 10, "bold"), text=(
-            f"{v['Fornecedor']}  •  {v['DescricaoXML']}  →  {v['NomeMestre']}  (Qtd/Cx {fmt_qtd(fator)})")).pack(anchor="w")
-        ttk.Label(frame, foreground="gray", text=(
-            "Selecione a compra com o preço errado, digite o preço CERTO de UMA embalagem (como está no DANFE) e clique em Corrigir. "
-            "Só o preço muda; a quantidade fica igual.")).pack(anchor="w", pady=(0, 6))
-
-        cols = ('NF', 'Data', 'Embalagens', 'Preço embalagem', f'Qtd ({unidade})', f'Custo/{unidade}',
-                'Total do item', 'Total da nota', 'Alerta')
-        tree = criar_tree_zebrada(frame, columns=cols, show='headings', selectmode='browse')
-        for col, larg, anc in zip(cols, (70, 90, 85, 120, 85, 110, 120, 120, 200),
-                                  ('center', 'center', 'center', 'e', 'center', 'e', 'e', 'e', 'w')):
-            tree.heading(col, text=col); tree.column(col, width=larg, anchor=anc)
+        cols = ('NF', 'Data', 'Qtd na nota', 'Qtd/Cx', 'Valor de 1 emb.', 'Total do item', 'Qtd no estoque',
+                'Custo/unid.', 'Total da nota', 'Alerta')
+        tree = criar_tree_zebrada(pai, columns=cols, show='headings', selectmode='browse', height=4)
+        for col, larg, anc in zip(cols, (70, 85, 80, 60, 110, 105, 110, 95, 105, 200),
+                                  ('center', 'center', 'center', 'center', 'e', 'e', 'center', 'e', 'e', 'w')):
+            tree.heading(col, text=col)
+            tree.column(col, width=larg, minwidth=40, anchor=anc, stretch=(col == 'Alerta'))
         tree.tag_configure('errado', background='#ffd6d6')
-        tree.pack(fill=tk.BOTH, expand=True)
+        sb = ttk.Scrollbar(pai, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=sb.set)
+        tree.grid(row=1, column=0, sticky="nsew")
+        sb.grid(row=1, column=1, sticky="ns")
 
-        frame_corr = ttk.LabelFrame(popup, text="Corrigir o preço da compra selecionada", padding=10)
-        frame_corr.pack(fill=tk.X, padx=10, pady=(0, 10))
-        lbl_sel = ttk.Label(frame_corr, text="Selecione uma compra na lista.", font=("Arial", 10, "bold"))
-        lbl_sel.grid(row=0, column=0, columnspan=4, sticky="w")
-        ttk.Label(frame_corr, text="Preço CERTO de 1 embalagem (R$):").grid(row=1, column=0, sticky="w", pady=(6, 0))
-        entry_preco = ttk.Entry(frame_corr, width=14)
-        entry_preco.grid(row=1, column=1, sticky="w", padx=5, pady=(6, 0))
-        lbl_sugestao = ttk.Label(frame_corr, text="", foreground="#0056b3")
-        lbl_sugestao.grid(row=2, column=0, columnspan=4, sticky="w", pady=(6, 0))
-        estado = {'compras': {}}
+        frame_campos = ttk.Frame(pai)
+        frame_campos.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        lbl_sel = ttk.Label(frame_campos, text="", font=("Arial", 10, "bold"))
+        lbl_sel.grid(row=0, column=0, columnspan=6, sticky="w")
+        entradas = {}
+        for i, (chave, rotulo, larg) in enumerate((('emb', 'Qtd na nota (embalagens):', 10),
+                                                   ('fator', 'Qtd/Cx desta compra:', 8),
+                                                   ('preco', 'Valor de 1 embalagem (R$):', 12),
+                                                   ('total', 'Total do item (R$):', 12))):
+            ttk.Label(frame_campos, text=rotulo).grid(row=1, column=i, sticky="w", padx=(0, 12), pady=(4, 0))
+            entradas[chave] = ttk.Entry(frame_campos, width=larg)
+            entradas[chave].grid(row=2, column=i, sticky="w", padx=(0, 12))
+        frame_botoes = ttk.Frame(frame_campos)
+        frame_botoes.grid(row=2, column=4, sticky="w")
+        lbl_resultado = ttk.Label(pai, text="", foreground="#0056b3", wraplength=1200, justify=tk.LEFT)
+        lbl_resultado.grid(row=3, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        lbl_sugestao = ttk.Label(pai, text="", foreground="#0056b3", wraplength=1200, justify=tk.LEFT)
+        lbl_sugestao.grid(row=4, column=0, columnspan=2, sticky="w")
+        quebrar_linhas_na_largura(pai, lbl_info, lbl_resultado, lbl_sugestao)
 
-        def carregar(manter=None):
+        def txt_valor(x):
+            """Valor para o campo: 2 casas (abaixo de R$ 1, até 4 casas, ex: 0,0838)."""
+            x = Decimal(str(x or 0))
+            if abs(x) >= 1 or x == 0:
+                return f"{x.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)}".replace('.', ',')
+            texto = f"{x.quantize(Decimal('0.0001'), rounding=ROUND_HALF_UP)}"
+            while texto.endswith('0') and len(texto.split('.')[1]) > 2:
+                texto = texto[:-1]
+            return texto.replace('.', ',')
+
+        def reais_unid(x):
+            x = Decimal(str(x or 0))
+            return fmt_reais(x) if abs(x) >= 1 or x == 0 else "R$ " + txt_valor(x)
+
+        def compra_atual():
+            return estado['compras'].get(estado['item']) if estado['item'] else None
+
+        def valores():
+            return tuple(entradas[k].get().strip() for k in ('emb', 'fator', 'preco', 'total'))
+
+        def tem_alteracao():
+            return estado['foto'] is not None and compra_atual() is not None and valores() != estado['foto']
+
+        def escrever(chave, texto):
+            entradas[chave].delete(0, tk.END)
+            entradas[chave].insert(0, texto)
+
+        def preco_atual():
+            """Valor de 1 embalagem. Se o usuário digitou o TOTAL, vem do total; se não mexeu no valor,
+            é o valor EXATO gravado (sem o arredondamento do campo). Levanta ValueError se inválido."""
+            c = compra_atual()
+            if estado['ultimo_valor'] == 'total':
+                emb = para_decimal(entradas['emb'].get(), "Qtd na nota", permitir_zero=False)
+                return para_decimal(entradas['total'].get(), "Total do item") / emb
+            texto = entradas['preco'].get().strip()
+            if c and estado['foto'] and texto == estado['foto'][2]:
+                return c['Custo'] * c['Fator']
+            return para_decimal(texto, "Valor de 1 embalagem")
+
+        def sincronizar(campo):
+            """Valor de 1 embalagem x Total do item: o que foi digitado por último manda no outro."""
+            try:
+                emb = para_decimal(entradas['emb'].get(), "Qtd na nota", permitir_zero=False)
+                if estado['ultimo_valor'] == 'total':
+                    if campo != 'preco':
+                        escrever('preco', txt_valor(para_decimal(entradas['total'].get(), "Total do item") / emb))
+                elif campo != 'total':
+                    escrever('total', txt_valor(emb * preco_atual()))
+            except (ValueError, InvalidOperation, ZeroDivisionError):
+                pass
+
+        def atualizar_resultado():
+            c = compra_atual()
+            if not c:
+                lbl_resultado.config(text="")
+                btn_salvar.state(['disabled'])
+                return
+            un = estado['un']
+            try:
+                emb = para_decimal(entradas['emb'].get(), "Qtd na nota", permitir_zero=False)
+                fator = para_decimal(entradas['fator'].get(), "Qtd/Cx desta compra", permitir_zero=False)
+                preco = preco_atual()
+            except ValueError as e:
+                lbl_resultado.config(text=f"Atenção: {e}", foreground="#c62828")
+                btn_salvar.state(['disabled'])
+                return
+            total = emb * preco
+            texto = (f"No estoque fica: {fmt_qtd(emb * fator)} {un} a {reais_unid(preco / fator)} cada  ·  "
+                     f"total do item {fmt_reais(total)}")
+            cor = "#0056b3"
+            if c['TotalNota'] > 0 and total > c['TotalNota'] * Decimal('1.05') + 1:
+                texto += f"  ·  MAIS CARO QUE A NOTA INTEIRA ({fmt_reais(c['TotalNota'])}): confira o valor"
+                cor = "#c62828"
+            mudou = tem_alteracao()
+            if mudou:
+                texto += "   (alteração não salva)"
+                cor = "#e65100" if cor == "#0056b3" else cor
+            lbl_resultado.config(text=texto, foreground=cor)
+            btn_salvar.state(['!disabled'] if mudou else ['disabled'])
+
+        def preencher():
+            c = compra_atual()
+            estado['ultimo_valor'] = 'preco'
+            estado['sugestao'] = None
+            for e in entradas.values():
+                e.state(['!disabled'])
+                e.delete(0, tk.END)
+            if not c:
+                lbl_sel.config(text="Selecione uma compra na lista." if estado['compras'] else "")
+                lbl_sugestao.config(text="")
+                for e in entradas.values():
+                    e.state(['disabled'])
+                btn_sugestao.state(['disabled'])
+                btn_desfazer.state(['disabled'])
+                estado['foto'] = None
+                atualizar_resultado()
+                return
+            fator = c['Fator']
+            embalagens = c['Quantidade'] / fator
+            lbl_sel.config(text=f"NF {c['NF']} de {c['Data'].strftime('%d/%m/%Y') if c['Data'] else '?'}  ·  "
+                                f"corrija como está no DANFE (papel da nota):")
+            escrever('emb', fmt_qtd(embalagens))
+            escrever('fator', fmt_qtd(fator))
+            escrever('preco', txt_valor(c['Custo'] * fator))
+            escrever('total', txt_valor(c['TotalItem']))
+            estado['foto'] = valores()
+            texto = ""
+            # a dica só aparece quando o item custa mais que a nota inteira (nos outros casos só confundia)
+            if c['MaiorQueNota'] and c['TotalNota'] > 0 and embalagens > 0:
+                sobra = c['TotalNota'] - c['SomaOutrosItens']
+                if sobra > 0:
+                    estado['sugestao'] = (sobra / embalagens).quantize(Decimal('0.01'))
+                    texto = (f"Dica: pelo total da nota ({fmt_reais(c['TotalNota'])}) menos os outros itens "
+                             f"({fmt_reais(c['SomaOutrosItens'])}), sobram {fmt_reais(sobra)} para este item = "
+                             f"~{fmt_reais(estado['sugestao'])} por embalagem (pode incluir frete/ST). Confira no DANFE.")
+            lbl_sugestao.config(text=texto, foreground="#c62828")
+            btn_sugestao.state(['!disabled'] if estado['sugestao'] else ['disabled'])
+            btn_desfazer.state(['!disabled'])
+            atualizar_resultado()
+
+        def carregar(v, manter=None):
+            mesmo = v is not None and estado['v'] is not None and estado['v']['ID'] == v['ID']
+            if manter is None and mesmo:
+                manter = estado['item']
+            estado.update({'v': v, 'compras': {}, 'item': None, 'foto': None})
             for i in tree.get_children():
                 tree.delete(i)
-            estado['compras'] = {}
-            for c in database.listar_compras_do_vinculo(v['ID']):
+            if not v:
+                lbl_info.config(text="Selecione um vínculo na lista para ver e corrigir as compras dele.")
+                preencher()
+                return
+            if v.get('Interno'):
+                lbl_info.config(text="Este vínculo guarda o CUSTO MANUAL do Catálogo (não é compra de nota): corrija o custo no Catálogo.")
+                preencher()
+                return
+            estado['un'] = self.unidade_do_produto(v.get('ProdutoID'))
+            try:
+                lista = database.listar_compras_do_vinculo(v['ID'])
+            except Exception as e:
+                logger.error(f"Erro ao listar as compras do vínculo {v['ID']}: {e}", exc_info=True)
+                lista = []
+            # quantidade 0 = custo manual (nota "fantasma"): não é compra e não pode virar compra aqui
+            lista = [c for c in lista or [] if c['Quantidade'] > 0]
+            un = estado['un']
+            for c in lista:
                 iid = str(c['ItemNotaID'])
                 estado['compras'][iid] = c
-                embalagens = c['Quantidade'] / fator_de(c)
-                alerta = "💸 Mais caro que a nota inteira!" if c['MaiorQueNota'] else ""
+                fator = c['Fator']
+                alerta = "Mais caro que a nota inteira!" if c['MaiorQueNota'] else ("bonificação" if c['Custo'] == 0 else "")
                 tree.insert("", "end", iid=iid, tags=('errado',) if c['MaiorQueNota'] else (), values=(
-                    c['NF'], c['Data'].strftime('%d/%m/%Y') if c['Data'] else "—", fmt_qtd(embalagens),
-                    fmt_reais(c['Custo'] * fator_de(c)), fmt_qtd(c['Quantidade']), fmt_reais(c['Custo']),
-                    fmt_reais(c['TotalItem']), fmt_reais(c['TotalNota']) if c['TotalNota'] > 0 else "—", alerta))
+                    c['NF'], c['Data'].strftime('%d/%m/%Y') if c['Data'] else "—", fmt_qtd(c['Quantidade'] / fator),
+                    fmt_qtd(fator), fmt_reais(c['Custo'] * fator), fmt_reais(c['TotalItem']),
+                    f"{fmt_qtd(c['Quantidade'])} {un}", reais_unid(c['Custo']),
+                    fmt_reais(c['TotalNota']) if c['TotalNota'] > 0 else "—", alerta))
+            if lista:
+                lbl_info.config(text=f"{len(lista)} compra(s) de '{v['DescricaoXML']}' (a mais nova primeiro). Escolha uma, "
+                                     "corrija a quantidade, o Qtd/Cx ou o valor e clique em 'Salvar compra'.")
+            else:
+                lbl_info.config(text="Este vínculo ainda não tem compras registradas.")
             filhos = tree.get_children()
             alvo = manter if manter and tree.exists(manter) else next(
                 (i for i in filhos if estado['compras'][i]['MaiorQueNota']), filhos[0] if filhos else None)
             if alvo:
+                estado['item'] = alvo
                 tree.focus(alvo); tree.selection_set(alvo); tree.see(alvo)
             preencher()
 
-        def preencher(event=None):
-            sel = tree.focus()
-            c = estado['compras'].get(sel)
-            entry_preco.delete(0, tk.END)
-            if not c:
-                lbl_sel.config(text="Selecione uma compra na lista."); lbl_sugestao.config(text=""); return
-            embalagens = c['Quantidade'] / fator_de(c)
-            lbl_sel.config(text=(f"NF {c['NF']} de {c['Data'].strftime('%d/%m/%Y') if c['Data'] else '?'}: "
-                                 f"{fmt_qtd(embalagens)} embalagem(ns) a {fmt_reais(c['Custo'] * fator_de(c))} cada "
-                                 f"(total do item {fmt_reais(c['TotalItem'])})"))
-            texto = ""
-            if c['TotalNota'] > 0 and embalagens > 0:
-                sobra = c['TotalNota'] - c['SomaOutrosItens']
-                if sobra > 0:
-                    sugestao = (sobra / embalagens).quantize(Decimal('0.01'))
-                    texto = (f"💡 Pelo total da nota ({fmt_reais(c['TotalNota'])}) menos os outros itens "
-                             f"({fmt_reais(c['SomaOutrosItens'])}), sobram {fmt_reais(sobra)} para este item = "
-                             f"~{fmt_reais(sugestao)} por embalagem (pode incluir frete/ST). Confira no DANFE.")
-                    if c['MaiorQueNota']:
-                        entry_preco.insert(0, fmt_reais(sugestao).replace('R$', '').strip())
-            lbl_sugestao.config(text=texto)
+        def pode_sair():
+            """True se não há alteração pendente na compra (ou se o usuário aceitou descartá-la)."""
+            if not tem_alteracao():
+                return True
+            c = compra_atual()
+            if messagebox.askyesno("Compra não salva", f"Você alterou a compra da NF {c['NF']} e não salvou.\n\n"
+                                   "Descartar essa alteração?", parent=pai):
+                preencher()
+                return True
+            return False
 
-        def corrigir(event=None):
-            sel = tree.focus()
-            c = estado['compras'].get(sel)
-            if not c:
-                messagebox.showwarning("Aviso", "Selecione a compra que quer corrigir.", parent=popup)
+        def ao_trocar_compra(event=None):
+            novo = tree.focus()
+            if not novo or novo == estado['item']:
                 return
+            if not pode_sair():
+                if estado['item'] and tree.exists(estado['item']):
+                    tree.focus(estado['item']); tree.selection_set(estado['item'])
+                return
+            estado['item'] = novo
+            preencher()
+
+        def ao_digitar(campo):
+            def tratar(event=None):
+                if getattr(event, 'keysym', '') in ('Return', 'Escape', 'Tab', 'ISO_Left_Tab', 'Shift_L', 'Shift_R'):
+                    return
+                if campo in ('preco', 'total'):
+                    estado['ultimo_valor'] = campo
+                sincronizar(campo)
+                atualizar_resultado()
+            return tratar
+
+        def usar_sugestao():
+            if estado['sugestao'] is None:
+                return
+            escrever('preco', txt_valor(estado['sugestao']))
+            estado['ultimo_valor'] = 'preco'
+            sincronizar('preco')
+            atualizar_resultado()
+
+        def desfazer(event=None):
+            preencher()
+            return "break"
+
+        def salvar_compra(event=None):
+            c, v = compra_atual(), estado['v']
+            if not c or not v:
+                messagebox.showwarning("Aviso", "Selecione a compra que quer corrigir.", parent=pai)
+                return "break"
             try:
-                preco_emb = para_decimal(entry_preco.get(), "Preço da embalagem", permitir_zero=False)
-            except ValueError as e:
-                messagebox.showerror("Valor inválido", str(e), parent=popup)
-                return
-            novo_custo = (preco_emb / fator_de(c)).quantize(Decimal('0.0001'))
-            embalagens = c['Quantidade'] / fator_de(c)
-            novo_total = c['Quantidade'] * novo_custo
+                emb = para_decimal(entradas['emb'].get(), "Qtd na nota (embalagens)", permitir_zero=False)
+                fator = para_decimal(entradas['fator'].get(), "Qtd/Cx desta compra", permitir_zero=False)
+                preco = preco_atual()
+            except (ValueError, InvalidOperation, ZeroDivisionError) as e:
+                messagebox.showerror("Valor inválido", str(e), parent=pai)
+                return "break"
+            nova_qtd = (emb * fator).quantize(Decimal('0.001'))
+            novo_custo = (preco / fator).quantize(Decimal('0.0001'))
+            if nova_qtd <= 0:
+                messagebox.showerror("Valor inválido", "A quantidade no estoque ficou zero. Confira a Qtd na nota e o Qtd/Cx.", parent=pai)
+                return "break"
+            if nova_qtd == c['Quantidade'] and novo_custo == c['Custo'] and fator == c['Fator']:
+                self.status("Nada mudou nesta compra.", 'info')
+                preencher()
+                return "break"
+            un = estado['un']
+            emb_antes = c['Quantidade'] / c['Fator']
+            novo_total = nova_qtd * novo_custo
             aviso = ""
             if c['TotalNota'] > 0 and novo_total > c['TotalNota'] * Decimal('1.05') + 1:
-                aviso = (f"\n\n⚠️ ATENÇÃO: mesmo assim o item ({fmt_reais(novo_total)}) continua mais caro que a "
-                         f"nota inteira ({fmt_reais(c['TotalNota'])}). Confira o valor digitado.")
-            if not messagebox.askyesno("Corrigir preço", (
+                aviso = (f"\n\nATENÇÃO: o item ({fmt_reais(novo_total)}) continua mais caro que a nota inteira "
+                         f"({fmt_reais(c['TotalNota'])}). Confira o valor digitado.")
+            if not messagebox.askyesno("Corrigir compra", (
                     f"NF {c['NF']} — {v['DescricaoXML']}\n\n"
-                    f"Preço da embalagem: {fmt_reais(c['Custo'] * fator_de(c))}  →  {fmt_reais(preco_emb)}\n"
-                    f"Custo por {unidade}: {fmt_reais(c['Custo'])}  →  {fmt_reais(novo_custo)}\n"
-                    f"Total do item: {fmt_reais(c['TotalItem'])}  →  {fmt_reais(novo_total)}\n"
-                    f"A quantidade ({fmt_qtd(embalagens)} emb. = {fmt_qtd(c['Quantidade'])} {unidade}) não muda.\n\n"
-                    f"Contagens com o valor do estoque já FECHADO não mudam.{aviso}\n\nConfirmar?"), parent=popup):
-                return
-            ok, msg = database.atualizar_custos_itens([(c['ItemNotaID'], novo_custo)])
-            if not ok:
-                messagebox.showerror("Erro", msg, parent=popup)
-                return
-            self.status(f"Preço corrigido: NF {c['NF']} • {v['DescricaoXML']} → {fmt_reais(preco_emb)} por embalagem.")
-            carregar(manter=sel)
+                    f"Qtd na nota: {fmt_qtd(emb_antes)} → {fmt_qtd(emb)} embalagem(ns)\n"
+                    f"Qtd/Cx: {fmt_qtd(c['Fator'])} → {fmt_qtd(fator)}\n"
+                    f"Valor de 1 embalagem: {fmt_reais(c['Custo'] * c['Fator'])} → {fmt_reais(preco)}\n"
+                    f"Total do item: {fmt_reais(c['TotalItem'])} → {fmt_reais(novo_total)}\n\n"
+                    f"No estoque: {fmt_qtd(c['Quantidade'])} {un} a {reais_unid(c['Custo'])} → "
+                    f"{fmt_qtd(nova_qtd)} {un} a {reais_unid(novo_custo)}\n\n"
+                    f"Contagens com o valor do estoque já FECHADO não mudam.{aviso}\n\nConfirmar?"), parent=pai):
+                return "break"
+            if not database.atualizar_item_historico_compra(c['ItemNotaID'], nova_qtd, novo_custo, fator_usado=fator):
+                messagebox.showerror("Erro", "Falha ao gravar a compra (ela pode ter sido apagada; veja o log).", parent=pai)
+                return "break"
+            self.status(f"Compra corrigida: NF {c['NF']} • {v['DescricaoXML']} → {fmt_qtd(emb)} emb. de {fmt_reais(preco)}. "
+                        "Se houver contagem em aberto no 'Valor do Estoque', clique em 'Recalcular'.")
+            estado['foto'] = None
             if ao_mudar:
                 try:
                     ao_mudar()
                 except Exception as e:
-                    logger.warning(f"Falha ao atualizar a janela de vínculos: {e}")
-            messagebox.showinfo("Pronto", "Preço corrigido! 👍\n\nSe houver contagem em aberto no '💰 Valor do Estoque', "
-                                "clique em '🔄 Recalcular' para ver o efeito.", parent=popup)
+                    logger.warning(f"Falha ao atualizar a tela de vínculos depois de corrigir a compra: {e}")
+                    carregar(v)
+            else:
+                carregar(v)
+            return "break"
 
-        btn_corrigir = ttk.Button(frame_corr, text="💾 Corrigir preço", command=corrigir)
-        btn_corrigir.grid(row=1, column=2, padx=10, pady=(6, 0))
-        ttk.Button(frame_corr, text="Fechar", command=popup.destroy).grid(row=1, column=3, pady=(6, 0))
-        tree.bind("<<TreeviewSelect>>", preencher)
-        entry_preco.bind("<Return>", corrigir)
-        carregar()
-        entry_preco.focus_set()
-        self._janela_compras = {'popup': popup, 'tree': tree, 'preco': entry_preco, 'corrigir': corrigir,
-                                'sugestao': lbl_sugestao, 'selecionado': lbl_sel}
+        def focar():
+            if compra_atual():
+                entradas['emb'].focus_set()
+                entradas['emb'].select_range(0, tk.END)
+
+        btn_salvar = ttk.Button(frame_botoes, text="Salvar compra", command=salvar_compra)
+        btn_salvar.pack(side=tk.LEFT)
+        btn_desfazer = ttk.Button(frame_botoes, text="Desfazer", command=desfazer)
+        btn_desfazer.pack(side=tk.LEFT, padx=6)
+        btn_sugestao = ttk.Button(frame_botoes, text="Usar sugestão", command=usar_sugestao)
+        btn_sugestao.pack(side=tk.LEFT)
+        for chave, e in entradas.items():
+            e.bind("<KeyRelease>", ao_digitar(chave))
+            e.bind("<Return>", salvar_compra)
+            e.bind("<Escape>", desfazer)
+        tree.bind("<<TreeviewSelect>>", ao_trocar_compra)
+        tree.bind("<Double-1>", lambda e: (focar(), "break")[1])
+        carregar(None)
+        return {'carregar': carregar, 'focar': focar, 'pode_sair': pode_sair, 'tree': tree, 'entradas': entradas,
+                'salvar': salvar_compra, 'desfazer': desfazer, 'usar_sugestao': usar_sugestao,
+                'resultado': lbl_resultado, 'sugestao': lbl_sugestao, 'tem_alteracao': tem_alteracao,
+                'estado': estado}
 
     def abrir_juntar_duplicados(self, janela_pai=None, ao_mudar=None):
         """

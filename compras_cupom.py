@@ -77,6 +77,32 @@ def extrair_chave(texto):
     raise ErroCompras("Este QR Code não é de um cupom fiscal (NFC-e).")
 
 
+# [CUPOM NO COMPUTADOR] consulta pública da NFC-e de cada estado (2 primeiros números da chave).
+# Na SEFAZ-MT a consulta SÓ pela chave pede "Não sou um robô" (reCAPTCHA, confirmado pelo
+# diagnosticar_cupom.py em 05/10/2026): o servidor não consegue abrir sozinho. Nesse caso a
+# pessoa abre a consulta no navegador, salva a página do cupom (Ctrl+S) e envia o arquivo.
+CONSULTA_SO_CHAVE_TEM_CAPTCHA = {'51'}
+TAMANHO_MAX_PAGINA = 3 * 1024 * 1024
+CONSULTA_POR_UF = {
+    '51': 'https://www.sefaz.mt.gov.br/nfce/consultanfce',
+}
+
+
+def _reconstruir_endereco(texto, chave):
+    """
+    Leitor de QR Code USB com o teclado do computador em outro padrão (ex.: ABNT2 x americano)
+    troca '?', '|', ':' e '/' por outros sinais: o link chega estragado, mas a chave e os
+    números depois dela continuam certos. Remonta o link da consulta com eles.
+    """
+    base = CONSULTA_POR_UF.get(chave[:2])
+    texto = re.sub(r'(?<=\d)[ .](?=\d)', '', str(texto or ''))
+    if not base or chave not in texto:
+        return None
+    partes = [p for p in re.split(r'[^0-9A-Za-z.]+', texto.split(chave, 1)[1]) if p]
+    # [DEPURAÇÃO] no QR o que vem depois da chave começa pela versão (ex.: "2"); texto qualquer não vira link
+    return f"{base}?p={chave}|{'|'.join(partes)}" if partes and partes[0].isdigit() else None
+
+
 def dados_da_chave(chave):
     """O que já vem DENTRO da chave: estado, ano/mês, CNPJ do emitente, modelo, série e número."""
     return {'uf': chave[0:2], 'ano_mes': f"20{chave[2:4]}-{chave[4:6]}", 'cnpj': chave[6:20],
@@ -101,8 +127,17 @@ def endereco_seguro(url):
 # == 2) Baixar e entender a página da SEFAZ ====================================
 # ==============================================================================
 
-def baixar_pagina(url):
-    """Abre a página do cupom na SEFAZ. Segue no máximo 5 redirecionamentos, todos .gov.br."""
+def _decodificar(bruto, codificacao=None):
+    for cod in ('utf-8', codificacao or 'latin-1', 'latin-1'):
+        try:
+            return bruto.decode(cod)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return bruto.decode('utf-8', errors='replace')
+
+
+def _baixar_com_requests(url):
+    """Jeito normal (biblioteca requests). Devolve o texto da página."""
     import requests
     sessao = requests.Session()
     sessao.headers.update({'User-Agent': NAVEGADOR, 'Accept': 'text/html,application/xhtml+xml',
@@ -119,6 +154,10 @@ def baixar_pagina(url):
                 r = sessao.get(atual, timeout=TEMPO_LIMITE_SEFAZ, allow_redirects=False, verify=False)
         except requests.exceptions.Timeout:
             raise ErroCompras("A SEFAZ demorou demais para responder. Tente de novo em alguns minutos.")
+        except requests.exceptions.ConnectionError as e:
+            # [MT] a SEFAZ-MT derruba a conexão https de programas que não abrem a conexão como um navegador
+            logger.warning(f"A SEFAZ derrubou a conexão ({urlparse(atual).hostname}): {e}")
+            raise _ConexaoDerrubada(atual)
         except requests.exceptions.RequestException as e:
             logger.warning(f"Falha ao abrir a página da SEFAZ: {e}")
             raise ErroCompras("Não consegui abrir o site da SEFAZ. O computador da loja está com internet?")
@@ -127,14 +166,54 @@ def baixar_pagina(url):
             continue
         if r.status_code != 200:
             raise ErroCompras(f"O site da SEFAZ respondeu com erro {r.status_code}. Tente de novo mais tarde.")
-        bruto = r.content
-        for cod in ('utf-8', r.encoding or 'latin-1', 'latin-1'):
-            try:
-                return bruto.decode(cod)
-            except (UnicodeDecodeError, LookupError):
-                continue
-        return bruto.decode('utf-8', errors='replace')
+        return _decodificar(r.content, r.encoding)
     raise ErroCompras("O site da SEFAZ redirecionou vezes demais.")
+
+
+class _ConexaoDerrubada(Exception):
+    """A SEFAZ fechou a conexão sem responder (guarda o endereço em que parou)."""
+    def __init__(self, url):
+        super().__init__(url)
+        self.url = url
+
+
+def _baixar_imitando_chrome(url):
+    """
+    Plano B: abre a página com a biblioteca curl_cffi, que faz a conexão segura IGUAL ao
+    Google Chrome. Alguns sites do governo derrubam qualquer outro programa.
+    Instalar no servidor:  pip install curl_cffi
+    """
+    try:
+        from curl_cffi import requests as creq
+    except ImportError:
+        raise ErroCompras("A SEFAZ recusou a conexão do computador da loja. Falta instalar o leitor que "
+                          "imita o navegador: pip install curl_cffi  (depois reinicie o serviço).")
+    atual = endereco_seguro(url.replace('|', '%7C'))
+    for _ in range(6):
+        try:
+            r = creq.get(atual, impersonate='chrome', timeout=TEMPO_LIMITE_SEFAZ, allow_redirects=False,
+                         headers={'Accept-Language': 'pt-BR,pt;q=0.9'})
+        except Exception as e:
+            logger.warning(f"Plano B (imitando o Chrome) também falhou em {atual}: {e}")
+            raise ErroCompras("A SEFAZ recusou a conexão do computador da loja. Tente de novo mais tarde; "
+                              "se continuar, avise o gestor.")
+        local = r.headers.get('Location')
+        if r.status_code in (301, 302, 303, 307, 308) and local:
+            atual = endereco_seguro(urljoin(atual, local))
+            continue
+        if r.status_code != 200:
+            raise ErroCompras(f"O site da SEFAZ respondeu com erro {r.status_code}. Tente de novo mais tarde.")
+        return _decodificar(r.content, r.encoding)
+    raise ErroCompras("O site da SEFAZ redirecionou vezes demais.")
+
+
+def baixar_pagina(url):
+    """Abre a página do cupom na SEFAZ. Segue no máximo 5 redirecionamentos, todos .gov.br."""
+    try:
+        return _baixar_com_requests(url)
+    except _ConexaoDerrubada as e:
+        logger.info("Tentando de novo imitando o Google Chrome (curl_cffi)...")
+        return _baixar_imitando_chrome(e.url)
 
 
 def _texto(fragmento):
@@ -411,15 +490,36 @@ def _id_cupom_por_chave(chave):
         conn.close()
 
 
-def _nota_ja_lancada(cnpj, numero):
-    """A mesma nota já está no estoque? (ex.: XML importado no Gestão de Estoque)"""
+def _nota_ja_lancada(cnpj, numero, serie=None, chave=None):
+    """A mesma nota já está no estoque? (ex.: XML importado no Gestão de Estoque)
+    Série e chave evitam confundir cupons de caixas diferentes com o mesmo número."""
     fornecedor_id = database.buscar_fornecedor_por_cnpj(cnpj)
     if not fornecedor_id:
         return False
-    return bool(database.buscar_nota_importada(numero, fornecedor_id))
+    return bool(database.buscar_nota_importada(numero, fornecedor_id, serie, chave))
 
 
-def registrar_cupom(texto_qr, usuario, lista_codigo=None, html=None):
+def registrar_cupom_da_pagina(pagina_html, usuario, lista_codigo=None):
+    """
+    [CUPOM NO COMPUTADOR] Página do cupom SALVA no navegador (Ctrl+S) depois da consulta pela
+    chave na SEFAZ (a que pede "não sou robô"). A chave sai da própria página.
+    """
+    pagina_html = str(pagina_html or '')
+    if len(pagina_html) > TAMANHO_MAX_PAGINA:
+        raise ErroCompras("Arquivo grande demais. Salve só a página do cupom (Ctrl+S) e envie o arquivo .html.")
+    if 'nfc' not in pagina_html.lower() and 'nota fiscal' not in pagina_html.lower():
+        raise ErroCompras("Este arquivo não parece a página de um cupom fiscal da SEFAZ.")
+    na_caixa = re.search(r'class="chave"[^>]*>([\d\s.]+)<', pagina_html, re.I)    # onde a SEFAZ mostra a chave
+    candidatos = [re.sub(r'\D', '', na_caixa.group(1))] if na_caixa else []
+    candidatos += re.findall(r'(?<!\d)(\d{44})(?!\d)', re.sub(r'(?<=\d)[ .](?=\d)', '', _texto(pagina_html)))
+    candidatos = [c for c in candidatos if len(c) == 44]
+    chave = next((c for c in candidatos if _dv_chave(c[:43]) == int(c[43])), None)
+    if not chave:
+        raise ErroCompras("Não achei a chave de acesso nesta página. Salve a página que mostra os ITENS do cupom.")
+    return registrar_cupom(chave, usuario, lista_codigo=lista_codigo, html=pagina_html, da_pagina_salva=True)
+
+
+def registrar_cupom(texto_qr, usuario, lista_codigo=None, html=None, da_pagina_salva=False):
     """
     Guarda o cupom lido e (se der) os itens da página da SEFAZ.
     Ler o mesmo QR duas vezes não duplica: devolve o cupom já guardado
@@ -430,8 +530,21 @@ def registrar_cupom(texto_qr, usuario, lista_codigo=None, html=None):
     info = dados_da_chave(chave)
     if info['modelo'] not in ('65', '55'):
         raise ErroCompras("Este QR Code não é de nota fiscal.")
-    if not url:
-        raise ErroCompras("Só a chave não basta: a SEFAZ pede o QR Code completo. Leia o QR Code do cupom.")
+    if url:
+        try:
+            endereco_seguro(url)
+        except ErroCompras:
+            url = None                      # link estragado (leitor USB): tenta remontar abaixo
+    url = url or _reconstruir_endereco(unquote(str(texto_qr or '')), chave)
+    so_chave = not url
+    if so_chave:
+        # [CUPOM NO COMPUTADOR] só a chave de 44 números: a consulta pública pede "não sou robô"
+        base = CONSULTA_POR_UF.get(info['uf'])
+        if not base or (html is None and info['uf'] in CONSULTA_SO_CHAVE_TEM_CAPTCHA):
+            raise ErroCompras("Só com a chave o servidor não consegue: a SEFAZ pede \"Não sou um robô\". "
+                              "Abra a consulta da SEFAZ no navegador, digite a chave, abra o cupom, salve a página "
+                              "(Ctrl+S) e envie o arquivo em \"Enviar página salva\". Ou use o link/imagem/leitor do QR Code.")
+        url = f"{base}?p={chave}"
     endereco_seguro(url)
     existente = _id_cupom_por_chave(chave)
     if existente:
@@ -442,7 +555,7 @@ def registrar_cupom(texto_qr, usuario, lista_codigo=None, html=None):
         return cupom
 
     status, erro, pagina = ST_PENDENTE, None, None
-    if _nota_ja_lancada(info['cnpj'], info['numero']):
+    if _nota_ja_lancada(info['cnpj'], info['numero'], info['serie'], chave):
         status, erro = ST_JA_LANCADO, "Esta nota já está no estoque (provavelmente o XML foi importado)."
     else:
         try:
@@ -456,6 +569,16 @@ def registrar_cupom(texto_qr, usuario, lista_codigo=None, html=None):
                 raise ErroCompras("A página da SEFAZ mostrou outro cupom. Tente ler de novo.")
         except ErroCompras as e:
             status, erro = ST_ERRO, str(e)
+            if da_pagina_salva:             # página enviada pela pessoa: guarda para o diagnóstico
+                caminho = guardar_para_diagnostico(chave, html)
+                logger.warning(f"Cupom {chave}: página salva não entendida ({e}); guardada em {caminho}.")
+                raise ErroCompras(f"Não consegui ler os itens desta página ({e}). Confira se é a página que mostra "
+                                  "os ITENS do cupom. Se for, avise o Claude: a página ficou guardada para ajuste.")
+            if so_chave:                    # não guarda um cupom que nunca vai abrir só com a chave
+                logger.warning(f"Cupom {chave}: a SEFAZ não mostrou o cupom só com a chave ({e}).")
+                raise ErroCompras("A SEFAZ não mostrou este cupom só com a chave. No computador, use o link do QR Code, "
+                                  "uma imagem do QR Code ou um leitor de QR Code USB. "
+                                  f"(Detalhe: {e})")
 
     conn = _conectar()
     try:
@@ -700,7 +823,7 @@ def lancar_cupom(cupom_id, usuario):
         raise ErroCompras("Este cupom não está aberto para lançar.")
     if cupom['pendentes']:
         raise ErroCompras(f"Ainda há {cupom['pendentes']} item(ns) sem produto. Vincule ou marque 'não é do estoque'.")
-    if _nota_ja_lancada(cupom['cnpj'], cupom['numero']):
+    if _nota_ja_lancada(cupom['cnpj'], cupom['numero'], cupom.get('serie'), cupom.get('chave')):
         _mudar_status(cupom_id, ST_JA_LANCADO, usuario, "Esta nota já estava no estoque.")
         raise ErroCompras("Esta nota já está no estoque (o XML dela foi importado). Nada foi lançado de novo.")
 
@@ -749,13 +872,21 @@ def lancar_cupom(cupom_id, usuario):
     cabecalho = {'NumeroNF': cupom['numero'], 'FornecedorID': fornecedor_id,
                  'DataEmissao': (data.date() if data else date.today()),
                  'ValorTotalNF': Decimal(str(cupom['valor_pagar'] if cupom['valor_pagar'] is not None else soma)),
-                 'ValorForaDoEstoque': fora.quantize(Decimal('0.01'))}
+                 'ValorForaDoEstoque': fora.quantize(Decimal('0.01')),
+                 'Serie': cupom.get('serie'), 'ChaveAcesso': cupom.get('chave')}
     ok, msg = database.salvar_nota_fiscal_completa(cabecalho, itens_nota)
     if not ok:
         raise ErroCompras(msg)
     _mudar_status(cupom_id, ST_IMPORTADO, usuario)
     logger.info(f"Cupom {cupom['chave']} lançado no estoque por {usuario.get('nome')}: {len(itens_nota)} itens.")
-    return obter_cupom(cupom_id)
+    resultado = obter_cupom(cupom_id)
+    resultado['aumentos'] = []
+    if cabecalho.get('NotaID') and hasattr(database, 'aumentos_de_preco'):
+        try:   # [ALERTA PREÇO] o que ficou mais caro que na compra anterior
+            resultado['aumentos'] = [database.texto_aumento_preco(a) for a in database.aumentos_de_preco(nota_ids=[cabecalho['NotaID']])]
+        except Exception as e:
+            logger.error(f"Cupom {cupom_id}: não foi possível conferir aumentos de preço: {e}")
+    return resultado
 
 
 def _mudar_status(cupom_id, status, usuario, erro=None):

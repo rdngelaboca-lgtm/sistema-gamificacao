@@ -8,6 +8,9 @@
 #   • 08:00: fechamento mensal (pódio) nos primeiros dias do mês;
 #   • 09:00: lembrete de comunicados sem "ciente";
 #   • 09:05: "Drop" das tarefas de quem está de folga/férias.
+#   • 08:30: avisos do estoque no Telegram (abaixo do mínimo, acabando, listas esquecidas);
+#   • 08:35 de segunda: resumo dos preços que subiram na semana.
+#   • de hora em hora: baixa os XMLs das notas de compra da SEFAZ (nfe_distribuicao.py).
 #
 # Como rodar:  python agendador.py        (para parar: Ctrl+C)
 #
@@ -83,6 +86,8 @@ MAX_MINUTOS_RECUPERAR = 10      # se o robô "travar" alguns minutos, recupera a
 HORARIO_FECHAMENTO = "08:00"
 HORARIO_LEMBRETE_COMUNICADOS = "09:00"
 HORARIO_DROP = "09:05"
+HORARIO_AVISOS_ESTOQUE = "08:30"     # [ALERTAS ESTOQUE] abaixo do mínimo / acabando / listas esquecidas
+HORARIO_RESUMO_PRECOS = "08:35"      # [ALERTAS ESTOQUE] segunda-feira: preços que subiram na semana
 DIAS_PARA_FECHAMENTO = 5        # o fechamento do mês anterior pode rodar do dia 1 ao dia 5
 
 # --- CONTROLE DE CONCORRÊNCIA ---
@@ -241,9 +246,13 @@ def ja_rodou_hoje(nome):
 
 
 def marcar_rodou_hoje(nome):
+    salvar_no_estado(nome, date.today().isoformat())
+
+
+def salvar_no_estado(nome, valor):
     with _trava_estado:
         estado = _ler_estado()
-        estado[nome] = date.today().isoformat()
+        estado[nome] = valor
         try:
             with open(ARQUIVO_ESTADO, 'w', encoding='utf-8') as f:
                 json.dump(estado, f, ensure_ascii=False, indent=2)
@@ -661,6 +670,86 @@ def verificar_e_enviar_lembretes_comunicados(forcar=False):
 
 
 # ==============================================================================
+# == MÓDULO 9: AVISOS DO ESTOQUE (Telegram) ====================================
+# ==============================================================================
+def verificar_avisos_estoque(forcar=False):
+    """Todo dia: abaixo do mínimo, acabando em 2 dias e listas do app esquecidas (alertas_estoque.py)."""
+    if not forcar and ja_rodou_hoje('avisos_estoque'):
+        return
+    import alertas_estoque
+    texto = alertas_estoque.montar_avisos_diarios()
+    if texto and not alertas_estoque.enviar(texto):
+        logger.error("Avisos do estoque: o envio falhou (tenta de novo quando o robô for reiniciado).")
+        return
+    marcar_rodou_hoje('avisos_estoque')
+    logger.info("Avisos do estoque: " + ("enviados." if texto else "nada para avisar hoje."))
+
+
+def verificar_resumo_precos(forcar=False):
+    """Segunda-feira: maiores aumentos de preço das notas importadas desde o último resumo."""
+    if not forcar and (date.today().weekday() != 0 or ja_rodou_hoje('resumo_precos')):
+        return
+    import alertas_estoque
+    desde = _ler_estado().get('resumo_precos_ultima_nota')
+    if desde is None:      # primeira vez: notas emitidas nos últimos 7 dias
+        texto, maior = alertas_estoque.montar_resumo_precos(desde_data=date.today() - timedelta(days=7))
+    else:
+        texto, maior = alertas_estoque.montar_resumo_precos(desde_nota_id=int(desde))
+    if texto and not alertas_estoque.enviar(texto):
+        logger.error("Resumo de preços: o envio falhou (tenta de novo quando o robô for reiniciado).")
+        return
+    salvar_no_estado('resumo_precos_ultima_nota', maior)
+    marcar_rodou_hoje('resumo_precos')
+    logger.info("Resumo de preços: " + ("enviado." if texto else "nenhum aumento na semana."))
+
+
+# ==============================================================================
+# == MÓDULO 10: XML DAS NOTAS DE COMPRA (SEFAZ, certificado A1) =================
+# ==============================================================================
+def buscar_xml_sefaz():
+    """De hora em hora: baixa os XMLs novos (nfe_distribuicao.py) e avisa o gestor no Telegram."""
+    import nfe_distribuicao as nd
+    if not nd.configurado():
+        return
+    import alertas_estoque
+    try:
+        r = nd.buscar_notas()
+    except nd.ErroNFe as e:
+        logger.error(f"XML da SEFAZ: {e}")
+        if not ja_rodou_hoje('aviso_erro_sefaz'):          # avisa no máximo 1 vez por dia
+            marcar_rodou_hoje('aviso_erro_sefaz')
+            alertas_estoque.enviar(f"⚠️ <b>Busca automática de XML da SEFAZ</b>\n{esc(e)}")
+        return
+    logger.info("XML da SEFAZ: " + nd.texto_resumo(r).replace("\n", " | "))
+    if r.get('sem_ciencia') and not ja_rodou_hoje('aviso_ciencia_sefaz'):
+        marcar_rodou_hoje('aviso_ciencia_sefaz')
+        alertas_estoque.enviar(f"⚠️ <b>XML da SEFAZ</b>: {r['sem_ciencia']} nota(s) sem a Ciência da Operação registrada. "
+                               "O robô tenta de novo de hora em hora; se continuar amanhã, avise o Claude (detalhe no log).")
+    if r['novas']:
+        linhas = [f"📥 <b>{len(r['novas'])} nota(s) nova(s) da SEFAZ</b>"]
+        linhas += [f"• {esc(n['emitente'] or 'Fornecedor')} · {nd._reais(n['valor'])}" for n in r['novas'][:25]]
+        linhas.append("Abra o Gestão de Estoque → aba 3 → <b>Notas baixadas da SEFAZ</b> para dar entrada.")
+        alertas_estoque.enviar("\n".join(linhas))
+    try:                                       # [ORÇAMENTOS] nota chegou para um orçamento enviado: avisa o que veio diferente
+        import orcamentos
+        for _, texto in orcamentos.avisos_pendentes():
+            alertas_estoque.enviar(texto)
+    except ImportError:
+        pass
+    except Exception as e:
+        logger.error(f"Orçamentos: aviso das notas que chegaram falhou: {e}", exc_info=True)
+    if not ja_rodou_hoje('aviso_certificado'):
+        marcar_rodou_hoje('aviso_certificado')
+        try:
+            dias = nd.dias_para_vencer_certificado()
+            if dias <= 30:
+                alertas_estoque.enviar(f"⚠️ O certificado digital A1 vence em <b>{dias} dia(s)</b>. "
+                                       "Renove para a busca de XML continuar funcionando.")
+        except nd.ErroNFe:
+            pass
+
+
+# ==============================================================================
 # == MÓDULO 8: DOWNLOADS (fotos de entregas e notas fiscais) ===================
 # ==============================================================================
 def _baixar_arquivo_telegram(file_id, pasta, prefixo):
@@ -879,11 +968,15 @@ def configurar_agendamentos():
     schedule.every().day.at(HORARIO_FECHAMENTO).do(executar_com_seguranca, verificar_e_executar_fechamento)
     schedule.every().day.at(HORARIO_LEMBRETE_COMUNICADOS).do(executar_com_seguranca, verificar_e_enviar_lembretes_comunicados)
     schedule.every().day.at(HORARIO_DROP).do(executar_com_seguranca, verificar_e_delegar_tarefas_de_folga)
+    schedule.every().day.at(HORARIO_AVISOS_ESTOQUE).do(executar_com_seguranca, verificar_avisos_estoque)
+    schedule.every().day.at(HORARIO_RESUMO_PRECOS).do(executar_com_seguranca, verificar_resumo_precos)
 
     # Downloads em threads separadas (não travam o relógio do robô)
     schedule.every(1).minutes.do(run_threaded, processar_downloads_pendentes_sync)
     schedule.every(1).minutes.do(run_threaded, processar_downloads_notas_fiscais)
     schedule.every(10).minutes.do(run_threaded, reenviar_avisos_de_entregas_pendentes)
+    # [XML SEFAZ] a SEFAZ pede no mínimo 1 hora entre consultas sem novidade
+    schedule.every(1).hours.do(run_threaded, buscar_xml_sefaz)
 
 
 def recuperar_tarefas_do_dia():
@@ -893,6 +986,10 @@ def recuperar_tarefas_do_dia():
         executar_com_seguranca(verificar_e_enviar_lembretes_comunicados)
     if _passou_do_horario(HORARIO_DROP):
         executar_com_seguranca(verificar_e_delegar_tarefas_de_folga)
+    if _passou_do_horario(HORARIO_AVISOS_ESTOQUE, limite_horas=12):
+        executar_com_seguranca(verificar_avisos_estoque)
+    if _passou_do_horario(HORARIO_RESUMO_PRECOS, limite_horas=12):
+        executar_com_seguranca(verificar_resumo_precos)
 
 
 def main():
