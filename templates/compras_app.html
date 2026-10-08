@@ -2463,7 +2463,8 @@ function cartaoFolha(f) {
       <div class="pequeno">folha ${pct(x.pct)}</div></div>
     <div class="mini suave">${x.fixos} fixo(s) + ${x.freelas} freela(s) · freelancers ${fmtReais(x.freela)}${a.pct != null ? ` · mês até ${dm(a.ate)}: ${pct(a.pct)} (meta ${fmtQtd(f.meta)}%)` : ''}</div>
     ${a.faltam_lancar && a.faltam_lancar.length ? `<div class="mini" style="color:var(--laranja);font-weight:700">⚠️ Falta lançar o faturamento de ${a.faltam_lancar.map(dm).join(', ')}</div>` : ''}
-    ${h && h.clima ? `<div class="mini">🌡️ Hoje: ${esc(h.clima.texto)}${q ? ` · em dias parecidos ~${fmtReais(Math.round(q.faturamento / 10) * 10)} e <b>${fmtQtd(q.freelas)} freela(s)</b>` : ''}</div>` : ''}</a>`;
+    ${h && h.clima ? `<div class="mini">🌡️ Hoje: ${esc(h.clima.texto)}${q ? ` · em dias parecidos ~${fmtReais(Math.round(q.faturamento / 10) * 10)} e <b>${fmtQtd(q.freelas)} freela(s)</b>` : ''}</div>` : ''}</a>
+    <a class="btn claro medio" href="/gestao/folha?lancar=1">💰 Lançar faturamento do dia</a>`;
 }
 async function carregarConsumo(rotinaId) {
   // contagem aberta (em uso ou guardada): não troca os itens no meio dela

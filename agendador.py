@@ -88,6 +88,9 @@ HORARIO_LEMBRETE_COMUNICADOS = "09:00"
 HORARIO_DROP = "09:05"
 HORARIO_AVISOS_ESTOQUE = "08:30"     # [ALERTAS ESTOQUE] abaixo do mínimo / acabando / listas esquecidas
 HORARIO_RESUMO_PRECOS = "08:35"      # [ALERTAS ESTOQUE] segunda-feira: preços que subiram na semana
+HORARIO_LEMBRETE_FATURAMENTO = "09:15"   # [FOLHA × FATURAMENTO] faltou lançar o faturamento de ontem?
+HORARIO_FECHAMENTO_FOLHA = "09:20"       # [FOLHA × FATURAMENTO] dia 1 (até o 5): fechamento do mês anterior
+HORARIO_AVISO_CLIMA = "10:00"            # [FOLHA × FATURAMENTO] amanhã/depois: calor × freelancers, chuva
 DIAS_PARA_FECHAMENTO = 5        # o fechamento do mês anterior pode rodar do dia 1 ao dia 5
 
 # --- CONTROLE DE CONCORRÊNCIA ---
@@ -806,6 +809,60 @@ def verificar_folha_faturamento(agora=None):
         logger.info(f"Folha × Faturamento: resumo enviado ({', '.join(f'{d:%d/%m}' for d in pendentes)}).")
 
 
+def verificar_lembrete_faturamento():
+    """09:15: se faltou lançar o faturamento de algum dos últimos 7 dias (sem contar os atípicos), avisa."""
+    if ja_rodou_hoje('lembrete_faturamento'):
+        return
+    try:
+        import folha_faturamento as ff
+    except ImportError:
+        return
+    import alertas_estoque
+    faltam = ff.dias_sem_faturamento()
+    if faltam and not alertas_estoque.enviar(ff.texto_lembrete(faltam)):
+        return                                   # Telegram falhou: tenta de novo na recuperação/amanhã
+    marcar_rodou_hoje('lembrete_faturamento')
+
+
+def verificar_fechamento_folha():
+    """Dia 1 (esperando até o dia 5 pelos faturamentos atrasados): fechamento do mês anterior no Telegram."""
+    if ja_rodou_hoje('fechamento_folha_verificado'):
+        return
+    try:
+        import folha_faturamento as ff
+    except ImportError:
+        return
+    import alertas_estoque
+    estado = _ler_estado()
+    mes = ff.fechamento_pendente(ultimo_enviado=estado.get('fechamento_folha'))
+    if mes:
+        texto = ff.texto_fechamento(ff.fechamento(*mes))
+        if texto and not alertas_estoque.enviar(texto):
+            return
+        salvar_no_estado('fechamento_folha', f"{mes[0]}-{mes[1]:02d}")
+        logger.info(f"Folha × Faturamento: fechamento de {mes[1]:02d}/{mes[0]} enviado.")
+    marcar_rodou_hoje('fechamento_folha_verificado')
+
+
+def verificar_aviso_clima(agora=None):
+    """10:00: amanhã e depois — escala com menos freelancers que em dias parecidos (calor) e chuva à tarde."""
+    if ja_rodou_hoje('aviso_clima'):
+        return
+    try:
+        import folha_faturamento as ff
+    except ImportError:
+        return
+    import alertas_estoque
+    enviados = _ler_estado().get('avisos_clima_enviados') or []
+    texto, chaves = ff.avisos_antecipados(agora, enviados)
+    if texto:
+        if not alertas_estoque.enviar(texto):
+            return
+        salvar_no_estado('avisos_clima_enviados', (enviados + chaves)[-80:])
+        logger.info(f"Folha × Faturamento: aviso de clima × escala enviado ({', '.join(chaves)}).")
+    marcar_rodou_hoje('aviso_clima')
+
+
 # ==============================================================================
 # == MÓDULO 8: DOWNLOADS (fotos de entregas e notas fiscais) ===================
 # ==============================================================================
@@ -1036,6 +1093,9 @@ def configurar_agendamentos():
     schedule.every(1).hours.do(run_threaded, buscar_xml_sefaz)
     # [FOLHA × FATURAMENTO] clima + resumo do dia quando o faturamento é lançado
     schedule.every(1).hours.do(run_threaded, verificar_folha_faturamento)
+    schedule.every().day.at(HORARIO_LEMBRETE_FATURAMENTO).do(run_threaded, verificar_lembrete_faturamento)
+    schedule.every().day.at(HORARIO_FECHAMENTO_FOLHA).do(run_threaded, verificar_fechamento_folha)
+    schedule.every().day.at(HORARIO_AVISO_CLIMA).do(run_threaded, verificar_aviso_clima)
 
 
 def recuperar_tarefas_do_dia():
@@ -1050,6 +1110,12 @@ def recuperar_tarefas_do_dia():
     if _passou_do_horario(HORARIO_RESUMO_PRECOS, limite_horas=12):
         executar_com_seguranca(verificar_resumo_precos)
     run_threaded(verificar_folha_faturamento)       # [FOLHA × FATURAMENTO] não espera 1 hora depois de ligar
+    if _passou_do_horario(HORARIO_LEMBRETE_FATURAMENTO, limite_horas=10):
+        run_threaded(verificar_lembrete_faturamento)
+    if _passou_do_horario(HORARIO_FECHAMENTO_FOLHA, limite_horas=12):
+        run_threaded(verificar_fechamento_folha)
+    if _passou_do_horario(HORARIO_AVISO_CLIMA, limite_horas=10):
+        run_threaded(verificar_aviso_clima)
 
 
 def main():

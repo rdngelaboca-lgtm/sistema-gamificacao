@@ -224,8 +224,27 @@ semana × sáb/dom/feriado). Também aparece:
 - no **Telegram**: quando o faturamento do dia é lançado, o robô manda o resumo (dias lançados
   atrasados vão juntos; o de hoje só depois das 21h; no fim, a previsão do próximo dia).
 
+**Melhorias (10/2026):**
+- **Chuva por horário**: guarda também a chuva da tarde/noite (12h–22h) e as horas de chuva; só ela conta como
+  "dia de chuva" (chuva de madrugada quase não muda a venda). Dias antigos sem o horário usam 5 mm no dia.
+- **📌 Dia atípico** (feriado prolongado, evento, loja fechada, sistema parado…): botão na tabela do dia a dia;
+  o dia sai das médias de calor × vendas, dos "dias parecidos" e do "falta lançar" (os números continuam na folha).
+- **"Dias parecidos"** = mesmo tipo de dia + máxima até 1,5° + o mesmo tempo (chuva à tarde × seco).
+- **Comparar** com o mesmo dia da semana passada (7 dias antes) e do ano passado (364 dias: mesmo dia da semana):
+  coluna na tabela, cartão do último dia e resumo do Telegram; cartão do mês compara com o mês anterior no mesmo período.
+- **📈 Gráfico do mês**: três painéis no mesmo eixo de dias (faturamento; máxima com os dias de chuva à tarde;
+  folha do dia × meta), com dica ao passar o dedo/mouse.
+- **💰 Lançar faturamento** pela Gestão (e pelo app, que abre a mesma janela): MESMA regra da Gamificação e do
+  `/lancar` do Telegram — `database.lancar_apuracao_diaria` + `verificar_e_premiar_meta_diaria` (pontos da meta,
+  com estorno se corrigir para menos). Meta: a do lançamento que já existe no dia; senão a meta cujo período tem o
+  dia; senão a ativa hoje. Lançar de novo o mesmo dia substitui o valor.
+- **Telegram** (agendador): 09:15 lembrete de faturamento não lançado (últimos 7 dias, sem os atípicos); 09:20 do
+  dia 1 ao 5 o fechamento do mês anterior (espera os atrasados até o dia 5); 10:00 aviso antecipado para amanhã e
+  depois: escala com menos freelancers que em dias parecidos (calor) e chuva à tarde quando nesses dias a venda
+  cai 15% ou mais (cada aviso uma vez só).
+
 Arquivos: `folha_faturamento.py`, `clima.py`, `templates/gestao_folha.html`; tabelas `ClimaDiario`,
-`FolhaFixaMensal`, `ParametrosFolha` (criadas sozinhas).
+`FolhaFixaMensal`, `ParametrosFolha`, `DiasAtipicos` (criadas sozinhas).
 
 ## 4. Gestão de Pessoas — RH (`gestao_pessoas_main.py` — 1.800 linhas)
 

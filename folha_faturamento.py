@@ -15,6 +15,11 @@
 #                ÷ faturamento desses dias (dia sem faturamento lançado fica avisado).
 # E, com o histórico: faturamento e freelancers médios por faixa de temperatura, e
 # para os próximos dias (previsão) quanto se vendeu em dias parecidos.
+#
+# [MELHORIAS] dia ATÍPICO (feriado prolongado, evento, loja fechada…) fica fora das médias;
+# comparação com o mesmo dia da semana passada e do ano passado; lançar o faturamento pela
+# Web (mesma regra da Gamificação, com os pontos da meta); e os textos do Telegram: aviso
+# antecipado de calor/chuva × escala, lembrete de faturamento e fechamento do mês.
 # ==============================================================================
 import calendar
 import logging
@@ -40,6 +45,12 @@ HORA_RESUMO_HOJE = 21                # o resumo de HOJE só vai ao Telegram depo
 VALOR_MAXIMO = Decimal('10000000')
 
 DIAS_HISTORICO_ESCALA = 180         # a dica da Escala compara com os últimos 6 meses
+DIAS_HISTORICO_AVISO = 365          # o aviso antecipado compara com o último ano
+MIN_PARECIDOS_AVISO = 3             # só avisa com pelo menos 3 dias parecidos
+QUEDA_CHUVA_AVISO = Decimal('15')   # avisa a chuva se em dias de chuva vende 15% menos (ou mais)
+DIAS_ESPERA_FECHAMENTO = 5          # o fechamento do mês espera até o dia 5 pelos faturamentos atrasados
+MOTIVOS_ATIPICO = ['Feriado prolongado', 'Evento na cidade', 'Loja fechada / fechou mais cedo',
+                   'Problema no sistema de vendas', 'Promoção especial']
 CACHE_ESCALA_SEG = 600
 
 _tabelas_ok = False
@@ -77,6 +88,15 @@ def garantir_tabelas():
                 AtualizadoEm DATETIME NULL,
                 AtualizadoPor NVARCHAR(150) NULL,
                 PRIMARY KEY (Ano, Mes)
+            )
+        """)
+        cur.execute("""
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'DiasAtipicos')
+            CREATE TABLE DiasAtipicos (
+                Data DATE NOT NULL PRIMARY KEY,
+                Motivo NVARCHAR(200) NULL,
+                MarcadoPor NVARCHAR(150) NULL,
+                MarcadoEm DATETIME NULL
             )
         """)
         cur.execute("""
@@ -272,6 +292,12 @@ def _faturamento(cur, ini, fim):
     return por_dia
 
 
+def _atipicos(cur, ini, fim):
+    """{data: motivo} dos dias marcados como atípicos."""
+    cur.execute("SELECT Data, Motivo FROM DiasAtipicos WHERE Data >= ? AND Data <= ?", str(ini), str(fim))
+    return {database._como_data(d): (m or 'Dia atípico') for d, m in cur.fetchall()}
+
+
 def _minutos(ent, sai, ini_int=None, fim_int=None):
     f = R.faixa_turno(ent, sai)
     if not f:
@@ -321,7 +347,8 @@ def _clima_json(c):
     if not c:
         return None
     return {'max': _num(c['max'], 1), 'min': _num(c['min'], 1), 'chuva': _num(c['chuva'], 1), 'previsao': c['previsao'],
-            'icone': clima.icone(c), 'texto': clima.texto(c)}
+            'chuva_tarde': _num(c.get('chuva_tarde'), 1), 'horas_chuva': c.get('horas_chuva'), 'chuvoso': clima.chuvoso(c),
+            'icone': clima.icone(c), 'texto': clima.texto(c), 'texto_chuva': clima.texto_chuva(c)}
 
 
 def dias(ini, fim, folhas=None, climas=None):
@@ -333,6 +360,7 @@ def dias(ini, fim, folhas=None, climas=None):
         cur = conn.cursor()
         fat = _faturamento(cur, ini, fim)
         esc = _escala(cur, ini, fim)
+        atip = _atipicos(cur, ini, fim)
     finally:
         conn.close()
     freelas = _freelancers(ini, fim)
@@ -349,6 +377,7 @@ def dias(ini, fim, folhas=None, climas=None):
         horas = Decimal(e['min_fixos'] + e['min_freelas']) / 60
         lista.append({
             'data': d, 'tipo': _tipo_dia(d, feriados), 'feriado': feriados.get(d) or '', 'clima': climas.get(d),
+            'atipico': atip.get(d),
             'faturamento': faturamento, 'fixo': fixo, 'fixo_estimado': estimado, 'freela': freela,
             'fixos': len(e['fixos']), 'freelas': len(e['freelas']),
             'horas_fixos': Decimal(e['min_fixos']) / 60, 'horas_freelas': Decimal(e['min_freelas']) / 60,
@@ -365,7 +394,7 @@ def _dia_json(x):
             'fixo_estimado': nome_mes(*x['fixo_estimado']) if x['fixo_estimado'] else None, 'freela': _num(x['freela']),
             'fixos': x['fixos'], 'freelas': x['freelas'], 'horas_fixos': _num(x['horas_fixos'], 1),
             'horas_freelas': _num(x['horas_freelas'], 1), 'folha': _num(x['folha']), 'pct': _num(x['pct'], 1),
-            'por_hora': _num(x['por_hora'])}
+            'por_hora': _num(x['por_hora']), 'atipico': x.get('atipico')}
 
 
 # ------------------------------------------------------------------------------
@@ -389,7 +418,7 @@ def acumulado(lista, hoje=None):
     return {'ate': ultimo, 'faturamento': fat, 'fixo': None if sem_fixo else fixo, 'freela': freela,
             'folha': None if sem_fixo else fixo + freela, 'pct': None if sem_fixo else _pct(fixo + freela, fat),
             'pct_freela': _pct(freela, fat), 'dias': len(ate),
-            'faltam_lancar': [x['data'] for x in ate if x['faturamento'] is None and x['data'] < hoje],
+            'faltam_lancar': [x['data'] for x in ate if x['faturamento'] is None and x['data'] < hoje and not x.get('atipico')],
             'estimado': next((x['fixo_estimado'] for x in ate if x['fixo_estimado']), None)}
 
 
@@ -409,9 +438,9 @@ def _media(valores):
 
 
 def _historico_valido(lista, hoje):
-    """Dias que entram nas médias: com faturamento e com temperatura medida (não previsão)."""
+    """Dias que entram nas médias: com faturamento, temperatura medida (não previsão) e NÃO marcados como atípicos."""
     return [x for x in lista if x['faturamento'] and x['clima'] and x['clima']['max'] is not None
-            and not x['clima']['previsao'] and x['data'] <= hoje]
+            and not x['clima']['previsao'] and x['data'] <= hoje and not x.get('atipico')]
 
 
 def faixas(lista, hoje=None):
@@ -435,9 +464,9 @@ def faixas(lista, hoje=None):
                 'pessoas': _num(_media([Decimal(x['fixos'] + x['freelas']) for x in sel]), 1),
                 'pct': _num(_pct(sum((x['folha'] for x in com_fixo), Decimal('0')),
                                  sum((x['faturamento'] for x in com_fixo), Decimal('0'))), 1) if com_fixo else None,
-                'chuva': sum(1 for x in sel if x['clima']['chuva'] is not None and x['clima']['chuva'] >= clima.CHUVA_DIA_MM)})
-        chuva = [x for x in xs if x['clima']['chuva'] is not None and x['clima']['chuva'] >= clima.CHUVA_DIA_MM]
-        seco = [x for x in xs if x['clima']['chuva'] is not None and x['clima']['chuva'] < clima.CHUVA_DIA_MM]
+                'chuva': sum(1 for x in sel if clima.chuvoso(x['clima']))})
+        chuva = [x for x in xs if clima.chuvoso(x['clima'])]
+        seco = [x for x in xs if clima.tem_chuva_info(x['clima']) and not clima.chuvoso(x['clima'])]
         saida[nome] = {'faixas': linhas, 'dias': len(xs),
                        'chuva': {'dias': len(chuva), 'faturamento': _num(_media([x['faturamento'] for x in chuva]))},
                        'seco': {'dias': len(seco), 'faturamento': _num(_media([x['faturamento'] for x in seco]))}}
@@ -445,14 +474,20 @@ def faixas(lista, hoje=None):
 
 
 def parecidos(hist, d, c, feriados):
-    """Dias do histórico do mesmo tipo (semana × fim de semana/feriado) com máxima parecida."""
+    """
+    Dias do histórico do mesmo tipo (semana × fim de semana/feriado), com máxima parecida (até 1,5°) e
+    o mesmo "tempo": chuva à tarde compara com dias de chuva à tarde; seco, com dias secos (senão um
+    dia quente e chuvoso pediria freelancers de dia quente e seco).
+    """
     if not c or c.get('max') is None:
         return None
     fds = _tipo_dia(d, feriados) != 'semana'
-    sel = [x for x in hist if (x['tipo'] != 'semana') == fds and abs(x['clima']['max'] - c['max']) <= PARECIDO_GRAUS]
+    chuva = clima.chuvoso(c)
+    sel = [x for x in hist if (x['tipo'] != 'semana') == fds and abs(x['clima']['max'] - c['max']) <= PARECIDO_GRAUS
+           and clima.chuvoso(x['clima']) == chuva]
     if len(sel) < MIN_PARECIDOS:
-        return {'dias': len(sel)}
-    return {'dias': len(sel), 'faturamento': _num(_media([x['faturamento'] for x in sel])),
+        return {'dias': len(sel), 'chuva': chuva}
+    return {'dias': len(sel), 'chuva': chuva, 'faturamento': _num(_media([x['faturamento'] for x in sel])),
             'freelas': _num(_media([Decimal(x['freelas']) for x in sel]), 1),
             'pessoas': _num(_media([Decimal(x['fixos'] + x['freelas']) for x in sel]), 1)}
 
@@ -497,6 +532,362 @@ def dica_escala(d, hoje=None):
 
 
 # ------------------------------------------------------------------------------
+# [COMPARAR] mesmo dia da semana passada e do ano passado (mesmo dia da semana: 52 semanas antes)
+# ------------------------------------------------------------------------------
+def _leve(ini, fim):
+    """{data: {'faturamento', 'clima', 'freelas', 'atipico'}} — sem o cálculo dos pagamentos (rápido)."""
+    if ini > fim:
+        return {}
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        fat = _faturamento(cur, ini, fim)
+        esc = _escala(cur, ini, fim)
+        atip = _atipicos(cur, ini, fim)
+    finally:
+        conn.close()
+    climas = clima.do_periodo(ini, fim)
+    return {ini + timedelta(days=n): {'faturamento': fat.get(ini + timedelta(days=n)), 'clima': climas.get(ini + timedelta(days=n)),
+                                      'freelas': len((esc.get(ini + timedelta(days=n)) or {}).get('freelas', ())),
+                                      'atipico': atip.get(ini + timedelta(days=n))}
+            for n in range((fim - ini).days + 1)}
+
+
+def _comparacao_json(d_ref, x, fat_ref):
+    if not x or x['faturamento'] is None:
+        return {'data': d_ref.isoformat(), 'dia': DIAS_SEMANA[d_ref.weekday()], 'faturamento': None,
+                'atipico': (x or {}).get('atipico')}
+    return {'data': d_ref.isoformat(), 'dia': DIAS_SEMANA[d_ref.weekday()], 'faturamento': _num(x['faturamento']),
+            'clima': _clima_json(x['clima']), 'freelas': x['freelas'], 'atipico': x['atipico'],
+            'var': _num(_pct(fat_ref - x['faturamento'], x['faturamento']), 1) if fat_ref is not None and x['faturamento'] else None}
+
+
+def comparativos(lista):
+    """{data: {'semana': ..., 'ano': ...}} para os dias da lista (semana passada = 7 dias antes; ano = 364 dias)."""
+    if not lista:
+        return {}
+    ini, fim = min(x['data'] for x in lista), max(x['data'] for x in lista)
+    sem = _leve(ini - timedelta(days=7), fim - timedelta(days=7))
+    ano = _leve(ini - timedelta(days=364), fim - timedelta(days=364))
+    saida = {}
+    for x in lista:
+        d = x['data']
+        ds, da = d - timedelta(days=7), d - timedelta(days=364)
+        saida[d] = {'semana': _comparacao_json(ds, sem.get(ds), x['faturamento']),
+                    'ano': _comparacao_json(da, ano.get(da), x['faturamento'])}
+    return saida
+
+
+def _linha_comparacao(rotulo, c):
+    if not c:
+        return f"{rotulo}: sem faturamento lançado"
+    d = date.fromisoformat(c['data'])
+    quando = f"{c['dia']} {d:%d/%m}{('/' + f'{d:%y}') if rotulo.startswith('Ano') else ''}"
+    if c.get('faturamento') is None:
+        return f"{rotulo} ({quando}): sem faturamento lançado" + (f" (📌 {c['atipico']})" if c.get('atipico') else '')
+    partes = [f"{rotulo} ({quando}): {_reais(c['faturamento'])}"]
+    if c.get('clima') and c['clima'].get('max') is not None:
+        partes.append(f"{c['clima']['max']:.0f}°{(' ' + c['clima']['icone']) if c['clima'].get('chuvoso') else ''}")
+    partes.append(f"{c['freelas']} freela(s)")
+    texto = ' · '.join(partes)
+    if c.get('var') is not None:
+        texto += f" → {'+' if c['var'] > 0 else ''}{_n(Decimal(str(c['var'])))}%"
+    if c.get('atipico'):
+        texto += f" (📌 {c['atipico']})"
+    return texto
+
+
+# ------------------------------------------------------------------------------
+# [ATÍPICO] dia fora do normal: sai das médias e dos "dias parecidos"
+# ------------------------------------------------------------------------------
+def marcar_atipico(data_txt, motivo, usuario):
+    """Marca (motivo) ou desmarca (motivo vazio) um dia como atípico."""
+    d = database._como_data(data_txt)
+    if not d:
+        raise ErroFolha("Data inválida.")
+    motivo = ' '.join(str(motivo or '').split())[:200]
+    garantir_tabelas()
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM DiasAtipicos WHERE Data = ?", str(d))
+        if motivo:
+            cur.execute("INSERT INTO DiasAtipicos (Data, Motivo, MarcadoPor, MarcadoEm) VALUES (?, ?, ?, ?)",
+                        str(d), motivo, (usuario or {}).get('nome'), datetime.now())
+        conn.commit()
+    finally:
+        conn.close()
+    _cache_hist.clear()                  # a dica da Escala recalcula sem (ou com) este dia
+    logger.info(f"Folha × Faturamento: {d} {'marcado como atípico (' + motivo + ')' if motivo else 'desmarcado'} "
+                f"por {(usuario or {}).get('nome')}.")
+    return {'data': d.isoformat(), 'atipico': motivo or None}
+
+
+# ------------------------------------------------------------------------------
+# [LANÇAR] faturamento do dia pela Web: a MESMA regra da Gamificação (main.py e /lancar do Telegram):
+# database.lancar_apuracao_diaria + database.verificar_e_premiar_meta_diaria (pontos da meta do dia,
+# com estorno se o valor for corrigido para baixo).
+# ------------------------------------------------------------------------------
+def _meta_para(cur, d, hoje):
+    """
+    Meta da apuração: (1) a do lançamento que já existe nesse dia (corrigir = mesma meta, não duplica);
+    (2) a meta cujo período tem o dia (de preferência 'Ativa'); (3) a meta ativa hoje (como no PC).
+    Devolve (id, nome) ou None.
+    """
+    cur.execute("SELECT MetaPrincipalID FROM MetasDiariasApuracoes WHERE DataApuracao >= ? AND DataApuracao < ?",
+                d, d + timedelta(days=1))
+    ja = [r[0] for r in cur.fetchall()]
+    cur.execute("SELECT MetaPrincipalID, NomeMeta, DataInicio, DataFim, Status FROM MetasPrincipais")
+    metas = [(r[0], r[1] or f"Meta {r[0]}", database._como_data(r[2]), database._como_data(r[3]), r[4]) for r in cur.fetchall()]
+    nomes = {m[0]: m[1] for m in metas}
+    if ja:
+        return ja[0], nomes.get(ja[0], f"Meta {ja[0]}")
+    def cobre(m, dia):
+        return m[2] and m[3] and m[2] <= dia <= m[3]
+    for filtro in (lambda m: cobre(m, d) and m[4] == 'Ativa', lambda m: cobre(m, d), lambda m: cobre(m, hoje) and m[4] == 'Ativa'):
+        achadas = [m for m in metas if filtro(m)]
+        if achadas:
+            m = max(achadas, key=lambda m: m[2])
+            return m[0], m[1]
+    return None
+
+
+def consultar_faturamento(data_txt, hoje=None):
+    """Para a janela de lançar: o valor que já está lançado no dia e em qual meta vai entrar."""
+    hoje = hoje or date.today()
+    d = database._como_data(data_txt)
+    if not d:
+        raise ErroFolha("Data inválida.")
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        atual = _faturamento(cur, d, d).get(d)
+        meta_id = _meta_para(cur, d, hoje)
+    finally:
+        conn.close()
+    return {'data': d.isoformat(), 'valor': _num(atual), 'meta': meta_id[1] if meta_id else None,
+            'futuro': d > hoje}
+
+
+def lancar_faturamento(data_txt, valor_txt, usuario, hoje=None, em_segundo_plano=True):
+    """Lança (ou corrige) o faturamento do dia, com os pontos da meta como na Gamificação."""
+    hoje = hoje or date.today()
+    d = database._como_data(data_txt)
+    if not d:
+        raise ErroFolha("Data inválida.")
+    if d > hoje:
+        raise ErroFolha("Não dá para lançar o faturamento de um dia que ainda não chegou.")
+    v = _valor(valor_txt, 'Faturamento')
+    if v is None:
+        raise ErroFolha("Digite o valor do faturamento do dia.")
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        antes = _faturamento(cur, d, d).get(d)
+        meta_id = _meta_para(cur, d, hoje)
+    finally:
+        conn.close()
+    if not meta_id:
+        raise ErroFolha(f"Nenhuma meta da Gamificação cobre o dia {d:%d/%m/%Y}. Cadastre ou ative a meta na "
+                        "Gamificação (aba Metas) e lance de novo.")
+    ok, resultado = database.lancar_apuracao_diaria(meta_id[0], d.isoformat(), float(v), (usuario or {}).get('id'))
+    if not ok:
+        raise ErroFolha(f"Não consegui gravar o faturamento: {resultado}")
+    apuracao_id = resultado
+
+    def premiar():
+        try:
+            database.verificar_e_premiar_meta_diaria(apuracao_id, d.isoformat(), float(v), meta_id[0])
+        except Exception as e:
+            logger.error(f"Folha × Faturamento: premiação da meta (ApuracaoID {apuracao_id}) falhou: {e}", exc_info=True)
+    if em_segundo_plano:
+        import threading
+        threading.Thread(target=premiar, daemon=True).start()
+    else:
+        premiar()
+    logger.info(f"Faturamento de {d} lançado pela Web: R$ {v} (antes: {antes}) na meta {meta_id[1]} "
+                f"por {(usuario or {}).get('nome')}.")
+    return {'data': d.isoformat(), 'valor': _num(v), 'antes': _num(antes), 'meta': meta_id[1]}
+
+
+# ------------------------------------------------------------------------------
+# [TELEGRAM] aviso antecipado, lembrete de faturamento e fechamento do mês
+# ------------------------------------------------------------------------------
+def _escalados(ini, fim):
+    """{data: (fixos, freelas)} pela escala lançada."""
+    conn = _conexao()
+    try:
+        esc = _escala(conn.cursor(), ini, fim)
+    finally:
+        conn.close()
+    return {d: (len(x['fixos']), len(x['freelas'])) for d, x in esc.items()}
+
+
+def _nome_dia(d, hoje):
+    if d == hoje + timedelta(days=1):
+        return f"Amanhã ({DIAS_SEMANA[d.weekday()]} {d:%d/%m})"
+    nomes = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo']
+    return f"{nomes[d.weekday()]} {d:%d/%m}"
+
+
+def avisos_antecipados(agora=None, enviados=(), dias_frente=(1, 2)):
+    """
+    Para amanhã e depois de amanhã (previsão):
+      - escala com MENOS freelancers do que costuma precisar em dias parecidos (calor);
+      - chuva à tarde prevista, quando nos dias de chuva desse tipo a venda cai 15% ou mais.
+    Cada dia/aviso vai uma vez só. Devolve (texto, chaves novas) — texto vazio se não há nada.
+    """
+    agora = agora or datetime.now()
+    hoje = agora.date()
+    enviados = set(enviados or ())
+    alvos = [hoje + timedelta(days=n) for n in dias_frente]
+    climas = clima.do_periodo(min(alvos), max(alvos))
+    if not any(climas.get(d) for d in alvos):
+        return '', []
+    hist = _historico_valido(dias(hoje - timedelta(days=DIAS_HISTORICO_AVISO), hoje), hoje)
+    feriados = database._feriados_periodo(min(alvos), max(alvos))
+    escala = _escalados(min(alvos), max(alvos))
+    linhas, chaves = [], []
+    for d in alvos:
+        c = climas.get(d)
+        if not c or c.get('max') is None:
+            continue
+        tipo_fds = _tipo_dia(d, feriados) != 'semana'
+        fixos_esc, freelas_esc = escala.get(d, (0, 0))
+        p = parecidos(hist, d, c, feriados)
+        chave = f"{d.isoformat()}:freelas"
+        if p and p.get('dias', 0) >= MIN_PARECIDOS_AVISO and chave not in enviados and not clima.chuvoso(c):
+            esperado = Decimal(str(p['freelas']))
+            if esperado.quantize(Decimal('1'), rounding=ROUND_HALF_UP) > freelas_esc:
+                icone = '🔥' if c['max'] >= 33 else '📋'
+                linhas.append(f"{icone} <b>{_nome_dia(d, hoje)} · {clima.texto(c)}</b>\n"
+                              f"   Em {p['dias']} dias parecidos você faturou ~{_reais_redondo(p['faturamento'])} e usou "
+                              f"<b>{_n(esperado)} freelancer(s)</b>. A escala ainda tem <b>{freelas_esc}</b>.")
+                chaves.append(chave)
+        chave = f"{d.isoformat()}:chuva"
+        if clima.chuvoso(c) and chave not in enviados:
+            mesmos = [x for x in hist if (x['tipo'] != 'semana') == tipo_fds and clima.tem_chuva_info(x['clima'])]
+            chuva = [x['faturamento'] for x in mesmos if clima.chuvoso(x['clima'])]
+            seco = [x['faturamento'] for x in mesmos if not clima.chuvoso(x['clima'])]
+            if len(chuva) >= 2 and len(seco) >= 2:
+                m_chuva, m_seco = _media(chuva), _media(seco)
+                queda = _pct(m_seco - m_chuva, m_seco)
+                if queda is not None and queda >= QUEDA_CHUVA_AVISO:
+                    linhas.append(f"🌧️ <b>{_nome_dia(d, hoje)} · {clima.texto(c)}</b>\n"
+                                  f"   Em dias de chuva ({'fim de semana/feriado' if tipo_fds else 'dia de semana'}) você vendeu "
+                                  f"<b>{_n(queda)}% menos</b> (~{_reais_redondo(m_chuva)} × ~{_reais_redondo(m_seco)} sem chuva). "
+                                  f"A escala tem {freelas_esc} freelancer(s)" + (": dá para chamar menos?" if freelas_esc else "."))
+                    chaves.append(chave)
+    if not linhas:
+        return '', []
+    return "📣 <b>Clima × escala</b>\n" + "\n".join(linhas) + "\n<i>Gestão › 📊 Folha para ver os detalhes.</i>", chaves
+
+
+def dias_sem_faturamento(hoje=None, janela=7):
+    """Dias (dos últimos 7, até ontem) sem faturamento lançado — sem contar os marcados como atípicos."""
+    hoje = hoje or date.today()
+    primeiro = primeiro_faturamento()
+    if not primeiro:
+        return []
+    ini = max(primeiro, hoje - timedelta(days=janela))
+    fim = hoje - timedelta(days=1)
+    if ini > fim:
+        return []
+    garantir_tabelas()
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        fat = _faturamento(cur, ini, fim)
+        atip = _atipicos(cur, ini, fim)
+    finally:
+        conn.close()
+    return [ini + timedelta(days=n) for n in range((fim - ini).days + 1)
+            if ini + timedelta(days=n) not in fat and ini + timedelta(days=n) not in atip]
+
+
+def texto_lembrete(faltam, hoje=None):
+    hoje = hoje or date.today()
+    if not faltam:
+        return ''
+    nomes = [("ontem" if d == hoje - timedelta(days=1) else DIAS_SEMANA[d.weekday()]) + f" {d:%d/%m}" for d in faltam]
+    return ("⏰ <b>Faturamento não lançado</b>: " + ", ".join(nomes) + "\n"
+            "Lance na Gestão › 📊 Folha (💰 Lançar faturamento), na Gamificação, ou no grupo com /lancar (só o de hoje).\n"
+            "Loja fechada nesse dia? Marque como 📌 dia atípico na tabela do dia a dia e o lembrete para.")
+
+
+def fechamento_pendente(hoje=None, ultimo_enviado=None):
+    """(ano, mês) do mês anterior se o fechamento ainda não foi: do dia 1 ao 5 (espera os faturamentos atrasados)."""
+    hoje = hoje or date.today()
+    ant = date(hoje.year, hoje.month, 1) - timedelta(days=1)
+    chave = f"{ant.year}-{ant.month:02d}"
+    if ultimo_enviado == chave or hoje.day > DIAS_ESPERA_FECHAMENTO + 2:
+        return None
+    lista = dias(date(ant.year, ant.month, 1), ant)
+    if not any(x['faturamento'] is not None for x in lista):
+        return None
+    faltam = [x for x in lista if x['faturamento'] is None and not x.get('atipico')]
+    if faltam and hoje.day < DIAS_ESPERA_FECHAMENTO:
+        return None
+    return ant.year, ant.month
+
+
+def fechamento(ano, mes):
+    """Números do mês inteiro (para o Telegram do dia 1)."""
+    ini = date(ano, mes, 1)
+    fim = date(ano, mes, calendar.monthrange(ano, mes)[1])
+    ini_ant = (ini - timedelta(days=1)).replace(day=1)
+    lista = dias(ini_ant, fim)
+    do_mes = [x for x in lista if x['data'] >= ini]
+    ant = [x for x in lista if x['data'] < ini]
+    a = acumulado(do_mes, fim + timedelta(days=1))
+    a_ant = acumulado(ant, ini)
+    validos = [x for x in do_mes if x['faturamento'] and not x.get('atipico')]
+    com_clima = [x for x in do_mes if x['clima'] and x['clima'].get('max') is not None and not x['clima']['previsao']]
+    return {'ano': ano, 'mes': mes, 'acumulado': a, 'anterior': a_ant, 'nome_ant': nome_mes(ini_ant.year, ini_ant.month),
+            'melhor': max(validos, key=lambda x: x['faturamento']) if validos else None,
+            'pior': min(validos, key=lambda x: x['faturamento']) if validos else None,
+            'diarias': sum(x['freelas'] for x in do_mes),
+            'max_media': _media([x['clima']['max'] for x in com_clima]),
+            'dias_chuva': sum(1 for x in com_clima if clima.chuvoso(x['clima'])),
+            'atipicos': [x for x in do_mes if x.get('atipico')]}
+
+
+def texto_fechamento(f, hoje=None):
+    hoje = hoje or date.today()
+    meses = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro',
+             'novembro', 'dezembro']
+    a, ant, meta_pct = f['acumulado'], f['anterior'], meta()
+    if not a:
+        return ''
+    linhas = [f"📅 <b>Fechamento de {meses[f['mes'] - 1]}/{f['ano']}</b> · Folha × Faturamento"]
+    var = _pct(a['faturamento'] - ant['faturamento'], ant['faturamento']) if ant and ant['faturamento'] else None
+    linhas.append(f"💰 Faturamento: <b>{_reais(a['faturamento'])}</b>"
+                  + (f" ({'+' if var > 0 else ''}{_n(var)}% × {f['nome_ant']})" if var is not None else ''))
+    if a['fixo'] is not None:
+        linhas.append(f"🧾 Fixos {_reais(a['fixo'])}" + (f" (folha de {nome_mes(*a['estimado'])})" if a['estimado'] else '')
+                      + f" · 🧑‍🍳 Freelancers {_reais(a['freela'])} ({f['diarias']} diária(s))")
+        linhas.append(f"➡️ Folha do mês: {_linha_pct(a['pct'], meta_pct)} (meta {_n(meta_pct)}%)"
+                      + (f" · {f['nome_ant']}: {_pct_txt(ant['pct'])}" if ant and ant['pct'] is not None else ''))
+    else:
+        linhas.append(f"🧑‍🍳 Freelancers {_reais(a['freela'])} ({f['diarias']} diária(s)) · informe a folha fixa para ver a %")
+    for rotulo, x in (('🏆 Melhor dia', f['melhor']), ('📉 Pior dia', f['pior'])):
+        if x:
+            linhas.append(f"{rotulo}: {DIAS_SEMANA[x['data'].weekday()]} {x['data']:%d/%m} · {_reais(x['faturamento'])}"
+                          + (f" · {clima.texto(x['clima'])}" if x['clima'] else ''))
+    if f['max_media'] is not None:
+        linhas.append(f"🌡️ Máxima média {_n(f['max_media'].quantize(Decimal('0.1'), rounding=ROUND_HALF_UP))}° · "
+                      f"{f['dias_chuva']} dia(s) de chuva à tarde")
+    if a['faltam_lancar']:
+        linhas.append(f"⚠️ Sem faturamento lançado: {', '.join(f'{d:%d/%m}' for d in a['faltam_lancar'][:8])}"
+                      + ('…' if len(a['faltam_lancar']) > 8 else '') + " (a % fica maior que a real)")
+    if f['atipicos']:
+        linhas.append("📌 Atípicos (fora das médias): " + ", ".join(f"{x['data']:%d/%m} {x['atipico']}" for x in f['atipicos'][:5]))
+    if (hoje.year, hoje.month) not in folhas_fixas():
+        linhas.append(f"ℹ️ Informe a folha fixa de {meses[hoje.month - 1]} na Gestão › 📊 Folha (⚙️ Folha fixa e meta).")
+    return "\n".join(linhas)
+
+
+# ------------------------------------------------------------------------------
 # Tela (Gestão › Folha × Faturamento)
 # ------------------------------------------------------------------------------
 def painel(mes=None, periodo='90', hoje=None, http=None):
@@ -512,11 +903,23 @@ def painel(mes=None, periodo='90', hoje=None, http=None):
     n = PERIODOS[periodo]
     ini_hist = (hoje - timedelta(days=n)) if n else (primeiro or hoje - timedelta(days=365))
     folhas = folhas_fixas()
-    ini = min(ini_mes, ini_hist)
+    ini_ant = (ini_mes - timedelta(days=1)).replace(day=1)
+    ini = min(ini_ant, ini_hist)
     fim = max(fim_mes, hoje)
     lista = dias(ini, fim, folhas) if ini <= fim else []
     do_mes = [x for x in lista if ini_mes <= x['data'] <= fim_mes]
     hist = [x for x in lista if x['data'] >= ini_hist]
+    # mês anterior no MESMO período (dia 1 até o mesmo dia) para comparar
+    a_mes = acumulado(do_mes, hoje)
+    anterior = None
+    if a_mes:
+        ult_dia = min(a_mes['ate'].day, calendar.monthrange(ini_ant.year, ini_ant.month)[1])
+        a_ant = acumulado([x for x in lista if ini_ant <= x['data'] <= ini_ant.replace(day=ult_dia)], hoje)
+        if a_ant:
+            anterior = {'nome': nome_mes(ini_ant.year, ini_ant.month), 'ate': a_ant['ate'].isoformat(),
+                        'faturamento': _num(a_ant['faturamento']), 'pct': _num(a_ant['pct'], 1),
+                        'var': _num(_pct(a_mes['faturamento'] - a_ant['faturamento'], a_ant['faturamento']), 1)}
+    comp = comparativos(do_mes)
     meses = []
     if primeiro:
         a, mm = primeiro.year, primeiro.month
@@ -532,8 +935,8 @@ def painel(mes=None, periodo='90', hoje=None, http=None):
         a, mm = (a - 1, 12) if mm == 1 else (a, mm - 1)
     return {'mes': f"{ano}-{m:02d}", 'nome_mes': nome_mes(ano, m), 'meses': meses[-24:], 'periodo': periodo,
             'meta': _num(meta(), 1), 'cidade': clima.CIDADE, 'erro_clima': erro_clima,
-            'dias': [_dia_json(x) for x in reversed(do_mes)],
-            'acumulado': _acumulado_json(acumulado(do_mes, hoje)),
+            'dias': [dict(_dia_json(x), comparar=comp.get(x['data'])) for x in reversed(do_mes)],
+            'acumulado': _acumulado_json(a_mes), 'anterior': anterior, 'motivos_atipico': MOTIVOS_ATIPICO,
             'faixas': faixas(hist, hoje), 'proximos': proximos(lista, hoje),
             'folhas': lista_folhas, 'tem_folha': bool(folhas),
             'folha_do_mes': _num(folhas.get((ano, m)))}
@@ -618,6 +1021,13 @@ def texto_telegram(datas, agora=None):
     if a and a['faltam_lancar']:
         faltam = ', '.join(f"{d:%d/%m}" for d in a['faltam_lancar'][:6]) + ('…' if len(a['faltam_lancar']) > 6 else '')
         linhas.append(f"⚠️ Falta lançar o faturamento de: {faltam}")
+    comp = comparativos([x]).get(ultimo) or {}
+    if comp.get('semana', {}).get('faturamento') is not None or comp.get('ano', {}).get('faturamento') is not None:
+        linhas.append("↔️ " + _linha_comparacao('Semana passada', comp.get('semana')))
+        if comp.get('ano', {}).get('faturamento') is not None:
+            linhas.append("↔️ " + _linha_comparacao('Ano passado', comp.get('ano')))
+    if x.get('atipico'):
+        linhas.append(f"📌 Dia atípico: {html.escape(x['atipico'])} (fora das médias)")
     outros = [por_data[d] for d in datas[:-1] if d in por_data]
     if outros:
         linhas.append("Também lançados: " + " · ".join(

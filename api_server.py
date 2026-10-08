@@ -2503,6 +2503,26 @@ def api_gestao_folha_meta(usuario):
     return _resposta_folha(lambda: folha_faturamento.definir_meta(dados.get('meta'), usuario))
 
 
+@app.route('/api/gestao/folha/atipico', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_folha_atipico(usuario):
+    dados = ler_json() or {}
+    return _resposta_folha(lambda: folha_faturamento.marcar_atipico(dados.get('data'), dados.get('motivo'), usuario))
+
+
+@app.route('/api/gestao/folha/faturamento', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_folha_faturamento_ver(usuario):
+    return _resposta_folha(lambda: folha_faturamento.consultar_faturamento(request.args.get('data')))
+
+
+@app.route('/api/gestao/folha/faturamento', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_folha_faturamento_lancar(usuario):
+    dados = ler_json() or {}
+    return _resposta_folha(lambda: folha_faturamento.lancar_faturamento(dados.get('data'), dados.get('valor'), usuario))
+
+
 if __name__ == "__main__":
     # O '0.0.0.0' é o segredo. Ele libera o acesso para a rede inteira.
     logger.info("Iniciando servidor API acessível na rede em modo Produção...")

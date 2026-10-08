@@ -12,6 +12,10 @@
 # Assim o histórico já começa com todos os dias que têm faturamento lançado.
 #
 # Outra cidade? No config.py: CLIMA_CIDADE, CLIMA_LATITUDE e CLIMA_LONGITUDE.
+#
+# [CHUVA POR HORÁRIO] Em sorveteria, chuva às 15h derruba a venda; chuva às 6h quase não.
+# Além da chuva do dia inteiro, guarda a chuva da TARDE/NOITE (12h às 22h) e quantas horas
+# choveu nesse horário. É ela que separa "dia de chuva" de "dia seco" nas contas.
 # ==============================================================================
 import logging
 import time
@@ -32,7 +36,10 @@ URL_HISTORICO = 'https://archive-api.open-meteo.com/v1/archive'
 CAMPOS = 'temperature_2m_max,temperature_2m_min,precipitation_sum'
 DIAS_PASSADOS_PREVISAO = 14     # a API de previsão traz os últimos 14 dias medidos
 DIAS_PREVISAO = 8               # hoje + 7 dias
-CHUVA_DIA_MM = Decimal('5')     # a partir de 5 mm o dia conta como "dia de chuva"
+CHUVA_DIA_MM = Decimal('5')     # sem a chuva por horário (dias antigos): 5 mm no dia = "dia de chuva"
+HORA_INICIO_TARDE, HORA_FIM_TARDE = 12, 22    # horário que mais vende (chuva aqui é a que pesa)
+CHUVA_TARDE_MM = Decimal('2')   # 2 mm entre 12h e 22h = "chuva à tarde"
+GAROA_MM = Decimal('0.2')
 
 _tabela_ok = False
 _ultima_tentativa = {}          # (só no processo da API) não fica chamando a internet a cada clique
@@ -62,6 +69,9 @@ def garantir_tabela():
                 AtualizadoEm DATETIME NULL
             )
         """)
+        # [CHUVA POR HORÁRIO] quem já tinha a tabela ganha as colunas (o histórico é refeito sozinho)
+        cur.execute("IF COL_LENGTH('ClimaDiario', 'ChuvaTardeMM') IS NULL ALTER TABLE ClimaDiario ADD ChuvaTardeMM DECIMAL(6, 1) NULL")
+        cur.execute("IF COL_LENGTH('ClimaDiario', 'HorasChuvaTarde') IS NULL ALTER TABLE ClimaDiario ADD HorasChuvaTarde INT NULL")
         conn.commit()
         _tabela_ok = True
     finally:
@@ -77,12 +87,32 @@ def _dec(v):
         return None
 
 
+def _chuva_da_tarde(dados):
+    """{data: (mm entre 12h e 22h, horas com chuva nesse horário)} a partir do 'hourly' da Open-Meteo."""
+    h = dados.get('hourly') or {}
+    horas, chuvas = h.get('time') or [], h.get('precipitation') or []
+    por_dia = {}
+    for i, txt in enumerate(horas):
+        try:
+            momento = datetime.fromisoformat(str(txt)[:16])
+        except ValueError:
+            continue
+        if not (HORA_INICIO_TARDE <= momento.hour < HORA_FIM_TARDE):
+            continue
+        v = _dec(chuvas[i]) if i < len(chuvas) else None
+        if v is None:
+            continue
+        mm, n = por_dia.get(momento.date(), (Decimal('0'), 0))
+        por_dia[momento.date()] = (mm + v, n + (1 if v >= GAROA_MM else 0))
+    return por_dia
+
+
 def _baixar(url, params, http=None):
-    """[(data, máx, mín, chuva)] da Open-Meteo. http = função tipo requests.get (os testes trocam)."""
+    """[(data, máx, mín, chuva, chuva da tarde, horas de chuva à tarde)] da Open-Meteo. http = como requests.get (testes trocam)."""
     if http is None:
         import requests
         http = requests.get
-    p = dict(params, latitude=LATITUDE, longitude=LONGITUDE, daily=CAMPOS, timezone=FUSO)
+    p = dict(params, latitude=LATITUDE, longitude=LONGITUDE, daily=CAMPOS, hourly='precipitation', timezone=FUSO)
     try:
         r = http(url, params=p, timeout=20)
         dados = r.json()
@@ -95,6 +125,7 @@ def _baixar(url, params, http=None):
     datas = d.get('time') or []
     maxs, mins, chuvas = (d.get('temperature_2m_max') or [], d.get('temperature_2m_min') or [],
                           d.get('precipitation_sum') or [])
+    tarde = _chuva_da_tarde(dados)
     linhas = []
     for i, txt in enumerate(datas):
         try:
@@ -102,7 +133,8 @@ def _baixar(url, params, http=None):
         except ValueError:
             continue
         pega = lambda lista: _dec(lista[i]) if i < len(lista) else None
-        linhas.append((dia, pega(maxs), pega(mins), pega(chuvas)))
+        mm, horas = tarde.get(dia, (None, None))
+        linhas.append((dia, pega(maxs), pega(mins), pega(chuvas), _dec(mm), horas))
     return linhas
 
 
@@ -117,21 +149,24 @@ def _gravar(linhas, hoje=None):
     try:
         cur = conn.cursor()
         agora = datetime.now()
-        for dia, tmax, tmin, chuva in linhas:
+        for linha in linhas:
+            dia, tmax, tmin, chuva = linha[:4]
+            tarde, horas = (linha[4], linha[5]) if len(linha) > 5 else (None, None)
             if tmax is None and tmin is None:
                 continue
             previsao = 1 if dia >= hoje else 0
             cur.execute("SELECT Previsao FROM ClimaDiario WHERE Data = ?", str(dia))
             r = cur.fetchone()
             if r is None:
-                cur.execute("INSERT INTO ClimaDiario (Data, TempMax, TempMin, ChuvaMM, Previsao, AtualizadoEm) VALUES (?, ?, ?, ?, ?, ?)",
-                            str(dia), tmax, tmin, chuva, previsao, agora)
+                cur.execute("INSERT INTO ClimaDiario (Data, TempMax, TempMin, ChuvaMM, ChuvaTardeMM, HorasChuvaTarde, Previsao, "
+                            "AtualizadoEm) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", str(dia), tmax, tmin, chuva, tarde, horas, previsao, agora)
             elif previsao and not r[0]:
                 continue
             else:
                 cur.execute("""UPDATE ClimaDiario SET TempMax = COALESCE(?, TempMax), TempMin = COALESCE(?, TempMin),
-                               ChuvaMM = COALESCE(?, ChuvaMM), Previsao = ?, AtualizadoEm = ? WHERE Data = ?""",
-                            tmax, tmin, chuva, previsao, agora, str(dia))
+                               ChuvaMM = COALESCE(?, ChuvaMM), ChuvaTardeMM = COALESCE(?, ChuvaTardeMM),
+                               HorasChuvaTarde = COALESCE(?, HorasChuvaTarde), Previsao = ?, AtualizadoEm = ? WHERE Data = ?""",
+                            tmax, tmin, chuva, tarde, horas, previsao, agora, str(dia))
             gravados += 1
         conn.commit()
     except Exception:
@@ -167,8 +202,8 @@ def completar_historico(desde, http=None, hoje=None):
         raise ErroClima("Sem conexão com o banco de dados.")
     try:
         cur = conn.cursor()
-        cur.execute("SELECT Data FROM ClimaDiario WHERE Data >= ? AND Data <= ? AND Previsao = 0 AND TempMax IS NOT NULL",
-                    str(desde), str(ate))
+        cur.execute("SELECT Data FROM ClimaDiario WHERE Data >= ? AND Data <= ? AND Previsao = 0 AND TempMax IS NOT NULL "
+                    "AND ChuvaTardeMM IS NOT NULL", str(desde), str(ate))
         tem = {database._como_data(r[0]) for r in cur.fetchall()}
     finally:
         conn.close()
@@ -190,9 +225,10 @@ def do_periodo(ini, fim):
         raise ErroClima("Sem conexão com o banco de dados.")
     try:
         cur = conn.cursor()
-        cur.execute("SELECT Data, TempMax, TempMin, ChuvaMM, Previsao FROM ClimaDiario WHERE Data >= ? AND Data <= ?",
-                    str(ini), str(fim))
-        return {database._como_data(r[0]): {'max': _dec(r[1]), 'min': _dec(r[2]), 'chuva': _dec(r[3]), 'previsao': bool(r[4])}
+        cur.execute("SELECT Data, TempMax, TempMin, ChuvaMM, Previsao, ChuvaTardeMM, HorasChuvaTarde FROM ClimaDiario "
+                    "WHERE Data >= ? AND Data <= ?", str(ini), str(fim))
+        return {database._como_data(r[0]): {'max': _dec(r[1]), 'min': _dec(r[2]), 'chuva': _dec(r[3]), 'previsao': bool(r[4]),
+                                            'chuva_tarde': _dec(r[5]), 'horas_chuva': r[6]}
                 for r in cur.fetchall()}
     finally:
         conn.close()
@@ -229,15 +265,51 @@ def garantir_recente(desde=None, http=None, hoje=None, intervalo_min=30):
     return erro
 
 
+def chuvoso(c):
+    """Dia de chuva para as contas: chuva à TARDE (12h-22h) >= 2 mm; dia antigo sem o horário: 5 mm no dia."""
+    if not c:
+        return False
+    if c.get('chuva_tarde') is not None:
+        return c['chuva_tarde'] >= CHUVA_TARDE_MM
+    return c.get('chuva') is not None and c['chuva'] >= CHUVA_DIA_MM
+
+
+def tem_chuva_info(c):
+    return bool(c) and (c.get('chuva_tarde') is not None or c.get('chuva') is not None)
+
+
 def icone(c):
-    """☀️ / 🌦️ / 🌧️ conforme a chuva do dia."""
-    if not c or c.get('chuva') is None:
+    """☀️ / 🌤️ (choveu só fora do horário) / 🌦️ (garoa à tarde) / 🌧️ (chuva à tarde)."""
+    if not tem_chuva_info(c):
         return ''
-    if c['chuva'] >= CHUVA_DIA_MM:
+    if chuvoso(c):
         return '🌧️'
-    if c['chuva'] >= 1:
-        return '🌦️'
-    return '☀️'
+    if c.get('chuva_tarde') is not None:
+        if c['chuva_tarde'] >= GAROA_MM:
+            return '🌦️'
+        return '🌤️' if (c.get('chuva') or 0) >= 1 else '☀️'
+    return '🌦️' if c['chuva'] >= 1 else '☀️'
+
+
+def _mm(v):
+    """6.0 -> '6' · 6.5 -> '6,5' · 10.0 -> '10' (nunca '1E+1')."""
+    return format(Decimal(v).normalize(), 'f').replace('.', ',')
+
+
+def texto_chuva(c):
+    """'sem chuva' / 'chuva à tarde (6 mm, 3 h)' / 'garoa à tarde' / '4 mm fora do horário de pico'."""
+    if not tem_chuva_info(c):
+        return ''
+    if c.get('chuva_tarde') is not None:
+        if chuvoso(c):
+            horas = f", {c['horas_chuva']} h" if c.get('horas_chuva') else ''
+            return f"chuva à tarde ({_mm(c['chuva_tarde'])} mm{horas})"
+        if c['chuva_tarde'] >= GAROA_MM:
+            return f"garoa à tarde ({_mm(c['chuva_tarde'])} mm)"
+        if (c.get('chuva') or 0) >= 1:
+            return f"{_mm(c['chuva'])} mm só fora do horário de pico"
+        return 'sem chuva'
+    return 'sem chuva' if c['chuva'] < 1 else f"{_mm(c['chuva'])} mm de chuva"
 
 
 def texto(c):
@@ -246,7 +318,6 @@ def texto(c):
         return ''
     temps = f"{c['max']:.0f}° / {c['min']:.0f}°" if c.get('max') is not None and c.get('min') is not None else \
         f"{(c.get('max') or c.get('min')):.0f}°"
-    if c.get('chuva') is None:
+    if not tem_chuva_info(c):
         return temps
-    chuva = 'sem chuva' if c['chuva'] < 1 else f"{str(c['chuva']).replace('.', ',')} mm de chuva"
-    return f"{temps} {icone(c)} {chuva}"
+    return f"{temps} {icone(c)} {texto_chuva(c)}"

@@ -41,6 +41,27 @@
   .barra-fat div { height: 100%; background: var(--verde); border-radius: 4px; }
   .vazio { background: #fff; border: 1px dashed var(--linha); border-radius: 12px; padding: 16px; text-align: center; color: var(--suave); }
   #t-dias { max-height: none; }
+  table.grade tr.atipico td { color: #6d7875; }
+  .tag-atipico { display: block; font-size: 11px; font-weight: 600; color: var(--aviso); white-space: normal; max-width: 180px; }
+  .btn-pino { border: 1px solid var(--linha); background: #fff; border-radius: 8px; padding: 3px 7px; font-size: 13px; }
+  .btn-pino.on { background: var(--laranja-claro); border-color: #f0c9ad; }
+  .var-up { color: var(--ok); font-weight: 700; } .var-down { color: var(--laranja); font-weight: 700; }
+  .comp { font-size: 13px; color: var(--suave); padding: 2px 0; }
+  .comp b { color: var(--texto); }
+  /* [GRÁFICO] três painéis no mesmo eixo de dias (nunca dois eixos no mesmo gráfico) */
+  #grafico { position: relative; background: #fff; border: 1px solid var(--linha); border-radius: 12px; padding: 8px 6px 4px; }
+  #grafico svg { display: block; width: 100%; height: auto; touch-action: pan-y; }
+  #grafico .tit { font: 600 12px system-ui, sans-serif; fill: var(--suave); }
+  #grafico .eixo { font: 11px system-ui, sans-serif; fill: #6d7875; font-variant-numeric: tabular-nums; }
+  #dica-graf { position: absolute; pointer-events: none; background: #fff; border: 1px solid var(--linha); border-radius: 10px;
+    box-shadow: 0 6px 18px #0002; padding: 8px 10px; font-size: 13px; min-width: 170px; z-index: 5; }
+  #dica-graf .v { font-weight: 800; font-variant-numeric: tabular-nums; }
+  #dica-graf .l { color: var(--suave); }
+  #dica-graf .ln { display: flex; align-items: center; gap: 6px; padding: 1px 0; }
+  #dica-graf .k { width: 12px; height: 2px; border-radius: 1px; flex: none; }
+  .legenda-graf { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--suave); padding: 4px 8px 2px; }
+  .legenda-graf span { display: inline-flex; align-items: center; gap: 5px; }
+  .legenda-graf i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; }
   @media (min-width: 1150px) { .dias-prev { grid-template-columns: repeat(8, minmax(0, 1fr)); } }
   @media (max-width: 900px) { .cartoes { grid-template-columns: 1fr; } }
   @media (max-width: 700px) { .area { padding-left: 10px; padding-right: 10px; } .grande { font-size: 26px; }
@@ -52,6 +73,7 @@
       <b>📊 Folha × Faturamento</b>
       <select id="mes" aria-label="Mês"></select>
       <button class="btn ico" id="atualizar" title="Atualizar">🔄</button>
+      <button class="btn prim" id="btn-lancar">💰 <span class="txt">Lançar faturamento</span><span class="curto">Lançar</span></button>
       <button class="btn" id="btn-config">⚙️ <span class="txt">Folha fixa e meta</span><span class="curto">Folha e meta</span></button>
     </div>
   </section>
@@ -113,6 +135,8 @@ function desenhar() {
     <div class="cartoes">${cartaoMes()}${cartaoDia()}</div>
     <h2 class="sec">🔮 Próximos dias <span class="mini suave" style="font-weight:600">previsão · ${esc(d.cidade)}</span></h2>
     ${proximosDias()}
+    <h2 class="sec">📈 Gráfico do mês · ${nomeMes(d.mes)}</h2>
+    <div id="grafico"></div>
     <h2 class="sec">Dia a dia · ${nomeMes(d.mes)}</h2>
     ${tabelaDias()}
     <h2 class="sec">🌡️ Calor × vendas</h2>
@@ -123,7 +147,12 @@ function desenhar() {
     ${tabelaFaixas()}`;
   document.querySelectorAll('[data-periodo]').forEach(b => b.onclick = () => { S.periodo = b.dataset.periodo; gravarLocal('folha_periodo', S.periodo); carregar(); });
   document.querySelectorAll('[data-grupo]').forEach(b => b.onclick = () => { S.grupo = b.dataset.grupo; gravarLocal('folha_grupo', S.grupo); desenhar(); });
+  document.querySelectorAll('[data-pino]').forEach(b => b.onclick = () => abrirAtipico(b.dataset.pino));
+  desenharGrafico();
+  if (!S.abriuLancar && new URLSearchParams(location.search).get('lancar')) { S.abriuLancar = true; abrirLancar(); }
 }
+let esperaResize = null;
+window.addEventListener('resize', () => { clearTimeout(esperaResize); esperaResize = setTimeout(() => { if (S.d) desenharGrafico(); }, 150); });
 
 function cartaoMes() {
   const d = S.d, a = d.acumulado;
@@ -140,6 +169,8 @@ function cartaoMes() {
     <div class="lin2"><span>💰 Faturamento</span><b>${R$(a.faturamento)}</b></div>
     <div class="lin2"><span>🧾 Fixos (${a.dias} dia${a.dias === 1 ? '' : 's'})${a.estimado ? ` <span class="n-aviso">· folha de ${esc(a.estimado)}</span>` : ''}</span><b>${R$(a.fixo)}</b></div>
     <div class="lin2"><span>🧑‍🍳 Freelancers <span class="suave">(${pctTxt(a.pct_freela)} do faturamento)</span></span><b>${R$(a.freela)}</b></div>
+    ${d.anterior ? `<div class="comp" style="margin-top:4px">↔️ ${esc(d.anterior.nome)} até dia ${+d.anterior.ate.slice(8)}: <b>${R$(d.anterior.faturamento)}</b>
+      ${varTxt(d.anterior.var)}${d.anterior.pct != null ? ` · folha ${pctTxt(d.anterior.pct)}` : ''}</div>` : ''}
     ${a.faltam_lancar.length ? `<div class="mini n-aviso" style="margin-top:6px">⚠️ Falta lançar o faturamento de ${a.faltam_lancar.map(dm).join(', ')}:
       a % fica maior que a real até lançar.</div>` : ''}</div>`;
 }
@@ -155,7 +186,21 @@ function cartaoDia() {
     <div class="lin2"><span>👥 ${x.fixos} fixo(s) + ${x.freelas} freela(s)</span><b>${num(horas)} h</b></div>
     <div class="lin2"><span>🧾 Fixos</span><b>${R$(x.fixo)}</b></div>
     <div class="lin2"><span>🧑‍🍳 Freelancers</span><b>${R$(x.freela)}</b></div>
-    ${x.por_hora ? `<div class="lin2"><span>⏱️ Por hora trabalhada</span><b>${R$(x.por_hora)}</b></div>` : ''}</div>`;
+    ${x.por_hora ? `<div class="lin2"><span>⏱️ Por hora trabalhada</span><b>${R$(x.por_hora)}</b></div>` : ''}
+    ${linhaComp('Semana passada', (x.comparar || {}).semana)}${linhaComp('Ano passado', (x.comparar || {}).ano)}
+    ${x.atipico ? `<div class="mini n-aviso" style="margin-top:4px">📌 Dia atípico: ${esc(x.atipico)} (fora das médias)</div>` : ''}</div>`;
+}
+// ↔️ "Semana passada (qua 01/10): R$ 8.300 · 33° · 1 freela  +12%"
+function varTxt(v) {
+  if (v == null) return '';
+  return `<span class="${v >= 0 ? 'var-up' : 'var-down'}">${v >= 0 ? '▲ +' : '▼ '}${num(v)}%</span>`;
+}
+function linhaComp(rotulo, c) {
+  if (!c) return '';
+  const quando = `${c.dia} ${dm(c.data)}${rotulo.startsWith('Ano') ? '/' + c.data.slice(2, 4) : ''}`;
+  if (c.faturamento == null) return `<div class="comp">↔️ ${rotulo} (${quando}): <span class="suave">sem faturamento lançado</span></div>`;
+  return `<div class="comp">↔️ ${rotulo} (${quando}): <b>${R$(c.faturamento)}</b>${c.clima ? ` · ${num(c.clima.max, 0)}°${c.clima.chuvoso ? ' 🌧️' : ''}` : ''}
+    · ${c.freelas} freela(s) ${varTxt(c.var)}${c.atipico ? ` <span class="n-aviso">📌 ${esc(c.atipico)}</span>` : ''}</div>`;
 }
 
 function proximosDias() {
@@ -170,7 +215,8 @@ function proximosDias() {
         <br>${q.dias < MIN_DIAS_CONFIAVEL ? `<span class="poucos-tag">só ${q.dias} dias parecidos</span>` : `${q.dias} dias parecidos`}` : 'sem dias parecidos'}</span></div>`;
   }).join('')}</div>
   <div class="mini suave" style="margin-top:6px">Valores = média dos dias parecidos do histórico: mesmo tipo de dia
-    (semana × fim de semana/feriado) com máxima até 1,5° de diferença.</div>`;
+    (semana × fim de semana/feriado), máxima até 1,5° de diferença e o mesmo tempo (chuva à tarde × seco).
+    Dias marcados com 📌 ficam de fora.</div>`;
 }
 
 function tabelaDias() {
@@ -179,22 +225,30 @@ function tabelaDias() {
   const linhas = dias.map(x => {
     const falta = x.faturamento == null && x.data < HOJE();
     const pessoas = x.fixos + x.freelas;
-    return `<tr class="${x.tipo !== 'semana' ? 'fds' : ''}">
-      <td><b>${x.dia} ${dm(x.data)}</b>${x.feriado ? `<div class="mini suave">🎉 ${esc(x.feriado)}</div>` : ''}</td>
-      <td>${x.clima ? `${climaCurto(x.clima)}${x.clima.chuva >= 1 ? ` <span class="mini suave">${num(x.clima.chuva)} mm</span>` : ''}` : '<span class="suave">—</span>'}</td>
-      <td class="num ${falta ? 'falta' : ''}">${falta ? 'falta lançar' : R$(x.faturamento)}</td>
+    const comp = x.comparar || {}, sem = comp.semana || {}, ano = comp.ano || {};
+    const dicaComp = [sem.faturamento != null ? `Semana passada (${sem.dia} ${dm(sem.data)}): ${R$(sem.faturamento)}` : '',
+                      ano.faturamento != null ? `Ano passado (${ano.dia} ${dm(ano.data)}/${ano.data.slice(2, 4)}): ${R$(ano.faturamento)}` : ''].filter(Boolean).join(' · ');
+    return `<tr class="${x.tipo !== 'semana' ? 'fds' : ''} ${x.atipico ? 'atipico' : ''}">
+      <td><b>${x.dia} ${dm(x.data)}</b>${x.feriado ? `<div class="mini suave">🎉 ${esc(x.feriado)}</div>` : ''}
+        ${x.atipico ? `<span class="tag-atipico">📌 ${esc(x.atipico)}</span>` : ''}</td>
+      <td title="${x.clima ? esc(x.clima.texto) : ''}">${x.clima ? `${climaCurto(x.clima)}${x.clima.chuvoso ? ` <span class="mini suave">${num(x.clima.chuva_tarde != null ? x.clima.chuva_tarde : x.clima.chuva)} mm${x.clima.chuva_tarde != null ? ' à tarde' : ''}</span>` : ''}` : '<span class="suave">—</span>'}</td>
+      <td class="num ${falta && !x.atipico ? 'falta' : ''}">${falta ? (x.atipico ? '—' : 'falta lançar') : R$(x.faturamento)}</td>
+      <td class="num" title="${esc(dicaComp)}">${sem.var != null ? varTxt(sem.var) : '<span class="suave">—</span>'}</td>
       <td class="num">${R$(x.fixo)}${x.fixo_estimado ? ' <span class="n-aviso" title="Folha de ' + esc(x.fixo_estimado) + '">*</span>' : ''}</td>
       <td class="num">${x.freela ? R$(x.freela) : '—'}</td>
       <td class="num">${pessoas ? `${x.fixos} + ${x.freelas} <span class="mini suave">(${num((x.horas_fixos || 0) + (x.horas_freelas || 0))} h)</span>` : '—'}</td>
       <td class="num ${pctCls(x.pct)}">${pctTxt(x.pct)}</td>
-      <td class="num">${x.por_hora ? R$(x.por_hora) : '—'}</td></tr>`;
+      <td class="num">${x.por_hora ? R$(x.por_hora) : '—'}</td>
+      <td><button class="btn-pino ${x.atipico ? 'on' : ''}" data-pino="${x.data}" title="${x.atipico ? 'Dia atípico: ' + esc(x.atipico) + ' (tocar para desmarcar)' : 'Marcar como dia atípico (fica fora das médias)'}">📌</button></td></tr>`;
   }).join('');
   return `<div class="tabela-rolagem"><table class="grade">
-    <thead><tr><th>Dia</th><th>Clima</th><th class="num">Faturamento</th><th class="num">Fixos</th><th class="num">Freelancers</th>
-      <th class="num">Fixos + freelas</th><th class="num">Folha</th><th class="num">R$ / hora</th></tr></thead>
+    <thead><tr><th>Dia</th><th>Clima</th><th class="num">Faturamento</th><th class="num" title="Faturamento × o mesmo dia da semana passada">vs. sem. passada</th>
+      <th class="num">Fixos</th><th class="num">Freelancers</th>
+      <th class="num">Fixos + freelas</th><th class="num">Folha</th><th class="num">R$ / hora</th><th title="Dia atípico">📌</th></tr></thead>
     <tbody>${linhas}</tbody></table></div>
     <div class="mini suave" style="margin-top:4px">Folha = (fixos + freelancers) ÷ faturamento · verde = dentro da meta de ${num(S.d.meta)}% ·
-      Fixos = folha do mês ÷ dias do mês${dias.some(x => x.fixo_estimado) ? ' · * = folha de outro mês (a deste mês não foi informada)' : ''}.</div>`;
+      Fixos = folha do mês ÷ dias do mês${dias.some(x => x.fixo_estimado) ? ' · * = folha de outro mês (a deste mês não foi informada)' : ''}.
+      📌 = dia atípico (feriado prolongado, evento, loja fechada…): fica fora das médias e dos "dias parecidos".</div>`;
 }
 
 function tabelaFaixas() {
@@ -219,9 +273,202 @@ function tabelaFaixas() {
       (com faturamento lançado) tiveram essa temperatura máxima. O faturamento médio, os freelancers e as pessoas são a média
       desses dias. Faixas em cinza têm menos de ${MIN_DIAS_CONFIAVEL} dias: a média pode ser de um dia fora do normal
       (feriado, início do mês…). Para mais dias em cada faixa, escolha "1 ano" ou "Tudo".</div>
-    <div class="mini" style="margin-top:6px">${c.dias ? `🌧️ Dias de chuva (5 mm ou mais): <b>${R$(c.faturamento)}</b> de faturamento médio (${c.dias} dias)` : '🌧️ Nenhum dia de chuva no período'}
-      ${s.dias ? ` · ☀️ sem chuva: <b>${R$(s.faturamento)}</b> (${s.dias} dias)` : ''}</div>`;
+    <div class="mini" style="margin-top:6px">${c.dias ? `🌧️ Chuva à tarde (12h às 22h, 2 mm ou mais): <b>${R$(c.faturamento)}</b> de faturamento médio (${c.dias} dias)` : '🌧️ Nenhum dia de chuva à tarde no período'}
+      ${s.dias ? ` · ☀️ sem chuva à tarde: <b>${R$(s.faturamento)}</b> (${s.dias} dias)` : ''}
+      ${c.dias && s.dias && s.faturamento ? ` · ${varTxt(Math.round((c.faturamento - s.faturamento) / s.faturamento * 1000) / 10)} nos dias de chuva` : ''}</div>
+    <div class="mini suave">Chuva de madrugada ou de manhã quase não muda a venda: só conta a chuva da tarde/noite.</div>`;
 }
+
+// ------------------------------------------------------------------ [GRÁFICO] faturamento × temperatura × folha
+// Três painéis no MESMO eixo de dias (um eixo de valor por painel; nunca dois no mesmo gráfico):
+// faturamento (colunas), temperatura máxima (linha; azul = chuva à tarde) e folha do dia × meta.
+const COR = {fat: '#078A78', atip: '#b9c4c1', temp: '#B3470F', chuva: '#2E6FD0', ok: '#1b7a2f', ruim: '#B3470F',
+             grade: '#e6ecea', tinta: '#16201F', fds: '#f4f8f7', fundo: '#ffffff'};
+function ticksBonitos(min, max, n) {
+  const bruto = (max - min) / Math.max(1, n), mag = Math.pow(10, Math.floor(Math.log10(bruto || 1)));
+  const passo = [1, 2, 2.5, 5, 10].map(f => f * mag).find(p => p >= bruto) || bruto;
+  const ini = Math.floor(min / passo) * passo, fim = Math.ceil(max / passo) * passo, t = [];
+  for (let v = ini; v <= fim + passo / 2; v += passo) t.push(Math.round(v * 100) / 100);
+  return t;
+}
+const reaisCurto = v => v >= 1000 ? 'R$ ' + (Math.round(v / 100) / 10).toLocaleString('pt-BR') + ' mil' : 'R$ ' + Math.round(v);
+function colunaPath(x, y0, w, y) {      // 4px arredondado na ponta, reto na base
+  const h = y0 - y, r = Math.min(4, h, w / 2);
+  if (h <= 0) return '';
+  return `M${x},${y0}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y0}Z`;
+}
+function desenharGrafico() {
+  const el = $('#grafico');
+  if (!el) return;
+  const dias = S.d.dias.slice().reverse();
+  if (dias.length < 2) { el.innerHTML = '<div class="vazio" style="border:0">O gráfico aparece a partir do 2º dia do mês.</div>'; return; }
+  const W = Math.max(300, el.clientWidth - 12), ESQ = 58, DIR = 12, n = dias.length;
+  const passo = (W - ESQ - DIR) / n, bw = Math.max(2, Math.min(24, passo - 2));
+  const xc = i => ESQ + passo * (i + 0.5);
+  const meta = S.d.meta;
+  // painéis: [topo, altura]
+  const P = {fat: [22, 130], temp: [22 + 130 + 34, 80], pct: [22 + 130 + 34 + 80 + 34, 80]};
+  const H = P.pct[0] + P.pct[1] + 24;
+  const fats = dias.map(x => x.faturamento || 0), maxFat = Math.max(...fats, 1);
+  const tFat = ticksBonitos(0, maxFat, 3), topoFat = tFat[tFat.length - 1];
+  const temps = dias.map(x => x.clima && x.clima.max != null ? x.clima.max : null).filter(v => v != null);
+  const tTemp = temps.length ? ticksBonitos(Math.min(...temps) - 1, Math.max(...temps) + 1, 2) : [20, 30, 40];
+  const pcts = dias.map(x => x.pct).filter(v => v != null);
+  const tPct = ticksBonitos(0, Math.max(meta * 1.4, ...(pcts.length ? pcts : [0])) + 1, 3);
+  const y = (painel, v, d0, d1) => { const [t, h] = P[painel]; return t + h - (v - d0) / (d1 - d0) * h; };
+  const yFat = v => y('fat', v, 0, topoFat);
+  const yTemp = v => y('temp', v, tTemp[0], tTemp[tTemp.length - 1]);
+  const yPct = v => y('pct', Math.min(v, tPct[tPct.length - 1]), 0, tPct[tPct.length - 1]);
+  let s = '';
+  // fins de semana / feriados: faixa de fundo nos 3 painéis
+  dias.forEach((x, i) => { if (x.tipo !== 'semana') for (const k of ['fat', 'temp', 'pct'])
+    s += `<rect x="${ESQ + passo * i}" y="${P[k][0]}" width="${passo}" height="${P[k][1]}" fill="${COR.fds}"/>`; });
+  // grades e eixos
+  const grade = (painel, ticks, fy, fmt) => ticks.forEach(t => {
+    const yy = fy(t);
+    s += `<line x1="${ESQ}" x2="${W - DIR}" y1="${yy}" y2="${yy}" stroke="${COR.grade}" stroke-width="1"/>
+          <text class="eixo" x="${ESQ - 6}" y="${yy + 4}" text-anchor="end">${fmt(t)}</text>`; });
+  grade('fat', tFat, yFat, reaisCurto);
+  grade('temp', tTemp, yTemp, t => num(t, 0) + '°');
+  grade('pct', tPct, yPct, t => num(t, 0) + '%');
+  s += `<text class="tit" x="${ESQ}" y="${P.fat[0] - 8}">Faturamento do dia</text>
+        <text class="tit" x="${ESQ}" y="${P.temp[0] - 8}">Temperatura máxima</text>
+        <text class="tit" x="${ESQ}" y="${P.pct[0] - 8}">Folha do dia (% do faturamento)</text>`;
+  // colunas do faturamento
+  dias.forEach((x, i) => { if (x.faturamento) s += `<path d="${colunaPath(xc(i) - bw / 2, P.fat[0] + P.fat[1], bw, yFat(x.faturamento))}" fill="${x.atipico ? COR.atip : COR.fat}"/>`; });
+  // temperatura: linha 2px (quebra onde falta) + pontos com anel; azul = chuva à tarde
+  let caminho = '', aberto = false;
+  dias.forEach((x, i) => {
+    const t = x.clima && x.clima.max != null ? x.clima.max : null;
+    if (t == null) { aberto = false; return; }
+    caminho += `${aberto ? 'L' : 'M'}${xc(i)},${yTemp(t)}`; aberto = true;
+  });
+  s += `<path d="${caminho}" fill="none" stroke="${COR.temp}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+  dias.forEach((x, i) => { if (x.clima && x.clima.max != null)
+    s += `<circle cx="${xc(i)}" cy="${yTemp(x.clima.max)}" r="4" fill="${x.clima.chuvoso ? COR.chuva : COR.temp}" stroke="${COR.fundo}" stroke-width="2"/>`; });
+  // folha do dia × meta
+  const ym = yPct(meta);
+  s += `<line x1="${ESQ}" x2="${W - DIR}" y1="${ym}" y2="${ym}" stroke="${COR.tinta}" stroke-width="1.5"/>
+        <text class="eixo" x="${W - DIR}" y="${ym - 5}" text-anchor="end" style="fill:${COR.tinta};font-weight:700">meta ${num(meta)}%</text>`;
+  let cp = '', ab = false;
+  dias.forEach((x, i) => { if (x.pct == null) { ab = false; return; } cp += `${ab ? 'L' : 'M'}${xc(i)},${yPct(x.pct)}`; ab = true; });
+  s += `<path d="${cp}" fill="none" stroke="#9aa6a3" stroke-width="2" stroke-linejoin="round"/>`;
+  dias.forEach((x, i) => { if (x.pct != null)
+    s += `<circle cx="${xc(i)}" cy="${yPct(x.pct)}" r="4" fill="${x.pct <= meta ? COR.ok : COR.ruim}" stroke="${COR.fundo}" stroke-width="2"/>`; });
+  // eixo x: dias (pula alguns no celular)
+  const cada = Math.ceil(n / Math.max(1, Math.floor((W - ESQ - DIR) / 26)));
+  dias.forEach((x, i) => { if (i % cada === 0 || i === n - 1)
+    s += `<text class="eixo" x="${xc(i)}" y="${H - 6}" text-anchor="middle">${+x.data.slice(8)}</text>`; });
+  // camada de toque/mouse: uma faixa por dia (alvo maior que a marca) + linha que acompanha
+  s += `<line id="cruz" x1="0" x2="0" y1="${P.fat[0]}" y2="${P.pct[0] + P.pct[1]}" stroke="${COR.tinta}" stroke-width="1" opacity="0"/>`;
+  dias.forEach((x, i) => { s += `<rect class="alvo" data-i="${i}" x="${ESQ + passo * i}" y="${P.fat[0]}" width="${passo}" height="${P.pct[0] + P.pct[1] - P.fat[0]}" fill="transparent"/>`; });
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Gráfico do mês: faturamento, temperatura máxima e folha do dia. Os valores estão na tabela do dia a dia.">${s}</svg>
+    <div class="legenda-graf"><span><i style="background:${COR.fat}"></i>faturamento</span><span><i style="background:${COR.atip}"></i>dia atípico</span>
+      <span><i style="background:${COR.temp};border-radius:50%"></i>máxima</span><span><i style="background:${COR.chuva};border-radius:50%"></i>chuva à tarde</span>
+      <span><i style="background:${COR.ok};border-radius:50%"></i>folha dentro da meta</span><span><i style="background:${COR.ruim};border-radius:50%"></i>acima da meta</span>
+      <span><i style="background:${COR.fds};border:1px solid var(--linha)"></i>sáb, dom e feriado</span></div>
+    <div id="dica-graf" hidden></div>`;
+  const svg = el.querySelector('svg'), dica = $('#dica-graf'), cruz = el.querySelector('#cruz');
+  const mostrar = alvo => {
+    const i = +alvo.dataset.i, x = dias[i];
+    cruz.setAttribute('x1', xc(i)); cruz.setAttribute('x2', xc(i)); cruz.setAttribute('opacity', '0.35');
+    dica.replaceChildren();
+    const linha = (valor, rotulo, cor) => {
+      const d = document.createElement('div'); d.className = 'ln';
+      if (cor) { const k = document.createElement('span'); k.className = 'k'; k.style.background = cor; d.append(k); }
+      const v = document.createElement('span'); v.className = 'v'; v.textContent = valor;
+      const l = document.createElement('span'); l.className = 'l'; l.textContent = rotulo;
+      d.append(v, l); dica.append(d);
+    };
+    const tit = document.createElement('div'); tit.style.fontWeight = '700';
+    tit.textContent = `${x.dia} ${dm(x.data)}${x.feriado ? ' · ' + x.feriado : ''}`; dica.append(tit);
+    linha(x.faturamento != null ? R$(x.faturamento) : (x.data < HOJE() ? 'falta lançar' : '—'), 'faturamento', COR.fat);
+    if (x.clima) linha(`${num(x.clima.max, 0)}° / ${num(x.clima.min, 0)}°`, x.clima.texto_chuva || '', x.clima.chuvoso ? COR.chuva : COR.temp);
+    linha(pctTxt(x.pct), `folha (meta ${num(meta)}%)`, x.pct == null ? null : x.pct <= meta ? COR.ok : COR.ruim);
+    linha(`${x.fixos} + ${x.freelas}`, 'fixos + freelas', null);
+    const sem = (x.comparar || {}).semana;
+    if (sem && sem.var != null) linha(`${sem.var >= 0 ? '+' : ''}${num(sem.var)}%`, `× ${sem.dia} ${dm(sem.data)}`, null);
+    if (x.atipico) { const a = document.createElement('div'); a.className = 'l'; a.textContent = '📌 ' + x.atipico; dica.append(a); }
+    dica.hidden = false;
+    const caixa = el.getBoundingClientRect(), sv = svg.getBoundingClientRect(), esc_ = sv.width / W;
+    let left = (xc(i) * esc_) + (sv.left - caixa.left) + 12;
+    if (left + dica.offsetWidth > caixa.width - 4) left = (xc(i) * esc_) + (sv.left - caixa.left) - dica.offsetWidth - 12;
+    dica.style.left = Math.max(4, left) + 'px'; dica.style.top = '8px';
+  };
+  const esconder = () => { dica.hidden = true; cruz.setAttribute('opacity', '0'); };
+  el.querySelectorAll('rect.alvo').forEach(r => { r.addEventListener('pointerenter', () => mostrar(r)); r.addEventListener('click', () => mostrar(r)); });
+  svg.addEventListener('pointerleave', esconder);
+}
+
+// ------------------------------------------------------------------ [ATÍPICO] dia fora do normal (sai das médias)
+function abrirAtipico(data) {
+  const x = S.d.dias.find(y => y.data === data) || {data};
+  const motivos = S.d.motivos_atipico || [];
+  abrirModal(`<h3>📌 ${x.dia || ''} ${dm(data)}: dia atípico?</h3>
+    <div class="form">
+      <div class="mini suave">Dia fora do normal (feriado prolongado, evento na cidade, loja fechada, sistema de vendas parado…)
+        sai das médias de calor × vendas e dos "dias parecidos". Os números do dia continuam na tabela e na folha do mês.</div>
+      ${x.atipico ? `<div class="aviso">Marcado: <b>${esc(x.atipico)}</b></div>` : ''}
+      <div class="chips">${motivos.map(m => `<button class="chip" type="button" data-motivo="${esc(m)}">${esc(m)}</button>`).join('')}</div>
+      <label>Motivo<input id="at-motivo" maxlength="200" placeholder="Escolha acima ou escreva" value="${esc(x.atipico || '')}"></label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn prim" id="at-salvar" type="button">📌 Marcar como atípico</button>
+        ${x.atipico ? '<button class="btn" id="at-tirar" type="button">Desmarcar (volta para as médias)</button>' : ''}</div>
+    </div>`, null, true);
+  document.querySelectorAll('#modal [data-motivo]').forEach(b => b.onclick = () => { $('#at-motivo').value = b.dataset.motivo; });
+  const enviar = async motivo => {
+    try { await api('POST', '/api/gestao/folha/atipico', {data, motivo}); fecharModal();
+          status(motivo ? `${dm(data)} marcado como atípico.` : `${dm(data)} voltou para as médias.`); carregar(); }
+    catch (e) { falhou(e); }
+  };
+  $('#at-salvar').onclick = () => { const m = $('#at-motivo').value.trim(); if (!m) { status('Escolha ou escreva o motivo.', 'aviso'); return; } enviar(m); };
+  if ($('#at-tirar')) $('#at-tirar').onclick = () => enviar('');
+}
+
+// ------------------------------------------------------------------ [LANÇAR] faturamento do dia (mesma regra da Gamificação)
+function abrirLancar() {
+  const ontem = somarDias(HOJE(), -1);
+  const faltando = S.d && S.d.acumulado ? S.d.acumulado.faltam_lancar : [];
+  const sugestao = faltando.length ? faltando[faltando.length - 1] : ontem;
+  abrirModal(`<h3>💰 Lançar faturamento</h3>
+    <div class="form">
+      <label>Dia<input id="lc-data" type="date" value="${sugestao}" max="${HOJE()}"></label>
+      <label>Faturamento do dia (R$)<input id="lc-valor" inputmode="decimal" placeholder="ex.: 8.420,50" autocomplete="off"></label>
+      <div id="lc-info" class="mini suave">…</div>
+      <div class="mini suave">Mesma regra da Gamificação: entra na meta do dia e, se bater a meta diária, a equipe ganha os pontos
+        (corrigir para menos estorna). Lançar de novo o mesmo dia SUBSTITUI o valor.</div>
+      <button class="btn prim" id="lc-salvar" type="button">💾 Lançar</button>
+    </div>`, null, true);
+  const info = async () => {
+    const data = $('#lc-data').value;
+    if (!data) return;
+    $('#lc-info').textContent = '…';
+    try {
+      const r = await api('GET', '/api/gestao/folha/faturamento?data=' + data);
+      $('#lc-info').innerHTML = (r.valor != null ? `⚠️ Já lançado neste dia: <b>${R$(r.valor)}</b> (o novo valor substitui)` : 'Ainda não lançado neste dia.')
+        + (r.meta ? ` · meta: <b>${esc(r.meta)}</b>` : ' · <span class="n-erro">nenhuma meta da Gamificação cobre este dia</span>');
+      if (r.valor != null && !$('#lc-valor').value) $('#lc-valor').value = Number(r.valor).toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    } catch (e) { $('#lc-info').textContent = e.message; }
+  };
+  $('#lc-data').onchange = () => { $('#lc-valor').value = ''; info(); };
+  info();
+  setTimeout(() => $('#lc-valor').focus(), 50);
+  const salvar = async () => {
+    const valor = $('#lc-valor').value.trim(), data = $('#lc-data').value;
+    if (!valor) { status('Digite o valor do faturamento.', 'aviso'); return; }
+    $('#lc-salvar').disabled = true;
+    try {
+      const r = await api('POST', '/api/gestao/folha/faturamento', {data, valor});
+      fecharModal();
+      status(`Faturamento de ${dm(r.data)} lançado: ${R$(r.valor)}${r.antes != null ? ' (antes ' + R$(r.antes) + ')' : ''}.`);
+      if (r.data.slice(0, 7) !== S.mes) S.mes = r.data.slice(0, 7);
+      carregar();
+    } catch (e) { $('#lc-salvar').disabled = false; falhou(e); }
+  };
+  $('#lc-salvar').onclick = salvar;
+  $('#lc-valor').addEventListener('keydown', e => { if (e.key === 'Enter') salvar(); });
+}
+$('#btn-lancar').onclick = () => abrirLancar();
 
 // ------------------------------------------------------------------ folha fixa e meta
 function abrirConfig() {
