@@ -90,7 +90,7 @@ HORARIO_AVISOS_ESTOQUE = "08:30"     # [ALERTAS ESTOQUE] abaixo do mínimo / aca
 HORARIO_RESUMO_PRECOS = "08:35"      # [ALERTAS ESTOQUE] segunda-feira: preços que subiram na semana
 HORARIO_LEMBRETE_FATURAMENTO = "09:15"   # [FOLHA × FATURAMENTO] faltou lançar o faturamento de ontem?
 HORARIO_FECHAMENTO_FOLHA = "09:20"       # [FOLHA × FATURAMENTO] dia 1 (até o 5): fechamento do mês anterior
-HORARIO_AVISO_CLIMA = "10:00"            # [FOLHA × FATURAMENTO] amanhã/depois: calor × freelancers, chuva
+HORARIO_AVISO_CLIMA = "10:00"            # [FOLHA × FATURAMENTO] boletim: previsão de hoje + 3 dias × escala
 DIAS_PARA_FECHAMENTO = 5        # o fechamento do mês anterior pode rodar do dia 1 ao dia 5
 
 # --- CONTROLE DE CONCORRÊNCIA ---
@@ -845,7 +845,7 @@ def verificar_fechamento_folha():
 
 
 def verificar_aviso_clima(agora=None):
-    """10:00: amanhã e depois — escala com menos freelancers que em dias parecidos (calor) e chuva à tarde."""
+    """10:00: boletim do dia — previsão de hoje e dos próximos 3 dias × escala (calor, chuva, freelancers)."""
     if ja_rodou_hoje('aviso_clima'):
         return
     try:
@@ -853,14 +853,12 @@ def verificar_aviso_clima(agora=None):
     except ImportError:
         return
     import alertas_estoque
-    enviados = _ler_estado().get('avisos_clima_enviados') or []
-    texto, chaves = ff.avisos_antecipados(agora, enviados)
-    if texto:
-        if not alertas_estoque.enviar(texto):
-            return
-        salvar_no_estado('avisos_clima_enviados', (enviados + chaves)[-80:])
-        logger.info(f"Folha × Faturamento: aviso de clima × escala enviado ({', '.join(chaves)}).")
+    texto = ff.boletim_previsao(agora)
+    if texto and not alertas_estoque.enviar(texto):
+        return                                   # não chegou em nenhum canal: tenta de novo na recuperação
     marcar_rodou_hoje('aviso_clima')
+    if texto:
+        logger.info("Folha × Faturamento: boletim de previsão enviado.")
 
 
 # ==============================================================================

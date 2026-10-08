@@ -2516,6 +2516,59 @@ def api_gestao_folha_faturamento_ver(usuario):
     return _resposta_folha(lambda: folha_faturamento.consultar_faturamento(request.args.get('data')))
 
 
+# ---------------- [WHATSAPP GRUPO] para onde vão os avisos da gestão (Telegram / WhatsApp / os dois) ----------------
+@app.route('/gestao/avisos')
+def pagina_gestao_avisos():
+    return _pagina_gestao('gestao_avisos.html', 'avisos')
+
+
+def _resposta_avisos(funcao):
+    try:
+        return jsonify(funcao()), 200
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        import notificador_whatsapp
+        if isinstance(e, notificador_whatsapp.ErroWhatsApp):
+            return jsonify({"erro": str(e)}), 400
+        logger.exception(f"Erro nos avisos da gestão ({request.path}): {e}")
+        return jsonify({"erro": "Erro no servidor. Tente de novo; se continuar, veja o log."}), 500
+
+
+@app.route('/api/gestao/avisos', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_avisos(usuario):
+    import alertas_estoque
+    import notificador_whatsapp
+    return _resposta_avisos(lambda: {'config': alertas_estoque.config_avisos(), 'zapi': bool(notificador_whatsapp._base_url())})
+
+
+@app.route('/api/gestao/avisos/grupos', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_avisos_grupos(usuario):
+    import notificador_whatsapp
+    return _resposta_avisos(notificador_whatsapp.listar_grupos)
+
+
+@app.route('/api/gestao/avisos', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_avisos_salvar(usuario):
+    import alertas_estoque
+    dados = ler_json() or {}
+    return _resposta_avisos(lambda: alertas_estoque.salvar_config_avisos(dados.get('canal'), dados.get('grupo_id'),
+                                                                         dados.get('grupo_nome'), usuario))
+
+
+@app.route('/api/gestao/avisos/teste', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_avisos_teste(usuario):
+    import alertas_estoque
+    texto = (f"✅ <b>Teste dos avisos da gestão</b> · Gela Boca\nEnviado por {alertas_estoque.esc(usuario.get('nome', '?'))} "
+             f"em {datetime.now():%d/%m às %H:%M}.\nDaqui para frente chegam aqui: <b>clima e previsão</b>, "
+             "<b>notas da SEFAZ e orçamentos</b>, <b>faturamento e folha</b> e <b>estoque</b>.")
+    return _resposta_avisos(lambda: alertas_estoque.enviar_detalhado(texto))
+
+
 @app.route('/api/gestao/folha/faturamento', methods=['POST'])
 @compras_login(somente_gestor=True)
 def api_gestao_folha_faturamento_lancar(usuario):

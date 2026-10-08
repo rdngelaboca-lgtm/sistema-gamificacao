@@ -18,8 +18,9 @@
 #
 # [MELHORIAS] dia ATÍPICO (feriado prolongado, evento, loja fechada…) fica fora das médias;
 # comparação com o mesmo dia da semana passada e do ano passado; lançar o faturamento pela
-# Web (mesma regra da Gamificação, com os pontos da meta); e os textos do Telegram: aviso
-# antecipado de calor/chuva × escala, lembrete de faturamento e fechamento do mês.
+# Web (mesma regra da Gamificação, com os pontos da meta); e os textos dos avisos (Telegram ou
+# WhatsApp, ver alertas_estoque.enviar): boletim das 10h (previsão × escala), lembrete de
+# faturamento e fechamento do mês.
 # ==============================================================================
 import calendar
 import logging
@@ -46,7 +47,6 @@ VALOR_MAXIMO = Decimal('10000000')
 
 DIAS_HISTORICO_ESCALA = 180         # a dica da Escala compara com os últimos 6 meses
 DIAS_HISTORICO_AVISO = 365          # o aviso antecipado compara com o último ano
-MIN_PARECIDOS_AVISO = 3             # só avisa com pelo menos 3 dias parecidos
 QUEDA_CHUVA_AVISO = Decimal('15')   # avisa a chuva se em dias de chuva vende 15% menos (ou mais)
 DIAS_ESPERA_FECHAMENTO = 5          # o fechamento do mês espera até o dia 5 pelos faturamentos atrasados
 MOTIVOS_ATIPICO = ['Feriado prolongado', 'Evento na cidade', 'Loja fechada / fechou mais cedo',
@@ -730,57 +730,67 @@ def _nome_dia(d, hoje):
     return f"{nomes[d.weekday()]} {d:%d/%m}"
 
 
-def avisos_antecipados(agora=None, enviados=(), dias_frente=(1, 2)):
+def _queda_chuva(hist, tipo_fds):
+    """(queda %, média com chuva, média seca) nos dias desse tipo — None se tem pouco dia de chuva ou seco."""
+    mesmos = [x for x in hist if (x['tipo'] != 'semana') == tipo_fds and clima.tem_chuva_info(x['clima'])]
+    chuva = [x['faturamento'] for x in mesmos if clima.chuvoso(x['clima'])]
+    seco = [x['faturamento'] for x in mesmos if not clima.chuvoso(x['clima'])]
+    if len(chuva) < 2 or len(seco) < 2:
+        return None
+    m_chuva, m_seco = _media(chuva), _media(seco)
+    return _pct(m_seco - m_chuva, m_seco), m_chuva, m_seco
+
+
+def boletim_previsao(agora=None, dias_frente=3):
     """
-    Para amanhã e depois de amanhã (previsão):
-      - escala com MENOS freelancers do que costuma precisar em dias parecidos (calor);
-      - chuva à tarde prevista, quando nos dias de chuva desse tipo a venda cai 15% ou mais.
-    Cada dia/aviso vai uma vez só. Devolve (texto, chaves novas) — texto vazio se não há nada.
+    [BOLETIM 10h] Todo dia: hoje e os próximos 3 dias — clima previsto, faturamento e freelancers em
+    dias parecidos × freelancers já escalados. Alertas: 🔥 escala com menos freelancers do que costuma
+    precisar (dia seco) e 🌧️ chuva à tarde quando nesses dias a venda cai 15% ou mais.
     """
     agora = agora or datetime.now()
     hoje = agora.date()
-    enviados = set(enviados or ())
-    alvos = [hoje + timedelta(days=n) for n in dias_frente]
-    climas = clima.do_periodo(min(alvos), max(alvos))
-    if not any(climas.get(d) for d in alvos):
-        return '', []
+    alvos = [hoje + timedelta(days=n) for n in range(dias_frente + 1)]
+    climas = clima.do_periodo(hoje, alvos[-1])
+    if not any(climas.get(d) and climas[d].get('max') is not None for d in alvos):
+        return ''
     hist = _historico_valido(dias(hoje - timedelta(days=DIAS_HISTORICO_AVISO), hoje), hoje)
-    feriados = database._feriados_periodo(min(alvos), max(alvos))
-    escala = _escalados(min(alvos), max(alvos))
-    linhas, chaves = [], []
+    feriados = database._feriados_periodo(hoje, alvos[-1])
+    escala = _escalados(hoje, alvos[-1])
+    linhas, alertas, faltando = [f"🌤️ <b>Previsão e escala</b> · {clima.CIDADE}"], [], []
     for d in alvos:
         c = climas.get(d)
         if not c or c.get('max') is None:
             continue
-        tipo_fds = _tipo_dia(d, feriados) != 'semana'
-        fixos_esc, freelas_esc = escala.get(d, (0, 0))
+        rotulo = ('Hoje' if d == hoje else 'Amanhã' if d == hoje + timedelta(days=1) else
+                  ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'][d.weekday()])
+        rotulo += f" ({DIAS_SEMANA[d.weekday()]} {d:%d/%m})" + (f" 🎉 {feriados[d]}" if d in feriados else '')
+        freelas_esc = escala.get(d, (0, 0))[1]
         p = parecidos(hist, d, c, feriados)
-        chave = f"{d.isoformat()}:freelas"
-        if p and p.get('dias', 0) >= MIN_PARECIDOS_AVISO and chave not in enviados and not clima.chuvoso(c):
+        linha = f"• <b>{rotulo}</b>: {clima.texto(c)}"
+        if p and p.get('faturamento'):
             esperado = Decimal(str(p['freelas']))
-            if esperado.quantize(Decimal('1'), rounding=ROUND_HALF_UP) > freelas_esc:
-                icone = '🔥' if c['max'] >= 33 else '📋'
-                linhas.append(f"{icone} <b>{_nome_dia(d, hoje)} · {clima.texto(c)}</b>\n"
-                              f"   Em {p['dias']} dias parecidos você faturou ~{_reais_redondo(p['faturamento'])} e usou "
-                              f"<b>{_n(esperado)} freelancer(s)</b>. A escala ainda tem <b>{freelas_esc}</b>.")
-                chaves.append(chave)
-        chave = f"{d.isoformat()}:chuva"
-        if clima.chuvoso(c) and chave not in enviados:
-            mesmos = [x for x in hist if (x['tipo'] != 'semana') == tipo_fds and clima.tem_chuva_info(x['clima'])]
-            chuva = [x['faturamento'] for x in mesmos if clima.chuvoso(x['clima'])]
-            seco = [x['faturamento'] for x in mesmos if not clima.chuvoso(x['clima'])]
-            if len(chuva) >= 2 and len(seco) >= 2:
-                m_chuva, m_seco = _media(chuva), _media(seco)
-                queda = _pct(m_seco - m_chuva, m_seco)
-                if queda is not None and queda >= QUEDA_CHUVA_AVISO:
-                    linhas.append(f"🌧️ <b>{_nome_dia(d, hoje)} · {clima.texto(c)}</b>\n"
-                                  f"   Em dias de chuva ({'fim de semana/feriado' if tipo_fds else 'dia de semana'}) você vendeu "
-                                  f"<b>{_n(queda)}% menos</b> (~{_reais_redondo(m_chuva)} × ~{_reais_redondo(m_seco)} sem chuva). "
-                                  f"A escala tem {freelas_esc} freelancer(s)" + (": dá para chamar menos?" if freelas_esc else "."))
-                    chaves.append(chave)
-    if not linhas:
-        return '', []
-    return "📣 <b>Clima × escala</b>\n" + "\n".join(linhas) + "\n<i>Gestão › 📊 Folha para ver os detalhes.</i>", chaves
+            falta = not clima.chuvoso(c) and esperado.quantize(Decimal('1'), rounding=ROUND_HALF_UP) > freelas_esc
+            marca = '' if clima.chuvoso(c) else (' ⚠️' if falta else ' ✅')
+            linha += (f"\n   ~{_reais_redondo(p['faturamento'])} em {p['dias']} dias parecidos · costuma {_n(esperado)} freela(s)"
+                      f" · escala: {freelas_esc}{marca}")
+            if falta:
+                curto = 'hoje' if d == hoje else 'amanhã' if d == hoje + timedelta(days=1) else f"{DIAS_SEMANA[d.weekday()]} {d:%d/%m}"
+                faltando.append(f"{curto} ({freelas_esc} de ~{_n(esperado)})")
+        else:
+            linha += f"\n   escala: {freelas_esc} freela(s) · poucos dias parecidos no histórico"
+        if clima.chuvoso(c):
+            q = _queda_chuva(hist, _tipo_dia(d, feriados) != 'semana')
+            if q and q[0] is not None and q[0] >= QUEDA_CHUVA_AVISO:
+                alertas.append(f"🌧️ <b>{rotulo}</b>: chuva à tarde prevista. Em dias de chuva você vendeu <b>{_n(q[0])}% menos</b> "
+                               f"(~{_reais_redondo(q[1])} × ~{_reais_redondo(q[2])} sem chuva)"
+                               + (f"; a escala tem {freelas_esc} freela(s): dá para chamar menos?" if freelas_esc else "."))
+        linhas.append(linha)
+    if faltando:
+        alertas.insert(0, "🔥 <b>Escala com menos freelancers do que costuma precisar</b>: " + ", ".join(faltando) + ".")
+    if alertas:
+        linhas += [''] + alertas
+    linhas.append("<i>Detalhes: Gestão › 📊 Folha.</i>")
+    return "\n".join(linhas)
 
 
 def dias_sem_faturamento(hoje=None, janela=7):

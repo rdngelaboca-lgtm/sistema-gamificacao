@@ -10,6 +10,12 @@
 #
 # Para testar à mão (mostra o texto e NÃO envia):   python alertas_estoque.py
 # Para testar enviando de verdade:                  python alertas_estoque.py enviar
+#
+# [WHATSAPP GRUPO] enviar() é a porta de saída de TODOS os avisos da gestão do robô
+# (estoque, preços, notas da SEFAZ, orçamentos, clima/previsão, faturamento e folha).
+# O canal é escolhido em Gestão › 📣 Avisos (tabela ConfigAvisos): Telegram, WhatsApp
+# (grupo, pela Z-API) ou os dois. Se o WhatsApp falhar, o aviso vai para o Telegram
+# com um alerta (nada se perde).
 # ==============================================================================
 import html
 import logging
@@ -192,7 +198,110 @@ def maior_nota_id():
         conn.close()
 
 
+# ------------------------------------------------------------------------------
+# [WHATSAPP GRUPO] canal dos avisos
+# ------------------------------------------------------------------------------
+CANAIS = ('telegram', 'whatsapp', 'ambos')
+_tabela_cfg_ok = False
+
+
+def _garantir_config():
+    global _tabela_cfg_ok
+    if _tabela_cfg_ok:
+        return
+    conn = database.get_db_connection()
+    if not conn:
+        raise RuntimeError("Sem conexão com o banco de dados.")
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ConfigAvisos')
+            CREATE TABLE ConfigAvisos (
+                Chave VARCHAR(40) NOT NULL PRIMARY KEY,
+                Valor NVARCHAR(300) NULL
+            )
+        """)
+        conn.commit()
+        _tabela_cfg_ok = True
+    finally:
+        conn.close()
+
+
+def config_avisos():
+    """{'canal', 'grupo_id', 'grupo_nome', 'atualizado'}. Sem banco / nunca configurado: Telegram."""
+    cfg = {'canal': 'telegram', 'grupo_id': '', 'grupo_nome': '', 'atualizado': ''}
+    try:
+        _garantir_config()
+        conn = database.get_db_connection()
+        if not conn:
+            return cfg
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT Chave, Valor FROM ConfigAvisos")
+            for chave, valor in cur.fetchall():
+                if chave in cfg:
+                    cfg[chave] = valor or ''
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.error(f"Avisos: não consegui ler o canal (vai pelo Telegram): {e}")
+    if cfg['canal'] not in CANAIS:
+        cfg['canal'] = 'telegram'
+    return cfg
+
+
+def salvar_config_avisos(canal, grupo_id, grupo_nome, usuario):
+    canal = str(canal or '').strip()
+    if canal not in CANAIS:
+        raise ValueError("Escolha Telegram, WhatsApp ou os dois.")
+    grupo_id = str(grupo_id or '').strip()[:120]
+    if canal != 'telegram' and not grupo_id:
+        raise ValueError("Escolha o grupo do WhatsApp.")
+    _garantir_config()
+    valores = {'canal': canal, 'grupo_id': grupo_id, 'grupo_nome': str(grupo_nome or '').strip()[:150],
+               'atualizado': f"{datetime.now():%d/%m/%Y %H:%M} por {(usuario or {}).get('nome', '?')}"}
+    conn = database.get_db_connection()
+    if not conn:
+        raise RuntimeError("Sem conexão com o banco de dados.")
+    try:
+        cur = conn.cursor()
+        for chave, valor in valores.items():
+            cur.execute("DELETE FROM ConfigAvisos WHERE Chave = ?", chave)
+            cur.execute("INSERT INTO ConfigAvisos (Chave, Valor) VALUES (?, ?)", chave, valor)
+        conn.commit()
+    finally:
+        conn.close()
+    logger.info(f"Avisos da gestão: canal {canal} ({valores['grupo_nome'] or grupo_id or 'Telegram'}) — {valores['atualizado']}.")
+    return config_avisos()
+
+
+def enviar_detalhado(texto):
+    """Manda pelo canal escolhido. Devolve {'ok', 'whatsapp' (None/True/False), 'telegram' (None/True/False), 'erro'}."""
+    cfg = config_avisos()
+    r = {'ok': False, 'whatsapp': None, 'telegram': None, 'erro': '', 'canal': cfg['canal']}
+    if cfg['canal'] in ('whatsapp', 'ambos') and cfg['grupo_id']:
+        import notificador_whatsapp
+        ok, motivo = notificador_whatsapp.enviar_para_grupo(cfg['grupo_id'], notificador_whatsapp.html_para_whatsapp(texto))
+        r['whatsapp'] = ok
+        if not ok:
+            r['erro'] = motivo
+        if cfg['canal'] == 'whatsapp':
+            if ok:
+                r['ok'] = True
+                return r
+            logger.error(f"Avisos: o WhatsApp falhou ({motivo}); vai pelo Telegram.")
+            texto = f"⚠️ <i>O WhatsApp não aceitou este aviso ({esc(motivo)}). Enviado aqui para não perder.</i>\n\n" + texto
+    r['telegram'] = _enviar_telegram(texto)
+    r['ok'] = bool(r['whatsapp']) or r['telegram']
+    return r
+
+
 def enviar(texto):
+    """Porta de saída dos avisos da gestão. True se chegou em algum canal."""
+    return enviar_detalhado(texto)['ok']
+
+
+def _enviar_telegram(texto):
     """Envia em partes (o Telegram recusa mensagens muito grandes). True se tudo foi aceito."""
     chat = chat_dos_avisos()
     if not chat:

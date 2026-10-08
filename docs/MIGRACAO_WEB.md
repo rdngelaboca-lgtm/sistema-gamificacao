@@ -239,12 +239,22 @@ semana × sáb/dom/feriado). Também aparece:
   com estorno se corrigir para menos). Meta: a do lançamento que já existe no dia; senão a meta cujo período tem o
   dia; senão a ativa hoje. Lançar de novo o mesmo dia substitui o valor.
 - **Telegram** (agendador): 09:15 lembrete de faturamento não lançado (últimos 7 dias, sem os atípicos); 09:20 do
-  dia 1 ao 5 o fechamento do mês anterior (espera os atrasados até o dia 5); 10:00 aviso antecipado para amanhã e
-  depois: escala com menos freelancers que em dias parecidos (calor) e chuva à tarde quando nesses dias a venda
-  cai 15% ou mais (cada aviso uma vez só).
+  dia 1 ao 5 o fechamento do mês anterior (espera os atrasados até o dia 5); 10:00 **boletim de previsão e escala**
+  (todo dia): hoje e os próximos 3 dias com clima, faturamento e freelancers de dias parecidos × escalados; alertas de
+  escala com menos freelancers do que costuma (dia seco) e de chuva à tarde quando nesses dias a venda cai 15% ou mais.
 
 Arquivos: `folha_faturamento.py`, `clima.py`, `templates/gestao_folha.html`; tabelas `ClimaDiario`,
 `FolhaFixaMensal`, `ParametrosFolha`, `DiasAtipicos` (criadas sozinhas).
+
+### Novo (só na Web) — 📣 Avisos da gestão: Telegram ou grupo do WhatsApp (10/2026: Gestão › 📣 Avisos)
+Todos os avisos da gestão que o robô manda (estoque, preços, notas da SEFAZ/XML, produtos novos para a franquia,
+orçamentos, boletim de previsão e escala, resumo do faturamento e folha, lembrete e fechamento do mês) saem por
+`alertas_estoque.enviar()`. Na tela se escolhe o canal: **Telegram**, **WhatsApp (grupo)** ou **os dois**, e o grupo
+(lista dos grupos em que o número da Z-API participa; ou o ID à mão). Fica no banco (`ConfigAvisos`), então o robô e o
+servidor usam a mesma escolha sem reiniciar. No WhatsApp a formatação do Telegram (`<b>`, `<i>`) vira `*` e `_`.
+Se o WhatsApp falhar, o aviso vai pelo Telegram com um alerta (nada se perde). Os avisos da Gamificação (tarefas,
+comunicados, pontos) e os comandos do grupo (`/lancar`…) continuam no Telegram. Arquivos: `notificador_whatsapp.py`
+(`enviar_para_grupo`, `listar_grupos`, `html_para_whatsapp`), `alertas_estoque.py`, `templates/gestao_avisos.html`.
 
 ## 4. Gestão de Pessoas — RH (`gestao_pessoas_main.py` — 1.800 linhas)
 
@@ -310,8 +320,8 @@ Cada etapa: construir → testar → usar em paralelo com o PC → marcar ✅ aq
 - Nos outros computadores/celulares da loja (mesma rede): `http://IP-DO-SERVIDOR:5000/gestao`
   (o mesmo endereço do painel da TV, trocando o final por `/gestao`).
 - Pelo app de compras: aba **Gestão › 🗓️ Escala da loja** (abre direto, sem pedir o PIN de novo).
-- Menu no alto de toda página da Gestão: **🗓️ Escala · 👤 Freelancers · 💰 Pagamentos · 📊 Folha**
-  (`/gestao/escala`, `/gestao/freelancers`, `/gestao/pagamentos`, `/gestao/folha`).
+- Menu no alto de toda página da Gestão: **🗓️ Escala · 👤 Freelancers · 💰 Pagamentos · 📊 Folha · 📣 Avisos**
+  (`/gestao/escala`, `/gestao/freelancers`, `/gestao/pagamentos`, `/gestao/folha`, `/gestao/avisos`).
 - Pela internet (fora da loja): liberado para a Gestão desde 10/2026, a pedido do Rodrigo — só gestor,
   com o login do app (nome + PIN, bloqueio após erros). Para fechar: `GESTAO_PELA_INTERNET = False` no config.py.
 - Login: o mesmo do app de compras (nome + PIN); só quem é gestor no app entra.
