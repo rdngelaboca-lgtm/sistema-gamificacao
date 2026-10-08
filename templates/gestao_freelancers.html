@@ -1,0 +1,133 @@
+{% extends 'gestao_base.html' %}
+{% block titulo %}Freelancers{% endblock %}
+{% block estilo %}
+  .area { padding: 12px 16px 70px; max-width: 1100px; }
+  #busca { flex: 1 1 220px; max-width: 360px; }
+  #resumo { font-weight: 700; }
+  .lista-free { display: grid; gap: 8px; }
+  .free { background: #fff; border: 1px solid var(--linha); border-radius: 12px; padding: 10px 12px;
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; align-items: center; }
+  .free .nome { font-weight: 700; font-size: 16px; }
+  .free .info { display: flex; gap: 14px; flex-wrap: wrap; font-size: 14px; color: var(--suave); }
+  .free .info a { color: var(--verde-esc); font-weight: 600; }
+  .free .deve { color: var(--aviso); font-weight: 700; }
+  .free .acoes { grid-row: 1 / span 2; grid-column: 2; display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+  .vazio { background: #fff; border: 1px dashed var(--linha); border-radius: 12px; padding: 18px; text-align: center; }
+  @media (max-width: 700px) {
+    .area { padding-left: 10px; padding-right: 10px; }
+    .free { grid-template-columns: 1fr; }
+    .free .acoes { grid-row: 3; grid-column: 1; justify-content: flex-start; margin-top: 4px; }
+    .free .acoes .btn { padding: 6px 9px; font-size: 14px; }
+  }
+{% endblock %}
+{% block conteudo %}
+  <section class="barra">
+    <div class="linha">
+      <b>👤 Freelancers</b>
+      <input id="busca" type="text" placeholder="Procurar por nome ou telefone" aria-label="Procurar freelancer">
+      <button class="btn prim" id="btn-novo">➕ Novo freelancer</button>
+      <button class="btn ico" id="atualizar" title="Atualizar">🔄</button>
+    </div>
+    <div class="linha"><span id="resumo" class="mini"></span></div>
+  </section>
+  <main class="area"><div id="lista" class="lista-free"></div></main>
+{% endblock %}
+{% block script %}
+// [GESTÃO WEB] O "👤 Gerenciar Freelancers" do programa da Escala: lista com telefone e quanto
+// falta pagar até hoje; novo, editar, excluir (avisa se ainda falta pagar) e atalho para os pagamentos.
+const S = {lista: null, seq: 0};
+
+function aoEntrar() { carregar(); }
+
+async function carregar() {
+  const seq = ++S.seq;
+  let r;
+  try { r = await api('GET', '/api/gestao/freelancers'); }
+  catch (e) {
+    if (seq !== S.seq) return;
+    if (e.status !== 401 && e.status !== 403) {
+      S.lista = null;
+      $('#resumo').textContent = '';
+      $('#lista').innerHTML = `<div class="vazio n-erro">❌ Não consegui carregar os freelancers: ${esc(e.message)}<br>Toque em 🔄 para tentar de novo.</div>`;
+    }
+    return;
+  }
+  if (seq !== S.seq) return;
+  S.lista = r;
+  desenhar();
+}
+$('#atualizar').onclick = carregar;
+$('#busca').addEventListener('input', () => { if (S.lista) desenhar(); });
+
+function semAcento(t) { return String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase(); }
+function desenhar() {
+  const r = S.lista, termo = semAcento($('#busca').value.trim());
+  const devem = r.freelancers.filter(f => f.pendente_qtd);
+  const semHora = r.freelancers.reduce((s, f) => s + (f.sem_horario || 0), 0);
+  $('#resumo').textContent = `${r.freelancers.length} freelancer(s)` +
+    (devem.length ? ` · ⏳ falta pagar ${r.total_pendente} até hoje (${devem.length} freelancer(s))` : ' · nada a pagar até hoje ✅') +
+    (semHora ? ` · ⚠️ ${semHora} turno(s) sem horário` : '') +
+    (r.aviso ? ` · ⚠️ ${r.aviso}` : '');
+  const lista = r.freelancers.filter(f => !termo || semAcento(f.nome).includes(termo) || f.telefone.replace(/\D/g, '').includes(termo.replace(/\D/g, '') || '§'));
+  $('#lista').innerHTML = lista.map(f => `
+    <div class="free" data-id="${f.id}">
+      <div class="nome">${esc(f.nome)}</div>
+      <div class="acoes">
+        <button class="btn" data-acao="editar">✏️ Editar</button>
+        <a class="btn" href="/gestao/pagamentos?freelancer=${f.id}&periodo=tudo&status=todos">💰 Pagamentos</a>
+        <button class="btn perigo" data-acao="excluir">🗑️ Excluir</button>
+      </div>
+      <div class="info">
+        <span>📞 ${f.whatsapp ? `<a href="https://wa.me/${esc(f.whatsapp)}" target="_blank" rel="noopener" title="Abrir conversa no WhatsApp">${esc(f.telefone)}</a>` : esc(f.telefone || '—')}</span>
+        <span class="${f.pendente_qtd ? 'deve' : ''}">${f.pendente_qtd
+          ? `⏳ A pagar até hoje: ${esc(f.pendente)} (${f.pendente_qtd} turno${f.pendente_qtd !== 1 ? 's' : ''})` : 'Nada a pagar'}</span>
+        ${f.sem_horario ? `<span class="n-erro" title="Sem entrada/saída na escala: não dá para calcular nem pagar">⚠️ ${f.sem_horario} turno${
+          f.sem_horario !== 1 ? 's' : ''} sem horário (corrija na Escala)</span>` : ''}
+      </div>
+    </div>`).join('')
+    || `<div class="vazio suave">${r.freelancers.length ? 'Ninguém com esse nome.' : 'Nenhum freelancer cadastrado ainda. Toque em ➕ Novo freelancer.'}</div>`;
+}
+
+$('#lista').addEventListener('click', e => {
+  const b = e.target.closest('button[data-acao]');
+  if (!b) return;
+  const f = S.lista.freelancers.find(x => x.id === +b.closest('.free').dataset.id);
+  if (!f) return;
+  if (b.dataset.acao === 'editar') abrirForm(f);
+  else excluir(f, b);
+});
+$('#btn-novo').onclick = () => { if (S.lista) abrirForm(null); };
+
+function abrirForm(f) {
+  abrirModal(`<h3>${f ? '✏️ Editar freelancer' : '➕ Novo freelancer'}</h3>
+    <form id="form-free" class="form" autocomplete="off">
+      <label>Nome completo<input id="f-nome" type="text" maxlength="100" value="${esc(f ? f.nome : '')}"></label>
+      <label>Telefone (WhatsApp) com DDD<input id="f-tel" type="tel" inputmode="tel" maxlength="30" placeholder="44 99999-8888" value="${esc(f ? f.telefone : '')}"></label>
+      <div class="mini suave">O telefone é usado para mandar a confirmação da escala e o recibo pelo WhatsApp.</div>
+      <button class="btn prim" type="submit" id="f-salvar">💾 Salvar</button>
+    </form>`, null, true);
+  $('#f-nome').focus();
+  $('#form-free').addEventListener('submit', async ev => {
+    ev.preventDefault();
+    const bt = $('#f-salvar');
+    if (bt.disabled) return;
+    bt.disabled = true;
+    try {
+      const r = await comPerguntas(f ? `/api/gestao/freelancers/${f.id}` : '/api/gestao/freelancers',
+                                   {nome: $('#f-nome').value, telefone: $('#f-tel').value});
+      if (r && r.ok) { fecharModal(); status(r.mensagem); carregar(); return; }
+    } catch (e) { falhou(e); }
+    if (bt.isConnected) bt.disabled = false;
+  });
+}
+
+async function excluir(f, botao) {
+  if (botao.disabled) return;
+  botao.disabled = true;
+  try {
+    const r = await comPerguntas(`/api/gestao/freelancers/${f.id}/excluir`, {});
+    if (r && r.ok) { status(r.mensagem); await carregar(); return; }
+  } catch (e) { falhou(e); }
+  botao.disabled = false;
+}
+{% endblock %}

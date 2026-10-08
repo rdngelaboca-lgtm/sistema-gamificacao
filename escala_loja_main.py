@@ -46,7 +46,11 @@ from escala_regras import (  # noqa: E402
     DIAS_SEMANA, DIAS_CURTOS, fmt_reais, para_decimal_br, fmt_horas, fmt_data_br, nome_tipo_dia,
     texto_calculo, SETORES_MAPA, MAPA_IMAGEM_LARGURA, MAPA_IMAGEM_ALTURA, parse_horario, dia_semana_banco,
     rotulo_e_cor_posicao, fluxo_por_hora, HORAS_FLUXO, pessoas_para_intervalos, gravar_intervalos,
-    lista_envio_whatsapp, enviar_confirmacoes_whatsapp)
+    lista_envio_whatsapp, enviar_confirmacoes_whatsapp,
+    # [GESTÃO WEB] freelancers e pagamentos: as mesmas contas e textos da Web
+    FORMAS_PAGAMENTO, STATUS_PAGAMENTO, periodo_rapido, texto_valores_pagamento, colunas_pagamento,
+    COLUNAS_PAGAMENTO, resumo_pagamentos, texto_recibo_freelancer as _texto_recibo, linhas_planilha_pagamentos,
+    campos_valores_pagamento, ler_valores_pagamento, exemplos_valores_pagamento, REGRAS_VALORES_PAGAMENTO)
 
 
 class AppEscalaLoja:
@@ -1838,8 +1842,8 @@ class AppEscalaLoja:
     # ===================================================================
     # == [MELHORIA ESCALA] PAGAMENTOS DE FREELANCERS ====================
     # ===================================================================
-    FORMAS_PAGAMENTO = ["Pix", "Dinheiro", "Transferência", "Outro"]
-    STATUS_PAGAMENTO = [('pendentes', '⏳ Pendentes'), ('pagos', '✅ Pagos'), ('todos', 'Todos')]
+    FORMAS_PAGAMENTO = FORMAS_PAGAMENTO
+    STATUS_PAGAMENTO = STATUS_PAGAMENTO
 
     def abrir_pagamentos_freelancers(self, freelancer_id=None):
         """
@@ -1867,16 +1871,7 @@ class AppEscalaLoja:
         ate.set_date(hoje)
 
         def periodo(rapido):
-            h = date.today()
-            if rapido == 'semana':
-                ini, fim = h - timedelta(days=h.weekday()), h
-            elif rapido == 'semana_passada':
-                ini = h - timedelta(days=h.weekday() + 7)
-                fim = ini + timedelta(days=6)
-            elif rapido == 'mes':
-                ini, fim = h.replace(day=1), h
-            else:                                  # tudo que está pendente
-                ini, fim = date(2000, 1, 1), h
+            ini, fim = periodo_rapido(rapido)
             de.set_date(ini); ate.set_date(fim)
             carregar()
 
@@ -1961,13 +1956,7 @@ class AppEscalaLoja:
         def carregar(manter=None):
             cfg = self._config_pagamento(recarregar=True)
             self.__dict__['_cache_feriados'] = {}
-            lbl_cfg.config(text=(
-                f"Longa ({fmt_horas(minutos=cfg['MinutosLonga'])}): {fmt_reais(cfg['DiariaLongaSemana'])} seg-sáb · "
-                f"{fmt_reais(cfg['DiariaLongaDomingo'])} dom/feriado     "
-                f"Curta ({fmt_horas(minutos=cfg['MinutosCurta'])}): {fmt_reais(cfg['DiariaCurtaSemana'])} · "
-                f"{fmt_reais(cfg['DiariaCurtaDomingo'])}     Extra: {fmt_reais(cfg['HoraExtraSemana'])}/h · "
-                f"{fmt_reais(cfg['HoraExtraDomingo'])}/h dom/fer, blocos de {cfg['BlocoExtraMinutos']} min"),
-                foreground="#0056b3")
+            lbl_cfg.config(text=texto_valores_pagamento(cfg), foreground="#0056b3")
             status = next((ch for ch, r in self.STATUS_PAGAMENTO if r == combo_status.get()), 'pendentes')
             fid = mapa_free.get(combo_free.get())
             try:
@@ -1979,39 +1968,15 @@ class AppEscalaLoja:
             for i in tree.get_children():
                 tree.delete(i)
             estado['itens'] = {}
-            resumo = {}
-            for n, it in enumerate(itens):
+            # [GESTÃO WEB] textos de cada linha e o resumo vêm de escala_regras (a Web mostra igual)
+            for it in itens:
                 iid = f"P{it['PagamentoID']}" if it['Pago'] else f"E{it['EscalaID']}"
                 estado['itens'][iid] = it
-                c = it['Calculo'] or {}
-                if it['Pago']:
-                    sit = f"✅ Pago {fmt_data_br(it['DataPagamento'])}" + (f" ({it['FormaPagamento']})" if it['FormaPagamento'] else "")
-                    if it['TurnoExcluido']:
-                        sit += " · turno excluído"
-                    tag = 'pago'
-                elif it['SemHorario']:
-                    sit, tag = "⚠️ Turno sem horário", 'problema'
-                else:
-                    extras_sit = [t for t, cond in (("horário corrigido", it['Corrigido']),
-                                                     ("proporcional", c.get('Proporcional')),
-                                                     ("diária trocada", it.get('TipoForcado'))) if cond]
-                    sit, tag = "⏳ Pendente" + "".join(f" · {t}" for t in extras_sit), 'pendente'
-                escala = f"{it['EntradaEscala'] or '?'}–{it['SaidaEscala'] or '?'}"
-                real = f"{it['EntradaReal']}–{it['SaidaReal']}" if it['Corrigido'] else "= escala"
-                tipo_txt = (nome_tipo_dia(c).replace(' (seg a sáb)', '') + (" (prop.)" if c.get('Proporcional') else "")) if c else "—"
-                data_txt = fmt_data_br(it['Data'], True) + (" 🎉" if it.get('Feriado') else "")
-                tree.insert("", "end", iid=iid, tags=(tag,), values=(
-                    data_txt, it['Nome'], it['Posicao'], escala, real,
-                    fmt_horas(c['Horas']) if c else "—", tipo_txt,
-                    fmt_reais(c['ValorDiaria']) if c else "—", fmt_horas(c['HorasExtras']) if c and c['HorasExtras'] else "—",
-                    fmt_reais(c['ValorExtras']) if c and c['ValorExtras'] else "—",
-                    fmt_reais(it['Ajuste']) if it['Ajuste'] else "—", fmt_reais(it['Total']), sit))
-                r = resumo.setdefault((it['FreelancerID'], it['Nome']), [0, Decimal('0'), Decimal('0')])
-                r[0] += 1
-                r[2 if it['Pago'] else 1] += it['Total']
+                col = colunas_pagamento(it)
+                tree.insert("", "end", iid=iid, tags=(col['tag'],), values=tuple(col[k] for k in COLUNAS_PAGAMENTO))
             for i in tree_res.get_children():
                 tree_res.delete(i)
-            for (fid_r, nome), (qtd, pend, pago) in sorted(resumo.items(), key=lambda kv: str(kv[0][1]).lower()):
+            for fid_r, nome, qtd, pend, pago in resumo_pagamentos(itens)[0]:
                 tree_res.insert("", "end", iid=f"F{fid_r}", values=(nome, qtd, fmt_reais(pend), fmt_reais(pago)))
             if manter:
                 for iid in manter:
@@ -2119,31 +2084,8 @@ class AppEscalaLoja:
 
     @staticmethod
     def texto_recibo_freelancer(itens):
-        """Texto para o WhatsApp com os turnos e o total de UM freelancer."""
-        itens = sorted(itens, key=lambda i: (i['Data'] or date.min, i['EntradaEscala'] or ''))
-        nome = itens[0]['Nome']
-        linhas = [f"Olá, {nome.split()[0] if nome else ''}! Segue o resumo dos seus turnos:", ""]
-        for i in itens:
-            c = i['Calculo'] or {}
-            ent = i['EntradaReal'] or i['EntradaEscala'] or '?'
-            sai = i['SaidaReal'] or i['SaidaEscala'] or '?'
-            extra = f" + {fmt_horas(c['HorasExtras'])} extra" if c and c.get('HorasExtras') else ""
-            prop = " (proporcional)" if c and c.get('Proporcional') else ""
-            ajuste = f" {'+' if i['Ajuste'] > 0 else ''}{fmt_reais(i['Ajuste'])} ajuste" if i['Ajuste'] else ""
-            tipo = f" · diária {nome_tipo_dia(c).replace(' (seg a sáb)', '')}" if c and c.get('Tipo') else ""
-            feriado = f" 🎉 {i['Feriado']}" if i.get('Feriado') else ""
-            linhas.append(f"• {fmt_data_br(i['Data'], True)}{feriado} {ent}–{sai} · {fmt_horas(c['Horas']) if c else '?'}"
-                          f"{tipo}{extra}{prop}{ajuste} → {fmt_reais(i['Total'])}" + (" ✅ pago" if i['Pago'] else ""))
-            if i.get('Observacao'):
-                linhas.append(f"   obs: {i['Observacao']}")
-        total = sum((i['Total'] for i in itens), Decimal('0'))
-        pendente = sum((i['Total'] for i in itens if not i['Pago']), Decimal('0'))
-        linhas += ["", f"*Total: {fmt_reais(total)}*"]
-        if pendente and pendente != total:
-            linhas.append(f"A receber: {fmt_reais(pendente)}")
-        empresa = getattr(config, 'NOME_EMPRESA', '') or ''
-        linhas += ["", "Obrigado pelo trabalho! 🙌"] + ([empresa] if empresa else [])
-        return "\n".join(linhas)
+        """Texto para o WhatsApp com os turnos e o total de UM freelancer (o mesmo da Web)."""
+        return _texto_recibo(itens, getattr(config, 'NOME_EMPRESA', '') or '')
 
     def _dialogo_confirmar_pagamento(self, pai, qtd, total, nomes):
         """Pergunta a data e a forma de pagamento. Devolve (data, forma) ou None."""
@@ -2296,70 +2238,43 @@ class AppEscalaLoja:
         frame.pack(fill=tk.BOTH, expand=True)
         campos = {}
 
-        def campo(linha, coluna, chave, valor, largura=9):
+        textos = campos_valores_pagamento(cfg)      # [GESTÃO WEB] mesmo formato da Web
+
+        def campo(linha, coluna, chave, largura=9):
             e = ttk.Entry(frame, width=largura, justify="center")
-            e.insert(0, valor)
+            e.insert(0, textos[chave])
             e.grid(row=linha, column=coluna, padx=4, pady=3)
             campos[chave] = e
             return e
-
-        def hm(minutos):
-            return f"{int(minutos) // 60}:{int(minutos) % 60:02d}"
-
-        def br(v):
-            return f"{Decimal(str(v)):.2f}".replace('.', ',')
 
         ttk.Label(frame, text="", width=26).grid(row=0, column=0)
         for col, titulo in ((1, "Tempo na loja"), (2, "Seg a sáb"), (3, "Dom / feriado")):
             ttk.Label(frame, text=titulo, font=("Arial", 9, "bold")).grid(row=0, column=col)
         ttk.Label(frame, text="Diária LONGA (R$):").grid(row=1, column=0, sticky="w")
-        campo(1, 1, 'MinutosLonga', hm(cfg['MinutosLonga']))
-        campo(1, 2, 'DiariaLongaSemana', br(cfg['DiariaLongaSemana']))
-        campo(1, 3, 'DiariaLongaDomingo', br(cfg['DiariaLongaDomingo']))
+        campo(1, 1, 'MinutosLonga')
+        campo(1, 2, 'DiariaLongaSemana')
+        campo(1, 3, 'DiariaLongaDomingo')
         ttk.Label(frame, text="Diária CURTA (R$):").grid(row=2, column=0, sticky="w")
-        campo(2, 1, 'MinutosCurta', hm(cfg['MinutosCurta']))
-        campo(2, 2, 'DiariaCurtaSemana', br(cfg['DiariaCurtaSemana']))
-        campo(2, 3, 'DiariaCurtaDomingo', br(cfg['DiariaCurtaDomingo']))
+        campo(2, 1, 'MinutosCurta')
+        campo(2, 2, 'DiariaCurtaSemana')
+        campo(2, 3, 'DiariaCurtaDomingo')
         ttk.Label(frame, text="Hora extra (R$ por hora):").grid(row=3, column=0, sticky="w")
-        campo(3, 2, 'HoraExtraSemana', br(cfg['HoraExtraSemana']))
-        campo(3, 3, 'HoraExtraDomingo', br(cfg['HoraExtraDomingo']))
+        campo(3, 2, 'HoraExtraSemana')
+        campo(3, 3, 'HoraExtraDomingo')
         ttk.Separator(frame).grid(row=4, column=0, columnspan=4, sticky="ew", pady=8)
         ttk.Label(frame, text="Hora extra conta em blocos de (min):").grid(row=5, column=0, sticky="w")
-        campo(5, 1, 'BlocoExtraMinutos', str(cfg['BlocoExtraMinutos']))
+        campo(5, 1, 'BlocoExtraMinutos')
         ttk.Label(frame, text="só blocos completos", foreground="gray").grid(row=5, column=2, columnspan=2, sticky="w")
         ttk.Label(frame, text="Na escala, até (horas) = diária curta:").grid(row=6, column=0, sticky="w")
-        campo(6, 1, 'LimiteCurtaMinutos', hm(cfg['LimiteCurtaMinutos']))
+        campo(6, 1, 'LimiteCurtaMinutos')
         ttk.Label(frame, text="acima disso = longa", foreground="gray").grid(row=6, column=2, columnspan=2, sticky="w")
         lbl_ex = ttk.Label(frame, text="", foreground="#0056b3", wraplength=580, justify="left")
         lbl_ex.grid(row=7, column=0, columnspan=4, sticky="w", pady=10)
-        ttk.Label(frame, foreground="gray", justify="left", wraplength=580, text=(
-            "• Conta só ENTRADA → SAÍDA (o intervalo é remunerado).\n"
-            "• Saiu antes do tempo da diária: paga proporcional ao tempo trabalhado.\n"
-            "• Domingos e os feriados cadastrados em '📅 Feriados' usam a coluna 'Dom / feriado'.\n"
-            "• Mudar os valores vale para os turnos ainda NÃO pagos.")).grid(row=8, column=0, columnspan=4, sticky="w")
-
-        def minutos_de(texto, nome):
-            t = str(texto).strip().lower().replace('h', ':')
-            try:
-                if ':' in t:
-                    h, m = (t.split(':') + ['0'])[:2]
-                    return int(h or 0) * 60 + int(m or 0)
-                return int((para_decimal_br(t, nome) * 60).to_integral_value())
-            except (ValueError, InvalidOperation):
-                raise ValueError(f"'{texto}' não é um tempo válido para {nome} (ex: 8:20).")
+        ttk.Label(frame, foreground="gray", justify="left", wraplength=580,
+                  text=REGRAS_VALORES_PAGAMENTO).grid(row=8, column=0, columnspan=4, sticky="w")
 
         def ler():
-            novo = {}
-            for chave, e in campos.items():
-                if chave in ('MinutosLonga', 'MinutosCurta', 'LimiteCurtaMinutos'):
-                    novo[chave] = minutos_de(e.get(), "o tempo")
-                elif chave == 'BlocoExtraMinutos':
-                    if not e.get().strip().isdigit():
-                        raise ValueError("O bloco da hora extra deve ser um número inteiro de minutos (ex: 20).")
-                    novo[chave] = int(e.get().strip())
-                else:
-                    novo[chave] = para_decimal_br(e.get(), "o valor")
-            return novo
+            return ler_valores_pagamento({chave: e.get() for chave, e in campos.items()})
 
         def exemplo(event=None):
             try:
@@ -2367,15 +2282,7 @@ class AppEscalaLoja:
             except ValueError as e:
                 lbl_ex.config(text=f"⚠️ {e}", foreground="#c62828")
                 return
-            base = datetime(2000, 1, 1, 10, 0)
-            linhas = []
-            for rotulo, data_ex, minutos in (("Segunda", '2026-09-28', novo['MinutosLonga'] + 60),
-                                             ("Domingo", '2026-09-27', novo['MinutosLonga'] + 60),
-                                             ("Sábado", '2026-10-03', novo['MinutosLonga'] - 140)):
-                fim_ex = base + timedelta(minutes=minutos)
-                calc = database.calcular_pagamento_turno(base.strftime('%H:%M'), fim_ex.strftime('%H:%M'), novo, 0, data_ex)
-                if calc:
-                    linhas.append(f"{rotulo} 10:00–{fim_ex.strftime('%H:%M')}: {texto_calculo(calc)}")
+            linhas = exemplos_valores_pagamento(novo, database.calcular_pagamento_turno)
             lbl_ex.config(text="Exemplos:\n" + "\n".join(linhas), foreground="#0056b3")
 
         def salvar(event=None):
@@ -2502,21 +2409,7 @@ class AppEscalaLoja:
                                                initialfile=f"Pagamentos_Freelancers_{datetime.now():%d-%m-%Y}.xlsx")
         if not caminho:
             return None
-        linhas = []
-        for i in itens:
-            c = i['Calculo'] or {}
-            linhas.append({'Data': fmt_data_br(i['Data']), 'Dia': DIAS_CURTOS[i['Data'].weekday()] if i['Data'] else '',
-                           'Freelancer': i['Nome'], 'Posição': i['Posicao'],
-                           'Entrada': i['EntradaReal'] or i['EntradaEscala'], 'Saída': i['SaidaReal'] or i['SaidaEscala'],
-                           'Horário corrigido': 'sim' if i['Corrigido'] else '',
-                           'Diária': nome_tipo_dia(c).replace(' (seg a sáb)', '') if c else '',
-                           'Feriado': i.get('Feriado') or '',
-                           'Horas': float(c.get('Horas', 0) or 0), 'Horas extras': float(c.get('HorasExtras', 0) or 0),
-                           'Valor diária (R$)': float(c.get('ValorDiaria', 0) or 0), 'Extras (R$)': float(c.get('ValorExtras', 0) or 0),
-                           'Ajuste (R$)': float(i['Ajuste'] or 0), 'Total (R$)': float(i['Total'] or 0),
-                           'Situação': 'Pago' if i['Pago'] else 'Pendente',
-                           'Pago em': fmt_data_br(i['DataPagamento']) if i['Pago'] else '',
-                           'Forma': i['FormaPagamento'] or '', 'Observação': i['Observacao'] or ''})
+        linhas = linhas_planilha_pagamentos(itens)      # [GESTÃO WEB] as mesmas colunas da Web
         try:
             if caminho.lower().endswith('.csv'):
                 raise ImportError

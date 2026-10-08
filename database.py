@@ -11561,6 +11561,27 @@ def _turno_freelancer(cursor, escala_id):
     return cursor.fetchone()
 
 
+def turno_de_freelancer(escala_id):
+    """
+    [GESTÃO WEB] Dados de UM turno de freelancer para a correção do pagamento:
+    {'EscalaID','Data','FreelancerID','Nome','Posicao','EntradaEscala','SaidaEscala','TipoEscala'} ou None.
+    """
+    _garantir_tabelas_pagamento_freelancer()
+    conn = get_db_connection()
+    if not conn:
+        return None
+    try:
+        cursor = conn.cursor()
+        t = _turno_freelancer(cursor, escala_id)
+        if not t:
+            return None
+        return {'EscalaID': t[0], 'Data': _como_data(t[1]), 'FreelancerID': t[2], 'Nome': t[3], 'Posicao': t[4] or '',
+                'EntradaEscala': _hhmm(t[5]), 'SaidaEscala': _hhmm(t[6]),
+                'TipoEscala': tipo_diaria_da_escala(cursor, escala_id)}
+    finally:
+        conn.close()
+
+
 def salvar_correcao_pagamento(escala_id, entrada_real=None, saida_real=None, ajuste=0, observacao='', tipo_diaria=None):
     """
     Guarda, para um turno AINDA NÃO PAGO: o horário REAL (se diferente da escala), o tipo

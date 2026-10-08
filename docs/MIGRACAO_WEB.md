@@ -159,35 +159,41 @@ quando a rede cai; trocar freelancer por funcionário apaga a diária curta/long
 ao voltar para a aba.
 
 ### Entrega 2 — Cadastros e configurações
+(Os freelancers — itens 25 a 27 — foram junto com a Entrega 3: **Gestão › 👤 Freelancers**.)
+
 | Função | Status |
 |---|---|
 | 21. 🔧 Modo "configurar mapa": clicar num lugar vazio cria posição (nome + setor) | ⬜ |
 | 22. Clicar numa posição: mudar nome e setor | ⬜ |
 | 23. Remover posição do mapa (as escalas antigas continuam guardadas) | ⬜ |
 | 24. Etiqueta do setor em cada posição ([Sem Setor] no modo configurar) | ⬜ |
-| 25. 👤 Freelancers: lista com telefone e "a pagar até hoje" | ⬜ |
-| 26. Freelancer: novo, editar, excluir (avisa se ainda falta pagar) | ⬜ |
-| 27. Freelancer: botão Pagamentos (abre tudo o que está pendente dele) | ⬜ |
+| 25. 👤 Freelancers: lista com telefone e "a pagar até hoje" | 🧪 |
+| 26. Freelancer: novo, editar, excluir (avisa se ainda falta pagar) | 🧪 |
+| 27. Freelancer: botão Pagamentos (abre tudo o que está pendente dele) | 🧪 |
 | 28. 📝 Diretrizes por setor (texto do WhatsApp, *negrito*) | ⬜ |
 | 29. ⚙️ Automação: máx. horas sem pausa, duração do intervalo, jornada padrão | ⬜ |
 | 30. Horários de pico por dia da semana | ⬜ |
 
-### Entrega 3 — Pagamentos de freelancers
+### Entrega 3 — Pagamentos de freelancers (instalada em 10/2026: Gestão › 💰 Pagamentos)
+No celular cada turno vira um cartão; toque marca, ✏️ corrige. Recibo: copia **e** abre a conversa do
+WhatsApp com o texto pronto. Excel: baixa o .xlsx (feito pelo próprio servidor, sem precisar de programa extra).
+As contas, os textos da lista, do recibo e do Excel são os MESMOS do PC (escala_regras.py).
+
 | Função | Status |
 |---|---|
-| 31. Filtros: período + atalhos (esta semana, semana passada, este mês, tudo até hoje), freelancer, pendentes/pagos/todos | ⬜ |
-| 32. Linha com os valores atuais (diárias, hora extra, blocos) | ⬜ |
-| 33. Tabela dos turnos: data (🎉), freelancer, posição, escala, real, horas, diária, extras, ajuste, total, situação (cores) | ⬜ |
-| 34. Resumo por freelancer (turnos, pendente, pago); clicar filtra | ⬜ |
-| 35. Totais: a pagar, pago, selecionados | ⬜ |
-| 36. Selecionar vários turnos | ⬜ |
-| 37. ✏️ Corrigir horário real, ajuste (+/-), observação e diária, com prévia do cálculo | ⬜ |
-| 38. ✅ Marcar como pago: data e forma (Pix, Dinheiro, Transferência, Outro; lembra a última); bloqueia turno sem horário | ⬜ |
-| 39. ↩️ Desfazer pagamento | ⬜ |
-| 40. 📋 Recibo do freelancer para o WhatsApp (na Web: copiar **e** abrir a conversa) | ⬜ |
-| 41. 📊 Exportar Excel (baixar) | ⬜ |
-| 42. ⚙️ Valores: diárias longa/curta (tempo e valor seg-sáb / dom-feriado), hora extra, bloco, limite da curta, exemplos | ⬜ |
-| 43. 📅 Feriados: lista por ano, adicionar, nacionais do ano, remover | ⬜ |
+| 31. Filtros: período + atalhos (esta semana, semana passada, este mês, tudo até hoje), freelancer, pendentes/pagos/todos | 🧪 |
+| 32. Linha com os valores atuais (diárias, hora extra, blocos) | 🧪 |
+| 33. Tabela dos turnos: data (🎉), freelancer, posição, escala, real, horas, diária, extras, ajuste, total, situação (cores) | 🧪 |
+| 34. Resumo por freelancer (turnos, pendente, pago); clicar filtra | 🧪 |
+| 35. Totais: a pagar, pago, selecionados | 🧪 |
+| 36. Selecionar vários turnos | 🧪 |
+| 37. ✏️ Corrigir horário real, ajuste (+/-), observação e diária, com prévia do cálculo | 🧪 |
+| 38. ✅ Marcar como pago: data e forma (Pix, Dinheiro, Transferência, Outro; lembra a última); bloqueia turno sem horário | 🧪 |
+| 39. ↩️ Desfazer pagamento | 🧪 |
+| 40. 📋 Recibo do freelancer para o WhatsApp (na Web: copiar **e** abrir a conversa) | 🧪 |
+| 41. 📊 Exportar Excel (baixar) | 🧪 |
+| 42. ⚙️ Valores: diárias longa/curta (tempo e valor seg-sáb / dom-feriado), hora extra, bloco, limite da curta, exemplos | 🧪 |
+| 43. 📅 Feriados: lista por ano, adicionar, nacionais do ano, remover | 🧪 |
 
 **Como fica por dentro:** as regras da escala (conflitos, folga, jornada, intervalo, valor do
 freelancer, recibo) passam para um arquivo só, usado **pelo PC e pela Web** — as duas versões
@@ -258,6 +264,8 @@ Cada etapa: construir → testar → usar em paralelo com o PC → marcar ✅ aq
 - Nos outros computadores/celulares da loja (mesma rede): `http://IP-DO-SERVIDOR:5000/gestao`
   (o mesmo endereço do painel da TV, trocando o final por `/gestao`).
 - Pelo app de compras: aba **Gestão › 🗓️ Escala da loja** (abre direto, sem pedir o PIN de novo).
+- Menu no alto de toda página da Gestão: **🗓️ Escala · 👤 Freelancers · 💰 Pagamentos**
+  (`/gestao/escala`, `/gestao/freelancers`, `/gestao/pagamentos`).
 - Pela internet (fora da loja): liberado para a Gestão desde 10/2026, a pedido do Rodrigo — só gestor,
   com o login do app (nome + PIN, bloqueio após erros). Para fechar: `GESTAO_PELA_INTERNET = False` no config.py.
 - Login: o mesmo do app de compras (nome + PIN); só quem é gestor no app entra.
@@ -268,7 +276,7 @@ Cada etapa: construir → testar → usar em paralelo com o PC → marcar ✅ aq
 |---|---|---|---|---|---|
 | Gestão de Estoque | 41 | 8 | 0 | 8 | 25 |
 | Painel do Gestor | 17 | 0 | 0 | 5 | 12 |
-| Escala da Loja | 43 | 0 | 20 | 0 | 23 |
+| Escala da Loja | 43 | 0 | 36 | 0 | 7 |
 | Gestão de Pessoas | 8 | 0 | 0 | 1 | 7 |
 | Agendamentos | 5 | 3 | 0 | 1 | 1 |
-| **Total** | **114** | **11** | **20** | **15** | **68** |
+| **Total** | **114** | **11** | **36** | **15** | **52** |

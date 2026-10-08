@@ -581,3 +581,213 @@ def enviar_confirmacoes_whatsapp(lista, data_escala, enviar, buscar_diretriz, es
         if progresso:
             progresso(enviados, erros)
     return enviados, erros
+
+
+# ------------------------------------------------------------------------------
+# [GESTÃO WEB] Freelancers e pagamentos: textos e contas IGUAIS no PC e na Web
+# (antes ficavam dentro das janelas do escala_loja_main.py)
+# ------------------------------------------------------------------------------
+FORMAS_PAGAMENTO = ["Pix", "Dinheiro", "Transferência", "Outro"]
+STATUS_PAGAMENTO = [('pendentes', '⏳ Pendentes'), ('pagos', '✅ Pagos'), ('todos', 'Todos')]
+PERIODOS_PAGAMENTO = [('semana', "Esta semana"), ('semana_passada', "Semana passada"),
+                      ('mes', "Este mês"), ('tudo', "Tudo até hoje")]
+# Ordem das colunas da lista de pagamentos (a do PC)
+COLUNAS_PAGAMENTO = ('data', 'nome', 'posicao', 'escala', 'real', 'horas', 'diaria', 'valor_diaria', 'extras',
+                     'valor_extras', 'ajuste', 'total', 'situacao')
+TITULOS_PAGAMENTO = ('Data', 'Freelancer', 'Posição', 'Escala', 'Real', 'Horas', 'Diária', 'Valor diária', 'Extras',
+                     'Valor extras', 'Ajuste', 'Total', 'Situação')
+
+
+def periodo_rapido(chave, hoje=None):
+    """'semana' (segunda até hoje), 'semana_passada' (seg a dom), 'mes' (dia 1 até hoje), 'tudo' (até hoje)."""
+    h = hoje or date.today()
+    if chave == 'semana':
+        return h - timedelta(days=h.weekday()), h
+    if chave == 'semana_passada':
+        ini = h - timedelta(days=h.weekday() + 7)
+        return ini, ini + timedelta(days=6)
+    if chave == 'mes':
+        return h.replace(day=1), h
+    return date(2000, 1, 1), h
+
+
+def texto_valores_pagamento(cfg):
+    """Linha com os valores atuais (aparece em cima da lista de pagamentos)."""
+    return (f"Longa ({fmt_horas(minutos=cfg['MinutosLonga'])}): {fmt_reais(cfg['DiariaLongaSemana'])} seg-sáb · "
+            f"{fmt_reais(cfg['DiariaLongaDomingo'])} dom/feriado     "
+            f"Curta ({fmt_horas(minutos=cfg['MinutosCurta'])}): {fmt_reais(cfg['DiariaCurtaSemana'])} · "
+            f"{fmt_reais(cfg['DiariaCurtaDomingo'])}     Extra: {fmt_reais(cfg['HoraExtraSemana'])}/h · "
+            f"{fmt_reais(cfg['HoraExtraDomingo'])}/h dom/fer, blocos de {cfg['BlocoExtraMinutos']} min")
+
+
+def colunas_pagamento(it):
+    """Textos de UMA linha da lista de pagamentos + a cor ('pago' / 'pendente' / 'problema')."""
+    c = it['Calculo'] or {}
+    if it['Pago']:
+        sit = f"✅ Pago {fmt_data_br(it['DataPagamento'])}" + (f" ({it['FormaPagamento']})" if it['FormaPagamento'] else "")
+        if it['TurnoExcluido']:
+            sit += " · turno excluído"
+        tag = 'pago'
+    elif it['SemHorario']:
+        sit, tag = "⚠️ Turno sem horário", 'problema'
+    else:
+        extras_sit = [t for t, cond in (("horário corrigido", it['Corrigido']),
+                                         ("proporcional", c.get('Proporcional')),
+                                         ("diária trocada", it.get('TipoForcado'))) if cond]
+        sit, tag = "⏳ Pendente" + "".join(f" · {t}" for t in extras_sit), 'pendente'
+    return {
+        'data': fmt_data_br(it['Data'], True) + (" 🎉" if it.get('Feriado') else ""),
+        'nome': it['Nome'], 'posicao': it['Posicao'],
+        'escala': f"{it['EntradaEscala'] or '?'}–{it['SaidaEscala'] or '?'}",
+        'real': f"{it['EntradaReal']}–{it['SaidaReal']}" if it['Corrigido'] else "= escala",
+        'horas': fmt_horas(c['Horas']) if c else "—",
+        'diaria': (nome_tipo_dia(c).replace(' (seg a sáb)', '') + (" (prop.)" if c.get('Proporcional') else "")) if c else "—",
+        'valor_diaria': fmt_reais(c['ValorDiaria']) if c else "—",
+        'extras': fmt_horas(c['HorasExtras']) if c and c['HorasExtras'] else "—",
+        'valor_extras': fmt_reais(c['ValorExtras']) if c and c['ValorExtras'] else "—",
+        'ajuste': fmt_reais(it['Ajuste']) if it['Ajuste'] else "—",
+        'total': fmt_reais(it['Total']), 'situacao': sit, 'tag': tag}
+
+
+def resumo_pagamentos(itens):
+    """
+    Por freelancer: [(FreelancerID, nome, turnos, pendente, pago)] em ordem de nome,
+    e os totais da lista: {'pendente', 'pendente_qtd', 'pago', 'pago_qtd'}.
+    """
+    por = {}
+    for it in itens:
+        r = por.setdefault((it['FreelancerID'], it['Nome']), [0, Decimal('0'), Decimal('0')])
+        r[0] += 1
+        r[2 if it['Pago'] else 1] += it['Total']
+    linhas = [(fid, nome, q, pe, pa) for (fid, nome), (q, pe, pa) in sorted(por.items(), key=lambda kv: str(kv[0][1]).lower())]
+    pend = [i for i in itens if not i['Pago']]
+    pagos = [i for i in itens if i['Pago']]
+    return linhas, {'pendente': sum((i['Total'] for i in pend), Decimal('0')), 'pendente_qtd': len(pend),
+                    'pago': sum((i['Total'] for i in pagos), Decimal('0')), 'pago_qtd': len(pagos)}
+
+
+def texto_recibo_freelancer(itens, empresa=''):
+    """Texto para o WhatsApp com os turnos e o total de UM freelancer."""
+    itens = sorted(itens, key=lambda i: (i['Data'] or date.min, i['EntradaEscala'] or ''))
+    nome = itens[0]['Nome']
+    linhas = [f"Olá, {nome.split()[0] if nome else ''}! Segue o resumo dos seus turnos:", ""]
+    for i in itens:
+        c = i['Calculo'] or {}
+        ent = i['EntradaReal'] or i['EntradaEscala'] or '?'
+        sai = i['SaidaReal'] or i['SaidaEscala'] or '?'
+        extra = f" + {fmt_horas(c['HorasExtras'])} extra" if c and c.get('HorasExtras') else ""
+        prop = " (proporcional)" if c and c.get('Proporcional') else ""
+        ajuste = f" {'+' if i['Ajuste'] > 0 else ''}{fmt_reais(i['Ajuste'])} ajuste" if i['Ajuste'] else ""
+        tipo = f" · diária {nome_tipo_dia(c).replace(' (seg a sáb)', '')}" if c and c.get('Tipo') else ""
+        feriado = f" 🎉 {i['Feriado']}" if i.get('Feriado') else ""
+        linhas.append(f"• {fmt_data_br(i['Data'], True)}{feriado} {ent}–{sai} · {fmt_horas(c['Horas']) if c else '?'}"
+                      f"{tipo}{extra}{prop}{ajuste} → {fmt_reais(i['Total'])}" + (" ✅ pago" if i['Pago'] else ""))
+        if i.get('Observacao'):
+            linhas.append(f"   obs: {i['Observacao']}")
+    total = sum((i['Total'] for i in itens), Decimal('0'))
+    pendente = sum((i['Total'] for i in itens if not i['Pago']), Decimal('0'))
+    linhas += ["", f"*Total: {fmt_reais(total)}*"]
+    if pendente and pendente != total:
+        linhas.append(f"A receber: {fmt_reais(pendente)}")
+    linhas += ["", "Obrigado pelo trabalho! 🙌"] + ([empresa] if empresa else [])
+    return "\n".join(linhas)
+
+
+def numero_whatsapp(telefone):
+    """Telefone como o WhatsApp entende (55 + DDD + número) ou None. Mesma regra do notificador_whatsapp."""
+    numero = re.sub(r'\D', '', str(telefone or ''))
+    if 10 <= len(numero) <= 11:
+        numero = '55' + numero
+    return numero if len(numero) in (12, 13) and numero.startswith('55') else None
+
+
+def linhas_planilha_pagamentos(itens):
+    """Linhas do Excel dos pagamentos (as mesmas colunas no PC e na Web)."""
+    linhas = []
+    for i in itens:
+        c = i['Calculo'] or {}
+        linhas.append({'Data': fmt_data_br(i['Data']), 'Dia': DIAS_CURTOS[i['Data'].weekday()] if i['Data'] else '',
+                       'Freelancer': i['Nome'], 'Posição': i['Posicao'],
+                       'Entrada': i['EntradaReal'] or i['EntradaEscala'], 'Saída': i['SaidaReal'] or i['SaidaEscala'],
+                       'Horário corrigido': 'sim' if i['Corrigido'] else '',
+                       'Diária': nome_tipo_dia(c).replace(' (seg a sáb)', '') if c else '',
+                       'Feriado': i.get('Feriado') or '',
+                       'Horas': float(c.get('Horas', 0) or 0), 'Horas extras': float(c.get('HorasExtras', 0) or 0),
+                       'Valor diária (R$)': float(c.get('ValorDiaria', 0) or 0), 'Extras (R$)': float(c.get('ValorExtras', 0) or 0),
+                       'Ajuste (R$)': float(i['Ajuste'] or 0), 'Total (R$)': float(i['Total'] or 0),
+                       'Situação': 'Pago' if i['Pago'] else 'Pendente',
+                       'Pago em': fmt_data_br(i['DataPagamento']) if i['Pago'] else '',
+                       'Forma': i['FormaPagamento'] or '', 'Observação': i['Observacao'] or ''})
+    return linhas
+
+
+# ---- Valores das diárias (janela "⚙️ Valores") ----
+CAMPOS_TEMPO_PAGAMENTO = ('MinutosLonga', 'MinutosCurta', 'LimiteCurtaMinutos')
+NOMES_VALORES_PAGAMENTO = {
+    'DiariaLongaSemana': "o campo diária longa (seg a sáb)", 'DiariaLongaDomingo': "o campo diária longa (dom/feriado)",
+    'DiariaCurtaSemana': "o campo diária curta (seg a sáb)", 'DiariaCurtaDomingo': "o campo diária curta (dom/feriado)",
+    'HoraExtraSemana': "o campo hora extra (seg a sáb)", 'HoraExtraDomingo': "o campo hora extra (dom/feriado)",
+    'MinutosLonga': "o tempo da diária longa", 'MinutosCurta': "o tempo da diária curta",
+    'LimiteCurtaMinutos': "o limite da diária curta"}
+
+
+def campos_valores_pagamento(cfg):
+    """Os valores como aparecem nos campos: tempos em H:MM e reais com vírgula."""
+    def hm_(minutos):
+        return f"{int(minutos) // 60}:{int(minutos) % 60:02d}"
+
+    def br(v):
+        return f"{Decimal(str(v)):.2f}".replace('.', ',')
+    return {k: (hm_(v) if k in CAMPOS_TEMPO_PAGAMENTO else str(int(v)) if k == 'BlocoExtraMinutos' else br(v))
+            for k, v in cfg.items()}
+
+
+def minutos_de_texto(texto, nome="o tempo"):
+    """'8:20' / '8h20' / '8' / '8,5' -> minutos. ValueError com mensagem clara."""
+    t = str(texto).strip().lower().replace('h', ':')
+    try:
+        if ':' in t:
+            h, m = (t.split(':') + ['0'])[:2]
+            h, m = int(h or 0), int(m or 0)
+            if h < 0 or not 0 <= m < 60:
+                raise ValueError
+            return h * 60 + m
+        return int((para_decimal_br(t, nome) * 60).to_integral_value())
+    except (ValueError, InvalidOperation):
+        raise ValueError(f"'{texto}' não é um tempo válido para {nome} (ex: 8:20).")
+
+
+def ler_valores_pagamento(campos):
+    """{chave: texto do campo} -> valores prontos para salvar (ValueError se algum estiver errado)."""
+    novo = {}
+    for chave, texto in campos.items():
+        nome = NOMES_VALORES_PAGAMENTO.get(chave, "o valor")
+        if chave in CAMPOS_TEMPO_PAGAMENTO:
+            novo[chave] = minutos_de_texto(texto, nome)
+        elif chave == 'BlocoExtraMinutos':
+            if not str(texto).strip().isdigit():
+                raise ValueError("O bloco da hora extra deve ser um número inteiro de minutos (ex: 20).")
+            novo[chave] = int(str(texto).strip())
+        else:
+            novo[chave] = para_decimal_br(texto, nome)
+    return novo
+
+
+def exemplos_valores_pagamento(novo, calcular):
+    """Três exemplos com os valores digitados. calcular = database.calcular_pagamento_turno."""
+    base = datetime(2000, 1, 1, 10, 0)
+    linhas = []
+    for rotulo, data_ex, minutos in (("Segunda", '2026-09-28', novo['MinutosLonga'] + 60),
+                                     ("Domingo", '2026-09-27', novo['MinutosLonga'] + 60),
+                                     ("Sábado", '2026-10-03', novo['MinutosLonga'] - 140)):
+        fim_ex = base + timedelta(minutes=minutos)
+        calc = calcular(base.strftime('%H:%M'), fim_ex.strftime('%H:%M'), novo, 0, data_ex)
+        if calc:
+            linhas.append(f"{rotulo} 10:00–{fim_ex.strftime('%H:%M')}: {texto_calculo(calc)}")
+    return linhas
+
+
+REGRAS_VALORES_PAGAMENTO = ("• Conta só ENTRADA → SAÍDA (o intervalo é remunerado).\n"
+                            "• Saiu antes do tempo da diária: paga proporcional ao tempo trabalhado.\n"
+                            "• Domingos e os feriados cadastrados em '📅 Feriados' usam a coluna 'Dom / feriado'.\n"
+                            "• Mudar os valores vale para os turnos ainda NÃO pagos.")

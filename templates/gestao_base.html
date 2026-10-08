@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0E6B63">
+<title>Gela Boca · Gestão · {% block titulo %}{% endblock %}</title>
+<!-- [GESTÃO WEB] Base de todas as páginas da Gestão: login (mesmo nome + PIN do app de compras,
+     só gestor), cabeçalho com o menu, janelas (modal), mensagens rápidas e o acesso ao servidor. -->
+<style>
+  :root {
+    --fundo: #F3F6F5; --cartao: #FFFFFF; --texto: #16201F; --suave: #55625F; --linha: #DCE3E1; --linha2: #E6ECEA;
+    --verde: #0E6B63; --verde-esc: #0B564F; --verde-claro: #DDEFEC; --laranja: #B3470F; --laranja-claro: #FBE7DA;
+    --erro: #c62828; --aviso: #b26a00; --ok: #1b7a2f; color-scheme: light;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--fundo); color: var(--texto);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 15px; }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  [hidden] { display: none !important; }
+  .mini { font-size: 13px; } .suave { color: var(--suave); }
+  .btn { border: 1px solid var(--linha); background: var(--cartao); border-radius: 10px; padding: 7px 12px; font-weight: 600;
+    display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; text-decoration: none; }
+  a.btn { color: var(--texto); }
+  .btn:hover { background: var(--linha2); }
+  .btn.prim { background: var(--verde); color: #fff; border-color: var(--verde); }
+  .btn.prim:hover { background: var(--verde-esc); }
+  .btn.perigo { color: var(--erro); }
+  .btn[disabled] { opacity: .55; cursor: default; }
+  .btn.ico { padding: 7px 10px; }
+  .btn .curto { display: none; }
+  input[type=text], input[type=date], input[type=password], input[type=number], input[type=tel], input:not([type]),
+  select, textarea { border: 1px solid var(--linha); border-radius: 8px; padding: 7px 9px; background: #fff; }
+  input:focus, select:focus, textarea:focus, button:focus-visible, a:focus-visible { outline: 2px solid var(--verde); outline-offset: 1px; }
+
+  /* ---------- topo ---------- */
+  header { background: var(--verde); color: #fff; display: flex; align-items: center; gap: 14px; padding: 8px 16px; flex-wrap: wrap; }
+  header .marca { font-weight: 800; font-size: 17px; }
+  header nav { display: flex; gap: 4px; flex-wrap: wrap; }
+  header nav a { color: #fff; text-decoration: none; padding: 6px 10px; border-radius: 8px; font-weight: 600; white-space: nowrap; }
+  header nav a.ativo { background: rgba(255,255,255,.18); }
+  header .dir { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  header .dir a, header .dir button { color: #fff; background: transparent; border: 1px solid rgba(255,255,255,.4);
+    border-radius: 8px; padding: 5px 10px; text-decoration: none; font-weight: 600; }
+
+  /* ---------- barra de ferramentas ---------- */
+  .barra { background: var(--cartao); border-bottom: 1px solid var(--linha); padding: 8px 16px; display: flex; flex-direction: column; gap: 8px; }
+  .barra .linha { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .barra .sep { width: 1px; height: 26px; background: var(--linha); margin: 0 4px; }
+  .botoes { display: flex; gap: 6px; } .botoes .btn { flex: 1; justify-content: center; }
+  .caixa { background: #fff; border: 1px solid var(--linha); border-radius: 12px; padding: 10px 12px; }
+  .caixa h3 { margin: 0 0 6px; font-size: 14px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .n-erro { color: var(--erro); } .n-aviso { color: var(--aviso); } .n-info { color: #555; } .n-ok { color: var(--ok); }
+
+  #status { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); background: #263238; color: #fff; padding: 9px 16px;
+    border-radius: 10px; font-weight: 600; max-width: 92vw; box-shadow: 0 4px 14px #0004; z-index: 50; white-space: pre-line; }
+  #status.erro { background: var(--erro); } #status.aviso { background: var(--aviso); }
+
+  /* ---------- janelas (modal) ---------- */
+  #fundo-modal { position: fixed; inset: 0; background: #0006; z-index: 40; display: flex; align-items: center; justify-content: center; padding: 12px; }
+  #modal { background: #fff; border-radius: 14px; padding: 16px; width: min(900px, 100%); max-height: 92vh; overflow: auto; }
+  #modal.estreito { width: min(520px, 100%); }
+  #modal h3 { margin: 0 0 10px; }
+  .tabela-rolagem { max-height: 50vh; overflow: auto; border: 1px solid var(--linha); border-radius: 8px; }
+  table.grade { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.grade th { position: sticky; top: 0; background: #f7f9f8; text-align: left; padding: 6px; border-bottom: 1px solid var(--linha); z-index: 1; }
+  table.grade td { padding: 6px; border-bottom: 1px solid var(--linha2); }
+  table.grade tr.sel td { background: var(--verde-claro); }
+  .progresso { height: 12px; background: var(--linha2); border-radius: 6px; overflow: hidden; margin: 10px 0; }
+  .progresso div { height: 100%; background: var(--verde); width: 0; transition: width .3s; }
+  .form { display: grid; gap: 10px; }
+  .form label { font-size: 13px; font-weight: 700; color: var(--suave); display: flex; flex-direction: column; gap: 4px; }
+  .form .dupla { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .form input, .form select, .form textarea { width: 100%; font-size: 16px; }
+
+  /* ---------- login ---------- */
+  #login { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 16px; }
+  #login form { background: #fff; border: 1px solid var(--linha); border-radius: 16px; padding: 22px; width: min(340px, 100%);
+    display: flex; flex-direction: column; gap: 10px; }
+  #login h2 { margin: 0; } #login input, #login select { width: 100%; padding: 10px; font-size: 16px; }
+  #login .btn { justify-content: center; padding: 11px; }
+  #erro-login { color: var(--erro); min-height: 1.2em; }
+
+  @media (max-width: 700px) {
+    .barra { padding-left: 10px; padding-right: 10px; }
+    .barra .sep { display: none; }
+    .barra .acoes .btn .txt { display: none; }
+    .barra .acoes .btn .curto { display: inline; }
+    header { padding: 8px 10px; gap: 6px 10px; }
+    header .marca, #quem { display: none; }
+    header nav { order: 2; width: 100%; }
+    header nav a { padding: 6px 8px; }
+    .form .dupla { grid-template-columns: 1fr; }
+  }
+</style>
+<style>{% block estilo %}{% endblock %}</style>
+</head>
+<body>
+
+<div id="login" hidden>
+  <form id="form-login">
+    <h2>Gela Boca · Gestão</h2>
+    <div class="suave mini">Entre com o mesmo nome e PIN do app de compras (só gestor).</div>
+    <select id="login-usuario" aria-label="Seu nome"></select>
+    <input id="login-pin" type="password" inputmode="numeric" autocomplete="current-password" placeholder="PIN" maxlength="8" aria-label="PIN">
+    <button class="btn prim" type="submit">Entrar</button>
+    <div id="erro-login"></div>
+    <div id="sem-permissao" hidden>
+      <div class="n-erro">Só o gestor pode usar a Gestão.</div>
+      <button class="btn" type="button" id="btn-trocar">Entrar com outro nome</button>
+    </div>
+  </form>
+</div>
+
+<div id="app" hidden>
+  <header>
+    <span class="marca">Gela Boca · Gestão</span>
+    <nav>
+      <a href="/gestao/escala"{% if pagina == 'escala' %} class="ativo" aria-current="page"{% endif %}>🗓️ Escala</a>
+      <a href="/gestao/freelancers"{% if pagina == 'freelancers' %} class="ativo" aria-current="page"{% endif %}>👤 Freelancers</a>
+      <a href="/gestao/pagamentos"{% if pagina == 'pagamentos' %} class="ativo" aria-current="page"{% endif %}>💰 Pagamentos</a>
+    </nav>
+    <div class="dir">
+      <span id="quem" class="mini"></span>
+      <a href="/compras/" title="Voltar ao app de compras">📱 App</a>
+      <button id="btn-sair" type="button" title="Sair (também sai do app de compras neste aparelho)">Sair</button>
+    </div>
+  </header>
+{% block conteudo %}{% endblock %}
+</div>
+
+<div id="fundo-modal" hidden><div id="modal" role="dialog" aria-modal="true"></div></div>
+<div id="status" hidden></div>
+
+<script>
+'use strict';
+const $ = s => document.querySelector(s);
+const esc = t => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+const HOJE = () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); };
+const BASE = {usuario: null, aoFecharModal: null};
+
+function lerLocal(k, padrao) { try { return localStorage.getItem(k) || padrao; } catch (e) { return padrao; } }
+function gravarLocal(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+function dataBR(iso, comDia) {
+  const [a, m, d] = iso.split('-');
+  const dias = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'];
+  return `${d}/${m}/${a}` + (comDia ? ` (${dias[new Date(+a, +m - 1, +d).getDay()]})` : '');
+}
+function somarDias(iso, n) {
+  const [a, m, d] = iso.split('-').map(Number);
+  const x = new Date(a, m - 1, d + n);
+  return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
+}
+// centavos -> "R$ 1.234,56"
+function reais(centavos) {
+  const v = Math.round(centavos) / 100;
+  return (v < 0 ? '-R$ ' : 'R$ ') + Math.abs(v).toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+
+let idStatus = null;
+function status(msg, tipo) {
+  const el = $('#status');
+  el.textContent = msg; el.className = tipo || ''; el.hidden = false;
+  clearTimeout(idStatus); idStatus = setTimeout(() => { el.hidden = true; }, 8000);
+}
+
+class ErroApi extends Error { constructor(m, st, d) { super(m); this.status = st; this.dados = d || {}; } }
+async function api(metodo, url, corpo) {
+  let r;
+  try {
+    r = await fetch(url, {method: metodo, credentials: 'same-origin', cache: 'no-store',
+      headers: corpo ? {'Content-Type': 'application/json'} : {}, body: corpo ? JSON.stringify(corpo) : undefined});
+  } catch (e) { throw new ErroApi('Sem conexão com o servidor da loja.', 0); }
+  let d = null;
+  try { d = await r.json(); } catch (e) {}
+  if (!r.ok) {
+    if (r.status === 401) { mostrarLogin(); }
+    if (r.status === 403) { mostrarLogin(true); }
+    throw new ErroApi((d && d.erro) || `Erro ${r.status}`, r.status, d);
+  }
+  return d;
+}
+// Ação que pode voltar com perguntas ("... mesmo assim?"): pergunta e manda de novo
+async function comPerguntas(url, corpo) {
+  const confirmar = [];
+  for (let i = 0; i < 5; i++) {
+    const r = await api('POST', url, Object.assign({}, corpo, {confirmar}));
+    if (!r.perguntas) return r;
+    for (const p of r.perguntas) {
+      if (!confirm(`${p.titulo}\n\n${p.texto}`)) return null;
+      confirmar.push(p.chave);
+    }
+  }
+  return null;
+}
+function falhou(e) { alert(e.message || String(e)); }
+
+// máscara HH:MM (como no PC): só números, os dois pontos entram sozinhos
+function mascara(e) {
+  if (e.inputType && e.inputType.startsWith('delete')) return;
+  const el = e.target;
+  let dig = el.value.replace(/\D/g, '').slice(0, 4);
+  if (dig.length >= 3) dig = dig.slice(0, 2) + ':' + dig.slice(2);
+  if (el.value !== dig) el.value = dig;
+}
+// a máscara transforma "830" em "83:0": ao sair do campo completa como a pessoa quis dizer
+// ("8" → 08:00, "830" → 08:30, "1730" → 17:30). Devolve true se mudou.
+function normalizarHora(el) {
+  const v = el.value.trim();
+  if (!v || /^([01]\d|2[0-3]):[0-5]\d$/.test(v)) return false;
+  const dig = v.replace(/\D/g, '');
+  let h, m;
+  if (dig.length === 1 || dig.length === 2) { h = +dig; m = 0; }
+  else if (dig.length === 3) { h = +dig[0]; m = +dig.slice(1); }
+  else if (dig.length === 4) { h = +dig.slice(0, 2); m = +dig.slice(2); }
+  else return false;
+  if (h > 23 || m > 59) return false;
+  el.value = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+  return true;
+}
+
+// ------------------------------------------------------------------ login
+async function mostrarLogin(semPermissao) {
+  $('#app').hidden = true; $('#login').hidden = false;
+  $('#sem-permissao').hidden = !semPermissao;
+  if (!$('#login-usuario').options.length) {
+    try {
+      const lista = await api('GET', '/api/compras/usuarios');
+      $('#login-usuario').innerHTML = '<option value="">Seu nome…</option>' + lista.map(u => `<option value="${u.id}">${esc(u.nome)}</option>`).join('');
+    } catch (e) { $('#erro-login').textContent = e.message; }
+  }
+}
+$('#form-login').addEventListener('submit', async ev => {
+  ev.preventDefault();
+  $('#erro-login').textContent = '';
+  const id = $('#login-usuario').value, pin = $('#login-pin').value.trim();
+  if (!id || !pin) { $('#erro-login').textContent = 'Escolha seu nome e digite o PIN.'; return; }
+  try {
+    const r = await api('POST', '/api/compras/login', {funcionario_id: +id, pin});
+    $('#login-pin').value = '';
+    if (!r.usuario.gestor) { $('#sem-permissao').hidden = false; return; }
+    iniciarApp(r.usuario);
+  } catch (e) { $('#erro-login').textContent = e.message; }
+});
+$('#btn-trocar').onclick = async () => { try { await api('POST', '/api/compras/logout'); } catch (e) {} $('#sem-permissao').hidden = true; };
+$('#btn-sair').onclick = async () => {
+  if (!confirm('Sair da Gestão? (neste aparelho também sai do app de compras)')) return;
+  try { await api('POST', '/api/compras/logout'); } catch (e) {}
+  BASE.usuario = null; mostrarLogin();
+};
+
+async function iniciar() {
+  try {
+    const r = await api('GET', '/api/compras/eu');
+    if (!r.usuario.gestor) return mostrarLogin(true);
+    iniciarApp(r.usuario);
+  } catch (e) { if (e.status !== 401 && e.status !== 403) { mostrarLogin(); $('#erro-login').textContent = e.message; } }
+}
+function iniciarApp(usuario) {
+  BASE.usuario = usuario;
+  $('#login').hidden = true; $('#app').hidden = false;
+  $('#quem').textContent = '👤 ' + usuario.nome;
+  if (typeof aoEntrar === 'function') aoEntrar(usuario);      // cada página carrega os seus dados
+}
+
+// ------------------------------------------------------------------ janelas
+function abrirModal(html, aoFechar, estreito) {
+  $('#modal').innerHTML = html + '<div style="text-align:right;margin-top:12px"><button class="btn" id="fechar-modal">Fechar</button></div>';
+  $('#modal').classList.toggle('estreito', !!estreito);
+  $('#fundo-modal').hidden = false;
+  BASE.aoFecharModal = aoFechar || null;
+  $('#fechar-modal').onclick = fecharModal;
+}
+function fecharModal() {
+  $('#fundo-modal').hidden = true; $('#modal').innerHTML = '';
+  const f = BASE.aoFecharModal; BASE.aoFecharModal = null;
+  if (f) f();
+}
+$('#fundo-modal').addEventListener('click', e => { if (e.target.id === 'fundo-modal') fecharModal(); });
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  if (!$('#fundo-modal').hidden) fecharModal();
+  else if (typeof aoEscape === 'function') aoEscape();
+});
+</script>
+<script>
+'use strict';
+{% block script %}{% endblock %}
+</script>
+<script>iniciar();</script>
+</body>
+</html>

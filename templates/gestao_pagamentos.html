@@ -1,0 +1,528 @@
+{% extends 'gestao_base.html' %}
+{% block titulo %}Pagamentos{% endblock %}
+{% block estilo %}
+  .barra label.mini { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; color: var(--suave); }
+  .atalhos { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+  .atalhos .btn { padding: 5px 10px; font-size: 14px; }
+  .atalhos .btn.sel { background: var(--verde-claro); border-color: var(--verde); color: var(--verde-esc); }
+  #valores { color: #0056b3; flex: 1 1 300px; }
+  .area { padding: 12px 16px 110px; }
+  #totais { font-weight: 700; margin: 4px 0 10px; display: flex; gap: 6px 18px; flex-wrap: wrap; }
+  #totais .sel { color: #0056b3; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+  .chip { background: #fff; border: 1px solid var(--linha); border-radius: 10px; padding: 6px 10px; text-align: left; font-size: 13px; }
+  .chip b { font-size: 14px; } .chip .pend { color: var(--aviso); font-weight: 700; } .chip .pg { color: var(--ok); }
+  .chip.sel { border-color: var(--verde); box-shadow: 0 0 0 2px #0e6b6333; }
+  .tabela-pag { background: #fff; border: 1px solid var(--linha); border-radius: 12px; overflow: auto; }
+  table.pag { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.pag th { position: sticky; top: 0; background: #f7f9f8; text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--linha);
+    white-space: nowrap; z-index: 1; }
+  table.pag td { padding: 7px 6px; border-bottom: 1px solid var(--linha2); white-space: nowrap; }
+  table.pag td.sit { white-space: normal; min-width: 150px; }
+  table.pag td.num, table.pag th.num { text-align: right; }
+  table.pag tbody tr { cursor: pointer; }
+  table.pag tr.pago td { background: #e3f5e1; } table.pag tr.pendente td { background: #fff4cc; }
+  table.pag tr.problema td { background: #ffd6d6; }
+  table.pag tr.marcado td { background: #cfe3ff; }
+  table.pag input[type=checkbox] { width: 18px; height: 18px; }
+  .vazio { padding: 18px; text-align: center; }
+  .acoes-pag { position: fixed; left: 0; right: 0; bottom: 0; background: #fff; border-top: 1px solid var(--linha); padding: 8px 16px;
+    display: flex; gap: 6px; flex-wrap: wrap; align-items: center; z-index: 20; box-shadow: 0 -2px 10px #0001; }
+  .acoes-pag #sel-info { margin-right: auto; font-weight: 700; color: #0056b3; }
+  #status { bottom: 74px; }               /* a mensagem rápida fica acima da barra de botões */
+  .valores-grade { display: grid; grid-template-columns: minmax(150px, 1.4fr) repeat(3, minmax(70px, 1fr)); gap: 6px 8px; align-items: center; }
+  .valores-grade input { width: 100%; text-align: center; font-size: 16px; }
+  .valores-grade .tit { font-weight: 700; font-size: 13px; text-align: center; color: var(--suave); }
+  #v-exemplos { color: #0056b3; white-space: pre-line; font-size: 13px; margin: 10px 0; }
+  #v-exemplos.erro { color: var(--erro); }
+  .regras { white-space: pre-line; font-size: 13px; color: var(--suave); }
+  #c-previa { font-weight: 700; color: #1b5e20; min-height: 1.2em; }
+  #c-previa.erro { color: var(--erro); }
+  #r-texto { width: 100%; min-height: 220px; font-size: 14px; }
+  .lista-fer { max-height: 46vh; overflow: auto; border: 1px solid var(--linha); border-radius: 8px; }
+  .lista-fer label { display: flex; gap: 8px; align-items: center; padding: 7px 8px; border-bottom: 1px solid var(--linha2); font-weight: 400; color: inherit; }
+  .linha-form { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+
+  /* celular: cada turno vira um cartão */
+  @media (max-width: 800px) {
+    .area { padding-left: 10px; padding-right: 10px; }
+    .tabela-pag { background: transparent; border: 0; overflow: visible; }
+    table.pag thead { display: none; }
+    table.pag, table.pag tbody { display: block; }
+    table.pag tr { display: grid; grid-template-columns: auto 1fr 1fr; gap: 2px 10px; padding: 10px; margin-bottom: 8px;
+      border: 1px solid var(--linha); border-radius: 12px; background: #fff; }
+    table.pag tr td { background: transparent !important; border: 0; padding: 1px 0; white-space: normal; }
+    table.pag tr.pago { background: #e3f5e1; } table.pag tr.pendente { background: #fff4cc; }
+    table.pag tr.problema { background: #ffd6d6; } table.pag tr.marcado { background: #cfe3ff; outline: 2px solid #0056b3; }
+    table.pag td.ck { grid-row: 1 / span 3; padding-top: 2px; }
+    table.pag td[data-rot]::before { content: attr(data-rot) ": "; color: var(--suave); font-size: 12px; }
+    table.pag td.c-data, table.pag td.c-nome { font-weight: 700; font-size: 14px; }
+    table.pag td.c-data::before, table.pag td.c-nome::before { content: none; }
+    table.pag td.c-total { font-weight: 800; font-size: 15px; text-align: left; }
+    table.pag td.sit { grid-column: 2 / span 2; }
+    table.pag td.c-acao { grid-column: 2 / span 2; }
+    table.pag td.num { text-align: left; }
+    .acoes-pag { padding: 6px 8px; }
+    .acoes-pag .btn { padding: 7px 9px; }
+    .acoes-pag .btn .txt { display: none; }
+    .acoes-pag .btn .curto { display: inline; }
+    .acoes-pag #sel-info { width: 100%; }
+    .area { padding-bottom: 150px; }
+    #status { bottom: 118px; }
+    .valores-grade { grid-template-columns: minmax(110px, 1.2fr) repeat(3, minmax(60px, 1fr)); }
+  }
+{% endblock %}
+{% block conteudo %}
+  <section class="barra">
+    <div class="linha">
+      <b>💰 Pagamentos</b>
+      <label class="mini">De <input type="date" id="de"></label>
+      <label class="mini">até <input type="date" id="ate"></label>
+      <span class="atalhos" id="atalhos">
+        <button class="btn" data-periodo="semana">Esta semana</button>
+        <button class="btn" data-periodo="semana_passada">Semana passada</button>
+        <button class="btn" data-periodo="mes">Este mês</button>
+        <button class="btn" data-periodo="tudo">Tudo até hoje</button>
+      </span>
+    </div>
+    <div class="linha">
+      <label class="mini">Freelancer <select id="free"><option value="">Todos</option></select></label>
+      <label class="mini">Mostrar <select id="mostrar">
+        <option value="pendentes">⏳ Pendentes</option><option value="pagos">✅ Pagos</option><option value="todos">Todos</option></select></label>
+      <button class="btn ico" id="atualizar" title="Atualizar">🔄</button>
+    </div>
+    <div class="linha">
+      <span id="valores" class="mini"></span>
+      <button class="btn" id="btn-valores">⚙️ Valores</button>
+      <button class="btn" id="btn-feriados">📅 Feriados</button>
+    </div>
+  </section>
+  <main class="area">
+    <div id="totais"></div>
+    <div id="resumo-free" class="chips" aria-label="Por freelancer (toque para filtrar)"></div>
+    <div class="tabela-pag">
+      <table class="pag">
+        <thead><tr>
+          <th><input type="checkbox" id="marcar-todos" title="Marcar todos" aria-label="Marcar todos"></th>
+          <th>Data</th><th>Freelancer</th><th>Posição</th><th>Escala</th><th>Real</th><th>Horas</th><th>Diária</th>
+          <th class="num">Valor diária</th><th>Extras</th><th class="num">Valor extras</th><th class="num">Ajuste</th>
+          <th class="num">Total</th><th>Situação</th><th></th></tr></thead>
+        <tbody id="linhas"></tbody>
+      </table>
+    </div>
+  </main>
+  <div class="acoes-pag">
+    <span id="sel-info" class="mini"></span>
+    <button class="btn" id="btn-corrigir">✏️ <span class="txt">Corrigir horário / ajuste</span><span class="curto">Corrigir</span></button>
+    <button class="btn prim" id="btn-pagar">✅ <span class="txt">Marcar como PAGO</span><span class="curto">Pagar</span></button>
+    <button class="btn" id="btn-desfazer">↩️ <span class="txt">Desfazer pagamento</span><span class="curto">Desfazer</span></button>
+    <button class="btn" id="btn-recibo">📋 <span class="txt">Recibo (WhatsApp)</span><span class="curto">Recibo</span></button>
+    <button class="btn" id="btn-excel">📊 <span class="txt">Exportar Excel</span><span class="curto">Excel</span></button>
+  </div>
+{% endblock %}
+{% block script %}
+// [GESTÃO WEB] O "💰 Pagamentos Freelancers" do programa da Escala: turnos do período com o valor
+// (diária + hora extra + ajuste), resumo por freelancer, corrigir, pagar, desfazer, recibo e Excel.
+// As contas são feitas no servidor (as mesmas do PC).
+const S = {filtro: {periodo: 'semana', status: 'pendentes', freelancer: ''}, dados: null, marcados: new Set(),
+           seq: 0, ultimo: null, ocupado: false};
+
+// filtros vindos da URL (o atalho "💰 Pagamentos" do cadastro manda ?freelancer=ID&periodo=tudo)
+{
+  const q = new URLSearchParams(location.search);
+  if (q.get('periodo')) S.filtro.periodo = q.get('periodo');
+  else if (/^\d{4}-\d{2}-\d{2}$/.test(q.get('de') || '') && /^\d{4}-\d{2}-\d{2}$/.test(q.get('ate') || '')) {
+    S.filtro = Object.assign(S.filtro, {periodo: '', de: q.get('de'), ate: q.get('ate')});
+  }
+  if (q.get('status')) S.filtro.status = q.get('status');
+  if (q.get('freelancer')) S.filtro.freelancer = q.get('freelancer');
+}
+
+function aoEntrar() { carregar(); }
+
+function parametros(extra) {
+  const f = S.filtro, p = new URLSearchParams();
+  if (f.periodo) p.set('periodo', f.periodo); else { p.set('de', f.de); p.set('ate', f.ate); }
+  p.set('status', f.status);
+  if (f.freelancer) p.set('freelancer', f.freelancer);
+  for (const [k, v] of Object.entries(extra || {})) p.set(k, v);
+  return p;
+}
+function corpoFiltro() {
+  const f = S.filtro;
+  return f.periodo ? {periodo: f.periodo, status: f.status, freelancer: f.freelancer}
+                   : {de: f.de, ate: f.ate, status: f.status, freelancer: f.freelancer};
+}
+
+async function carregar(manterMarcados) {
+  const seq = ++S.seq;
+  history.replaceState(null, '', '/gestao/pagamentos?' + parametros());
+  let r;
+  try { r = await api('GET', '/api/gestao/pagamentos?' + parametros()); }
+  catch (e) {
+    if (seq !== S.seq) return;
+    if (e.status !== 401 && e.status !== 403) {
+      S.dados = null; S.marcados.clear();
+      $('#linhas').innerHTML = `<tr><td colspan="15" class="vazio n-erro">❌ Não consegui carregar os pagamentos: ${esc(e.message)}<br>Toque em 🔄 para tentar de novo.</td></tr>`;
+      $('#totais').textContent = ''; $('#resumo-free').innerHTML = ''; atualizarSelecao();
+    }
+    return;
+  }
+  if (seq !== S.seq) return;                  // resposta de um filtro antigo
+  S.dados = r;
+  if (!manterMarcados) S.marcados.clear();
+  const existentes = new Set(r.itens.map(i => i.iid));
+  for (const iid of [...S.marcados]) if (!existentes.has(iid)) S.marcados.delete(iid);
+  desenhar();
+}
+
+function desenhar() {
+  const r = S.dados;
+  $('#de').value = r.de; $('#ate').value = r.ate;
+  document.querySelectorAll('#atalhos [data-periodo]').forEach(b => b.classList.toggle('sel', b.dataset.periodo === S.filtro.periodo));
+  const nomes = {};
+  for (const f of r.freelancers) nomes[f.nome] = (nomes[f.nome] || 0) + 1;
+  $('#free').innerHTML = '<option value="">Todos</option>' + r.freelancers.map(f =>
+    `<option value="${f.id}">${esc(f.nome)}${nomes[f.nome] > 1 ? ` (ID ${f.id})` : ''}</option>`).join('');
+  $('#free').value = r.freelancer == null ? '' : String(r.freelancer);
+  $('#mostrar').value = r.status;
+  $('#valores').textContent = r.valores;
+  $('#resumo-free').innerHTML = r.resumo.length > 1 || r.freelancer != null ? r.resumo.map(x => `
+    <button class="chip ${r.freelancer === x.freelancer_id ? 'sel' : ''}" data-free="${x.freelancer_id}" title="Mostrar só ${esc(x.nome)}">
+      <b>${esc(x.nome)}</b> · ${x.turnos} turno(s)<br><span class="pend">⏳ ${esc(x.pendente)}</span> · <span class="pg">✅ ${esc(x.pago)}</span></button>`).join('')
+    + (r.freelancer != null ? '<button class="chip" data-free="">✖ Mostrar todos</button>' : '') : '';
+  $('#linhas').innerHTML = r.itens.map((i, n) => `
+    <tr class="${i.tag} ${S.marcados.has(i.iid) ? 'marcado' : ''}" data-iid="${esc(i.iid)}" data-n="${n}">
+      <td class="ck"><input type="checkbox" aria-label="Marcar" ${S.marcados.has(i.iid) ? 'checked' : ''}></td>
+      <td class="c-data">${esc(i.data)}</td><td class="c-nome">${esc(i.nome)}</td>
+      <td data-rot="Posição">${esc(i.posicao)}</td><td data-rot="Escala">${esc(i.escala)}</td>
+      <td data-rot="Real">${esc(i.real)}</td><td data-rot="Horas">${esc(i.horas)}</td><td data-rot="Diária">${esc(i.diaria)}</td>
+      <td class="num" data-rot="Valor diária">${esc(i.valor_diaria)}</td><td data-rot="Extras">${esc(i.extras)}</td>
+      <td class="num" data-rot="Valor extras">${esc(i.valor_extras)}</td><td class="num" data-rot="Ajuste">${esc(i.ajuste)}</td>
+      <td class="num c-total" data-rot="Total">${esc(i.total)}</td>
+      <td class="sit">${esc(i.situacao)}${i.observacao ? `<div class="mini suave">obs: ${esc(i.observacao)}</div>` : ''}</td>
+      <td class="c-acao">${i.pago ? '' : '<button class="btn" data-corrigir title="Corrigir horário / ajuste">✏️</button>'}</td>
+    </tr>`).join('') || `<tr><td colspan="15" class="vazio suave">Nenhum turno de freelancer ${
+      {pendentes: 'pendente', pagos: 'pago', todos: ''}[r.status]} neste período.</td></tr>`;
+  atualizarSelecao();
+}
+
+function itensMarcados() { return S.dados ? S.dados.itens.filter(i => S.marcados.has(i.iid)) : []; }
+function atualizarSelecao() {
+  const r = S.dados;
+  if (!r) { $('#sel-info').textContent = ''; $('#totais').textContent = ''; return; }
+  const sel = itensMarcados(), soma = sel.reduce((s, i) => s + i.total_centavos, 0);
+  $('#totais').innerHTML = `<span>⏳ A pagar: ${esc(r.totais.pendente)} (${r.totais.pendente_qtd} turno(s))</span>
+    <span>✅ Pago: ${esc(r.totais.pago)} (${r.totais.pago_qtd})</span>` +
+    (sel.length ? `<span class="sel">🔹 Marcados: ${reais(soma)} (${sel.length})</span>` : '');
+  $('#sel-info').textContent = sel.length ? `🔹 ${sel.length} marcado(s): ${reais(soma)}` : 'Marque os turnos (toque na linha).';
+  const todos = r.itens.length && sel.length === r.itens.length;
+  $('#marcar-todos').checked = !!todos;
+  $('#marcar-todos').indeterminate = sel.length > 0 && !todos;
+}
+function marcar(iid, valor) {
+  if (valor) S.marcados.add(iid); else S.marcados.delete(iid);
+  const tr = document.querySelector(`#linhas tr[data-iid="${CSS.escape(iid)}"]`);
+  if (tr) { tr.classList.toggle('marcado', valor); tr.querySelector('input[type=checkbox]').checked = valor; }
+}
+$('#linhas').addEventListener('click', e => {
+  const tr = e.target.closest('tr[data-iid]');
+  if (!tr || !S.dados) return;
+  const item = S.dados.itens[+tr.dataset.n];
+  if (e.target.closest('[data-corrigir]')) { abrirCorrecao(item); return; }
+  if (e.target.closest('a')) return;
+  const n = +tr.dataset.n;
+  const valor = e.target.matches('input[type=checkbox]') ? e.target.checked : !S.marcados.has(item.iid);
+  if (e.shiftKey && S.ultimo != null) {              // Shift+clique marca o intervalo (como no PC)
+    const [a, b] = [Math.min(S.ultimo, n), Math.max(S.ultimo, n)];
+    for (let k = a; k <= b; k++) marcar(S.dados.itens[k].iid, valor);
+  } else marcar(item.iid, valor);
+  S.ultimo = n;
+  atualizarSelecao();
+});
+$('#linhas').addEventListener('dblclick', e => {
+  const tr = e.target.closest('tr[data-iid]');
+  if (tr && S.dados && !e.target.closest('input,button')) abrirCorrecao(S.dados.itens[+tr.dataset.n]);
+});
+$('#marcar-todos').addEventListener('change', e => {
+  if (!S.dados) return;
+  for (const i of S.dados.itens) marcar(i.iid, e.target.checked);
+  atualizarSelecao();
+});
+
+// ---- filtros
+document.querySelectorAll('#atalhos [data-periodo]').forEach(b => b.onclick = () => {
+  S.filtro.periodo = b.dataset.periodo; carregar();
+});
+for (const id of ['#de', '#ate']) $(id).addEventListener('change', () => {
+  if (!$('#de').value || !$('#ate').value) return;
+  S.filtro = Object.assign(S.filtro, {periodo: '', de: $('#de').value, ate: $('#ate').value});
+  carregar();
+});
+$('#free').addEventListener('change', e => { S.filtro.freelancer = e.target.value; carregar(); });
+$('#mostrar').addEventListener('change', e => { S.filtro.status = e.target.value; carregar(); });
+$('#atualizar').onclick = () => carregar(true);
+$('#resumo-free').addEventListener('click', e => {
+  const b = e.target.closest('[data-free]');
+  if (b) { S.filtro.freelancer = b.dataset.free; carregar(); }
+});
+
+// ---- ações (um clique por vez: o botão fica travado até a resposta)
+function pronto() {
+  if (S.dados) return true;
+  alert('A lista ainda não foi carregada. Toque em 🔄 (Atualizar) e tente de novo.');
+  return false;
+}
+async function uma(botao, acao) {
+  if (S.ocupado) return;
+  S.ocupado = true; if (botao) botao.disabled = true;
+  try { await acao(); } catch (e) { falhou(e); }
+  S.ocupado = false; if (botao) botao.disabled = false;
+}
+
+$('#btn-corrigir').onclick = () => {
+  if (!pronto()) return;
+  const sel = itensMarcados();
+  if (sel.length !== 1) { alert('Marque UM turno para corrigir.'); return; }
+  abrirCorrecao(sel[0]);
+};
+
+$('#btn-pagar').onclick = () => {
+  if (!pronto()) return;
+  const sel = itensMarcados().filter(i => !i.pago);
+  if (!sel.length) { alert('Marque os turnos PENDENTES que você pagou.'); return; }
+  if (sel.some(i => i.sem_horario)) { alert('Há turno sem horário de entrada/saída na seleção. Corrija antes de pagar.'); return; }
+  const total = sel.reduce((s, i) => s + i.total_centavos, 0);
+  const nomes = [...new Set(sel.map(i => i.nome))].sort((a, b) => a.localeCompare(b, 'pt'));
+  const quem = nomes.slice(0, 3).join(', ') + (nomes.length > 3 ? ` e mais ${nomes.length - 3}` : '');
+  const forma = lerLocal('gestao_forma_pag', 'Pix');
+  abrirModal(`<h3>✅ Confirmar pagamento</h3>
+    <form id="form-pagar" class="form">
+      <div>${sel.length} turno(s) de ${esc(quem)}</div>
+      <div style="font-size:22px;font-weight:800;color:var(--ok)">Total: ${reais(total)}</div>
+      <div class="dupla">
+        <label>Pago em<input type="date" id="p-data" value="${esc(S.dados.hoje)}"></label>
+        <label>Forma<input id="p-forma" list="formas" maxlength="30" value="${esc(forma)}">
+          <datalist id="formas">${S.dados.formas.map(f => `<option value="${esc(f)}">`).join('')}</datalist></label>
+      </div>
+      <button class="btn prim" type="submit" id="p-ok">✅ Confirmar pagamento</button>
+    </form>`, null, true);
+  $('#form-pagar').addEventListener('submit', ev => {
+    ev.preventDefault();
+    uma($('#p-ok'), async () => {
+      const r = await comPerguntas('/api/gestao/pagamentos/pagar', {escala_ids: sel.map(i => i.escala_id),
+        data: $('#p-data').value, forma: $('#p-forma').value});
+      if (r && r.ok) {
+        gravarLocal('gestao_forma_pag', $('#p-forma').value.trim() || 'Pix');
+        fecharModal(); status(r.mensagem); await carregar();
+      }
+    });
+  });
+};
+
+$('#btn-desfazer').onclick = () => {
+  if (!pronto()) return;
+  const sel = itensMarcados().filter(i => i.pago);
+  if (!sel.length) { alert('Marque os turnos PAGOS que quer voltar para pendente.'); return; }
+  const total = sel.reduce((s, i) => s + i.total_centavos, 0);
+  if (!confirm(`Voltar ${sel.length} turno(s) (${reais(total)}) para PENDENTE?\n\nUse quando marcou como pago por engano.`)) return;
+  uma($('#btn-desfazer'), async () => {
+    const r = await api('POST', '/api/gestao/pagamentos/desfazer', {pagamento_ids: sel.map(i => i.pagamento_id)});
+    status(r.mensagem); await carregar();
+  });
+};
+
+$('#btn-recibo').onclick = () => {
+  if (!pronto()) return;
+  uma($('#btn-recibo'), async () => {
+    const r = await api('POST', '/api/gestao/pagamentos/recibo', Object.assign(corpoFiltro(), {ids: [...S.marcados]}));
+    abrirModal(`<h3>📋 Recibo de ${esc(r.nome)}</h3>
+      <textarea id="r-texto" readonly>${esc(r.texto)}</textarea>
+      <div class="linha-form">
+        <button class="btn prim" id="r-copiar">📋 Copiar</button>
+        ${r.whatsapp ? `<a class="btn" id="r-wpp" href="${esc(r.whatsapp)}" target="_blank" rel="noopener">💬 Abrir no WhatsApp (${esc(r.telefone)})</a>`
+                     : `<span class="mini n-aviso">Sem telefone válido no cadastro: copie e cole no WhatsApp.</span>`}
+      </div>
+      <div class="mini suave">O WhatsApp abre com o texto pronto; é só conferir e enviar.</div>`);
+    $('#r-copiar').onclick = () => copiar($('#r-texto'));
+  });
+};
+async function copiar(campo) {
+  try { await navigator.clipboard.writeText(campo.value); status('Recibo copiado. Cole no WhatsApp.'); return; } catch (e) {}
+  // na rede da loja (http://IP) o navegador não deixa usar a área de transferência moderna
+  campo.removeAttribute('readonly'); campo.select(); campo.setSelectionRange(0, campo.value.length);
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch (e) {}
+  campo.setAttribute('readonly', '');
+  status(ok ? 'Recibo copiado. Cole no WhatsApp.' : 'Não consegui copiar sozinho: o texto está selecionado, copie (Ctrl+C).', ok ? '' : 'aviso');
+}
+
+$('#btn-excel').onclick = () => {
+  if (!pronto()) return;
+  if (!S.dados.itens.length) { alert('Não há turnos na lista para exportar.'); return; }
+  uma($('#btn-excel'), async () => {
+    const p = parametros(S.marcados.size ? {ids: [...S.marcados].join(',')} : {});
+    let r;
+    try { r = await fetch('/api/gestao/pagamentos/excel?' + p, {credentials: 'same-origin', cache: 'no-store'}); }
+    catch (e) { throw new Error('Sem conexão com o servidor da loja.'); }
+    if (!r.ok) {
+      let d = null; try { d = await r.json(); } catch (e) {}
+      if (r.status === 401) mostrarLogin();
+      throw new Error((d && d.erro) || `Erro ${r.status}`);
+    }
+    const nome = ((r.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/) || [])[1] || 'Pagamentos.xlsx';
+    const url = URL.createObjectURL(await r.blob());
+    const a = document.createElement('a');
+    a.href = url; a.download = nome; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    status(`Planilha ${nome} baixada.`);
+  });
+};
+
+// ---- corrigir horário real / ajuste / diária
+function abrirCorrecao(item) {
+  if (item.pago) { alert("Este turno já está PAGO. Para corrigir, primeiro use '↩️ Desfazer pagamento'."); return; }
+  const rotulo = item.tipo_escala ? `Como está na escala (${item.tipo_escala})` : 'Automático (pela duração)';
+  abrirModal(`<h3>✏️ Corrigir horário / ajuste</h3>
+    <div><b>${esc(item.nome)} · ${esc(item.data_curta)} · ${esc(item.posicao)}</b></div>
+    <div class="mini suave" style="margin-bottom:8px">Na escala: ${esc(item.entrada_escala || '?')} às ${esc(item.saida_escala || '?')}</div>
+    <form id="form-corr" class="form" autocomplete="off">
+      <div class="dupla">
+        <label>Entrada real<input id="c-ent" inputmode="numeric" maxlength="5" placeholder="${esc(item.entrada_escala)}" value="${esc(item.entrada_real)}"></label>
+        <label>Saída real<input id="c-sai" inputmode="numeric" maxlength="5" placeholder="${esc(item.saida_escala)}" value="${esc(item.saida_real)}"></label>
+      </div>
+      <div class="mini suave">Vazio = usar o horário da escala.</div>
+      <div class="dupla">
+        <label>Ajuste R$ (+ bônus / - desconto)<input id="c-aj" inputmode="decimal" placeholder="ex: -10" value="${esc(item.ajuste_txt)}"></label>
+        <label>Diária<select id="c-tipo"><option value="">${esc(rotulo)}</option><option value="longa">Longa</option><option value="curta">Curta</option></select></label>
+      </div>
+      <label>Observação<input id="c-obs" type="text" maxlength="300" value="${esc(item.observacao)}"></label>
+      <div id="c-previa"></div>
+      <button class="btn prim" type="submit" id="c-salvar">💾 Salvar</button>
+    </form>`, null, true);
+  $('#c-tipo').value = item.tipo_forcado || '';
+  let timer = null, seq = 0;
+  const previa = () => {
+    clearTimeout(timer);
+    const meu = ++seq;
+    timer = setTimeout(async () => {
+      let r;
+      try { r = await api('POST', '/api/gestao/pagamentos/previa-correcao', leitura()); }
+      catch (e) { r = {ok: false, texto: '⚠️ ' + e.message}; }
+      if (meu !== seq || !$('#c-previa')) return;
+      $('#c-previa').textContent = r.texto; $('#c-previa').classList.toggle('erro', !r.ok);
+    }, 250);
+  };
+  const leitura = () => ({escala_id: item.escala_id, entrada: $('#c-ent').value, saida: $('#c-sai').value,
+                          ajuste: $('#c-aj').value, tipo: $('#c-tipo').value, observacao: $('#c-obs').value});
+  for (const id of ['#c-ent', '#c-sai']) {
+    $(id).addEventListener('input', mascara);
+    $(id).addEventListener('blur', e => { if (normalizarHora(e.target)) previa(); });
+  }
+  for (const id of ['#c-ent', '#c-sai', '#c-aj']) $(id).addEventListener('input', previa);
+  $('#c-tipo').addEventListener('change', previa);
+  previa();
+  $('#c-ent').focus();
+  $('#form-corr').addEventListener('submit', ev => {
+    ev.preventDefault();
+    normalizarHora($('#c-ent')); normalizarHora($('#c-sai'));
+    uma($('#c-salvar'), async () => {
+      const r = await api('POST', '/api/gestao/pagamentos/corrigir', leitura());
+      fecharModal(); status(r.mensagem);
+      S.marcados = new Set([item.iid]); await carregar(true);
+    });
+  });
+}
+
+// ---- valores das diárias
+const CAMPOS_VALORES = [
+  ['Diária LONGA (R$)', 'MinutosLonga', 'DiariaLongaSemana', 'DiariaLongaDomingo'],
+  ['Diária CURTA (R$)', 'MinutosCurta', 'DiariaCurtaSemana', 'DiariaCurtaDomingo'],
+  ['Hora extra (R$ por hora)', null, 'HoraExtraSemana', 'HoraExtraDomingo']];
+$('#btn-valores').onclick = () => uma($('#btn-valores'), async () => {
+  const v = await api('GET', '/api/gestao/pagamentos/valores');
+  const campo = k => k ? `<input data-campo="${k}" value="${esc(v.campos[k])}" inputmode="decimal" aria-label="${k}">` : '<span></span>';
+  abrirModal(`<h3>⚙️ Valores dos freelancers</h3>
+    <form id="form-val" autocomplete="off">
+      <div class="valores-grade">
+        <span></span><span class="tit">Tempo na loja</span><span class="tit">Seg a sáb</span><span class="tit">Dom / feriado</span>
+        ${CAMPOS_VALORES.map(([rot, a, b, c]) => `<span>${rot}</span>${campo(a)}${campo(b)}${campo(c)}`).join('')}
+        <span>Hora extra conta em blocos de (min)</span>${campo('BlocoExtraMinutos')}<span class="mini suave" style="grid-column:span 2">só blocos completos</span>
+        <span>Na escala, até (horas) = diária curta</span>${campo('LimiteCurtaMinutos')}<span class="mini suave" style="grid-column:span 2">acima disso = longa</span>
+      </div>
+      <div id="v-exemplos"></div>
+      <div class="regras">${esc(v.regras)}</div>
+      <div class="linha-form"><button class="btn prim" type="submit" id="v-salvar">💾 Salvar valores</button></div>
+    </form>`);
+  const ler = () => { const c = {}; document.querySelectorAll('#form-val [data-campo]').forEach(i => { c[i.dataset.campo] = i.value; }); return {campos: c}; };
+  const mostrar = (linhas, ok) => { const el = $('#v-exemplos'); if (!el) return; el.textContent = (ok ? 'Exemplos:\n' : '') + linhas.join('\n'); el.classList.toggle('erro', !ok); };
+  mostrar(v.exemplos, true);
+  let timer = null, seq = 0;
+  $('#form-val').addEventListener('input', () => {
+    clearTimeout(timer);
+    const meu = ++seq;
+    timer = setTimeout(async () => {
+      let r;
+      try { r = await api('POST', '/api/gestao/pagamentos/valores/exemplos', ler()); } catch (e) { r = {ok: false, linhas: ['⚠️ ' + e.message]}; }
+      if (meu === seq) mostrar(r.linhas, r.ok);
+    }, 300);
+  });
+  $('#form-val').addEventListener('submit', ev => {
+    ev.preventDefault();
+    uma($('#v-salvar'), async () => {
+      const r = await api('POST', '/api/gestao/pagamentos/valores', ler());
+      fecharModal(); status(r.mensagem); await carregar(true);
+    });
+  });
+});
+
+// ---- feriados (pagos com os valores de domingo)
+$('#btn-feriados').onclick = () => {
+  const st = {ano: new Date().getFullYear(), mudou: false};
+  abrirModal(`<h3>📅 Feriados (pagos como domingo)</h3>
+    <div class="linha-form"><b>Ano:</b>
+      <button class="btn ico" id="f-ant" title="Ano anterior">◀</button><b id="f-ano"></b><button class="btn ico" id="f-prox" title="Próximo ano">▶</button>
+      <button class="btn" id="f-nacionais">🇧🇷 Cadastrar feriados nacionais do ano</button></div>
+    <div class="lista-fer" id="f-lista" style="margin-top:8px"></div>
+    <form class="linha-form" id="form-fer" autocomplete="off">
+      <input type="date" id="f-data" aria-label="Data do feriado">
+      <input type="text" id="f-nome" maxlength="100" placeholder="Nome (ex: Aniversário da cidade)" style="flex:1 1 180px">
+      <button class="btn prim" type="submit" id="f-add">➕ Adicionar</button></form>
+    <div class="linha-form"><button class="btn perigo" id="f-remover">🗑️ Remover marcados</button>
+      <span class="mini suave">Feriados do estado e da cidade: cadastre à mão.</span></div>`,
+    () => { if (st.mudou) carregar(true); });
+  const listar = async () => {
+    $('#f-ano').textContent = st.ano;
+    let r;
+    try { r = await api('GET', `/api/gestao/feriados?ano=${st.ano}`); }
+    catch (e) { if ($('#f-lista')) $('#f-lista').innerHTML = `<div class="vazio n-erro">${esc(e.message)}</div>`; return; }
+    if (!$('#f-lista') || r.ano !== st.ano) return;
+    $('#f-lista').innerHTML = r.feriados.map(f => `<label><input type="checkbox" value="${esc(f.data)}"> <b>${esc(f.data_txt)}</b> ${esc(f.nome)}</label>`).join('')
+      || `<div class="vazio suave">Nenhum feriado cadastrado em ${st.ano}.</div>`;
+  };
+  $('#f-ant').onclick = () => { st.ano--; listar(); };
+  $('#f-prox').onclick = () => { st.ano++; listar(); };
+  $('#form-fer').addEventListener('submit', ev => {
+    ev.preventDefault();
+    if (!$('#f-data').value) { alert('Escolha a data do feriado.'); return; }
+    uma($('#f-add'), async () => {
+      const r = await api('POST', '/api/gestao/feriados', {data: $('#f-data').value, nome: $('#f-nome').value});
+      st.mudou = true; st.ano = r.ano; $('#f-nome').value = ''; status(r.mensagem); await listar();
+    });
+  });
+  $('#f-nacionais').onclick = () => uma($('#f-nacionais'), async () => {
+    const r = await comPerguntas('/api/gestao/feriados/nacionais', {ano: st.ano});
+    if (r && r.ok) { st.mudou = true; status(r.mensagem); await listar(); }
+  });
+  $('#f-remover').onclick = () => {
+    const datas = [...document.querySelectorAll('#f-lista input:checked')].map(i => i.value);
+    if (!datas.length) { alert('Marque o(s) feriado(s) na lista.'); return; }
+    if (!confirm(`Remover ${datas.length} feriado(s)?`)) return;
+    uma($('#f-remover'), async () => {
+      const r = await api('POST', '/api/gestao/feriados/remover', {datas});
+      st.mudou = true; status(r.mensagem); await listar();
+    });
+  };
+  listar();
+};
+{% endblock %}

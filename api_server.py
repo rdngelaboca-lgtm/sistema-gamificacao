@@ -2203,12 +2203,26 @@ def pagina_gestao():
     return redirect('/gestao/escala')
 
 
-@app.route('/gestao/escala')
-def pagina_gestao_escala():
-    """A página cuida do login (mesmo nome + PIN do app; só gestor)."""
-    resposta = app.make_response(render_template('gestao.html'))
+def _pagina_gestao(template, pagina):
+    """As páginas cuidam do login (mesmo nome + PIN do app; só gestor)."""
+    resposta = app.make_response(render_template(template, pagina=pagina))
     resposta.headers['Cache-Control'] = 'no-store'
     return resposta
+
+
+@app.route('/gestao/escala')
+def pagina_gestao_escala():
+    return _pagina_gestao('gestao.html', 'escala')
+
+
+@app.route('/gestao/freelancers')
+def pagina_gestao_freelancers():
+    return _pagina_gestao('gestao_freelancers.html', 'freelancers')
+
+
+@app.route('/gestao/pagamentos')
+def pagina_gestao_pagamentos():
+    return _pagina_gestao('gestao_pagamentos.html', 'pagamentos')
 
 
 @app.route('/gestao/mapa.png')
@@ -2293,6 +2307,144 @@ def api_gestao_escala_whatsapp(usuario):
 @compras_login(somente_gestor=True)
 def api_gestao_escala_whatsapp_andamento(usuario, job_id):
     return _resposta_gestao(gestao_escala.andamento_whatsapp, job_id)
+
+
+# ==============================================================================
+# == [GESTÃO WEB] Gestão › Freelancers e Pagamentos =============================
+# ==============================================================================
+try:
+    import gestao_pagamentos
+except Exception as _erro_import_pag:
+    gestao_pagamentos = None
+    logger.error(f"Gestão › Pagamentos DESLIGADA: não consegui carregar gestao_pagamentos.py ({_erro_import_pag})")
+
+
+def _resposta_pagamentos(nome_funcao, *args):
+    if gestao_pagamentos is None:
+        return jsonify({"erro": "Freelancers/Pagamentos na Web não estão instalados no servidor "
+                                "(falta gestao_pagamentos.py)."}), 503
+    return _resposta_gestao(getattr(gestao_pagamentos, nome_funcao), *args)
+
+
+@app.route('/api/gestao/freelancers', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_freelancers(usuario):
+    return _resposta_pagamentos('listar_freelancers')
+
+
+@app.route('/api/gestao/freelancers', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_freelancer_novo(usuario):
+    return _resposta_pagamentos('salvar_freelancer', None, ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/freelancers/<int:freelancer_id>', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_freelancer_editar(usuario, freelancer_id):
+    return _resposta_pagamentos('salvar_freelancer', freelancer_id, ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/freelancers/<int:freelancer_id>/excluir', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_freelancer_excluir(usuario, freelancer_id):
+    return _resposta_pagamentos('excluir_freelancer', freelancer_id, ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/pagamentos', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_pagamentos(usuario):
+    return _resposta_pagamentos('listar', request.args.to_dict())
+
+
+@app.route('/api/gestao/pagamentos/previa-correcao', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_pagamentos_previa(usuario):
+    return _resposta_pagamentos('previa_correcao', ler_json() or {})
+
+
+@app.route('/api/gestao/pagamentos/corrigir', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_pagamentos_corrigir(usuario):
+    return _resposta_pagamentos('corrigir', ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/pagamentos/pagar', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_pagamentos_pagar(usuario):
+    return _resposta_pagamentos('pagar', ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/pagamentos/desfazer', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_pagamentos_desfazer(usuario):
+    return _resposta_pagamentos('desfazer', ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/pagamentos/recibo', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_pagamentos_recibo(usuario):
+    return _resposta_pagamentos('recibo', ler_json() or {})
+
+
+@app.route('/api/gestao/pagamentos/excel', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_pagamentos_excel(usuario):
+    if gestao_pagamentos is None:
+        return _resposta_pagamentos('planilha')
+    try:
+        conteudo, nome = gestao_pagamentos.planilha(request.args.to_dict())
+    except gestao_escala.ErroEscala as e:
+        return jsonify({"erro": str(e)}), e.status
+    except Exception as e:
+        logger.exception(f"Erro ao gerar a planilha de pagamentos: {e}")
+        return jsonify({"erro": "Erro no servidor ao gerar a planilha. Veja o log."}), 500
+    resposta = app.make_response(conteudo)
+    resposta.headers['Content-Type'] = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    resposta.headers['Content-Disposition'] = f'attachment; filename="{nome}"'
+    resposta.headers['Cache-Control'] = 'no-store'
+    return resposta
+
+
+@app.route('/api/gestao/pagamentos/valores', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_pagamentos_valores(usuario):
+    return _resposta_pagamentos('valores')
+
+
+@app.route('/api/gestao/pagamentos/valores/exemplos', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_pagamentos_valores_exemplos(usuario):
+    return _resposta_pagamentos('exemplos_valores', ler_json() or {})
+
+
+@app.route('/api/gestao/pagamentos/valores', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_pagamentos_valores_salvar(usuario):
+    return _resposta_pagamentos('salvar_valores', ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/feriados', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_feriados(usuario):
+    return _resposta_pagamentos('feriados', request.args.get('ano'))
+
+
+@app.route('/api/gestao/feriados', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_feriados_adicionar(usuario):
+    return _resposta_pagamentos('adicionar_feriado', ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/feriados/nacionais', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_feriados_nacionais(usuario):
+    return _resposta_pagamentos('feriados_nacionais', ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/feriados/remover', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_feriados_remover(usuario):
+    return _resposta_pagamentos('remover_feriados', ler_json() or {}, usuario)
 
 
 if __name__ == "__main__":
