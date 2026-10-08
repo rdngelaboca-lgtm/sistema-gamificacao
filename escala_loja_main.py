@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 from escala_regras import (  # noqa: E402
     PADRAO_HORA, hora_ou_none, normalizar_folga, folga_do_funcionario, formatar_hora_curta,
     SETOR_TODOS, LIMITE_JORNADA_DIA_MIN, TURNO_EXIGE_INTERVALO_MIN, minutos_do_horario, faixa_turno,
-    sobrepoe, hm, problema_intervalo, chave_pessoa, analisar_escala_do_dia, conflitos_ao_salvar,
+    sobrepoe, hm, problema_intervalo, chave_pessoa, analisar_escala_do_dia, conflitos_ao_salvar, conflito_na_posicao,
     DIAS_SEMANA, DIAS_CURTOS, fmt_reais, para_decimal_br, fmt_horas, fmt_data_br, nome_tipo_dia,
     texto_calculo, SETORES_MAPA, MAPA_IMAGEM_LARGURA, MAPA_IMAGEM_ALTURA, parse_horario, dia_semana_banco,
     rotulo_e_cor_posicao, fluxo_por_hora, HORAS_FLUXO, pessoas_para_intervalos, gravar_intervalos,
@@ -422,6 +422,7 @@ class AppEscalaLoja:
             funcionarios = self._funcionarios_cache = list(database.listar_funcionarios())
         mapa_folgas = {f.FuncionarioID: folga_do_funcionario(f) for f in funcionarios}
         cache_padrao = self.__dict__.setdefault('_posicao_padrao_cache', {})
+        escalados = {t.FuncionarioID for ts in self.escala_atual.values() for t in ts if t.FuncionarioID}
 
         # Captura o tamanho atual do canvas para renderização responsiva
         W = self.canvas.winfo_width() if self.canvas.winfo_width() > 1 else MAPA_IMAGEM_LARGURA
@@ -445,7 +446,7 @@ class AppEscalaLoja:
                 fixo = cache_padrao[pos_id]
             # [GESTÃO WEB] cor e texto vêm de escala_regras (a Web mostra igual)
             cor, linhas = rotulo_e_cor_posicao(nome, lista_turnos, mapa_folgas, self._indisponivel_no_dia,
-                                               dia_db, fixo, self.modo_edicao)
+                                               dia_db, fixo, self.modo_edicao, escalados)
             label_final = "\n".join(linhas)
             tag = f"pos_{pos_id}"
 
@@ -1408,6 +1409,14 @@ class AppEscalaLoja:
         if erros:
             messagebox.showerror("Conflito de horário", "\n".join(erros) + "\n\nAjuste os horários ou escolha outra pessoa.", parent=self.root)
             return
+        # [DEPURAÇÃO WEB] outro turno nesta mesma posição (o banco não via turno que passa da meia-noite)
+        outro = conflito_na_posicao(self.escala_atual, self.pos_id_selecionada, escala_id, h_ent, h_sai)
+        if outro:
+            messagebox.showerror("Conflito de horário",
+                                 f"Já tem {outro.NomePessoa or 'alguém'} em {nomes_pos.get(self.pos_id_selecionada, 'esta posição')} "
+                                 f"das {formatar_hora_curta(outro.HorarioEntrada)} às {formatar_hora_curta(outro.HorarioSaida)}: "
+                                 "os horários se cruzam.\n\nAjuste os horários ou use outra posição.", parent=self.root)
+            return
         # 2) escalar quem está de folga/férias: a etiqueta [FOLGA] aparecia, mas salvava sem perguntar
         turno_antigo = next((t for lista in self.escala_atual.values() for t in lista
                              if escala_id and str(t.EscalaID) == str(escala_id)), None)
@@ -1439,6 +1448,10 @@ class AppEscalaLoja:
         ):
             self.carregar_escala_do_dia()
             aviso_diaria = ""
+            if func_id and turno_antigo is not None and getattr(turno_antigo, 'TipoDiaria', None):
+                # [DEPURAÇÃO WEB] era de freelancer e virou de funcionário: a diária curta/longa não vale mais
+                database.definir_tipo_diaria_escala(int(escala_id), None)
+                self.carregar_escala_do_dia()
             if free_id:
                 # [DIÁRIA NA ESCALA] grava Curta/Longa no turno (o pagamento usa esta escolha)
                 tipo = self.var_tipo_diaria.get() or None

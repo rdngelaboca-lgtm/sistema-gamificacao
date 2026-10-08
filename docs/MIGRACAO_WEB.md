@@ -149,6 +149,15 @@ o fluxo e as pausas de **hoje**, sem deixar mexer. Na Web fica em **Gestão › 
 | 19. 📱 Confirmar escala no WhatsApp: mensagem a cada pessoa (data, posição, horário, intervalo) + diretriz do setor; resumo enviados/falhas | 🧪 |
 | 20. Mensagens rápidas de status | 🧪 |
 
+**Depuração da Entrega 1 (10/2026) — 17 correções:** turno que passa da meia-noite agora é conferido
+contra os outros da mesma posição; turnos em posição removida do mapa aparecem (lista "Removidas do
+mapa") e podem ser excluídos; banco fora do ar avisa em vez de mostrar o dia vazio; o fixo já escalado
+em outra posição não aparece mais como "disponível" (também no PC); "830" digitado vira 08:30; trocar
+de dia rápido não mostra mais a escala do dia errado; falha ao carregar limpa a tela e trava os botões;
+clique duplo no Copiar não duplica; WhatsApp não manda "None às None" e o acompanhamento tenta de novo
+quando a rede cai; trocar freelancer por funcionário apaga a diária curta/longa; a página se atualiza
+ao voltar para a aba.
+
 ### Entrega 2 — Cadastros e configurações
 | Função | Status |
 |---|---|

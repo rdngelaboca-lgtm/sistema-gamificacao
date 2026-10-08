@@ -72,6 +72,11 @@
     border-radius: 12px; padding: 10px 12px; }
   .cartao-pos.sel { border-color: #0056b3; box-shadow: 0 0 0 2px #0056b333; }
   .cartao-pos .bola { width: 16px; height: 16px; border-radius: 50%; flex-shrink: 0; margin-top: 2px; border: 1px solid #0002; }
+  .cartao-pos.removida { border-style: dashed; background: #fff8e1; }
+  #aviso-fora { background: #fff8e1; border: 1px dashed var(--aviso); border-radius: 10px; padding: 8px 10px; margin-bottom: 8px;
+    font-size: 13px; color: var(--aviso); display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  #aviso-fora .btn { font-size: 13px; padding: 4px 10px; }
+  #aviso-removida { background: #fff8e1; border-radius: 10px; padding: 8px 10px; font-size: 13px; color: var(--aviso); }
 
   /* ---------- painel de escalar ---------- */
   #painel { width: 380px; flex-shrink: 0; background: #fff; border: 1px solid var(--linha); border-radius: 12px; padding: 12px;
@@ -199,6 +204,7 @@
 
   <main class="area">
     <div class="vista" id="vista-mapa">
+      <div id="aviso-fora" hidden></div>
       <div id="mapa-rolagem"><div id="mapa-caixa"><div id="mapa"></div></div></div>
       <div class="mini suave" style="margin-top:4px">Clique numa posição para escalar. Verde = escalado · vermelho = vazio ·
         azul = fixo disponível · laranja = escalado de folga · amarelo = turno sem pessoa.</div>
@@ -208,6 +214,9 @@
     <aside id="painel" hidden>
       <div class="cab"><b id="painel-titulo">Escalando</b><button class="btn ico" id="fechar-painel" title="Fechar painel">✕</button></div>
       <table class="turnos"><thead><tr><th>Nome</th><th>Ent</th><th>Sai</th><th>Intervalo</th></tr></thead><tbody id="turnos-pos"></tbody></table>
+      <div id="aviso-removida" hidden>Esta posição foi <b>removida do mapa</b>, mas estes turnos continuam na escala do dia
+        (vão no Telegram e no WhatsApp). Toque no turno e em <b>Excluir</b> — ou reative a posição no programa do PC.</div>
+      <div id="campos-turno" style="display:flex;flex-direction:column;gap:8px">
       <label for="pessoa">Funcionário / Freelancer:</label>
       <select id="pessoa"></select>
       <div class="duas"><label for="ent">Entrada:</label><input id="ent" inputmode="numeric" maxlength="5" placeholder="08:00">
@@ -221,12 +230,13 @@
       <div id="previa-pag"></div>
       <label for="foco">Foco do dia:</label>
       <textarea id="foco" rows="3"></textarea>
+      </div>
       <div class="botoes">
         <button class="btn" id="btn-limpar">✨ Limpar</button>
         <button class="btn perigo" id="btn-excluir">🗑️ Excluir</button>
         <button class="btn prim" id="btn-salvar">✅ Salvar</button>
       </div>
-      <div class="mini suave">Enter nos horários salva.</div>
+      <div class="mini suave" id="dica-enter">Enter nos horários salva.</div>
     </aside>
   </main>
 
@@ -245,7 +255,7 @@ const $ = s => document.querySelector(s);
 const esc = t => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
 const HOJE = () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); };
 const S = {usuario: null, data: HOJE(), dia: null, vista: null, pos: null, turno: null, tipoManual: false, extra: null,
-           setorFluxo: null, prevTimer: null};
+           setorFluxo: null, prevTimer: null, seqDia: 0, seqPrev: 0};
 
 function lerLocal(k, padrao) { try { return localStorage.getItem(k) || padrao; } catch (e) { return padrao; } }
 function gravarLocal(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
@@ -347,20 +357,42 @@ function iniciarApp(usuario) {
 
 // ------------------------------------------------------------------ o dia
 async function carregarDia(manterPainel) {
-  $('#data').value = S.data;
-  history.replaceState(null, '', `/gestao/escala?data=${S.data}`);
+  // [DEPURAÇÃO WEB] cada carga tem um número: se o gestor trocou de dia antes de a resposta chegar,
+  // a resposta velha é ignorada (antes o campo mostrava o dia 09 e a tela, a escala do dia 08)
+  const data = S.data, seq = ++S.seqDia;
+  $('#data').value = data;
+  history.replaceState(null, '', `/gestao/escala?data=${data}`);
+  let dia;
   try {
-    S.dia = await api('GET', `/api/gestao/escala/dia?data=${S.data}`);
+    dia = await api('GET', `/api/gestao/escala/dia?data=${data}`);
   } catch (e) {
+    if (seq !== S.seqDia) return;
     if (e.status !== 401 && e.status !== 403) {
-      $('#alertas').innerHTML = `<li class="n-erro">❌ Não consegui carregar a escala: ${esc(e.message)}</li>`;
+      // [DEPURAÇÃO WEB] antes ficava na tela a escala do dia ANTERIOR (com a data nova no campo)
+      S.dia = null; fecharPainel();
+      limparVista(`❌ Não consegui carregar a escala de ${dataBR(data, true)}: ${e.message}\nToque em 🔄 para tentar de novo.`);
     }
     return;
   }
+  if (seq !== S.seqDia || dia.data !== S.data) return;
+  S.dia = dia;
   desenhar();
-  if (manterPainel && S.pos != null && S.dia.posicoes.some(p => p.id === S.pos)) abrirPainel(S.pos);
+  if (manterPainel && S.pos != null && todasPos().some(p => p.id === S.pos)) abrirPainel(S.pos);
   else fecharPainel();
 }
+function limparVista(msg) {
+  $('#titulo-dia').textContent = ''; $('#resumo').textContent = '';
+  $('#mapa').innerHTML = ''; $('#mapa-caixa').style.height = '0px'; $('#vista-lista').innerHTML = '';
+  $('#aviso-fora').hidden = true; $('#grafico').innerHTML = '';
+  $('#alertas').innerHTML = `<li class="n-erro">${esc(msg)}</li>`;
+}
+// [DEPURAÇÃO WEB] as ações usam a data do campo: só deixa agir se a escala DESTE dia está na tela
+function diaPronto() {
+  if (S.dia && S.dia.data === S.data) return true;
+  alert('A escala deste dia ainda não foi carregada.\nToque em 🔄 (Atualizar) e tente de novo.');
+  return false;
+}
+function todasPos() { return S.dia ? S.dia.posicoes.concat(S.dia.fora_do_mapa || []) : []; }
 function mudarDia(nova) {
   if (!nova) return;
   S.data = nova; S.extra = null; S.pos = null;
@@ -371,6 +403,12 @@ $('#dia-ant').onclick = () => mudarDia(somarDias(S.data, -1));
 $('#dia-prox').onclick = () => mudarDia(somarDias(S.data, 1));
 $('#hoje').onclick = () => mudarDia(HOJE());
 $('#atualizar').onclick = () => { S.extra = null; carregarDia(true); };
+// [DEPURAÇÃO WEB] aba/celular que ficou aberto: ao voltar, recarrega (a escala pode ter mudado no PC ou em
+// outro aparelho). Não recarrega com o painel ou uma janela abertos, para não perder o que está sendo digitado.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && S.usuario && !$('#app').hidden && $('#painel').hidden &&
+      $('#fundo-modal').hidden) carregarDia();
+});
 
 function desenhar() {
   const d = S.dia;
@@ -405,6 +443,11 @@ function desenharMapa() {
       <button class="bola-pos ${S.pos === p.id ? 'sel' : ''}" data-pos="${p.id}" title="${esc(p.nome)}"
         style="left:${p.x}px;top:${p.y}px;background:${esc(p.cor)}"></button>
       <div class="rotulo-pos ${S.pos === p.id ? 'sel' : ''}" data-pos="${p.id}" style="left:${p.x}px;top:${p.y + 18}px"><b>${esc(p.nome)}</b>${p.linhas.map(l => '<br>' + esc(l)).join('')}</div>`).join('');
+  // [DEPURAÇÃO WEB] turnos em posição removida do mapa: antes não apareciam (nem dava para excluir)
+  const fora = d.fora_do_mapa || [];
+  $('#aviso-fora').hidden = !fora.length;
+  $('#aviso-fora').innerHTML = fora.length ? '⚠️ Turnos em posição removida do mapa: ' + fora.map(p =>
+    `<button class="btn" data-pos="${p.id}">${esc(p.nome)} (${p.turnos.length})</button>`).join('') : '';
 }
 function desenharLista() {
   const grupos = {};
@@ -416,6 +459,11 @@ function desenharLista() {
         <span class="bola" style="background:${esc(p.cor)}"></span>
         <span><b>${esc(p.nome)}</b>${p.linhas.map(l => `<div class="mini">${esc(l)}</div>`).join('')}</span></button>`).join('')
   }</div></div>`).join('') || '<div class="suave">Nenhuma posição no mapa ainda.</div>';
+  const fora = S.dia.fora_do_mapa || [];
+  if (fora.length) $('#vista-lista').innerHTML += `<div class="grupo-setor"><h4>⚠️ Removidas do mapa</h4><div class="cartoes">${
+    fora.map(p => `<button class="cartao-pos removida ${S.pos === p.id ? 'sel' : ''}" data-pos="${p.id}">
+        <span class="bola" style="background:${esc(p.cor)}"></span>
+        <span><b>${esc(p.nome)}</b>${p.linhas.map(l => `<div class="mini">${esc(l)}</div>`).join('')}</span></button>`).join('')}</div></div>`;
 }
 document.addEventListener('click', e => {
   const alvo = e.target.closest('[data-pos]');
@@ -452,15 +500,18 @@ function desenharFluxo() {
 $('#setor-fluxo').addEventListener('change', e => { S.setorFluxo = e.target.value; desenharFluxo(); });
 
 // ------------------------------------------------------------------ painel de escalar
-function posAtual() { return S.dia && S.dia.posicoes.find(p => p.id === S.pos); }
+function posAtual() { return todasPos().find(p => p.id === S.pos); }
 function abrirPainel(posId) {
   S.pos = posId;
   const p = posAtual();
   if (!p) return;
   $('#painel').hidden = false;
-  $('#painel-titulo').textContent = 'Escalando: ' + p.nome;
+  const removida = !!p.removida;          // [DEPURAÇÃO WEB] só dá para ver e excluir os turnos dela
+  $('#painel-titulo').textContent = (removida ? 'Posição removida: ' : 'Escalando: ') + p.nome;
+  $('#aviso-removida').hidden = !removida;
+  for (const id of ['#campos-turno', '#btn-limpar', '#btn-salvar', '#dica-enter']) $(id).hidden = removida;
   $('#turnos-pos').innerHTML = p.turnos.map(t => `<tr class="lin" data-turno="${t.id}"><td>${esc(t.nome || '?')}${
-      t.tipo_diaria ? ` <span class="mini suave">(${t.tipo_diaria})</span>` : ''}${t.pago ? ' <span class="mini" title="Já pago">✅</span>' : ''}</td>
+      t.tipo_diaria ? ` <span class="mini suave">(${esc(t.tipo_diaria)})</span>` : ''}${t.pago ? ' <span class="mini" title="Já pago">✅</span>' : ''}</td>
       <td>${esc(t.entrada)}</td><td>${esc(t.saida)}</td><td>${t.int_ini ? esc(t.int_ini + '–' + t.int_fim) : ''}</td></tr>`).join('')
     || '<tr><td colspan="4" class="suave">Ninguém escalado nesta posição.</td></tr>';
   const func = S.dia.pessoas.filter(x => x.tipo === 'func'), free = S.dia.pessoas.filter(x => x.tipo === 'free');
@@ -519,9 +570,33 @@ function mascara(e) {
   if (dig.length >= 3) dig = dig.slice(0, 2) + ':' + dig.slice(2);
   if (el.value !== dig) el.value = dig;
 }
+// [DEPURAÇÃO WEB] a máscara transforma "830" em "83:0" (horário inválido): ao sair do campo (e antes de
+// salvar) completa como o gestor quis dizer: "8" → 08:00, "830" → 08:30, "1730" → 17:30
+function normalizarHora(el) {
+  const v = el.value.trim();
+  if (!v || /^([01]\d|2[0-3]):[0-5]\d$/.test(v)) return false;
+  const dig = v.replace(/\D/g, '');
+  let h, m;
+  if (dig.length === 1 || dig.length === 2) { h = +dig; m = 0; }
+  else if (dig.length === 3) { h = +dig[0]; m = +dig.slice(1); }
+  else if (dig.length === 4) { h = +dig.slice(0, 2); m = +dig.slice(2); }
+  else return false;
+  if (h > 23 || m > 59) return false;
+  el.value = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+  return true;
+}
+function normalizarHorarios() {
+  if (normalizarHora($('#ent'))) saidaPelaJornada();
+  for (const id of ['#sai', '#ini', '#fim']) normalizarHora($(id));
+}
 for (const id of ['#ent', '#sai', '#ini', '#fim']) {
   $(id).addEventListener('input', mascara);
   $(id).addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); salvarTurno(); } });
+  $(id).addEventListener('blur', e => {
+    if (!normalizarHora(e.target)) return;
+    if (id === '#ent') saidaPelaJornada();
+    atualizarPrevia();
+  });
 }
 $('#ent').addEventListener('input', () => { saidaPelaJornada(); atualizarPrevia(); });
 $('#sai').addEventListener('input', atualizarPrevia);
@@ -531,23 +606,31 @@ document.querySelectorAll('input[name=diaria]').forEach(r => r.addEventListener(
 function ehFree() { return ($('#pessoa').value || '').startsWith('free:'); }
 function tipoDiaria() { const r = document.querySelector('input[name=diaria]:checked'); return r ? r.value : null; }
 function atualizarPrevia() {
+  // [DEPURAÇÃO WEB] antes: trocar de freelancer para funcionário logo depois de digitar deixava o
+  // pedido pendente rodar e a prévia "Diária ... = R$" aparecia para o funcionário. Agora cada pedido
+  // tem um número, o pendente é cancelado e a resposta só vale se ainda for a última e de freelancer.
+  clearTimeout(S.prevTimer);
+  const seq = ++S.seqPrev;
   $('#diaria').hidden = !ehFree();
   if (!ehFree()) { $('#previa-pag').textContent = ''; return; }
-  clearTimeout(S.prevTimer);
   S.prevTimer = setTimeout(async () => {
+    let r = null;
     try {
-      const r = await api('POST', '/api/gestao/escala/previa-freelancer', {data: S.data, entrada: $('#ent').value,
+      r = await api('POST', '/api/gestao/escala/previa-freelancer', {data: S.data, entrada: $('#ent').value,
         saida: $('#sai').value, tipo_diaria: S.tipoManual ? tipoDiaria() : null, escala_id: S.turno ? S.turno.id : null});
-      if (!S.tipoManual && r.sugerida) document.querySelectorAll('input[name=diaria]').forEach(x => { x.checked = x.value === r.sugerida; });
-      $('#previa-pag').textContent = r.texto;
-    } catch (e) { $('#previa-pag').textContent = ''; }
+    } catch (e) {}
+    if (seq !== S.seqPrev || !ehFree()) return;
+    if (!r) { $('#previa-pag').textContent = ''; return; }
+    if (!S.tipoManual && r.sugerida) document.querySelectorAll('input[name=diaria]').forEach(x => { x.checked = x.value === r.sugerida; });
+    $('#previa-pag').textContent = r.texto;
   }, 250);
 }
 
 let salvando = false;
 async function salvarTurno() {
-  if (salvando || S.pos == null) return;
+  if (salvando || S.pos == null || !posAtual() || posAtual().removida || !diaPronto()) return;
   if (!$('#pessoa').value) { alert('Selecione um funcionário ou freelancer.'); return; }
+  normalizarHorarios();
   salvando = true; $('#btn-salvar').disabled = true;
   try {
     const r = await comPerguntas('/api/gestao/escala/turno', {data: S.data, posicao_id: S.pos, escala_id: S.turno ? S.turno.id : null,
@@ -559,6 +642,7 @@ async function salvarTurno() {
 }
 $('#btn-salvar').onclick = salvarTurno;
 $('#btn-excluir').onclick = async () => {
+  if (!diaPronto()) return;
   if (!S.turno) { alert('Selecione um turno na lista para excluir.'); return; }
   if (!S.turno.pago && !confirm(`Remover a escalação de ${S.turno.nome || '?'}?`)) return;
   try {
@@ -587,22 +671,30 @@ document.addEventListener('keydown', e => {
 
 // Copiar escala
 $('#btn-copiar').onclick = () => {
+  if (!diaPronto()) return;
+  const dataJanela = S.data;
   abrirModal(`<h3>📋 Copiar escala para ${esc(dataBR(S.data, true))}</h3>
     <p>Copiar a escala de qual dia?</p>
     <div style="display:flex;gap:10px;flex-wrap:wrap">
       <button class="btn prim" data-copiar="ontem">Copiar de ontem (${esc(dataBR(somarDias(S.data, -1), true))})</button>
       <button class="btn prim" data-copiar="semana">Copiar semana passada (${esc(dataBR(somarDias(S.data, -7), true))})</button></div>
     <p class="mini suave">Se este dia já tiver gente escalada, a escala dele será substituída (o sistema pergunta antes).</p>`);
-  document.querySelectorAll('[data-copiar]').forEach(b => b.onclick = async () => {
+  const botoes = [...document.querySelectorAll('[data-copiar]')];
+  botoes.forEach(b => b.onclick = async () => {
+    // [DEPURAÇÃO WEB] clique duplo mandava 2 cópias (e a 2ª perguntava "substituir?" por cima da 1ª)
+    if (botoes.some(x => x.disabled)) return;
+    botoes.forEach(x => { x.disabled = true; });
     try {
-      const r = await comPerguntas('/api/gestao/escala/copiar', {data: S.data, origem: b.dataset.copiar});
+      const r = await comPerguntas('/api/gestao/escala/copiar', {data: dataJanela, origem: b.dataset.copiar});
       if (r && r.ok) { fecharModal(); status(r.mensagem); S.extra = null; carregarDia(); }
     } catch (e) { falhou(e); }
+    botoes.forEach(x => { x.disabled = false; });
   });
 };
 
 // Intervalos automáticos
 $('#btn-auto').onclick = async () => {
+  if (!diaPronto()) return;
   const b = $('#btn-auto'); b.disabled = true;
   try {
     const r = await comPerguntas('/api/gestao/escala/intervalos/gerar', {data: S.data});
@@ -619,6 +711,7 @@ $('#btn-auto').onclick = async () => {
 
 // Gerenciar intervalos
 $('#btn-intervalos').onclick = async () => {
+  if (!diaPronto()) return;
   let lista;
   try { lista = (await api('GET', `/api/gestao/escala/intervalos?data=${S.data}`)).turnos; } catch (e) { return falhou(e); }
   const dataJanela = S.data;
@@ -667,6 +760,7 @@ $('#btn-intervalos').onclick = async () => {
 
 // Telegram
 $('#btn-telegram').onclick = async () => {
+  if (!diaPronto()) return;
   if (!confirm(`Deseja enviar a escala do dia ${dataBR(S.data, true)} para o grupo TODOS OS FUNCIONÁRIOS no Telegram?`)) return;
   const b = $('#btn-telegram'); b.disabled = true;
   try { const r = await api('POST', '/api/gestao/escala/telegram', {data: S.data}); status(r.mensagem); }
@@ -676,6 +770,7 @@ $('#btn-telegram').onclick = async () => {
 
 // WhatsApp (o envio roda no servidor: dá para fechar a página)
 $('#btn-whatsapp').onclick = async () => {
+  if (!diaPronto()) return;
   let pv;
   try { pv = await api('GET', `/api/gestao/escala/whatsapp/previa?data=${S.data}`); } catch (e) { return falhou(e); }
   if (!pv.pessoas) { alert('Nenhuma pessoa com telefone encontrada na escala deste dia.'); return; }
@@ -685,16 +780,32 @@ $('#btn-whatsapp').onclick = async () => {
   try { job = await api('POST', '/api/gestao/escala/whatsapp', {data: S.data}); } catch (e) { return falhou(e); }
   abrirModal(`<h3>📱 Confirmando a escala no WhatsApp</h3><div id="wpp-txt">Enviando…</div>
     <div class="progresso"><div id="wpp-barra"></div></div><div class="mini suave">Pode fechar: o envio continua no servidor.</div>`);
+  // [DEPURAÇÃO WEB] antes, uma falha de rede no acompanhamento parava tudo e a janela ficava em
+  // "Enviando…" para sempre. Agora tenta de novo por ~2 minutos e avisa o que está acontecendo.
+  const txt = $('#wpp-txt'), barra = $('#wpp-barra'), jobId = job.id;
+  let falhas = 0;
   const tick = async () => {
-    try { job = await api('GET', `/api/gestao/escala/whatsapp/${job.id}`); } catch (e) { return; }
-    if (!$('#wpp-txt')) return;                       // janela fechada
-    $('#wpp-barra').style.width = (job.total ? 100 * job.feitos / job.total : 100) + '%';
+    if (!txt.isConnected) return;                      // janela fechada (o envio continua no servidor)
+    try { job = await api('GET', `/api/gestao/escala/whatsapp/${jobId}`); falhas = 0; }
+    catch (e) {
+      if (!txt.isConnected) return;
+      if (e.status === 404 || e.status === 401 || e.status === 403 || ++falhas >= 60) {
+        txt.innerHTML = `<b>Não consegui acompanhar o envio.</b><br>${esc(e.message)}<br>` +
+          'As mensagens já enviadas continuam valendo. Confira no WhatsApp quem recebeu antes de mandar de novo.';
+        return;
+      }
+      txt.textContent = `Sem resposta do servidor (${e.message}). Tentando de novo…`;
+      setTimeout(tick, 2000);
+      return;
+    }
+    if (!txt.isConnected) return;
+    barra.style.width = (job.total ? 100 * job.feitos / job.total : 100) + '%';
     if (job.terminado) {
-      $('#wpp-txt').innerHTML = `<b>Processo finalizado!</b><br>✅ Enviados: ${job.enviados}<br>❌ Falhas: ${job.erros}`;
+      txt.innerHTML = `<b>Processo finalizado!</b><br>✅ Enviados: ${job.enviados}<br>❌ Falhas: ${job.erros}`;
       if (!job.erros) status(`WhatsApp: ${job.enviados} confirmação(ões) enviada(s). ✅`);
       return;
     }
-    $('#wpp-txt').textContent = `Enviando ${Math.min(job.feitos + 1, job.total)} de ${job.total}…`;
+    txt.textContent = `Enviando ${Math.min(job.feitos + 1, job.total)} de ${job.total}…`;
     setTimeout(tick, 1000);
   };
   tick();

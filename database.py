@@ -8932,6 +8932,26 @@ def listar_posicoes_loja():
             conn.close()
     return []
 
+def nomes_posicoes_loja(ids):
+    """[DEPURAÇÃO WEB] {PosicaoID: NomePosicao} de quaisquer posições (inclusive as removidas do mapa)."""
+    ids = [int(i) for i in ids or []]
+    if not ids:
+        return {}
+    conn = get_db_connection()
+    if not conn:
+        return {}
+    try:
+        cursor = conn.cursor()
+        marcas = ','.join('?' * len(ids))
+        cursor.execute(f"SELECT PosicaoID, NomePosicao FROM PosicoesLoja WHERE PosicaoID IN ({marcas})", *ids)
+        return {r[0]: r[1] for r in cursor.fetchall()}
+    except Exception as e:
+        logger.warning(f"Não deu para ler os nomes das posições {ids}: {e}")
+        return {}
+    finally:
+        conn.close()
+
+
 def excluir_posicao_loja(posicao_id):
     """Desativa uma posição no mapa."""
     conn = get_db_connection()

@@ -230,6 +230,26 @@ def conflitos_ao_salvar(escala, escala_id, pessoa, ent, sai, nome_pessoa="Esta p
     return erros, avisos
 
 
+def conflito_na_posicao(escala, pos_id, escala_id, ent, sai):
+    """
+    [DEPURAÇÃO WEB] Outro turno da MESMA posição, no mesmo dia, que cruza o horário. A conferência
+    do banco compara as horas direto e não enxergava turno que passa da meia-noite: deixava salvar
+    23:00–02:00 em cima de 22:00–06:00, ou 15:00–01:00 em cima de 08:00–16:00.
+    (01:00–05:00 e 22:00–06:00 do MESMO dia não se cruzam: um é de madrugada, o outro à noite.)
+    Devolve o turno que atrapalha ou None.
+    """
+    faixa = faixa_turno(ent, sai)
+    if faixa is None:
+        return None
+    for t in escala.get(pos_id, []):
+        if escala_id and str(t.EscalaID) == str(escala_id):
+            continue
+        f2 = faixa_turno(t.HorarioEntrada, t.HorarioSaida)
+        if f2 is not None and sobrepoe(faixa, f2):
+            return t
+    return None
+
+
 # ------------------------------------------------------------------------------
 # [MELHORIA ESCALA] Formatação de dinheiro / horas / datas
 # ------------------------------------------------------------------------------
@@ -308,6 +328,8 @@ def texto_calculo(calc):
             texto += f" ({sobra} min não fecham bloco de {calc['BlocoMinutos']})"
     if calc.get('Ajuste'):
         texto += f" {'+' if calc['Ajuste'] > 0 else ''}{fmt_reais(calc['Ajuste'])} ajuste"
+    elif calc.get('Proporcional'):
+        return texto      # [DEPURAÇÃO WEB] já termina com "= valor (proporcional)": não repete o total
     return f"{texto} = {fmt_reais(calc['Total'])}"
 
 
@@ -360,13 +382,15 @@ def dia_semana_banco(dia):
     return (dia.isoweekday() % 7) + 1
 
 
-def rotulo_e_cor_posicao(nome_pos, turnos, folgas, indisponivel, dia_db, fixo=None, modo_edicao=False):
+def rotulo_e_cor_posicao(nome_pos, turnos, folgas, indisponivel, dia_db, fixo=None, modo_edicao=False,
+                         escalados=None):
     """
     Cor da bolinha e texto embaixo dela (o mesmo do PC).
       turnos: lista de turnos da posição (linhas do buscar_escala_do_dia)
       folgas: {FuncionarioID: dia de folga fixa (1=Dom..7=Sáb) ou None}
       indisponivel: função(funcionario_id) -> motivo (texto) ou None
       fixo: (FuncionarioID, Nome, DiaDeFolga) do funcionário fixo da posição, ou None
+      escalados: FuncionarioIDs já escalados no dia (o fixo que está em OUTRA posição não fica azul)
     Devolve (cor, [linhas]); a 1ª linha é o nome da posição.
     """
     linhas = [nome_pos]
@@ -387,7 +411,10 @@ def rotulo_e_cor_posicao(nome_pos, turnos, folgas, indisponivel, dia_db, fixo=No
             linhas.append(f"{nome_p} ({h_ent}-{h_sai})" + (f" [{tipo_d}]" if tipo_d in ('curta', 'longa') else ""))
     elif not modo_edicao and fixo:
         f_id, f_nome, f_folga = fixo[0], fixo[1], fixo[2]
-        if not indisponivel(f_id) and normalizar_folga(f_folga) != dia_db:
+        if escalados and f_id in escalados:
+            # [DEPURAÇÃO WEB] o fixo já trabalha em outra posição hoje: não está "disponível" aqui
+            linhas.append("(Vazio)")
+        elif not indisponivel(f_id) and normalizar_folga(f_folga) != dia_db:
             linhas.append(f"{f_nome} (Fixo)")
             cor = COR_FIXO
         else:
@@ -504,6 +531,10 @@ def lista_envio_whatsapp(escala, posicoes):
         pos = next((p for p in posicoes if p[0] == pos_id), None)
         for t in turnos:
             if t.NomePessoa and getattr(t, 'TelefonePessoa', None):
+                if not (t.HorarioEntrada and t.HorarioSaida):
+                    # [DEPURAÇÃO WEB] mandava "Horário: None às None"
+                    logger.warning(f"[WPP] {t.NomePessoa} está sem horário na escala: confirmação não enviada.")
+                    continue
                 lista.append({'nome': t.NomePessoa, 'telefone': t.TelefonePessoa,
                               'posicao': pos[1] if pos else "Posição", 'setor': pos[5] if pos else None,
                               'entrada': t.HorarioEntrada, 'saida': t.HorarioSaida,

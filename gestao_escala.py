@@ -43,6 +43,29 @@ def _data(texto):
     return d.strftime('%Y-%m-%d'), d
 
 
+def _exigir_banco():
+    """
+    [DEPURAÇÃO WEB] As funções do banco devolvem lista/dicionário VAZIO quando não conseguem
+    conectar: sem esta conferência a tela mostrava um dia "sem ninguém escalado" (e salvar dizia
+    "esta posição não está mais no mapa"), em vez de avisar que o banco está fora do ar.
+    """
+    conn = database.get_db_connection()
+    if not conn:
+        raise ErroEscala("Sem conexão com o banco de dados. Tente de novo em alguns segundos.", 503)
+    try:
+        conn.close()
+    except Exception:
+        pass
+
+
+def _id(valor, nome="o turno"):
+    """[DEPURAÇÃO WEB] número inteiro vindo da página (texto inválido dava erro 500)."""
+    try:
+        return int(valor)
+    except (TypeError, ValueError):
+        raise ErroEscala(f"Identificação inválida para {nome}. Atualize a página.")
+
+
 def _hora(valor, nome):
     try:
         return R.hora_ou_none(valor)
@@ -113,6 +136,7 @@ def _jornada_horas():
 def dia(data_txt):
     """Tudo o que a tela precisa para mostrar um dia."""
     data, d = _data(data_txt)
+    _exigir_banco()
     posicoes = database.listar_posicoes_loja()
     escala = database.buscar_escala_do_dia(data)
     funcionarios = list(database.listar_funcionarios())
@@ -125,6 +149,7 @@ def dia(data_txt):
         if getattr(f, 'PosicaoPadraoID', None):
             fixos.setdefault(f.PosicaoPadraoID, (f.FuncionarioID, f.NomeCompleto, f.DiaDeFolga))
     dia_db = R.dia_semana_banco(d)
+    escalados = {t.FuncionarioID for ts in escala.values() for t in ts if t.FuncionarioID}
     pagos = database.turnos_pagos(data_escala=data)
     tela = database.tamanho_mapa_escala() or (R.MAPA_IMAGEM_LARGURA, R.MAPA_IMAGEM_ALTURA)
 
@@ -137,11 +162,21 @@ def dia(data_txt):
         x, y = (vx, vy) if vx > 1.0 else (vx * tela[0], vy * tela[1])
         turnos = escala.get(pos_id, [])
         cor, linhas = R.rotulo_e_cor_posicao(nome, turnos, folgas, indisponivel, dia_db,
-                                             None if turnos else fixos.get(pos_id), False)
+                                             None if turnos else fixos.get(pos_id), False, escalados)
         lista_pos.append({'id': pos_id, 'nome': nome, 'setor': setor or '', 'x': round(x, 1), 'y': round(y, 1),
                           'cor': cor, 'linhas': linhas[1:], 'turnos': [_turno_json(t, pagos) for t in turnos]})
 
     alertas = [{'nivel': n, 'texto': t} for n, t in R.analisar_escala_do_dia(escala, posicoes, indisponivel)]
+
+    # [DEPURAÇÃO WEB] turnos em posições REMOVIDAS do mapa: antes só apareciam num alerta e não
+    # havia como vê-los nem excluí-los (mas iam no Telegram/WhatsApp). Agora vêm numa lista à parte.
+    ativos = {p[0] for p in posicoes}
+    ids_fora = [pid for pid in escala if pid not in ativos and escala[pid]]
+    nomes_fora = database.nomes_posicoes_loja(ids_fora) if ids_fora else {}
+    fora_do_mapa = [{'id': pid, 'nome': nomes_fora.get(pid) or f"Posição {pid}", 'setor': '', 'removida': True,
+                     'cor': R.COR_SEM_PESSOA, 'linhas': [f"{t.NomePessoa or '?'} ({_h(t.HorarioEntrada)}-{_h(t.HorarioSaida)})"
+                                                          for t in escala[pid]],
+                     'turnos': [_turno_json(t, pagos) for t in escala[pid]]} for pid in ids_fora]
 
     # Resumo (o mesmo do PC)
     feriado = _feriado(data)
@@ -182,7 +217,7 @@ def dia(data_txt):
     return {'data': data, 'titulo': titulo, 'hoje': d == date.today(), 'feriado': feriado,
             'tela': {'largura': tela[0], 'altura': tela[1],
                      'imagem_largura': R.MAPA_IMAGEM_LARGURA, 'imagem_altura': R.MAPA_IMAGEM_ALTURA},
-            'posicoes': lista_pos, 'alertas': alertas, 'resumo': resumo, 'fluxo': fluxo,
+            'posicoes': lista_pos, 'fora_do_mapa': fora_do_mapa, 'alertas': alertas, 'resumo': resumo, 'fluxo': fluxo,
             'setor_todos': R.SETOR_TODOS, 'pessoas': pessoas,
             'config': {'jornada_horas': _jornada_horas(),
                        'limite_curta_min': int(cfg_pag.get('LimiteCurtaMinutos', 420))}}
@@ -205,8 +240,8 @@ def previa_freelancer(dados):
     if not faixa:
         return {'texto': "💰 Preencha entrada e saída para ver o valor.", 'sugerida': None, 'pago': False}
     calc = database.calcular_pagamento_turno(ent, sai, cfg, 0, data, tipo, ent, sai, _feriado(data))
-    escala_id = dados.get('escala_id')
-    pago = bool(escala_id) and int(escala_id) in database.turnos_pagos([escala_id])
+    escala_id = _id(dados['escala_id']) if dados.get('escala_id') else None
+    pago = bool(escala_id) and escala_id in database.turnos_pagos([escala_id])
     texto = ("💰 " + R.texto_calculo(calc)) if calc else "💰 Preencha entrada e saída para ver o valor."
     return {'texto': texto + ("   ✅ JÁ PAGO" if pago else ""), 'sugerida': sugerida, 'pago': pago}
 
@@ -220,7 +255,7 @@ def salvar_turno(dados, usuario):
         pos_id = int(dados.get('posicao_id'))
     except (TypeError, ValueError):
         raise ErroEscala("Escolha a posição no mapa.")
-    escala_id = int(dados['escala_id']) if dados.get('escala_id') else None
+    escala_id = _id(dados['escala_id']) if dados.get('escala_id') else None
     tipo, pessoa_id = _pessoa(dados.get('pessoa'))
     h_ent = _hora(dados.get('entrada'), "a entrada")
     h_sai = _hora(dados.get('saida'), "a saída")
@@ -237,6 +272,7 @@ def salvar_turno(dados, usuario):
     if prob:
         raise ErroEscala(f"O {prob} ({h_ent} às {h_sai}).")
 
+    _exigir_banco()
     posicoes = database.listar_posicoes_loja()
     nomes_pos = {p[0]: p[1] for p in posicoes}
     if pos_id not in nomes_pos:
@@ -260,6 +296,13 @@ def salvar_turno(dados, usuario):
     erros, avisos = R.conflitos_ao_salvar(escala, escala_id, pessoa, h_ent, h_sai, nome_pessoa, nomes_pos)
     if erros:
         raise ErroEscala("\n".join(erros) + "\n\nAjuste os horários ou escolha outra pessoa.", 409)
+    outro = R.conflito_na_posicao(escala, pos_id, escala_id, h_ent, h_sai)
+    if outro:
+        # [DEPURAÇÃO WEB] antes: "Não foi possível salvar... provável conflito" (sem dizer com quem),
+        # e turno que passa da meia-noite nem era conferido pelo banco
+        raise ErroEscala(f"Já tem {outro.NomePessoa or 'alguém'} em {nomes_pos[pos_id]} das "
+                         f"{_h(outro.HorarioEntrada)} às {_h(outro.HorarioSaida)}: os horários se cruzam.\n\n"
+                         "Ajuste os horários ou use outra posição.", 409)
 
     confirmados = set(dados.get('confirmar') or [])
     perguntas = []
@@ -286,6 +329,10 @@ def salvar_turno(dados, usuario):
         raise ErroEscala("Não foi possível salvar.\n\nProvável conflito de horário com outro turno desta "
                          "posição (ou falha no banco).", 409)
     extra = ""
+    if func_id and turno_antigo is not None and getattr(turno_antigo, 'TipoDiaria', None):
+        # [DEPURAÇÃO WEB] o turno era de freelancer e virou de funcionário: a diária curta/longa
+        # escolhida para o freelancer não vale mais
+        database.definir_tipo_diaria_escala(escala_id, None)
     if free_id:
         tipo_d = dados.get('tipo_diaria') if dados.get('tipo_diaria') in ('curta', 'longa') else None
         eid = escala_id or next((t.EscalaID for t in database.buscar_escala_do_dia(data).get(pos_id, [])
@@ -300,6 +347,7 @@ def salvar_turno(dados, usuario):
 
 def excluir_turno(escala_id, dados, usuario):
     data, _d = _data(dados.get('data'))
+    _exigir_banco()
     escala = database.buscar_escala_do_dia(data)
     turno = next((t for ts in escala.values() for t in ts if t.EscalaID == escala_id), None)
     if not turno:
@@ -316,9 +364,10 @@ def excluir_turno(escala_id, dados, usuario):
 
 def copiar(dados, usuario):
     data, d = _data(dados.get('data'))
-    origem = d - timedelta(days=1 if dados.get('origem') == 'ontem' else 7)
     if dados.get('origem') not in ('ontem', 'semana'):
         raise ErroEscala("Escolha copiar de ontem ou da semana passada.")
+    origem = d - timedelta(days=1 if dados.get('origem') == 'ontem' else 7)
+    _exigir_banco()
     if 'substituir' not in set(dados.get('confirmar') or []) and any(database.buscar_escala_do_dia(data).values()):
         return {'perguntas': [{'chave': 'substituir', 'titulo': "Atenção", 'texto': (
             f"Já existem pessoas escaladas para {R.fmt_data_br(d, True)}.\n\n"
@@ -336,6 +385,7 @@ def copiar(dados, usuario):
 def gerar_intervalos(dados, usuario):
     import calculadora_logica
     data, d = _data(dados.get('data'))
+    _exigir_banco()
     escala = database.buscar_escala_do_dia(data)
     pessoas, por_turno = R.pessoas_para_intervalos(escala, database.listar_posicoes_loja(), d)
     if not pessoas:
@@ -360,6 +410,7 @@ def gerar_intervalos(dados, usuario):
 
 def listar_intervalos(data_txt):
     data, _d = _data(data_txt)
+    _exigir_banco()
     linhas = []
     for r in database.listar_escala_detalhada_ordenada(data) or []:
         ini, fim = _h(r[7]), _h(r[8])
@@ -374,6 +425,7 @@ def salvar_intervalo(dados, usuario):
         escala_id = int(dados.get('escala_id'))
     except (TypeError, ValueError):
         raise ErroEscala("Escolha o turno na lista.")
+    _exigir_banco()
     ini = _hora(dados.get('int_ini'), "o início do intervalo")
     fim = _hora(dados.get('int_fim'), "o fim do intervalo")
     if bool(ini) != bool(fim):
@@ -398,10 +450,15 @@ def salvar_intervalo(dados, usuario):
 def enviar_telegram(dados, usuario):
     import notificador_telegram
     data, _d = _data(dados.get('data'))
+    grupo = getattr(config, 'TODOS_FUNCIONARIOS_GROUP_ID', None)
+    if not grupo:
+        # [DEPURAÇÃO WEB] sem o grupo no config.py dava "Erro no servidor" sem explicação
+        raise ErroEscala("O grupo do Telegram (TODOS_FUNCIONARIOS_GROUP_ID) não está no config.py.", 503)
+    _exigir_banco()
     texto = database.gerar_relatorio_escala_texto(data)
     if not texto or texto.startswith(("Erro", "Nenhuma escala")):
         raise ErroEscala(texto or "Escala vazia.")
-    resposta = notificador_telegram.enviar_mensagem(config.TODOS_FUNCIONARIOS_GROUP_ID, texto)
+    resposta = notificador_telegram.enviar_mensagem(grupo, texto)
     if not (resposta and resposta.get('ok')):
         raise ErroEscala(f"O Telegram recusou o envio: {resposta}", 502)
     logger.info(f"[GESTÃO] {usuario.get('nome')}: escala de {data} enviada ao grupo do Telegram.")
@@ -414,6 +471,7 @@ _trava_envios = threading.Lock()
 
 def previa_whatsapp(data_txt):
     data, _d = _data(data_txt)
+    _exigir_banco()
     lista = R.lista_envio_whatsapp(database.buscar_escala_do_dia(data), database.listar_posicoes_loja())
     return {'pessoas': len(lista), 'nomes': [i['nome'] for i in lista]}
 
@@ -422,6 +480,7 @@ def iniciar_whatsapp(dados, usuario):
     """Começa o envio em segundo plano (pode fechar a página). Devolve o andamento."""
     import notificador_whatsapp
     data, _d = _data(dados.get('data'))
+    _exigir_banco()
     with _trava_envios:
         for job in list(_envios.values()):              # limpa os antigos
             if job['terminado'] and time.time() - job['criado'] > 3600:
