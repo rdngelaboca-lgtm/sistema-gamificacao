@@ -729,6 +729,14 @@ def buscar_xml_sefaz():
         linhas = [f"📥 <b>{len(r['novas'])} nota(s) nova(s) da SEFAZ</b>"]
         linhas += [f"• {esc(n['emitente'] or 'Fornecedor')} · {nd._reais(n['valor'])}" for n in r['novas'][:25]]
         linhas.append("Abra o Gestão de Estoque → aba 3 → <b>Notas baixadas da SEFAZ</b> para dar entrada.")
+        try:                                   # [CADASTRO FRANQUIA] produto novo precisa ser cadastrado antes de chegar
+            import cadastro_franquia
+            novos = cadastro_franquia.produtos_novos_nas_notas([n['chave'] for n in r['novas']])
+            if novos:
+                linhas.append(f"🏷️ <b>{novos} produto(s) novo(s)</b> nestas notas: crie/vincule na aba 3 e mande o "
+                              "cadastro para a franquia na <b>aba 9</b> (assim, quando chegar, é só vender).")
+        except Exception as e:
+            logger.error(f"Cadastro na franquia: contar produtos novos das notas falhou: {e}", exc_info=True)
         alertas_estoque.enviar("\n".join(linhas))
     try:                                       # [ORÇAMENTOS] nota chegou para um orçamento enviado: avisa o que veio diferente
         import orcamentos

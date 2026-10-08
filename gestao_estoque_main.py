@@ -471,39 +471,9 @@ from nota_xml import CFOP_BONIFICACAO, CFOP_IGNORAR, tipo_item_por_cfop   # noqa
 import nota_xml   # noqa: E402
 
 
-# [MELHORIA CATÁLOGO] Sugestão de nome "limpo" para produtos criados a partir do XML
-_PALAVRAS_MINUSCULAS = {'de', 'da', 'do', 'das', 'dos', 'com', 'sem', 'e', 'em', 'a', 'o', 'ao', 'na', 'no', 'p/', 'c/', 's/'}
-_SIGLAS_MAIUSCULAS = {'KG', 'G', 'GR', 'ML', 'L', 'LT', 'UN', 'UND', 'PCT', 'PC', 'CX', 'FD', 'DZ', 'PT', 'SC', 'TP', 'PET'}
-
-
-def sugerir_nome_limpo(nome):
-    """
-    '003 FERRERO ROCHER T3X16..........01X37.5GR %AGR: 2'  ->  'Ferrero Rocher T3X16 01X37.5GR'
-    '160068-BARBIE FAB BARBIE FASHION   BARBIE   12X'      ->  'Barbie Fab Barbie Fashion Barbie 12X'
-    '232 - CARNE CONG. FRANGO S/O FILE'                    ->  'Carne Cong. Frango s/o File'
-    Regras: tira o código numérico do início, as sequências de pontos, os textos técnicos do
-    fornecedor (%AGR:, CXA:, ***), espaços repetidos, e deixa só a 1ª letra maiúscula.
-    Palavras com números (12X, 5KG, T3X16) ficam como estão.
-    """
-    t = str(nome or '')
-    t = re.split(r'%AGR:|\bCXA:|\bCX\.:', t, maxsplit=1, flags=re.IGNORECASE)[0]   # lixo técnico no fim
-    t = re.sub(r'\*{2,}', ' ', t)                                                 # ***
-    t = re.sub(r'\.{3,}', ' ', t)                                                 # ..........
-    t = re.sub(r'^\s*\d{2,}\s*(?:-\s*|\s+)', '', t)                                # "003 " / "160068-" / "232 - "
-    t = ' '.join(t.split()).strip(' -.:;')
-    if not t:
-        return str(nome or '').strip()
-    palavras = []
-    for i, p in enumerate(t.split(' ')):
-        if any(ch.isdigit() for ch in p):
-            palavras.append(p)
-        elif p.upper() in _SIGLAS_MAIUSCULAS or ('/' in p and len(p) <= 4 and p.lower() not in _PALAVRAS_MINUSCULAS):
-            palavras.append(p.upper())          # KG, UN, S/O, C/G ficam em maiúsculas
-        elif i > 0 and p.lower() in _PALAVRAS_MINUSCULAS:
-            palavras.append(p.lower())
-        else:
-            palavras.append(p[:1].upper() + p[1:].lower())
-    return ' '.join(palavras)
+# [MELHORIA CATÁLOGO] Sugestão de nome "limpo" para produtos criados a partir do XML.
+# [CADASTRO FRANQUIA] A regra mora em texto_produto.py (a planilha da franquia usa a mesma).
+from texto_produto import sugerir_nome_limpo, _PALAVRAS_MINUSCULAS, _SIGLAS_MAIUSCULAS   # noqa: E402,F401
 
 
 def criar_tree_zebrada(pai, **kwargs):
@@ -568,6 +538,9 @@ class AppGestaoEstoque:
         # [MELHORIA] Aba de consultas rápidas: histórico de preços do produto e itens das notas
         self.frame_consultas = ttk.Frame(self.notebook, padding="10")
         self.notebook.add(self.frame_consultas, text='8. 🔎 Consultas')
+        # [CADASTRO FRANQUIA] pedir o cadastro dos produtos novos na franquia
+        self.frame_cadastro = ttk.Frame(self.notebook, padding="10")
+        self.notebook.add(self.frame_cadastro, text='9. 🏷️ Cadastro Franquia')
         self.criar_aba_solicitacoes()
 
         self.produto_selecionado_id = None
@@ -600,6 +573,7 @@ class AppGestaoEstoque:
         self.criar_aba_sugestao_compra() 
         self.criar_aba_administracao()
         self.criar_aba_consultas()  # [MELHORIA]
+        self.criar_aba_cadastro_franquia()  # [CADASTRO FRANQUIA]
         
         # Carregamento inicial
         self.atualizar_lista_produtos() 
@@ -698,6 +672,7 @@ class AppGestaoEstoque:
             self.frame_contagem: getattr(self, 'entry_filtro_contagem', None),
             self.frame_sugestao: getattr(self, 'entry_busca_sugestao', None),
             self.frame_consultas: self._campo_busca_consultas() if hasattr(self, 'nb_consultas') else None,
+            self.frame_cadastro: getattr(self, 'entry_busca_franquia', None),
         }
         campo = campos.get(aba)
         if campo is not None:
@@ -728,7 +703,7 @@ class AppGestaoEstoque:
             if 400 <= larg <= tela_l and 300 <= alt <= tela_a and 0 <= x < tela_l - 100 and 0 <= y < tela_a - 100:
                 self.root.geometry(geo)
         aba = pref.get('aba')
-        if isinstance(aba, int) and 0 <= aba < 8:
+        if isinstance(aba, int) and 0 <= aba < self.notebook.index('end'):
             try:
                 self.notebook.select(aba)
             except tk.TclError:
@@ -818,6 +793,8 @@ class AppGestaoEstoque:
             self.atualizar_lista_contagens_admin()
         elif aba is self.frame_consultas:
             self.atualizar_consultas()  # [MELHORIA] notas/produtos novos aparecem ao abrir a aba
+        elif aba is self.frame_cadastro:
+            self.atualizar_cadastro_franquia()
         elif aba is self.frame_solicitacoes:
             # [DEPURAÇÃO] comparava com '7. Aprovar Compras/Manutenção', mas a aba se chama
             # '7. Solicitações (Líderes)' -> a lista NUNCA atualizava sozinha.
@@ -3551,6 +3528,9 @@ class AppGestaoEstoque:
             criado = "criado e vinculado" if produto_foi_criado else "vinculado"
             self.status(f"Produto '{nome_novo_produto}' {criado}.")
             self._apos_vincular(indice)
+            if produto_foi_criado:   # [CADASTRO FRANQUIA] depois de reler a pasta (senão o aviso some)
+                self.status(f"Produto '{nome_novo_produto}' criado e vinculado. É produto NOVO: mande o cadastro "
+                            "para a franquia na aba 9 (🏷️ Cadastro Franquia).", 'info', 30)
         except Exception as e:
             logger.error(f"Erro ao auto-criar e vincular: {e}", exc_info=True)
             messagebox.showerror("Erro Crítico", f"Não foi possível criar e vincular o produto.\nVerifique se o nome já existe no Catálogo Mestre com alguma variação.\n\nErro: {e}", parent=self.root)
@@ -7201,7 +7181,7 @@ class AppGestaoEstoque:
             try:
                 compras = database.listar_compras_do_vinculo(v['ID'], levantar_erro=True)   # [F-15]
             except Exception as e:
-                self.falha_banco("as compras do vínculo", e, janela)
+                self.falha_banco("as compras do vínculo", e, popup)
                 compras = []
             for c in compras:
                 iid = str(c['ItemNotaID'])
@@ -8138,6 +8118,472 @@ class AppGestaoEstoque:
         except Exception as e:
             logger.error(f"Erro ao exportar histórico de preços: {e}", exc_info=True)
             messagebox.showerror("Erro", f"Não foi possível salvar o Excel.\n{e}", parent=self.root)
+
+    # ===================================================================
+    # == ABA 9: [CADASTRO FRANQUIA] pedir o cadastro dos produtos ========
+    # ===================================================================
+    # Produto novo precisa ser cadastrado na Franquia antes de vender: nome limpo, código de
+    # barras, NCM, preço de custo e preço de venda (custo × markup, terminando em ,90). As regras
+    # ficam em cadastro_franquia.py; aqui é só a tela.
+    MOSTRAR_FRANQUIA = [
+        ('pendente', '📝 Para enviar'),
+        ('chegando', '🚚 Chegando nas notas novas'),
+        ('enviado', '📤 Enviados (aguardando a franquia)'),
+        ('cadastrado', '✅ Cadastrados'),
+        ('nao_vende', '🚫 Não vende'),
+        ('todos', 'Todos'),
+    ]
+
+    def criar_aba_cadastro_franquia(self):
+        import cadastro_franquia as cf
+        self._franq_linhas = {}
+        self._franq_sem_produto = []
+        self._franq_carregado = {}      # valores mostrados no editor quando o produto foi aberto
+        f = self.frame_cadastro
+
+        topo = ttk.Frame(f)
+        topo.pack(fill=tk.X)
+        ttk.Label(topo, text="Buscar:").pack(side=tk.LEFT)
+        self.entry_busca_franquia = ttk.Entry(topo, width=28)
+        self.entry_busca_franquia.pack(side=tk.LEFT, padx=(4, 12))
+        self.entry_busca_franquia.bind("<KeyRelease>", lambda e: self.mostrar_cadastro_franquia())
+        ttk.Label(topo, text="Mostrar:").pack(side=tk.LEFT)
+        self.combo_mostrar_franquia = ttk.Combobox(topo, state="readonly", width=34,
+                                                   values=[t for _, t in self.MOSTRAR_FRANQUIA])
+        self.combo_mostrar_franquia.set(self.MOSTRAR_FRANQUIA[0][1])
+        self.combo_mostrar_franquia.pack(side=tk.LEFT, padx=(4, 12))
+        self.combo_mostrar_franquia.bind("<<ComboboxSelected>>", lambda e: self.mostrar_cadastro_franquia())
+        ttk.Label(topo, text="Categoria:").pack(side=tk.LEFT)
+        self.combo_categoria_franquia = ttk.Combobox(topo, state="readonly", width=18, values=["Todas"])
+        self.combo_categoria_franquia.set("Todas")
+        self.combo_categoria_franquia.pack(side=tk.LEFT, padx=(4, 12))
+        self.combo_categoria_franquia.bind("<<ComboboxSelected>>", lambda e: self.mostrar_cadastro_franquia())
+        ttk.Button(topo, text="🔄", width=3, command=self.atualizar_cadastro_franquia).pack(side=tk.LEFT)
+        ttk.Button(topo, text="🔎 Códigos de barras das notas antigas",
+                   command=self.aprender_codigos_franquia).pack(side=tk.RIGHT)
+        ttk.Button(topo, text="⚙️ Markup por categoria", command=self.abrir_markup_categorias).pack(side=tk.RIGHT, padx=6)
+
+        self.frame_novos_franquia = ttk.Frame(f)
+        self.lbl_novos_franquia = ttk.Label(self.frame_novos_franquia, foreground="#b35c00", text="")
+        self.lbl_novos_franquia.pack(side=tk.LEFT)
+        ttk.Button(self.frame_novos_franquia, text="Abrir notas da SEFAZ (aba 3)",
+                   command=lambda: (self.notebook.select(self.frame_importacao), self.carregar_notas_sefaz())).pack(side=tk.LEFT, padx=8)
+
+        meio = ttk.Frame(f)
+        meio.pack(fill=tk.BOTH, expand=True, pady=6)
+        self._frame_meio_franquia = meio
+        cols = ('situacao', 'nome', 'ean', 'ncm', 'custo', 'markup', 'venda', 'categoria', 'origem', 'avisos')
+        self.tree_franquia = ttk.Treeview(meio, columns=cols, show='headings', selectmode='extended')
+        for col, titulo, larg, anc in (('situacao', 'Situação', 150, 'w'), ('nome', 'Nome para o cadastro', 270, 'w'),
+                                       ('ean', 'Código de barras', 120, 'center'), ('ncm', 'NCM', 80, 'center'),
+                                       ('custo', 'Custo (nota)', 85, 'e'), ('markup', 'Markup', 60, 'center'),
+                                       ('venda', 'Preço de venda', 95, 'e'), ('categoria', 'Categoria', 110, 'w'),
+                                       ('origem', 'De onde veio o custo', 210, 'w'), ('avisos', 'Falta / conferir', 220, 'w')):
+            self.tree_franquia.heading(col, text=titulo, command=lambda c=col: self.ordenar_coluna_treeview(self.tree_franquia, c, False))
+            self.tree_franquia.column(col, width=larg, anchor=anc)
+        self.tree_franquia.tag_configure('chegando', background='#e3f2fd')
+        self.tree_franquia.tag_configure('aviso', foreground='#b35c00')
+        self.tree_franquia.tag_configure('cadastrado', foreground='#1b7a2f')
+        self.tree_franquia.tag_configure('nao_vende', foreground='#888888')
+        sb = ttk.Scrollbar(meio, orient="vertical", command=self.tree_franquia.yview)
+        self.tree_franquia.configure(yscrollcommand=sb.set)
+        self.tree_franquia.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb.pack(side=tk.LEFT, fill=tk.Y)
+        self.tree_franquia.bind("<<TreeviewSelect>>", lambda e: self.preencher_editor_franquia())
+        self.tree_franquia.bind("<Control-a>", lambda e: (self.tree_franquia.selection_set(self.tree_franquia.get_children()), "break")[1])
+
+        # ---------- editor do produto ----------
+        ed = ttk.LabelFrame(f, text="Produto selecionado (Enter = salvar)", padding=8)
+        ed.pack(fill=tk.X)
+        self.lbl_franq_produto = ttk.Label(ed, text="Selecione um produto na lista.", font=("Arial", 10, "bold"))
+        self.lbl_franq_produto.grid(row=0, column=0, columnspan=8, sticky="w")
+        campos = (('nome', 'Nome para o cadastro', 46), ('ean', 'Código de barras', 18), ('ncm', 'NCM', 11),
+                  ('custo', 'Preço de custo', 11), ('markup', 'Markup (×)', 7), ('venda', 'Preço de venda', 11))
+        self.entries_franquia = {}
+        for i, (chave, titulo, larg) in enumerate(campos):
+            ttk.Label(ed, text=titulo).grid(row=1, column=i, sticky="w", padx=(0, 6))
+            e = ttk.Entry(ed, width=larg)
+            e.grid(row=2, column=i, sticky="w", padx=(0, 6))
+            e.bind("<Return>", lambda ev: self.salvar_editor_franquia())
+            self.entries_franquia[chave] = e
+        self.entries_franquia['markup'].bind("<KeyRelease>", lambda ev: self._franq_recalcular('markup'))
+        self.entries_franquia['custo'].bind("<KeyRelease>", lambda ev: self._franq_recalcular('custo'))
+        self.entries_franquia['venda'].bind("<KeyRelease>", lambda ev: self._franq_recalcular('venda'))
+        self.btn_salvar_franquia = ttk.Button(ed, text="💾 Salvar", command=self.salvar_editor_franquia)
+        self.btn_salvar_franquia.grid(row=2, column=6, padx=4)
+        ttk.Button(ed, text="↺ Voltar à sugestão", command=self.voltar_sugestao_franquia).grid(row=2, column=7, padx=4)
+        self.lbl_franq_detalhe = ttk.Label(ed, text="", foreground="gray")
+        self.lbl_franq_detalhe.grid(row=3, column=0, columnspan=8, sticky="w", pady=(4, 0))
+
+        # ---------- ações nos selecionados ----------
+        acoes = ttk.Frame(f)
+        acoes.pack(fill=tk.X, pady=(6, 0))
+        ttk.Label(acoes, text="Markup:").pack(side=tk.LEFT)
+        self.entry_markup_massa = ttk.Entry(acoes, width=6)
+        self.entry_markup_massa.pack(side=tk.LEFT, padx=4)
+        ttk.Button(acoes, text="Aplicar aos selecionados", command=self.aplicar_markup_franquia).pack(side=tk.LEFT)
+        ttk.Button(acoes, text="📤 Gerar planilha para a franquia",
+                   command=self.gerar_planilha_franquia).pack(side=tk.LEFT, padx=(18, 4))
+        ttk.Button(acoes, text="✅ Já cadastrado", command=lambda: self.marcar_franquia(cf.CADASTRADO)).pack(side=tk.LEFT, padx=4)
+        ttk.Button(acoes, text="🚫 Não vende", command=lambda: self.marcar_franquia(cf.NAO_VENDE)).pack(side=tk.LEFT, padx=4)
+        ttk.Button(acoes, text="📝 Voltar para 'Para enviar'", command=lambda: self.marcar_franquia(cf.PENDENTE)).pack(side=tk.LEFT, padx=4)
+        self.lbl_resumo_franquia = ttk.Label(acoes, text="", foreground="gray")
+        self.lbl_resumo_franquia.pack(side=tk.RIGHT)
+        ttk.Label(f, foreground="gray", text=(
+            "Custo = preço da nota por unidade (com impostos e frete, sem royalties). Preço de venda = custo × markup, "
+            "arredondado para cima terminando em ,90. Ctrl+A seleciona tudo; Ctrl/Shift + clique escolhe vários.")).pack(anchor="w", pady=(4, 0))
+        self._janela_franquia = {'tree': self.tree_franquia, 'entries': self.entries_franquia}   # (testes)
+
+    # -------------------------- dados --------------------------
+    def atualizar_cadastro_franquia(self):
+        import cadastro_franquia as cf
+        try:
+            self.root.config(cursor="watch"); self.root.update_idletasks()
+            dados = cf.listar()
+        except Exception as e:
+            self.falha_banco("a lista do Cadastro na Franquia", e)
+            return
+        finally:
+            try:
+                self.root.config(cursor="")
+            except tk.TclError:
+                pass
+        self._franq_linhas = {l['ProdutoID']: l for l in dados['linhas']}
+        self._franq_sem_produto = dados['sem_produto']
+        cats = sorted({l['Categoria'] for l in dados['linhas']}, key=sem_acento)
+        self.combo_categoria_franquia['values'] = ["Todas"] + cats
+        if self.combo_categoria_franquia.get() not in self.combo_categoria_franquia['values']:
+            self.combo_categoria_franquia.set("Todas")
+        if self._franq_sem_produto:
+            notas = sorted({f"NF {s['nf']}" for s in self._franq_sem_produto})
+            self.lbl_novos_franquia.config(text=(
+                f"⚠️ {len(self._franq_sem_produto)} item(ns) das notas novas ({', '.join(notas[:4])}"
+                + ("…" if len(notas) > 4 else "") + ") ainda não têm produto no estoque: crie/vincule na aba 3 "
+                "e eles aparecem aqui para mandar ao cadastro."))
+            self.frame_novos_franquia.pack(fill=tk.X, pady=(6, 0), before=self._frame_meio_franquia)
+        else:
+            self.frame_novos_franquia.pack_forget()
+        self.mostrar_cadastro_franquia()
+
+    def _filtro_mostrar_franquia(self):
+        texto = self.combo_mostrar_franquia.get()
+        return next((ch for ch, t in self.MOSTRAR_FRANQUIA if t == texto), 'pendente')
+
+    def mostrar_cadastro_franquia(self):
+        sel = set(self.tree_franquia.selection())
+        for i in self.tree_franquia.get_children():
+            self.tree_franquia.delete(i)
+        mostrar = self._filtro_mostrar_franquia()
+        cat = self.combo_categoria_franquia.get()
+        palavras = sem_acento(self.entry_busca_franquia.get()).split()
+        visiveis = 0
+        contagem = {}
+        linhas = sorted(self._franq_linhas.values(), key=lambda l: (l['Chegando'] is None, sem_acento(l['Nome'])))
+        for l in linhas:
+            contagem[l['Status']] = contagem.get(l['Status'], 0) + 1
+            if mostrar == 'chegando' and not (l['Status'] == 'pendente' and l['Chegando']):
+                continue
+            if mostrar not in ('todos', 'chegando') and l['Status'] != mostrar:
+                continue
+            if cat and cat != "Todas" and l['Categoria'] != cat:
+                continue
+            alvo = sem_acento(f"{l['Nome']} {l['Produto']} {l['EAN'] or ''} {l['ProdutoID']}")
+            if palavras and not all(p in alvo for p in palavras):
+                continue
+            tags = []
+            if l['Status'] == 'cadastrado':
+                tags.append('cadastrado')
+            elif l['Status'] == 'nao_vende':
+                tags.append('nao_vende')
+            elif l['Chegando']:
+                tags.append('chegando')
+            if l['Avisos'] and l['Status'] in ('pendente', 'enviado'):
+                tags.append('aviso')
+            situacao = l['TextoStatus'] + (" 🚚" if l['Chegando'] and l['Status'] == 'pendente' else "")
+            self.tree_franquia.insert("", "end", iid=str(l['ProdutoID']), tags=tuple(tags), values=(
+                situacao, l['Nome'], l['EAN'] or '—', l['NCM'] or '—',
+                fmt_reais(l['Custo']) if l['Custo'] else '—', fmt_qtd(l['Markup']) if l['Markup'] else '—',
+                fmt_reais(l['PrecoVenda']) if l['PrecoVenda'] else '—', l['Categoria'], l['OrigemCusto'],
+                ", ".join(l['Avisos'])))
+            visiveis += 1
+        manter = [i for i in sel if self.tree_franquia.exists(i)]
+        if manter:
+            self.tree_franquia.selection_set(manter)
+        chegando = sum(1 for l in self._franq_linhas.values() if l['Status'] == 'pendente' and l['Chegando'])
+        self.lbl_resumo_franquia.config(text=(
+            f"{visiveis} na lista · para enviar {contagem.get('pendente', 0)} (🚚 {chegando} chegando) · "
+            f"enviados {contagem.get('enviado', 0)} · cadastrados {contagem.get('cadastrado', 0)} · "
+            f"não vende {contagem.get('nao_vende', 0)}"))
+        if not manter:
+            self.preencher_editor_franquia()
+
+    def _franq_selecionados(self):
+        return [self._franq_linhas[int(i)] for i in self.tree_franquia.selection() if int(i) in self._franq_linhas]
+
+    # -------------------------- editor --------------------------
+    def _franq_texto(self, chave, valor):
+        if valor is None:
+            return ''
+        if chave in ('custo', 'venda'):
+            # 2 casas; o custo guarda até 4 (ex.: caixa de 24 por R$ 80 = 3,3333 cada)
+            texto = f"{Decimal(str(valor)):.{2 if chave == 'venda' else 4}f}"
+            inteiro, dec = texto.split('.')
+            return f"{inteiro},{dec[:2] + dec[2:].rstrip('0')}"
+        if chave == 'markup':
+            return fmt_qtd(valor)
+        return str(valor)
+
+    def preencher_editor_franquia(self):
+        sel = self._franq_selecionados()
+        for e in self.entries_franquia.values():
+            e.config(state="normal")
+            e.delete(0, tk.END)
+        self._franq_carregado = {}
+        if len(sel) != 1:
+            estado = "disabled"
+            self.lbl_franq_produto.config(text=(f"{len(sel)} produtos selecionados: use os botões de baixo (markup, planilha, situação)."
+                                                if sel else "Selecione um produto na lista."))
+            self.lbl_franq_detalhe.config(text="")
+            for e in self.entries_franquia.values():
+                e.config(state=estado)
+            self.btn_salvar_franquia.config(state=estado)
+            return
+        l = sel[0]
+        valores = {'nome': l['Nome'], 'ean': l['EAN'], 'ncm': l['NCM'], 'custo': l['Custo'], 'markup': l['Markup'],
+                   'venda': l['PrecoVenda']}
+        for chave, v in valores.items():
+            texto = self._franq_texto(chave, v)
+            self.entries_franquia[chave].insert(0, texto)
+            self._franq_carregado[chave] = texto
+        self._franq_carregado['_linha'] = l
+        self.btn_salvar_franquia.config(state="normal")
+        self.lbl_franq_produto.config(text=f"{l['Produto']}  (ID {l['ProdutoID']} · {l['Unidade']} · {l['TextoStatus']})")
+        self._franq_atualizar_detalhe()
+
+    def _franq_atualizar_detalhe(self):
+        import cadastro_franquia as cf
+        l = self._franq_carregado.get('_linha')
+        if not l:
+            return
+        partes = [f"Custo: {l['OrigemCusto']}"]
+        if l.get('OrigemEAN'):
+            partes.append(f"Código de barras: {l['OrigemEAN']}")
+        if l.get('MarkupPadrao'):
+            partes.append(f"Markup padrão de {l['Categoria']}: {fmt_qtd(l['MarkupPadrao'])}")
+        try:
+            custo = cf.numero(self.entries_franquia['custo'].get(), 'Custo')
+            venda = cf.numero(self.entries_franquia['venda'].get(), 'Preço de venda')
+            real = cf.markup_de(custo, venda)
+            if real:
+                partes.append(f"Venda ÷ custo = markup {fmt_qtd(real)}")
+        except cf.ErroCadastro:
+            pass
+        if l['Chegando']:
+            partes.append(f"🚚 chegando na NF {l['Chegando']['nf']} ({l['Chegando']['fornecedor']})")
+        self.lbl_franq_detalhe.config(text="  ·  ".join(partes))
+
+    def _franq_recalcular(self, mudou):
+        """Markup ou custo mudou: o preço de venda acompanha (custo × markup, terminando em ,90)."""
+        import cadastro_franquia as cf
+        if mudou in ('markup', 'custo'):
+            try:
+                custo = cf.numero(self.entries_franquia['custo'].get(), 'Custo')
+                markup = cf.numero(self.entries_franquia['markup'].get(), 'Markup')
+            except cf.ErroCadastro:
+                return self._franq_atualizar_detalhe()
+            venda = cf.preco_venda_sugerido(custo, markup)
+            if venda:
+                self.entries_franquia['venda'].delete(0, tk.END)
+                self.entries_franquia['venda'].insert(0, self._franq_texto('venda', venda))
+        self._franq_atualizar_detalhe()
+
+    def salvar_editor_franquia(self):
+        import cadastro_franquia as cf
+        l = self._franq_carregado.get('_linha')
+        if not l:
+            return
+        novos = {c: e.get().strip() for c, e in self.entries_franquia.items()}
+        mudou = {c: v for c, v in novos.items() if v != self._franq_carregado.get(c, '')}
+        if not mudou:
+            self.status("Nada mudou.", 'info', 4)
+            return
+        try:
+            custo = cf.numero(novos['custo'], 'Custo')
+            markup = cf.numero(novos['markup'], 'Markup')
+            venda = cf.numero(novos['venda'], 'Preço de venda')
+            # o preço que é só "custo × markup" continua automático (acompanha o custo da próxima nota);
+            # preço digitado diferente da conta fica gravado como está
+            venda_auto = venda is not None and venda == cf.preco_venda_sugerido(custo, markup)
+            cf.salvar(l['ProdutoID'],
+                      nome=novos['nome'] if 'nome' in mudou else None,
+                      ean=novos['ean'].replace('—', '') if 'ean' in mudou else None,
+                      ncm=novos['ncm'].replace('—', '') if 'ncm' in mudou else None,
+                      custo=novos['custo'] if 'custo' in mudou else None,
+                      markup=novos['markup'] if ('markup' in mudou or 'venda' in mudou) else None,
+                      venda=('' if venda_auto else novos['venda']) if ('venda' in mudou or 'markup' in mudou or 'custo' in mudou) else None)
+        except cf.ErroCadastro as e:
+            messagebox.showerror("Cadastro na Franquia", str(e), parent=self.root)
+            return
+        except Exception as e:
+            self.falha_banco("o cadastro do produto (não gravou)", e)
+            return
+        self.status(f"{novos['nome'] or l['Nome']}: gravado.")
+        self.atualizar_cadastro_franquia()
+        if self.tree_franquia.exists(str(l['ProdutoID'])):
+            self.tree_franquia.selection_set(str(l['ProdutoID']))
+            self.tree_franquia.see(str(l['ProdutoID']))
+
+    def voltar_sugestao_franquia(self):
+        import cadastro_franquia as cf
+        sel = self._franq_selecionados()
+        if not sel:
+            return
+        try:
+            cf.voltar_para_sugestao([l['ProdutoID'] for l in sel])
+        except Exception as e:
+            return self.falha_banco("o cadastro (não gravou)", e)
+        self.status(f"{len(sel)} produto(s): custo, markup e preço voltaram para a sugestão do sistema.")
+        self.atualizar_cadastro_franquia()
+
+    # -------------------------- ações --------------------------
+    def aplicar_markup_franquia(self):
+        import cadastro_franquia as cf
+        sel = self._franq_selecionados()
+        if not sel:
+            messagebox.showinfo("Markup", "Selecione os produtos na lista (Ctrl+A = todos da lista).", parent=self.root)
+            return
+        try:
+            msg = cf.aplicar_markup([l['ProdutoID'] for l in sel], self.entry_markup_massa.get())
+        except cf.ErroCadastro as e:
+            messagebox.showerror("Markup", str(e), parent=self.root)
+            return
+        except Exception as e:
+            return self.falha_banco("o cadastro (não gravou)", e)
+        self.status(msg)
+        self.atualizar_cadastro_franquia()
+
+    def marcar_franquia(self, status):
+        import cadastro_franquia as cf
+        sel = self._franq_selecionados()
+        if not sel:
+            messagebox.showinfo("Cadastro na Franquia", "Selecione os produtos na lista (Ctrl+A = todos da lista).", parent=self.root)
+            return
+        textos = {cf.CADASTRADO: "JÁ CADASTRADOS na franquia", cf.NAO_VENDE: "NÃO VENDE (não precisa cadastrar)",
+                  cf.PENDENTE: "PARA ENVIAR de novo"}
+        nomes = "\n".join(f"  • {l['Nome']}" for l in sel[:12]) + (f"\n  … e mais {len(sel) - 12}" if len(sel) > 12 else "")
+        if not messagebox.askyesno("Cadastro na Franquia", f"Marcar {len(sel)} produto(s) como {textos[status]}?\n\n{nomes}",
+                                   parent=self.root):
+            return
+        try:
+            cf.marcar(sel, status)
+        except Exception as e:
+            return self.falha_banco("o cadastro (não gravou)", e)
+        self.status(f"{len(sel)} produto(s) marcado(s): {cf.TEXTO_STATUS[status]}.")
+        self.atualizar_cadastro_franquia()
+
+    def gerar_planilha_franquia(self):
+        import cadastro_franquia as cf
+        sel = self._franq_selecionados()
+        if not sel:
+            visiveis = [self._franq_linhas[int(i)] for i in self.tree_franquia.get_children()]
+            if not visiveis:
+                messagebox.showinfo("Planilha", "Nenhum produto na lista.", parent=self.root)
+                return
+            if not messagebox.askyesno("Planilha", f"Nenhum produto selecionado. Gerar com os {len(visiveis)} da lista?",
+                                       parent=self.root):
+                return
+            sel = visiveis
+        problemas = cf.problemas_para_envio(sel)
+        if problemas:
+            texto = "\n".join(f"  • {n}: {p}" for n, p in problemas[:15]) + (f"\n  … e mais {len(problemas) - 15}" if len(problemas) > 15 else "")
+            if not messagebox.askyesno("Conferir antes de mandar",
+                                       f"{len(problemas)} produto(s) com algo faltando ou estranho:\n\n{texto}\n\n"
+                                       "Gerar a planilha assim mesmo? (Não = voltar e completar)", icon='warning', parent=self.root):
+                return
+        caminho = filedialog.asksaveasfilename(
+            parent=self.root, title="Salvar planilha para a franquia", defaultextension=".xlsx",
+            initialfile=f"Cadastro_Franquia_{date.today():%Y-%m-%d}.xlsx", filetypes=[("Excel", "*.xlsx")])
+        if not caminho:
+            return
+        try:
+            cf.gerar_planilha(sel, caminho)
+        except ImportError:
+            messagebox.showerror("Planilha", "Falta a biblioteca openpyxl. No terminal: pip install openpyxl", parent=self.root)
+            return
+        except Exception as e:
+            logger.error(f"Planilha da franquia: {e}", exc_info=True)
+            messagebox.showerror("Planilha", f"Não foi possível salvar a planilha:\n{e}", parent=self.root)
+            return
+        pendentes = [l for l in sel if l['Status'] == cf.PENDENTE]
+        if pendentes and messagebox.askyesno(
+                "Planilha pronta", f"Planilha salva:\n{caminho}\n\nMarcar os {len(pendentes)} produto(s) como ENVIADOS à franquia?\n"
+                "(os valores mandados ficam guardados; quando a franquia confirmar, use '✅ Já cadastrado')", parent=self.root):
+            try:
+                cf.marcar(pendentes, cf.ENVIADO)
+            except Exception as e:
+                return self.falha_banco("o cadastro (não marcou como enviado)", e)
+            self.atualizar_cadastro_franquia()
+        self.status(f"Planilha da franquia salva ({len(sel)} produto(s)): {os.path.basename(caminho)}", segundos=20)
+
+    def abrir_markup_categorias(self):
+        import cadastro_franquia as cf
+        try:
+            atuais = cf.markups_por_categoria()
+            categorias = database.listar_categorias_produto(levantar_erro=True)
+        except Exception as e:
+            return self.falha_banco("as categorias", e)
+        win = Toplevel(self.root)
+        win.title("Markup padrão por categoria")
+        win.transient(self.root)
+        corpo = ttk.Frame(win, padding=10)
+        corpo.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(corpo, text="Markup que já vem preenchido para os produtos de cada categoria\n"
+                              "(2,5 = preço de venda = custo × 2,5). Em branco = sem padrão.").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        entradas = {}
+        for i, cat in enumerate(categorias, start=1):
+            ttk.Label(corpo, text=cat).grid(row=i, column=0, sticky="w", padx=(0, 10))
+            e = ttk.Entry(corpo, width=8)
+            e.grid(row=i, column=1, sticky="w", pady=1)
+            if cat in atuais:
+                e.insert(0, fmt_qtd(atuais[cat]))
+            entradas[cat] = (e, e.get())
+
+        def salvar():
+            mudou = 0
+            for cat, (e, antes) in entradas.items():
+                if e.get().strip() != antes:
+                    try:
+                        cf.definir_markup_categoria(cat, e.get())
+                        mudou += 1
+                    except cf.ErroCadastro as erro:
+                        messagebox.showerror("Markup", f"{cat}: {erro}", parent=win)
+                        return
+            win.destroy()
+            self.status(f"Markup padrão atualizado em {mudou} categoria(s).")
+            self.atualizar_cadastro_franquia()
+        ttk.Button(corpo, text="💾 Salvar", command=salvar).grid(row=len(categorias) + 1, column=0, columnspan=2, pady=(10, 0))
+        self._janela_markup = {'win': win, 'entradas': entradas, 'salvar': salvar}   # (testes)
+
+    def aprender_codigos_franquia(self):
+        import cadastro_franquia as cf
+        if not messagebox.askyesno("Códigos de barras das notas antigas",
+                                   "Vou ler os XMLs guardados (notas da SEFAZ e a pasta 'importadas') e pegar o código de "
+                                   "barras da UNIDADE dos produtos comprados em caixa.\n\nPode levar alguns minutos. Continuar?",
+                                   parent=self.root):
+            return
+        def progresso(i, total):
+            self.status(f"Lendo notas antigas… {i} de {total}", 'info', 60)
+            self.root.update_idletasks()
+        try:
+            self.root.config(cursor="watch"); self.root.update_idletasks()
+            lidos, novos = cf.aprender_codigos_das_notas(progresso=progresso)
+        except Exception as e:
+            return self.falha_banco("os vínculos (códigos das notas antigas)", e)
+        finally:
+            self.root.config(cursor="")
+        messagebox.showinfo("Códigos de barras", f"Li {lidos} nota(s) e achei o código da unidade de {novos} produto(s) comprado(s) em caixa.",
+                            parent=self.root)
+        self.atualizar_cadastro_franquia()
 
     def ordenar_coluna_treeview(self, tree, col, reverse):
         """

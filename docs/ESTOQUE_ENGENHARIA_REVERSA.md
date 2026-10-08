@@ -144,7 +144,8 @@ assunto na seção 2.15, e cada aba indica quais delas usa.
   5. Sugestão de Compra;
   6. Administração / Reset;
   7. Solicitações (Líderes);
-  8. 🔎 Consultas.
+  8. 🔎 Consultas;
+  9. 🏷️ Cadastro Franquia (seção 6).
 - ⚠ A **ordem de criação importa**: `criar_aba_solicitacoes()` roda **antes** das variáveis de estado e
   das outras abas.
 - Estado da instância criado aqui (lista completa na seção 3.4):
@@ -211,6 +212,7 @@ assunto na seção 2.15, e cada aba indica quais delas usa.
 | 6 | Notas e contagens da Administração |
 | 7 | Solicitações |
 | 8 | Consultas |
+| 9 | Cadastro na Franquia (lê também os XMLs da pasta da SEFAZ) |
 | 3 | **Nada** (o estado da importação fica em memória) |
 
 ### 2.4 Aba 1 — Catálogo Mestre (`:821–1945`)
@@ -1533,6 +1535,7 @@ Exceções vão para o log e são relançadas. Também é usada por `compras_dat
 | `RecebimentoNotas` / `RecebimentoItens` | `recebimento.py` | — (só lê a conferência) | app (aba Receber) |
 | `CompraRotinaItens`, `CompraCodigos` | `compras_database.py` | juntar/excluir produto (`_trocar_produto_no_app_compras`) | app |
 | `CompraListas`, `CompraListaItens`, `CompraContagemLocais`, `CompraOrcamentoItens`, `CompraCupomItens` | app / orçamentos / cupom | **não toca** (ver F-01, F-02) | app |
+| `CadastroFranquia` (+ `CategoriasProduto.MarkupPadrao`, `ProdutosFornecedor.EANUnidade`) | `cadastro_franquia.garantir_tabelas` | aba 9 | Telegram (só conta produtos novos) |
 
 **Valores especiais gravados no banco:**
 - fornecedor interno com CNPJ `00000000000000`, nome `PRODUÇÃO INTERNA / AVULSO`;
@@ -2099,6 +2102,69 @@ As seções 2 a 4 descrevem o código **antes** destas correções. O que mudou 
 - `repro_forensics.py` reproduziu 12 falhas antes e 0 depois.
 - `teste_forensics_banco.py` (banco) e `teste_forensics_tela.py` (Tkinter) cobrem cada ponto.
 - Toda a suíte anterior passou: banco, telas do PC, app de compras e Gestão Web no navegador.
+
+---
+
+## 6. Cadastro na Franquia (aba 9)
+
+Produto novo precisa ser cadastrado na Franquia antes de vender. A franquia pede, por produto: nome
+limpo, código de barras, NCM, preço de custo e preço de venda. As regras ficam em
+`cadastro_franquia.py`; a aba 9 só mostra e chama.
+
+**Decisões do gestor:**
+- envio por **planilha do Excel** (5 colunas; código de barras e NCM gravados como texto);
+- markup **multiplicador** (2,5 = custo × 2,5), com um padrão por categoria;
+- preço de venda arredondado **para cima terminando em ,90** (R$ 24,37 → R$ 24,90; R$ 24,95 → R$ 25,90);
+- custo = **preço da nota** por unidade do estoque (com impostos e frete, **sem royalties**).
+
+**De onde vem cada campo (sugestão; o que o gestor digita tem prioridade):**
+- **Nome:** `texto_produto.sugerir_nome_limpo` (a mesma regra da criação de produto pelo XML).
+- **Código de barras da UNIDADE**, nesta ordem:
+  1. código do app com fator 1;
+  2. EAN do vínculo com fator 1;
+  3. `EANUnidade` do vínculo;
+  4. nota nova;
+  5. EAN da caixa (com aviso "confira o da unidade").
+
+  Na caixa, o XML traz o código da caixa em `cEAN` e o da unidade em `cEANTrib`. O
+  `nota_xml.py` agora lê `cEANTrib`/`uTrib`/`qTrib`, e o `database` guarda o `cEANTrib` em
+  `ProdutosFornecedor.EANUnidade` a cada nota salva (pelo PC e pelo app: `recebimento.py` passa o
+  `cEANTrib` adiante). O botão "Códigos de barras das notas antigas"
+  (`aprender_codigos_das_notas`) faz o mesmo com os XMLs já guardados.
+- **NCM:** produto → vínculo → nota nova.
+- **Custo:** nota que está **chegando** (XML na pasta da SEFAZ, ainda não lançado; preço ÷ Qtd/Cx do
+  vínculo) se for mais nova que a última compra; senão `ultimos_precos_pagos(com_royalties=False)`;
+  senão custo manual.
+
+**Situações:**
+- `pendente` (📝 para enviar);
+- `enviado` (📤 aguardando a franquia; os valores mandados ficam **congelados**);
+- `cadastrado` (✅);
+- `nao_vende` (🚫 insumos, embalagens).
+
+Markup em massa e "voltar à sugestão" não mexem em enviado/cadastrado.
+
+**Fluxo do produto novo:**
+1. O robô baixa o XML.
+2. O Telegram avisa "N produto(s) novo(s) nestas notas".
+3. O gestor cria/vincula o produto na aba 3, e o status lembra da aba 9.
+4. Na aba 9 o produto aparece em "🚚 Chegando", com custo, código e NCM da nota.
+5. O gestor gera a planilha e marca como enviado.
+6. Quando a franquia confirmar, marca "✅ Já cadastrado".
+
+Itens das notas novas **sem produto** aparecem numa faixa no topo da aba, com um botão para a aba 3.
+
+**Desempenho:** as notas novas são reconhecidas em memória (`_Reconhecedor`). É a mesma regra do
+`buscar_vinculo_inteligente`, com uma consulta só, em vez de uma conexão por item. Medido com 1.200
+produtos e 20 notas de 40 itens: 3 conexões e 0,13 s.
+
+**Correção junto:** a janela "Corrigir quantidade e preço" usava um nome inexistente (`janela`) no aviso
+de falha do banco (F-15), o que dava NameError só quando o banco caía. Agora usa a própria janela.
+
+**Testes:**
+- `teste_franquia_banco.py`: contas, fontes de dados, notas chegando, gravação, planilha, situações,
+  códigos antigos, reconhecimento igual ao do `database`, aviso do Telegram;
+- `teste_franquia_tela.py`: aba 9 inteira, criação de produto pela aba 3 e preferência da aba.
 
 ---
 

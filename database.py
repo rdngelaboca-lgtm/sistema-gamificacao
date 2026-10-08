@@ -6728,6 +6728,11 @@ def _garantir_colunas_estoque():
         cur.execute("SELECT * FROM ItensNotaFiscalEntrada WHERE 1 = 0")
         if 'nitem' not in {d[0].lower() for d in (cur.description or [])}:
             cur.execute("ALTER TABLE ItensNotaFiscalEntrada ADD NItem INT NULL")
+        # [CADASTRO FRANQUIA] código de barras da UNIDADE (cEANTrib do XML): numa caixa de 12, o EAN
+        # do vínculo é o da caixa; o da unidade é o que vai no cadastro da franquia / no caixa da loja
+        cur.execute("SELECT * FROM ProdutosFornecedor WHERE 1 = 0")
+        if 'eanunidade' not in {d[0].lower() for d in (cur.description or [])}:
+            cur.execute("ALTER TABLE ProdutosFornecedor ADD EANUnidade VARCHAR(14) NULL")
         # [NCM] o NCM (classificação fiscal) passa a ficar também no PRODUTO do estoque
         cur.execute("SELECT * FROM ProdutosEstoque WHERE 1 = 0")
         if 'ncm' not in {d[0].lower() for d in (cur.description or [])}:
@@ -6766,8 +6771,15 @@ def _preencher_ncm_dos_produtos(cur):
 
 
 def _guardar_ncm_dos_itens(cursor, itens):
-    """[NCM] Ao salvar uma nota: o vínculo fica com o NCM do XML e o produto, se ainda não tinha, também."""
+    """
+    [NCM] Ao salvar uma nota: o vínculo fica com o NCM do XML e o produto, se ainda não tinha, também.
+    [CADASTRO FRANQUIA] E o código de barras da UNIDADE (cEANTrib), quando é diferente do da caixa.
+    """
     for item in itens:
+        ean_unid = _ean_valido(item.get('cEANTrib'))
+        if ean_unid and ean_unid != _ean_valido(item.get('cEAN')) and item.get('ProdutoFornecedorID'):
+            cursor.execute("UPDATE ProdutosFornecedor SET EANUnidade = ? WHERE ProdutoFornecedorID = ?",
+                           ean_unid, item['ProdutoFornecedorID'])
         ncm = ncm_valido(item.get('NCM'))
         if not ncm or not item.get('ProdutoFornecedorID'):
             continue

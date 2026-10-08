@@ -46,7 +46,7 @@ def tipo_item_por_cfop(cfop):
 
 def ler_xml_nota_fiscal(caminho_arquivo_xml):
     """
-    Devolve (cabecalho, itens). Cada item: cProd, cEAN, DescricaoXML, NCM, Quantidade (da nota),
+    Devolve (cabecalho, itens). Cada item: cProd, cEAN (+ cEANTrib, uCom, uTrib, qTrib), DescricaoXML, NCM, Quantidade (da nota),
     PrecoCustoUnitario (custo real, com impostos e rateios), ValorItemNota, CFOP e NItem.
     """
     def dec(texto):
@@ -125,6 +125,10 @@ def ler_xml_nota_fiscal(caminho_arquivo_xml):
                 n_item = int(det.get('nItem') or len(itens) + 1)
             except ValueError:
                 n_item = len(itens) + 1
+            try:
+                q_trib = dec(prod.findtext('qTrib', default='0'))
+            except Exception:
+                q_trib = Decimal('0')       # campo só informativo: número estranho não derruba a nota
             itens.append({
                 '_vProd': vProd, '_custo_total': custo_total_item,
                 'ValorItemNota': custo_total_item,   # valor do item na nota (p/ "fora do estoque")
@@ -132,6 +136,12 @@ def ler_xml_nota_fiscal(caminho_arquivo_xml):
                 'NItem': n_item,                     # nº do item na nota (liga com a conferência do app)
                 'cProd': prod.findtext('cProd', default=''),
                 'cEAN': (prod.findtext('cEAN', default='') or '').strip(),
+                # [CADASTRO FRANQUIA] código de barras e unidade "tributável": numa caixa de 12, o cEAN
+                # costuma ser o da CAIXA e o cEANTrib o da UNIDADE que vai para o caixa da loja
+                'cEANTrib': (prod.findtext('cEANTrib', default='') or '').strip(),
+                'uCom': (prod.findtext('uCom', default='') or '').strip(),
+                'uTrib': (prod.findtext('uTrib', default='') or '').strip(),
+                'qTrib': q_trib,
                 'DescricaoXML': prod.findtext('xProd', default=''),
                 'NCM': prod.findtext('NCM', default=''),
                 'Quantidade': qtd_xml,
