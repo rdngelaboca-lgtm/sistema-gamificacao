@@ -9938,18 +9938,20 @@ def itens_da_nota(nota_id):
         cursor = conn.cursor()
         cursor.execute("""
             SELECT INI.ItemNotaID, PF.DescricaoXML, P.ProdutoID, P.NomeProduto, P.UnidadeMedida,
-                   COALESCE(INI.FatorConversaoUsado, PF.FatorConversao), INI.Quantidade, INI.PrecoCustoUnitario
+                   COALESCE(INI.FatorConversaoUsado, PF.FatorConversao), INI.Quantidade, INI.PrecoCustoUnitario,
+                   P.Categoria
             FROM ItensNotaFiscalEntrada INI
             LEFT JOIN ProdutosFornecedor PF ON INI.ProdutoFornecedorID = PF.ProdutoFornecedorID
             LEFT JOIN ProdutosEstoque P ON PF.ProdutoID = P.ProdutoID
             WHERE INI.NotaID = ?
         """, nota_id)
         itens = []
-        for item_id, desc, pid, nome, un, fator, qtd, custo in cursor.fetchall():
+        for item_id, desc, pid, nome, un, fator, qtd, custo, categoria in cursor.fetchall():
             fator = _dec(fator) if fator is not None and _dec(fator) > 0 else Decimal('1')
             q, c = _dec(qtd), _dec(custo)
             itens.append({'ItemNotaID': item_id, 'DescricaoXML': desc or '(vínculo excluído)', 'ProdutoID': pid,
                           'NomeProduto': nome or '(sem produto)', 'Unidade': un or 'UN', 'Fator': fator,
+                          'Categoria': (categoria or '').strip() or ('Geral' if pid else '(sem produto)'),
                           'Quantidade': q, 'CustoUnitario': c, 'Total': q * c,
                           'Embalagens': q / fator, 'CustoEmbalagem': c * fator})
         itens.sort(key=lambda i: i['ItemNotaID'] or 0)
@@ -9959,6 +9961,38 @@ def itens_da_nota(nota_id):
         return []
     finally:
         conn.close()
+
+
+def resumo_categorias_nota(itens, percentuais=None):
+    """
+    [RESUMO POR CATEGORIA] Soma os itens de uma nota (itens_da_nota) por categoria do produto:
+    [{'Categoria', 'Itens', 'Valor', 'Percentual' (da soma dos itens), 'RoyaltyPct' (custo adicional
+    da categoria ou None), 'ValorComRoyalties'}], da categoria de maior valor para a de menor.
+    percentuais: {categoria: %} (custos_adicionais_categorias); None = sem royalties.
+    """
+    grupos = {}
+    for it in itens or []:
+        g = grupos.setdefault(it.get('Categoria') or 'Geral', {'Itens': 0, 'Valor': Decimal('0')})
+        g['Itens'] += 1
+        g['Valor'] += _dec(it.get('Total'))
+    total = sum((g['Valor'] for g in grupos.values()), Decimal('0'))
+    percentuais = percentuais or {}
+    resultado = []
+    for cat, g in grupos.items():
+        pct = percentuais.get(cat)
+        resultado.append({'Categoria': cat, 'Itens': g['Itens'], 'Valor': g['Valor'],
+                          'Percentual': (g['Valor'] / total * 100) if total > 0 else Decimal('0'),
+                          'RoyaltyPct': pct if pct and pct > 0 else None,
+                          'ValorComRoyalties': g['Valor'] * (1 + pct / 100) if pct and pct > 0 else g['Valor']})
+    resultado.sort(key=lambda r: (-r['Valor'], sem_acento_simples(r['Categoria'])))
+    return resultado
+
+
+def sem_acento_simples(texto):
+    """'Açaí' -> 'acai' (só para ordenar nomes)."""
+    import unicodedata
+    t = unicodedata.normalize('NFKD', str(texto or ''))
+    return ''.join(c for c in t if not unicodedata.combining(c)).lower()
 
 
 def buscar_nota_importada(numero_nf, fornecedor_id, serie=None, chave=None):

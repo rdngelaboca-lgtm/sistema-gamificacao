@@ -7494,7 +7494,8 @@ class AppGestaoEstoque:
           📦 Produto: histórico de compras de um produto, comparação de preços entre
              fornecedores (o mais barato primeiro), menor/último preço e quantidades.
           🧾 Nota Fiscal: busca a nota (número, fornecedor ou um produto que veio nela)
-             e mostra todos os itens.
+             e mostra todos os itens, com o resumo do valor por categoria (clicar numa
+             categoria mostra só os itens dela).
         """
         self.nb_consultas = ttk.Notebook(self.frame_consultas)
         self.nb_consultas.pack(fill=tk.BOTH, expand=True)
@@ -7640,13 +7641,35 @@ class AppGestaoEstoque:
         sb_i = ttk.Scrollbar(frame_itens, orient="vertical", command=self.tree_consulta_itens.yview)
         self.tree_consulta_itens.configure(yscrollcommand=sb_i.set)
         self.tree_consulta_itens.grid(row=0, column=0, sticky="nsew"); sb_i.grid(row=0, column=1, sticky="ns")
+        # [RESUMO POR CATEGORIA] quanto da nota foi de cada categoria
+        frame_cat = ttk.LabelFrame(aba_nota, text="📊 Resumo por categoria  (clique numa categoria para ver só os itens dela)",
+                                   padding=(6, 4))
+        frame_cat.grid(row=4, column=0, sticky="ew", pady=(6, 0))
+        frame_cat.columnconfigure(0, weight=1)
+        cols_c = ('Categoria', 'Itens', 'Valor', 'Participação', 'Com royalties')
+        self.tree_consulta_categorias = criar_tree_zebrada(frame_cat, columns=cols_c, show='headings', selectmode='browse', height=5)
+        for col, larg, anc, estica in (('Categoria', 260, 'w', False), ('Itens', 60, 'center', False), ('Valor', 120, 'e', False),
+                                       ('Participação', 300, 'w', True), ('Com royalties', 190, 'e', False)):
+            self.tree_consulta_categorias.heading(col, text=col)
+            self.tree_consulta_categorias.column(col, width=larg, anchor=anc, stretch=estica)
+        sb_c = ttk.Scrollbar(frame_cat, orient="vertical", command=self.tree_consulta_categorias.yview)
+        self.tree_consulta_categorias.configure(yscrollcommand=sb_c.set)
+        self.tree_consulta_categorias.grid(row=0, column=0, rowspan=2, sticky="ew"); sb_c.grid(row=0, column=1, rowspan=2, sticky="ns")
+        self.btn_consulta_todas_categorias = ttk.Button(frame_cat, text="Mostrar todos os itens",
+                                                        command=self._consulta_mostrar_todas_categorias)
+        self.btn_consulta_todas_categorias.grid(row=0, column=2, sticky="ne", padx=(8, 0))
+        self.btn_consulta_todas_categorias.state(['disabled'])
+        self.filtro_categoria_nota = None
+        self.resumo_categorias_nota = []
+
         self.lbl_consulta_total_nota = ttk.Label(aba_nota, text="", font=("Arial", 11, "bold"), foreground="green")
-        self.lbl_consulta_total_nota.grid(row=4, column=0, sticky="e", pady=(4, 0))
+        self.lbl_consulta_total_nota.grid(row=5, column=0, sticky="e", pady=(4, 0))
 
         self.entry_busca_nota.bind("<KeyRelease>", lambda e: self.listar_notas_consulta())
         self.combo_periodo_nota.bind("<<ComboboxSelected>>", lambda e: self.listar_notas_consulta())
         self.tree_consulta_notas.bind("<<TreeviewSelect>>", lambda e: self.mostrar_itens_nota_consulta())
         self.tree_consulta_itens.bind("<Double-1>", lambda e: self._consulta_ir_para_produto_do_item())
+        self.tree_consulta_categorias.bind("<<TreeviewSelect>>", lambda e: self._consulta_filtrar_categoria())
 
     # -------------------------- dados --------------------------
     def atualizar_consultas(self):
@@ -7794,9 +7817,14 @@ class AppGestaoEstoque:
 
     def mostrar_itens_nota_consulta(self, destacar=None):
         sel = self.tree_consulta_notas.focus()
-        for i in self.tree_consulta_itens.get_children():
-            self.tree_consulta_itens.delete(i)
+        for tree in (self.tree_consulta_itens, self.tree_consulta_categorias):
+            for i in tree.get_children():
+                tree.delete(i)
+        self.filtro_categoria_nota = None
+        self.btn_consulta_todas_categorias.state(['disabled'])
         if not sel:
+            self.itens_nota_consulta, self.resumo_categorias_nota = [], []
+            self.lbl_consulta_total_nota.config(text="")
             return
         nota_id = int(sel[1:])
         nota = next((n for n in self.cache_consulta_notas if n['NotaID'] == nota_id), None)
@@ -7806,23 +7834,88 @@ class AppGestaoEstoque:
             logger.error(f"Erro ao carregar itens da nota {nota_id}: {e}", exc_info=True)
             itens = []
         self.itens_nota_consulta = itens
+        self.nota_consulta_atual = nota
+        self.destacar_nota_consulta = destacar
+        if nota:
+            self.lbl_consulta_nota.config(text=f"🧾 NF {nota['NumeroNF']} — {nota['Fornecedor']} — "
+                                               f"{nota['Data'].strftime('%d/%m/%Y') if nota['Data'] else '?'} — {len(itens)} item(ns)")
+        self._preencher_resumo_categorias_nota()
+        self._preencher_itens_nota_consulta()
+
+    def _preencher_resumo_categorias_nota(self):
+        """[RESUMO POR CATEGORIA] Valor da nota por categoria, da maior para a menor, com barrinha."""
+        try:
+            percentuais = database.custos_adicionais_categorias() if hasattr(database, 'custos_adicionais_categorias') else {}
+        except Exception as e:
+            logger.warning(f"Royalties das categorias não lidos: {e}")
+            percentuais = {}
+        self.resumo_categorias_nota = database.resumo_categorias_nota(self.itens_nota_consulta, percentuais)
+        maior = max((r['Percentual'] for r in self.resumo_categorias_nota), default=Decimal('0'))
+        for n, r in enumerate(self.resumo_categorias_nota):
+            blocos = int((r['Percentual'] / maior * 20).to_integral_value(rounding=ROUND_HALF_UP)) if maior > 0 else 0
+            barra = f"{r['Percentual']:.1f}%".replace('.', ',').rjust(6) + "  " + "█" * max(blocos, 1 if r['Valor'] > 0 else 0)
+            royalties = (f"{fmt_reais(r['ValorComRoyalties'])} (+{fmt_qtd(r['RoyaltyPct'])}%)" if r['RoyaltyPct'] else "")
+            self.tree_consulta_categorias.insert("", "end", iid=f"c{n}", values=(
+                r['Categoria'], r['Itens'], fmt_reais(r['Valor']), barra, royalties))
+        # a coluna "Com royalties" só aparece quando alguma categoria da nota tem royalties
+        colunas = ('Categoria', 'Itens', 'Valor', 'Participação')
+        if any(r['RoyaltyPct'] for r in self.resumo_categorias_nota):
+            colunas += ('Com royalties',)
+        self.tree_consulta_categorias.configure(displaycolumns=colunas,
+                                                height=min(max(len(self.resumo_categorias_nota), 1), 6))
+
+    def _preencher_itens_nota_consulta(self):
+        """Itens da nota (todos ou só os da categoria escolhida no resumo) e a linha do total."""
+        for i in self.tree_consulta_itens.get_children():
+            self.tree_consulta_itens.delete(i)
+        itens = getattr(self, 'itens_nota_consulta', [])
+        nota = getattr(self, 'nota_consulta_atual', None)
+        filtro = self.filtro_categoria_nota
+        destacar = getattr(self, 'destacar_nota_consulta', None)
         palavras = sem_acento(destacar).split() if destacar else sem_acento(self.entry_busca_nota.get()).split()
         total = Decimal('0')
         for it in itens:
+            total += it['Total']
+            if filtro is not None and it.get('Categoria') != filtro:
+                continue
             texto = sem_acento(f"{it['NomeProduto']} {it['DescricaoXML']}")
             achou = bool(palavras) and all(p in texto for p in palavras)
             self.tree_consulta_itens.insert("", "end", iid=f"i{it['ItemNotaID']}", tags=('achado',) if achou else (), values=(
                 it['NomeProduto'], it['DescricaoXML'], fmt_qtd(it['Embalagens']), fmt_qtd(it['Fator']),
                 fmt_reais(it['CustoEmbalagem']), fmt_qtd(it['Quantidade']), it['Unidade'],
                 fmt_reais(it['CustoUnitario']), fmt_reais(it['Total'])))
-            total += it['Total']
-        if nota:
-            self.lbl_consulta_nota.config(text=f"🧾 NF {nota['NumeroNF']} — {nota['Fornecedor']} — "
-                                               f"{nota['Data'].strftime('%d/%m/%Y') if nota['Data'] else '?'} — {len(itens)} item(ns)")
         texto_total = f"Total dos itens: {fmt_reais(total)}"
+        if filtro is not None:
+            r = next((r for r in self.resumo_categorias_nota if r['Categoria'] == filtro), None)
+            if r:
+                texto_total = (f"Mostrando só {filtro}: {r['Itens']} item(ns), {fmt_reais(r['Valor'])}"
+                               f"   ·   {texto_total}")
+        com_roy = sum((r['ValorComRoyalties'] for r in self.resumo_categorias_nota), Decimal('0'))
+        if any(r['RoyaltyPct'] for r in self.resumo_categorias_nota):
+            texto_total += f"   ·   Custo real com royalties: {fmt_reais(com_roy)}"
         if nota and nota['ValorNF'] and abs(nota['ValorNF'] - total) >= Decimal('0.05'):
             texto_total += f"   ·   Valor da nota: {fmt_reais(nota['ValorNF'])} (a diferença são itens ignorados, como comodato, ou itens não salvos)"
         self.lbl_consulta_total_nota.config(text=texto_total)
+
+    def _consulta_filtrar_categoria(self):
+        """[RESUMO POR CATEGORIA] Clique numa categoria: a lista de itens mostra só os dela."""
+        sel = self.tree_consulta_categorias.selection()
+        novo = None
+        if sel:
+            n = int(sel[0][1:])
+            if n < len(self.resumo_categorias_nota):
+                novo = self.resumo_categorias_nota[n]['Categoria']
+        if novo == self.filtro_categoria_nota:
+            return
+        self.filtro_categoria_nota = novo
+        self.btn_consulta_todas_categorias.state(['!disabled'] if novo is not None else ['disabled'])
+        self._preencher_itens_nota_consulta()
+
+    def _consulta_mostrar_todas_categorias(self):
+        self.tree_consulta_categorias.selection_remove(*self.tree_consulta_categorias.selection())
+        self.filtro_categoria_nota = None
+        self.btn_consulta_todas_categorias.state(['disabled'])
+        self._preencher_itens_nota_consulta()
 
     def abrir_nota_na_consulta(self, nota_id, destacar=None):
         """Vai para a aba 8 > Nota Fiscal e mostra a nota (usado pelo histórico do produto)."""

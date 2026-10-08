@@ -83,7 +83,7 @@ Legenda: ✅ já existe na Web/app (só conferir) · 🟡 existe em parte · ⬜
 | Função | Na Web | Status |
 |---|---|---|
 | Consulta por produto (compras, exportar) | Gestão › Consultas (app tem histórico de preços) | 🟡 |
-| Consulta por nota fiscal (itens) | Gestão › Consultas | ⬜ |
+| Consulta por nota fiscal (itens + resumo do valor por categoria, com royalties) | Gestão › Consultas | ⬜ |
 | Relatórios: gasto por categoria, inflação, mais barato | App › Gestão | ✅ |
 
 ### 1.8 Administração
