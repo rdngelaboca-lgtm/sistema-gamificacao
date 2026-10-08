@@ -94,6 +94,7 @@
       <button class="btn" id="btn-telegram">📢 <span class="txt">Enviar escala Telegram</span><span class="curto">Telegram</span></button>
       <button class="btn" id="btn-whatsapp">📱 <span class="txt">Confirmar escala (WhatsApp)</span><span class="curto">WhatsApp</span></button>
     </div>
+    <div class="linha" id="clima-dia" hidden></div>
     <div class="linha">
       <span id="resumo"></span>
       <div class="alternar" role="group" aria-label="Ver como">
@@ -215,6 +216,7 @@ function desenhar() {
   const d = S.dia;
   $('#titulo-dia').textContent = d.titulo;
   $('#resumo').textContent = d.resumo;
+  desenharClima(d.clima);
   $('#ver-mapa').classList.toggle('sel', S.vista === 'mapa');
   $('#ver-lista').classList.toggle('sel', S.vista === 'lista');
   $('#vista-mapa').hidden = S.vista !== 'mapa';
@@ -222,6 +224,18 @@ function desenhar() {
   if (S.vista === 'mapa') desenharMapa(); else desenharLista();
   desenharAlertas();
   desenharFluxo();
+}
+// [FOLHA × FATURAMENTO] clima do dia + o que aconteceu em dias parecidos (quantos freelancers costumam precisar)
+function desenharClima(c) {
+  const el = $('#clima-dia');
+  el.hidden = !c || !c.clima;
+  if (el.hidden) return;
+  const p = c.parecidos || {};
+  const real = n => 'R$ ' + (Math.round(n / 10) * 10).toLocaleString('pt-BR');
+  el.innerHTML = `<span class="mini"><b>🌡️ ${esc(c.clima.texto)}</b>${c.clima.previsao ? ' <span class="suave">(previsão)</span>' : ''}</span>
+    <span class="mini suave">${p.faturamento ? `Em ${p.dias} dias parecidos: ~${real(p.faturamento)} de faturamento, ` +
+      `<b class="n-aviso">${String(p.freelas).replace('.', ',')} freelancer(s)</b> e ${String(p.pessoas).replace('.', ',')} pessoas na escala`
+      : 'Ainda sem histórico de dias parecidos.'} · <a href="/gestao/folha">📊 Folha × Faturamento</a></span>`;
 }
 $('#ver-mapa').onclick = () => { S.vista = 'mapa'; gravarLocal('gestao_vista', 'mapa'); desenhar(); };
 $('#ver-lista').onclick = () => { S.vista = 'lista'; gravarLocal('gestao_vista', 'lista'); desenhar(); };

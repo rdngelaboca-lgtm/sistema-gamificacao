@@ -758,6 +758,55 @@ def buscar_xml_sefaz():
 
 
 # ==============================================================================
+# == MÓDULO 11: FOLHA × FATURAMENTO × CLIMA =====================================
+# ==============================================================================
+CLIMA_A_CADA_HORAS = 3
+
+
+def verificar_folha_faturamento(agora=None):
+    """
+    De hora em hora: (1) a cada 3 horas, busca o clima (previsão + dias que faltam no histórico);
+    (2) quando o faturamento de um dia é lançado na Gamificação, manda o resumo no Telegram
+    (folha do dia, mês até ali, clima e a previsão). Dias lançados atrasados vão juntos numa
+    mensagem só. O de HOJE só depois das 21h (o dia já fechou).
+    """
+    try:
+        import clima
+        import folha_faturamento as ff
+    except ImportError:
+        return
+    import alertas_estoque
+    agora = agora or datetime.now()
+    estado = _ler_estado()
+    try:
+        ultimo = datetime.fromisoformat(estado['clima_atualizado_em']) if estado.get('clima_atualizado_em') else None
+    except ValueError:
+        ultimo = None
+    if not ultimo or agora - ultimo >= timedelta(hours=CLIMA_A_CADA_HORAS):
+        try:
+            clima.atualizar(hoje=agora.date())
+            primeiro = ff.primeiro_faturamento()
+            if primeiro:
+                clima.completar_historico(primeiro, hoje=agora.date())
+            salvar_no_estado('clima_atualizado_em', agora.isoformat(timespec='seconds'))
+        except Exception as e:
+            logger.warning(f"Clima: {e}")
+    enviados = estado.get('folha_resumo_enviados')
+    pendentes = ff.dias_para_avisar(enviados or [], agora)
+    if enviados is None:
+        # primeira vez: não manda a semana inteira; só o dia mais recente (se for de ontem ou hoje)
+        recentes = [d for d in pendentes if d >= agora.date() - timedelta(days=1)][-1:]
+        enviados = [d.isoformat() for d in pendentes if d not in recentes]
+        salvar_no_estado('folha_resumo_enviados', enviados)
+        pendentes = recentes
+    if not pendentes:
+        return
+    if alertas_estoque.enviar(ff.texto_telegram(pendentes, agora)):
+        salvar_no_estado('folha_resumo_enviados', sorted(set(enviados) | {d.isoformat() for d in pendentes})[-60:])
+        logger.info(f"Folha × Faturamento: resumo enviado ({', '.join(f'{d:%d/%m}' for d in pendentes)}).")
+
+
+# ==============================================================================
 # == MÓDULO 8: DOWNLOADS (fotos de entregas e notas fiscais) ===================
 # ==============================================================================
 def _baixar_arquivo_telegram(file_id, pasta, prefixo):
@@ -985,6 +1034,8 @@ def configurar_agendamentos():
     schedule.every(10).minutes.do(run_threaded, reenviar_avisos_de_entregas_pendentes)
     # [XML SEFAZ] a SEFAZ pede no mínimo 1 hora entre consultas sem novidade
     schedule.every(1).hours.do(run_threaded, buscar_xml_sefaz)
+    # [FOLHA × FATURAMENTO] clima + resumo do dia quando o faturamento é lançado
+    schedule.every(1).hours.do(run_threaded, verificar_folha_faturamento)
 
 
 def recuperar_tarefas_do_dia():
@@ -998,6 +1049,7 @@ def recuperar_tarefas_do_dia():
         executar_com_seguranca(verificar_avisos_estoque)
     if _passou_do_horario(HORARIO_RESUMO_PRECOS, limite_horas=12):
         executar_com_seguranca(verificar_resumo_precos)
+    run_threaded(verificar_folha_faturamento)       # [FOLHA × FATURAMENTO] não espera 1 hora depois de ligar
 
 
 def main():

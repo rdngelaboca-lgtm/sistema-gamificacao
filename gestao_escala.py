@@ -214,7 +214,15 @@ def dia(data_txt):
         pessoas.append({'chave': f"free:{fr.FreelancerID}", 'tipo': 'free', 'nome': fr.Nome,
                         'rotulo': f"[Free] {fr.Nome}", 'folga': None})
 
-    return {'data': data, 'titulo': titulo, 'hoje': d == date.today(), 'feriado': feriado,
+    # [FOLHA × FATURAMENTO] clima do dia e o que aconteceu em dias parecidos (ajuda a decidir os freelancers)
+    try:
+        import folha_faturamento
+        dica = folha_faturamento.dica_escala(d)
+    except Exception as e:
+        logger.warning(f"Escala: dica do clima indisponível ({e})")
+        dica = None
+
+    return {'data': data, 'titulo': titulo, 'hoje': d == date.today(), 'feriado': feriado, 'clima': dica,
             'tela': {'largura': tela[0], 'altura': tela[1],
                      'imagem_largura': R.MAPA_IMAGEM_LARGURA, 'imagem_altura': R.MAPA_IMAGEM_ALTURA},
             'posicoes': lista_pos, 'fora_do_mapa': fora_do_mapa, 'alertas': alertas, 'resumo': resumo, 'fluxo': fluxo,

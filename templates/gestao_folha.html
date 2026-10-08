@@ -1,0 +1,248 @@
+{% extends 'gestao_base.html' %}
+{% block titulo %}Folha × Faturamento{% endblock %}
+{% block estilo %}
+  .area { padding: 12px 16px 70px; max-width: 1200px; }
+  .cartoes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; align-items: start; }
+  .caixa h3 { color: var(--suave); font-size: 13px; text-transform: uppercase; letter-spacing: .3px; }
+  .grande { font-size: 30px; font-weight: 800; line-height: 1.1; }
+  .ok-c { color: var(--ok); } .ruim-c { color: var(--laranja); }
+  .lin2 { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; font-size: 14px; }
+  .lin2 b { white-space: nowrap; }
+  .trilho { position: relative; height: 10px; background: var(--linha2); border-radius: 6px; margin: 8px 0 14px; }
+  .trilho .enche { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 6px; }
+  .trilho .marca { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--texto); }
+  .trilho .marca span { position: absolute; top: 14px; left: -14px; font-size: 11px; color: var(--suave); white-space: nowrap; }
+  .aviso { background: var(--laranja-claro); color: #7a3a10; border-radius: 10px; padding: 9px 12px; margin-bottom: 10px; font-size: 14px; }
+  .aviso .btn { margin-left: 8px; }
+  h2.sec { font-size: 16px; margin: 20px 0 8px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .dias-prev { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+  .prev { background: #fff; border: 1px solid var(--linha); border-radius: 12px; padding: 8px 10px; display: flex; flex-direction: column; gap: 2px; }
+  .prev.fds { background: #f6faf9; }
+  .prev .q { font-weight: 700; font-size: 13px; color: var(--suave); }
+  .prev .t { font-size: 18px; font-weight: 800; white-space: nowrap; }
+  .prev .p { font-size: 12px; color: var(--suave); }
+  .prev .p b { color: var(--aviso); }
+  table.grade td, table.grade th { white-space: nowrap; }
+  table.grade td.num, table.grade th.num { text-align: right; }
+  table.grade td:first-child, table.grade th:first-child { position: sticky; left: 0; background: #fff; z-index: 1; }
+  table.grade th:first-child { background: #f7f9f8; z-index: 2; }
+  table.grade tr.fds td { background: #f6faf9; }
+  table.grade td .mini { white-space: normal; }
+  table.grade td.falta { color: var(--laranja); font-weight: 700; }
+  .pct-ok { color: var(--ok); font-weight: 800; } .pct-ruim { color: var(--laranja); font-weight: 800; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip { border: 1px solid var(--linha); background: #fff; border-radius: 999px; padding: 5px 12px; font-weight: 600; font-size: 13px; }
+  .chip.sel { background: var(--verde); border-color: var(--verde); color: #fff; }
+  .barra-fat { height: 8px; background: var(--verde-claro); border-radius: 4px; margin-top: 3px; }
+  .barra-fat div { height: 100%; background: var(--verde); border-radius: 4px; }
+  .vazio { background: #fff; border: 1px dashed var(--linha); border-radius: 12px; padding: 16px; text-align: center; color: var(--suave); }
+  #t-dias { max-height: none; }
+  @media (min-width: 1150px) { .dias-prev { grid-template-columns: repeat(8, minmax(0, 1fr)); } }
+  @media (max-width: 900px) { .cartoes { grid-template-columns: 1fr; } }
+  @media (max-width: 700px) { .area { padding-left: 10px; padding-right: 10px; } .grande { font-size: 26px; }
+    .dias-prev { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+{% endblock %}
+{% block conteudo %}
+  <section class="barra">
+    <div class="linha">
+      <b>📊 Folha × Faturamento</b>
+      <select id="mes" aria-label="Mês"></select>
+      <button class="btn ico" id="atualizar" title="Atualizar">🔄</button>
+      <button class="btn" id="btn-config">⚙️ <span class="txt">Folha fixa e meta</span><span class="curto">Folha e meta</span></button>
+    </div>
+  </section>
+  <main class="area">
+    <div id="avisos"></div>
+    <div id="conteudo"><div class="vazio">Carregando…</div></div>
+  </main>
+{% endblock %}
+{% block script %}
+// [FOLHA × FATURAMENTO] Folha (fixos + freelancers) ÷ faturamento, dia a dia e no mês, com o clima.
+// Faturamento = Apuração Diária da Gamificação; fixos = folha do mês ÷ dias do mês; freelancers =
+// o valor de cada turno (tela de Pagamentos); clima = Open-Meteo (o robô busca de hora em hora).
+const S = {d: null, mes: null, periodo: lerLocal('folha_periodo', '90'), grupo: lerLocal('folha_grupo', 'todos'), seq: 0};
+const R$ = v => v == null ? '—' : reais(v * 100);
+const aprox = v => 'R$ ' + (Math.round(v / 10) * 10).toLocaleString('pt-BR');
+const num = (v, c = 1) => v == null ? '—' : Number(v).toLocaleString('pt-BR', {maximumFractionDigits: c});
+const pctTxt = v => v == null ? '—' : Number(v).toLocaleString('pt-BR', {minimumFractionDigits: 1, maximumFractionDigits: 1}) + '%';
+const pctCls = v => v == null ? '' : (v <= S.d.meta ? 'pct-ok' : 'pct-ruim');
+const NOMES_MES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+const nomeMes = ym => { const [a, m] = ym.split('-'); return `${NOMES_MES[+m - 1]}/${a.slice(2)}`; };
+const dm = iso => iso.slice(8, 10) + '/' + iso.slice(5, 7);
+const climaCurto = c => c ? `${c.icone || ''} ${num(c.max, 0)}° / ${num(c.min, 0)}°` : '—';
+
+function aoEntrar() { carregar(); }
+
+async function carregar() {
+  const seq = ++S.seq;
+  const q = new URLSearchParams({periodo: S.periodo});
+  if (S.mes) q.set('mes', S.mes);
+  let d;
+  try { d = await api('GET', '/api/gestao/folha?' + q); }
+  catch (e) {
+    if (seq !== S.seq) return;
+    if (e.status !== 401 && e.status !== 403)
+      $('#conteudo').innerHTML = `<div class="vazio n-erro">❌ Não consegui carregar: ${esc(e.message)}<br>Toque em 🔄 para tentar de novo.</div>`;
+    return;
+  }
+  if (seq !== S.seq) return;
+  S.d = d; S.mes = d.mes;
+  desenhar();
+}
+$('#atualizar').onclick = carregar;
+$('#mes').onchange = () => { S.mes = $('#mes').value; carregar(); };
+
+function desenhar() {
+  const d = S.d;
+  $('#mes').innerHTML = d.meses.slice().reverse().map(m => `<option value="${m}" ${m === d.mes ? 'selected' : ''}>${nomeMes(m)}</option>`).join('');
+  const avisos = [];
+  if (!d.tem_folha) avisos.push(`Informe o valor da <b>folha fixa do mês</b> (salários + encargos + benefícios) para ver a % da folha.
+      <button class="btn" onclick="abrirConfig()">Informar</button>`);
+  else if (d.folha_do_mes == null) avisos.push(`A folha fixa de <b>${nomeMes(d.mes)}</b> não foi informada: as contas usam o valor do mês mais perto.
+      <button class="btn" onclick="abrirConfig()">Informar</button>`);
+  if (d.erro_clima) avisos.push(`🌡️ Clima: ${esc(d.erro_clima)} O resto da tela está certo; o robô tenta de novo sozinho.`);
+  $('#avisos').innerHTML = avisos.map(a => `<div class="aviso">${a}</div>`).join('');
+  $('#conteudo').innerHTML = `
+    <div class="cartoes">${cartaoMes()}${cartaoDia()}</div>
+    <h2 class="sec">🔮 Próximos dias <span class="mini suave" style="font-weight:600">previsão · ${esc(d.cidade)}</span></h2>
+    ${proximosDias()}
+    <h2 class="sec">Dia a dia · ${nomeMes(d.mes)}</h2>
+    ${tabelaDias()}
+    <h2 class="sec">🌡️ Calor × vendas</h2>
+    <div class="chips" style="margin-bottom:6px">${[['90', '90 dias'], ['180', '6 meses'], ['365', '1 ano'], ['tudo', 'Tudo']].map(([v, t]) =>
+      `<button class="chip ${S.periodo === v ? 'sel' : ''}" data-periodo="${v}">${t}</button>`).join('')}</div>
+    <div class="chips" style="margin-bottom:8px">${[['todos', 'Todos os dias'], ['semana', 'Seg a sex'], ['fds', 'Sáb, dom e feriados']].map(([v, t]) =>
+      `<button class="chip ${S.grupo === v ? 'sel' : ''}" data-grupo="${v}">${t}</button>`).join('')}</div>
+    ${tabelaFaixas()}`;
+  document.querySelectorAll('[data-periodo]').forEach(b => b.onclick = () => { S.periodo = b.dataset.periodo; gravarLocal('folha_periodo', S.periodo); carregar(); });
+  document.querySelectorAll('[data-grupo]').forEach(b => b.onclick = () => { S.grupo = b.dataset.grupo; gravarLocal('folha_grupo', S.grupo); desenhar(); });
+}
+
+function cartaoMes() {
+  const d = S.d, a = d.acumulado;
+  if (!a) return `<div class="caixa"><h3>Mês · ${nomeMes(d.mes)}</h3><div class="suave">Nenhum faturamento lançado neste mês ainda
+    (Gamificação → Metas → Lançar Apuração Diária).</div></div>`;
+  const escala = Math.max(30, (a.pct || 0) + 5, d.meta + 5);
+  const barra = a.pct == null ? '' : `<div class="trilho" title="Meta ${num(d.meta)}%">
+      <div class="enche" style="width:${Math.min(100, a.pct / escala * 100)}%;background:${a.pct <= d.meta ? 'var(--ok)' : 'var(--laranja)'}"></div>
+      <div class="marca" style="left:${d.meta / escala * 100}%"><span>meta ${num(d.meta)}%</span></div></div>`;
+  return `<div class="caixa"><h3>Mês até ${dm(a.ate)}</h3>
+    <div class="grande ${a.pct == null ? '' : a.pct <= d.meta ? 'ok-c' : 'ruim-c'}">${a.pct == null ? '—' : pctTxt(a.pct)}
+      <span class="mini suave" style="font-weight:600">da folha sobre o faturamento</span></div>
+    ${barra}
+    <div class="lin2"><span>💰 Faturamento</span><b>${R$(a.faturamento)}</b></div>
+    <div class="lin2"><span>🧾 Fixos (${a.dias} dia${a.dias === 1 ? '' : 's'})${a.estimado ? ` <span class="n-aviso">· folha de ${esc(a.estimado)}</span>` : ''}</span><b>${R$(a.fixo)}</b></div>
+    <div class="lin2"><span>🧑‍🍳 Freelancers <span class="suave">(${pctTxt(a.pct_freela)} do faturamento)</span></span><b>${R$(a.freela)}</b></div>
+    ${a.faltam_lancar.length ? `<div class="mini n-aviso" style="margin-top:6px">⚠️ Falta lançar o faturamento de ${a.faltam_lancar.map(dm).join(', ')}:
+      a % fica maior que a real até lançar.</div>` : ''}</div>`;
+}
+
+function cartaoDia() {
+  const x = S.d.dias.find(y => y.faturamento != null);
+  if (!x) return `<div class="caixa"><h3>Último dia lançado</h3><div class="suave">—</div></div>`;
+  const horas = (x.horas_fixos || 0) + (x.horas_freelas || 0);
+  return `<div class="caixa"><h3>Último dia lançado · ${x.dia} ${dm(x.data)}${x.feriado ? ' · 🎉 ' + esc(x.feriado) : ''}</h3>
+    <div class="grande ${pctCls(x.pct)}">${pctTxt(x.pct)} <span class="mini suave" style="font-weight:600">folha do dia</span></div>
+    <div class="mini" style="margin:4px 0 6px">${x.clima ? '🌡️ ' + esc(x.clima.texto) : '<span class="suave">sem clima</span>'}</div>
+    <div class="lin2"><span>💰 Faturamento</span><b>${R$(x.faturamento)}</b></div>
+    <div class="lin2"><span>👥 ${x.fixos} fixo(s) + ${x.freelas} freela(s)</span><b>${num(horas)} h</b></div>
+    <div class="lin2"><span>🧾 Fixos</span><b>${R$(x.fixo)}</b></div>
+    <div class="lin2"><span>🧑‍🍳 Freelancers</span><b>${R$(x.freela)}</b></div>
+    ${x.por_hora ? `<div class="lin2"><span>⏱️ Por hora trabalhada</span><b>${R$(x.por_hora)}</b></div>` : ''}</div>`;
+}
+
+function proximosDias() {
+  const p = S.d.proximos;
+  if (!p.length) return '<div class="vazio">Sem previsão ainda: o robô busca o clima de hora em hora.</div>';
+  return `<div class="dias-prev">${p.map(x => {
+    const q = x.parecidos || {};
+    return `<div class="prev ${x.tipo !== 'semana' ? 'fds' : ''}" title="${esc(x.clima.texto)}">
+      <span class="q">${x.data === HOJE() ? 'Hoje' : x.dia} ${dm(x.data)}${x.feriado ? ' 🎉' : ''}</span>
+      <span class="t">${climaCurto(x.clima)}</span>
+      <span class="p">${q.faturamento ? `~${aprox(q.faturamento)}<br><b>${num(q.freelas)} freela</b> · ${num(q.pessoas)} pessoas` : 'sem dias parecidos'}</span></div>`;
+  }).join('')}</div>
+  <div class="mini suave" style="margin-top:6px">Valores = média dos dias parecidos do histórico: mesmo tipo de dia
+    (semana × fim de semana/feriado) com máxima até 1,5° de diferença.</div>`;
+}
+
+function tabelaDias() {
+  const dias = S.d.dias;
+  if (!dias.length) return '<div class="vazio">Nenhum dia neste mês ainda.</div>';
+  const linhas = dias.map(x => {
+    const falta = x.faturamento == null && x.data < HOJE();
+    const pessoas = x.fixos + x.freelas;
+    return `<tr class="${x.tipo !== 'semana' ? 'fds' : ''}">
+      <td><b>${x.dia} ${dm(x.data)}</b>${x.feriado ? `<div class="mini suave">🎉 ${esc(x.feriado)}</div>` : ''}</td>
+      <td>${x.clima ? `${climaCurto(x.clima)}${x.clima.chuva >= 1 ? ` <span class="mini suave">${num(x.clima.chuva)} mm</span>` : ''}` : '<span class="suave">—</span>'}</td>
+      <td class="num ${falta ? 'falta' : ''}">${falta ? 'falta lançar' : R$(x.faturamento)}</td>
+      <td class="num">${R$(x.fixo)}${x.fixo_estimado ? ' <span class="n-aviso" title="Folha de ' + esc(x.fixo_estimado) + '">*</span>' : ''}</td>
+      <td class="num">${x.freela ? R$(x.freela) : '—'}</td>
+      <td class="num">${pessoas ? `${x.fixos} + ${x.freelas} <span class="mini suave">(${num((x.horas_fixos || 0) + (x.horas_freelas || 0))} h)</span>` : '—'}</td>
+      <td class="num ${pctCls(x.pct)}">${pctTxt(x.pct)}</td>
+      <td class="num">${x.por_hora ? R$(x.por_hora) : '—'}</td></tr>`;
+  }).join('');
+  return `<div class="tabela-rolagem"><table class="grade">
+    <thead><tr><th>Dia</th><th>Clima</th><th class="num">Faturamento</th><th class="num">Fixos</th><th class="num">Freelancers</th>
+      <th class="num">Fixos + freelas</th><th class="num">Folha</th><th class="num">R$ / hora</th></tr></thead>
+    <tbody>${linhas}</tbody></table></div>
+    <div class="mini suave" style="margin-top:4px">Folha = (fixos + freelancers) ÷ faturamento · verde = dentro da meta de ${num(S.d.meta)}% ·
+      Fixos = folha do mês ÷ dias do mês${dias.some(x => x.fixo_estimado) ? ' · * = folha de outro mês (a deste mês não foi informada)' : ''}.</div>`;
+}
+
+function tabelaFaixas() {
+  const g = S.d.faixas[S.grupo];
+  if (!g || !g.faixas.length) return `<div class="vazio">Ainda sem dias com faturamento e clima neste período.<br>
+    <span class="mini">O robô busca o clima de todos os dias com faturamento lançado (pode levar até 1 hora depois da instalação).</span></div>`;
+  const maior = Math.max(...g.faixas.map(f => f.faturamento || 0));
+  const linhas = g.faixas.map(f => `<tr>
+      <td><b>${esc(f.faixa)}</b></td><td class="num">${f.dias}</td>
+      <td class="num" style="min-width:150px">${R$(f.faturamento)}<div class="barra-fat"><div style="width:${maior ? f.faturamento / maior * 100 : 0}%"></div></div></td>
+      <td class="num"><b>${num(f.freelas)}</b> <span class="mini suave">(${R$(f.freela)})</span></td>
+      <td class="num">${num(f.pessoas)}</td><td class="num ${pctCls(f.pct)}">${pctTxt(f.pct)}</td>
+      <td class="num">${f.chuva ? f.chuva + ' 🌧️' : '—'}</td></tr>`).join('');
+  const c = g.chuva, s = g.seco;
+  return `<div class="tabela-rolagem"><table class="grade">
+    <thead><tr><th>Temperatura máxima</th><th class="num">Dias</th><th class="num">Faturamento médio</th><th class="num">Freelancers / dia</th>
+      <th class="num">Pessoas / dia</th><th class="num">Folha</th><th class="num">Com chuva</th></tr></thead>
+    <tbody>${linhas}</tbody></table></div>
+    <div class="mini" style="margin-top:6px">${c.dias ? `🌧️ Dias de chuva (5 mm ou mais): <b>${R$(c.faturamento)}</b> de faturamento médio (${c.dias} dias)` : '🌧️ Nenhum dia de chuva no período'}
+      ${s.dias ? ` · ☀️ sem chuva: <b>${R$(s.faturamento)}</b> (${s.dias} dias)` : ''}</div>`;
+}
+
+// ------------------------------------------------------------------ folha fixa e meta
+function abrirConfig() {
+  const d = S.d;
+  abrirModal(`<h3>⚙️ Folha fixa e meta</h3>
+    <div class="form">
+      <label>Meta da folha (% do faturamento)
+        <div style="display:flex;gap:8px"><input id="cfg-meta" inputmode="decimal" value="${num(d.meta)}" style="max-width:120px">
+        <button class="btn prim" id="cfg-salvar-meta" type="button">Salvar meta</button></div></label>
+      <div class="mini suave">Folha fixa = <b>salários + encargos + benefícios</b> do mês (o que a loja paga aos fixos, mesmo de folga).
+        O sistema divide pelos dias do mês. Em branco = não informado (usa o mês mais perto).</div>
+      <div class="tabela-rolagem" style="max-height:46vh"><table class="grade"><thead><tr><th>Mês</th><th>Folha fixa (R$)</th></tr></thead><tbody>
+        ${d.folhas.map(f => `<tr><td><b>${esc(f.nome)}</b></td><td><input data-mes="${f.mes}" inputmode="decimal" placeholder="ex.: 31.000,00"
+          value="${f.valor == null ? '' : Number(f.valor).toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2})}"
+          data-antes="${f.valor == null ? '' : f.valor}" style="width:100%"></td></tr>`).join('')}
+      </tbody></table></div>
+      <button class="btn prim" id="cfg-salvar-folha" type="button">💾 Salvar folhas</button>
+    </div>`, null, true);
+  $('#cfg-salvar-meta').onclick = async () => {
+    try { await api('POST', '/api/gestao/folha/meta', {meta: $('#cfg-meta').value}); status('Meta salva.'); carregar(); }
+    catch (e) { falhou(e); }
+  };
+  $('#cfg-salvar-folha').onclick = async () => {
+    const mudou = [...document.querySelectorAll('#modal input[data-mes]')].filter(i => {
+      const antes = i.dataset.antes, agora = i.value.trim();
+      if (!agora) return antes !== '';
+      const v = Number(agora.replace(/R\$|\s/g, '').replace(/\./g, '').replace(',', '.'));
+      return antes === '' || isNaN(v) || Math.abs(v - Number(antes)) > 0.004;
+    });
+    if (!mudou.length) { status('Nada mudou.'); return; }
+    try {
+      for (const i of mudou) await api('POST', '/api/gestao/folha/fixa', {mes: i.dataset.mes, valor: i.value.trim()});
+      fecharModal(); status(`Folha salva (${mudou.length} mês/meses).`); carregar();
+    } catch (e) { falhou(e); }
+  };
+}
+$('#btn-config').onclick = () => { if (S.d) abrirConfig(); };
+{% endblock %}

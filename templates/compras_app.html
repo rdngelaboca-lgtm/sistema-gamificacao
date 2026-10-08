@@ -1744,10 +1744,11 @@ TELAS.gestao = p => {
         <input id="busca-preco" placeholder="Digite parte do nome (ex.: leite cond)" autocomplete="off" value="${esc(p.buscaPreco || '')}"></div>
       <div id="res-preco" class="linhas">${p.carregandoPreco ? '<div class="vazio">Carregando…</div>' : '<div class="vazio" style="padding:14px">Digite pelo menos 2 letras.</div>'}</div>`;
   } else {
-    corpo = conteudoResumo(E.painel);
+    corpo = cartaoFolha(E.folha) + conteudoResumo(E.painel);
   }
   // [GESTÃO WEB] atalho para a Escala da loja (Gestão no navegador; abre na loja e fora dela)
-  const atalhoEscala = `<a class="btn claro medio" href="/gestao/escala">🗓️ Escala da loja</a>`;
+  const atalhoEscala = `<div class="linha-btns"><a class="btn claro medio" href="/gestao/escala">🗓️ Escala da loja</a>
+    <a class="btn claro medio" href="/gestao/folha">📊 Folha × Faturamento</a></div>`;
   return `${faixaRede()}${topo('Gestão', 'Relatórios e conferências (só o gestor vê)')}
     <div class="corpo">${atalhoEscala}<div class="filtros">${abas}</div>${corpo}</div>${navbar('gestao')}`;
 };
@@ -2441,8 +2442,28 @@ function conteudoPreco(h, p) {
         || '<div class="mini suave" style="padding:10px">Nenhuma compra no período.</div>'}</div></div>`;
 }
 async function carregarPainel() {
+  carregarFolha();
   try { E.painel = await api('GET', '/api/compras/painel'); salvar(); if (T.nome === 'gestao') desenhar(); }
   catch (e) { if (!e.extra.offline && T.nome === 'gestao') toast(e.message); }
+}
+// [FOLHA × FATURAMENTO] último dia lançado: clima, faturamento, folha do dia e do mês (x meta) + previsão de hoje
+async function carregarFolha() {
+  try { E.folha = await api('GET', '/api/gestao/folha/resumo'); salvar(); if (T.nome === 'gestao') desenhar(); }
+  catch (e) { /* servidor sem o módulo ou sem internet: o card só não aparece */ }
+}
+function cartaoFolha(f) {
+  if (!f || !f.dia) return '';
+  const x = f.dia, a = f.acumulado || {}, h = f.hoje;
+  const pct = v => v == null ? '—' : `<b style="color:${v <= f.meta ? 'var(--verde-esc)' : 'var(--laranja)'}">${fmtQtd(v)}%</b>`;
+  const dm = iso => iso.slice(8, 10) + '/' + iso.slice(5, 7);
+  const q = h && h.parecidos && h.parecidos.faturamento ? h.parecidos : null;
+  return `<a class="cartao" href="/gestao/folha" style="text-decoration:none;color:inherit;display:flex;flex-direction:column;gap:4px">
+    <div class="mini suave" style="font-weight:700">📊 FOLHA × FATURAMENTO · ${esc(x.dia)} ${dm(x.data)}${x.clima ? ' · ' + esc(x.clima.icone || '') + ' ' + Math.round(x.clima.max) + '°/' + Math.round(x.clima.min) + '°' : ''}</div>
+    <div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline"><div style="font-size:22px;font-weight:800">${fmtReais(x.faturamento)}</div>
+      <div class="pequeno">folha ${pct(x.pct)}</div></div>
+    <div class="mini suave">${x.fixos} fixo(s) + ${x.freelas} freela(s) · freelancers ${fmtReais(x.freela)}${a.pct != null ? ` · mês até ${dm(a.ate)}: ${pct(a.pct)} (meta ${fmtQtd(f.meta)}%)` : ''}</div>
+    ${a.faltam_lancar && a.faltam_lancar.length ? `<div class="mini" style="color:var(--laranja);font-weight:700">⚠️ Falta lançar o faturamento de ${a.faltam_lancar.map(dm).join(', ')}</div>` : ''}
+    ${h && h.clima ? `<div class="mini">🌡️ Hoje: ${esc(h.clima.texto)}${q ? ` · em dias parecidos ~${fmtReais(Math.round(q.faturamento / 10) * 10)} e <b>${fmtQtd(q.freelas)} freela(s)</b>` : ''}</div>` : ''}</a>`;
 }
 async function carregarConsumo(rotinaId) {
   // contagem aberta (em uso ou guardada): não troca os itens no meio dela

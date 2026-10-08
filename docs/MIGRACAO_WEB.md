@@ -200,6 +200,33 @@ freelancer, recibo) passam para um arquivo só, usado **pelo PC e pela Web** —
 conferem igual. Na Web, as conferências são refeitas no servidor com os dados do banco na hora
 de salvar (se o PC e a Web mexerem no mesmo dia, a última gravação confere de novo).
 
+### Novo (só na Web) — 📊 Folha × Faturamento × Clima (10/2026: Gestão › 📊 Folha)
+Meta: folha (fixos + freelancers) em até **18% do faturamento** (a meta muda na tela). Para cada dia:
+- **Faturamento** = o lançado na Gamificação (Metas → Lançar Apuração Diária). Só há uma meta por vez;
+  se o mesmo dia aparecer em duas, vale o maior (não soma duas vezes).
+- **Fixos** = folha do mês (salários + encargos + benefícios), informada em ⚙️ Folha fixa e meta e
+  dividida pelos dias do mês (custa igual com o funcionário de folga ou a loja fechada). Mês sem valor
+  usa o mês informado mais perto (marcado com *).
+- **Freelancers** = o valor de cada turno, o mesmo da tela de Pagamentos.
+- **Pessoas e horas** = a escala do dia (sem o intervalo).
+- **Clima** = máxima, mínima e chuva de Rondonópolis - MT (`clima.py`, Open-Meteo: gratuito, sem cadastro).
+  O robô busca de 3 em 3 horas a previsão e os últimos 14 dias, e completa o histórico de todos os dias
+  que têm faturamento (o cruzamento já começa com o passado). Outra cidade: `CLIMA_CIDADE`,
+  `CLIMA_LATITUDE`, `CLIMA_LONGITUDE` no config.py.
+
+Na tela: mês até o último dia lançado (fixo de todos os dias até ali + freelancers ÷ faturamento, com
+aviso dos dias sem faturamento lançado), último dia lançado, **próximos dias** (previsão + média dos
+"dias parecidos": mesmo tipo de dia e máxima até 1,5° de diferença), dia a dia do mês e **calor × vendas**
+(faturamento, freelancers, pessoas e folha por faixa de temperatura; dias de chuva × sem chuva; filtro
+semana × sáb/dom/feriado). Também aparece:
+- na **Escala** (linha do clima do dia + "em dias parecidos: ~R$ X, N freelancers");
+- no **app** (Gestão › Resumo: card com o último dia lançado e a previsão de hoje);
+- no **Telegram**: quando o faturamento do dia é lançado, o robô manda o resumo (dias lançados
+  atrasados vão juntos; o de hoje só depois das 21h; no fim, a previsão do próximo dia).
+
+Arquivos: `folha_faturamento.py`, `clima.py`, `templates/gestao_folha.html`; tabelas `ClimaDiario`,
+`FolhaFixaMensal`, `ParametrosFolha` (criadas sozinhas).
+
 ## 4. Gestão de Pessoas — RH (`gestao_pessoas_main.py` — 1.800 linhas)
 
 Dados sensíveis: fica **por último**, com a segurança já testada.
@@ -264,8 +291,8 @@ Cada etapa: construir → testar → usar em paralelo com o PC → marcar ✅ aq
 - Nos outros computadores/celulares da loja (mesma rede): `http://IP-DO-SERVIDOR:5000/gestao`
   (o mesmo endereço do painel da TV, trocando o final por `/gestao`).
 - Pelo app de compras: aba **Gestão › 🗓️ Escala da loja** (abre direto, sem pedir o PIN de novo).
-- Menu no alto de toda página da Gestão: **🗓️ Escala · 👤 Freelancers · 💰 Pagamentos**
-  (`/gestao/escala`, `/gestao/freelancers`, `/gestao/pagamentos`).
+- Menu no alto de toda página da Gestão: **🗓️ Escala · 👤 Freelancers · 💰 Pagamentos · 📊 Folha**
+  (`/gestao/escala`, `/gestao/freelancers`, `/gestao/pagamentos`, `/gestao/folha`).
 - Pela internet (fora da loja): liberado para a Gestão desde 10/2026, a pedido do Rodrigo — só gestor,
   com o login do app (nome + PIN, bloqueio após erros). Para fechar: `GESTAO_PELA_INTERNET = False` no config.py.
 - Login: o mesmo do app de compras (nome + PIN); só quem é gestor no app entra.

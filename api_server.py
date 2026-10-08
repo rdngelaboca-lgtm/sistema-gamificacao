@@ -2451,6 +2451,58 @@ def api_gestao_feriados_remover(usuario):
     return _resposta_pagamentos('remover_feriados', ler_json() or {}, usuario)
 
 
+# ---------------- [FOLHA × FATURAMENTO] folha (fixos + freelancers) x faturamento x clima ----------------
+try:
+    import folha_faturamento
+    import clima
+except Exception as _erro_import_folha:
+    folha_faturamento = clima = None
+    logger.error(f"Folha × Faturamento DESLIGADO: não consegui carregar folha_faturamento.py/clima.py ({_erro_import_folha})")
+
+
+def _resposta_folha(funcao, *args):
+    if folha_faturamento is None:
+        return jsonify({"erro": "Folha × Faturamento não está instalado no servidor (falta folha_faturamento.py ou clima.py)."}), 503
+    try:
+        return jsonify(funcao(*args)), 200
+    except (folha_faturamento.ErroFolha, clima.ErroClima) as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        logger.exception(f"Erro na Folha × Faturamento ({request.path}): {e}")
+        return jsonify({"erro": "Erro no servidor. Tente de novo; se continuar, veja o log."}), 500
+
+
+@app.route('/gestao/folha')
+def pagina_gestao_folha():
+    return _pagina_gestao('gestao_folha.html', 'folha')
+
+
+@app.route('/api/gestao/folha', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_folha(usuario):
+    return _resposta_folha(lambda: folha_faturamento.painel(request.args.get('mes') or None, request.args.get('periodo') or '90'))
+
+
+@app.route('/api/gestao/folha/resumo', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_folha_resumo(usuario):
+    return _resposta_folha(lambda: folha_faturamento.resumo())
+
+
+@app.route('/api/gestao/folha/fixa', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_folha_fixa(usuario):
+    dados = ler_json() or {}
+    return _resposta_folha(lambda: folha_faturamento.definir_folha_fixa(dados.get('mes'), dados.get('valor'), usuario))
+
+
+@app.route('/api/gestao/folha/meta', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_folha_meta(usuario):
+    dados = ler_json() or {}
+    return _resposta_folha(lambda: folha_faturamento.definir_meta(dados.get('meta'), usuario))
+
+
 if __name__ == "__main__":
     # O '0.0.0.0' é o segredo. Ele libera o acesso para a rede inteira.
     logger.info("Iniciando servidor API acessível na rede em modo Produção...")
