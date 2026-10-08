@@ -8643,18 +8643,33 @@ def buscar_historico_compras_produto(produto_id_mestre):
             if conn: conn.close()
     return []
 
-def atualizar_item_historico_compra(item_nota_id, nova_qtd, novo_custo):
-    """Atualiza a quantidade e o custo de uma entrada de nota fiscal do passado."""
+def atualizar_item_historico_compra(item_nota_id, nova_qtd, novo_custo, fator_usado=None):
+    """
+    Atualiza a quantidade e o custo de uma entrada de nota fiscal do passado.
+    [AUDITORIA VÍNCULOS] fator_usado: grava também o Qtd/Cx DESTA compra (a tela de vínculos
+    edita a compra como veio na nota: embalagens x Qtd/Cx). None = não mexe no Qtd/Cx.
+    """
+    if fator_usado is not None:
+        try:
+            _garantir_colunas_estoque()
+        except Exception as e:
+            logger.error(f"Coluna do Qtd/Cx por compra indisponível (item {item_nota_id}): {e}")
+            return False
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            sql = """
-                UPDATE ItensNotaFiscalEntrada 
-                SET Quantidade = ?, PrecoCustoUnitario = ? 
-                WHERE ItemNotaID = ?
-            """
-            cursor.execute(sql, nova_qtd, novo_custo, item_nota_id)
+            if fator_usado is not None:
+                cursor.execute("UPDATE ItensNotaFiscalEntrada SET Quantidade = ?, PrecoCustoUnitario = ?, "
+                               "FatorConversaoUsado = ? WHERE ItemNotaID = ?",
+                               nova_qtd, novo_custo, fator_usado, item_nota_id)
+            else:
+                sql = """
+                    UPDATE ItensNotaFiscalEntrada
+                    SET Quantidade = ?, PrecoCustoUnitario = ?
+                    WHERE ItemNotaID = ?
+                """
+                cursor.execute(sql, nova_qtd, novo_custo, item_nota_id)
             if getattr(cursor, 'rowcount', 1) == 0:   # [DEPURAÇÃO 2] item não existe mais
                 conn.rollback()
                 return False
@@ -9377,9 +9392,24 @@ def atualizar_vinculo_existente(vinculo_id, novo_produto_id, novo_fator, recalcu
                                        "FatorConversaoUsado = ? WHERE ItemNotaID = ?", nova_qtd, novo_custo, fator_novo, item_id)
                         alterados += 1
                     logger.info(f"Vínculo {vinculo_id}: {alterados} compra(s) recalculada(s) para o Qtd/Cx {fator_novo}.")
+            else:
+                # [AUDITORIA VÍNCULOS] Qtd/Cx mudando "só para as próximas notas": as compras antigas
+                # sem o Qtd/Cx gravado (FatorConversaoUsado NULL) passavam a usar o Qtd/Cx NOVO do
+                # vínculo (embalagens/preço errados e um recálculo futuro errado). Guarda o antigo.
+                try:
+                    _garantir_colunas_estoque()
+                    cursor.execute("SELECT FatorConversao FROM ProdutosFornecedor WHERE ProdutoFornecedorID = ?", vinculo_id)
+                    linha = cursor.fetchone()
+                    fator_antigo = _fator_item(None, linha[0] if linha else None)
+                    if _dec(novo_fator) > 0 and fator_antigo != _dec(novo_fator):
+                        cursor.execute("UPDATE ItensNotaFiscalEntrada SET FatorConversaoUsado = ? "
+                                       "WHERE ProdutoFornecedorID = ? AND FatorConversaoUsado IS NULL AND Quantidade > 0",
+                                       fator_antigo, vinculo_id)
+                except Exception as e:
+                    logger.warning(f"Vínculo {vinculo_id}: não foi possível guardar o Qtd/Cx antigo nas compras: {e}")
             sql = """
-                UPDATE ProdutosFornecedor 
-                SET ProdutoID = ?, FatorConversao = ? 
+                UPDATE ProdutosFornecedor
+                SET ProdutoID = ?, FatorConversao = ?
                 WHERE ProdutoFornecedorID = ?
             """
             cursor.execute(sql, novo_produto_id, novo_fator, vinculo_id)
@@ -9406,6 +9436,13 @@ def listar_vinculos_com_resumo():
     embalagem (custo x fator) e se o vínculo parece ter o fator errado.
     Devolve uma lista de dicionários.
     """
+    # [AUDITORIA VÍNCULOS] o Qtd/Cx com que cada compra foi importada (sem a coluna, usa o do vínculo)
+    try:
+        _garantir_colunas_estoque()
+        col_fator_usado = "INI.FatorConversaoUsado"
+    except Exception as e:
+        logger.warning(f"Qtd/Cx por compra indisponível na lista de vínculos: {e}")
+        col_fator_usado = "NULL"
     conn = get_db_connection()
     if not conn:
         return []
@@ -9419,17 +9456,18 @@ def listar_vinculos_com_resumo():
             LEFT JOIN ProdutosEstoque P ON PF.ProdutoID = P.ProdutoID
         """)
         vinculos = cursor.fetchall()
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT INI.ProdutoFornecedorID, NF.DataEmissao, NF.NotaID, INI.ItemNotaID, INI.Quantidade, INI.PrecoCustoUnitario,
-                   NF.ValorTotalNF
+                   NF.ValorTotalNF, {col_fator_usado}
             FROM ItensNotaFiscalEntrada INI
             JOIN NotasFiscaisEntrada NF ON INI.NotaID = NF.NotaID
             WHERE INI.Quantidade > 0
         """)
         compras = {}
         custo_errado = set()   # [MELHORIA] vínculos com alguma compra que custa mais que a NOTA INTEIRA
-        for pf, dt, nota_id, item_id, qtd, custo, total_nf in cursor.fetchall():
-            compras.setdefault(pf, []).append((_como_data(dt) or date.min, nota_id or 0, item_id or 0, _dec(qtd), _dec(custo)))
+        for pf, dt, nota_id, item_id, qtd, custo, total_nf, usado in cursor.fetchall():
+            compras.setdefault(pf, []).append((_como_data(dt) or date.min, nota_id or 0, item_id or 0, _dec(qtd), _dec(custo),
+                                               usado))
             if _item_maior_que_nota(_dec(qtd) * _dec(custo), total_nf):
                 custo_errado.add(pf)
 
@@ -9439,6 +9477,10 @@ def listar_vinculos_com_resumo():
             lista = sorted(compras.get(pf, []))
             ultima = lista[-1] if lista else None
             custos = [c[4] for c in lista if c[4] > 0]
+            # [AUDITORIA VÍNCULOS] "como veio na nota" usa o Qtd/Cx DAQUELA compra (antes usava o atual
+            # do vínculo: depois de trocar o Qtd/Cx só para as próximas notas, embalagens e custo da
+            # embalagem da última compra apareciam errados)
+            ultimo_fator = _fator_item(ultima[5], fator) if ultima else None
             resultado.append({
                 'ID': pf, 'Fornecedor': forn or 'FORNECEDOR DELETADO', 'DescricaoXML': desc or 'Sem Descrição',
                 'ProdutoID': pid, 'NomeMestre': nome_mestre or ('PRODUTO DELETADO (ÓRFÃO)' if pid else 'SEM PRODUTO'),
@@ -9449,6 +9491,9 @@ def listar_vinculos_com_resumo():
                 'UltimaData': ultima[0] if ultima and ultima[0] != date.min else None,
                 'UltimaQtd': ultima[3] if ultima else None,          # já na unidade do estoque
                 'UltimoCustoUnid': ultima[4] if ultima else None,    # por unidade do estoque
+                'UltimoFator': ultimo_fator,                          # Qtd/Cx usado na última compra
+                'UltimasEmbalagens': ultima[3] / ultimo_fator if ultima else None,   # como veio na nota
+                'UltimoCustoEmb': ultima[4] * ultimo_fator if ultima else None,      # preço da embalagem na nota
                 'VariacaoPropria': bool(len(custos) >= 2 and max(custos) >= min(custos) * FATOR_CUSTO_SUSPEITO),
                 'CustoErrado': pf in custo_errado,
             })
@@ -10315,14 +10360,17 @@ def previa_recalculo_vinculo(vinculo_id, novo_fator):
     """
     [MELHORIA] Mostra como ficariam as compras já importadas se o fator mudar.
     Devolve (fator_antigo, [ {NF, Data, QtdAtual, CustoAtual, QtdNova, CustoNovo} ]).
+    [AUDITORIA VÍNCULOS] Em caso de ERRO devolve (None, None). Antes devolvia (1, []) e a tela
+    perguntava "vai mudar de 1 para X, existem 0 compras": o erro passava como se fosse dado.
     """
     try:
         _garantir_colunas_estoque()
-    except Exception:
-        return Decimal('1'), []
+    except Exception as e:
+        logger.error(f"Prévia de recálculo do vínculo {vinculo_id}: {e}")
+        return None, None
     conn = get_db_connection()
     if not conn:
-        return Decimal('1'), []
+        return None, None
     try:
         cursor = conn.cursor()
         cursor.execute("SELECT FatorConversao FROM ProdutosFornecedor WHERE ProdutoFornecedorID = ?", vinculo_id)
@@ -10347,7 +10395,7 @@ def previa_recalculo_vinculo(vinculo_id, novo_fator):
         return fator_vinculo, itens
     except Exception as e:
         logger.error(f"Erro na prévia de recálculo do vínculo {vinculo_id}: {e}", exc_info=True)
-        return Decimal('1'), []
+        return None, None
     finally:
         conn.close()
 
@@ -10360,6 +10408,10 @@ def vinculo_tem_itens(vinculo_id):
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM ItensNotaFiscalEntrada WHERE ProdutoFornecedorID = ?", vinculo_id)
         return int(cursor.fetchone()[0] or 0)
+    except Exception as e:
+        # [AUDITORIA VÍNCULOS] antes o erro estourava dentro do clique (a tecla Delete "não fazia nada")
+        logger.error(f"Erro ao contar os itens do vínculo {vinculo_id}: {e}", exc_info=True)
+        return None
     finally:
         conn.close()
 
