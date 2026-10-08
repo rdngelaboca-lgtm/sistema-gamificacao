@@ -33,6 +33,10 @@
   .chips { display: flex; gap: 6px; flex-wrap: wrap; }
   .chip { border: 1px solid var(--linha); background: #fff; border-radius: 999px; padding: 5px 12px; font-weight: 600; font-size: 13px; }
   .chip.sel { background: var(--verde); border-color: var(--verde); color: #fff; }
+  table.grade tr.poucos td { color: #8a9592; }
+  table.grade tr.poucos td b { color: #8a9592; }
+  table.grade tr.poucos .barra-fat div { background: #b9c4c1; }
+  .poucos-tag { display: block; font-size: 11px; font-weight: 600; color: var(--aviso); }
   .barra-fat { height: 8px; background: var(--verde-claro); border-radius: 4px; margin-top: 3px; }
   .barra-fat div { height: 100%; background: var(--verde); border-radius: 4px; }
   .vazio { background: #fff; border: 1px dashed var(--linha); border-radius: 12px; padding: 16px; text-align: center; color: var(--suave); }
@@ -69,6 +73,9 @@ const pctCls = v => v == null ? '' : (v <= S.d.meta ? 'pct-ok' : 'pct-ruim');
 const NOMES_MES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
 const nomeMes = ym => { const [a, m] = ym.split('-'); return `${NOMES_MES[+m - 1]}/${a.slice(2)}`; };
 const dm = iso => iso.slice(8, 10) + '/' + iso.slice(5, 7);
+const MIN_DIAS_CONFIAVEL = 5;      // menos que isso: média pouco confiável (um dia fora do normal pesa demais)
+const NOME_PERIODO = {'90': 'nos últimos 90 dias', '180': 'nos últimos 6 meses', '365': 'no último ano', 'tudo': 'em todo o histórico'};
+const NOME_GRUPO = {todos: 'dias', semana: 'dias de semana (seg a sex)', fds: 'sábados, domingos e feriados'};
 const climaCurto = c => c ? `${c.icone || ''} ${num(c.max, 0)}° / ${num(c.min, 0)}°` : '—';
 
 function aoEntrar() { carregar(); }
@@ -159,7 +166,8 @@ function proximosDias() {
     return `<div class="prev ${x.tipo !== 'semana' ? 'fds' : ''}" title="${esc(x.clima.texto)}">
       <span class="q">${x.data === HOJE() ? 'Hoje' : x.dia} ${dm(x.data)}${x.feriado ? ' 🎉' : ''}</span>
       <span class="t">${climaCurto(x.clima)}</span>
-      <span class="p">${q.faturamento ? `~${aprox(q.faturamento)}<br><b>${num(q.freelas)} freela</b> · ${num(q.pessoas)} pessoas` : 'sem dias parecidos'}</span></div>`;
+      <span class="p">${q.faturamento ? `~${aprox(q.faturamento)}<br><b>${num(q.freelas)} freela</b> · ${num(q.pessoas)} pessoas
+        <br>${q.dias < MIN_DIAS_CONFIAVEL ? `<span class="poucos-tag">só ${q.dias} dias parecidos</span>` : `${q.dias} dias parecidos`}` : 'sem dias parecidos'}</span></div>`;
   }).join('')}</div>
   <div class="mini suave" style="margin-top:6px">Valores = média dos dias parecidos do histórico: mesmo tipo de dia
     (semana × fim de semana/feriado) com máxima até 1,5° de diferença.</div>`;
@@ -194,17 +202,23 @@ function tabelaFaixas() {
   if (!g || !g.faixas.length) return `<div class="vazio">Ainda sem dias com faturamento e clima neste período.<br>
     <span class="mini">O robô busca o clima de todos os dias com faturamento lançado (pode levar até 1 hora depois da instalação).</span></div>`;
   const maior = Math.max(...g.faixas.map(f => f.faturamento || 0));
-  const linhas = g.faixas.map(f => `<tr>
-      <td><b>${esc(f.faixa)}</b></td><td class="num">${f.dias}</td>
+  const linhas = g.faixas.map(f => `<tr class="${f.dias < MIN_DIAS_CONFIAVEL ? 'poucos' : ''}"
+      ${f.dias < MIN_DIAS_CONFIAVEL ? 'title="Poucos dias: a média pode ser de um dia fora do normal"' : ''}>
+      <td><b>${esc(f.faixa)}</b>${f.dias < MIN_DIAS_CONFIAVEL ? '<span class="poucos-tag">poucos dias · média pouco confiável</span>' : ''}</td>
+      <td class="num">${f.dias}</td>
       <td class="num" style="min-width:150px">${R$(f.faturamento)}<div class="barra-fat"><div style="width:${maior ? f.faturamento / maior * 100 : 0}%"></div></div></td>
       <td class="num"><b>${num(f.freelas)}</b> <span class="mini suave">(${R$(f.freela)})</span></td>
       <td class="num">${num(f.pessoas)}</td><td class="num ${pctCls(f.pct)}">${pctTxt(f.pct)}</td>
       <td class="num">${f.chuva ? f.chuva + ' 🌧️' : '—'}</td></tr>`).join('');
   const c = g.chuva, s = g.seco;
   return `<div class="tabela-rolagem"><table class="grade">
-    <thead><tr><th>Temperatura máxima</th><th class="num">Dias</th><th class="num">Faturamento médio</th><th class="num">Freelancers / dia</th>
+    <thead><tr><th>Temperatura máxima</th><th class="num">Dias no período</th><th class="num">Faturamento médio</th><th class="num">Freelancers / dia</th>
       <th class="num">Pessoas / dia</th><th class="num">Folha</th><th class="num">Com chuva</th></tr></thead>
     <tbody>${linhas}</tbody></table></div>
+    <div class="mini suave" style="margin-top:6px"><b>Dias no período</b> = quantos ${NOME_GRUPO[S.grupo]} ${NOME_PERIODO[S.periodo] || ''}
+      (com faturamento lançado) tiveram essa temperatura máxima. O faturamento médio, os freelancers e as pessoas são a média
+      desses dias. Faixas em cinza têm menos de ${MIN_DIAS_CONFIAVEL} dias: a média pode ser de um dia fora do normal
+      (feriado, início do mês…). Para mais dias em cada faixa, escolha "1 ano" ou "Tudo".</div>
     <div class="mini" style="margin-top:6px">${c.dias ? `🌧️ Dias de chuva (5 mm ou mais): <b>${R$(c.faturamento)}</b> de faturamento médio (${c.dias} dias)` : '🌧️ Nenhum dia de chuva no período'}
       ${s.dias ? ` · ☀️ sem chuva: <b>${R$(s.faturamento)}</b> (${s.dias} dias)` : ''}</div>`;
 }
