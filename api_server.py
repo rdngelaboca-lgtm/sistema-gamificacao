@@ -2132,6 +2132,10 @@ def api_compras_orcamento_acao(usuario, orcamento_id, acao):
     if acao == 'nota':
         dados = ler_json() or {}
         return _orcamentos_disponivel() or _resposta_compras(orcamentos.ligar_nota, orcamento_id, dados.get('chave'), usuario)
+    if acao == 'concluir':                       # [CONCLUIR] aceitou a nota como veio (+ pedir o que faltou)
+        dados = ler_json() or {}
+        return _orcamentos_disponivel() or _resposta_compras(orcamentos.concluir, orcamento_id, usuario, dados.get('observacao'),
+                                                             bool(dados.get('pedir_faltou')))
     if acao not in funcoes:
         return _orcamentos_disponivel() or (jsonify({"erro": "Ação inválida."}), 404)
     return _resposta_compras(funcoes[acao], orcamento_id, usuario)

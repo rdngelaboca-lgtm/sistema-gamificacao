@@ -1961,8 +1961,8 @@ TELAS.conferencia = p => {
                     <div class="mini suave" style="text-align:right">${ICONES.barras}<br>Bipe os produtos</div></div>
                   <div class="progresso"><div style="width:${Math.round(100 * ok / Math.max(itens.length, 1))}%"></div></div>
                   ${ehComputador() ? `<div class="campo"><input id="receb-cod" inputmode="numeric" placeholder="Leitor USB ou digite o código e Enter" autocomplete="off" aria-label="Código de barras"></div>` : ''}`}
-      ${n.orcamento ? `<${E.usuario.gestor ? 'button data-acao="orc-abrir" data-id="' + n.orcamento.id + '"' : 'div'} class="${n.orcamento.tudo_certo ? 'info' : 'aviso'}" style="text-align:left;width:100%">
-          <b>Orçamento nº ${n.orcamento.id}:</b> ${esc(n.orcamento.resumo)}
+      ${n.orcamento ? `<${E.usuario.gestor ? 'button data-acao="orc-abrir" data-id="' + n.orcamento.id + '"' : 'div'} class="${n.orcamento.tudo_certo || n.orcamento.concluido ? 'info' : 'aviso'}" style="text-align:left;width:100%">
+          <b>Orçamento nº ${n.orcamento.id}${n.orcamento.concluido ? ' (concluído ✅)' : ''}:</b> ${esc(n.orcamento.resumo)}
           ${n.orcamento.diferencas.map(x => `<div class="mini">• ${esc(x.nome)}: pedido ${fmtQtd(x.pedido)}, nota ${fmtQtd(x.nota)} ${esc(x.unidade)}${x.preco === 'mais_caro' ? ' · mais caro (+' + fmtQtd(x.pct) + '%)' : x.preco === 'mais_barato' ? ' · mais barato (' + fmtQtd(x.pct) + '%)' : ''}</div>`).join('')}
           ${n.orcamento.nao_pedidos.map(x => `<div class="mini">• ${esc(x.nome)}: veio sem pedir</div>`).join('')}</${E.usuario.gestor ? 'button' : 'div'}>` : ''}
       ${p.bipMsg ? `<div class="mini" style="text-align:center;font-weight:700">${esc(p.bipMsg)}</div>` : ''}
@@ -2147,14 +2147,14 @@ async function enviarRecebimento() {
 
 // ---------------------------------------------------------------- [ORÇAMENTOS] pedidos aos fornecedores (gestor)
 const ST_ORC = {rascunho: ['p-cinza', 'Rascunho'], enviado: ['p-laranja', 'Esperando a nota'], recebido: ['p-verde', 'Nota chegou'],
-                cancelado: ['p-cinza', 'Cancelado']};
+                concluido: ['p-verde', 'Concluído'], cancelado: ['p-cinza', 'Cancelado']};
 function cartaoOrcamento(o) {
   const st = o.status === 'recebido' && !o.tudo_certo ? ['p-laranja', 'Nota chegou'] : (ST_ORC[o.status] || ['p-cinza', o.status]);
   return `<button class="cartao" style="text-align:left;display:flex;flex-direction:column;gap:6px;width:100%" data-acao="orc-abrir" data-id="${o.id}">
     <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;width:100%">
       <div class="nome">${esc(o.fornecedor)}</div><span class="pilula ${st[0]}">${st[1]}</span></div>
-    <div class="pequeno suave">nº ${o.id} · ${o.qtd_itens} ite${o.qtd_itens === 1 ? 'm' : 'ns'}${o.valor ? ' · ≈ ' + fmtReais(o.valor) : ''} · ${o.enviado_em ? 'enviado ' + dataBR(o.enviado_em) : 'criado ' + dataBR(o.criado_em)}</div>
-    ${o.nota ? `<div class="mini" style="font-weight:700;color:${o.tudo_certo ? 'var(--verde-esc)' : 'var(--laranja)'}">NF ${esc(o.nota.numero || '?')}: ${esc(o.resumo || '')}</div>` : ''}</button>`;
+    <div class="pequeno suave">nº ${o.id} · ${o.qtd_itens} ite${o.qtd_itens === 1 ? 'm' : 'ns'}${o.valor ? ' · ≈ ' + fmtReais(o.valor) : ''} · ${o.enviado_em ? 'enviado ' + dataBR(o.enviado_em) : 'criado ' + dataBR(o.criado_em)}${o.status === 'concluido' && o.concluido_em ? ' · concluído ' + dataBR(o.concluido_em) : ''}</div>
+    ${o.nota ? `<div class="mini" style="font-weight:700;color:${o.status === 'concluido' ? 'var(--suave)' : o.tudo_certo ? 'var(--verde-esc)' : 'var(--laranja)'}">NF ${esc(o.nota.numero || '?')}: ${esc(o.resumo || '')}</div>` : ''}</button>`;
 }
 TELAS.orcamentos = () => {
   const l = E.orcamentos;
@@ -2164,7 +2164,7 @@ TELAS.orcamentos = () => {
   };
   const corpo = !l ? `<div class="vazio">${online ? 'Carregando…' : 'Sem internet: conecte para ver os orçamentos.'}</div>`
     : (l.length ? secao('Rascunhos (ainda não enviados)', ['rascunho']) + secao('Enviados · esperando a nota', ['enviado'])
-                  + secao('A nota chegou', ['recebido']) + secao('Cancelados', ['cancelado'])
+                  + secao('A nota chegou', ['recebido']) + secao('Concluídos', ['concluido']) + secao('Cancelados', ['cancelado'])
                 : '<div class="vazio">Nenhum orçamento ainda.<br><span class="mini">Toque em <b>Novo orçamento</b>, ou abra uma lista aprovada e toque em <b>Gerar orçamentos</b>.</span></div>');
   return `${faixaRede()}${topo('Orçamentos', 'Pedidos aos fornecedores')}
     <div class="corpo">
@@ -2233,6 +2233,7 @@ TELAS.orcamento = p => {
   const o = p.o;
   if (!o) return `${topo('Orçamento', '', 'orc-voltar')}<div class="corpo"><div class="vazio">Carregando…</div></div>`;
   const editavel = ['rascunho', 'enviado'].includes(o.status);
+  const temNota = ['recebido', 'concluido'].includes(o.status);   // [CONCLUIR] concluído continua mostrando a comparação
   const st = ST_ORC[o.status] || ['p-cinza', o.status];
   const total = o.itens.reduce((s, i) => s + (i.preco != null ? i.preco * i.qtd : 0), 0);
   let cabNota = '';
@@ -2242,15 +2243,25 @@ TELAS.orcamento = p => {
   if (o.status === 'rascunho' && o.itens.length) cabNota = `<div class="cartao" style="display:flex;justify-content:space-between;gap:10px;align-items:center">
       <div class="mini suave">Já comprou e a nota chegou?</div>
       <button class="link-btn" data-acao="orc-escolher-nota">Escolher a nota</button></div>`;
-  if (o.status === 'recebido' && o.nota) cabNota = `<div class="cartao" style="display:flex;justify-content:space-between;gap:10px;align-items:center">
+  if (temNota && o.nota) cabNota = `<div class="cartao" style="display:flex;justify-content:space-between;gap:10px;align-items:center">
       <div><div class="titulo-sec">NF ${esc(o.nota.numero || '?')}${o.nota.emissao ? ' · ' + dataBR(o.nota.emissao) : ''}</div>
         <div class="mini suave">${o.nota.valor != null ? fmtReais(o.nota.valor) + ' · ' : ''}ligada ${o.vinculado_por === 'automático' ? 'automaticamente' : 'por ' + esc(o.vinculado_por || '?')}${o.nota.conferida ? ' · conferida no Receber' : ''}</div></div>
-      <button class="link-btn" data-acao="orc-desligar">Não é esta nota</button></div>`;
+      ${o.status === 'recebido' ? '<button class="link-btn" data-acao="orc-desligar">Não é esta nota</button>' : ''}</div>`;
+  // [CONCLUIR] a nota chegou: o gestor aceita como veio e o orçamento sai de "A nota chegou"
+  let conclusao = '';
+  if (o.status === 'recebido') conclusao = `<div class="cartao"><div class="titulo-sec">Tudo resolvido com esta nota?</div>
+      <div class="mini suave">Concluir tira o orçamento de "A nota chegou". As diferenças continuam registradas aqui.</div>
+      <button class="btn medio" style="margin-top:10px" data-acao="orc-concluir">✅ Concluir orçamento</button></div>`;
+  if (o.status === 'concluido') conclusao = `<div class="info"><b>✅ Concluído</b>${o.concluido_em ? ' em ' + dataBR(o.concluido_em) : ''}${o.concluido_por ? ' por ' + esc(o.concluido_por) : ''}
+      ${o.nota_conclusao ? `<div class="mini">${esc(o.nota_conclusao)}</div>` : ''}
+      ${o.orcamento_faltou ? `<button class="link-btn" style="margin-top:6px" data-acao="orc-abrir" data-id="${o.orcamento_faltou}">Ver o pedido do que faltou (nº ${o.orcamento_faltou})</button>` : ''}</div>`;
   return `${faixaRede()}${topo(o.fornecedor, `Orçamento nº ${o.id}`, 'orc-voltar', `<span class="pilula ${st[0]}">${st[1]}</span>`)}
     <div class="corpo">
       ${cabNota}
-      ${o.status === 'recebido' ? comparacaoOrc(o) : ''}
-      ${o.status !== 'recebido' ? `<div class="lista-cartoes"><div class="rotulo">Itens (${o.itens.length})${p.salvando ? ' · salvando…' : ''}</div>
+      ${o.status === 'concluido' ? conclusao : ''}
+      ${temNota ? comparacaoOrc(o) : ''}
+      ${o.status === 'recebido' ? conclusao : ''}
+      ${!temNota ? `<div class="lista-cartoes"><div class="rotulo">Itens (${o.itens.length})${p.salvando ? ' · salvando…' : ''}</div>
         <div class="linhas">${o.itens.map(i => linhaItemOrc(i, editavel)).join('') || '<div class="vazio" style="padding:14px">Nenhum produto ainda.</div>'}</div>
         ${editavel ? '<button class="btn claro medio" data-acao="orc-add">+ Adicionar produto</button>' : ''}</div>
       <div class="cartao" style="display:flex;justify-content:space-between;align-items:center"><div class="mini suave" style="font-weight:600">Total estimado${o.valor_real != null ? '<br>com royalties' : ''}</div>
@@ -2262,6 +2273,7 @@ TELAS.orcamento = p => {
         ${editavel ? '<button class="btn claro medio" data-acao="orc-trocar">Comprei de outro fornecedor</button>' : ''}</div>` : ''}
       ${editavel ? '<button class="btn claro medio" data-acao="orc-cancelar">Cancelar orçamento</button>' : ''}
       ${o.status === 'cancelado' ? '<button class="btn claro medio" data-acao="orc-reabrir">Reabrir (voltar a rascunho)</button>' : ''}
+      ${o.status === 'concluido' ? '<button class="btn claro medio" data-acao="orc-reabrir">Reabrir (voltar para "A nota chegou")</button>' : ''}
     </div>
     ${editavel ? `<div class="rodape">
       <label class="mini" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="orc-precos" ${p.comPrecos ? 'checked' : ''}> Mandar os preços no texto</label>
@@ -3362,6 +3374,33 @@ const acoes = {
   'orc-compartilhar': () => compartilharOrcamento(),
   'orc-cancelar': () => { if (confirm('Cancelar este orçamento?')) acaoOrc('POST', `/api/compras/orcamentos/${T.p.o.id}/cancelar`, null, 'Orçamento cancelado.'); },
   'orc-reabrir': () => acaoOrc('POST', `/api/compras/orcamentos/${T.p.o.id}/reabrir`, null, 'Orçamento reaberto.'),
+  // [CONCLUIR] aceitar a nota como veio; opcional: novo orçamento só com o que faltou
+  'orc-concluir': () => {
+    const o = T.p.o, c = o.comparacao;
+    const faltou = c ? c.linhas.filter(l => l.situacao === 'faltou' || l.situacao === 'nao_veio') : [];
+    abrirModal(`<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px"><div class="titulo-sec">Concluir o orçamento nº ${o.id}?</div>
+        <button class="icone-btn" data-acao="fechar-modal" aria-label="Fechar">${ICONES.fechar}</button></div>
+      <div class="mini suave">${c && !c.resumo.tudo_certo ? 'As diferenças continuam registradas no orçamento; ele só sai de "A nota chegou".' : 'Veio tudo como pedido.'}</div>
+      ${faltou.length ? `<label class="cartao" style="display:flex;gap:10px;align-items:flex-start;cursor:pointer"><input type="checkbox" id="orc-faltou" style="margin-top:3px;width:20px;height:20px">
+        <div><b>Pedir o que faltou</b><div class="mini suave">Cria um orçamento novo para ${esc(o.fornecedor)}, com o preço combinado:</div>
+        ${faltou.map(l => { const falta = Math.round((l.pedido - l.nota) * 1000) / 1000, emb = l.fator > 1 ? Math.ceil(falta / l.fator - 1e-9) : 0;
+          return `<div class="mini">• ${esc(l.nome)}: ${emb ? `${emb} emb. (${fmtQtd(emb * l.fator)} ${esc(l.unidade)})` : `${fmtQtd(falta)} ${esc(l.unidade)}`}</div>`; }).join('')}</div></label>` : ''}
+      <div class="campo"><label for="orc-concl-obs">Observação (opcional)</label>
+        <input id="orc-concl-obs" maxlength="300" placeholder="Ex.: veio mais barato, aceito; o resto vem depois" autocomplete="off"></div>
+      <button class="btn" data-acao="orc-concluir-ok">✅ Concluir</button>`);
+  },
+  'orc-concluir-ok': async (d, el) => {
+    const pedir = !!(document.getElementById('orc-faltou') || {}).checked;
+    const obs = (document.getElementById('orc-concl-obs') || {}).value || '';
+    el.disabled = true;
+    try {
+      const o = await api('POST', `/api/compras/orcamentos/${T.p.o.id}/concluir`, {observacao: obs, pedir_faltou: pedir});
+      fecharModal();
+      if (T.nome === 'orcamento' && T.p.id === o.id) { T.p.o = o; desenhar(); }
+      toast(o.novo_orcamento ? `Concluído. O orçamento nº ${o.novo_orcamento} tem o que faltou: confira e compartilhe.` : 'Orçamento concluído.');
+      carregarOrcamentos();
+    } catch (e) { el.disabled = false; toast(e.extra.offline ? 'Sem internet.' : e.message); }
+  },
   'orc-escolher-nota': () => modalNotaOrc(),
   'orc-ligar': d => (!d.outro || confirm(`Esta nota é de ${d.outro}. O orçamento passa para ${d.outro} e a nota é ligada. Continuar?`)) && acaoOrc('POST', `/api/compras/orcamentos/${T.p.o.id}/nota`, {chave: d.chave}, 'Nota ligada ao orçamento.'),
   'orc-desligar': () => { if (confirm('Desligar esta nota do orçamento? Ela não será ligada de novo sozinha.')) acaoOrc('POST', `/api/compras/orcamentos/${T.p.o.id}/nota`, {chave: ''}, 'Nota desligada.'); },

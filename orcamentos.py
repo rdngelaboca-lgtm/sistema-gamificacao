@@ -9,13 +9,16 @@
 # compara item por item:
 #   quantidade: veio certo / faltou / não veio / veio a mais / veio sem pedir
 #   preço:      igual / mais caro / mais barato (custo com impostos, por unidade)
-# Situação: rascunho -> enviado -> recebido (nota ligada)   ou   cancelado
+# Situação: rascunho -> enviado -> recebido (nota ligada) -> concluído   ou   cancelado
+# [CONCLUIR] "concluído" = o gestor viu as diferenças e aceitou (ex.: veio mais barato, ou veio a
+# menos e o resto vem depois). Sai de "A nota chegou" e para de contar como pendente. Ao concluir,
+# dá para criar um orçamento novo só com o que faltou.
 # ==============================================================================
 import html
 import logging
 import re
 from datetime import date, datetime, timedelta
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_CEILING
 
 import config
 import database
@@ -27,6 +30,7 @@ ST_RASCUNHO = 'rascunho'
 ST_ENVIADO = 'enviado'
 ST_RECEBIDO = 'recebido'
 ST_CANCELADO = 'cancelado'
+ST_CONCLUIDO = 'concluido'
 ABERTOS = (ST_RASCUNHO, ST_ENVIADO)
 DIAS_HISTORICO = 60            # recebidos/cancelados aparecem por 60 dias
 DIAS_NOTAS_CANDIDATAS = 60     # notas que podem ser ligadas à mão
@@ -84,6 +88,9 @@ def garantir_tabelas():
                 PRIMARY KEY (OrcamentoID, ProdutoID)
             )
         """)
+        for coluna, tipo in (('ConcluidoEm', 'DATETIME'), ('ConcluidoPor', 'NVARCHAR(150)'), ('NotaConclusao', 'NVARCHAR(300)'),
+                             ('OrcamentoFaltou', 'INT')):           # [CONCLUIR]
+            cur.execute(f"IF COL_LENGTH('CompraOrcamentos', '{coluna}') IS NULL ALTER TABLE CompraOrcamentos ADD {coluna} {tipo} NULL")
         conn.commit()
         _tabelas_ok = True
     finally:
@@ -188,7 +195,8 @@ def criar_orcamento(fornecedor_id, usuario):
 
 def _cabecalho(cur, orcamento_id):
     cur.execute("""SELECT OrcamentoID, FornecedorID, Fornecedor, CNPJ, Status, ListaCodigo, Observacao, CriadoPor, CriadoEm,
-                          EnviadoEm, ChaveNota, VinculadoEm, VinculadoPor, CanceladoEm
+                          EnviadoEm, ChaveNota, VinculadoEm, VinculadoPor, CanceladoEm, ConcluidoEm, ConcluidoPor, NotaConclusao,
+                          OrcamentoFaltou
                    FROM CompraOrcamentos WHERE OrcamentoID = ?""", (int(orcamento_id),))
     r = cur.fetchone()
     if not r:
@@ -196,7 +204,8 @@ def _cabecalho(cur, orcamento_id):
     return {'id': r[0], 'fornecedor_id': r[1], 'fornecedor': r[2] or '', 'cnpj': r[3] or '', 'status': r[4],
             'lista': r[5], 'observacao': r[6] or '', 'criado_por': r[7], 'criado_em': _iso(_como_datahora(r[8])),
             'enviado_em': _iso(_como_datahora(r[9])), 'chave_nota': r[10], 'vinculado_em': _iso(_como_datahora(r[11])),
-            'vinculado_por': r[12], 'cancelado_em': _iso(_como_datahora(r[13]))}
+            'vinculado_por': r[12], 'cancelado_em': _iso(_como_datahora(r[13])), 'concluido_em': _iso(_como_datahora(r[14])),
+            'concluido_por': r[15], 'nota_conclusao': r[16] or '', 'orcamento_faltou': r[17]}
 
 
 def _itens(cur, orcamento_id):
@@ -254,7 +263,8 @@ def obter_orcamento(orcamento_id):
 def _editavel(cab):
     if cab['status'] not in ABERTOS:
         raise ErroCompras("Este orçamento não pode mais ser mudado (" + {
-            ST_RECEBIDO: "a nota já chegou: desligue a nota para mudar", ST_CANCELADO: "foi cancelado"}.get(cab['status'], cab['status']) + ").")
+            ST_RECEBIDO: "a nota já chegou: desligue a nota para mudar", ST_CANCELADO: "foi cancelado",
+            ST_CONCLUIDO: "já foi concluído: reabra para mudar"}.get(cab['status'], cab['status']) + ").")
 
 
 def salvar_orcamento(orcamento_id, itens, observacao, usuario):
@@ -357,8 +367,76 @@ def cancelar(orcamento_id, usuario):
 
 
 def reabrir(orcamento_id, usuario):
-    """Cancelado volta a rascunho (cancelou sem querer)."""
+    """Cancelado volta a rascunho (cancelou sem querer). [CONCLUIR] Concluído volta para "a nota chegou"."""
+    conn = _conexao()
+    try:
+        status = _cabecalho(conn.cursor(), orcamento_id)['status']
+    finally:
+        conn.close()
+    if status == ST_CONCLUIDO:
+        return _mudar_status(orcamento_id, (ST_CONCLUIDO,), ST_RECEBIDO,
+                             {'ConcluidoEm': None, 'ConcluidoPor': None, 'NotaConclusao': None}, usuario)
     return _mudar_status(orcamento_id, (ST_CANCELADO,), ST_RASCUNHO, {'CanceladoEm': None}, usuario)
+
+
+def _o_que_faltou(itens, comparacao):
+    """[(item do orçamento, quantidade que faltou)] dos itens que vieram a menos ou não vieram na nota."""
+    linhas = {l['produto_id']: l for l in (comparacao or {}).get('linhas', [])}
+    faltou = []
+    for i in itens:
+        l = linhas.get(i['produto_id'])
+        if not l or l['situacao'] not in ('faltou', 'nao_veio'):
+            continue
+        falta = i['qtd'] - _dec(l['nota'] or 0)
+        if i['fator'] > 1:                    # pede em embalagens inteiras do fornecedor
+            emb = (falta / i['fator']).to_integral_value(rounding=ROUND_CEILING)
+            falta = emb * i['fator']
+        if falta > 0:
+            faltou.append((i, falta))
+    return faltou
+
+
+def concluir(orcamento_id, usuario, observacao=None, pedir_faltou=False):
+    """
+    [CONCLUIR] A nota chegou e o gestor aceitou como veio (as diferenças ficam registradas na comparação).
+    pedir_faltou=True: cria um orçamento NOVO (rascunho, mesmo fornecedor, preço combinado) só com o que
+    veio a menos / não veio, para mandar de novo. Devolve o orçamento (+ 'novo_orcamento' quando criou).
+    """
+    o = obter_orcamento(orcamento_id)
+    if o['status'] != ST_RECEBIDO:
+        raise ErroCompras("Só dá para concluir um orçamento com a nota já ligada (\"A nota chegou\"). Atualize a tela.")
+    obs = ' '.join(str(observacao or '').split())[:300] or None
+    novo = None
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        cab = _cabecalho(cur, orcamento_id)
+        if cab['status'] != ST_RECEBIDO:
+            raise ErroCompras("Este orçamento não está mais nessa situação. Atualize a tela.")
+        if pedir_faltou:
+            faltou = _o_que_faltou(_itens(cur, orcamento_id), o['comparacao'])
+            if not faltou:
+                raise ErroCompras("Não faltou nada nesta nota: desmarque \"pedir o que faltou\".")
+            novo = _novo(cur, {'id': cab['fornecedor_id'], 'nome': cab['fornecedor'], 'cnpj': cab['cnpj']}, usuario, cab['lista'])
+            for ordem, (i, falta) in enumerate(faltou):
+                cur.execute("""INSERT INTO CompraOrcamentoItens (OrcamentoID, ProdutoID, Ordem, NomeProduto, Unidade, Qtd, Fator, Preco,
+                                                                 DescricaoFornecedor, CodigoFornecedor)
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                            (novo, i['produto_id'], ordem, i['nome'][:255], i['unidade'][:20], falta, i['fator'], i['preco'],
+                             i['descricao_fornecedor'] and i['descricao_fornecedor'][:255],
+                             i['codigo_fornecedor'] and i['codigo_fornecedor'][:60]))
+            cur.execute("UPDATE CompraOrcamentos SET Observacao = ? WHERE OrcamentoID = ?",
+                        (f"O que faltou na NF {(o['nota'] or {}).get('numero') or '?'} (orçamento nº {int(orcamento_id)})"[:500], novo))
+        cur.execute("""UPDATE CompraOrcamentos SET Status = ?, ConcluidoEm = ?, ConcluidoPor = ?, NotaConclusao = ?, OrcamentoFaltou = ?
+                       WHERE OrcamentoID = ? AND Status = ?""",
+                    (ST_CONCLUIDO, datetime.now(), usuario.get('nome'), obs, novo or cab['orcamento_faltou'], int(orcamento_id), ST_RECEBIDO))
+        conn.commit()
+    finally:
+        conn.close()
+    logger.info(f"Orçamento {orcamento_id}: concluído por {usuario.get('nome')}" + (f" (o que faltou -> nº {novo})" if novo else "") + ".")
+    o = obter_orcamento(orcamento_id)
+    o['novo_orcamento'] = novo
+    return o
 
 
 # ------------------------------------------------------------------------------
@@ -519,6 +597,8 @@ def ligar_nota(orcamento_id, chave, usuario):
         cab = _cabecalho(cur, orcamento_id)
         if cab['status'] == ST_CANCELADO:
             raise ErroCompras("Orçamento cancelado.")
+        if cab['status'] == ST_CONCLUIDO:
+            raise ErroCompras("Orçamento concluído: toque em \"Reabrir\" antes de trocar a nota.")
         if not chave:
             # a nota desligada não volta sozinha (era a nota errada)
             cur.execute("SELECT NotasRecusadas FROM CompraOrcamentos WHERE OrcamentoID = ?", (int(orcamento_id),))
@@ -795,22 +875,23 @@ def listar_orcamentos(hoje=None):
     try:
         cur = conn.cursor()
         cur.execute("""SELECT O.OrcamentoID, O.Fornecedor, O.Status, O.CriadoEm, O.EnviadoEm, O.ChaveNota, O.CanceladoEm, O.VinculadoEm,
-                              COUNT(I.ProdutoID), SUM(I.Qtd * I.Preco)
+                              O.ConcluidoEm, COUNT(I.ProdutoID), SUM(I.Qtd * I.Preco)
                        FROM CompraOrcamentos O LEFT JOIN CompraOrcamentoItens I ON I.OrcamentoID = O.OrcamentoID
-                       GROUP BY O.OrcamentoID, O.Fornecedor, O.Status, O.CriadoEm, O.EnviadoEm, O.ChaveNota, O.CanceladoEm, O.VinculadoEm""")
+                       GROUP BY O.OrcamentoID, O.Fornecedor, O.Status, O.CriadoEm, O.EnviadoEm, O.ChaveNota, O.CanceladoEm, O.VinculadoEm,
+                                O.ConcluidoEm""")
         linhas = cur.fetchall()
     finally:
         conn.close()
     limite = hoje - timedelta(days=DIAS_HISTORICO)
     lista = []
-    for oid, forn, st, criado, enviado, chave, cancelado, vinculado, qtd, valor in linhas:
-        fim = _como_datahora(cancelado) or _como_datahora(vinculado)
+    for oid, forn, st, criado, enviado, chave, cancelado, vinculado, concluido, qtd, valor in linhas:
+        fim = _como_datahora(cancelado) or _como_datahora(concluido) or _como_datahora(vinculado)
         if st not in ABERTOS and fim and fim.date() < limite:
             continue
         item = {'id': oid, 'fornecedor': forn or '', 'status': st, 'criado_em': _iso(_como_datahora(criado)),
                 'enviado_em': _iso(_como_datahora(enviado)), 'qtd_itens': int(qtd or 0), 'valor': _num(valor, 2) if valor is not None else None,
-                'nota': None, 'resumo': None}
-        if st == ST_RECEBIDO and chave:
+                'nota': None, 'resumo': None, 'concluido_em': _iso(_como_datahora(concluido))}
+        if st in (ST_RECEBIDO, ST_CONCLUIDO) and chave:
             try:
                 o = obter_orcamento(oid)
                 item['nota'] = {'numero': (o['nota'] or {}).get('numero'), 'emissao': (o['nota'] or {}).get('emissao')}
@@ -819,7 +900,7 @@ def listar_orcamentos(hoje=None):
             except Exception as e:
                 item['resumo'] = f"não deu para comparar: {e}"
         lista.append(item)
-    ordem = {ST_RASCUNHO: 0, ST_ENVIADO: 1, ST_RECEBIDO: 2, ST_CANCELADO: 3}
+    ordem = {ST_RASCUNHO: 0, ST_ENVIADO: 1, ST_RECEBIDO: 2, ST_CONCLUIDO: 3, ST_CANCELADO: 4}
     lista.sort(key=lambda x: (ordem.get(x['status'], 9), -(x['id'])))
     return lista
 
@@ -840,6 +921,7 @@ def orcamento_da_nota(chave):
         c = o['comparacao']
         diferencas = [l for l in c['linhas'] if l['situacao'] != 'ok' or l['preco'] in ('mais_caro', 'mais_barato')] if c else []
         return {'id': o['id'], 'resumo': texto_resumo(o), 'tudo_certo': bool(c and c['resumo']['tudo_certo']),
+                'concluido': o['status'] == ST_CONCLUIDO,
                 'diferencas': diferencas[:30], 'nao_pedidos': (c or {}).get('nao_pedidos', [])[:30]}
     except Exception as e:
         logger.warning(f"Orçamentos: não deu para ler o orçamento da nota {chave}: {e}")
