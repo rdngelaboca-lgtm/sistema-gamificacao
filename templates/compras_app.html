@@ -94,6 +94,18 @@
   .segmento { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); background: var(--linha2); border-radius: 12px; padding: 4px; gap: 4px; }
   .segmento button { height: 40px; border-radius: 9px; border: 0; background: transparent; font-size: 15px; font-weight: 600; color: var(--suave); }
   .segmento button.sel { background: #fff; color: var(--texto); font-weight: 700; }
+  /* [GESTÃO EM 3 ÁREAS] Loja · Compras · Estoque, com o número de pendências em cada uma */
+  .segmento.tres { grid-template-columns: repeat(3, minmax(0, 1fr)); border-radius: 14px; }
+  .segmento.tres button { height: 46px; border-radius: 11px; display: flex; align-items: center; justify-content: center; gap: 4px;
+    white-space: nowrap; padding: 0 2px; font-size: 14px; position: relative; }
+  .segmento.tres button.sel { box-shadow: 0 1px 3px rgba(22, 32, 31, .14); }
+  .segmento .qtd { position: absolute; top: -7px; right: -3px; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 99px;
+    background: var(--laranja); color: #fff; font-size: 11px; font-weight: 800; display: inline-flex; align-items: center;
+    justify-content: center; box-shadow: 0 0 0 2px var(--fundo); }
+  .filtros.sub .filtro { height: 34px; padding: 0 13px; font-size: 14px; }
+  .linhas > a.lin { color: inherit; text-decoration: none; }
+  .linhas > a.lin:active { background: var(--linha2); }
+  .atalho-ic { font-size: 22px; width: 28px; text-align: center; flex-shrink: 0; }
   .contador { display: flex; align-items: center; justify-content: space-between; background: #fff; border: 1px solid var(--linha);
     border-radius: 20px; padding: 10px; gap: 8px; }
   .contador .mm { width: 72px; height: 72px; border-radius: 16px; border: 0; background: var(--linha2); display: flex;
@@ -1721,12 +1733,27 @@ function conteudoConsumo(p) {
 }
 
 // ---------------------------------------------------------------- [PAINEL DO GESTOR] aba Gestão
+// [GESTÃO EM 3 ÁREAS] Loja (folha, faturamento e a Gestão Web) · Compras (resumo e relatórios) · Estoque
+const AREAS_GESTAO = [['loja', '🏪', 'Loja'], ['compras', '🛒', 'Compras'], ['estoque', '📦', 'Estoque']];
+const SECOES_GESTAO = {
+  compras: [['compras', 'Resumo'], ['categorias', 'Categorias'], ['inflacao', 'Inflação'], ['barato', 'Mais barato'], ['precos', 'Preços'], ['cupons', 'Cupons']],
+  estoque: [['estoque', 'Resumo'], ['consumo', 'Consumo']]};
+function areaDaSecao(s) { return Object.keys(SECOES_GESTAO).find(a => SECOES_GESTAO[a].some(([id]) => id === s)) || 'loja'; }
+// sem seção (ou 'resumo', dos links antigos): abre na última área usada
+function secaoInicialGestao(s) { return s && s !== 'resumo' ? s : (E.gestaoArea || 'loja'); }
+function pendenciasGestao() {
+  const pn = E.painel || {}, l = pn.listas || {}, a = (E.folha && E.folha.acumulado) || {};
+  return {loja: (a.faltam_lancar || []).length,
+          compras: ((l.aguardando || {}).qtd || 0) + ((pn.cupons || {}).pendentes || 0),
+          estoque: (pn.estoque || {}).qtd_acabando || 0};
+}
 TELAS.gestao = p => {
   if (!E.usuario.gestor) return TELAS.inicio();
-  const secao = p.secao || 'resumo';
-  const abas = [['resumo', 'Resumo'], ['categorias', 'Por categoria'], ['inflacao', 'Inflação'], ['barato', 'Mais barato'],
-                ['precos', 'Preços'], ['cupons', 'Cupons fiscais'], ['consumo', 'Consumo']].map(([id, txt]) =>
-    `<button class="filtro ${secao === id ? 'sel' : ''}" data-acao="gestao-secao" data-s="${id}">${txt}</button>`).join('');
+  const secao = p.secao || 'loja', area = areaDaSecao(secao), pend = pendenciasGestao();
+  const areas = AREAS_GESTAO.map(([id, ic, txt]) => `<button class="${area === id ? 'sel' : ''}" data-acao="gestao-area" data-a="${id}" aria-pressed="${area === id}">${ic} ${txt}${
+      pend[id] ? `<span class="qtd" title="${pend[id]} pendência(s)">${pend[id]}</span>` : ''}</button>`).join('');
+  const subs = SECOES_GESTAO[area] ? `<div class="filtros sub">${SECOES_GESTAO[area].map(([id, txt]) =>
+      `<button class="filtro ${secao === id ? 'sel' : ''}" data-acao="gestao-secao" data-s="${id}">${txt}</button>`).join('')}</div>` : '';
   let corpo;
   if (secao === 'cupons') {
     corpo = `<button class="btn claro medio" data-acao="cupom-ler">${ICONES.qr} ${ehComputador() ? 'Lançar cupom fiscal (chave, link ou imagem)' : 'Ler QR Code de um cupom'}</button>
@@ -1743,15 +1770,39 @@ TELAS.gestao = p => {
     corpo = p.preco ? conteudoPreco(p.preco, p) : `<div class="campo"><label for="busca-preco">Procurar produto</label>
         <input id="busca-preco" placeholder="Digite parte do nome (ex.: leite cond)" autocomplete="off" value="${esc(p.buscaPreco || '')}"></div>
       <div id="res-preco" class="linhas">${p.carregandoPreco ? '<div class="vazio">Carregando…</div>' : '<div class="vazio" style="padding:14px">Digite pelo menos 2 letras.</div>'}</div>`;
+  } else if (secao === 'compras') {
+    corpo = conteudoCompras(E.painel);
+  } else if (secao === 'estoque') {
+    corpo = conteudoEstoque(E.painel);
   } else {
-    corpo = cartaoFolha(E.folha) + conteudoResumo(E.painel);
+    corpo = conteudoLoja(E.folha);
   }
-  // [GESTÃO WEB] atalho para a Escala da loja (Gestão no navegador; abre na loja e fora dela)
-  const atalhoEscala = `<div class="linha-btns"><a class="btn claro medio" href="/gestao/escala">🗓️ Escala da loja</a>
-    <a class="btn claro medio" href="/gestao/folha">📊 Folha × Faturamento</a></div>`;
-  return `${faixaRede()}${topo('Gestão', 'Relatórios e conferências (só o gestor vê)')}
-    <div class="corpo">${atalhoEscala}<div class="filtros">${abas}</div>${corpo}</div>${navbar('gestao')}`;
+  return `${faixaRede()}${topo('Gestão', 'Loja, compras e estoque (só o gestor vê)')}
+    <div class="corpo"><div class="segmento tres" role="group" aria-label="Área da gestão">${areas}</div>${subs}${corpo}</div>${navbar('gestao')}`;
 };
+function carregarSecaoGestao(s) {
+  if (s === 'loja' || s === 'compras' || s === 'estoque') carregarPainel();
+  else if (s === 'cupons') carregarCupons().then(() => { if (T.nome === 'gestao') desenhar(); });
+  else if (s === 'consumo') { const r = E.rotinas.find(x => x.id === T.p.rotina_id) || E.rotinas[0]; if (r) carregarConsumo(r.id); }
+  else if (s === 'categorias') carregarRelatorio('categorias', T.p.mesRel);
+  else if (s === 'inflacao') carregarRelatorio('inflacao');
+  else if (s === 'barato') carregarRelatorio('mais-barato', T.p.mesRel);
+}
+// [GESTÃO EM 3 ÁREAS] páginas da Gestão Web: abrem no navegador, com o mesmo login do app
+const ATALHOS_GESTAO_WEB = [
+  ['/gestao/escala', '🗓️', 'Escala da loja', 'Quem trabalha em cada dia e em qual posição'],
+  ['/gestao/folha', '📊', 'Folha × Faturamento', 'Dia a dia, gráfico do mês, clima e meta'],
+  ['/gestao/pagamentos', '💰', 'Pagamentos', 'Diárias dos freelancers, Pix e recibos'],
+  ['/gestao/freelancers', '👤', 'Freelancers', 'Cadastro, telefone e WhatsApp'],
+  ['/gestao/avisos', '📣', 'Avisos', 'Para onde vão os avisos: WhatsApp ou Telegram']];
+function conteudoLoja(f) {
+  return `${cartaoFolha(f)}
+    <div class="rotulo">Gestão da loja</div>
+    <div class="linhas">${ATALHOS_GESTAO_WEB.map(([href, ic, txt, sub]) => `<a class="lin" href="${href}"><span class="atalho-ic" aria-hidden="true">${ic}</span>
+      <div class="grow"><div style="font-weight:700">${txt}</div><div class="mini suave">${sub}</div></div>${ICONES.seta}</a>`).join('')}</div>
+    <div class="mini suave" style="text-align:center">Abrem no navegador (Gestão Web), com o mesmo login do app ·
+      <button class="icone-btn" style="width:auto;display:inline;color:var(--verde);font-weight:700" data-acao="gestao-atualizar">atualizar</button></div>`;
+}
 // ---------------------------------------------------------------- [RELATÓRIOS] categoria, inflação, onde comprar mais barato
 const NOMES_MES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
 function nomeMes(ym) { const [a, m] = ym.split('-'); return `${NOMES_MES[+m - 1]}/${a.slice(2)}`; }
@@ -1831,16 +1882,20 @@ function conteudoBarato(p) {
     ${linhas || '<div class="vazio">Nenhum produto comprado em mais de um fornecedor neste período.</div>'}
     <div class="mini suave">Compara cada compra com a última compra de OUTRO fornecedor nos 60 dias antes, por unidade do estoque, com impostos. Não considera pedido mínimo, frete ou prazo.</div>`;
 }
-function conteudoResumo(pn) {
-  if (!pn) return `<div class="vazio">${online ? 'Carregando…' : 'Sem internet: o resumo ainda não foi baixado neste celular.'}</div>`;
-  const card = (titulo, valor, sub, acao, cor) => `<button class="cartao" style="text-align:left;display:flex;flex-direction:column;gap:4px" ${acao || ''}>
-      <div class="mini suave" style="font-weight:700">${titulo}</div><div style="font-size:22px;font-weight:800;color:${cor || 'var(--texto)'}">${valor}</div>
+function semPainel() { return `<div class="vazio">${online ? 'Carregando…' : 'Sem internet: o resumo ainda não foi baixado neste celular.'}</div>`; }
+function cardGestao(titulo, valor, sub, acao, cor) {
+  return `<button class="cartao" style="text-align:left;display:flex;flex-direction:column;gap:4px" ${acao || ''}>
+      <div class="mini suave" style="font-weight:700">${titulo}</div><div style="font-size:${String(valor).length > 12 ? 16 : String(valor).length > 9 ? 18 : 22}px;font-weight:800;white-space:nowrap;color:${cor || 'var(--texto)'}">${valor}</div>
       ${sub ? `<div class="mini suave">${sub}</div>` : ''}</button>`;
+}
+function rodapePainel(pn) {
+  return `${(pn.avisos || []).map(a => `<div class="mini suave">⚠ ${esc(a)}</div>`).join('')}
+    <div class="mini suave" style="text-align:center">Atualizado ${pn.gerado_em ? dataBR(pn.gerado_em) + ' ' + pn.gerado_em.slice(11, 16) : ''} · <button class="icone-btn" style="width:auto;display:inline;color:var(--verde);font-weight:700" data-acao="gestao-atualizar">atualizar</button></div>`;
+}
+function conteudoCompras(pn) {
+  if (!pn) return semPainel();
   const l = pn.listas || {}, ag = l.aguardando || {qtd: 0}, ap = l.aprovada || {qtd: 0}, cp = pn.cupons || {};
   const comp = pn.compras;
-  const est = pn.estoque;
-  const linhasEst = (arr, fn) => arr.map(a => `<div class="lin" style="padding:8px 10px"><div class="grow pequeno" style="font-weight:700">${esc(a.produto)}</div>
-      <div class="mini" style="text-align:right">${fn(a)}</div></div>`).join('');
   // mesmo período do mês passado (dia 1 até hoje): comparar com o mês passado INTEIRO enganava
   let comparativo = '';
   if (comp && comp.mes_anterior_ate != null && comp.mes_anterior) {
@@ -1849,23 +1904,30 @@ function conteudoResumo(pn) {
   } else if (comp && comp.mes_anterior) comparativo = `mês passado: ${fmtReais(comp.mes_anterior)}`;
   return `
     <div class="linha-btns">
-      ${card('Listas para aprovar', ag.qtd, ag.qtd ? '≈ ' + fmtReais(ag.valor) : 'nenhuma esperando', 'data-acao="nav" data-tela="listas"', ag.qtd ? 'var(--laranja)' : '')}
-      ${card('Compras em andamento', ap.qtd, ap.qtd ? 'listas aprovadas' : 'nenhuma aberta', 'data-acao="nav" data-tela="listas"')}</div>
+      ${cardGestao('Listas para aprovar', ag.qtd, ag.qtd ? '≈ ' + fmtReais(ag.valor) : 'nenhuma esperando', 'data-acao="nav" data-tela="listas"', ag.qtd ? 'var(--laranja)' : '')}
+      ${cardGestao('Compras em andamento', ap.qtd, ap.qtd ? 'listas aprovadas' : 'nenhuma aberta', 'data-acao="nav" data-tela="listas"')}</div>
     <div class="linha-btns">
-      ${card('Cupons para conferir', cp.pendentes || 0, cp.erro ? `${cp.erro} com erro na SEFAZ` : 'lançar no estoque', 'data-acao="gestao-secao" data-s="cupons"', cp.pendentes ? 'var(--laranja)' : '')}
-      ${card('Compras no mês' + (comp ? ' (' + esc(comp.nome_mes) + ')' : ''), comp ? fmtReais(comp.mes) : '—', comparativo || 'pelas notas lançadas')}</div>
+      ${cardGestao('Cupons para conferir', cp.pendentes || 0, cp.erro ? `${cp.erro} com erro na SEFAZ` : 'lançar no estoque', 'data-acao="gestao-secao" data-s="cupons"', cp.pendentes ? 'var(--laranja)' : '')}
+      ${cardGestao('Compras no mês' + (comp ? ' (' + esc(comp.nome_mes) + ')' : ''), comp ? fmtReais(comp.mes) : '—', comparativo || 'pelas notas lançadas', 'data-acao="gestao-secao" data-s="categorias"')}</div>
+    ${pn.listas_esquecidas && pn.listas_esquecidas.length ? `<div class="aviso"><b>Listas aprovadas e não finalizadas:</b>
+      ${pn.listas_esquecidas.map(x => `<div class="mini">• ${esc(x.rotina)} de ${esc(x.funcionario || '?')} (${x.dias} dias)</div>`).join('')}</div>` : ''}
     ${comp && comp.fornecedores && comp.fornecedores.length ? `<div class="cartao"><div class="titulo-sec">Maiores fornecedores do mês</div>
       <div class="linhas" style="border:0">${comp.fornecedores.map(f => `<div class="lin" style="padding:7px 2px"><div class="grow pequeno">${esc(nomeCurto(f.nome))}</div><b class="pequeno">${fmtReais(f.valor)}</b></div>`).join('')}</div></div>` : ''}
-    ${est ? `<div class="cartao"><div class="titulo-sec" style="color:var(--laranja)">Devem acabar em até 2 dias (${est.qtd_acabando})</div>
+    ${rodapePainel(pn)}`;
+}
+function conteudoEstoque(pn) {
+  if (!pn) return semPainel();
+  const est = pn.estoque;
+  const linhasEst = (arr, fn) => arr.map(a => `<div class="lin" style="padding:8px 10px"><div class="grow pequeno" style="font-weight:700">${esc(a.produto)}</div>
+      <div class="mini" style="text-align:right">${fn(a)}</div></div>`).join('');
+  return `
+    ${est ? `<div class="cartao"><div class="titulo-sec" style="color:${est.qtd_acabando ? 'var(--laranja)' : 'var(--texto)'}">Devem acabar em até 2 dias (${est.qtd_acabando})</div>
       ${est.acabando.length ? `<div class="linhas" style="border:0">${linhasEst(est.acabando, a => `tem ≈ ${fmtQtd(a.estoque)} ${esc(unCurta(a.unidade))}<br>${a.dias < 0.5 ? '<b>acabou</b>' : 'dura ~' + fmtQtd(a.dias) + ' dia(s)'}`)}</div>` : '<div class="mini suave">Nenhum item.</div>'}</div>
     <div class="cartao"><div class="titulo-sec">Abaixo do estoque mínimo (${est.qtd_abaixo})</div>
       ${est.abaixo.length ? `<div class="linhas" style="border:0">${linhasEst(est.abaixo, a => `tem ≈ ${fmtQtd(a.estoque)}<br>mínimo ${fmtQtd(a.minimo)} ${esc(unCurta(a.unidade))}`)}</div>` : '<div class="mini suave">Nenhum item.</div>'}</div>` : ''}
     ${pn.aumentos && pn.aumentos.length ? `<div class="cartao"><div class="titulo-sec">Preços que subiram (30 dias)</div>
       ${pn.aumentos.map(t => `<div class="mini" style="padding:4px 0">• ${esc(t)}</div>`).join('')}</div>` : ''}
-    ${pn.listas_esquecidas && pn.listas_esquecidas.length ? `<div class="aviso"><b>Listas aprovadas e não finalizadas:</b>
-      ${pn.listas_esquecidas.map(x => `<div class="mini">• ${esc(x.rotina)} de ${esc(x.funcionario || '?')} (${x.dias} dias)</div>`).join('')}</div>` : ''}
-    ${(pn.avisos || []).map(a => `<div class="mini suave">⚠ ${esc(a)}</div>`).join('')}
-    <div class="mini suave" style="text-align:center">Atualizado ${pn.gerado_em ? dataBR(pn.gerado_em) + ' ' + pn.gerado_em.slice(11, 16) : ''} · <button class="icone-btn" style="width:auto;display:inline;color:var(--verde);font-weight:700" data-acao="gestao-atualizar">atualizar</button></div>`;
+    ${rodapePainel(pn)}`;
 }
 // ---------------------------------------------------------------- [RECEBIMENTO] conferência da mercadoria que chega
 const ST_RECEB = {aguardando: ['p-laranja', 'Aguardando conferência'], conferida: ['p-verde', 'Conferida'],
@@ -2446,25 +2508,33 @@ async function carregarPainel() {
   try { E.painel = await api('GET', '/api/compras/painel'); salvar(); if (T.nome === 'gestao') desenhar(); }
   catch (e) { if (!e.extra.offline && T.nome === 'gestao') toast(e.message); }
 }
-// [FOLHA × FATURAMENTO] último dia lançado: clima, faturamento, folha do dia e do mês (x meta) + previsão de hoje
+// [FOLHA × FATURAMENTO] último dia lançado: clima, faturamento, folha do dia e do mês (x meta) + previsão de hoje e amanhã
+let erroFolha = null;
 async function carregarFolha() {
-  try { E.folha = await api('GET', '/api/gestao/folha/resumo'); salvar(); if (T.nome === 'gestao') desenhar(); }
-  catch (e) { /* servidor sem o módulo ou sem internet: o card só não aparece */ }
+  try { E.folha = await api('GET', '/api/gestao/folha/resumo'); erroFolha = null; salvar(); }
+  catch (e) { erroFolha = e.extra.offline ? 'sem internet: ainda não foi baixada neste celular.' : e.message; }
+  if (T.nome === 'gestao') desenhar();
+}
+function linhaPrevisao(rotulo, x) {
+  if (!x || !x.clima) return '';
+  const q = x.parecidos && x.parecidos.faturamento ? x.parecidos : null;
+  return `<div class="mini">🌡️ ${rotulo}: ${esc(x.clima.texto)}${q ? ` · em dias parecidos ~${fmtReais(Math.round(q.faturamento / 10) * 10)} e <b>${fmtQtd(q.freelas)} freela(s)</b>` : ''}</div>`;
 }
 function cartaoFolha(f) {
-  if (!f || !f.dia) return '';
-  const x = f.dia, a = f.acumulado || {}, h = f.hoje;
+  const lancar = '<a class="btn claro medio" href="/gestao/folha?lancar=1">💰 Lançar faturamento do dia</a>';
+  if (!f) return erroFolha ? `<div class="aviso">📊 Folha × Faturamento: ${esc(erroFolha)}</div>${lancar}` : '<div class="vazio">Carregando…</div>';
+  const x = f.dia, a = f.acumulado || {};
   const pct = v => v == null ? '—' : `<b style="color:${v <= f.meta ? 'var(--verde-esc)' : 'var(--laranja)'}">${fmtQtd(v)}%</b>`;
   const dm = iso => iso.slice(8, 10) + '/' + iso.slice(5, 7);
-  const q = h && h.parecidos && h.parecidos.faturamento ? h.parecidos : null;
-  return `<a class="cartao" href="/gestao/folha" style="text-decoration:none;color:inherit;display:flex;flex-direction:column;gap:4px">
-    <div class="mini suave" style="font-weight:700">📊 FOLHA × FATURAMENTO · ${esc(x.dia)} ${dm(x.data)}${x.clima ? ' · ' + esc(x.clima.icone || '') + ' ' + Math.round(x.clima.max) + '°/' + Math.round(x.clima.min) + '°' : ''}</div>
+  const dia = x ? `<div class="mini suave" style="font-weight:700">📊 FOLHA × FATURAMENTO · ${esc(x.dia)} ${dm(x.data)}${x.clima ? ' · ' + esc(x.clima.icone || '') + ' ' + Math.round(x.clima.max) + '°/' + Math.round(x.clima.min) + '°' : ''}</div>
     <div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline"><div style="font-size:22px;font-weight:800">${fmtReais(x.faturamento)}</div>
       <div class="pequeno">folha ${pct(x.pct)}</div></div>
-    <div class="mini suave">${x.fixos} fixo(s) + ${x.freelas} freela(s) · freelancers ${fmtReais(x.freela)}${a.pct != null ? ` · mês até ${dm(a.ate)}: ${pct(a.pct)} (meta ${fmtQtd(f.meta)}%)` : ''}</div>
+    <div class="mini suave">${x.fixos} fixo(s) + ${x.freelas} freela(s) · freelancers ${fmtReais(x.freela)}${a.pct != null ? ` · mês até ${dm(a.ate)}: ${pct(a.pct)} (meta ${fmtQtd(f.meta)}%)` : ''}</div>`
+    : `<div class="mini suave" style="font-weight:700">📊 FOLHA × FATURAMENTO</div><div class="pequeno">Nenhum faturamento lançado nos últimos 90 dias.</div>`;
+  return `<a class="cartao" href="/gestao/folha" style="text-decoration:none;color:inherit;display:flex;flex-direction:column;gap:4px">${dia}
     ${a.faltam_lancar && a.faltam_lancar.length ? `<div class="mini" style="color:var(--laranja);font-weight:700">⚠️ Falta lançar o faturamento de ${a.faltam_lancar.map(dm).join(', ')}</div>` : ''}
-    ${h && h.clima ? `<div class="mini">🌡️ Hoje: ${esc(h.clima.texto)}${q ? ` · em dias parecidos ~${fmtReais(Math.round(q.faturamento / 10) * 10)} e <b>${fmtQtd(q.freelas)} freela(s)</b>` : ''}</div>` : ''}</a>
-    <a class="btn claro medio" href="/gestao/folha?lancar=1">💰 Lançar faturamento do dia</a>`;
+    ${linhaPrevisao('Hoje', f.hoje)}${linhaPrevisao('Amanhã', f.amanha)}</a>
+    ${lancar}`;
 }
 async function carregarConsumo(rotinaId) {
   // contagem aberta (em uso ou guardada): não troca os itens no meio dela
@@ -3088,10 +3158,11 @@ const acoes = {
     else if (tela === 'listas') { filtroListas = d.filtro || 'abertas'; ir('listas', {filtro: filtroListas}); carregarInicio().then(() => { if (T.nome === 'listas') desenhar(); }); }
     else if (tela === 'gestao') {
       if (!E.usuario.gestor) return acoes.nav({tela: 'inicio'});
-      ir('gestao', {secao: d.secao || 'resumo'});
-      if ((d.secao || 'resumo') === 'resumo') carregarPainel();
-      carregarCupons().then(() => { if (T.nome === 'gestao') desenhar(); });
-      if (d.secao === 'consumo' && E.rotinas[0]) carregarConsumo(E.rotinas[0].id);
+      const secao = secaoInicialGestao(d.secao);
+      ir('gestao', {secao});
+      carregarPainel();   // [GESTÃO EM 3 ÁREAS] painel e folha dão o número de pendências nos botões das 3 áreas
+      if (secao !== 'cupons') carregarCupons().then(() => { if (T.nome === 'gestao') desenhar(); });
+      if (!['loja', 'compras', 'estoque'].includes(secao)) carregarSecaoGestao(secao);
     }
     else if (tela === 'rotinas') { ir('rotinas', {}); }
     else if (tela === 'estoque') { ir('estoque', {selCats: []}); carregarEstoque(); }
@@ -3305,14 +3376,14 @@ const acoes = {
   'consumo-rotina': d => { T.p.rotina_id = +d.id; desenhar(); carregarConsumo(+d.id); },
   'gestao-secao': d => {
     if (T.nome !== 'gestao') return acoes.nav({tela: 'gestao', secao: d.s});
-    T.p.secao = d.s; desenhar();
-    if (d.s === 'resumo') carregarPainel();
-    else if (d.s === 'cupons') carregarCupons().then(() => { if (T.nome === 'gestao') desenhar(); });
-    else if (d.s === 'consumo') { const r = E.rotinas.find(x => x.id === T.p.rotina_id) || E.rotinas[0]; if (r) carregarConsumo(r.id); }
-    else if (d.s === 'categorias') carregarRelatorio('categorias', T.p.mesRel);
-    else if (d.s === 'inflacao') carregarRelatorio('inflacao');
-    else if (d.s === 'barato') carregarRelatorio('mais-barato', T.p.mesRel);
+    const area = areaDaSecao(d.s);
+    T.p.secao = d.s; T.p.subs = {...(T.p.subs || {}), [area]: d.s};
+    if (E.gestaoArea !== area) { E.gestaoArea = area; salvar(); }   // a Gestão abre na última área usada
+    desenhar(); window.scrollTo(0, 0);
+    carregarSecaoGestao(d.s);
   },
+  // [GESTÃO EM 3 ÁREAS] volta para a seção que estava aberta na área; tocar na área atual volta ao resumo dela
+  'gestao-area': d => acoes['gestao-secao']({s: areaDaSecao(T.p.secao) === d.a ? d.a : ((T.p.subs || {})[d.a] || d.a)}),
   'rel-mes': d => { T.p.mesRel = d.m === hojeISO().slice(0, 7) ? '' : d.m; acoes['rel-recarregar'](); },
   'rel-recarregar': () => {
     const nome = {categorias: 'categorias', inflacao: 'inflacao', barato: 'mais-barato'}[T.p.secao];

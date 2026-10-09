@@ -256,6 +256,17 @@ Se o WhatsApp falhar, o aviso vai pelo Telegram com um alerta (nada se perde). O
 comunicados, pontos) e os comandos do grupo (`/lancar`…) continuam no Telegram. Arquivos: `notificador_whatsapp.py`
 (`enviar_para_grupo`, `listar_grupos`, `html_para_whatsapp`), `alertas_estoque.py`, `templates/gestao_avisos.html`.
 
+### App de compras — aba Gestão em 3 áreas (10/2026)
+A aba **Gestão** do app (só o gestor vê) foi dividida em **🏪 Loja · 🛒 Compras · 📦 Estoque**, com o número de
+pendências de cada área no botão (Loja: dias sem faturamento lançado; Compras: listas para aprovar + cupons para
+conferir; Estoque: produtos que acabam em até 2 dias). A Gestão abre na última área usada.
+- **🏪 Loja**: cartão da Folha × Faturamento (último dia, mês × meta, falta lançar, previsão de hoje e de amanhã),
+  **💰 Lançar faturamento do dia** e a lista **Gestão da loja** com as páginas da Web (Escala, Folha, Pagamentos,
+  Freelancers, 📣 Avisos).
+- **🛒 Compras**: Resumo (listas, compras em andamento, cupons, compras do mês, listas esquecidas, maiores
+  fornecedores) e os relatórios Categorias, Inflação, Mais barato, Preços e Cupons.
+- **📦 Estoque**: Resumo (acabam em até 2 dias, abaixo do mínimo, preços que subiram) e Consumo.
+
 ## 4. Gestão de Pessoas — RH (`gestao_pessoas_main.py` — 1.800 linhas)
 
 Dados sensíveis: fica **por último**, com a segurança já testada.
@@ -319,7 +330,8 @@ Cada etapa: construir → testar → usar em paralelo com o PC → marcar ✅ aq
 - No computador do servidor: `http://localhost:5000/gestao`
 - Nos outros computadores/celulares da loja (mesma rede): `http://IP-DO-SERVIDOR:5000/gestao`
   (o mesmo endereço do painel da TV, trocando o final por `/gestao`).
-- Pelo app de compras: aba **Gestão › 🗓️ Escala da loja** (abre direto, sem pedir o PIN de novo).
+- Pelo app de compras: aba **Gestão › 🏪 Loja › Gestão da loja** (Escala, Folha, Pagamentos, Freelancers e Avisos;
+  abrem direto, sem pedir o PIN de novo).
 - Menu no alto de toda página da Gestão: **🗓️ Escala · 👤 Freelancers · 💰 Pagamentos · 📊 Folha · 📣 Avisos**
   (`/gestao/escala`, `/gestao/freelancers`, `/gestao/pagamentos`, `/gestao/folha`, `/gestao/avisos`).
 - Pela internet (fora da loja): liberado para a Gestão desde 10/2026, a pedido do Rodrigo — só gestor,
