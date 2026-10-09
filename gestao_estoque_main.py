@@ -292,6 +292,12 @@ def sugerir_unidade_contagem(total, fator_usado, fatores, anterior, digitado_sim
     return melhor if distancia(melhor[0]) <= math.log(2) else None
 
 
+def produto_inativo(p):
+    """[PRODUTO INATIVO] Linha de ProdutosEstoque com Ativo = 0 (sem a coluna ou NULL = ativo)."""
+    ativo = getattr(p, 'Ativo', None)
+    return ativo is not None and not ativo
+
+
 def fmt_custo(valor):
     """[CONTAGEM COM VALOR] Custo por unidade: 'R$ 6,90'; abaixo de R$ 1 mostra até 4 casas ('R$ 0,035')."""
     try:
@@ -944,6 +950,9 @@ class AppGestaoEstoque:
         ttk.Button(acoes_frame, text="🔗 Juntar produtos duplicados", command=lambda: self.abrir_juntar_produtos()).pack(side=tk.LEFT)
         ttk.Button(acoes_frame, text="📈 Gráfico", command=self.abrir_grafico_selecionado).pack(side=tk.LEFT, padx=5)
         ttk.Button(acoes_frame, text="🔗 Vínculos", command=self.abrir_vinculos_selecionado).pack(side=tk.LEFT)
+        # [PRODUTO INATIVO] "não trabalho mais com ele": some das listas, o histórico continua
+        self.btn_inativar = ttk.Button(acoes_frame, text="💤 Inativar", command=self.inativar_ou_reativar_selecionados)
+        self.btn_inativar.pack(side=tk.LEFT, padx=5)
         ttk.Label(acoes_frame, foreground="gray", text="  Duplo clique = gráfico · Ctrl/Shift + clique = vários").pack(side=tk.LEFT)
 
         # Tabela
@@ -972,6 +981,8 @@ class AppGestaoEstoque:
 
         # Eventos (Binds)
         self.tree_produtos.bind('<<TreeviewSelect>>', self.selecionar_produto_para_edicao)
+        self.tree_produtos.bind('<<TreeviewSelect>>', lambda e: self._atualizar_botao_inativar(), add="+")
+        self.tree_produtos.tag_configure('inativo', foreground='#8a8a8a')
         self.tree_produtos.bind('<Double-1>', self.abrir_grafico_do_clique)   # [GRÁFICO PRODUTO] (vínculos: botão 🔗)
 
         # Rodapé com Indicador
@@ -989,6 +1000,70 @@ class AppGestaoEstoque:
 
     def _ids_selecionados_catalogo(self):
         return [int(i) for i in self.tree_produtos.selection() if str(i).isdigit()]
+
+    # -------------------------------------------------------------------
+    # [PRODUTO INATIVO] inativar / reativar
+    # -------------------------------------------------------------------
+    def _produtos_do_cache(self, ids):
+        por_id = {p.ProdutoID: p for p in getattr(self, '_cache_produtos', None) or []}
+        return [por_id[i] for i in ids if i in por_id]
+
+    def _atualizar_botao_inativar(self):
+        if not hasattr(self, 'btn_inativar'):
+            return
+        sel = self._produtos_do_cache(self._ids_selecionados_catalogo())
+        if sel and all(produto_inativo(p) for p in sel):
+            texto = f"✅ Reativar ({len(sel)})" if len(sel) > 1 else "✅ Reativar"
+        else:
+            ativos = [p for p in sel if not produto_inativo(p)]
+            texto = f"💤 Inativar ({len(ativos)})" if len(ativos) > 1 else "💤 Inativar"
+        try:
+            self.btn_inativar.config(text=texto)
+        except tk.TclError:
+            pass
+
+    def inativar_ou_reativar_selecionados(self):
+        """Selecionados todos inativos: reativa. Senão: inativa os ativos da seleção."""
+        sel = self._produtos_do_cache(self._ids_selecionados_catalogo())
+        if not sel:
+            messagebox.showwarning("Inativar", "Selecione os produtos na lista (Ctrl ou Shift + clique para vários).\n\n"
+                                   "Dica: 'Mostrar › Sem compra há mais de 90 dias' ajuda a achar o que saiu de linha.", parent=self.root)
+            return
+        reativar = all(produto_inativo(p) for p in sel)
+        alvo = sel if reativar else [p for p in sel if not produto_inativo(p)]
+        nomes = "\n".join(f"  • {p.NomeProduto}" for p in alvo[:8]) + (f"\n  ... e mais {len(alvo) - 8}" if len(alvo) > 8 else "")
+        if reativar:
+            pergunta = (f"Reativar {len(alvo)} produto(s)?\n\n{nomes}\n\n"
+                        "Eles voltam para o Catálogo, a contagem, a sugestão de compra e o app de compras.")
+        else:
+            resumo = getattr(self, '_cache_resumo_catalogo', {}) or {}
+            com_estoque = [(p, resumo.get(p.ProdutoID, {})) for p in alvo]
+            com_estoque = [(p, r) for p, r in com_estoque if r.get('UltContagemQtd') and r['UltContagemQtd'] > 0]
+            aviso = ""
+            if com_estoque:
+                linhas = "\n".join(f"  • {p.NomeProduto}: {fmt_qtd(r['UltContagemQtd'])} {p.UnidadeMedida or 'UN'} "
+                                   f"em {r['UltContagemData'].strftime('%d/%m/%Y') if r.get('UltContagemData') else '?'}"
+                                   for p, r in com_estoque[:5])
+                aviso = (f"\n\n⚠️ {len(com_estoque)} ainda tinha(m) estoque na última contagem:\n{linhas}\n"
+                         "Se acabou mesmo, tudo bem. Se ainda tem na loja, conte antes (ou lance 0 na próxima contagem).")
+            pergunta = (f"Inativar {len(alvo)} produto(s)? (não trabalha mais com eles)\n\n{nomes}\n\n"
+                        "Eles SOMEM do Catálogo, da contagem, da sugestão de compra, da folha de contagem, "
+                        "do app de compras, dos avisos de estoque e do cadastro da franquia.\n"
+                        "O histórico continua (notas, contagens, relatórios, Valor do Estoque).\n\n"
+                        "Para ver ou reativar: Mostrar › 💤 Inativos. Se chegar NOTA de um deles, ele volta sozinho." + aviso)
+        if not messagebox.askyesno("Reativar produtos" if reativar else "Inativar produtos", pergunta,
+                                   icon='question' if reativar else 'warning', parent=self.root):
+            return
+        try:
+            n = database.definir_produtos_ativos([p.ProdutoID for p in alvo], reativar)
+        except Exception as e:
+            logger.error(f"Erro ao {'reativar' if reativar else 'inativar'} produtos: {e}", exc_info=True)
+            messagebox.showerror("Erro de Banco", f"Não foi possível {'reativar' if reativar else 'inativar'}:\n{e}", parent=self.root)
+            return
+        self.atualizar_lista_produtos()
+        self.popular_combobox_produtos_mestre()
+        self.status(f"{n} produto(s) {'reativado(s)' if reativar else 'inativado(s)'}."
+                    + ("" if reativar else " Para ver: Mostrar › 💤 Inativos."))
 
     def abrir_edicao_em_massa(self):
         """Muda categoria, unidade e/ou estoque mínimo de VÁRIOS produtos de uma vez."""
@@ -1486,6 +1561,23 @@ class AppGestaoEstoque:
                 else:
                     self.status("Produto atualizado com sucesso!")  # [MELHORIA UX] rodapé em vez de janelinha
             else:
+                # [PRODUTO INATIVO] já existe com esse nome, só que inativo: reativar em vez de criar outro igual
+                igual = next((pid for pid, n in getattr(self, '_inativos_ids', {}).items() if sem_acento(n) == sem_acento(nome)), None)
+                if igual is not None:
+                    resp = messagebox.askyesnocancel(
+                        "Produto inativo com esse nome",
+                        f"Já existe '{self._inativos_ids[igual]}' (ID {igual}), que está 💤 INATIVO.\n\n"
+                        "SIM = reativar esse (mantém o histórico de compras e contagens)\n"
+                        "NÃO = criar outro produto novo mesmo assim\nCANCELAR = voltar", parent=self.root)
+                    if resp is None:
+                        return
+                    if resp:
+                        database.definir_produtos_ativos([igual], True)
+                        self.limpar_formulario_produto()
+                        self.atualizar_lista_produtos()
+                        self.popular_combobox_produtos_mestre()
+                        self.status(f"'{self._inativos_ids.get(igual, nome)}' reativado.")
+                        return
                 # SE FOR NOVO: Chama nossa nova função mágica!
                 novo_id = database.criar_produto_manual_com_custo(nome, unidade, estoque_min, categoria, custo_inicial) 
                 
@@ -1519,6 +1611,7 @@ class AppGestaoEstoque:
         ('nunca_comprado', 'Nunca comprado por nota'),
         ('sem_custo', 'Sem custo (vale R$ 0 no estoque)'),
         ('custo_manual', 'Com custo manual'),
+        ('inativos', '💤 Inativos (não trabalho mais)'),   # [PRODUTO INATIVO]
     ]
 
     def _carregar_cache_catalogo(self):
@@ -1567,14 +1660,20 @@ class AppGestaoEstoque:
             icones = {'sem_custo': '⚠️ sem custo', 'custo_manual': '✍️ manual', 'sem_compra_90': '💤 +90 dias',
                       'nunca_comprado': '', 'minimo_zero': ''}
             count = 0
+            escondidos = 0
             for p in self._cache_produtos or []:
                 cat = getattr(p, 'Categoria', None) or 'Geral'
                 nome = p.NomeProduto or ''
+                # [PRODUTO INATIVO] só aparece no filtro "💤 Inativos"
+                inativo = produto_inativo(p)
+                if inativo != (filtro_sit == 'inativos'):
+                    escondidos += inativo
+                    continue
                 if cat_filtro != "Todas" and cat != cat_filtro: continue
                 if palavras and not all(w in sem_acento(f"{nome} {p.ProdutoID}") for w in palavras): continue
                 r = self._cache_resumo_catalogo.get(p.ProdutoID, {})
                 sit = self.situacao_produto(p, r)
-                if filtro_sit != 'todos' and filtro_sit not in sit: continue
+                if filtro_sit not in ('todos', 'inativos') and filtro_sit not in sit: continue
                 tag = 'par' if count % 2 == 0 else 'impar'
                 un = p.UnidadeMedida or 'UN'
                 custo = fmt_reais(r['CustoAtual']) if r.get('CustoAtual') else '—'
@@ -1586,16 +1685,23 @@ class AppGestaoEstoque:
                             + (f", soma de {r['UltContagemVarias']} contagens" if (r.get('UltContagemVarias') or 0) > 1 else "") + ")"
                             if r.get('UltContagemData') and r.get('UltContagemQtd') is not None else '—')
                 situacao = " ".join(t for t in (icones[x] for x in sit) if t)
+                if inativo:
+                    desde = getattr(p, 'InativadoEm', None)
+                    situacao = "💤 inativo" + (f" desde {fmt_data(desde)}" if desde else "")
                 # [DEPURAÇÃO] EstoqueMinimo vazio (NULL) no banco fazia a LISTA INTEIRA sumir
                 self.tree_produtos.insert("", "end", iid=str(p.ProdutoID), values=(
                     p.ProdutoID, nome, un, cat, fmt_num(p.EstoqueMinimo, 3, "0.000"),
-                    custo, ultima, barato, contagem, situacao), tags=(tag,))
+                    custo, ultima, barato, contagem, situacao), tags=(tag, 'inativo') if inativo else (tag,))
                 count += 1
             for iid in selecionados:
                 if self.tree_produtos.exists(iid):
                     self.tree_produtos.selection_add(iid)
             if hasattr(self, 'lbl_total_mestre'):
-                self.lbl_total_mestre.config(text=f"Total exibido: {count} de {len(self._cache_produtos or [])} produto(s)")
+                total_inativos = sum(1 for p in self._cache_produtos or [] if produto_inativo(p))
+                extra = (f" · 💤 {total_inativos} inativo(s) escondido(s) (Mostrar › 💤 Inativos)"
+                         if total_inativos and filtro_sit != 'inativos' else "")
+                self.lbl_total_mestre.config(text=f"Total exibido: {count} de {len(self._cache_produtos or [])} produto(s){extra}")
+            self._atualizar_botao_inativar()
         except Exception as e:
             logger.error(f"Erro ao atualizar lista de produtos: {e}", exc_info=True)
 
@@ -2260,14 +2366,19 @@ class AppGestaoEstoque:
             # Nome vazio no banco também não derruba mais a lista inteira.
             def nome_de(p):
                 return (p.NomeProduto or '').strip() or f"Produto {p.ProdutoID}"
-            repetidos = collections.Counter(nome_de(p) for p in produtos)
+            repetidos = collections.Counter(nome_de(p) for p in produtos if not produto_inativo(p))
+            self._inativos_ids = {}
 
             for p in produtos:
                 # Dados para a Aba 3 (Vínculos)
                 nome_display = f"{nome_de(p)} (ID: {p.ProdutoID})"
-                nomes_produtos_mestre.append(nome_display)
-                self.mapa_produtos_mestre[nome_display] = p.ProdutoID
+                self.mapa_produtos_mestre[nome_display] = p.ProdutoID   # (o nome do vinculado aparece mesmo inativo)
                 self._unidade_por_id[p.ProdutoID] = (p.UnidadeMedida or 'UN')
+                if produto_inativo(p):
+                    # [PRODUTO INATIVO] fora das listas de escolha e da contagem
+                    self._inativos_ids[p.ProdutoID] = nome_de(p)
+                    continue
+                nomes_produtos_mestre.append(nome_display)
 
                 # Dados para a Aba 4 (Contagem - Independente de filtros)
                 chave = nome_de(p) if repetidos[nome_de(p)] == 1 else nome_display
@@ -3941,6 +4052,14 @@ class AppGestaoEstoque:
         """Bipou (ou digitou) um código de barras: escolhe o produto e, se é o código da CAIXA, já escolhe a caixa."""
         achados = self._produtos_do_codigo(codigo)
         self.entry_filtro_contagem.delete(0, tk.END)
+        inativo = next((self._inativos_ids[pid] for pid, _f in (self._codigos_contagem or {}).get(codigo.lstrip('0'), [])
+                        if pid in getattr(self, '_inativos_ids', {})), None) if not achados else None
+        if inativo:
+            self.lbl_contagem_encontrados.config(text=f"💤 {inativo} está inativo", foreground="#b35c00")
+            self.status(f"O código {codigo} é do produto '{inativo}', que está INATIVO. Para contar, reative no "
+                        "Catálogo (Mostrar › 💤 Inativos).", 'aviso')
+            self.entry_filtro_contagem.focus_set()
+            return False
         if not achados:
             self.lbl_contagem_encontrados.config(text=f"Código {codigo} não cadastrado", foreground="#c62828")
             self.status(f"O código {codigo} não está ligado a nenhum produto: procure pelo nome. (O código fica ligado "

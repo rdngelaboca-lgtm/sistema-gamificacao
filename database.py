@@ -6415,7 +6415,9 @@ def excluir_produto_estoque(produto_id):
                 "Apagar faria essas compras e contagens perderem o produto (o valor do estoque e a "
                 "sugestão de compra ficariam errados).\n\n"
                 "Se ele é um produto REPETIDO, selecione os dois no Catálogo (Ctrl + clique) e use "
-                "'🔗 Juntar produtos duplicados'.")
+                "'🔗 Juntar produtos duplicados'.\n\n"
+                "Se você NÃO TRABALHA MAIS com ele, use '💤 Inativar' no Catálogo: ele some das listas "
+                "e o histórico continua.")
         usos_app = _uso_aberto_no_app(cursor, produto_id)     # [F-02]
         if usos_app:
             raise ProdutoComHistorico(
@@ -6739,6 +6741,13 @@ def _garantir_colunas_estoque():
             cur.execute("ALTER TABLE ProdutosEstoque ADD NCM VARCHAR(10) NULL")
             conn.commit()
             _preencher_ncm_dos_produtos(cur)
+        # [PRODUTO INATIVO] Ativo = 0: "não trabalho mais com ele" (NULL/1 = ativo)
+        cur.execute("SELECT * FROM ProdutosEstoque WHERE 1 = 0")
+        colunas_prod = {d[0].lower() for d in (cur.description or [])}
+        if 'ativo' not in colunas_prod:
+            cur.execute("ALTER TABLE ProdutosEstoque ADD Ativo BIT NULL")
+        if 'inativadoem' not in colunas_prod:
+            cur.execute("ALTER TABLE ProdutosEstoque ADD InativadoEm DATETIME NULL")
         conn.commit()
         _colunas_estoque_ok = True
     except Exception as e:
@@ -6747,6 +6756,85 @@ def _garantir_colunas_estoque():
         raise
     finally:
         conn.close()
+
+
+# ==============================================================================
+# == [PRODUTO INATIVO] "não trabalho mais com ele" ============================
+# ==============================================================================
+# Inativo some das listas do dia a dia: Catálogo (fica no filtro "💤 Inativos"), contagem, sugestão de
+# compra, folha de contagem, App de Compras (rotinas, busca, estoque, avisos) e cadastro da franquia.
+# O histórico continua (notas, contagens, relatórios, Valor do Estoque). Chegou NOTA com ele: volta sozinho.
+def _tem_coluna_ativo(cursor):
+    cursor.execute("SELECT * FROM ProdutosEstoque WHERE 1 = 0")
+    return 'ativo' in {d[0].lower() for d in (cursor.description or [])}
+
+
+def ids_produtos_inativos(cursor=None):
+    """{ProdutoID} dos produtos inativos (sem a coluna ainda = ninguém inativou = conjunto vazio)."""
+    if cursor is None:
+        conn = get_db_connection()
+        if not conn:
+            raise Exception("Falha de conexão com o banco de dados.")
+        try:
+            return ids_produtos_inativos(conn.cursor())
+        finally:
+            conn.close()
+    if not _tem_coluna_ativo(cursor):
+        return set()
+    cursor.execute("SELECT ProdutoID FROM ProdutosEstoque WHERE Ativo = 0")
+    return {r[0] for r in cursor.fetchall()}
+
+
+def definir_produtos_ativos(produto_ids, ativo):
+    """Inativa (ativo=False) ou reativa (True) os produtos. Devolve quantos mudaram de situação."""
+    ids = sorted({int(p) for p in produto_ids})
+    if not ids:
+        return 0
+    _garantir_colunas_estoque()
+    conn = get_db_connection()
+    if not conn:
+        raise Exception("Falha de conexão com o banco de dados.")
+    try:
+        cursor = conn.cursor()
+        mudaram = 0
+        for inicio in range(0, len(ids), 500):          # limite de parâmetros do SQL Server
+            parte = ids[inicio:inicio + 500]
+            marcas = ", ".join("?" for _ in parte)
+            if ativo:
+                cursor.execute(f"UPDATE ProdutosEstoque SET Ativo = NULL, InativadoEm = NULL "
+                               f"WHERE ProdutoID IN ({marcas}) AND Ativo = 0", *parte)
+            else:
+                cursor.execute(f"UPDATE ProdutosEstoque SET Ativo = 0, InativadoEm = ? "
+                               f"WHERE ProdutoID IN ({marcas}) AND (Ativo IS NULL OR Ativo = 1)", datetime.now(), *parte)
+            mudaram += max(cursor.rowcount or 0, 0)
+        conn.commit()
+        logger.info(f"[PRODUTO INATIVO] {mudaram} produto(s) {'reativado(s)' if ativo else 'inativado(s)'}: {ids[:50]}")
+        return mudaram
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _reativar_comprados(cursor, lista_itens_nf):
+    """Chegou nota com produto INATIVO (quantidade > 0): ele volta a ser ativo. Devolve os nomes."""
+    vinculos = sorted({int(i['ProdutoFornecedorID']) for i in lista_itens_nf
+                       if i.get('ProdutoFornecedorID') is not None and _dec(i.get('Quantidade')) > 0})
+    if not vinculos or not _tem_coluna_ativo(cursor):
+        return []
+    voltaram = {}
+    for inicio in range(0, len(vinculos), 500):
+        parte = vinculos[inicio:inicio + 500]
+        cursor.execute(f"""SELECT DISTINCT P.ProdutoID, P.NomeProduto FROM ProdutosFornecedor PF
+                           JOIN ProdutosEstoque P ON PF.ProdutoID = P.ProdutoID
+                           WHERE PF.ProdutoFornecedorID IN ({", ".join("?" for _ in parte)}) AND P.Ativo = 0""", *parte)
+        voltaram.update({pid: nome for pid, nome in cursor.fetchall()})
+    for pid in voltaram:
+        cursor.execute("UPDATE ProdutosEstoque SET Ativo = NULL, InativadoEm = NULL WHERE ProdutoID = ?", pid)
+    if voltaram:
+        logger.info(f"[PRODUTO INATIVO] voltaram a ser ativos (chegou nota): {sorted(voltaram.values())}")
+    return sorted(voltaram.values())
 
 
 def ncm_valido(ncm):
@@ -6900,6 +6988,7 @@ def completar_nota_fiscal(nota_id, lista_itens_nf, itens_pendentes=0):
                            nota_id, item['ProdutoFornecedorID'], item['Quantidade'], item['PrecoCustoUnitario'],
                            item.get('FatorUsado'), _nitem(item.get('NItem')))
         _guardar_ncm_dos_itens(cursor, novos)
+        _reativar_comprados(cursor, novos)        # [PRODUTO INATIVO] comprou de novo
         cursor.execute("UPDATE NotasFiscaisEntrada SET ItensPendentes = ? WHERE NotaID = ?", max(int(itens_pendentes or 0), 0), nota_id)
         conn.commit()
         logger.info(f"Nota Fiscal {cab[0]} (ID {nota_id}) completada com {len(novos)} item(ns); ainda faltam {itens_pendentes}.")
@@ -7001,12 +7090,15 @@ def salvar_nota_fiscal_completa(dados_nf_cabecalho, lista_itens_nf):
         
         cursor.executemany(sql_item, itens_para_inserir)
         _guardar_ncm_dos_itens(cursor, lista_itens_nf)   # [NCM]
+        voltaram = _reativar_comprados(cursor, lista_itens_nf)   # [PRODUTO INATIVO] comprou de novo
 
         # 3. Se tudo deu certo, commita a transação
         conn.commit()
         dados_nf_cabecalho['NotaID'] = int(nova_nota_id)   # [ALERTA PREÇO] quem salvou sabe qual nota conferir
+        dados_nf_cabecalho['ProdutosReativados'] = voltaram
         logger.info(f"Nota Fiscal {dados_nf_cabecalho['NumeroNF']} (ID: {nova_nota_id}) e seus {len(itens_para_inserir)} itens foram salvos com sucesso.")
-        return True, f"Nota Fiscal {dados_nf_cabecalho['NumeroNF']} salva com sucesso."
+        return True, f"Nota Fiscal {dados_nf_cabecalho['NumeroNF']} salva com sucesso." + (
+            f" Voltaram para os ativos (estavam inativos): {', '.join(voltaram[:5])}{'…' if len(voltaram) > 5 else ''}." if voltaram else "")
 
     except Exception as e:
         if conn: conn.rollback() # Desfaz tudo em caso de erro
@@ -8078,6 +8170,7 @@ def calcular_valor_estoque(contagem_id):
         # ---------- Catálogo ----------
         cursor.execute("SELECT ProdutoID, NomeProduto, UnidadeMedida, Categoria FROM ProdutosEstoque")
         catalogo = {r[0]: {'nome': r[1], 'un': r[2] or 'UN', 'cat': r[3] or 'Geral'} for r in cursor.fetchall()}
+        inativos = ids_produtos_inativos(cursor)   # [PRODUTO INATIVO] não cobra "não contado" de quem saiu de linha
 
         # ---------- Itens contados (somando repetidos) e avulsos ----------
         cursor.execute("SELECT ProdutoID, QuantidadeContada, NomeAvulso FROM ItensContagemEstoque WHERE ContagemID = ?", contagem_id)
@@ -8136,10 +8229,10 @@ def calcular_valor_estoque(contagem_id):
             onde = (f"na contagem de {data_ant:%d/%m/%Y}" if len(ids_ant) == 1
                     else f"nas {len(ids_ant)} contagens de {data_ant:%d/%m/%Y}")
             for pid, qtd in qtd_ant.items():
-                if qtd > 0 and pid not in contados and pid not in outra_do_dia and pid in catalogo:
+                if qtd > 0 and pid not in contados and pid not in outra_do_dia and pid in catalogo and pid not in inativos:
                     nao_contados[pid] = f"tinha {_br(qtd)} {catalogo[pid]['un']} {onde}"
         for pid, lista in compras.items():
-            if pid in contados or pid in outra_do_dia or pid not in catalogo:
+            if pid in contados or pid in outra_do_dia or pid not in catalogo or pid in inativos:
                 continue
             qtd_comprada = sum(c[3] for c in lista if c[0] and c[0] > desde)
             if qtd_comprada > 0:
@@ -8548,6 +8641,9 @@ def calcular_sugestao_compra(contagem_id_fim, contagem_id_inicio=None, janela_di
 
         cursor.execute("SELECT ProdutoID, NomeProduto, UnidadeMedida, EstoqueMinimo, Categoria FROM ProdutosEstoque")
         produtos = cursor.fetchall()
+        inativos = ids_produtos_inativos(cursor)          # [PRODUTO INATIVO] não entra na sugestão nem nos avisos
+        if inativos:
+            produtos = [p for p in produtos if p[0] not in inativos]
 
         # Contagens por produto (somando as do mesmo dia), só até a data do Ponto B
         cursor.execute("SELECT ContagemID, ProdutoID, QuantidadeContada FROM ItensContagemEstoque WHERE ProdutoID IS NOT NULL")
@@ -13401,9 +13497,11 @@ def buscar_produtos_para_folha_contagem(levantar_erro=False):
         cursor = conn.cursor()
         custos, _ = _custos_por_produto(cursor, date.today())
         cursor.execute("SELECT ProdutoID, NomeProduto, UnidadeMedida, Categoria FROM ProdutosEstoque")
+        produtos = cursor.fetchall()
+        inativos = ids_produtos_inativos(cursor)      # [PRODUTO INATIVO] fora da folha
         linhas = [{'Categoria': (cat or 'Geral'), 'ProdutoID': pid, 'NomeProduto': nome, 'UnidadeMedida': un,
                    'UltimoCusto': custos.get(pid, {}).get('custo', Decimal('0'))}
-                  for pid, nome, un, cat in cursor.fetchall()]
+                  for pid, nome, un, cat in produtos if pid not in inativos]
         return sorted(linhas, key=lambda r: (sem_acento_simples(r['Categoria']), sem_acento_simples(r['NomeProduto'])))
     except Exception as e:
         logger.error(f"Erro ao buscar produtos para folha de contagem: {e}", exc_info=True)

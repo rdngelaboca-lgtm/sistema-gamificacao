@@ -550,10 +550,15 @@ def listar_rotinas(incluir_inativas=False, hoje=None):
         """)
         linhas = cur.fetchall()
         # [CATEGORIAS] categorias dos produtos de cada rotina (para contar só algumas, ex.: só Brinquedos)
-        cur.execute("""SELECT DISTINCT I.RotinaID, P.Categoria FROM CompraRotinaItens I
+        cur.execute("""SELECT I.RotinaID, I.ProdutoID, P.Categoria FROM CompraRotinaItens I
                        JOIN ProdutosEstoque P ON P.ProdutoID = I.ProdutoID""")
-        categorias = {}
-        for rid, cat in cur.fetchall():
+        itens_rotinas = cur.fetchall()
+        inativos = database.ids_produtos_inativos(cur)     # [PRODUTO INATIVO] não conta nem aparece
+        categorias, tirar = {}, {}
+        for rid, pid, cat in itens_rotinas:
+            if pid in inativos:
+                tirar[rid] = tirar.get(rid, 0) + 1
+                continue
             categorias.setdefault(rid, set()).add(categoria_do(cat))
         rotinas = []
         for r in linhas:
@@ -563,7 +568,7 @@ def listar_rotinas(incluir_inativas=False, hoje=None):
             prox = _proxima_data(dias, hoje)
             rotinas.append({'id': r[0], 'nome': r[1], 'dias_semana': dias, 'dias_cobertura': int(r[3] or 7),
                             'prazo_dias': int(r[4] or 0), 'fornecedores': _ler_ids(r[5]), 'ativa': bool(r[6]),
-                            'qtd_itens': int(r[7] or 0), 'hoje': prox == hoje, 'proxima': _iso(prox),
+                            'qtd_itens': max(int(r[7] or 0) - tirar.get(r[0], 0), 0), 'hoje': prox == hoje, 'proxima': _iso(prox),
                             'so_contagem': bool(r[8]), 'automatica': bool(r[9]),
                             'categorias': sorted(categorias.get(r[0], set()), key=lambda c: c.lower())})
         rotinas.sort(key=lambda x: (not x['hoje'], x['proxima'] or '9999', x['nome']))
@@ -588,8 +593,10 @@ def obter_rotina(rotina_id):
             WHERE I.RotinaID = ?
             ORDER BY I.Ordem, I.ProdutoID
         """, (int(rotina_id),))
+        linhas = cur.fetchall()
+        inativos = database.ids_produtos_inativos(cur)     # [PRODUTO INATIVO]
         itens = []
-        for i in cur.fetchall():
+        for i in linhas:
             # [VÁRIOS LOCAIS] só na contagem geral; na rotina de COMPRA o texto é o corredor inteiro
             # (ex.: "Corredor 3, Secos" é UM lugar só)
             if r[7]:
@@ -597,9 +604,12 @@ def obter_rotina(rotina_id):
             else:
                 corredor = re.sub(r'\s*\|\s*', ', ', str(i[2] or '')).strip()
                 locais = [corredor] if corredor else []
+            inativo = i[0] in inativos
+            # [PRODUTO INATIVO] fica na rotina (volta se for reativado), mas não entra na contagem nem na lista
             itens.append({'produto_id': i[0], 'ordem': i[1], 'secao': locais[0] if locais else '', 'locais': locais,
-                          'nome': i[3] or f'Produto {i[0]} (apagado do estoque)', 'unidade': (i[4] or 'UN').strip() or 'UN',
-                          'categoria': i[5] or '', 'existe': i[3] is not None})
+                          'nome': (i[3] or f'Produto {i[0]} (apagado do estoque)') + (' (💤 inativo)' if inativo else ''),
+                          'unidade': (i[4] or 'UN').strip() or 'UN',
+                          'categoria': i[5] or '', 'existe': i[3] is not None and not inativo, 'inativo': inativo})
         return {'id': r[0], 'nome': r[1], 'dias_semana': _ler_dias_semana(r[2]), 'dias_cobertura': int(r[3] or 7),
                 'prazo_dias': int(r[4] or 0), 'fornecedores': _ler_ids(r[5]), 'ativa': bool(r[6]),
                 'so_contagem': bool(r[7]), 'itens': itens}
@@ -731,10 +741,13 @@ def estoque_completo():
                         (NOME_ESTOQUE_COMPLETO, datetime.now()))
             rotina_id = int(cur.fetchone()[0])
         cur.execute("SELECT ProdutoID, NomeProduto, Categoria FROM ProdutosEstoque")
-        produtos = {pid: (nome or '', categoria_do(cat)) for pid, nome, cat in cur.fetchall()}
+        todos = {pid: (nome or '', categoria_do(cat)) for pid, nome, cat in cur.fetchall()}
+        # [PRODUTO INATIVO] o inativo não entra (nem conta), mas quem já estava fica: reativado, volta com o local
+        inativos = database.ids_produtos_inativos(cur)
+        produtos = {pid: v for pid, v in todos.items() if pid not in inativos}
         cur.execute("SELECT ProdutoID, Ordem FROM CompraRotinaItens WHERE RotinaID = ?", (rotina_id,))
         atuais = {pid: ordem or 0 for pid, ordem in cur.fetchall()}
-        apagados = [pid for pid in atuais if pid not in produtos]
+        apagados = [pid for pid in atuais if pid not in todos]
         for pid in apagados:
             cur.execute("DELETE FROM CompraRotinaItens WHERE RotinaID = ? AND ProdutoID = ?", (rotina_id, pid))
         novos = sorted((pid for pid in produtos if pid not in atuais), key=lambda p: (produtos[p][1].lower(), produtos[p][0].lower()))
@@ -771,9 +784,13 @@ def buscar_produtos(termo='', limite=40):
     try:
         cur = conn.cursor()
         cur.execute("SELECT ProdutoID, NomeProduto, UnidadeMedida, Categoria FROM ProdutosEstoque")
+        produtos = cur.fetchall()
+        inativos = database.ids_produtos_inativos(cur)     # [PRODUTO INATIVO] não aparece na busca
         palavras = [p for p in database_normalizar(termo).split() if p]
         achados = []
-        for pid, nome, un, cat in cur.fetchall():
+        for pid, nome, un, cat in produtos:
+            if pid in inativos:
+                continue
             alvo = database_normalizar(f"{nome or ''} {cat or ''}")
             if all(p in alvo for p in palavras):
                 achados.append({'produto_id': pid, 'nome': nome or f'Produto {pid}',

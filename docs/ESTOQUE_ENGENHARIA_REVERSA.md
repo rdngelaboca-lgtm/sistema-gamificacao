@@ -217,6 +217,16 @@ assunto na seção 2.15, e cada aba indica quais delas usa.
 
 ### 2.4 Aba 1 — Catálogo Mestre (`:821–1945`)
 
+> **Atualização 10/2026 — produto inativo** ("não trabalho mais com ele"): `ProdutosEstoque.Ativo = 0`
+> (+ `InativadoEm`; NULL = ativo; colunas criadas em `_garantir_colunas_estoque`). Botão **💤 Inativar /
+> ✅ Reativar** para os selecionados e o filtro **Mostrar › 💤 Inativos**. O inativo some do Catálogo, da
+> contagem (combos, leitor, contar por lista), dos combos de vínculo (o nome do vinculado continua no
+> `mapa_produtos_mestre`), da sugestão de compra e avisos (`calcular_sugestao_compra`), da folha de contagem,
+> do "não contado" do Valor do Estoque, do App de Compras (busca, rotinas: `existe=False` + "(💤 inativo)" no
+> editor, estoque completo) e do cadastro da franquia (a não ser que esteja chegando numa nota). O histórico
+> continua. **Chegou nota** com ele (quantidade > 0): volta sozinho (`_reativar_comprados`, em
+> `salvar_nota_fiscal_completa` e ao completar nota). Criar produto com o nome de um inativo oferece reativar.
+
 **Montagem (`criar_aba_catalogo_produtos` `:821`).**
 - Formulário (LabelFrame "Modo: NOVO CADASTRO"):
   - nome;

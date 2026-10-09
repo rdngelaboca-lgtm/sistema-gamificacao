@@ -395,6 +395,7 @@ def listar(incluir_notas=True, pasta=None):
         cur = conn.cursor()
         cur.execute("SELECT ProdutoID, NomeProduto, UnidadeMedida, Categoria, NCM FROM ProdutosEstoque")
         produtos = cur.fetchall()
+        inativos = database.ids_produtos_inativos(cur)     # [PRODUTO INATIVO]
         cur.execute("SELECT ProdutoID, Status, NomeCadastro, EAN, NCM, PrecoCusto, Markup, PrecoVenda, EnviadoEm, "
                     "CadastradoEm FROM CadastroFranquia")
         salvos = {r[0]: r for r in cur.fetchall()}
@@ -415,6 +416,8 @@ def listar(incluir_notas=True, pasta=None):
         s = salvos.get(pid)
         status = (s[1] if s else PENDENTE) or PENDENTE
         chegando = notas['por_produto'].get(pid)
+        if pid in inativos and not chegando:      # [PRODUTO INATIVO] só aparece se está chegando numa nota nova
+            continue
         # --- sugestões do sistema ---
         ean_sug, origem_ean = _melhor_codigo(codigos.get(pid), chegando['ean_unidade'] if chegando else None)
         ncm_sug = ncm_valido(ncm_prod) or ncm_vinculo.get(pid) or (chegando['ncm'] if chegando else None)
