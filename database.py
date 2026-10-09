@@ -10558,7 +10558,14 @@ def listar_notas_para_consulta(levantar_erro=False):
                 continue
             notas[nota_id] = {'NotaID': nota_id, 'NumeroNF': numero or '', 'Data': _como_data(dt),
                               'ValorNF': _dec(valor), 'Fornecedor': forn or '?', 'CNPJ': cnpj or '',
-                              'Itens': 0, 'TotalItens': Decimal('0'), 'TextoItens': ''}
+                              'Itens': 0, 'TotalItens': Decimal('0'), 'TextoItens': '', 'ChaveAcesso': ''}
+        # [DANFE] a chave de acesso acha o XML guardado (a coluna é das versões novas)
+        cursor.execute("SELECT * FROM NotasFiscaisEntrada WHERE 1 = 0")
+        if 'chaveacesso' in {d[0].lower() for d in (cursor.description or [])}:
+            cursor.execute("SELECT NotaID, ChaveAcesso FROM NotasFiscaisEntrada WHERE ChaveAcesso IS NOT NULL")
+            for nota_id, chave in cursor.fetchall():
+                if nota_id in notas:
+                    notas[nota_id]['ChaveAcesso'] = (chave or '').strip()
         cursor.execute("""
             SELECT INI.NotaID, INI.Quantidade, INI.PrecoCustoUnitario, PF.DescricaoXML, P.NomeProduto
             FROM ItensNotaFiscalEntrada INI

@@ -292,6 +292,16 @@ def sugerir_unidade_contagem(total, fator_usado, fatores, anterior, digitado_sim
     return melhor if distancia(melhor[0]) <= math.log(2) else None
 
 
+def abrir_no_sistema(caminho):
+    """[DANFE] Abre o arquivo no programa padrão (PDF: o leitor de PDF), no Windows ou no Linux."""
+    if sys.platform.startswith('win'):
+        os.startfile(caminho)                                         # noqa (só existe no Windows)
+    else:
+        import subprocess
+        subprocess.Popen(['open' if sys.platform == 'darwin' else 'xdg-open', caminho],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 def produto_inativo(p):
     """[PRODUTO INATIVO] Linha de ProdutosEstoque com Ativo = 0 (sem a coluna ou NULL = ativo)."""
     ativo = getattr(p, 'Ativo', None)
@@ -2648,6 +2658,16 @@ class AppGestaoEstoque:
         botoes.pack(fill=tk.X, pady=(8, 0))
         ttk.Button(botoes, text="Abrir nota selecionada", command=abrir).pack(side=tk.LEFT)
         ttk.Button(botoes, text="Abrir todas", command=lambda: abrir(todas=True)).pack(side=tk.LEFT, padx=6)
+
+        def ver_danfe():
+            """[DANFE] o PDF da nota selecionada (para conferir a entrega ou imprimir)."""
+            escolhidas = list(tree.selection())
+            if not escolhidas:
+                messagebox.showinfo("DANFE", "Selecione uma nota na lista.", parent=janela)
+                return
+            self.abrir_danfe(caminho_xml=os.path.join(pasta, escolhidas[0]), janela=janela)
+
+        ttk.Button(botoes, text="📄 DANFE", command=ver_danfe).pack(side=tk.LEFT)
 
         def tirar_da_lista():
             """Nota lançada de outro jeito (ex.: digitada à mão) ou que não é compra: sai da lista sem entrar no estoque."""
@@ -8574,6 +8594,7 @@ class AppGestaoEstoque:
         self.combo_periodo_nota.pack(side=tk.LEFT)
         self.lbl_consulta_qtd_notas = ttk.Label(filtros, text="", foreground="gray")
         self.lbl_consulta_qtd_notas.pack(side=tk.RIGHT)
+        ttk.Button(filtros, text="📄 DANFE da nota", command=self.danfe_da_nota_consulta).pack(side=tk.RIGHT, padx=8)
 
         frame_notas = ttk.Frame(aba_nota)
         frame_notas.grid(row=1, column=0, sticky="nsew")
@@ -8781,6 +8802,44 @@ class AppGestaoEstoque:
                 nota['Itens'], fmt_reais(nota['ValorNF'] or nota['TotalItens'])))
             n += 1
         self.lbl_consulta_qtd_notas.config(text=f"{n} nota(s)")
+
+    def danfe_da_nota_consulta(self):
+        """[DANFE] PDF da nota selecionada em 🔎 Consultas › Nota Fiscal."""
+        sel = self.tree_consulta_notas.focus()
+        if not sel:
+            messagebox.showinfo("DANFE", "Selecione uma nota na lista.", parent=self.root)
+            return
+        nota = next((n for n in self.cache_consulta_notas if n['NotaID'] == int(sel[1:])), None)
+        if nota:
+            self.abrir_danfe(chave=nota.get('ChaveAcesso'))
+
+    def abrir_danfe(self, chave=None, caminho_xml=None, janela=None):
+        """[DANFE] Monta o PDF a partir do XML guardado e abre no leitor de PDF. Devolve o caminho ou None."""
+        try:
+            self.root.config(cursor="watch"); self.root.update_idletasks()
+        except tk.TclError:
+            pass
+        try:
+            import danfe
+            caminho, dados = danfe.gerar(chave=chave, caminho_xml=caminho_xml)
+        except Exception as e:      # danfe.ErroDanfe já vem explicado; o resto vai para o log
+            if e.__class__.__name__ != 'ErroDanfe':
+                logger.error(f"DANFE: erro inesperado: {e}", exc_info=True)
+            messagebox.showwarning("DANFE", str(e), parent=janela or self.root)
+            return None
+        finally:
+            try:
+                self.root.config(cursor="")
+            except tk.TclError:
+                pass
+        try:
+            abrir_no_sistema(caminho)
+            self.status(f"DANFE da NF {dados.get('numero')} aberto. O arquivo fica em: {caminho}", 'ok', 15)
+        except Exception as e:
+            logger.warning(f"DANFE: não abriu sozinho ({e})")
+            messagebox.showinfo("DANFE", f"O DANFE está pronto, mas não consegui abrir sozinho.\nAbra este arquivo:\n\n{caminho}",
+                                parent=janela or self.root)
+        return caminho
 
     def mostrar_itens_nota_consulta(self, destacar=None):
         sel = self.tree_consulta_notas.focus()

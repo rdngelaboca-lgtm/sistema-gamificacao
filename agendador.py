@@ -732,6 +732,9 @@ def buscar_xml_sefaz():
         linhas = [f"📥 <b>{len(r['novas'])} nota(s) nova(s) da SEFAZ</b>"]
         linhas += [f"• {esc(n['emitente'] or 'Fornecedor')} · {nd._reais(n['valor'])}" for n in r['novas'][:25]]
         linhas.append("Abra o Gestão de Estoque → aba 3 → <b>Notas baixadas da SEFAZ</b> para dar entrada.")
+        if len(r['novas']) > MAX_DANFES_POR_AVISO:
+            linhas.append(f"📄 O DANFE das {MAX_DANFES_POR_AVISO} primeiras vai em anexo; o das outras está no app "
+                          "(Receber → nota → Ver o DANFE) e no Gestão de Estoque.")
         try:                                   # [CADASTRO FRANQUIA] produto novo precisa ser cadastrado antes de chegar
             import cadastro_franquia
             novos = cadastro_franquia.produtos_novos_nas_notas([n['chave'] for n in r['novas']])
@@ -741,6 +744,7 @@ def buscar_xml_sefaz():
         except Exception as e:
             logger.error(f"Cadastro na franquia: contar produtos novos das notas falhou: {e}", exc_info=True)
         alertas_estoque.enviar("\n".join(linhas))
+        enviar_danfes(r['novas'][:MAX_DANFES_POR_AVISO])
     try:                                       # [ORÇAMENTOS] nota chegou para um orçamento enviado: avisa o que veio diferente
         import orcamentos
         for _, texto in orcamentos.avisos_pendentes():
@@ -758,6 +762,36 @@ def buscar_xml_sefaz():
                                        "Renove para a busca de XML continuar funcionando.")
         except nd.ErroNFe:
             pass
+
+
+MAX_DANFES_POR_AVISO = 5     # [DANFE] mais que isso numa rodada: o resto fica no app / no PC
+
+
+def enviar_danfes(novas):
+    """[DANFE] O PDF de cada nota nova vai junto com o aviso (pelo mesmo canal: WhatsApp e/ou Telegram)."""
+    import alertas_estoque
+    try:
+        import danfe
+    except ImportError:
+        return
+    for n in novas:
+        try:
+            caminho, dados = danfe.gerar(chave=n.get('chave'))
+        except Exception as e:                  # sem a biblioteca, XML só com o resumo...: o aviso em texto já foi
+            logger.warning(f"DANFE da nota {n.get('chave')}: {e}")
+            continue
+        legenda = (f"📄 DANFE · NF {esc(dados.get('numero') or '')} · {esc(dados.get('emitente') or n.get('emitente') or '')}"
+                   + (f" · {nd_reais(dados.get('valor'))}" if dados.get('valor') else ""))
+        if not alertas_estoque.enviar_arquivo(caminho, danfe.nome_arquivo(dados), legenda):
+            logger.error(f"DANFE da nota {n.get('chave')}: não foi aceito em nenhum canal.")
+
+
+def nd_reais(valor):
+    try:
+        import nfe_distribuicao as nd
+        return nd._reais(valor)
+    except Exception:
+        return f"R$ {valor}"
 
 
 # ==============================================================================

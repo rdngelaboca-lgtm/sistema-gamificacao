@@ -301,6 +301,29 @@ def enviar(texto):
     return enviar_detalhado(texto)['ok']
 
 
+def enviar_arquivo(caminho, nome_arquivo, legenda=''):
+    """
+    [DANFE] Manda um arquivo (PDF) pelo mesmo canal dos avisos. Se o WhatsApp falhar (só WhatsApp),
+    vai pelo Telegram. True se chegou em algum canal.
+    """
+    cfg = config_avisos()
+    whats = None
+    if cfg['canal'] in ('whatsapp', 'ambos') and cfg['grupo_id']:
+        import notificador_whatsapp
+        whats, motivo = notificador_whatsapp.enviar_documento_para_grupo(
+            cfg['grupo_id'], caminho, nome_arquivo, notificador_whatsapp.html_para_whatsapp(legenda))
+        if whats and cfg['canal'] == 'whatsapp':
+            return True
+        if not whats:
+            logger.error(f"Avisos: o WhatsApp não aceitou o arquivo {nome_arquivo} ({motivo}); vai pelo Telegram.")
+    chat = chat_dos_avisos()
+    if not chat:
+        return bool(whats)
+    import notificador_telegram
+    resposta = notificador_telegram.enviar_documento(chat, caminho, legenda, parse_mode='HTML')
+    return bool(whats) or bool(resposta and resposta.get('ok'))
+
+
 def _enviar_telegram(texto):
     """Envia em partes (o Telegram recusa mensagens muito grandes). True se tudo foi aceito."""
     chat = chat_dos_avisos()

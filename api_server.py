@@ -1935,6 +1935,28 @@ def api_compras_recebimento(usuario, chave):
     return _recebimento_disponivel() or _resposta_compras(recebimento.obter_recebimento, chave)
 
 
+@app.route('/api/compras/recebimentos/<chave>/danfe', methods=['GET'])
+@compras_login()
+def api_compras_recebimento_danfe(usuario, chave):
+    """[DANFE] O PDF da nota, montado do XML que o robô baixou da SEFAZ (abre no celular ou compartilha)."""
+    from urllib.parse import quote
+    from flask import send_file
+    try:
+        import danfe
+        caminho, dados = danfe.gerar(chave=chave)
+    except ImportError:
+        return jsonify({"erro": "O gerador de DANFE não está instalado no servidor."}), 503
+    except Exception as e:
+        if e.__class__.__name__ != 'ErroDanfe':
+            logger.error(f"DANFE da nota {chave}: {e}", exc_info=True)
+            return jsonify({"erro": "Não consegui montar o DANFE (veja o log do servidor)."}), 500
+        return jsonify({"erro": str(e)}), 404
+    resp = send_file(caminho, mimetype='application/pdf')
+    resp.headers['Content-Disposition'] = f"inline; filename*=UTF-8''{quote(danfe.nome_arquivo(dados))}"
+    resp.headers['Cache-Control'] = 'no-store'
+    return resp
+
+
 @app.route('/api/compras/recebimentos/<chave>/codigo', methods=['POST'])
 @compras_login()
 def api_compras_recebimento_codigo(usuario, chave):

@@ -989,6 +989,14 @@ função do arquivo (~630 linhas).
 
 ### 2.13 Aba 8 — Consultas (`:7482–7991`)
 
+> **10/2026 — DANFE (PDF) a partir do XML** (`danfe.py`, biblioteca `brazilfiscalreport`): botão **📄 DANFE da
+> nota** em Consultas › Nota Fiscal (pela `ChaveAcesso`; `listar_notas_para_consulta` passou a trazer a chave) e
+> **📄 DANFE** na lista "Notas baixadas da SEFAZ" (aba 3). O XML vem da pasta da SEFAZ (`NFE_PASTA_XML`, ou a subpasta
+> `importadas`); o PDF fica em `<pasta>/danfe/<chave>.pdf` e só é refeito se o XML mudar. O mesmo PDF sai no app
+> (Receber › nota › "📄 Ver o DANFE", rota `/api/compras/recebimentos/<chave>/danfe`) e vai anexado no aviso de nota
+> nova (até 5 por rodada; `alertas_estoque.enviar_arquivo`: WhatsApp `send-document` da Z-API, Telegram se falhar).
+> Instalar uma vez: `pip install brazilfiscalreport`.
+
 **Constantes.** `PERIODOS_CONSULTA` = 90 / 183 / 365 dias / tudo. `_campo_busca_consultas` `:7484`
 diz qual campo o Ctrl+F foca.
 

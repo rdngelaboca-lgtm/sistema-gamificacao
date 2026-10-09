@@ -153,6 +153,41 @@ def enviar_para_grupo(grupo_id, texto, http=None):
     return True, "enviado"
 
 
+def enviar_documento_para_grupo(grupo_id, caminho, nome_arquivo, legenda='', http=None):
+    """
+    [DANFE] Manda um arquivo (PDF) para o grupo pela Z-API (send-document, com o arquivo em base64).
+    Devolve (ok, mensagem).
+    """
+    import base64
+    import os
+    base = _base_url()
+    if not base:
+        return False, "Z-API não configurada no config.py"
+    if not grupo_id:
+        return False, "Nenhum grupo escolhido"
+    extensao = os.path.splitext(caminho)[1].lstrip('.').lower() or 'pdf'
+    try:
+        with open(caminho, 'rb') as f:
+            conteudo = base64.b64encode(f.read()).decode('ascii')
+    except OSError as e:
+        return False, f"arquivo não encontrado ({e})"
+    corpo = {"phone": str(grupo_id), "document": f"data:application/{extensao};base64,{conteudo}",
+             "fileName": os.path.splitext(nome_arquivo)[0]}
+    if legenda:
+        corpo["caption"] = legenda[:1000]
+    http = http or requests.post
+    try:
+        r = http(f"{base}/send-document/{extensao}", json=corpo, headers=_cabecalhos(), timeout=60)
+    except Exception as e:
+        logger.error(f"WhatsApp (grupo): sem conexão com a Z-API para mandar o arquivo: {e}")
+        return False, f"sem conexão com a Z-API ({e.__class__.__name__})"
+    if r.status_code != 200:
+        logger.error(f"WhatsApp (grupo): Z-API recusou o arquivo ({r.status_code}): {r.text[:300]}")
+        return False, f"a Z-API recusou o arquivo ({r.status_code}): {r.text[:200]}"
+    logger.info(f"WhatsApp (grupo): arquivo enviado ({nome_arquivo}).")
+    return True, "enviado"
+
+
 def listar_grupos(http=None):
     """[{'id', 'nome'}] dos grupos em que o número da Z-API está (os mais recentes primeiro)."""
     base = _base_url()

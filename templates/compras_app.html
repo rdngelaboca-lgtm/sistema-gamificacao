@@ -1679,6 +1679,15 @@ TELAS.finalizar = p => {
 
 // ---------------------------------------------------------------- listas
 let filtroListas = 'abertas';
+let danfeAtual = null;   // [DANFE] o último PDF baixado (para abrir ou compartilhar)
+function abrirPdf(blob, nome) {
+  // computador: abre numa aba; celular: baixa e o leitor de PDF abre
+  const url = URL.createObjectURL(blob), a = document.createElement('a');
+  a.href = url; a.rel = 'noopener';
+  if (ehComputador()) a.target = '_blank'; else a.download = nome;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
 const FILTROS_LISTAS = [['abertas', 'Abertas', l => ['aguardando', 'aprovada'].includes(l.status)],
                         ['aguardando', 'Para aprovar', l => l.status === 'aguardando'], ['aprovada', 'Para comprar', l => l.status === 'aprovada'],
                         ['finalizada', 'Finalizadas', l => l.status === 'finalizada'], ['cancelada', 'Canceladas', l => l.status === 'cancelada']];
@@ -2029,6 +2038,7 @@ TELAS.conferencia = p => {
           ${n.orcamento.diferencas.map(x => `<div class="mini">• ${esc(x.nome)}: pedido ${fmtQtd(x.pedido)}, nota ${fmtQtd(x.nota)} ${esc(x.unidade)}${x.preco === 'mais_caro' ? ' · mais caro (+' + fmtQtd(x.pct) + '%)' : x.preco === 'mais_barato' ? ' · mais barato (' + fmtQtd(x.pct) + '%)' : ''}</div>`).join('')}
           ${n.orcamento.nao_pedidos.map(x => `<div class="mini">• ${esc(x.nome)}: veio sem pedir</div>`).join('')}</${E.usuario.gestor ? 'button' : 'div'}>` : ''}
       ${p.bipMsg ? `<div class="mini" style="text-align:center;font-weight:700">${esc(p.bipMsg)}</div>` : ''}
+      <button class="link-btn" style="align-self:flex-start" data-acao="receb-danfe">📄 Ver o DANFE (PDF da nota)</button>
       <div class="linhas">${linhas}</div>
       ${!fechada && E.usuario.gestor && n.falta_vincular && !n.lancada ? `<div class="mini suave">${n.falta_vincular} item(ns) sem vínculo com o estoque: toque em <b>Vincular</b> no item (pode ser antes ou depois de conferir).</div>` : ''}
       ${!fechada && E.usuario.gestor ? '<button class="btn claro medio" data-acao="receb-dispensar">Dispensar (tirar da lista sem conferir)</button>' : ''}
@@ -3521,6 +3531,35 @@ const acoes = {
       E.receb[n.chave] = {qtd: contadas, finalizada: false};
       salvar(); toast('Conferência reaberta.'); desenhar(); carregarRecebimentos();
     } catch (e) { el.disabled = false; toast(e.extra.offline ? 'Sem internet: conecte para reabrir.' : e.message); }
+  },
+  // [DANFE] o PDF da nota: baixa pelo app (o login vai junto) e abre ou compartilha (WhatsApp...)
+  'receb-danfe': async (d, el) => {
+    const n = E.notasReceb[T.p.chave];
+    if (!n) return;
+    const txt = el.textContent; el.disabled = true; el.textContent = 'Montando o DANFE…';
+    try {
+      let r;
+      try { r = await fetch(`/api/compras/recebimentos/${n.chave}/danfe`, {credentials: 'same-origin', cache: 'no-store'}); }
+      catch (e) { throw new Error('Sem internet: conecte para ver o DANFE.'); }
+      if (!r.ok) { let m = `Erro ${r.status}`; try { m = (await r.json()).erro || m; } catch (e) {} throw new Error(m); }
+      const blob = await r.blob(), nome = `DANFE NF ${n.numero}.pdf`;
+      const arq = typeof File === 'function' ? new File([blob], nome, {type: 'application/pdf'}) : null;
+      danfeAtual = {blob, arq, nome};
+      if (!ehComputador() && arq && navigator.canShare && navigator.canShare({files: [arq]})) {
+        abrirModal(`<div style="display:flex;justify-content:space-between;align-items:center"><div class="titulo-sec">DANFE da NF ${esc(n.numero)}</div>
+            <button class="icone-btn" data-acao="fechar-modal" aria-label="Fechar">${ICONES.fechar}</button></div>
+          <div class="mini suave">${esc(n.fornecedor)} · ${fmtReais(n.valor)}</div>
+          <div class="linha-btns"><button class="btn claro" data-acao="danfe-abrir">📄 Abrir</button>
+            <button class="btn" data-acao="danfe-compartilhar">📤 Compartilhar</button></div>`);
+      } else abrirPdf(blob, nome);
+    } catch (e) { toast(e.message); }
+    el.disabled = false; el.textContent = txt;
+  },
+  'danfe-abrir': () => { fecharModal(); if (danfeAtual) abrirPdf(danfeAtual.blob, danfeAtual.nome); },
+  'danfe-compartilhar': async () => {
+    if (!danfeAtual) return;
+    try { await navigator.share({files: [danfeAtual.arq], title: danfeAtual.nome}); fecharModal(); }
+    catch (e) { if (e.name !== 'AbortError') toast('Não deu para compartilhar: use Abrir.'); }
   },
   'receb-buscar-sefaz': async (d, el) => {
     el.disabled = true; el.textContent = 'Buscando…';
