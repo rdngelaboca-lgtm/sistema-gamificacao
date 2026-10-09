@@ -863,6 +863,11 @@ arquivo):
 
 ### 2.11 Aba 7 — Solicitações (Líderes) (`:5752–5897`)
 
+> **10/2026 — desligada** (não era usada): a aba não aparece (Consultas vira a 7 e Cadastro Franquia a 8) e o
+> botão "📦 Solicitar Compras/Manutenção" sai do menu do bot (quem tiver o botão antigo recebe um aviso).
+> Para ligar as duas de novo: `SOLICITACOES_LIDERES = True` no `config.py`. A última aba aberta agora é
+> lembrada pelo nome (`aba_nome` nas preferências), porque a posição muda quando uma aba some.
+
 - **Origem:** é a tela "transplantada do `main.py`". As solicitações nascem no **bot do Telegram**
   (`telegram_bot.py` chama `database.criar_solicitacao_interna`), com foto opcional salva no disco
   pelo bot.

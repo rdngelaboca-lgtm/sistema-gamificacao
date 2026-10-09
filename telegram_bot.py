@@ -130,12 +130,19 @@ BOTOES_MENU = {
     BTN_SOLICITACOES, BTN_AJUDA,
 }
 
+# [SOLICITAÇÕES] compras de insumos / manutenção pelos líderes: DESLIGADO (10/2026, a pedido do Rodrigo; a aba
+# onde se aprovava, no Gestão de Estoque, não era usada). Para ligar de novo: SOLICITACOES_LIDERES = True no config.py.
+SOLICITACOES_ATIVAS = bool(getattr(config, 'SOLICITACOES_LIDERES', False))
+TEXTO_SOLICITACOES_DESLIGADAS = ("📦 Os pedidos de compra e manutenção pelo bot foram desativados.\n"
+                                 "Fale direto com a gestão.")
+CALLBACKS_SOLICITACOES = ("menu_solicitacoes", "solic_compra", "solic_manut", "compra_add_mais", "compra_finalizar")
+
 TECLADO_MENU = [
     [BTN_TAREFAS, BTN_RANKING, BTN_METAS],
     [BTN_SALDO, BTN_LOJA, BTN_NF],
     [BTN_HISTORICO, BTN_CONFIDENCIAL],
     [BTN_CONQUISTAS, BTN_DOCUMENTOS],
-    [BTN_SOLICITACOES],
+] + ([[BTN_SOLICITACOES]] if SOLICITACOES_ATIVAS else []) + [
     [BTN_AJUDA],
 ]
 
@@ -628,6 +635,11 @@ async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def abrir_central_solicitacoes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Botão '📦 Solicitar Compras/Manutenção' (antes era um lambda difícil de depurar)."""
+    if not SOLICITACOES_ATIVAS:
+        # quem ainda tem o teclado antigo: avisa e já manda o menu novo (sem o botão)
+        await update.message.reply_text(TEXTO_SOLICITACOES_DESLIGADAS,
+                                        reply_markup=ReplyKeyboardMarkup(TECLADO_MENU, resize_keyboard=True))
+        return
     await update.message.reply_text(
         "Acessando Central...",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Abrir Menu", callback_data="menu_solicitacoes")]])
@@ -1609,6 +1621,9 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
                 return
 
         # ================= SOLICITAÇÕES (COMPRAS / MANUTENÇÃO) =================
+        if not SOLICITACOES_ATIVAS and (data in CALLBACKS_SOLICITACOES or data.startswith("cat_")):
+            await query.edit_message_text(TEXTO_SOLICITACOES_DESLIGADAS)   # (botão de uma mensagem antiga)
+            return
         if data == "menu_solicitacoes":
             func_db = database.buscar_funcionario_por_chat_id(user.id)
             pode_acessar = False

@@ -737,7 +737,7 @@ def buscar_xml_sefaz():
             novos = cadastro_franquia.produtos_novos_nas_notas([n['chave'] for n in r['novas']])
             if novos:
                 linhas.append(f"🏷️ <b>{novos} produto(s) novo(s)</b> nestas notas: crie/vincule na aba 3 e mande o "
-                              "cadastro para a franquia na <b>aba 9</b> (assim, quando chegar, é só vender).")
+                              "cadastro para a franquia na aba <b>🏷️ Cadastro Franquia</b> (assim, quando chegar, é só vender).")
         except Exception as e:
             logger.error(f"Cadastro na franquia: contar produtos novos das notas falhou: {e}", exc_info=True)
         alertas_estoque.enviar("\n".join(linhas))

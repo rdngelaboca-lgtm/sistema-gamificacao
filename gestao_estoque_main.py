@@ -571,15 +571,24 @@ class AppGestaoEstoque:
         self.notebook.add(self.frame_contagem, text='4. Lançar Contagem Física')
         self.notebook.add(self.frame_sugestao, text='5. Sugestão de Compra') 
         self.notebook.add(self.frame_admin, text='6. Administração / Reset')
-        self.frame_solicitacoes = ttk.Frame(self.notebook, padding="10")
-        self.notebook.add(self.frame_solicitacoes, text='7. Solicitações (Líderes)')
+        # [SOLICITAÇÕES] a aba dos pedidos dos líderes (compra de insumos / manutenção) não é usada: fica
+        # escondida (10/2026, a pedido do Rodrigo), e o botão do bot também. Para ligar de novo:
+        # SOLICITACOES_LIDERES = True no config.py.
+        self.solicitacoes_ativas = bool(getattr(config, 'SOLICITACOES_LIDERES', False))
+        self.frame_solicitacoes = None
+        numero = 7
+        if self.solicitacoes_ativas:
+            self.frame_solicitacoes = ttk.Frame(self.notebook, padding="10")
+            self.notebook.add(self.frame_solicitacoes, text=f'{numero}. Solicitações (Líderes)')
+            numero += 1
         # [MELHORIA] Aba de consultas rápidas: histórico de preços do produto e itens das notas
         self.frame_consultas = ttk.Frame(self.notebook, padding="10")
-        self.notebook.add(self.frame_consultas, text='8. 🔎 Consultas')
+        self.notebook.add(self.frame_consultas, text=f'{numero}. 🔎 Consultas')
         # [CADASTRO FRANQUIA] pedir o cadastro dos produtos novos na franquia
         self.frame_cadastro = ttk.Frame(self.notebook, padding="10")
-        self.notebook.add(self.frame_cadastro, text='9. 🏷️ Cadastro Franquia')
-        self.criar_aba_solicitacoes()
+        self.notebook.add(self.frame_cadastro, text=f'{numero + 1}. 🏷️ Cadastro Franquia')
+        if self.solicitacoes_ativas:
+            self.criar_aba_solicitacoes()
 
         self.produto_selecionado_id = None
         self.custo_carregado_texto = None  # [DEPURAÇÃO] custo mostrado ao abrir o produto p/ edição
@@ -629,7 +638,8 @@ class AppGestaoEstoque:
         self.atualizar_lista_contagens_historico() 
         self.popular_combos_contagem_sugestao() # <-- CORREÇÃO: Inicializa os combos da aba 5
         self.carregar_categorias_do_banco()
-        self.carregar_solicitacoes()  # [DEPURAÇÃO] antes a aba 7 abria sempre vazia
+        if self.solicitacoes_ativas:
+            self.carregar_solicitacoes()  # [DEPURAÇÃO] antes a aba 7 abria sempre vazia
 
         # [MELHORIA UX] Atalhos de teclado, lembrar tamanho da janela / última aba,
         # aviso ao fechar e recuperação de contagem não salva.
@@ -750,16 +760,25 @@ class AppGestaoEstoque:
             if 400 <= larg <= tela_l and 300 <= alt <= tela_a and 0 <= x < tela_l - 100 and 0 <= y < tela_a - 100:
                 self.root.geometry(geo)
         aba = pref.get('aba')
+        nome = pref.get('aba_nome')
+        if nome:      # [SOLICITAÇÕES] pelo nome (sem o número): a posição muda quando uma aba some
+            aba = next((i for i in range(self.notebook.index('end'))
+                        if self._nome_da_aba(i) == nome), aba)
         if isinstance(aba, int) and 0 <= aba < self.notebook.index('end'):
             try:
                 self.notebook.select(aba)
             except tk.TclError:
                 pass
 
+    def _nome_da_aba(self, indice):
+        """'8. 🔎 Consultas' -> '🔎 Consultas'."""
+        return re.sub(r'^\d+\.\s*', '', str(self.notebook.tab(indice, 'text')))
+
     def salvar_preferencias(self):
         try:
             dados = self.ler_preferencias()   # [MELHORIA SUGESTÃO] mantém as outras preferências
-            dados.update({'geometria': self.root.geometry(), 'aba': self.notebook.index(self.notebook.select())})
+            indice = self.notebook.index(self.notebook.select())
+            dados.update({'geometria': self.root.geometry(), 'aba': indice, 'aba_nome': self._nome_da_aba(indice)})
             with open(ARQUIVO_PREFERENCIAS, 'w', encoding='utf-8') as f:
                 json.dump(dados, f)
         except Exception as e:  # nunca impede o programa de fechar
@@ -1759,7 +1778,7 @@ class AppGestaoEstoque:
                 self.lbl_prod_custo.config(text="Custo atual (das notas):")
                 self.lbl_prod_custo_info.config(foreground="#0056b3", text=(
                     f"{r.get('OrigemCusto', '')}. Este é o custo usado no Valor do Estoque. "
-                    "Para corrigir, ajuste a nota/vínculo (aba 8 Consultas ou Vínculos)."))
+                    "Para corrigir, ajuste a nota/vínculo (aba 🔎 Consultas ou Vínculos)."))
             else:
                 custo_real = database.buscar_ultimo_custo_por_produto(self.produto_selecionado_id)
                 # Formata para ficar bonito com duas casas decimais (Ex: 15.50)
@@ -3690,7 +3709,7 @@ class AppGestaoEstoque:
             self._apos_vincular(indice)
             if produto_foi_criado:   # [CADASTRO FRANQUIA] depois de reler a pasta (senão o aviso some)
                 self.status(f"Produto '{nome_novo_produto}' criado e vinculado. É produto NOVO: mande o cadastro "
-                            "para a franquia na aba 9 (🏷️ Cadastro Franquia).", 'info', 30)
+                            "para a franquia na aba 🏷️ Cadastro Franquia.", 'info', 30)
         except Exception as e:
             logger.error(f"Erro ao auto-criar e vincular: {e}", exc_info=True)
             messagebox.showerror("Erro Crítico", f"Não foi possível criar e vincular o produto.\nVerifique se o nome já existe no Catálogo Mestre com alguma variação.\n\nErro: {e}", parent=self.root)
@@ -8838,7 +8857,7 @@ class AppGestaoEstoque:
         self._preencher_itens_nota_consulta()
 
     def abrir_nota_na_consulta(self, nota_id, destacar=None):
-        """Vai para a aba 8 > Nota Fiscal e mostra a nota (usado pelo histórico do produto)."""
+        """Vai para a aba 🔎 Consultas > Nota Fiscal e mostra a nota (usado pelo histórico do produto)."""
         if not self.cache_consulta_notas:
             self.cache_consulta_notas = database.listar_notas_para_consulta() or []
         self.entry_busca_nota.delete(0, tk.END)
@@ -8864,7 +8883,7 @@ class AppGestaoEstoque:
         self.abrir_produto_na_consulta(item['ProdutoID'])
 
     def abrir_produto_na_consulta(self, produto_id):
-        """Vai para a aba 8 > Produto e mostra o histórico de preços do produto."""
+        """Vai para a aba 🔎 Consultas > Produto e mostra o histórico de preços do produto."""
         self.entry_busca_produto_consulta.delete(0, tk.END)
         self.listar_produtos_consulta()
         try:
