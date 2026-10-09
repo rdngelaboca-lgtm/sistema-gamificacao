@@ -5391,10 +5391,12 @@ class AppGestaoEstoque:
             aviso_datas = (f"\n\n⚠️ ATENÇÃO: as contagens são de DIAS DIFERENTES. As quantidades serão SOMADAS "
                            f"e a contagem ficará com a data {data_consolidada.strftime('%d/%m/%Y')}.\n"
                            "Consolidar serve para juntar partes da MESMA contagem (ex: freezer + estoque seco).")
+        aviso_repetidos = self._repetidos_na_consolidacao(ids, {int(v[0]): v[2] for v in linhas})
         if not messagebox.askyesno("Confirmar Consolidação",
                                    f"Mesclar estas {len(ids)} contagens?\n{lista}\n\n"
                                    "Os itens iguais serão somados em uma ÚNICA contagem e as originais serão excluídas."
-                                   + aviso_datas, icon='warning' if aviso_datas else 'question', parent=self.root):
+                                   + aviso_repetidos + aviso_datas,
+                                   icon='warning' if (aviso_datas or aviso_repetidos) else 'question', parent=self.root):
             return
         nome_nova_contagem = simpledialog.askstring("Nome da Consolidação", "Digite um nome/referência para a nova contagem (Ex: Balanço Consolidado):", parent=self.root)
         if not nome_nova_contagem or not nome_nova_contagem.strip():
@@ -5422,6 +5424,32 @@ class AppGestaoEstoque:
         self.popular_combos_contagem_sugestao()
         for i in self.tree_hist_itens.get_children():
             self.tree_hist_itens.delete(i)
+
+    def _repetidos_na_consolidacao(self, ids, nomes):
+        """
+        [CONSOLIDAR] Produtos que estão em MAIS DE UMA das contagens: vão ser SOMADOS. Certo quando são
+        partes da mesma contagem (freezer + depósito); errado quando é a MESMA coisa contada de novo.
+        """
+        por_produto = {}
+        try:
+            for cid in ids:
+                for it in database.buscar_itens_contagem(cid, levantar_erro=True) or []:
+                    chave = it.ProdutoID if it.ProdutoID is not None else f"avulso:{(it.NomeAvulso or '').strip().upper()}"
+                    p = por_produto.setdefault(chave, {'nome': it.NomeProduto, 'un': it.UnidadeMedida or 'UN', 'partes': []})
+                    p['partes'].append((nomes.get(cid, f"ID {cid}"), Decimal(str(it.QuantidadeContada or 0))))
+        except Exception as e:
+            logger.warning(f"Não foi possível listar os produtos repetidos da consolidação: {e}")
+            return ""
+        repetidos = sorted((p for p in por_produto.values() if len(p['partes']) > 1), key=lambda p: sem_acento(p['nome'] or ''))
+        if not repetidos:
+            return "\n\n✅ Nenhum produto aparece em mais de uma contagem (nada vai ser somado com nada)."
+        linhas = "\n".join(
+            f"  • {p['nome']}: " + " + ".join(f"{fmt_qtd(q)} ({n})" for n, q in p['partes'])
+            + f" = {fmt_qtd(sum(q for _, q in p['partes']))} {p['un']}" for p in repetidos[:8])
+        mais = f"\n  ... e mais {len(repetidos) - 8}" if len(repetidos) > 8 else ""
+        return (f"\n\n⚠️ {len(repetidos)} produto(s) estão em MAIS DE UMA contagem e serão SOMADOS:\n{linhas}{mais}\n"
+                "Se são partes diferentes (ex.: freezer + depósito), está certo. Se foi a MESMA coisa contada "
+                "de novo, responda NÃO e corrija antes a contagem errada ('✏️ Editar Contagem').")
 
     def abrir_relatorio_valoracao(self):
         """
