@@ -8027,6 +8027,11 @@ def _custos_por_produto(cursor, data_contagem):
     return resultado, compras
 
 
+def valor_item_estoque(qtd, custo):
+    """[CONTAGEM COM VALOR] Quantidade × custo real, em centavos: a mesma conta no Valor do Estoque e na contagem."""
+    return (_dec(qtd) * _dec(custo).quantize(Decimal('0.0001'))).quantize(Decimal('0.01'))
+
+
 def calcular_valor_estoque(contagem_id):
     """
     Calcula o VALOR DO ESTOQUE de uma contagem (quantidade x custo médio ponderado).
@@ -8090,7 +8095,7 @@ def calcular_valor_estoque(contagem_id):
             prod = catalogo.get(pid, {'nome': f'Produto {pid} (excluído do catálogo)', 'un': 'UN', 'cat': 'Geral'})
             c = custos.get(pid, {'custo': Decimal('0'), 'origem': 'SEM CUSTO', 'suspeito': None})
             custo = c['custo'].quantize(Decimal('0.0001'))
-            valor = (qtd * custo).quantize(Decimal('0.01'))
+            valor = valor_item_estoque(qtd, custo)   # [CONTAGEM COM VALOR] a mesma conta da tela de contagem
             item = {'ProdutoID': pid, 'NomeProduto': prod['nome'], 'Categoria': prod['cat'], 'Unidade': prod['un'],
                     'Quantidade': qtd, 'CustoUnitario': custo, 'ValorTotal': valor, 'OrigemCusto': c['origem']}
             itens.append(item)
@@ -8744,6 +8749,133 @@ def ultimas_contagens_por_produto():
     except Exception as e:
         logger.error(f"Erro ao buscar últimas contagens: {e}", exc_info=True)
         return {}
+    finally:
+        conn.close()
+
+
+# ==============================================================================
+# == [CONTAGEM COM VALOR] dados da tela "4. Lançar Contagem Física" ============
+# ==============================================================================
+DIAS_COMPRADO_SEM_CONTAGEM = 30   # produto nunca contado: "comprou X nos últimos 30 dias"
+
+
+def referencias_contagem(data_ref=None):
+    """
+    Tudo o que a tela de lançar contagem mostra de cada produto, numa conexão só:
+    {ProdutoID: {'custo', 'origem', 'suspeito': (menor, maior) ou None, 'categoria',
+                 'antes': (qtd, data) ou None, 'comprado': Decimal}}
+      custo    = o MESMO custo real do 💰 Valor do Estoque na data da contagem (nota + royalties);
+      antes    = a última contagem ANTES da data (as contagens do mesmo dia somadas, como na Sugestão);
+      comprado = o que entrou por nota depois dessa contagem até a data (nunca contado: nos últimos 30 dias).
+    """
+    data = _como_data(data_ref) or date.today()
+    conn = get_db_connection()
+    if not conn:
+        raise Exception("Falha de conexão com o banco de dados.")
+    try:
+        cursor = conn.cursor()
+        custos, compras = _custos_por_produto(cursor, data)
+        cursor.execute("SELECT ProdutoID, Categoria FROM ProdutosEstoque")
+        categorias = {pid: (cat or 'Geral') for pid, cat in cursor.fetchall()}
+        cursor.execute("""
+            SELECT C.DataContagem, I.ProdutoID, I.QuantidadeContada
+            FROM ItensContagemEstoque I JOIN ContagensEstoque C ON I.ContagemID = C.ContagemID
+            WHERE I.ProdutoID IS NOT NULL
+        """)
+        por_dia = {}
+        for dt, pid, qtd in cursor.fetchall():
+            d = _como_data(dt)
+            if d and d < data:
+                por_dia[(pid, d)] = por_dia.get((pid, d), Decimal('0')) + _dec(qtd)
+        antes = {}
+        for (pid, d), qtd in por_dia.items():
+            if pid not in antes or d > antes[pid][1]:
+                antes[pid] = (qtd, d)
+        resultado = {}
+        for pid, cat in categorias.items():
+            c = custos.get(pid) or {'custo': Decimal('0'), 'origem': 'SEM CUSTO', 'suspeito': None}
+            desde = antes[pid][1] if pid in antes else data - timedelta(days=DIAS_COMPRADO_SEM_CONTAGEM)
+            comprado = sum((x[3] for x in compras.get(pid, []) if x[0] and x[0] > desde), Decimal('0'))
+            resultado[pid] = {'custo': c['custo'].quantize(Decimal('0.0001')), 'origem': c['origem'],
+                              'suspeito': c['suspeito'], 'categoria': cat, 'antes': antes.get(pid), 'comprado': comprado}
+        return resultado
+    finally:
+        conn.close()
+
+
+def _sem_zeros(codigo):
+    d = _ean_valido(codigo)
+    return d.lstrip('0') if d else None
+
+
+def codigos_barras_produtos():
+    """
+    [CONTAGEM COM LEITOR] Códigos de barras conhecidos: {código sem os zeros da esquerda: [(ProdutoID, fator)]}.
+    Vêm do App de Compras (CompraCodigos: bipados na conferência, com o fator da caixa) e dos vínculos com
+    as notas (EAN da unidade = fator 1; EAN da nota = Qtd/Cx do vínculo). Sem repetir o mesmo par.
+    """
+    conn = get_db_connection()
+    if not conn:
+        raise Exception("Falha de conexão com o banco de dados.")
+    try:
+        cursor = conn.cursor()
+        mapa = {}
+
+        def guardar(codigo, pid, fator):
+            c = _sem_zeros(codigo)
+            if not c or pid is None:
+                return
+            par = (int(pid), _dec(fator or 1).normalize() if _dec(fator or 1) > 0 else Decimal('1'))
+            lista = mapa.setdefault(c, [])
+            if par not in lista:
+                lista.append(par)
+
+        if _tabela_existe(cursor, 'CompraCodigos'):
+            cursor.execute("SELECT Codigo, ProdutoID, Fator FROM CompraCodigos")
+            for codigo, pid, fator in cursor.fetchall():
+                guardar(codigo, pid, fator)
+        cursor.execute("SELECT * FROM ProdutosFornecedor WHERE 1 = 0")
+        tem_unidade = 'eanunidade' in {d[0].lower() for d in (cursor.description or [])}
+        cursor.execute("SELECT ProdutoID, EAN, FatorConversao" + (", EANUnidade" if tem_unidade else "")
+                       + " FROM ProdutosFornecedor WHERE ProdutoID IS NOT NULL")
+        for linha in cursor.fetchall():
+            guardar(linha[1], linha[0], linha[2])
+            if tem_unidade:
+                guardar(linha[3], linha[0], 1)
+        return mapa
+    finally:
+        conn.close()
+
+
+def rotinas_para_contar():
+    """[CONTAR POR LISTA] Rotinas do App de Compras com produtos: [{'id', 'nome', 'qtd'}] (as ativas primeiro)."""
+    conn = get_db_connection()
+    if not conn:
+        raise Exception("Falha de conexão com o banco de dados.")
+    try:
+        cursor = conn.cursor()
+        if not (_tabela_existe(cursor, 'CompraRotinas') and _tabela_existe(cursor, 'CompraRotinaItens')):
+            return []
+        cursor.execute("""
+            SELECT R.RotinaID, R.Nome, R.Ativa, COUNT(I.ProdutoID)
+            FROM CompraRotinas R JOIN CompraRotinaItens I ON I.RotinaID = R.RotinaID
+            GROUP BY R.RotinaID, R.Nome, R.Ativa
+        """)
+        linhas = sorted(cursor.fetchall(), key=lambda r: (not r[2], (r[1] or '').lower()))
+        return [{'id': r[0], 'nome': r[1] or f"Rotina {r[0]}", 'qtd': int(r[3] or 0)} for r in linhas]
+    finally:
+        conn.close()
+
+
+def produtos_da_rotina(rotina_id):
+    """[CONTAR POR LISTA] ProdutoIDs da rotina do app, na ordem do percurso (local/seção e ordem)."""
+    conn = get_db_connection()
+    if not conn:
+        raise Exception("Falha de conexão com o banco de dados.")
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT ProdutoID FROM CompraRotinaItens WHERE RotinaID = ? ORDER BY Ordem, ProdutoID", int(rotina_id))
+        return [r[0] for r in cursor.fetchall()]
     finally:
         conn.close()
 

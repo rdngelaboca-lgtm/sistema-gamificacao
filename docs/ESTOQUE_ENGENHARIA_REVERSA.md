@@ -520,6 +520,24 @@ assunto na seção 2.15, e cada aba indica quais delas usa.
 
 ### 2.7 Aba 4 — Lançar Contagem Física (`:3481–4910`)
 
+> **Atualização 10/2026 — contagem com valor** (os números de linha abaixo são de antes dela):
+> - **Custo un. e Total** em cada item e o **Total da contagem** embaixo; a prévia mostra
+>   `= 36 UN × R$ 6,90 = R$ 248,40`. É o mesmo custo real do 💰 Valor do Estoque **na data da contagem**
+>   (`database.referencias_contagem(data)` → `_custos_por_produto`; a conta é `valor_item_estoque`, a mesma
+>   do `calcular_valor_estoque`).
+> - **Antes e Diferença**: última contagem ANTES da data (contagens do mesmo dia somadas) e o que entrou
+>   por nota desde então. `avaliar_diferenca_contagem`: ⚠ quando contou mais do que tinha + comprou
+>   (+10%) ou menos de 1/10 disso. A linha cinza embaixo da busca mostra a última contagem, as compras e o custo.
+> - **Leitor de código de barras**: 8–14 dígitos + Enter na busca (ou na quantidade, por engano) procura
+>   em `codigos_barras_produtos()` (CompraCodigos do app + EAN/EANUnidade dos vínculos). Código da CAIXA já
+>   escolhe "CX de N".
+> - **📋 Contar por lista**: rotina do app (`rotinas_para_contar`/`produtos_da_rotina`, na ordem dos
+>   locais), categoria(s) ou uma contagem anterior. A fila (`fila_contagem`) aparece em cinza no fim da
+>   lista; Enter grava e vai para o próximo, ↓ pula, ↑ volta. O rascunho guarda a fila.
+> - **✅ Conferir e Salvar**: janela com o valor por categoria e os pontos para conferir (já contado na
+>   data, diferença grande, sem custo, custo suspeito, ficou sem contar da lista, comprado por nota e não
+>   contado das mesmas categorias). Duplo clique leva até o produto. Substitui a pergunta "Salvar?".
+
 **Tela (`criar_aba_contagem_estoque` `:3481`).**
 - **Esquerda (lançamento):**
   - busca com ↑/↓/Enter;

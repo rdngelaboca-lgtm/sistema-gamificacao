@@ -292,6 +292,38 @@ def sugerir_unidade_contagem(total, fator_usado, fatores, anterior, digitado_sim
     return melhor if distancia(melhor[0]) <= math.log(2) else None
 
 
+def fmt_custo(valor):
+    """[CONTAGEM COM VALOR] Custo por unidade: 'R$ 6,90'; abaixo de R$ 1 mostra até 4 casas ('R$ 0,035')."""
+    try:
+        v = Decimal(str(valor or 0))
+    except (InvalidOperation, ValueError):
+        v = Decimal('0')
+    if v >= 1 or v == v.quantize(Decimal('0.01')):
+        return fmt_reais(v)
+    inteiro, casas = f"{v.quantize(Decimal('0.0001')):.4f}".rstrip('0').split('.')
+    return f"R$ {inteiro},{casas.ljust(2, '0')}"
+
+
+def avaliar_diferenca_contagem(contado, antes, comprado):
+    """
+    [CONTAGEM COM VALOR] Compara o que foi contado com a última contagem + o que entrou por nota.
+    Devolve (diferença para a última contagem ou None, alerta ou None):
+      'acima' = contou MAIS do que tinha + comprou (digitação, caixa × unidade, ou nota que não foi lançada);
+      'queda' = contou menos de 1/10 do que tinha + comprou (ex.: lançou caixas como se fossem unidades).
+    Contar menos que antes é o normal (a loja vendeu); zero também (acabou): nenhum dos dois é alerta.
+    """
+    if antes is None:
+        return None, None
+    contado, antes = Decimal(str(contado or 0)), Decimal(str(antes))
+    esperado = antes + Decimal(str(comprado or 0))
+    dif = contado - antes
+    if contado - esperado > max(esperado * Decimal('0.1'), Decimal('0.001')):
+        return dif, 'acima'
+    if contado > 0 and esperado >= 4 and contado * 10 < esperado:
+        return dif, 'queda'
+    return dif, None
+
+
 def _fmt_d(d):
     return d.strftime('%d/%m/%Y') if d else '--'
 
@@ -557,6 +589,15 @@ class AppGestaoEstoque:
         self.mapa_produtos_mestre_contagem = {}
         self.lista_itens_para_salvar_contagem = []
         self.lista_mestre_contagem_nomes = []
+        # [CONTAGEM COM VALOR] custo/última contagem/compras de cada produto (na data da contagem), códigos
+        # de barras e a fila do "Contar por lista" (o que falta contar, na ordem do percurso)
+        self._chave_contagem_por_id = {}
+        self._ref_contagem = None
+        self._codigos_contagem = None
+        self.fila_contagem = []
+        self._pos_fila_contagem = 0
+        self._nome_lista_contagem = ''
+        self._total_lista_contagem = 0
 
         self.cache_relatorio_posicao = {}
         self.mapa_contagens_historico = {}
@@ -784,6 +825,10 @@ class AppGestaoEstoque:
             self.popular_combos_contagem_sugestao()
         elif aba is self.frame_contagem:
             self.atualizar_lista_contagens_historico()
+            self._ref_contagem = None       # [CONTAGEM COM VALOR] custos/últimas contagens e códigos de novo
+            self._codigos_contagem = None
+            if self.lista_itens_para_salvar_contagem or self.fila_contagem:
+                self._redesenhar_lista_contagem()
         elif aba is self.frame_produtos:
             self.atualizar_lista_produtos()
         elif aba is self.frame_fornecedores:
@@ -2209,6 +2254,7 @@ class AppGestaoEstoque:
 
             nomes_produtos_mestre = []
             self._unidade_por_id = {}
+            self._chave_contagem_por_id = {}
             # [DEPURAÇÃO 2] Dois produtos com o MESMO nome viravam um só na contagem (o 2º
             # apagava o 1º, que nunca podia ser contado). Agora o repetido leva o ID no nome.
             # Nome vazio no banco também não derruba mais a lista inteira.
@@ -2226,6 +2272,7 @@ class AppGestaoEstoque:
                 # Dados para a Aba 4 (Contagem - Independente de filtros)
                 chave = nome_de(p) if repetidos[nome_de(p)] == 1 else nome_display
                 self.mapa_produtos_mestre_contagem[chave] = {'id': p.ProdutoID, 'un': p.UnidadeMedida or 'UN'}
+                self._chave_contagem_por_id[p.ProdutoID] = chave
 
             # Configurações da Aba 3
             self.lista_mestre_produtos_nomes = sorted(nomes_produtos_mestre) 
@@ -2241,6 +2288,8 @@ class AppGestaoEstoque:
                 self.embalagens_contagem = {}
             if hasattr(self, 'combo_contagem_produtos'):
                 self.combo_contagem_produtos['values'] = self.lista_mestre_contagem_nomes
+            self._ref_contagem = None       # [CONTAGEM COM VALOR] custos e códigos são lidos de novo
+            self._codigos_contagem = None
         except Exception as e:
             self.falha_banco("a lista de produtos", e)   # [F-15]
 
@@ -3551,15 +3600,20 @@ class AppGestaoEstoque:
         # [MELHORIA UX] Contagem só pelo teclado:
         #   digite parte do nome -> Enter -> digite a quantidade -> Enter (e repete).
         #   Setas ↑/↓ no campo de busca escolhem entre os produtos encontrados.
-        ttk.Label(frame_lancamento, text="Buscar Produto (digite e tecle Enter):").grid(row=0, column=0, sticky="w")
+        # [CONTAGEM COM LEITOR] o leitor de código de barras (USB) digita o código + Enter no campo de busca
+        ttk.Label(frame_lancamento, text="Buscar Produto (digite ou bipe o código e tecle Enter):").grid(row=0, column=0, sticky="w")
         self.entry_filtro_contagem = ttk.Entry(frame_lancamento)
         self.entry_filtro_contagem.grid(row=1, column=0, sticky="ew", padx=(0, 5))
         self.entry_filtro_contagem.bind("<KeyRelease>", self.filtrar_combo_contagem)
         self.entry_filtro_contagem.bind("<Return>", self.contagem_enter_na_busca)
+        self.entry_filtro_contagem.bind("<KP_Enter>", self.contagem_enter_na_busca)
         self.entry_filtro_contagem.bind("<Down>", lambda e: self.contagem_navegar_resultados(1))
         self.entry_filtro_contagem.bind("<Up>", lambda e: self.contagem_navegar_resultados(-1))
         self.lbl_contagem_encontrados = ttk.Label(frame_lancamento, text="", foreground="gray")
-        self.lbl_contagem_encontrados.grid(row=1, column=1, columnspan=3, sticky="w", padx=5)
+        self.lbl_contagem_encontrados.grid(row=1, column=1, columnspan=2, sticky="w", padx=5)
+        # [CONTAR POR LISTA] a lista já vem com os produtos (rotina do app, categoria ou contagem anterior)
+        ttk.Button(frame_lancamento, text="📋 Contar por lista...", command=self.abrir_contar_por_lista).grid(
+            row=1, column=3, sticky="e", padx=10)
         ttk.Label(frame_lancamento, text="Produto do Catálogo Mestre:").grid(row=2, column=0, sticky="w", pady=(5,0))
         self.combo_contagem_produtos = ttk.Combobox(frame_lancamento, state="readonly")
         self.combo_contagem_produtos.grid(row=3, column=0, sticky="ew", padx=(0, 5))
@@ -3570,6 +3624,9 @@ class AppGestaoEstoque:
         self.entry_contagem_qtd.bind("<Return>", lambda e: self.adicionar_item_contagem())
         self.entry_contagem_qtd.bind("<KP_Enter>", lambda e: self.adicionar_item_contagem())
         self.entry_contagem_qtd.bind("<Escape>", lambda e: self.entry_filtro_contagem.focus_set())
+        # [CONTAR POR LISTA] ↓ pula o produto (fica para depois), ↑ volta para o anterior
+        self.entry_contagem_qtd.bind("<Down>", lambda e: self._navegar_fila_contagem(1))
+        self.entry_contagem_qtd.bind("<Up>", lambda e: self._navegar_fila_contagem(-1))
         # [MELHORIA CONTAGEM] "Contado em": unidade do estoque OU caixa do fornecedor.
         # Ex: escolha "CX de 12" e digite 3 -> lança 36 UN.  "3+5" = 3 caixas + 5 soltas.
         self.lbl_contagem_unidade = ttk.Label(frame_lancamento, text="UN", font=("Arial", 10, "italic"))  # (compatibilidade)
@@ -3581,6 +3638,21 @@ class AppGestaoEstoque:
         btn_adicionar_item.grid(row=3, column=3, sticky="w", padx=10)
         self.lbl_contagem_conversao = ttk.Label(frame_lancamento, text="", foreground="#0056b3")
         self.lbl_contagem_conversao.grid(row=4, column=0, columnspan=4, sticky="w", pady=(4, 0))
+        # [CONTAGEM COM VALOR] última contagem, o que entrou por nota desde então e o custo do produto escolhido
+        self.lbl_contagem_info = ttk.Label(frame_lancamento, text="", foreground="#555555", wraplength=400, justify="left")
+        self.lbl_contagem_info.grid(row=5, column=0, columnspan=4, sticky="w", pady=(2, 0))
+        self.frame_lista_ativa = ttk.Frame(frame_lancamento)
+        self.frame_lista_ativa.grid(row=6, column=0, columnspan=4, sticky="ew", pady=(6, 0))
+        self.frame_lista_ativa.columnconfigure(0, weight=1)
+        self.lbl_lista_ativa = ttk.Label(self.frame_lista_ativa, text="", foreground="#0b564f", font=("Arial", 10, "bold"))
+        self.lbl_lista_ativa.grid(row=0, column=0, sticky="w")
+        ttk.Button(self.frame_lista_ativa, text="⏭ Pular (↓)", command=lambda: self._navegar_fila_contagem(1)).grid(row=0, column=1, padx=4)
+        ttk.Button(self.frame_lista_ativa, text="⏹ Sair da lista", command=self.sair_da_lista_contagem).grid(row=0, column=2)
+        ttk.Label(self.frame_lista_ativa, text="Enter grava e vai para o próximo · ↓ pula · ↑ volta · Esc: buscar outro produto",
+                  foreground="#555555").grid(row=1, column=0, columnspan=3, sticky="w")
+        self.frame_lista_ativa.grid_remove()
+        # os textos longos quebram na largura REAL do quadro (um wraplength fixo alargava a coluna e espremia a busca)
+        frame_lancamento.bind("<Configure>", lambda e: self.lbl_contagem_info.config(wraplength=max(300, e.width - 40)), add="+")
         self.entry_contagem_qtd.bind("<KeyRelease>", self.atualizar_previa_contagem)
         self._opcoes_embalagem = {}
         self._ultimas_contagens = None
@@ -3589,16 +3661,37 @@ class AppGestaoEstoque:
         frame_lista_lancar.grid(row=1, column=0, sticky="nsew", padx=(0, 5), pady=10)
         frame_lista_lancar.rowconfigure(0, weight=1)
         frame_lista_lancar.columnconfigure(0, weight=1)
-        cols_cont = ('Produto Mestre', 'Qtd Contada', 'UN', 'Como contou')
+        # [CONTAGEM COM VALOR] custo da unidade e total de cada item (o mesmo custo do 💰 Valor do Estoque),
+        # a última contagem ("Antes") e a diferença, com ⚠ quando não fecha com o que tinha + o que comprou
+        cols_cont = ('Produto Mestre', 'Qtd Contada', 'UN', 'Custo', 'Total', 'Antes', 'Dif', 'Como contou')
         self.tree_contagem_atual = criar_tree_zebrada(frame_lista_lancar, columns=cols_cont, show='headings', selectmode='browse')
-        self.tree_contagem_atual.bind("<Double-1>", lambda e: self.editar_item_contagem())
-        self.tree_contagem_atual.heading('Produto Mestre', text='Produto'); self.tree_contagem_atual.column('Produto Mestre', width=200)
-        self.tree_contagem_atual.heading('Qtd Contada', text='Qtd'); self.tree_contagem_atual.column('Qtd Contada', width=60, anchor='e')
-        self.tree_contagem_atual.heading('UN', text='UN'); self.tree_contagem_atual.column('UN', width=40, anchor='center')
-        self.tree_contagem_atual.heading('Como contou', text='Como contou'); self.tree_contagem_atual.column('Como contou', width=150)
+        self.tree_contagem_atual.bind("<Double-1>", lambda e: self._duplo_clique_contagem())
+        self.tree_contagem_atual.bind("<<TreeviewSelect>>", self._mostrar_detalhe_item_contagem)
+        for col, titulo, largura, lado in (('Produto Mestre', 'Produto', 180, 'w'), ('Qtd Contada', 'Qtd', 55, 'e'),
+                                           ('UN', 'UN', 38, 'center'), ('Custo', 'Custo un.', 82, 'e'),
+                                           ('Total', 'Total', 85, 'e'), ('Antes', 'Antes', 55, 'e'),
+                                           ('Dif', 'Diferença', 80, 'e'), ('Como contou', 'Como contou', 110, 'w')):
+            self.tree_contagem_atual.heading(col, text=titulo)
+            self.tree_contagem_atual.column(col, width=largura, anchor=lado, stretch=(col == 'Produto Mestre'))
+        self.tree_contagem_atual.tag_configure('sem_custo', foreground='#b35c00')
+        self.tree_contagem_atual.tag_configure('alerta', background='#fde2cf')
+        self.tree_contagem_atual.tag_configure('pendente', foreground='#8a8a8a')
         self.tree_contagem_atual.grid(row=0, column=0, sticky="nsew")
-        btn_remover_item = ttk.Button(frame_lista_lancar, text="Remover Item Selecionado da Lista", command=self.remover_item_contagem)
-        btn_remover_item.grid(row=1, column=0, sticky="w", pady=(10, 0))
+        barra_lista = ttk.Scrollbar(frame_lista_lancar, orient="vertical", command=self.tree_contagem_atual.yview)
+        self.tree_contagem_atual.configure(yscrollcommand=barra_lista.set)
+        barra_lista.grid(row=0, column=1, sticky="ns")
+        frame_rodape_lista = ttk.Frame(frame_lista_lancar)
+        frame_rodape_lista.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        frame_rodape_lista.columnconfigure(1, weight=1)
+        btn_remover_item = ttk.Button(frame_rodape_lista, text="Remover Item Selecionado da Lista", command=self.remover_item_contagem)
+        btn_remover_item.grid(row=0, column=0, sticky="w")
+        self.lbl_total_contagem = ttk.Label(frame_rodape_lista, text="Total da contagem: R$ 0,00", font=("Arial", 12, "bold"))
+        self.lbl_total_contagem.grid(row=0, column=1, sticky="e")
+        self.lbl_resumo_contagem = ttk.Label(frame_rodape_lista, text="", foreground="#555555")
+        self.lbl_resumo_contagem.grid(row=1, column=1, sticky="e")
+        self.lbl_detalhe_item_contagem = ttk.Label(frame_lista_lancar, text="", foreground="#555555", wraplength=400, justify="left")
+        self.lbl_detalhe_item_contagem.grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        frame_lista_lancar.bind("<Configure>", lambda e: self.lbl_detalhe_item_contagem.config(wraplength=max(300, e.width - 40)), add="+")
         frame_salvar = ttk.Frame(main_frame)
         frame_salvar.grid(row=2, column=0, sticky="nsew", padx=(0, 5))
         frame_salvar.columnconfigure(1, weight=1)
@@ -3612,12 +3705,12 @@ class AppGestaoEstoque:
         self.entry_nome_contagem.insert(0, "Geral")
         # [DEPURAÇÃO 2] o rascunho guarda também a data e o nome quando eles mudam
         # (antes só ao lançar um item: mudando a data por último, a recuperação voltava a data antiga)
-        self.date_contagem.bind("<<DateEntrySelected>>", lambda e: self.lista_itens_para_salvar_contagem and self.salvar_rascunho_contagem())
+        self.date_contagem.bind("<<DateEntrySelected>>", lambda e: self._ao_mudar_data_contagem())
         self.entry_nome_contagem.bind("<KeyRelease>", lambda e: self.lista_itens_para_salvar_contagem and self.salvar_rascunho_contagem())
 
         self.id_funcionario_contagem = getattr(config, 'ID_GESTOR_PADRAO', 2) 
 
-        btn_salvar_contagem = ttk.Button(frame_salvar, text="Salvar Contagem Completa", command=self.salvar_contagem_completa)
+        btn_salvar_contagem = ttk.Button(frame_salvar, text="✅ Conferir e Salvar Contagem", command=self.salvar_contagem_completa)
         btn_salvar_contagem.grid(row=0, column=4, sticky="e", padx=20, ipady=5)
 
         # Botão para exportar a planilha de conferência manual (A caneta)
@@ -3668,6 +3761,10 @@ class AppGestaoEstoque:
         if event is not None and getattr(event, 'keysym', '') in ('Return', 'KP_Enter', 'Up', 'Down', 'Tab', 'Escape'):
             return
         texto = self.entry_filtro_contagem.get()
+        if self._codigo_de_barras(texto):
+            # [CONTAGEM COM LEITOR] só números (8 a 14): é um código de barras, procura no Enter
+            self.lbl_contagem_encontrados.config(text="📷 Código de barras: tecle Enter para procurar", foreground="gray")
+            return
         if not texto.strip():
             self.combo_contagem_produtos['values'] = self.lista_mestre_contagem_nomes
             self.combo_contagem_produtos.set('')
@@ -3701,7 +3798,11 @@ class AppGestaoEstoque:
         return "break"
 
     def contagem_enter_na_busca(self, event=None):
-        """Enter na busca: confirma o produto e pula para o campo de quantidade."""
+        """Enter na busca: confirma o produto e pula para o campo de quantidade (ou procura o código bipado)."""
+        codigo = self._codigo_de_barras(self.entry_filtro_contagem.get())
+        if codigo:
+            self.contagem_por_codigo(codigo)
+            return "break"
         if self.combo_contagem_produtos.get() in self.mapa_produtos_mestre_contagem:
             self.entry_contagem_qtd.focus_set()
             self.entry_contagem_qtd.select_range(0, tk.END)
@@ -3718,6 +3819,323 @@ class AppGestaoEstoque:
         else:
             self.lbl_contagem_unidade.config(text="UN")
         self._preencher_embalagens_contagem()
+        self._mostrar_info_produto_contagem()
+
+    # -------------------------------------------------------------------
+    # [CONTAGEM COM VALOR] custo, última contagem e diferença
+    # -------------------------------------------------------------------
+    def _referencias_contagem(self):
+        """Custo, última contagem e compras de cada produto NA DATA da contagem (lido uma vez por data; F5 relê)."""
+        try:
+            data = self.date_contagem.get_date()
+        except (tk.TclError, ValueError, AttributeError):
+            data = date.today()
+        if self._ref_contagem is None or self._ref_contagem[0] != data:
+            try:
+                dados = database.referencias_contagem(data)
+            except Exception as e:
+                logger.warning(f"Não foi possível ler os custos e as últimas contagens: {e}")
+                self.status("Não consegui ler os custos e as últimas contagens no banco: a lista aparece sem eles (F5 tenta de novo).", 'aviso')
+                dados = {}
+            self._ref_contagem = (data, dados)
+        return self._ref_contagem[1]
+
+    def _ref_produto(self, produto_id):
+        return self._referencias_contagem().get(produto_id) or {}
+
+    def _texto_referencia_contagem(self, produto_id, contado=None, com_origem=False):
+        """'Última contagem: 12 UN em 30/09/2026 · comprou 24 UN desde então · custo R$ 6,90/UN' (+ alertas)."""
+        r = self._ref_produto(produto_id)
+        un = self.unidade_do_produto(produto_id)
+        antes, comprado = r.get('antes'), r.get('comprado') or Decimal('0')
+        if antes:
+            partes = [f"Última contagem: {fmt_qtd(antes[0])} {un} em {antes[1]:%d/%m/%Y}"
+                      + (f" · comprou {fmt_qtd(comprado)} {un} desde então" if comprado > 0 else " · nada comprado desde então")]
+        else:
+            partes = ["Nunca contado" + (f" · comprou {fmt_qtd(comprado)} {un} nos últimos "
+                                          f"{database.DIAS_COMPRADO_SEM_CONTAGEM} dias" if comprado > 0 else "")]
+        custo = r.get('custo') or Decimal('0')
+        if custo > 0:
+            partes.append(f"custo {fmt_custo(custo)}/{un}" + (f" ({r.get('origem')})" if com_origem and r.get('origem') else ""))
+        else:
+            partes.append("SEM CUSTO: entra com R$ 0,00 no Valor do Estoque (informe o custo no Catálogo)")
+        if contado is not None:
+            _dif, alerta = avaliar_diferenca_contagem(contado, antes[0] if antes else None, comprado)
+            if alerta == 'acima':
+                partes.append("⚠ contou MAIS do que tinha + comprou: confira a quantidade (ou falta lançar alguma nota)")
+            elif alerta == 'queda':
+                partes.append("⚠ contou bem MENOS do que tinha + comprou: contou em caixas e lançou como unidades?")
+        if r.get('suspeito'):
+            menor, maior = r['suspeito']
+            partes.append(f"⚠ custo suspeito: compras entre {fmt_reais(menor)} e {fmt_reais(maior)} por {un} (confira o Qtd/Cx)")
+        return " · ".join(partes)
+
+    def _mostrar_info_produto_contagem(self):
+        if not hasattr(self, 'lbl_contagem_info'):
+            return
+        nome, dados = self._produto_contagem_atual()
+        if not dados:
+            self.lbl_contagem_info.config(text="")
+            return
+        texto = self._texto_referencia_contagem(dados['id'])
+        existente = self._item_contagem_por_id(dados['id'])
+        if existente:
+            texto = f"Já está nesta contagem: {fmt_qtd(existente['QuantidadeContada'])} {dados['un']} (lançando de novo, você escolhe somar ou substituir) · " + texto
+        self.lbl_contagem_info.config(text=texto)
+
+    def _mostrar_detalhe_item_contagem(self, event=None):
+        sel = self.tree_contagem_atual.focus() or ''
+        pid = int(sel[1:]) if sel.startswith('f') and sel[1:].isdigit() else int(sel) if sel.isdigit() else None
+        if pid is None:
+            self.lbl_detalhe_item_contagem.config(text="")
+            return
+        item = self._item_contagem_por_id(pid)
+        nome = item['NomeProduto'] if item else self._chave_contagem_por_id.get(pid, f"Produto {pid}")
+        texto = self._texto_referencia_contagem(pid, item['QuantidadeContada'] if item else None, com_origem=True)
+        dica = " · duplo clique corrige a quantidade" if item else " · duplo clique: contar agora"
+        self.lbl_detalhe_item_contagem.config(text=f"{nome}: {texto}{dica}")
+
+    def _duplo_clique_contagem(self):
+        sel = self.tree_contagem_atual.focus() or ''
+        if sel.startswith('f') and sel[1:].isdigit():
+            pid = int(sel[1:])
+            if pid in self.fila_contagem:
+                self._pos_fila_contagem = self.fila_contagem.index(pid)
+                self._ir_para_item_da_fila()
+            return
+        self.editar_item_contagem()
+
+    def _ao_mudar_data_contagem(self):
+        """Outra data: custo e última contagem mudam (o custo é o da data da contagem)."""
+        if self.lista_itens_para_salvar_contagem or self.fila_contagem:
+            self.salvar_rascunho_contagem()
+            self._redesenhar_lista_contagem()
+        self.atualizar_previa_contagem()
+        self._mostrar_info_produto_contagem()
+
+    # -------------------------------------------------------------------
+    # [CONTAGEM COM LEITOR] código de barras
+    # -------------------------------------------------------------------
+    @staticmethod
+    def _codigo_de_barras(texto):
+        t = str(texto or '').strip()
+        return t if re.fullmatch(r'\d{8,14}', t) and t.strip('0') else None
+
+    def _produtos_do_codigo(self, codigo):
+        """[(ProdutoID, fator)] do código. Não achou: lê de novo (o código pode ter sido ligado agora no app)."""
+        chave = codigo.lstrip('0')
+        for tentativa in (0, 1):
+            if self._codigos_contagem is None or tentativa:
+                try:
+                    self._codigos_contagem = database.codigos_barras_produtos()
+                except Exception as e:
+                    self.falha_banco("os códigos de barras", e)
+                    self._codigos_contagem = None
+                    return []
+            achados = [(pid, f) for pid, f in self._codigos_contagem.get(chave, []) if pid in self._chave_contagem_por_id]
+            if achados:
+                return achados
+        return []
+
+    def contagem_por_codigo(self, codigo):
+        """Bipou (ou digitou) um código de barras: escolhe o produto e, se é o código da CAIXA, já escolhe a caixa."""
+        achados = self._produtos_do_codigo(codigo)
+        self.entry_filtro_contagem.delete(0, tk.END)
+        if not achados:
+            self.lbl_contagem_encontrados.config(text=f"Código {codigo} não cadastrado", foreground="#c62828")
+            self.status(f"O código {codigo} não está ligado a nenhum produto: procure pelo nome. (O código fica ligado "
+                        "quando vem na nota do fornecedor ou é bipado na conferência do app.)", 'aviso')
+            self.entry_filtro_contagem.focus_set()
+            return False
+        chaves = []
+        for pid, _fator in achados:
+            if self._chave_contagem_por_id[pid] not in chaves:
+                chaves.append(self._chave_contagem_por_id[pid])
+        pid, fator = achados[0]
+        self.combo_contagem_produtos['values'] = chaves
+        self.combo_contagem_produtos.set(chaves[0])
+        if fator > 1:
+            conhecidas = [Decimal(str(e['Fator'])) for e in (getattr(self, 'embalagens_contagem', {}) or {}).get(pid, [])]
+            self._embalagens_extras = getattr(self, '_embalagens_extras', {})
+            if fator not in conhecidas and fator not in self._embalagens_extras.get(pid, []):
+                self._embalagens_extras.setdefault(pid, []).append(fator)
+        self.atualizar_label_unidade_contagem()
+        self._preencher_embalagens_contagem(escolher_fator=fator)   # código da caixa: digitar 3 = 3 caixas
+        texto = f"📷 {chaves[0]}" + (f" · código da CAIXA de {fmt_qtd(fator)}" if fator > 1 else "")
+        if len(chaves) > 1:
+            self.lbl_contagem_encontrados.config(text=f"📷 {len(chaves)} produtos com este código: use ↑ ↓ e Enter", foreground="#b35c00")
+            self.entry_filtro_contagem.focus_set()
+        else:
+            self.lbl_contagem_encontrados.config(text=texto, foreground="#1b7a2f")
+            self.entry_contagem_qtd.delete(0, tk.END)
+            self.entry_contagem_qtd.focus_set()
+        return True
+
+    # -------------------------------------------------------------------
+    # [CONTAR POR LISTA] a lista já vem com os produtos; Enter grava e vai para o próximo
+    # -------------------------------------------------------------------
+    def abrir_contar_por_lista(self):
+        popup = Toplevel(self.root)
+        popup.title("📋 Contar por lista")
+        popup.transient(self.root)
+        popup.resizable(False, False)
+        frame = ttk.Frame(popup, padding=14)
+        frame.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(frame, text="De onde vêm os produtos?", font=("Arial", 11, "bold")).grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(frame, text="Os produtos aparecem um por vez: digite a quantidade e tecle Enter para ir ao próximo.\n"
+                              "Os que já estão nesta contagem ficam de fora.", foreground="#555555").grid(
+            row=1, column=0, columnspan=2, sticky="w", pady=(2, 10))
+        origem = tk.StringVar(value='rotina')
+        try:
+            rotinas = database.rotinas_para_contar()
+        except Exception as e:
+            logger.warning(f"Não foi possível ler as rotinas do app: {e}")
+            rotinas = []
+        refs = self._referencias_contagem()
+        cats = {}
+        for pid, r in refs.items():
+            if pid in self._chave_contagem_por_id:
+                cats[r.get('categoria') or 'Geral'] = cats.get(r.get('categoria') or 'Geral', 0) + 1
+        contagens = [self.tree_hist_contagens.item(i, 'values') for i in self.tree_hist_contagens.get_children()]
+
+        ttk.Radiobutton(frame, text="Rotina do app (na ordem dos locais)", variable=origem, value='rotina').grid(row=2, column=0, sticky="w")
+        combo_rot = ttk.Combobox(frame, state="readonly", width=44, values=[f"{r['nome']} ({r['qtd']} produtos)" for r in rotinas])
+        combo_rot.grid(row=2, column=1, sticky="w", pady=3)
+        if rotinas:
+            combo_rot.current(0)
+        ttk.Radiobutton(frame, text="Categoria(s)", variable=origem, value='categoria').grid(row=3, column=0, sticky="nw", pady=(6, 0))
+        lista_cat = tk.Listbox(frame, selectmode=tk.MULTIPLE, height=7, width=46, exportselection=False)
+        nomes_cat = sorted(cats, key=sem_acento)
+        for c in nomes_cat:
+            lista_cat.insert(tk.END, f"{c} ({cats[c]})")
+        lista_cat.grid(row=3, column=1, sticky="w", pady=(6, 0))
+        lista_cat.bind("<<ListboxSelect>>", lambda e: origem.set('categoria'))
+        ttk.Radiobutton(frame, text="Repetir uma contagem anterior", variable=origem, value='contagem').grid(row=4, column=0, sticky="w", pady=(6, 0))
+        combo_cont = ttk.Combobox(frame, state="readonly", width=44, values=[f"ID {v[0]} · {v[1]} · {v[2]}" for v in contagens])
+        combo_cont.grid(row=4, column=1, sticky="w", pady=(6, 0))
+        combo_rot.bind("<<ComboboxSelected>>", lambda e: origem.set('rotina'))
+        combo_cont.bind("<<ComboboxSelected>>", lambda e: origem.set('contagem'))
+        if not rotinas:
+            origem.set('categoria')
+            combo_rot.config(state="disabled")
+            combo_rot.set("(nenhuma rotina com produtos no app)")
+
+        def comecar():
+            try:
+                if origem.get() == 'rotina':
+                    if combo_rot.current() < 0:
+                        return messagebox.showwarning("Contar por lista", "Escolha a rotina.", parent=popup)
+                    r = rotinas[combo_rot.current()]
+                    pids, nome = database.produtos_da_rotina(r['id']), r['nome']
+                elif origem.get() == 'categoria':
+                    escolhidas = [nomes_cat[i] for i in lista_cat.curselection()]
+                    if not escolhidas:
+                        return messagebox.showwarning("Contar por lista", "Escolha pelo menos uma categoria.", parent=popup)
+                    pids = sorted((pid for pid, r in refs.items() if (r.get('categoria') or 'Geral') in escolhidas),
+                                  key=lambda pid: (sem_acento(refs[pid].get('categoria') or ''), sem_acento(self._chave_contagem_por_id.get(pid, ''))))
+                    nome = ", ".join(escolhidas)
+                else:
+                    if combo_cont.current() < 0:
+                        return messagebox.showwarning("Contar por lista", "Escolha a contagem.", parent=popup)
+                    v = contagens[combo_cont.current()]
+                    itens = database.buscar_itens_contagem(v[0], levantar_erro=True) or []
+                    pids, nome = [i.ProdutoID for i in itens if i.ProdutoID is not None], v[2]
+            except Exception as e:
+                self.falha_banco("os produtos da lista", e, popup)
+                return
+            if self.iniciar_lista_contagem(pids, nome, janela=popup):
+                popup.destroy()
+
+        botoes = ttk.Frame(frame)
+        botoes.grid(row=5, column=0, columnspan=2, sticky="e", pady=(12, 0))
+        ttk.Button(botoes, text="Cancelar", command=popup.destroy).pack(side=tk.RIGHT, padx=(6, 0))
+        ttk.Button(botoes, text="▶ Começar", command=comecar).pack(side=tk.RIGHT)
+        popup.bind("<Escape>", lambda e: popup.destroy())
+        self._popup_contar_lista = popup
+        self._comecar_lista_contagem = comecar   # (testes)
+        self._lista_opcoes = {'origem': origem, 'rotina': combo_rot, 'categorias': lista_cat, 'contagem': combo_cont}
+
+    def iniciar_lista_contagem(self, produto_ids, nome, janela=None):
+        """Coloca os produtos na fila (sem os que já estão na contagem e sem repetir) e vai para o primeiro."""
+        if self.fila_contagem and not messagebox.askyesno(
+                "Contar por lista", f"Ainda faltam {len(self.fila_contagem)} produtos da lista '{self._nome_lista_contagem}'.\n\n"
+                "Trocar pela lista nova? (os já contados continuam na contagem)", parent=janela or self.root):
+            return False
+        ja = {i['ProdutoID'] for i in self.lista_itens_para_salvar_contagem}
+        fila = []
+        for pid in produto_ids:
+            if pid in self._chave_contagem_por_id and pid not in ja and pid not in fila:
+                fila.append(pid)
+        if not fila:
+            messagebox.showinfo("Contar por lista", "Todos os produtos dessa lista já estão nesta contagem." if produto_ids
+                                else "Essa lista não tem produtos.", parent=janela or self.root)
+            return False
+        self.fila_contagem, self._pos_fila_contagem = fila, 0
+        self._nome_lista_contagem, self._total_lista_contagem = nome, len(fila)
+        if self.entry_nome_contagem.get().strip() in ('', 'Geral'):
+            self.entry_nome_contagem.delete(0, tk.END)
+            self.entry_nome_contagem.insert(0, nome[:50])
+        self.frame_lista_ativa.grid()
+        self._redesenhar_lista_contagem()
+        self._ir_para_item_da_fila()
+        self.salvar_rascunho_contagem()
+        self.status(f"Contando a lista '{nome}': {len(fila)} produto{'s' if len(fila) != 1 else ''}. "
+                    "Digite a quantidade e tecle Enter (↓ pula, ↑ volta).")
+        return True
+
+    def _ir_para_item_da_fila(self):
+        if not self.fila_contagem:
+            self._terminar_lista_contagem()
+            return
+        self._pos_fila_contagem %= len(self.fila_contagem)
+        pid = self.fila_contagem[self._pos_fila_contagem]
+        chave = self._chave_contagem_por_id.get(pid)
+        self.entry_filtro_contagem.delete(0, tk.END)
+        self.lbl_contagem_encontrados.config(text="")
+        self.combo_contagem_produtos['values'] = [chave]
+        self.combo_contagem_produtos.set(chave)
+        self.atualizar_label_unidade_contagem()
+        self.entry_contagem_qtd.delete(0, tk.END)
+        feitos = self._total_lista_contagem - len(self.fila_contagem)
+        self.lbl_lista_ativa.config(text=(
+            f"📋 {self._nome_lista_contagem[:40]}: {feitos} de {self._total_lista_contagem} contados · faltam {len(self.fila_contagem)}"))
+        try:
+            self.tree_contagem_atual.see(f"f{pid}")
+            self.tree_contagem_atual.selection_set(f"f{pid}")
+            self.tree_contagem_atual.focus(f"f{pid}")
+        except tk.TclError:
+            pass
+        self.entry_contagem_qtd.focus_set()
+        self.atualizar_previa_contagem()
+
+    def _navegar_fila_contagem(self, passo):
+        if not self.fila_contagem:
+            return None
+        nome, dados = self._produto_contagem_atual()
+        atual = dados['id'] if dados else None
+        if atual in self.fila_contagem:
+            self._pos_fila_contagem = self.fila_contagem.index(atual) + passo
+        self._ir_para_item_da_fila()
+        return "break"
+
+    def _terminar_lista_contagem(self, avisar=True):
+        nome = self._nome_lista_contagem
+        self.fila_contagem, self._pos_fila_contagem = [], 0
+        self._nome_lista_contagem, self._total_lista_contagem = '', 0
+        self.frame_lista_ativa.grid_remove()
+        self._redesenhar_lista_contagem()
+        self._limpar_campos_lancamento()
+        self.salvar_rascunho_contagem()
+        if avisar and nome:
+            self.status(f"Lista '{nome}' terminada! Confira o total e clique em '✅ Conferir e Salvar Contagem'.")
+
+    def sair_da_lista_contagem(self):
+        if self.fila_contagem and not messagebox.askyesno(
+                "Sair da lista", f"Faltam {len(self.fila_contagem)} produtos da lista '{self._nome_lista_contagem}'.\n\n"
+                "Sair? Eles saem da tela (os já contados continuam na contagem).", parent=self.root):
+            return
+        self._terminar_lista_contagem(avisar=False)
+        self.status("Saiu da lista. Os itens contados continuam na contagem.", 'info')
 
     # -------------------------------------------------------------------
     # [MELHORIA CONTAGEM] CONTAR EM CAIXAS
@@ -3795,13 +4213,26 @@ class AppGestaoEstoque:
                     "Digite a quantidade. Contou em caixa? Escolha a caixa em 'Contado em' ou digite 3x12.")
             self.lbl_contagem_conversao.config(text=dica, foreground="gray")
             return
+        if self._codigo_de_barras(texto):
+            self.lbl_contagem_conversao.config(text="📷 Isso é um código de barras: tecle Enter para ir para esse produto.",
+                                               foreground="#b35c00")
+            return
         try:
             total, detalhe = calcular_qtd_contagem(texto, fator, un)
         except ValueError as e:
             self.lbl_contagem_conversao.config(text=f"⚠️ {e}", foreground="#c62828")
             return
         extra = f"  ({detalhe})" if detalhe else ""
-        self.lbl_contagem_conversao.config(text=f"= {fmt_qtd(total)} {un}{extra}", foreground="#0056b3")
+        # [CONTAGEM COM VALOR] o valor já aparece enquanto digita (e o alerta, se não fecha com a última contagem)
+        r = self._ref_produto(dados['id'])
+        custo = r.get('custo') or Decimal('0')
+        valor = (f" × {fmt_custo(custo)} = {fmt_reais(database.valor_item_estoque(total, custo))}" if custo > 0
+                 else "  (sem custo: R$ 0,00 no Valor do Estoque)")
+        antes = r.get('antes')
+        _dif, alerta = avaliar_diferenca_contagem(total, antes[0] if antes else None, r.get('comprado'))
+        aviso = {'acima': "   ⚠ mais do que tinha + comprou", 'queda': "   ⚠ bem menos do que tinha + comprou"}.get(alerta, "")
+        self.lbl_contagem_conversao.config(text=f"= {fmt_qtd(total)} {un}{valor}{extra}{aviso}",
+                                           foreground="#b35c00" if alerta else "#0056b3")
 
     def _lembrar_embalagem_contagem(self, produto_id, fator):
         try:
@@ -3827,15 +4258,55 @@ class AppGestaoEstoque:
         return next((i for i in self.lista_itens_para_salvar_contagem if i['ProdutoID'] == produto_id), None)
 
     def _redesenhar_lista_contagem(self, destacar_id=None):
-        """Mostra a lista da contagem atual (e o total de itens no título)."""
-        for i in self.tree_contagem_atual.get_children():
-            self.tree_contagem_atual.delete(i)
+        """
+        Mostra a lista da contagem atual com custo, total, última contagem e diferença, o total em R$
+        e, no "Contar por lista", os produtos que ainda faltam (cinza, no fim).
+        """
+        tree = self.tree_contagem_atual
+        for i in tree.get_children():
+            tree.delete(i)
+        refs = self._referencias_contagem() if (self.lista_itens_para_salvar_contagem or self.fila_contagem) else {}
+        total, sem_custo, alertas = Decimal('0'), 0, 0
         for item in self.lista_itens_para_salvar_contagem:
-            self.tree_contagem_atual.insert("", "end", iid=str(item['ProdutoID']), values=(
-                item['NomeProduto'], fmt_qtd(item['QuantidadeContada']), item['Unidade'], item.get('Detalhe') or ''))
+            r = refs.get(item['ProdutoID']) or {}
+            qtd = Decimal(str(item['QuantidadeContada']))
+            custo = r.get('custo') or Decimal('0')
+            valor = database.valor_item_estoque(qtd, custo)
+            total += valor
+            antes = r.get('antes')
+            dif, alerta = avaliar_diferenca_contagem(qtd, antes[0] if antes else None, r.get('comprado'))
+            tags = []
+            if custo <= 0 and qtd > 0:
+                tags.append('sem_custo')
+                sem_custo += 1
+            if alerta:
+                tags.append('alerta')
+                alertas += 1
+            tree.insert("", "end", iid=str(item['ProdutoID']), tags=tuple(tags), values=(
+                item['NomeProduto'], fmt_qtd(qtd), item['Unidade'],
+                fmt_custo(custo) if custo > 0 else 'sem custo', fmt_reais(valor) if custo > 0 else '—',
+                fmt_qtd(antes[0]) if antes else 'novo',
+                ('⚠ ' if alerta else '') + (('+' if dif > 0 else '') + fmt_qtd(dif) if dif is not None else '—'),
+                item.get('Detalhe') or ''))
+        for pid in self.fila_contagem:
+            r = refs.get(pid) or {}
+            custo, antes = r.get('custo') or Decimal('0'), r.get('antes')
+            tree.insert("", "end", iid=f"f{pid}", tags=('pendente',), values=(
+                f"⏳ {self._chave_contagem_por_id.get(pid, f'Produto {pid}')}", '', self.unidade_do_produto(pid),
+                fmt_custo(custo) if custo > 0 else '', '', fmt_qtd(antes[0]) if antes else '', '', 'a contar'))
         qtd = len(self.lista_itens_para_salvar_contagem)
+        faltam = f" · faltam {len(self.fila_contagem)} da lista" if self.fila_contagem else ""
         try:
-            self.frame_lista_lancar.config(text=f"2. Itens nesta Contagem ({qtd}) — duplo clique corrige a quantidade")
+            self.frame_lista_lancar.config(text=f"2. Itens nesta Contagem ({qtd}){faltam} — duplo clique corrige a quantidade")
+            self.lbl_total_contagem.config(text=f"Total da contagem: {fmt_reais(total)}")
+            resumo = [f"{qtd} {'item' if qtd == 1 else 'itens'}"]
+            if sem_custo:
+                resumo.append(f"{sem_custo} sem custo (R$ 0,00)")
+            if alertas:
+                resumo.append(f"⚠ {alertas} para conferir")
+            self.lbl_resumo_contagem.config(text=" · ".join(resumo) if qtd else "",
+                                            foreground="#b35c00" if (sem_custo or alertas) else "#555555")
+            self.lbl_detalhe_item_contagem.config(text="")
         except (tk.TclError, AttributeError):
             pass
         if destacar_id is not None:
@@ -3851,6 +4322,7 @@ class AppGestaoEstoque:
         self.entry_contagem_qtd.delete(0, tk.END)
         self.lbl_contagem_unidade.config(text="UN")
         self._preencher_embalagens_contagem()
+        self._mostrar_info_produto_contagem()
         self.lbl_contagem_encontrados.config(text="")
         self.entry_filtro_contagem.delete(0, tk.END)
         self.combo_contagem_produtos['values'] = self.lista_mestre_contagem_nomes
@@ -3859,6 +4331,11 @@ class AppGestaoEstoque:
     def adicionar_item_contagem(self):
         produto_nome = self.combo_contagem_produtos.get()
         qtd_str = self.entry_contagem_qtd.get()
+        if self._codigo_de_barras(qtd_str):
+            # [CONTAGEM COM LEITOR] bipou com o cursor na quantidade: é o próximo produto, não 7 bilhões de unidades
+            self.entry_contagem_qtd.delete(0, tk.END)
+            self.contagem_por_codigo(qtd_str.strip())
+            return
         if not produto_nome or not qtd_str.strip():
             messagebox.showwarning("Aviso", "Selecione um produto e digite a quantidade.", parent=self.root)
             return
@@ -3943,10 +4420,17 @@ class AppGestaoEstoque:
             })
             msg = f"{produto_nome}: {fmt_qtd(quantidade)} {unidade}" + (f" ({detalhe})" if detalhe else "") + " adicionado."
 
+        if produto_id in self.fila_contagem:      # [CONTAR POR LISTA] contado: sai da fila
+            if self.fila_contagem.index(produto_id) < self._pos_fila_contagem:
+                self._pos_fila_contagem -= 1
+            self.fila_contagem.remove(produto_id)
         self._redesenhar_lista_contagem(destacar_id=produto_id)
         self.salvar_rascunho_contagem()
         self.status(f"{msg} ({len(self.lista_itens_para_salvar_contagem)} itens na contagem)")
-        self._limpar_campos_lancamento()
+        if self._nome_lista_contagem:
+            self._ir_para_item_da_fila()            # o próximo da lista (acabou: termina a lista)
+        else:
+            self._limpar_campos_lancamento()
 
     def editar_item_contagem(self):
         """[MELHORIA UX] Duplo clique num item da lista: corrige a quantidade."""
@@ -3976,6 +4460,19 @@ class AppGestaoEstoque:
         if not selecionado:
             messagebox.showwarning("Aviso", "Selecione um item da lista 'Itens nesta Contagem' para remover.", parent=self.root)
             return
+        if selecionado.startswith('f') and selecionado[1:].isdigit():
+            # [CONTAR POR LISTA] tira da lista o que não vai ser contado agora
+            pid = int(selecionado[1:])
+            if pid in self.fila_contagem and messagebox.askyesno(
+                    "Tirar da lista", f"Tirar '{self._chave_contagem_por_id.get(pid, pid)}' da lista a contar?", parent=self.root):
+                if self.fila_contagem.index(pid) < self._pos_fila_contagem:
+                    self._pos_fila_contagem -= 1
+                self.fila_contagem.remove(pid)
+                self._total_lista_contagem -= 1
+                self._redesenhar_lista_contagem()
+                self.salvar_rascunho_contagem()
+                self._ir_para_item_da_fila()
+            return
         item = next((i for i in self.lista_itens_para_salvar_contagem if str(i['ProdutoID']) == str(selecionado)), None)
         nome_produto = item['NomeProduto'] if item else self.tree_contagem_atual.item(selecionado, 'values')[0]
         # [MELHORIA UX] confirmação (com a tecla Delete ficou fácil apagar sem querer)
@@ -3998,29 +4495,15 @@ class AppGestaoEstoque:
         # [AUDITORIA ESTOQUE] A Sugestão de Compra SOMA as contagens do mesmo dia (para contar por
         # área: freezer + depósito). Se o produto já foi contado nesta data (ex: pelo App de
         # Compras) e esta é uma RECONTAGEM, o estoque fica em DOBRO. Antes não havia aviso.
-        aviso = ""
         try:
             ja_contados = database.contagens_do_dia_por_produto(
                 data_contagem, [i['ProdutoID'] for i in self.lista_itens_para_salvar_contagem])
         except Exception as e:
             logger.warning(f"Não foi possível conferir as contagens do mesmo dia: {e}")
             ja_contados = {}
-        if ja_contados:
-            nomes = {i['ProdutoID']: (i['NomeProduto'], i['Unidade']) for i in self.lista_itens_para_salvar_contagem}
-            linhas = [f"  • {nomes.get(pid, ('?', ''))[0]}: já tem {fmt_qtd(r['qtd'])} {nomes.get(pid, ('', 'UN'))[1]} "
-                      f"em {', '.join(r['contagens'])}" for pid, r in list(ja_contados.items())[:8]]
-            mais = f"\n  ... e mais {len(ja_contados) - 8}" if len(ja_contados) > 8 else ""
-            aviso = (f"\n\n⚠️ {len(ja_contados)} produto(s) desta lista JÁ FORAM CONTADOS nesta data em outra contagem:\n"
-                     + "\n".join(linhas) + mais +
-                     "\n\nContagens do MESMO DIA são SOMADAS (serve para contar por área: freezer + depósito).\n"
-                     "Se você contou esses produtos DE NOVO (recontagem), NÃO salve: corrija a contagem antiga "
-                     "('✏️ Editar Contagem'), senão o estoque desses produtos fica em DOBRO.")
-        # [MELHORIA UX] confirmação com o resumo (evita salvar pela metade por engano)
-        if not messagebox.askyesno(
-                "Salvar contagem",
-                f"Salvar a contagem '{nome_cont}' de {self.date_contagem.get_date().strftime('%d/%m/%Y')} "
-                f"com {len(self.lista_itens_para_salvar_contagem)} itens?" + aviso,
-                icon='warning' if aviso else 'question', parent=self.root):
+        # [CONTAGEM COM VALOR] antes de gravar: total por categoria e o que merece uma olhada
+        # (já contado hoje, diferença grande, sem custo, ficou sem contar, comprado e não contado)
+        if not self.conferir_antes_de_salvar(self._dados_conferencia_contagem(ja_contados)):
             return
         try:
             sucesso, msg = database.salvar_contagem_estoque(
@@ -4034,6 +4517,9 @@ class AppGestaoEstoque:
                 self.entry_nome_contagem.delete(0, tk.END)
                 self.entry_nome_contagem.insert(0, "Geral")
                 self.lista_itens_para_salvar_contagem.clear()
+                self._ref_contagem = None        # [CONTAGEM COM VALOR] a contagem nova vira o "Antes" das próximas
+                if self._nome_lista_contagem:
+                    self._terminar_lista_contagem(avisar=False)
                 self._redesenhar_lista_contagem()
                 self.apagar_rascunho_contagem()  # [MELHORIA UX] salvo no banco: rascunho não é mais necessário
                 self._ultimas_contagens = None   # [MELHORIA CONTAGEM] recarrega na próxima
@@ -4046,13 +4532,185 @@ class AppGestaoEstoque:
                                  "Os itens continuam na lista (e guardados no rascunho).", parent=self.root)
 
     # -------------------------------------------------------------------
+    # [CONTAGEM COM VALOR] CONFERIR ANTES DE SALVAR
+    # -------------------------------------------------------------------
+    def _dados_conferencia_contagem(self, ja_contados=None):
+        """
+        O que a janela de conferência mostra: total, valor por categoria e os pontos para conferir
+        [(ordem, tipo, ProdutoID, nome, detalhe, na_contagem)], os mais importantes primeiro.
+        """
+        ja_contados = ja_contados or {}
+        refs = self._referencias_contagem()
+        try:
+            data = self.date_contagem.get_date()
+        except (tk.TclError, ValueError):
+            data = date.today()
+        por_cat, pontos, total = {}, [], Decimal('0')
+        for it in self.lista_itens_para_salvar_contagem:
+            pid, nome, un = it['ProdutoID'], it['NomeProduto'], it['Unidade']
+            qtd = Decimal(str(it['QuantidadeContada']))
+            r = refs.get(pid) or {}
+            custo = r.get('custo') or Decimal('0')
+            valor = database.valor_item_estoque(qtd, custo)
+            total += valor
+            cat = por_cat.setdefault(r.get('categoria') or 'Geral', [0, Decimal('0')])
+            cat[0] += 1
+            cat[1] += valor
+            if pid in ja_contados:
+                j = ja_contados[pid]
+                pontos.append((0, '🔁 Já contado nesta data', pid, nome,
+                               f"já tem {fmt_qtd(j['qtd'])} {un} em {', '.join(j['contagens'])}. O mesmo dia SOMA: "
+                               "se é RECONTAGEM, não salve (corrija a antiga), senão fica em dobro", True))
+            antes = r.get('antes')
+            _dif, alerta = avaliar_diferenca_contagem(qtd, antes[0] if antes else None, r.get('comprado'))
+            if alerta:
+                base = (f"contou {fmt_qtd(qtd)} {un}; tinha {fmt_qtd(antes[0])} em {antes[1]:%d/%m/%Y}"
+                        f" + comprou {fmt_qtd(r.get('comprado') or 0)} desde então")
+                pontos.append((1, '⚠ Diferença grande', pid, nome, base + (
+                    " — MAIS do que tinha + comprou (digitação? caixa × unidade? nota não lançada?)" if alerta == 'acima'
+                    else " — bem MENOS (contou em caixas e lançou como unidades?)"), True))
+            if custo <= 0 and qtd > 0:
+                pontos.append((2, '💲 Sem custo', pid, nome, "entra com R$ 0,00 no Valor do Estoque (informe o custo no Catálogo)", True))
+            if r.get('suspeito') and qtd > 0:
+                menor, maior = r['suspeito']
+                pontos.append((3, '❓ Custo suspeito', pid, nome,
+                               f"compras entre {fmt_reais(menor)} e {fmt_reais(maior)} por {un}: confira o Qtd/Cx do vínculo", True))
+        for pid in self.fila_contagem:
+            pontos.append((4, '📋 Ficou sem contar', pid, self._chave_contagem_por_id.get(pid, f"Produto {pid}"),
+                           f"está na lista '{self._nome_lista_contagem}' sem quantidade: NÃO vai ser salvo (acabou? lance 0)", False))
+        # comprados por nota depois da última contagem, das MESMAS categorias desta contagem, e que ficaram de fora
+        na_tela = {i['ProdutoID'] for i in self.lista_itens_para_salvar_contagem} | set(self.fila_contagem)
+        candidatos = [pid for pid, r in refs.items() if (r.get('categoria') or 'Geral') in por_cat and pid not in na_tela
+                      and (r.get('comprado') or 0) > 0 and pid in self._chave_contagem_por_id]
+        try:
+            em_outra = database.contagens_do_dia_por_produto(data, candidatos) if candidatos else {}
+        except Exception as e:
+            logger.warning(f"Não foi possível conferir as outras contagens do dia: {e}")
+            em_outra = {}
+        for pid in candidatos:
+            if pid in em_outra:
+                continue
+            r, un = refs[pid], self.unidade_do_produto(pid)
+            antes = r.get('antes')
+            detalhe = (f"comprou {fmt_qtd(r['comprado'])} {un} desde a última contagem ({fmt_qtd(antes[0])} {un} em {antes[1]:%d/%m/%Y})"
+                       if antes else f"comprou {fmt_qtd(r['comprado'])} {un} nos últimos {database.DIAS_COMPRADO_SEM_CONTAGEM} dias (nunca contado)")
+            pontos.append((5, '🛒 Comprado e não contado', pid, self._chave_contagem_por_id[pid], detalhe, False))
+        pontos.sort(key=lambda p: (p[0], sem_acento(p[3])))
+        return {'nome': self.entry_nome_contagem.get().strip() or 'Geral', 'data': data,
+                'itens': len(self.lista_itens_para_salvar_contagem), 'total': total,
+                'por_categoria': sorted(por_cat.items(), key=lambda c: -c[1][1]), 'pontos': pontos,
+                'ja_contados': bool(ja_contados)}
+
+    def conferir_antes_de_salvar(self, dados):
+        """Janela de conferência. True = salvar. Duplo clique num ponto fecha e leva até o produto."""
+        popup = Toplevel(self.root)
+        popup.title("✅ Conferir a contagem antes de salvar")
+        popup.transient(self.root)
+        popup.geometry("1180x640")
+        self._popup_conferencia, self._resultado_conferencia = popup, {'salvar': False, 'ir_para': None}
+        frame = ttk.Frame(popup, padding=12)
+        frame.pack(fill=tk.BOTH, expand=True)
+        frame.columnconfigure(1, weight=1)
+        frame.rowconfigure(2, weight=1)
+        ttk.Label(frame, text=f"Contagem '{dados['nome']}' de {dados['data']:%d/%m/%Y}: {dados['itens']} "
+                              f"{'item' if dados['itens'] == 1 else 'itens'} · {fmt_reais(dados['total'])}",
+                  font=("Arial", 13, "bold")).grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(frame, text="Valor pelo custo real na data da contagem (o mesmo do 💰 Valor do Estoque).",
+                  foreground="#555555").grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 8))
+
+        f_cat = ttk.LabelFrame(frame, text="Valor por categoria", padding=6)
+        f_cat.grid(row=2, column=0, sticky="nsew", padx=(0, 8))
+        tree_cat = ttk.Treeview(f_cat, columns=('Cat', 'Itens', 'Valor'), show='headings', height=14)
+        for col, titulo, larg, lado in (('Cat', 'Categoria', 140, 'w'), ('Itens', 'Itens', 45, 'e'), ('Valor', 'Valor', 95, 'e')):
+            tree_cat.heading(col, text=titulo)
+            tree_cat.column(col, width=larg, anchor=lado)
+        for cat, (n, valor) in dados['por_categoria']:
+            tree_cat.insert("", "end", values=(cat, n, fmt_reais(valor)))
+        tree_cat.insert("", "end", values=('TOTAL', dados['itens'], fmt_reais(dados['total'])), tags=('total',))
+        tree_cat.tag_configure('total', font=("Arial", 10, "bold"))
+        tree_cat.pack(fill=tk.BOTH, expand=True)
+
+        pontos = dados['pontos']
+        f_pontos = ttk.LabelFrame(frame, text=f"Para conferir ({len(pontos)})" if pontos else "Para conferir", padding=6)
+        f_pontos.grid(row=2, column=1, sticky="nsew")
+        f_pontos.rowconfigure(0, weight=1)
+        f_pontos.columnconfigure(0, weight=1)
+        tree = ttk.Treeview(f_pontos, columns=('Tipo', 'Produto', 'Detalhe'), show='headings', height=14)
+        for col, titulo, larg in (('Tipo', 'O quê', 215), ('Produto', 'Produto', 180), ('Detalhe', 'Detalhe', 420)):
+            tree.heading(col, text=titulo)
+            tree.column(col, width=larg, anchor='w', stretch=(col == 'Detalhe'))
+        cores = {0: '#fbd5d5', 1: '#fde2cf', 2: '#fff4d6', 3: '#fff4d6', 4: '#eeeeee', 5: '#e3f0ff'}
+        for n, (ordem, tipo, pid, nome, detalhe, _na) in enumerate(pontos):
+            tree.insert("", "end", iid=str(n), values=(tipo, nome, detalhe), tags=(f"o{ordem}",))
+        for ordem, cor in cores.items():
+            tree.tag_configure(f"o{ordem}", background=cor)
+        tree.grid(row=0, column=0, sticky="nsew")
+        barra = ttk.Scrollbar(f_pontos, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=barra.set)
+        barra.grid(row=0, column=1, sticky="ns")
+        lbl_ponto = ttk.Label(f_pontos, text=("Clique num ponto para ler tudo · duplo clique: vai até o produto "
+                                               "(corrige a quantidade ou conta agora)." if pontos else "✅ Nada estranho: pode salvar."),
+                              foreground="#555555" if pontos else "#1b7a2f", wraplength=760, justify="left")
+        lbl_ponto.grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        tree.bind("<<TreeviewSelect>>", lambda e: tree.focus() and lbl_ponto.config(
+            text=f"{pontos[int(tree.focus())][3]}: {pontos[int(tree.focus())][4]}", foreground="#222222"))
+        self._tree_pontos_conferencia = tree
+
+        def fechar(salvar, ir_para=None):
+            self._resultado_conferencia = {'salvar': salvar, 'ir_para': ir_para}
+            popup.destroy()
+
+        def ir_ao_ponto(event=None):
+            sel = tree.focus()
+            if sel:
+                fechar(False, pontos[int(sel)][2])
+        tree.bind("<Double-1>", ir_ao_ponto)
+        botoes = ttk.Frame(frame)
+        botoes.grid(row=3, column=0, columnspan=2, sticky="e", pady=(10, 0))
+        ttk.Button(botoes, text="↩ Voltar e corrigir", command=lambda: fechar(False)).pack(side=tk.RIGHT, padx=(8, 0))
+        ttk.Button(botoes, text="💾 Salvar mesmo assim" if dados['ja_contados'] else "💾 Salvar contagem",
+                   command=lambda: fechar(True)).pack(side=tk.RIGHT)
+        popup.bind("<Escape>", lambda e: fechar(False))
+        popup.protocol("WM_DELETE_WINDOW", lambda: fechar(False))
+        self._fechar_conferencia, self._ir_ao_ponto_conferencia = fechar, ir_ao_ponto   # (testes)
+        try:
+            popup.grab_set()
+        except tk.TclError:
+            pass
+        self.root.wait_window(popup)
+        ir_para = self._resultado_conferencia.get('ir_para')
+        if ir_para is not None:
+            self._ir_para_produto_contagem(ir_para)
+        return bool(self._resultado_conferencia.get('salvar'))
+
+    def _ir_para_produto_contagem(self, produto_id):
+        """Da conferência para a tela: item contado = corrigir; da lista = contar agora; de fora = lançar agora."""
+        if self._item_contagem_por_id(produto_id):
+            self.tree_contagem_atual.see(str(produto_id))
+            self.tree_contagem_atual.selection_set(str(produto_id))
+            self.tree_contagem_atual.focus(str(produto_id))
+            self.editar_item_contagem()
+        elif produto_id in self.fila_contagem:
+            self._pos_fila_contagem = self.fila_contagem.index(produto_id)
+            self._ir_para_item_da_fila()
+        elif produto_id in self._chave_contagem_por_id:
+            chave = self._chave_contagem_por_id[produto_id]
+            self.entry_filtro_contagem.delete(0, tk.END)
+            self.combo_contagem_produtos['values'] = [chave]
+            self.combo_contagem_produtos.set(chave)
+            self.atualizar_label_unidade_contagem()
+            self.entry_contagem_qtd.delete(0, tk.END)
+            self.entry_contagem_qtd.focus_set()
+            self.status(f"{chave}: digite a quantidade e tecle Enter.", 'info')
+
+    # -------------------------------------------------------------------
     # [MELHORIA UX] RASCUNHO AUTOMÁTICO DA CONTAGEM
     # -------------------------------------------------------------------
     # A cada item lançado, a lista é gravada em "rascunho_contagem.json" (na pasta do
     # programa). Se o programa fechar, travar ou faltar luz, nada se perde: ao abrir de
     # novo, ele pergunta se você quer continuar de onde parou.
     def salvar_rascunho_contagem(self):
-        if not self.lista_itens_para_salvar_contagem:
+        if not self.lista_itens_para_salvar_contagem and not self.fila_contagem:
             self.apagar_rascunho_contagem()
             return
         try:
@@ -4067,6 +4725,9 @@ class AppGestaoEstoque:
                        'QuantidadeContada': str(i['QuantidadeContada']), 'Unidade': i['Unidade'],
                        'Detalhe': i.get('Detalhe')}
                       for i in self.lista_itens_para_salvar_contagem],
+            # [CONTAR POR LISTA] o que ainda falta contar da lista (volta junto se o programa fechar)
+            'fila': list(self.fila_contagem), 'nome_lista': self._nome_lista_contagem,
+            'total_lista': self._total_lista_contagem,
         }
         temporario = ARQUIVO_RASCUNHO_CONTAGEM + '.tmp'
         try:
@@ -4099,7 +4760,8 @@ class AppGestaoEstoque:
         except (OSError, ValueError, KeyError, TypeError, InvalidOperation) as e:
             logger.error(f"Rascunho de contagem ilegível: {e}")
             return
-        if not itens:
+        fila = [pid for pid in (dados.get('fila') or []) if pid in self._chave_contagem_por_id]
+        if not itens and not fila:
             self.apagar_rascunho_contagem()
             return
 
@@ -4108,7 +4770,8 @@ class AppGestaoEstoque:
                 f"Existe uma contagem que NÃO foi salva no banco:\n\n"
                 f"  • Nome: {dados.get('nome_contagem', 'Geral')}\n"
                 f"  • Itens lançados: {len(itens)}\n"
-                f"  • Último lançamento: {dados.get('salvo_em', '?')}\n\n"
+                + (f"  • Lista '{dados.get('nome_lista') or ''}': faltam {len(fila)} produtos\n" if fila else "")
+                + f"  • Último lançamento: {dados.get('salvo_em', '?')}\n\n"
                 "Deseja CONTINUAR essa contagem?\n\n"
                 "(Se responder NÃO, ela é descartada — uma cópia fica guardada na pasta "
                 "'backups_estoque', por segurança.)", parent=self.root):
@@ -4124,7 +4787,15 @@ class AppGestaoEstoque:
                 self.notebook.select(self.frame_contagem)
             except tk.TclError:
                 pass
-            self.status(f"Contagem recuperada: {len(itens)} itens. Continue de onde parou.")
+            if fila:
+                self.fila_contagem, self._pos_fila_contagem = fila, 0
+                self._nome_lista_contagem = dados.get('nome_lista') or 'Lista'
+                self._total_lista_contagem = max(int(dados.get('total_lista') or 0), len(fila))
+                self.frame_lista_ativa.grid()
+                self._redesenhar_lista_contagem()
+                self._ir_para_item_da_fila()
+            self.status(f"Contagem recuperada: {len(itens)} itens" + (f", faltam {len(fila)} da lista" if fila else "")
+                        + ". Continue de onde parou.")
         else:
             try:
                 os.makedirs(PASTA_BACKUPS, exist_ok=True)
