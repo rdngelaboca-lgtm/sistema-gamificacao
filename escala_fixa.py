@@ -193,6 +193,50 @@ def _motivo(func, d):
         getattr(func, 'DataInicioAfastamento', None), getattr(func, 'DataFimAfastamento', None), d)
 
 
+def _intocado(turno, fid, pos_snap, ent_snap, sai_snap):
+    """O turno automático continua como o sistema gravou (mesma pessoa, posição e horário)?"""
+    return (turno is not None and turno.FuncionarioID == fid and turno.PosicaoID == pos_snap
+            and R.formatar_hora_curta(turno.HorarioEntrada) == R.formatar_hora_curta(ent_snap)
+            and R.formatar_hora_curta(turno.HorarioSaida) == R.formatar_hora_curta(sai_snap))
+
+
+def _vale(cfg, func, d):
+    """O fixo deve estar na escala neste dia? (é fixo, existe, o dia está marcado e não está de folga/férias)"""
+    return bool(cfg and func and R.dia_semana_banco(d) in cfg['dias'] and not _motivo(func, d))
+
+
+def _revisar_dia(cur, conn, d, cfgs, funcs, funcionario_id=None):
+    """
+    [DEPURAÇÃO ESCALA 2] Tira o turno AUTOMÁTICO (que ninguém mexeu) de quem não deve mais estar no dia (só de amanhã
+    em diante; hoje o gestor decide na tela, onde o "de folga" aparece em laranja):
+    a folga ou as férias foram lançadas DEPOIS (inclusive pelo programa da Gamificação no PC), o funcionário
+    saiu do cadastro, o dia foi desmarcado ou deixou de ser fixo. Antes o turno ficava lá (laranja "de folga").
+    """
+    data = d.isoformat()
+    sql = ("SELECT FuncionarioID, EscalaID, PosicaoID, HorarioEntrada, HorarioSaida FROM EscalaFixaAplicada "
+           "WHERE DataEscala = ? AND Situacao = 'escalado'")
+    if funcionario_id is None:
+        cur.execute(sql, data)
+    else:
+        cur.execute(sql + " AND FuncionarioID = ?", data, funcionario_id)
+    linhas = [r for r in cur.fetchall() if not _vale(cfgs.get(r[0]), funcs.get(r[0]), d)]
+    if not linhas:
+        return 0
+    escala = database.buscar_escala_do_dia(data)
+    turnos = {t.EscalaID: t for ts in escala.values() for t in ts}
+    tirados = 0
+    for fid, eid, pos_snap, ent_snap, sai_snap in linhas:
+        if not _intocado(turnos.get(eid), fid, pos_snap, ent_snap, sai_snap):
+            continue                                   # o gestor mexeu neste dia: fica como ele deixou
+        database.excluir_turno_escala(eid)
+        cur.execute("DELETE FROM EscalaFixaAplicada WHERE DataEscala = ? AND FuncionarioID = ?", data, fid)
+        conn.commit()
+        tirados += 1
+        nome = funcs[fid].NomeCompleto if fid in funcs else f"funcionário {fid}"
+        logger.info(f"Escala fixa: {nome} saiu da escala de {data} (folga/férias/dia desmarcado).")
+    return tirados
+
+
 def _reservar(cur, conn, data, fid):
     """Grava a linha do dia (a chave impede que o robô e o servidor escalem o mesmo dia duas vezes)."""
     try:
@@ -223,13 +267,15 @@ def aplicar(datas, funcionario_id=None, hoje=None):
     try:
         cur = conn.cursor()
         cfgs = _ler_fixos(cur, funcionario_id)
-        if not cfgs:
-            return 0
         funcs = {f.FuncionarioID: f for f in database.listar_funcionarios()}
         nomes_pos = {p[0]: p[1] for p in database.listar_posicoes_loja()}
         for d in datas:
             data = d.isoformat()
             dia_db = R.dia_semana_banco(d)
+            if d > hoje:                       # hoje fica como está (a pessoa pode já estar trabalhando)
+                _revisar_dia(cur, conn, d, cfgs, funcs, funcionario_id)
+            if not cfgs:
+                continue
             cur.execute("SELECT FuncionarioID FROM EscalaFixaAplicada WHERE DataEscala = ?", data)
             ja = {r[0] for r in cur.fetchall()}
             candidatos = [c for c in cfgs.values() if c['funcionario_id'] not in ja and dia_db in c['dias']
@@ -290,6 +336,43 @@ def esquecer_dia(data_txt):
         conn.close()
 
 
+def pendencias_do_dia(d, escala=None):
+    """
+    [DEPURAÇÃO ESCALA 2] Fixos que deviam estar no dia e o sistema NÃO conseguiu escalar (antes só ia para o
+    log): posição ocupada no horário ou posição removida do mapa. Quem o gestor tirou à mão não entra aqui.
+    Devolve textos para os alertas da tela.
+    """
+    if d < date.today():
+        return []
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        cfgs = _ler_fixos(cur)
+        if not cfgs:
+            return []
+        cur.execute("SELECT FuncionarioID FROM EscalaFixaAplicada WHERE DataEscala = ?", d.isoformat())
+        ja = {r[0] for r in cur.fetchall()}
+    finally:
+        conn.close()
+    funcs = {f.FuncionarioID: f for f in database.listar_funcionarios()}
+    nomes_pos = {p[0]: p[1] for p in database.listar_posicoes_loja()}
+    escala = database.buscar_escala_do_dia(d.isoformat()) if escala is None else escala
+    no_dia = {t.FuncionarioID for ts in escala.values() for t in ts if t.FuncionarioID}
+    textos = []
+    for fid, c in cfgs.items():
+        f = funcs.get(fid)
+        if fid in ja or fid in no_dia or not _vale(c, f, d):
+            continue
+        if c['posicao_id'] not in nomes_pos:
+            textos.append(f"📌 {f.NomeCompleto} é fixo numa posição que foi removida do mapa: escolha outra em 📌 Fixos.")
+            continue
+        outro = R.conflito_na_posicao(escala, c['posicao_id'], None, c['entrada'], c['saida'])
+        textos.append(f"📌 {f.NomeCompleto} (fixo) não entrou: {nomes_pos[c['posicao_id']]} está ocupada das "
+                      f"{c['entrada']} às {c['saida']}" + (f" ({outro.NomePessoa or '?'})" if outro else "")
+                      + ". Libere a posição ou escale à mão.")
+    return textos
+
+
 def ids_fixos_aplicados(data_txt):
     """{EscalaID} dos turnos deste dia que vieram do fixo (para o 📌 na tela)."""
     conn = _conexao()
@@ -325,27 +408,32 @@ def ressincronizar(funcionario_id, desde=None, hoje=None):
             d = datetime.strptime(data, '%Y-%m-%d').date()
             escala = database.buscar_escala_do_dia(data)
             turno = next((t for ts in escala.values() for t in ts if t.EscalaID == eid), None)
-            if (turno is None or turno.FuncionarioID != funcionario_id or turno.PosicaoID != pos_snap
-                    or R.formatar_hora_curta(turno.HorarioEntrada) != R.formatar_hora_curta(ent_snap)
-                    or R.formatar_hora_curta(turno.HorarioSaida) != R.formatar_hora_curta(sai_snap)):
+            if not _intocado(turno, funcionario_id, pos_snap, ent_snap, sai_snap):
                 continue                                       # o gestor mexeu neste dia: fica como ele deixou
-            vale = bool(cfg and func and R.dia_semana_banco(d) in cfg['dias'] and not _motivo(func, d))
-            if not vale:
+            if not _vale(cfg, func, d):
                 database.excluir_turno_escala(eid)
                 cur.execute("DELETE FROM EscalaFixaAplicada WHERE DataEscala = ? AND FuncionarioID = ?", data, funcionario_id)
                 conn.commit()
                 removidos += 1
                 continue
+            # [DEPURAÇÃO ESCALA 2] fixo sem intervalo: o intervalo do dia (🪄 automático ou à mão) fica, se ainda
+            # couber no horário. Antes qualquer ajuste do fixo (até mudar a folga) apagava os intervalos dos dias.
+            ini_dia = R.formatar_hora_curta(turno.InicioIntervalo) or None
+            fim_dia = R.formatar_hora_curta(turno.FimIntervalo) or None
+            if cfg['int_ini']:
+                ini, fim = cfg['int_ini'], cfg['int_fim']
+            elif ini_dia and fim_dia and not R.problema_intervalo(cfg['entrada'], cfg['saida'], ini_dia, fim_dia):
+                ini, fim = ini_dia, fim_dia
+            else:
+                ini = fim = None
             iguais = (turno.PosicaoID == cfg['posicao_id'] and R.formatar_hora_curta(turno.HorarioEntrada) == cfg['entrada']
-                      and R.formatar_hora_curta(turno.HorarioSaida) == cfg['saida']
-                      and (R.formatar_hora_curta(turno.InicioIntervalo) or '') == cfg['int_ini']
-                      and (R.formatar_hora_curta(turno.FimIntervalo) or '') == cfg['int_fim'])
+                      and R.formatar_hora_curta(turno.HorarioSaida) == cfg['saida'] and ini == ini_dia and fim == fim_dia)
             if iguais:
                 continue
             if R.conflito_na_posicao(escala, cfg['posicao_id'], eid, cfg['entrada'], cfg['saida']):
                 continue
             if database.salvar_escala_dia_v3(eid, data, cfg['posicao_id'], funcionario_id, None, cfg['entrada'], cfg['saida'],
-                                             cfg['int_ini'] or None, cfg['int_fim'] or None, turno.FocoDoDia or ''):
+                                             ini, fim, turno.FocoDoDia or ''):
                 if turno.PosicaoID != cfg['posicao_id']:
                     _mudar_posicao(cur, eid, cfg['posicao_id'])
                 cur.execute("UPDATE EscalaFixaAplicada SET PosicaoID = ?, HorarioEntrada = ?, HorarioSaida = ? "
@@ -474,17 +562,22 @@ def _comeca_amanha(funcionario_id, hoje):
 
 def remover(funcionario_id, usuario):
     """Deixa de ser fixo: sai dos próximos dias que ninguém mexeu (a partir de amanhã)."""
-    func = _funcionario(funcionario_id)
+    try:
+        fid = int(funcionario_id)
+    except (TypeError, ValueError):
+        raise ErroFixo("Escolha o funcionário.")
+    func = next((f for f in database.listar_funcionarios() if f.FuncionarioID == fid), None)
+    nome = func.NomeCompleto if func else f"Funcionário {fid} (excluído do cadastro)"   # [DEPURAÇÃO ESCALA 2] antes dava erro
     conn = _conexao()
     try:
         cur = conn.cursor()
-        cur.execute("DELETE FROM EscalaFixa WHERE FuncionarioID = ?", func.FuncionarioID)
+        cur.execute("DELETE FROM EscalaFixa WHERE FuncionarioID = ?", fid)
         conn.commit()
     finally:
         conn.close()
-    r = ressincronizar(func.FuncionarioID)
-    logger.info(f"[GESTÃO] {(usuario or {}).get('nome')}: {func.NomeCompleto} deixou de ser fixo — {r}.")
-    return {'ok': True, 'mensagem': f"{func.NomeCompleto} não é mais fixo"
+    r = ressincronizar(fid)
+    logger.info(f"[GESTÃO] {(usuario or {}).get('nome')}: {nome} deixou de ser fixo — {r}.")
+    return {'ok': True, 'mensagem': f"{nome} não é mais fixo"
             + (f" ({r['removidos']} turno(s) automático(s) dos próximos dias retirado(s))." if r['removidos'] else ".")}
 
 
@@ -500,7 +593,8 @@ def definir_folga(funcionario_id, dia_folga, usuario):
     conn = _conexao()
     try:
         cur = conn.cursor()
-        cur.execute("UPDATE Funcionarios SET DiaDeFolga = ? WHERE FuncionarioID = ?", dia or None, func.FuncionarioID)
+        # [DEPURAÇÃO ESCALA 2] "sem folga" = 0, como grava o programa da Gamificação (antes gravava NULL)
+        cur.execute("UPDATE Funcionarios SET DiaDeFolga = ? WHERE FuncionarioID = ?", dia, func.FuncionarioID)
         conn.commit()
     finally:
         conn.close()

@@ -92,7 +92,7 @@ HORARIO_LEMBRETE_FATURAMENTO = "09:15"   # [FOLHA × FATURAMENTO] faltou lançar
 HORARIO_FECHAMENTO_FOLHA = "09:20"       # [FOLHA × FATURAMENTO] dia 1 (até o 5): fechamento do mês anterior
 HORARIO_AVISO_CLIMA = "10:00"            # [FOLHA × FATURAMENTO] boletim: previsão de hoje + 3 dias × escala
 HORARIOS_RESUMO_NOTAS = ("12:00", "18:00")
-HORARIO_ESCALA_FIXA = "05:00"            # [ESCALA FIXA] escala os fixos de hoje e dos próximos 14 dias   # [AVISOS LIMPOS] notas novas da SEFAZ: 2 resumos por dia (não 1 aviso por hora)
+HORARIO_ESCALA_FIXA = "05:00"            # [ESCALA FIXA] escala os fixos de hoje e dos próximos 14 dias (e de hora em hora)   # [AVISOS LIMPOS] notas novas da SEFAZ: 2 resumos por dia (não 1 aviso por hora)
 DIAS_PARA_FECHAMENTO = 5        # o fechamento do mês anterior pode rodar do dia 1 ao dia 5
 
 # --- CONTROLE DE CONCORRÊNCIA ---
@@ -1237,6 +1237,9 @@ def configurar_agendamentos():
     for horario in HORARIOS_RESUMO_NOTAS:                   # [AVISOS LIMPOS] resumo das notas novas
         schedule.every().day.at(horario).do(run_threaded, verificar_resumo_notas)
     schedule.every().day.at(HORARIO_ESCALA_FIXA).do(run_threaded, aplicar_escala_fixa)
+    # [DEPURAÇÃO ESCALA 2] de hora em hora também: folga/férias mudadas no programa do PC ou escala copiada
+    # pelo PC se acertam no mesmo dia (antes só no dia seguinte, ou quando alguém abria o dia na Web)
+    schedule.every(1).hours.do(run_threaded, aplicar_escala_fixa)
 
 
 def recuperar_tarefas_do_dia():

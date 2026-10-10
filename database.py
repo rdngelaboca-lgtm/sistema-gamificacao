@@ -9661,8 +9661,10 @@ def gerar_relatorio_escala_texto(data_str):
                     WHEN PL.Setor = 'Salão' THEN 3
                     WHEN PL.Setor = 'Buffet' THEN 4
                     WHEN PL.Setor = 'Cozinha' THEN 5
-                    ELSE 99 END, PL.NomePosicao
+                    ELSE 99 END, PL.Setor, PL.NomePosicao, ED.HorarioEntrada
             """
+            # [DEPURAÇÃO ESCALA 2] sem o PL.Setor, os setores fora da lista (Camara Fria, Limpeza, Varanda...) saíam
+            # misturados pela ordem do nome da posição, com o título do setor repetido no Telegram
             cursor.execute(sql, data_str)
             resultados = cursor.fetchall()
 
@@ -9727,7 +9729,9 @@ def buscar_horarios_ocupacao_hoje(data_str, dia_semana_int):
                 INNER JOIN PosicoesLoja PL ON ED.PosicaoID = PL.PosicaoID
                 WHERE ED.DataEscala = ?
                   AND PL.Ativo = 1
+                  AND (ED.FuncionarioID IS NOT NULL OR ED.FreelancerID IS NOT NULL)
             """
+            # [DEPURAÇÃO ESCALA 2] turno SEM pessoa (freelancer excluído) contava como gente trabalhando no gráfico
             cursor.execute(sql, data_str)
             return cursor.fetchall()
         except Exception as e:
@@ -12527,6 +12531,11 @@ def copiar_escala_dia(data_origem, data_destino):
                 WHERE DataEscala = ?
             """
             cursor.execute(sql_copy, data_destino, data_origem)
+            # [DEPURAÇÃO ESCALA 2] o dia foi refeito: os 📌 fixos são conferidos de novo nele (escala_fixa.py).
+            # Antes, copiar pelo PC deixava o dia "já conferido" e o fixo que não estava na cópia sumia.
+            cursor.execute("SELECT 1 FROM sys.tables WHERE name = 'EscalaFixaAplicada'")
+            if cursor.fetchone():
+                cursor.execute("DELETE FROM EscalaFixaAplicada WHERE DataEscala = ?", data_destino)
             conn.commit()
             return True, "Escala copiada com sucesso!"
         except Exception as e:

@@ -605,15 +605,32 @@ $('#pessoa-busca').addEventListener('keydown', e => {
     if (aberta && it) { escolherPessoa(it.x.chave, true); $('#ent').focus(); $('#ent').select(); }
   } else if (e.key === 'Escape' && aberta) {
     e.preventDefault(); e.stopPropagation();          // fecha só a lista (o painel continua aberto)
-    escolherPessoa($('#pessoa').value, false);
+    restaurarNomeBusca();                             // [DEPURAÇÃO ESCALA 2] antes refazia a escolha e desmarcava o 📌
   }
 });
-$('#pessoa-busca').addEventListener('blur', () => setTimeout(() => {
-  if (document.activeElement === $('#pessoa-busca')) return;
+function restaurarNomeBusca() {
   fecharListaPessoas();
   const x = pessoaPorChave($('#pessoa').value);           // digitou e não escolheu: volta para quem estava
-  if ($('#pessoa-busca').value !== (x ? x.nome : '')) { $('#pessoa-busca').value = x ? x.nome : ''; $('#pessoa-busca').classList.toggle('escolhido', !!x); }
+  if ($('#pessoa-busca').value !== (x ? x.nome : '')) $('#pessoa-busca').value = x ? x.nome : '';
+  $('#pessoa-busca').classList.toggle('escolhido', !!x);
+}
+$('#pessoa-busca').addEventListener('blur', () => setTimeout(() => {
+  if (document.activeElement === $('#pessoa-busca')) return;
+  restaurarNomeBusca();
 }, 150));
+// [DEPURAÇÃO ESCALA 2] digitou outro nome e clicou em Salvar sem escolher na lista: antes salvava a pessoa
+// ANTERIOR (a busca só voltava ao nome antigo depois). Agora: um só resultado = escolhe ele; vários = pergunta.
+function confirmarPessoaDigitada() {
+  const texto = $('#pessoa-busca').value.trim(), x = pessoaPorChave($('#pessoa').value);
+  if (x && texto === x.nome) return true;
+  if (!texto) { if (x) escolherPessoa('', false); return true; }
+  const achados = listarPessoas(texto).itens;
+  if (achados.length === 1) { escolherPessoa(achados[0].x.chave, false); return true; }
+  alert(achados.length ? `Mais de uma pessoa com “${texto}”: toque no nome certo na lista.`
+                       : `Ninguém com “${texto}”. Confira o nome (freelancer novo: cadastre em 👤 Freelancers).`);
+  $('#pessoa-busca').focus(); desenharListaPessoas();
+  return false;
+}
 $('#pessoa-lista').addEventListener('mousedown', e => { if (e.target.closest('.op')) e.preventDefault(); });
 $('#pessoa-lista').addEventListener('click', e => {
   const li = e.target.closest('.op[data-chave]');
@@ -635,7 +652,8 @@ function infoFixo(x) {
   const aqui = !!(x.fixo && x.fixo.posicao_id === S.pos), marcado = $('#fixo').checked;
   const folga = x.folga_semana ? `folga: ${esc(x.folga_semana)}` : '<span class="alerta">⚠️ sem folga fixa no cadastro (defina em 📌 Fixos)</span>';
   let t;
-  if (aqui && marcado) t = `Fixo aqui: ${esc(x.fixo.entrada)}–${esc(x.fixo.saida)}, ${esc(x.fixo.dias_texto)} · ${folga}. Mudou o horário? Salve: os próximos dias mudam junto.`;
+  if (aqui && marcado) t = `Fixo aqui: ${esc(x.fixo.entrada)}–${esc(x.fixo.saida)}, ${esc(x.fixo.dias_texto)} · ${folga}. ` +
+    'Mudar o horário aqui vale só para este dia; para todos os dias, use 📌 Fixos.';
   else if (aqui) t = '<span class="alerta">Ao salvar, deixa de ser fixo</span> (sai dos próximos dias que o sistema escalou sozinho).';
   else if (x.fixo) t = `Hoje é fixo em <b>${esc(x.fixo.posicao)}</b> (${esc(x.fixo.entrada)}–${esc(x.fixo.saida)}).` + (marcado ? ' Ao salvar, o fixo muda para esta posição.' : '');
   else t = (marcado ? 'Ao salvar, entra sozinho nos próximos dias (a partir de amanhã)' : 'Marque para ele entrar sozinho nos próximos dias') + ` · ${folga}.`;
@@ -671,10 +689,13 @@ function atualizarPrevia() {
 let salvando = false;
 async function salvarTurno() {
   if (salvando || S.pos == null || !posAtual() || posAtual().removida || !diaPronto()) return;
+  if (!confirmarPessoaDigitada()) return;
   if (!$('#pessoa').value) { alert('Digite o nome e escolha um funcionário ou freelancer na lista.'); $('#pessoa-busca').focus(); return; }
   const quem = pessoaPorChave($('#pessoa').value);
   let fixo = null;                          // [ESCALA FIXA] null = não mexe no fixo
-  if (quem && quem.tipo === 'func' && !$('#linha-fixo').hidden) {
+  if (quem && quem.tipo === 'func' && !$('#linha-fixo').hidden && $('#fixo').checked !== S.fixoAntes) {
+    // [DEPURAÇÃO ESCALA 2] só quando o 📌 foi MARCADO ou DESMARCADO agora. Antes, editar UM dia de quem já é fixo
+    // (o 📌 vem marcado) mudava o horário do fixo em todos os próximos dias.
     if ($('#fixo').checked) {
       if (!quem.folga_semana && !confirm(`${quem.nome} não tem folga fixa no cadastro: vai entrar na escala TODOS os dias.\n\n` +
                                          'Continuar? (A folga se define em 📌 Fixos.)')) return;

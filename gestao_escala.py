@@ -180,6 +180,10 @@ def dia(data_txt):
                           'cor': cor, 'linhas': linhas[1:], 'turnos': tj})
 
     alertas = [{'nivel': n, 'texto': t} for n, t in R.analisar_escala_do_dia(escala, posicoes, indisponivel)]
+    try:                                     # [DEPURAÇÃO ESCALA 2] fixo que não conseguiu entrar (antes só no log)
+        alertas[0:0] = [{'nivel': 'aviso', 'texto': t} for t in escala_fixa.pendencias_do_dia(d, escala)]
+    except Exception as e:
+        logger.warning(f"Escala fixa: pendências de {data} indisponíveis ({e})")
 
     # [DEPURAÇÃO WEB] turnos em posições REMOVIDAS do mapa: antes só apareciam num alerta e não
     # havia como vê-los nem excluí-los (mas iam no Telegram/WhatsApp). Agora vêm numa lista à parte.
@@ -370,6 +374,11 @@ def salvar_turno(dados, usuario):
         turno_antigo = next((t for ts in escala.values() for t in ts if t.EscalaID == escala_id), None)
         if not turno_antigo:
             raise ErroEscala("Este turno não existe mais (foi excluído ou a escala foi copiada). Atualize a página.", 409)
+        if turno_antigo.PosicaoID != pos_id:
+            # [DEPURAÇÃO ESCALA 2] a página estava desatualizada: conferia o conflito na posição errada e dizia
+            # "salvo" (o turno continuava na outra posição)
+            raise ErroEscala(f"Este turno está em {nomes_pos.get(turno_antigo.PosicaoID, 'outra posição')}, não em "
+                             f"{nomes_pos[pos_id]} (a escala mudou em outro lugar). Atualize a página.", 409)
 
     pessoa = (tipo, pessoa_id)
     erros, avisos = R.conflitos_ao_salvar(escala, escala_id, pessoa, h_ent, h_sai, nome_pessoa, nomes_pos)
@@ -426,8 +435,9 @@ def salvar_turno(dados, usuario):
     if func_id and dados.get('fixo') in (True, False):          # [ESCALA FIXA] 📌 marcado/desmarcado no painel
         try:
             cfg = escala_fixa.fixos().get(func_id)
-            if dados['fixo'] and not (cfg and cfg['posicao_id'] == pos_id and cfg['entrada'] == h_ent and cfg['saida'] == h_sai
-                                      and cfg['int_ini'] == (h_ini or '') and cfg['int_fim'] == (h_fim or '')):
+            # [DEPURAÇÃO ESCALA 2] já é fixo NESTA posição: salvar um dia não muda o fixo (antes, editar UM dia mudava o
+            # horário de todos os próximos). O horário do fixo muda em 📌 Fixos.
+            if dados['fixo'] and not (cfg and cfg['posicao_id'] == pos_id):
                 r = escala_fixa.salvar({'funcionario_id': func_id, 'posicao_id': pos_id, 'entrada': h_ent, 'saida': h_sai,
                                         'int_ini': h_ini, 'int_fim': h_fim}, usuario)
                 mensagem += "\n" + r['mensagem']
@@ -436,6 +446,9 @@ def salvar_turno(dados, usuario):
                 mensagem += "\n" + escala_fixa.remover(func_id, usuario)['mensagem']
         except escala_fixa.ErroFixo as e:
             mensagem += f"\n⚠️ O turno foi salvo, mas o fixo não: {e}"
+        except Exception as e:
+            logger.error(f"Escala fixa: o turno de {nome_pessoa} foi salvo, mas o fixo falhou: {e}", exc_info=True)
+            mensagem += "\n⚠️ O turno foi salvo, mas o fixo não (erro no servidor; tente de novo em 📌 Fixos)."
     return {'ok': True, 'mensagem': mensagem, 'sem_folga': sem_folga}
 
 
