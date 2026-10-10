@@ -20,6 +20,7 @@ from datetime import date, datetime, timedelta
 
 import config
 import database
+import escala_fixa
 import escala_regras as R
 
 logger = logging.getLogger(__name__)
@@ -88,9 +89,11 @@ def _pessoa(chave):
     raise ErroEscala("Escolha um funcionário ou freelancer.")
 
 
-def _turno_json(t, pagos):
+def _turno_json(t, pagos, fixos=None):
     tipo = 'func' if t.FuncionarioID else ('free' if getattr(t, 'FreelancerID', None) else None)
+    cfg = (fixos or {}).get(t.FuncionarioID) if t.FuncionarioID else None
     return {'id': t.EscalaID, 'posicao_id': t.PosicaoID, 'tipo': tipo,
+            'fixo': bool(cfg and cfg['posicao_id'] == t.PosicaoID),       # [ESCALA FIXA] 📌
             'pessoa': f"{tipo}:{t.FuncionarioID or t.FreelancerID}" if tipo else None,
             'nome': t.NomePessoa or '', 'entrada': _h(t.HorarioEntrada), 'saida': _h(t.HorarioSaida),
             'int_ini': _h(t.InicioIntervalo), 'int_fim': _h(t.FimIntervalo), 'foco': t.FocoDoDia or '',
@@ -137,6 +140,13 @@ def dia(data_txt):
     """Tudo o que a tela precisa para mostrar um dia."""
     data, d = _data(data_txt)
     _exigir_banco()
+    cfg_fixos = {}
+    try:                                     # [ESCALA FIXA] o fixo entra sozinho (de hoje em diante, menos na folga)
+        if d >= date.today():
+            escala_fixa.aplicar([d])
+        cfg_fixos = escala_fixa.fixos()
+    except Exception as e:
+        logger.error(f"Escala fixa: não consegui aplicar os fixos em {data}: {e}", exc_info=True)
     posicoes = database.listar_posicoes_loja()
     escala = database.buscar_escala_do_dia(data)
     funcionarios = list(database.listar_funcionarios())
@@ -163,8 +173,11 @@ def dia(data_txt):
         turnos = escala.get(pos_id, [])
         cor, linhas = R.rotulo_e_cor_posicao(nome, turnos, folgas, indisponivel, dia_db,
                                              None if turnos else fixos.get(pos_id), False, escalados)
+        tj = [_turno_json(t, pagos, cfg_fixos) for t in turnos]
+        if turnos and len(linhas) == len(turnos) + 1:          # [ESCALA FIXA] 📌 no nome de quem é fixo aqui
+            linhas = [linhas[0]] + [('📌 ' if j['fixo'] else '') + l for j, l in zip(tj, linhas[1:])]
         lista_pos.append({'id': pos_id, 'nome': nome, 'setor': setor or '', 'x': round(x, 1), 'y': round(y, 1),
-                          'cor': cor, 'linhas': linhas[1:], 'turnos': [_turno_json(t, pagos) for t in turnos]})
+                          'cor': cor, 'linhas': linhas[1:], 'turnos': tj})
 
     alertas = [{'nivel': n, 'texto': t} for n, t in R.analisar_escala_do_dia(escala, posicoes, indisponivel)]
 
@@ -204,15 +217,30 @@ def dia(data_txt):
     fluxo = {'horas': R.HORAS_FLUXO, 'setores': setores,
              'series': {s: R.fluxo_por_hora(horarios, s) for s in [R.SETOR_TODOS] + setores}}
 
+    # [BUSCA DE PESSOA] onde cada um já está hoje, a folga do cadastro e o fixo (para a busca da tela)
+    nomes_pos = {p[0]: p[1] for p in posicoes}
+    nomes_pos.update({p['id']: p['nome'] for p in fora_do_mapa})
+    hoje_em = {}
+    for pid, ts in escala.items():
+        for t in ts:
+            chave = f"func:{t.FuncionarioID}" if t.FuncionarioID else (f"free:{t.FreelancerID}" if getattr(t, 'FreelancerID', None) else None)
+            if chave:
+                hoje_em.setdefault(chave, []).append(f"{nomes_pos.get(pid, '?')} {_h(t.HorarioEntrada)}–{_h(t.HorarioSaida)}")
     pessoas = []
     for f in funcionarios:
         folga = motivos.get(f.FuncionarioID) or (folgas.get(f.FuncionarioID) == dia_db and "Dia de folga")
-        pessoas.append({'chave': f"func:{f.FuncionarioID}", 'tipo': 'func', 'nome': f.NomeCompleto,
+        chave = f"func:{f.FuncionarioID}"
+        cfg = cfg_fixos.get(f.FuncionarioID)
+        pessoas.append({'chave': chave, 'tipo': 'func', 'nome': f.NomeCompleto,
                         'rotulo': f"[Fixo] {f.NomeCompleto}" + (" [FOLGA]" if folga else ""),
-                        'folga': str(folga).replace('⚠️', '').strip().rstrip('!') if folga else None})
+                        'folga': str(folga).replace('⚠️', '').strip().rstrip('!') if folga else None,
+                        'folga_semana': escala_fixa.texto_folga(f), 'hoje_em': hoje_em.get(chave, []),
+                        'fixo': dict(cfg, posicao=nomes_pos.get(cfg['posicao_id']) or f"Posição {cfg['posicao_id']}",
+                                     dias_texto=escala_fixa._resumo_dias(cfg['dias'])) if cfg else None})
     for fr in freelancers:
-        pessoas.append({'chave': f"free:{fr.FreelancerID}", 'tipo': 'free', 'nome': fr.Nome,
-                        'rotulo': f"[Free] {fr.Nome}", 'folga': None})
+        chave = f"free:{fr.FreelancerID}"
+        pessoas.append({'chave': chave, 'tipo': 'free', 'nome': fr.Nome,
+                        'rotulo': f"[Free] {fr.Nome}", 'folga': None, 'hoje_em': hoje_em.get(chave, []), 'fixo': None})
 
     # [FOLHA × FATURAMENTO] clima do dia e o que aconteceu em dias parecidos (ajuda a decidir os freelancers)
     try:
@@ -226,9 +254,42 @@ def dia(data_txt):
             'tela': {'largura': tela[0], 'altura': tela[1],
                      'imagem_largura': R.MAPA_IMAGEM_LARGURA, 'imagem_altura': R.MAPA_IMAGEM_ALTURA},
             'posicoes': lista_pos, 'fora_do_mapa': fora_do_mapa, 'alertas': alertas, 'resumo': resumo, 'fluxo': fluxo,
-            'setor_todos': R.SETOR_TODOS, 'pessoas': pessoas,
+            'setor_todos': R.SETOR_TODOS, 'pessoas': pessoas, 'habituais': _habituais(d),
             'config': {'jornada_horas': _jornada_horas(),
                        'limite_curta_min': int(cfg_pag.get('LimiteCurtaMinutos', 420))}}
+
+
+DIAS_HABITUAIS = 60
+
+
+def _habituais(d):
+    """
+    [BUSCA DE PESSOA] {PosicaoID: [{'chave', 'vezes', 'entrada', 'saida', 'ultima'}]}: quem mais trabalhou em cada
+    posição nos últimos 60 dias (aparece primeiro na busca, com o horário da última vez).
+    """
+    conn = database.get_db_connection()
+    if not conn:
+        return {}
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT PosicaoID, FuncionarioID, FreelancerID, DataEscala, HorarioEntrada, HorarioSaida FROM EscalaDiaria "
+                    "WHERE DataEscala >= ? AND DataEscala < ? AND (FuncionarioID IS NOT NULL OR FreelancerID IS NOT NULL)",
+                    (d - timedelta(days=DIAS_HABITUAIS)).strftime('%Y-%m-%d'), d.strftime('%Y-%m-%d'))
+        linhas = cur.fetchall()
+    except Exception as e:
+        logger.warning(f"Escala: habituais por posição indisponíveis ({e})")
+        return {}
+    finally:
+        conn.close()
+    por_pos = {}
+    for pid, fid, frid, data_e, ent, sai in linhas:
+        chave = f"func:{fid}" if fid else f"free:{frid}"
+        x = por_pos.setdefault(pid, {}).setdefault(chave, {'chave': chave, 'vezes': 0, 'ultima': '', 'entrada': '', 'saida': ''})
+        x['vezes'] += 1
+        data_txt = str(data_e)[:10]
+        if data_txt >= x['ultima']:
+            x.update(ultima=data_txt, entrada=_h(ent), saida=_h(sai))
+    return {pid: sorted(v.values(), key=lambda x: (-x['vezes'], x['chave']))[:6] for pid, v in por_pos.items()}
 
 
 def previa_freelancer(dados):
@@ -350,7 +411,22 @@ def salvar_turno(dados, usuario):
             extra = (f", diária {tipo_d}" if tipo_d else "") if ok_t else f" ({msg_t})"
     logger.info(f"[GESTÃO] {usuario.get('nome')}: turno de {nome_pessoa} em {nomes_pos[pos_id]} {data} "
                 f"{h_ent}-{h_sai} {'atualizado' if escala_id else 'criado'}.")
-    return {'ok': True, 'mensagem': f"Turno de {nome_pessoa} salvo ({h_ent}–{h_sai}{extra})."}
+    mensagem = f"Turno de {nome_pessoa} salvo ({h_ent}–{h_sai}{extra})."
+    sem_folga = False
+    if func_id and dados.get('fixo') in (True, False):          # [ESCALA FIXA] 📌 marcado/desmarcado no painel
+        try:
+            cfg = escala_fixa.fixos().get(func_id)
+            if dados['fixo'] and not (cfg and cfg['posicao_id'] == pos_id and cfg['entrada'] == h_ent and cfg['saida'] == h_sai
+                                      and cfg['int_ini'] == (h_ini or '') and cfg['int_fim'] == (h_fim or '')):
+                r = escala_fixa.salvar({'funcionario_id': func_id, 'posicao_id': pos_id, 'entrada': h_ent, 'saida': h_sai,
+                                        'int_ini': h_ini, 'int_fim': h_fim}, usuario)
+                mensagem += "\n" + r['mensagem']
+                sem_folga = r['sem_folga']
+            elif not dados['fixo'] and cfg and cfg['posicao_id'] == pos_id:
+                mensagem += "\n" + escala_fixa.remover(func_id, usuario)['mensagem']
+        except escala_fixa.ErroFixo as e:
+            mensagem += f"\n⚠️ O turno foi salvo, mas o fixo não: {e}"
+    return {'ok': True, 'mensagem': mensagem, 'sem_folga': sem_folga}
 
 
 def excluir_turno(escala_id, dados, usuario):
@@ -383,8 +459,44 @@ def copiar(dados, usuario):
     ok, msg = database.copiar_escala_dia(origem.strftime('%Y-%m-%d'), data)
     if not ok:
         raise ErroEscala(msg)
+    try:                                     # [ESCALA FIXA] o dia foi refeito: confere os fixos de novo nele
+        escala_fixa.esquecer_dia(data)
+        if d >= date.today():
+            escala_fixa.aplicar([d])
+    except Exception as e:
+        logger.error(f"Escala fixa: conferir os fixos depois de copiar {data} falhou: {e}", exc_info=True)
     logger.info(f"[GESTÃO] {usuario.get('nome')}: copiou a escala de {origem} para {data}.")
     return {'ok': True, 'mensagem': f"Escala de {R.fmt_data_br(origem, True)} copiada para {R.fmt_data_br(d, True)}."}
+
+
+# ------------------------------------------------------------------------------
+# [ESCALA FIXA] Funcionários fixos (todo dia na mesma posição e horário, menos na folga)
+# ------------------------------------------------------------------------------
+def _fixo(funcao, *args):
+    try:
+        return funcao(*args)
+    except escala_fixa.ErroFixo as e:
+        raise ErroEscala(str(e), e.status)
+
+
+def fixos_listar():
+    _exigir_banco()
+    return {'fixos': _fixo(escala_fixa.listar), 'dias_a_frente': escala_fixa.DIAS_A_FRENTE}
+
+
+def fixo_salvar(dados, usuario):
+    _exigir_banco()
+    return _fixo(escala_fixa.salvar, dados, usuario)
+
+
+def fixo_remover(funcionario_id, usuario):
+    _exigir_banco()
+    return _fixo(escala_fixa.remover, funcionario_id, usuario)
+
+
+def fixo_folga(funcionario_id, dados, usuario):
+    _exigir_banco()
+    return _fixo(escala_fixa.definir_folga, funcionario_id, dados.get('dia_folga'), usuario)
 
 
 # ------------------------------------------------------------------------------

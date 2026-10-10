@@ -53,6 +53,48 @@
   table.turnos tr.sel td { background: var(--verde-claro); }
   #previa-pag { font-weight: 700; color: #1b5e20; font-size: 13px; min-height: 1em; }
 
+  /* [BUSCA DE PESSOA] digitar o nome em vez de rolar a lista */
+  .busca-pessoa { position: relative; }
+  .campo-busca { display: flex; gap: 6px; }
+  #pessoa-busca { flex: 1; min-width: 0; font-size: 16px; }
+  #pessoa-busca.escolhido { font-weight: 700; border-color: var(--verde); background: var(--verde-claro); }
+  #pessoa-lista { list-style: none; margin: 4px 0 0; padding: 4px; border: 1px solid var(--linha); border-radius: 10px; background: #fff;
+    max-height: 300px; overflow: auto; box-shadow: 0 6px 18px #0002; }
+  #pessoa-lista .grupo { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--suave); padding: 6px 8px 2px; }
+  #pessoa-lista .op { padding: 7px 8px; border-radius: 8px; cursor: pointer; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; }
+  #pessoa-lista .op.ativo { background: var(--verde-claro); }
+  #pessoa-lista .op.fraco .nome { color: var(--suave); }
+  #pessoa-lista .op .nome { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #pessoa-lista .op .nome mark { background: #ffe58f; color: inherit; border-radius: 3px; padding: 0 1px; }
+  #pessoa-lista .op .tipo { font-size: 11px; color: var(--suave); align-self: center; }
+  #pessoa-lista .op .info { grid-column: 1 / -1; font-size: 12px; color: var(--suave); }
+  #pessoa-lista .op .info .alerta { color: var(--aviso); font-weight: 700; }
+  #pessoa-lista .vazio { padding: 10px 8px; color: var(--suave); font-size: 13px; }
+  #pessoa-info { font-size: 12px; color: var(--suave); min-height: 0; }
+  #pessoa-info .alerta { color: var(--aviso); font-weight: 700; }
+  .linha-fixo { display: flex; gap: 8px; align-items: flex-start; border: 1px dashed var(--linha); border-radius: 10px; padding: 8px 10px;
+    font-weight: 600 !important; color: var(--texto) !important; cursor: pointer; }
+  .linha-fixo input { width: 18px; height: 18px; flex: none; margin-top: 1px; }
+  .linha-fixo.marcado { border-style: solid; border-color: var(--verde); background: var(--verde-claro); }
+  #fixo-info { font-size: 12px; color: var(--suave); }
+  #fixo-info .alerta { color: var(--aviso); font-weight: 700; }
+
+  /* [ESCALA FIXA] janela 📌 Fixos */
+  .fixos-lista { display: grid; gap: 10px; }
+  .fixo-cartao { border: 1px solid var(--linha); border-radius: 12px; padding: 10px 12px; display: grid; gap: 8px; }
+  .fixo-cartao .topo { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+  .fixo-cartao .topo b { font-size: 15px; }
+  .fixo-cartao .campos { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; }
+  .fixo-cartao .campos label { font-size: 12px; font-weight: 700; color: var(--suave); display: grid; gap: 2px; }
+  .fixo-cartao .campos input { width: 76px; text-align: center; }
+  .fixo-cartao .campos select { max-width: 220px; }
+  .dias-chips { display: flex; gap: 4px; flex-wrap: wrap; }
+  .dias-chips label { display: inline-flex; align-items: center; gap: 3px; border: 1px solid var(--linha); border-radius: 999px; padding: 3px 9px;
+    font-size: 13px; font-weight: 600; cursor: pointer; color: var(--texto) !important; }
+  .dias-chips label.on { background: var(--verde-claro); border-color: var(--verde); }
+  .dias-chips label.folga { text-decoration: line-through; color: var(--suave) !important; }
+  .dias-chips input { width: 14px; height: 14px; margin: 0; }
+
   /* ---------- rodapé: alertas e fluxo ---------- */
   .inferior { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 0 16px 70px; }
   #alertas { margin: 0; padding: 0; list-style: none; font-size: 13px; display: flex; flex-direction: column; gap: 4px; }
@@ -87,6 +129,7 @@
     </div>
     <div class="linha acoes">
       <button class="btn" id="btn-copiar">📋 <span class="txt">Copiar escala anterior</span><span class="curto">Copiar</span></button>
+      <button class="btn" id="btn-fixos">📌 <span class="txt">Fixos</span><span class="curto">Fixos</span></button>
       <span class="sep"></span>
       <button class="btn" id="btn-auto">🪄 <span class="txt">Gerar intervalos automáticos</span><span class="curto">Auto</span></button>
       <button class="btn" id="btn-intervalos">⏱️ <span class="txt">Gerenciar intervalos</span><span class="curto">Intervalos</span></button>
@@ -118,8 +161,20 @@
       <div id="aviso-removida" hidden>Esta posição foi <b>removida do mapa</b>, mas estes turnos continuam na escala do dia
         (vão no Telegram e no WhatsApp). Toque no turno e em <b>Excluir</b> — ou reative a posição no programa do PC.</div>
       <div id="campos-turno" style="display:flex;flex-direction:column;gap:8px">
-      <label for="pessoa">Funcionário / Freelancer:</label>
-      <select id="pessoa"></select>
+      <label for="pessoa-busca">Funcionário / Freelancer:</label>
+      <div class="busca-pessoa">
+        <div class="campo-busca">
+          <input id="pessoa-busca" type="text" placeholder="Digite o nome (ou toque para ver a lista)…" autocomplete="off" spellcheck="false"
+            role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="pessoa-lista">
+          <button type="button" class="btn ico" id="pessoa-limpar" title="Limpar a pessoa" hidden>✕</button>
+        </div>
+        <ul id="pessoa-lista" role="listbox" aria-label="Pessoas" hidden></ul>
+        <input type="hidden" id="pessoa">
+      </div>
+      <div id="pessoa-info"></div>
+      <label class="linha-fixo" id="linha-fixo" hidden><input type="checkbox" id="fixo">
+        <span>📌 Fixo: escalar sozinho <b>todo dia</b> nesta posição e horário (menos na folga)</span></label>
+      <div id="fixo-info" hidden></div>
       <div class="duas"><label for="ent">Entrada:</label><input id="ent" inputmode="numeric" maxlength="5" placeholder="08:00">
         <label for="sai">Saída:</label><input id="sai" inputmode="numeric" maxlength="5" placeholder="16:00"></div>
       <label>Intervalo (início – fim):</label>
@@ -148,7 +203,7 @@
 {% endblock %}
 {% block script %}
 const S = {data: HOJE(), dia: null, vista: null, pos: null, turno: null, tipoManual: false, extra: null,
-           setorFluxo: null, prevTimer: null, seqDia: 0, seqPrev: 0};
+           setorFluxo: null, prevTimer: null, seqDia: 0, seqPrev: 0, busca: {itens: [], ativo: -1}, fixoAntes: false};
 // a data vem na URL (?data=AAAA-MM-DD) para o 🔄 do navegador voltar no mesmo dia
 { const q = new URLSearchParams(location.search).get('data'); if (q && /^\d{4}-\d{2}-\d{2}$/.test(q)) S.data = q; }
 function aoEntrar() {
@@ -329,15 +384,16 @@ function abrirPainel(posId) {
       t.tipo_diaria ? ` <span class="mini suave">(${esc(t.tipo_diaria)})</span>` : ''}${t.pago ? ' <span class="mini" title="Já pago">✅</span>' : ''}</td>
       <td>${esc(t.entrada)}</td><td>${esc(t.saida)}</td><td>${t.int_ini ? esc(t.int_ini + '–' + t.int_fim) : ''}</td></tr>`).join('')
     || '<tr><td colspan="4" class="suave">Ninguém escalado nesta posição.</td></tr>';
-  const func = S.dia.pessoas.filter(x => x.tipo === 'func'), free = S.dia.pessoas.filter(x => x.tipo === 'free');
-  $('#pessoa').innerHTML = '<option value="">(Vazio)</option>' +
-    `<optgroup label="Funcionários">${func.map(x => `<option value="${x.chave}" title="${esc(x.folga || '')}">${esc(x.rotulo)}</option>`).join('')}</optgroup>` +
-    (free.length ? `<optgroup label="Freelancers">${free.map(x => `<option value="${x.chave}">${esc(x.rotulo)}</option>`).join('')}</optgroup>` : '');
+  $('#turnos-pos').querySelectorAll('tr.lin').forEach(tr => {
+    const t = p.turnos.find(x => x.id === +tr.dataset.turno);
+    if (t && t.fixo) tr.cells[0].insertAdjacentHTML('afterbegin', '<span title="Fixo: entra sozinho todo dia">📌 </span>');
+  });
   limparForm();
   if (S.vista === 'mapa') document.querySelectorAll('.bola-pos, .rotulo-pos').forEach(b => b.classList.toggle('sel', +b.dataset.pos === posId));
   else document.querySelectorAll('.cartao-pos').forEach(b => b.classList.toggle('sel', +b.dataset.pos === posId));
 }
 function fecharPainel() {
+  fecharListaPessoas();
   $('#painel').hidden = true; S.pos = null; S.turno = null;
   document.querySelectorAll('.bola-pos.sel, .rotulo-pos.sel, .cartao-pos.sel').forEach(b => b.classList.remove('sel'));
 }
@@ -353,7 +409,7 @@ function saidaPelaJornada() {
 }
 function limparForm() {
   S.turno = null; S.tipoManual = false;
-  $('#pessoa').value = ''; $('#ent').value = '08:00'; saidaPelaJornada();
+  $('#ent').value = '08:00'; saidaPelaJornada(); escolherPessoa('', false);
   $('#ini').value = ''; $('#fim').value = ''; $('#foco').value = '';
   document.querySelectorAll('input[name=diaria]').forEach(r => { r.checked = false; });
   $('#btn-salvar').textContent = '✅ Salvar';
@@ -368,8 +424,8 @@ $('#turnos-pos').addEventListener('click', e => {
   if (!t) return;
   S.turno = t;
   document.querySelectorAll('#turnos-pos tr').forEach(r => r.classList.toggle('sel', r === tr));
-  $('#pessoa').value = t.pessoa || '';
   $('#ent').value = t.entrada; $('#sai').value = t.saida; $('#ini').value = t.int_ini; $('#fim').value = t.int_fim;
+  escolherPessoa(t.pessoa || '', false);
   $('#foco').value = t.foco;
   S.tipoManual = t.tipo_diaria === 'curta' || t.tipo_diaria === 'longa';
   document.querySelectorAll('input[name=diaria]').forEach(r => { r.checked = r.value === t.tipo_diaria; });
@@ -392,7 +448,180 @@ for (const id of ['#ent', '#sai', '#ini', '#fim']) {
 }
 $('#ent').addEventListener('input', () => { saidaPelaJornada(); atualizarPrevia(); });
 $('#sai').addEventListener('input', atualizarPrevia);
-$('#pessoa').addEventListener('change', () => { S.tipoManual = false; atualizarPrevia(); });
+
+// ------------------------------------------------------------------ [BUSCA DE PESSOA] digitar o nome
+// Sem acento e sem maiúscula; cada palavra digitada pode estar em qualquer parte do nome ("jo sil" acha João da Silva).
+// Sem nada digitado: primeiro quem é fixo ou costuma ficar nesta posição; no fim, quem está de folga ou já escalado.
+const semAcento = t => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+function pessoaPorChave(ch) { return (S.dia && ch && S.dia.pessoas.find(x => x.chave === ch)) || null; }
+function habituaisDaPos() {
+  const m = {};
+  ((S.dia && S.dia.habituais && S.dia.habituais[S.pos]) || []).forEach(h => { m[h.chave] = h; });
+  return m;
+}
+function ondeHoje(x) {                 // onde a pessoa já está hoje (sem contar o turno que está sendo editado)
+  const lista = (x.hoje_em || []).slice();
+  if (S.turno && S.turno.pessoa === x.chave) {
+    const p = posAtual(), i = lista.indexOf(`${p ? p.nome : ''} ${S.turno.entrada}–${S.turno.saida}`);
+    if (i >= 0) lista.splice(i, 1);
+  }
+  return lista;
+}
+function marcarBusca(nome, termos) {
+  const letras = [...nome], base = letras.map(c => semAcento(c));
+  if (!termos.length || base.some(c => c.length !== 1)) return esc(nome);
+  const junto = base.join(''), marca = letras.map(() => false);
+  for (const t of termos) { const i = junto.indexOf(t); if (i >= 0) for (let k = i; k < i + t.length; k++) marca[k] = true; }
+  let out = '', aberto = false;
+  letras.forEach((c, i) => {
+    if (marca[i] !== aberto) { out += aberto ? '</mark>' : '<mark>'; aberto = marca[i]; }
+    out += esc(c);
+  });
+  return out + (aberto ? '</mark>' : '');
+}
+function listarPessoas(texto) {
+  const termos = semAcento(texto).split(/\s+/).filter(Boolean), hab = habituaisDaPos(), itens = [];
+  for (const x of S.dia.pessoas) {
+    const nome = semAcento(x.nome);
+    if (termos.length && !termos.every(t => nome.includes(t))) continue;
+    const palavras = nome.split(/\s+/);
+    const qualidade = !termos.length ? 0 : nome.startsWith(termos[0]) ? 0 : termos.every(t => palavras.some(w => w.startsWith(t))) ? 1 : 2;
+    const h = hab[x.chave] || null, fixoAqui = !!(x.fixo && x.fixo.posicao_id === S.pos), hoje = ondeHoje(x);
+    const ocupado = !!x.folga || hoje.length > 0;
+    itens.push({x, h, fixoAqui, hoje, ocupado, termos,
+                chave: [qualidade, ocupado ? 1 : 0, fixoAqui ? 0 : h ? 1 : 2, h ? -h.vezes : 0, x.tipo === 'func' ? 0 : 1]});
+  }
+  itens.sort((a, b) => { for (let i = 0; i < a.chave.length; i++) if (a.chave[i] !== b.chave[i]) return a.chave[i] - b.chave[i];
+                         return a.x.nome.localeCompare(b.x.nome, 'pt'); });
+  return {itens, termos};
+}
+function itemPessoaHtml(it, i) {
+  const x = it.x, info = [];
+  if (it.fixoAqui) info.push(`📌 Fixo aqui (${esc(x.fixo.entrada)}–${esc(x.fixo.saida)})`);
+  else if (x.fixo) info.push(`📌 Fixo em ${esc(x.fixo.posicao)}`);
+  if (it.h) info.push(`⭐ ${it.h.vezes}× aqui · última ${esc(it.h.entrada)}–${esc(it.h.saida)} (${esc(dataBR(it.h.ultima).slice(0, 5))})`);
+  if (x.folga) info.push(`<span class="alerta">⛔ ${esc(x.folga)}</span>`);
+  if (it.hoje.length) info.push(`<span class="alerta">Já na escala: ${esc(it.hoje.join(', '))}</span>`);
+  if (x.tipo === 'func' && !x.folga && x.folga_semana) info.push(`folga: ${esc(x.folga_semana)}`);
+  return `<li class="op ${i === S.busca.ativo ? 'ativo' : ''} ${it.ocupado ? 'fraco' : ''}" role="option" id="op-pessoa-${i}"
+      data-chave="${esc(x.chave)}" aria-selected="${i === S.busca.ativo}">
+    <span class="nome">${marcarBusca(x.nome, it.termos)}</span><span class="tipo">${x.tipo === 'func' ? 'Funcionário' : 'Freelancer'}</span>
+    ${info.length ? `<span class="info">${info.join(' · ')}</span>` : ''}</li>`;
+}
+function desenharListaPessoas() {
+  if (!S.dia) return;
+  const texto = $('#pessoa-busca').value.trim();
+  const r = listarPessoas(texto === ($('#pessoa-busca').dataset.nome || '\u0000') ? '' : texto);
+  S.busca.itens = r.itens;
+  if (S.busca.ativo < 0 || S.busca.ativo >= r.itens.length) S.busca.ativo = r.itens.length ? 0 : -1;
+  let html = '', grupo = null;
+  r.itens.forEach((it, i) => {
+    if (!r.termos.length) {
+      const g = it.ocupado ? 'De folga ou já escalados hoje' : (it.fixoAqui || it.h) ? 'Costumam ficar aqui' : 'Disponíveis';
+      if (g !== grupo) { html += `<li class="grupo" role="presentation">${g}</li>`; grupo = g; }
+    }
+    html += itemPessoaHtml(it, i);
+  });
+  const lista = $('#pessoa-lista');
+  lista.innerHTML = html || `<li class="vazio">Ninguém com “${esc(texto)}”. Freelancer novo? Cadastre em <a href="/gestao/freelancers">👤 Freelancers</a>.</li>`;
+  lista.hidden = false;
+  $('#pessoa-busca').setAttribute('aria-expanded', 'true');
+  $('#pessoa-busca').setAttribute('aria-activedescendant', S.busca.ativo >= 0 ? `op-pessoa-${S.busca.ativo}` : '');
+  const at = lista.querySelector('.op.ativo'); if (at) at.scrollIntoView({block: 'nearest'});
+}
+function fecharListaPessoas() {
+  $('#pessoa-lista').hidden = true;
+  $('#pessoa-busca').setAttribute('aria-expanded', 'false');
+}
+function moverAtivo(passo) {
+  if (!S.busca.itens.length) return;
+  S.busca.ativo = (S.busca.ativo + passo + S.busca.itens.length) % S.busca.itens.length;
+  desenharListaPessoas();
+}
+function escolherPessoa(chave, preencher) {
+  const x = pessoaPorChave(chave);
+  $('#pessoa').value = x ? x.chave : '';
+  $('#pessoa-busca').value = x ? x.nome : '';
+  $('#pessoa-busca').dataset.nome = x ? x.nome : '';
+  $('#pessoa-busca').classList.toggle('escolhido', !!x);
+  $('#pessoa-limpar').hidden = !x;
+  fecharListaPessoas();
+  S.tipoManual = false;
+  let nota = '';
+  if (x && preencher && !S.turno) {           // turno novo: já vem com o horário de costume
+    const fx = x.fixo && x.fixo.posicao_id === S.pos ? x.fixo : null, h = habituaisDaPos()[x.chave];
+    if (fx) {
+      $('#ent').value = fx.entrada; $('#sai').value = fx.saida; $('#ini').value = fx.int_ini || ''; $('#fim').value = fx.int_fim || '';
+      nota = '🕒 Horário do fixo.';
+    } else if (h && h.entrada && h.saida) {
+      $('#ent').value = h.entrada; $('#sai').value = h.saida;
+      nota = `🕒 Horário da última vez aqui (${dataBR(h.ultima).slice(0, 5)}).`;
+    }
+  }
+  const avisos = [];
+  if (x && x.folga) avisos.push(`<span class="alerta">⛔ ${esc(x.folga)} neste dia</span> (o sistema pergunta antes de salvar)`);
+  const hoje = x ? ondeHoje(x) : [];
+  if (hoje.length) avisos.push(`<span class="alerta">Já na escala hoje: ${esc(hoje.join(', '))}</span>`);
+  if (nota) avisos.push(nota);
+  $('#pessoa-info').innerHTML = avisos.join('<br>');
+  atualizarFixo(x);
+  atualizarPrevia();
+}
+$('#pessoa-busca').addEventListener('focus', e => { e.target.select(); desenharListaPessoas(); });
+$('#pessoa-busca').addEventListener('click', () => { if ($('#pessoa-lista').hidden) desenharListaPessoas(); });
+$('#pessoa-busca').addEventListener('input', () => {
+  S.busca.ativo = 0;
+  $('#pessoa-busca').classList.remove('escolhido');
+  desenharListaPessoas();
+});
+$('#pessoa-busca').addEventListener('keydown', e => {
+  const aberta = !$('#pessoa-lista').hidden;
+  if (e.key === 'ArrowDown') { e.preventDefault(); if (!aberta) desenharListaPessoas(); else moverAtivo(1); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); if (aberta) moverAtivo(-1); }
+  else if (e.key === 'Enter') {
+    e.preventDefault();
+    const it = S.busca.itens[S.busca.ativo];
+    if (aberta && it) { escolherPessoa(it.x.chave, true); $('#ent').focus(); $('#ent').select(); }
+  } else if (e.key === 'Escape' && aberta) {
+    e.preventDefault(); e.stopPropagation();          // fecha só a lista (o painel continua aberto)
+    escolherPessoa($('#pessoa').value, false);
+  }
+});
+$('#pessoa-busca').addEventListener('blur', () => setTimeout(() => {
+  if (document.activeElement === $('#pessoa-busca')) return;
+  fecharListaPessoas();
+  const x = pessoaPorChave($('#pessoa').value);           // digitou e não escolheu: volta para quem estava
+  if ($('#pessoa-busca').value !== (x ? x.nome : '')) { $('#pessoa-busca').value = x ? x.nome : ''; $('#pessoa-busca').classList.toggle('escolhido', !!x); }
+}, 150));
+$('#pessoa-lista').addEventListener('mousedown', e => { if (e.target.closest('.op')) e.preventDefault(); });
+$('#pessoa-lista').addEventListener('click', e => {
+  const li = e.target.closest('.op[data-chave]');
+  if (!li) return;
+  escolherPessoa(li.dataset.chave, true);
+  $('#ent').focus(); $('#ent').select();
+});
+$('#pessoa-limpar').onclick = () => { escolherPessoa('', false); $('#pessoa-busca').focus(); };
+
+// ------------------------------------------------------------------ [ESCALA FIXA] 📌 no painel
+function atualizarFixo(x) {
+  const eFunc = !!x && x.tipo === 'func' && !(posAtual() || {}).removida;
+  $('#linha-fixo').hidden = !eFunc; $('#fixo-info').hidden = !eFunc;
+  S.fixoAntes = eFunc && !!(x.fixo && x.fixo.posicao_id === S.pos);
+  $('#fixo').checked = S.fixoAntes;
+  if (eFunc) infoFixo(x);
+}
+function infoFixo(x) {
+  const aqui = !!(x.fixo && x.fixo.posicao_id === S.pos), marcado = $('#fixo').checked;
+  const folga = x.folga_semana ? `folga: ${esc(x.folga_semana)}` : '<span class="alerta">⚠️ sem folga fixa no cadastro (defina em 📌 Fixos)</span>';
+  let t;
+  if (aqui && marcado) t = `Fixo aqui: ${esc(x.fixo.entrada)}–${esc(x.fixo.saida)}, ${esc(x.fixo.dias_texto)} · ${folga}. Mudou o horário? Salve: os próximos dias mudam junto.`;
+  else if (aqui) t = '<span class="alerta">Ao salvar, deixa de ser fixo</span> (sai dos próximos dias que o sistema escalou sozinho).';
+  else if (x.fixo) t = `Hoje é fixo em <b>${esc(x.fixo.posicao)}</b> (${esc(x.fixo.entrada)}–${esc(x.fixo.saida)}).` + (marcado ? ' Ao salvar, o fixo muda para esta posição.' : '');
+  else t = (marcado ? 'Ao salvar, entra sozinho nos próximos dias (a partir de amanhã)' : 'Marque para ele entrar sozinho nos próximos dias') + ` · ${folga}.`;
+  $('#fixo-info').innerHTML = t;
+  $('#linha-fixo').classList.toggle('marcado', marcado);
+}
+$('#fixo').addEventListener('change', () => { const x = pessoaPorChave($('#pessoa').value); if (x) infoFixo(x); });
 document.querySelectorAll('input[name=diaria]').forEach(r => r.addEventListener('change', () => { S.tipoManual = true; atualizarPrevia(); }));
 
 function ehFree() { return ($('#pessoa').value || '').startsWith('free:'); }
@@ -421,13 +650,25 @@ function atualizarPrevia() {
 let salvando = false;
 async function salvarTurno() {
   if (salvando || S.pos == null || !posAtual() || posAtual().removida || !diaPronto()) return;
-  if (!$('#pessoa').value) { alert('Selecione um funcionário ou freelancer.'); return; }
+  if (!$('#pessoa').value) { alert('Digite o nome e escolha um funcionário ou freelancer na lista.'); $('#pessoa-busca').focus(); return; }
+  const quem = pessoaPorChave($('#pessoa').value);
+  let fixo = null;                          // [ESCALA FIXA] null = não mexe no fixo
+  if (quem && quem.tipo === 'func' && !$('#linha-fixo').hidden) {
+    if ($('#fixo').checked) {
+      if (!quem.folga_semana && !confirm(`${quem.nome} não tem folga fixa no cadastro: vai entrar na escala TODOS os dias.\n\n` +
+                                         'Continuar? (A folga se define em 📌 Fixos.)')) return;
+      fixo = true;
+    } else if (S.fixoAntes) {
+      if (!confirm(`Tirar ${quem.nome} dos fixos?\n\nOs próximos dias que o sistema escalou sozinho (e ninguém mexeu) saem da escala.`)) return;
+      fixo = false;
+    }
+  }
   normalizarHorarios();
   salvando = true; $('#btn-salvar').disabled = true;
   try {
     const r = await comPerguntas('/api/gestao/escala/turno', {data: S.data, posicao_id: S.pos, escala_id: S.turno ? S.turno.id : null,
       pessoa: $('#pessoa').value, entrada: $('#ent').value, saida: $('#sai').value, int_ini: $('#ini').value,
-      int_fim: $('#fim').value, foco: $('#foco').value, tipo_diaria: ehFree() ? tipoDiaria() : null});
+      int_fim: $('#fim').value, foco: $('#foco').value, tipo_diaria: ehFree() ? tipoDiaria() : null, fixo});
     if (r && r.ok) { status(r.mensagem); S.extra = null; await carregarDia(true); }
   } catch (e) { falhou(e); }
   salvando = false; $('#btn-salvar').disabled = false;
@@ -452,7 +693,8 @@ $('#btn-copiar').onclick = () => {
     <div style="display:flex;gap:10px;flex-wrap:wrap">
       <button class="btn prim" data-copiar="ontem">Copiar de ontem (${esc(dataBR(somarDias(S.data, -1), true))})</button>
       <button class="btn prim" data-copiar="semana">Copiar semana passada (${esc(dataBR(somarDias(S.data, -7), true))})</button></div>
-    <p class="mini suave">Se este dia já tiver gente escalada, a escala dele será substituída (o sistema pergunta antes).</p>`);
+    <p class="mini suave">Se este dia já tiver gente escalada, a escala dele será substituída (o sistema pergunta antes).
+      Os 📌 fixos que não estiverem na cópia entram de novo (menos quem está de folga).</p>`);
   const botoes = [...document.querySelectorAll('[data-copiar]')];
   botoes.forEach(b => b.onclick = async () => {
     // [DEPURAÇÃO WEB] clique duplo mandava 2 cópias (e a 2ª perguntava "substituir?" por cima da 1ª)
@@ -465,6 +707,72 @@ $('#btn-copiar').onclick = () => {
     botoes.forEach(x => { x.disabled = false; });
   });
 };
+
+// [ESCALA FIXA] janela 📌 Fixos: ver, mudar posição/horário/dias/folga e tirar
+$('#btn-fixos').onclick = () => { if (diaPronto()) abrirFixos(); };
+async function abrirFixos() {
+  let r;
+  try { r = await api('GET', '/api/gestao/escala/fixos'); } catch (e) { return falhou(e); }
+  const nomesDia = ['', 'Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+  const nomesFolga = ['Sem folga fixa', 'Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
+  const posicoes = S.dia.posicoes.slice().sort((a, b) => (a.setor + a.nome).localeCompare(b.setor + b.nome, 'pt'));
+  const cartao = f => `<div class="fixo-cartao" data-fid="${f.funcionario_id}">
+      <div class="topo"><b>📌 ${esc(f.nome)}</b><span class="mini suave">${esc(f.posicao)}${f.posicao_ativa ? '' : ' <span class="n-aviso">(removida do mapa: escolha outra)</span>'}
+        · ${esc(f.entrada)}–${esc(f.saida)}${f.int_ini ? ` (intervalo ${esc(f.int_ini)}–${esc(f.int_fim)})` : ''} · ${esc(f.dias_texto)}</span></div>
+      <div class="campos">
+        <label>Posição<select data-c="pos">${posicoes.map(p => `<option value="${p.id}" ${p.id === f.posicao_id ? 'selected' : ''}>${esc(p.nome)}${p.setor ? ' · ' + esc(p.setor) : ''}</option>`).join('')}
+          ${f.posicao_ativa ? '' : `<option value="${f.posicao_id}" selected>${esc(f.posicao)} (removida)</option>`}</select></label>
+        <label>Entrada<input data-c="ent" value="${esc(f.entrada)}" inputmode="numeric" maxlength="5"></label>
+        <label>Saída<input data-c="sai" value="${esc(f.saida)}" inputmode="numeric" maxlength="5"></label>
+        <label>Intervalo<span style="display:flex;gap:4px"><input data-c="ini" value="${esc(f.int_ini)}" inputmode="numeric" maxlength="5" aria-label="Início do intervalo">
+          <input data-c="fim" value="${esc(f.int_fim)}" inputmode="numeric" maxlength="5" aria-label="Fim do intervalo"></span></label>
+        <label>Folga da semana<select data-c="folga">${nomesFolga.map((n, i) => `<option value="${i}" ${(f.dia_folga || 0) === i ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+      </div>
+      <div class="dias-chips" aria-label="Dias em que trabalha">${[1, 2, 3, 4, 5, 6, 7].map(d => `<label class="${f.dias.includes(d) ? 'on' : ''} ${f.dia_folga === d ? 'folga' : ''}"
+          title="${f.dia_folga === d ? 'Dia de folga: não entra' : ''}"><input type="checkbox" data-dia="${d}" ${f.dias.includes(d) ? 'checked' : ''}>${nomesDia[d]}</label>`).join('')}</div>
+      <div class="mini suave">${f.folga ? `Não entra na folga (<b>${esc(f.folga)}</b>), nas férias/afastamento nem no domingo de folga.`
+        : '<span class="n-aviso">⚠️ Sem folga fixa no cadastro: entra em todos os dias marcados.</span>'} Alterado em ${esc(f.atualizado)}.</div>
+      <div class="botoes"><button class="btn perigo" data-acao="tirar">Tirar dos fixos</button><button class="btn prim" data-acao="salvar">💾 Salvar</button></div>
+    </div>`;
+  abrirModal(`<h3>📌 Funcionários fixos</h3>
+    <p class="mini suave" style="margin-top:0">Entram sozinhos na escala nos dias marcados — menos na folga, nas férias e no domingo de folga do cadastro.
+      O sistema escala hoje e os próximos ${r.dias_a_frente} dias (e vai adiantando sozinho). O dia que você mexer à mão fica como você deixou.</p>
+    <div class="fixos-lista" id="fixos-lista">${r.fixos.map(cartao).join('') || '<div class="suave">Nenhum fixo ainda.</div>'}</div>
+    <p class="mini suave">Para marcar alguém como fixo: toque na posição no mapa, escolha o funcionário, marque <b>📌 Fixo</b> e salve.</p>`,
+    () => carregarDia(true));
+  const lista = $('#fixos-lista');
+  lista.addEventListener('input', e => { if (e.target.matches('input[data-c]')) mascara(e); });
+  lista.addEventListener('focusout', e => { if (e.target.matches('input[data-c]')) normalizarHora(e.target); });
+  lista.addEventListener('change', async e => {
+    const cart = e.target.closest('.fixo-cartao'), f = cart && r.fixos.find(x => x.funcionario_id === +cart.dataset.fid);
+    if (e.target.matches('input[data-dia]')) { e.target.parentElement.classList.toggle('on', e.target.checked); return; }
+    if (!f || !e.target.matches('select[data-c="folga"]')) return;
+    const dia = +e.target.value;
+    if (!confirm(`Mudar a folga de ${f.nome} para: ${nomesFolga[dia]}?\n\nMuda no cadastro do funcionário (vale também para a Gamificação). ` +
+                 'Os próximos dias da escala que ninguém mexeu se ajustam sozinhos.')) { e.target.value = f.dia_folga || 0; return; }
+    try { const x = await api('POST', `/api/gestao/escala/fixos/${f.funcionario_id}/folga`, {dia_folga: dia}); status(x.mensagem); abrirFixos(); }
+    catch (err) { falhou(err); e.target.value = f.dia_folga || 0; }
+  });
+  lista.addEventListener('click', async e => {
+    const b = e.target.closest('button[data-acao]'), cart = b && b.closest('.fixo-cartao');
+    if (!cart) return;
+    const f = r.fixos.find(x => x.funcionario_id === +cart.dataset.fid), v = c => cart.querySelector(`[data-c="${c}"]`).value.trim();
+    if (b.dataset.acao === 'tirar') {
+      if (!confirm(`Tirar ${f.nome} dos fixos?\n\nOs próximos dias que o sistema escalou sozinho (e ninguém mexeu) saem da escala. Hoje continua como está.`)) return;
+      try { const x = await api('POST', `/api/gestao/escala/fixos/${f.funcionario_id}/remover`, {}); status(x.mensagem); abrirFixos(); }
+      catch (err) { falhou(err); }
+      return;
+    }
+    cart.querySelectorAll('input[data-c]').forEach(normalizarHora);
+    const dias = [...cart.querySelectorAll('input[data-dia]:checked')].map(x => +x.dataset.dia);
+    b.disabled = true;
+    try {
+      const x = await api('POST', '/api/gestao/escala/fixos', {funcionario_id: f.funcionario_id, posicao_id: +v('pos'),
+        entrada: v('ent'), saida: v('sai'), int_ini: v('ini'), int_fim: v('fim'), dias});
+      status(x.mensagem); abrirFixos();
+    } catch (err) { falhou(err); b.disabled = false; }
+  });
+}
 
 // Intervalos automáticos
 $('#btn-auto').onclick = async () => {

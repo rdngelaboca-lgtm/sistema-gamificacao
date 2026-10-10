@@ -2301,6 +2301,30 @@ def api_gestao_escala_copiar(usuario):
     return _resposta_gestao(gestao_escala.copiar, ler_json() or {}, usuario)
 
 
+@app.route('/api/gestao/escala/fixos', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_escala_fixos(usuario):
+    return _resposta_gestao(gestao_escala.fixos_listar)
+
+
+@app.route('/api/gestao/escala/fixos', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_escala_fixo_salvar(usuario):
+    return _resposta_gestao(gestao_escala.fixo_salvar, ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/escala/fixos/<int:funcionario_id>/remover', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_escala_fixo_remover(usuario, funcionario_id):
+    return _resposta_gestao(gestao_escala.fixo_remover, funcionario_id, usuario)
+
+
+@app.route('/api/gestao/escala/fixos/<int:funcionario_id>/folga', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_escala_fixo_folga(usuario, funcionario_id):
+    return _resposta_gestao(gestao_escala.fixo_folga, funcionario_id, ler_json() or {}, usuario)
+
+
 @app.route('/api/gestao/escala/intervalos', methods=['GET'])
 @compras_login(somente_gestor=True)
 def api_gestao_escala_intervalos(usuario):

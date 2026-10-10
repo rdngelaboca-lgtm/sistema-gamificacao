@@ -91,7 +91,8 @@ HORARIO_RESUMO_PRECOS = "08:35"      # [ALERTAS ESTOQUE] segunda-feira: preços 
 HORARIO_LEMBRETE_FATURAMENTO = "09:15"   # [FOLHA × FATURAMENTO] faltou lançar o faturamento de ontem?
 HORARIO_FECHAMENTO_FOLHA = "09:20"       # [FOLHA × FATURAMENTO] dia 1 (até o 5): fechamento do mês anterior
 HORARIO_AVISO_CLIMA = "10:00"            # [FOLHA × FATURAMENTO] boletim: previsão de hoje + 3 dias × escala
-HORARIOS_RESUMO_NOTAS = ("12:00", "18:00")   # [AVISOS LIMPOS] notas novas da SEFAZ: 2 resumos por dia (não 1 aviso por hora)
+HORARIOS_RESUMO_NOTAS = ("12:00", "18:00")
+HORARIO_ESCALA_FIXA = "05:00"            # [ESCALA FIXA] escala os fixos de hoje e dos próximos 14 dias   # [AVISOS LIMPOS] notas novas da SEFAZ: 2 resumos por dia (não 1 aviso por hora)
 DIAS_PARA_FECHAMENTO = 5        # o fechamento do mês anterior pode rodar do dia 1 ao dia 5
 
 # --- CONTROLE DE CONCORRÊNCIA ---
@@ -989,6 +990,17 @@ def verificar_aviso_clima(agora=None):
         logger.info("Folha × Faturamento: boletim de previsão enviado.")
 
 
+def aplicar_escala_fixa():
+    """[ESCALA FIXA] Funcionário fixo entra sozinho na escala (hoje e os próximos 14 dias), menos na folga."""
+    try:
+        import escala_fixa
+    except ImportError:
+        return
+    n = escala_fixa.aplicar_proximos()
+    if n:
+        logger.info(f"Escala fixa: {n} turno(s) de fixo(s) gravado(s) nos próximos dias.")
+
+
 # ==============================================================================
 # == MÓDULO 8: DOWNLOADS (fotos de entregas e notas fiscais) ===================
 # ==============================================================================
@@ -1224,6 +1236,7 @@ def configurar_agendamentos():
     schedule.every().day.at(HORARIO_AVISO_CLIMA).do(run_threaded, verificar_aviso_clima)
     for horario in HORARIOS_RESUMO_NOTAS:                   # [AVISOS LIMPOS] resumo das notas novas
         schedule.every().day.at(horario).do(run_threaded, verificar_resumo_notas)
+    schedule.every().day.at(HORARIO_ESCALA_FIXA).do(run_threaded, aplicar_escala_fixa)
 
 
 def recuperar_tarefas_do_dia():
@@ -1245,6 +1258,7 @@ def recuperar_tarefas_do_dia():
     if _passou_do_horario(HORARIO_AVISO_CLIMA, limite_horas=10):
         run_threaded(verificar_aviso_clima)
     run_threaded(verificar_resumo_notas)            # [AVISOS LIMPOS] só manda se passou das 12h/18h sem mandar
+    run_threaded(aplicar_escala_fixa)               # [ESCALA FIXA] não espera as 05:00 depois de ligar
 
 
 def main():
