@@ -18,6 +18,23 @@
   .resultado.ok { background: var(--verde-claro); color: var(--verde-esc); }
   .resultado.aviso { background: var(--laranja-claro); color: #7a3a10; }
   details summary { cursor: pointer; color: var(--suave); font-size: 13px; }
+  /* [AVISOS LIMPOS] liga/desliga cada tipo de aviso */
+  .tipos { display: grid; gap: 8px; }
+  .tipo { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; border: 1px solid var(--linha); border-radius: 12px; padding: 10px 12px; background: #fff; }
+  .tipo.off { background: var(--fundo); }
+  .tipo.off .t-nome, .tipo.off .t-desc { opacity: .55; }
+  .tipo .quando { font-size: 12px; font-weight: 700; color: var(--suave); margin-left: 6px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .tipo .t-desc { margin-top: 2px; }
+  .tipo .t-dep { color: var(--laranja); font-weight: 700; }
+  .chave { position: relative; width: 48px; height: 28px; flex: none; }
+  .chave input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; z-index: 1; }
+  .chave input:disabled { cursor: default; }
+  .chave span { position: absolute; inset: 0; border-radius: 14px; background: #B9C3C0; transition: background .15s; pointer-events: none; }
+  .chave span::after { content: ''; position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.3); transition: transform .15s; }
+  .chave input:checked + span { background: var(--verde); }
+  .chave input:checked + span::after { transform: translateX(20px); }
+  .chave input:focus-visible + span { outline: 2px solid var(--verde-esc); outline-offset: 2px; }
+  .chave input:disabled + span { opacity: .5; }
   @media (max-width: 700px) { .area { padding-left: 10px; padding-right: 10px; } }
 {% endblock %}
 {% block conteudo %}
@@ -54,26 +71,23 @@
     </div>
     <div class="caixa">
       <h3>O que vai por aqui</h3>
-      <ul class="lista-o-que">
-        <li><span class="h">08:30</span><span>📦 Estoque: abaixo do mínimo, produtos acabando, listas esquecidas (segunda 08:35: preços que subiram)</span></li>
-        <li><span class="h">09:15</span><span>⏰ Faturamento que faltou lançar</span></li>
-        <li><span class="h">09:20</span><span>📅 Dia 1 (até o 5): fechamento do mês (folha × meta, melhor e pior dia)</span></li>
-        <li><span class="h">10:00</span><span>🌤️ Previsão e escala: hoje e os próximos 3 dias, freelancers que costumam precisar × escalados, calor e chuva</span></li>
-        <li><span class="h">Toda hora</span><span>📥 Notas novas da SEFAZ (XML), produtos novos para o cadastro da franquia, orçamento com a nota que chegou</span></li>
-        <li><span class="h">Lançou</span><span>📊 Quando o faturamento do dia é lançado: resumo (folha do dia, mês × meta, comparação)</span></li>
-      </ul>
+      <div class="mini suave" style="margin-bottom:8px">Desligue o que não quer receber (vale na hora, para o WhatsApp e o Telegram).
+        Erros da busca de notas e o vencimento do certificado sempre chegam.</div>
+      <div class="tipos" id="tipos"><div class="mini suave">Carregando…</div></div>
       <div class="mini suave" style="margin-top:10px">Continuam só no Telegram: os avisos da Gamificação (tarefas, comunicados, pontos) e os comandos do grupo (como /lancar).</div>
     </div>
   </main>
 {% endblock %}
 {% block script %}
 // [WHATSAPP GRUPO] escolhe o canal dos avisos da gestão (o robô e o servidor leem a mesma escolha no banco).
-const S = {cfg: null, grupos: null};
+const S = {cfg: null, grupos: null, tipos: []};
 function aoEntrar() { carregar(); }
 async function carregar() {
   try {
     const r = await api('GET', '/api/gestao/avisos');
     S.cfg = r.config;
+    S.tipos = r.tipos || [];
+    desenharTipos();
     document.querySelectorAll('input[name=canal]').forEach(i => { i.checked = i.value === S.cfg.canal; });
     $('#grupo-manual').value = '';
     $('#atualizado').textContent = S.cfg.atualizado ? 'Última alteração: ' + S.cfg.atualizado : '';
@@ -120,6 +134,37 @@ async function salvar(silencioso) {
   } catch (e) { falhou(e); return false; }
 }
 $('#btn-salvar').onclick = () => salvar(false);
+// [AVISOS LIMPOS] cada tipo de aviso liga/desliga na hora (o robô confere antes de mandar)
+function desenharTipos() {
+  const des = new Set(S.cfg.desligados || []);
+  $('#tipos').innerHTML = S.tipos.map(t => {
+    const ligado = !des.has(t.chave);
+    const dep = t.chave === 'danfe' && des.has('notas');          // o DANFE vai junto com o resumo das notas
+    return `<div class="tipo ${ligado && !dep ? '' : 'off'}" data-tipo-linha="${esc(t.chave)}">
+      <div><b class="t-nome">${esc(t.nome)}</b><span class="quando">${esc(t.quando)}</span>
+        <div class="mini suave t-desc">${esc(t.descricao)}</div>
+        ${dep ? '<div class="mini t-dep">Vai junto com as 📥 Notas novas: ligue as notas para receber.</div>' : ''}
+        ${!ligado ? '<div class="mini t-dep">🔕 Desligado</div>' : ''}</div>
+      <label class="chave" title="${ligado ? 'Ligado: toque para desligar' : 'Desligado: toque para ligar'}">
+        <input type="checkbox" data-tipo="${esc(t.chave)}" ${ligado ? 'checked' : ''} ${dep ? 'disabled' : ''} aria-label="${esc(t.nome)}"><span></span></label>
+    </div>`;
+  }).join('') || '<div class="mini suave">Atualize o servidor para ligar e desligar os avisos aqui.</div>';
+}
+$('#tipos').addEventListener('change', async ev => {
+  const i = ev.target.closest('input[data-tipo]');
+  if (!i) return;
+  const des = new Set(S.cfg.desligados || []);
+  if (i.checked) des.delete(i.dataset.tipo); else des.add(i.dataset.tipo);
+  const nome = (S.tipos.find(t => t.chave === i.dataset.tipo) || {}).nome || i.dataset.tipo;
+  document.querySelectorAll('#tipos input').forEach(x => { x.disabled = true; });
+  try {
+    S.cfg = await api('POST', '/api/gestao/avisos', {canal: S.cfg.canal, grupo_id: S.cfg.grupo_id, grupo_nome: S.cfg.grupo_nome,
+                                                     desligados: [...des]});
+    $('#atualizado').textContent = 'Última alteração: ' + S.cfg.atualizado;
+    status((i.checked ? '🔔 Ligado: ' : '🔕 Desligado: ') + nome);
+  } catch (e) { falhou(e); }
+  desenharTipos();
+});
 $('#btn-teste').onclick = async () => {
   $('#btn-teste').disabled = true;
   try {

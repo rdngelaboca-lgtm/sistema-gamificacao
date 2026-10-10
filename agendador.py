@@ -91,6 +91,7 @@ HORARIO_RESUMO_PRECOS = "08:35"      # [ALERTAS ESTOQUE] segunda-feira: preços 
 HORARIO_LEMBRETE_FATURAMENTO = "09:15"   # [FOLHA × FATURAMENTO] faltou lançar o faturamento de ontem?
 HORARIO_FECHAMENTO_FOLHA = "09:20"       # [FOLHA × FATURAMENTO] dia 1 (até o 5): fechamento do mês anterior
 HORARIO_AVISO_CLIMA = "10:00"            # [FOLHA × FATURAMENTO] boletim: previsão de hoje + 3 dias × escala
+HORARIOS_RESUMO_NOTAS = ("12:00", "18:00")   # [AVISOS LIMPOS] notas novas da SEFAZ: 2 resumos por dia (não 1 aviso por hora)
 DIAS_PARA_FECHAMENTO = 5        # o fechamento do mês anterior pode rodar do dia 1 ao dia 5
 
 # --- CONTROLE DE CONCORRÊNCIA ---
@@ -676,14 +677,23 @@ def verificar_e_enviar_lembretes_comunicados(forcar=False):
 # == MÓDULO 9: AVISOS DO ESTOQUE (Telegram) ====================================
 # ==============================================================================
 def verificar_avisos_estoque(forcar=False):
-    """Todo dia: abaixo do mínimo, acabando em 2 dias e listas do app esquecidas (alertas_estoque.py)."""
+    """
+    Todo dia: abaixo do mínimo, acabando em 2 dias e listas do app esquecidas (alertas_estoque.py).
+    [AVISOS LIMPOS] Só o que ENTROU na lista desde o último aviso (antes repetia tudo, todo dia);
+    o que continua vira uma linha. Nada novo: nenhuma mensagem (na segunda, um lembrete curto).
+    """
     if not forcar and ja_rodou_hoje('avisos_estoque'):
         return
     import alertas_estoque
-    texto = alertas_estoque.montar_avisos_diarios()
+    if not alertas_estoque.aviso_ligado('estoque'):
+        marcar_rodou_hoje('avisos_estoque')
+        logger.info("Avisos do estoque: desligado na página 📣 Avisos.")
+        return
+    texto, avisados = alertas_estoque.montar_avisos_do_dia(_ler_estado().get('avisos_estoque_avisados'))
     if texto and not alertas_estoque.enviar(texto):
         logger.error("Avisos do estoque: o envio falhou (tenta de novo quando o robô for reiniciado).")
         return
+    salvar_no_estado('avisos_estoque_avisados', avisados)
     marcar_rodou_hoje('avisos_estoque')
     logger.info("Avisos do estoque: " + ("enviados." if texto else "nada para avisar hoje."))
 
@@ -693,6 +703,9 @@ def verificar_resumo_precos(forcar=False):
     if not forcar and (date.today().weekday() != 0 or ja_rodou_hoje('resumo_precos')):
         return
     import alertas_estoque
+    if not alertas_estoque.aviso_ligado('precos'):           # [AVISOS LIMPOS]
+        marcar_rodou_hoje('resumo_precos')
+        return
     desde = _ler_estado().get('resumo_precos_ultima_nota')
     if desde is None:      # primeira vez: notas emitidas nos últimos 7 dias
         texto, maior = alertas_estoque.montar_resumo_precos(desde_data=date.today() - timedelta(days=7))
@@ -710,7 +723,10 @@ def verificar_resumo_precos(forcar=False):
 # == MÓDULO 10: XML DAS NOTAS DE COMPRA (SEFAZ, certificado A1) =================
 # ==============================================================================
 def buscar_xml_sefaz():
-    """De hora em hora: baixa os XMLs novos (nfe_distribuicao.py) e avisa o gestor no Telegram."""
+    """
+    De hora em hora: baixa os XMLs novos (nfe_distribuicao.py). [AVISOS LIMPOS] As notas novas entram numa
+    fila e vão no resumo das 12h e das 18h (verificar_resumo_notas); erros e certificado continuam na hora.
+    """
     import nfe_distribuicao as nd
     if not nd.configurado():
         return
@@ -729,30 +745,8 @@ def buscar_xml_sefaz():
         alertas_estoque.enviar(f"⚠️ <b>XML da SEFAZ</b>: {r['sem_ciencia']} nota(s) sem a Ciência da Operação registrada. "
                                "O robô tenta de novo de hora em hora; se continuar amanhã, avise o Claude (detalhe no log).")
     if r['novas']:
-        linhas = [f"📥 <b>{len(r['novas'])} nota(s) nova(s) da SEFAZ</b>"]
-        linhas += [f"• {esc(n['emitente'] or 'Fornecedor')} · {nd._reais(n['valor'])}" for n in r['novas'][:25]]
-        linhas.append("Abra o Gestão de Estoque → aba 3 → <b>Notas baixadas da SEFAZ</b> para dar entrada.")
-        if len(r['novas']) > MAX_DANFES_POR_AVISO:
-            linhas.append(f"📄 O DANFE das {MAX_DANFES_POR_AVISO} primeiras vai em anexo; o das outras está no app "
-                          "(Receber → nota → Ver o DANFE) e no Gestão de Estoque.")
-        try:                                   # [CADASTRO FRANQUIA] produto novo precisa ser cadastrado antes de chegar
-            import cadastro_franquia
-            novos = cadastro_franquia.produtos_novos_nas_notas([n['chave'] for n in r['novas']])
-            if novos:
-                linhas.append(f"🏷️ <b>{novos} produto(s) novo(s)</b> nestas notas: crie/vincule na aba 3 e mande o "
-                              "cadastro para a franquia na aba <b>🏷️ Cadastro Franquia</b> (assim, quando chegar, é só vender).")
-        except Exception as e:
-            logger.error(f"Cadastro na franquia: contar produtos novos das notas falhou: {e}", exc_info=True)
-        alertas_estoque.enviar("\n".join(linhas))
-        enviar_danfes(r['novas'][:MAX_DANFES_POR_AVISO])
-    try:                                       # [ORÇAMENTOS] nota chegou para um orçamento enviado: avisa o que veio diferente
-        import orcamentos
-        for _, texto in orcamentos.avisos_pendentes():
-            alertas_estoque.enviar(texto)
-    except ImportError:
-        pass
-    except Exception as e:
-        logger.error(f"Orçamentos: aviso das notas que chegaram falhou: {e}", exc_info=True)
+        guardar_notas_para_o_resumo(r['novas'])
+    verificar_resumo_notas()                   # se o robô passou do horário (12h/18h) sem mandar, manda agora
     if not ja_rodou_hoje('aviso_certificado'):
         marcar_rodou_hoje('aviso_certificado')
         try:
@@ -765,6 +759,97 @@ def buscar_xml_sefaz():
 
 
 MAX_DANFES_POR_AVISO = 5     # [DANFE] mais que isso numa rodada: o resto fica no app / no PC
+MAX_NOTAS_NA_FILA = 200      # [AVISOS LIMPOS] proteção: a fila do resumo nunca cresce sem limite
+_trava_resumo_notas = threading.Lock()     # o resumo roda pelo relógio (12h/18h) e pela busca de hora em hora
+
+
+def guardar_notas_para_o_resumo(novas):
+    """[AVISOS LIMPOS] Notas novas da SEFAZ esperam o próximo resumo (12h ou 18h). Sem repetir a mesma chave."""
+    with _trava_resumo_notas:
+        fila = _ler_estado().get('notas_novas_fila') or []
+        chaves = {n.get('chave') for n in fila}
+        for n in novas:
+            if n.get('chave') not in chaves:
+                fila.append({'chave': n.get('chave'), 'emitente': n.get('emitente') or '', 'valor': n.get('valor')})
+                chaves.add(n.get('chave'))
+        salvar_no_estado('notas_novas_fila', fila[-MAX_NOTAS_NA_FILA:])
+
+
+def _turno_do_resumo_notas(agora):
+    """'2026-10-10 18:00': o último horário de resumo que já passou hoje (None antes do primeiro)."""
+    passados = [h for h in HORARIOS_RESUMO_NOTAS if f"{agora:%H:%M}" >= h]
+    return f"{agora.date().isoformat()} {passados[-1]}" if passados else None
+
+
+def montar_resumo_notas(fila, textos_orcamentos, com_danfe):
+    """[AVISOS LIMPOS] Uma mensagem: notas novas + produtos novos para a franquia + orçamentos que chegaram."""
+    linhas = []
+    if fila:
+        linhas.append(f"📥 <b>{len(fila)} nota(s) nova(s) da SEFAZ</b>")
+        linhas += [f"• {esc(n['emitente'] or 'Fornecedor')} · {nd_reais(n['valor'])}" for n in fila[:25]]
+        if len(fila) > 25:
+            linhas.append(f"<i>… e mais {len(fila) - 25}</i>")
+        try:                                   # [CADASTRO FRANQUIA] produto novo precisa ser cadastrado antes de chegar
+            import cadastro_franquia
+            novos = cadastro_franquia.produtos_novos_nas_notas([n['chave'] for n in fila])
+            if novos:
+                linhas.append(f"🏷️ <b>{novos} produto(s) novo(s)</b> nestas notas: cadastre na aba <b>🏷️ Cadastro Franquia</b>.")
+        except Exception as e:
+            logger.error(f"Cadastro na franquia: contar produtos novos das notas falhou: {e}", exc_info=True)
+    if textos_orcamentos:
+        linhas += ([''] if linhas else []) + list(textos_orcamentos)
+    if not linhas:
+        return None
+    if fila:
+        dica = "Dar entrada: Gestão de Estoque › aba 3 › Notas baixadas da SEFAZ"
+        if com_danfe:
+            dica += (" · DANFE em anexo" if len(fila) <= MAX_DANFES_POR_AVISO else
+                     f" · DANFE das {MAX_DANFES_POR_AVISO} primeiras em anexo (as outras no app › Receber)")
+        linhas += ['', f"<i>{dica}.</i>"]
+    return "\n".join(linhas)
+
+
+def verificar_resumo_notas(agora=None):
+    """
+    [AVISOS LIMPOS] 12h e 18h: um resumo com as notas novas desde o último (fila do buscar_xml_sefaz), os
+    orçamentos cuja nota chegou e, logo depois, o DANFE de cada nota (até 5). Cada parte pode ser desligada
+    na página 📣 Avisos (desligada: o que estava esperando é descartado, não acumula).
+    """
+    agora = agora or datetime.now()
+    turno = _turno_do_resumo_notas(agora)
+    if not turno:
+        return
+    import alertas_estoque
+    with _trava_resumo_notas:
+        estado = _ler_estado()
+        if estado.get('resumo_notas_turno') == turno:
+            return
+        fila = (estado.get('notas_novas_fila') or []) if alertas_estoque.aviso_ligado('notas') else []
+        orc_ligado = alertas_estoque.aviso_ligado('orcamentos')
+        textos_orc = list(estado.get('orcamentos_textos_pendentes') or []) if orc_ligado else []   # do envio que falhou
+        try:                                   # [ORÇAMENTOS] nota chegou para um orçamento enviado: o que veio diferente
+            import orcamentos
+            pendentes = orcamentos.avisos_pendentes()          # marca como avisados (desligado: não manda)
+            if orc_ligado:
+                textos_orc += [t for _, t in pendentes]
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.error(f"Orçamentos: aviso das notas que chegaram falhou: {e}", exc_info=True)
+        com_danfe = bool(fila) and alertas_estoque.aviso_ligado('danfe')
+        texto = montar_resumo_notas(fila, textos_orc, com_danfe)
+        if texto and not alertas_estoque.enviar(texto):
+            logger.error("Resumo das notas: o envio falhou (tenta de novo na próxima busca da SEFAZ).")
+            if textos_orc:                     # os orçamentos já ficaram marcados: não se perdem no próximo
+                salvar_no_estado('orcamentos_textos_pendentes', textos_orc)
+            return
+        salvar_no_estado('notas_novas_fila', [])
+        salvar_no_estado('orcamentos_textos_pendentes', [])
+        salvar_no_estado('resumo_notas_turno', turno)
+    if com_danfe:
+        enviar_danfes(fila[:MAX_DANFES_POR_AVISO])
+    if texto:
+        logger.info(f"Resumo das notas ({turno[-5:]}): {len(fila)} nota(s), {len(textos_orc)} orçamento(s).")
 
 
 def enviar_danfes(novas):
@@ -838,6 +923,9 @@ def verificar_folha_faturamento(agora=None):
         pendentes = recentes
     if not pendentes:
         return
+    if not alertas_estoque.aviso_ligado('faturamento'):     # [AVISOS LIMPOS] desligado: conta como avisado
+        salvar_no_estado('folha_resumo_enviados', sorted(set(enviados) | {d.isoformat() for d in pendentes})[-60:])
+        return
     if alertas_estoque.enviar(ff.texto_telegram(pendentes, agora)):
         salvar_no_estado('folha_resumo_enviados', sorted(set(enviados) | {d.isoformat() for d in pendentes})[-60:])
         logger.info(f"Folha × Faturamento: resumo enviado ({', '.join(f'{d:%d/%m}' for d in pendentes)}).")
@@ -852,6 +940,9 @@ def verificar_lembrete_faturamento():
     except ImportError:
         return
     import alertas_estoque
+    if not alertas_estoque.aviso_ligado('lembrete'):         # [AVISOS LIMPOS]
+        marcar_rodou_hoje('lembrete_faturamento')
+        return
     faltam = ff.dias_sem_faturamento()
     if faltam and not alertas_estoque.enviar(ff.texto_lembrete(faltam)):
         return                                   # Telegram falhou: tenta de novo na recuperação/amanhã
@@ -870,7 +961,7 @@ def verificar_fechamento_folha():
     estado = _ler_estado()
     mes = ff.fechamento_pendente(ultimo_enviado=estado.get('fechamento_folha'))
     if mes:
-        texto = ff.texto_fechamento(ff.fechamento(*mes))
+        texto = ff.texto_fechamento(ff.fechamento(*mes)) if alertas_estoque.aviso_ligado('faturamento') else None
         if texto and not alertas_estoque.enviar(texto):
             return
         salvar_no_estado('fechamento_folha', f"{mes[0]}-{mes[1]:02d}")
@@ -887,6 +978,9 @@ def verificar_aviso_clima(agora=None):
     except ImportError:
         return
     import alertas_estoque
+    if not alertas_estoque.aviso_ligado('previsao'):         # [AVISOS LIMPOS]
+        marcar_rodou_hoje('aviso_clima')
+        return
     texto = ff.boletim_previsao(agora)
     if texto and not alertas_estoque.enviar(texto):
         return                                   # não chegou em nenhum canal: tenta de novo na recuperação
@@ -1128,6 +1222,8 @@ def configurar_agendamentos():
     schedule.every().day.at(HORARIO_LEMBRETE_FATURAMENTO).do(run_threaded, verificar_lembrete_faturamento)
     schedule.every().day.at(HORARIO_FECHAMENTO_FOLHA).do(run_threaded, verificar_fechamento_folha)
     schedule.every().day.at(HORARIO_AVISO_CLIMA).do(run_threaded, verificar_aviso_clima)
+    for horario in HORARIOS_RESUMO_NOTAS:                   # [AVISOS LIMPOS] resumo das notas novas
+        schedule.every().day.at(horario).do(run_threaded, verificar_resumo_notas)
 
 
 def recuperar_tarefas_do_dia():
@@ -1148,6 +1244,7 @@ def recuperar_tarefas_do_dia():
         run_threaded(verificar_fechamento_folha)
     if _passou_do_horario(HORARIO_AVISO_CLIMA, limite_horas=10):
         run_threaded(verificar_aviso_clima)
+    run_threaded(verificar_resumo_notas)            # [AVISOS LIMPOS] só manda se passou das 12h/18h sem mandar
 
 
 def main():

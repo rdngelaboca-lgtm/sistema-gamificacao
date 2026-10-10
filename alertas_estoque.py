@@ -32,6 +32,22 @@ DIAS_PARA_ACABAR = 2              # avisa quem deve acabar em até 2 dias
 DIAS_LISTA_ABERTA = 2             # lista aprovada e não finalizada há mais de 2 dias
 DIAS_CONTAGEM_CONFIAVEL = 60      # estimativa de estoque com contagem mais velha que isso não entra
 MAX_LINHAS = 25                   # por bloco (o resto vira "… e mais N")
+# [AVISOS LIMPOS] o aviso diário do grupo traz só o que ENTROU na lista desde o último aviso
+MAX_LINHAS_NOVOS = 8              # por bloco no aviso diário (os mais usados primeiro)
+CONSUMO_MINIMO_ACABANDO = Decimal('0.1')   # gasta menos que isso por dia: não é "acaba em 2 dias" (era o "0,0/dia → acabou")
+
+# [AVISOS LIMPOS] cada tipo de aviso do grupo pode ser desligado na página 📣 Avisos (erros e certificado: sempre)
+TIPOS_AVISO = [
+    ('estoque', '📦 Estoque', '08:30', 'O que entrou hoje em "acaba em 2 dias" e "abaixo do mínimo"; listas esquecidas'),
+    ('precos', '📈 Preços que subiram', 'Segunda 08:35', 'Resumo da semana dos aumentos de preço nas notas'),
+    ('lembrete', '⏰ Faturamento que faltou lançar', '09:15', 'Lembrete dos dias sem faturamento lançado'),
+    ('previsao', '🌤️ Previsão e escala', '10:00', 'Hoje e os próximos 3 dias: clima, freelancers × escalados'),
+    ('notas', '📥 Notas novas da SEFAZ', '12:00 e 18:00', 'Resumo das notas baixadas e produtos novos para a franquia'),
+    ('danfe', '📄 DANFE das notas novas', 'junto', 'O PDF de cada nota nova vai junto com o resumo (até 5)'),
+    ('orcamentos', '📋 Orçamentos', 'junto', 'Nota que chegou para um orçamento (o que veio diferente), no resumo das notas'),
+    ('faturamento', '📊 Faturamento e folha', 'Ao lançar · dia 1', 'Resumo do dia quando o faturamento é lançado e o fechamento do mês'),
+]
+CHAVES_AVISO = [t[0] for t in TIPOS_AVISO]
 
 
 def esc(t):
@@ -88,7 +104,8 @@ def situacao_do_estoque(hoje=None):
         dias = (estoque / uso) if uso > 0 else None
         linha = {'produto_id': i['ProdutoID'], 'produto': i['NomeProduto'], 'unidade': i.get('Unidade') or 'UN',
                  'estoque': estoque, 'minimo': minimo, 'consumo_dia': uso, 'dias': dias}
-        if dias is not None and dias <= DIAS_PARA_ACABAR and not i.get('ConsumoNegativo'):
+        if (dias is not None and dias <= DIAS_PARA_ACABAR and not i.get('ConsumoNegativo')
+                and uso >= CONSUMO_MINIMO_ACABANDO):
             acabando.append(linha)
         elif minimo > 0 and estoque < minimo:
             abaixo.append(linha)
@@ -162,6 +179,51 @@ def montar_avisos_diarios(hoje=None, agora=None):
     return "\n".join(partes)
 
 
+def montar_avisos_do_dia(ja_avisados=None, hoje=None, agora=None):
+    """
+    [AVISOS LIMPOS] O aviso das 8:30 para o grupo: só o que ENTROU na lista desde o último aviso (no máximo
+    MAX_LINHAS_NOVOS por bloco, os mais usados primeiro) e uma linha com quantos continuam. Na segunda, mesmo
+    sem nada novo, uma linha lembra os que continuam. Nada novo nos outros dias: nenhuma mensagem.
+    Devolve (texto ou None, avisados) — avisados = o que está na lista hoje (guarde para amanhã).
+    """
+    hoje = hoje or date.today()
+    ja = ja_avisados or {}
+    ja_prod = set(ja.get('produtos') or [])
+    ja_listas = set(ja.get('listas') or [])
+    abaixo, acabando = situacao_do_estoque(hoje)
+    listas = listas_esquecidas(agora)
+    avisados = {'produtos': sorted({a['produto_id'] for a in abaixo + acabando}),
+                'listas': sorted(l['codigo'] for l in listas)}
+    novos_acab = sorted((a for a in acabando if a['produto_id'] not in ja_prod), key=lambda a: (-a['consumo_dia'], a['produto']))
+    novos_abaixo = [a for a in abaixo if a['produto_id'] not in ja_prod]
+    novas_listas = [l for l in listas if l['codigo'] not in ja_listas]
+    continuam = len(abaixo) + len(acabando) - len(novos_acab) - len(novos_abaixo)
+    segunda = hoje.weekday() == 0
+    if not (novos_acab or novos_abaixo or novas_listas) and not (segunda and (continuam or listas)):
+        return None, avisados
+
+    def bloco(titulo, linhas):
+        if not linhas:
+            return []
+        corpo = linhas[:MAX_LINHAS_NOVOS]
+        if len(linhas) > MAX_LINHAS_NOVOS:
+            corpo.append(f"<i>… e mais {len(linhas) - MAX_LINHAS_NOVOS}</i>")
+        return ['', titulo] + corpo
+    partes = [f"📦 <b>Estoque · {hoje.strftime('%d/%m')}</b>"]
+    partes += bloco(f"⏳ <b>Novos: acabam em até {DIAS_PARA_ACABAR} dias</b>", [
+        f"• {esc(a['produto'])}: ≈ {_qtd(a['estoque'])} {esc(a['unidade'])} · gasta {_qtd(a['consumo_dia'])}/dia"
+        + ((" → <b>acabou</b>" if a['estoque'] <= 0 else " → <b>acaba hoje</b>") if a['dias'] < Decimal('0.5')
+           else f" → ~{_qtd(a['dias'])} dia(s)") for a in novos_acab])
+    partes += bloco("🔻 <b>Novos abaixo do mínimo</b>", [
+        f"• {esc(a['produto'])}: ≈ {_qtd(a['estoque'])} de {_qtd(a['minimo'])} {esc(a['unidade'])}" for a in novos_abaixo])
+    lista_aviso = listas if segunda else novas_listas          # segunda: lembra todas as esquecidas
+    partes += bloco(f"🛒 <b>Listas aprovadas há mais de {DIAS_LISTA_ABERTA} dias</b> (finalize ou cancele no app)", [
+        f"• {esc(l['rotina'])} de {esc(l['funcionario'] or '?')} · {l['dias']} dias" for l in lista_aviso])
+    if continuam:
+        partes += ['', f"➕ {continuam} que já estavam na lista (acabados ou abaixo do mínimo): veja no app › Gestão › Estoque."]
+    return "\n".join(partes), avisados
+
+
 def montar_resumo_precos(desde_nota_id=None, desde_data=None):
     """
     Resumo dos maiores aumentos (um por produto, o maior). Devolve (texto ou None, maior NotaID visto).
@@ -229,7 +291,7 @@ def _garantir_config():
 
 def config_avisos():
     """{'canal', 'grupo_id', 'grupo_nome', 'atualizado'}. Sem banco / nunca configurado: Telegram."""
-    cfg = {'canal': 'telegram', 'grupo_id': '', 'grupo_nome': '', 'atualizado': ''}
+    cfg = {'canal': 'telegram', 'grupo_id': '', 'grupo_nome': '', 'atualizado': '', 'desligados': ''}
     try:
         _garantir_config()
         conn = database.get_db_connection()
@@ -247,10 +309,16 @@ def config_avisos():
         logger.error(f"Avisos: não consegui ler o canal (vai pelo Telegram): {e}")
     if cfg['canal'] not in CANAIS:
         cfg['canal'] = 'telegram'
+    cfg['desligados'] = [c for c in str(cfg['desligados'] or '').split(',') if c in CHAVES_AVISO]   # [AVISOS LIMPOS]
     return cfg
 
 
-def salvar_config_avisos(canal, grupo_id, grupo_nome, usuario):
+def aviso_ligado(tipo):
+    """[AVISOS LIMPOS] False se o gestor desligou este tipo de aviso na página 📣 Avisos."""
+    return tipo not in config_avisos()['desligados']
+
+
+def salvar_config_avisos(canal, grupo_id, grupo_nome, usuario, desligados=None):
     canal = str(canal or '').strip()
     if canal not in CANAIS:
         raise ValueError("Escolha Telegram, WhatsApp ou os dois.")
@@ -260,6 +328,13 @@ def salvar_config_avisos(canal, grupo_id, grupo_nome, usuario):
     _garantir_config()
     valores = {'canal': canal, 'grupo_id': grupo_id, 'grupo_nome': str(grupo_nome or '').strip()[:150],
                'atualizado': f"{datetime.now():%d/%m/%Y %H:%M} por {(usuario or {}).get('nome', '?')}"}
+    if desligados is not None:          # [AVISOS LIMPOS] None = não mexe nos interruptores
+        if not isinstance(desligados, (list, tuple, set)):
+            raise ValueError("Lista de avisos desligados inválida.")
+        desconhecidos = [c for c in desligados if c not in CHAVES_AVISO]
+        if desconhecidos:
+            raise ValueError(f"Tipo de aviso desconhecido: {', '.join(map(str, desconhecidos))}")
+        valores['desligados'] = ",".join(c for c in CHAVES_AVISO if c in desligados)
     conn = database.get_db_connection()
     if not conn:
         raise RuntimeError("Sem conexão com o banco de dados.")
@@ -271,7 +346,8 @@ def salvar_config_avisos(canal, grupo_id, grupo_nome, usuario):
         conn.commit()
     finally:
         conn.close()
-    logger.info(f"Avisos da gestão: canal {canal} ({valores['grupo_nome'] or grupo_id or 'Telegram'}) — {valores['atualizado']}.")
+    logger.info(f"Avisos da gestão: canal {canal} ({valores['grupo_nome'] or grupo_id or 'Telegram'}) — {valores['atualizado']}"
+                + (f" · desligados: {valores['desligados'] or 'nenhum'}" if 'desligados' in valores else "") + ".")
     return config_avisos()
 
 

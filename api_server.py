@@ -2570,7 +2570,9 @@ def _resposta_avisos(funcao):
 def api_gestao_avisos(usuario):
     import alertas_estoque
     import notificador_whatsapp
-    return _resposta_avisos(lambda: {'config': alertas_estoque.config_avisos(), 'zapi': bool(notificador_whatsapp._base_url())})
+    tipos = [{'chave': c, 'nome': n, 'quando': q, 'descricao': d} for c, n, q, d in alertas_estoque.TIPOS_AVISO]   # [AVISOS LIMPOS]
+    return _resposta_avisos(lambda: {'config': alertas_estoque.config_avisos(), 'zapi': bool(notificador_whatsapp._base_url()),
+                                     'tipos': tipos})
 
 
 @app.route('/api/gestao/avisos/grupos', methods=['GET'])
@@ -2586,7 +2588,8 @@ def api_gestao_avisos_salvar(usuario):
     import alertas_estoque
     dados = ler_json() or {}
     return _resposta_avisos(lambda: alertas_estoque.salvar_config_avisos(dados.get('canal'), dados.get('grupo_id'),
-                                                                         dados.get('grupo_nome'), usuario))
+                                                                         dados.get('grupo_nome'), usuario,
+                                                                         dados.get('desligados')))
 
 
 @app.route('/api/gestao/avisos/teste', methods=['POST'])
