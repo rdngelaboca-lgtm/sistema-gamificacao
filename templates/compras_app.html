@@ -605,7 +605,8 @@ TELAS.inicio = () => {
   if (idaEst) {
     const pe = progressoDaIda(idaEst), prepE = E.preparos[idaEst.rotina_id];
     principal = `<div class="cartao" style="display:flex;gap:10px;align-items:center"><div class="grow"><div class="nome">Contagem de estoque em andamento</div>
-        <div class="mini suave">${esc(prepE ? prepE.nome : 'Estoque')}${idaEst.categorias ? ' · ' + esc(idaEst.categorias.join(', ')) : ''} · ${pe.feitos}${pe.total != null ? ' de ' + pe.total : ''} contados</div></div>
+        <div class="mini suave">${esc(prepE ? prepE.nome : 'Estoque')}${idaEst.categorias ? ' · ' + esc(idaEst.categorias.join(', ')) : ''} · ${pe.feitos}${pe.total != null ? ' de ' + pe.total : ''} contados${idaEst.dia && idaEst.dia !== hojeISO() ? ' · começada em ' + dataBR(idaEst.dia) : ''}</div>
+        <button class="link-btn mini" style="color:var(--suave);margin-top:4px" data-acao="ida-descartar" data-tipo="estoque">Descartar esta contagem</button></div>
         <button class="btn claro" style="width:auto;min-height:40px;padding:4px 14px" data-acao="continuar-ida" data-tipo="estoque">Continuar</button></div>`;
   }
   if (ida) {
@@ -631,7 +632,14 @@ TELAS.inicio = () => {
       : `<div class="destaque"><div><div class="rotulo" style="color:#CDEBE6">Hoje · ${dataHoje}</div>
           <div style="font-size:22px;font-weight:800">${esc(r.nome)}</div>
           <div style="color:#E3F4F1">${r.qtd_itens} itens para contar</div></div>
-          <button class="btn" data-acao="nova-ida" data-id="${r.id}">Começar contagem ${ICONES.seta}</button></div>`;
+          <button class="btn" data-acao="nova-ida" data-id="${r.id}">Começar contagem ${ICONES.seta}</button>
+          ${u.gestor ? `<button class="link-btn" style="color:#E3F4F1;align-self:center" data-acao="rotina-pular" data-id="${r.id}">Hoje não vai dar: pular</button>` : ''}</div>`;
+  }
+  // [PULAR HOJE] as puladas hoje: uma linha só, com desfazer
+  const puladas = compra.filter(r => r.pulada_hoje);
+  if (puladas.length && !ida) {
+    principal += `<div class="mini suave" style="text-align:center">⏭ Pulada hoje: ${puladas.map(r => esc(r.nome)).join(', ')}
+      ${u.gestor ? puladas.map(r => `· <button class="link-btn mini" data-acao="rotina-pular" data-id="${r.id}" data-desfazer="1">desfazer${puladas.length > 1 ? ' ' + esc(r.nome) : ''}</button>`).join(' ') : ''}</div>`;
   }
   // [ORGANIZAÇÃO] o Início mostra o que tem para fazer agora; as listas ficam na aba Listas
   const contar = st => Object.values(E.listas).filter(l => l.status === st).length;
@@ -653,7 +661,7 @@ TELAS.inicio = () => {
   const cartaoRotina = r => `<button class="cartao item-rotina" data-acao="nova-ida" data-id="${r.id}">
       <div class="quadrado">${ICONES.carrinho}</div>
       <div class="grow"><div class="nome">${esc(r.nome)}</div><div class="pequeno suave">${r.qtd_itens} itens · ${esc(textoDias(r.dias_semana))}</div></div>
-      <div class="mini" style="font-weight:800;color:${r.hoje && !listaDeHoje(r.id) ? 'var(--laranja)' : 'var(--suave)'}">${r.hoje ? (listaDeHoje(r.id) ? 'HOJE ✓' : 'HOJE') : (r.proxima ? dataBR(r.proxima) : '')}</div></button>`;
+      <div class="mini" style="font-weight:800;color:${r.hoje && !listaDeHoje(r.id) ? 'var(--laranja)' : 'var(--suave)'}">${r.hoje ? (listaDeHoje(r.id) ? 'HOJE ✓' : 'HOJE') : r.pulada_hoje ? 'PULADA HOJE' : (r.proxima ? dataBR(r.proxima) : '')}</div></button>`;
   return `${faixaRede()}
     <div class="topo" style="padding:20px 16px 4px;align-items:flex-start">
       <div class="grow"><div class="sub">Gela Boca · Compras</div><h1 style="font-size:26px">Olá, ${esc(u.nome)}</h1></div>
@@ -707,8 +715,25 @@ let inicioCarregadoEm = 0;
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && E.usuario && T.nome === 'inicio' && Date.now() - inicioCarregadoEm > 60000) carregarInicio();
 });
+// [LEMBRETES] contagem aberta em outro dia e sem NENHUM número digitado: só ocupava o Início; sai sozinha.
+// Olha direto onde os números ficam (por local, contagens antigas, itens incluídos), sem depender da rotina no celular.
+function temNumeroDigitado(ida) {
+  const porLocal = Object.values(ida.porLocal || {}).some(m => Object.values(m || {}).some(v => v != null));
+  return porLocal || Object.values(ida.contagens || {}).some(v => v != null) || (ida.extras || []).length > 0;
+}
+function limparContagensVazias() {
+  if (T.nome === 'contagem') return;
+  let mudou = false;
+  for (const tipo of ['compra', 'estoque']) {
+    const i = idaDoTipo(tipo);
+    if (!i || !i.dia || i.dia === hojeISO() || temNumeroDigitado(i)) continue;
+    trazerIda(tipo); descartarIda(); retomarIdaGuardada(); mudou = true;
+  }
+  if (mudou) salvar();
+}
 async function carregarInicio() {
   inicioCarregadoEm = Date.now();
+  limparContagensVazias();
   if (T.nome === 'inicio') {                     // números do "Para fazer agora"
     carregarRecebimentos().then(() => { if (T.nome === 'inicio') desenhar(); });
     if (E.usuario && E.usuario.gestor) carregarOrcamentos().then(() => { if (T.nome === 'inicio') desenhar(); });
@@ -3230,6 +3255,18 @@ const acoes = {
     const r = E.rotinas.find(x => x.id === +d.id);
     if (!abrirEspacoPara(r && r.so_contagem ? 'estoque' : 'compra')) return;
     ir('novaIda', {rotina_id: +d.id});
+  },
+  // [PULAR HOJE] "hoje não vai dar": some do destaque do Início (para todos) só hoje
+  'rotina-pular': async (d, el) => {
+    const r = E.rotinas.find(x => x.id === +d.id), desfazer = !!d.desfazer;
+    if (!r) return;
+    if (!desfazer && !confirm(`Pular "${r.nome}" hoje?\n\nO lembrete some do Início para todos e volta no próximo dia dela. Se der tempo, dá para contar mesmo assim pela lista de rotinas.`)) return;
+    el.disabled = true;
+    try {
+      await api('POST', `/api/compras/rotinas/${r.id}/pular`, {desfazer});
+      toast(desfazer ? `${r.nome} voltou para hoje.` : `${r.nome} pulada hoje.`);
+      await carregarInicio(); if (T.nome === 'inicio') desenhar();
+    } catch (e) { el.disabled = false; toast(e.extra.offline ? 'Sem internet: conecte para pular.' : e.message); }
   },
   'ida-descartar': d => {
     if (d.tipo) trazerIda(d.tipo);

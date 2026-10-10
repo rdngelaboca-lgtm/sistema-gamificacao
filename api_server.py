@@ -1610,6 +1610,14 @@ def api_compras_salvar_rotina(usuario):
     return _resposta_compras(salvar)
 
 
+@app.route('/api/compras/rotinas/<int:rotina_id>/pular', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_compras_rotina_pular(usuario, rotina_id):
+    """[PULAR HOJE] tira a rotina do destaque de hoje (ou desfaz)."""
+    dados = ler_json() or {}
+    return _resposta_compras(compras_database.pular_rotina_hoje, rotina_id, desfazer=bool(dados.get('desfazer')))
+
+
 @app.route('/api/compras/rotinas/<int:rotina_id>', methods=['DELETE'])
 @compras_login(somente_gestor=True)
 def api_compras_apagar_rotina(usuario, rotina_id):

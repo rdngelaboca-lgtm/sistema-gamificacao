@@ -321,6 +321,8 @@ def garantir_tabelas():
         cur.execute("IF COL_LENGTH('CompraRotinas', 'SoContagem') IS NULL ALTER TABLE CompraRotinas ADD SoContagem BIT NULL")
         # [ABA ESTOQUE] rotina automática "Estoque completo" (todos os produtos do cadastro)
         cur.execute("IF COL_LENGTH('CompraRotinas', 'Automatica') IS NULL ALTER TABLE CompraRotinas ADD Automatica BIT NULL")
+        # [PULAR HOJE] "hoje não vai dar para contar": a rotina sai do destaque do Início só neste dia
+        cur.execute("IF COL_LENGTH('CompraRotinas', 'PuladaEm') IS NULL ALTER TABLE CompraRotinas ADD PuladaEm DATE NULL")
         # [VÁRIOS LOCAIS] o mesmo produto em mais de um local ("Freezer 1|Estoque seco") e a contagem de cada local
         cur.execute("""
             IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'CompraContagemLocais')
@@ -538,13 +540,14 @@ def categoria_do(texto):
 
 def listar_rotinas(incluir_inativas=False, hoje=None):
     hoje = _como_data(hoje) or date.today()
+    garantir_tabelas()
     conn = _conectar()
     try:
         cur = conn.cursor()
         cur.execute("""
             SELECT R.RotinaID, R.Nome, R.DiasSemana, R.DiasCobertura, R.PrazoDias, R.Fornecedores, R.Ativa,
                    (SELECT COUNT(*) FROM CompraRotinaItens I WHERE I.RotinaID = R.RotinaID) AS QtdItens, R.SoContagem,
-                   R.Automatica
+                   R.Automatica, R.PuladaEm
             FROM CompraRotinas R
             ORDER BY R.Nome
         """)
@@ -566,9 +569,13 @@ def listar_rotinas(incluir_inativas=False, hoje=None):
                 continue
             dias = _ler_dias_semana(r[2])
             prox = _proxima_data(dias, hoje)
+            pulada = prox == hoje and _como_data(r[10]) == hoje      # [PULAR HOJE] fica para o próximo dia dela
+            if pulada:
+                prox = _proxima_data(dias, hoje + timedelta(days=1))
             rotinas.append({'id': r[0], 'nome': r[1], 'dias_semana': dias, 'dias_cobertura': int(r[3] or 7),
                             'prazo_dias': int(r[4] or 0), 'fornecedores': _ler_ids(r[5]), 'ativa': bool(r[6]),
                             'qtd_itens': max(int(r[7] or 0) - tirar.get(r[0], 0), 0), 'hoje': prox == hoje, 'proxima': _iso(prox),
+                            'pulada_hoje': pulada,
                             'so_contagem': bool(r[8]), 'automatica': bool(r[9]),
                             'categorias': sorted(categorias.get(r[0], set()), key=lambda c: c.lower())})
         rotinas.sort(key=lambda x: (not x['hoje'], x['proxima'] or '9999', x['nome']))
@@ -697,6 +704,25 @@ def salvar_rotina(dados):
         raise
     finally:
         conn.close()
+
+
+def pular_rotina_hoje(rotina_id, desfazer=False, hoje=None):
+    """
+    [PULAR HOJE] "Hoje não vai dar para contar": a rotina sai do destaque do Início (para todos) só hoje e
+    volta no próximo dia dela. Dá para contar mesmo assim pela lista de rotinas. desfazer=True volta hoje.
+    """
+    hoje = _como_data(hoje) or date.today()
+    garantir_tabelas()
+    conn = _conectar()
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE CompraRotinas SET PuladaEm = ? WHERE RotinaID = ?", (None if desfazer else hoje, int(rotina_id)))
+        if cur.rowcount == 0:
+            raise ErroCompras("Rotina não encontrada.")
+        conn.commit()
+    finally:
+        conn.close()
+    return {'ok': True}
 
 
 def desativar_rotina(rotina_id):
