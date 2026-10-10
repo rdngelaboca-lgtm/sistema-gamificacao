@@ -212,6 +212,16 @@ def dia(data_txt):
         if pagos:
             resumo += f" ({len(pagos)} pago(s))"
 
+    resumo_real = None                     # [RESUMO REAL] o que aconteceu de verdade (📝 Resumo do dia)
+    try:
+        import folha_faturamento
+        r = folha_faturamento.resumo_freelas_dia(data)
+        if r['tem_resumo']:
+            resumo_real = r['real']
+            resumo += f"   📝 Real: {r['real']['qtd']} freelancer(s): {R.fmt_reais(r['real']['valor'])}"
+    except Exception as e:
+        logger.warning(f"Escala: resumo real dos freelancers indisponível ({e})")
+
     horarios = database.buscar_horarios_ocupacao_hoje(data, 0)
     setores = sorted({p[5] for p in posicoes if p[5]}, key=str.lower)
     fluxo = {'horas': R.HORAS_FLUXO, 'setores': setores,
@@ -254,7 +264,7 @@ def dia(data_txt):
             'tela': {'largura': tela[0], 'altura': tela[1],
                      'imagem_largura': R.MAPA_IMAGEM_LARGURA, 'imagem_altura': R.MAPA_IMAGEM_ALTURA},
             'posicoes': lista_pos, 'fora_do_mapa': fora_do_mapa, 'alertas': alertas, 'resumo': resumo, 'fluxo': fluxo,
-            'setor_todos': R.SETOR_TODOS, 'pessoas': pessoas, 'habituais': _habituais(d),
+            'setor_todos': R.SETOR_TODOS, 'pessoas': pessoas, 'habituais': _habituais(d), 'resumo_real': resumo_real,
             'config': {'jornada_horas': _jornada_horas(),
                        'limite_curta_min': int(cfg_pag.get('LimiteCurtaMinutos', 420))}}
 
@@ -467,6 +477,27 @@ def copiar(dados, usuario):
         logger.error(f"Escala fixa: conferir os fixos depois de copiar {data} falhou: {e}", exc_info=True)
     logger.info(f"[GESTÃO] {usuario.get('nome')}: copiou a escala de {origem} para {data}.")
     return {'ok': True, 'mensagem': f"Escala de {R.fmt_data_br(origem, True)} copiada para {R.fmt_data_br(d, True)}."}
+
+
+# ------------------------------------------------------------------------------
+# [RESUMO REAL] freelancers do dia: quantos vieram de verdade e o valor total, por setor
+# ------------------------------------------------------------------------------
+def _folha(funcao, *args):
+    import folha_faturamento
+    try:
+        return funcao(folha_faturamento, *args)
+    except folha_faturamento.ErroFolha as e:
+        raise ErroEscala(str(e))
+
+
+def resumo_freelas(data_txt):
+    _exigir_banco()
+    return _folha(lambda ff: ff.resumo_freelas_dia(_data(data_txt)[0]))
+
+
+def salvar_resumo_freelas(dados, usuario):
+    _exigir_banco()
+    return _folha(lambda ff: ff.salvar_resumo_freelas_dia(dict(dados, data=_data(dados.get('data'))[0]), usuario))
 
 
 # ------------------------------------------------------------------------------

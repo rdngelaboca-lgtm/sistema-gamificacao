@@ -823,7 +823,7 @@ def verificar_resumo_notas(agora=None):
     import alertas_estoque
     with _trava_resumo_notas:
         estado = _ler_estado()
-        if estado.get('resumo_notas_turno') == turno:
+        if (estado.get('resumo_notas_turno') or '') >= turno:     # já mandou este horário (ou um mais novo)
             return
         fila = (estado.get('notas_novas_fila') or []) if alertas_estoque.aviso_ligado('notas') else []
         orc_ligado = alertas_estoque.aviso_ligado('orcamentos')

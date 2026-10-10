@@ -2301,6 +2301,18 @@ def api_gestao_escala_copiar(usuario):
     return _resposta_gestao(gestao_escala.copiar, ler_json() or {}, usuario)
 
 
+@app.route('/api/gestao/escala/resumo-freelas', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_escala_resumo_freelas(usuario):
+    return _resposta_gestao(gestao_escala.resumo_freelas, request.args.get('data'))
+
+
+@app.route('/api/gestao/escala/resumo-freelas', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_escala_resumo_freelas_salvar(usuario):
+    return _resposta_gestao(gestao_escala.salvar_resumo_freelas, ler_json() or {}, usuario)
+
+
 @app.route('/api/gestao/escala/fixos', methods=['GET'])
 @compras_login(somente_gestor=True)
 def api_gestao_escala_fixos(usuario):

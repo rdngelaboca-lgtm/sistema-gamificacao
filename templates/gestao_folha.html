@@ -183,7 +183,7 @@ function cartaoDia() {
     <div class="grande ${pctCls(x.pct)}">${pctTxt(x.pct)} <span class="mini suave" style="font-weight:600">folha do dia</span></div>
     <div class="mini" style="margin:4px 0 6px">${x.clima ? '🌡️ ' + esc(x.clima.texto) : '<span class="suave">sem clima</span>'}</div>
     <div class="lin2"><span>💰 Faturamento</span><b>${R$(x.faturamento)}</b></div>
-    <div class="lin2"><span>👥 ${x.fixos} fixo(s) + ${x.freelas} freela(s)</span><b>${num(horas)} h</b></div>
+    <div class="lin2"><span>👥 ${x.fixos} fixo(s) + ${x.freelas} freela(s)${x.resumo_freelas ? ' <span class="mini suave">(📝 resumo real)</span>' : ''}</span><b>${num(horas)} h</b></div>
     <div class="lin2"><span>🧾 Fixos</span><b>${R$(x.fixo)}</b></div>
     <div class="lin2"><span>🧑‍🍳 Freelancers</span><b>${R$(x.freela)}</b></div>
     ${x.por_hora ? `<div class="lin2"><span>⏱️ Por hora trabalhada</span><b>${R$(x.por_hora)}</b></div>` : ''}
@@ -236,7 +236,7 @@ function tabelaDias() {
       <td class="num" title="${esc(dicaComp)}">${sem.var != null ? varTxt(sem.var) : '<span class="suave">—</span>'}</td>
       <td class="num">${R$(x.fixo)}${x.fixo_estimado ? ' <span class="n-aviso" title="Folha de ' + esc(x.fixo_estimado) + '">*</span>' : ''}</td>
       <td class="num">${x.freela ? R$(x.freela) : '—'}</td>
-      <td class="num">${pessoas ? `${x.fixos} + ${x.freelas} <span class="mini suave">(${num((x.horas_fixos || 0) + (x.horas_freelas || 0))} h)</span>` : '—'}</td>
+      <td class="num">${pessoas ? `${x.fixos} + ${x.freelas}${x.resumo_freelas ? ' <span title="Freelancers pelo resumo real do dia (Escala › 📝 Resumo do dia)">📝</span>' : ''} <span class="mini suave">(${num((x.horas_fixos || 0) + (x.horas_freelas || 0))} h)</span>` : '—'}</td>
       <td class="num ${pctCls(x.pct)}">${pctTxt(x.pct)}</td>
       <td class="num">${x.por_hora ? R$(x.por_hora) : '—'}</td>
       <td><button class="btn-pino ${x.atipico ? 'on' : ''}" data-pino="${x.data}" title="${x.atipico ? 'Dia atípico: ' + esc(x.atipico) + ' (tocar para desmarcar)' : 'Marcar como dia atípico (fica fora das médias)'}">📌</button></td></tr>`;

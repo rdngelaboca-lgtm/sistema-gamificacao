@@ -95,6 +95,25 @@
   .dias-chips label.folga { text-decoration: line-through; color: var(--suave) !important; }
   .dias-chips input { width: 14px; height: 14px; margin: 0; }
 
+  /* [RESUMO REAL] freelancers do dia por setor */
+  .resumo-freelas { display: grid; gap: 6px; }
+  .rf-linha { display: grid; grid-template-columns: minmax(110px, 1.2fr) minmax(110px, 1fr) 90px 130px minmax(120px, 1.4fr); gap: 8px;
+    align-items: center; border-bottom: 1px solid var(--linha2); padding: 6px 0; }
+  .rf-linha.cab { font-size: 12px; font-weight: 700; color: var(--suave); border-bottom: 1px solid var(--linha); }
+  .rf-linha input { width: 100%; text-align: center; font-size: 16px; }
+  .rf-linha input.obs { text-align: left; font-size: 14px; }
+  .rf-linha.preenchido { background: var(--verde-claro); border-radius: 8px; padding-left: 6px; padding-right: 6px; }
+  .rf-linha .escala { font-size: 13px; color: var(--suave); }
+  .rf-linha .rot { display: none; font-size: 11px; font-weight: 700; color: var(--suave); }
+  .rf-total { display: flex; gap: 12px; flex-wrap: wrap; justify-content: space-between; font-weight: 700; padding-top: 6px; }
+  @media (max-width: 700px) {
+    .rf-linha { grid-template-columns: 1fr 1fr; }
+    .rf-linha.cab { display: none; }
+    .rf-linha > b, .rf-linha .escala, .rf-linha .obs-c { grid-column: 1 / -1; }
+    .rf-linha .rot { display: block; }
+  }
+  #btn-resumo-dia.tem { border-color: var(--verde); background: var(--verde-claro); }
+
   /* ---------- rodapé: alertas e fluxo ---------- */
   .inferior { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 0 16px 70px; }
   #alertas { margin: 0; padding: 0; list-style: none; font-size: 13px; display: flex; flex-direction: column; gap: 4px; }
@@ -130,6 +149,7 @@
     <div class="linha acoes">
       <button class="btn" id="btn-copiar">📋 <span class="txt">Copiar escala anterior</span><span class="curto">Copiar</span></button>
       <button class="btn" id="btn-fixos">📌 <span class="txt">Fixos</span><span class="curto">Fixos</span></button>
+      <button class="btn" id="btn-resumo-dia" title="Quantos freelancers vieram de verdade e o valor total, por setor">📝 <span class="txt">Resumo do dia</span><span class="curto">Resumo</span></button>
       <span class="sep"></span>
       <button class="btn" id="btn-auto">🪄 <span class="txt">Gerar intervalos automáticos</span><span class="curto">Auto</span></button>
       <button class="btn" id="btn-intervalos">⏱️ <span class="txt">Gerenciar intervalos</span><span class="curto">Intervalos</span></button>
@@ -271,6 +291,7 @@ function desenhar() {
   const d = S.dia;
   $('#titulo-dia').textContent = d.titulo;
   $('#resumo').textContent = d.resumo;
+  $('#btn-resumo-dia').classList.toggle('tem', !!d.resumo_real);
   desenharClima(d.clima);
   $('#ver-mapa').classList.toggle('sel', S.vista === 'mapa');
   $('#ver-lista').classList.toggle('sel', S.vista === 'lista');
@@ -707,6 +728,62 @@ $('#btn-copiar').onclick = () => {
     botoes.forEach(x => { x.disabled = false; });
   });
 };
+
+// [RESUMO REAL] 📝 Resumo do dia: quantos freelancers vieram de verdade e o valor total, por setor
+$('#btn-resumo-dia').onclick = () => { if (diaPronto()) abrirResumoDia(); };
+async function abrirResumoDia() {
+  const dataJanela = S.data;
+  let r;
+  try { r = await api('GET', `/api/gestao/escala/resumo-freelas?data=${dataJanela}`); } catch (e) { return falhou(e); }
+  const br = v => (v == null ? '' : Number(v).toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2}));
+  const linha = (l, i) => `<div class="rf-linha ${l.real ? 'preenchido' : ''}" data-i="${i}">
+      <b>${esc(l.nome)}</b>
+      <span class="escala">${l.escala_qtd ? `${l.escala_qtd} na escala · ${reais(Math.round(l.escala_valor * 100))}` : 'ninguém na escala'}</span>
+      <label><span class="rot">Freelancers</span><input data-c="qtd" inputmode="numeric" maxlength="3" placeholder="—" value="${l.real ? l.real.qtd : ''}"
+        aria-label="Freelancers que vieram em ${esc(l.nome)}"></label>
+      <label><span class="rot">Valor total (R$)</span><input data-c="valor" inputmode="decimal" placeholder="—" value="${l.real ? br(l.real.valor) : ''}"
+        aria-label="Valor total do dia em ${esc(l.nome)}"></label>
+      <label class="obs-c"><span class="rot">Observação</span><input data-c="obs" class="obs" maxlength="300" placeholder="Obs. (opcional)"
+        value="${l.real ? esc(l.real.obs) : ''}" aria-label="Observação de ${esc(l.nome)}"></label>
+    </div>`;
+  abrirModal(`<h3>📝 Resumo dos freelancers — ${esc(dataBR(dataJanela, true))}</h3>
+    <p class="mini suave" style="margin-top:0">Nem sempre dá para lançar todo freelancer na escala (um falta, outro chega na hora).
+      Aqui fica registrado o que aconteceu <b>de verdade</b> em cada setor: quantos vieram e o valor total pago no dia.
+      Nos números da 📊 Folha × Faturamento, o setor preenchido vale no lugar da escala; o setor em branco continua pela escala.</p>
+    <div class="resumo-freelas" id="rf">
+      <div class="rf-linha cab"><span>Setor</span><span>Na escala</span><span>Vieram</span><span>Valor total (R$)</span><span>Observação</span></div>
+      ${r.linhas.map(linha).join('') || '<div class="suave">Nenhum setor no mapa.</div>'}
+    </div>
+    <div class="rf-total"><span class="suave" id="rf-escala">Escala: ${r.escala.qtd} freelancer(s) · ${reais(Math.round(r.escala.valor * 100))}</span>
+      <span id="rf-real">${r.tem_resumo ? `Vale para a Folha: ${r.real.qtd} freelancer(s) · ${reais(Math.round(r.real.valor * 100))}` : ''}</span></div>
+    ${r.atualizado ? `<div class="mini suave">Lançado em ${esc(r.atualizado)}.</div>` : ''}
+    <div class="botoes" style="margin-top:10px"><button class="btn" id="rf-limpar">Apagar o resumo</button>
+      <button class="btn prim" id="rf-salvar">💾 Salvar resumo</button></div>`, () => carregarDia(true));
+  const caixa = $('#rf');
+  caixa.addEventListener('input', e => {
+    const lin = e.target.closest('.rf-linha');
+    if (e.target.dataset.c === 'qtd') e.target.value = e.target.value.replace(/\D/g, '');
+    if (lin) lin.classList.toggle('preenchido', [...lin.querySelectorAll('input[data-c="qtd"], input[data-c="valor"]')].some(x => x.value.trim()));
+  });
+  caixa.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.matches('input')) { e.preventDefault(); $('#rf-salvar').click(); } });
+  const salvar = async apagar => {
+    const linhas = apagar ? [] : r.linhas.map((l, i) => {
+      const el = caixa.querySelector(`.rf-linha[data-i="${i}"]`), v = c => el.querySelector(`[data-c="${c}"]`).value.trim();
+      return {setor: l.setor, qtd: v('qtd'), valor: v('valor'), obs: v('obs')};
+    });
+    if (apagar && !confirm('Apagar o resumo deste dia? Os números voltam a ser os da escala.')) return;
+    $('#rf-salvar').disabled = true;
+    try {
+      const x = await api('POST', '/api/gestao/escala/resumo-freelas', {data: dataJanela, linhas});
+      status(x.mensagem); fecharModal();
+    } catch (e) { falhou(e); }
+    const b = $('#rf-salvar'); if (b) b.disabled = false;
+  };
+  $('#rf-salvar').onclick = () => salvar(false);
+  $('#rf-limpar').onclick = () => salvar(true);
+  $('#rf-limpar').hidden = !r.tem_resumo;
+  const primeiro = caixa.querySelector('input[data-c="qtd"]'); if (primeiro && innerWidth > 700) primeiro.focus();
+}
 
 // [ESCALA FIXA] janela 📌 Fixos: ver, mudar posição/horário/dias/folga e tirar
 $('#btn-fixos').onclick = () => { if (diaPronto()) abrirFixos(); };
