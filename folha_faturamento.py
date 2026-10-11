@@ -352,8 +352,10 @@ def _escala(cur, ini, fim):
 
 def _freelancers(ini, fim):
     """
-    {data: {'total': valor, 'setor': {setor: valor}}} — o mesmo cálculo da tela de Pagamentos (pagos: valor
-    congelado; pendentes: calculado). O setor vem da posição do turno (turno excluído: pelo nome da posição).
+    {data: {'total': valor, 'setor': {setor: valor}, 'excluido': {setor: valor}, 'ids_excluidos': {setor: {ids}}}}
+    — o mesmo cálculo da tela de Pagamentos (pagos: valor congelado; pendentes: calculado). O setor vem da posição
+    do turno (turno excluído: pelo nome da posição). [DEPURAÇÃO RESUMO] 'excluido' = turno PAGO que depois saiu
+    da escala: o valor sempre contou, mas o freelancer não entrava na quantidade.
     """
     conn = _conexao()
     try:
@@ -375,9 +377,13 @@ def _freelancers(ini, fim):
         setor = setor_turno.get(i.get('EscalaID'))
         if setor is None:
             setor = setor_posicao.get(str(i.get('Posicao') or '').strip().upper(), '')
-        x = por_dia.setdefault(i['Data'], {'total': Decimal('0'), 'setor': {}})
+        x = por_dia.setdefault(i['Data'], {'total': Decimal('0'), 'setor': {}, 'excluido': {}, 'ids_excluidos': {}})
         x['total'] += v
         x['setor'][setor] = x['setor'].get(setor, Decimal('0')) + v
+        if i.get('TurnoExcluido'):
+            x['excluido'][setor] = x['excluido'].get(setor, Decimal('0')) + v
+            if i.get('FreelancerID'):
+                x['ids_excluidos'].setdefault(setor, set()).add(i['FreelancerID'])
     return por_dia
 
 
@@ -398,10 +404,11 @@ def _freelas_do_dia(e, valores, resumo):
     os outros setores continuam pela escala.
     """
     e = e or {}
+    excluidos = (valores or {}).get('ids_excluidos') or {}       # turno pago que saiu da escala: também veio
     if not resumo:
-        return len(e.get('freelas', ())), (valores or {}).get('total', Decimal('0'))
+        return len(set(e.get('freelas', ())).union(*excluidos.values())), (valores or {}).get('total', Decimal('0'))
     ids = set()
-    for setor, quem in (e.get('freelas_setor') or {}).items():
+    for setor, quem in list((e.get('freelas_setor') or {}).items()) + list(excluidos.items()):
         if setor not in resumo:
             ids |= quem
     valor = sum((v for setor, v in ((valores or {}).get('setor') or {}).items() if setor not in resumo), Decimal('0'))
@@ -732,7 +739,9 @@ def resumo_freelas_dia(data_txt):
         ultimo = cur.fetchone()
     finally:
         conn.close()
-    valores = _freelancers(d, d).get(d) or {'total': Decimal('0'), 'setor': {}}
+    valores = _freelancers(d, d).get(d) or {'total': Decimal('0'), 'setor': {}, 'excluido': {}, 'ids_excluidos': {}}
+    excl_ids = valores.get('ids_excluidos') or {}
+    ids_setor = lambda k: set((esc.get('freelas_setor') or {}).get(k, ())) | set(excl_ids.get(k, ()))
     nomes = {}
     for nome in setores_mapa:
         nomes.setdefault(_setor(nome), nome)
@@ -743,8 +752,9 @@ def resumo_freelas_dia(data_txt):
     linhas = []
     for k in sorted(nomes, key=lambda x: (x == '', nomes[x].lower())):
         r = res.get(k)
-        linhas.append({'setor': nomes[k] if k else '', 'nome': nomes[k], 'escala_qtd': len((esc.get('freelas_setor') or {}).get(k, ())),
+        linhas.append({'setor': nomes[k] if k else '', 'nome': nomes[k], 'escala_qtd': len(ids_setor(k)),
                        'escala_valor': _num(valores['setor'].get(k, Decimal('0'))),
+                       'escala_excluido': _num((valores.get('excluido') or {}).get(k, Decimal('0'))),
                        'real': {'qtd': r['qtd'], 'valor': _num(r['valor']), 'obs': r['obs']} if r else None})
     n_real, v_real = _freelas_do_dia(esc, valores, res)
     quando = ''
@@ -752,7 +762,7 @@ def resumo_freelas_dia(data_txt):
         q = ultimo[0] if hasattr(ultimo[0], 'strftime') else datetime.fromisoformat(str(ultimo[0])[:19])
         quando = f"{q:%d/%m %H:%M}" + (f" por {ultimo[1]}" if ultimo[1] else '')
     return {'data': d.isoformat(), 'linhas': linhas, 'tem_resumo': bool(res), 'atualizado': quando,
-            'escala': {'qtd': len(esc.get('freelas') or ()), 'valor': _num(valores['total'])},
+            'escala': {'qtd': len(set(esc.get('freelas') or ()).union(*excl_ids.values())), 'valor': _num(valores['total'])},
             'real': {'qtd': n_real, 'valor': _num(v_real)}}
 
 
@@ -799,6 +809,12 @@ def salvar_resumo_freelas_dia(dados, usuario):
     conn = _conexao()
     try:
         cur = conn.cursor()
+        if not gravar:
+            # [DEPURAÇÃO RESUMO] salvar sem preencher nada dizia "resumo apagado" mesmo sem ter resumo
+            cur.execute("SELECT COUNT(*) FROM FreelasResumoDia WHERE Data = ?", str(d))
+            if not cur.fetchone()[0]:
+                raise ErroFolha("Nada para salvar: preencha quantos freelancers vieram e o valor total em pelo menos "
+                                "um setor (setor em branco continua pela escala).")
         cur.execute("DELETE FROM FreelasResumoDia WHERE Data = ?", str(d))
         for setor, qtd, valor, obs in gravar:
             cur.execute("INSERT INTO FreelasResumoDia (Data, Setor, Quantidade, Valor, Observacao, AtualizadoEm, AtualizadoPor) "

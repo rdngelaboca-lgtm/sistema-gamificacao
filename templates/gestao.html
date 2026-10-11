@@ -759,7 +759,8 @@ async function abrirResumoDia() {
   const br = v => (v == null ? '' : Number(v).toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2}));
   const linha = (l, i) => `<div class="rf-linha ${l.real ? 'preenchido' : ''}" data-i="${i}">
       <b>${esc(l.nome)}</b>
-      <span class="escala">${l.escala_qtd ? `${l.escala_qtd} na escala · ${reais(Math.round(l.escala_valor * 100))}` : 'ninguém na escala'}</span>
+      <span class="escala">${l.escala_qtd || l.escala_valor ? `${l.escala_qtd} na escala · ${reais(Math.round(l.escala_valor * 100))}` : 'ninguém na escala'}${
+        l.escala_excluido ? `<br><span class="n-aviso">inclui ${reais(Math.round(l.escala_excluido * 100))} de turno pago que saiu da escala</span>` : ''}</span>
       <label><span class="rot">Freelancers</span><input data-c="qtd" inputmode="numeric" maxlength="3" placeholder="—" value="${l.real ? l.real.qtd : ''}"
         aria-label="Freelancers que vieram em ${esc(l.nome)}"></label>
       <label><span class="rot">Valor total (R$)</span><input data-c="valor" inputmode="decimal" placeholder="—" value="${l.real ? br(l.real.valor) : ''}"
