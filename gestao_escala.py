@@ -205,13 +205,18 @@ def dia(data_txt):
     resumo = f"👥 {len([t for t in todos if t.NomePessoa])} na escala   ⭕ {vazias} posição(ões) vazia(s)"
     cfg_pag = _config_pagamento()
     if frees:
-        cfg = cfg_pag
-        custo = 0
-        for t in frees:
-            calc = database.calcular_pagamento_turno(t.HorarioEntrada, t.HorarioSaida, cfg, 0, data,
-                                                     getattr(t, 'TipoDiaria', None), t.HorarioEntrada,
-                                                     t.HorarioSaida, feriado)
-            custo += calc['Total'] if calc else 0
+        try:
+            # [DEPURAÇÃO RESUMO] o MESMO valor da tela de Pagamentos e do 📝 Resumo do dia (horário corrigido, ajuste e o
+            # valor congelado de quem já foi pago). Antes recalculava pela escala e a barra não batia com a janela.
+            custo = sum(i['Total'] for i in database.listar_pagamentos_freelancers(d, d) if not i.get('TurnoExcluido'))
+        except Exception as e:
+            logger.warning(f"Escala: valores dos freelancers pelos Pagamentos indisponíveis ({e}); calculando pela escala.")
+            custo = 0
+            for t in frees:
+                calc = database.calcular_pagamento_turno(t.HorarioEntrada, t.HorarioSaida, cfg_pag, 0, data,
+                                                         getattr(t, 'TipoDiaria', None), t.HorarioEntrada,
+                                                         t.HorarioSaida, feriado)
+                custo += calc['Total'] if calc else 0
         resumo += f"   🧑‍🍳 {len(frees)} freelancer(s): {R.fmt_reais(custo)}"
         if pagos:
             resumo += f" ({len(pagos)} pago(s))"

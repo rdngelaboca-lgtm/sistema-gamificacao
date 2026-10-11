@@ -759,8 +759,9 @@ async function abrirResumoDia() {
   const br = v => (v == null ? '' : Number(v).toLocaleString('pt-BR', {minimumFractionDigits: 2, maximumFractionDigits: 2}));
   const linha = (l, i) => `<div class="rf-linha ${l.real ? 'preenchido' : ''}" data-i="${i}">
       <b>${esc(l.nome)}</b>
-      <span class="escala">${l.escala_qtd || l.escala_valor ? `${l.escala_qtd} na escala · ${reais(Math.round(l.escala_valor * 100))}` : 'ninguém na escala'}${
-        l.escala_excluido ? `<br><span class="n-aviso">inclui ${reais(Math.round(l.escala_excluido * 100))} de turno pago que saiu da escala</span>` : ''}</span>
+      <span class="escala">${l.escala_qtd || l.escala_valor ? `${l.escala_qtd} na escala · ${reais(Math.round(l.escala_valor * 100))}`
+        : (l.fora_qtd ? '' : 'ninguém na escala')}${l.fora_qtd ? `${l.escala_qtd || l.escala_valor ? '<br>' : ''}<span class="n-aviso">${l.fora_qtd} pago(s) fora da escala · ${
+        reais(Math.round(l.fora_valor * 100))}</span>` : ''}<span class="rf-media mini" data-media></span></span>
       <label><span class="rot">Freelancers</span><input data-c="qtd" inputmode="numeric" maxlength="3" placeholder="—" value="${l.real ? l.real.qtd : ''}"
         aria-label="Freelancers que vieram em ${esc(l.nome)}"></label>
       <label><span class="rot">Valor total (R$)</span><input data-c="valor" inputmode="decimal" placeholder="—" value="${l.real ? br(l.real.valor) : ''}"
@@ -777,16 +778,45 @@ async function abrirResumoDia() {
       ${r.linhas.map(linha).join('') || '<div class="suave">Nenhum setor no mapa.</div>'}
     </div>
     <div class="rf-total"><span class="suave" id="rf-escala">Escala: ${r.escala.qtd} freelancer(s) · ${reais(Math.round(r.escala.valor * 100))}</span>
-      <span id="rf-real">${r.tem_resumo ? `Vale para a Folha: ${r.real.qtd} freelancer(s) · ${reais(Math.round(r.real.valor * 100))}` : ''}</span></div>
+      <span id="rf-real"></span></div>
     ${r.atualizado ? `<div class="mini suave">Lançado em ${esc(r.atualizado)}.</div>` : ''}
     <div class="botoes" style="margin-top:10px"><button class="btn" id="rf-limpar">Apagar o resumo</button>
       <button class="btn prim" id="rf-salvar">💾 Salvar resumo</button></div>`, () => carregarDia(true));
   const caixa = $('#rf');
+  // [DEPURAÇÃO RESUMO] prévia ao vivo do que vai para a Folha e a média por freelancer (pega "36000" no lugar de "360,00").
+  // O valor é lido como no servidor: "1.200" = mil e duzentos; "1.200,50" e "1200.50" também valem.
+  const lerValor = t => {
+    t = String(t || '').replace(/R\$|\s/g, '');
+    if (!t) return null;
+    if (t.includes(',')) t = t.replace(/\./g, '').replace(',', '.');
+    else if (/^\d{1,3}(\.\d{3})+$/.test(t)) t = t.replace(/\./g, '');
+    const v = Number(t);
+    return Number.isFinite(v) ? v : NaN;
+  };
+  const previa = () => {
+    let qtd = 0, valor = 0, ok = true;
+    r.linhas.forEach((l, i) => {
+      const el = caixa.querySelector(`.rf-linha[data-i="${i}"]`), q = el.querySelector('[data-c="qtd"]').value.trim();
+      const v = lerValor(el.querySelector('[data-c="valor"]').value), media = el.querySelector('[data-media]');
+      if (q || v != null) {
+        if (!q || v == null || Number.isNaN(v)) { ok = false; media.textContent = ''; return; }
+        qtd += +q; valor += v;
+        media.innerHTML = +q > 0 ? `<br>≈ ${reais(Math.round(v / +q * 100))} por freelancer` : '';
+      } else {
+        qtd += l.escala_qtd + (l.fora_qtd || 0); valor += l.escala_valor + (l.fora_valor || 0); media.textContent = '';
+      }
+    });
+    const algum = r.linhas.some((l, i) => [...caixa.querySelectorAll(`.rf-linha[data-i="${i}"] input[data-c="qtd"], .rf-linha[data-i="${i}"] input[data-c="valor"]`)].some(x => x.value.trim()));
+    $('#rf-real').innerHTML = !algum ? '' : ok ? `Vai valer para a Folha: ${qtd} freelancer(s) · ${reais(Math.round(valor * 100))}`
+      : '<span class="n-aviso">Preencha quantos vieram E o valor nos setores marcados.</span>';
+  };
   caixa.addEventListener('input', e => {
     const lin = e.target.closest('.rf-linha');
     if (e.target.dataset.c === 'qtd') e.target.value = e.target.value.replace(/\D/g, '');
     if (lin) lin.classList.toggle('preenchido', [...lin.querySelectorAll('input[data-c="qtd"], input[data-c="valor"]')].some(x => x.value.trim()));
+    previa();
   });
+  previa();
   caixa.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.matches('input')) { e.preventDefault(); $('#rf-salvar').click(); } });
   const salvar = async apagar => {
     const linhas = apagar ? [] : r.linhas.map((l, i) => {
@@ -794,12 +824,14 @@ async function abrirResumoDia() {
       return {setor: l.setor, qtd: v('qtd'), valor: v('valor'), obs: v('obs')};
     });
     if (apagar && !confirm('Apagar o resumo deste dia? Os números voltam a ser os da escala.')) return;
-    $('#rf-salvar').disabled = true;
+    const botoes = [$('#rf-salvar'), $('#rf-limpar')];
+    botoes.forEach(b => { b.disabled = true; });              // [DEPURAÇÃO RESUMO] clique duplo mandava 2 vezes
     try {
-      const x = await api('POST', '/api/gestao/escala/resumo-freelas', {data: dataJanela, linhas});
-      status(x.mensagem); fecharModal();
+      // [DEPURAÇÃO RESUMO] valor muito alto por freelancer: o servidor pergunta antes (comPerguntas)
+      const x = await comPerguntas('/api/gestao/escala/resumo-freelas', {data: dataJanela, linhas});
+      if (x) { status(x.mensagem); fecharModal(); }
     } catch (e) { falhou(e); }
-    const b = $('#rf-salvar'); if (b) b.disabled = false;
+    botoes.forEach(b => { if (b.isConnected) b.disabled = false; });
   };
   $('#rf-salvar').onclick = () => salvar(false);
   $('#rf-limpar').onclick = () => salvar(true);

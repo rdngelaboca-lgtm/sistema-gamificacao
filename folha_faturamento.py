@@ -26,7 +26,9 @@
 # ==============================================================================
 import calendar
 import logging
+import re
 import time
+import unicodedata
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
@@ -156,6 +158,9 @@ def _valor(texto, nome):
         return None
     if ',' in t:
         t = t.replace('.', '').replace(',', '.')
+    elif re.fullmatch(r'\d{1,3}(\.\d{3})+', t):
+        # [DEPURAÇÃO RESUMO] '1.200' / '12.345': ponto de milhar (como se escreve no Brasil). Antes virava 1,20 / 12,35.
+        t = t.replace('.', '')
     try:
         v = Decimal(t)
     except InvalidOperation:
@@ -325,12 +330,51 @@ def _minutos(ent, sai, ini_int=None, fim_int=None):
 
 
 def _setor(nome):
-    """[RESUMO REAL] setor para comparar ('Cozinha ' = 'COZINHA')."""
-    return str(nome or '').strip().upper()
+    """
+    [RESUMO REAL] setor para comparar ('Cozinha ' = 'COZINHA'). [DEPURAÇÃO RESUMO] sem acento e sem espaço repetido:
+    'Salão' = 'SALAO' (antes, um setor renomeado só no acento não era substituído pelo resumo e contava em dobro).
+    """
+    t = unicodedata.normalize('NFD', ' '.join(str(nome or '').split()))
+    return ''.join(c for c in t if unicodedata.category(c) != 'Mn').upper()
+
+
+def _setor_por_posicao(cur):
+    """{NOME DA POSIÇÃO: setor} para o pagamento de turno que saiu da escala (só tem o nome). Posição ativa primeiro."""
+    cur.execute("SELECT NomePosicao, Setor FROM PosicoesLoja ORDER BY Ativo DESC")
+    setor_posicao = {}
+    for nome, setor in cur.fetchall():
+        setor_posicao.setdefault(str(nome or '').strip().upper(), _setor(setor))
+    return setor_posicao
+
+
+def _pagos_fora_da_escala(cur, ini, fim):
+    """
+    [DEPURAÇÃO RESUMO] {data: {setor: {FreelancerID}}}: turno de freelancer PAGO que depois saiu da escala (a mesma regra
+    da tela de Pagamentos), sem calcular os pagamentos. Para os comparativos contarem igual à Folha.
+    """
+    cur.execute("SELECT 1 FROM sys.tables WHERE name = 'PagamentosFreelancer'")
+    if not cur.fetchone():
+        return {}
+    cur.execute("""SELECT P.DataEscala, P.FreelancerID, P.NomePosicao FROM PagamentosFreelancer P
+                   WHERE P.Pago = 1 AND P.FreelancerID IS NOT NULL AND P.DataEscala >= ? AND P.DataEscala <= ?
+                     AND NOT EXISTS (SELECT 1 FROM EscalaDiaria E WHERE E.EscalaID = P.EscalaID AND E.FreelancerID IS NOT NULL)""",
+                str(ini), str(fim))
+    linhas = cur.fetchall()
+    if not linhas:
+        return {}
+    setor_posicao = _setor_por_posicao(cur)
+    por_dia = {}
+    for d, frid, posicao in linhas:
+        setor = setor_posicao.get(str(posicao or '').strip().upper(), '')
+        por_dia.setdefault(database._como_data(d), {}).setdefault(setor, set()).add(frid)
+    return por_dia
 
 
 def _escala(cur, ini, fim):
-    """{data: {'fixos': {ids}, 'freelas': {ids}, 'freelas_setor': {setor: {ids}}, 'min_fixos', 'min_freelas'}}."""
+    """
+    {data: {'fixos': {ids}, 'freelas': {ids}, 'freelas_setor': {setor: {ids}}, 'min_fixos', 'min_freelas',
+            'min_freelas_setor': {setor: minutos}, 'turnos_freelas_setor': {setor: turnos}}}.
+    """
     cur.execute("""SELECT E.DataEscala, E.FuncionarioID, E.FreelancerID, E.HorarioEntrada, E.HorarioSaida, E.InicioIntervalo,
                           E.FimIntervalo, PL.Setor
                    FROM EscalaDiaria E LEFT JOIN PosicoesLoja PL ON E.PosicaoID = PL.PosicaoID
@@ -338,12 +382,15 @@ def _escala(cur, ini, fim):
     por_dia = {}
     for d, fid, frid, ent, sai, ii, fi, setor in cur.fetchall():
         d = database._como_data(d)
-        x = por_dia.setdefault(d, {'fixos': set(), 'freelas': set(), 'freelas_setor': {}, 'min_fixos': 0, 'min_freelas': 0})
+        x = por_dia.setdefault(d, {'fixos': set(), 'freelas': set(), 'freelas_setor': {}, 'min_fixos': 0, 'min_freelas': 0,
+                                   'min_freelas_setor': {}, 'turnos_freelas_setor': {}})
         m = _minutos(ent, sai, ii, fi)
         if frid:
             x['freelas'].add(frid)
             x['freelas_setor'].setdefault(_setor(setor), set()).add(frid)
             x['min_freelas'] += m
+            x['min_freelas_setor'][_setor(setor)] = x['min_freelas_setor'].get(_setor(setor), 0) + m
+            x['turnos_freelas_setor'][_setor(setor)] = x['turnos_freelas_setor'].get(_setor(setor), 0) + 1
         elif fid:
             x['fixos'].add(fid)
             x['min_fixos'] += m
@@ -363,10 +410,7 @@ def _freelancers(ini, fim):
         cur.execute("""SELECT E.EscalaID, PL.Setor FROM EscalaDiaria E LEFT JOIN PosicoesLoja PL ON E.PosicaoID = PL.PosicaoID
                        WHERE E.FreelancerID IS NOT NULL AND E.DataEscala >= ? AND E.DataEscala <= ?""", str(ini), str(fim))
         setor_turno = {r[0]: _setor(r[1]) for r in cur.fetchall()}
-        cur.execute("SELECT NomePosicao, Setor FROM PosicoesLoja")
-        setor_posicao = {}
-        for nome, setor in cur.fetchall():
-            setor_posicao.setdefault(str(nome or '').strip().upper(), _setor(setor))
+        setor_posicao = _setor_por_posicao(cur)
     finally:
         conn.close()
     por_dia = {}
@@ -377,13 +421,15 @@ def _freelancers(ini, fim):
         setor = setor_turno.get(i.get('EscalaID'))
         if setor is None:
             setor = setor_posicao.get(str(i.get('Posicao') or '').strip().upper(), '')
-        x = por_dia.setdefault(i['Data'], {'total': Decimal('0'), 'setor': {}, 'excluido': {}, 'ids_excluidos': {}})
+        x = por_dia.setdefault(i['Data'], {'total': Decimal('0'), 'setor': {}, 'excluido': {}, 'ids_excluidos': {},
+                                           'min_excluidos': {}})
         x['total'] += v
         x['setor'][setor] = x['setor'].get(setor, Decimal('0')) + v
         if i.get('TurnoExcluido'):
             x['excluido'][setor] = x['excluido'].get(setor, Decimal('0')) + v
             if i.get('FreelancerID'):
                 x['ids_excluidos'].setdefault(setor, set()).add(i['FreelancerID'])
+            x['min_excluidos'][setor] = x['min_excluidos'].get(setor, 0) + int((i.get('Calculo') or {}).get('Minutos') or 0)
     return por_dia
 
 
@@ -413,6 +459,37 @@ def _freelas_do_dia(e, valores, resumo):
             ids |= quem
     valor = sum((v for setor, v in ((valores or {}).get('setor') or {}).items() if setor not in resumo), Decimal('0'))
     return len(ids) + sum(r['qtd'] for r in resumo.values()), valor + sum((r['valor'] for r in resumo.values()), Decimal('0'))
+
+
+def _minutos_freelas_do_dia(e, valores, resumo, padrao_min):
+    """
+    [DEPURAÇÃO RESUMO] Minutos trabalhados por freelancers no dia. Antes eram SEMPRE os da escala, mesmo com o resumo
+    real (ninguém veio no salão = as 8h da escala continuavam; R$/hora e "horas trabalhadas" errados). Agora: setor com
+    resumo = quantos vieram × a duração média dos turnos de freelancer daquele setor na escala do dia (sem turno lá: a
+    média do dia; sem nenhum: o tempo da diária longa). Os outros setores: escala + turnos pagos que saíram dela.
+    """
+    e, resumo = e or {}, resumo or {}
+    por_setor = dict(e.get('min_freelas_setor') or {})
+    turnos = e.get('turnos_freelas_setor') or {}
+    for setor, m in ((valores or {}).get('min_excluidos') or {}).items():
+        por_setor[setor] = por_setor.get(setor, 0) + m
+    if not resumo:
+        return sum(por_setor.values())
+    total_t = sum(turnos.values())
+    media_dia = sum((e.get('min_freelas_setor') or {}).values()) / total_t if total_t else padrao_min
+    minutos = sum(m for setor, m in por_setor.items() if setor not in resumo)
+    for setor, r in resumo.items():
+        media = (e.get('min_freelas_setor') or {}).get(setor, 0) / turnos[setor] if turnos.get(setor) else media_dia
+        minutos += r['qtd'] * media
+    return minutos
+
+
+def _minutos_diaria_longa():
+    try:
+        return int(database.buscar_config_pagamento_freelancer().get('MinutosLonga') or 0) or 480
+    except Exception as e:
+        logger.warning(f"Folha: tempo da diária longa indisponível (usando 8h): {e}")
+        return 480
 
 
 def _tipo_dia(d, feriados):
@@ -445,21 +522,23 @@ def dias(ini, fim, folhas=None, climas=None):
     freelas = _freelancers(ini, fim)
     climas = clima.do_periodo(ini, fim) if climas is None else climas
     feriados = database._feriados_periodo(ini, fim)
+    padrao_min = _minutos_diaria_longa() if resumos else 0
     lista = []
     for n in range((fim - ini).days + 1):
         d = ini + timedelta(days=n)
         e = esc.get(d) or {'fixos': set(), 'freelas': set(), 'freelas_setor': {}, 'min_fixos': 0, 'min_freelas': 0}
         fixo, estimado = _fixo_do_dia(d, folhas)
         n_freelas, freela = _freelas_do_dia(e, freelas.get(d), resumos.get(d))
+        min_freelas = Decimal(str(_minutos_freelas_do_dia(e, freelas.get(d), resumos.get(d), padrao_min)))
         faturamento = fat.get(d)
         folha = (fixo or Decimal('0')) + freela
-        horas = Decimal(e['min_fixos'] + e['min_freelas']) / 60
+        horas = (Decimal(e['min_fixos']) + min_freelas) / 60
         lista.append({
             'data': d, 'tipo': _tipo_dia(d, feriados), 'feriado': feriados.get(d) or '', 'clima': climas.get(d),
             'atipico': atip.get(d),
             'faturamento': faturamento, 'fixo': fixo, 'fixo_estimado': estimado, 'freela': freela,
             'fixos': len(e['fixos']), 'freelas': n_freelas, 'resumo_freelas': bool(resumos.get(d)),
-            'horas_fixos': Decimal(e['min_fixos']) / 60, 'horas_freelas': Decimal(e['min_freelas']) / 60,
+            'horas_fixos': Decimal(e['min_fixos']) / 60, 'horas_freelas': min_freelas / 60,
             'folha': folha if fixo is not None or freela else None,
             'pct': _pct(folha, faturamento) if fixo is not None else None,
             'por_hora': (faturamento / horas) if faturamento and horas else None})
@@ -625,13 +704,14 @@ def _leve(ini, fim):
         esc = _escala(cur, ini, fim)
         atip = _atipicos(cur, ini, fim)
         resumos = _resumos(cur, ini, fim)
+        fora = _pagos_fora_da_escala(cur, ini, fim)
     finally:
         conn.close()
     climas = clima.do_periodo(ini, fim)
     saida = {}
     for n in range((fim - ini).days + 1):
         d = ini + timedelta(days=n)
-        n_freelas = _freelas_do_dia(esc.get(d), None, resumos.get(d))[0]
+        n_freelas = _freelas_do_dia(esc.get(d), {'ids_excluidos': fora.get(d, {})}, resumos.get(d))[0]
         saida[d] = {'faturamento': fat.get(d), 'clima': climas.get(d), 'freelas': n_freelas, 'atipico': atip.get(d)}
     return saida
 
@@ -712,6 +792,17 @@ def marcar_atipico(data_txt, motivo, usuario):
 # (quantos vieram + valor total do dia) vale no lugar da escala DAQUELE setor nos números da Folha.
 # ------------------------------------------------------------------------------
 MAX_FREELAS_SETOR = 200
+VEZES_DIARIA_ALTA = 3        # [DEPURAÇÃO RESUMO] média por freelancer acima de 3 diárias longas de domingo: pergunta antes
+
+
+def _limite_por_freelancer():
+    try:
+        cfg = database.buscar_config_pagamento_freelancer()
+        maior = max(Decimal(str(cfg.get('DiariaLongaDomingo') or 0)), Decimal(str(cfg.get('DiariaLongaSemana') or 0)))
+    except Exception as e:
+        logger.warning(f"Folha: valores das diárias indisponíveis (usando o padrão): {e}")
+        maior = Decimal(str(database.CONFIG_PAGAMENTO_PADRAO['DiariaLongaDomingo']))
+    return (maior or Decimal('130')) * VEZES_DIARIA_ALTA, maior or Decimal('130')
 
 
 def _data_resumo(data_txt):
@@ -741,7 +832,6 @@ def resumo_freelas_dia(data_txt):
         conn.close()
     valores = _freelancers(d, d).get(d) or {'total': Decimal('0'), 'setor': {}, 'excluido': {}, 'ids_excluidos': {}}
     excl_ids = valores.get('ids_excluidos') or {}
-    ids_setor = lambda k: set((esc.get('freelas_setor') or {}).get(k, ())) | set(excl_ids.get(k, ()))
     nomes = {}
     for nome in setores_mapa:
         nomes.setdefault(_setor(nome), nome)
@@ -752,9 +842,12 @@ def resumo_freelas_dia(data_txt):
     linhas = []
     for k in sorted(nomes, key=lambda x: (x == '', nomes[x].lower())):
         r = res.get(k)
-        linhas.append({'setor': nomes[k] if k else '', 'nome': nomes[k], 'escala_qtd': len(ids_setor(k)),
-                       'escala_valor': _num(valores['setor'].get(k, Decimal('0'))),
-                       'escala_excluido': _num((valores.get('excluido') or {}).get(k, Decimal('0'))),
+        fora_valor = (valores.get('excluido') or {}).get(k, Decimal('0'))
+        # [DEPURAÇÃO RESUMO] "na escala" e "pago fora da escala" separados (antes o pago fora contava "1 na escala")
+        linhas.append({'setor': nomes[k] if k else '', 'nome': nomes[k],
+                       'escala_qtd': len((esc.get('freelas_setor') or {}).get(k, ())),
+                       'escala_valor': _num(valores['setor'].get(k, Decimal('0')) - fora_valor),
+                       'fora_qtd': len(excl_ids.get(k, ())), 'fora_valor': _num(fora_valor),
                        'real': {'qtd': r['qtd'], 'valor': _num(r['valor']), 'obs': r['obs']} if r else None})
     n_real, v_real = _freelas_do_dia(esc, valores, res)
     quando = ''
@@ -768,8 +861,9 @@ def resumo_freelas_dia(data_txt):
 
 def salvar_resumo_freelas_dia(dados, usuario):
     """
-    dados: {'data', 'linhas': [{'setor', 'qtd', 'valor', 'obs'}]}. Setor em branco (sem quantidade e sem valor)
-    = vale a escala. Substitui o resumo do dia inteiro.
+    dados: {'data', 'linhas': [{'setor', 'qtd', 'valor', 'obs'}], 'confirmar': [...]}. Setor em branco (sem quantidade
+    e sem valor) = vale a escala. Substitui o resumo do dia inteiro. Valor muito alto por freelancer volta como
+    {'perguntas': [...]} (a página pergunta e manda de novo com 'confirmar').
     """
     d = _data_resumo(dados.get('data'))
     linhas = dados.get('linhas')
@@ -803,7 +897,21 @@ def salvar_resumo_freelas_dia(dados, usuario):
             raise ErroFolha(f"{nome}: quantidade de freelancers inválida ({qtd}).")
         if qtd == 0 and valor > 0:
             raise ErroFolha(f"{nome}: tem valor mas nenhum freelancer. Confira a quantidade.")
+        if qtd > 0 and valor == 0:
+            # [DEPURAÇÃO RESUMO] antes aceitava (freelancers de graça puxavam a folha para baixo)
+            raise ErroFolha(f"{nome}: {qtd} freelancer(s) com valor R$ 0,00. Preencha o valor total pago no dia.")
         gravar.append((setor, qtd, valor, obs))
+    if gravar and d > date.today():
+        # [DEPURAÇÃO RESUMO] o resumo é o que ACONTECEU: antes aceitava dia que ainda não chegou
+        raise ErroFolha("Não dá para lançar o resumo de um dia que ainda não chegou.")
+    if gravar and 'valor_alto' not in set(dados.get('confirmar') or []):
+        # [DEPURAÇÃO RESUMO] '36000' no lugar de '360,00' ia direto para a Folha: valor alto por freelancer pergunta antes
+        limite, diaria = _limite_por_freelancer()
+        altos = [(s_, q, v) for s_, q, v, _ in gravar if q and v / q > limite]
+        if altos:
+            return {'perguntas': [{'chave': 'valor_alto', 'titulo': "Valor alto", 'texto': "\n".join(
+                f"{s_ or 'Sem setor'}: {q} freelancer(s) por {_reais(v)} = {_reais(v / q)} por freelancer." for s_, q, v in altos)
+                + f"\n\nA diária longa mais cara é {_reais(diaria)}. O valor está certo (com vírgula nos centavos)?"}]}
     garantir_tabelas()
     quem = str((usuario or {}).get('nome') or '?')[:150]
     conn = _conexao()
