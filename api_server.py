@@ -2646,6 +2646,15 @@ def api_gestao_avisos_salvar(usuario):
                                                                          dados.get('desligados')))
 
 
+@app.route('/api/gestao/avisos/agora', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_avisos_agora(usuario):
+    """[AVISOS DE AGORA] Sem ?tipo: a lista. Com ?tipo=previsao (etc.): o aviso montado agora, sem enviar."""
+    import avisos_agora
+    tipo = request.args.get('tipo')
+    return _resposta_avisos(lambda: avisos_agora.ver(tipo) if tipo else {'avisos': avisos_agora.lista()})
+
+
 @app.route('/api/gestao/avisos/teste', methods=['POST'])
 @compras_login(somente_gestor=True)
 def api_gestao_avisos_teste(usuario):

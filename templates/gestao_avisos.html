@@ -35,11 +35,33 @@
   .chave input:checked + span::after { transform: translateX(20px); }
   .chave input:focus-visible + span { outline: 2px solid var(--verde-esc); outline-offset: 2px; }
   .chave input:disabled + span { opacity: .5; }
+  /* [AVISOS DE AGORA] cada aviso montado na hora */
+  .cab-agora { display: flex; gap: 8px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+  .cab-agora h3 { margin: 0; }
+  .agora { display: grid; gap: 8px; }
+  .av { border: 1px solid var(--linha); border-radius: 12px; background: #fff; }
+  .av > summary { list-style: none; display: flex; gap: 6px 8px; align-items: center; flex-wrap: wrap; padding: 10px 12px;
+    cursor: pointer; color: var(--texto); font-size: 14px; }
+  .av > summary::-webkit-details-marker { display: none; }
+  .av > summary::after { content: '▸'; margin-left: auto; color: var(--suave); }
+  .av[open] > summary::after { content: '▾'; }
+  .av .quando-av { font-size: 12px; font-weight: 700; color: var(--suave); white-space: nowrap; }
+  .av .estado { font-size: 12px; font-weight: 700; border-radius: 10px; padding: 2px 8px; background: var(--fundo); color: var(--suave); white-space: nowrap; }
+  .av .estado.tem { background: var(--verde-claro); color: var(--verde-esc); }
+  .av .estado.alerta { background: var(--laranja-claro); color: #7a3a10; }
+  .av .corpo-av { padding: 0 12px 12px; display: grid; gap: 8px; }
+  .av .texto-av { white-space: pre-line; line-height: 1.5; font-size: 14px; overflow-wrap: anywhere; }
   @media (max-width: 700px) { .area { padding-left: 10px; padding-right: 10px; } }
 {% endblock %}
 {% block conteudo %}
   <section class="barra"><div class="linha"><b>📣 Avisos da gestão</b><button class="btn ico" id="atualizar" title="Atualizar">🔄</button></div></section>
   <main class="area">
+    <div class="caixa">
+      <div class="cab-agora"><h3>👀 Avisos de agora</h3><button class="btn" id="btn-agora" type="button">🔄 Atualizar</button></div>
+      <div class="mini suave" style="margin:4px 0 10px">Cada aviso montado agora, com os dados de agora: não precisa esperar o horário do robô.
+        Só para ver aqui; o grupo continua recebendo no horário de sempre.</div>
+      <div class="agora" id="agora"><div class="mini suave">Carregando…</div></div>
+    </div>
     <div class="caixa">
       <h3>Para onde vão os avisos</h3>
       <div class="opcoes" id="canais">
@@ -81,7 +103,7 @@
 {% block script %}
 // [WHATSAPP GRUPO] escolhe o canal dos avisos da gestão (o robô e o servidor leem a mesma escolha no banco).
 const S = {cfg: null, grupos: null, tipos: []};
-function aoEntrar() { carregar(); }
+function aoEntrar() { carregar(); carregarAgora(); }
 async function carregar() {
   try {
     const r = await api('GET', '/api/gestao/avisos');
@@ -117,7 +139,7 @@ async function carregarGrupos() {
     + lista.map(g => `<option value="${esc(g.id)}" ${g.id === atual ? 'selected' : ''}>${esc(g.nome)}</option>`).join('');
 }
 $('#btn-grupos').onclick = carregarGrupos;
-$('#atualizar').onclick = () => { S.grupos = null; carregar(); };
+$('#atualizar').onclick = () => { S.grupos = null; carregar(); carregarAgora(); };
 async function salvar(silencioso) {
   const canal = canalEscolhido();
   const manual = $('#grupo-manual').value.trim();
@@ -165,6 +187,46 @@ $('#tipos').addEventListener('change', async ev => {
   } catch (e) { falhou(e); }
   desenharTipos();
 });
+// [AVISOS DE AGORA] cada aviso montado na hora: o servidor usa as mesmas contas do robô e não marca nada como enviado
+const AG = {lista: [], seq: 0};
+async function carregarAgora() {
+  const seq = ++AG.seq;
+  $('#btn-agora').disabled = true;
+  try {
+    if (!AG.lista.length) {
+      AG.lista = (await api('GET', '/api/gestao/avisos/agora')).avisos || [];
+      $('#agora').innerHTML = AG.lista.map(a => `<details class="av" data-av="${esc(a.tipo)}">
+        <summary><b>${esc(a.nome)}</b><span class="quando-av">no grupo: ${esc(a.quando)}</span><span class="estado"></span></summary>
+        <div class="corpo-av"><div class="texto-av"></div><div class="mini suave nota-av"></div></div></details>`).join('');
+    }
+    document.querySelectorAll('#agora .estado').forEach(e => { e.className = 'estado'; e.textContent = 'montando…'; });
+    await Promise.all(AG.lista.map(a => carregarUmAviso(a.tipo, seq)));
+  } catch (e) {
+    if (e.status !== 401 && e.status !== 403) $('#agora').innerHTML = `<div class="mini n-erro">${esc(e.message)}</div>`;
+  }
+  if (seq === AG.seq) $('#btn-agora').disabled = false;
+}
+function estadoDoAviso(tipo, r) {
+  if (r.erro) return ['alerta', '⚠️ erro'];
+  if (!r.texto) return ['', '✅ nada agora'];
+  if (tipo === 'resultado') return r.texto.includes('Superou a média') ? ['tem', '✅ superou'] : ['alerta', '⚠️ abaixo da média'];
+  if (tipo === 'lembrete') return ['alerta', '⚠️ falta lançar'];
+  return ['tem', '📝 ver'];
+}
+async function carregarUmAviso(tipo, seq) {
+  let r;
+  try { r = await api('GET', '/api/gestao/avisos/agora?tipo=' + encodeURIComponent(tipo)); }
+  catch (e) { r = {erro: e.message}; }
+  const el = document.querySelector(`#agora .av[data-av="${tipo}"]`);
+  if (seq !== AG.seq || !el) return;
+  const [classe, txt] = estadoDoAviso(tipo, r);
+  const estado = el.querySelector('.estado');
+  estado.className = 'estado ' + classe; estado.textContent = txt;
+  el.querySelector('.texto-av').innerHTML = r.erro ? `<span class="n-erro">${esc(r.erro)}</span>` : (r.texto || esc(r.vazio));
+  el.querySelector('.nota-av').textContent = [r.nota, r.ligado === false ? '🔕 Desligado: não vai para o grupo.' : '',
+                                              r.gerado ? `Montado às ${r.gerado}.` : ''].filter(Boolean).join(' ');
+}
+$('#btn-agora').onclick = () => carregarAgora();
 $('#btn-teste').onclick = async () => {
   $('#btn-teste').disabled = true;
   try {

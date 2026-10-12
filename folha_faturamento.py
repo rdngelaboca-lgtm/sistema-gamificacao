@@ -1427,6 +1427,31 @@ def resultados(datas):
     return lista
 
 
+def resultados_recentes(hoje=None, janela=DIAS_RESULTADO):
+    """[AVISOS DE AGORA] Dias (dos últimos 7) com sugestão guardada e faturamento lançado, avisados ou não."""
+    hoje = hoje or date.today()
+    garantir_tabelas()
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        sug = _sugestoes_guardadas(cur, hoje - timedelta(days=janela), hoje)
+        fat = _faturamento(cur, min(sug), max(sug)) if sug else {}
+    finally:
+        conn.close()
+    return sorted(d for d in sug if d in fat)
+
+
+def ultimo_dia_lancado(hoje=None, janela=60):
+    """[AVISOS DE AGORA] O dia mais recente com faturamento lançado (dos últimos 60), ou None."""
+    hoje = hoje or date.today()
+    conn = _conexao()
+    try:
+        fat = _faturamento(conn.cursor(), hoje - timedelta(days=janela), hoje)
+    finally:
+        conn.close()
+    return max(fat) if fat else None
+
+
 def _placar(ultimo):
     """(superaram, total) das sugestões do mês até 'ultimo' com faturamento lançado."""
     ini = date(ultimo.year, ultimo.month, 1)

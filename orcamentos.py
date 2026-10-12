@@ -928,12 +928,16 @@ def orcamento_da_nota(chave):
         return None
 
 
-def avisos_pendentes():
-    """Orçamentos ligados a uma nota e ainda não avisados no Telegram: [(id, texto)] e marca como avisados."""
-    try:
-        vincular_automatico()
-    except Exception as e:
-        logger.warning(f"Orçamentos: ligação automática falhou: {e}")
+def avisos_pendentes(marcar=True):
+    """
+    Orçamentos ligados a uma nota e ainda não avisados no Telegram: [(id, texto)] e marca como avisados.
+    [AVISOS DE AGORA] marcar=False: só para ver (não liga notas nem marca nada; o resumo das 12h/18h manda igual).
+    """
+    if marcar:
+        try:
+            vincular_automatico()
+        except Exception as e:
+            logger.warning(f"Orçamentos: ligação automática falhou: {e}")
     conn = _conexao()
     try:
         cur = conn.cursor()
@@ -950,7 +954,7 @@ def avisos_pendentes():
                                 f"{html.escape(texto_resumo(o) or nota.get('erro', ''))}. Veja no app, aba Orçamentos."))
         except Exception as e:
             logger.warning(f"Orçamentos: aviso do orçamento {oid} falhou: {e}")
-    if ids:
+    if ids and marcar:
         conn = _conexao()
         try:
             cur = conn.cursor()
