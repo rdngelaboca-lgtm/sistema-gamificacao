@@ -2569,6 +2569,24 @@ def api_gestao_folha_meta(usuario):
     return _resposta_folha(lambda: folha_faturamento.definir_meta(dados.get('meta'), usuario))
 
 
+@app.route('/api/gestao/folha/super-meta', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_folha_super_meta(usuario):
+    dados = ler_json() or {}
+    return _resposta_folha(lambda: folha_faturamento.definir_super_meta(dados.get('super_meta'), usuario))
+
+
+@app.route('/api/gestao/folha/sugestao', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_folha_sugestao(usuario):
+    """[SUGESTÃO AMANHÃ] Prévia da mensagem das 14h (no sábado, mostra a de domingo)."""
+    def previa():
+        hoje = datetime.now().date()
+        datas = folha_faturamento.dias_da_sugestao(hoje) or [hoje + timedelta(days=1)]
+        return {'texto': folha_faturamento.texto_sugestao(datas, hoje), 'dias': [d.isoformat() for d in datas]}
+    return _resposta_folha(previa)
+
+
 @app.route('/api/gestao/folha/atipico', methods=['POST'])
 @compras_login(somente_gestor=True)
 def api_gestao_folha_atipico(usuario):

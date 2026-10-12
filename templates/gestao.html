@@ -311,7 +311,8 @@ function desenharClima(c) {
   el.innerHTML = `<span class="mini"><b>🌡️ ${esc(c.clima.texto)}</b>${c.clima.previsao ? ' <span class="suave">(previsão)</span>' : ''}</span>
     <span class="mini suave">${p.faturamento ? `Em ${p.dias} dias parecidos: ~${real(p.faturamento)} de faturamento, ` +
       `<b class="n-aviso">${String(p.freelas).replace('.', ',')} freelancer(s)</b> e ${String(p.pessoas).replace('.', ',')} pessoas na escala`
-      : 'Ainda sem histórico de dias parecidos.'} · <a href="/gestao/folha">📊 Folha × Faturamento</a></span>`;
+      : 'Ainda sem histórico de dias parecidos.'}${c.sugestao ? ` · 🔮 <b>pela super meta (${String(c.sugestao.super_meta).replace('.', ',')}%): ` +
+      `${c.sugestao.freelas} freelancer(s)</b>` : ''} · <a href="/gestao/folha">📊 Folha × Faturamento</a></span>`;
 }
 $('#ver-mapa').onclick = () => { S.vista = 'mapa'; gravarLocal('gestao_vista', 'mapa'); desenhar(); };
 $('#ver-lista').onclick = () => { S.vista = 'lista'; gravarLocal('gestao_vista', 'lista'); desenhar(); };

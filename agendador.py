@@ -91,6 +91,7 @@ HORARIO_RESUMO_PRECOS = "08:35"      # [ALERTAS ESTOQUE] segunda-feira: preços 
 HORARIO_LEMBRETE_FATURAMENTO = "09:15"   # [FOLHA × FATURAMENTO] faltou lançar o faturamento de ontem?
 HORARIO_FECHAMENTO_FOLHA = "09:20"       # [FOLHA × FATURAMENTO] dia 1 (até o 5): fechamento do mês anterior
 HORARIO_AVISO_CLIMA = "10:00"            # [FOLHA × FATURAMENTO] boletim: previsão de hoje + 3 dias × escala
+HORARIO_SUGESTAO_AMANHA = "14:00"        # [SUGESTÃO AMANHÃ] quantos freelancers chamar amanhã (sexta: sáb + dom)
 HORARIOS_RESUMO_NOTAS = ("12:00", "18:00")
 HORARIO_ESCALA_FIXA = "05:00"            # [ESCALA FIXA] escala os fixos de hoje e dos próximos 14 dias (e de hora em hora)   # [AVISOS LIMPOS] notas novas da SEFAZ: 2 resumos por dia (não 1 aviso por hora)
 DIAS_PARA_FECHAMENTO = 5        # o fechamento do mês anterior pode rodar do dia 1 ao dia 5
@@ -1001,6 +1002,32 @@ def aplicar_escala_fixa():
         logger.info(f"Escala fixa: {n} turno(s) de fixo(s) gravado(s) nos próximos dias.")
 
 
+def verificar_sugestao_amanha(agora=None):
+    """
+    [SUGESTÃO AMANHÃ] 14:00 da véspera: clima de amanhã, o faturamento em dias parecidos e quantos freelancers
+    cabem na super meta da folha (média × 15% − fixos do dia ÷ diária longa, para baixo). Sexta: sábado e domingo
+    juntos; sábado: nada (o domingo foi na sexta).
+    """
+    if ja_rodou_hoje('sugestao_amanha'):
+        return
+    try:
+        import folha_faturamento as ff
+    except ImportError:
+        return
+    import alertas_estoque
+    if not alertas_estoque.aviso_ligado('sugestao'):
+        marcar_rodou_hoje('sugestao_amanha')
+        return
+    agora = agora or datetime.now()
+    datas = ff.dias_da_sugestao(agora.date())
+    texto = ff.texto_sugestao(datas, agora.date()) if datas else ''
+    if texto and not alertas_estoque.enviar(texto):
+        return                                   # não chegou em nenhum canal: tenta de novo na recuperação
+    marcar_rodou_hoje('sugestao_amanha')
+    if texto:
+        logger.info(f"Sugestão para amanhã enviada ({', '.join(f'{d:%d/%m}' for d in datas)}).")
+
+
 # ==============================================================================
 # == MÓDULO 8: DOWNLOADS (fotos de entregas e notas fiscais) ===================
 # ==============================================================================
@@ -1234,6 +1261,7 @@ def configurar_agendamentos():
     schedule.every().day.at(HORARIO_LEMBRETE_FATURAMENTO).do(run_threaded, verificar_lembrete_faturamento)
     schedule.every().day.at(HORARIO_FECHAMENTO_FOLHA).do(run_threaded, verificar_fechamento_folha)
     schedule.every().day.at(HORARIO_AVISO_CLIMA).do(run_threaded, verificar_aviso_clima)
+    schedule.every().day.at(HORARIO_SUGESTAO_AMANHA).do(run_threaded, verificar_sugestao_amanha)
     for horario in HORARIOS_RESUMO_NOTAS:                   # [AVISOS LIMPOS] resumo das notas novas
         schedule.every().day.at(horario).do(run_threaded, verificar_resumo_notas)
     schedule.every().day.at(HORARIO_ESCALA_FIXA).do(run_threaded, aplicar_escala_fixa)
@@ -1260,6 +1288,8 @@ def recuperar_tarefas_do_dia():
         run_threaded(verificar_fechamento_folha)
     if _passou_do_horario(HORARIO_AVISO_CLIMA, limite_horas=10):
         run_threaded(verificar_aviso_clima)
+    if _passou_do_horario(HORARIO_SUGESTAO_AMANHA, limite_horas=6):
+        run_threaded(verificar_sugestao_amanha)
     run_threaded(verificar_resumo_notas)            # [AVISOS LIMPOS] só manda se passou das 12h/18h sem mandar
     run_threaded(aplicar_escala_fixa)               # [ESCALA FIXA] não espera as 05:00 depois de ligar
 

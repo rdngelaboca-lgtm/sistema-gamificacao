@@ -30,7 +30,7 @@ import re
 import time
 import unicodedata
 from datetime import date, datetime, timedelta
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_FLOOR, ROUND_HALF_UP
 
 import clima
 import database
@@ -39,6 +39,9 @@ import escala_regras as R
 logger = logging.getLogger(__name__)
 
 META_PADRAO = Decimal('18')
+SUPER_META_PADRAO = Decimal('15')     # [SUGESTÃO AMANHÃ] o teto da folha para sugerir quantos freelancers chamar
+CALOR_FORTE = Decimal('36')           # [SUGESTÃO AMANHÃ] máxima a partir da qual a mensagem pede para preparar a equipe
+EXEMPLOS_PARECIDOS = 4                # [SUGESTÃO AMANHÃ] quantos dias parecidos aparecem na mensagem
 DIAS_SEMANA = ['seg', 'ter', 'qua', 'qui', 'sex', 'sáb', 'dom']
 NOMES_MES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez']
 FAIXAS = [(None, 29, 'até 29°'), (30, 31, '30° a 31°'), (32, 33, '32° a 33°'), (34, 35, '34° a 35°'), (36, None, '36° ou mais')]
@@ -239,6 +242,37 @@ def definir_meta(texto, usuario):
         conn.close()
     logger.info(f"Folha × Faturamento: meta {v}% ({(usuario or {}).get('nome')}).")
     return {'meta': _num(v, 1)}
+
+
+def super_meta():
+    """[SUGESTÃO AMANHÃ] Super meta da folha (% do faturamento) usada na sugestão de freelancers. Padrão: 15%."""
+    garantir_tabelas()
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT Valor FROM ParametrosFolha WHERE Chave = 'super_meta_pct'")
+        r = cur.fetchone()
+    finally:
+        conn.close()
+    v = _d(r[0]) if r else None
+    return v if v and v > 0 else SUPER_META_PADRAO
+
+
+def definir_super_meta(texto, usuario):
+    v = _valor(texto, 'Super meta')
+    if v is None or v <= 0 or v >= 100:
+        raise ErroFolha("A super meta precisa ser um número entre 0 e 100 (ex.: 15).")
+    garantir_tabelas()
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM ParametrosFolha WHERE Chave = 'super_meta_pct'")
+        cur.execute("INSERT INTO ParametrosFolha (Chave, Valor) VALUES ('super_meta_pct', ?)", format(v.normalize(), 'f'))
+        conn.commit()
+    finally:
+        conn.close()
+    logger.info(f"Folha × Faturamento: super meta {v}% ({(usuario or {}).get('nome')}).")
+    return {'super_meta': _num(v, 1)}
 
 
 def folhas_fixas():
@@ -639,15 +673,24 @@ def parecidos(hist, d, c, feriados):
     """
     if not c or c.get('max') is None:
         return None
-    fds = _tipo_dia(d, feriados) != 'semana'
     chuva = clima.chuvoso(c)
-    sel = [x for x in hist if (x['tipo'] != 'semana') == fds and abs(x['clima']['max'] - c['max']) <= PARECIDO_GRAUS
-           and clima.chuvoso(x['clima']) == chuva]
+    sel = dias_parecidos(hist, d, c, feriados)
     if len(sel) < MIN_PARECIDOS:
         return {'dias': len(sel), 'chuva': chuva}
     return {'dias': len(sel), 'chuva': chuva, 'faturamento': _num(_media([x['faturamento'] for x in sel])),
             'freelas': _num(_media([Decimal(x['freelas']) for x in sel]), 1),
             'pessoas': _num(_media([Decimal(x['fixos'] + x['freelas']) for x in sel]), 1)}
+
+
+def dias_parecidos(hist, d, c, feriados):
+    """Os dias do histórico parecidos com d (a mesma regra de parecidos()), do mais recente para o mais antigo."""
+    if not c or c.get('max') is None:
+        return []
+    fds = _tipo_dia(d, feriados) != 'semana'
+    chuva = clima.chuvoso(c)
+    sel = [x for x in hist if (x['tipo'] != 'semana') == fds and abs(x['clima']['max'] - c['max']) <= PARECIDO_GRAUS
+           and clima.chuvoso(x['clima']) == chuva]
+    return sorted(sel, key=lambda x: x['data'], reverse=True)
 
 
 def proximos(hist_lista, hoje=None, climas=None):
@@ -686,7 +729,16 @@ def dica_escala(d, hoje=None):
         guardado = (agora, _historico_valido(dias(hoje - timedelta(days=DIAS_HISTORICO_ESCALA), hoje), hoje))
         _cache_hist[hoje] = guardado
     hist = [x for x in guardado[1] if x['data'] != d]
-    return {'clima': _clima_json(c), 'parecidos': parecidos(hist, d, c, database._feriados_periodo(d, d))}
+    feriados = database._feriados_periodo(d, d)
+    sug = None
+    try:                                 # [SUGESTÃO AMANHÃ] quantos freelancers cabem na super meta (o mesmo da mensagem)
+        cfg_pag = database.buscar_config_pagamento_freelancer()
+        r = sugestao_freelas(d, hist, feriados, folhas_fixas(), cfg_pag, super_meta(), {d: c}, _escalados(d, d))
+        if r and r['sugeridos'] is not None:
+            sug = {'freelas': r['sugeridos'], 'super_meta': _num(r['super_meta'], 1)}
+    except Exception as e:
+        logger.warning(f"Escala: sugestão de freelancers indisponível ({e})")
+    return {'clima': _clima_json(c), 'parecidos': parecidos(hist, d, c, feriados), 'sugestao': sug}
 
 
 # ------------------------------------------------------------------------------
@@ -1109,6 +1161,143 @@ def boletim_previsao(agora=None, dias_frente=3):
     return "\n".join(linhas)
 
 
+# ------------------------------------------------------------------------------
+# [SUGESTÃO AMANHÃ] 14h da véspera: clima, dias parecidos e quantos freelancers chamar
+#   faturamento esperado = média dos dias parecidos; teto da folha = esperado × super meta (15%);
+#   sobra = teto − fixos do dia (folha fixa do mês ÷ dias do mês); freelancers = sobra ÷ diária LONGA
+#   do dia (seg a sáb ou domingo/feriado, dos ⚙️ Valores dos Pagamentos), arredondado para BAIXO.
+# ------------------------------------------------------------------------------
+def dias_da_sugestao(hoje):
+    """Para quais dias mandar a sugestão hoje: amanhã; na sexta, sábado E domingo; no sábado, nada (domingo foi na sexta)."""
+    if hoje.weekday() == 4:
+        return [hoje + timedelta(days=1), hoje + timedelta(days=2)]
+    if hoje.weekday() == 5:
+        return []
+    return [hoje + timedelta(days=1)]
+
+
+def _diaria_longa(d, feriados, cfg):
+    """(valor, rótulo) da diária longa do dia: domingo e feriado usam o valor de domingo (como no cálculo dos pagamentos)."""
+    if d in feriados or d.weekday() == 6:
+        return Decimal(str(cfg['DiariaLongaDomingo'])), ('feriado' if d in feriados else 'domingo')
+    return Decimal(str(cfg['DiariaLongaSemana'])), 'seg a sáb'
+
+
+def sugestao_freelas(d, hist, feriados, folhas, cfg_pag, pct, climas, escalados):
+    """
+    Números da sugestão de UM dia. hist = _historico_valido(...). Devolve None se não há previsão do clima para o dia.
+    'sugeridos' = None quando não dá para calcular ('motivo' explica).
+    """
+    c = climas.get(d)
+    if not c or c.get('max') is None:
+        return None
+    sel = dias_parecidos(hist, d, c, feriados)
+    diaria, rotulo_diaria = _diaria_longa(d, feriados, cfg_pag)
+    fixo, estimado = _fixo_do_dia(d, folhas)
+    r = {'data': d, 'clima': c, 'feriado': feriados.get(d), 'tipo': _tipo_dia(d, feriados), 'parecidos': sel,
+         'super_meta': pct, 'diaria': diaria, 'rotulo_diaria': rotulo_diaria, 'fixo': fixo, 'fixo_estimado': estimado,
+         'escala': escalados.get(d, (0, 0))[1], 'faturamento': None, 'teto': None, 'sobra': None, 'sugeridos': None,
+         'motivo': None, 'queda_chuva': None}
+    if clima.chuvoso(c):
+        q = _queda_chuva(hist, r['tipo'] != 'semana')
+        r['queda_chuva'] = q[0] if q and q[0] is not None else None
+    if len(sel) < MIN_PARECIDOS:
+        r['motivo'] = f"poucos dias parecidos no histórico ({len(sel)})"
+        return r
+    r['faturamento'] = _media([x['faturamento'] for x in sel])
+    r['teto'] = r['faturamento'] * pct / 100
+    if fixo is None:
+        r['motivo'] = "falta informar a folha fixa do mês (📊 Folha › ⚙️)"
+        return r
+    if not diaria or diaria <= 0:
+        r['motivo'] = "falta o valor da diária longa (💰 Pagamentos › ⚙️ Valores)"
+        return r
+    r['sobra'] = r['teto'] - fixo
+    r['sugeridos'] = int((r['sobra'] / diaria).to_integral_value(rounding=ROUND_FLOOR)) if r['sobra'] > 0 else 0
+    return r
+
+
+def sugestoes(datas, hoje=None):
+    """As sugestões dos dias pedidos (os que têm previsão do clima)."""
+    hoje = hoje or date.today()
+    datas = sorted(datas)
+    if not datas:
+        return []
+    garantir_tabelas()
+    climas = clima.do_periodo(datas[0], datas[-1])
+    if not any(climas.get(d) and climas[d].get('max') is not None for d in datas):
+        return []
+    hist = _historico_valido(dias(hoje - timedelta(days=DIAS_HISTORICO_AVISO), hoje), hoje)
+    feriados = database._feriados_periodo(min(hoje, datas[0]), datas[-1])
+    try:
+        cfg_pag = database.buscar_config_pagamento_freelancer()
+    except Exception as e:
+        logger.warning(f"Sugestão: valores das diárias indisponíveis (usando o padrão): {e}")
+        cfg_pag = dict(database.CONFIG_PAGAMENTO_PADRAO)
+    folhas, pct, escalados = folhas_fixas(), super_meta(), _escalados(datas[0], datas[-1])
+    return [s_ for s_ in (sugestao_freelas(d, hist, feriados, folhas, cfg_pag, pct, climas, escalados) for d in datas) if s_]
+
+
+def _rotulo_dia(d, hoje):
+    nomes = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo']
+    return ('Amanhã' if d == hoje + timedelta(days=1) else nomes[d.weekday()]) + f" ({DIAS_SEMANA[d.weekday()]} {d:%d/%m})"
+
+
+def _bloco_sugestao(r, hoje):
+    import html
+    c, linhas = r['clima'], []
+    linhas.append(f"<b>{_rotulo_dia(r['data'], hoje)}</b>" + (f" 🎉 {html.escape(r['feriado'])}" if r['feriado'] else ''))
+    linhas.append(f"🌡️ {clima.texto(c)}")
+    sel = r['parecidos']
+    tipo = 'fins de semana/feriados' if r['tipo'] != 'semana' else 'dias de semana'
+    tempo = 'com chuva à tarde' if clima.chuvoso(c) else 'sem chuva'
+    if r['faturamento'] is not None:
+        linhas.append(f"📊 Em {len(sel)} {tipo} parecidos ({_grau(c['max'])}° ± {_n(PARECIDO_GRAUS)}°, {tempo}) o faturamento "
+                      f"foi em média <b>{_reais_redondo(r['faturamento'])}</b>:")
+        for x in sel[:EXEMPLOS_PARECIDOS]:
+            linhas.append(f"   • {DIAS_SEMANA[x['data'].weekday()]} {x['data']:%d/%m} · {_grau(x['clima']['max'])}° · "
+                          f"{_reais_redondo(x['faturamento'])} · {x['freelas']} freela(s)")
+    if r['queda_chuva'] is not None and r['queda_chuva'] > 0:
+        linhas.append(f"🌧️ Com chuva à tarde você vendeu <b>{_n(r['queda_chuva'])}% menos</b>: reduza os freelancers.")
+    elif clima.chuvoso(c):
+        linhas.append("🌧️ Chuva à tarde prevista: o movimento costuma cair; chame só o necessário.")
+    elif c['max'] >= CALOR_FORTE:
+        linhas.append(f"🔥 <b>{_grau(c['max'])}°</b>: dia de muito movimento"
+                      + (f" (~{_reais_redondo(r['faturamento'])} nos dias parecidos)" if r['faturamento'] is not None else '')
+                      + ". Prepare a equipe: reposição, gelo, caixas e limpeza.")
+    if r['sugeridos'] is None:
+        linhas.append(f"👉 Sem sugestão de número: {r['motivo']}. Na escala: {r['escala']} freela(s).")
+        return linhas
+    pct = _n(r['super_meta'])
+    linhas.append(f"🧮 {pct}% de {_reais_redondo(r['faturamento'])} = {_reais(r['teto'])} − fixos do dia {_reais(r['fixo'])}"
+                  + (f" (folha de {nome_mes(*r['fixo_estimado'])})" if r['fixo_estimado'] else '')
+                  + f" = {_reais(r['sobra'])} ÷ diária longa ({r['rotulo_diaria']}) {_reais(r['diaria'])}")
+    if r['sugeridos'] == 0:
+        linhas.append(f"👉 <b>Sugestão: nenhum freelancer</b> — só os fixos já passam dos {pct}%. Na escala: {r['escala']}.")
+        return linhas
+    diff = r['sugeridos'] - r['escala']
+    comp = ('✅ a escala já está assim' if diff == 0 else f"dá para chamar mais {diff}" if diff > 0
+            else f"⚠️ {-diff} a mais do que os {pct}% comportam")
+    linhas.append(f"👉 <b>Sugestão: {r['sugeridos']} freelancer(s)</b> · na escala: {r['escala']} → {comp}")
+    return linhas
+
+
+def texto_sugestao(datas, hoje=None):
+    """[SUGESTÃO AMANHÃ] Mensagem (HTML) com a sugestão de cada dia (sexta: sábado e domingo juntos). '' sem previsão."""
+    hoje = hoje or date.today()
+    lista = sugestoes(datas, hoje)
+    if not lista:
+        return ''
+    titulo = "🔮 <b>Sugestão para o fim de semana</b>" if len(lista) > 1 else "🔮 <b>Sugestão para amanhã</b>" \
+        if lista[0]['data'] == hoje + timedelta(days=1) else "🔮 <b>Sugestão de freelancers</b>"
+    linhas = [f"{titulo} · {clima.CIDADE}"]
+    for r in lista:
+        linhas += [''] + _bloco_sugestao(r, hoje)
+    linhas += ['', f"<i>Super meta da folha: {_n(lista[0]['super_meta'])}% (muda em 📊 Folha › ⚙️). "
+                   "Dias atípicos ficam de fora das médias.</i>"]
+    return "\n".join(linhas)
+
+
 def dias_sem_faturamento(hoje=None, janela=7):
     """Dias (dos últimos 7, até ontem) sem faturamento lançado — sem contar os marcados como atípicos."""
     hoje = hoje or date.today()
@@ -1260,7 +1449,7 @@ def painel(mes=None, periodo='90', hoje=None, http=None):
         lista_folhas.append({'mes': f"{a}-{mm:02d}", 'nome': nome_mes(a, mm), 'valor': _num(folhas.get((a, mm)))})
         a, mm = (a - 1, 12) if mm == 1 else (a, mm - 1)
     return {'mes': f"{ano}-{m:02d}", 'nome_mes': nome_mes(ano, m), 'meses': meses[-24:], 'periodo': periodo,
-            'meta': _num(meta(), 1), 'cidade': clima.CIDADE, 'erro_clima': erro_clima,
+            'meta': _num(meta(), 1), 'super_meta': _num(super_meta(), 1), 'cidade': clima.CIDADE, 'erro_clima': erro_clima,
             'dias': [dict(_dia_json(x), comparar=comp.get(x['data'])) for x in reversed(do_mes)],
             'acumulado': _acumulado_json(a_mes), 'anterior': anterior, 'motivos_atipico': MOTIVOS_ATIPICO,
             'faixas': faixas(hist, hoje), 'proximos': proximos(lista, hoje),

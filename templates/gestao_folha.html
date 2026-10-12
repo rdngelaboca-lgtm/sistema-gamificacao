@@ -75,6 +75,7 @@
       <button class="btn ico" id="atualizar" title="Atualizar">🔄</button>
       <button class="btn prim" id="btn-lancar">💰 <span class="txt">Lançar faturamento</span><span class="curto">Lançar</span></button>
       <button class="btn" id="btn-config">⚙️ <span class="txt">Folha fixa e meta</span><span class="curto">Folha e meta</span></button>
+      <button class="btn" id="btn-sugestao" title="A mensagem das 14h: quantos freelancers chamar amanhã">🔮 <span class="txt">Sugestão de amanhã</span><span class="curto">Amanhã</span></button>
     </div>
   </section>
   <main class="area">
@@ -478,6 +479,11 @@ function abrirConfig() {
       <label>Meta da folha (% do faturamento)
         <div style="display:flex;gap:8px"><input id="cfg-meta" inputmode="decimal" value="${num(d.meta)}" style="max-width:120px">
         <button class="btn prim" id="cfg-salvar-meta" type="button">Salvar meta</button></div></label>
+      <label>🔮 Super meta (% do faturamento) — usada na sugestão de freelancers para amanhã
+        <div style="display:flex;gap:8px"><input id="cfg-super-meta" inputmode="decimal" value="${num(d.super_meta)}" style="max-width:120px">
+        <button class="btn prim" id="cfg-salvar-super-meta" type="button">Salvar super meta</button></div></label>
+      <div class="mini suave">Sugestão = faturamento médio dos dias parecidos × super meta − fixos do dia, ÷ diária longa do dia
+        (💰 Pagamentos › ⚙️ Valores), arredondado para baixo. A meta de cima continua sendo a das cores (verde/vermelho).</div>
       <div class="mini suave">Folha fixa = <b>salários + encargos + benefícios</b> do mês (o que a loja paga aos fixos, mesmo de folga).
         O sistema divide pelos dias do mês. Em branco = não informado (usa o mês mais perto).</div>
       <div class="tabela-rolagem" style="max-height:46vh"><table class="grade"><thead><tr><th>Mês</th><th>Folha fixa (R$)</th></tr></thead><tbody>
@@ -489,6 +495,10 @@ function abrirConfig() {
     </div>`, null, true);
   $('#cfg-salvar-meta').onclick = async () => {
     try { await api('POST', '/api/gestao/folha/meta', {meta: $('#cfg-meta').value}); status('Meta salva.'); carregar(); }
+    catch (e) { falhou(e); }
+  };
+  $('#cfg-salvar-super-meta').onclick = async () => {
+    try { await api('POST', '/api/gestao/folha/super-meta', {super_meta: $('#cfg-super-meta').value}); status('Super meta salva.'); carregar(); }
     catch (e) { falhou(e); }
   };
   $('#cfg-salvar-folha').onclick = async () => {
@@ -506,4 +516,14 @@ function abrirConfig() {
   };
 }
 $('#btn-config').onclick = () => { if (S.d) abrirConfig(); };
+// [SUGESTÃO AMANHÃ] a mesma mensagem que vai para o grupo às 14h
+$('#btn-sugestao').onclick = async () => {
+  let r;
+  try { r = await api('GET', '/api/gestao/folha/sugestao'); } catch (e) { return falhou(e); }
+  abrirModal(`<h3>🔮 Sugestão de freelancers</h3>
+    <div id="sugestao-texto" style="white-space:pre-line;line-height:1.5">${r.texto ||
+      'Ainda sem a previsão do clima para esse dia (o robô busca de 3 em 3 horas). Tente mais tarde.'}</div>
+    <div class="mini suave" style="margin-top:10px">Vai para o grupo às 14h da véspera (na sexta: sábado e domingo juntos).
+      Liga/desliga em <a href="/gestao/avisos">📣 Avisos</a>.</div>`);
+};
 {% endblock %}
