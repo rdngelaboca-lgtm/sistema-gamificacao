@@ -143,7 +143,9 @@ def _pedido_do_proprio_computador():
 
 # [APP DE COMPRAS] Pela internet (túnel) só o app de compras fica disponível.
 # O painel da TV, documentos, agendamentos etc. continuam só na rede da loja.
-CAMINHOS_LIBERADOS_NA_INTERNET = tuple(getattr(config, 'TUNEL_CAMINHOS_LIBERADOS', ('/compras', '/api/compras')))
+# [APP DE FINANÇAS] O app de finanças da família também fica liberado (tem login próprio com PIN).
+CAMINHOS_LIBERADOS_NA_INTERNET = tuple(getattr(config, 'TUNEL_CAMINHOS_LIBERADOS', ('/compras', '/api/compras'))) + (
+    '/financas', '/api/financas')
 
 
 @app.before_request
@@ -1803,6 +1805,18 @@ def api_compras_categorias(usuario):
 @compras_login(somente_gestor=True)
 def api_compras_lancar_cupom(usuario, cupom_id):
     return _cupom_disponivel() or _resposta_compras(compras_cupom.lancar_cupom, cupom_id, usuario)
+
+
+# ==============================================================================
+# == [APP DE FINANÇAS] FINANÇAS DA FAMÍLIA (/financas) ==========================
+# ==============================================================================
+# Rotas no financas_rotas.py, lógica e banco (SQLite separado) no financas_database.py.
+# Se der problema ao carregar, o resto do servidor continua funcionando.
+try:
+    import financas_rotas
+    app.register_blueprint(financas_rotas.bp)
+except Exception as _erro_import_financas:
+    logger.error(f"App de finanças DESLIGADO: não consegui carregar financas_rotas.py ({_erro_import_financas})")
 
 
 if __name__ == "__main__":
