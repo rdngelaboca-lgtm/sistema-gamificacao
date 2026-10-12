@@ -2731,6 +2731,10 @@ def api_gestao_clientes_acao(usuario, acao):
         'numero': lambda: clientes.salvar_numero(dados, usuario),
         'aniversario': lambda: clientes.salvar_config_aniversario(dados, usuario),
         'endereco': lambda: clientes.salvar_endereco(dados, usuario),
+        'lote': lambda: clientes.lote(dados, usuario),                         # [CLIENTES+] vários de uma vez
+        'etiqueta': lambda: clientes.acao_etiqueta(dados, usuario),            # renomear / apagar etiqueta
+        'conferir-whatsapp': lambda: clientes.conferir_whatsapp(usuario),      # 📵 quem não tem WhatsApp
+        'respostas-vistas': lambda: clientes.marcar_respostas_vistas(dados),
     }
     if acao not in acoes:
         return jsonify({"erro": "Não encontrado."}), 404
@@ -2746,6 +2750,20 @@ def api_gestao_clientes_ver_foto(usuario, nome):
         return send_file(clientes.caminho_foto(nome), max_age=3600)
     except clientes.ErroClientes as e:
         return jsonify({"erro": str(e)}), e.status
+
+
+@app.route('/api/gestao/clientes/<int:cliente_id>/ficha', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_clientes_ficha(usuario, cliente_id):
+    import clientes
+    return _resposta_clientes(lambda: clientes.ficha(cliente_id))
+
+
+@app.route('/api/gestao/clientes/respostas', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_clientes_respostas(usuario):
+    import clientes
+    return _resposta_clientes(lambda: clientes.respostas(request.args))
 
 
 @app.route('/api/gestao/clientes/ajustes', methods=['GET'])
@@ -2788,6 +2806,10 @@ def api_gestao_clientes_campanha(usuario, camp_id):
 @compras_login(somente_gestor=True)
 def api_gestao_clientes_campanha_acao(usuario, camp_id, acao):
     import clientes
+    if acao == 'reservas':                       # [CLIENTES+] fila do "responda QUERO"
+        dados = ler_json() or {}
+        dados.pop('_segundo_plano', None)
+        return _resposta_clientes(lambda: clientes.acao_reservas(camp_id, dados, usuario))
     return _resposta_clientes(lambda: clientes.acao_campanha(camp_id, acao, usuario))
 
 

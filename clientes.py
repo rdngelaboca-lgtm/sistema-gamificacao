@@ -58,6 +58,12 @@ TEXTO_BOAS_VINDAS = ("Oi, {nome}! 🍦 Agora você recebe as novidades e promoç
                      "Salve este número na sua agenda para ver as fotos!")
 TEXTO_SAIU = "Pronto! Você não vai mais receber nossas mensagens. Se mudar de ideia, responda VOLTAR. 🍦"
 TEXTO_VOLTOU = "Que bom! 🍦 Você volta a receber as novidades do Gela Boca. Para sair, responda SAIR."
+DIAS_RESPOSTA = 3                # a resposta vale para a última mensagem recebida nos últimos 3 dias
+DIAS_RESERVA = 7                 # "QUERO" vale para mensagens com reserva dos últimos 7 dias
+MAX_QTD_RESERVA = 10             # "QUERO 50" vira 10
+DIAS_CONFERENCIA = 30            # "tem WhatsApp?" conferido vale por 30 dias
+MAX_CONFERIR = 300
+INTERVALO_CONFERIR = 1.5         # segundos entre uma conferência e outra
 MODELOS = [
     ('🍦 Sabor novo', "Oi, {nome}! 🍦 Chegou sabor novo no Gela Boca: venha provar!"),
     ('🔥 Dia quente', "Oi, {nome}! 🔥 Hoje o calor está forte: que tal um sorvete bem gelado? Estamos te esperando!"),
@@ -159,6 +165,46 @@ def garantir_tabelas():
                 Valor NVARCHAR(400) NULL
             )
         """)
+        # [CLIENTES+] respostas dos clientes, reservas por resposta ("QUERO"), entregue/lida e "tem WhatsApp?"
+        cur.execute("""
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ClienteRespostas')
+            CREATE TABLE ClienteRespostas (
+                RespostaID INT IDENTITY(1,1) PRIMARY KEY,
+                ClienteID INT NULL,
+                Telefone VARCHAR(20) NOT NULL,
+                NomeContato NVARCHAR(120) NULL,
+                Texto NVARCHAR(1000) NULL,
+                Tipo VARCHAR(12) NULL,
+                CampanhaID INT NULL,
+                MensagemID VARCHAR(80) NULL,
+                RecebidaEm DATETIME NOT NULL,
+                Vista BIT NOT NULL DEFAULT 0
+            )
+        """)
+        cur.execute("""
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'CampanhaReservas')
+            CREATE TABLE CampanhaReservas (
+                CampanhaID INT NOT NULL,
+                ClienteID INT NOT NULL,
+                Nome NVARCHAR(120) NULL,
+                Telefone VARCHAR(20) NOT NULL,
+                Quantidade INT NOT NULL,
+                Ordem INT NOT NULL,
+                Status VARCHAR(12) NOT NULL,
+                Texto NVARCHAR(200) NULL,
+                CriadaEm DATETIME NOT NULL,
+                AtualizadaEm DATETIME NULL,
+                PRIMARY KEY (CampanhaID, ClienteID)
+            )
+        """)
+        for tabela, coluna, tipo in (('Clientes', 'TemWhatsApp', 'BIT NULL'), ('Clientes', 'WhatsAppVerificadoEm', 'DATETIME NULL'),
+                                     ('CampanhaEnvios', 'MensagemID', 'VARCHAR(80) NULL'),
+                                     ('CampanhaEnvios', 'EntregueEm', 'DATETIME NULL'), ('CampanhaEnvios', 'LidaEm', 'DATETIME NULL'),
+                                     ('CampanhasClientes', 'ReservaPalavra', 'NVARCHAR(30) NULL'),
+                                     ('CampanhasClientes', 'ReservaItem', 'NVARCHAR(80) NULL'),
+                                     ('CampanhasClientes', 'ReservaEstoque', 'INT NULL'), ('CampanhasClientes', 'ReservaAuto', 'BIT NULL'),
+                                     ('CampanhasClientes', 'ReservaAberta', 'BIT NULL'), ('CampanhasClientes', 'ReservaEsgotou', 'BIT NULL')):
+            cur.execute(f"IF COL_LENGTH('{tabela}', '{coluna}') IS NULL ALTER TABLE {tabela} ADD {coluna} {tipo}")
         conn.commit()
         _tabelas_ok = True
     finally:
@@ -431,11 +477,18 @@ def salvar_foto(data_url):
     return {'foto': nome}
 
 
+def _id_mensagem(r):
+    return str((r.get('messageId') or r.get('id') or '') if isinstance(r, dict) else '')[:80]
+
+
 def enviar_para(telefone, texto, foto=None):
-    """(True, '') ou (False, motivo). Foto: send-image com legenda (texto longo vai em seguida, separado)."""
+    """
+    (True, id da mensagem) ou (False, motivo). Foto: send-image com legenda (texto longo vai em seguida, separado).
+    O id serve para a Z-API avisar depois quando a mensagem foi ENTREGUE e LIDA.
+    """
     if not foto:
         ok, r = _zapi('POST', 'send-text', {"phone": telefone, "message": texto})
-        return (True, '') if ok else (False, r)
+        return (True, _id_mensagem(r)) if ok else (False, r)
     caminho = caminho_foto(foto)
     with open(caminho, 'rb') as f:
         b64 = base64.b64encode(f.read()).decode()
@@ -444,11 +497,12 @@ def enviar_para(telefone, texto, foto=None):
     ok, r = _zapi('POST', 'send-image', {"phone": telefone, "image": f"data:image/{mime};base64,{b64}", "caption": legenda}, timeout=60)
     if not ok:
         return False, r
+    mid = _id_mensagem(r)
     if not legenda:
         ok, r = _zapi('POST', 'send-text', {"phone": telefone, "message": texto})
         if not ok:
             return False, f"a foto foi, o texto não: {r}"
-    return True, ''
+    return True, mid
 
 
 def _em_segundo_plano(funcao, *args):
@@ -470,16 +524,65 @@ def _todas_etiquetas(cur):
     return por
 
 
-COLUNAS = "ClienteID, Nome, Telefone, AniversarioDia, AniversarioMes, Aceite, AceiteEm, SaiuEm, Origem, Observacao, CriadoEm"
+COLUNAS = ("ClienteID, Nome, Telefone, AniversarioDia, AniversarioMes, Aceite, AceiteEm, SaiuEm, Origem, Observacao, CriadoEm, "
+           "TemWhatsApp")
 
 
-def _cliente_json(r, etqs):
-    cid, nome, tel, dia, mes, aceite, aceite_em, saiu, origem, obs, criado = r
+def _cliente_json(r, etqs, extras=None):
+    cid, nome, tel, dia, mes, aceite, aceite_em, saiu, origem, obs, criado, tem_wpp = r
     situacao = 'saiu' if saiu else ('recebe' if aceite else 'sem_autorizacao')
+    ex = (extras or {}).get(cid, {})
     return {'id': cid, 'nome': nome, 'telefone': tel, 'telefone_fmt': fmt_telefone(tel),
             'aniversario': f"{dia:02d}/{mes:02d}" if dia and mes else '', 'etiquetas': sorted(etqs, key=str.lower),
             'situacao': situacao, 'origem': origem or '', 'observacao': obs or '',
-            'saiu_em': database._como_data(saiu).strftime('%d/%m/%Y') if saiu else ''}
+            'saiu_em': database._como_data(saiu).strftime('%d/%m/%Y') if saiu else '',
+            'tem_whatsapp': None if tem_wpp is None else bool(tem_wpp),
+            'ultima_mensagem': _dt(ex.get('msg')).strftime('%d/%m') if ex.get('msg') else '',
+            'ultima_resposta': _dt(ex.get('resp')).strftime('%d/%m') if ex.get('resp') else ''}
+
+
+FILTROS_PRONTOS = {
+    'aniversario_mes': '🎂 Aniversário este mês',
+    'novos': '🆕 Novos (7 dias)',
+    'qr': '📱 Vieram pelo QR',
+    'responderam': '💬 Responderam (30 dias)',
+    'sem_mensagem': '😴 Sem mensagem há 30 dias',
+    'nunca': '🕳️ Nunca receberam',
+    'sem_whatsapp': '📵 Sem WhatsApp',
+}
+
+
+def _extras_clientes(cur):
+    """{ClienteID: {'msg': última mensagem recebida, 'resp': última resposta}}."""
+    extras = {}
+    cur.execute("SELECT ClienteID, MAX(EnviadoEm) FROM CampanhaEnvios WHERE Status = 'enviado' GROUP BY ClienteID")
+    for cid, quando in cur.fetchall():
+        extras.setdefault(cid, {})['msg'] = _dt(quando)
+    cur.execute("SELECT ClienteID, MAX(RecebidaEm) FROM ClienteRespostas WHERE ClienteID IS NOT NULL GROUP BY ClienteID")
+    for cid, quando in cur.fetchall():
+        extras.setdefault(cid, {})['resp'] = _dt(quando)
+    return extras
+
+
+def _no_filtro(filtro, linha, extras, hoje):
+    cid, _n, _t, _dia, mes, aceite, _ae, saiu, origem, _o, criado, tem_wpp = linha
+    ex = extras.get(cid, {})
+    recebe = _recebe(aceite, saiu)
+    if filtro == 'aniversario_mes':
+        return mes == hoje.month
+    if filtro == 'novos':
+        return bool(_dt(criado)) and _dt(criado).date() >= hoje - timedelta(days=7)
+    if filtro == 'qr':
+        return origem == 'qr'
+    if filtro == 'responderam':
+        return bool(ex.get('resp')) and ex['resp'].date() >= hoje - timedelta(days=30)
+    if filtro == 'sem_mensagem':
+        return recebe and (not ex.get('msg') or ex['msg'].date() < hoje - timedelta(days=30))
+    if filtro == 'nunca':
+        return recebe and not ex.get('msg')
+    if filtro == 'sem_whatsapp':
+        return tem_wpp is not None and not tem_wpp
+    return True
 
 
 def listar(filtros=None):
@@ -488,17 +591,25 @@ def listar(filtros=None):
     busca = _sem_acento(_limpo(filtros.get('busca'), 60)).lower()
     etiqueta = _limpo(filtros.get('etiqueta'), 30)
     situacao = filtros.get('situacao') if filtros.get('situacao') in ('recebe', 'saiu', 'sem_autorizacao') else 'todos'
+    filtro = filtros.get('filtro') if filtros.get('filtro') in FILTROS_PRONTOS else ''
+    hoje = date.today()
     conn = _conexao()
     try:
         cur = conn.cursor()
         cur.execute(f"SELECT {COLUNAS} FROM Clientes")
         linhas = cur.fetchall()
         etqs = _todas_etiquetas(cur)
+        extras = _extras_clientes(cur)
+        cur.execute("SELECT COUNT(*) FROM ClienteRespostas WHERE Vista = 0")
+        nao_vistas = int(cur.fetchone()[0] or 0)
     finally:
         conn.close()
-    todos = [_cliente_json(r, etqs.get(r[0], [])) for r in linhas]
     contagem = {}
-    for c in todos:
+    todos = []
+    for r in linhas:
+        c = _cliente_json(r, etqs.get(r[0], []), extras)
+        c['_linha'] = r
+        todos.append(c)
         for e in c['etiquetas']:
             contagem.setdefault(e, [0, 0])
             contagem[e][0] += 1
@@ -511,13 +622,19 @@ def listar(filtros=None):
         sel = [c for c in sel if any(_sem_acento(e).lower() == _sem_acento(etiqueta).lower() for e in c['etiquetas'])]
     if situacao != 'todos':
         sel = [c for c in sel if c['situacao'] == situacao]
+    if filtro:
+        sel = [c for c in sel if _no_filtro(filtro, c['_linha'], extras, hoje)]
     sel.sort(key=lambda c: _sem_acento(c['nome']).lower())
-    return {'clientes': sel[:1000], 'total_filtro': len(sel),
+    contagem_filtros = {f: sum(1 for c in todos if _no_filtro(f, c['_linha'], extras, hoje)) for f in FILTROS_PRONTOS}
+    for c in todos:
+        c.pop('_linha', None)
+    return {'clientes': sel[:1000], 'total_filtro': len(sel), 'ids_filtro': [c['id'] for c in sel],
             'totais': {'todos': len(todos), 'recebe': sum(1 for c in todos if c['situacao'] == 'recebe'),
                        'saiu': sum(1 for c in todos if c['situacao'] == 'saiu'),
                        'sem_autorizacao': sum(1 for c in todos if c['situacao'] == 'sem_autorizacao')},
             'etiquetas': [{'nome': e, 'qtd': q, 'recebem': r} for e, (q, r) in sorted(contagem.items(), key=lambda kv: kv[0].lower())],
-            'configurado': configurado()}
+            'filtros': [{'chave': f, 'nome': n, 'qtd': contagem_filtros[f]} for f, n in FILTROS_PRONTOS.items()],
+            'respostas_nao_vistas': nao_vistas, 'conferindo': dict(_conferindo), 'configurado': configurado()}
 
 
 def _gravar_etiquetas(cur, cid, etiquetas, somar=False):
@@ -572,6 +689,8 @@ def salvar(cliente_id, dados, usuario):
             cur.nextset()
             cid = int(cur.fetchone()[0])
         _gravar_etiquetas(cur, cid, etiquetas)
+        # [CLIENTES+] cadastrou quem tinha respondido sem estar na lista: as respostas passam a ser dele
+        cur.execute("UPDATE ClienteRespostas SET ClienteID = ? WHERE ClienteID IS NULL AND Telefone = ?", cid, tel)
         conn.commit()
     finally:
         conn.close()
@@ -630,6 +749,10 @@ def _publico(dados):
     p = dados.get('publico') or {}
     if not isinstance(p, dict):
         raise ErroClientes("Escolha para quem vai a mensagem.")
+    if p.get('ids'):                                    # [CLIENTES+] marcados na lista (ou um cliente só, pela ficha)
+        if not isinstance(p['ids'], list) or len(p['ids']) > 5000:
+            raise ErroClientes("Seleção inválida. Atualize a página.")
+        return {'todos': False, 'etiquetas': [], 'ids': sorted({_id(x) for x in p['ids']})}
     etiquetas = _etiquetas(p.get('etiquetas') or [])
     todos = bool(p.get('todos'))
     if not todos and not etiquetas:
@@ -638,6 +761,8 @@ def _publico(dados):
 
 
 def _texto_publico(p):
+    if p.get('ids'):
+        return f"{len(p['ids'])} cliente(s) escolhido(s)"
     return "Todos os clientes" if p['todos'] else "Etiquetas: " + ", ".join(p['etiquetas'])
 
 
@@ -650,11 +775,14 @@ def destinatarios(publico, cur=None):
         cur = cur or conn.cursor()
         cur.execute("SELECT ClienteID, Nome, Telefone, Aceite, SaiuEm FROM Clientes")
         clientes = [r for r in cur.fetchall() if _recebe(r[3], r[4])]
-        etqs = _todas_etiquetas(cur) if not publico['todos'] else {}
+        etqs = _todas_etiquetas(cur) if not publico['todos'] and not publico.get('ids') else {}
     finally:
         if proprio:
             conn.close()
-    if not publico['todos']:
+    if publico.get('ids'):
+        escolhidos = set(publico['ids'])
+        clientes = [r for r in clientes if r[0] in escolhidos]
+    elif not publico['todos']:
         alvo = {_sem_acento(e).lower() for e in publico['etiquetas']}
         clientes = [r for r in clientes if alvo & {_sem_acento(e).lower() for e in etqs.get(r[0], [])}]
     return sorted([(r[0], r[1], r[2]) for r in clientes], key=lambda r: _sem_acento(r[1]).lower())
@@ -690,6 +818,9 @@ def previa(dados):
     """Quantos vão receber, como fica a mensagem (com o 1º nome) e quanto tempo leva."""
     p = _publico(dados)
     texto = str(dados.get('texto') or '').strip()
+    reserva = _reserva(dados)
+    if texto and reserva:
+        texto = _texto_com_reserva(texto, reserva)
     garantir_tabelas()
     conn = _conexao()
     try:
@@ -737,6 +868,9 @@ def _criar(cur, tipo, titulo, texto, foto, publico_txt, lista, status, agendada,
 def criar_campanha(dados, usuario):
     """Grava a mensagem e a lista de quem recebe; o robô manda (agora ou na hora agendada)."""
     texto, foto, p = _texto(dados), _foto_dados(dados), _publico(dados)
+    reserva = _reserva(dados)
+    if reserva:
+        texto = _texto_com_reserva(texto, reserva)
     agora = datetime.now().replace(second=0, microsecond=0)
     quando = _quando(dados, agora)
     if not configurado():
@@ -764,16 +898,21 @@ def criar_campanha(dados, usuario):
         titulo = _limpo(re.sub(r'\{\s*nome\s*\}', '…', texto.split('\n')[0], flags=re.I), 80)
         camp = _criar(cur, 'mensagem', titulo, texto, foto, _texto_publico(p), lista,
                       ST_AGENDADA if quando else ST_ENVIANDO, quando, usuario.get('nome'), agora)
+        if reserva:
+            cur.execute("UPDATE CampanhasClientes SET ReservaPalavra = ?, ReservaItem = ?, ReservaEstoque = ?, ReservaAuto = ?, "
+                        "ReservaAberta = 1, ReservaEsgotou = 0 WHERE CampanhaID = ?", reserva['palavra'], reserva['item'] or None,
+                        reserva['estoque'], 1 if reserva['auto'] else 0, camp)
         conn.commit()
     finally:
         conn.close()
     logger.info(f"[CLIENTES] {usuario.get('nome')}: mensagem {camp} para {len(lista)} cliente(s)"
                 + (f", agendada para {quando:%d/%m %H:%M}" if quando else '') + '.')
+    extra = (f" Quem responder {reserva['palavra']} entra na fila de reserva (Envios › a mensagem)." if reserva else '')
     if quando:
-        msg = f"Agendada para {quando:%d/%m às %H:%M}: {len(lista)} cliente(s)."
+        msg = f"Agendada para {quando:%d/%m às %H:%M}: {len(lista)} cliente(s).{extra}"
     else:
         msg = (f"Na fila: {len(lista)} cliente(s). O robô começa em até 1 minuto e leva cerca de {_minutos(len(lista))} min "
-               f"(uma mensagem a cada {INTERVALO_SEG[0]} a {INTERVALO_SEG[1]} s).")
+               f"(uma mensagem a cada {INTERVALO_SEG[0]} a {INTERVALO_SEG[1]} s).{extra}")
     return {'ok': True, 'id': camp, 'mensagem': msg}
 
 
@@ -797,16 +936,18 @@ def _contagens(cur):
     return por
 
 
-def _campanha_json(r, cont):
-    camp, tipo, titulo, texto, foto, publico, status, agendada, criada, por, iniciada, concluida, obs = r
+def _campanha_json(r, cont, extra=None):
+    camp, tipo, titulo, texto, foto, publico, status, agendada, criada, por, iniciada, concluida, obs = r[:13]
     c = cont.get(camp, {})
     total = sum(c.values())
+    ex = (extra or {}).get(camp, {})
     return {'id': camp, 'tipo': tipo, 'titulo': titulo or '', 'texto': texto, 'foto': foto or '', 'publico': publico or '',
             'status': status, 'status_nome': NOMES_STATUS.get(status, status),
             'agendada': _dt_txt(agendada), 'criada': _dt_txt(criada), 'criada_por': por or '',
             'concluida': _dt_txt(concluida) if concluida else '', 'observacao': obs or '',
             'total': total, 'enviados': c.get('enviado', 0), 'falhas': c.get('falhou', 0), 'pulados': c.get('pulado', 0),
-            'pendentes': c.get('pendente', 0)}
+            'pendentes': c.get('pendente', 0), 'entregues': ex.get('entregues', 0), 'lidas': ex.get('lidas', 0),
+            'respostas': ex.get('respostas', 0), 'reserva': ex.get('reserva')}
 
 
 def _dt(v):
@@ -824,7 +965,24 @@ def _dt_txt(v):
 
 
 CAMPOS_CAMPANHA = ("CampanhaID, Tipo, Titulo, Texto, Foto, Publico, Status, AgendadaPara, CriadaEm, CriadaPor, IniciadaEm, "
-                   "ConcluidaEm, Observacao")
+                   "ConcluidaEm, Observacao, ReservaPalavra, ReservaItem, ReservaEstoque, ReservaAuto, ReservaAberta, ReservaEsgotou")
+
+
+def _extras_campanhas(cur, linhas):
+    """[CLIENTES+] por mensagem: entregues, lidas, respostas e o resumo da reserva."""
+    ex = {}
+    cur.execute("SELECT CampanhaID, SUM(CASE WHEN EntregueEm IS NOT NULL OR LidaEm IS NOT NULL THEN 1 ELSE 0 END), "
+                "SUM(CASE WHEN LidaEm IS NOT NULL THEN 1 ELSE 0 END) FROM CampanhaEnvios GROUP BY CampanhaID")
+    for camp, ent, lid in cur.fetchall():
+        ex.setdefault(camp, {}).update(entregues=int(ent or 0), lidas=int(lid or 0))
+    cur.execute("SELECT CampanhaID, COUNT(*) FROM ClienteRespostas WHERE CampanhaID IS NOT NULL GROUP BY CampanhaID")
+    for camp, n in cur.fetchall():
+        ex.setdefault(camp, {})['respostas'] = int(n or 0)
+    for r in linhas:
+        if r[13]:
+            itens, restante = _fila(cur, r[0], r[15])
+            ex.setdefault(r[0], {})['reserva'] = _resumo_reserva(r, itens, restante)
+    return ex
 
 
 def campanhas():
@@ -833,14 +991,17 @@ def campanhas():
     try:
         cur = conn.cursor()
         cur.execute(f"SELECT {CAMPOS_CAMPANHA} FROM CampanhasClientes")
-        linhas = cur.fetchall()
+        linhas = sorted(cur.fetchall(), key=lambda r: -r[0])[:60]
         cont = _contagens(cur)
+        extra = _extras_campanhas(cur, linhas)
         hoje = enviados_hoje(cur, datetime.now())
+        cur.execute("SELECT COUNT(*) FROM ClienteRespostas WHERE Vista = 0")
+        nao_vistas = int(cur.fetchone()[0] or 0)
     finally:
         conn.close()
-    lista = sorted((_campanha_json(r, cont) for r in linhas), key=lambda c: -c['id'])[:60]
+    lista = [_campanha_json(r, cont, extra) for r in linhas]
     return {'campanhas': lista, 'enviados_hoje': hoje, 'limite_dia': LIMITE_POR_DIA, 'configurado': configurado(),
-            'horario': f"{HORARIO_ENVIO[0]}h às {HORARIO_ENVIO[1]}h"}
+            'horario': f"{HORARIO_ENVIO[0]}h às {HORARIO_ENVIO[1]}h", 'respostas_nao_vistas': nao_vistas}
 
 
 def campanha(camp_id):
@@ -854,14 +1015,22 @@ def campanha(camp_id):
         if not r:
             raise ErroClientes("Mensagem não encontrada. Atualize a página.", 404)
         cont = _contagens(cur)
-        cur.execute("SELECT ClienteID, Nome, Telefone, Status, Erro, EnviadoEm FROM CampanhaEnvios WHERE CampanhaID = ?", camp)
+        extra = _extras_campanhas(cur, [r])
+        cur.execute("SELECT ClienteID, Nome, Telefone, Status, Erro, EnviadoEm, EntregueEm, LidaEm FROM CampanhaEnvios "
+                    "WHERE CampanhaID = ?", camp)
         envios = [{'cliente_id': e[0], 'nome': e[1] or '', 'telefone_fmt': fmt_telefone(e[2]), 'status': e[3],
-                   'erro': e[4] or '', 'enviado': _dt_txt(e[5])} for e in cur.fetchall()]
+                   'erro': e[4] or '', 'enviado': _dt_txt(e[5]), 'entregue': _dt_txt(e[6]), 'lida': _dt_txt(e[7])}
+                  for e in cur.fetchall()]
+        reservas = []
+        if r[13]:
+            itens, _restante = _fila(cur, camp, r[15])
+            reservas = [_reserva_json(x) for x in itens]
+        respostas = _respostas(cur, "R.CampanhaID = ?", [camp], 200)
     finally:
         conn.close()
     ordem = {'falhou': 0, 'pendente': 1, 'pulado': 2, 'enviado': 3}
     envios.sort(key=lambda e: (ordem.get(e['status'], 9), _sem_acento(e['nome']).lower()))
-    return dict(_campanha_json(r, cont), envios=envios)
+    return dict(_campanha_json(r, cont, extra), envios=envios, reservas=reservas, lista_respostas=respostas)
 
 
 def acao_campanha(camp_id, acao, usuario):
@@ -986,6 +1155,15 @@ def processar_fila(agora=None, dormir=time.sleep, avisar=None):
                     continue
             finally:
                 conn.close()
+            if _whatsapp_do_cliente(cid, tel, relogio()) is False:   # [CLIENTES+] número sem WhatsApp: pula (não é falha)
+                conn = _conexao()
+                try:
+                    conn.cursor().execute("UPDATE CampanhaEnvios SET Status = 'pulado', Erro = 'número sem WhatsApp' "
+                                          "WHERE CampanhaID = ? AND ClienteID = ?", camp, cid)
+                    conn.commit()
+                finally:
+                    conn.close()
+                continue
             try:
                 ok, motivo = enviar_para(tel, personalizar(texto, nome), foto)
             except ErroClientes as e:                        # a foto sumiu da pasta
@@ -995,8 +1173,9 @@ def processar_fila(agora=None, dormir=time.sleep, avisar=None):
             conn = _conexao()
             try:
                 cur = conn.cursor()
-                cur.execute("UPDATE CampanhaEnvios SET Status = ?, Erro = ?, EnviadoEm = ? WHERE CampanhaID = ? AND ClienteID = ?",
-                            'enviado' if ok else 'falhou', None if ok else str(motivo)[:200], relogio().replace(microsecond=0), camp, cid)
+                cur.execute("UPDATE CampanhaEnvios SET Status = ?, Erro = ?, EnviadoEm = ?, MensagemID = ? WHERE CampanhaID = ? "
+                            "AND ClienteID = ?", 'enviado' if ok else 'falhou', None if ok else str(motivo)[:200],
+                            relogio().replace(microsecond=0), (motivo or None) if ok else None, camp, cid)
                 falhas_seguidas = 0 if ok else falhas_seguidas + 1
                 if falhas_seguidas >= FALHAS_SEGUIDAS:
                     cur.execute("UPDATE CampanhasClientes SET Status = ?, Observacao = ? WHERE CampanhaID = ?", ST_PAUSADA,
@@ -1142,48 +1321,665 @@ def _palavra(texto):
     return re.sub(r'[^a-z ]', '', _sem_acento(str(texto or '')).lower()).strip()
 
 
+def _achar_cliente(cur, tel):
+    """(ClienteID, Nome, Aceite, SaiuEm, Telefone) pelo WhatsApp. O WhatsApp às vezes manda o celular SEM o 9
+    (55 66 9999-1234 × 55 66 99999-1234): se não achar igual, procura pelo DDD + os 8 últimos números."""
+    cur.execute("SELECT ClienteID, Nome, Aceite, SaiuEm, Telefone FROM Clientes WHERE Telefone = ?", tel)
+    r = cur.fetchone()
+    if r or len(tel) < 12:
+        return r
+    cur.execute("SELECT ClienteID, Nome, Aceite, SaiuEm, Telefone FROM Clientes WHERE Telefone LIKE ?", tel[:4] + '%' + tel[-8:])
+    achados = [x for x in cur.fetchall() if x[4][:4] == tel[:4] and x[4][-8:] == tel[-8:]]
+    return achados[0] if len(achados) == 1 else None
+
+
+def _conteudo(p):
+    """(texto, tipo) da mensagem recebida: texto, foto (com legenda), áudio, figurinha, reação..."""
+    if isinstance(p.get('text'), dict):
+        return str(p['text'].get('message') or ''), 'texto'
+    for chave, tipo, rotulo in (('image', 'foto', '📷 foto'), ('video', 'video', '🎬 vídeo'), ('audio', 'audio', '🎤 áudio'),
+                                ('document', 'documento', '📄 documento'), ('sticker', 'figurinha', '🙂 figurinha'),
+                                ('location', 'local', '📍 localização'), ('contact', 'contato', '👤 contato')):
+        v = p.get(chave)
+        if isinstance(v, dict):
+            leg = str(v.get('caption') or v.get('title') or '').strip()
+            return (f"{rotulo}: {leg}" if leg else rotulo), tipo
+    if isinstance(p.get('reaction'), dict):
+        return f"reagiu {p['reaction'].get('value') or ''}".strip(), 'reacao'
+    if isinstance(p.get('buttonsResponseMessage'), dict):
+        return str(p['buttonsResponseMessage'].get('message') or ''), 'texto'
+    return '', None
+
+
+def _campanha_recente(cur, cid, agora):
+    """A última mensagem que o cliente recebeu nos últimos 3 dias (a resposta provavelmente é para ela)."""
+    cur.execute("SELECT CampanhaID, EnviadoEm FROM CampanhaEnvios WHERE ClienteID = ? AND Status = 'enviado' AND EnviadoEm >= ?",
+                cid, agora - timedelta(days=DIAS_RESPOSTA))
+    linhas = sorted(cur.fetchall(), key=lambda r: (_dt(r[1]) or datetime.min, r[0]))
+    return linhas[-1][0] if linhas else None
+
+
+def _avisar_gestao(texto):
+    """Aviso no grupo da gestão (tipo 📢 Mensagens para clientes em 📣 Avisos)."""
+    try:
+        import alertas_estoque
+        if alertas_estoque.aviso_ligado('clientes'):
+            alertas_estoque.enviar(texto)
+    except Exception as e:
+        logger.error(f"[CLIENTES] Aviso para a gestão falhou: {e}")
+
+
 def processar_webhook(segredo, payload, em_segundo_plano=True):
-    """A Z-API avisa cada mensagem recebida no número dos clientes. Só 'SAIR'/'VOLTAR' (a mensagem inteira) fazem algo."""
+    """
+    A Z-API avisa o que acontece no número dos clientes (webhooks "Ao receber" e "Status da mensagem"):
+      - mensagem recebida: guarda a resposta (aba 💬 Respostas); SAIR/VOLTAR tiram/voltam da lista; a palavra da
+        reserva (ex.: QUERO) entra na fila da mensagem e o cliente recebe a posição;
+      - status: marca a mensagem como ENTREGUE ou LIDA.
+    """
     certo = _params('webhook_segredo').get('webhook_segredo') or ''
     if not certo or not hmac.compare_digest(certo, str(segredo or '')):
         raise ErroClientes("Não encontrado.", 404)
     p = payload if isinstance(payload, dict) else {}
-    if p.get('fromMe') or p.get('isGroup') or p.get('isNewsletter') or p.get('broadcast'):
-        return {'ok': True, 'acao': 'ignorada'}
     inst = _numero()['zapi_instancia']
     if p.get('instanceId') and inst and str(p.get('instanceId')) != inst:
         return {'ok': True, 'acao': 'ignorada'}
-    texto = (p.get('text') or {}).get('message') if isinstance(p.get('text'), dict) else None
-    palavra = _palavra(texto)
-    if palavra not in PALAVRAS_SAIR and palavra not in PALAVRAS_VOLTAR:
+    if p.get('type') == 'MessageStatusCallback' or (p.get('ids') and p.get('status') and 'text' not in p):
+        return _status_entrega(p)
+    if p.get('fromMe') or p.get('isGroup') or p.get('isNewsletter') or p.get('broadcast') or p.get('isStatusReply'):
+        return {'ok': True, 'acao': 'ignorada'}
+    if p.get('type') and p.get('type') != 'ReceivedCallback':
+        return {'ok': True, 'acao': 'ignorada'}
+    texto, tipo = _conteudo(p)
+    if not tipo:
         return {'ok': True, 'acao': 'ignorada'}
     try:
         tel = normalizar_telefone(p.get('phone'))
     except ErroClientes:
         return {'ok': True, 'acao': 'ignorada'}
+    palavra = _palavra(texto) if tipo == 'texto' else ''
+    mid = str(p.get('messageId') or '')[:80] or None
     agora = datetime.now().replace(microsecond=0)
+    garantir_tabelas()
+    rodar = _em_segundo_plano if em_segundo_plano else (lambda f, *a: f(*a))
+    with _trava_webhook:
+        return _guardar_resposta(p, tel, texto, tipo, palavra, mid, agora, rodar)
+
+
+def _guardar_resposta(p, tel, texto, tipo, palavra, mid, agora, rodar):
+    resposta_auto = aviso = None
     conn = _conexao()
     try:
         cur = conn.cursor()
-        r = _por_telefone(cur, tel)
-        if not r:
-            return {'ok': True, 'acao': 'desconhecido'}
-        cid, nome, aceite, saiu = r
-        if palavra in PALAVRAS_SAIR:
+        if mid:
+            cur.execute("SELECT 1 FROM ClienteRespostas WHERE MensagemID = ?", mid)
+            if cur.fetchone():
+                return {'ok': True, 'acao': 'repetida'}       # a Z-API mandou o mesmo aviso duas vezes
+        r = _achar_cliente(cur, tel)
+        cid, nome = (r[0], r[1]) if r else (None, _limpo(p.get('senderName') or p.get('chatName'), 120) or None)
+        camp = _campanha_recente(cur, cid, agora) if cid else None
+        acao = 'resposta' if cid else 'desconhecido'
+        if cid and palavra in PALAVRAS_SAIR:
             cur.execute("UPDATE Clientes SET SaiuEm = ?, AtualizadoEm = ? WHERE ClienteID = ?", agora, agora, cid)
-            resposta, acao = TEXTO_SAIU, 'saiu'
-        else:
-            if not saiu and aceite:
-                return {'ok': True, 'acao': 'ja_recebe'}
-            cur.execute("UPDATE Clientes SET SaiuEm = NULL, Aceite = 1, AceiteEm = ?, AtualizadoEm = ? WHERE ClienteID = ?",
-                        agora, agora, cid)
-            resposta, acao = TEXTO_VOLTOU, 'voltou'
+            resposta_auto, acao = TEXTO_SAIU, 'saiu'
+        elif cid and palavra in PALAVRAS_VOLTAR:
+            if not r[3] and r[2]:
+                acao = 'ja_recebe'
+            else:
+                cur.execute("UPDATE Clientes SET SaiuEm = NULL, Aceite = 1, AceiteEm = ?, AtualizadoEm = ? WHERE ClienteID = ?",
+                            agora, agora, cid)
+                resposta_auto, acao = TEXTO_VOLTOU, 'voltou'
+        elif cid and tipo == 'texto':
+            res = _reservar(cur, cid, r[1], r[4], texto, agora)
+            if res:
+                acao, camp, resposta_auto, aviso = 'reserva', res['camp'], res['resposta'], res['aviso']
+        cur.execute("INSERT INTO ClienteRespostas (ClienteID, Telefone, NomeContato, Texto, Tipo, CampanhaID, MensagemID, RecebidaEm, "
+                    "Vista) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)", cid, tel, nome, _limpo_multilinha(texto, 1000), tipo, camp, mid, agora)
         conn.commit()
     finally:
         conn.close()
-    logger.info(f"[CLIENTES] {nome} respondeu {palavra.upper()} no WhatsApp: {acao}.")
-    (_em_segundo_plano if em_segundo_plano else (lambda f, *a: f(*a)))(enviar_para, tel, resposta)
+    if acao in ('saiu', 'voltou', 'reserva'):
+        logger.info(f"[CLIENTES] {nome} respondeu no WhatsApp: {acao}.")
+    if resposta_auto:
+        rodar(enviar_para, tel, resposta_auto)
+    if aviso:
+        rodar(_avisar_gestao, aviso)
     return {'ok': True, 'acao': acao}
+
+
+def _limpo_multilinha(texto, tamanho):
+    linhas = [re.sub(r'[ \t]+', ' ', l).strip() for l in str(texto or '').replace('\r\n', '\n').split('\n')]
+    return re.sub(r'\n{3,}', '\n\n', '\n'.join(linhas)).strip()[:tamanho]
+
+
+# ------------------------------------------------------------------------------
+# ✔️✔️ Entregue / lida (webhook "Status da mensagem")
+# ------------------------------------------------------------------------------
+def _status_entrega(p):
+    st = str(p.get('status') or '').upper()
+    ids = p.get('ids') if isinstance(p.get('ids'), list) else ([p.get('messageId')] if p.get('messageId') else [])
+    ids = [str(i)[:80] for i in ids if i][:50]
+    if st not in ('RECEIVED', 'READ', 'PLAYED') or not ids:
+        return {'ok': True, 'acao': 'ignorada'}
+    try:
+        quando = datetime.fromtimestamp(int(p.get('momment')) / 1000).replace(microsecond=0)
+    except (TypeError, ValueError, OverflowError, OSError):
+        quando = datetime.now().replace(microsecond=0)
+    garantir_tabelas()
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        for i in ids:
+            if st == 'RECEIVED':
+                cur.execute("UPDATE CampanhaEnvios SET EntregueEm = ? WHERE MensagemID = ? AND EntregueEm IS NULL", quando, i)
+            else:
+                cur.execute("UPDATE CampanhaEnvios SET LidaEm = ? WHERE MensagemID = ? AND LidaEm IS NULL", quando, i)
+                cur.execute("UPDATE CampanhaEnvios SET EntregueEm = ? WHERE MensagemID = ? AND EntregueEm IS NULL", quando, i)
+        conn.commit()
+    finally:
+        conn.close()
+    return {'ok': True, 'acao': 'lida' if st != 'RECEIVED' else 'entregue'}
+
+
+# ------------------------------------------------------------------------------
+# 🏎️ Reserva por resposta: "responda QUERO" (lançamentos, poucas unidades)
+# ------------------------------------------------------------------------------
+def _reserva(dados):
+    """{'palavra', 'item', 'estoque' (None = sem limite), 'auto'} ou None (mensagem sem reserva)."""
+    r = dados.get('reserva') if isinstance(dados.get('reserva'), dict) else None
+    if not r or not r.get('ligada'):
+        return None
+    palavra = _limpo(r.get('palavra') or 'QUERO', 20).upper()
+    chave = _sem_acento(palavra).lower()
+    if not re.fullmatch(r'[a-z]{2,20}', chave):
+        raise ErroClientes("Palavra da reserva: só letras, sem espaço (ex.: QUERO).")
+    if chave in PALAVRAS_SAIR or chave in PALAVRAS_VOLTAR:
+        raise ErroClientes(f"{palavra} é a palavra de sair/voltar da lista. Use outra (ex.: QUERO).")
+    est = str(r.get('estoque') if r.get('estoque') is not None else '').strip()
+    if est:
+        try:
+            estoque = int(est)
+        except ValueError:
+            raise ErroClientes("Unidades disponíveis: use um número (ou deixe vazio = sem limite).")
+        if not 1 <= estoque <= 9999:
+            raise ErroClientes("Unidades disponíveis: de 1 a 9999 (ou vazio = sem limite).")
+    else:
+        estoque = None
+    return {'palavra': palavra, 'item': _limpo(r.get('item'), 80), 'estoque': estoque, 'auto': bool(r.get('auto', True))}
+
+
+def _texto_com_reserva(texto, reserva):
+    """Se a mensagem ainda não diz a palavra, explica como reservar no final."""
+    if re.search(rf"\b{re.escape(_sem_acento(reserva['palavra']).lower())}\b", _sem_acento(texto).lower()):
+        return texto
+    p = reserva['palavra']
+    return f"{texto}\n\n👉 Para reservar, responda *{p}* (ou *{p} 2* para duas unidades)."
+
+
+def _pedido(texto_norm, palavra):
+    """Quantas unidades a resposta pede (1 a 10) ou None se não é um pedido. 'quero', 'QUERO 2', 'Quero!', 'eu quero 3'."""
+    chave = _sem_acento(palavra).lower()
+    m = re.search(rf"\b{re.escape(chave)}\b", texto_norm[:80])
+    if not m or re.search(r"\b(nao|n|nem)\s*$", texto_norm[:m.start()]):
+        return None                                  # "não quero" não é pedido
+    q = re.search(r"\b(\d{1,3})\b", texto_norm[m.end():m.end() + 25])
+    return max(1, min(MAX_QTD_RESERVA, int(q.group(1)))) if q else 1
+
+
+def _fila(cur, camp, estoque):
+    """
+    ([itens na ordem de chegada], unidades que sobram). Quem pediu primeiro fica com as unidades; quem não cabe
+    vai para a espera (mas alguém depois que pediu menos pode caber nas que sobram). Cancelada não conta.
+    """
+    cur.execute("SELECT ClienteID, Nome, Telefone, Quantidade, Ordem, Status, Texto, CriadaEm FROM CampanhaReservas WHERE CampanhaID = ?",
+                camp)
+    linhas = sorted(cur.fetchall(), key=lambda r: r[4])
+    restante = estoque
+    itens, pos, espera = [], 0, 0
+    for cid, nome, tel, qtd, ordem, st, txt, criada in linhas:
+        item = {'cliente_id': cid, 'nome': nome or '', 'telefone': tel, 'quantidade': int(qtd), 'status': st, 'texto': txt or '',
+                'criada': _dt(criada), 'posicao': None, 'garantida': False, 'espera': None}
+        if st != 'cancelada':
+            pos += 1
+            item['posicao'] = pos
+            if restante is None or qtd <= restante:
+                item['garantida'] = True
+                if restante is not None:
+                    restante -= qtd
+            else:
+                espera += 1
+                item['espera'] = espera
+        itens.append(item)
+    return itens, restante
+
+
+def _reserva_json(x):
+    return {'cliente_id': x['cliente_id'], 'nome': x['nome'], 'telefone_fmt': fmt_telefone(x['telefone']),
+            'quantidade': x['quantidade'], 'status': x['status'], 'posicao': x['posicao'], 'garantida': x['garantida'],
+            'espera': x['espera'], 'texto': x['texto'], 'quando': x['criada'].strftime('%d/%m %H:%M:%S') if x['criada'] else ''}
+
+
+def _resumo_reserva(r, itens, restante):
+    ativos = [x for x in itens if x['status'] != 'cancelada']
+    return {'palavra': r[13], 'item': r[14] or '', 'estoque': r[15], 'auto': bool(r[16]), 'aberta': bool(r[17]),
+            'esgotou': bool(r[18]), 'pedidos': len(ativos), 'garantidas': sum(1 for x in ativos if x['garantida']),
+            'unidades': sum(x['quantidade'] for x in ativos if x['garantida']), 'espera': sum(1 for x in ativos if not x['garantida']),
+            'retiradas': sum(1 for x in ativos if x['status'] == 'retirada'), 'sobram': restante}
+
+
+def _de_item(item):
+    """' de «Hot Wheels lote K»' (ou '' se a mensagem não disse o que é)."""
+    return f" de «{item}»" if item else ''
+
+
+def _texto_reserva(nome, x, estoque, ja=False):
+    pn = primeiro_nome(nome) or 'cliente'
+    un = f"{x['quantidade']} unid."
+    if x['garantida']:
+        if ja:
+            return f"👍 {pn}, você já está na lista: sua reserva ({un}) está garantida ({x['posicao']}º). Passe na loja para retirar."
+        return f"✅ Anotado, {pn}! Sua reserva ({un}) está garantida: você é o {x['posicao']}º da lista. Passe na loja para retirar. 🙌"
+    if ja:
+        return f"👍 {pn}, você já está na lista de espera ({x['espera']}º). Se alguém desistir, a gente te avisa por aqui."
+    return (f"📝 Anotado, {pn}! As unidades já foram reservadas, mas você está na lista de espera ({x['espera']}º). "
+            "Se alguém desistir, a gente te avisa por aqui.")
+
+
+def _reservar(cur, cid, nome, tel, texto, agora):
+    """Resposta com a palavra da reserva: entra (ou atualiza) na fila. {'camp', 'resposta' (ou None), 'aviso' (ou None)}."""
+    norm = _sem_acento(texto).lower()
+    cur.execute("SELECT CampanhaID, Titulo, ReservaPalavra, ReservaItem, ReservaEstoque, ReservaAuto, ReservaAberta, ReservaEsgotou "
+                "FROM CampanhasClientes WHERE ReservaPalavra IS NOT NULL AND CriadaEm >= ?", agora - timedelta(days=DIAS_RESERVA))
+    candidatas = [(r, _pedido(norm, r[2])) for r in cur.fetchall()]
+    candidatas = [(r, q) for r, q in candidatas if q]
+    if not candidatas:
+        return None
+    cur.execute("SELECT CampanhaID FROM CampanhaEnvios WHERE ClienteID = ? AND Status = 'enviado'", cid)
+    recebeu = {x[0] for x in cur.fetchall()}
+    candidatas.sort(key=lambda c: (bool(c[0][6]), c[0][0] in recebeu, c[0][0]))      # aberta > recebeu > mais nova
+    (camp, titulo, palavra, item, estoque, auto, aberta, esgotou), qtd = candidatas[-1]
+    if not aberta:
+        return {'camp': camp, 'aviso': None,
+                'resposta': (f"Oi, {primeiro_nome(nome) or 'tudo bem'}! As reservas{_de_item(item)} já encerraram 😕. "
+                             "Fique de olho nas próximas!") if auto else None}
+    cur.execute("SELECT Status, Quantidade FROM CampanhaReservas WHERE CampanhaID = ? AND ClienteID = ?", camp, cid)
+    ex = cur.fetchone()
+    ja = False
+    if ex and ex[0] in ('ativa', 'retirada'):
+        ja = ex[0] == 'retirada' or int(ex[1]) == qtd
+        if ex[0] == 'ativa' and int(ex[1]) != qtd:
+            cur.execute("UPDATE CampanhaReservas SET Quantidade = ?, Texto = ?, AtualizadaEm = ? WHERE CampanhaID = ? AND ClienteID = ?",
+                        qtd, _limpo(texto, 200), agora, camp, cid)
+    else:
+        cur.execute("SELECT MAX(Ordem) FROM CampanhaReservas WHERE CampanhaID = ?", camp)
+        ordem = int(cur.fetchone()[0] or 0) + 1
+        if ex:                                       # tinha cancelado: volta, no fim da fila
+            cur.execute("UPDATE CampanhaReservas SET Status = 'ativa', Quantidade = ?, Ordem = ?, Texto = ?, CriadaEm = ?, AtualizadaEm = ? "
+                        "WHERE CampanhaID = ? AND ClienteID = ?", qtd, ordem, _limpo(texto, 200), agora, agora, camp, cid)
+        else:
+            cur.execute("INSERT INTO CampanhaReservas (CampanhaID, ClienteID, Nome, Telefone, Quantidade, Ordem, Status, Texto, CriadaEm) "
+                        "VALUES (?, ?, ?, ?, ?, ?, 'ativa', ?, ?)", camp, cid, nome, tel, qtd, ordem, _limpo(texto, 200), agora)
+    itens, restante = _fila(cur, camp, estoque)
+    eu = next(x for x in itens if x['cliente_id'] == cid)
+    aviso = None
+    if estoque is not None and restante == 0 and not esgotou:
+        cur.execute("UPDATE CampanhasClientes SET ReservaEsgotou = 1 WHERE CampanhaID = ?", camp)
+        garantidas = [x for x in itens if x['garantida'] and x['status'] != 'cancelada']
+        espera = sum(1 for x in itens if x['status'] != 'cancelada' and not x['garantida'])
+        aviso = (f"🏁 <b>Reservas esgotadas</b>: «{_esc(item or titulo)}»: as {estoque} unidade(s) ficaram com "
+                 f"{len(garantidas)} cliente(s)" + (f"; {espera} na espera" if espera else '') +
+                 ".\n<i>Veja a fila em Gestão › 📢 Clientes › Envios.</i>")
+    return {'camp': camp, 'resposta': _texto_reserva(nome, eu, estoque, ja) if auto else None, 'aviso': aviso}
+
+
+def acao_reservas(camp_id, dados, usuario):
+    """
+    A gestão mexe na fila: 📦 retirou · ❌ cancelar · ↩️ reativar (cliente_id), mudar as unidades, 🔒 encerrar / 🔓 reabrir.
+    Quem sobe da espera para garantida recebe "liberou uma unidade" (se a resposta automática estiver ligada).
+    """
+    camp = _id(camp_id, "a mensagem")
+    acao = dados.get('acao')
+    if acao not in ('retirou', 'cancelar', 'reativar', 'estoque', 'encerrar', 'reabrir'):
+        raise ErroClientes("Ação desconhecida.")
+    garantir_tabelas()
+    agora = datetime.now().replace(microsecond=0)
+    avisar_promovidos, campanha_espera = [], None
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT Titulo, ReservaPalavra, ReservaItem, ReservaEstoque, ReservaAuto, ReservaAberta FROM CampanhasClientes "
+                    "WHERE CampanhaID = ?", camp)
+        r = cur.fetchone()
+        if not r or not r[1]:
+            raise ErroClientes("Essa mensagem não tem reserva.", 404)
+        titulo, palavra, item, estoque, auto, aberta = r
+        antes, _ = _fila(cur, camp, estoque)
+        garantidos_antes = {x['cliente_id'] for x in antes if x['garantida']}
+        if acao in ('retirou', 'cancelar', 'reativar'):
+            cid = _id(dados.get('cliente_id'))
+            atual = next((x for x in antes if x['cliente_id'] == cid), None)
+            if not atual:
+                raise ErroClientes("Esse cliente não está na fila. Atualize a página.", 409)
+            novo = {'retirou': 'retirada', 'cancelar': 'cancelada', 'reativar': 'ativa'}[acao]
+            if acao == 'reativar' and atual['status'] == 'cancelada':
+                cur.execute("SELECT MAX(Ordem) FROM CampanhaReservas WHERE CampanhaID = ?", camp)
+                ordem = int(cur.fetchone()[0] or 0) + 1        # voltou: vai para o fim da fila
+                cur.execute("UPDATE CampanhaReservas SET Status = 'ativa', Ordem = ?, AtualizadaEm = ? WHERE CampanhaID = ? AND ClienteID = ?",
+                            ordem, agora, camp, cid)
+            else:
+                cur.execute("UPDATE CampanhaReservas SET Status = ?, AtualizadaEm = ? WHERE CampanhaID = ? AND ClienteID = ?",
+                            novo, agora, camp, cid)
+            msg = {'retirou': f"📦 {atual['nome']} retirou.", 'cancelar': f"❌ Reserva de {atual['nome']} cancelada.",
+                   'reativar': f"↩️ {atual['nome']} voltou para a fila."}[acao]
+        elif acao == 'estoque':
+            txt = str(dados.get('estoque') if dados.get('estoque') is not None else '').strip()
+            novo_est = _reserva({'reserva': {'ligada': True, 'palavra': palavra, 'estoque': txt}})['estoque']
+            cur.execute("UPDATE CampanhasClientes SET ReservaEstoque = ?, ReservaEsgotou = 0 WHERE CampanhaID = ?", novo_est, camp)
+            estoque = novo_est
+            msg = f"Unidades disponíveis: {novo_est if novo_est is not None else 'sem limite'}."
+        elif acao == 'reabrir':
+            cur.execute("UPDATE CampanhasClientes SET ReservaAberta = 1 WHERE CampanhaID = ?", camp)
+            msg = f"Reservas reabertas: quem responder {palavra} entra na fila."
+        else:
+            cur.execute("UPDATE CampanhasClientes SET ReservaAberta = 0 WHERE CampanhaID = ?", camp)
+            msg = "🔒 Reservas encerradas."
+            if dados.get('avisar_espera'):
+                espera = [x for x in antes if x['status'] == 'ativa' and not x['garantida']]
+                if espera:
+                    texto = (f"Oi, {{nome}}! As unidades{_de_item(item)} esgotaram desta vez 😕. "
+                             "No próximo lançamento você fica sabendo primeiro!")
+                    campanha_espera = _criar(cur, 'aviso', f"😕 Esgotou: lista de espera «{item or titulo}»"[:120], texto, None,
+                                             f"Lista de espera (mensagem {camp})", [(x['cliente_id'], x['nome'], x['telefone']) for x in espera],
+                                             ST_ENVIANDO, None, usuario.get('nome'), agora)
+                    msg += f" {len(espera)} da espera vão receber que esgotou (fila do robô)."
+        depois, _ = _fila(cur, camp, estoque)
+        if auto and acao != 'encerrar':
+            avisar_promovidos = [x for x in depois if x['garantida'] and x['status'] == 'ativa'
+                                 and x['cliente_id'] not in garantidos_antes]
+        conn.commit()
+    finally:
+        conn.close()
+
+    def mandar():
+        for i, x in enumerate(avisar_promovidos):
+            if i:
+                time.sleep(3)
+            enviar_para(x['telefone'], f"🎉 Boa notícia, {primeiro_nome(x['nome']) or 'tudo bem'}! Liberou: sua reserva "
+                                       f"({x['quantidade']} unid.) agora está garantida. Passe na loja para retirar.")
+    if avisar_promovidos:
+        (_em_segundo_plano if dados.get('_segundo_plano', True) else (lambda f, *a: f(*a)))(mandar)
+        msg += f" {len(avisar_promovidos)} saiu(íram) da espera e foi(ram) avisado(s)."
+    logger.info(f"[CLIENTES] {usuario.get('nome')}: reservas da mensagem {camp}: {acao}.")
+    return {'ok': True, 'mensagem': msg, 'campanha_espera': campanha_espera}
+
+
+# ------------------------------------------------------------------------------
+# 💬 Respostas (aba própria)
+# ------------------------------------------------------------------------------
+def _respostas(cur, onde, args, limite):
+    cur.execute("SELECT R.RespostaID, R.ClienteID, R.Telefone, R.NomeContato, R.Texto, R.Tipo, R.CampanhaID, R.RecebidaEm, R.Vista, "
+                f"C.Nome FROM ClienteRespostas R LEFT JOIN Clientes C ON C.ClienteID = R.ClienteID WHERE {onde}", *args)
+    linhas = sorted(cur.fetchall(), key=lambda r: -r[0])[:limite]
+    titulos = {}
+    camps = {r[6] for r in linhas if r[6]}
+    if camps:
+        cur.execute("SELECT CampanhaID, Titulo FROM CampanhasClientes")
+        titulos = {c: t for c, t in cur.fetchall() if c in camps}
+    return [{'id': r[0], 'cliente_id': r[1], 'nome': r[9] or r[3] or '', 'cadastrado': bool(r[1]), 'nome_contato': r[3] or '',
+             'telefone': r[2], 'telefone_fmt': fmt_telefone(r[2]), 'texto': r[4] or '', 'tipo': r[5] or '',
+             'campanha_id': r[6], 'campanha': titulos.get(r[6], ''), 'quando': _dt_txt(r[7]), 'vista': bool(r[8])} for r in linhas]
+
+
+def respostas(filtros=None):
+    garantir_tabelas()
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        lista = _respostas(cur, "1 = 1", [], 300)
+        cur.execute("SELECT COUNT(*) FROM ClienteRespostas WHERE Vista = 0")
+        nao_vistas = int(cur.fetchone()[0] or 0)
+    finally:
+        conn.close()
+    return {'respostas': lista, 'nao_vistas': nao_vistas}
+
+
+def marcar_respostas_vistas(dados):
+    ids = [_id(x, "a resposta") for x in (dados.get('ids') or [])][:1000]
+    garantir_tabelas()
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        if dados.get('todas'):
+            cur.execute("UPDATE ClienteRespostas SET Vista = 1 WHERE Vista = 0")
+        for i in ids:
+            cur.execute("UPDATE ClienteRespostas SET Vista = 1 WHERE RespostaID = ?", i)
+        conn.commit()
+    finally:
+        conn.close()
+    return {'ok': True}
+
+
+# ------------------------------------------------------------------------------
+# 📵 O número tem WhatsApp? (Z-API phone-exists; guardado por 30 dias)
+# ------------------------------------------------------------------------------
+_conferindo = {'rodando': False, 'feitos': 0, 'total': 0, 'sem': 0}
+_trava_webhook = threading.Lock()   # duas respostas "QUERO" no mesmo instante: uma de cada vez (a fila não empata)
+_trava_conferir = threading.Lock()
+
+
+def tem_whatsapp(telefone):
+    """True/False, ou None se não deu para saber (a Z-API não respondeu): na dúvida, manda."""
+    ok, r = _zapi('GET', f"phone-exists/{telefone}", timeout=15)
+    if not ok or not isinstance(r, dict) or 'exists' not in r:
+        return None
+    return bool(r['exists'])
+
+
+def _whatsapp_do_cliente(cid, tel, momento):
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT TemWhatsApp, WhatsAppVerificadoEm FROM Clientes WHERE ClienteID = ?", cid)
+        r = cur.fetchone()
+    finally:
+        conn.close()
+    if r and r[1] is not None and _dt(r[1]) and momento - _dt(r[1]) < timedelta(days=DIAS_CONFERENCIA):
+        return None if r[0] is None else bool(r[0])
+    tem = tem_whatsapp(tel)
+    if tem is not None:
+        conn = _conexao()
+        try:
+            conn.cursor().execute("UPDATE Clientes SET TemWhatsApp = ?, WhatsAppVerificadoEm = ? WHERE ClienteID = ?",
+                                  1 if tem else 0, momento.replace(microsecond=0), cid)
+            conn.commit()
+        finally:
+            conn.close()
+    return tem
+
+
+def conferir_whatsapp(usuario, dormir=time.sleep, em_segundo_plano=True):
+    """🔎 Confere (em segundo plano) quem ainda não foi conferido nos últimos 30 dias. No máximo 300 por vez."""
+    if not configurado():
+        raise ErroClientes("Antes, configure o número dos clientes em ⚙️ Ajustes.")
+    with _trava_conferir:
+        if _conferindo['rodando']:
+            return {'ok': True, 'mensagem': f"Já estou conferindo: {_conferindo['feitos']} de {_conferindo['total']}."}
+        garantir_tabelas()
+        limite = datetime.now() - timedelta(days=DIAS_CONFERENCIA)
+        conn = _conexao()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT ClienteID, Telefone, Aceite, SaiuEm, WhatsAppVerificadoEm FROM Clientes")
+            fila = [(r[0], r[1]) for r in sorted(cur.fetchall(), key=lambda r: (not _recebe(r[2], r[3]), r[0]))
+                    if not r[4] or (_dt(r[4]) and _dt(r[4]) < limite)][:MAX_CONFERIR]
+        finally:
+            conn.close()
+        if not fila:
+            return {'ok': True, 'mensagem': "Todos os números já foram conferidos nos últimos 30 dias."}
+        _conferindo.update(rodando=True, feitos=0, total=len(fila), sem=0)
+
+    def rodar():
+        try:
+            for i, (cid, tel) in enumerate(fila):
+                if i:
+                    dormir(INTERVALO_CONFERIR)
+                tem = _whatsapp_do_cliente(cid, tel, datetime.now())
+                _conferindo['feitos'] += 1
+                _conferindo['sem'] += 1 if tem is False else 0
+        except Exception as e:
+            logger.error(f"[CLIENTES] Conferir WhatsApp parou: {_sem_segredo(e)}")
+        finally:
+            _conferindo['rodando'] = False
+            logger.info(f"[CLIENTES] Conferidos {_conferindo['feitos']} número(s): {_conferindo['sem']} sem WhatsApp.")
+    (_em_segundo_plano if em_segundo_plano else (lambda f, *a: f(*a)))(rodar)
+    logger.info(f"[CLIENTES] {usuario.get('nome')}: conferindo {len(fila)} número(s) no WhatsApp.")
+    return {'ok': True, 'mensagem': f"Conferindo {len(fila)} número(s) em segundo plano (cerca de "
+                                    f"{max(1, round(len(fila) * INTERVALO_CONFERIR / 60))} min). Depois use o filtro 📵 Sem WhatsApp."}
+
+
+# ------------------------------------------------------------------------------
+# 📋 Ficha do cliente
+# ------------------------------------------------------------------------------
+def ficha(cliente_id):
+    cid = _id(cliente_id)
+    garantir_tabelas()
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        cur.execute(f"SELECT {COLUNAS}, AceiteEm, AtualizadoEm, WhatsAppVerificadoEm FROM Clientes WHERE ClienteID = ?", cid)
+        r = cur.fetchone()
+        if not r:
+            raise ErroClientes("Cliente não encontrado (foi excluído?). Atualize a página.", 404)
+        cur.execute("SELECT Etiqueta FROM ClienteEtiquetas WHERE ClienteID = ?", cid)
+        etqs = [x[0] for x in cur.fetchall()]
+        extras = _extras_clientes(cur)
+        cur.execute("SELECT E.CampanhaID, C.Titulo, C.Tipo, E.Status, E.Erro, E.EnviadoEm, E.EntregueEm, E.LidaEm "
+                    "FROM CampanhaEnvios E JOIN CampanhasClientes C ON C.CampanhaID = E.CampanhaID WHERE E.ClienteID = ?", cid)
+        envios = sorted(cur.fetchall(), key=lambda e: -e[0])[:60]
+        resp = _respostas(cur, "R.ClienteID = ?", [cid], 60)
+        cur.execute("SELECT R.CampanhaID, C.Titulo, C.ReservaItem, R.Quantidade, R.Status, R.CriadaEm, C.ReservaEstoque "
+                    "FROM CampanhaReservas R JOIN CampanhasClientes C ON C.CampanhaID = R.CampanhaID WHERE R.ClienteID = ?", cid)
+        reservas = []
+        for camp, titulo, item, qtd, st, criada, estoque in sorted(cur.fetchall(), key=lambda x: -x[0])[:30]:
+            eu = next((x for x in _fila(cur, camp, estoque)[0] if x['cliente_id'] == cid), None)
+            reservas.append({'campanha_id': camp, 'titulo': item or titulo or '', 'quantidade': int(qtd), 'status': st,
+                             'garantida': bool(eu and eu['garantida']), 'posicao': eu['posicao'] if eu else None,
+                             'quando': _dt_txt(criada)})
+        cur.execute("UPDATE ClienteRespostas SET Vista = 1 WHERE ClienteID = ? AND Vista = 0", cid)
+        conn.commit()
+    finally:
+        conn.close()
+    c = _cliente_json(r[:12], etqs, extras)
+    lista_envios = [{'campanha_id': e[0], 'titulo': e[1] or '', 'tipo': e[2], 'status': e[3], 'erro': e[4] or '',
+                     'enviado': _dt_txt(e[5]), 'entregue': _dt_txt(e[6]), 'lida': _dt_txt(e[7])} for e in envios]
+    recebidas = [e for e in lista_envios if e['status'] == 'enviado']
+    c.update(criado=_dt_txt(r[10]), aceite_em=_dt_txt(r[12]), atualizado=_dt_txt(r[13]), conferido=_dt_txt(r[14]),
+             wa=f"https://wa.me/{r[2]}", envios=lista_envios, respostas=resp, reservas=reservas,
+             resumo={'recebeu': len(recebidas), 'leu': sum(1 for e in recebidas if e['lida']), 'respondeu': len(resp),
+                     'reservas': sum(1 for x in reservas if x['status'] != 'cancelada')})
+    return c
+
+
+# ------------------------------------------------------------------------------
+# ☑️ Vários de uma vez e 🏷️ etiquetas
+# ------------------------------------------------------------------------------
+def lote(dados, usuario):
+    """Para os clientes marcados: pôr etiqueta, tirar etiqueta ou excluir."""
+    acao = dados.get('acao')
+    if acao not in ('etiqueta_por', 'etiqueta_tirar', 'excluir'):
+        raise ErroClientes("Ação desconhecida.")
+    ids = dados.get('ids') or []
+    if not isinstance(ids, list) or not ids:
+        raise ErroClientes("Marque pelo menos um cliente.")
+    if len(ids) > 5000:
+        raise ErroClientes("Seleção grande demais.")
+    ids = sorted({_id(x) for x in ids})
+    etiqueta = None
+    if acao != 'excluir':
+        e = _etiquetas(dados.get('etiqueta'))
+        if len(e) != 1:
+            raise ErroClientes("Digite uma etiqueta.")
+        etiqueta = e[0]
+    garantir_tabelas()
+    feitos = pulados = 0
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT ClienteID FROM Clientes")
+        existem = {r[0] for r in cur.fetchall()}
+        etqs = _todas_etiquetas(cur)
+        chave = _sem_acento(etiqueta).lower() if etiqueta else None
+        for cid in ids:
+            if cid not in existem:
+                continue
+            atuais = etqs.get(cid, [])
+            if acao == 'etiqueta_por':
+                if any(_sem_acento(x).lower() == chave for x in atuais):
+                    continue
+                if len(atuais) >= MAX_ETIQUETAS:
+                    pulados += 1
+                    continue
+                cur.execute("INSERT INTO ClienteEtiquetas (ClienteID, Etiqueta) VALUES (?, ?)", cid, etiqueta)
+            elif acao == 'etiqueta_tirar':
+                alvo = [x for x in atuais if _sem_acento(x).lower() == chave]
+                if not alvo:
+                    continue
+                for x in alvo:
+                    cur.execute("DELETE FROM ClienteEtiquetas WHERE ClienteID = ? AND Etiqueta = ?", cid, x)
+            else:
+                cur.execute("DELETE FROM ClienteEtiquetas WHERE ClienteID = ?", cid)
+                cur.execute("UPDATE CampanhaEnvios SET Status = 'pulado', Erro = 'cliente excluído' WHERE ClienteID = ? AND Status = 'pendente'", cid)
+                cur.execute("DELETE FROM Clientes WHERE ClienteID = ?", cid)
+            feitos += 1
+        conn.commit()
+    finally:
+        conn.close()
+    logger.info(f"[CLIENTES] {usuario.get('nome')}: {acao} {etiqueta or ''} em {feitos} cliente(s).")
+    msg = {'etiqueta_por': f"Etiqueta {etiqueta} colocada em {feitos} cliente(s).",
+           'etiqueta_tirar': f"Etiqueta {etiqueta} tirada de {feitos} cliente(s).",
+           'excluir': f"{feitos} cliente(s) excluído(s)."}[acao]
+    if pulados:
+        msg += f" {pulados} já tinham {MAX_ETIQUETAS} etiquetas (ficaram sem)."
+    return {'ok': True, 'mensagem': msg, 'feitos': feitos}
+
+
+def acao_etiqueta(dados, usuario):
+    """🏷️ Renomear (se o nome novo já existe, junta as duas) ou apagar uma etiqueta de todos os clientes."""
+    acao = dados.get('acao')
+    if acao not in ('renomear', 'apagar'):
+        raise ErroClientes("Ação desconhecida.")
+    velha = _limpo(dados.get('etiqueta'), 30)
+    if not velha:
+        raise ErroClientes("Escolha a etiqueta.")
+    nova = None
+    if acao == 'renomear':
+        e = _etiquetas(dados.get('nova'))
+        if len(e) != 1:
+            raise ErroClientes("Digite o nome novo da etiqueta.")
+        nova = e[0]
+    garantir_tabelas()
+    chave_velha = _sem_acento(velha).lower()
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        etqs = _todas_etiquetas(cur)
+        n = 0
+        for cid, lista in etqs.items():
+            alvo = [x for x in lista if _sem_acento(x).lower() == chave_velha]
+            if not alvo:
+                continue
+            for x in alvo:
+                cur.execute("DELETE FROM ClienteEtiquetas WHERE ClienteID = ? AND Etiqueta = ?", cid, x)
+            if nova and not any(_sem_acento(x).lower() == _sem_acento(nova).lower() for x in lista if x not in alvo):
+                cur.execute("INSERT INTO ClienteEtiquetas (ClienteID, Etiqueta) VALUES (?, ?)", cid, nova)
+            n += 1
+        conn.commit()
+    finally:
+        conn.close()
+    if not n:
+        raise ErroClientes("Nenhum cliente com essa etiqueta. Atualize a página.", 409)
+    logger.info(f"[CLIENTES] {usuario.get('nome')}: etiqueta {velha} {'→ ' + nova if nova else 'apagada'} ({n}).")
+    return {'ok': True, 'mensagem': (f"Etiqueta {velha} agora é {nova} ({n} cliente(s))." if nova
+                                     else f"Etiqueta {velha} apagada de {n} cliente(s).")}
 
 
 # ------------------------------------------------------------------------------

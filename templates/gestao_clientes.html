@@ -52,6 +52,32 @@
   details summary { cursor: pointer; color: var(--verde-esc); font-weight: 600; font-size: 13px; }
   ol.passos { margin: 6px 0 0; padding-left: 20px; font-size: 13px; display: grid; gap: 4px; }
   .env-linha td.ok { color: var(--ok); } .env-linha td.falhou { color: var(--erro); }
+  /* [CLIENTES+] respostas, ficha, seleção, reserva */
+  .badge { background: var(--erro); color: #fff; border-radius: 999px; font-size: 11px; padding: 1px 6px; margin-left: 3px; }
+  .cli .extra { font-size: 12px; color: var(--suave); }
+  .cli .extra .n-erro { font-weight: 700; }
+  .cli.marcado { border-color: var(--verde); background: var(--verde-claro); }
+  .cli .marca { width: 20px; height: 20px; flex: none; }
+  .barra-sel { position: sticky; bottom: 8px; z-index: 5; background: #263238; color: #fff; border-radius: 14px; padding: 8px 10px;
+    display: flex; gap: 6px; flex-wrap: wrap; align-items: center; box-shadow: 0 6px 18px #0004; }
+  .barra-sel b { margin-right: auto; }
+  .barra-sel .btn { font-size: 13px; padding: 6px 10px; }
+  .ficha-resumo { display: flex; gap: 6px 14px; flex-wrap: wrap; font-weight: 700; font-size: 14px; }
+  .ficha h4 { margin: 10px 0 4px; font-size: 14px; }
+  .itens { display: grid; gap: 4px; }
+  .item { border: 1px solid var(--linha2); border-radius: 10px; padding: 6px 9px; font-size: 13px; }
+  .item .txt { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .resp { background: #fff; border: 1px solid var(--linha); border-radius: 12px; padding: 10px 12px; display: grid; gap: 4px; }
+  .resp.nova { border-color: var(--verde); box-shadow: 0 0 0 2px var(--verde-claro); }
+  .resp .txt { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; }
+  .resp .acoes { margin-top: 2px; }
+  .camp-tag { font-size: 11px; background: var(--linha2); border-radius: 6px; padding: 1px 6px; color: var(--suave); }
+  .reserva-box { border: 1px dashed var(--verde); border-radius: 10px; padding: 8px 10px; display: grid; gap: 6px; }
+  .reserva-ctl { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .reserva-ctl input { width: 90px; font-size: 15px; }
+  tr.cancelada td { color: var(--suave); text-decoration: line-through; }
+  tr.espera td { color: var(--aviso); }
+  .acoes-mini { display: flex; gap: 4px; flex-wrap: wrap; } .acoes-mini .btn { font-size: 12px; padding: 3px 7px; }
   @media (max-width: 700px) {
     .area { padding-left: 10px; padding-right: 10px; }
     .abas { width: 100%; } .abas button { flex: 1 1 auto; padding: 7px 6px; font-size: 13px; }
@@ -64,6 +90,7 @@
         <button type="button" data-aba="clientes" class="sel">👥 Clientes</button>
         <button type="button" data-aba="mensagem">✉️ Mensagem</button>
         <button type="button" data-aba="envios">📊 Envios</button>
+        <button type="button" data-aba="respostas">💬 Respostas<span id="badge-resp" class="badge" hidden></span></button>
         <button type="button" data-aba="ajustes">⚙️ Ajustes</button>
       </div>
     </div>
@@ -81,16 +108,29 @@
             <option value="todos">Todos</option><option value="recebe">✅ Recebem</option>
             <option value="saiu">🚫 Saíram</option><option value="sem_autorizacao">⚪ Sem autorização</option>
           </select>
+          <select id="filtro" aria-label="Filtros prontos"><option value="">⭐ Filtros prontos…</option></select>
         </div>
         <div id="chips-etq" class="chips"></div>
         <div class="acoes">
           <button type="button" class="btn prim" id="btn-novo">➕ Novo cliente</button>
           <button type="button" class="btn" id="btn-importar">📥 Importar planilha</button>
           <button type="button" class="btn" id="btn-agenda" hidden>📇 Da agenda do celular</button>
+          <button type="button" class="btn" id="btn-selecionar">☑️ Selecionar</button>
+          <button type="button" class="btn" id="btn-etiquetas">🏷️ Etiquetas</button>
+          <button type="button" class="btn" id="btn-conferir" title="Confere quais números não têm WhatsApp (evita falhas e bloqueio)">🔎 Conferir números</button>
           <span id="totais" class="mini suave"></span>
         </div>
       </div>
       <div id="lista" class="lista" style="margin-top:12px"><div class="vazio">Carregando…</div></div>
+      <div id="barra-sel" class="barra-sel" hidden>
+        <b id="sel-qtd">0 marcados</b>
+        <button type="button" class="btn" id="sel-todos">Marcar todos do filtro</button>
+        <button type="button" class="btn" id="sel-msg">✉️ Mensagem</button>
+        <button type="button" class="btn" id="sel-por">🏷️ Pôr etiqueta</button>
+        <button type="button" class="btn" id="sel-tirar">🏷️ Tirar etiqueta</button>
+        <button type="button" class="btn perigo" id="sel-excluir">🗑️ Excluir</button>
+        <button type="button" class="btn" id="sel-sair" title="Sair da seleção">✖</button>
+      </div>
     </section>
 
     <!-- ============================ ✉️ Mensagem ============================ -->
@@ -107,6 +147,21 @@
         <div class="acoes" style="margin-top:6px">
           <button type="button" class="btn" id="m-nome">+ {nome}</button>
           <span class="mini suave"><b>{nome}</b> vira o primeiro nome de cada cliente. <span id="m-cont">0/1500</span></span>
+        </div>
+      </div>
+      <div class="caixa" style="margin-top:12px">
+        <h3>🏎️ Reserva por resposta (opcional)</h3>
+        <label class="check" style="display:flex"><input type="checkbox" id="r-ligada"> Quem responder a palavra entra numa <b>fila de reserva</b>
+          (lançamentos, poucas unidades)</label>
+        <div id="r-campos" class="form" style="margin-top:8px" hidden>
+          <div class="dupla">
+            <label>Palavra<input id="r-palavra" value="QUERO" maxlength="20" autocomplete="off"></label>
+            <label>Unidades disponíveis<input id="r-estoque" inputmode="numeric" placeholder="vazio = sem limite" autocomplete="off"></label>
+          </div>
+          <label>O que é (aparece nas respostas)<input id="r-item" maxlength="80" placeholder="ex.: Hot Wheels lote K" autocomplete="off"></label>
+          <label class="check"><input type="checkbox" id="r-auto" checked> Responder sozinho com a posição na fila</label>
+          <div class="mini suave">Quem responde primeiro fica com as unidades; quem não cabe vai para a lista de espera. "QUERO 2" reserva 2.
+            Acompanhe e mexa na fila em 📊 Envios › a mensagem. Precisa do endereço em ⚙️ Ajustes › Webhooks.</div>
         </div>
       </div>
       <div class="caixa" style="margin-top:12px">
@@ -143,6 +198,14 @@
       <div id="env-lista" class="lista" style="margin-top:12px"></div>
     </section>
 
+    <!-- ============================ 💬 Respostas ============================ -->
+    <section id="aba-respostas" hidden>
+      <div class="caixa"><div class="acoes" style="margin-top:0"><span class="mini suave" style="flex:1 1 220px">O que os clientes responderam no
+        número dos clientes (precisa do endereço em ⚙️ Ajustes › Webhooks). Para responder, toque em 💬 e fale pelo WhatsApp.</span>
+        <button type="button" class="btn" id="resp-atualizar">🔄</button></div></div>
+      <div id="resp-lista" class="lista" style="margin-top:12px"></div>
+    </section>
+
     <!-- ============================ ⚙️ Ajustes ============================ -->
     <section id="aba-ajustes" hidden>
       <div class="caixa">
@@ -170,10 +233,10 @@
           </ol></details>
       </div>
       <div class="caixa" style="margin-top:12px">
-        <h3>🚫 "SAIR" automático</h3>
-        <div class="mini suave">Toda mensagem termina com "Para não receber mais mensagens, responda SAIR". Para o sistema tirar a pessoa
-          da lista sozinho (e responder confirmando), cole este endereço no painel da Z-API, na instância dos clientes,
-          em <b>Webhooks › Ao receber</b>:</div>
+        <h3>🔗 Respostas, "SAIR", reservas e ✔️✔️ lida (webhooks)</h3>
+        <div class="mini suave">Para o sistema ver as <b>respostas</b> dos clientes (aba 💬, "SAIR", "QUERO") e saber quem <b>recebeu e leu</b>,
+          cole este endereço no painel da Z-API, na instância dos clientes, em <b>Webhooks</b>, nos dois campos:
+          <b>Ao receber</b> e <b>Status da mensagem</b> (pode estar como "Ao receber status").</div>
         <div class="copiar" style="margin-top:6px"><input id="aj-webhook" readonly aria-label="Endereço do webhook">
           <button type="button" class="btn" id="aj-copiar">📋 Copiar</button></div>
         <div id="aj-webhook-aviso" class="mini n-aviso" style="margin-top:4px"></div>
@@ -218,7 +281,8 @@
 {% block script %}
 // [CLIENTES] cadastro e mensagens para clientes (lista de transmissão) pelo número SÓ dos clientes.
 const S = {aba: lerLocal('clientes_aba', 'clientes'), dados: null, publico: {todos: false, etiquetas: []}, foto: null, fotoUrl: null,
-           ajustes: null, filtroEtq: '', previaSeq: 0, timerPrevia: null, timerEnvios: null, aniv: {foto: null, fotoUrl: null}};
+           ajustes: null, filtroEtq: '', previaSeq: 0, timerPrevia: null, timerEnvios: null, aniv: {foto: null, fotoUrl: null},
+           sel: null, timerResp: null, timerConferir: null};
 const SIT = {recebe: '✅ recebe', saiu: '🚫 saiu', sem_autorizacao: '⚪ sem autorização'};
 const ORIGEM = {manual: 'cadastro', qr: 'QR do balcão', planilha: 'planilha', agenda: 'agenda'};
 
@@ -226,9 +290,10 @@ function aoEntrar() { mostrarAba(S.aba); carregarClientes(); carregarAjustes(); 
 function mostrarAba(aba) {
   S.aba = aba; gravarLocal('clientes_aba', aba);
   document.querySelectorAll('.abas [data-aba]').forEach(b => b.classList.toggle('sel', b.dataset.aba === aba));
-  for (const a of ['clientes', 'mensagem', 'envios', 'ajustes']) $('#aba-' + a).hidden = a !== aba;
-  clearTimeout(S.timerEnvios);
+  for (const a of ['clientes', 'mensagem', 'envios', 'respostas', 'ajustes']) $('#aba-' + a).hidden = a !== aba;
+  clearTimeout(S.timerEnvios); clearTimeout(S.timerResp);
   if (aba === 'envios') carregarEnvios();
+  if (aba === 'respostas') carregarRespostas(true);
   if (aba === 'mensagem') { desenharPublico(); agendarPrevia(); }
 }
 document.querySelectorAll('.abas [data-aba]').forEach(b => b.onclick = () => mostrarAba(b.dataset.aba));
@@ -238,10 +303,14 @@ document.addEventListener('click', e => { const b = e.target.closest('[data-ir]'
 let timerBusca = null;
 async function carregarClientes() {
   try {
-    const q = new URLSearchParams({busca: $('#busca').value.trim(), situacao: $('#situacao').value, etiqueta: S.filtroEtq});
+    const q = new URLSearchParams({busca: $('#busca').value.trim(), situacao: $('#situacao').value, etiqueta: S.filtroEtq,
+                                   filtro: $('#filtro').value});
     S.dados = await api('GET', '/api/gestao/clientes?' + q);
     $('#aviso-numero').hidden = S.dados.configurado;
+    marcarBadge(S.dados.respostas_nao_vistas);
     desenharClientes();
+    clearTimeout(S.timerConferir);                  // 🔎 conferindo os números: atualiza sozinho até terminar
+    if (S.dados.conferindo && S.dados.conferindo.rodando) S.timerConferir = setTimeout(carregarClientes, 4000);
     if (S.aba === 'mensagem') desenharPublico();
   } catch (e) { if (e.status !== 401 && e.status !== 403) $('#lista').innerHTML = `<div class="vazio n-erro">${esc(e.message)}</div>`; }
 }
@@ -249,21 +318,153 @@ function desenharClientes() {
   const d = S.dados, t = d.totais;
   $('#chips-etq').innerHTML = `<button type="button" class="chip ${S.filtroEtq ? '' : 'sel'}" data-etq="">Todas</button>`
     + d.etiquetas.map(e => `<button type="button" class="chip ${S.filtroEtq === e.nome ? 'sel' : ''}" data-etq="${esc(e.nome)}">${esc(e.nome)} <small>${e.qtd}</small></button>`).join('');
+  const cf = d.conferindo || {};
   $('#totais').textContent = `${t.todos} cliente(s) · ${t.recebe} recebem` + (t.saiu ? ` · ${t.saiu} saíram` : '')
-    + (t.sem_autorizacao ? ` · ${t.sem_autorizacao} sem autorização` : '');
-  $('#lista').innerHTML = d.clientes.map(c => `<div class="cli" data-id="${c.id}" tabindex="0">
-      <div class="cli-topo"><b>${esc(c.nome)}</b><span class="sit sit-${c.situacao}">${SIT[c.situacao]}</span></div>
+    + (t.sem_autorizacao ? ` · ${t.sem_autorizacao} sem autorização` : '')
+    + (cf.rodando ? ` · 🔎 conferindo ${cf.feitos} de ${cf.total}…` : '');
+  const fsel = $('#filtro').value;
+  $('#filtro').innerHTML = '<option value="">⭐ Filtros prontos…</option>' + d.filtros.map(f =>
+    `<option value="${f.chave}" ${f.chave === fsel ? 'selected' : ''}>${esc(f.nome)} (${f.qtd})</option>`).join('');
+  $('#lista').innerHTML = d.clientes.map(c => `<div class="cli ${S.sel && S.sel.has(c.id) ? 'marcado' : ''}" data-id="${c.id}" tabindex="0">
+      <div class="cli-topo">${S.sel ? `<input type="checkbox" class="marca" ${S.sel.has(c.id) ? 'checked' : ''} aria-label="Marcar ${esc(c.nome)}" tabindex="-1">` : ''}
+        <b style="flex:1">${esc(c.nome)}</b><span class="sit sit-${c.situacao}">${SIT[c.situacao]}</span></div>
       <div class="mini suave">${esc(c.telefone_fmt)}${c.aniversario ? ' · 🎂 ' + esc(c.aniversario) : ''} · ${esc(ORIGEM[c.origem] || c.origem || '')}</div>
       ${c.etiquetas.length ? `<div class="etqs">${c.etiquetas.map(e => `<span class="etq">${esc(e)}</span>`).join('')}</div>` : ''}
+      ${c.ultima_mensagem || c.ultima_resposta || c.tem_whatsapp === false ? `<div class="extra">${[
+          c.ultima_mensagem ? '📨 última mensagem ' + esc(c.ultima_mensagem) : '', c.ultima_resposta ? '💬 respondeu ' + esc(c.ultima_resposta) : '',
+          c.tem_whatsapp === false ? '<span class="n-erro">📵 sem WhatsApp</span>' : ''].filter(Boolean).join(' · ')}</div>` : ''}
     </div>`).join('') || `<div class="vazio">${t.todos ? 'Ninguém com esse filtro.' : 'Nenhum cliente ainda. Toque em ➕ Novo cliente, importe uma planilha ou imprima o QR do balcão (⚙️ Ajustes).'}</div>`;
+  desenharSelecao();
   if (d.total_filtro > d.clientes.length) $('#lista').insertAdjacentHTML('beforeend', `<div class="vazio mini">Mostrando ${d.clientes.length} de ${d.total_filtro}: use a busca.</div>`);
 }
 $('#busca').addEventListener('input', () => { clearTimeout(timerBusca); timerBusca = setTimeout(carregarClientes, 300); });
 $('#situacao').addEventListener('change', carregarClientes);
+$('#filtro').addEventListener('change', carregarClientes);
 $('#chips-etq').addEventListener('click', e => { const b = e.target.closest('[data-etq]'); if (b) { S.filtroEtq = b.dataset.etq; carregarClientes(); } });
-$('#lista').addEventListener('click', e => { const c = e.target.closest('.cli'); if (c) abrirCliente(S.dados.clientes.find(x => x.id === +c.dataset.id)); });
+$('#lista').addEventListener('click', e => {
+  const c = e.target.closest('.cli'); if (!c) return;
+  const id = +c.dataset.id;
+  if (S.sel) { if (S.sel.has(id)) S.sel.delete(id); else S.sel.add(id); desenharClientes(); return; }
+  abrirFicha(id);
+});
 $('#lista').addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.matches('.cli')) e.target.click(); });
 $('#btn-novo').onclick = () => abrirCliente(null);
+
+function marcarBadge(n) { $('#badge-resp').hidden = !n; $('#badge-resp').textContent = n > 99 ? '99+' : n; }
+
+// ---- 📋 ficha do cliente (tocar no nome)
+const ST_ENVIO = {enviado: '✔️ enviada', falhou: '❌ falhou', pendente: '⏳ na fila', pulado: '⏭️ pulou'};
+async function abrirFicha(id) {
+  let c;
+  try { c = await api('GET', `/api/gestao/clientes/${id}/ficha`); } catch (e) { return falhou(e); }
+  const r = c.resumo;
+  const wpp = c.tem_whatsapp === false ? '<span class="n-erro">📵 sem WhatsApp</span>' : c.tem_whatsapp ? '✅ WhatsApp conferido' : '';
+  abrirModal(`<div class="ficha"><h3>👤 ${esc(c.nome)} <span class="sit sit-${c.situacao}">${SIT[c.situacao]}</span></h3>
+    <div class="mini suave">${esc(c.telefone_fmt)}${c.aniversario ? ' · 🎂 ' + esc(c.aniversario) : ''} · veio por: ${esc(ORIGEM[c.origem] || c.origem || '—')}
+      ${c.criado ? ' · cadastrado ' + esc(c.criado) : ''}${wpp ? ' · ' + wpp : ''}</div>
+    ${c.etiquetas.length ? `<div class="etqs" style="margin-top:6px">${c.etiquetas.map(e => `<span class="etq">${esc(e)}</span>`).join('')}</div>` : ''}
+    ${c.observacao ? `<div class="mini" style="margin-top:6px">📝 ${esc(c.observacao)}</div>` : ''}
+    ${c.situacao === 'saiu' ? `<div class="mini n-erro">🚫 Pediu para sair em ${esc(c.saiu_em)}.</div>` : ''}
+    <div class="acoes">
+      <button type="button" class="btn" id="f-editar">✏️ Editar</button>
+      <a class="btn" href="${esc(c.wa)}" target="_blank" rel="noopener">💬 Abrir no WhatsApp</a>
+      ${c.situacao === 'recebe' ? '<button type="button" class="btn" id="f-msg">✉️ Mensagem só para este cliente</button>' : ''}
+    </div>
+    <div class="ficha-resumo" style="margin-top:10px"><span>📨 recebeu ${r.recebeu}</span><span>👁️ leu ${r.leu}</span>
+      <span>💬 respondeu ${r.respondeu}</span>${r.reservas ? `<span>🏎️ ${r.reservas} reserva(s)</span>` : ''}</div>
+    ${c.respostas.length ? `<h4>💬 Respostas</h4><div class="itens">${c.respostas.slice(0, 15).map(x => `<div class="item">
+        <div class="mini suave">${esc(x.quando)}${x.campanha ? ' · ' + esc(x.campanha) : ''}</div><div class="txt">${esc(x.texto)}</div></div>`).join('')}</div>` : ''}
+    ${c.reservas.length ? `<h4>🏎️ Reservas</h4><div class="itens">${c.reservas.map(x => `<div class="item">${esc(x.titulo)} · ${x.quantidade} unid. ·
+        ${x.status === 'cancelada' ? '❌ cancelada' : x.status === 'retirada' ? '📦 retirou' : x.garantida ? `✅ garantida (${x.posicao}º)` : '⏳ espera'}
+        <span class="mini suave">· ${esc(x.quando)}</span></div>`).join('')}</div>` : ''}
+    <h4>📨 Mensagens</h4>${c.envios.length ? `<div class="tabela-rolagem" style="max-height:30vh"><table class="grade"><thead><tr><th>Mensagem</th><th>Situação</th></tr></thead><tbody>
+      ${c.envios.map(e => `<tr><td>${esc(e.titulo)}</td><td class="mini">${e.lida ? '👁️ leu ' + esc(e.lida) : e.entregue ? '✔️✔️ entregue ' + esc(e.entregue)
+        : (ST_ENVIO[e.status] || e.status) + (e.enviado ? ' ' + esc(e.enviado) : '')}${e.erro ? ' · ' + esc(e.erro) : ''}</td></tr>`).join('')}
+    </tbody></table></div>` : '<div class="mini suave">Ainda não recebeu mensagens.</div>'}</div>`, () => carregarClientes(), true);
+  $('#f-editar').onclick = () => abrirCliente(c);
+  if ($('#f-msg')) $('#f-msg').onclick = () => {
+    S.publico = {todos: false, etiquetas: [], ids: [c.id], rotulo: c.nome};
+    fecharModal(); mostrarAba('mensagem');
+  };
+}
+
+// ---- ☑️ vários de uma vez
+function desenharSelecao() {
+  $('#barra-sel').hidden = !S.sel;
+  $('#btn-selecionar').textContent = S.sel ? '✖ Sair da seleção' : '☑️ Selecionar';
+  if (S.sel) $('#sel-qtd').textContent = `${S.sel.size} marcado(s)`;
+}
+$('#btn-selecionar').onclick = () => { S.sel = S.sel ? null : new Set(); desenharClientes(); };
+$('#sel-sair').onclick = () => { S.sel = null; desenharClientes(); };
+$('#sel-todos').onclick = () => { S.sel = new Set(S.dados.ids_filtro); desenharClientes(); };
+function precisaMarcar() { if (!S.sel || !S.sel.size) { alert('Toque nos clientes para marcar.'); return true; } return false; }
+$('#sel-msg').onclick = () => {
+  if (precisaMarcar()) return;
+  S.publico = {todos: false, etiquetas: [], ids: [...S.sel], rotulo: `${S.sel.size} marcado(s)`};
+  S.sel = null; desenharClientes(); mostrarAba('mensagem');
+};
+function janelaEtiqueta(acao) {
+  if (precisaMarcar()) return;
+  const todas = (S.dados ? S.dados.etiquetas : []).map(e => e.nome);
+  abrirModal(`<h3>🏷️ ${acao === 'etiqueta_por' ? 'Pôr' : 'Tirar'} etiqueta · ${S.sel.size} cliente(s)</h3>
+    <form id="form-lote" class="form"><label>Etiqueta<input id="l-etq" maxlength="30" autocomplete="off"></label>
+      ${todas.length ? `<div class="chips" id="l-chips">${todas.map(e => `<button type="button" class="chip" data-etq-l="${esc(e)}">${esc(e)}</button>`).join('')}</div>` : ''}
+      <div><button class="btn prim" type="submit" id="l-ok">${acao === 'etiqueta_por' ? '🏷️ Pôr' : '🏷️ Tirar'}</button></div></form>`, null, true);
+  if ($('#l-chips')) $('#l-chips').onclick = e => { const b = e.target.closest('[data-etq-l]'); if (b) $('#l-etq').value = b.dataset.etqL; };
+  $('#form-lote').onsubmit = async ev => {
+    ev.preventDefault(); $('#l-ok').disabled = true;
+    try {
+      const r = await api('POST', '/api/gestao/clientes/lote', {acao, ids: [...S.sel], etiqueta: $('#l-etq').value});
+      fecharModal(); status(r.mensagem); carregarClientes();
+    } catch (e) { $('#l-ok').disabled = false; falhou(e); }
+  };
+  setTimeout(() => $('#l-etq').focus(), 50);
+}
+$('#sel-por').onclick = () => janelaEtiqueta('etiqueta_por');
+$('#sel-tirar').onclick = () => janelaEtiqueta('etiqueta_tirar');
+$('#sel-excluir').onclick = async () => {
+  if (precisaMarcar()) return;
+  if (!confirm(`Excluir ${S.sel.size} cliente(s)? Somem da lista e das próximas mensagens.`)) return;
+  try { const r = await api('POST', '/api/gestao/clientes/lote', {acao: 'excluir', ids: [...S.sel]}); S.sel = null; status(r.mensagem); carregarClientes(); }
+  catch (e) { falhou(e); }
+};
+
+// ---- 🏷️ etiquetas: renomear (ou juntar) e apagar
+$('#btn-etiquetas').onclick = () => {
+  const etqs = S.dados ? S.dados.etiquetas : [];
+  abrirModal(`<h3>🏷️ Etiquetas</h3>${etqs.length ? `<div class="itens">${etqs.map(e => `<div class="item cli-topo">
+      <span><b>${esc(e.nome)}</b> <span class="mini suave">${e.qtd} cliente(s)</span></span>
+      <span class="acoes-mini"><button type="button" class="btn" data-ren="${esc(e.nome)}">✏️ Renomear</button>
+        <button type="button" class="btn perigo" data-apa="${esc(e.nome)}">🗑️ Apagar</button></span></div>`).join('')}</div>
+    <div class="mini suave" style="margin-top:8px">Renomear para um nome que já existe junta as duas. Apagar tira a etiqueta de todos (os clientes continuam).</div>`
+    : '<div class="mini suave">Nenhuma etiqueta ainda.</div>'}`, null, true);
+  $('#modal').onclick = async e => {
+    const b = e.target.closest('[data-ren], [data-apa]'); if (!b) return;
+    let corpo;
+    if (b.dataset.ren) {
+      const nova = prompt(`Novo nome para a etiqueta "${b.dataset.ren}":`, b.dataset.ren);
+      if (!nova || nova.trim() === b.dataset.ren) return;
+      corpo = {acao: 'renomear', etiqueta: b.dataset.ren, nova};
+    } else {
+      if (!confirm(`Apagar a etiqueta "${b.dataset.apa}" de todos os clientes?`)) return;
+      corpo = {acao: 'apagar', etiqueta: b.dataset.apa};
+    }
+    try {
+      const r = await api('POST', '/api/gestao/clientes/etiqueta', corpo);
+      $('#modal').onclick = null; fecharModal(); status(r.mensagem);
+      if (S.filtroEtq === corpo.etiqueta) S.filtroEtq = corpo.nova || '';
+      await carregarClientes(); $('#btn-etiquetas').click();
+    } catch (er) { falhou(er); }
+  };
+  BASE.aoFecharModal = () => { $('#modal').onclick = null; };
+};
+
+// ---- 🔎 conferir quem tem WhatsApp
+$('#btn-conferir').onclick = async () => {
+  if (!confirm('Conferir quais números não têm WhatsApp? Roda em segundo plano (1 número a cada 1,5 s) e evita falhas e bloqueio.')) return;
+  try { const r = await api('POST', '/api/gestao/clientes/conferir-whatsapp', {}); status(r.mensagem); carregarClientes(); }
+  catch (e) { falhou(e); }
+};
 
 function abrirCliente(c) {
   const todas = (S.dados ? S.dados.etiquetas : []).map(e => e.nome);
@@ -370,6 +571,10 @@ async function previaImportacao(corpo) {
 // ------------------------------------------------------------------ ✉️ mensagem
 function desenharPublico() {
   if (!S.dados) return;
+  if (S.publico.ids && S.publico.ids.length) {           // [CLIENTES+] marcados na lista / um cliente pela ficha
+    $('#publico').innerHTML = `<button type="button" class="chip sel" data-pub="__ids">☑️ ${esc(S.publico.rotulo || S.publico.ids.length + ' marcado(s)')} ✖</button>`;
+    return;
+  }
   const etqs = S.dados.etiquetas.filter(e => e.recebem > 0);
   S.publico.etiquetas = S.publico.etiquetas.filter(n => etqs.some(e => e.nome === n));
   $('#publico').innerHTML = `<button type="button" class="chip ${S.publico.todos ? 'sel' : ''}" data-pub="__todos">Todos <small>${S.dados.totais.recebe}</small></button>`
@@ -377,7 +582,8 @@ function desenharPublico() {
 }
 $('#publico').addEventListener('click', e => {
   const b = e.target.closest('[data-pub]'); if (!b) return;
-  if (b.dataset.pub === '__todos') { S.publico.todos = !S.publico.todos; S.publico.etiquetas = []; }
+  if (b.dataset.pub === '__ids') S.publico = {todos: false, etiquetas: []};
+  else if (b.dataset.pub === '__todos') { S.publico.todos = !S.publico.todos; S.publico.etiquetas = []; }
   else {
     S.publico.todos = false;
     const i = S.publico.etiquetas.indexOf(b.dataset.pub);
@@ -386,22 +592,32 @@ $('#publico').addEventListener('click', e => {
   desenharPublico(); agendarPrevia();
 });
 function textoMsg() { return $('#m-texto').value; }
+// *negrito* e _itálico_ como no WhatsApp
+function fmtWhats(t) { return esc(t).replace(/\*([^*\n]+)\*/g, '<b>$1</b>').replace(/_([^_\n]+)_/g, '<i>$1</i>'); }
 function agendarPrevia() { clearTimeout(S.timerPrevia); S.timerPrevia = setTimeout(previa, 350); desenharBalao(); }
 function desenharBalao(texto) {
   $('#m-cont').textContent = `${textoMsg().length}/1500`;
   if (texto === undefined) texto = textoMsg().replace(/\{\s*nome\s*\}/gi, S.nomeExemplo || 'Maria')
     + (textoMsg().trim() ? '\n\n_Para não receber mais mensagens, responda SAIR._' : '');
-  $('#p-texto').innerHTML = esc(texto || 'Escreva a mensagem…').replace(/\*([^*\n]+)\*/g, '<b>$1</b>').replace(/_([^_\n]+)_/g, '<i>$1</i>');
+  $('#p-texto').innerHTML = fmtWhats(texto || 'Escreva a mensagem…');
   $('#p-img').hidden = !S.fotoUrl; if (S.fotoUrl) $('#p-img').src = S.fotoUrl;
 }
+function temPublico() { return S.publico.todos || S.publico.etiquetas.length || (S.publico.ids || []).length; }
+function publicoApi() { return S.publico.ids && S.publico.ids.length ? {ids: S.publico.ids} : {todos: S.publico.todos, etiquetas: S.publico.etiquetas}; }
+function reservaDados() {
+  return $('#r-ligada').checked ? {ligada: true, palavra: $('#r-palavra').value, estoque: $('#r-estoque').value, item: $('#r-item').value,
+                                   auto: $('#r-auto').checked} : null;
+}
+$('#r-ligada').addEventListener('change', () => { $('#r-campos').hidden = !$('#r-ligada').checked; agendarPrevia(); });
+for (const id of ['#r-palavra', '#r-estoque', '#r-item']) $(id).addEventListener('input', agendarPrevia);
 async function previa() {
   const seq = ++S.previaSeq;
-  if (!S.publico.todos && !S.publico.etiquetas.length) {
+  if (!temPublico()) {
     $('#qtd-publico').innerHTML = '<span class="suave">Toque em <b>Todos</b> ou numa ou mais etiquetas. Só recebe quem autorizou.</span>';
     $('#m-regras').textContent = ''; return;
   }
   try {
-    const r = await api('POST', '/api/gestao/clientes/previa', {texto: textoMsg(), publico: S.publico});
+    const r = await api('POST', '/api/gestao/clientes/previa', {texto: textoMsg(), publico: publicoApi(), reserva: reservaDados()});
     if (seq !== S.previaSeq) return;
     S.nomeExemplo = r.exemplo_nome; S.qtd = r.qtd;
     $('#qtd-publico').innerHTML = r.qtd ? `👥 <b>${r.qtd} cliente(s)</b> vão receber: ${esc(r.nomes.join(', '))}${r.qtd > r.nomes.length ? '…' : ''}`
@@ -484,17 +700,21 @@ $('#m-teste').onclick = () => {
 };
 $('#m-enviar').onclick = async () => {
   if (!textoMsg().trim()) { alert('Escreva a mensagem.'); return; }
-  if (!S.publico.todos && !S.publico.etiquetas.length) { alert('Escolha para quem vai: Todos ou uma etiqueta.'); return; }
+  if (!temPublico()) { alert('Escolha para quem vai: Todos ou uma etiqueta.'); return; }
   if (agendando() && !$('#m-quando').value) { alert('Escolha o dia e a hora do agendamento.'); return; }
-  const quem = S.publico.todos ? 'TODOS os clientes que autorizaram' : 'as etiquetas ' + S.publico.etiquetas.join(', ');
-  if (!confirm(`${agendando() ? 'Agendar' : 'Enviar agora'} para ${S.qtd || ''} cliente(s) (${quem})${S.foto ? ', com a foto' : ''}?`)) return;
+  const quem = (S.publico.ids || []).length ? (S.publico.rotulo || 'os marcados')
+    : S.publico.todos ? 'TODOS os clientes que autorizaram' : 'as etiquetas ' + S.publico.etiquetas.join(', ');
+  const res = reservaDados();
+  if (!confirm(`${agendando() ? 'Agendar' : 'Enviar agora'} para ${S.qtd || ''} cliente(s) (${quem})${S.foto ? ', com a foto' : ''}`
+               + (res ? `, com reserva por resposta (${(res.palavra || 'QUERO').toUpperCase()}${res.estoque ? ', ' + res.estoque + ' unid.' : ''})` : '') + '?')) return;
   $('#m-enviar').disabled = true;
   try {
-    const r = await comPerguntas('/api/gestao/clientes/campanhas', {texto: textoMsg(), foto: S.foto, publico: S.publico,
+    const r = await comPerguntas('/api/gestao/clientes/campanhas', {texto: textoMsg(), foto: S.foto, publico: publicoApi(), reserva: res,
       agendar: agendando() ? $('#m-quando').value : ''});
     if (r && r.ok) {
       status(r.mensagem);
       $('#m-texto').value = ''; S.foto = S.fotoUrl = null; $('#m-foto').hidden = true; S.publico = {todos: false, etiquetas: []};
+      $('#r-ligada').checked = false; $('#r-campos').hidden = true; $('#r-estoque').value = $('#r-item').value = '';
       document.querySelector('input[name=quando][value=agora]').checked = true;
       mostrarAba('envios');
     }
@@ -509,6 +729,7 @@ async function carregarEnvios() {
   try { r = await api('GET', '/api/gestao/clientes/campanhas'); }
   catch (e) { if (e.status !== 401 && e.status !== 403) $('#env-info').innerHTML = `<span class="n-erro">${esc(e.message)}</span>`; return; }
   $('#aviso-numero').hidden = r.configurado;
+  marcarBadge(r.respostas_nao_vistas);
   $('#env-info').innerHTML = `Hoje: <b>${r.enviados_hoje}</b> de ${r.limite_dia} mensagens · só das ${esc(r.horario)} · o robô começa em até 1 minuto.`;
   $('#env-lista').innerHTML = r.campanhas.map(c => {
     const feitos = c.enviados + c.falhas + c.pulados, pct = c.total ? Math.round(feitos * 100 / c.total) : 0;
@@ -517,6 +738,9 @@ async function carregarEnvios() {
       <div class="mini suave">${esc(c.publico)} · ${c.status === 'agendada' ? 'para ' + esc(c.agendada) : 'criada ' + esc(c.criada)}${c.foto ? ' · 📷' : ''}</div>
       <div class="progresso"><div style="width:${pct}%"></div></div>
       <div class="mini">✅ ${c.enviados} de ${c.total}${c.falhas ? ` · <span class="n-erro">❌ ${c.falhas} falharam</span>` : ''}${c.pulados ? ` · ⏭️ ${c.pulados} pularam` : ''}${c.observacao ? ` · <span class="n-aviso">${esc(c.observacao)}</span>` : ''}</div>
+      ${c.enviados ? `<div class="mini">✔️✔️ ${c.entregues} entregues · 👁️ ${c.lidas} leram${c.respostas ? ` · 💬 ${c.respostas} resposta(s)` : ''}</div>` : ''}
+      ${c.reserva ? `<div class="mini"><b>🏎️ ${c.reserva.unidades}${c.reserva.estoque ? '/' + c.reserva.estoque : ''} reservada(s)</b> · ${c.reserva.garantidas} garantida(s)${
+        c.reserva.espera ? ` · ⏳ ${c.reserva.espera} na espera` : ''}${c.reserva.aberta ? '' : ' · 🔒 encerrada'}</div>` : ''}
     </div>`;
   }).join('') || '<div class="vazio">Nenhuma mensagem enviada ainda. Vá em ✉️ Mensagem.</div>';
   if (S.aba === 'envios' && r.campanhas.some(c => c.status === 'enviando' || c.status === 'agendada'))
@@ -524,18 +748,44 @@ async function carregarEnvios() {
 }
 $('#env-lista').addEventListener('click', e => { const c = e.target.closest('.camp'); if (c) abrirCampanha(+c.dataset.camp); });
 $('#env-lista').addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.matches('.camp')) e.target.click(); });
+function htmlReserva(c) {
+  const r = c.reserva;
+  const sit = x => x.status === 'cancelada' ? '❌ cancelada' : x.status === 'retirada' ? '📦 retirou' : x.garantida ? '✅ garantida' : `⏳ espera ${x.espera}º`;
+  return `<div class="reserva-box">
+    <div><b>🏎️ Reserva: responda ${esc(r.palavra)}</b>${r.item ? ' · ' + esc(r.item) : ''} · ${r.aberta ? '🟢 aberta' : '🔒 encerrada'}</div>
+    <div class="mini"><b>${r.unidades}${r.estoque ? ' de ' + r.estoque : ''} unidade(s)</b> com ${r.garantidas} cliente(s)${r.espera ? ` · ⏳ ${r.espera} na espera` : ''}${
+      r.retiradas ? ` · 📦 ${r.retiradas} retiraram` : ''}${r.estoque && r.sobram ? ` · sobram ${r.sobram}` : ''}${r.auto ? '' : ' · sem resposta automática'}</div>
+    <div class="reserva-ctl"><label class="mini">Unidades <input id="rv-estoque" inputmode="numeric" value="${r.estoque ?? ''}" placeholder="sem limite"></label>
+      <button type="button" class="btn" data-rv="estoque">💾</button>
+      ${r.aberta ? '<button type="button" class="btn perigo" data-rv="encerrar">🔒 Encerrar reservas</button>'
+                 : '<button type="button" class="btn" data-rv="reabrir">🔓 Reabrir</button>'}</div>
+    ${c.reservas.length ? `<div class="tabela-rolagem" style="max-height:34vh"><table class="grade"><thead><tr><th>#</th><th>Cliente</th><th>Unid.</th><th>Situação</th><th></th></tr></thead><tbody>
+      ${c.reservas.map(x => `<tr class="${x.status === 'cancelada' ? 'cancelada' : x.garantida ? '' : 'espera'}"><td>${x.posicao ?? ''}</td>
+        <td>${esc(x.nome)}<div class="mini suave">${esc(x.quando)} · “${esc(x.texto)}”</div></td><td>${x.quantidade}</td><td class="mini">${sit(x)}</td>
+        <td><span class="acoes-mini">${x.status === 'ativa' ? `<button type="button" class="btn" data-rv="retirou" data-cli="${x.cliente_id}">📦 Retirou</button>
+          <button type="button" class="btn perigo" data-rv="cancelar" data-cli="${x.cliente_id}">❌</button>`
+          : `<button type="button" class="btn" data-rv="reativar" data-cli="${x.cliente_id}" title="${x.status === 'cancelada' ? 'Voltar para a fila (no fim)' : 'Desfazer'}">↩️</button>`}</span></td></tr>`).join('')}
+    </tbody></table></div>` : '<div class="mini suave">Ninguém reservou ainda.</div>'}
+  </div>`;
+}
 async function abrirCampanha(id) {
   let c;
   try { c = await api('GET', '/api/gestao/clientes/campanhas/' + id); } catch (e) { return falhou(e); }
   const ic = {enviado: '✅', falhou: '❌', pendente: '⏳', pulado: '⏭️'};
+  const ent = e => e.lida ? '👁️ leu ' + esc(e.lida) : e.entregue ? '✔️✔️ ' + esc(e.entregue) : esc(e.erro || e.enviado);
   abrirModal(`<h3>${esc(c.titulo)} <span class="st st-${c.status}">${esc(c.status_nome)}</span></h3>
     <div class="form">
       <div class="mini suave">${esc(c.publico)} · criada ${esc(c.criada)} por ${esc(c.criada_por)}${c.agendada ? ' · agendada para ' + esc(c.agendada) : ''}${c.concluida ? ' · terminou ' + esc(c.concluida) : ''}</div>
       ${c.observacao ? `<div class="n-aviso">${esc(c.observacao)}</div>` : ''}
-      <div class="whats"><div class="balao">${c.foto ? `<img src="/api/gestao/clientes/foto/${encodeURIComponent(c.foto)}" alt="Foto da mensagem">` : ''}<div class="txt">${esc(c.texto)}</div></div></div>
-      <div><b>✅ ${c.enviados}</b> receberam de ${c.total}${c.falhas ? ` · ❌ ${c.falhas} falharam` : ''}${c.pulados ? ` · ⏭️ ${c.pulados} pularam` : ''}${c.pendentes ? ` · ⏳ ${c.pendentes} na fila` : ''}</div>
+      <div class="whats"><div class="balao">${c.foto ? `<img src="/api/gestao/clientes/foto/${encodeURIComponent(c.foto)}" alt="Foto da mensagem">` : ''}<div class="txt">${fmtWhats(c.texto)}</div></div></div>
+      <div><b>✅ ${c.enviados}</b> receberam de ${c.total}${c.falhas ? ` · ❌ ${c.falhas} falharam` : ''}${c.pulados ? ` · ⏭️ ${c.pulados} pularam` : ''}${c.pendentes ? ` · ⏳ ${c.pendentes} na fila` : ''}
+        ${c.enviados ? ` · ✔️✔️ ${c.entregues} entregues · 👁️ ${c.lidas} leram` : ''}</div>
+      ${c.reserva ? htmlReserva(c) : ''}
+      ${c.lista_respostas.length ? `<details ${c.reserva ? '' : 'open'}><summary>💬 ${c.lista_respostas.length} resposta(s)</summary><div class="itens" style="margin-top:6px">
+        ${c.lista_respostas.map(x => `<div class="item"><b>${esc(x.nome || x.telefone_fmt)}</b> <span class="mini suave">${esc(x.quando)}</span><div class="txt">${esc(x.texto)}</div></div>`).join('')}
+      </div></details>` : ''}
       <div class="tabela-rolagem" style="max-height:36vh"><table class="grade"><thead><tr><th></th><th>Cliente</th><th>WhatsApp</th><th>Quando / motivo</th></tr></thead><tbody>
-        ${c.envios.map(e => `<tr class="env-linha"><td>${ic[e.status] || ''}</td><td>${esc(e.nome)}</td><td>${esc(e.telefone_fmt)}</td><td class="mini ${e.status}">${esc(e.erro || e.enviado)}</td></tr>`).join('')}
+        ${c.envios.map(e => `<tr class="env-linha"><td>${ic[e.status] || ''}</td><td>${esc(e.nome)}</td><td>${esc(e.telefone_fmt)}</td><td class="mini ${e.status}">${ent(e)}</td></tr>`).join('')}
       </tbody></table></div>
       <div class="acoes" style="margin-top:0">
         ${c.status === 'pausada' ? '<button class="btn prim" type="button" data-acao="continuar">▶️ Continuar</button>' : ''}
@@ -543,6 +793,19 @@ async function abrirCampanha(id) {
         ${['agendada', 'enviando', 'pausada'].includes(c.status) ? '<button class="btn perigo" type="button" data-acao="cancelar">⏹️ Cancelar</button>' : ''}
       </div>
     </div>`);
+  document.querySelectorAll('#modal [data-rv]').forEach(b => b.onclick = async () => {      // 🏎️ mexer na fila
+    const acao = b.dataset.rv, corpo = {acao};
+    if (b.dataset.cli) corpo.cliente_id = +b.dataset.cli;
+    if (acao === 'estoque') corpo.estoque = $('#rv-estoque').value;
+    if (acao === 'cancelar' && !confirm('Cancelar a reserva desse cliente? Quem está na espera e couber sobe (e é avisado).')) return;
+    if (acao === 'encerrar') {
+      if (!confirm('Encerrar as reservas? Quem responder depois recebe que já encerrou.')) return;
+      if (c.reserva.espera) corpo.avisar_espera = confirm(`Avisar os ${c.reserva.espera} da lista de espera que esgotou?`);
+    }
+    b.disabled = true;
+    try { const r = await api('POST', `/api/gestao/clientes/campanhas/${id}/reservas`, corpo); status(r.mensagem); abrirCampanha(id); carregarEnvios(); }
+    catch (e) { b.disabled = false; falhou(e); }
+  });
   document.querySelectorAll('#modal [data-acao]').forEach(b => b.onclick = async () => {
     if (b.dataset.acao === 'cancelar' && !confirm('Cancelar? Quem ainda não recebeu não vai receber.')) return;
     b.disabled = true;
@@ -550,6 +813,41 @@ async function abrirCampanha(id) {
     catch (e) { b.disabled = false; falhou(e); }
   });
 }
+
+// ------------------------------------------------------------------ 💬 respostas
+async function carregarRespostas(marcar) {
+  clearTimeout(S.timerResp);
+  let r;
+  try { r = await api('GET', '/api/gestao/clientes/respostas'); }
+  catch (e) { if (e.status !== 401 && e.status !== 403) $('#resp-lista').innerHTML = `<div class="vazio n-erro">${esc(e.message)}</div>`; return; }
+  $('#resp-lista').innerHTML = r.respostas.map(x => `<div class="resp ${x.vista ? '' : 'nova'}">
+      <div class="cli-topo"><b>${esc(x.nome || x.telefone_fmt)}${x.cadastrado ? '' : ' <span class="mini n-aviso">(não cadastrado)</span>'}</b>
+        <span class="mini suave">${esc(x.quando)}</span></div>
+      ${x.campanha ? `<div><span class="camp-tag">↩️ ${esc(x.campanha)}</span></div>` : ''}
+      <div class="txt">${esc(x.texto)}</div>
+      <div class="acoes acoes-mini"><a class="btn" href="https://wa.me/${esc(x.telefone)}" target="_blank" rel="noopener">💬 Responder</a>
+        ${x.cadastrado ? `<button type="button" class="btn" data-ficha="${x.cliente_id}">📋 Ficha</button>`
+          : `<button type="button" class="btn" data-cadastrar="${x.id}">➕ Cadastrar</button>`}</div>
+    </div>`).join('') || '<div class="vazio">Nenhuma resposta ainda. Elas aparecem aqui quando os clientes respondem as mensagens (precisa do endereço em ⚙️ Ajustes › Webhooks).</div>';
+  S.respostas = r.respostas;
+  marcarBadge(r.nao_vistas);
+  if (marcar && r.nao_vistas) {                  // abriu a aba: as novas ficam destacadas agora e contam como vistas
+    try { await api('POST', '/api/gestao/clientes/respostas-vistas', {todas: true}); marcarBadge(0); } catch (e) {}
+  }
+  if (S.aba === 'respostas') S.timerResp = setTimeout(() => carregarRespostas(false), 30000);
+}
+$('#resp-atualizar').onclick = () => carregarRespostas(true);
+$('#resp-lista').addEventListener('click', e => {
+  const f = e.target.closest('[data-ficha]');
+  if (f) return abrirFicha(+f.dataset.ficha);
+  const c = e.target.closest('[data-cadastrar]');
+  if (c) {
+    const x = (S.respostas || []).find(y => y.id === +c.dataset.cadastrar);
+    if (!x) return;
+    abrirCliente(null);
+    $('#c-nome').value = x.nome_contato || ''; $('#c-tel').value = x.telefone_fmt; $('#c-aceite').checked = false;
+  }
+});
 
 // ------------------------------------------------------------------ ⚙️ ajustes
 async function carregarAjustes() {

@@ -273,6 +273,18 @@ pulou; cancelar, continuar, reenviar para quem falhou). Pela internet só ficam 
 Arquivos: `clientes.py`, `templates/gestao_clientes.html`, `templates/clientes_cadastro.html`; tabelas `Clientes`,
 `ClienteEtiquetas`, `CampanhasClientes`, `CampanhaEnvios`, `ParametrosClientes`; fotos em `fotos_clientes/`.
 O QR precisa de `pip install qrcode` no servidor (sem ele, o resto funciona e a tela avisa).
+**Clientes+ (10/2026):** 💬 aba **Respostas** (tudo o que os clientes respondem, ligado à mensagem; quem não está
+cadastrado vira cliente com um toque); 🏎️ **reserva por resposta** na mensagem (palavra, ex. QUERO, unidades e o que
+é: quem responde entra numa fila, "QUERO 2" pede 2, resposta automática com a posição; quem não cabe fica na espera e
+sobe sozinho — avisado — se alguém desistir; a gestão marca 📦 retirou / ❌ cancela / muda as unidades / 🔒 encerra
+e pode avisar a espera que esgotou; aviso "Reservas esgotadas" no grupo da gestão); ✔️✔️ **entregue e lida** por
+mensagem e por cliente (webhook "Status da mensagem"); 📵 **tem WhatsApp?** (o robô confere antes de mandar e pula
+quem não tem, sem contar como falha; botão 🔎 Conferir números; vale 30 dias); 📋 **ficha do cliente** (mensagens,
+leitura, respostas, reservas, 💬 Abrir no WhatsApp, ✉️ mensagem só para ele); ☑️ **seleção** (pôr/tirar etiqueta,
+excluir, mensagem só para os marcados); ⭐ **filtros prontos** (aniversário no mês, novos, QR, responderam, sem
+mensagem há 30 dias, nunca receberam, sem WhatsApp) e 🏷️ renomear/juntar/apagar etiquetas. Os dois webhooks da
+instância dos clientes (Ao receber e Status da mensagem) usam o mesmo endereço de ⚙️ Ajustes. Tabelas novas:
+`ClienteRespostas`, `CampanhaReservas` (+ colunas em `Clientes`, `CampanhaEnvios` e `CampanhasClientes`).
 
 ### Novo (só na Web) — ✅ Confirmar presença e 🙋 Vagas para freelancers (10/2026: Gestão › 🗓️ Escala)
 **Confirmar presença:** a mensagem do 📱 Confirmar escala (WhatsApp) termina com um **link** de cada pessoa
