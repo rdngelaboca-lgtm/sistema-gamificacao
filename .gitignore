@@ -13,3 +13,6 @@ notas_xml_sefaz/
 
 # [SEGURANÇA] chave que assina o login (gerada no servidor; nunca no GitHub)
 chave_sessoes.key
+
+# [CLIENTES] fotos das mensagens para clientes (ficam só no servidor; nunca no GitHub)
+fotos_clientes/

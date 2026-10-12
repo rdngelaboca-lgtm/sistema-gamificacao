@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0E6B63">
+<meta name="robots" content="noindex">
+<title>Gela Boca · Receba nossas novidades</title>
+<!-- [CLIENTES] Página PÚBLICA do QR do balcão: o cliente se cadastra e autoriza receber as mensagens.
+     Só tem este formulário; nada da Gestão aparece aqui. -->
+<style>
+  :root { --verde: #0E6B63; --verde-esc: #0B564F; --verde-claro: #DDEFEC; --texto: #16201F; --suave: #55625F; --linha: #DCE3E1; --erro: #c62828; }
+  * { box-sizing: border-box; }
+  html { background: #F3F6F5; }
+  body { margin: 0; min-height: 100vh; background: linear-gradient(180deg, #DDEFEC 0%, #F3F6F5 260px) no-repeat; color: var(--texto);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 16px; }
+  main { max-width: 440px; margin: 0 auto; padding: 22px 16px 40px; }
+  .topo { text-align: center; margin-bottom: 14px; }
+  .topo .marca { font-size: 34px; font-weight: 800; color: var(--verde-esc); }
+  .topo p { margin: 6px 0 0; color: var(--suave); }
+  form, .ok { background: #fff; border: 1px solid var(--linha); border-radius: 18px; padding: 18px; display: grid; gap: 14px; box-shadow: 0 6px 20px #0E6B6314; }
+  label { display: grid; gap: 6px; font-weight: 700; font-size: 14px; color: var(--suave); }
+  input, select { font: inherit; font-size: 17px; border: 1px solid var(--linha); border-radius: 10px; padding: 11px 12px; width: 100%; background: #fff; color: var(--texto); }
+  input:focus, select:focus, button:focus-visible { outline: 2px solid var(--verde); outline-offset: 1px; }
+  .dupla { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .aceite { display: flex; gap: 10px; align-items: flex-start; font-weight: 600; color: var(--texto); font-size: 15px; }
+  .aceite input { width: 22px; height: 22px; flex: none; margin-top: 1px; }
+  button { font: inherit; font-weight: 800; font-size: 18px; background: var(--verde); color: #fff; border: 0; border-radius: 12px; padding: 14px; cursor: pointer; }
+  button[disabled] { opacity: .6; }
+  .mini { font-size: 13px; color: var(--suave); }
+  #erro { color: var(--erro); font-weight: 600; min-height: 1.2em; }
+  .escondido { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+  .ok { text-align: center; }
+  .ok .grande { font-size: 54px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <div class="topo"><div class="marca">🍦 Gela Boca</div><p>Receba no WhatsApp os sabores novos, as promoções e um mimo no seu aniversário!</p></div>
+  <form id="form" autocomplete="on" novalidate>
+    <label>Seu nome<input id="nome" name="name" autocomplete="given-name" maxlength="80" required></label>
+    <label>Seu WhatsApp (com DDD)<input id="telefone" name="tel" type="tel" inputmode="tel" autocomplete="tel" placeholder="(66) 99999-1234" maxlength="20" required></label>
+    <div>
+      <div class="mini" style="font-weight:700;margin-bottom:6px">Seu aniversário (opcional)</div>
+      <div class="dupla">
+        <select id="dia" aria-label="Dia do aniversário"><option value="">Dia</option></select>
+        <select id="mes" aria-label="Mês do aniversário"><option value="">Mês</option></select>
+      </div>
+    </div>
+    <div class="escondido" aria-hidden="true"><label>Site<input id="site" tabindex="-1" autocomplete="off"></label></div>
+    <label class="aceite"><input type="checkbox" id="aceite"> Aceito receber mensagens do Gela Boca no WhatsApp. Posso sair quando quiser respondendo SAIR.</label>
+    <div id="erro" role="alert"></div>
+    <button type="submit" id="enviar">🍦 Quero receber</button>
+    <div class="mini">Seus dados são usados só para o Gela Boca falar com você pelo WhatsApp. Não passamos para ninguém.</div>
+  </form>
+  <div class="ok" id="ok" hidden>
+    <div class="grande">🎉</div>
+    <h2 id="ok-titulo">Pronto!</h2>
+    <p>Daqui a pouco chega uma mensagem nossa no seu WhatsApp. <b>Salve o número</b> para ver as fotos das novidades!</p>
+  </div>
+</main>
+<script>
+'use strict';
+const $ = s => document.querySelector(s);
+const MESES = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+for (let d = 1; d <= 31; d++) $('#dia').insertAdjacentHTML('beforeend', `<option value="${d}">${d}</option>`);
+MESES.forEach((m, i) => $('#mes').insertAdjacentHTML('beforeend', `<option value="${i + 1}">${m}</option>`));
+$('#form').addEventListener('submit', async ev => {
+  ev.preventDefault();
+  $('#erro').textContent = '';
+  if ($('#nome').value.trim().length < 2) { $('#erro').textContent = 'Digite o seu nome.'; $('#nome').focus(); return; }
+  if ($('#telefone').value.replace(/\D/g, '').length < 10) { $('#erro').textContent = 'Digite o WhatsApp com o DDD.'; $('#telefone').focus(); return; }
+  if (!!$('#dia').value !== !!$('#mes').value) { $('#erro').textContent = 'Escolha o dia E o mês do aniversário (ou deixe os dois em branco).'; return; }
+  if (!$('#aceite').checked) { $('#erro').textContent = 'Marque que você aceita receber as mensagens.'; return; }
+  $('#enviar').disabled = true;
+  try {
+    const r = await fetch('/api/clientes/cadastro', {method: 'POST', headers: {'Content-Type': 'application/json'}, credentials: 'omit',
+      body: JSON.stringify({nome: $('#nome').value, telefone: $('#telefone').value, dia: $('#dia').value, mes: $('#mes').value,
+                            aceite: $('#aceite').checked, site: $('#site').value})});
+    let d = {}; try { d = await r.json(); } catch (e) {}
+    if (!r.ok) throw new Error(d.erro || 'Não deu certo. Tente de novo.');
+    $('#ok-titulo').textContent = d.nome ? `Pronto, ${d.nome}!` : 'Pronto!';
+    $('#form').hidden = true; $('#ok').hidden = false;
+  } catch (e) {
+    $('#erro').textContent = e.message === 'Failed to fetch' ? 'Sem internet. Tente de novo.' : e.message;
+    $('#enviar').disabled = false;
+  }
+});
+</script>
+</body>
+</html>

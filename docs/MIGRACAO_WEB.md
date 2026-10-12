@@ -256,6 +256,24 @@ Se o WhatsApp falhar, o aviso vai pelo Telegram com um alerta (nada se perde). O
 comunicados, pontos) e os comandos do grupo (`/lancar`…) continuam no Telegram. Arquivos: `notificador_whatsapp.py`
 (`enviar_para_grupo`, `listar_grupos`, `html_para_whatsapp`), `alertas_estoque.py`, `templates/gestao_avisos.html`.
 
+### Novo (só na Web) — 📢 Clientes: cadastro e mensagens no WhatsApp (10/2026: Gestão › 📢 Clientes)
+Cadastro dos clientes (nome, WhatsApp, aniversário, etiquetas como "VIP", "Delivery", e se **autorizou** receber) e
+mensagens como uma lista de transmissão: texto com `{nome}` (vira o primeiro nome), **foto tirada no celular**
+(a página diminui para 1280 px antes de subir), para "Todos" ou uma ou mais etiquetas, **agora ou agendada**.
+Saem por um **número só dos clientes** (2ª instância da Z-API; ID e token gravados no banco pela aba ⚙️ Ajustes,
+nunca no config.py; recusa a instância da loja), para que um bloqueio não pare a escala e os avisos. O robô
+(`agendador.py`, de minuto em minuto) manda em fila: 1 mensagem a cada 6–15 s, só das 8h às 21h, no máximo 300 por dia,
+pula quem pediu para sair e **pausa sozinho** após 5 falhas seguidas (avisa no grupo; tipo 📢 em 📣 Avisos).
+Toda mensagem termina com "responda SAIR": o webhook da Z-API (`/webhook/zapi-clientes/<segredo>`, "Ao receber") tira
+a pessoa da lista e confirma; "VOLTAR" coloca de volta. Extras: 🎂 aniversário automático às 10h (texto e foto
+configuráveis), **QR do balcão** (página pública `/clientes/cadastro`: o cliente se cadastra e autoriza, ganha a
+etiqueta "Balcão" e uma mensagem de boas-vindas; limite por aparelho e por dia), importar planilha (.xlsx/.csv) ou a
+agenda do celular (Android/Chrome), teste para o próprio número, histórico de cada envio (quem recebeu, falhou ou
+pulou; cancelar, continuar, reenviar para quem falhou). Pela internet só ficam abertos o formulário do QR e o webhook.
+Arquivos: `clientes.py`, `templates/gestao_clientes.html`, `templates/clientes_cadastro.html`; tabelas `Clientes`,
+`ClienteEtiquetas`, `CampanhasClientes`, `CampanhaEnvios`, `ParametrosClientes`; fotos em `fotos_clientes/`.
+O QR precisa de `pip install qrcode` no servidor (sem ele, o resto funciona e a tela avisa).
+
 ### App de compras — aba Gestão em 3 áreas (10/2026)
 A aba **Gestão** do app (só o gestor vê) foi dividida em **🏪 Loja · 🛒 Compras · 📦 Estoque**, com o número de
 pendências de cada área no botão (Loja: dias sem faturamento lançado; Compras: listas para aprovar + cupons para
@@ -332,8 +350,8 @@ Cada etapa: construir → testar → usar em paralelo com o PC → marcar ✅ aq
   (o mesmo endereço do painel da TV, trocando o final por `/gestao`).
 - Pelo app de compras: aba **Gestão › 🏪 Loja › Gestão da loja** (Escala, Folha, Pagamentos, Freelancers e Avisos;
   abrem direto, sem pedir o PIN de novo).
-- Menu no alto de toda página da Gestão: **🗓️ Escala · 👤 Freelancers · 💰 Pagamentos · 📊 Folha · 📣 Avisos**
-  (`/gestao/escala`, `/gestao/freelancers`, `/gestao/pagamentos`, `/gestao/folha`, `/gestao/avisos`).
+- Menu no alto de toda página da Gestão: **🗓️ Escala · 👤 Freelancers · 💰 Pagamentos · 📊 Folha · 📣 Avisos · 📢 Clientes**
+  (`/gestao/escala`, `/gestao/freelancers`, `/gestao/pagamentos`, `/gestao/folha`, `/gestao/avisos`, `/gestao/clientes`).
 - Pela internet (fora da loja): liberado para a Gestão desde 10/2026, a pedido do Rodrigo — só gestor,
   com o login do app (nome + PIN, bloqueio após erros). Para fechar: `GESTAO_PELA_INTERNET = False` no config.py.
 - Login: o mesmo do app de compras (nome + PIN); só quem é gestor no app entra.

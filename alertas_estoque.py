@@ -50,6 +50,8 @@ TIPOS_AVISO = [
     ('danfe', '📄 DANFE das notas novas', 'junto', 'O PDF de cada nota nova vai junto com o resumo (até 5)'),
     ('orcamentos', '📋 Orçamentos', 'junto', 'Nota que chegou para um orçamento (o que veio diferente), no resumo das notas'),
     ('faturamento', '📊 Faturamento e folha', 'Ao lançar · dia 1', 'Resumo do dia quando o faturamento é lançado e o fechamento do mês'),
+    ('clientes', '📢 Mensagens para clientes', 'Ao terminar', 'Resumo quando termina um envio para clientes (quantos receberam) '
+                                                             'e alerta se o número dos clientes parar'),
 ]
 CHAVES_AVISO = [t[0] for t in TIPOS_AVISO]
 

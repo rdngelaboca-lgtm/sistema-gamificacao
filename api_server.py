@@ -182,6 +182,9 @@ CAMINHOS_LIBERADOS_NA_INTERNET = tuple(getattr(config, 'TUNEL_CAMINHOS_LIBERADOS
 # coloque no config.py:  GESTAO_PELA_INTERNET = False
 if getattr(config, 'GESTAO_PELA_INTERNET', True):
     CAMINHOS_LIBERADOS_NA_INTERNET += ('/gestao', '/api/gestao')
+# [CLIENTES] O cliente se cadastra pelo QR do balcão (página pública, só o formulário) e a Z-API avisa
+# quem respondeu SAIR (com um segredo no endereço). Nada mais da área de clientes fica aberto.
+CAMINHOS_LIBERADOS_NA_INTERNET += ('/clientes/cadastro', '/api/clientes/cadastro', '/webhook/zapi-clientes/')
 
 
 @app.before_request
@@ -2675,6 +2678,135 @@ def api_gestao_avisos_teste(usuario):
 def api_gestao_folha_faturamento_lancar(usuario):
     dados = ler_json() or {}
     return _resposta_folha(lambda: folha_faturamento.lancar_faturamento(dados.get('data'), dados.get('valor'), usuario))
+
+
+# ---------------- [CLIENTES] cadastro e mensagens para clientes (lista de transmissão) ----------------
+@app.route('/gestao/clientes')
+def pagina_gestao_clientes():
+    return _pagina_gestao('gestao_clientes.html', 'clientes')
+
+
+def _resposta_clientes(funcao):
+    import clientes
+    try:
+        return jsonify(funcao()), 200
+    except clientes.ErroClientes as e:
+        return jsonify({"erro": str(e)}), e.status
+    except Exception as e:
+        logger.exception(f"Erro em clientes ({request.path}): {e}")
+        return jsonify({"erro": "Erro no servidor. Tente de novo; se continuar, veja o log."}), 500
+
+
+@app.route('/api/gestao/clientes', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_clientes(usuario):
+    import clientes
+    return _resposta_clientes(lambda: clientes.listar(request.args))
+
+
+@app.route('/api/gestao/clientes', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_clientes_salvar(usuario):
+    import clientes
+    dados = ler_json() or {}
+    return _resposta_clientes(lambda: clientes.salvar(dados.get('id'), dados, usuario))
+
+
+@app.route('/api/gestao/clientes/<acao>', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_clientes_acao(usuario, acao):
+    import clientes
+    dados = ler_json() or {}
+    acoes = {
+        'excluir': lambda: clientes.excluir(dados.get('id'), usuario),
+        'saida': lambda: clientes.definir_saida(dados.get('id'), bool(dados.get('saiu')), usuario),
+        'foto': lambda: clientes.salvar_foto(dados.get('foto')),
+        'previa': lambda: clientes.previa(dados),
+        'teste': lambda: clientes.enviar_teste(dados),
+        'importar-previa': lambda: clientes.previa_importacao(dados),
+        'importar': lambda: clientes.importar(dados, usuario),
+        'numero': lambda: clientes.salvar_numero(dados, usuario),
+        'aniversario': lambda: clientes.salvar_config_aniversario(dados, usuario),
+        'endereco': lambda: clientes.salvar_endereco(dados, usuario),
+    }
+    if acao not in acoes:
+        return jsonify({"erro": "Não encontrado."}), 404
+    return _resposta_clientes(acoes[acao])
+
+
+@app.route('/api/gestao/clientes/foto/<nome>', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_clientes_ver_foto(usuario, nome):
+    import clientes
+    from flask import send_file
+    try:
+        return send_file(clientes.caminho_foto(nome), max_age=3600)
+    except clientes.ErroClientes as e:
+        return jsonify({"erro": str(e)}), e.status
+
+
+@app.route('/api/gestao/clientes/ajustes', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_clientes_ajustes(usuario):
+    import clientes
+    return _resposta_clientes(lambda: clientes.ajustes(request.host_url))
+
+
+@app.route('/api/gestao/clientes/conexao', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_clientes_conexao(usuario):
+    import clientes
+    return _resposta_clientes(clientes.testar_conexao)
+
+
+@app.route('/api/gestao/clientes/campanhas', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_clientes_campanhas(usuario):
+    import clientes
+    return _resposta_clientes(clientes.campanhas)
+
+
+@app.route('/api/gestao/clientes/campanhas', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_clientes_campanha_criar(usuario):
+    import clientes
+    dados = ler_json() or {}
+    return _resposta_clientes(lambda: clientes.criar_campanha(dados, usuario))
+
+
+@app.route('/api/gestao/clientes/campanhas/<int:camp_id>', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_clientes_campanha(usuario, camp_id):
+    import clientes
+    return _resposta_clientes(lambda: clientes.campanha(camp_id))
+
+
+@app.route('/api/gestao/clientes/campanhas/<int:camp_id>/<acao>', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_clientes_campanha_acao(usuario, camp_id, acao):
+    import clientes
+    return _resposta_clientes(lambda: clientes.acao_campanha(camp_id, acao, usuario))
+
+
+# Página PÚBLICA do QR do balcão (sem login): o cliente se cadastra e já autoriza receber as mensagens.
+@app.route('/clientes/cadastro')
+def pagina_clientes_cadastro():
+    resposta = app.make_response(render_template('clientes_cadastro.html'))
+    resposta.headers['Cache-Control'] = 'no-store'
+    return resposta
+
+
+@app.route('/api/clientes/cadastro', methods=['POST'])
+def api_clientes_cadastro():
+    import clientes
+    return _resposta_clientes(lambda: clientes.cadastro_publico(ler_json() or {}, _ip_do_cliente()))
+
+
+# A Z-API avisa as mensagens recebidas no número dos clientes ("Ao receber"): SAIR / VOLTAR.
+@app.route('/webhook/zapi-clientes/<segredo>', methods=['POST'])
+def webhook_zapi_clientes(segredo):
+    import clientes
+    return _resposta_clientes(lambda: clientes.processar_webhook(segredo, request.get_json(silent=True)))
 
 
 if __name__ == "__main__":

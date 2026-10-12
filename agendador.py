@@ -92,6 +92,7 @@ HORARIO_LEMBRETE_FATURAMENTO = "09:15"   # [FOLHA × FATURAMENTO] faltou lançar
 HORARIO_FECHAMENTO_FOLHA = "09:20"       # [FOLHA × FATURAMENTO] dia 1 (até o 5): fechamento do mês anterior
 HORARIO_AVISO_CLIMA = "10:00"            # [FOLHA × FATURAMENTO] boletim: previsão de hoje + 3 dias × escala
 HORARIO_SUGESTAO_AMANHA = "14:00"        # [SUGESTÃO AMANHÃ] quantos freelancers chamar amanhã (sexta: sáb + dom)
+HORARIO_ANIVERSARIOS_CLIENTES = "10:00"  # [CLIENTES] 🎂 os aniversariantes do dia entram na fila do número dos clientes
 HORARIOS_RESUMO_NOTAS = ("12:00", "18:00")
 HORARIO_ESCALA_FIXA = "05:00"            # [ESCALA FIXA] escala os fixos de hoje e dos próximos 14 dias (e de hora em hora)   # [AVISOS LIMPOS] notas novas da SEFAZ: 2 resumos por dia (não 1 aviso por hora)
 DIAS_PARA_FECHAMENTO = 5        # o fechamento do mês anterior pode rodar do dia 1 ao dia 5
@@ -1070,6 +1071,44 @@ def verificar_resultado_sugestao(agora=None):
 
 
 # ==============================================================================
+# == MÓDULO 12: CLIENTES (mensagens pelo número SÓ dos clientes) ================
+# ==============================================================================
+def _avisar_gestao_clientes(texto):
+    """Resumo no grupo da gestão quando um envio termina (ou pausa); desliga em 📣 Avisos."""
+    import alertas_estoque
+    if alertas_estoque.aviso_ligado('clientes'):
+        alertas_estoque.enviar(texto)
+
+
+def processar_campanhas_clientes():
+    """
+    [CLIENTES] De minuto em minuto: manda a fila das mensagens para clientes (uma a cada 6–15 s, das 8h às 21h,
+    no máximo 300 por dia). Uma rodada pode levar vários minutos: o run_threaded não deixa rodar duas juntas.
+    """
+    try:
+        import clientes
+    except ImportError:
+        return
+    n = clientes.processar_fila(avisar=_avisar_gestao_clientes)
+    if n:
+        logger.info(f"Clientes: {n} mensagem(ns) enviada(s) nesta rodada.")
+
+
+def verificar_aniversarios_clientes():
+    """[CLIENTES] 10h: os aniversariantes do dia (que autorizaram) recebem o parabéns pela fila."""
+    if ja_rodou_hoje('aniversarios_clientes'):
+        return
+    try:
+        import clientes
+    except ImportError:
+        return
+    n = clientes.criar_campanha_aniversario()
+    marcar_rodou_hoje('aniversarios_clientes')
+    if n:
+        logger.info(f"Clientes: {n} aniversariante(s) na fila.")
+
+
+# ==============================================================================
 # == MÓDULO 8: DOWNLOADS (fotos de entregas e notas fiscais) ===================
 # ==============================================================================
 def _baixar_arquivo_telegram(file_id, pasta, prefixo):
@@ -1304,6 +1343,8 @@ def configurar_agendamentos():
     schedule.every().day.at(HORARIO_AVISO_CLIMA).do(run_threaded, verificar_aviso_clima)
     schedule.every().day.at(HORARIO_SUGESTAO_AMANHA).do(run_threaded, verificar_sugestao_amanha)
     schedule.every(10).minutes.do(run_threaded, verificar_resultado_sugestao)
+    schedule.every(1).minutes.do(run_threaded, processar_campanhas_clientes)          # [CLIENTES] a fila
+    schedule.every().day.at(HORARIO_ANIVERSARIOS_CLIENTES).do(run_threaded, verificar_aniversarios_clientes)
     for horario in HORARIOS_RESUMO_NOTAS:                   # [AVISOS LIMPOS] resumo das notas novas
         schedule.every().day.at(horario).do(run_threaded, verificar_resumo_notas)
     schedule.every().day.at(HORARIO_ESCALA_FIXA).do(run_threaded, aplicar_escala_fixa)
@@ -1333,6 +1374,8 @@ def recuperar_tarefas_do_dia():
     if _passou_do_horario(HORARIO_SUGESTAO_AMANHA, limite_horas=6):
         run_threaded(verificar_sugestao_amanha)
     run_threaded(verificar_resultado_sugestao)      # [RESULTADO DA SUGESTÃO] não espera 10 minutos depois de ligar
+    if _passou_do_horario(HORARIO_ANIVERSARIOS_CLIENTES, limite_horas=8):
+        run_threaded(verificar_aniversarios_clientes)
     run_threaded(verificar_resumo_notas)            # [AVISOS LIMPOS] só manda se passou das 12h/18h sem mandar
     run_threaded(aplicar_escala_fixa)               # [ESCALA FIXA] não espera as 05:00 depois de ligar
 
