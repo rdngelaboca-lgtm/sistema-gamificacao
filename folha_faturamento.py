@@ -245,8 +245,16 @@ def meta():
     return v if v and v > 0 else META_PADRAO
 
 
+def _pct_digitado(texto, nome):
+    """[AUDITORIA] '15%' / '15 %' / '14,5' -> Decimal (o '%' que todo mundo digita não é mais recusado)."""
+    try:
+        return _valor(str(texto if texto is not None else '').replace('%', ''), nome)
+    except ErroFolha:
+        return None
+
+
 def definir_meta(texto, usuario):
-    v = _valor(texto, 'Meta')
+    v = _pct_digitado(texto, 'Meta')
     if v is None or v <= 0 or v >= 100:
         raise ErroFolha("A meta precisa ser um número entre 0 e 100 (ex.: 18).")
     garantir_tabelas()
@@ -277,7 +285,7 @@ def super_meta():
 
 
 def definir_super_meta(texto, usuario):
-    v = _valor(texto, 'Super meta')
+    v = _pct_digitado(texto, 'Super meta')
     if v is None or v <= 0 or v >= 100:
         raise ErroFolha("A super meta precisa ser um número entre 0 e 100 (ex.: 15).")
     garantir_tabelas()
@@ -744,14 +752,16 @@ def dica_escala(d, hoje=None):
     guardado = _cache_hist.get(hoje)
     if not guardado or agora - guardado[0] > CACHE_ESCALA_SEG:
         _cache_hist.clear()
-        guardado = (agora, _historico_valido(dias(hoje - timedelta(days=DIAS_HISTORICO_ESCALA), hoje), hoje))
+        guardado = (agora, _historico_valido(dias(hoje - timedelta(days=DIAS_HISTORICO_AVISO), hoje), hoje))
         _cache_hist[hoje] = guardado
-    hist = [x for x in guardado[1] if x['data'] != d]
+    # [AUDITORIA] antes a sugestão daqui usava 6 meses e a mensagem das 14h 1 ano: o mesmo dia dava números diferentes
+    hist_ano = [x for x in guardado[1] if x['data'] != d]
+    hist = [x for x in hist_ano if x['data'] >= hoje - timedelta(days=DIAS_HISTORICO_ESCALA)]
     feriados = database._feriados_periodo(d, d)
     sug = None
     try:                                 # [SUGESTÃO AMANHÃ] quantos freelancers cabem na super meta (o mesmo da mensagem)
         cfg_pag = database.buscar_config_pagamento_freelancer()
-        r = sugestao_freelas(d, hist, feriados, folhas_fixas(), cfg_pag, super_meta(), {d: c}, _escalados(d, d))
+        r = sugestao_freelas(d, hist_ano, feriados, folhas_fixas(), cfg_pag, super_meta(), {d: c}, _escalados(d, d))
         if r and r['sugeridos'] is not None:
             sug = {'freelas': r['sugeridos'], 'super_meta': _num(r['super_meta'], 1)}
     except Exception as e:
@@ -1139,6 +1149,7 @@ def boletim_previsao(agora=None, dias_frente=3):
     dias parecidos × freelancers já escalados. Alertas: 🔥 escala com menos freelancers do que costuma
     precisar (dia seco) e 🌧️ chuva à tarde quando nesses dias a venda cai 15% ou mais.
     """
+    import html
     agora = agora or datetime.now()
     hoje = agora.date()
     alvos = [hoje + timedelta(days=n) for n in range(dias_frente + 1)]
@@ -1155,7 +1166,7 @@ def boletim_previsao(agora=None, dias_frente=3):
             continue
         rotulo = ('Hoje' if d == hoje else 'Amanhã' if d == hoje + timedelta(days=1) else
                   ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'][d.weekday()])
-        rotulo += f" ({DIAS_SEMANA[d.weekday()]} {d:%d/%m})" + (f" 🎉 {feriados[d]}" if d in feriados else '')
+        rotulo += f" ({DIAS_SEMANA[d.weekday()]} {d:%d/%m})" + (f" 🎉 {html.escape(feriados[d])}" if d in feriados else '')
         freelas_esc = escala.get(d, (0, 0))[1]
         p = parecidos(hist, d, c, feriados)
         linha = f"• <b>{rotulo}</b>: {clima.texto(c)}"
@@ -1283,6 +1294,8 @@ def _bloco_sugestao(r, hoje):
                           f"{_reais_redondo(x['faturamento'])} · {x['freelas']} freela(s)")
     if r['queda_chuva'] is not None and r['queda_chuva'] > 0:
         linhas.append(f"🌧️ Com chuva à tarde você vendeu <b>{_n(r['queda_chuva'])}% menos</b>: reduza os freelancers.")
+    elif clima.chuvoso(c) and r['queda_chuva'] is not None:     # [AUDITORIA] antes dizia "costuma cair" mesmo assim
+        linhas.append("🌧️ Chuva à tarde prevista, mas nos seus dias de chuva a venda não caiu.")
     elif clima.chuvoso(c):
         linhas.append("🌧️ Chuva à tarde prevista: o movimento costuma cair; chame só o necessário.")
     elif c['max'] >= CALOR_FORTE:
@@ -1293,11 +1306,13 @@ def _bloco_sugestao(r, hoje):
         linhas.append(f"👉 Sem sugestão de número: {r['motivo']}. Na escala: {r['escala']} freela(s).")
         return linhas
     pct = _n(r['super_meta'])
-    linhas.append(f"🧮 {pct}% de {_reais_redondo(r['faturamento'])} = {_reais(r['teto'])} − fixos do dia {_reais(r['fixo'])}"
+    linhas.append(f"🧮 {pct}% de {_reais(r['faturamento'])} = {_reais(r['teto'])} − fixos do dia {_reais(r['fixo'])}"
                   + (f" (folha de {nome_mes(*r['fixo_estimado'])})" if r['fixo_estimado'] else '')
                   + f" = {_reais(r['sobra'])} ÷ diária longa ({r['rotulo_diaria']}) {_reais(r['diaria'])}")
     if r['sugeridos'] == 0:
-        linhas.append(f"👉 <b>Sugestão: nenhum freelancer</b> — só os fixos já passam dos {pct}%. Na escala: {r['escala']}.")
+        motivo = (f"só os fixos já passam dos {pct}%" if r['sobra'] <= 0       # [AUDITORIA] antes: sempre esta frase
+                  else f"sobram só {_reais(r['sobra'])}, menos que uma diária")
+        linhas.append(f"👉 <b>Sugestão: nenhum freelancer</b> — {motivo}. Na escala: {r['escala']}.")
         return linhas
     diff = r['sugeridos'] - r['escala']
     comp = ('✅ a escala já está assim' if diff == 0 else f"dá para chamar mais {diff}" if diff > 0

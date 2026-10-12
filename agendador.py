@@ -1021,7 +1021,17 @@ def verificar_sugestao_amanha(agora=None):
     agora = agora or datetime.now()
     datas = ff.dias_da_sugestao(agora.date())
     lista = ff.sugestoes(datas, agora.date()) if datas else []
+    if datas and not lista:                  # [AUDITORIA] sem a previsão: busca o clima agora antes de desistir
+        try:
+            import clima
+            clima.atualizar(hoje=agora.date())
+            lista = ff.sugestoes(datas, agora.date())
+        except Exception as e:
+            logger.warning(f"Sugestão para amanhã: clima indisponível ({e}).")
     texto = ff.texto_sugestao(datas, agora.date(), lista) if lista else ''
+    if datas and not lista:                  # [AUDITORIA] antes desistia calado (e sem sugestão não tem resultado depois)
+        texto = ("🔮 <b>Sugestão para amanhã</b>: não consegui a previsão do clima (internet?), então não deu para calcular. "
+                 "Veja mais tarde em Gestão › 📣 Avisos › 👀 Avisos de agora.")
     if texto and not alertas_estoque.enviar(texto):
         return                                   # não chegou em nenhum canal: tenta de novo na recuperação
     marcar_rodou_hoje('sugestao_amanha')

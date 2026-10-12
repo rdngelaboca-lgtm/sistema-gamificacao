@@ -209,7 +209,10 @@ async function carregarAgora() {
 function estadoDoAviso(tipo, r) {
   if (r.erro) return ['alerta', '⚠️ erro'];
   if (!r.texto) return ['', '✅ nada agora'];
-  if (tipo === 'resultado') return r.texto.includes('Superou a média') ? ['tem', '✅ superou'] : ['alerta', '⚠️ abaixo da média'];
+  if (tipo === 'resultado') {          // [AUDITORIA] vários dias juntos: um pode ter superado e o outro não
+    const sup = r.texto.includes('Superou a média'), abaixo = r.texto.includes('abaixo da média!');
+    return sup && abaixo ? ['alerta', '⚠️ um dia abaixo'] : sup ? ['tem', '✅ superou'] : ['alerta', '⚠️ abaixo da média'];
+  }
   if (tipo === 'lembrete') return ['alerta', '⚠️ falta lançar'];
   return ['tem', '📝 ver'];
 }

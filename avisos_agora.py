@@ -110,13 +110,18 @@ def _sugestao(agora):
 
 def _resultado(agora):
     hoje = agora.date()
-    datas = ff.resultados_recentes(hoje)
-    if not datas:
+    pendentes = ff.resultados_pendentes(agora)       # [AUDITORIA] o que o robô vai mandar (juntos), não só o último dia
+    recentes = ff.resultados_recentes(hoje)
+    if not pendentes and not recentes:
         return '', "Ainda não tem dia com 🔮 sugestão enviada e faturamento lançado (últimos 7 dias).", ''
-    d = datas[-1]
-    nota = ("⏳ O dia ainda não fechou: no grupo, o resultado vai depois das 21h."
-            if d == hoje and agora.hour < ff.HORA_RESUMO_HOJE else '')
-    return ff.texto_resultado([d], hoje), "Sem média dos dias parecidos para comparar.", nota
+    datas = pendentes or recentes[-1:]
+    if pendentes and alertas_estoque.aviso_ligado('resultado'):
+        nota = "📤 Ainda não foi para o grupo: o robô manda em até 10 minutos."
+    elif datas[-1] == hoje and agora.hour < ff.HORA_RESUMO_HOJE:
+        nota = "⏳ O dia ainda não fechou: no grupo, o resultado vai depois das 21h."
+    else:
+        nota = ''
+    return ff.texto_resultado(datas, hoje), "Sem média dos dias parecidos para comparar.", nota
 
 
 def _faturamento(agora):
@@ -160,12 +165,12 @@ def _notas(agora):
                 linhas.append(f"🏷️ <b>{novos} produto(s) novo(s)</b> nestas notas: cadastre na aba <b>🏷️ Cadastro Franquia</b>.")
         except Exception as e:
             logger.warning(f"Avisos de agora: produtos novos das notas: {e}")
+    textos = list(estado.get('orcamentos_textos_pendentes') or [])   # [AUDITORIA] os de um envio que falhou
     try:
         import orcamentos
-        textos = [t for _, t in orcamentos.avisos_pendentes(marcar=False)]
+        textos += [t for _, t in orcamentos.avisos_pendentes(marcar=False)]
     except Exception as e:
         logger.warning(f"Avisos de agora: orçamentos que chegaram: {e}")
-        textos = []
     if textos:
         linhas += ([''] if linhas else []) + textos
     turno = estado.get('resumo_notas_turno') or ''

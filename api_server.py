@@ -2581,6 +2581,11 @@ def api_gestao_folha_super_meta(usuario):
 def api_gestao_folha_sugestao(usuario):
     """[SUGESTÃO AMANHÃ] Prévia da mensagem das 14h (no sábado, mostra a de domingo)."""
     def previa():
+        try:                                 # [AUDITORIA] clima velho: busca de novo, como nos 👀 Avisos de agora
+            import avisos_agora
+            avisos_agora.clima_fresco()
+        except Exception as e:
+            logger.warning(f"Prévia da sugestão: clima não atualizado ({e})")
         hoje = datetime.now().date()
         datas = folha_faturamento.dias_da_sugestao(hoje) or [hoje + timedelta(days=1)]
         return {'texto': folha_faturamento.texto_sugestao(datas, hoje), 'dias': [d.isoformat() for d in datas]}
