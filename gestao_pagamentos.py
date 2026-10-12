@@ -29,6 +29,7 @@ from gestao_escala import ErroEscala, _data, _exigir_banco, _hora, _id
 logger = logging.getLogger(__name__)
 
 STATUS = ('pendentes', 'pagos', 'todos')
+VEZES_DIFERENTE = 2          # [VALOR NA HORA DE PAGAR] mais que o dobro (ou menos da metade) do calculado: pergunta antes
 
 
 # ------------------------------------------------------------------------------
@@ -82,7 +83,8 @@ def _item_json(it):
                 sem_horario=bool(it['SemHorario']), total_centavos=_centavos(it['Total']),
                 entrada_escala=it['EntradaEscala'] or '', saida_escala=it['SaidaEscala'] or '',
                 entrada_real=it['EntradaReal'] or '', saida_real=it['SaidaReal'] or '',
-                ajuste_txt=f"{ajuste:.2f}".replace('.', ',') if ajuste else '', observacao=it['Observacao'] or '',
+                ajuste_txt=f"{ajuste:.2f}".replace('.', ',') if ajuste else '', ajuste_centavos=_centavos(ajuste),
+                observacao=it['Observacao'] or '',
                 tipo_forcado=it.get('TipoForcado') or '', tipo_escala=it.get('TipoEscala') or '')
 
 
@@ -293,6 +295,46 @@ def corrigir(dados, usuario):
     return {'ok': True, 'mensagem': f"Turno de {t['Nome']} em {R.fmt_data_br(t['Data'])}: {msg.lower()}"}
 
 
+def _valor_a_pagar(texto):
+    """'150' / '150,00' / 'R$ 1.300' (ponto de milhar, como no Brasil) -> Decimal. Vazio ou negativo: erro."""
+    t = str(texto if texto is not None else '').replace('R$', '').replace(' ', '').strip()
+    if not t:
+        raise ErroEscala("Digite o valor a pagar de cada turno.")
+    if ',' not in t and re.fullmatch(r'\d{1,3}(\.\d{3})+', t):
+        t = t.replace('.', '')                   # '1.300' = mil e trezentos (não R$ 1,30)
+    try:
+        v = R.para_decimal_br(t, "o valor a pagar")
+    except ValueError as e:
+        raise ErroEscala(str(e))
+    if v > Decimal('100000'):
+        raise ErroEscala(f"Valor a pagar alto demais: {R.fmt_reais(v)}. Confira o número digitado.")
+    return v.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+
+def _novos_valores(dados, ids):
+    """[VALOR NA HORA DE PAGAR] {EscalaID: valor} dos turnos cujo valor o gestor mudou na janela de pagar."""
+    brutos = dados.get('valores') or {}
+    if not isinstance(brutos, dict) or len(brutos) > 1000:
+        raise ErroEscala("Valores inválidos. Atualize a página.")
+    novos = {}
+    for chave, texto in brutos.items():
+        eid = _id(chave, "o turno")
+        if eid not in ids:
+            raise ErroEscala("Há valor de um turno que não está na seleção. Atualize a página e tente de novo.", 409)
+        novos[eid] = _valor_a_pagar(texto)
+    return novos
+
+
+def _calculados(ids):
+    """{EscalaID: (nome, data, valor calculado SEM ajuste)} dos turnos pendentes (o que o sistema calcula)."""
+    datas = [t['Data'] for t in (database.turno_de_freelancer(e) for e in ids) if t]
+    if not datas:
+        return {}
+    itens = database.listar_pagamentos_freelancers(min(datas), max(datas), None, 'pendentes')
+    return {i['EscalaID']: (i['Nome'], i['Data'], i['Total'] - (i['Ajuste'] or Decimal('0')))
+            for i in itens if i['EscalaID'] in ids}
+
+
 def pagar(dados, usuario):
     _exigir_banco()
     ids = _lista_ids(dados.get('escala_ids'), "os turnos")
@@ -300,16 +342,35 @@ def pagar(dados, usuario):
         raise ErroEscala("Selecione os turnos PENDENTES que você pagou.")
     _txt, dia = _data(dados.get('data') or date.today().isoformat())
     forma = str(dados.get('forma') or '').strip()[:30]
+    novos = _novos_valores(dados, ids)
+    motivo = str(dados.get('motivo') or '').strip()[:150]
+    perguntas = []
     if dia > date.today() and 'futuro' not in _confirmados(dados):
-        return {'perguntas': [{'chave': 'futuro', 'titulo': "Data no futuro", 'texto': (
+        perguntas.append({'chave': 'futuro', 'titulo': "Data no futuro", 'texto': (
             f"A data do pagamento ({R.fmt_data_br(dia, True)}) ainda não chegou.\n\n"
-            "Marcar como pago nessa data mesmo assim?")}]}
-    ok, msg, total = database.marcar_pagamentos_pagos(ids, dia, forma)
+            "Marcar como pago nessa data mesmo assim?")})
+    calculados = _calculados(list(novos)) if novos else {}
+    if novos and 'valor_diferente' not in _confirmados(dados):
+        estranhos = [(eid, v) for eid, v in novos.items() if eid in calculados and (
+            v == 0 or v > calculados[eid][2] * VEZES_DIFERENTE or v * VEZES_DIFERENTE < calculados[eid][2])]
+        if estranhos:
+            perguntas.append({'chave': 'valor_diferente', 'titulo': "Valor bem diferente do calculado", 'texto': (
+                "\n".join(f"• {calculados[e][0]} {R.fmt_data_br(calculados[e][1], True)}: calculado "
+                          f"{R.fmt_reais(calculados[e][2])} → pagar {R.fmt_reais(v)}" for e, v in estranhos)
+                + "\n\nConfira o número digitado. Pagar esses valores mesmo assim?")})
+    if perguntas:
+        return {'perguntas': perguntas}
+    ok, msg, total = database.marcar_pagamentos_pagos(ids, dia, forma, novos_totais=novos, motivo=motivo)
     if not ok:
         raise ErroEscala(msg, 409)
+    mudou = ''
+    if novos:
+        dif = sum((v - calculados[e][2] for e, v in novos.items() if e in calculados), Decimal('0'))
+        mudou = (f" ({len(novos)} com valor mudado na hora: {'+' if dif > 0 else ''}{R.fmt_reais(dif)}"
+                 f"{' · ' + motivo if motivo else ''})")
     logger.info(f"[GESTÃO] {usuario.get('nome')}: pagou {len(ids)} turno(s) de freelancer "
-                f"({R.fmt_reais(total)}, {R.fmt_data_br(dia)}, {forma or 'sem forma'}).")
-    return {'ok': True, 'mensagem': f"{msg} Total {R.fmt_reais(total)}."}
+                f"({R.fmt_reais(total)}, {R.fmt_data_br(dia)}, {forma or 'sem forma'}){mudou}.")
+    return {'ok': True, 'mensagem': f"{msg} Total {R.fmt_reais(total)}{mudou}."}
 
 
 def desfazer(dados, usuario):

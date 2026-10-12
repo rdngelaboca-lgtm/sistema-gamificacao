@@ -12376,10 +12376,12 @@ def salvar_correcao_pagamento(escala_id, entrada_real=None, saida_real=None, aju
         conn.close()
 
 
-def marcar_pagamentos_pagos(escala_ids, data_pagamento=None, forma_pagamento=''):
+def marcar_pagamentos_pagos(escala_ids, data_pagamento=None, forma_pagamento='', novos_totais=None, motivo=''):
     """
     Marca os turnos como PAGOS, congelando os valores calculados agora.
     Tudo numa transação (ou paga todos, ou nenhum). Devolve (ok, mensagem, total_pago).
+    [VALOR NA HORA DE PAGAR] novos_totais = {EscalaID: valor que o gestor decidiu pagar}: a diferença para o
+    calculado (diária + extras) vira o AJUSTE do turno (+ bônus / − desconto) e o motivo vai na observação.
     """
     _garantir_tabelas_pagamento_freelancer()
     if not escala_ids:
@@ -12398,8 +12400,8 @@ def marcar_pagamentos_pagos(escala_ids, data_pagamento=None, forma_pagamento='')
                 raise ValueError(f"Turno {escala_id} não encontrado (foi excluído da escala?).")
             eid, dt, fid, nome, posicao, ent, sai = turno
             d = _como_data(dt)
-            cursor.execute("SELECT PagamentoID, Pago, EntradaReal, SaidaReal, Ajuste, TipoDiaria FROM PagamentosFreelancer "
-                           "WHERE EscalaID = ?", escala_id)
+            cursor.execute("SELECT PagamentoID, Pago, EntradaReal, SaidaReal, Ajuste, TipoDiaria, Observacao "
+                           "FROM PagamentosFreelancer WHERE EscalaID = ?", escala_id)
             s = cursor.fetchone()
             if s and s[1]:
                 raise ValueError(f"O turno de {nome} em {d.strftime('%d/%m/%Y')} já está pago.")
@@ -12409,20 +12411,30 @@ def marcar_pagamentos_pagos(escala_ids, data_pagamento=None, forma_pagamento='')
             calc = calcular_pagamento_turno(ent_real or ent, sai_real or sai, cfg, ajuste, d, tipo, ent, sai, nome_feriado(d))
             if not calc:
                 raise ValueError(f"O turno de {nome} em {d.strftime('%d/%m/%Y')} está sem horário de entrada/saída.")
+            obs = s[6] if s else None
+            novo = (novos_totais or {}).get(escala_id)
+            if novo is not None:                 # [VALOR NA HORA DE PAGAR] o que passar do calculado (ou faltar) vira o ajuste
+                ajuste = (_dec(novo) - (calc['Total'] - calc['Ajuste'])).quantize(_CENTAVO)
+                calc = calcular_pagamento_turno(ent_real or ent, sai_real or sai, cfg, ajuste, d, tipo, ent, sai, nome_feriado(d))
+                motivo = (motivo or '').strip()
+                if motivo and motivo not in (obs or ''):
+                    obs = f"{obs} · {motivo}" if obs else motivo
+                obs = (obs or '')[:300] or None
             valores = (_hhmm(ent), _hhmm(sai), calc['Tipo'], calc['Dia'], calc['Horas'], calc['HorasExtras'],
                        calc['ValorDiaria'], calc['ValorHoraExtra'].quantize(_CENTAVO), calc['ValorExtras'], calc['Total'],
                        data_pagamento, (forma_pagamento or '')[:30] or None)
             if s:
                 cursor.execute("UPDATE PagamentosFreelancer SET EntradaEscala = ?, SaidaEscala = ?, TipoDiaria = ?, TipoDia = ?, "
                                "Horas = ?, HorasExtras = ?, ValorDiaria = ?, ValorHoraExtra = ?, ValorExtras = ?, ValorTotal = ?, "
-                               "Pago = 1, DataPagamento = ?, FormaPagamento = ?, NomeFreelancer = ?, NomePosicao = ?, "
-                               "AtualizadoEm = GETDATE() WHERE PagamentoID = ?", *valores, nome, posicao, s[0])
+                               "Pago = 1, DataPagamento = ?, FormaPagamento = ?, Ajuste = ?, Observacao = ?, NomeFreelancer = ?, "
+                               "NomePosicao = ?, AtualizadoEm = GETDATE() WHERE PagamentoID = ?",
+                               *valores, calc['Ajuste'], obs, nome, posicao, s[0])
             else:
                 cursor.execute("INSERT INTO PagamentosFreelancer (EntradaEscala, SaidaEscala, TipoDiaria, TipoDia, Horas, "
                                "HorasExtras, ValorDiaria, ValorHoraExtra, ValorExtras, ValorTotal, DataPagamento, FormaPagamento, "
-                               "Pago, EscalaID, DataEscala, FreelancerID, NomeFreelancer, NomePosicao, Ajuste) "
-                               "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, 0)",
-                               *valores, escala_id, d, fid, nome, posicao)
+                               "Pago, EscalaID, DataEscala, FreelancerID, NomeFreelancer, NomePosicao, Ajuste, Observacao) "
+                               "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)",
+                               *valores, escala_id, d, fid, nome, posicao, calc['Ajuste'], obs)
             total += calc['Total']
         conn.commit()
         logger.info(f"{len(escala_ids)} turno(s) de freelancer marcados como pagos ({_br(total)}).")
