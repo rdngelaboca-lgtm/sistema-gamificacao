@@ -2850,7 +2850,7 @@ def _resposta_presenca(funcao):
 @compras_login(somente_gestor=True)
 def api_gestao_vagas(usuario):
     import confirmacoes
-    return _resposta_presenca(lambda: confirmacoes.listar_vagas())
+    return _resposta_presenca(lambda: confirmacoes.listar_vagas(host_url=request.host_url))
 
 
 @app.route('/api/gestao/escala/vagas', methods=['POST'])

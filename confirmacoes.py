@@ -503,7 +503,7 @@ def _json_vaga(v, resp):
                            'respondido': x['respondido'].strftime('%d/%m %H:%M') if x['respondido'] else ''} for x in resp]}
 
 
-def listar_vagas(desde=None):
+def listar_vagas(desde=None, host_url=None):
     """Vagas de hoje em diante (e as dos últimos 7 dias), com as respostas."""
     garantir_tabelas()
     desde = database._como_data(desde) or (date.today() - timedelta(days=7))
@@ -517,7 +517,9 @@ def listar_vagas(desde=None):
         conn.close()
     vagas.sort(key=lambda v: (v['status'] not in (V_ABERTA, V_PREENCHIDA), v['data'], v['entrada'], -v['id']))
     p = _params()
-    return {'vagas': vagas, 'grupo': {'id': p.get('grupo_id') or '', 'nome': p.get('grupo_nome') or ''}}
+    base, local = endereco_publico(host_url)
+    return {'vagas': vagas, 'grupo': {'id': p.get('grupo_id') or '', 'nome': p.get('grupo_nome') or ''},
+            'link_local': local or not base, 'endereco': base}
 
 
 def vaga(vid):
@@ -578,7 +580,12 @@ def enviar_vaga(vid, dados, usuario, host_url):
     ids = list(dict.fromkeys(ids))
     if not no_grupo and not ids:
         raise ErroPresenca("Escolha mandar no grupo e/ou marque os freelancers.")
-    base, _local = endereco_publico(host_url)
+    base, local = endereco_publico(host_url)
+    if local or not base:
+        # [DEPURAÇÃO] ia "http://localhost:5000/vaga/…": no celular não abre (o WhatsApp nem deixa clicar)
+        raise ErroPresenca(f"O link da vaga ficaria «{base or '(sem endereço)'}», que não abre no celular dos freelancers. "
+                           "Grave antes o endereço da internet em 📢 Clientes › ⚙️ Ajustes › QR Code do balcão "
+                           "(o mesmo que você usa para abrir o app fora da loja) e mande de novo.", 409)
     p = _params()
     if no_grupo and not p.get('grupo_id'):
         raise ErroPresenca("Escolha antes o grupo dos freelancers (⚙️ na janela de vagas).")

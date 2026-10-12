@@ -688,7 +688,7 @@ def iniciar_whatsapp(dados, usuario, host_url=None):
     links = None
     try:                                     # [PRESENÇA] cada um recebe o seu link ✅ Confirmo / ❌ Não posso
         import confirmacoes
-        links = confirmacoes.preparar_escala(data, lista, host_url)
+        links = confirmacoes.preparar_escala(data, lista, host_url, so_internet=True)   # link local não abre no celular: vai sem
     except Exception as e:
         logger.error(f"[GESTÃO] Confirmação de presença por link indisponível ({e}): a mensagem vai sem o link.")
 

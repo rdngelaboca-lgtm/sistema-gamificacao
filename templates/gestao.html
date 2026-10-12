@@ -1029,8 +1029,8 @@ $('#btn-whatsapp').onclick = async () => {
   try { pv = await api('GET', `/api/gestao/escala/whatsapp/previa?data=${S.data}`); } catch (e) { return falhou(e); }
   if (!pv.pessoas) { alert('Nenhuma pessoa com telefone encontrada na escala deste dia.'); return; }
   const link = pv.link_local
-    ? '⚠️ O link de ✅ confirmar presença vai com o endereço da rede da loja: só abre no Wi-Fi da loja. Para abrir em qualquer lugar, ' +
-      'grave o endereço da internet em 📢 Clientes › ⚙️ Ajustes.'
+    ? '⚠️ A mensagem vai SEM o link de ✅ confirmar presença: falta gravar o endereço da internet em 📢 Clientes › ⚙️ Ajustes ' +
+      '(QR Code do balcão). O endereço desta página só funciona aqui no computador/na loja.'
     : 'Cada um recebe um link para ✅ confirmar presença (ou ❌ avisar que não vem): a resposta aparece aqui no painel.';
   if (!confirm(`Encontradas ${pv.pessoas} pessoas com telefone na escala.\n\nDeseja enviar a confirmação de horário individual ` +
                `para o WhatsApp de cada um via BOT?\n\n${link}\n\n⚠️ Isso pode levar alguns segundos (pode fechar esta página: o envio continua no servidor).`)) return;
@@ -1086,6 +1086,7 @@ $('#btn-vagas').onclick = () => {
   abrirModal(`<h3>🙋 Vagas para freelancers</h3>
     <div class="mini suave">Mande a vaga no grupo dos freelancers e/ou no WhatsApp de cada um. Quem quer toca no link e confirma;
       você escolhe quem entra na escala (📌). Ao encerrar, quem não foi escolhido recebe um “desta vez não deu”.</div>
+    <div id="vg-aviso-link" class="caixa" style="background:#fff4dc;border-color:#f0d08a;color:#7a5200;margin-top:10px" hidden></div>
     <div id="vg-grupo" class="vg-grupo"></div>
     <details id="vg-nova" class="caixa"><summary><b>➕ Nova vaga</b></summary>
       <div class="form" style="margin-top:10px">
@@ -1149,6 +1150,10 @@ async function carregarVagas(primeira) {
   catch (e) { if ($('#vg-lista')) $('#vg-lista').innerHTML = `<div class="n-erro">${esc(e.message)}</div>`; return; }
   if (!$('#vg-lista')) return;
   VG.dados = d;
+  $('#vg-aviso-link').hidden = !d.link_local;
+  $('#vg-aviso-link').innerHTML = d.link_local ? `⚠️ <b>Falta o endereço da internet.</b> Sem ele o link da vaga sai como
+    "${esc(d.endereco || 'localhost')}", que não abre no celular dos freelancers. Grave em
+    <a href="/gestao/clientes" target="_blank" rel="noopener">📢 Clientes › ⚙️ Ajustes</a> (QR Code do balcão) e volte aqui.` : '';
   desenharGrupoVagas();
   if (primeira && !d.vagas.some(v => v.status === 'aberta')) $('#vg-nova').open = true;
   if (VG.enviando) {
