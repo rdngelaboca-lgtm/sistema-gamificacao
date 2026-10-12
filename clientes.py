@@ -2081,9 +2081,11 @@ def qr_svg(url):
 
 def ajustes(host_url):
     url, local = endereco_cadastro(host_url)
+    # o webhook usa o endereço da internet gravado (aberto pelo localhost, a Z-API não alcançaria)
+    base = (_params('url_publica').get('url_publica') or '').strip() or str(host_url or '')
     return {'numero': ajustes_numero(), 'aniversario': config_aniversario(),
             'hoje_aniversariantes': len(aniversariantes()),
-            'webhook': str(host_url or '').rstrip('/') + f"/webhook/zapi-clientes/{webhook_segredo()}",
+            'webhook': base.rstrip('/') + f"/webhook/zapi-clientes/{webhook_segredo()}",
             'qr': {'url': url, 'local': local, 'svg': qr_svg(url), 'url_gravada': _params('url_publica').get('url_publica') or ''},
             'modelos': [{'nome': n, 'texto': t} for n, t in MODELOS],
             'regras': {'intervalo': f"{INTERVALO_SEG[0]} a {INTERVALO_SEG[1]} s", 'limite_dia': LIMITE_POR_DIA,
