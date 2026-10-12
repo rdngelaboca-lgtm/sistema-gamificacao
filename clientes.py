@@ -953,10 +953,9 @@ def processar_fila(agora=None, dormir=time.sleep, avisar=None):
                 cur.execute("UPDATE CampanhasClientes SET Status = ?, ConcluidaEm = ? WHERE CampanhaID = ?", ST_CONCLUIDA, momento, camp)
                 conn.commit()
                 cont = _contagens(cur).get(camp, {})
-                avisar(f"📢 <b>Mensagem para clientes enviada</b>: {_esc(titulo)}\n"
-                       f"✅ {cont.get('enviado', 0)} receberam" + (f" · ❌ {cont['falhou']} falharam" if cont.get('falhou') else '')
-                       + (f" · ⏭️ {cont['pulado']} pularam" if cont.get('pulado') else '')
-                       + ("\n<i>Veja em Gestão › 📢 Clientes › Envios.</i>"))
+                cur.execute("SELECT Nome FROM CampanhaEnvios WHERE CampanhaID = ? AND Status = 'enviado'", camp)
+                nomes = sorted((primeiro_nome(r[0]) for r in cur.fetchall() if r[0]), key=lambda n: _sem_acento(n).lower())
+                avisar(_texto_resumo(titulo, cont, nomes))
                 continue
             if enviados_hoje(cur, momento) >= LIMITE_POR_DIA:
                 _avisar_limite(momento, avisar)
@@ -1009,15 +1008,38 @@ def processar_fila(agora=None, dormir=time.sleep, avisar=None):
                 mandadas += 1
             if falhas_seguidas >= FALHAS_SEGUIDAS:
                 logger.error(f"[CLIENTES] Mensagem {camp} pausada: {FALHAS_SEGUIDAS} falhas seguidas ({motivo}).")
-                avisar(f"⚠️ <b>Mensagem para clientes PAUSADA</b>: {_esc(titulo)}\n{FALHAS_SEGUIDAS} falhas seguidas "
-                       f"({_esc(motivo)}). O número dos clientes pode ter desconectado: confira na Z-API e toque em "
-                       "▶️ Continuar em Gestão › 📢 Clientes › Envios.")
+                avisar(f"⚠️ <b>Envio para clientes PAUSADO</b> (número dos clientes{_fim_instancia()}): «{_esc(titulo)}»\n"
+                       f"{FALHAS_SEGUIDAS} falhas seguidas ({_esc(motivo)}). O número dos clientes pode ter desconectado: "
+                       "confira na Z-API e toque em ▶️ Continuar em Gestão › 📢 Clientes › Envios.")
                 return mandadas
             if i < len(fila) - 1:
                 dormir(random.uniform(*INTERVALO_SEG))
         else:
             continue                                         # terminou a fila desta: volta e marca concluída
         return mandadas
+
+
+def _fim_instancia():
+    inst = _numero()['zapi_instancia']
+    return f", instância …{inst[-4:]}" if inst else ''
+
+
+def _texto_resumo(titulo, cont, nomes):
+    """
+    [CLIENTES] Resumo para o GRUPO DA GESTÃO (vai pelo canal dos avisos, como o boletim). Deixa claro que a mensagem
+    foi direto para cada cliente pelo número dos clientes, e não para o grupo.
+    """
+    n = cont.get('enviado', 0)
+    quem = ''
+    if nomes:
+        quem = ': ' + ', '.join(_esc(x) for x in nomes[:8]) + (f" e mais {len(nomes) - 8}" if len(nomes) > 8 else '')
+    return (f"📢 <b>Resumo do envio para clientes</b> (só para a gestão)\n"
+            f"«{_esc(titulo)}»\n"
+            f"✅ {n} cliente(s) receberam no WhatsApp deles{quem}"
+            + (f"\n❌ {cont['falhou']} falharam" if cont.get('falhou') else '')
+            + (f"\n⏭️ {cont['pulado']} pularam (saíram da lista)" if cont.get('pulado') else '')
+            + f"\n📱 Saiu pelo número dos clientes{_fim_instancia()}, direto para cada um."
+            + "\n<i>Detalhes em Gestão › 📢 Clientes › Envios. Para não receber este resumo: 📣 Avisos.</i>")
 
 
 def _avisar_limite(momento, avisar):
