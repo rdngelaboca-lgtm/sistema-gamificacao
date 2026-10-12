@@ -1020,12 +1020,43 @@ def verificar_sugestao_amanha(agora=None):
         return
     agora = agora or datetime.now()
     datas = ff.dias_da_sugestao(agora.date())
-    texto = ff.texto_sugestao(datas, agora.date()) if datas else ''
+    lista = ff.sugestoes(datas, agora.date()) if datas else []
+    texto = ff.texto_sugestao(datas, agora.date(), lista) if lista else ''
     if texto and not alertas_estoque.enviar(texto):
         return                                   # não chegou em nenhum canal: tenta de novo na recuperação
     marcar_rodou_hoje('sugestao_amanha')
     if texto:
         logger.info(f"Sugestão para amanhã enviada ({', '.join(f'{d:%d/%m}' for d in datas)}).")
+        try:
+            ff.guardar_sugestoes(lista, agora)   # [RESULTADO DA SUGESTÃO] para comparar quando o faturamento for lançado
+        except Exception as e:
+            logger.error(f"Sugestão para amanhã: não consegui guardar para o resultado: {e}", exc_info=True)
+
+
+def verificar_resultado_sugestao(agora=None):
+    """
+    [RESULTADO DA SUGESTÃO] De 10 em 10 minutos: o faturamento de um dia que teve sugestão foi lançado (Gestão,
+    Gamificação ou /lancar)? Compara com a média prevista: ✅ superou a média / ⚠️ atenção, abaixo da média, os
+    freelancers e a folha × super meta. Cada dia é avisado uma vez só. O de hoje só depois das 21h.
+    """
+    try:
+        import folha_faturamento as ff
+    except ImportError:
+        return
+    import alertas_estoque
+    agora = agora or datetime.now()
+    datas = ff.resultados_pendentes(agora)
+    if not datas:
+        return
+    if not alertas_estoque.aviso_ligado('resultado'):
+        ff.marcar_resultado(datas, agora)       # desligado: conta como avisado (não chega tudo junto ao religar)
+        return
+    texto = ff.texto_resultado(datas, agora.date())
+    if texto and not alertas_estoque.enviar(texto):
+        return                                   # não chegou em nenhum canal: tenta de novo em 10 minutos
+    ff.marcar_resultado(datas, agora)
+    if texto:
+        logger.info(f"Resultado da sugestão enviado ({', '.join(f'{d:%d/%m}' for d in datas)}).")
 
 
 # ==============================================================================
@@ -1262,6 +1293,7 @@ def configurar_agendamentos():
     schedule.every().day.at(HORARIO_FECHAMENTO_FOLHA).do(run_threaded, verificar_fechamento_folha)
     schedule.every().day.at(HORARIO_AVISO_CLIMA).do(run_threaded, verificar_aviso_clima)
     schedule.every().day.at(HORARIO_SUGESTAO_AMANHA).do(run_threaded, verificar_sugestao_amanha)
+    schedule.every(10).minutes.do(run_threaded, verificar_resultado_sugestao)
     for horario in HORARIOS_RESUMO_NOTAS:                   # [AVISOS LIMPOS] resumo das notas novas
         schedule.every().day.at(horario).do(run_threaded, verificar_resumo_notas)
     schedule.every().day.at(HORARIO_ESCALA_FIXA).do(run_threaded, aplicar_escala_fixa)
@@ -1290,6 +1322,7 @@ def recuperar_tarefas_do_dia():
         run_threaded(verificar_aviso_clima)
     if _passou_do_horario(HORARIO_SUGESTAO_AMANHA, limite_horas=6):
         run_threaded(verificar_sugestao_amanha)
+    run_threaded(verificar_resultado_sugestao)      # [RESULTADO DA SUGESTÃO] não espera 10 minutos depois de ligar
     run_threaded(verificar_resumo_notas)            # [AVISOS LIMPOS] só manda se passou das 12h/18h sem mandar
     run_threaded(aplicar_escala_fixa)               # [ESCALA FIXA] não espera as 05:00 depois de ligar
 

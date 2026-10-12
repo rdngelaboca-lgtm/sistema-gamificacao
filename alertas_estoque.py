@@ -44,6 +44,8 @@ TIPOS_AVISO = [
     ('previsao', '🌤️ Previsão e escala', '10:00', 'Hoje e os próximos 3 dias: clima, freelancers × escalados'),
     ('sugestao', '🔮 Sugestão para amanhã', '14:00', 'Clima de amanhã, dias parecidos e quantos freelancers chamar pela '
                                                     'super meta (na sexta: sábado e domingo)'),
+    ('resultado', '🎯 Resultado da sugestão', 'Ao lançar', 'Quando o faturamento do dia é lançado: superou a média dos dias '
+                                                          'parecidos ou ficou abaixo, freelancers e folha × super meta'),
     ('notas', '📥 Notas novas da SEFAZ', '12:00 e 18:00', 'Resumo das notas baixadas e produtos novos para a franquia'),
     ('danfe', '📄 DANFE das notas novas', 'junto', 'O PDF de cada nota nova vai junto com o resumo (até 5)'),
     ('orcamentos', '📋 Orçamentos', 'junto', 'Nota que chegou para um orçamento (o que veio diferente), no resumo das notas'),

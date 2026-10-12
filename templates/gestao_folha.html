@@ -464,6 +464,10 @@ function abrirLancar() {
       status(`Faturamento de ${dm(r.data)} lançado: ${R$(r.valor)}${r.antes != null ? ' (antes ' + R$(r.antes) + ')' : ''}.`);
       if (r.data.slice(0, 7) !== S.mes) S.mes = r.data.slice(0, 7);
       carregar();
+      // [RESULTADO DA SUGESTÃO] o dia teve 🔮 sugestão: superou a média ou ficou abaixo
+      if (r.resultado) abrirModal(`<h3>🎯 Resultado da sugestão</h3>
+        <div id="resultado-texto" style="white-space:pre-line;line-height:1.5">${r.resultado}</div>
+        <div class="mini suave" style="margin-top:10px">O robô também manda no grupo, uma vez por dia lançado (liga/desliga em <a href="/gestao/avisos">📣 Avisos</a>).</div>`);
     } catch (e) { $('#lc-salvar').disabled = false; falhou(e); }
   };
   $('#lc-salvar').onclick = salvar;

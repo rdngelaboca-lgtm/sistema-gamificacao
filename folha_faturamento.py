@@ -120,6 +120,24 @@ def garantir_tabelas():
             )
         """)
         cur.execute("""
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'SugestoesFreelas')
+            CREATE TABLE SugestoesFreelas (
+                Data DATE NOT NULL PRIMARY KEY,
+                FaturamentoMedio DECIMAL(12, 2) NULL,
+                Parecidos INT NOT NULL,
+                SuperMeta DECIMAL(5, 2) NOT NULL,
+                Fixo DECIMAL(12, 2) NULL,
+                Diaria DECIMAL(12, 2) NULL,
+                Sugeridos INT NULL,
+                Escalados INT NULL,
+                ClimaMax DECIMAL(5, 1) NULL,
+                Chuva BIT NOT NULL DEFAULT 0,
+                ClimaTexto NVARCHAR(200) NULL,
+                EnviadaEm DATETIME NOT NULL,
+                ResultadoEm DATETIME NULL
+            )
+        """)
+        cur.execute("""
             IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ParametrosFolha')
             CREATE TABLE ParametrosFolha (
                 Chave VARCHAR(40) NOT NULL PRIMARY KEY,
@@ -1075,7 +1093,13 @@ def lancar_faturamento(data_txt, valor_txt, usuario, hoje=None, em_segundo_plano
         premiar()
     logger.info(f"Faturamento de {d} lançado pela Web: R$ {v} (antes: {antes}) na meta {meta_id[1]} "
                 f"por {(usuario or {}).get('nome')}.")
-    return {'data': d.isoformat(), 'valor': _num(v), 'antes': _num(antes), 'meta': meta_id[1]}
+    resultado = None
+    if d < hoje or datetime.now().hour >= HORA_RESUMO_HOJE:      # [RESULTADO DA SUGESTÃO] o de hoje só com o dia fechado
+        try:
+            resultado = texto_resultado([d], hoje) or None
+        except Exception as e:
+            logger.warning(f"Resultado da sugestão de {d}: {e}")
+    return {'data': d.isoformat(), 'valor': _num(v), 'antes': _num(antes), 'meta': meta_id[1], 'resultado': resultado}
 
 
 # ------------------------------------------------------------------------------
@@ -1282,10 +1306,10 @@ def _bloco_sugestao(r, hoje):
     return linhas
 
 
-def texto_sugestao(datas, hoje=None):
+def texto_sugestao(datas, hoje=None, lista=None):
     """[SUGESTÃO AMANHÃ] Mensagem (HTML) com a sugestão de cada dia (sexta: sábado e domingo juntos). '' sem previsão."""
     hoje = hoje or date.today()
-    lista = sugestoes(datas, hoje)
+    lista = sugestoes(datas, hoje) if lista is None else lista
     if not lista:
         return ''
     titulo = "🔮 <b>Sugestão para o fim de semana</b>" if len(lista) > 1 else "🔮 <b>Sugestão para amanhã</b>" \
@@ -1295,6 +1319,194 @@ def texto_sugestao(datas, hoje=None):
         linhas += [''] + _bloco_sugestao(r, hoje)
     linhas += ['', f"<i>Super meta da folha: {_n(lista[0]['super_meta'])}% (muda em 📊 Folha › ⚙️). "
                    "Dias atípicos ficam de fora das médias.</i>"]
+    return "\n".join(linhas)
+
+
+# ------------------------------------------------------------------------------
+# [RESULTADO DA SUGESTÃO] a sugestão das 14h × o faturamento lançado depois
+# ------------------------------------------------------------------------------
+DIAS_RESULTADO = 7     # sugestão cujo faturamento não foi lançado em 7 dias: não cobra mais
+
+
+def _q(v, casas='0.01'):
+    return Decimal(v).quantize(Decimal(casas), rounding=ROUND_HALF_UP) if v is not None else None
+
+
+def guardar_sugestoes(lista, agora=None):
+    """Guarda a "foto" da sugestão que FOI ENVIADA (média prevista, sugeridos, clima previsto) para comparar depois."""
+    agora = agora or datetime.now()
+    garantir_tabelas()
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        for r in lista:
+            c = r['clima']
+            cur.execute("DELETE FROM SugestoesFreelas WHERE Data = ?", str(r['data']))
+            cur.execute("INSERT INTO SugestoesFreelas (Data, FaturamentoMedio, Parecidos, SuperMeta, Fixo, Diaria, Sugeridos, "
+                        "Escalados, ClimaMax, Chuva, ClimaTexto, EnviadaEm, ResultadoEm) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
+                        str(r['data']), _q(r['faturamento']), len(r['parecidos']), _q(r['super_meta']), _q(r['fixo']),
+                        _q(r['diaria']), r['sugeridos'], r['escala'], _q(c['max'], '0.1'), 1 if clima.chuvoso(c) else 0,
+                        clima.texto(c)[:200], agora.replace(microsecond=0))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _sugestoes_guardadas(cur, ini, fim, so_pendentes=False):
+    cur.execute("SELECT Data, FaturamentoMedio, Parecidos, SuperMeta, Fixo, Diaria, Sugeridos, Escalados, ClimaMax, Chuva, "
+                "ClimaTexto, ResultadoEm FROM SugestoesFreelas WHERE Data >= ? AND Data <= ? AND FaturamentoMedio IS NOT NULL"
+                + (" AND ResultadoEm IS NULL" if so_pendentes else ''), str(ini), str(fim))
+    return {database._como_data(r[0]): {
+        'faturamento': _d(r[1]), 'parecidos': r[2], 'super_meta': _d(r[3]), 'fixo': _d(r[4]), 'diaria': _d(r[5]),
+        'sugeridos': r[6], 'escalados': r[7], 'max': _d(r[8]), 'chuva': bool(r[9]), 'clima_texto': r[10] or '',
+        'resultado_em': r[11]} for r in cur.fetchall()}
+
+
+def resultados_pendentes(agora=None, janela=DIAS_RESULTADO):
+    """
+    Dias com sugestão enviada e ainda sem resultado cujo faturamento JÁ foi lançado (em qualquer lugar: Gestão,
+    Gamificação ou /lancar). O de hoje só depois das 21h (o dia já fechou), como o resumo da folha.
+    """
+    agora = agora or datetime.now()
+    hoje = agora.date()
+    garantir_tabelas()
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        sug = _sugestoes_guardadas(cur, hoje - timedelta(days=janela), hoje, so_pendentes=True)
+        fat = _faturamento(cur, min(sug), max(sug)) if sug else {}
+    finally:
+        conn.close()
+    return sorted(d for d in sug if d in fat and (d < hoje or agora.hour >= HORA_RESUMO_HOJE))
+
+
+def marcar_resultado(datas, agora=None):
+    """Resultado avisado (ou o aviso está desligado): não manda de novo."""
+    agora = agora or datetime.now()
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        for d in datas:
+            cur.execute("UPDATE SugestoesFreelas SET ResultadoEm = ? WHERE Data = ?", agora.replace(microsecond=0), str(d))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def resultados(datas):
+    """A sugestão guardada de cada dia × o que aconteceu (faturamento lançado, freelancers, folha e clima medido)."""
+    datas = sorted(datas)
+    if not datas:
+        return []
+    garantir_tabelas()
+    conn = _conexao()
+    try:
+        sug = _sugestoes_guardadas(conn.cursor(), datas[0], datas[-1])
+    finally:
+        conn.close()
+    reais = {x['data']: x for x in dias(datas[0], datas[-1])}
+    lista = []
+    for d in datas:
+        s, x = sug.get(d), reais.get(d)
+        if not s or not x or x['faturamento'] is None:
+            continue
+        real, media = x['faturamento'], s['faturamento']
+        fixo = x['fixo'] if x['fixo'] is not None else s['fixo']
+        cabiam = None
+        if fixo is not None and s['diaria'] and s['diaria'] > 0:
+            sobra = real * s['super_meta'] / 100 - fixo
+            cabiam = int((sobra / s['diaria']).to_integral_value(rounding=ROUND_FLOOR)) if sobra > 0 else 0
+        c = x['clima']
+        medido = bool(c) and not c.get('previsao') and c.get('max') is not None
+        mudou = medido and (clima.chuvoso(c) != s['chuva'] or abs(c['max'] - (s['max'] or c['max'])) > PARECIDO_GRAUS)
+        lista.append({'data': d, 'sugestao': s, 'dia': x, 'faturamento': real, 'media': media, 'superou': real >= media,
+                      'diferenca': real - media, 'diferenca_pct': _pct(real - media, media), 'cabiam': cabiam,
+                      'clima_medido': medido, 'clima_mudou': mudou,
+                      'folha_ok': None if x['pct'] is None else x['pct'] <= s['super_meta']})
+    return lista
+
+
+def _placar(ultimo):
+    """(superaram, total) das sugestões do mês até 'ultimo' com faturamento lançado."""
+    ini = date(ultimo.year, ultimo.month, 1)
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        sug = _sugestoes_guardadas(cur, ini, ultimo)
+        fat = _faturamento(cur, ini, ultimo)
+    finally:
+        conn.close()
+    feitos = [d for d in sug if d in fat]
+    return sum(1 for d in feitos if fat[d] >= sug[d]['faturamento']), len(feitos)
+
+
+def _bloco_resultado(r):
+    import html
+    s, x, linhas = r['sugestao'], r['dia'], []
+    pct = _n(s['super_meta'])
+    linhas.append(f"💰 Faturamento: <b>{_reais(r['faturamento'])}</b> · média dos {s['parecidos']} dias parecidos: "
+                  f"{_reais_redondo(r['media'])}")
+    dif = f"{_reais_redondo(abs(r['diferenca']))} ({_n(abs(r['diferenca_pct']))}%)"
+    if r['superou']:
+        linhas.append(f"✅ <b>Superou a média!</b> {dif} a mais")
+    else:
+        linhas.append(f"⚠️ <b>Atenção: faturamento abaixo da média!</b> {dif} a menos")
+    if r['clima_medido']:
+        linhas.append(f"🌡️ {clima.texto(x['clima'])}"
+                      + (f" · <b>previsto era</b> {html.escape(s['clima_texto'])}" if r['clima_mudou'] else ' (como previsto)'))
+    else:
+        linhas.append(f"🌡️ Previsto: {html.escape(s['clima_texto'])}")
+    fr = f"👥 Freelancers: sugestão {s['sugeridos'] if s['sugeridos'] is not None else '—'} · trabalharam {x['freelas']}"
+    if r['cabiam'] is not None:
+        fr += f" · com o faturamento real cabiam {r['cabiam']}"
+    linhas.append(fr)
+    if r['folha_ok'] is not None:
+        linhas.append(f"🧾 Folha do dia: <b>{_pct_txt(x['pct'])}</b> "
+                      + (f"✅ dentro da super meta ({pct}%)" if r['folha_ok'] else f"⚠️ passou da super meta ({pct}%)"))
+    a_mais = x['freelas'] - r['cabiam'] if r['cabiam'] is not None else 0
+    if r['folha_ok'] is False:
+        if a_mais > 0:
+            motivo = f"{a_mais} freelancer(s) além do que cabia"
+        elif not x['freelas']:
+            motivo = "só os fixos já passaram dela"
+        else:
+            motivo = "os freelancers custaram mais do que a diária longa (horas a mais)"
+    if r['superou'] and r['folha_ok'] is not False:
+        concl = "A sugestão deu certo: vendeu acima da média" + (" e a folha ficou dentro da super meta. 👏" if r['folha_ok'] else ". 👏")
+    elif r['superou']:
+        concl = f"Vendeu acima da média, mas a folha passou da super meta: {motivo}."
+    elif r['folha_ok'] is False:
+        concl = f"Vendeu abaixo da média e a folha passou da super meta: {motivo}." \
+            + (" Em dias assim, chame menos freelancers." if a_mais > 0 else '')
+    else:
+        concl = "Vendeu abaixo da média" + (", mas a folha ficou dentro da super meta." if r['folha_ok'] else ".")
+    if r['clima_mudou']:
+        concl += " O clima não foi o previsto, o que ajuda a explicar a diferença."
+    linhas.append(f"👉 {concl}")
+    if x.get('atipico'):
+        linhas.append(f"📌 Dia marcado como atípico: {html.escape(x['atipico'])} (fica fora das médias)")
+    return linhas
+
+
+def texto_resultado(datas, hoje=None):
+    """[RESULTADO DA SUGESTÃO] Mensagem (HTML): superou a média ou atenção, abaixo da média. '' sem nada para comparar."""
+    lista = resultados(datas)
+    if not lista:
+        return ''
+    if len(lista) == 1:
+        d = lista[0]['data']
+        linhas = [f"🎯 <b>Resultado da sugestão</b> · {DIAS_SEMANA[d.weekday()]} {d:%d/%m}"] + _bloco_resultado(lista[0])
+    else:
+        linhas = ["🎯 <b>Resultado das sugestões</b>"]
+        for r in lista:
+            linhas += ['', f"<b>{DIAS_SEMANA[r['data'].weekday()]} {r['data']:%d/%m}</b>"] + _bloco_resultado(r)
+    try:
+        bons, total = _placar(lista[-1]['data'])
+        if total >= 2:
+            linhas += ['', f"📈 Em {NOMES_MES[lista[-1]['data'].month - 1]}: {bons} de {total} dias com sugestão superaram a média."]
+    except Exception as e:
+        logger.warning(f"Resultado da sugestão: placar do mês indisponível: {e}")
     return "\n".join(linhas)
 
 
