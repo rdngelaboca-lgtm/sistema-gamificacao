@@ -507,8 +507,8 @@ def setor_da_diretriz(setor):
     return MAPA_FUNCAO_DIRETRIZ.get(setor, setor)
 
 
-def mensagem_confirmacao_escala(nome, data_escala, posicao, entrada, saida, int_ini=None, int_fim=None):
-    """Mensagem de confirmação de escala para o WhatsApp de uma pessoa."""
+def mensagem_confirmacao_escala(nome, data_escala, posicao, entrada, saida, int_ini=None, int_fim=None, link=None):
+    """Mensagem de confirmação de escala para o WhatsApp de uma pessoa (link = ✅ confirmar presença)."""
     fmt = lambda v: v.strftime('%H:%M') if hasattr(v, 'strftime') else str(v)[:5]
     data_fmt = datetime.strptime(str(data_escala)[:10], '%Y-%m-%d').strftime('%d/%m')
     intervalo = f"\n☕ Intervalo: *{fmt(int_ini)} às {fmt(int_fim)}*" if int_ini and int_fim else ""
@@ -517,7 +517,8 @@ def mensagem_confirmacao_escala(nome, data_escala, posicao, entrada, saida, int_
             f"📅 Data: *{data_fmt}*\n"
             f"📍 Posição: *{posicao}*\n"
             f"⏰ Horário: *{fmt(entrada)} às {fmt(saida)}*{intervalo}\n\n"
-            f"Bom trabalho!")
+            + (f"👉 *Toque para confirmar sua presença:*\n{link}\n\n" if link else "")
+            + "Bom trabalho!")
 
 
 def mensagem_diretriz(setor, descricao):
@@ -525,7 +526,7 @@ def mensagem_diretriz(setor, descricao):
 
 
 def lista_envio_whatsapp(escala, posicoes):
-    """Pessoas da escala do dia com telefone: [{'nome','telefone','posicao','setor','entrada','saida','int_ini','int_fim'}]."""
+    """Pessoas da escala do dia com telefone: [{'escala_id','nome','telefone','posicao','setor','entrada','saida','int_ini','int_fim'}]."""
     lista = []
     for pos_id, turnos in escala.items():
         pos = next((p for p in posicoes if p[0] == pos_id), None)
@@ -535,18 +536,19 @@ def lista_envio_whatsapp(escala, posicoes):
                     # [DEPURAÇÃO WEB] mandava "Horário: None às None"
                     logger.warning(f"[WPP] {t.NomePessoa} está sem horário na escala: confirmação não enviada.")
                     continue
-                lista.append({'nome': t.NomePessoa, 'telefone': t.TelefonePessoa,
+                lista.append({'escala_id': getattr(t, 'EscalaID', None), 'nome': t.NomePessoa, 'telefone': t.TelefonePessoa,
                               'posicao': pos[1] if pos else "Posição", 'setor': pos[5] if pos else None,
                               'entrada': t.HorarioEntrada, 'saida': t.HorarioSaida,
                               'int_ini': t.InicioIntervalo, 'int_fim': t.FimIntervalo})
     return lista
 
 
-def enviar_confirmacoes_whatsapp(lista, data_escala, enviar, buscar_diretriz, esperar=None, progresso=None):
+def enviar_confirmacoes_whatsapp(lista, data_escala, enviar, buscar_diretriz, esperar=None, progresso=None, links=None):
     """
     Manda a confirmação de escala e a diretriz do setor para cada pessoa da lista.
       enviar(telefone, texto) -> (ok, resposta); buscar_diretriz(setor) -> texto ou None
       esperar(segundos): pausa entre mensagens (anti-spam); progresso(enviados, erros): a cada pessoa
+      links: {EscalaID: link do ✅ confirmar presença} (confirmacoes.preparar_escala)
     Devolve (enviados, erros).
     """
     import time
@@ -555,7 +557,8 @@ def enviar_confirmacoes_whatsapp(lista, data_escala, enviar, buscar_diretriz, es
     for item in lista:
         try:
             ok, resp = enviar(item['telefone'], mensagem_confirmacao_escala(
-                item['nome'], data_escala, item['posicao'], item['entrada'], item['saida'], item['int_ini'], item['int_fim']))
+                item['nome'], data_escala, item['posicao'], item['entrada'], item['saida'], item['int_ini'], item['int_fim'],
+                (links or {}).get(item.get('escala_id'))))
             if ok:
                 enviados += 1
                 if item['setor']:

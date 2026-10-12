@@ -274,6 +274,26 @@ Arquivos: `clientes.py`, `templates/gestao_clientes.html`, `templates/clientes_c
 `ClienteEtiquetas`, `CampanhasClientes`, `CampanhaEnvios`, `ParametrosClientes`; fotos em `fotos_clientes/`.
 O QR precisa de `pip install qrcode` no servidor (sem ele, o resto funciona e a tela avisa).
 
+### Novo (só na Web) — ✅ Confirmar presença e 🙋 Vagas para freelancers (10/2026: Gestão › 🗓️ Escala)
+**Confirmar presença:** a mensagem do 📱 Confirmar escala (WhatsApp) termina com um **link** de cada pessoa
+(`/confirmar/<código>`): a página tem **✅ Confirmo** e **❌ Não posso** (com motivo opcional). No mapa, na lista e no
+painel aparece ✅ / ⏳ / ❌ antes do nome, e o resumo do dia mostra "📲 Presença: ✅ n · ⏳ n · ❌ n". Quem avisa que não
+vem gera aviso no grupo da gestão (tipo ✅ Presença e vagas em 📣 Avisos). Se a pessoa ou o horário mudar depois da
+mensagem, a resposta antiga deixa de valer (volta a ⏳ quando a confirmação for mandada de novo; o link é o mesmo).
+O pagamento continua com o 💰 (antes era ✅ no painel). Link e não botão do WhatsApp: pela Z-API o botão não aparece
+em todo celular. O programa do PC também manda o link, mas só se o endereço da internet estiver gravado.
+**🙋 Vagas:** a gestão cria a vaga (dia, posição, horário, **valor da diária** — o sistema sugere, dá para mudar —,
+quantas pessoas, observação) e manda **no grupo dos freelancers** (um link para todos; a pessoa confirma com o WhatsApp
+do cadastro, com limite de tentativas por aparelho) e/ou **no individual** (nome, horário, valor e o link de cada um; a
+lista avisa quem já está na escala no dia e quem não tem WhatsApp). Quem quer aparece na janela e gera aviso no grupo
+da gestão; **📌 Colocar na escala** escala o freelancer (mesmas conferências da escala; se a posição já tem gente, vai
+para outra livre do mesmo setor ou a tela pergunta qual), grava o valor combinado como ajuste nos 💰 Pagamentos, marca
+✅ e manda a confirmação. **✔️ Encerrar** avisa quem quis e não foi escolhido ("desta vez não deu"); **🗑️ Cancelar**
+avisa que foi cancelada. Os links usam o endereço da internet gravado em 📢 Clientes › ⚙️ Ajustes (sem ele, só abrem
+no Wi-Fi da loja e a tela avisa); pela internet só ficam abertos `/confirmar/`, `/vaga/` e `/api/presenca/`.
+Arquivos: `confirmacoes.py`, `templates/presenca.html`, `templates/gestao.html`; tabelas `ConfirmacoesEscala`,
+`VagasFreelancer`, `VagaRespostas`, `ParametrosVagas`.
+
 ### App de compras — aba Gestão em 3 áreas (10/2026)
 A aba **Gestão** do app (só o gestor vê) foi dividida em **🏪 Loja · 🛒 Compras · 📦 Estoque**, com o número de
 pendências de cada área no botão (Loja: dias sem faturamento lançado; Compras: listas para aprovar + cupons para

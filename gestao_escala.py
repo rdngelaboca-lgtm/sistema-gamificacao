@@ -89,7 +89,7 @@ def _pessoa(chave):
     raise ErroEscala("Escolha um funcionário ou freelancer.")
 
 
-def _turno_json(t, pagos, fixos=None):
+def _turno_json(t, pagos, fixos=None, presenca=None):
     tipo = 'func' if t.FuncionarioID else ('free' if getattr(t, 'FreelancerID', None) else None)
     cfg = (fixos or {}).get(t.FuncionarioID) if t.FuncionarioID else None
     return {'id': t.EscalaID, 'posicao_id': t.PosicaoID, 'tipo': tipo,
@@ -98,7 +98,13 @@ def _turno_json(t, pagos, fixos=None):
             'nome': t.NomePessoa or '', 'entrada': _h(t.HorarioEntrada), 'saida': _h(t.HorarioSaida),
             'int_ini': _h(t.InicioIntervalo), 'int_fim': _h(t.FimIntervalo), 'foco': t.FocoDoDia or '',
             'tipo_diaria': getattr(t, 'TipoDiaria', None) if tipo == 'free' else None,
-            'pago': t.EscalaID in pagos}
+            'pago': t.EscalaID in pagos,
+            'confirmacao': (presenca or {}).get(t.EscalaID)}          # [PRESENÇA] ✅ / ❌ / ⏳ (None = não recebeu o link)
+
+
+def _icone_presenca(turno_json):
+    c = turno_json.get('confirmacao')
+    return {'confirmado': '✅ ', 'recusado': '❌ ', 'pendente': '⏳ '}.get(c['status'], '') if c else ''
 
 
 def _indisponibilidade(funcionarios, d):
@@ -162,6 +168,12 @@ def dia(data_txt):
     escalados = {t.FuncionarioID for ts in escala.values() for t in ts if t.FuncionarioID}
     pagos = database.turnos_pagos(data_escala=data)
     tela = database.tamanho_mapa_escala() or (R.MAPA_IMAGEM_LARGURA, R.MAPA_IMAGEM_ALTURA)
+    presenca = {}
+    try:                                     # [PRESENÇA] quem já confirmou pelo link do WhatsApp
+        import confirmacoes
+        presenca = confirmacoes.status_do_dia(data, [t for ts in escala.values() for t in ts])
+    except Exception as e:
+        logger.warning(f"Escala: confirmações de presença indisponíveis ({e})")
 
     lista_pos = []
     for pos_id, nome, cx, cy, _ativo, setor in posicoes:
@@ -173,9 +185,9 @@ def dia(data_txt):
         turnos = escala.get(pos_id, [])
         cor, linhas = R.rotulo_e_cor_posicao(nome, turnos, folgas, indisponivel, dia_db,
                                              None if turnos else fixos.get(pos_id), False, escalados)
-        tj = [_turno_json(t, pagos, cfg_fixos) for t in turnos]
+        tj = [_turno_json(t, pagos, cfg_fixos, presenca) for t in turnos]
         if turnos and len(linhas) == len(turnos) + 1:          # [ESCALA FIXA] 📌 no nome de quem é fixo aqui
-            linhas = [linhas[0]] + [('📌 ' if j['fixo'] else '') + l for j, l in zip(tj, linhas[1:])]
+            linhas = [linhas[0]] + [_icone_presenca(j) + ('📌 ' if j['fixo'] else '') + l for j, l in zip(tj, linhas[1:])]
         lista_pos.append({'id': pos_id, 'nome': nome, 'setor': setor or '', 'x': round(x, 1), 'y': round(y, 1),
                           'cor': cor, 'linhas': linhas[1:], 'turnos': tj})
 
@@ -193,7 +205,7 @@ def dia(data_txt):
     fora_do_mapa = [{'id': pid, 'nome': nomes_fora.get(pid) or f"Posição {pid}", 'setor': '', 'removida': True,
                      'cor': R.COR_SEM_PESSOA, 'linhas': [f"{t.NomePessoa or '?'} ({_h(t.HorarioEntrada)}-{_h(t.HorarioSaida)})"
                                                           for t in escala[pid]],
-                     'turnos': [_turno_json(t, pagos) for t in escala[pid]]} for pid in ids_fora]
+                     'turnos': [_turno_json(t, pagos, None, presenca) for t in escala[pid]]} for pid in ids_fora]
 
     # Resumo (o mesmo do PC)
     feriado = _feriado(data)
@@ -220,6 +232,10 @@ def dia(data_txt):
         resumo += f"   🧑‍🍳 {len(frees)} freelancer(s): {R.fmt_reais(custo)}"
         if pagos:
             resumo += f" ({len(pagos)} pago(s))"
+
+    if presenca:                           # [PRESENÇA] quantos já responderam o link da confirmação
+        conta = lambda st: sum(1 for p in presenca.values() if p['status'] == st)
+        resumo += f"   📲 Presença: ✅ {conta('confirmado')} · ⏳ {conta('pendente')} · ❌ {conta('recusado')}"
 
     resumo_real = None                     # [RESUMO REAL] o que aconteceu de verdade (📝 Resumo do dia)
     try:
@@ -638,14 +654,20 @@ _envios = {}
 _trava_envios = threading.Lock()
 
 
-def previa_whatsapp(data_txt):
+def previa_whatsapp(data_txt, host_url=None):
     data, _d = _data(data_txt)
     _exigir_banco()
     lista = R.lista_envio_whatsapp(database.buscar_escala_do_dia(data), database.listar_posicoes_loja())
-    return {'pessoas': len(lista), 'nomes': [i['nome'] for i in lista]}
+    link_local = False
+    try:                                     # [PRESENÇA] o link só abre fora da loja com o endereço da internet gravado
+        import confirmacoes
+        link_local = confirmacoes.endereco_publico(host_url)[1]
+    except Exception as e:
+        logger.warning(f"Escala: endereço dos links de presença indisponível ({e})")
+    return {'pessoas': len(lista), 'nomes': [i['nome'] for i in lista], 'link_local': link_local}
 
 
-def iniciar_whatsapp(dados, usuario):
+def iniciar_whatsapp(dados, usuario, host_url=None):
     """Começa o envio em segundo plano (pode fechar a página). Devolve o andamento."""
     import notificador_whatsapp
     data, _d = _data(dados.get('data'))
@@ -663,6 +685,12 @@ def iniciar_whatsapp(dados, usuario):
         job = {'id': uuid.uuid4().hex[:12], 'data': data, 'total': len(lista), 'feitos': 0, 'enviados': 0,
                'erros': 0, 'terminado': False, 'por': usuario.get('nome'), 'criado': time.time()}
         _envios[job['id']] = job
+    links = None
+    try:                                     # [PRESENÇA] cada um recebe o seu link ✅ Confirmo / ❌ Não posso
+        import confirmacoes
+        links = confirmacoes.preparar_escala(data, lista, host_url)
+    except Exception as e:
+        logger.error(f"[GESTÃO] Confirmação de presença por link indisponível ({e}): a mensagem vai sem o link.")
 
     def progresso(enviados, erros):
         job.update(enviados=enviados, erros=erros, feitos=job['feitos'] + 1)
@@ -670,7 +698,7 @@ def iniciar_whatsapp(dados, usuario):
     def rodar():
         try:
             enviados, erros = R.enviar_confirmacoes_whatsapp(lista, data, notificador_whatsapp.enviar_mensagem_whatsapp,
-                                                            database.buscar_descricao_setor, progresso=progresso)
+                                                            database.buscar_descricao_setor, progresso=progresso, links=links)
             job.update(enviados=enviados, erros=erros)
         except Exception as e:
             logger.exception(f"[GESTÃO] Envio de WhatsApp da escala de {data} falhou: {e}")

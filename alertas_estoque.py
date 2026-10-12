@@ -52,6 +52,8 @@ TIPOS_AVISO = [
     ('faturamento', '📊 Faturamento e folha', 'Ao lançar · dia 1', 'Resumo do dia quando o faturamento é lançado e o fechamento do mês'),
     ('clientes', '📢 Mensagens para clientes', 'Ao terminar', 'Resumo quando termina um envio para clientes (quantos receberam) '
                                                              'e alerta se o número dos clientes parar'),
+    ('presenca', '✅ Presença e vagas', 'Na hora', 'Quem avisou pelo link que NÃO vai poder vir e freelancer que quer '
+                                                  'uma vaga (🙋 Vagas da escala)'),
 ]
 CHAVES_AVISO = [t[0] for t in TIPOS_AVISO]
 

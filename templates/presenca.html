@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0E6B63">
+<meta name="robots" content="noindex">
+<meta name="referrer" content="no-referrer">
+<title>Gela Boca · Confirmar presença</title>
+<!-- [PRESENÇA] Página PÚBLICA do link do WhatsApp: /confirmar/<código> (escala) e /vaga/<código> (vaga de freelancer).
+     Só mostra o turno/vaga daquele código e os botões ✅ / ❌. Nada da Gestão aparece aqui. -->
+<style>
+  :root { --verde: #0E6B63; --verde-esc: #0B564F; --verde-claro: #DDEFEC; --texto: #16201F; --suave: #55625F; --linha: #DCE3E1;
+    --erro: #c62828; --erro-claro: #FDECEA; --aviso: #8a5300; --aviso-claro: #FFF4DC; }
+  * { box-sizing: border-box; }
+  html { background: #F3F6F5; }
+  body { margin: 0; min-height: 100vh; background: linear-gradient(180deg, #DDEFEC 0%, #F3F6F5 260px) no-repeat; color: var(--texto);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 16px; }
+  main { max-width: 440px; margin: 0 auto; padding: 22px 16px 40px; }
+  .topo { text-align: center; margin-bottom: 14px; }
+  .topo .marca { font-size: 30px; font-weight: 800; color: var(--verde-esc); }
+  .cartao { background: #fff; border: 1px solid var(--linha); border-radius: 18px; padding: 18px; display: grid; gap: 14px; box-shadow: 0 6px 20px #0E6B6314; }
+  h1 { font-size: 21px; margin: 0; }
+  .dados { display: grid; gap: 8px; margin: 0; padding: 12px 14px; background: #F7FAF9; border-radius: 12px; border: 1px solid var(--linha); }
+  .dados div { display: flex; gap: 10px; align-items: baseline; font-size: 17px; }
+  .dados .ic { width: 24px; text-align: center; flex: none; }
+  .dados b { font-weight: 800; }
+  .situacao { border-radius: 12px; padding: 12px 14px; font-weight: 700; line-height: 1.35; }
+  .situacao.ok { background: var(--verde-claro); color: var(--verde-esc); }
+  .situacao.nao { background: var(--erro-claro); color: var(--erro); }
+  .situacao.aviso { background: var(--aviso-claro); color: var(--aviso); }
+  label { display: grid; gap: 6px; font-weight: 700; font-size: 14px; color: var(--suave); }
+  input, textarea { font: inherit; font-size: 17px; border: 1px solid var(--linha); border-radius: 10px; padding: 11px 12px; width: 100%; background: #fff; color: var(--texto); }
+  textarea { min-height: 70px; resize: vertical; }
+  input:focus, textarea:focus, button:focus-visible { outline: 2px solid var(--verde); outline-offset: 1px; }
+  .botoes { display: grid; gap: 10px; }
+  button { font: inherit; font-weight: 800; font-size: 19px; border-radius: 14px; padding: 15px; cursor: pointer; border: 2px solid transparent; }
+  button.sim { background: var(--verde); color: #fff; }
+  button.nao { background: #fff; color: var(--erro); border-color: #f1c4c0; }
+  button.leve { background: transparent; color: var(--suave); font-size: 15px; font-weight: 700; padding: 6px; text-decoration: underline; }
+  button[disabled] { opacity: .6; cursor: default; }
+  .mini { font-size: 13px; color: var(--suave); }
+  #erro { color: var(--erro); font-weight: 700; min-height: 1.2em; }
+  .grande { font-size: 54px; text-align: center; line-height: 1; }
+  .carregando { text-align: center; color: var(--suave); padding: 30px 0; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <div class="topo"><div class="marca">🍦 Gela Boca</div></div>
+  <div class="cartao" id="cartao">
+    <div class="carregando" id="carregando">Carregando…</div>
+    <div class="grande" id="emoji" hidden></div>
+    <h1 id="titulo" hidden></h1>
+    <div class="dados" id="dados" hidden></div>
+    <div class="situacao" id="situacao" hidden></div>
+    <label id="campo-tel" hidden>Seu WhatsApp (o mesmo do cadastro de freelancer)
+      <input id="telefone" type="tel" inputmode="tel" autocomplete="tel" placeholder="(66) 99999-1234" maxlength="20"></label>
+    <div class="botoes" id="botoes" hidden>
+      <button class="sim" id="sim" type="button">✅ Confirmo</button>
+      <button class="nao" id="nao" type="button">❌ Não posso</button>
+    </div>
+    <div id="caixa-motivo" class="botoes" hidden>
+      <label>Por que não vai poder vir? (opcional)<textarea id="motivo" maxlength="200" placeholder="Ex.: estou doente"></textarea></label>
+      <button class="nao" id="enviar-nao" type="button">❌ Avisar que não vou</button>
+      <button class="leve" id="voltar" type="button">Voltar</button>
+    </div>
+    <div id="erro" role="alert"></div>
+    <div class="mini" id="rodape" hidden></div>
+  </div>
+</main>
+<script>
+'use strict';
+const $ = s => document.querySelector(s);
+const esc = t => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+const partes = location.pathname.split('/').filter(Boolean);
+const TIPO = partes[0] === 'vaga' ? 'vaga' : 'confirmar', TOKEN = partes[1] || '';
+const URL_API = `/api/presenca/${TIPO}/${encodeURIComponent(TOKEN)}`;
+let D = null;
+
+function lerTel() { try { return localStorage.getItem('gb_whatsapp') || ''; } catch (e) { return ''; } }
+function gravarTel(v) { try { localStorage.setItem('gb_whatsapp', v); } catch (e) {} }
+
+async function chamar(metodo, corpo) {
+  let r;
+  try {
+    r = await fetch(URL_API, {method: metodo, credentials: 'omit', cache: 'no-store',
+      headers: corpo ? {'Content-Type': 'application/json'} : {}, body: corpo ? JSON.stringify(corpo) : undefined});
+  } catch (e) { throw new Error('Sem internet. Tente de novo.'); }
+  let d = {};
+  try { d = await r.json(); } catch (e) {}
+  if (!r.ok) { const er = new Error(d.erro || 'Não deu certo. Tente de novo.'); er.status = r.status; throw er; }
+  return d;
+}
+function situacao(texto, tipo) {
+  $('#situacao').hidden = !texto; $('#situacao').className = 'situacao ' + (tipo || ''); $('#situacao').textContent = texto || '';
+}
+function mostrarBotoes(sim) { $('#botoes').hidden = !sim; $('#caixa-motivo').hidden = true; }
+
+function desenhar() {
+  const d = D;
+  $('#carregando').hidden = true;
+  $('#titulo').hidden = false; $('#dados').hidden = false; $('#emoji').hidden = true;
+  const linhas = [['📅', `<b>${esc(d.dia)}</b>`], ['⏰', `<b>${esc(d.entrada)} às ${esc(d.saida)}</b>`], ['📍', esc(d.posicao)]];
+  if (d.tipo === 'vaga') {
+    linhas.push(['💰', `<b>${esc(d.valor_txt)}</b>`]);
+    if (d.observacao) linhas.push(['📝', esc(d.observacao)]);
+  }
+  $('#dados').innerHTML = linhas.map(([i, t]) => `<div><span class="ic">${i}</span><span>${t}</span></div>`).join('');
+  $('#rodape').hidden = true;
+  if (d.tipo === 'escala') {
+    $('#titulo').textContent = `Olá, ${d.nome || 'tudo bem'}! 👋 Sua escala:`;
+    $('#sim').textContent = '✅ Confirmo'; $('#nao').textContent = '❌ Não posso';
+    if (d.mudou) { situacao('⚠️ A sua escala mudou depois desta mensagem. Fale com a loja para receber a nova.', 'aviso'); return mostrarBotoes(false); }
+    if (d.passou) { situacao('Essa escala já passou.', 'aviso'); return mostrarBotoes(false); }
+    if (d.status === 'confirmado') situacao(`✅ Você confirmou${d.respondido ? ' (' + d.respondido + ')' : ''}. Te esperamos!`, 'ok');
+    else if (d.status === 'recusado') situacao(`❌ Você avisou que não vai poder vir${d.motivo ? ': ' + d.motivo : ''}.`, 'nao');
+    else situacao('');
+    mostrarBotoes(true);
+    if (d.status !== 'pendente') { $('#rodape').hidden = false; $('#rodape').textContent = 'Mudou algo? Dá para trocar a resposta até o dia.'; }
+    return;
+  }
+  // vaga
+  const grupo = d.link === 'grupo';
+  $('#titulo').textContent = grupo ? '🆕 Vaga de freelancer' : `Oi, ${d.nome}! 👋 Temos uma vaga para você:`;
+  $('#sim').textContent = '✅ Quero a vaga'; $('#nao').textContent = '❌ Não posso';
+  $('#campo-tel').hidden = !grupo || d.fechada;
+  if (grupo && !$('#telefone').value) $('#telefone').value = lerTel();
+  if (d.status === 'escalado') { situacao('✅ Você está na escala! Te esperamos.', 'ok'); return mostrarBotoes(false); }
+  if (d.fechada) { situacao(d.fechada_txt, 'aviso'); return mostrarBotoes(false); }
+  if (d.status === 'confirmou') situacao('🙋 Você disse que quer. A loja vai escolher e te confirma pelo WhatsApp.', 'ok');
+  else if (d.status === 'recusou') situacao('Você disse que não pode desta vez.', 'nao');
+  else situacao('');
+  mostrarBotoes(true);
+}
+
+async function carregar() {
+  try { D = await chamar('GET'); desenhar(); }
+  catch (e) {
+    $('#carregando').hidden = true; $('#emoji').hidden = false; $('#emoji').textContent = '🔗';
+    $('#erro').textContent = e.message;
+  }
+}
+
+async function responder(resposta) {
+  $('#erro').textContent = '';
+  const corpo = {resposta};
+  if (D.tipo === 'escala' && resposta === 'nao') corpo.motivo = $('#motivo').value;
+  if (D.tipo === 'vaga' && D.link === 'grupo') {
+    corpo.telefone = $('#telefone').value;
+    if (corpo.telefone.replace(/\D/g, '').length < 10) { $('#erro').textContent = 'Digite o seu WhatsApp com o DDD.'; $('#telefone').focus(); return; }
+  }
+  document.querySelectorAll('button').forEach(b => { b.disabled = true; });
+  try {
+    const r = await chamar('POST', corpo);
+    if (D.tipo === 'vaga' && D.link === 'grupo') {
+      gravarTel(corpo.telefone);
+      D.status = r.status; D.nome = r.nome;
+      desenhar();
+      $('#titulo').textContent = `Obrigado, ${r.nome}!`;
+    } else {
+      D = await chamar('GET'); desenhar();
+    }
+    $('#emoji').hidden = false;
+    $('#emoji').textContent = r.status === 'confirmado' || r.status === 'confirmou' ? '🙌' : '👍';
+  } catch (e) {
+    $('#erro').textContent = e.message;
+    if (e.status === 409) { try { D = await chamar('GET'); desenhar(); } catch (e2) {} }
+  }
+  document.querySelectorAll('button').forEach(b => { b.disabled = false; });
+}
+
+$('#sim').onclick = () => responder('sim');
+$('#nao').onclick = () => {
+  if (D && D.tipo === 'escala') { $('#botoes').hidden = true; $('#caixa-motivo').hidden = false; $('#motivo').focus(); }
+  else responder('nao');
+};
+$('#enviar-nao').onclick = () => responder('nao');
+$('#voltar').onclick = () => mostrarBotoes(true);
+carregar();
+</script>
+</body>
+</html>

@@ -120,6 +120,33 @@
   #alertas li { white-space: pre-line; }
   #grafico svg { width: 100%; height: auto; display: block; }
 
+  /* [PRESENÇA] ✅ confirmou · ⏳ não respondeu · ❌ não vem (link do 📱 WhatsApp) */
+  .presenca { cursor: help; }
+  .motivo-nao { font-size: 12px; color: var(--erro); font-weight: 600; }
+  /* [VAGAS] janela 🙋 Vagas */
+  .vg-grupo { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 10px 0; font-size: 14px; }
+  .vg-grupo select { max-width: 100%; flex: 1; min-width: 180px; }
+  #vg-nova { margin-bottom: 10px; } #vg-nova summary { cursor: pointer; }
+  .vg-cartao { border: 1px solid var(--linha); border-radius: 12px; padding: 10px 12px; display: grid; gap: 6px; margin-bottom: 10px; }
+  .vg-cartao.aberta { border-color: var(--verde); }
+  .vg-cartao.encerrada, .vg-cartao.cancelada { background: #f7f9f8; }
+  .vg-topo { display: flex; gap: 6px 10px; flex-wrap: wrap; align-items: baseline; }
+  .vg-chip { font-size: 12px; font-weight: 700; border-radius: 999px; padding: 2px 8px; background: var(--linha2); }
+  .vg-chip.aberta { background: var(--verde-claro); color: var(--verde-esc); }
+  .vg-chip.preenchida { background: #e3f2fd; color: #0d47a1; }
+  .vg-chip.cancelada { background: #fdecea; color: var(--erro); }
+  .vg-resp { display: flex; gap: 8px; align-items: center; justify-content: space-between; flex-wrap: wrap; border-top: 1px solid var(--linha2); padding-top: 6px; }
+  .vg-resp.confirmou { background: #fffbe6; border-radius: 8px; padding: 6px; }
+  .vg-resp .btn { font-size: 13px; }
+  .vg-escolher { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; width: 100%; }
+  .vg-frees { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 4px 10px; max-height: 40vh; overflow: auto;
+    border: 1px solid var(--linha); border-radius: 10px; padding: 8px; }
+  .vg-check { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; padding: 4px 2px; cursor: pointer; }
+  .vg-check input { width: 18px; height: 18px; flex: none; margin-top: 1px; }
+  .vg-check.off { color: var(--suave); cursor: default; }
+  .vg-envio { display: grid; gap: 8px; border: 1px dashed var(--verde); border-radius: 10px; padding: 10px; }
+  .vg-acoes { flex-wrap: wrap; } .vg-acoes .btn { flex: 1 1 auto; }
+
   .editor-int { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-top: 10px; }
   .editor-int input { width: 90px; text-align: center; font-size: 16px; }
 
@@ -156,6 +183,7 @@
       <span class="sep"></span>
       <button class="btn" id="btn-telegram">📢 <span class="txt">Enviar escala Telegram</span><span class="curto">Telegram</span></button>
       <button class="btn" id="btn-whatsapp">📱 <span class="txt">Confirmar escala (WhatsApp)</span><span class="curto">WhatsApp</span></button>
+      <button class="btn" id="btn-vagas" title="Mandar vaga para os freelancers (grupo ou individual) e escolher quem entra">🙋 <span class="txt">Vagas para freelancers</span><span class="curto">Vagas</span></button>
     </div>
     <div class="linha" id="clima-dia" hidden></div>
     <div class="linha">
@@ -171,7 +199,8 @@
       <div id="aviso-fora" hidden></div>
       <div id="mapa-rolagem"><div id="mapa-caixa"><div id="mapa"></div></div></div>
       <div class="mini suave" style="margin-top:4px">Clique numa posição para escalar. Verde = escalado · vermelho = vazio ·
-        azul = fixo disponível · laranja = escalado de folga · amarelo = turno sem pessoa.</div>
+        azul = fixo disponível · laranja = escalado de folga · amarelo = turno sem pessoa.
+        Presença (link do 📱 WhatsApp): ✅ confirmou · ⏳ ainda não respondeu · ❌ avisou que não vem.</div>
     </div>
     <div class="vista" id="vista-lista" hidden></div>
 
@@ -402,8 +431,10 @@ function abrirPainel(posId) {
   $('#painel-titulo').textContent = (removida ? 'Posição removida: ' : 'Escalando: ') + p.nome;
   $('#aviso-removida').hidden = !removida;
   for (const id of ['#campos-turno', '#btn-limpar', '#btn-salvar', '#dica-enter']) $(id).hidden = removida;
-  $('#turnos-pos').innerHTML = p.turnos.map(t => `<tr class="lin" data-turno="${t.id}"><td>${esc(t.nome || '?')}${
-      t.tipo_diaria ? ` <span class="mini suave">(${esc(t.tipo_diaria)})</span>` : ''}${t.pago ? ' <span class="mini" title="Já pago">✅</span>' : ''}</td>
+  $('#turnos-pos').innerHTML = p.turnos.map(t => `<tr class="lin" data-turno="${t.id}"><td>${iconePresenca(t)}${esc(t.nome || '?')}${
+      t.tipo_diaria ? ` <span class="mini suave">(${esc(t.tipo_diaria)})</span>` : ''}${t.pago ? ' <span class="mini" title="Já pago">💰</span>' : ''}${
+      t.confirmacao && t.confirmacao.status === 'recusado' ? `<div class="motivo-nao">Avisou que não vem${
+        t.confirmacao.motivo ? ': ' + esc(t.confirmacao.motivo) : ''}</div>` : ''}</td>
       <td>${esc(t.entrada)}</td><td>${esc(t.saida)}</td><td>${t.int_ini ? esc(t.int_ini + '–' + t.int_fim) : ''}</td></tr>`).join('')
     || '<tr><td colspan="4" class="suave">Ninguém escalado nesta posição.</td></tr>';
   $('#turnos-pos').querySelectorAll('tr.lin').forEach(tr => {
@@ -413,6 +444,15 @@ function abrirPainel(posId) {
   limparForm();
   if (S.vista === 'mapa') document.querySelectorAll('.bola-pos, .rotulo-pos').forEach(b => b.classList.toggle('sel', +b.dataset.pos === posId));
   else document.querySelectorAll('.cartao-pos').forEach(b => b.classList.toggle('sel', +b.dataset.pos === posId));
+}
+// [PRESENÇA] resposta do link da 📱 confirmação de escala
+const PRESENCA = {confirmado: ['✅', 'Confirmou presença'], pendente: ['⏳', 'Recebeu o link e ainda não respondeu'],
+                  recusado: ['❌', 'Avisou que NÃO vem']};
+function iconePresenca(t) {
+  const c = t.confirmacao, m = c && PRESENCA[c.status];
+  if (!m) return '';
+  const dica = m[1] + (c.quando ? ` (${c.quando})` : '') + (c.motivo ? `: ${c.motivo}` : '');
+  return `<span class="presenca" title="${esc(dica)}" aria-label="${esc(dica)}">${m[0]}</span> `;
 }
 function fecharPainel() {
   fecharListaPessoas();
@@ -988,8 +1028,12 @@ $('#btn-whatsapp').onclick = async () => {
   let pv;
   try { pv = await api('GET', `/api/gestao/escala/whatsapp/previa?data=${S.data}`); } catch (e) { return falhou(e); }
   if (!pv.pessoas) { alert('Nenhuma pessoa com telefone encontrada na escala deste dia.'); return; }
+  const link = pv.link_local
+    ? '⚠️ O link de ✅ confirmar presença vai com o endereço da rede da loja: só abre no Wi-Fi da loja. Para abrir em qualquer lugar, ' +
+      'grave o endereço da internet em 📢 Clientes › ⚙️ Ajustes.'
+    : 'Cada um recebe um link para ✅ confirmar presença (ou ❌ avisar que não vem): a resposta aparece aqui no painel.';
   if (!confirm(`Encontradas ${pv.pessoas} pessoas com telefone na escala.\n\nDeseja enviar a confirmação de horário individual ` +
-               `para o WhatsApp de cada um via BOT?\n\n⚠️ Isso pode levar alguns segundos (pode fechar esta página: o envio continua no servidor).`)) return;
+               `para o WhatsApp de cada um via BOT?\n\n${link}\n\n⚠️ Isso pode levar alguns segundos (pode fechar esta página: o envio continua no servidor).`)) return;
   let job;
   try { job = await api('POST', '/api/gestao/escala/whatsapp', {data: S.data}); } catch (e) { return falhou(e); }
   abrirModal(`<h3>📱 Confirmando a escala no WhatsApp</h3><div id="wpp-txt">Enviando…</div>
@@ -1017,6 +1061,7 @@ $('#btn-whatsapp').onclick = async () => {
     if (job.terminado) {
       txt.innerHTML = `<b>Processo finalizado!</b><br>✅ Enviados: ${job.enviados}<br>❌ Falhas: ${job.erros}`;
       if (!job.erros) status(`WhatsApp: ${job.enviados} confirmação(ões) enviada(s). ✅`);
+      if (job.data === S.data) carregarDia(true);        // [PRESENÇA] ⏳ de quem recebeu o link
       return;
     }
     txt.textContent = `Enviando ${Math.min(job.feitos + 1, job.total)} de ${job.total}…`;
@@ -1024,5 +1069,234 @@ $('#btn-whatsapp').onclick = async () => {
   };
   tick();
 };
+
+// ------------------------------------------------------------------ [VAGAS] 🙋 vagas para freelancers
+// Cria a vaga, manda no grupo dos freelancers e/ou no WhatsApp de cada um (com o link para confirmar),
+// mostra quem quer e 📌 coloca na escala quem você escolher. Encerrar avisa quem não foi escolhido.
+const VG = {dados: null, enviando: null, frees: null, timer: null, valorManual: false, seqPrev: 0};
+const ST_VAGA = {aberta: 'Aberta', preenchida: 'Preenchida', encerrada: 'Encerrada', cancelada: 'Cancelada'};
+const ST_RESP = {convidado: ['📨', 'recebeu, não respondeu'], confirmou: ['🙋', 'quer a vaga'], recusou: ['❌', 'não pode'],
+                 escalado: ['✅', 'na escala'], dispensado: ['➖', 'não foi escolhido']};
+function vgUrl(id, acao) { return `/api/gestao/escala/vagas/${id}${acao ? '/' + acao : ''}`; }
+
+$('#btn-vagas').onclick = () => {
+  const dataPadrao = S.data >= HOJE() ? S.data : HOJE();
+  const posicoes = (S.dia ? S.dia.posicoes : []).slice().sort((a, b) => a.nome.localeCompare(b.nome, 'pt'));
+  VG.enviando = null; VG.valorManual = false;
+  abrirModal(`<h3>🙋 Vagas para freelancers</h3>
+    <div class="mini suave">Mande a vaga no grupo dos freelancers e/ou no WhatsApp de cada um. Quem quer toca no link e confirma;
+      você escolhe quem entra na escala (📌). Ao encerrar, quem não foi escolhido recebe um “desta vez não deu”.</div>
+    <div id="vg-grupo" class="vg-grupo"></div>
+    <details id="vg-nova" class="caixa"><summary><b>➕ Nova vaga</b></summary>
+      <div class="form" style="margin-top:10px">
+        <div class="dupla"><label>Dia<input type="date" id="vg-data" value="${dataPadrao}" min="${HOJE()}"></label>
+          <label>Posição<select id="vg-pos"><option value="">Escolha…</option>${posicoes.map(p =>
+            `<option value="${p.id}">${esc(p.nome)}${p.setor ? ' · ' + esc(p.setor) : ''}</option>`).join('')}</select></label></div>
+        <div class="dupla"><label>Entrada<input id="vg-ent" inputmode="numeric" maxlength="5" placeholder="14:00"></label>
+          <label>Saída<input id="vg-sai" inputmode="numeric" maxlength="5" placeholder="20:00"></label></div>
+        <div class="dupla"><label>Valor da diária (R$)<input id="vg-valor" inputmode="decimal" placeholder="o sistema calcula"></label>
+          <label>Quantas pessoas<input type="number" id="vg-qtd" min="1" max="20" value="1"></label></div>
+        <div class="mini suave" id="vg-calc">Digite o horário: o valor da diária aparece sozinho (dá para mudar).</div>
+        <label>Observação (opcional)<input id="vg-obs" maxlength="300" placeholder="Ex.: levar camiseta preta"></label>
+        <button class="btn prim" id="vg-criar">➕ Criar vaga</button>
+      </div></details>
+    <div id="vg-lista"><div class="suave">Carregando…</div></div>`, () => { clearInterval(VG.timer); VG.timer = null; VG.enviando = null; });
+  for (const id of ['#vg-ent', '#vg-sai']) {
+    $(id).addEventListener('input', mascara);
+    $(id).addEventListener('blur', e => { normalizarHora(e.target); vgPrevia(); });
+  }
+  $('#vg-data').addEventListener('change', vgPrevia);
+  $('#vg-valor').addEventListener('input', e => { VG.valorManual = !!e.target.value.trim(); });
+  $('#vg-criar').onclick = vgCriar;
+  carregarVagas(true);
+  VG.timer = setInterval(() => {               // quem confirmou aparece sozinho (não atrapalha quem está escolhendo)
+    if (!$('#vg-lista') || VG.enviando || document.querySelector('.vg-escolher')) return;
+    carregarVagas();
+  }, 20000);
+};
+
+async function vgPrevia() {
+  const ent = $('#vg-ent').value, sai = $('#vg-sai').value, data = $('#vg-data').value, seq = ++VG.seqPrev;
+  if (!/^\d{2}:\d{2}$/.test(ent) || !/^\d{2}:\d{2}$/.test(sai) || !data) return;
+  try {
+    const r = await api('GET', `/api/gestao/escala/vagas/previa?data=${data}&entrada=${ent}&saida=${sai}`);
+    if (seq !== VG.seqPrev || !$('#vg-calc')) return;
+    $('#vg-calc').textContent = r.valor_txt ? `Pelo sistema: ${r.valor_txt} (a diária desse horário). Mude se combinar outro valor.` : '';
+    if (!VG.valorManual && r.valor != null) $('#vg-valor').value = r.valor.toFixed(2).replace('.', ',');
+  } catch (e) { if ($('#vg-calc')) $('#vg-calc').textContent = e.message; }
+}
+
+async function vgCriar() {
+  normalizarHora($('#vg-ent')); normalizarHora($('#vg-sai'));
+  const b = $('#vg-criar'); b.disabled = true;
+  try {
+    const r = await api('POST', '/api/gestao/escala/vagas', {data: $('#vg-data').value, posicao_id: $('#vg-pos').value,
+      entrada: $('#vg-ent').value, saida: $('#vg-sai').value, valor: $('#vg-valor').value, quantidade: $('#vg-qtd').value,
+      observacao: $('#vg-obs').value});
+    status('Vaga criada! Agora escolha para quem mandar.');
+    $('#vg-nova').open = false;
+    for (const id of ['#vg-ent', '#vg-sai', '#vg-valor', '#vg-obs']) $(id).value = '';
+    $('#vg-qtd').value = 1; VG.valorManual = false; $('#vg-calc').textContent = '';
+    VG.enviando = r.id;
+    await carregarVagas();
+  } catch (e) { falhou(e); }
+  b.disabled = false;
+}
+
+async function carregarVagas(primeira) {
+  let d;
+  try { d = await api('GET', '/api/gestao/escala/vagas'); }
+  catch (e) { if ($('#vg-lista')) $('#vg-lista').innerHTML = `<div class="n-erro">${esc(e.message)}</div>`; return; }
+  if (!$('#vg-lista')) return;
+  VG.dados = d;
+  desenharGrupoVagas();
+  if (primeira && !d.vagas.some(v => v.status === 'aberta')) $('#vg-nova').open = true;
+  if (VG.enviando) {
+    const v = d.vagas.find(x => x.id === VG.enviando);
+    if (v) { try { VG.frees = (await api('GET', `/api/gestao/escala/vagas/freelancers?data=${v.data}`)).freelancers; } catch (e) { VG.frees = []; } }
+  }
+  desenharVagas();
+}
+
+function desenharGrupoVagas() {
+  const g = VG.dados.grupo;
+  $('#vg-grupo').innerHTML = g.id
+    ? `<span>👥 Grupo dos freelancers: <b>${esc(g.nome)}</b></span> <button class="btn" id="vg-trocar-grupo">⚙️ Trocar</button>`
+    : `<span>👥 Nenhum grupo dos freelancers escolhido (dá para mandar só no individual).</span> <button class="btn" id="vg-trocar-grupo">⚙️ Escolher o grupo</button>`;
+  $('#vg-trocar-grupo').onclick = escolherGrupoVagas;
+}
+
+async function escolherGrupoVagas() {
+  $('#vg-grupo').innerHTML = '<span class="suave">Buscando os grupos do WhatsApp da loja…</span>';
+  let grupos;
+  try { grupos = await api('GET', '/api/gestao/avisos/grupos'); }
+  catch (e) { $('#vg-grupo').innerHTML = `<span class="n-erro">${esc(e.message)}</span>`; return; }
+  const atual = VG.dados.grupo.id;
+  $('#vg-grupo').innerHTML = `<select id="vg-sel-grupo" aria-label="Grupo dos freelancers"><option value="">(nenhum: só no individual)</option>${
+      grupos.map(g => `<option value="${esc(g.id)}" ${g.id === atual ? 'selected' : ''}>${esc(g.nome)}</option>`).join('')}</select>
+    <button class="btn prim" id="vg-salvar-grupo">Salvar</button><button class="btn" id="vg-cancelar-grupo">Voltar</button>
+    <div class="mini suave" style="width:100%">O número da loja precisa estar no grupo dos freelancers.</div>`;
+  $('#vg-cancelar-grupo').onclick = desenharGrupoVagas;
+  $('#vg-salvar-grupo').onclick = async () => {
+    const sel = $('#vg-sel-grupo');
+    try {
+      const r = await api('POST', '/api/gestao/escala/vagas/grupo', {grupo_id: sel.value, grupo_nome: sel.value ? sel.selectedOptions[0].textContent : ''});
+      status(r.mensagem); carregarVagas();
+    } catch (e) { falhou(e); }
+  };
+}
+
+function htmlVaga(v) {
+  const viva = v.status === 'aberta' || v.status === 'preenchida';
+  const resps = v.respostas.map(x => {
+    const [ic, txt] = ST_RESP[x.status] || ['', x.status];
+    return `<div class="vg-resp ${x.status}" data-free="${x.freelancer_id}"><span>${ic} <b>${esc(x.nome)}</b>
+      <span class="mini suave">${txt} · ${x.origem === 'grupo' ? 'pelo grupo' : 'individual'}${x.respondido ? ' · ' + esc(x.respondido) : ''}${
+        x.status === 'convidado' && x.enviado ? ' · enviado ' + esc(x.enviado) : ''}</span>${
+        x.erro ? `<span class="mini n-erro"> · ⚠️ não recebeu: ${esc(x.erro)}</span>` : ''}</span>${
+      x.status === 'confirmou' && viva ? `<button class="btn prim" data-escalar="${x.freelancer_id}">📌 Colocar na escala</button>` : ''}</div>`;
+  }).join('');
+  return `<div class="vg-cartao ${v.status}" data-vaga="${v.id}">
+    <div class="vg-topo"><b>${esc(v.dia)} · ${esc(v.entrada)}–${esc(v.saida)}</b><span>${esc(v.posicao)}</span><b>${esc(v.valor_txt)}</b>
+      <span class="vg-chip ${v.status}">${ST_VAGA[v.status] || v.status}</span></div>
+    <div class="mini suave">${v.quantidade} vaga(s) · ✅ ${v.escalados} na escala · 🙋 ${v.confirmaram} quer(em) · ❌ ${v.recusaram} não pode(m)${
+      v.enviada_grupo ? ' · 👥 grupo ' + esc(v.enviada_grupo) : ''}${
+      v.valor_calculado_txt && v.valor_calculado_txt !== v.valor_txt ? ' · pelo sistema ' + esc(v.valor_calculado_txt) : ''}</div>
+    ${v.observacao ? `<div class="mini">📝 ${esc(v.observacao)}</div>` : ''}
+    ${resps || (viva ? '<div class="mini suave">Ninguém respondeu ainda.</div>' : '')}
+    ${VG.enviando === v.id ? htmlEnvio(v) : (viva ? `<div class="botoes vg-acoes">
+      ${v.status === 'aberta' ? '<button class="btn" data-acao="enviar">📤 Enviar</button>' : ''}
+      <button class="btn" data-acao="encerrar">✔️ Encerrar</button><button class="btn perigo" data-acao="cancelar">🗑️ Cancelar vaga</button></div>` : '')}
+  </div>`;
+}
+
+function htmlEnvio(v) {
+  const g = VG.dados.grupo, ja = {};
+  for (const x of v.respostas) ja[x.freelancer_id] = x;
+  const frees = (VG.frees || []).map(f => {
+    const r = ja[f.id], respondeu = r && r.status !== 'convidado', pode = f.whatsapp && !respondeu;
+    const info = !f.whatsapp ? 'sem WhatsApp no cadastro' : respondeu ? (ST_RESP[r.status] || ['', r.status])[1]
+      : [f.ocupado ? `⚠️ já na escala ${f.ocupado}` : '', r ? 'já recebeu (manda de novo)' : ''].filter(Boolean).join(' · ');
+    return `<label class="vg-check ${pode ? '' : 'off'}"><input type="checkbox" value="${f.id}" ${pode ? '' : 'disabled'}>
+      <span>${esc(f.nome)}${info ? `<br><span class="mini suave">${esc(info)}</span>` : ''}</span></label>`;
+  }).join('');
+  return `<div class="vg-envio">
+    <label class="vg-check ${g.id ? '' : 'off'}"><input type="checkbox" id="vg-no-grupo" ${g.id && !v.enviada_grupo ? 'checked' : ''} ${g.id ? '' : 'disabled'}>
+      <span>👥 No grupo <b>${esc(g.nome || '(escolha o grupo lá em cima)')}</b>${v.enviada_grupo ? `<br><span class="mini suave">já foi em ${esc(v.enviada_grupo)}</span>` : ''}
+      <br><span class="mini suave">Um link para todos: a pessoa confirma com o WhatsApp do cadastro.</span></span></label>
+    <div class="mini"><b>No individual</b> (cada um recebe com o nome, horário, valor e o link dele):
+      <button class="btn" type="button" id="vg-marcar-livres">Marcar quem está livre</button></div>
+    <div class="vg-frees">${frees || '<span class="suave">Nenhum freelancer cadastrado.</span>'}</div>
+    <div class="botoes"><button class="btn" data-acao="voltar">Voltar</button><button class="btn prim" data-acao="mandar">📤 Mandar agora</button></div>
+  </div>`;
+}
+
+function desenharVagas() {
+  const vs = VG.dados.vagas, vivas = vs.filter(v => v.status === 'aberta' || v.status === 'preenchida');
+  const velhas = vs.filter(v => !vivas.includes(v));
+  $('#vg-lista').innerHTML = (vivas.map(htmlVaga).join('') || '<div class="suave" style="margin:8px 0">Nenhuma vaga aberta.</div>') +
+    (velhas.length ? `<details><summary class="mini suave" style="cursor:pointer">Encerradas e canceladas (${velhas.length})</summary>${velhas.map(htmlVaga).join('')}</details>` : '');
+  const livres = $('#vg-marcar-livres');
+  if (livres) livres.onclick = () => document.querySelectorAll('.vg-frees input:not(:disabled)').forEach(c => {
+    const f = (VG.frees || []).find(x => x.id === +c.value);
+    c.checked = !!(f && !f.ocupado);
+  });
+}
+
+document.addEventListener('click', async e => {
+  const cartao = e.target.closest('.vg-cartao');
+  if (!cartao || !e.target.closest('#vg-lista')) return;
+  const id = +cartao.dataset.vaga, v = VG.dados.vagas.find(x => x.id === id);
+  const bt = e.target.closest('button');
+  if (!bt || !v) return;
+  const acao = bt.dataset.acao;
+  if (acao === 'enviar') { VG.enviando = id; await carregarVagas(); return; }
+  if (acao === 'voltar') { VG.enviando = null; desenharVagas(); return; }
+  if (acao === 'mandar') {
+    const ids = [...cartao.querySelectorAll('.vg-frees input:checked')].map(c => +c.value);
+    const grupo = !!(cartao.querySelector('#vg-no-grupo') || {}).checked;
+    if (!grupo && !ids.length) { alert('Marque o grupo e/ou os freelancers.'); return; }
+    bt.disabled = true;
+    try {
+      const r = await api('POST', vgUrl(id, 'enviar'), {grupo, freelancers: ids});
+      status(r.mensagem, r.aviso ? 'aviso' : '');
+      VG.enviando = null; await carregarVagas();
+      if (ids.length) setTimeout(() => { if ($('#vg-lista') && !VG.enviando) carregarVagas(); }, 4000 + ids.length * 2600);
+    } catch (er) { falhou(er); bt.disabled = false; }
+    return;
+  }
+  if (acao === 'encerrar' || acao === 'cancelar') {
+    const sobram = v.respostas.filter(x => x.status === 'confirmou').length;
+    const msg = acao === 'cancelar'
+      ? `Cancelar a vaga de ${v.dia} (${v.entrada}–${v.saida})?` + (sobram ? `\n\n${sobram} pessoa(s) que quiseram recebem que a vaga foi cancelada.` : '') +
+        (v.escalados ? `\n\nQuem já está na escala continua: tire pela escala se precisar.` : '')
+      : `Encerrar a vaga de ${v.dia} (${v.entrada}–${v.saida})?` + (sobram ? `\n\n${sobram} pessoa(s) que quiseram e não foram escolhidas recebem:\n“A vaga já foi preenchida. Obrigado! Na próxima a gente chama você.”` : '');
+    if (!confirm(msg)) return;
+    bt.disabled = true;
+    try { const r = await api('POST', vgUrl(id, 'encerrar'), {cancelar: acao === 'cancelar'}); status(r.mensagem); await carregarVagas(); }
+    catch (er) { falhou(er); bt.disabled = false; }
+    return;
+  }
+  const free = bt.dataset.escalar || (bt.dataset.posicaoOk && bt.closest('.vg-resp').dataset.free);
+  if (free) {
+    const linha = bt.closest('.vg-resp'), sel = linha.querySelector('.vg-escolher select');
+    bt.disabled = true;
+    try {
+      const r = await comPerguntas(vgUrl(id, 'escalar'), {freelancer_id: +free, posicao_id: sel ? sel.value : null});
+      if (!r) { bt.disabled = false; return; }
+      if (r.posicoes) {                         // a posição da vaga já tem gente: escolher outra
+        linha.querySelector('.vg-escolher')?.remove();
+        linha.insertAdjacentHTML('beforeend', `<div class="vg-escolher"><span class="mini">${esc(r.mensagem)}</span>
+          <select aria-label="Posição">${r.posicoes.map(p => `<option value="${p.id}">${esc(p.nome)}${p.setor ? ' · ' + esc(p.setor) : ''}</option>`).join('')}</select>
+          <button class="btn prim" data-posicao-ok="1">📌 Colocar aqui</button></div>`);
+        bt.disabled = false;
+        return;
+      }
+      status(r.mensagem);
+      await carregarVagas();
+      if (v.data === S.data) carregarDia(true);
+    } catch (er) { falhou(er); bt.disabled = false; }
+  }
+});
 
 {% endblock %}

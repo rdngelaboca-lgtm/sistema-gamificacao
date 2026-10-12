@@ -185,6 +185,9 @@ if getattr(config, 'GESTAO_PELA_INTERNET', True):
 # [CLIENTES] O cliente se cadastra pelo QR do balcão (página pública, só o formulário) e a Z-API avisa
 # quem respondeu SAIR (com um segredo no endereço). Nada mais da área de clientes fica aberto.
 CAMINHOS_LIBERADOS_NA_INTERNET += ('/clientes/cadastro', '/api/clientes/cadastro', '/webhook/zapi-clientes/')
+# [PRESENÇA] O link da mensagem da escala e da vaga (✅ Confirmo / ❌ Não posso): só a página do link, que
+# não abre sem o código secreto da mensagem. Nada mais da escala fica aberto.
+CAMINHOS_LIBERADOS_NA_INTERNET += ('/confirmar/', '/vaga/', '/api/presenca/')
 
 
 @app.before_request
@@ -2367,13 +2370,13 @@ def api_gestao_escala_telegram(usuario):
 @app.route('/api/gestao/escala/whatsapp/previa', methods=['GET'])
 @compras_login(somente_gestor=True)
 def api_gestao_escala_whatsapp_previa(usuario):
-    return _resposta_gestao(gestao_escala.previa_whatsapp, request.args.get('data'))
+    return _resposta_gestao(gestao_escala.previa_whatsapp, request.args.get('data'), request.host_url)
 
 
 @app.route('/api/gestao/escala/whatsapp', methods=['POST'])
 @compras_login(somente_gestor=True)
 def api_gestao_escala_whatsapp(usuario):
-    return _resposta_gestao(gestao_escala.iniciar_whatsapp, ler_json() or {}, usuario)
+    return _resposta_gestao(gestao_escala.iniciar_whatsapp, ler_json() or {}, usuario, request.host_url)
 
 
 @app.route('/api/gestao/escala/whatsapp/<job_id>', methods=['GET'])
@@ -2807,6 +2810,107 @@ def api_clientes_cadastro():
 def webhook_zapi_clientes(segredo):
     import clientes
     return _resposta_clientes(lambda: clientes.processar_webhook(segredo, request.get_json(silent=True)))
+
+
+# ---------------- [PRESENÇA] ✅ confirmar presença (escala) e 📢 vagas para freelancers ----------------
+def _resposta_presenca(funcao):
+    import confirmacoes
+    try:
+        return jsonify(funcao()), 200
+    except confirmacoes.ErroPresenca as e:
+        return jsonify({"erro": str(e)}), e.status
+    except Exception as e:
+        logger.exception(f"Erro na presença/vagas ({request.path}): {e}")
+        return jsonify({"erro": "Erro no servidor. Tente de novo; se continuar, veja o log."}), 500
+
+
+@app.route('/api/gestao/escala/vagas', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_vagas(usuario):
+    import confirmacoes
+    return _resposta_presenca(lambda: confirmacoes.listar_vagas())
+
+
+@app.route('/api/gestao/escala/vagas', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_vagas_criar(usuario):
+    import confirmacoes
+    dados = ler_json() or {}
+    return _resposta_presenca(lambda: confirmacoes.criar_vaga(dados, usuario))
+
+
+@app.route('/api/gestao/escala/vagas/previa', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_vagas_previa(usuario):
+    import confirmacoes
+    return _resposta_presenca(lambda: confirmacoes.previa_vaga(request.args))
+
+
+@app.route('/api/gestao/escala/vagas/freelancers', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_vagas_freelancers(usuario):
+    import confirmacoes
+    return _resposta_presenca(lambda: confirmacoes.freelancers_para_vaga(request.args.get('data')))
+
+
+@app.route('/api/gestao/escala/vagas/grupo', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_vagas_grupo(usuario):
+    import confirmacoes
+    dados = ler_json() or {}
+    return _resposta_presenca(lambda: confirmacoes.salvar_grupo(dados, usuario))
+
+
+@app.route('/api/gestao/escala/vagas/<int:vaga_id>', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_vaga(usuario, vaga_id):
+    import confirmacoes
+    return _resposta_presenca(lambda: confirmacoes.vaga(vaga_id))
+
+
+@app.route('/api/gestao/escala/vagas/<int:vaga_id>/<acao>', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_vaga_acao(usuario, vaga_id, acao):
+    import confirmacoes
+    dados = ler_json() or {}
+    host = request.host_url
+    acoes = {
+        'enviar': lambda: confirmacoes.enviar_vaga(vaga_id, dados, usuario, host),
+        'escalar': lambda: confirmacoes.colocar_na_escala(vaga_id, dados.get('freelancer_id'), dados, usuario),
+        'encerrar': lambda: confirmacoes.encerrar_vaga(vaga_id, dados, usuario),
+    }
+    if acao not in acoes:
+        return jsonify({"erro": "Não encontrado."}), 404
+    return _resposta_presenca(acoes[acao])
+
+
+# Páginas PÚBLICAS dos links do WhatsApp (sem login: o código secreto do link é a chave).
+@app.route('/confirmar/<token>')
+@app.route('/vaga/<token>')
+def pagina_presenca(token):
+    resposta = app.make_response(render_template('presenca.html'))
+    resposta.headers['Cache-Control'] = 'no-store'
+    resposta.headers['Referrer-Policy'] = 'no-referrer'
+    return resposta
+
+
+@app.route('/api/presenca/confirmar/<token>', methods=['GET', 'POST'])
+def api_presenca_confirmar(token):
+    import confirmacoes
+    if request.method == 'GET':
+        return _resposta_presenca(lambda: confirmacoes.ver_confirmacao(token))
+    dados = ler_json() or {}
+    return _resposta_presenca(lambda: confirmacoes.responder_confirmacao(token, dados.get('resposta'), dados.get('motivo')))
+
+
+@app.route('/api/presenca/vaga/<token>', methods=['GET', 'POST'])
+def api_presenca_vaga(token):
+    import confirmacoes
+    if request.method == 'GET':
+        return _resposta_presenca(lambda: confirmacoes.ver_vaga(token))
+    dados = ler_json() or {}
+    return _resposta_presenca(lambda: confirmacoes.responder_vaga(token, dados.get('resposta'), dados.get('telefone'),
+                                                                  _ip_do_cliente()))
 
 
 if __name__ == "__main__":

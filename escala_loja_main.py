@@ -854,9 +854,15 @@ class AppEscalaLoja:
 
         def run_envio():
             # [GESTÃO WEB] mensagens e diretriz do setor iguais às da Web (escala_regras)
+            links = None
+            try:    # [PRESENÇA] link ✅ Confirmo / ❌ Não posso (só se o endereço da internet estiver gravado na Gestão)
+                import confirmacoes
+                links = confirmacoes.preparar_escala(data_snapshot, lista_envio, None, so_internet=True)
+            except Exception as e:
+                logger.warning(f"[WPP] Confirmação de presença por link indisponível: {e}")
             enviados, erros = enviar_confirmacoes_whatsapp(
                 lista_envio, data_snapshot, notificador_whatsapp.enviar_mensagem_whatsapp,
-                database.buscar_descricao_setor)
+                database.buscar_descricao_setor, links=links)
             self.root.after(0, lambda: self._finalizar_envio_wpp(enviados, erros))
 
         threading.Thread(target=run_envio, daemon=True).start()
