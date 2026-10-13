@@ -2367,6 +2367,13 @@ def api_gestao_escala_telegram(usuario):
     return _resposta_gestao(gestao_escala.enviar_telegram, ler_json() or {}, usuario)
 
 
+@app.route('/api/gestao/escala/mapa', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_escala_mapa(usuario):
+    """[DEPURAÇÃO MAPA] 📐 Arrumar mapa: grava onde fica cada posição (em proporção da planta)."""
+    return _resposta_gestao(gestao_escala.salvar_mapa, ler_json() or {}, usuario)
+
+
 @app.route('/api/gestao/escala/whatsapp/previa', methods=['GET'])
 @compras_login(somente_gestor=True)
 def api_gestao_escala_whatsapp_previa(usuario):

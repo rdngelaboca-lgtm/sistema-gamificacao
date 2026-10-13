@@ -158,6 +158,18 @@ clique duplo no Copiar não duplica; WhatsApp não manda "None às None" e o aco
 quando a rede cai; trocar freelancer por funcionário apaga a diária curta/longa; a página se atualiza
 ao voltar para a aba.
 
+**Depuração do mapa (13/10/2026) — posições encavaladas / fora da planta.** As posições eram guardadas em
+proporção da *área do mapa da janela do programa do PC*, mas a planta tem tamanho fixo (1180 × 600). Abrir
+o programa maximizado regravava esse tamanho e todas as bolinhas saíam do lugar (na Web e no PC). Correção:
+- **📐 Arrumar mapa** (Web, só gestor): barras de largura/altura levam todas as bolinhas de volta de uma
+  vez; depois dá para arrastar uma a uma (mouse ou dedo) e 💾 Salvar. Ao salvar, as posições passam a ser
+  proporção da **planta** e o mapa fica **fixo** (`ConfiguracoesEscala.MapaFixo = 1`).
+- Mapa fixo: o PC desenha e cria posições em proporção da planta e não regrava mais o tamanho da janela; a
+  Web ignora o tamanho gravado (um PC com o programa antigo não tira mais nada do lugar).
+- Avisos 📐 nos alertas do dia: "ainda depende da janela do PC", "fora da planta" e "uma em cima da outra".
+- Textos de posições vizinhas não ficam mais um em cima do outro (Web e PC): o texto desce até ficar livre
+  (fio tracejado até a bolinha na Web) e o [setor] repetido aparece uma vez só.
+
 ### Entrega 2 — Cadastros e configurações
 (Os freelancers — itens 25 a 27 — foram junto com a Entrega 3: **Gestão › 👤 Freelancers**.)
 

@@ -22,6 +22,17 @@
   .rotulo-pos:hover, .rotulo-pos.sel { z-index: 5; background: #fff; box-shadow: 0 1px 6px #0003; }
   .bola-pos:hover { z-index: 6; }
   .setor-pos { position: absolute; transform: translate(-50%, -100%); font-size: 10px; color: blue; white-space: nowrap; }
+  /* [DEPURAÇÃO MAPA] texto que desceu para não ficar em cima de outro: um fio liga à bolinha */
+  .fio-rot { position: absolute; width: 0; border-left: 1px dashed #37474f; transform: translateX(-0.5px); pointer-events: none; }
+  /* 📐 Arrumar mapa */
+  .barra-arrumar { display: grid; gap: 8px; margin-bottom: 8px; border-color: #f0c36d; background: #fff8e1; }
+  .barra-arrumar .arr-escala { display: flex; gap: 8px 18px; flex-wrap: wrap; align-items: center; }
+  .barra-arrumar label { display: flex; gap: 6px; align-items: center; font-weight: 700; font-size: 13px; }
+  .barra-arrumar input[type=range] { width: 200px; }
+  .bola-pos.arrastar { cursor: grab; touch-action: none; }
+  .bola-pos.movido { box-shadow: 0 0 0 3px #ffb300; }
+  .rotulo-arr { position: absolute; transform: translateX(-50%); font-size: 11px; font-weight: 700; white-space: nowrap; pointer-events: none;
+    background: rgba(255,255,255,.85); border-radius: 4px; padding: 0 4px; }
 
   .grupo-setor { margin-bottom: 14px; }
   .grupo-setor h4 { margin: 0 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--suave); }
@@ -176,6 +187,7 @@
     <div class="linha acoes">
       <button class="btn" id="btn-copiar">📋 <span class="txt">Copiar escala anterior</span><span class="curto">Copiar</span></button>
       <button class="btn" id="btn-fixos">📌 <span class="txt">Fixos</span><span class="curto">Fixos</span></button>
+      <button class="btn" id="btn-arrumar" title="Arrastar as posições para o lugar certo na planta">📐 <span class="txt">Arrumar mapa</span><span class="curto">Arrumar</span></button>
       <button class="btn" id="btn-resumo-dia" title="Quantos freelancers vieram de verdade e o valor total, por setor">📝 <span class="txt">Resumo do dia</span><span class="curto">Resumo</span></button>
       <span class="sep"></span>
       <button class="btn" id="btn-auto">🪄 <span class="txt">Gerar intervalos automáticos</span><span class="curto">Auto</span></button>
@@ -196,6 +208,18 @@
 
   <main class="area">
     <div class="vista" id="vista-mapa">
+      <div id="barra-arrumar" class="caixa barra-arrumar" hidden>
+        <div><b>📐 Arrumar mapa</b> <span class="mini">Arraste cada bolinha para o lugar certo na planta e toque em 💾 Salvar.
+          Depois disso o lugar não muda mais com o tamanho da janela do PC.</span></div>
+        <div id="arr-escala" class="arr-escala">
+          <label>↔ Largura <input type="range" id="arr-w" min="600" max="2600" step="1"> <span id="arr-w-v" class="mini"></span></label>
+          <label>↕ Altura <input type="range" id="arr-h" min="300" max="1400" step="1"> <span id="arr-h-v" class="mini"></span></label>
+          <span class="mini suave">Mexa nas barras até as bolinhas voltarem para cima dos lugares certos (move todas juntas);
+            depois acerte uma a uma arrastando.</span>
+        </div>
+        <div class="botoes" style="max-width:420px"><button class="btn" id="arr-cancelar">Cancelar</button>
+          <button class="btn prim" id="arr-salvar">💾 Salvar posições</button></div>
+      </div>
       <div id="aviso-fora" hidden></div>
       <div id="mapa-rolagem"><div id="mapa-caixa"><div id="mapa"></div></div></div>
       <div class="mini suave" style="margin-top:4px">Clique numa posição para escalar. Verde = escalado · vermelho = vazio ·
@@ -302,7 +326,7 @@ function todasPos() { return S.dia ? S.dia.posicoes.concat(S.dia.fora_do_mapa ||
 function mudarDia(nova) {
   if (!nova) return;
   S.data = nova; S.extra = null; S.pos = null;
-  fecharPainel(); carregarDia();
+  sairArrumar(); fecharPainel(); carregarDia();
 }
 $('#data').addEventListener('change', e => mudarDia(e.target.value));
 $('#dia-ant').onclick = () => mudarDia(somarDias(S.data, -1));
@@ -313,7 +337,7 @@ $('#atualizar').onclick = () => { S.extra = null; carregarDia(true); };
 // outro aparelho). Não recarrega com o painel ou uma janela abertos, para não perder o que está sendo digitado.
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && BASE.usuario && !$('#app').hidden && $('#painel').hidden &&
-      $('#fundo-modal').hidden) carregarDia();
+      $('#fundo-modal').hidden && !S.arrumar) carregarDia();
 });
 
 function desenhar() {
@@ -344,19 +368,35 @@ function desenharClima(c) {
       `${c.sugestao.freelas} freelancer(s)</b>` : ''} · <a href="/gestao/folha">📊 Folha × Faturamento</a></span>`;
 }
 $('#ver-mapa').onclick = () => { S.vista = 'mapa'; gravarLocal('gestao_vista', 'mapa'); desenhar(); };
-$('#ver-lista').onclick = () => { S.vista = 'lista'; gravarLocal('gestao_vista', 'lista'); desenhar(); };
+$('#ver-lista').onclick = () => { sairArrumar(); S.vista = 'lista'; gravarLocal('gestao_vista', 'lista'); desenhar(); };
 
 // O mapa é desenhado como no PC: a imagem da loja esticada em 1180x600 no canto de cima e as
-// posições em pixels (antigas) ou em proporção da área do mapa do PC (tamanho gravado pelo PC).
+// posições em pixels (antigas) ou em proporção (o servidor já manda x/y em pixels da planta: depois do
+// 📐 Arrumar mapa, proporção da planta; antes, da área do mapa do PC, pelo tamanho gravado pelo PC).
 function desenharMapa() {
-  const d = S.dia, t = d.tela;
+  const d = S.dia, t = d.tela, arr = S.arrumar;
+  // 📐 arrumando: as bolinhas ficam onde a pessoa arrastou (ou pela largura/altura das barras)
+  const pts = arr ? d.posicoes.map(p => {
+    const q = arr.pos[p.id] || (arr.pos[p.id] = {rel: p.relativa, cx: p.cx, cy: p.cy, x: p.x, y: p.y, movido: false});
+    return Object.assign({}, p, {x: q.x, y: q.y});
+  }) : d.posicoes;
   let W = t.imagem_largura, H = t.imagem_altura;
-  for (const p of d.posicoes) { W = Math.max(W, p.x + 90); H = Math.max(H, p.y + 80); }
+  for (const p of pts) { W = Math.max(W, p.x + 90); H = Math.max(H, p.y + 80); }
   const disp = $('#mapa-rolagem').clientWidth - 2;
   const escala = disp < 700 ? Math.max(disp / W, 0.72) : Math.min(disp / W, 1.5);
   const caixa = $('#mapa-caixa'), mapa = $('#mapa');
   caixa.style.width = (W * escala) + 'px'; caixa.style.height = (H * escala) + 'px';
   mapa.style.width = W + 'px'; mapa.style.height = H + 'px'; mapa.style.transform = `scale(${escala})`;
+  S.mapaEscala = escala;
+  if (arr) {
+    mapa.innerHTML = `<img src="/gestao/mapa.png" alt="Mapa da loja" width="${t.imagem_largura}" height="${t.imagem_altura}"
+        style="width:${t.imagem_largura}px;height:${t.imagem_altura}px">` + pts.map(p => `
+      <div class="bola-pos arrastar ${arr.pos[p.id].movido ? 'movido' : ''}" data-arr="${p.id}" title="${esc(p.nome)}: arraste"
+        style="left:${p.x}px;top:${p.y}px;background:${esc(p.cor)}"></div>
+      <div class="rotulo-arr" data-arr-rot="${p.id}" style="left:${p.x}px;top:${p.y + 18}px">${esc(p.nome)}</div>`).join('');
+    $('#aviso-fora').hidden = true;
+    return;
+  }
   mapa.innerHTML = `<img src="/gestao/mapa.png" alt="Mapa da loja" width="${t.imagem_largura}" height="${t.imagem_altura}"
       style="width:${t.imagem_largura}px;height:${t.imagem_altura}px">` +
     d.posicoes.map(p => `
@@ -364,12 +404,112 @@ function desenharMapa() {
       <button class="bola-pos ${S.pos === p.id ? 'sel' : ''}" data-pos="${p.id}" title="${esc(p.nome)}"
         style="left:${p.x}px;top:${p.y}px;background:${esc(p.cor)}"></button>
       <div class="rotulo-pos ${S.pos === p.id ? 'sel' : ''}" data-pos="${p.id}" style="left:${p.x}px;top:${p.y + 18}px"><b>${esc(p.nome)}</b>${p.linhas.map(l => '<br>' + esc(l)).join('')}</div>`).join('');
+  // texto que desceu além do fim do mapa: a caixa cresce para ele não ficar cortado
+  const fundo = afastarRotulos();
+  if (fundo > H) { H = fundo + 10; caixa.style.height = (H * escala) + 'px'; mapa.style.height = H + 'px'; }
   // [DEPURAÇÃO WEB] turnos em posição removida do mapa: antes não apareciam (nem dava para excluir)
   const fora = d.fora_do_mapa || [];
   $('#aviso-fora').hidden = !fora.length;
   $('#aviso-fora').innerHTML = fora.length ? '⚠️ Turnos em posição removida do mapa: ' + fora.map(p =>
     `<button class="btn" data-pos="${p.id}">${esc(p.nome)} (${p.turnos.length})</button>`).join('') : '';
 }
+// [DEPURAÇÃO MAPA] Posições vizinhas: o texto de uma ficava em cima do da outra. O texto que bate em outro texto,
+// numa bolinha ou num [setor] desce até ficar livre (de cima para baixo) e um fio tracejado liga à bolinha.
+function afastarRotulos() {
+  const mapa = $('#mapa'), ocupados = [];
+  mapa.querySelectorAll('.bola-pos').forEach(b => {
+    const x = parseFloat(b.style.left), y = parseFloat(b.style.top);
+    ocupados.push({x: x - 17, y: y - 17, w: 34, h: 34});
+  });
+  // [setor] de posições vizinhas: o mesmo setor aparece uma vez só; setor diferente sobe
+  const setores = [];
+  mapa.querySelectorAll('.setor-pos').forEach(e => {
+    const w = e.offsetWidth, h = e.offsetHeight, x = parseFloat(e.style.left) - w / 2;
+    let y = parseFloat(e.style.top) - h;
+    for (let i = 0; i < 20; i++) {
+      const o = setores.find(o => x < o.x + o.w && x + w > o.x && y < o.y + o.h && y + h > o.y);
+      if (!o) break;
+      if (o.texto === e.textContent) { e.hidden = true; return; }
+      y = o.y - h - 1;
+    }
+    e.style.top = (y + h) + 'px';
+    const caixa = {x, y, w, h, texto: e.textContent};
+    setores.push(caixa); ocupados.push(caixa);
+  });
+  const rotulos = [...mapa.querySelectorAll('.rotulo-pos')].sort((a, b) => parseFloat(a.style.top) - parseFloat(b.style.top));
+  const fios = [];
+  let fundo = 0;
+  for (const r of rotulos) {
+    const w = r.offsetWidth, h = r.offsetHeight, cx = parseFloat(r.style.left), x = cx - w / 2, y0 = parseFloat(r.style.top);
+    let y = y0;
+    for (let i = 0; i < 40; i++) {
+      const b = ocupados.find(o => x < o.x + o.w && x + w > o.x && y < o.y + o.h && y + h > o.y);
+      if (!b) break;
+      y = b.y + b.h + 2;
+    }
+    if (y !== y0) {
+      r.style.top = y + 'px';
+      fios.push(`<div class="fio-rot" style="left:${cx}px;top:${y0 - 2}px;height:${y - y0 + 2}px"></div>`);
+    }
+    ocupados.push({x, y, w, h});
+    fundo = Math.max(fundo, y + h);
+  }
+  if (fios.length) mapa.querySelector('img').insertAdjacentHTML('afterend', fios.join(''));
+  return fundo;
+}
+
+// ------------------------------------------------------------------ 📐 arrumar o mapa
+$('#btn-arrumar').onclick = () => {
+  if (!diaPronto()) return;
+  if (S.vista !== 'mapa') { S.vista = 'mapa'; gravarLocal('gestao_vista', 'mapa'); }
+  fecharPainel();
+  const t = S.dia.tela;
+  S.arrumar = {pos: Object.fromEntries(S.dia.posicoes.map(p => [p.id, {rel: p.relativa, cx: p.cx, cy: p.cy, x: p.x, y: p.y, movido: false}]))};
+  $('#arr-w').value = t.largura; $('#arr-h').value = t.altura;
+  $('#arr-w-v').textContent = t.largura; $('#arr-h-v').textContent = t.altura;
+  $('#arr-escala').hidden = t.fixo || !S.dia.posicoes.some(p => p.relativa);
+  $('#barra-arrumar').hidden = false;
+  desenhar();
+};
+function escalaArrumar() {
+  const W = +$('#arr-w').value, H = +$('#arr-h').value;
+  $('#arr-w-v').textContent = W; $('#arr-h-v').textContent = H;
+  for (const p of Object.values(S.arrumar.pos)) if (p.rel && !p.movido) { p.x = Math.round(p.cx * W); p.y = Math.round(p.cy * H); }
+  desenharMapa();
+}
+$('#arr-w').addEventListener('input', escalaArrumar);
+$('#arr-h').addEventListener('input', escalaArrumar);
+function sairArrumar() { S.arrumar = null; $('#barra-arrumar').hidden = true; }
+$('#arr-cancelar').onclick = () => { sairArrumar(); desenhar(); };
+$('#arr-salvar').onclick = async () => {
+  const t = S.dia.tela, pos = S.arrumar.pos;
+  const fora = S.dia.posicoes.filter(p => pos[p.id].x < 0 || pos[p.id].x > t.imagem_largura || pos[p.id].y < 0 || pos[p.id].y > t.imagem_altura);
+  if (fora.length && !confirm(`${fora.length} bolinha(s) fora da planta (${fora.map(p => p.nome).slice(0, 4).join(', ')}): vão para a borda mais perto.\n\nSalvar mesmo assim?`)) return;
+  const b = $('#arr-salvar'); b.disabled = true;
+  try {
+    const r = await api('POST', '/api/gestao/escala/mapa', {posicoes: S.dia.posicoes.map(p => ({id: p.id, x: pos[p.id].x, y: pos[p.id].y}))});
+    sairArrumar(); status(r.mensagem); await carregarDia(true);
+  } catch (e) { falhou(e); }
+  b.disabled = false;
+};
+$('#mapa').addEventListener('pointerdown', e => {
+  const b = e.target.closest('[data-arr]');
+  if (!b || !S.arrumar) return;
+  e.preventDefault();
+  try { b.setPointerCapture(e.pointerId); } catch (er) {}
+  const id = +b.dataset.arr, rot = $('#mapa').querySelector(`[data-arr-rot="${id}"]`), t = S.dia.tela;
+  const mover = ev => {
+    const r = $('#mapa').getBoundingClientRect(), p = S.arrumar.pos[id];
+    p.x = Math.round(Math.min(Math.max((ev.clientX - r.left) / S.mapaEscala, 0), t.imagem_largura));
+    p.y = Math.round(Math.min(Math.max((ev.clientY - r.top) / S.mapaEscala, 0), t.imagem_altura));
+    p.movido = true;
+    b.style.left = p.x + 'px'; b.style.top = p.y + 'px'; b.classList.add('movido');
+    rot.style.left = p.x + 'px'; rot.style.top = (p.y + 18) + 'px';
+  };
+  const fim = () => { b.removeEventListener('pointermove', mover); b.removeEventListener('pointerup', fim); b.removeEventListener('pointercancel', fim); };
+  b.addEventListener('pointermove', mover); b.addEventListener('pointerup', fim); b.addEventListener('pointercancel', fim);
+});
+
 function desenharLista() {
   const grupos = {};
   for (const p of S.dia.posicoes) (grupos[p.setor || 'Sem setor'] = grupos[p.setor || 'Sem setor'] || []).push(p);

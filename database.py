@@ -9209,7 +9209,8 @@ def _garantir_colunas_mapa_escala(cursor):
     global _colunas_mapa_escala_ok
     if _colunas_mapa_escala_ok:
         return
-    for coluna in ('MapaTelaLargura', 'MapaTelaAltura'):
+    # MapaFixo = 1: as posições estão em proporção da PLANTA (1180 x 600), não da janela do PC
+    for coluna in ('MapaTelaLargura', 'MapaTelaAltura', 'MapaFixo'):
         cursor.execute(f"IF COL_LENGTH('ConfiguracoesEscala', '{coluna}') IS NULL "
                        f"ALTER TABLE ConfiguracoesEscala ADD {coluna} INT NULL")
     _colunas_mapa_escala_ok = True     # quem chama faz o commit logo em seguida
@@ -9227,8 +9228,10 @@ def registrar_tamanho_mapa_escala(largura, altura):
         cursor = conn.cursor()
         _garantir_colunas_mapa_escala(cursor)
         conn.commit()
-        cursor.execute("UPDATE ConfiguracoesEscala SET MapaTelaLargura = ?, MapaTelaAltura = ?",
-                       int(largura), int(altura))
+        # [DEPURAÇÃO MAPA] Mapa já fixado (📐 Arrumar mapa): o tamanho da janela do PC não muda mais nada.
+        # Antes, abrir o programa maximizado regravava este tamanho e TODAS as posições saíam do lugar na Web.
+        cursor.execute("UPDATE ConfiguracoesEscala SET MapaTelaLargura = ?, MapaTelaAltura = ? "
+                       "WHERE ISNULL(MapaFixo, 0) = 0", int(largura), int(altura))
         conn.commit()
         return True
     except Exception as e:
@@ -9256,6 +9259,53 @@ def tamanho_mapa_escala():
     except Exception as e:
         logger.warning(f"Não deu para ler o tamanho do mapa da escala: {e}")
         return None
+    finally:
+        conn.close()
+
+
+def mapa_escala_fixo():
+    """[DEPURAÇÃO MAPA] True se as posições já estão em proporção da planta (não dependem da janela do PC)."""
+    conn = get_db_connection()
+    if not conn:
+        return False
+    try:
+        cursor = conn.cursor()
+        _garantir_colunas_mapa_escala(cursor)
+        conn.commit()
+        cursor.execute("SELECT MapaFixo FROM ConfiguracoesEscala")
+        return any(r[0] == 1 for r in cursor.fetchall())
+    except Exception as e:
+        logger.warning(f"Não deu para ler se o mapa da escala está fixo: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def fixar_mapa_escala(coordenadas, largura, altura):
+    """
+    [DEPURAÇÃO MAPA] Grava as posições em proporção da PLANTA ({PosicaoID: (x, y)} de 0 a 1) e marca o mapa como
+    fixo (largura x altura = tamanho da planta). Tudo numa transação. Devolve (ok, mensagem).
+    """
+    conn = get_db_connection()
+    if not conn:
+        return False, "Falha de conexão com o banco de dados."
+    try:
+        cursor = conn.cursor()
+        _garantir_colunas_mapa_escala(cursor)
+        conn.commit()
+        for pos_id, (x, y) in coordenadas.items():
+            cursor.execute("UPDATE PosicoesLoja SET CoordX = ?, CoordY = ? WHERE PosicaoID = ?", x, y, pos_id)
+        cursor.execute("UPDATE ConfiguracoesEscala SET MapaTelaLargura = ?, MapaTelaAltura = ?, MapaFixo = 1",
+                       int(largura), int(altura))
+        if cursor.rowcount == 0:
+            cursor.execute("INSERT INTO ConfiguracoesEscala (MaxHorasSemPausa, DuracaoIntervalo, MapaTelaLargura, MapaTelaAltura, "
+                           "MapaFixo) VALUES (5, 1, ?, ?, 1)", int(largura), int(altura))
+        conn.commit()
+        return True, f"{len(coordenadas)} posição(ões) salvas."
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao fixar o mapa da escala: {e}", exc_info=True)
+        return False, f"Erro ao salvar o mapa: {e}"
     finally:
         conn.close()
 

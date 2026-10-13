@@ -175,13 +175,19 @@ def dia(data_txt):
     except Exception as e:
         logger.warning(f"Escala: confirmações de presença indisponíveis ({e})")
 
+    mapa_fixo = database.mapa_escala_fixo()
+    if mapa_fixo:
+        # [DEPURAÇÃO MAPA] mapa fixado: proporção da PLANTA. Ignora o tamanho gravado (um PC com o programa
+        # antigo ainda regrava o tamanho da janela dele e tiraria tudo do lugar de novo).
+        tela = (R.MAPA_IMAGEM_LARGURA, R.MAPA_IMAGEM_ALTURA)
     lista_pos = []
     for pos_id, nome, cx, cy, _ativo, setor in posicoes:
         try:
             vx, vy = float(cx), float(cy)
         except (TypeError, ValueError):
             continue                         # coordenada corrompida: o PC também pula
-        x, y = (vx, vy) if vx > 1.0 else (vx * tela[0], vy * tela[1])
+        relativa = vx <= 1.0
+        x, y = (vx, vy) if not relativa else (vx * tela[0], vy * tela[1])
         turnos = escala.get(pos_id, [])
         cor, linhas = R.rotulo_e_cor_posicao(nome, turnos, folgas, indisponivel, dia_db,
                                              None if turnos else fixos.get(pos_id), False, escalados)
@@ -189,9 +195,11 @@ def dia(data_txt):
         if turnos and len(linhas) == len(turnos) + 1:          # [ESCALA FIXA] 📌 no nome de quem é fixo aqui
             linhas = [linhas[0]] + [_icone_presenca(j) + ('📌 ' if j['fixo'] else '') + l for j, l in zip(tj, linhas[1:])]
         lista_pos.append({'id': pos_id, 'nome': nome, 'setor': setor or '', 'x': round(x, 1), 'y': round(y, 1),
+                          'cx': vx, 'cy': vy, 'relativa': relativa,      # [DEPURAÇÃO MAPA] o valor guardado (📐 Arrumar mapa)
                           'cor': cor, 'linhas': linhas[1:], 'turnos': tj})
 
     alertas = [{'nivel': n, 'texto': t} for n, t in R.analisar_escala_do_dia(escala, posicoes, indisponivel)]
+    alertas += [{'nivel': 'aviso', 'texto': t} for t in _alertas_mapa(lista_pos, mapa_fixo)]
     try:                                     # [DEPURAÇÃO ESCALA 2] fixo que não conseguiu entrar (antes só no log)
         alertas[0:0] = [{'nivel': 'aviso', 'texto': t} for t in escala_fixa.pendencias_do_dia(d, escala)]
     except Exception as e:
@@ -286,12 +294,74 @@ def dia(data_txt):
         dica = None
 
     return {'data': data, 'titulo': titulo, 'hoje': d == date.today(), 'feriado': feriado, 'clima': dica,
-            'tela': {'largura': tela[0], 'altura': tela[1],
+            'tela': {'largura': tela[0], 'altura': tela[1], 'fixo': mapa_fixo,
                      'imagem_largura': R.MAPA_IMAGEM_LARGURA, 'imagem_altura': R.MAPA_IMAGEM_ALTURA},
             'posicoes': lista_pos, 'fora_do_mapa': fora_do_mapa, 'alertas': alertas, 'resumo': resumo, 'fluxo': fluxo,
             'setor_todos': R.SETOR_TODOS, 'pessoas': pessoas, 'habituais': _habituais(d), 'resumo_real': resumo_real,
             'config': {'jornada_horas': _jornada_horas(),
                        'limite_curta_min': int(cfg_pag.get('LimiteCurtaMinutos', 420))}}
+
+
+# ------------------------------------------------------------------------------
+# [DEPURAÇÃO MAPA] 📐 Arrumar o mapa
+# As posições eram guardadas em proporção da ÁREA DO MAPA da janela do programa do PC, mas a planta tem
+# tamanho fixo (1180 x 600). Abrir o programa maximizado (ou noutro monitor) mudava esse tamanho e todas as
+# bolinhas saíam do lugar (na Web e no PC). Agora a gestão arruma o mapa uma vez e as posições passam a ser
+# proporção da PLANTA: o tamanho da janela não muda mais nada.
+# ------------------------------------------------------------------------------
+DISTANCIA_MINIMA_POSICOES = 18       # px na planta: menos que isso, uma bolinha fica em cima da outra
+
+
+def _alertas_mapa(lista_pos, mapa_fixo):
+    alertas = []
+    larg, alt = R.MAPA_IMAGEM_LARGURA, R.MAPA_IMAGEM_ALTURA
+    if not mapa_fixo and any(p['relativa'] for p in lista_pos):
+        alertas.append("📐 O lugar das posições no mapa ainda depende do tamanho da janela do programa da Escala no PC "
+                       "(maximizar a janela tira as bolinhas do lugar). Toque em 📐 Arrumar mapa, confira e salve uma vez.")
+    fora = [p['nome'] for p in lista_pos if not (0 <= p['x'] <= larg and 0 <= p['y'] <= alt)]
+    if fora:
+        alertas.append(f"📐 {len(fora)} posição(ões) fora da planta: {', '.join(fora[:6])}{'…' if len(fora) > 6 else ''}. "
+                       "Arraste para o lugar certo em 📐 Arrumar mapa.")
+    juntas = []
+    for i, a in enumerate(lista_pos):
+        for b in lista_pos[i + 1:]:
+            if ((a['x'] - b['x']) ** 2 + (a['y'] - b['y']) ** 2) ** 0.5 < DISTANCIA_MINIMA_POSICOES:
+                juntas.append(f"{a['nome']} e {b['nome']}")
+    if juntas:
+        alertas.append(f"📐 Posições uma em cima da outra: {'; '.join(juntas[:4])}{'…' if len(juntas) > 4 else ''}. "
+                       "Arraste uma delas em 📐 Arrumar mapa (ou exclua a repetida no programa do PC).")
+    return alertas
+
+
+def salvar_mapa(dados, usuario):
+    """📐 Grava onde fica cada posição (pixels da planta vindos da página) e fixa o mapa."""
+    _exigir_banco()
+    itens = dados.get('posicoes')
+    if not isinstance(itens, list) or not itens or len(itens) > 500:
+        raise ErroEscala("Nenhuma posição para salvar. Atualize a página.")
+    ativas = {p[0]: p[1] for p in database.listar_posicoes_loja()}
+    larg, alt = R.MAPA_IMAGEM_LARGURA, R.MAPA_IMAGEM_ALTURA
+    coords = {}
+    for it in itens:
+        try:
+            pid, x, y = int(it.get('id')), float(it.get('x')), float(it.get('y'))
+        except (TypeError, ValueError, AttributeError):
+            raise ErroEscala("Posição inválida. Atualize a página e tente de novo.")
+        if pid not in ativas:
+            raise ErroEscala("Uma das posições não está mais no mapa. Atualize a página.", 409)
+        if x != x or y != y:                 # NaN
+            raise ErroEscala("Posição inválida. Atualize a página e tente de novo.")
+        # proporção da planta, sempre entre 0 e 1 (acima de 1 o sistema entenderia como pixel antigo)
+        coords[pid] = (round(min(max(x / larg, 0.002), 0.998), 4), round(min(max(y / alt, 0.002), 0.998), 4))
+    faltam = [ativas[p] for p in ativas if p not in coords]
+    if faltam:
+        raise ErroEscala(f"O mapa mudou enquanto você arrumava (nova posição: {', '.join(faltam[:3])}). "
+                         "Atualize a página e arrume de novo.", 409)
+    ok, msg = database.fixar_mapa_escala(coords, larg, alt)
+    if not ok:
+        raise ErroEscala(msg, 500)
+    logger.info(f"[GESTÃO] {usuario.get('nome')}: arrumou e fixou o mapa da escala ({len(coords)} posições).")
+    return {'ok': True, 'mensagem': f"📐 Mapa salvo: {len(coords)} posições no lugar. O tamanho da janela do PC não muda mais nada."}
 
 
 DIAS_HABITUAIS = 60

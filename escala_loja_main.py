@@ -243,6 +243,8 @@ class AppEscalaLoja:
         self.data_selecionada = self.date_entry.get_date().strftime('%Y-%m-%d')
         self._cache_indisponibilidade = {}  # Dados novos: esquece o cache antigo
         self.posicoes = database.listar_posicoes_loja()
+        # [DEPURAÇÃO MAPA] mapa fixado na Web (📐 Arrumar mapa): posições em proporção da PLANTA, não da janela
+        self._mapa_fixo = database.mapa_escala_fixo()
         self.escala_atual = database.buscar_escala_do_dia(self.data_selecionada)
         # [AUDITORIA ESCALA] Funcionários e "posição fixa" lidos UMA vez por carga.
         # Antes o mapa consultava o banco a cada redesenho (e a janela redesenha várias
@@ -428,10 +430,14 @@ class AppEscalaLoja:
         cache_padrao = self.__dict__.setdefault('_posicao_padrao_cache', {})
         escalados = {t.FuncionarioID for ts in self.escala_atual.values() for t in ts if t.FuncionarioID}
 
-        # Captura o tamanho atual do canvas para renderização responsiva
-        W = self.canvas.winfo_width() if self.canvas.winfo_width() > 1 else MAPA_IMAGEM_LARGURA
-        H = self.canvas.winfo_height() if self.canvas.winfo_height() > 1 else MAPA_IMAGEM_ALTURA
-        self._registrar_tamanho_mapa(W, H)
+        if getattr(self, '_mapa_fixo', False):
+            # [DEPURAÇÃO MAPA] a planta tem tamanho fixo (1180 x 600): as bolinhas não andam ao maximizar a janela
+            W, H = MAPA_IMAGEM_LARGURA, MAPA_IMAGEM_ALTURA
+        else:
+            # Captura o tamanho atual do canvas para renderização responsiva
+            W = self.canvas.winfo_width() if self.canvas.winfo_width() > 1 else MAPA_IMAGEM_LARGURA
+            H = self.canvas.winfo_height() if self.canvas.winfo_height() > 1 else MAPA_IMAGEM_ALTURA
+            self._registrar_tamanho_mapa(W, H)
 
         for pos in self.posicoes:
             pos_id, nome, coord_x_db, coord_y_db, _, setor = pos
@@ -466,7 +472,35 @@ class AppEscalaLoja:
                 txt_setor = f"[{setor}]" if setor else "[Sem Setor]"
                 self.canvas.create_text(x, y-25, text=txt_setor, fill=cor_setor, font=("Arial", 7), tags=("setor_tag", tag))
 
+        self._afastar_rotulos()
         self.canvas.tag_lower("fundo")
+
+    def _afastar_rotulos(self):
+        """
+        [DEPURAÇÃO MAPA] Posições vizinhas: o texto de uma ficava em cima do da outra (ilegível). Agora o texto
+        que bate em outro texto ou numa bolinha desce até ficar livre (de cima para baixo).
+        """
+        try:
+            # [setor] repetido de posições coladas aparece uma vez só
+            setores = []
+            for item in self.canvas.find_withtag("setor_tag"):
+                caixa, txt = self.canvas.bbox(item), self.canvas.itemcget(item, 'text')
+                if any(t == txt and caixa[0] < b[2] and caixa[2] > b[0] and caixa[1] < b[3] and caixa[3] > b[1] for t, b in setores):
+                    self.canvas.itemconfigure(item, state='hidden')
+                else:
+                    setores.append((txt, caixa))
+            itens = sorted(self.canvas.find_withtag("texto_marcador"), key=lambda i: self.canvas.bbox(i)[1])
+            ocupados = [self.canvas.bbox(i) for i in self.canvas.find_withtag("marcador")]
+            for item in itens:
+                for _ in range(40):
+                    x1, y1, x2, y2 = self.canvas.bbox(item)
+                    bate = next((b for b in ocupados if b and x1 < b[2] and x2 > b[0] and y1 < b[3] and y2 > b[1]), None)
+                    if not bate:
+                        break
+                    self.canvas.move(item, 0, bate[3] - y1 + 2)
+                ocupados.append(self.canvas.bbox(item))
+        except Exception as e:                       # nunca deixa o mapa sem desenhar por causa disso
+            logger.warning(f"Mapa: não deu para afastar os textos ({e})")
 
     def _registrar_tamanho_mapa(self, largura, altura):
         """
@@ -682,10 +716,12 @@ class AppEscalaLoja:
             # Fallback de segurança para 1180x600 se o canvas reportar dimensão inválida
             W = self.canvas.winfo_width() if self.canvas.winfo_width() > 1 else 1180
             H = self.canvas.winfo_height() if self.canvas.winfo_height() > 1 else 600
+            if getattr(self, '_mapa_fixo', False):
+                W, H = MAPA_IMAGEM_LARGURA, MAPA_IMAGEM_ALTURA   # [DEPURAÇÃO MAPA] proporção da planta
             
             # Cálculo da coordenada relativa (0.0 a 1.0)
-            rel_x = x / W
-            rel_y = y / H
+            rel_x = min(max(x / W, 0.002), 0.998)
+            rel_y = min(max(y / H, 0.002), 0.998)
             
             # Normalização do setor para o SQL
             setor_limpo = setor if setor else None
