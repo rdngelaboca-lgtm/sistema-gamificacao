@@ -21,6 +21,13 @@
   table.pag td.sit { white-space: normal; min-width: 150px; }
   .check-recibo { flex-direction: row !important; align-items: center; gap: 8px !important; color: var(--texto) !important; font-weight: 600 !important; }
   .check-recibo input { width: 20px !important; height: 20px; flex: none; }
+  .rv-lista { display: grid; gap: 6px; margin: 10px 0; max-height: 56vh; overflow: auto; }
+  .rv-linha { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--linha); border-radius: 10px; padding: 8px 10px; cursor: pointer; }
+  .rv-linha.off { opacity: .6; cursor: default; }
+  .rv-linha input { width: 20px; height: 20px; flex: none; margin-top: 2px; }
+  .rv-info { display: grid; gap: 2px; min-width: 0; }
+  .rv-texto { white-space: pre-wrap; font-family: inherit; font-size: 13px; line-height: 1.35; background: #f7f9f8; border-radius: 8px;
+    padding: 8px; margin: 4px 0 0; }
   table.pag td.num, table.pag th.num { text-align: right; }
   table.pag tbody tr { cursor: pointer; }
   table.pag tr.pago td { background: #e3f5e1; } table.pag tr.pendente td { background: #fff4cc; }
@@ -416,6 +423,8 @@ $('#btn-desfazer').onclick = () => {
 
 $('#btn-recibo').onclick = () => {
   if (!pronto()) return;
+  const base = S.marcados.size ? itensMarcados() : S.dados.itens;
+  if (new Set(base.map(i => i.freelancer_id)).size > 1) return recibosVarios();   // vários freelancers: um recibo para cada
   uma($('#btn-recibo'), async () => {
     const r = await api('POST', '/api/gestao/pagamentos/recibo', Object.assign(corpoFiltro(), {ids: [...S.marcados]}));
     abrirModal(`<h3>📋 Recibo de ${esc(r.nome)}</h3>
@@ -434,6 +443,41 @@ $('#btn-recibo').onclick = () => {
     });
   });
 };
+// [RECIBOS DE VÁRIOS] marcou turnos de vários freelancers: cada um recebe o recibo dele pelo WhatsApp da loja
+function recibosVarios() {
+  uma($('#btn-recibo'), async () => {
+    const corpo = Object.assign(corpoFiltro(), {ids: [...S.marcados]});
+    const r = await api('POST', '/api/gestao/pagamentos/recibos-previa', corpo);
+    const fs = r.freelancers;
+    abrirModal(`<h3>📱 Recibos de ${fs.length} freelancers</h3>
+      <div class="mini suave">Cada um recebe <b>só o recibo dele</b> (os turnos marcados), pelo WhatsApp da loja, um de cada vez.</div>
+      <div class="rv-lista">${fs.map(f => `<label class="rv-linha ${f.whatsapp ? '' : 'off'}">
+          <input type="checkbox" data-f="${f.freelancer_id}" ${f.whatsapp && !f.ja_enviado ? 'checked' : ''} ${f.whatsapp ? '' : 'disabled'}>
+          <span class="rv-info"><span><b>${esc(f.nome)}</b> · ${f.turnos} turno(s) · ${esc(f.total)}${f.pendentes ? ` · <span class="n-aviso">⏳ ${f.pendentes} pendente(s)</span>` : ''}</span>
+            <span class="mini suave rv-sit">${!f.whatsapp ? '📵 sem WhatsApp no cadastro' : f.ja_enviado ? '📱 já recebeu este recibo (marque para mandar de novo)' : esc(f.telefone)}</span>
+            <details><summary class="mini">ver o recibo</summary><pre class="rv-texto">${esc(f.texto)}</pre></details></span>
+        </label>`).join('')}</div>
+      <div class="linha-form">
+        <button class="btn" type="button" id="rv-todos">Marcar todos</button>
+        <button class="btn prim" type="button" id="rv-enviar">📱 Mandar</button>
+      </div>`);
+    const marcadosRv = () => [...document.querySelectorAll('.rv-lista input:checked')].map(c => +c.dataset.f);
+    const contar = () => { const n = marcadosRv().length; $('#rv-enviar').textContent = `📱 Mandar para ${n}`; $('#rv-enviar').disabled = !n; };
+    document.querySelector('.rv-lista').addEventListener('change', contar);
+    $('#rv-todos').onclick = () => { document.querySelectorAll('.rv-lista input:not(:disabled)').forEach(c => { c.checked = true; }); contar(); };
+    contar();
+    $('#rv-enviar').onclick = async () => {
+      const escolhidos = marcadosRv();
+      if (!escolhidos.length) return;
+      $('#rv-enviar').disabled = true;
+      try {
+        const e = await api('POST', '/api/gestao/pagamentos/recibos-enviar', Object.assign({}, corpo, {freelancers: escolhidos}));
+        fecharModal(); status(e.mensagem); await carregar(true);
+        setTimeout(() => carregar(true), 2000 + e.enviando * 2700);   // atualiza para ver 📱 recibo enviado
+      } catch (er) { $('#rv-enviar').disabled = false; falhou(er); }
+    };
+  });
+}
 async function copiar(campo) {
   try { await navigator.clipboard.writeText(campo.value); status('Recibo copiado. Cole no WhatsApp.'); return; } catch (e) {}
   // na rede da loja (http://IP) o navegador não deixa usar a área de transferência moderna

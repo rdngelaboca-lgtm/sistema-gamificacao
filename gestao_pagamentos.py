@@ -473,6 +473,30 @@ def _texto_recibo_pago(itens, dia, forma):
     return cabeca + "\n\n" + R.texto_recibo_freelancer(itens, getattr(config, 'NOME_EMPRESA', '') or '')
 
 
+def _mandar_fila(fila):
+    """Manda [(FreelancerID, nome, telefone, [PagamentoID], texto)] um de cada vez (em segundo plano) e grava 📱/⚠️."""
+    def mandar():
+        import notificador_whatsapp
+        for k, (fid, nome, tel, pags, texto) in enumerate(fila):
+            if k:
+                time.sleep(INTERVALO_RECIBO_SEG)
+            try:
+                ok, resp = notificador_whatsapp.enviar_mensagem_whatsapp(tel, texto)
+            except Exception as e:
+                ok, resp = False, str(e)
+            if pags:
+                _gravar_recibo(pags, fid, 'enviado' if ok else 'falhou', None if ok else resp)
+            if not ok:
+                logger.error(f"[GESTÃO] Recibo de {nome} não foi: {resp}")
+        if fila:
+            logger.info(f"[GESTÃO] Recibos de pagamento: {len(fila)} freelancer(s).")
+    if fila:
+        if SEGUNDO_PLANO:
+            threading.Thread(target=mandar, daemon=True).start()
+        else:
+            mandar()
+
+
 def enviar_recibos(escala_ids, dia, forma):
     """Recibo dos turnos pagos agora para cada freelancer. {'enviando': [nomes], 'sem_whatsapp': [nomes]}."""
     _garantir_recibos()
@@ -499,25 +523,7 @@ def enviar_recibos(escala_ids, dia, forma):
         _gravar_recibo(pags, fid, 'enviando')
         fila.append((fid, nome, tel, pags, _texto_recibo_pago(itens, dia, forma)))
 
-    def mandar():
-        import notificador_whatsapp
-        for k, (fid, nome, tel, pags, texto) in enumerate(fila):
-            if k:
-                time.sleep(INTERVALO_RECIBO_SEG)
-            try:
-                ok, resp = notificador_whatsapp.enviar_mensagem_whatsapp(tel, texto)
-            except Exception as e:
-                ok, resp = False, str(e)
-            _gravar_recibo(pags, fid, 'enviado' if ok else 'falhou', None if ok else resp)
-            if not ok:
-                logger.error(f"[GESTÃO] Recibo de {nome} não foi: {resp}")
-        if fila:
-            logger.info(f"[GESTÃO] Recibos de pagamento: {len(fila)} freelancer(s).")
-    if fila:
-        if SEGUNDO_PLANO:
-            threading.Thread(target=mandar, daemon=True).start()
-        else:
-            mandar()
+    _mandar_fila(fila)
     return {'enviando': [x[1] for x in fila], 'sem_whatsapp': sem}
 
 
@@ -546,6 +552,68 @@ def recibo(dados):
     numero = R.numero_whatsapp(f.Telefone if f else None)
     return {'texto': texto, 'nome': sel[0]['Nome'], 'telefone': (f.Telefone if f else '') or '',
             'whatsapp': f"https://wa.me/{numero}?text={quote(texto)}" if numero else None}
+
+
+def _por_freelancer(dados):
+    """Os turnos escolhidos (ou a lista toda) separados por freelancer, com o texto do recibo de cada um."""
+    _filtro, itens = _itens(dados)
+    sel = _escolhidos(itens, dados.get('ids'))
+    if not sel:
+        raise ErroEscala("Não há turnos na lista.")
+    frees = {f.FreelancerID: f for f in database.listar_freelancers()}
+    try:
+        recibos = _status_recibos([i['PagamentoID'] for i in sel if i['Pago']])
+    except Exception as e:
+        logger.warning(f"Pagamentos: situação dos recibos indisponível ({e})")
+        recibos = {}
+    grupos = {}
+    for i in sel:
+        grupos.setdefault(i['FreelancerID'], []).append(i)
+    empresa = getattr(config, 'NOME_EMPRESA', '') or ''
+    saida = []
+    for fid, its in sorted(grupos.items(), key=lambda kv: str(kv[1][0]['Nome'] or '').lower()):
+        f = frees.get(fid)
+        tel = R.numero_whatsapp(getattr(f, 'Telefone', None) if f else None)
+        pagos = [i for i in its if i['Pago']]
+        ja = bool(pagos) and len(pagos) == len(its) and all((recibos.get(i['PagamentoID']) or {}).get('status') == 'enviado' for i in pagos)
+        saida.append({'freelancer_id': fid, 'nome': its[0]['Nome'] or '?', 'turnos': len(its),
+                      'total': R.fmt_reais(sum((i['Total'] for i in its), Decimal('0'))),
+                      'pendentes': sum(1 for i in its if not i['Pago']), 'whatsapp': bool(tel),
+                      'telefone': (getattr(f, 'Telefone', '') if f else '') or '', 'ja_enviado': ja,
+                      'texto': R.texto_recibo_freelancer(its, empresa), '_tel': tel,
+                      '_pags': [i['PagamentoID'] for i in pagos]})
+    return saida
+
+
+def recibos_previa(dados):
+    """📋 Recibo com turnos de VÁRIOS freelancers: a lista de quem vai receber (e o texto de cada um)."""
+    _exigir_banco()
+    return {'freelancers': [{k: v for k, v in x.items() if not k.startswith('_')} for x in _por_freelancer(dados)]}
+
+
+def enviar_recibos_lote(dados, usuario):
+    """📱 Manda o recibo de cada freelancer escolhido (dos turnos selecionados) pelo WhatsApp da loja."""
+    _exigir_banco()
+    try:
+        escolhidos = {_id(x, "o freelancer") for x in (dados.get('freelancers') or [])}
+    except ErroEscala:
+        raise ErroEscala("Seleção de freelancers inválida. Atualize a página.")
+    if not escolhidos:
+        raise ErroEscala("Marque para quem mandar o recibo.")
+    grupos = [x for x in _por_freelancer(dados) if x['freelancer_id'] in escolhidos]
+    fila = [(x['freelancer_id'], x['nome'], x['_tel'], x['_pags'], x['texto']) for x in grupos if x['_tel']]
+    sem = [x['nome'] for x in grupos if not x['_tel']]
+    if not fila:
+        raise ErroEscala("Nenhum dos escolhidos tem WhatsApp válido no cadastro (👤 Freelancers).")
+    for fid, _n, _t, pags, _x in fila:
+        if pags:
+            _gravar_recibo(pags, fid, 'enviando')
+    _mandar_fila(fila)
+    logger.info(f"[GESTÃO] {usuario.get('nome')}: mandou {len(fila)} recibo(s) pelo WhatsApp da loja.")
+    segundos = round(len(fila) * INTERVALO_RECIBO_SEG)
+    return {'ok': True, 'enviando': len(fila),
+            'mensagem': f"📱 Mandando {len(fila)} recibo(s) pelo WhatsApp da loja" + (f" (cerca de {segundos} s)" if segundos > 5 else '') + "."
+                        + (f"\n📵 Sem WhatsApp no cadastro: {', '.join(sem)}." if sem else '')}
 
 
 def enviar_recibo_agora(dados, usuario):

@@ -182,7 +182,9 @@ As contas, os textos da lista, do recibo e do Excel são os MESMOS do PC (escala
 lembrada no aparelho), cada freelancer recebe pelo número da loja o recibo SÓ dos turnos pagos agora, com o cabeçalho
 "💰 Pagamento feito: R$ … · data · forma" (um de cada vez, a cada 2,5 s). A lista mostra em cada turno pago 📱 recibo
 enviado / ⚠️ não foi (motivo) / 📵 sem WhatsApp; na janela 📋 Recibo, **📱 Mandar agora** reenvia. Se o WhatsApp
-falhar, o pagamento continua salvo. Tabela `RecibosFreelancer`.
+falhar, o pagamento continua salvo. Tabela `RecibosFreelancer`. Com turnos de **vários freelancers** marcados (ou a
+lista toda), o 📋 Recibo abre "📱 Recibos de N freelancers": um recibo para cada um (ver o texto, quem já recebeu vem
+desmarcado, quem não tem WhatsApp não dá para marcar) e **📱 Mandar para N**.
 
 | Função | Status |
 |---|---|

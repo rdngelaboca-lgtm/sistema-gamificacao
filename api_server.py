@@ -2468,6 +2468,18 @@ def api_gestao_pagamentos_recibo_enviar(usuario):
     return _resposta_pagamentos('enviar_recibo_agora', ler_json() or {}, usuario)
 
 
+@app.route('/api/gestao/pagamentos/recibos-previa', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_pagamentos_recibos_previa(usuario):
+    return _resposta_pagamentos('recibos_previa', ler_json() or {})
+
+
+@app.route('/api/gestao/pagamentos/recibos-enviar', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_pagamentos_recibos_enviar(usuario):
+    return _resposta_pagamentos('enviar_recibos_lote', ler_json() or {}, usuario)
+
+
 @app.route('/api/gestao/pagamentos/excel', methods=['GET'])
 @compras_login(somente_gestor=True)
 def api_gestao_pagamentos_excel(usuario):
