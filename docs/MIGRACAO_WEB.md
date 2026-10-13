@@ -178,6 +178,11 @@ ao voltar para a aba.
 No celular cada turno vira um cartão; toque marca, ✏️ corrige. Recibo: copia **e** abre a conversa do
 WhatsApp com o texto pronto. Excel: baixa o .xlsx (feito pelo próprio servidor, sem precisar de programa extra).
 As contas, os textos da lista, do recibo e do Excel são os MESMOS do PC (escala_regras.py).
+**Recibo automático (10/2026):** ao ✅ Marcar como PAGO (opção "📱 Mandar o recibo no WhatsApp de cada freelancer",
+lembrada no aparelho), cada freelancer recebe pelo número da loja o recibo SÓ dos turnos pagos agora, com o cabeçalho
+"💰 Pagamento feito: R$ … · data · forma" (um de cada vez, a cada 2,5 s). A lista mostra em cada turno pago 📱 recibo
+enviado / ⚠️ não foi (motivo) / 📵 sem WhatsApp; na janela 📋 Recibo, **📱 Mandar agora** reenvia. Se o WhatsApp
+falhar, o pagamento continua salvo. Tabela `RecibosFreelancer`.
 
 | Função | Status |
 |---|---|

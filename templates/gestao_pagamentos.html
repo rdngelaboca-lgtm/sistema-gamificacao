@@ -19,6 +19,8 @@
     white-space: nowrap; z-index: 1; }
   table.pag td { padding: 7px 6px; border-bottom: 1px solid var(--linha2); white-space: nowrap; }
   table.pag td.sit { white-space: normal; min-width: 150px; }
+  .check-recibo { flex-direction: row !important; align-items: center; gap: 8px !important; color: var(--texto) !important; font-weight: 600 !important; }
+  .check-recibo input { width: 20px !important; height: 20px; flex: none; }
   table.pag td.num, table.pag th.num { text-align: right; }
   table.pag tbody tr { cursor: pointer; }
   table.pag tr.pago td { background: #e3f5e1; } table.pag tr.pendente td { background: #fff4cc; }
@@ -211,7 +213,7 @@ function desenhar() {
       <td class="num" data-rot="Valor diária">${esc(i.valor_diaria)}</td><td data-rot="Extras">${esc(i.extras)}</td>
       <td class="num" data-rot="Valor extras">${esc(i.valor_extras)}</td><td class="num" data-rot="Ajuste">${esc(i.ajuste)}</td>
       <td class="num c-total" data-rot="Total">${esc(i.total)}</td>
-      <td class="sit">${esc(i.situacao)}${i.observacao ? `<div class="mini suave">obs: ${esc(i.observacao)}</div>` : ''}</td>
+      <td class="sit">${esc(i.situacao)}${i.observacao ? `<div class="mini suave">obs: ${esc(i.observacao)}</div>` : ''}${textoRecibo(i.recibo)}</td>
       <td class="c-acao">${i.pago ? '' : '<button class="btn" data-corrigir title="Corrigir horário / ajuste">✏️</button>'}</td>
     </tr>`).join('') || `<tr><td colspan="15" class="vazio suave">Nenhum turno de freelancer ${
       {pendentes: 'pendente', pagos: 'pago', todos: ''}[r.status]} neste período.</td></tr>`;
@@ -307,6 +309,7 @@ $('#btn-pagar').onclick = () => {
   const nomes = [...new Set(sel.map(i => i.nome))].sort((a, b) => a.localeCompare(b, 'pt'));
   const quem = nomes.slice(0, 3).join(', ') + (nomes.length > 3 ? ` e mais ${nomes.length - 3}` : '');
   const forma = lerLocal('gestao_forma_pag', 'Pix');
+  const semWpp = [...new Set(sel.filter(i => !(S.dados.freelancers.find(f => f.id === i.freelancer_id) || {}).whatsapp).map(i => i.nome))];
   // [VALOR NA HORA DE PAGAR] o valor de cada turno pode mudar aqui: a diferença vira o ajuste (+ bônus / − desconto)
   const linhasPag = sel.map((i, k) => {
     const calc = i.total_centavos - (i.ajuste_centavos || 0);
@@ -331,6 +334,9 @@ $('#btn-pagar').onclick = () => {
         <label>Forma<input id="p-forma" list="formas" maxlength="30" value="${esc(forma)}">
           <datalist id="formas">${S.dados.formas.map(f => `<option value="${esc(f)}">`).join('')}</datalist></label>
       </div>
+      <label class="check-recibo"><input type="checkbox" id="p-recibo" ${lerLocal('gestao_recibo_auto', '1') === '1' ? 'checked' : ''}>
+        📱 Mandar o recibo no WhatsApp de cada freelancer</label>
+      ${semWpp.length ? `<div class="mini n-aviso">📵 Sem WhatsApp no cadastro (não recebem): ${esc(semWpp.join(', '))}</div>` : ''}
       <button class="btn prim" type="submit" id="p-ok">✅ Confirmar pagamento</button>
     </form>`, null, true);
   const lidos = () => sel.map((i, k) => centavosDigitados(document.querySelector(`#form-pagar input[data-k="${k}"]`).value));
@@ -363,16 +369,28 @@ $('#btn-pagar').onclick = () => {
     const valores = {};
     sel.forEach((i, k) => { if (v[k] !== i.total_centavos) valores[i.escala_id] = (v[k] / 100).toFixed(2).replace('.', ','); });
     uma($('#p-ok'), async () => {
+      const enviarRecibo = $('#p-recibo').checked;
       const r = await comPerguntas('/api/gestao/pagamentos/pagar', {escala_ids: sel.map(i => i.escala_id),
-        data: $('#p-data').value, forma: $('#p-forma').value, valores,
+        data: $('#p-data').value, forma: $('#p-forma').value, valores, enviar_recibo: enviarRecibo,
         motivo: Object.keys(valores).length ? $('#p-motivo').value.trim() : ''});
       if (r && r.ok) {
         gravarLocal('gestao_forma_pag', $('#p-forma').value.trim() || 'Pix');
+        gravarLocal('gestao_recibo_auto', enviarRecibo ? '1' : '0');
         fecharModal(); status(r.mensagem); await carregar();
+        const n = r.recibos ? r.recibos.enviando.length : 0;   // os recibos saem em segundo plano: atualiza para ver 📱
+        if (n) setTimeout(carregar, 2000 + n * 2700);
       }
     });
   });
 };
+
+// [RECIBO AUTOMÁTICO] situação do recibo de um turno pago
+function textoRecibo(r) {
+  if (!r) return '';
+  const t = {enviado: `📱 recibo enviado ${r.quando}`, enviando: '📱 mandando o recibo…', sem_whatsapp: '📵 recibo não foi: sem WhatsApp',
+             falhou: `⚠️ recibo não foi${r.erro ? ': ' + r.erro : ''}`}[r.status] || '';
+  return t ? `<div class="mini ${r.status === 'enviado' ? 'suave' : 'n-aviso'}">${esc(t)}</div>` : '';
+}
 
 // '150' / '150,50' / '1.300' / 'R$ 1.300,00' -> centavos (null se não for um valor válido)
 function centavosDigitados(texto) {
@@ -404,11 +422,16 @@ $('#btn-recibo').onclick = () => {
       <textarea id="r-texto" readonly>${esc(r.texto)}</textarea>
       <div class="linha-form">
         <button class="btn prim" id="r-copiar">📋 Copiar</button>
-        ${r.whatsapp ? `<a class="btn" id="r-wpp" href="${esc(r.whatsapp)}" target="_blank" rel="noopener">💬 Abrir no WhatsApp (${esc(r.telefone)})</a>`
+        ${r.whatsapp ? `<button class="btn" id="r-enviar">📱 Mandar agora (WhatsApp da loja)</button>
+                        <a class="btn" id="r-wpp" href="${esc(r.whatsapp)}" target="_blank" rel="noopener">💬 Abrir no WhatsApp (${esc(r.telefone)})</a>`
                      : `<span class="mini n-aviso">Sem telefone válido no cadastro: copie e cole no WhatsApp.</span>`}
       </div>
-      <div class="mini suave">O WhatsApp abre com o texto pronto; é só conferir e enviar.</div>`);
+      <div class="mini suave">📱 Mandar agora: sai direto pelo número da loja. 💬 Abrir: o seu WhatsApp abre com o texto pronto.</div>`);
     $('#r-copiar').onclick = () => copiar($('#r-texto'));
+    if ($('#r-enviar')) $('#r-enviar').onclick = () => uma($('#r-enviar'), async () => {
+      const e = await api('POST', '/api/gestao/pagamentos/recibo-enviar', Object.assign(corpoFiltro(), {ids: [...S.marcados]}));
+      fecharModal(); status(e.mensagem); await carregar();
+    });
   });
 };
 async function copiar(campo) {

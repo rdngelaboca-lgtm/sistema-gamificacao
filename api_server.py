@@ -2462,6 +2462,12 @@ def api_gestao_pagamentos_recibo(usuario):
     return _resposta_pagamentos('recibo', ler_json() or {})
 
 
+@app.route('/api/gestao/pagamentos/recibo-enviar', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_pagamentos_recibo_enviar(usuario):
+    return _resposta_pagamentos('enviar_recibo_agora', ler_json() or {}, usuario)
+
+
 @app.route('/api/gestao/pagamentos/excel', methods=['GET'])
 @compras_login(somente_gestor=True)
 def api_gestao_pagamentos_excel(usuario):

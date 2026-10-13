@@ -15,6 +15,8 @@
 import io
 import logging
 import re
+import threading
+import time
 import zipfile
 from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
@@ -30,6 +32,9 @@ logger = logging.getLogger(__name__)
 
 STATUS = ('pendentes', 'pagos', 'todos')
 VEZES_DIFERENTE = 2          # [VALOR NA HORA DE PAGAR] mais que o dobro (ou menos da metade) do calculado: pergunta antes
+INTERVALO_RECIBO_SEG = 2.5   # [RECIBO AUTOMÁTICO] entre um recibo e outro (o WhatsApp não gosta de rajada)
+SEGUNDO_PLANO = True         # os testes desligam para conferir na hora
+_recibos_ok = False
 
 
 # ------------------------------------------------------------------------------
@@ -75,7 +80,7 @@ def _iid(it):
     return f"P{it['PagamentoID']}" if it['Pago'] else f"E{it['EscalaID']}"
 
 
-def _item_json(it):
+def _item_json(it, recibos=None):
     ajuste = it['Ajuste'] or Decimal('0')
     return dict(R.colunas_pagamento(it), iid=_iid(it), pagamento_id=it['PagamentoID'], escala_id=it['EscalaID'],
                 data_iso=it['Data'].isoformat() if it['Data'] else None, data_curta=R.fmt_data_br(it['Data'], True),
@@ -85,7 +90,8 @@ def _item_json(it):
                 entrada_real=it['EntradaReal'] or '', saida_real=it['SaidaReal'] or '',
                 ajuste_txt=f"{ajuste:.2f}".replace('.', ',') if ajuste else '', ajuste_centavos=_centavos(ajuste),
                 observacao=it['Observacao'] or '',
-                tipo_forcado=it.get('TipoForcado') or '', tipo_escala=it.get('TipoEscala') or '')
+                tipo_forcado=it.get('TipoForcado') or '', tipo_escala=it.get('TipoEscala') or '',
+                recibo=(recibos or {}).get(it['PagamentoID']) if it['Pago'] else None)
 
 
 def _filtros(dados):
@@ -234,10 +240,16 @@ def listar(dados):
     _exigir_banco()
     (de, ate, fid, status), itens = _itens(dados)
     linhas, totais = R.resumo_pagamentos(itens)
-    frees = [{'id': f.FreelancerID, 'nome': f.Nome or ''} for f in database.listar_freelancers()]
+    frees = [{'id': f.FreelancerID, 'nome': f.Nome or '', 'whatsapp': bool(R.numero_whatsapp(getattr(f, 'Telefone', None)))}
+             for f in database.listar_freelancers()]
+    try:
+        recibos = _status_recibos([i['PagamentoID'] for i in itens if i['Pago']])
+    except Exception as e:
+        logger.warning(f"Pagamentos: situação dos recibos indisponível ({e})")
+        recibos = {}
     return {'de': de.isoformat(), 'ate': ate.isoformat(), 'freelancer': fid, 'status': status,
             'periodo': dados.get('periodo') if dados.get('periodo') in dict(R.PERIODOS_PAGAMENTO) else None,
-            'itens': [_item_json(i) for i in itens],
+            'itens': [_item_json(i, recibos) for i in itens],
             'resumo': [{'freelancer_id': f, 'nome': n, 'turnos': q, 'pendente': R.fmt_reais(pe), 'pago': R.fmt_reais(pa)}
                        for f, n, q, pe, pa in linhas],
             'totais': {'pendente': R.fmt_reais(totais['pendente']), 'pendente_qtd': totais['pendente_qtd'],
@@ -370,7 +382,143 @@ def pagar(dados, usuario):
                  f"{' · ' + motivo if motivo else ''})")
     logger.info(f"[GESTÃO] {usuario.get('nome')}: pagou {len(ids)} turno(s) de freelancer "
                 f"({R.fmt_reais(total)}, {R.fmt_data_br(dia)}, {forma or 'sem forma'}){mudou}.")
-    return {'ok': True, 'mensagem': f"{msg} Total {R.fmt_reais(total)}{mudou}."}
+    mensagem = f"{msg} Total {R.fmt_reais(total)}{mudou}."
+    recibos = None
+    if dados.get('enviar_recibo'):            # [RECIBO AUTOMÁTICO] cada freelancer recebe o dele no WhatsApp
+        try:
+            recibos = enviar_recibos(ids, dia, forma)
+            if recibos['enviando']:
+                mensagem += f"\n📱 Recibo indo para o WhatsApp de {len(recibos['enviando'])} freelancer(s)."
+            if recibos['sem_whatsapp']:
+                mensagem += f"\n📵 Sem WhatsApp no cadastro (mande pelo 📋 Recibo): {', '.join(recibos['sem_whatsapp'])}."
+        except Exception as e:                # o pagamento já foi gravado: só o recibo não saiu
+            logger.error(f"[GESTÃO] Recibos automáticos falharam: {e}", exc_info=True)
+            mensagem += "\n⚠️ O pagamento foi salvo, mas os recibos não saíram. Mande pelo 📋 Recibo."
+    return {'ok': True, 'mensagem': mensagem, 'recibos': recibos}
+
+
+# ------------------------------------------------------------------------------
+# [RECIBO AUTOMÁTICO] Ao marcar como PAGO, cada freelancer recebe o recibo (só os turnos pagos agora)
+# pelo WhatsApp da loja (Z-API), um de cada vez. A lista mostra 📱 enviado / ⚠️ não foi / 📵 sem WhatsApp.
+# ------------------------------------------------------------------------------
+def _garantir_recibos():
+    global _recibos_ok
+    if _recibos_ok:
+        return
+    conn = database.get_db_connection()
+    if not conn:
+        raise ErroEscala("Sem conexão com o banco de dados.", 503)
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'RecibosFreelancer')
+            CREATE TABLE RecibosFreelancer (
+                PagamentoID INT NOT NULL PRIMARY KEY,
+                FreelancerID INT NULL,
+                Status VARCHAR(12) NOT NULL,
+                Erro NVARCHAR(150) NULL,
+                EnviadoEm DATETIME NULL
+            )
+        """)
+        conn.commit()
+        _recibos_ok = True
+    finally:
+        conn.close()
+
+
+def _gravar_recibo(pagamento_ids, freelancer_id, status, erro=None):
+    _garantir_recibos()
+    conn = database.get_db_connection()
+    if not conn:
+        return
+    try:
+        cur = conn.cursor()
+        agora = datetime.now().replace(microsecond=0)
+        for pid in pagamento_ids:
+            cur.execute("DELETE FROM RecibosFreelancer WHERE PagamentoID = ?", pid)
+            cur.execute("INSERT INTO RecibosFreelancer (PagamentoID, FreelancerID, Status, Erro, EnviadoEm) VALUES (?, ?, ?, ?, ?)",
+                        pid, freelancer_id, status, (erro or None) and str(erro)[:150], agora)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _status_recibos(pagamento_ids):
+    """{PagamentoID: {'status', 'quando', 'erro'}}."""
+    pagamento_ids = [p for p in pagamento_ids if p]
+    if not pagamento_ids:
+        return {}
+    _garantir_recibos()
+    conn = database.get_db_connection()
+    if not conn:
+        return {}
+    saida = {}
+    try:
+        cur = conn.cursor()
+        for k in range(0, len(pagamento_ids), 500):
+            parte = pagamento_ids[k:k + 500]
+            cur.execute(f"SELECT PagamentoID, Status, Erro, EnviadoEm FROM RecibosFreelancer WHERE PagamentoID IN "
+                        f"({','.join('?' * len(parte))})", *parte)
+            for pid, st, erro, quando in cur.fetchall():
+                q = quando if isinstance(quando, datetime) else (datetime.fromisoformat(str(quando)[:19]) if quando else None)
+                saida[pid] = {'status': st, 'erro': erro or '', 'quando': q.strftime('%d/%m %H:%M') if q else ''}
+    finally:
+        conn.close()
+    return saida
+
+
+def _texto_recibo_pago(itens, dia, forma):
+    total = sum((i['Total'] for i in itens), Decimal('0'))
+    cabeca = f"💰 *Pagamento feito: {R.fmt_reais(total)}* · {R.fmt_data_br(dia)}" + (f" · {forma}" if forma else '')
+    return cabeca + "\n\n" + R.texto_recibo_freelancer(itens, getattr(config, 'NOME_EMPRESA', '') or '')
+
+
+def enviar_recibos(escala_ids, dia, forma):
+    """Recibo dos turnos pagos agora para cada freelancer. {'enviando': [nomes], 'sem_whatsapp': [nomes]}."""
+    _garantir_recibos()
+    turnos = [database.turno_de_freelancer(e) for e in escala_ids]
+    datas = [t['Data'] for t in turnos if t and t['Data']]
+    if not datas:
+        return {'enviando': [], 'sem_whatsapp': []}
+    ids = set(escala_ids)
+    por = {}
+    for i in database.listar_pagamentos_freelancers(min(datas), max(datas), None, 'pagos'):
+        if i['EscalaID'] in ids:
+            por.setdefault(i['FreelancerID'], []).append(i)
+    frees = {f.FreelancerID: f for f in database.listar_freelancers()}
+    fila, sem = [], []
+    for fid, itens in sorted(por.items(), key=lambda kv: str(kv[1][0]['Nome'] or '').lower()):
+        f = frees.get(fid)
+        tel = R.numero_whatsapp(getattr(f, 'Telefone', None) if f else None)
+        pags = [i['PagamentoID'] for i in itens]
+        nome = itens[0]['Nome'] or '?'
+        if not tel:
+            sem.append(nome)
+            _gravar_recibo(pags, fid, 'sem_whatsapp')
+            continue
+        _gravar_recibo(pags, fid, 'enviando')
+        fila.append((fid, nome, tel, pags, _texto_recibo_pago(itens, dia, forma)))
+
+    def mandar():
+        import notificador_whatsapp
+        for k, (fid, nome, tel, pags, texto) in enumerate(fila):
+            if k:
+                time.sleep(INTERVALO_RECIBO_SEG)
+            try:
+                ok, resp = notificador_whatsapp.enviar_mensagem_whatsapp(tel, texto)
+            except Exception as e:
+                ok, resp = False, str(e)
+            _gravar_recibo(pags, fid, 'enviado' if ok else 'falhou', None if ok else resp)
+            if not ok:
+                logger.error(f"[GESTÃO] Recibo de {nome} não foi: {resp}")
+        if fila:
+            logger.info(f"[GESTÃO] Recibos de pagamento: {len(fila)} freelancer(s).")
+    if fila:
+        if SEGUNDO_PLANO:
+            threading.Thread(target=mandar, daemon=True).start()
+        else:
+            mandar()
+    return {'enviando': [x[1] for x in fila], 'sem_whatsapp': sem}
 
 
 def desfazer(dados, usuario):
@@ -398,6 +546,25 @@ def recibo(dados):
     numero = R.numero_whatsapp(f.Telefone if f else None)
     return {'texto': texto, 'nome': sel[0]['Nome'], 'telefone': (f.Telefone if f else '') or '',
             'whatsapp': f"https://wa.me/{numero}?text={quote(texto)}" if numero else None}
+
+
+def enviar_recibo_agora(dados, usuario):
+    """[RECIBO AUTOMÁTICO] 📱 Manda o recibo da janela 📋 Recibo pelo WhatsApp da loja (sem abrir o celular)."""
+    import notificador_whatsapp
+    r = recibo(dados)
+    _filtro, itens = _itens(dados)
+    sel = _escolhidos(itens, dados.get('ids'))
+    numero = R.numero_whatsapp(r['telefone'])
+    if not numero:
+        raise ErroEscala(f"{r['nome']} está sem WhatsApp válido no cadastro (👤 Freelancers).")
+    ok, resp = notificador_whatsapp.enviar_mensagem_whatsapp(numero, r['texto'])
+    pags = [i['PagamentoID'] for i in sel if i['Pago']]
+    if pags:
+        _gravar_recibo(pags, sel[0]['FreelancerID'], 'enviado' if ok else 'falhou', None if ok else resp)
+    if not ok:
+        raise ErroEscala(f"O WhatsApp não mandou: {resp}", 502)
+    logger.info(f"[GESTÃO] {usuario.get('nome')}: mandou o recibo de {r['nome']} pelo WhatsApp da loja.")
+    return {'ok': True, 'mensagem': f"📱 Recibo enviado para {r['nome']} ({r['telefone']})."}
 
 
 def planilha(dados):
