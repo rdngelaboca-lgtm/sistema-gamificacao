@@ -24,6 +24,12 @@
   .setor-pos { position: absolute; transform: translate(-50%, -100%); font-size: 10px; color: blue; white-space: nowrap; }
   /* [DEPURAÇÃO MAPA] texto que desceu para não ficar em cima de outro: um fio liga à bolinha */
   .fio-rot { position: absolute; width: 0; border-left: 1px dashed #37474f; transform: translateX(-0.5px); pointer-events: none; }
+  /* [ENVIO POR GRUPO] 📱 para quem enviar */
+  .wpp-quem { display: grid; gap: 6px; margin-top: 6px; }
+  .wpp-quem label { display: block; border: 1px solid var(--linha); border-radius: 8px; padding: 8px 10px; cursor: pointer; }
+  .wpp-quem label:has(input:checked) { border-color: var(--verde); background: var(--verde-claro); }
+  .wpp-quem label.vazio { opacity: .55; cursor: default; }
+  .wpp-quem .nomes { margin: 2px 0 0 24px; }
   /* 📐 Arrumar mapa */
   .barra-arrumar { display: grid; gap: 8px; margin-bottom: 8px; border-color: #f0c36d; background: #fff8e1; }
   .barra-arrumar .arr-escala { display: flex; gap: 8px 18px; flex-wrap: wrap; align-items: center; }
@@ -1172,11 +1178,13 @@ $('#btn-whatsapp').onclick = async () => {
     ? '⚠️ A mensagem vai SEM o link de ✅ confirmar presença: falta gravar o endereço da internet em 📢 Clientes › ⚙️ Ajustes ' +
       '(QR Code do balcão). O endereço desta página só funciona aqui no computador/na loja.'
     : 'Cada um recebe um link para ✅ confirmar presença (ou ❌ avisar que não vem): a resposta aparece aqui no painel.';
-  if (!confirm(`Encontradas ${pv.pessoas} pessoas com telefone na escala.\n\nDeseja enviar a confirmação de horário individual ` +
-               `para o WhatsApp de cada um via BOT?\n\n${link}\n\n⚠️ Isso pode levar alguns segundos (pode fechar esta página: o envio continua no servidor).`)) return;
+  // [ENVIO POR GRUPO] pergunta para quem mandar: todos, só os fixos (funcionários) ou só os freelancers
+  const quem = await escolherQuemWhatsapp(pv, link);
+  if (!quem) return;
   let job;
-  try { job = await api('POST', '/api/gestao/escala/whatsapp', {data: S.data}); } catch (e) { return falhou(e); }
-  abrirModal(`<h3>📱 Confirmando a escala no WhatsApp</h3><div id="wpp-txt">Enviando…</div>
+  try { job = await api('POST', '/api/gestao/escala/whatsapp', {data: S.data, quem}); } catch (e) { return falhou(e); }
+  const titulo = quem === 'todos' ? '' : ` — ${esc(((pv.grupos || {})[quem] || {}).titulo || '').toLowerCase()}`;
+  abrirModal(`<h3>📱 Confirmando a escala no WhatsApp${titulo}</h3><div id="wpp-txt">Enviando…</div>
     <div class="progresso"><div id="wpp-barra"></div></div><div class="mini suave">Pode fechar: o envio continua no servidor.</div>`);
   // [DEPURAÇÃO WEB] antes, uma falha de rede no acompanhamento parava tudo e a janela ficava em
   // "Enviando…" para sempre. Agora tenta de novo por ~2 minutos e avisa o que está acontecendo.
@@ -1209,6 +1217,42 @@ $('#btn-whatsapp').onclick = async () => {
   };
   tick();
 };
+
+// [ENVIO POR GRUPO] janela "Para quem enviar?" (devolve 'todos' / 'fixos' / 'freelancers', ou null se cancelar)
+function escolherQuemWhatsapp(pv, link) {
+  return new Promise(resolve => {
+    let escolha = null;
+    const icones = {todos: '👥', fixos: '👔', freelancers: '🧑‍🍳'};
+    const g = pv.grupos || {todos: {titulo: 'Todos', pessoas: pv.pessoas, nomes: pv.nomes}};
+    const ordem = ['todos', 'fixos', 'freelancers'].filter(q => g[q]);      // o servidor manda em ordem alfabética
+    const primeiro = ordem.find(q => g[q].pessoas);
+    abrirModal(`<h3>📱 Confirmar escala no WhatsApp</h3>
+      <div class="mini suave" style="margin-bottom:8px">${esc(pv.dia || dataBR(S.data, true))} · cada pessoa recebe o seu horário</div>
+      <b>Para quem enviar?</b>
+      <div class="wpp-quem">${ordem.map(q => [q, g[q]]).map(([q, x]) => `
+        <label class="${x.pessoas ? '' : 'vazio'}"><input type="radio" name="wpp-quem" value="${q}" ${q === primeiro ? 'checked' : ''}
+            ${x.pessoas ? '' : 'disabled'}> ${icones[q] || ''} <b>${esc(x.titulo)}</b>
+          <span class="mini">(${x.pessoas} ${x.pessoas === 1 ? 'pessoa' : 'pessoas'})</span>
+          <div class="mini suave nomes">${x.pessoas ? esc(x.nomes.join(', ')) : 'ninguém com telefone na escala deste dia'}</div></label>`).join('')}
+      </div>
+      <div class="mini" style="margin:8px 0">${esc(link)}</div>
+      <div class="mini suave">⚠️ Leva alguns segundos por pessoa (pode fechar esta página: o envio continua no servidor).</div>
+      <div class="botoes" style="margin-top:10px"><button class="btn" id="wpp-cancelar">Cancelar</button>
+        <button class="btn prim" id="wpp-enviar">📱 Enviar</button></div>`, () => resolve(escolha), true);
+    const atualizar = () => {
+      const q = (document.querySelector('input[name=wpp-quem]:checked') || {}).value;
+      $('#wpp-enviar').textContent = q ? `📱 Enviar para ${g[q].pessoas} ${g[q].pessoas === 1 ? 'pessoa' : 'pessoas'}` : '📱 Enviar';
+      $('#wpp-enviar').disabled = !q;
+    };
+    document.querySelectorAll('input[name=wpp-quem]').forEach(r => r.addEventListener('change', atualizar));
+    atualizar();
+    $('#wpp-cancelar').onclick = fecharModal;
+    $('#wpp-enviar').onclick = () => {
+      escolha = (document.querySelector('input[name=wpp-quem]:checked') || {}).value || null;
+      fecharModal();
+    };
+  });
+}
 
 // ------------------------------------------------------------------ [VAGAS] 🙋 vagas para freelancers
 // Cria a vaga, manda no grupo dos freelancers e/ou no WhatsApp de cada um (com o link para confirmar),

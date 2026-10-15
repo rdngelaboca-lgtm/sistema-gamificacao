@@ -734,13 +734,26 @@ def previa_whatsapp(data_txt, host_url=None):
         link_local = confirmacoes.endereco_publico(host_url)[1]
     except Exception as e:
         logger.warning(f"Escala: endereço dos links de presença indisponível ({e})")
-    return {'pessoas': len(lista), 'nomes': [i['nome'] for i in lista], 'link_local': link_local}
+    # [ENVIO POR GRUPO] quantos e quem em cada opção (todos / só fixos / só freelancers)
+    grupos = {q: {'titulo': t, 'nomes': [i['nome'] for i in R.filtrar_envio(lista, q)]} for q, t in R.QUEM_ENVIO.items()}
+    for g in grupos.values():
+        g['pessoas'] = len(g['nomes'])
+    return {'pessoas': len(lista), 'nomes': [i['nome'] for i in lista], 'link_local': link_local, 'grupos': grupos,
+            'dia': _dia_semana_br(data)}
+
+
+def _dia_semana_br(data):
+    d = date.fromisoformat(data)
+    return f"{R.DIAS_SEMANA[d.weekday()]}, {d:%d/%m}"
 
 
 def iniciar_whatsapp(dados, usuario, host_url=None):
     """Começa o envio em segundo plano (pode fechar a página). Devolve o andamento."""
     import notificador_whatsapp
     data, _d = _data(dados.get('data'))
+    quem = dados.get('quem') or 'todos'                 # [ENVIO POR GRUPO] todos / só fixos / só freelancers
+    if quem not in R.QUEM_ENVIO:
+        raise ErroEscala("Escolha para quem enviar: todos, só os fixos ou só os freelancers.")
     _exigir_banco()
     with _trava_envios:
         for job in list(_envios.values()):              # limpa os antigos
@@ -748,11 +761,18 @@ def iniciar_whatsapp(dados, usuario, host_url=None):
                 _envios.pop(job['id'], None)
         andando = next((j for j in _envios.values() if j['data'] == data and not j['terminado']), None)
         if andando:
-            return dict(andando)                          # não manda 2 vezes
-        lista = R.lista_envio_whatsapp(database.buscar_escala_do_dia(data), database.listar_posicoes_loja())
+            if andando.get('quem', 'todos') == quem:
+                return dict(andando)                      # não manda 2 vezes
+            para = {'todos': 'todos', 'fixos': 'os fixos', 'freelancers': 'os freelancers'}[andando.get('quem', 'todos')]
+            raise ErroEscala(f"Ainda estou enviando a escala deste dia para {para} ({andando['feitos']} de {andando['total']}). "
+                             "Espere terminar e envie de novo.", 409)
+        lista = R.filtrar_envio(R.lista_envio_whatsapp(database.buscar_escala_do_dia(data), database.listar_posicoes_loja()),
+                                quem)
         if not lista:
-            raise ErroEscala("Nenhuma pessoa com telefone encontrada na escala deste dia.")
-        job = {'id': uuid.uuid4().hex[:12], 'data': data, 'total': len(lista), 'feitos': 0, 'enviados': 0,
+            raise ErroEscala({'fixos': "Nenhum fixo (funcionário) com telefone na escala deste dia.",
+                              'freelancers': "Nenhum freelancer com telefone na escala deste dia."}.get(
+                                  quem, "Nenhuma pessoa com telefone encontrada na escala deste dia."))
+        job = {'id': uuid.uuid4().hex[:12], 'data': data, 'quem': quem, 'total': len(lista), 'feitos': 0, 'enviados': 0,
                'erros': 0, 'terminado': False, 'por': usuario.get('nome'), 'criado': time.time()}
         _envios[job['id']] = job
     links = None
@@ -775,7 +795,7 @@ def iniciar_whatsapp(dados, usuario, host_url=None):
             job['erros'] = job['total'] - job['enviados']
         finally:
             job['terminado'] = True
-            logger.info(f"[GESTÃO] {job['por']}: WhatsApp da escala de {data}: {job['enviados']} enviado(s), "
+            logger.info(f"[GESTÃO] {job['por']}: WhatsApp da escala de {data} ({quem}): {job['enviados']} enviado(s), "
                         f"{job['erros']} falha(s).")
     threading.Thread(target=rodar, daemon=True).start()
     return dict(job)

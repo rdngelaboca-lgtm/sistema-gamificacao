@@ -46,7 +46,7 @@ from escala_regras import (  # noqa: E402
     DIAS_SEMANA, DIAS_CURTOS, fmt_reais, para_decimal_br, fmt_horas, fmt_data_br, nome_tipo_dia,
     texto_calculo, SETORES_MAPA, MAPA_IMAGEM_LARGURA, MAPA_IMAGEM_ALTURA, parse_horario, dia_semana_banco,
     rotulo_e_cor_posicao, fluxo_por_hora, HORAS_FLUXO, pessoas_para_intervalos, gravar_intervalos,
-    lista_envio_whatsapp, enviar_confirmacoes_whatsapp,
+    lista_envio_whatsapp, enviar_confirmacoes_whatsapp, QUEM_ENVIO, filtrar_envio,
     # [GESTÃO WEB] freelancers e pagamentos: as mesmas contas e textos da Web
     FORMAS_PAGAMENTO, STATUS_PAGAMENTO, periodo_rapido, texto_valores_pagamento, colunas_pagamento,
     COLUNAS_PAGAMENTO, resumo_pagamentos, texto_recibo_freelancer as _texto_recibo, linhas_planilha_pagamentos,
@@ -878,12 +878,11 @@ class AppEscalaLoja:
             messagebox.showwarning("Aviso", "Nenhuma pessoa com telefone encontrada na escala deste dia.", parent=self.root)
             return
 
-        # 2. Confirmação
-        if not messagebox.askyesno("Confirmação em Massa", 
-            f"Encontradas {len(lista_envio)} pessoas com telefone na escala.\n\n"
-            "Deseja enviar a confirmação de horário individual para o WhatsApp de cada um via BOT?\n\n"
-            "⚠️ Isso pode levar alguns segundos.", parent=self.root):
+        # 2. Confirmação: [ENVIO POR GRUPO] para todos, só os fixos (funcionários) ou só os freelancers
+        quem = self._perguntar_quem_envio(lista_envio, data_snapshot)
+        if not quem:
             return
+        lista_envio = filtrar_envio(lista_envio, quem)
 
         # 3. Execução em Thread (Background)
         self.btn_wpp_mass.config(state='disabled', text="Enviando...")
@@ -902,6 +901,34 @@ class AppEscalaLoja:
             self.root.after(0, lambda: self._finalizar_envio_wpp(enviados, erros))
 
         threading.Thread(target=run_envio, daemon=True).start()
+
+    def _perguntar_quem_envio(self, lista_envio, data_txt):
+        """[ENVIO POR GRUPO] Janela 'Para quem enviar?': 'todos' / 'fixos' / 'freelancers', ou None (cancelou)."""
+        resposta = {'quem': None}
+        dia = datetime.strptime(data_txt, '%Y-%m-%d')
+        popup = Toplevel(self.root)
+        popup.title("Confirmar escala no WhatsApp")
+        popup.transient(self.root)
+        popup.resizable(False, False)
+        frame = ttk.Frame(popup, padding=15)
+        frame.pack(fill='both', expand=True)
+        ttk.Label(frame, text=f"Escala de {DIAS_SEMANA[dia.weekday()]}, {dia:%d/%m}", font=("Arial", 10, "bold")).pack(anchor='w')
+        ttk.Label(frame, text="Enviar a confirmação de horário no WhatsApp de cada um. Para quem?").pack(anchor='w', pady=(4, 8))
+
+        def escolher(q):
+            resposta['quem'] = q
+            popup.destroy()
+
+        for q, titulo in QUEM_ENVIO.items():
+            n = len(filtrar_envio(lista_envio, q))
+            ttk.Button(frame, text=f"{titulo} ({n} {'pessoa' if n == 1 else 'pessoas'})", width=40,
+                       state='normal' if n else 'disabled', command=lambda q=q: escolher(q)).pack(fill='x', pady=2)
+        ttk.Label(frame, text="⚠️ Isso pode levar alguns segundos.", foreground="gray").pack(anchor='w', pady=(8, 4))
+        ttk.Button(frame, text="Cancelar", command=popup.destroy).pack(anchor='e')
+        popup.bind('<Escape>', lambda e: popup.destroy())
+        popup.grab_set()
+        self.root.wait_window(popup)
+        return resposta['quem']
 
     def _finalizar_envio_wpp(self, enviados, erros):
         self.btn_wpp_mass.config(state='normal', text="📱 Confirmar Escala (WhatsApp)")

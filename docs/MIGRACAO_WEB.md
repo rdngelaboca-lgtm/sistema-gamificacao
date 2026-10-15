@@ -146,7 +146,7 @@ o fluxo e as pausas de **hoje**, sem deixar mexer. Na Web fica em **Gestão › 
 | 16. 🪄 Gerar intervalos automáticos (pergunta antes de substituir os feitos à mão, mostra conflitos) | 🧪 |
 | 17. ⏱️ Gerenciar intervalos: lista do dia por setor e horário, verde/vermelho, Enter salva e passa para o próximo | 🧪 |
 | 18. 📢 Enviar a escala no grupo do Telegram (com confirmação) | 🧪 |
-| 19. 📱 Confirmar escala no WhatsApp: mensagem a cada pessoa (data, posição, horário, intervalo) + diretriz do setor; resumo enviados/falhas | 🧪 |
+| 19. 📱 Confirmar escala no WhatsApp: mensagem a cada pessoa (data com o dia da semana, posição, horário, intervalo) + diretriz do setor; antes de enviar pergunta **para quem**: 👥 todos, 👔 só os fixos (funcionários) ou 🧑‍🍳 só os freelancers (com quantos e quem em cada opção; igual no PC); resumo enviados/falhas | 🧪 |
 | 20. Mensagens rápidas de status | 🧪 |
 
 **Depuração da Entrega 1 (10/2026) — 17 correções:** turno que passa da meia-noite agora é conferido

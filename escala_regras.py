@@ -510,7 +510,8 @@ def setor_da_diretriz(setor):
 def mensagem_confirmacao_escala(nome, data_escala, posicao, entrada, saida, int_ini=None, int_fim=None, link=None):
     """Mensagem de confirmação de escala para o WhatsApp de uma pessoa (link = ✅ confirmar presença)."""
     fmt = lambda v: v.strftime('%H:%M') if hasattr(v, 'strftime') else str(v)[:5]
-    data_fmt = datetime.strptime(str(data_escala)[:10], '%Y-%m-%d').strftime('%d/%m')
+    dia = datetime.strptime(str(data_escala)[:10], '%Y-%m-%d')
+    data_fmt = f"{dia:%d/%m} ({DIAS_SEMANA[dia.weekday()]})"      # 17/10 (sábado)
     intervalo = f"\n☕ Intervalo: *{fmt(int_ini)} às {fmt(int_fim)}*" if int_ini and int_fim else ""
     return (f"Olá, *{nome}*! 👋\n"
             f"Confirmação de Escala:\n"
@@ -525,8 +526,22 @@ def mensagem_diretriz(setor, descricao):
     return f"🎯 *Diretrizes do Setor ({setor}):*\n\n{descricao}"
 
 
+# Para quem mandar a confirmação de escala (os funcionários aparecem como [Fixo] na escala)
+QUEM_ENVIO = {'todos': "Todos", 'fixos': "Só os fixos (funcionários)", 'freelancers': "Só os freelancers"}
+
+
+def filtrar_envio(lista, quem):
+    """Só os fixos (funcionários), só os freelancers ou todos (quem = chave de QUEM_ENVIO)."""
+    if quem == 'fixos':
+        return [i for i in lista if i.get('tipo') != 'freelancer']
+    if quem == 'freelancers':
+        return [i for i in lista if i.get('tipo') == 'freelancer']
+    return list(lista)
+
+
 def lista_envio_whatsapp(escala, posicoes):
-    """Pessoas da escala do dia com telefone: [{'escala_id','nome','telefone','posicao','setor','entrada','saida','int_ini','int_fim'}]."""
+    """Pessoas da escala do dia com telefone: [{'escala_id','nome','telefone','tipo','posicao','setor','entrada','saida',
+    'int_ini','int_fim'}] (tipo = 'funcionario' ou 'freelancer')."""
     lista = []
     for pos_id, turnos in escala.items():
         pos = next((p for p in posicoes if p[0] == pos_id), None)
@@ -537,6 +552,7 @@ def lista_envio_whatsapp(escala, posicoes):
                     logger.warning(f"[WPP] {t.NomePessoa} está sem horário na escala: confirmação não enviada.")
                     continue
                 lista.append({'escala_id': getattr(t, 'EscalaID', None), 'nome': t.NomePessoa, 'telefone': t.TelefonePessoa,
+                              'tipo': 'freelancer' if getattr(t, 'FreelancerID', None) else 'funcionario',
                               'posicao': pos[1] if pos else "Posição", 'setor': pos[5] if pos else None,
                               'entrada': t.HorarioEntrada, 'saida': t.HorarioSaida,
                               'int_ini': t.InicioIntervalo, 'int_fim': t.FimIntervalo})
