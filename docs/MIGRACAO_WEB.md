@@ -148,6 +148,8 @@ o fluxo e as pausas de **hoje**, sem deixar mexer. Na Web fica em **Gestão › 
 | 18. 📢 Enviar a escala no grupo do Telegram (com confirmação) | 🧪 |
 | 19. 📱 Confirmar escala no WhatsApp: mensagem a cada pessoa (data com o dia da semana, posição, horário, intervalo) + diretriz do setor; antes de enviar pergunta **para quem**: 👥 todos, 👔 só os fixos (funcionários) ou 🧑‍🍳 só os freelancers (com quantos e quem em cada opção; igual no PC); resumo enviados/falhas | 🧪 |
 | 20. Mensagens rápidas de status | 🧪 |
+| 21. ☕ Intervalos no WhatsApp (só na Web): cada escalado recebe só o horário do intervalo dele + um aviso de que não seguir o horário prejudica a operação (aviso editável, com prévia); todos / só fixos / só freelancers; avisa quem fica de fora (sem intervalo ou sem telefone). Também na janela ⏱️ Gerenciar intervalos | 🧪 |
+| 22. 🖨️ Imprimir escala (só na Web; substitui o Word do mural): folha A4 com a escala do dia por setor (entrada, saída, intervalo), a ordem dos intervalos e o aviso; escolhe o que sai no papel (lembra a escolha); imprime ou salva em PDF | 🧪 |
 
 **Depuração da Entrega 1 (10/2026) — 17 correções:** turno que passa da meia-noite agora é conferido
 contra os outros da mesma posição; turnos em posição removida do mapa aparecem (lista "Removidas do

@@ -2386,6 +2386,20 @@ def api_gestao_escala_whatsapp(usuario):
     return _resposta_gestao(gestao_escala.iniciar_whatsapp, ler_json() or {}, usuario, request.host_url)
 
 
+@app.route('/api/gestao/escala/intervalos/whatsapp/previa', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_escala_intervalos_whatsapp_previa(usuario):
+    """[INTERVALOS NO WHATSAPP] quem recebe o horário do intervalo (e quem fica de fora)."""
+    return _resposta_gestao(gestao_escala.previa_intervalos, request.args.get('data'))
+
+
+@app.route('/api/gestao/escala/intervalos/whatsapp', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_escala_intervalos_whatsapp(usuario):
+    """[INTERVALOS NO WHATSAPP] manda o horário do intervalo de cada um (andamento: /api/gestao/escala/whatsapp/<id>)."""
+    return _resposta_gestao(gestao_escala.iniciar_intervalos, ler_json() or {}, usuario)
+
+
 @app.route('/api/gestao/escala/whatsapp/<job_id>', methods=['GET'])
 @compras_login(somente_gestor=True)
 def api_gestao_escala_whatsapp_andamento(usuario, job_id):

@@ -522,6 +522,48 @@ def mensagem_confirmacao_escala(nome, data_escala, posicao, entrada, saida, int_
             + "Bom trabalho!")
 
 
+# [INTERVALOS NO WHATSAPP] aviso que vai no fim da mensagem do intervalo (e no rodapé da escala impressa)
+AVISO_INTERVALO = ("⚠️ *Importante:* respeite o horário do seu intervalo. Sair antes, voltar depois ou trocar sem combinar "
+                   "deixa o setor descoberto e *prejudica a operação da loja*. Se precisar mudar, fale antes com a gerência.")
+LIMITE_AVISO_INTERVALO = 600
+
+
+def mensagem_intervalo(nome, data_escala, posicao, int_ini, int_fim, aviso=None):
+    """Só o horário de intervalo do dia, para o WhatsApp de uma pessoa (+ o aviso de que é para seguir o horário)."""
+    fmt = lambda v: v.strftime('%H:%M') if hasattr(v, 'strftime') else str(v)[:5]
+    dia = datetime.strptime(str(data_escala)[:10], '%Y-%m-%d')
+    aviso = (aviso or '').strip() or AVISO_INTERVALO
+    return (f"Olá, *{nome}*! ☕\n"
+            f"Seu intervalo de {DIAS_SEMANA[dia.weekday()]}, {dia:%d/%m}:\n"
+            f"⏰ *{fmt(int_ini)} às {fmt(int_fim)}*\n"
+            f"📍 {posicao}\n\n"
+            f"{aviso}\n\n"
+            "Bom trabalho!")
+
+
+def enviar_intervalos_whatsapp(lista, data_escala, enviar, aviso=None, esperar=None, progresso=None):
+    """Manda o horário de intervalo para cada pessoa da lista (itens de lista_envio_whatsapp com intervalo). (enviados, erros)"""
+    import time
+    esperar = esperar or time.sleep
+    enviados = erros = 0
+    for item in lista:
+        try:
+            ok, resp = enviar(item['telefone'], mensagem_intervalo(item['nome'], data_escala, item['posicao'],
+                                                                  item['int_ini'], item['int_fim'], aviso))
+            if ok:
+                enviados += 1
+            else:
+                logger.error(f"[WPP] Falha ao enviar o intervalo para {item['nome']}: {resp}")
+                erros += 1
+            esperar(1.5)
+        except Exception as e:
+            logger.error(f"[WPP] Erro ao enviar o intervalo para {item['nome']}: {e}", exc_info=True)
+            erros += 1
+        if progresso:
+            progresso(enviados, erros)
+    return enviados, erros
+
+
 def mensagem_diretriz(setor, descricao):
     return f"🎯 *Diretrizes do Setor ({setor}):*\n\n{descricao}"
 

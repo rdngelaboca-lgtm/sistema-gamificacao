@@ -24,6 +24,32 @@
   .setor-pos { position: absolute; transform: translate(-50%, -100%); font-size: 10px; color: blue; white-space: nowrap; }
   /* [DEPURAÇÃO MAPA] texto que desceu para não ficar em cima de outro: um fio liga à bolinha */
   .fio-rot { position: absolute; width: 0; border-left: 1px dashed #37474f; transform: translateX(-0.5px); pointer-events: none; }
+  /* [INTERVALOS NO WHATSAPP] aviso editável e a mensagem de exemplo */
+  .aviso-int { display: block; margin-top: 10px; }
+  .aviso-int textarea { width: 100%; margin-top: 4px; font: inherit; }
+  .wpp-exemplo { white-space: pre-wrap; background: #e7f6e7; border-radius: 8px; padding: 8px 10px; margin-top: 6px; font-size: 13px; }
+  /* [IMPRIMIR] escala para o mural da loja (só aparece no papel) */
+  .imp-opcoes { display: grid; gap: 8px; margin: 6px 0 10px; }
+  #impressao { display: none; }
+  @media print {
+    @page { size: A4 portrait; margin: 10mm; }
+    body > *:not(#impressao) { display: none !important; }
+    html, body { background: #fff !important; }
+    #impressao { display: block !important; color: #000; font: 11.5pt/1.3 Arial, Helvetica, sans-serif; }
+    #impressao .imp-cab { display: flex; justify-content: space-between; align-items: baseline; border-bottom: 2px solid #000;
+      padding-bottom: 4pt; font-size: 15pt; }
+    #impressao .imp-quando { font-size: 9pt; }
+    #impressao h2 { font-size: 14pt; margin: 10pt 0 4pt; }
+    #impressao h3 { font-size: 12pt; margin: 6pt 0 2pt; text-transform: uppercase; }
+    #impressao table { width: 100%; border-collapse: collapse; }
+    #impressao th, #impressao td { border: 1px solid #444; padding: 3pt 6pt; text-align: left; }
+    #impressao th { background: #e6e6e6; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    #impressao .h { white-space: nowrap; width: 1%; }
+    #impressao .imp-setor, #impressao tr { break-inside: avoid; }
+    #impressao .imp-bloco table { font-size: 13pt; }          /* a ordem dos intervalos é lida de longe, no mural */
+    #impressao .imp-sem { margin-top: 4pt; font-size: 10pt; }
+    #impressao .imp-aviso { margin-top: 10pt; border: 2px solid #000; padding: 6pt 8pt; font-weight: bold; break-inside: avoid; }
+  }
   /* [ENVIO POR GRUPO] 📱 para quem enviar */
   .wpp-quem { display: grid; gap: 6px; margin-top: 6px; }
   .wpp-quem label { display: block; border: 1px solid var(--linha); border-radius: 8px; padding: 8px 10px; cursor: pointer; }
@@ -195,12 +221,14 @@
       <button class="btn" id="btn-fixos">📌 <span class="txt">Fixos</span><span class="curto">Fixos</span></button>
       <button class="btn" id="btn-arrumar" title="Arrastar as posições para o lugar certo na planta">📐 <span class="txt">Arrumar mapa</span><span class="curto">Arrumar</span></button>
       <button class="btn" id="btn-resumo-dia" title="Quantos freelancers vieram de verdade e o valor total, por setor">📝 <span class="txt">Resumo do dia</span><span class="curto">Resumo</span></button>
+      <button class="btn" id="btn-imprimir" title="Escala do dia e ordem dos intervalos para colocar na loja">🖨️ <span class="txt">Imprimir escala</span><span class="curto">Imprimir</span></button>
       <span class="sep"></span>
       <button class="btn" id="btn-auto">🪄 <span class="txt">Gerar intervalos automáticos</span><span class="curto">Auto</span></button>
       <button class="btn" id="btn-intervalos">⏱️ <span class="txt">Gerenciar intervalos</span><span class="curto">Intervalos</span></button>
       <span class="sep"></span>
       <button class="btn" id="btn-telegram">📢 <span class="txt">Enviar escala Telegram</span><span class="curto">Telegram</span></button>
       <button class="btn" id="btn-whatsapp">📱 <span class="txt">Confirmar escala (WhatsApp)</span><span class="curto">WhatsApp</span></button>
+      <button class="btn" id="btn-int-wpp" title="Manda só o horário do intervalo no WhatsApp de cada um">☕ <span class="txt">Intervalos (WhatsApp)</span><span class="curto">Int. WhatsApp</span></button>
       <button class="btn" id="btn-vagas" title="Mandar vaga para os freelancers (grupo ou individual) e escolher quem entra">🙋 <span class="txt">Vagas para freelancers</span><span class="curto">Vagas</span></button>
     </div>
     <div class="linha" id="clima-dia" hidden></div>
@@ -1123,8 +1151,12 @@ $('#btn-intervalos').onclick = async () => {
       <label>Início do intervalo<br><input id="int-ini" inputmode="numeric" maxlength="5"></label>
       <label>Fim do intervalo<br><input id="int-fim" inputmode="numeric" maxlength="5"></label>
       <button class="btn prim" id="int-salvar">✅ SALVAR (Enter)</button></div>
-    <div class="mini suave" style="margin-top:6px">Verde = já tem intervalo · vermelho = sem intervalo. Deixe os dois vazios para remover.</div>`,
+    <div class="mini suave" style="margin-top:6px">Verde = já tem intervalo · vermelho = sem intervalo. Deixe os dois vazios para remover.</div>
+    <div class="botoes" style="margin-top:10px;max-width:520px"><button class="btn" id="int-wpp">☕ Enviar no WhatsApp</button>
+      <button class="btn" id="int-imprimir">🖨️ Imprimir escala</button></div>`,
     () => carregarDia(true));
+  $('#int-wpp').onclick = () => { fecharModal(); enviarIntervalos(); };
+  $('#int-imprimir').onclick = () => { fecharModal(); imprimirEscala(); };
   const linhaHtml = t => `<td>${esc(t.setor)}</td><td>${esc(t.posicao)}</td><td>${esc(t.nome)}</td><td>${esc(t.entrada)}</td>
       <td>${esc(t.saida)}</td><td>${esc(t.int_ini)}</td><td>${esc(t.int_fim)}</td>`;
   $('#tab-int').innerHTML = lista.map((t, i) => `<tr data-i="${i}" class="${t.definido ? 'def' : 'pend'}">${linhaHtml(t)}</tr>`).join('')
@@ -1179,12 +1211,60 @@ $('#btn-whatsapp').onclick = async () => {
       '(QR Code do balcão). O endereço desta página só funciona aqui no computador/na loja.'
     : 'Cada um recebe um link para ✅ confirmar presença (ou ❌ avisar que não vem): a resposta aparece aqui no painel.';
   // [ENVIO POR GRUPO] pergunta para quem mandar: todos, só os fixos (funcionários) ou só os freelancers
-  const quem = await escolherQuemWhatsapp(pv, link);
-  if (!quem) return;
+  const r = await escolherQuemWhatsapp(pv, {titulo: '📱 Confirmar escala no WhatsApp', sub: 'cada pessoa recebe o seu horário',
+    extra: `<div class="mini" style="margin:8px 0">${esc(link)}</div>`});
+  if (!r) return;
   let job;
-  try { job = await api('POST', '/api/gestao/escala/whatsapp', {data: S.data, quem}); } catch (e) { return falhou(e); }
-  const titulo = quem === 'todos' ? '' : ` — ${esc(((pv.grupos || {})[quem] || {}).titulo || '').toLowerCase()}`;
-  abrirModal(`<h3>📱 Confirmando a escala no WhatsApp${titulo}</h3><div id="wpp-txt">Enviando…</div>
+  try { job = await api('POST', '/api/gestao/escala/whatsapp', {data: S.data, quem: r.quem}); } catch (e) { return falhou(e); }
+  acompanharEnvio(job, '📱 Confirmando a escala no WhatsApp' + tituloGrupo(pv, r.quem),
+                  n => `WhatsApp: ${n} confirmação(ões) enviada(s). ✅`, true);   // [PRESENÇA] ⏳ de quem recebeu o link
+};
+
+// [INTERVALOS NO WHATSAPP] cada pessoa escalada recebe só o horário do intervalo dela (+ o aviso de respeitar o horário)
+$('#btn-int-wpp').onclick = () => enviarIntervalos();
+async function enviarIntervalos() {
+  if (!diaPronto()) return;
+  let pv;
+  try { pv = await api('GET', `/api/gestao/escala/intervalos/whatsapp/previa?data=${S.data}`); } catch (e) { return falhou(e); }
+  if (!pv.pessoas) {
+    alert('Ninguém com intervalo e telefone neste dia.\n\nDefina os intervalos antes: 🪄 Gerar intervalos automáticos ou ⏱️ Gerenciar intervalos.');
+    return;
+  }
+  const fora = [pv.sem_intervalo.length ? `⚠️ Sem intervalo definido (não recebem): ${pv.sem_intervalo.join(', ')}` : '',
+                pv.sem_telefone.length ? `📵 Sem telefone no cadastro: ${pv.sem_telefone.join(', ')}` : ''].filter(Boolean);
+  const r = await escolherQuemWhatsapp(pv, {titulo: '☕ Intervalos no WhatsApp', sub: 'cada pessoa recebe só o horário do intervalo dela',
+    vazio: 'ninguém com intervalo e telefone',
+    extra: `${fora.map(t => `<div class="mini n-aviso" style="margin-top:6px">${esc(t)}</div>`).join('')}
+      <label class="mini aviso-int"><b>Aviso no fim da mensagem</b> (dá para mudar)
+        <textarea id="int-aviso" rows="3" maxlength="600">${esc(lerLocal('gestao_aviso_intervalo', pv.aviso))}</textarea></label>
+      <div class="mini"><a href="#" id="int-aviso-padrao">↩️ Voltar ao aviso padrão</a></div>
+      <details class="mini" style="margin-top:6px"><summary>👀 Ver como fica a mensagem</summary><div class="wpp-exemplo" id="int-exemplo"></div></details>`,
+    ler: () => ({aviso: $('#int-aviso').value.trim()}),
+    montar: () => {
+      // a mensagem de exemplo (a 1ª pessoa) com o aviso que está escrito agora; *negrito* como no WhatsApp
+      const exemplo = () => {
+        const txt = pv.exemplo.replace(pv.aviso, $('#int-aviso').value.trim() || pv.aviso);
+        $('#int-exemplo').innerHTML = esc(txt).replace(/\*([^*\n]+)\*/g, '<b>$1</b>');
+      };
+      $('#int-aviso').addEventListener('input', exemplo);
+      $('#int-aviso-padrao').onclick = e => { e.preventDefault(); $('#int-aviso').value = pv.aviso; exemplo(); };
+      exemplo();
+    }});
+  if (!r) return;
+  gravarLocal('gestao_aviso_intervalo', r.aviso === pv.aviso ? '' : r.aviso);     // lembra o aviso mudado
+  let job;
+  try { job = await api('POST', '/api/gestao/escala/intervalos/whatsapp', {data: S.data, quem: r.quem, aviso: r.aviso}); }
+  catch (e) { return falhou(e); }
+  acompanharEnvio(job, '☕ Enviando os intervalos no WhatsApp' + tituloGrupo(pv, r.quem),
+                  n => `WhatsApp: intervalo enviado para ${n} pessoa(s). ✅`, false);
+}
+
+function tituloGrupo(pv, quem) {
+  return quem === 'todos' ? '' : ` — ${(((pv.grupos || {})[quem] || {}).titulo || '').toLowerCase()}`;
+}
+// Acompanha um envio de WhatsApp que roda no servidor (dá para fechar a janela: o envio continua)
+function acompanharEnvio(job, titulo, msgOk, recarregar) {
+  abrirModal(`<h3>${esc(titulo)}</h3><div id="wpp-txt">Enviando…</div>
     <div class="progresso"><div id="wpp-barra"></div></div><div class="mini suave">Pode fechar: o envio continua no servidor.</div>`);
   // [DEPURAÇÃO WEB] antes, uma falha de rede no acompanhamento parava tudo e a janela ficava em
   // "Enviando…" para sempre. Agora tenta de novo por ~2 minutos e avisa o que está acontecendo.
@@ -1208,35 +1288,36 @@ $('#btn-whatsapp').onclick = async () => {
     barra.style.width = (job.total ? 100 * job.feitos / job.total : 100) + '%';
     if (job.terminado) {
       txt.innerHTML = `<b>Processo finalizado!</b><br>✅ Enviados: ${job.enviados}<br>❌ Falhas: ${job.erros}`;
-      if (!job.erros) status(`WhatsApp: ${job.enviados} confirmação(ões) enviada(s). ✅`);
-      if (job.data === S.data) carregarDia(true);        // [PRESENÇA] ⏳ de quem recebeu o link
+      if (!job.erros) status(msgOk(job.enviados));
+      if (recarregar && job.data === S.data) carregarDia(true);
       return;
     }
     txt.textContent = `Enviando ${Math.min(job.feitos + 1, job.total)} de ${job.total}…`;
     setTimeout(tick, 1000);
   };
   tick();
-};
+}
 
-// [ENVIO POR GRUPO] janela "Para quem enviar?" (devolve 'todos' / 'fixos' / 'freelancers', ou null se cancelar)
-function escolherQuemWhatsapp(pv, link) {
+// [ENVIO POR GRUPO] janela "Para quem enviar?": devolve {quem: 'todos' / 'fixos' / 'freelancers', ...o que ler() devolver},
+// ou null se cancelar. opc: {titulo, sub, extra (html), vazio (texto da opção sem ninguém), ler(), montar()}
+function escolherQuemWhatsapp(pv, opc) {
   return new Promise(resolve => {
     let escolha = null;
     const icones = {todos: '👥', fixos: '👔', freelancers: '🧑‍🍳'};
     const g = pv.grupos || {todos: {titulo: 'Todos', pessoas: pv.pessoas, nomes: pv.nomes}};
     const ordem = ['todos', 'fixos', 'freelancers'].filter(q => g[q]);      // o servidor manda em ordem alfabética
     const primeiro = ordem.find(q => g[q].pessoas);
-    abrirModal(`<h3>📱 Confirmar escala no WhatsApp</h3>
-      <div class="mini suave" style="margin-bottom:8px">${esc(pv.dia || dataBR(S.data, true))} · cada pessoa recebe o seu horário</div>
+    abrirModal(`<h3>${esc(opc.titulo)}</h3>
+      <div class="mini suave" style="margin-bottom:8px">${esc(pv.dia || dataBR(S.data, true))} · ${esc(opc.sub)}</div>
       <b>Para quem enviar?</b>
       <div class="wpp-quem">${ordem.map(q => [q, g[q]]).map(([q, x]) => `
         <label class="${x.pessoas ? '' : 'vazio'}"><input type="radio" name="wpp-quem" value="${q}" ${q === primeiro ? 'checked' : ''}
             ${x.pessoas ? '' : 'disabled'}> ${icones[q] || ''} <b>${esc(x.titulo)}</b>
           <span class="mini">(${x.pessoas} ${x.pessoas === 1 ? 'pessoa' : 'pessoas'})</span>
-          <div class="mini suave nomes">${x.pessoas ? esc(x.nomes.join(', ')) : 'ninguém com telefone na escala deste dia'}</div></label>`).join('')}
+          <div class="mini suave nomes">${x.pessoas ? esc(x.nomes.join(', ')) : esc(opc.vazio || 'ninguém com telefone na escala deste dia')}</div></label>`).join('')}
       </div>
-      <div class="mini" style="margin:8px 0">${esc(link)}</div>
-      <div class="mini suave">⚠️ Leva alguns segundos por pessoa (pode fechar esta página: o envio continua no servidor).</div>
+      ${opc.extra || ''}
+      <div class="mini suave" style="margin-top:8px">⚠️ Leva alguns segundos por pessoa (pode fechar esta página: o envio continua no servidor).</div>
       <div class="botoes" style="margin-top:10px"><button class="btn" id="wpp-cancelar">Cancelar</button>
         <button class="btn prim" id="wpp-enviar">📱 Enviar</button></div>`, () => resolve(escolha), true);
     const atualizar = () => {
@@ -1246,13 +1327,87 @@ function escolherQuemWhatsapp(pv, link) {
     };
     document.querySelectorAll('input[name=wpp-quem]').forEach(r => r.addEventListener('change', atualizar));
     atualizar();
+    if (opc.montar) opc.montar();
     $('#wpp-cancelar').onclick = fecharModal;
     $('#wpp-enviar').onclick = () => {
-      escolha = (document.querySelector('input[name=wpp-quem]:checked') || {}).value || null;
+      const quem = (document.querySelector('input[name=wpp-quem]:checked') || {}).value;
+      escolha = quem ? Object.assign({quem}, opc.ler ? opc.ler() : {}) : null;
       fecharModal();
     };
   });
 }
+
+// ------------------------------------------------------------------ [IMPRIMIR] 🖨️ escala do dia para o mural da loja
+// Substitui o Word: a escala por setor (com o intervalo) e a ordem dos intervalos, numa folha A4, com o aviso.
+$('#btn-imprimir').onclick = () => imprimirEscala();
+async function imprimirEscala() {
+  if (!diaPronto()) return;
+  const data = S.data;
+  let r;
+  try { r = await api('GET', `/api/gestao/escala/intervalos?data=${data}`); } catch (e) { return falhou(e); }   // sempre o mais novo
+  if (!r.turnos.length) { alert('Ninguém escalado neste dia.'); return; }
+  let op = {};
+  try { op = JSON.parse(lerLocal('gestao_imprimir', '{}')); } catch (e) {}
+  const marcado = k => op[k] === false ? '' : 'checked';
+  const sem = r.turnos.filter(t => !t.definido).map(t => t.nome);
+  abrirModal(`<h3>🖨️ Imprimir escala — ${esc(r.dia)}</h3>
+    <div class="imp-opcoes">
+      <label><input type="checkbox" id="imp-escala" ${marcado('escala')}> 🗓️ <b>Escala do dia</b> por setor (entrada, saída e intervalo)</label>
+      <label><input type="checkbox" id="imp-intervalos" ${marcado('intervalos')}> ☕ <b>Ordem dos intervalos</b> (quem sai e quando)</label>
+      <label><input type="checkbox" id="imp-aviso" ${marcado('aviso')}> ⚠️ Aviso para respeitar o horário do intervalo</label>
+    </div>
+    ${sem.length ? `<div class="mini n-aviso">⚠️ Sem intervalo definido: ${esc(sem.join(', '))}</div>` : ''}
+    <div class="mini suave" style="margin-top:6px">${r.turnos.length} pessoa(s) escalada(s). Abre a janela de impressão do navegador
+      (dá para escolher a impressora ou salvar em PDF).</div>
+    <div class="botoes" style="margin-top:10px"><button class="btn" id="imp-cancelar">Cancelar</button>
+      <button class="btn prim" id="imp-ok">🖨️ Imprimir</button></div>`, null, true);
+  $('#imp-cancelar').onclick = fecharModal;
+  $('#imp-ok').onclick = () => {
+    op = {escala: $('#imp-escala').checked, intervalos: $('#imp-intervalos').checked, aviso: $('#imp-aviso').checked};
+    if (!op.escala && !op.intervalos) { alert('Marque o que imprimir: a escala do dia e/ou a ordem dos intervalos.'); return; }
+    gravarLocal('gestao_imprimir', JSON.stringify(op));
+    fecharModal();
+    montarImpressao(r, op);
+    window.print();
+  };
+}
+function montarImpressao(r, op) {
+  let caixa = document.getElementById('impressao');
+  if (!caixa) { caixa = document.createElement('div'); caixa.id = 'impressao'; document.body.appendChild(caixa); }
+  const min = h => { const [a, b] = String(h || '').split(':').map(Number); return a * 60 + b; };
+  const agora = new Date();
+  const partes = [`<div class="imp-cab"><div><b>Gela Boca</b> · Escala de ${esc(r.dia)}/${esc(r.data.slice(0, 4))}</div>
+    <div class="imp-quando">impressa em ${String(agora.getDate()).padStart(2, '0')}/${String(agora.getMonth() + 1).padStart(2, '0')}
+      às ${String(agora.getHours()).padStart(2, '0')}:${String(agora.getMinutes()).padStart(2, '0')}</div></div>`];
+  if (op.escala) {
+    const setores = [];
+    for (const t of r.turnos) {
+      let s = setores.find(x => x.nome === t.setor);
+      if (!s) setores.push(s = {nome: t.setor, turnos: []});
+      s.turnos.push(t);
+    }
+    partes.push(`<h2>🗓️ Escala do dia</h2>` + setores.map(s => `<div class="imp-setor"><h3>${esc(s.nome)}</h3>
+      <table><thead><tr><th>Posição</th><th>Nome</th><th class="h">Entrada</th><th class="h">Saída</th><th class="h">Intervalo</th></tr></thead>
+      <tbody>${s.turnos.map(t => `<tr><td>${esc(t.posicao)}</td><td><b>${esc(t.nome)}</b></td><td class="h">${esc(t.entrada)}</td>
+        <td class="h">${esc(t.saida)}</td><td class="h">${t.definido ? esc(`${t.int_ini} às ${t.int_fim}`) : '—'}</td></tr>`).join('')}</tbody>
+      </table></div>`).join(''));
+  }
+  if (op.intervalos) {
+    // turno que vira a meia-noite: o intervalo depois das 00:00 fica no fim da lista
+    const ordem = r.turnos.filter(t => t.definido)
+      .map(t => Object.assign({k: min(t.int_ini) + (min(t.int_ini) < min(t.entrada) ? 1440 : 0)}, t)).sort((a, b) => a.k - b.k);
+    const sem = r.turnos.filter(t => !t.definido).map(t => t.nome);
+    partes.push(`<div class="imp-bloco"><h2>☕ Ordem dos intervalos</h2>
+      <table><thead><tr><th class="h">Intervalo</th><th>Nome</th><th>Setor · Posição</th></tr></thead>
+      <tbody>${ordem.map(t => `<tr><td class="h"><b>${esc(t.int_ini)} às ${esc(t.int_fim)}</b></td><td><b>${esc(t.nome)}</b></td>
+        <td>${esc(t.setor)} · ${esc(t.posicao)}</td></tr>`).join('') || '<tr><td colspan="3">Nenhum intervalo definido.</td></tr>'}</tbody></table>
+      ${sem.length ? `<div class="imp-sem">Sem intervalo definido: ${esc(sem.join(', '))}</div>` : ''}</div>`);
+  }
+  if (op.aviso) partes.push(`<div class="imp-aviso">${esc(r.aviso)}</div>`);
+  caixa.innerHTML = partes.join('');
+}
+// depois de imprimir, a folha some da página
+addEventListener('afterprint', () => { const c = document.getElementById('impressao'); if (c) c.innerHTML = ''; });
 
 // ------------------------------------------------------------------ [VAGAS] 🙋 vagas para freelancers
 // Cria a vaga, manda no grupo dos freelancers e/ou no WhatsApp de cada um (com o link para confirmar),

@@ -671,7 +671,8 @@ def listar_intervalos(data_txt):
         ini, fim = _h(r[7]), _h(r[8])
         linhas.append({'id': r[0], 'setor': r[2], 'posicao': r[3], 'nome': r[4] or '?', 'entrada': _h(r[5]),
                        'saida': _h(r[6]), 'int_ini': ini, 'int_fim': fim, 'definido': bool(ini and fim)})
-    return {'data': data, 'turnos': linhas}
+    # [IMPRIMIR] o mesmo aviso da mensagem do intervalo vai no rodapé da escala impressa (sem o * do WhatsApp)
+    return {'data': data, 'turnos': linhas, 'dia': _dia_semana_br(data), 'aviso': R.AVISO_INTERVALO.replace('*', '')}
 
 
 def salvar_intervalo(dados, usuario):
@@ -747,6 +748,25 @@ def _dia_semana_br(data):
     return f"{R.DIAS_SEMANA[d.weekday()]}, {d:%d/%m}"
 
 
+def _envio_andando(data, tipo, quem):
+    """
+    (chamar com _trava_envios) Envio deste dia ainda andando: o mesmo (tipo e grupo) é devolvido para acompanhar;
+    outro espera terminar (dois envios juntos no mesmo número da Z-API viram spam). Limpa os antigos.
+    """
+    for job in list(_envios.values()):
+        if job['terminado'] and time.time() - job['criado'] > 3600:
+            _envios.pop(job['id'], None)
+    andando = next((j for j in _envios.values() if j['data'] == data and not j['terminado']), None)
+    if not andando:
+        return None
+    if andando.get('tipo', 'escala') == tipo and andando.get('quem', 'todos') == quem:
+        return dict(andando)
+    para = {'todos': 'todos', 'fixos': 'os fixos', 'freelancers': 'os freelancers'}[andando.get('quem', 'todos')]
+    oque = {'escala': 'a escala', 'intervalos': 'os intervalos'}[andando.get('tipo', 'escala')]
+    raise ErroEscala(f"Ainda estou enviando {oque} deste dia para {para} ({andando['feitos']} de {andando['total']}). "
+                     "Espere terminar e envie de novo.", 409)
+
+
 def iniciar_whatsapp(dados, usuario, host_url=None):
     """Começa o envio em segundo plano (pode fechar a página). Devolve o andamento."""
     import notificador_whatsapp
@@ -756,23 +776,17 @@ def iniciar_whatsapp(dados, usuario, host_url=None):
         raise ErroEscala("Escolha para quem enviar: todos, só os fixos ou só os freelancers.")
     _exigir_banco()
     with _trava_envios:
-        for job in list(_envios.values()):              # limpa os antigos
-            if job['terminado'] and time.time() - job['criado'] > 3600:
-                _envios.pop(job['id'], None)
-        andando = next((j for j in _envios.values() if j['data'] == data and not j['terminado']), None)
+        andando = _envio_andando(data, 'escala', quem)
         if andando:
-            if andando.get('quem', 'todos') == quem:
-                return dict(andando)                      # não manda 2 vezes
-            para = {'todos': 'todos', 'fixos': 'os fixos', 'freelancers': 'os freelancers'}[andando.get('quem', 'todos')]
-            raise ErroEscala(f"Ainda estou enviando a escala deste dia para {para} ({andando['feitos']} de {andando['total']}). "
-                             "Espere terminar e envie de novo.", 409)
+            return andando                                # não manda 2 vezes
         lista = R.filtrar_envio(R.lista_envio_whatsapp(database.buscar_escala_do_dia(data), database.listar_posicoes_loja()),
                                 quem)
         if not lista:
             raise ErroEscala({'fixos': "Nenhum fixo (funcionário) com telefone na escala deste dia.",
                               'freelancers': "Nenhum freelancer com telefone na escala deste dia."}.get(
                                   quem, "Nenhuma pessoa com telefone encontrada na escala deste dia."))
-        job = {'id': uuid.uuid4().hex[:12], 'data': data, 'quem': quem, 'total': len(lista), 'feitos': 0, 'enviados': 0,
+        job = {'id': uuid.uuid4().hex[:12], 'data': data, 'tipo': 'escala', 'quem': quem, 'total': len(lista), 'feitos': 0,
+               'enviados': 0,
                'erros': 0, 'terminado': False, 'por': usuario.get('nome'), 'criado': time.time()}
         _envios[job['id']] = job
     links = None
@@ -796,6 +810,79 @@ def iniciar_whatsapp(dados, usuario, host_url=None):
         finally:
             job['terminado'] = True
             logger.info(f"[GESTÃO] {job['por']}: WhatsApp da escala de {data} ({quem}): {job['enviados']} enviado(s), "
+                        f"{job['erros']} falha(s).")
+    threading.Thread(target=rodar, daemon=True).start()
+    return dict(job)
+
+
+# ------------------------------------------------------------------------------
+# [INTERVALOS NO WHATSAPP] cada pessoa escalada recebe só o horário do intervalo dela (+ aviso)
+# ------------------------------------------------------------------------------
+def _lista_intervalos(data):
+    """(com intervalo e telefone, nomes sem intervalo, nomes sem telefone)"""
+    escala = database.buscar_escala_do_dia(data)
+    lista = R.lista_envio_whatsapp(escala, database.listar_posicoes_loja())
+    com = [i for i in lista if i['int_ini'] and i['int_fim']]
+    sem_intervalo = [i['nome'] for i in lista if not (i['int_ini'] and i['int_fim'])]
+    sem_telefone = sorted({t.NomePessoa for ts in escala.values() for t in ts
+                           if t.NomePessoa and not getattr(t, 'TelefonePessoa', None)})
+    return com, sem_intervalo, sem_telefone
+
+
+def previa_intervalos(data_txt):
+    data, _d = _data(data_txt)
+    _exigir_banco()
+    com, sem_intervalo, sem_telefone = _lista_intervalos(data)
+    grupos = {q: {'titulo': t, 'nomes': [f"{i['nome']} ({R.formatar_hora_curta(i['int_ini'])})" for i in R.filtrar_envio(com, q)]}
+              for q, t in R.QUEM_ENVIO.items()}
+    for g in grupos.values():
+        g['pessoas'] = len(g['nomes'])
+    exemplo = R.mensagem_intervalo(com[0]['nome'], data, com[0]['posicao'], com[0]['int_ini'], com[0]['int_fim']) if com else None
+    return {'pessoas': len(com), 'grupos': grupos, 'dia': _dia_semana_br(data), 'sem_intervalo': sem_intervalo,
+            'sem_telefone': sem_telefone, 'aviso': R.AVISO_INTERVALO, 'exemplo': exemplo}
+
+
+def iniciar_intervalos(dados, usuario):
+    """Manda o horário de intervalo no WhatsApp de cada um (em segundo plano, como a confirmação de escala)."""
+    import notificador_whatsapp
+    data, _d = _data(dados.get('data'))
+    quem = dados.get('quem') or 'todos'
+    if quem not in R.QUEM_ENVIO:
+        raise ErroEscala("Escolha para quem enviar: todos, só os fixos ou só os freelancers.")
+    aviso = str(dados.get('aviso') or '').strip()
+    if len(aviso) > R.LIMITE_AVISO_INTERVALO:
+        raise ErroEscala(f"O aviso está grande demais (máximo {R.LIMITE_AVISO_INTERVALO} letras).")
+    _exigir_banco()
+    with _trava_envios:
+        andando = _envio_andando(data, 'intervalos', quem)
+        if andando:
+            return andando
+        com, _sem_int, _sem_tel = _lista_intervalos(data)
+        if not com:
+            raise ErroEscala("Ninguém com intervalo e telefone neste dia. Defina os intervalos antes "
+                             "(🪄 Gerar intervalos automáticos ou ⏱️ Gerenciar intervalos).")
+        lista = R.filtrar_envio(com, quem)
+        if not lista:
+            raise ErroEscala({'fixos': "Nenhum fixo (funcionário) com intervalo e telefone neste dia.",
+                              'freelancers': "Nenhum freelancer com intervalo e telefone neste dia."}.get(quem, "Ninguém para enviar."))
+        job = {'id': uuid.uuid4().hex[:12], 'data': data, 'tipo': 'intervalos', 'quem': quem, 'total': len(lista), 'feitos': 0,
+               'enviados': 0, 'erros': 0, 'terminado': False, 'por': usuario.get('nome'), 'criado': time.time()}
+        _envios[job['id']] = job
+
+    def progresso(enviados, erros):
+        job.update(enviados=enviados, erros=erros, feitos=job['feitos'] + 1)
+
+    def rodar():
+        try:
+            enviados, erros = R.enviar_intervalos_whatsapp(lista, data, notificador_whatsapp.enviar_mensagem_whatsapp,
+                                                          aviso=aviso, progresso=progresso)
+            job.update(enviados=enviados, erros=erros)
+        except Exception as e:
+            logger.exception(f"[GESTÃO] Envio dos intervalos de {data} falhou: {e}")
+            job['erros'] = job['total'] - job['enviados']
+        finally:
+            job['terminado'] = True
+            logger.info(f"[GESTÃO] {job['por']}: intervalos de {data} no WhatsApp ({quem}): {job['enviados']} enviado(s), "
                         f"{job['erros']} falha(s).")
     threading.Thread(target=rodar, daemon=True).start()
     return dict(job)
