@@ -727,13 +727,74 @@ def resumo_pagamentos(itens):
                     'pago': sum((i['Total'] for i in pagos), Decimal('0')), 'pago_qtd': len(pagos)}
 
 
+# [RECIBO COM PRESENTE] o ajuste que veio do valor combinado na 🙋 Vaga (confirmacoes.colocar_na_escala)
+_OBS_VAGA = re.compile(r'^Vaga: valor combinado R\$\s*([\d.]+,\d{2})')
+
+
+def _partes_ajuste(i):
+    """
+    Turno com ajuste POSITIVO: separa o que é 💬 valor combinado na vaga e o que é 🎁 presente (o ajuste dado na tela
+    de Pagamentos ou ao pagar). (combinado, presente, motivo do presente, outras observações).
+    """
+    ajuste = Decimal(str(i['Ajuste'] or 0))
+    partes = [p.strip() for p in str(i.get('Observacao') or '').split(' · ') if p.strip()]
+    combinado = Decimal('0')
+    vaga = next((p for p in partes if p.startswith('Vaga: valor combinado')), None)
+    if vaga:
+        m = _OBS_VAGA.match(vaga)
+        base = Decimal(str(i['Total'] or 0)) - ajuste            # diária + extras, sem ajuste
+        try:
+            combinado = min(ajuste, max(Decimal('0'), para_decimal_br(m.group(1)) - base)) if m else ajuste
+        except ValueError:
+            combinado = ajuste
+        partes = [p for p in partes if p is not vaga]
+    presente = ajuste - combinado
+    motivo = ' · '.join(partes)
+    return combinado, presente, (motivo if presente > 0 else ''), ('' if presente > 0 else motivo)
+
+
+def _bloco_turno_com_presente(i, varios):
+    """[RECIBO COM PRESENTE] turno com ajuste positivo: diária, extras e presente separados (o freelancer entende a conta)."""
+    c = i['Calculo']
+    ent = i['EntradaReal'] or i['EntradaEscala'] or '?'
+    sai = i['SaidaReal'] or i['SaidaEscala'] or '?'
+    feriado = f" 🎉 {i['Feriado']}" if i.get('Feriado') else ""
+    tipo = nome_tipo_dia(c).replace(' (seg a sáb)', '') if c.get('Tipo') else ''
+    horas = fmt_horas(minutos=c['Minutos']) if c.get('Minutos') is not None else fmt_horas(c.get('Horas'))
+    sobre = f"{horas}, proporcional" if c.get('Proporcional') else horas
+    combinado, presente, motivo, outras = _partes_ajuste(i)
+    tem_extra = bool(c.get('MinutosExtras') and c.get('ValorExtras'))     # com hora extra, as horas ficam na linha dela
+    linhas = [f"📅 {fmt_data_br(i['Data'], True)}{feriado} · das {ent} às {sai}",
+              f"• Diária{' ' + tipo if tipo else ''}{'' if tem_extra else f' ({sobre})'}: {fmt_reais(c['ValorDiaria'])}"]
+    if tem_extra:
+        linhas.append(f"• Hora extra ({fmt_horas(minutos=c['MinutosExtras'])}): + {fmt_reais(c['ValorExtras'])}")
+    if combinado > 0:
+        linhas.append(f"• 💬 Valor combinado: + {fmt_reais(combinado)}")
+    if presente > 0:
+        linhas.append(f"• 🎁 Presente: + {fmt_reais(presente)}" + (f" ({motivo})" if motivo else ""))
+    if varios:
+        linhas.append(f"  = {fmt_reais(i['Total'])}" + (" ✅ pago" if i['Pago'] else ""))
+    if outras:
+        linhas.append(f"   obs: {outras}")
+    return linhas
+
+
 def texto_recibo_freelancer(itens, empresa=''):
     """Texto para o WhatsApp com os turnos e o total de UM freelancer."""
     itens = sorted(itens, key=lambda i: (i['Data'] or date.min, i['EntradaEscala'] or ''))
     nome = itens[0]['Nome']
-    linhas = [f"Olá, {nome.split()[0] if nome else ''}! Segue o resumo dos seus turnos:", ""]
-    for i in itens:
+    varios = len(itens) > 1
+    linhas = [f"Olá, {nome.split()[0] if nome else ''}! Segue o resumo {'dos seus turnos' if varios else 'do seu turno'}:", ""]
+    for n, i in enumerate(itens):
         c = i['Calculo'] or {}
+        if c and i['Ajuste'] and i['Ajuste'] > 0 and c.get('ValorDiaria') is not None:
+            # [RECIBO COM PRESENTE] reajuste positivo: a conta separada (diária + extra + presente = total)
+            if n and linhas[-1] != "":
+                linhas.append("")
+            linhas += _bloco_turno_com_presente(i, varios)
+            if varios and n + 1 < len(itens):
+                linhas.append("")
+            continue
         ent = i['EntradaReal'] or i['EntradaEscala'] or '?'
         sai = i['SaidaReal'] or i['SaidaEscala'] or '?'
         extra = f" + {fmt_horas(c['HorasExtras'])} extra" if c and c.get('HorasExtras') else ""
@@ -747,7 +808,9 @@ def texto_recibo_freelancer(itens, empresa=''):
             linhas.append(f"   obs: {i['Observacao']}")
     total = sum((i['Total'] for i in itens), Decimal('0'))
     pendente = sum((i['Total'] for i in itens if not i['Pago']), Decimal('0'))
-    linhas += ["", f"*Total: {fmt_reais(total)}*"]
+    if linhas[-1] != "":
+        linhas.append("")
+    linhas.append(f"*Total pago: {fmt_reais(total)}*" if all(i['Pago'] for i in itens) else f"*Total: {fmt_reais(total)}*")
     if pendente and pendente != total:
         linhas.append(f"A receber: {fmt_reais(pendente)}")
     linhas += ["", "Obrigado pelo trabalho! 🙌"] + ([empresa] if empresa else [])

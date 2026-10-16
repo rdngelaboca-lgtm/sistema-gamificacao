@@ -215,6 +215,7 @@ desmarcado, quem não tem WhatsApp não dá para marcar) e **📱 Mandar para N*
 | 41. 📊 Exportar Excel (baixar) | 🧪 |
 | 42. ⚙️ Valores: diárias longa/curta (tempo e valor seg-sáb / dom-feriado), hora extra, bloco, limite da curta, exemplos | 🧪 |
 | 43. 📅 Feriados: lista por ano, adicionar, nacionais do ano, remover | 🧪 |
+| 44. Recibo com a conta separada para quem teve ajuste **positivo** (PC e Web): "📅 dia · das X às Y / • Diária: R$ / • Hora extra: + R$ / • 🎁 Presente: + R$ (motivo) / Total pago". O valor combinado na 🙋 Vaga aparece como "💬 Valor combinado" (e o que for dado a mais na hora de pagar, como presente). Sem ajuste ou com desconto: a linha de sempre | 🧪 |
 
 **Como fica por dentro:** as regras da escala (conflitos, folga, jornada, intervalo, valor do
 freelancer, recibo) passam para um arquivo só, usado **pelo PC e pela Web** — as duas versões
