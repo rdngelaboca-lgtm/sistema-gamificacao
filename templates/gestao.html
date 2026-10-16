@@ -28,27 +28,33 @@
   .aviso-int { display: block; margin-top: 10px; }
   .aviso-int textarea { width: 100%; margin-top: 4px; font: inherit; }
   .wpp-exemplo { white-space: pre-wrap; background: #e7f6e7; border-radius: 8px; padding: 8px 10px; margin-top: 6px; font-size: 13px; }
-  /* [IMPRIMIR] escala para o mural da loja (só aparece no papel) */
+  /* [IMPRIMIR] escala para o mural da loja (só aparece no papel). Tamanhos em "em": a letra da folha inteira diminui
+     sozinha até caber numa folha A4 (ajustarFolha). */
   .imp-opcoes { display: grid; gap: 8px; margin: 6px 0 10px; }
-  #impressao { display: none; }
+  #imp-folha { margin-top: 8px; font-weight: 700; }
+  #impressao { display: none; color: #000; background: #fff; font: 12pt/1.22 Arial, Helvetica, sans-serif; width: 190mm; }
+  #impressao.medindo { display: block; position: absolute; left: -10000px; top: 0; visibility: hidden; }
+  #impressao .imp-cab { display: flex; justify-content: space-between; align-items: baseline; gap: 1em;
+    border-bottom: 2px solid #000; padding-bottom: .2em; font-size: 1.25em; }
+  #impressao .imp-quando { font-size: .62em; white-space: nowrap; }
+  #impressao h2 { font-size: 1.12em; margin: .55em 0 .2em; }
+  #impressao table { width: 100%; border-collapse: collapse; }
+  #impressao th, #impressao td { border: 1px solid #444; padding: .14em .4em; text-align: left; vertical-align: top; }
+  #impressao th { background: #e6e6e6; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  #impressao tr.imp-grupo td { background: #f1f1f1; font-weight: 700; text-transform: uppercase; font-size: .86em;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  #impressao .h { white-space: nowrap; width: 1%; }
+  #impressao tr { break-inside: avoid; }
+  #impressao .imp-int { display: flex; gap: .7em; align-items: flex-start; }
+  #impressao .imp-int table { flex: 1; font-size: 1.08em; }        /* a ordem dos intervalos é lida de longe, no mural */
+  #impressao .imp-sem { margin-top: .25em; font-size: .85em; }
+  #impressao .imp-aviso { margin-top: .6em; border: 2px solid #000; padding: .35em .55em; font-weight: 700; font-size: .92em;
+    break-inside: avoid; }
   @media print {
     @page { size: A4 portrait; margin: 10mm; }
-    body > *:not(#impressao) { display: none !important; }
     html, body { background: #fff !important; }
-    #impressao { display: block !important; color: #000; font: 11.5pt/1.3 Arial, Helvetica, sans-serif; }
-    #impressao .imp-cab { display: flex; justify-content: space-between; align-items: baseline; border-bottom: 2px solid #000;
-      padding-bottom: 4pt; font-size: 15pt; }
-    #impressao .imp-quando { font-size: 9pt; }
-    #impressao h2 { font-size: 14pt; margin: 10pt 0 4pt; }
-    #impressao h3 { font-size: 12pt; margin: 6pt 0 2pt; text-transform: uppercase; }
-    #impressao table { width: 100%; border-collapse: collapse; }
-    #impressao th, #impressao td { border: 1px solid #444; padding: 3pt 6pt; text-align: left; }
-    #impressao th { background: #e6e6e6; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    #impressao .h { white-space: nowrap; width: 1%; }
-    #impressao .imp-setor, #impressao tr { break-inside: avoid; }
-    #impressao .imp-bloco table { font-size: 13pt; }          /* a ordem dos intervalos é lida de longe, no mural */
-    #impressao .imp-sem { margin-top: 4pt; font-size: 10pt; }
-    #impressao .imp-aviso { margin-top: 10pt; border: 2px solid #000; padding: 6pt 8pt; font-weight: bold; break-inside: avoid; }
+    body > *:not(#impressao) { display: none !important; }
+    #impressao { display: block !important; position: static !important; visibility: visible !important; width: auto; }
   }
   /* [ENVIO POR GRUPO] 📱 para quem enviar */
   .wpp-quem { display: grid; gap: 6px; margin-top: 6px; }
@@ -1357,57 +1363,107 @@ async function imprimirEscala() {
       <label><input type="checkbox" id="imp-aviso" ${marcado('aviso')}> ⚠️ Aviso para respeitar o horário do intervalo</label>
     </div>
     ${sem.length ? `<div class="mini n-aviso">⚠️ Sem intervalo definido: ${esc(sem.join(', '))}</div>` : ''}
+    <div id="imp-folha"></div>
     <div class="mini suave" style="margin-top:6px">${r.turnos.length} pessoa(s) escalada(s). Abre a janela de impressão do navegador
       (dá para escolher a impressora ou salvar em PDF).</div>
     <div class="botoes" style="margin-top:10px"><button class="btn" id="imp-cancelar">Cancelar</button>
       <button class="btn prim" id="imp-ok">🖨️ Imprimir</button></div>`, null, true);
+  const lerOpcoes = () => ({escala: $('#imp-escala').checked, intervalos: $('#imp-intervalos').checked, aviso: $('#imp-aviso').checked});
+  // [A4] mostra antes se cabe numa folha (e com que letra)
+  const previa = () => {
+    const o = lerOpcoes();
+    if (!o.escala && !o.intervalos) { $('#imp-folha').innerHTML = '<span class="n-aviso">Marque o que imprimir.</span>'; return; }
+    const f = ajustarFolha(montarImpressao(r, o));
+    $('#imp-folha').innerHTML = f.cabe
+      ? `<span class="n-ok">📄 Cabe em 1 folha A4</span> <span class="mini suave">(letra ${String(f.fs).replace('.', ',')})</span>`
+      : '<span class="n-aviso">⚠️ Não cabe em 1 folha A4, nem com a letra pequena: desmarque a escala do dia ou a ordem dos ' +
+        'intervalos para caber (ou imprima em mais de uma folha).</span>';
+  };
+  document.querySelectorAll('.imp-opcoes input').forEach(c => c.addEventListener('change', previa));
+  previa();
   $('#imp-cancelar').onclick = fecharModal;
   $('#imp-ok').onclick = () => {
-    op = {escala: $('#imp-escala').checked, intervalos: $('#imp-intervalos').checked, aviso: $('#imp-aviso').checked};
+    op = lerOpcoes();
     if (!op.escala && !op.intervalos) { alert('Marque o que imprimir: a escala do dia e/ou a ordem dos intervalos.'); return; }
     gravarLocal('gestao_imprimir', JSON.stringify(op));
+    const caixa = montarImpressao(r, op), f = ajustarFolha(caixa);
+    if (!f.cabe) {
+      if (!confirm('Não coube em 1 folha A4, nem com a letra pequena.\n\nImprimir em mais de uma folha?\n\n' +
+                   '(Para caber em uma, desmarque a "Escala do dia" ou a "Ordem dos intervalos".)')) return;
+      caixa.style.fontSize = '9pt';          // em várias folhas: letra boa de ler
+    }
     fecharModal();
-    montarImpressao(r, op);
     window.print();
   };
+}
+// [A4] a folha útil é 190 x 277 mm (A4 em pé, margem de 10 mm). Mede a folha montada (fora da tela) e diminui a letra
+// até caber: começa grande (14pt, poucas pessoas) e vai até 7,5pt. Devolve {cabe, fs}.
+const A4_ALTURA_UTIL_PX = 277 * 96 / 25.4 * 0.97;     // 3% de folga para arredondamentos de cada navegador
+function ajustarFolha(caixa) {
+  caixa.classList.add('medindo');
+  let fs = 14;
+  caixa.style.fontSize = fs + 'pt';
+  while (caixa.scrollHeight > A4_ALTURA_UTIL_PX && fs > 7.5) { fs -= 0.25; caixa.style.fontSize = fs + 'pt'; }
+  const cabe = caixa.scrollHeight <= A4_ALTURA_UTIL_PX;
+  caixa.classList.remove('medindo');
+  return {cabe, fs};
+}
+// [A4] nome curto para a lista dos intervalos: 2 primeiros nomes ("ROSANGELA LISBOA DA SILVA" -> "ROSANGELA LISBOA");
+// se ficar igual ao de outra pessoa, o primeiro e o último ("MARIA SILVA" / "MARIA SOUZA"); se ainda bater, o nome todo
+function nomesCurtos(nomes) {
+  const palavras = n => String(n).trim().split(/\s+/).filter((p, i) => i === 0 || !/^(da|de|do|das|dos|e)$/i.test(p));
+  const formas = [p => p.slice(0, 2).join(' '), p => (p.length > 1 ? [p[0], p[p.length - 1]] : p).join(' ')];
+  const unicos = [...new Set(nomes)], res = {};
+  for (const n of unicos) {
+    res[n] = n;
+    for (const f of formas) {
+      const c = f(palavras(n));
+      if (unicos.every(m => m === n || f(palavras(m)) !== c)) { res[n] = c; break; }
+    }
+  }
+  return res;
 }
 function montarImpressao(r, op) {
   let caixa = document.getElementById('impressao');
   if (!caixa) { caixa = document.createElement('div'); caixa.id = 'impressao'; document.body.appendChild(caixa); }
   const min = h => { const [a, b] = String(h || '').split(':').map(Number); return a * 60 + b; };
-  const agora = new Date();
+  const agora = new Date(), dd = n => String(n).padStart(2, '0');
   const partes = [`<div class="imp-cab"><div><b>Gela Boca</b> · Escala de ${esc(r.dia)}/${esc(r.data.slice(0, 4))}</div>
-    <div class="imp-quando">impressa em ${String(agora.getDate()).padStart(2, '0')}/${String(agora.getMonth() + 1).padStart(2, '0')}
-      às ${String(agora.getHours()).padStart(2, '0')}:${String(agora.getMinutes()).padStart(2, '0')}</div></div>`];
+    <div class="imp-quando">impressa em ${dd(agora.getDate())}/${dd(agora.getMonth() + 1)} às ${dd(agora.getHours())}:${dd(agora.getMinutes())}</div></div>`];
   if (op.escala) {
-    const setores = [];
+    // [A4] uma tabela só, com o setor numa linha (antes: um título e um cabeçalho de tabela por setor)
+    let setor = null;
+    const linhas = [];
     for (const t of r.turnos) {
-      let s = setores.find(x => x.nome === t.setor);
-      if (!s) setores.push(s = {nome: t.setor, turnos: []});
-      s.turnos.push(t);
+      if (t.setor !== setor) { setor = t.setor; linhas.push(`<tr class="imp-grupo"><td colspan="5">${esc(setor)}</td></tr>`); }
+      linhas.push(`<tr><td>${esc(t.posicao)}</td><td><b>${esc(t.nome)}</b></td><td class="h">${esc(t.entrada)}</td>
+        <td class="h">${esc(t.saida)}</td><td class="h">${t.definido ? esc(`${t.int_ini} às ${t.int_fim}`) : '—'}</td></tr>`);
     }
-    partes.push(`<h2>🗓️ Escala do dia</h2>` + setores.map(s => `<div class="imp-setor"><h3>${esc(s.nome)}</h3>
-      <table><thead><tr><th>Posição</th><th>Nome</th><th class="h">Entrada</th><th class="h">Saída</th><th class="h">Intervalo</th></tr></thead>
-      <tbody>${s.turnos.map(t => `<tr><td>${esc(t.posicao)}</td><td><b>${esc(t.nome)}</b></td><td class="h">${esc(t.entrada)}</td>
-        <td class="h">${esc(t.saida)}</td><td class="h">${t.definido ? esc(`${t.int_ini} às ${t.int_fim}`) : '—'}</td></tr>`).join('')}</tbody>
-      </table></div>`).join(''));
+    partes.push(`<h2>🗓️ Escala do dia</h2><table><thead><tr><th>Posição</th><th>Nome</th><th class="h">Entrada</th>
+      <th class="h">Saída</th><th class="h">Intervalo</th></tr></thead><tbody>${linhas.join('')}</tbody></table>`);
   }
   if (op.intervalos) {
     // turno que vira a meia-noite: o intervalo depois das 00:00 fica no fim da lista
     const ordem = r.turnos.filter(t => t.definido)
       .map(t => Object.assign({k: min(t.int_ini) + (min(t.int_ini) < min(t.entrada) ? 1440 : 0)}, t)).sort((a, b) => a.k - b.k);
     const sem = r.turnos.filter(t => !t.definido).map(t => t.nome);
-    partes.push(`<div class="imp-bloco"><h2>☕ Ordem dos intervalos</h2>
-      <table><thead><tr><th class="h">Intervalo</th><th>Nome</th><th>Setor · Posição</th></tr></thead>
-      <tbody>${ordem.map(t => `<tr><td class="h"><b>${esc(t.int_ini)} às ${esc(t.int_fim)}</b></td><td><b>${esc(t.nome)}</b></td>
-        <td>${esc(t.setor)} · ${esc(t.posicao)}</td></tr>`).join('') || '<tr><td colspan="3">Nenhum intervalo definido.</td></tr>'}</tbody></table>
-      ${sem.length ? `<div class="imp-sem">Sem intervalo definido: ${esc(sem.join(', '))}</div>` : ''}</div>`);
+    // [A4] muita gente: a lista vai em 2 colunas (lê de cima para baixo, primeiro a da esquerda), com o nome curto
+    // numa linha só ("ROSANGELA LISBOA DA SILVA" -> "ROSANGELA LISBOA"; o nome completo está na escala do dia)
+    const duas = ordem.length > 8, meio = Math.ceil(ordem.length / 2);
+    const curtos = duas ? nomesCurtos(ordem.map(t => t.nome)) : {}, curto = n => curtos[n] || n;
+    const tabela = lista => `<table><thead><tr><th class="h">Intervalo</th><th>Nome</th><th>${duas ? 'Setor' : 'Setor · Posição'}</th></tr></thead>
+      <tbody>${lista.map(t => `<tr><td class="h"><b>${esc(t.int_ini)} às ${esc(t.int_fim)}</b></td><td class="${duas && curto(t.nome).length <= 24 ? 'h' : ''}"><b>${esc(curto(t.nome))}</b></td>
+        <td>${esc(t.setor)}${duas ? '' : ` · ${esc(t.posicao)}`}</td></tr>`).join('') || '<tr><td colspan="3">Nenhum intervalo definido.</td></tr>'}</tbody></table>`;
+    partes.push(`<h2>☕ Ordem dos intervalos</h2>
+      <div class="imp-int">${duas ? tabela(ordem.slice(0, meio)) + tabela(ordem.slice(meio)) : tabela(ordem)}</div>
+      ${sem.length ? `<div class="imp-sem">Sem intervalo definido: ${esc(sem.join(', '))}</div>` : ''}`);
   }
   if (op.aviso) partes.push(`<div class="imp-aviso">${esc(r.aviso)}</div>`);
   caixa.innerHTML = partes.join('');
+  return caixa;
 }
 // depois de imprimir, a folha some da página
-addEventListener('afterprint', () => { const c = document.getElementById('impressao'); if (c) c.innerHTML = ''; });
+addEventListener('afterprint', () => { const c = document.getElementById('impressao'); if (c) { c.innerHTML = ''; c.style.fontSize = ''; } });
 
 // ------------------------------------------------------------------ [VAGAS] 🙋 vagas para freelancers
 // Cria a vaga, manda no grupo dos freelancers e/ou no WhatsApp de cada um (com o link para confirmar),
