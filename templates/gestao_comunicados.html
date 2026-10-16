@@ -1,0 +1,235 @@
+{% extends 'gestao_base.html' %}
+{% block titulo %}Comunicados{% endblock %}
+{% block estilo %}
+  .area { padding: 12px 16px 70px; max-width: 900px; display: grid; gap: 12px; }
+  .explica { font-size: 13px; color: var(--suave); line-height: 1.45; }
+  .alerta { background: var(--laranja-claro); color: #7a3a10; border-radius: 10px; padding: 9px 12px; font-size: 14px; font-weight: 600; }
+  .lista-com { display: grid; gap: 10px; }
+  .com { text-align: left; width: 100%; background: #fff; border: 1px solid var(--linha); border-radius: 12px; padding: 12px 14px;
+    display: grid; gap: 8px; cursor: pointer; font: inherit; color: inherit; }
+  .com:hover { border-color: var(--verde); }
+  .com .cab { display: flex; gap: 8px; align-items: baseline; justify-content: space-between; flex-wrap: wrap; }
+  .com .tit { font-weight: 800; font-size: 16px; overflow-wrap: anywhere; }
+  .com .quando { font-size: 12px; color: var(--suave); white-space: nowrap; }
+  .tag { font-size: 12px; font-weight: 700; border-radius: 10px; padding: 2px 8px; background: var(--fundo); color: var(--suave); white-space: nowrap; }
+  .tag.fim { background: #eceff1; }
+  .barra-prog { display: flex; height: 10px; border-radius: 6px; overflow: hidden; background: var(--linha2); }
+  .barra-prog span { display: block; height: 100%; }
+  .p-lido { background: var(--ok); } .p-enviado { background: #64b5f6; } .p-aguardando { background: #c5ccc9; }
+  .contas { display: flex; gap: 6px 12px; flex-wrap: wrap; font-size: 13px; }
+  .contas b { font-variant-numeric: tabular-nums; }
+  .vazio-com { text-align: center; color: var(--suave); padding: 30px 10px; background: #fff; border: 1px dashed var(--linha); border-radius: 12px; }
+  /* novo comunicado */
+  .campo { display: grid; gap: 4px; margin-bottom: 10px; }
+  .campo > span { font-weight: 700; font-size: 14px; }
+  .campo input, .campo textarea { font: inherit; font-size: 15px; border: 1px solid var(--linha); border-radius: 10px; padding: 8px 10px; width: 100%; }
+  .campo textarea { min-height: 120px; resize: vertical; }
+  .conta-letras { font-size: 12px; color: var(--suave); text-align: right; }
+  .grade2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .rapidos { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+  .rapidos .btn { font-size: 13px; padding: 5px 10px; }
+  .pessoas { border: 1px solid var(--linha); border-radius: 10px; max-height: 300px; overflow: auto; }
+  .pessoa { display: flex; gap: 10px; align-items: center; padding: 7px 10px; border-bottom: 1px solid var(--linha2); cursor: pointer; }
+  .pessoa:last-child { border-bottom: 0; }
+  .pessoa input { width: 18px; height: 18px; flex: none; }
+  .pessoa .nm { font-weight: 700; }
+  .pessoa .info { font-size: 12px; color: var(--suave); }
+  .pessoa .info.agora { color: var(--ok); font-weight: 700; }
+  .pessoa.sem { opacity: .55; cursor: default; }
+  .resumo-sel { font-size: 13px; margin: 6px 0 10px; font-weight: 600; }
+  .previa-wpp { white-space: pre-wrap; background: #e7f6e7; border-radius: 10px; padding: 10px 12px; font-size: 14px; overflow-wrap: anywhere; }
+  /* detalhe */
+  .texto-com { white-space: pre-wrap; background: var(--fundo); border-radius: 10px; padding: 10px 12px; font-size: 14px; overflow-wrap: anywhere; }
+  .filtros { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0 6px; }
+  .filtros .btn.sel { background: var(--verde-claro); border-color: var(--verde); }
+  .quem { display: grid; gap: 0; border: 1px solid var(--linha); border-radius: 10px; overflow: hidden; }
+  .quem .lin { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 8px 10px;
+    border-bottom: 1px solid var(--linha2); }
+  .quem .lin:last-child { border-bottom: 0; }
+  .quem .ic { font-size: 18px; text-align: center; }
+  .quem .nm { font-weight: 700; }
+  .quem .sit { font-size: 13px; color: var(--suave); }
+  .acoes-com { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  @media (max-width: 700px) { .area { padding-left: 10px; padding-right: 10px; } .grade2 { grid-template-columns: 1fr; } }
+{% endblock %}
+{% block conteudo %}
+  <section class="barra"><div class="linha"><b>📨 Comunicados para a equipe</b>
+    <button class="btn prim" id="btn-novo">✍️ Novo comunicado</button>
+    <button class="btn ico" id="atualizar" title="Atualizar">🔄</button></div></section>
+  <main class="area">
+    <div class="explica">Cada pessoa recebe o comunicado no WhatsApp <b>só durante o turno dela</b> (pela escala). Na folga ou fora do
+      horário ele fica guardado e vai no próximo turno. A mensagem leva um link com o botão <b>✅ Li e estou ciente</b>: aqui você vê
+      quem leu, quem só recebeu e quem ainda espera o turno.</div>
+    <div class="alerta" id="aviso-endereco" hidden>⚠️ Falta o endereço da internet (📢 Clientes › ⚙️ Ajustes › QR do balcão): sem ele
+      o link de confirmação de leitura não abre no celular, e o comunicado não pode ser criado.</div>
+    <div class="lista-com" id="lista"><div class="vazio-com">Carregando…</div></div>
+  </main>
+{% endblock %}
+{% block script %}
+// [COMUNICADOS] comunicados para fixos e freelancers: WhatsApp só no turno de cada um, com confirmação de leitura pelo link
+const S = {lista: [], pessoas: null, det: null, filtro: 'todos'};
+function aoEntrar() { carregar(); }
+$('#atualizar').onclick = () => carregar();
+$('#btn-novo').onclick = () => novo();
+
+async function carregar() {
+  try {
+    const r = await api('GET', '/api/gestao/comunicados');
+    S.lista = r.comunicados;
+    desenharLista();
+  } catch (e) { if (e.status !== 401 && e.status !== 403) falhou(e); }
+}
+function barra(c) {
+  const t = c.total || 1, pct = n => (100 * n / t).toFixed(1) + '%';
+  return `<div class="barra-prog" title="✅ leram · 📤 receberam · ⏳ esperam o turno"><span class="p-lido" style="width:${pct(c.lido)}"></span>
+    <span class="p-enviado" style="width:${pct(c.enviado)}"></span><span class="p-aguardando" style="width:${pct(c.aguardando + c.falhou)}"></span></div>`;
+}
+function contas(c) {
+  const p = [[`✅ <b>${c.lido}</b> de ${c.total} leram`, true], [`📤 <b>${c.enviado}</b> receberam e não confirmaram`, c.enviado],
+             [`⏳ <b>${c.aguardando}</b> esperam o turno`, c.aguardando], [`⚠️ <b>${c.falhou}</b> falharam`, c.falhou],
+             [`⌛ <b>${c.expirado}</b> expiraram`, c.expirado], [`📵 <b>${c.sem_telefone}</b> sem WhatsApp`, c.sem_telefone],
+             [`⛔ <b>${c.encerrado}</b> não foram`, c.encerrado]];
+  return `<div class="contas">${p.filter(x => x[1]).map(x => `<span>${x[0]}</span>`).join('')}</div>`;
+}
+function desenharLista() {
+  $('#lista').innerHTML = S.lista.map(c => `<button class="com" data-com="${c.id}">
+      <div class="cab"><span class="tit">${esc(c.titulo)}</span><span class="quando">${esc(c.criado)}${c.por ? ' · ' + esc(c.por) : ''}</span></div>
+      ${barra(c.contagem)}${contas(c.contagem)}
+      <div class="contas">${c.encerrado ? '<span class="tag fim">⛔ encerrado</span>' : c.vencido ? '<span class="tag fim">⌛ validade acabou</span>'
+        : `<span class="tag">vale até ${esc(c.valido_ate)}</span>`}${c.pontos ? `<span class="tag">⭐ ${c.pontos} pontos</span>` : ''}</div>
+    </button>`).join('')
+    || '<div class="vazio-com">Nenhum comunicado ainda. Toque em ✍️ Novo comunicado.</div>';
+}
+document.addEventListener('click', e => { const b = e.target.closest('[data-com]'); if (b) abrir(+b.dataset.com); });
+
+// ------------------------------------------------------------------ novo comunicado
+async function novo() {
+  let r;
+  try { r = await api('GET', '/api/gestao/comunicados/pessoas'); } catch (e) { return falhou(e); }
+  $('#aviso-endereco').hidden = !r.link_local;
+  if (r.link_local) { alert('Falta o endereço da internet (📢 Clientes › ⚙️ Ajustes › QR do balcão): sem ele o link de confirmação não abre no celular.'); return; }
+  S.pessoas = r.pessoas;
+  const marcados = new Set(r.pessoas.filter(p => p.ativo && p.whatsapp).map(p => p.id));
+  let todos = false;
+  abrirModal(`<h3>✍️ Novo comunicado</h3>
+    <label class="campo"><span>Título</span><input id="c-titulo" maxlength="120" placeholder="Ex.: Uniforme novo a partir de segunda"></label>
+    <label class="campo"><span>Texto</span><textarea id="c-texto" maxlength="2000" placeholder="Escreva o comunicado…"></textarea>
+      <span class="conta-letras" id="c-conta">0 / 2000</span></label>
+    <div class="campo"><span>Para quem?</span>
+      <div class="rapidos"><button class="btn" data-rap="todos">👥 Todos</button><button class="btn" data-rap="func">👔 Só fixos</button>
+        <button class="btn" data-rap="free">🧑‍🍳 Só freelancers</button><button class="btn" data-rap="nenhum">Ninguém</button></div>
+      <input id="c-busca" placeholder="Procurar pelo nome…" autocomplete="off" style="font:inherit;border:1px solid var(--linha);border-radius:10px;padding:7px 10px">
+      <label class="mini suave" style="display:flex;gap:6px;align-items:center;margin:4px 0"><input type="checkbox" id="c-todos-cad">
+        Mostrar também quem não trabalhou nem está na escala nos últimos/próximos 30 dias</label>
+      <div class="pessoas" id="c-pessoas"></div>
+      <div class="resumo-sel" id="c-resumo"></div></div>
+    <div class="grade2">
+      <label class="campo"><span>Vale até</span><input type="date" id="c-valido" value="${esc(r.validade_padrao)}" max="${esc(r.validade_max)}">
+        <span class="mini suave">Quem não trabalhar até lá não recebe (⌛ expira).</span></label>
+      <label class="campo"><span>⭐ Pontos na gamificação (fixos)</span><input type="number" id="c-pontos" min="0" max="100" value="0">
+        <span class="mini suave">Ganha quem confirmar a leitura. 0 = sem pontos.</span></label>
+    </div>
+    <details class="campo"><summary>👀 Ver como fica a mensagem</summary><div class="previa-wpp" id="c-previa"></div></details>
+    <div class="botoes"><button class="btn" id="c-cancelar">Cancelar</button><button class="btn prim" id="c-criar">📨 Criar e enviar no turno de cada um</button></div>`);
+  const visiveis = () => S.pessoas.filter(p => (todos || p.ativo || marcados.has(p.id)) &&
+    (!$('#c-busca').value.trim() || p.nome.toLowerCase().includes($('#c-busca').value.trim().toLowerCase())));
+  const desenhar = () => {
+    $('#c-pessoas').innerHTML = visiveis().map(p => `<label class="pessoa ${p.whatsapp ? '' : 'sem'}">
+        <input type="checkbox" data-p="${esc(p.id)}" ${marcados.has(p.id) ? 'checked' : ''} ${p.whatsapp ? '' : 'disabled'}>
+        <span><span class="nm">${esc(p.nome)}</span> <span class="tag">${esc(p.tipo_nome)}</span>
+          <div class="info ${p.agora ? 'agora' : ''}">${!p.whatsapp ? '📵 sem WhatsApp no cadastro' : p.agora ? '🟢 no turno agora: recebe na hora'
+            : p.proximo ? 'próximo turno: ' + esc(p.proximo) : 'sem turno marcado na escala'}</div></span></label>`).join('')
+      || '<div class="mini suave" style="padding:10px">Ninguém com esse nome.</div>';
+    const sel = S.pessoas.filter(p => marcados.has(p.id)), ja = sel.filter(p => p.agora).length;
+    $('#c-resumo').textContent = sel.length
+      ? `${sel.length} pessoa(s) · ${ja} no turno agora (recebem na hora) · ${sel.length - ja} no próximo turno de cada um`
+      : 'Ninguém escolhido.';
+  };
+  const previa = () => {
+    const t = $('#c-titulo').value.trim() || 'Título', x = $('#c-texto').value.trim() || 'Texto do comunicado';
+    $('#c-previa').innerHTML = esc(`📢 *Comunicado*\n*${t}*\n\n${x}\n\n👉 *Toque para confirmar que leu:*\n(link)`).replace(/\*([^*\n]+)\*/g, '<b>$1</b>');
+    $('#c-conta').textContent = `${$('#c-texto').value.length} / 2000`;
+  };
+  $('#c-pessoas').addEventListener('change', e => {
+    const c = e.target.closest('[data-p]'); if (!c) return;
+    if (c.checked) marcados.add(c.dataset.p); else marcados.delete(c.dataset.p);
+    desenhar();
+  });
+  document.querySelectorAll('[data-rap]').forEach(b => b.onclick = () => {
+    marcados.clear();
+    for (const p of S.pessoas) if (p.whatsapp && (todos || p.ativo) && (b.dataset.rap === 'todos' || b.dataset.rap === p.tipo)) marcados.add(p.id);
+    desenhar();
+  });
+  $('#c-busca').addEventListener('input', desenhar);
+  $('#c-todos-cad').addEventListener('change', e => { todos = e.target.checked; desenhar(); });
+  $('#c-titulo').addEventListener('input', previa); $('#c-texto').addEventListener('input', previa);
+  $('#c-cancelar').onclick = fecharModal;
+  $('#c-criar').onclick = async () => {
+    const corpo = {titulo: $('#c-titulo').value, texto: $('#c-texto').value, valido_ate: $('#c-valido').value,
+                   pontos: +$('#c-pontos').value || 0, pessoas: [...marcados]};
+    if (!corpo.titulo.trim()) { alert('Escreva o título.'); return $('#c-titulo').focus(); }
+    if (!corpo.texto.trim()) { alert('Escreva o texto do comunicado.'); return $('#c-texto').focus(); }
+    if (!corpo.pessoas.length) { alert('Escolha quem vai receber.'); return; }
+    const b = $('#c-criar'); b.disabled = true;
+    try {
+      const r2 = await api('POST', '/api/gestao/comunicados', corpo);
+      fecharModal(); status(r2.mensagem); await carregar();
+    } catch (e) { falhou(e); }
+    b.disabled = false;
+  };
+  desenhar(); previa(); $('#c-titulo').focus();
+}
+
+// ------------------------------------------------------------------ detalhe: quem leu
+async function abrir(id) {
+  let d;
+  try { d = await api('GET', `/api/gestao/comunicados/${id}`); } catch (e) { return falhou(e); }
+  S.det = d;
+  const c = d.contagem;
+  abrirModal(`<h3>📨 ${esc(d.titulo)}</h3>
+    <div class="mini suave">Criado ${esc(d.criado)}${d.por ? ' por ' + esc(d.por) : ''} · vale até ${esc(d.valido_ate)}${d.pontos ? ` · ⭐ ${d.pontos} pontos (fixos)` : ''}${d.encerrado ? ' · ⛔ encerrado' : ''}</div>
+    <details style="margin:8px 0"><summary class="mini">Ver o texto</summary><div class="texto-com">${esc(d.texto)}</div></details>
+    ${barra(c)}${contas(c)}
+    <div class="filtros"><button class="btn" data-f="todos">Todos (${c.total})</button><button class="btn" data-f="leram">✅ Leram (${c.lido})</button>
+      <button class="btn" data-f="faltam">⏳ Faltam (${c.total - c.lido})</button></div>
+    <div class="quem" id="d-quem"></div>
+    ${d.encerrado ? '' : `<div class="acoes-com">
+      ${c.enviado ? '<button class="btn" id="d-lembrar">🔔 Lembrar quem não leu</button>' : ''}
+      ${d.pessoas.some(p => p.pode_agora) ? '<button class="btn" id="d-agora">📤 Mandar agora para quem espera</button>' : ''}
+      <button class="btn perigo" id="d-encerrar">⛔ Encerrar</button>
+      <button class="btn ico" id="d-atualizar" title="Atualizar">🔄</button></div>`}`);
+  const desenhar = () => {
+    document.querySelectorAll('[data-f]').forEach(b => b.classList.toggle('sel', b.dataset.f === S.filtro));
+    const lista = d.pessoas.filter(p => S.filtro === 'todos' || (S.filtro === 'leram' ? p.status === 'lido' : p.status !== 'lido'));
+    $('#d-quem').innerHTML = lista.map(p => `<div class="lin"><span class="ic">${p.icone}</span>
+        <span><span class="nm">${esc(p.nome)}</span> <span class="tag">${esc(p.tipo_nome)}</span><div class="sit">${esc(p.situacao)}</div></span>
+        ${p.pode_agora ? `<button class="btn" data-agora="${p.id}" title="Manda já, sem esperar o turno">📤 Agora</button>` : '<span></span>'}</div>`).join('')
+      || '<div class="mini suave" style="padding:10px">Ninguém aqui.</div>';
+  };
+  document.querySelectorAll('[data-f]').forEach(b => b.onclick = () => { S.filtro = b.dataset.f; desenhar(); });
+  $('#d-quem').addEventListener('click', e => {
+    const b = e.target.closest('[data-agora]');
+    if (b) mandarAgora(d, [+b.dataset.agora]);
+  });
+  if ($('#d-lembrar')) $('#d-lembrar').onclick = () => fazer(d.id, 'lembrar', {}, null);
+  if ($('#d-agora')) $('#d-agora').onclick = () => mandarAgora(d, []);
+  if ($('#d-encerrar')) $('#d-encerrar').onclick = () => fazer(d.id, 'encerrar', {},
+    'Encerrar este comunicado?\n\nQuem ainda espera o turno não vai mais receber. Quem já recebeu continua podendo confirmar a leitura.');
+  if ($('#d-atualizar')) $('#d-atualizar').onclick = () => abrir(d.id);
+  desenhar();
+}
+function mandarAgora(d, ids) {
+  const nomes = ids.length ? d.pessoas.filter(p => ids.includes(p.id)).map(p => p.nome) : d.pessoas.filter(p => p.pode_agora).map(p => p.nome);
+  fazer(d.id, 'agora', {ids}, `Mandar AGORA, sem esperar o turno?\n\n${nomes.slice(0, 8).join(', ')}${nomes.length > 8 ? '…' : ''}\n\n` +
+        'A mensagem chega fora do horário de trabalho de quem não está na loja.');
+}
+async function fazer(id, acao, corpo, pergunta) {
+  if (pergunta && !confirm(pergunta)) return;
+  try {
+    const r = await api('POST', `/api/gestao/comunicados/${id}/${acao}`, corpo);
+    status(r.mensagem);
+    await carregar();
+    setTimeout(() => abrir(id), acao === 'encerrar' ? 0 : 1500);      // dá tempo de sair a mensagem
+  } catch (e) { falhou(e); }
+}
+{% endblock %}

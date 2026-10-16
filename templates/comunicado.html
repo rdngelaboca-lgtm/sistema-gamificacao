@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0E6B63">
+<meta name="robots" content="noindex">
+<meta name="referrer" content="no-referrer">
+<title>Gela Boca · Comunicado</title>
+<!-- [COMUNICADOS] Página PÚBLICA do link do WhatsApp: /comunicado/<código>. Mostra só o comunicado daquele código
+     e o botão "✅ Li e estou ciente". Nada da Gestão aparece aqui. -->
+<style>
+  :root { --verde: #0E6B63; --verde-esc: #0B564F; --verde-claro: #DDEFEC; --texto: #16201F; --suave: #55625F; --linha: #DCE3E1;
+    --erro: #c62828; }
+  * { box-sizing: border-box; }
+  html { background: #F3F6F5; }
+  body { margin: 0; min-height: 100vh; background: linear-gradient(180deg, #DDEFEC 0%, #F3F6F5 260px) no-repeat; color: var(--texto);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 16px; }
+  main { max-width: 520px; margin: 0 auto; padding: 22px 16px 40px; }
+  .topo { text-align: center; margin-bottom: 14px; }
+  .topo .marca { font-size: 30px; font-weight: 800; color: var(--verde-esc); }
+  .cartao { background: #fff; border: 1px solid var(--linha); border-radius: 18px; padding: 18px; display: grid; gap: 14px; box-shadow: 0 6px 20px #0E6B6314; }
+  .ola { font-size: 15px; color: var(--suave); }
+  h1 { font-size: 22px; margin: 0; line-height: 1.25; }
+  .texto { white-space: pre-wrap; line-height: 1.5; font-size: 17px; padding: 14px; background: #F7FAF9; border-radius: 12px;
+    border: 1px solid var(--linha); overflow-wrap: anywhere; }
+  .situacao { border-radius: 12px; padding: 12px 14px; font-weight: 700; line-height: 1.35; background: var(--verde-claro); color: var(--verde-esc); }
+  button { font: inherit; font-weight: 800; font-size: 19px; border-radius: 14px; padding: 16px; cursor: pointer; border: 0;
+    background: var(--verde); color: #fff; width: 100%; }
+  button:focus-visible { outline: 2px solid var(--verde-esc); outline-offset: 2px; }
+  button[disabled] { opacity: .6; cursor: default; }
+  .mini { font-size: 13px; color: var(--suave); }
+  #erro { color: var(--erro); font-weight: 700; min-height: 1.2em; }
+  .grande { font-size: 54px; text-align: center; line-height: 1; }
+  .carregando { text-align: center; color: var(--suave); padding: 30px 0; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <div class="topo"><div class="marca" id="marca">🍦 Gela Boca</div></div>
+  <div class="cartao">
+    <div class="carregando" id="carregando">Carregando…</div>
+    <div class="grande" id="emoji" hidden></div>
+    <div class="ola" id="ola" hidden></div>
+    <h1 id="titulo" hidden></h1>
+    <div class="texto" id="texto" hidden></div>
+    <div class="situacao" id="situacao" hidden></div>
+    <button id="ciente" type="button" hidden>✅ Li e estou ciente</button>
+    <div class="mini" id="dica" hidden>Toque no botão para a gestão saber que você leu.</div>
+    <div id="erro" role="alert"></div>
+  </div>
+</main>
+<script>
+'use strict';
+const $ = s => document.querySelector(s);
+const TOKEN = location.pathname.split('/').filter(Boolean)[1] || '';
+const URL_API = `/api/comunicado/${encodeURIComponent(TOKEN)}`;
+
+async function chamar(metodo) {
+  let r;
+  try { r = await fetch(URL_API, {method: metodo, credentials: 'omit', cache: 'no-store'}); }
+  catch (e) { throw new Error('Sem internet. Tente de novo.'); }
+  let d = {};
+  try { d = await r.json(); } catch (e) {}
+  if (!r.ok) throw new Error(d.erro || 'Não deu certo. Tente de novo.');
+  return d;
+}
+function desenhar(d) {
+  $('#carregando').hidden = true;
+  $('#marca').textContent = '🍦 ' + (d.empresa || 'Gela Boca');
+  $('#ola').hidden = false; $('#ola').textContent = `Olá${d.nome ? ', ' + d.nome : ''}! Comunicado de ${d.data}:`;
+  $('#titulo').hidden = false; $('#titulo').textContent = d.titulo;
+  $('#texto').hidden = false; $('#texto').textContent = d.texto;
+  $('#ciente').hidden = d.lido; $('#dica').hidden = d.lido;
+  $('#situacao').hidden = !d.lido;
+  if (d.lido) $('#situacao').textContent = `✅ Leitura confirmada (${d.lido_em}). Obrigado!` + (d.pontos ? ` +${d.pontos} pontos na gamificação.` : '');
+}
+async function carregar() {
+  try { desenhar(await chamar('GET')); }
+  catch (e) { $('#carregando').hidden = true; $('#emoji').hidden = false; $('#emoji').textContent = '🔗'; $('#erro').textContent = e.message; }
+}
+$('#ciente').onclick = async () => {
+  $('#erro').textContent = ''; $('#ciente').disabled = true;
+  try { desenhar(await chamar('POST')); $('#emoji').hidden = false; $('#emoji').textContent = '🙌'; }
+  catch (e) { $('#erro').textContent = e.message; }
+  $('#ciente').disabled = false;
+};
+carregar();
+</script>
+</body>
+</html>

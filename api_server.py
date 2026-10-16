@@ -188,6 +188,8 @@ CAMINHOS_LIBERADOS_NA_INTERNET += ('/clientes/cadastro', '/api/clientes/cadastro
 # [PRESENÇA] O link da mensagem da escala e da vaga (✅ Confirmo / ❌ Não posso): só a página do link, que
 # não abre sem o código secreto da mensagem. Nada mais da escala fica aberto.
 CAMINHOS_LIBERADOS_NA_INTERNET += ('/confirmar/', '/vaga/', '/api/presenca/')
+# [COMUNICADOS] O link do comunicado (✅ Li e estou ciente): só a página do link, que não abre sem o código secreto.
+CAMINHOS_LIBERADOS_NA_INTERNET += ('/comunicado/', '/api/comunicado/')
 
 
 @app.before_request
@@ -2972,6 +2974,74 @@ def api_presenca_vaga(token):
     dados = ler_json() or {}
     return _resposta_presenca(lambda: confirmacoes.responder_vaga(token, dados.get('resposta'), dados.get('telefone'),
                                                                   _ip_do_cliente()))
+
+
+# ---------------- [COMUNICADOS] 📨 comunicados para a equipe (WhatsApp no turno de cada um) ----------------
+def _resposta_comunicados(funcao):
+    import comunicados_equipe
+    try:
+        return jsonify(funcao()), 200
+    except comunicados_equipe.ErroComunicado as e:
+        return jsonify({"erro": str(e)}), e.status
+    except Exception as e:
+        logger.exception(f"Erro em comunicados ({request.path}): {e}")
+        return jsonify({"erro": "Erro no servidor. Tente de novo; se continuar, veja o log."}), 500
+
+
+@app.route('/gestao/comunicados')
+def pagina_gestao_comunicados():
+    return _pagina_gestao('gestao_comunicados.html', 'comunicados')
+
+
+@app.route('/api/gestao/comunicados', methods=['GET', 'POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_comunicados(usuario):
+    import comunicados_equipe
+    if request.method == 'GET':
+        return _resposta_comunicados(comunicados_equipe.listar)
+    dados = ler_json() or {}
+    return _resposta_comunicados(lambda: comunicados_equipe.criar(dados, usuario))
+
+
+@app.route('/api/gestao/comunicados/pessoas', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_comunicados_pessoas(usuario):
+    import comunicados_equipe
+    return _resposta_comunicados(comunicados_equipe.pessoas)
+
+
+@app.route('/api/gestao/comunicados/<int:comunicado_id>', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_comunicado(usuario, comunicado_id):
+    import comunicados_equipe
+    return _resposta_comunicados(lambda: comunicados_equipe.detalhe(comunicado_id))
+
+
+@app.route('/api/gestao/comunicados/<int:comunicado_id>/<acao>', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_comunicado_acao(usuario, comunicado_id, acao):
+    import comunicados_equipe
+    if acao not in ('lembrar', 'agora', 'encerrar'):
+        return jsonify({"erro": "Não encontrado."}), 404
+    dados = ler_json() or {}
+    return _resposta_comunicados(lambda: comunicados_equipe.acao(comunicado_id, acao, dados, usuario))
+
+
+# Página PÚBLICA do link do comunicado (sem login: o código secreto do link é a chave).
+@app.route('/comunicado/<token>')
+def pagina_comunicado(token):
+    resposta = app.make_response(render_template('comunicado.html'))
+    resposta.headers['Cache-Control'] = 'no-store'
+    resposta.headers['Referrer-Policy'] = 'no-referrer'
+    return resposta
+
+
+@app.route('/api/comunicado/<token>', methods=['GET', 'POST'])
+def api_comunicado(token):
+    import comunicados_equipe
+    if request.method == 'GET':
+        return _resposta_comunicados(lambda: comunicados_equipe.ver(token))
+    return _resposta_comunicados(lambda: comunicados_equipe.confirmar_leitura(token))
 
 
 if __name__ == "__main__":

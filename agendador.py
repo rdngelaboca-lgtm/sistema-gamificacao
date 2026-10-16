@@ -1094,6 +1094,18 @@ def processar_campanhas_clientes():
         logger.info(f"Clientes: {n} mensagem(ns) enviada(s) nesta rodada.")
 
 
+def processar_comunicados_equipe():
+    """
+    [COMUNICADOS] A cada 2 minutos: quem está NO TURNO agora (pela escala) recebe os comunicados que esperam por
+    ele (folga ou fora do horário: fica guardado para o próximo turno). Expira o que passou da validade.
+    """
+    try:
+        import comunicados_equipe
+    except ImportError:
+        return
+    comunicados_equipe.processar()
+
+
 def verificar_aniversarios_clientes():
     """[CLIENTES] 10h: os aniversariantes do dia (que autorizaram) recebem o parabéns pela fila."""
     if ja_rodou_hoje('aniversarios_clientes'):
@@ -1344,6 +1356,7 @@ def configurar_agendamentos():
     schedule.every().day.at(HORARIO_SUGESTAO_AMANHA).do(run_threaded, verificar_sugestao_amanha)
     schedule.every(10).minutes.do(run_threaded, verificar_resultado_sugestao)
     schedule.every(1).minutes.do(run_threaded, processar_campanhas_clientes)          # [CLIENTES] a fila
+    schedule.every(2).minutes.do(run_threaded, processar_comunicados_equipe)          # [COMUNICADOS] no turno de cada um
     schedule.every().day.at(HORARIO_ANIVERSARIOS_CLIENTES).do(run_threaded, verificar_aniversarios_clientes)
     for horario in HORARIOS_RESUMO_NOTAS:                   # [AVISOS LIMPOS] resumo das notas novas
         schedule.every().day.at(horario).do(run_threaded, verificar_resumo_notas)

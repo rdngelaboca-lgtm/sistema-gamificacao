@@ -328,13 +328,31 @@ no Wi-Fi da loja e a tela avisa); pela internet só ficam abertos `/confirmar/`,
 Arquivos: `confirmacoes.py`, `templates/presenca.html`, `templates/gestao.html`; tabelas `ConfirmacoesEscala`,
 `VagasFreelancer`, `VagaRespostas`, `ParametrosVagas`.
 
+### Novo (só na Web) — 📨 Comunicados para a equipe (10/2026: Gestão › 📨 Comunicados)
+A gestão escreve o comunicado (título, texto, **para quem**: todos, só fixos, só freelancers ou escolhendo um a um;
+**vale até** — padrão 7 dias — e ⭐ pontos opcionais na gamificação para os fixos que confirmarem a leitura).
+**Entrega só no horário de trabalho de cada um, pela escala do dia** (os fixos também: a escala fixa já preenche a
+escala do dia): a mensagem sai de 5 min depois da entrada até 10 min antes da saída, nunca no intervalo. Quem está de
+folga ou não tem turno fica com o comunicado **guardado** e recebe no próximo turno; se não trabalhar até o "vale até",
+fica ⌛ expirado. O robô (agendador) olha a fila a cada 2 minutos; quem já está no turno recebe na hora da criação.
+A mensagem leva um **link** (`/comunicado/<código>`) com o botão **✅ Li e estou ciente** (os "tiques azuis" do
+WhatsApp não chegam ao sistema pela Z-API). **Controle de leitura** no detalhe de cada comunicado: ✅ leu (data/hora),
+👀 abriu e não confirmou, 📤 recebeu e não abriu, ⏳ espera o turno (mostra quando), ⚠️ falhou, ⌛ expirou, 📵 sem
+WhatsApp, ⛔ encerrado; filtros Todos / Leram / Faltam. Ações: **🔔 Lembrar quem não leu** (vai de novo no próximo
+turno com "Lembrete"), **📤 Agora** (manda já, fora do turno — para uma pessoa ou para todos que esperam) e
+**⛔ Encerrar** (para de mandar). O link usa o endereço da internet gravado em 📢 Clientes › ⚙️ Ajustes (sem ele a
+tela não deixa criar); pela internet só ficam abertos `/comunicado/` e `/api/comunicado/`. Os comunicados antigos do
+Telegram (Painel do Gestor) continuam como estavam.
+Arquivos: `comunicados_equipe.py`, `templates/gestao_comunicados.html`, `templates/comunicado.html`; tabelas
+`ComunicadosEquipe`, `ComunicadosEquipeDestinos` (criadas sozinhas na primeira vez).
+
 ### App de compras — aba Gestão em 3 áreas (10/2026)
 A aba **Gestão** do app (só o gestor vê) foi dividida em **🏪 Loja · 🛒 Compras · 📦 Estoque**, com o número de
 pendências de cada área no botão (Loja: dias sem faturamento lançado; Compras: listas para aprovar + cupons para
 conferir; Estoque: produtos que acabam em até 2 dias). A Gestão abre na última área usada.
 - **🏪 Loja**: cartão da Folha × Faturamento (último dia, mês × meta, falta lançar, previsão de hoje e de amanhã),
   **💰 Lançar faturamento do dia** e a lista **Gestão da loja** com as páginas da Web (Escala, Folha, Pagamentos,
-  Freelancers, 📣 Avisos).
+  Freelancers, 📣 Avisos, 📢 Clientes, 📨 Comunicados).
 - **🛒 Compras**: Resumo (listas, compras em andamento, cupons, compras do mês, listas esquecidas, maiores
   fornecedores) e os relatórios Categorias, Inflação, Mais barato, Preços e Cupons.
 - **📦 Estoque**: Resumo (acabam em até 2 dias, abaixo do mínimo, preços que subiram) e Consumo.
@@ -402,10 +420,12 @@ Cada etapa: construir → testar → usar em paralelo com o PC → marcar ✅ aq
 - No computador do servidor: `http://localhost:5000/gestao`
 - Nos outros computadores/celulares da loja (mesma rede): `http://IP-DO-SERVIDOR:5000/gestao`
   (o mesmo endereço do painel da TV, trocando o final por `/gestao`).
-- Pelo app de compras: aba **Gestão › 🏪 Loja › Gestão da loja** (Escala, Folha, Pagamentos, Freelancers e Avisos;
+- Pelo app de compras: aba **Gestão › 🏪 Loja › Gestão da loja** (Escala, Folha, Pagamentos, Freelancers, Avisos,
+  Clientes e Comunicados;
   abrem direto, sem pedir o PIN de novo).
-- Menu no alto de toda página da Gestão: **🗓️ Escala · 👤 Freelancers · 💰 Pagamentos · 📊 Folha · 📣 Avisos · 📢 Clientes**
-  (`/gestao/escala`, `/gestao/freelancers`, `/gestao/pagamentos`, `/gestao/folha`, `/gestao/avisos`, `/gestao/clientes`).
+- Menu no alto de toda página da Gestão: **🗓️ Escala · 👤 Freelancers · 💰 Pagamentos · 📊 Folha · 📣 Avisos · 📢 Clientes
+  · 📨 Comunicados** (`/gestao/escala`, `/gestao/freelancers`, `/gestao/pagamentos`, `/gestao/folha`, `/gestao/avisos`,
+  `/gestao/clientes`, `/gestao/comunicados`).
 - Pela internet (fora da loja): liberado para a Gestão desde 10/2026, a pedido do Rodrigo — só gestor,
   com o login do app (nome + PIN, bloqueio após erros). Para fechar: `GESTAO_PELA_INTERNET = False` no config.py.
 - Login: o mesmo do app de compras (nome + PIN); só quem é gestor no app entra.
