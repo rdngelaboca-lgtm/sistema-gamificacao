@@ -132,7 +132,7 @@ async function novo() {
       <label class="campo"><span>Vale até</span><input type="date" id="c-valido" value="${esc(r.validade_padrao)}" max="${esc(r.validade_max)}">
         <span class="mini suave">Quem não trabalhar até lá não recebe (⌛ expira).</span></label>
       <label class="campo"><span>⭐ Pontos na gamificação (fixos)</span><input type="number" id="c-pontos" min="0" max="100" value="0">
-        <span class="mini suave">Ganha quem confirmar a leitura. 0 = sem pontos.</span></label>
+        <span class="mini suave">Só os fixos ganham, ao confirmar a leitura (o WhatsApp e o link avisam). 0 = sem pontos.</span></label>
     </div>
     <details class="campo"><summary>👀 Ver como fica a mensagem no WhatsApp</summary><div class="previa-wpp" id="c-previa"></div></details>
     <div class="botoes"><button class="btn" id="c-cancelar">Cancelar</button><button class="btn prim" id="c-criar">📨 Criar e enviar no turno de cada um</button></div>`);
@@ -155,8 +155,11 @@ async function novo() {
     const t = $('#c-titulo').value.trim() || 'Título', ch = $('#c-chamada').value.trim().replace(/\s+/g, ' ');
     const p = S.pessoas.find(x => marcados.has(x.id)), nome = p ? p.nome.split(' ')[0] : 'Fulano';
     const frase = ch ? ch[0].toUpperCase() + ch.slice(1) : `Tem um comunicado novo para você: *${t}*.`;
-    $('#c-previa').innerHTML = esc(`📢 *Comunicado — ${r.empresa || 'Gela Boca'}*\n\nOlá, ${nome}!\n${frase}\n\n` +
-      `👉 *Toque no link para ler o comunicado e confirmar a leitura:*\n(link)`).replace(/\*([^*\n]+)\*/g, '<b>$1</b>');
+    const pts = Math.max(0, Math.min(100, Math.floor(+$('#c-pontos').value || 0)));
+    const linhaPts = pts && (!p || p.tipo === 'func') ? `⭐ Confirmando a leitura você ganha *${pts} pontos* na gamificação!\n\n` : '';
+    $('#c-previa').innerHTML = esc(`📢 *Comunicado — ${r.empresa || 'Gela Boca'}*\n\nOlá, ${nome}!\n${frase}\n\n${linhaPts}` +
+      `👉 *Toque no link para ler o comunicado e confirmar a leitura:*\n(link)`).replace(/\*([^*\n]+)\*/g, '<b>$1</b>') +
+      (pts ? `<div class="mini suave" style="margin-top:6px">${p && p.tipo !== 'func' ? 'Freelancer: vai sem a linha dos pontos.' : 'A linha dos ⭐ pontos vai só para os fixos.'}</div>` : '');
     $('#c-conta').textContent = `${$('#c-texto').value.length} / 2000`;
   };
   $('#c-pessoas').addEventListener('change', e => {
@@ -171,7 +174,7 @@ async function novo() {
   });
   $('#c-busca').addEventListener('input', desenhar);
   $('#c-todos-cad').addEventListener('change', e => { todos = e.target.checked; desenhar(); });
-  for (const id of ['#c-titulo', '#c-chamada', '#c-texto']) $(id).addEventListener('input', previa);
+  for (const id of ['#c-titulo', '#c-chamada', '#c-texto', '#c-pontos']) $(id).addEventListener('input', previa);
   $('#c-cancelar').onclick = fecharModal;
   $('#c-criar').onclick = async () => {
     const corpo = {titulo: $('#c-titulo').value, chamada: $('#c-chamada').value, texto: $('#c-texto').value, valido_ate: $('#c-valido').value,

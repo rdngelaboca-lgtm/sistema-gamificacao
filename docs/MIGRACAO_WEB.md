@@ -330,7 +330,8 @@ Arquivos: `confirmacoes.py`, `templates/presenca.html`, `templates/gestao.html`;
 
 ### Novo (só na Web) — 📨 Comunicados para a equipe (10/2026: Gestão › 📨 Comunicados)
 A gestão escreve o comunicado (título, chamada do WhatsApp, texto, **para quem**: todos, só fixos, só freelancers ou escolhendo um a um;
-**vale até** — padrão 7 dias — e ⭐ pontos opcionais na gamificação para os fixos que confirmarem a leitura).
+**vale até** — padrão 7 dias — e ⭐ pontos opcionais na gamificação para os fixos que confirmarem a leitura; a
+mensagem do WhatsApp e a página do link avisam o fixo dos pontos antes, e o painel mostra "⭐ ganhou N pontos").
 **Entrega só no horário de trabalho de cada um, pela escala do dia** (os fixos também: a escala fixa já preenche a
 escala do dia): a mensagem sai de 5 min depois da entrada até 10 min antes da saída, nunca no intervalo. Quem está de
 folga ou não tem turno fica com o comunicado **guardado** e recebe no próximo turno; se não trabalhar até o "vale até",

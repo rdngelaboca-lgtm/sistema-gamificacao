@@ -30,6 +30,7 @@
   button:focus-visible { outline: 2px solid var(--verde-esc); outline-offset: 2px; }
   button[disabled] { opacity: .6; cursor: default; }
   .mini { font-size: 13px; color: var(--suave); }
+  .pontos { border-radius: 12px; padding: 10px 14px; font-weight: 700; background: #FFF6D6; color: #6B4E00; border: 1px solid #F1DE9C; }
   #erro { color: var(--erro); font-weight: 700; min-height: 1.2em; }
   .grande { font-size: 54px; text-align: center; line-height: 1; }
   .carregando { text-align: center; color: var(--suave); padding: 30px 0; }
@@ -46,6 +47,7 @@
     <h1 id="titulo" hidden></h1>
     <div class="texto" id="texto" hidden></div>
     <div class="situacao" id="situacao" hidden></div>
+    <div class="pontos" id="pontos" hidden></div>
     <button id="ciente" type="button" hidden>✅ Li e estou ciente</button>
     <div class="mini" id="dica" hidden>Toque no botão para a gestão saber que você leu.</div>
     <div id="erro" role="alert"></div>
@@ -73,6 +75,8 @@ function desenhar(d) {
   $('#titulo').hidden = false; $('#titulo').textContent = d.titulo;
   $('#texto').hidden = false; $('#texto').textContent = d.texto;
   $('#ciente').hidden = d.lido; $('#dica').hidden = d.lido;
+  $('#pontos').hidden = d.lido || !d.pontos;
+  if (d.pontos) $('#pontos').textContent = `⭐ Confirmando a leitura você ganha ${d.pontos} pontos na gamificação!`;
   $('#situacao').hidden = !d.lido;
   if (d.lido) $('#situacao').textContent = `✅ Leitura confirmada (${d.lido_em}). Obrigado!` + (d.pontos ? ` +${d.pontos} pontos na gamificação.` : '');
 }

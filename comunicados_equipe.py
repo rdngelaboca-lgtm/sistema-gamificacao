@@ -246,12 +246,13 @@ def chamada_ou_padrao(titulo, chamada):
     return chamada[0].upper() + chamada[1:] if chamada else f"Tem um comunicado novo para você: *{titulo}*."
 
 
-def texto_mensagem(titulo, chamada, link, nome='', lembrete=False):
-    """Só a chamada e o link: o comunicado em si a pessoa lê (e confirma) no link."""
+def texto_mensagem(titulo, chamada, link, nome='', lembrete=False, pontos=0):
+    """Só a chamada e o link: o comunicado em si a pessoa lê (e confirma) no link. pontos: só para fixos."""
     primeiro = _primeiro_nome(nome)
     return ((f"🔔 *Lembrete:* você ainda não confirmou a leitura deste comunicado.\n\n" if lembrete else "")
             + f"📢 *Comunicado — {_empresa()}*\n\n"
             + (f"Olá, {primeiro}!\n" if primeiro else "Olá!\n") + f"{chamada_ou_padrao(titulo, chamada)}\n\n"
+            + (f"⭐ Confirmando a leitura você ganha *{pontos} pontos* na gamificação!\n\n" if pontos else "")
             + f"👉 *Toque no link para ler o comunicado e confirmar a leitura:*\n{link}")
 
 
@@ -371,7 +372,7 @@ def processar(agora=None, comunicado_id=None, forcar_ids=None):
                         ST_EXPIRADO, ST_AGUARDANDO, ST_FALHOU, agora.date())
             cur.execute("UPDATE ComunicadosEquipeDestinos SET Status = ? WHERE Status = ? AND EnviadoEm < ?",
                         ST_AGUARDANDO, ST_ENVIANDO, agora - timedelta(minutes=ENVIANDO_PRESO_MIN))
-            sql = """SELECT D.DestinoID, D.Tipo, D.PessoaID, D.Nome, D.Telefone, D.Token, D.Lembretes, C.Titulo, C.Chamada
+            sql = """SELECT D.DestinoID, D.Tipo, D.PessoaID, D.Nome, D.Telefone, D.Token, D.Lembretes, C.Titulo, C.Chamada, C.Pontos
                      FROM ComunicadosEquipeDestinos D JOIN ComunicadosEquipe C ON C.ComunicadoID = D.ComunicadoID
                      WHERE C.EncerradoEm IS NULL AND (D.Status = ? OR (D.Status = ? AND D.Tentativas < ?))"""
             args = [ST_AGUARDANDO, ST_FALHOU, MAX_TENTATIVAS]
@@ -391,14 +392,15 @@ def processar(agora=None, comunicado_id=None, forcar_ids=None):
         forcar = {int(i) for i in (forcar_ids or [])}
         no_turno = _quem_trabalha_agora(agora) if len(forcar) < len(fila) else set()
         enviados = 0
-        for did, tipo, pid, nome, tel, token, lembretes, titulo, chamada in fila:
+        for did, tipo, pid, nome, tel, token, lembretes, titulo, chamada, pontos in fila:
             if did not in forcar and (tipo, int(pid)) not in no_turno:
                 continue
             if not _pegar(did, agora):                  # outra rodada (ou o outro programa) já pegou
                 continue
             if enviados:
                 time.sleep(INTERVALO_ENVIO_SEG)
-            ok, resp = _mandar(tel, texto_mensagem(titulo, chamada, f"{base}/comunicado/{token}", nome, lembrete=bool(lembretes)))
+            ok, resp = _mandar(tel, texto_mensagem(titulo, chamada, f"{base}/comunicado/{token}", nome, lembrete=bool(lembretes),
+                                                   pontos=(pontos or 0) if tipo == 'func' else 0))
             _depois_de_mandar(did, ok, resp, agora)
             if ok:
                 enviados += 1
@@ -531,6 +533,8 @@ def detalhe(cid, agora=None):
         chave = (tipo, int(pid))
         p = prox.get(chave)
         ic, txt = _situacao(st, env, ab, lido, lemb, _quando(p) if p else '', chave in agora_set, erro, tent or 0)
+        if st == ST_LIDO and tipo == 'func' and cab[4]:
+            txt += f" · ⭐ ganhou {cab[4]} pontos"
         pessoas_.append({'id': did, 'nome': nome or '?', 'tipo': tipo, 'tipo_nome': TIPOS.get(tipo, tipo), 'status': st,
                          'icone': ic, 'situacao': txt, 'lembretes': lemb or 0,
                          'pode_agora': st in (ST_AGUARDANDO, ST_FALHOU, ST_EXPIRADO) and not cab[7]})
