@@ -113,7 +113,12 @@ async function novo() {
   let todos = false;
   abrirModal(`<h3>✍️ Novo comunicado</h3>
     <label class="campo"><span>Título</span><input id="c-titulo" maxlength="120" placeholder="Ex.: Uniforme novo a partir de segunda"></label>
-    <label class="campo"><span>Texto</span><textarea id="c-texto" maxlength="2000" placeholder="Escreva o comunicado…"></textarea>
+    <label class="campo"><span>📱 Chamada no WhatsApp <span class="mini suave">(opcional)</span></span>
+      <input id="c-chamada" maxlength="200" placeholder="Ex.: Segue comunicado sobre um feedback positivo de uma cliente">
+      <span class="mini suave">No WhatsApp vai só esta frase e o link. O comunicado completo a pessoa lê ao tocar no link.
+        Em branco: "Tem um comunicado novo para você: <i>título</i>".</span></label>
+    <label class="campo"><span>Texto do comunicado <span class="mini suave">(aparece ao abrir o link)</span></span>
+      <textarea id="c-texto" maxlength="2000" placeholder="Escreva o comunicado…"></textarea>
       <span class="conta-letras" id="c-conta">0 / 2000</span></label>
     <div class="campo"><span>Para quem?</span>
       <div class="rapidos"><button class="btn" data-rap="todos">👥 Todos</button><button class="btn" data-rap="func">👔 Só fixos</button>
@@ -129,7 +134,7 @@ async function novo() {
       <label class="campo"><span>⭐ Pontos na gamificação (fixos)</span><input type="number" id="c-pontos" min="0" max="100" value="0">
         <span class="mini suave">Ganha quem confirmar a leitura. 0 = sem pontos.</span></label>
     </div>
-    <details class="campo"><summary>👀 Ver como fica a mensagem</summary><div class="previa-wpp" id="c-previa"></div></details>
+    <details class="campo"><summary>👀 Ver como fica a mensagem no WhatsApp</summary><div class="previa-wpp" id="c-previa"></div></details>
     <div class="botoes"><button class="btn" id="c-cancelar">Cancelar</button><button class="btn prim" id="c-criar">📨 Criar e enviar no turno de cada um</button></div>`);
   const visiveis = () => S.pessoas.filter(p => (todos || p.ativo || marcados.has(p.id)) &&
     (!$('#c-busca').value.trim() || p.nome.toLowerCase().includes($('#c-busca').value.trim().toLowerCase())));
@@ -144,10 +149,14 @@ async function novo() {
     $('#c-resumo').textContent = sel.length
       ? `${sel.length} pessoa(s) · ${ja} no turno agora (recebem na hora) · ${sel.length - ja} no próximo turno de cada um`
       : 'Ninguém escolhido.';
+    previa();
   };
-  const previa = () => {
-    const t = $('#c-titulo').value.trim() || 'Título', x = $('#c-texto').value.trim() || 'Texto do comunicado';
-    $('#c-previa').innerHTML = esc(`📢 *Comunicado*\n*${t}*\n\n${x}\n\n👉 *Toque para confirmar que leu:*\n(link)`).replace(/\*([^*\n]+)\*/g, '<b>$1</b>');
+  const previa = () => {   // igual ao texto_mensagem do servidor: só a chamada e o link
+    const t = $('#c-titulo').value.trim() || 'Título', ch = $('#c-chamada').value.trim().replace(/\s+/g, ' ');
+    const p = S.pessoas.find(x => marcados.has(x.id)), nome = p ? p.nome.split(' ')[0] : 'Fulano';
+    const frase = ch ? ch[0].toUpperCase() + ch.slice(1) : `Tem um comunicado novo para você: *${t}*.`;
+    $('#c-previa').innerHTML = esc(`📢 *Comunicado — ${r.empresa || 'Gela Boca'}*\n\nOlá, ${nome}!\n${frase}\n\n` +
+      `👉 *Toque no link para ler o comunicado e confirmar a leitura:*\n(link)`).replace(/\*([^*\n]+)\*/g, '<b>$1</b>');
     $('#c-conta').textContent = `${$('#c-texto').value.length} / 2000`;
   };
   $('#c-pessoas').addEventListener('change', e => {
@@ -162,10 +171,10 @@ async function novo() {
   });
   $('#c-busca').addEventListener('input', desenhar);
   $('#c-todos-cad').addEventListener('change', e => { todos = e.target.checked; desenhar(); });
-  $('#c-titulo').addEventListener('input', previa); $('#c-texto').addEventListener('input', previa);
+  for (const id of ['#c-titulo', '#c-chamada', '#c-texto']) $(id).addEventListener('input', previa);
   $('#c-cancelar').onclick = fecharModal;
   $('#c-criar').onclick = async () => {
-    const corpo = {titulo: $('#c-titulo').value, texto: $('#c-texto').value, valido_ate: $('#c-valido').value,
+    const corpo = {titulo: $('#c-titulo').value, chamada: $('#c-chamada').value, texto: $('#c-texto').value, valido_ate: $('#c-valido').value,
                    pontos: +$('#c-pontos').value || 0, pessoas: [...marcados]};
     if (!corpo.titulo.trim()) { alert('Escreva o título.'); return $('#c-titulo').focus(); }
     if (!corpo.texto.trim()) { alert('Escreva o texto do comunicado.'); return $('#c-texto').focus(); }
@@ -177,7 +186,7 @@ async function novo() {
     } catch (e) { falhou(e); }
     b.disabled = false;
   };
-  desenhar(); previa(); $('#c-titulo').focus();
+  desenhar(); $('#c-titulo').focus();
 }
 
 // ------------------------------------------------------------------ detalhe: quem leu
@@ -188,7 +197,8 @@ async function abrir(id) {
   const c = d.contagem;
   abrirModal(`<h3>📨 ${esc(d.titulo)}</h3>
     <div class="mini suave">Criado ${esc(d.criado)}${d.por ? ' por ' + esc(d.por) : ''} · vale até ${esc(d.valido_ate)}${d.pontos ? ` · ⭐ ${d.pontos} pontos (fixos)` : ''}${d.encerrado ? ' · ⛔ encerrado' : ''}</div>
-    <details style="margin:8px 0"><summary class="mini">Ver o texto</summary><div class="texto-com">${esc(d.texto)}</div></details>
+    <div class="mini" style="margin-top:6px">📱 No WhatsApp: <i>${esc(d.chamada.replace(/\*/g, ''))}</i></div>
+    <details style="margin:8px 0"><summary class="mini">Ver o texto do comunicado</summary><div class="texto-com">${esc(d.texto)}</div></details>
     ${barra(c)}${contas(c)}
     <div class="filtros"><button class="btn" data-f="todos">Todos (${c.total})</button><button class="btn" data-f="leram">✅ Leram (${c.lido})</button>
       <button class="btn" data-f="faltam">⏳ Faltam (${c.total - c.lido})</button></div>

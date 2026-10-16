@@ -5,8 +5,9 @@
 # freelancers). Cada pessoa recebe no WhatsApp (número da LOJA) SÓ DURANTE O TURNO DELA, pela escala
 # do dia: quem está de folga (ou sem turno) recebe no próximo turno. Fora do turno o comunicado fica
 # guardado ("⏳ espera o turno").
-# A mensagem leva um LINK: um toque abre o comunicado com o botão "✅ Li e estou ciente". O painel
-# mostra quem leu (e quando), quem abriu, quem recebeu e ainda não confirmou e quem espera o turno.
+# No WhatsApp vai SÓ uma chamada curta ("Segue comunicado sobre…") e um LINK: o comunicado em si a pessoa
+# lê ao abrir o link, que tem o botão "✅ Li e estou ciente". O painel mostra quem leu (e quando), quem
+# abriu, quem recebeu e ainda não abriu e quem espera o turno.
 # Link, e não as ✔✔ azuis do WhatsApp: a pessoa pode desligar a confirmação de leitura do WhatsApp,
 # e o link é uma confirmação de verdade ("li e estou ciente").
 # O robô (agendador) confere a cada 2 minutos quem está trabalhando agora.
@@ -37,7 +38,7 @@ DIAS_ATIVO = 30                # "pessoa ativa": tem turno na escala de 30 dias 
 MAX_TENTATIVAS = 3             # WhatsApp falhou: tenta de novo na próxima rodada (até 3 vezes)
 ENVIANDO_PRESO_MIN = 30        # 'enviando' há mais que isso (robô caiu no meio): volta para a fila
 INTERVALO_ENVIO_SEG = 2.5      # entre uma mensagem e outra (o WhatsApp não gosta de rajada)
-LIMITE_TITULO, LIMITE_TEXTO = 120, 2000
+LIMITE_TITULO, LIMITE_TEXTO, LIMITE_CHAMADA = 120, 2000, 200
 
 SEGUNDO_PLANO = True           # os testes desligam para conferir na hora
 
@@ -100,6 +101,8 @@ def garantir_tabelas():
                 Erro NVARCHAR(300) NULL
             )
         """)
+        # a chamada curta que vai no WhatsApp (o texto completo fica no link)
+        cur.execute("IF COL_LENGTH('ComunicadosEquipe', 'Chamada') IS NULL ALTER TABLE ComunicadosEquipe ADD Chamada NVARCHAR(300) NULL")
         conn.commit()
         _tabelas_ok = True
     finally:
@@ -225,26 +228,43 @@ def pessoas(agora=None):
                       'whatsapp': bool(R.numero_whatsapp(tel)), 'ativo': chave in recentes,
                       'agora': chave in agora_set, 'proximo': _quando(p) if p and chave not in agora_set else ''})
     saida.sort(key=lambda x: (x['tipo'] != 'func', (x['nome'] or '').lower()))
-    return {'pessoas': saida, 'validade_padrao': (agora.date() + timedelta(days=VALIDADE_PADRAO_DIAS)).isoformat(),
+    return {'pessoas': saida, 'empresa': _empresa(), 'validade_padrao': (agora.date() + timedelta(days=VALIDADE_PADRAO_DIAS)).isoformat(),
             'validade_max': (agora.date() + timedelta(days=VALIDADE_MAX_DIAS)).isoformat(), 'link_local': _endereco()[1]}
 
 
 # ------------------------------------------------------------------------------
 # Criar e mandar
 # ------------------------------------------------------------------------------
-def texto_mensagem(titulo, texto, link, lembrete=False):
+def _primeiro_nome(nome):
+    p = (nome or '').split()
+    return (p[0].capitalize() if p[0].isupper() or p[0].islower() else p[0]) if p else ''
+
+
+def chamada_ou_padrao(titulo, chamada):
+    """A frase do WhatsApp. Em branco: 'Tem um comunicado novo para você: *título*.'"""
+    chamada = ' '.join(str(chamada or '').split())
+    return chamada[0].upper() + chamada[1:] if chamada else f"Tem um comunicado novo para você: *{titulo}*."
+
+
+def texto_mensagem(titulo, chamada, link, nome='', lembrete=False):
+    """Só a chamada e o link: o comunicado em si a pessoa lê (e confirma) no link."""
+    primeiro = _primeiro_nome(nome)
     return ((f"🔔 *Lembrete:* você ainda não confirmou a leitura deste comunicado.\n\n" if lembrete else "")
-            + f"📢 *Comunicado — {_empresa()}*\n*{titulo}*\n\n{texto}\n\n"
-            + f"👉 *Toque para confirmar que leu:*\n{link}")
+            + f"📢 *Comunicado — {_empresa()}*\n\n"
+            + (f"Olá, {primeiro}!\n" if primeiro else "Olá!\n") + f"{chamada_ou_padrao(titulo, chamada)}\n\n"
+            + f"👉 *Toque no link para ler o comunicado e confirmar a leitura:*\n{link}")
 
 
 def _ler_dados(dados, agora):
     titulo = ' '.join(str(dados.get('titulo') or '').split())
+    chamada = ' '.join(str(dados.get('chamada') or '').split())
     texto = str(dados.get('texto') or '').strip()
     if not titulo:
         raise ErroComunicado("Escreva o título do comunicado.")
     if len(titulo) > LIMITE_TITULO:
         raise ErroComunicado(f"Título grande demais (máximo {LIMITE_TITULO} letras).")
+    if len(chamada) > LIMITE_CHAMADA:
+        raise ErroComunicado(f"A chamada do WhatsApp é grande demais (máximo {LIMITE_CHAMADA} letras): o texto completo vai no link.")
     if not texto:
         raise ErroComunicado("Escreva o texto do comunicado.")
     if len(texto) > LIMITE_TEXTO:
@@ -274,14 +294,14 @@ def _ler_dados(dados, agora):
             escolhidos.append((tipo, int(pid)))
     if len(escolhidos) > 500:
         raise ErroComunicado("Gente demais num comunicado só.")
-    return titulo, texto, valido, pontos, escolhidos
+    return titulo, chamada, texto, valido, pontos, escolhidos
 
 
 def criar(dados, usuario, agora=None):
     """Grava o comunicado e uma linha por pessoa; quem já está no turno recebe na hora (em segundo plano)."""
     garantir_tabelas()
     agora = agora or _agora()
-    titulo, texto, valido, pontos, escolhidos = _ler_dados(dados, agora)
+    titulo, chamada, texto, valido, pontos, escolhidos = _ler_dados(dados, agora)
     base, local = _endereco()
     if not base or local:
         raise ErroComunicado("Falta o endereço da internet (📢 Clientes › ⚙️ Ajustes › QR do balcão): sem ele o link de "
@@ -294,9 +314,9 @@ def criar(dados, usuario, agora=None):
     conn = _conexao()
     try:
         cur = conn.cursor()
-        cur.execute("""INSERT INTO ComunicadosEquipe (Titulo, Texto, ValidoAte, Pontos, CriadoPor, CriadoEm)
-                       VALUES (?, ?, ?, ?, ?, ?); SELECT SCOPE_IDENTITY();""",
-                    titulo, texto, valido, pontos, usuario.get('nome'), agora)
+        cur.execute("""INSERT INTO ComunicadosEquipe (Titulo, Chamada, Texto, ValidoAte, Pontos, CriadoPor, CriadoEm)
+                       VALUES (?, ?, ?, ?, ?, ?, ?); SELECT SCOPE_IDENTITY();""",
+                    titulo, chamada or None, texto, valido, pontos, usuario.get('nome'), agora)
         cur.nextset()
         cid = int(cur.fetchone()[0])
         for tipo, pid in escolhidos:
@@ -351,7 +371,7 @@ def processar(agora=None, comunicado_id=None, forcar_ids=None):
                         ST_EXPIRADO, ST_AGUARDANDO, ST_FALHOU, agora.date())
             cur.execute("UPDATE ComunicadosEquipeDestinos SET Status = ? WHERE Status = ? AND EnviadoEm < ?",
                         ST_AGUARDANDO, ST_ENVIANDO, agora - timedelta(minutes=ENVIANDO_PRESO_MIN))
-            sql = """SELECT D.DestinoID, D.Tipo, D.PessoaID, D.Nome, D.Telefone, D.Token, D.Lembretes, C.Titulo, C.Texto
+            sql = """SELECT D.DestinoID, D.Tipo, D.PessoaID, D.Nome, D.Telefone, D.Token, D.Lembretes, C.Titulo, C.Chamada
                      FROM ComunicadosEquipeDestinos D JOIN ComunicadosEquipe C ON C.ComunicadoID = D.ComunicadoID
                      WHERE C.EncerradoEm IS NULL AND (D.Status = ? OR (D.Status = ? AND D.Tentativas < ?))"""
             args = [ST_AGUARDANDO, ST_FALHOU, MAX_TENTATIVAS]
@@ -371,14 +391,14 @@ def processar(agora=None, comunicado_id=None, forcar_ids=None):
         forcar = {int(i) for i in (forcar_ids or [])}
         no_turno = _quem_trabalha_agora(agora) if len(forcar) < len(fila) else set()
         enviados = 0
-        for did, tipo, pid, nome, tel, token, lembretes, titulo, texto in fila:
+        for did, tipo, pid, nome, tel, token, lembretes, titulo, chamada in fila:
             if did not in forcar and (tipo, int(pid)) not in no_turno:
                 continue
             if not _pegar(did, agora):                  # outra rodada (ou o outro programa) já pegou
                 continue
             if enviados:
                 time.sleep(INTERVALO_ENVIO_SEG)
-            ok, resp = _mandar(tel, texto_mensagem(titulo, texto, f"{base}/comunicado/{token}", lembrete=bool(lembretes)))
+            ok, resp = _mandar(tel, texto_mensagem(titulo, chamada, f"{base}/comunicado/{token}", nome, lembrete=bool(lembretes)))
             _depois_de_mandar(did, ok, resp, agora)
             if ok:
                 enviados += 1
@@ -493,7 +513,7 @@ def detalhe(cid, agora=None):
     conn = _conexao()
     try:
         cur = conn.cursor()
-        cur.execute("""SELECT ComunicadoID, Titulo, Texto, ValidoAte, Pontos, CriadoPor, CriadoEm, EncerradoEm
+        cur.execute("""SELECT ComunicadoID, Titulo, Texto, ValidoAte, Pontos, CriadoPor, CriadoEm, EncerradoEm, Chamada
                        FROM ComunicadosEquipe WHERE ComunicadoID = ?""", int(cid))
         cab = cur.fetchone()
         if not cab:
@@ -516,10 +536,11 @@ def detalhe(cid, agora=None):
                          'pode_agora': st in (ST_AGUARDANDO, ST_FALHOU, ST_EXPIRADO) and not cab[7]})
     pessoas_.sort(key=lambda x: (ordem.get(x['status'], 9), x['nome'].lower()))
     valido = database._como_data(cab[3])
-    return {'id': cab[0], 'titulo': cab[1], 'texto': cab[2], 'valido_ate': valido.strftime('%d/%m/%Y') if valido else '',
+    return {'id': cab[0], 'titulo': cab[1], 'texto': cab[2], 'chamada': chamada_ou_padrao(cab[1], cab[8]),
+            'valido_ate': valido.strftime('%d/%m/%Y') if valido else '',
             'pontos': cab[4] or 0, 'por': cab[5] or '', 'criado': _quando(cab[6]), 'encerrado': bool(cab[7]),
             'contagem': _contar([(x['status'], x['status'] == ST_ENVIADO and x['icone'] == '👀') for x in pessoas_]),
-            'pessoas': pessoas_, 'exemplo': texto_mensagem(cab[1], cab[2], f"{_endereco()[0]}/comunicado/…")}
+            'pessoas': pessoas_, 'exemplo': texto_mensagem(cab[1], cab[8], f"{_endereco()[0]}/comunicado/…")}
 
 
 def acao(cid, nome_acao, dados, usuario, agora=None):

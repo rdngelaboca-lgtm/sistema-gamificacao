@@ -329,14 +329,16 @@ Arquivos: `confirmacoes.py`, `templates/presenca.html`, `templates/gestao.html`;
 `VagasFreelancer`, `VagaRespostas`, `ParametrosVagas`.
 
 ### Novo (só na Web) — 📨 Comunicados para a equipe (10/2026: Gestão › 📨 Comunicados)
-A gestão escreve o comunicado (título, texto, **para quem**: todos, só fixos, só freelancers ou escolhendo um a um;
+A gestão escreve o comunicado (título, chamada do WhatsApp, texto, **para quem**: todos, só fixos, só freelancers ou escolhendo um a um;
 **vale até** — padrão 7 dias — e ⭐ pontos opcionais na gamificação para os fixos que confirmarem a leitura).
 **Entrega só no horário de trabalho de cada um, pela escala do dia** (os fixos também: a escala fixa já preenche a
 escala do dia): a mensagem sai de 5 min depois da entrada até 10 min antes da saída, nunca no intervalo. Quem está de
 folga ou não tem turno fica com o comunicado **guardado** e recebe no próximo turno; se não trabalhar até o "vale até",
 fica ⌛ expirado. O robô (agendador) olha a fila a cada 2 minutos; quem já está no turno recebe na hora da criação.
-A mensagem leva um **link** (`/comunicado/<código>`) com o botão **✅ Li e estou ciente** (os "tiques azuis" do
-WhatsApp não chegam ao sistema pela Z-API). **Controle de leitura** no detalhe de cada comunicado: ✅ leu (data/hora),
+No WhatsApp vai **só a chamada** (frase curta opcional, ex.: "Segue comunicado sobre um feedback positivo de uma
+cliente"; em branco: "Tem um comunicado novo para você: *título*") com "Olá, <nome>!" e um **link**
+(`/comunicado/<código>`): o comunicado completo a pessoa lê ao abrir o link, que tem o botão **✅ Li e estou ciente**
+(os "tiques azuis" do WhatsApp não chegam ao sistema pela Z-API). **Controle de leitura** no detalhe de cada comunicado: ✅ leu (data/hora),
 👀 abriu e não confirmou, 📤 recebeu e não abriu, ⏳ espera o turno (mostra quando), ⚠️ falhou, ⌛ expirou, 📵 sem
 WhatsApp, ⛔ encerrado; filtros Todos / Leram / Faltam. Ações: **🔔 Lembrar quem não leu** (vai de novo no próximo
 turno com "Lembrete"), **📤 Agora** (manda já, fora do turno — para uma pessoa ou para todos que esperam) e
