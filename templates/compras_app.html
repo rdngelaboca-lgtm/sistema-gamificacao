@@ -237,6 +237,7 @@
   .qr-tela video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
   .qr-mira { position: absolute; left: 50%; top: 45%; width: min(70vw, 300px); aspect-ratio: 1; transform: translate(-50%, -50%);
     border: 3px solid #fff; border-radius: 20px; box-shadow: 0 0 0 100vmax rgba(0,0,0,.45); }
+  .qr-tela.barras .qr-mira { width: min(86vw, 420px); aspect-ratio: 2.6; }   /* [CÓDIGO DE BARRAS] mira larga */
   .qr-topo { position: absolute; top: calc(18px + env(safe-area-inset-top)); left: 0; right: 0; text-align: center; color: #fff; font-weight: 700; font-size: 17px; }
   .qr-rodape { position: absolute; left: 16px; right: 16px; bottom: calc(20px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 10px; }
   .link-btn { border: 0; background: none; padding: 0; color: var(--verde); font-weight: 700; text-decoration: underline; text-align: left; }
@@ -2466,6 +2467,29 @@ async function modalNotaOrc(todos) {
       || `<div class="vazio" style="padding:14px">${todos ? 'Nenhuma nota livre nos últimos 60 dias.' : 'Nenhuma nota deste fornecedor ainda. Ela aparece aqui quando o XML chegar.'}</div>`}</div>
     ${todos ? '' : '<button class="btn claro medio" data-acao="orc-notas-todas">Comprei de outro fornecedor: ver notas de todos</button>'}`);
 }
+// [CÓDIGO DE BARRAS] bipou (leitor ou câmera) com o orçamento aberto: põe o produto do código no orçamento
+async function bipOrcamento(cod) {
+  const o = T.nome === 'orcamento' && T.p.o;
+  if (!o) return;
+  if (!['rascunho', 'enviado'].includes(o.status)) { bipe(false); return toast('Este orçamento não pode mais ser mudado.'); }
+  const achados = await acharCodigo(cod);
+  if (!achados.length) return codigoDesconhecido(cod, () => bipOrcamento(cod));
+  const unicos = achados.filter((a, i) => achados.findIndex(b => b.produto_id === a.produto_id) === i);
+  if (unicos.length > 1) {             // código ligado a mais de um produto: pergunta qual
+    bipe(true);
+    return abrirModal(`<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px"><div class="titulo-sec">Qual produto é o código ${esc(cod)}?</div>
+        <button class="icone-btn" data-acao="fechar-modal" aria-label="Fechar">${ICONES.fechar}</button></div>
+      <div class="linhas">${unicos.map(a => `<button class="lin" style="width:100%;border-left:0;border-right:0;border-bottom:0;background:#fff;text-align:left" data-acao="orc-add-escolher" data-pid="${a.produto_id}" data-nome="${esc(a.nome)}">
+        <div class="grow"><div style="font-weight:700">${esc(a.nome)}</div><div class="mini suave">${esc(a.unidade)}</div></div></button>`).join('')}</div>`);
+  }
+  const a = unicos[0];
+  if (o.itens.some(i => i.produto_id === a.produto_id)) {
+    bipe(false); fecharModal();
+    return toast(`${a.nome} já está no orçamento: mude a quantidade na lista.`);
+  }
+  bipe(true);
+  acoes['orc-add-escolher']({pid: a.produto_id, nome: a.nome});
+}
 async function acaoOrc(metodo, url, corpo, msg) {
   try { T.p.o = await api(metodo, url, corpo); fecharModal(); if (msg) toast(msg); desenhar(); }
   catch (e) { toast(e.extra.offline ? 'Sem internet.' : e.message); }
@@ -2769,13 +2793,18 @@ function carregarJsQR() {
   });
   return promessaJsQR;
 }
-async function detectorNativo() {
+async function detectorNativo(barras) {
   try {
     if (!('BarcodeDetector' in window)) return null;
     const formatos = await BarcodeDetector.getSupportedFormats();
+    if (barras) {   // [CÓDIGO DE BARRAS] EAN/UPC das embalagens (só o leitor do próprio navegador lê: Chrome do Android)
+      const quero = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'itf', 'code_128'].filter(f => formatos.includes(f));
+      return quero.includes('ean_13') ? new BarcodeDetector({formats: quero}) : null;
+    }
     return formatos.includes('qr_code') ? new BarcodeDetector({formats: ['qr_code']}) : null;
   } catch (e) { return null; }
 }
+async function cameraLeBarras() { return cameraAoVivoDisponivel() && !!(await detectorNativo(true)); }
 function qrDoCanvas(jsQR, cv, ctx, fonte, largura, altura, tentativas) {
   cv.width = largura; cv.height = altura;
   ctx.drawImage(fonte, 0, 0, largura, altura);
@@ -2804,20 +2833,22 @@ async function lerQrNoCelular(arquivo) {
 function cameraAoVivoDisponivel() { return !!(window.isSecureContext && navigator.mediaDevices && navigator.mediaDevices.getUserMedia); }
 let leitorQr = null;   // {stream, parar}
 function pararLeitorQr() { if (leitorQr) { leitorQr.parar(); leitorQr = null; } }
-async function lerQrAoVivo(aoLer) {
+async function lerQrAoVivo(aoLer, barras) {
   // abre a câmera DENTRO do app e lê o QR assim que ele aparece (sem tirar foto)
+  // [CÓDIGO DE BARRAS] barras = true: lê o código de barras da embalagem (mira larga, sem jsQR)
   pararLeitorQr();
   let stream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({video: {facingMode: {ideal: 'environment'}, width: {ideal: 1280}, height: {ideal: 720}}, audio: false});
   } catch (e) {
-    statusCupom(e && e.name === 'NotAllowedError' ? '⚠ O app não tem permissão para usar a câmera. Libere nas configurações do navegador, ou use "Tirar foto".'
-                                                  : '⚠ Não consegui abrir a câmera. Use "Tirar foto".');
+    const msg = e && e.name === 'NotAllowedError' ? '⚠ O app não tem permissão para usar a câmera. Libere nas configurações do navegador'
+                                                  : '⚠ Não consegui abrir a câmera';
+    if (barras) toast(msg + '. Digite o código.'); else statusCupom(msg + (msg.includes('Libere') ? ', ou use "Tirar foto".' : '. Use "Tirar foto".'));
     return;
   }
-  const tela = document.createElement('div'); tela.className = 'qr-tela'; tela.id = 'qr-tela';
+  const tela = document.createElement('div'); tela.className = 'qr-tela' + (barras ? ' barras' : ''); tela.id = 'qr-tela';
   tela.innerHTML = `<video playsinline muted autoplay></video><div class="qr-mira"></div>
-    <div class="qr-topo">Aponte para o QR Code do cupom</div>
+    <div class="qr-topo">${barras ? 'Aponte para o código de barras' : 'Aponte para o QR Code do cupom'}</div>
     <div class="qr-rodape"><div id="qr-dica" class="pequeno" style="color:#fff;text-align:center;min-height:20px"></div>
       <button class="btn claro" id="qr-cancelar">Cancelar</button></div>`;
   document.body.appendChild(tela);
@@ -2827,9 +2858,9 @@ async function lerQrAoVivo(aoLer) {
   leitorQr = {stream, parar};
   tela.querySelector('#qr-cancelar').addEventListener('click', pararLeitorQr);
   try { await video.play(); } catch (e) {}
-  const nativo = await detectorNativo();
+  const nativo = await detectorNativo(barras);
   let jsQR = null;
-  if (!nativo) { try { jsQR = await carregarJsQR(); } catch (e) { document.getElementById('qr-dica').textContent = 'Leitor de QR não carregou: use "Tirar foto".'; } }
+  if (!nativo && !barras) { try { jsQR = await carregarJsQR(); } catch (e) { document.getElementById('qr-dica').textContent = 'Leitor de QR não carregou: use "Tirar foto".'; } }
   const cv = document.createElement('canvas'), ctx = cv.getContext('2d', {willReadFrequently: true});
   const inicio = Date.now();
   const passo = async () => {
@@ -2852,7 +2883,7 @@ async function lerQrAoVivo(aoLer) {
       if (navigator.vibrate) navigator.vibrate(60);
       pararLeitorQr(); aoLer(texto); return;
     }
-    if (Date.now() - inicio > 12000) { const d = document.getElementById('qr-dica'); if (d) d.textContent = 'Chegue mais perto, com luz, e segure firme. Ou cancele e use "Tirar foto".'; }
+    if (Date.now() - inicio > 12000) { const d = document.getElementById('qr-dica'); if (d) d.textContent = barras ? 'Chegue mais perto, com luz, e segure firme. Ou cancele e digite o código.' : 'Chegue mais perto, com luz, e segure firme. Ou cancele e use "Tirar foto".'; }
     setTimeout(passo, nativo ? 150 : 120);
   };
   passo();
@@ -3043,6 +3074,7 @@ function codigoLido(cod) {
   if (T.nome === 'carrinho' || T.nome === 'lista') return bipCarrinho(cod);
   if (T.nome === 'rotina' && T.p.r) return bipRotina(cod);
   if (T.nome === 'conferencia') return bipConferencia(cod);
+  if (T.nome === 'orcamento') return bipOrcamento(cod);
 }
 function codigoDesconhecido(cod, depois) {
   bipe(false);
@@ -3061,19 +3093,27 @@ function codigoDesconhecido(cod, depois) {
   T.p.sel = null;
   ligarBuscaProduto('codigo-escolher');
 }
-function ligarBuscaProduto(acao) {
+// [CÓDIGO DE BARRAS] a busca acha pelo nome ou pelo código de barras (inteiro ou parte, 4+ números);
+// codigoNovo(cod): código inteiro que ninguém conhece (o gestor pode dizer qual produto é)
+function ligarBuscaProduto(acao, codigoNovo) {
   let espera;
   document.getElementById('busca-prod').addEventListener('input', e => {
     clearTimeout(espera);
     espera = setTimeout(async () => {
       const termo = e.target.value.trim(), res = document.getElementById('busca-res');
       if (!res) return;
-      if (termo.length < 2) { res.innerHTML = '<div class="vazio" style="padding:14px">Digite pelo menos 2 letras.</div>'; return; }
+      if (termo.length < 2) { res.innerHTML = '<div class="vazio" style="padding:14px">Digite pelo menos 2 letras (ou números do código de barras).</div>'; return; }
+      const digitos = termo.replace(/[\s.\-]/g, ''), ehCodigo = /^\d{4,}$/.test(digitos);
       try {
         const achados = await api('GET', '/api/compras/produtos?q=' + encodeURIComponent(termo));
         res.innerHTML = achados.map(a => `<button class="lin" style="width:100%;border-left:0;border-right:0;border-bottom:0;background:#fff;text-align:left" data-acao="${acao}" data-pid="${a.produto_id}" data-nome="${esc(a.nome)}" data-un="${esc(a.unidade)}">
-            <div class="grow"><div style="font-weight:700">${esc(a.nome)}</div><div class="mini suave">${esc(a.unidade)} · ${esc(a.categoria)}</div></div></button>`).join('')
-          || '<div class="vazio" style="padding:14px">Nenhum produto com esse nome.</div>';
+            <div class="grow"><div style="font-weight:700">${esc(a.nome)}</div><div class="mini suave">${esc(a.unidade)} · ${esc(a.categoria)}${a.codigo
+              ? ` · 🏷️ ${esc(a.codigo)}${a.fator > 1 ? ` (caixa com ${fmtQtd(a.fator)})` : ''}` : ''}</div></div></button>`).join('')
+          || `<div class="vazio" style="padding:14px">${ehCodigo ? 'Nenhum produto com esse código de barras.' : 'Nenhum produto com esse nome.'}
+              ${ehCodigo && codigoNovo && E.usuario.gestor && digitos.length >= 8 && digitos.length <= 14
+                ? `<div style="margin-top:8px"><button class="btn claro medio" id="busca-codigo-novo">🏷️ Dizer qual produto é este código</button></div>` : ''}</div>`;
+        const novo = document.getElementById('busca-codigo-novo');
+        if (novo) novo.onclick = () => codigoNovo(digitos);
       } catch (err) { res.innerHTML = `<div class="vazio" style="padding:14px">${esc(err.extra && err.extra.offline ? 'Sem internet.' : err.message)}</div>`; }
     }, 300);
   });
@@ -3501,12 +3541,17 @@ const acoes = {
     T.p.o.itens = T.p.o.itens.filter(x => x !== i); salvarOrcamento(); desenhar();
   },
   'orc-add': () => {
+    // [CÓDIGO DE BARRAS] nome, código de barras (digitado, bipado com o leitor ou pela câmera)
     abrirModal(`<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px"><div class="titulo-sec">Adicionar produto</div>
         <button class="icone-btn" data-acao="fechar-modal" aria-label="Fechar">${ICONES.fechar}</button></div>
-      <div class="campo"><input id="busca-prod" placeholder="Digite parte do nome" autocomplete="off" aria-label="Procurar produto"></div>
+      <div class="campo" style="flex-direction:row;gap:8px"><input id="busca-prod" placeholder="Nome ou código de barras" autocomplete="off" aria-label="Procurar produto pelo nome ou pelo código de barras" style="flex:1;min-width:0">
+        <button class="btn claro" id="orc-camera" data-acao="orc-camera" title="Ler o código de barras com a câmera" aria-label="Ler o código de barras com a câmera" style="width:auto;height:48px;padding:0 14px;display:none">📷</button></div>
+      <div class="mini suave" style="margin:-4px 0 8px">🏷️ Digite o código de barras (ou só parte dele) ou bipe com o leitor: o produto aparece aqui.</div>
       <div id="busca-res" class="linhas" style="max-height:340px;overflow:auto"><div class="vazio" style="padding:14px">Digite para buscar.</div></div>`);
-    ligarBuscaProduto('orc-add-escolher');
+    ligarBuscaProduto('orc-add-escolher', cod => codigoDesconhecido(cod, () => bipOrcamento(cod)));
+    cameraLeBarras().then(sim => { const b = document.getElementById('orc-camera'); if (b && sim) b.style.display = ''; });   // só onde a câmera lê código de barras
   },
+  'orc-camera': () => lerQrAoVivo(cod => bipOrcamento(String(cod).replace(/\D/g, '')), true),
   'orc-add-escolher': async d => {
     clearTimeout(esperaOrc);
     if (T.p.salvando) await salvarOrcamento(true);

@@ -804,8 +804,9 @@ def estoque_completo():
 
 
 def buscar_produtos(termo='', limite=40):
-    """Produtos do estoque para colocar numa rotina (busca por nome ou categoria)."""
+    """Produtos do estoque (busca por nome, categoria ou [CÓDIGO DE BARRAS] código de barras, inteiro ou parte)."""
     termo = str(termo or '').strip()
+    por_codigo = _produtos_pelo_codigo(termo)
     conn = _conectar()
     try:
         cur = conn.cursor()
@@ -818,13 +819,47 @@ def buscar_produtos(termo='', limite=40):
             if pid in inativos:
                 continue
             alvo = database_normalizar(f"{nome or ''} {cat or ''}")
-            if all(p in alvo for p in palavras):
-                achados.append({'produto_id': pid, 'nome': nome or f'Produto {pid}',
-                                'unidade': (un or 'UN').strip() or 'UN', 'categoria': cat or ''})
-        achados.sort(key=lambda x: x['nome'].lower())
+            cod = por_codigo.get(pid)
+            if cod or all(p in alvo for p in palavras):
+                item = {'produto_id': pid, 'nome': nome or f'Produto {pid}',
+                        'unidade': (un or 'UN').strip() or 'UN', 'categoria': cat or ''}
+                if cod:                                   # mostra qual código achou (e se é o da caixa)
+                    item.update(codigo=cod[0], fator=_num(cod[1]))
+                achados.append(item)
+        # o código inteiro primeiro, depois parte do código, depois o nome
+        achados.sort(key=lambda x: ((0 if por_codigo[x['produto_id']][2] else 1) if x['produto_id'] in por_codigo else 2,
+                                    x['nome'].lower()))
         return achados[:limite]
     finally:
         conn.close()
+
+
+def _produtos_pelo_codigo(termo):
+    """
+    [CÓDIGO DE BARRAS] Busca só com números (4 ou mais, pode ter espaço, ponto ou traço): os produtos dos códigos de
+    barras conhecidos (vínculos das notas, código da unidade e os bipados no app) que são esse código ou o contêm.
+    {ProdutoID: (código, fator, exato)}. Qualquer falha: {} (a busca pelo nome continua funcionando).
+    """
+    digitos = re.sub(r'[\s.\-]', '', termo or '')
+    if not digitos.isdigit() or len(digitos) < 4 or not digitos.strip('0'):
+        return {}
+    alvo = digitos.lstrip('0')
+    try:
+        mapa = database.codigos_barras_produtos()           # {código sem os zeros da esquerda: [(ProdutoID, fator)]}
+    except Exception as e:
+        logger.warning(f"Busca por código de barras indisponível: {e}")
+        return {}
+    achados = {}
+    for codigo, lista in mapa.items():
+        exato = codigo == alvo
+        if not exato and alvo not in codigo:
+            continue
+        for pid, fator in lista:
+            atual = achados.get(pid)
+            # fica com o código inteiro (se houver) e, entre iguais, com o da unidade (fator 1)
+            if atual is None or (exato and not atual[2]) or (exato == atual[2] and fator < atual[1]):
+                achados[pid] = (codigo.zfill(8) if len(codigo) <= 8 else codigo.zfill(13), fator, exato)   # EAN-8 / EAN-13
+    return achados
 
 
 def database_normalizar(texto):
