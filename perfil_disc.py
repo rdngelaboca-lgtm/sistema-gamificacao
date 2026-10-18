@@ -178,7 +178,8 @@ TEXTOS = {
 # Onde cada perfil rende mais na loja: peso de cada fator por setor (nomes dos setores da escala)
 SETORES = [
     ('Caixa', {'C': .5, 'I': .25, 'S': .25}, 'atenção com dinheiro e cupom, e simpatia no fim do atendimento'),
-    ('Frente Loja', {'I': .6, 'S': .25, 'D': .15}, 'receber o cliente, explicar o buffet e sugerir sabores'),
+    ('Recepção', {'I': .6, 'S': .3, 'D': .1}, 'receber quem chega com simpatia e explicar como funciona o buffet'),
+    ('Frente Loja', {'I': .5, 'S': .25, 'D': .25}, 'atender no balcão, sugerir sabores e vender mais'),
     ('Salão', {'S': .45, 'I': .35, 'C': .2}, 'manter o salão em ordem e atender as mesas com calma'),
     ('Varanda', {'I': .5, 'S': .3, 'D': .2}, 'contato com o cliente e movimento'),
     ('Buffet', {'S': .4, 'C': .4, 'D': .2}, 'repor no ritmo certo e manter a apresentação no padrão'),
@@ -187,6 +188,32 @@ SETORES = [
     ('Camara Fria', {'C': .6, 'S': .3, 'D': .1}, 'organização, validade e contagem do estoque'),
     ('Liderança de turno', {'D': .5, 'I': .3, 'C': .2}, 'decidir rápido no pico e puxar a equipe'),
 ]
+# O que cada fator traz para cada função (para explicar o PORQUÊ de combinar ou não)
+NECESSIDADES = {
+    'Caixa': {'C': 'atenção com dinheiro, troco e cupom', 'I': 'simpatia no fim do atendimento', 'S': 'calma com a fila'},
+    'Recepção': {'I': 'conversar e receber quem chega com simpatia', 'S': 'paciência para explicar o buffet muitas vezes',
+                 'D': 'agilidade quando chega muita gente junto'},
+    'Frente Loja': {'I': 'puxar conversa e sugerir sabores (vender mais)', 'S': 'paciência com o cliente indeciso',
+                    'D': 'agilidade no horário de pico'},
+    'Salão': {'S': 'calma e constância para cuidar do salão', 'I': 'simpatia com as mesas', 'C': 'capricho com a organização'},
+    'Varanda': {'I': 'contato o tempo todo com o cliente', 'S': 'paciência com o movimento', 'D': 'agilidade quando enche'},
+    'Buffet': {'S': 'ritmo constante de reposição', 'C': 'padrão de apresentação e validade', 'D': 'rapidez para repor no pico'},
+    'Cozinha': {'C': 'seguir receita e higiene à risca', 'S': 'constância, sempre do mesmo jeito', 'D': 'agilidade quando aperta'},
+    'Limpeza': {'S': 'rotina sem pular etapa', 'C': 'capricho nos detalhes'},
+    'Camara Fria': {'C': 'organização, validade e contagem do estoque', 'S': 'rotina e paciência (é um trabalho mais sozinho)',
+                    'D': 'agilidade para repor'},
+    'Liderança de turno': {'D': 'decidir rápido e assumir a frente', 'I': 'puxar e animar a equipe', 'C': 'cobrar o padrão'},
+}
+# Quando um fator MUITO forte atrapalha a função (mesmo combinando no resto)
+CONFLITOS = {
+    'Camara Fria': {'I': 'é um trabalho mais sozinho, e quem é muito 🟡 Influente desanima sem gente para conversar'},
+    'Limpeza': {'D': 'é rotina repetitiva, e quem é muito 🔴 Dominante perde o interesse sem desafio',
+                'I': 'é um trabalho mais sozinho, e quem é muito 🟡 Influente desanima sem gente para conversar'},
+    'Caixa': {'D': 'pede conferir tudo com paciência, e quem é muito 🔴 Dominante pode querer pular etapa'},
+    'Cozinha': {'I': 'fica longe do cliente, e quem é muito 🟡 Influente sente falta de conversar'},
+}
+NIVEIS = {'combina': '✅ Combina muito', 'pode': '🟡 Pode funcionar', 'menos': '⚠️ Menos indicado'}
+
 FALTA_NA_EQUIPE = {
     'D': 'Ninguém com D forte: no pico, combine antes quem decide (líder do turno) para a equipe não travar.',
     'I': 'Ninguém com I forte: treine a recepção e as sugestões de sabores, senão o atendimento fica frio.',
@@ -307,6 +334,38 @@ def intensidade(p):
     return 'alto' if p >= 35 else ('médio' if p >= 25 else 'baixo')
 
 
+def funcoes_da_pessoa(pct):
+    """
+    TODAS as funções da loja para esta pessoa, da que mais combina para a que menos, com o nível e o PORQUÊ:
+    ✅ combina muito · 🟡 pode funcionar (com treino) · ⚠️ menos indicado (diz qual fator falta).
+    """
+    saida = []
+    for nome, pesos, motivo in SETORES:
+        nota = sum(peso * pct[d] for d, peso in pesos.items())
+        nec, ordem = NECESSIDADES.get(nome, {}), sorted(pesos, key=lambda d: -pesos[d])
+        forte = max(ordem, key=lambda d: pesos[d] * pct[d])            # o fator dela que mais ajuda nesta função
+        falta = max(ordem, key=lambda d: pesos[d] * (25 - pct[d]))     # o fator que a função pede e ela tem pouco
+        fator = lambda d: f"{EMOJI[d]} {NOMES[d]} {pct[d]}%"
+        nivel = 'combina' if nota >= 30 else ('pode' if nota >= 22 else 'menos')
+        if nivel == 'combina':
+            porque = f"Pede {nec.get(forte, motivo)}, e isso é um ponto forte do perfil ({fator(forte)})."
+        elif nivel == 'menos':
+            porque = f"Pede {nec.get(falta, motivo)}, e esse é um fator baixo no perfil ({fator(falta)})."
+        elif pct[falta] < 25 and falta != forte:
+            porque = (f"A favor: {nec.get(forte, motivo)} ({fator(forte)}). Vai precisar de treino em: {nec.get(falta, '')} "
+                      f"({fator(falta)}).")
+        else:
+            porque = f"Dá para fazer: pede {nec.get(forte, motivo)} ({fator(forte)}), sem ser o ponto mais forte do perfil."
+        for d, aviso in CONFLITOS.get(nome, {}).items():
+            if pct[d] >= 40:                                            # fator muito forte que atrapalha: desce um nível
+                nivel = {'combina': 'pode', 'pode': 'menos'}.get(nivel, nivel)
+                porque += f" Atenção: {aviso}."
+        saida.append({'setor': nome, 'nivel': nivel, 'nivel_nome': NIVEIS[nivel], 'porque': porque, 'nota': round(nota, 1)})
+    ordem_nivel = {'combina': 0, 'pode': 1, 'menos': 2}
+    saida.sort(key=lambda x: (ordem_nivel[x['nivel']], -x['nota']))
+    return saida
+
+
 def setores_da_pessoa(pct, n=3):
     """Os setores (e a liderança de turno) que mais combinam com o perfil, com o motivo."""
     notas = [(sum(peso * pct[d] for d, peso in pesos.items()), nome, motivo) for nome, pesos, motivo in SETORES]
@@ -327,7 +386,7 @@ def relatorio(pct, perfil):
         'fortes': junta('fortes', 4), 'motiva': junta('motiva'), 'desmotiva': junta('desmotiva'),
         'comunicar': junta('comunicar'), 'feedback': junta('feedback'), 'atencao': junta('atencao', 3, 1),
         'pressao': t['pressao'], 'liderar': junta('liderar', 3, 1), 'funcoes': junta('funcoes', 3, 1),
-        'setores': setores_da_pessoa(pct),
+        'setores': setores_da_pessoa(pct), 'funcoes_loja': funcoes_da_pessoa(pct),
     }
 
 

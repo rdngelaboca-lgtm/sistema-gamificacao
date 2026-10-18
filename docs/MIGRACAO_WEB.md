@@ -372,8 +372,9 @@ aparelho, e o mesmo WhatsApp em até 60 dias atualiza o cadastro em vez de dupli
 `Disponibilidade`, `Experiencia`, `Etapa`, `AceiteEm`; pela internet ficam abertos só `/trabalhe-conosco` e `/api/trabalhe-conosco`. O sistema soma 🔴 D Dominante, 🟡 I Influente, 🟢 S Estável e 🔵 C Conforme
 (porcentagens que somam 100; dois fatores fortes e próximos viram perfil combinado, ex.: IS) e monta o **relatório da
 gestão**: pontos fortes, o que motiva, o que desmotiva, como conversar, como dar feedback, como liderar, **onde rende
-mais na loja** (pelos setores da escala: Caixa, Frente Loja, Salão, Varanda, Buffet, Cozinha, Limpeza, Câmara Fria e
-liderança de turno) e pontos de atenção. A pessoa vê só um **resumo positivo** (perfil e pontos fortes) e ganha os pontos
+mais na loja** — TODAS as funções (Caixa, Recepção, Frente Loja, Salão, Varanda, Buffet, Cozinha, Limpeza, Câmara Fria e
+liderança de turno) em ✅ combina muito / 🟡 pode funcionar / ⚠️ menos indicado, cada uma com o **porquê** (qual fator do
+perfil ajuda ou falta, e avisos como "trabalho mais sozinho" para quem é muito Influente) — e pontos de atenção. A pessoa vê só um **resumo positivo** (perfil e pontos fortes) e ganha os pontos
 uma vez. Aba 👥 Equipe: quantos de cada perfil, dicas do que falta na equipe e **sugestões para a escala** (quem combina
 mais com cada setor); aba 📋 Envios: situação de cada link (🔔 Lembrar, 📤 Agora, ⛔ Cancelar). Aviso no grupo da gestão
 quando alguém responde (desliga em 📣 Avisos › 🧭 Perfil da equipe). Questionário próprio, baseado na teoria DISC

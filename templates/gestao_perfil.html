@@ -86,6 +86,9 @@
   .secao h4 { margin: 0 0 4px; font-size: 14px; }
   .secao ul { margin: 0; padding-left: 18px; font-size: 14px; line-height: 1.5; }
   .secao.larga { grid-column: 1 / -1; }
+  .nivel-f { border-left: 4px solid var(--linha); padding: 2px 0 2px 10px; margin: 6px 0; }
+  .nivel-f.combina { border-left-color: var(--ok); } .nivel-f.pode { border-left-color: #f9a825; } .nivel-f.menos { border-left-color: var(--erro); }
+  .nivel-f ul { margin-top: 2px; }
   .aviso-uso { font-size: 12px; color: var(--suave); margin-top: 10px; line-height: 1.45; }
   @media (max-width: 700px) {
     .area { padding-left: 10px; padding-right: 10px; }
@@ -374,8 +377,12 @@ async function relatorio(id) {
       ${sec('💪 Pontos fortes', d.fortes)}${sec('🔋 O que motiva', d.motiva)}
       ${sec('🪫 O que desmotiva', d.desmotiva)}${sec('💬 Como conversar', d.comunicar)}
       ${sec('🗣️ Como dar feedback', d.feedback)}${sec('🧑‍🏫 Como liderar', d.liderar)}
-      <div class="secao larga"><h4>📍 Onde rende mais na loja</h4><ul>${d.setores.map(s => `<li><b>${esc(s.setor)}</b>: ${esc(s.motivo)}</li>`).join('')}</ul>
-        <div class="mini" style="margin-top:6px"><b>Funções que combinam:</b> ${d.funcoes.map(esc).join(' · ')}</div></div>
+      <div class="secao larga"><h4>📍 Onde rende mais na loja <span class="mini suave">(todas as funções, com o porquê)</span></h4>
+        ${['combina', 'pode', 'menos'].map(n => {
+          const fs = (d.funcoes_loja || []).filter(f => f.nivel === n);
+          return fs.length ? `<div class="nivel-f ${n}"><b>${esc(fs[0].nivel_nome)}</b><ul>${fs.map(f => `<li><b>${esc(f.setor)}</b>: ${esc(f.porque)}</li>`).join('')}</ul></div>` : '';
+        }).join('')}
+        <div class="mini" style="margin-top:6px"><b>Tarefas que combinam:</b> ${d.funcoes.map(esc).join(' · ')}</div></div>
       <div class="secao larga"><h4>⚠️ Pontos de atenção</h4><ul>${d.atencao.map(x => `<li>${esc(x)}</li>`).join('')}<li>${esc(d.pressao)}</li></ul></div>
     </div>
     <div class="aviso-uso">Ferramenta de orientação (questionário próprio, baseado na teoria DISC): use para conversar e organizar a
