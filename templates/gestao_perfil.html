@@ -79,7 +79,7 @@
     <button class="btn prim" id="btn-enviar">📤 Enviar avaliação</button>
     <button class="btn ico" id="atualizar" title="Atualizar">🔄</button></div></section>
   <main class="area">
-    <details class="explica"><summary><b>O que é o DISC?</b> Uma avaliação rápida (24 grupos de palavras) que mostra o jeito
+    <details class="explica"><summary><b>O que é o DISC?</b> Uma avaliação rápida (20 perguntas simples do dia a dia da loja) que mostra o jeito
       natural de cada fixo trabalhar.</summary>
       <div class="cores">
         <div class="cor D"><b>🔴 D · Dominante</b>Resultado, desafio, decisão rápida.</div>
@@ -200,7 +200,7 @@ async function enviar() {
     const p = P.find(x => marcados.has(x.id)), nome = p ? p.nome.split(' ')[0] : 'Fulano';
     const pts = Math.max(0, Math.min(100, Math.floor(+$('#p-pontos').value || 0)));
     $('#p-previa').innerHTML = esc(`🧭 *Avaliação de perfil — ${r.empresa}*\n\nOlá, ${nome}!\nQueremos te conhecer melhor para organizar a equipe do jeito ` +
-      `que combina com você. São 24 perguntas rápidas (uns 10 minutos) e não existe resposta certa ou errada.\n\n` +
+      `que combina com você. São ${r.perguntas} perguntas rápidas (uns 8 minutos) e não existe resposta certa ou errada.\n\n` +
       (pts ? `⭐ Respondendo você ganha *${pts} pontos* na gamificação!\n\n` : '') + `👉 *Toque no link para responder:*\n(link)`)
       .replace(/\*([^*\n]+)\*/g, '<b>$1</b>');
   };

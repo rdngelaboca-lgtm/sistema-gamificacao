@@ -354,8 +354,10 @@ Arquivos: `comunicados_equipe.py`, `templates/gestao_comunicados.html`, `templat
 Avaliação de perfil comportamental **só para os fixos**. A gestão escolhe quem recebe (🆕 quem ainda não fez, 👥 todos,
 📅 escalados no dia ou um a um), a validade e ⭐ pontos opcionais. O link vai no WhatsApp **no mesmo horário dos
 📨 comunicados** (a partir de 30 min antes do turno, fora do intervalo; 📤 Agora manda na hora). No link (`/perfil/<código>`):
-**24 grupos de 4 palavras** — em cada um a pessoa toca na que MAIS e na que MENOS parece com ela (o andamento fica no
-celular: dá para fechar e continuar). O sistema soma 🔴 D Dominante, 🟡 I Influente, 🟢 S Estável e 🔵 C Conforme
+**20 perguntas simples do dia a dia da loja** ("Quando a loja está cheia, eu…") com 4 respostas curtas — em 2 passos com
+cor, a pessoa toca na que 👍 MAIS e na que 👎 MENOS combina com ela. Antes vem uma **pergunta de treino** que não conta
+("Qual sabor de sorvete…"), e o botão **🔊 Ouvir** lê a pergunta em voz alta (para quem tem dificuldade de leitura). O
+andamento fica no celular: dá para fechar e continuar. O sistema soma 🔴 D Dominante, 🟡 I Influente, 🟢 S Estável e 🔵 C Conforme
 (porcentagens que somam 100; dois fatores fortes e próximos viram perfil combinado, ex.: IS) e monta o **relatório da
 gestão**: pontos fortes, o que motiva, o que desmotiva, como conversar, como dar feedback, como liderar, **onde rende
 mais na loja** (pelos setores da escala: Caixa, Frente Loja, Salão, Varanda, Buffet, Cozinha, Limpeza, Câmara Fria e

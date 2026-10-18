@@ -4,7 +4,8 @@
 # A gestão envia pela Gestão Web (🧭 Perfil) e cada FIXO recebe um LINK no WhatsApp no mesmo horário dos
 # 📨 comunicados: a partir de 30 min antes do turno dele (pela escala), fora do intervalo; na folga espera
 # o próximo turno.
-# No link: 24 grupos de 4 palavras; em cada grupo a pessoa toca na que MAIS e na que MENOS parece com ela.
+# No link: 20 perguntas do dia a dia, com 4 respostas; a pessoa toca na que MAIS e na que MENOS combina com ela
+# (antes uma pergunta de treino, que não conta).
 # O sistema soma D (Dominante), I (Influente), S (Estável) e C (Conforme) e monta:
 #   - o relatório da gestão: o que motiva, o que desmotiva, como conversar, como dar feedback, onde rende
 #     mais na loja (pelos setores da escala), pontos de atenção e como liderar;
@@ -26,7 +27,7 @@ import comunicados_equipe as CE      # mesmo horário de entrega e mesmos ajudan
 
 logger = logging.getLogger(__name__)
 
-VERSAO = 1
+VERSAO = 2                     # 2: perguntas do dia a dia (a 1 tinha palavras soltas)
 DIMS = 'DISC'
 NOMES = {'D': 'Dominante', 'I': 'Influente', 'S': 'Estável', 'C': 'Conforme'}
 EMOJI = {'D': '🔴', 'I': '🟡', 'S': '🟢', 'C': '🔵'}
@@ -37,25 +38,76 @@ ST_FALHOU, ST_EXPIRADO, ST_SEM_TEL, ST_CANCELADO = 'falhou', 'expirado', 'sem_te
 VALIDADE_PADRAO_DIAS, VALIDADE_MAX_DIAS = 7, 30
 SEGUNDO_PLANO = True           # os testes desligam para conferir na hora
 
-# Palavras de cada fator (24 cada). Cada grupo do questionário tem uma de cada, numa ordem diferente.
-PALAVRAS = {
-    'D': ['Decidido', 'Competitivo', 'Direto', 'Ousado', 'Determinado', 'Exigente', 'Independente', 'Enérgico',
-          'Objetivo', 'Corajoso', 'Firme', 'Ambicioso', 'Persistente', 'Ágil', 'Desafiador', 'Autoconfiante',
-          'Assertivo', 'Arrojado', 'Empreendedor', 'Franco', 'Dinâmico', 'Destemido', 'Prático', 'Audacioso'],
-    'I': ['Comunicativo', 'Animado', 'Otimista', 'Persuasivo', 'Sociável', 'Entusiasmado', 'Expressivo', 'Divertido',
-          'Inspirador', 'Espontâneo', 'Convincente', 'Extrovertido', 'Alegre', 'Falante', 'Carismático', 'Brincalhão',
-          'Popular', 'Criativo', 'Simpático', 'Empolgado', 'Encantador', 'Contagiante', 'Festeiro', 'Motivador'],
-    'S': ['Paciente', 'Calmo', 'Leal', 'Prestativo', 'Constante', 'Tranquilo', 'Bom ouvinte', 'Cooperativo',
-          'Gentil', 'Previsível', 'Compreensivo', 'Estável', 'Sereno', 'Amigável', 'Acolhedor', 'Dedicado',
-          'Pacífico', 'Confiável', 'Solidário', 'Moderado', 'Atencioso', 'Equilibrado', 'Tolerante', 'Companheiro'],
-    'C': ['Cuidadoso', 'Organizado', 'Preciso', 'Detalhista', 'Analítico', 'Caprichoso', 'Disciplinado', 'Cauteloso',
-          'Perfeccionista', 'Metódico', 'Lógico', 'Criterioso', 'Exato', 'Sistemático', 'Reservado', 'Correto',
-          'Pontual', 'Planejador', 'Observador', 'Rigoroso', 'Minucioso', 'Prudente', 'Formal', 'Zeloso'],
-}
-# ordem das 4 palavras em cada grupo (as 24 combinações de DISC, misturadas): ninguém "acha o padrão"
-ORDENS = ['DISC', 'IDCS', 'SCID', 'CSDI', 'DCSI', 'ISDC', 'SDIC', 'CIDS', 'DSIC', 'ICSD', 'SICD', 'CDSI',
-          'DICS', 'IDSC', 'SCDI', 'CISD', 'DSCI', 'ICDS', 'SDCI', 'CSID', 'DCIS', 'ISCD', 'SIDC', 'CDIS']
-BLOCOS = [[(PALAVRAS[d][k], d) for d in ordem] for k, ordem in enumerate(ORDENS)]
+# As perguntas (v2: linguagem simples, do dia a dia da loja, para quem tem pouco estudo). Cada pergunta tem uma
+# resposta de cada fator; a pessoa escolhe a que MAIS e a que MENOS combina com ela.
+PERGUNTAS = [
+    ("Quando a loja está cheia, eu…", {
+        'D': "tomo a frente e resolvo rápido", 'I': "animo o pessoal e converso com os clientes",
+        'S': "faço a minha parte com calma", 'C': "presto atenção para não errar nada"}),
+    ("Quando chega uma regra nova, eu…", {
+        'D': "quero começar logo", 'I': "comento com os colegas",
+        'S': "preciso de um tempo para me acostumar", 'C': "quero entender bem como funciona"}),
+    ("No trabalho, eu gosto mais de…", {
+        'D': "desafios e metas", 'I': "conversar e conhecer gente",
+        'S': "ajudar os colegas", 'C': "fazer tudo bem feito, no capricho"}),
+    ("Quando um cliente reclama, eu…", {
+        'D': "resolvo o problema na hora", 'I': "uso a simpatia para deixar ele feliz de novo",
+        'S': "escuto com paciência", 'C': "explico direitinho o que aconteceu"}),
+    ("Meus colegas dizem que eu sou alguém…", {
+        'D': "que decide rápido", 'I': "animado e divertido",
+        'S': "calmo e paciente", 'C': "caprichoso e organizado"}),
+    ("Quando recebo uma tarefa nova, eu…", {
+        'D': "começo logo, sem enrolar", 'I': "gosto de fazer junto com alguém",
+        'S': "sigo o jeito que me ensinaram", 'C': "pergunto tudo antes de começar"}),
+    ("O que mais me deixa feliz no trabalho é…", {
+        'D': "bater a meta", 'I': "ver o cliente sair sorrindo",
+        'S': "a equipe unida, sem briga", 'C': "ver tudo limpo e organizado"}),
+    ("O que mais me incomoda é…", {
+        'D': "gente lenta ou enrolada", 'I': "ficar sozinho, sem conversar com ninguém",
+        'S': "briga e confusão", 'C': "bagunça e coisa malfeita"}),
+    ("Quando aparece um problema, eu…", {
+        'D': "resolvo do meu jeito, rápido", 'I': "chamo o pessoal para pensar junto",
+        'S': "mantenho a calma e não me desespero", 'C': "procuro a causa com cuidado"}),
+    ("Se eu pudesse escolher, eu trabalharia mais…", {
+        'D': "liderando a equipe", 'I': "atendendo os clientes",
+        'S': "numa função que eu já conheço bem", 'C': "cuidando do estoque e da organização"}),
+    ("Quando alguém me explica uma coisa, eu prefiro que…", {
+        'D': "vá direto ao ponto", 'I': "converse comigo de um jeito leve",
+        'S': "explique com calma, passo a passo", 'C': "mostre todos os detalhes"}),
+    ("Quando a escala ou o combinado muda de última hora, eu…", {
+        'D': "me ajeito e sigo em frente", 'I': "acho bom, gosto de novidade",
+        'S': "fico um pouco incomodado", 'C': "quero saber o motivo da mudança"}),
+    ("No dia a dia, eu sou alguém…", {
+        'D': "rápido e prático", 'I': "falante e alegre",
+        'S': "tranquilo e constante", 'C': "cuidadoso e atento"}),
+    ("Quando um colega erra, eu…", {
+        'D': "falo na hora, sem rodeio", 'I': "brinco para deixar o clima leve",
+        'S': "ajudo a consertar sem fazer barulho", 'C': "mostro qual é o jeito certo"}),
+    ("Numa reunião da equipe, eu…", {
+        'D': "dou minha opinião com firmeza", 'I': "falo bastante e dou ideias",
+        'S': "escuto mais do que falo", 'C': "faço perguntas sobre os detalhes"}),
+    ("O que eu mais quero no trabalho é…", {
+        'D': "crescer e ter mais responsabilidade", 'I': "ser reconhecido e elogiado",
+        'S': "ter segurança e estabilidade", 'C': "fazer as coisas do jeito certo"}),
+    ("Quando estou sob muita pressão, eu…", {
+        'D': "fico mais direto e acelerado", 'I': "falo mais e fico agitado",
+        'S': "fico quieto e continuo fazendo", 'C': "fico mais exigente com os detalhes"}),
+    ("Para aprender uma coisa nova, eu prefiro…", {
+        'D': "fazer na prática, logo de cara", 'I': "aprender junto com outras pessoas",
+        'S': "ver alguém fazendo antes, com calma", 'C': "ter tudo explicado, de preferência anotado"}),
+    ("Quando o movimento está fraco, eu…", {
+        'D': "procuro um jeito de vender mais", 'I': "puxo conversa com os clientes e colegas",
+        'S': "adianto as tarefas de sempre", 'C': "organizo o que está fora do lugar"}),
+    ("Uma qualidade minha é…", {
+        'D': "coragem para encarar desafios", 'I': "simpatia com as pessoas",
+        'S': "paciência e lealdade", 'C': "capricho e atenção aos detalhes"}),
+]
+# ordem das 4 respostas em cada pergunta: 20 das 24 combinações de DISC (sem um quadrado latino), assim cada fator
+# aparece 5 vezes em cada posição e ninguém "acha o padrão"
+ORDENS = ['SCID', 'CSDI', 'DCSI', 'ISDC', 'SDIC', 'CIDS', 'DSIC', 'ICSD', 'SICD', 'CDSI',
+          'DICS', 'IDSC', 'CISD', 'DSCI', 'ICDS', 'SDCI', 'DCIS', 'ISCD', 'SIDC', 'CDIS']
+ENUNCIADOS = [pergunta for pergunta, _ in PERGUNTAS]
+BLOCOS = [[(opcoes[d], d) for d in ordem] for (_, opcoes), ordem in zip(PERGUNTAS, ORDENS)]
 N_BLOCOS = len(BLOCOS)
 
 # O que cada fator significa no dia a dia da loja (textos do relatório)
@@ -252,8 +304,8 @@ def _rodar(funcao):
 # ------------------------------------------------------------------------------
 def calcular(escolhas):
     """
-    escolhas: [(fator MAIS, fator MENOS)] dos 24 grupos. Mais = +1, menos = −1; cada fator vai de −24 a +24.
-    Somando 24 em cada um (0 a 48) o total dá sempre 96: vira porcentagem que soma 100 (a média é 25%).
+    escolhas: [(fator MAIS, fator MENOS)] das perguntas. Mais = +1, menos = −1; com 20 perguntas cada fator vai de −20 a
+    +20. Somando 20 em cada um (0 a 40) o total dá sempre 80: vira porcentagem que soma 100 (a média é 25%).
     """
     bruto = {d: 0 for d in DIMS}
     for mais, menos in escolhas:
@@ -348,6 +400,7 @@ def pessoas(agora=None):
                  pendente=bool(u and u[2] in (ST_AGUARDANDO, ST_ENVIANDO, ST_ENVIADO, ST_FALHOU)))
         saida.append(p)
     return {'pessoas': saida, 'hoje': base['hoje'], 'antecedencia': base['antecedencia'], 'empresa': base['empresa'],
+            'perguntas': N_BLOCOS,
             'dias_escalados_max': base['dias_escalados_max'], 'link_local': base['link_local'],
             'validade_padrao': (agora.date() + timedelta(days=VALIDADE_PADRAO_DIAS)).isoformat(),
             'validade_max': (agora.date() + timedelta(days=VALIDADE_MAX_DIAS)).isoformat()}
@@ -362,7 +415,7 @@ def texto_mensagem(nome, link, pontos=0, lembrete=False):
             + f"🧭 *Avaliação de perfil — {CE._empresa()}*\n\n"
             + (f"Olá, {primeiro}!\n" if primeiro else "Olá!\n")
             + "Queremos te conhecer melhor para organizar a equipe do jeito que combina com você. São "
-            + f"{N_BLOCOS} perguntas rápidas (uns 10 minutos) e não existe resposta certa ou errada.\n\n"
+            + f"{N_BLOCOS} perguntas rápidas (uns 8 minutos) e não existe resposta certa ou errada.\n\n"
             + (f"⭐ Respondendo você ganha *{pontos} pontos* na gamificação!\n\n" if pontos else "")
             + f"👉 *Toque no link para responder:*\n{link}")
 
@@ -668,7 +721,7 @@ def _por_token(cur, token):
 
 
 def ver(token, agora=None):
-    """O questionário (só as palavras, sem dizer qual é de qual fator) ou, se já respondeu, o resumo da pessoa."""
+    """O questionário (só os textos, sem dizer qual resposta é de qual fator) ou, se já respondeu, o resumo da pessoa."""
     garantir_tabelas()
     agora = agora or CE._agora()
     conn = _conexao()
@@ -689,24 +742,24 @@ def ver(token, agora=None):
         return {'nome': nome, 'empresa': CE._empresa(), 'respondido': True, 'respondido_em': CE._quando(a[11]),
                 'pontos': a[5] or 0, 'resultado': resumo_pessoa(_pct(a[7], a[8], a[9], a[10]), a[6])}
     return {'nome': nome, 'empresa': CE._empresa(), 'respondido': False, 'pontos': a[5] or 0,
-            'blocos': [[palavra for palavra, _ in bloco] for bloco in BLOCOS]}
+            'blocos': [{'pergunta': ENUNCIADOS[k], 'opcoes': [texto for texto, _ in bloco]} for k, bloco in enumerate(BLOCOS)]}
 
 
 def responder(token, dados, agora=None):
-    """Recebe as 24 escolhas [[índice MAIS, índice MENOS], …], calcula, guarda e dá os pontos (uma vez só)."""
+    """Recebe as escolhas [[índice MAIS, índice MENOS], …] de cada pergunta, calcula, guarda e dá os pontos (uma vez só)."""
     garantir_tabelas()
     agora = agora or CE._agora()
     respostas = (dados or {}).get('respostas')
     if not isinstance(respostas, list) or len(respostas) != N_BLOCOS:
-        raise ErroPerfil(f"Responda os {N_BLOCOS} grupos antes de enviar.")
+        raise ErroPerfil(f"Responda as {N_BLOCOS} perguntas antes de enviar.")
     escolhas = []
     for k, r in enumerate(respostas):
         try:
             mais, menos = int(r[0]), int(r[1])
         except (TypeError, ValueError, IndexError):
-            raise ErroPerfil(f"Grupo {k + 1} incompleto: escolha a palavra que MAIS e a que MENOS parece com você.")
+            raise ErroPerfil(f"Pergunta {k + 1} incompleta: escolha a resposta que MAIS e a que MENOS combina com você.")
         if not (0 <= mais < 4 and 0 <= menos < 4) or mais == menos:
-            raise ErroPerfil(f"Grupo {k + 1}: a palavra do MAIS e a do MENOS precisam ser diferentes.")
+            raise ErroPerfil(f"Pergunta {k + 1}: a resposta do MAIS e a do MENOS precisam ser diferentes.")
         escolhas.append((BLOCOS[k][mais][1], BLOCOS[k][menos][1]))
     pct, perfil = calcular(escolhas)
     novo = False
