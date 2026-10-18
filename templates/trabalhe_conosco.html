@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0E6B63">
+<meta name="description" content="Trabalhe na Gela Boca: faça o seu cadastro e o questionário de perfil.">
+<title>Trabalhe conosco · Gela Boca</title>
+<!-- [TRABALHE CONOSCO] Página PÚBLICA (link da bio do Instagram): /trabalhe-conosco. A pessoa preenche os dados, as áreas
+     que tem interesse e a disponibilidade, autoriza guardar os dados e segue para o questionário de perfil (/perfil/<código>).
+     Fica tudo no banco da loja (Gestão › 🧭 Perfil › 🧑‍💼 Processo seletivo). Nada de ninguém aparece aqui. -->
+<style>
+  :root { --verde: #0E6B63; --verde-esc: #0B564F; --verde-claro: #DDEFEC; --texto: #16201F; --suave: #55625F; --linha: #DCE3E1;
+    --erro: #c62828; }
+  * { box-sizing: border-box; }
+  html { background: #F3F6F5; }
+  body { margin: 0; min-height: 100vh; background: linear-gradient(180deg, #DDEFEC 0%, #F3F6F5 300px) no-repeat; color: var(--texto);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 17px; }
+  main { max-width: 540px; margin: 0 auto; padding: 18px 14px 40px; }
+  .topo { text-align: center; margin-bottom: 12px; }
+  .topo .marca { font-size: 28px; font-weight: 800; color: var(--verde-esc); }
+  .topo .sub { font-size: 15px; color: var(--suave); margin-top: 2px; }
+  .cartao { background: #fff; border: 1px solid var(--linha); border-radius: 18px; padding: 18px 16px; display: grid; gap: 14px; box-shadow: 0 6px 20px #0E6B6314; }
+  h1 { font-size: 23px; margin: 0; line-height: 1.25; }
+  p { margin: 0; line-height: 1.5; }
+  .passos { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .passos div { border-radius: 12px; padding: 9px 10px; font-weight: 700; font-size: 14px; background: var(--verde-claro); color: var(--verde-esc); }
+  .passos div.agora { background: var(--verde); color: #fff; }
+  label.campo { display: grid; gap: 5px; font-weight: 700; font-size: 15px; }
+  label.campo small { font-weight: 500; color: var(--suave); }
+  input, textarea { font: inherit; font-size: 17px; border: 1px solid var(--linha); border-radius: 12px; padding: 12px; width: 100%; background: #fff; color: var(--texto); }
+  input:focus, textarea:focus { outline: 2px solid var(--verde); border-color: var(--verde); }
+  textarea { min-height: 90px; resize: vertical; }
+  .grupo { display: grid; gap: 8px; }
+  .grupo > b { font-size: 15px; }
+  .grupo > small { color: var(--suave); font-size: 14px; margin-top: -4px; }
+  .opcoes { display: grid; gap: 8px; }
+  .opcoes.duas { grid-template-columns: 1fr 1fr; }
+  .opcao { text-align: left; font: inherit; font-weight: 700; font-size: 16px; padding: 12px 12px; border-radius: 12px; border: 2px solid var(--linha);
+    background: #fff; color: var(--texto); cursor: pointer; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .opcao.sel { border-color: var(--verde); background: var(--verde-claro); }
+  .opcao .v { font-size: 18px; opacity: 0; }
+  .opcao.sel .v { opacity: 1; }
+  .aceite { display: grid; grid-template-columns: 26px 1fr; gap: 10px; align-items: start; font-size: 15px; line-height: 1.45; cursor: pointer; }
+  .aceite input { width: 22px; height: 22px; margin-top: 2px; }
+  .prim { font-weight: 800; font-size: 19px; border-radius: 14px; padding: 16px; border: 0; background: var(--verde); color: #fff; width: 100%; cursor: pointer; }
+  .prim[disabled] { opacity: .6; cursor: default; }
+  .mini { font-size: 13px; color: var(--suave); line-height: 1.45; }
+  #erro { color: var(--erro); font-weight: 700; min-height: 1.2em; }
+  .esconde { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+  .carregando { text-align: center; color: var(--suave); padding: 30px 0; }
+  .grande { font-size: 54px; text-align: center; line-height: 1; }
+  [hidden] { display: none !important; }
+  @media (max-width: 360px) { .opcoes.duas { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <div class="topo"><div class="marca" id="marca">🍦 Gela Boca</div><div class="sub">Trabalhe conosco</div></div>
+  <form class="cartao" id="form" novalidate hidden>
+    <h1>Venha fazer parte da nossa equipe! 💚</h1>
+    <div class="passos"><div class="agora">1. Seus dados</div><div>2. Questionário rápido</div></div>
+    <p>Preencha os seus dados e depois responda um questionário sobre o seu jeito de trabalhar (uns <b>10 minutos</b>).</p>
+    <label class="campo">Nome completo<input id="nome" autocomplete="name" maxlength="150" required></label>
+    <label class="campo">WhatsApp <small>com DDD</small><input id="telefone" type="tel" inputmode="tel" autocomplete="tel" placeholder="66 99999-1234" required></label>
+    <div class="opcoes duas">
+      <label class="campo">Idade<input id="idade" type="number" inputmode="numeric" min="14" max="80" required></label>
+      <label class="campo">Bairro<input id="bairro" maxlength="100" placeholder="Ex.: Centro" required></label>
+    </div>
+    <div class="grupo"><b>Em qual área você tem interesse?</b><small>Pode escolher mais de uma.</small>
+      <div class="opcoes" id="areas"></div></div>
+    <div class="grupo"><b>Quando você pode trabalhar?</b><small>Pode escolher mais de uma.</small>
+      <div class="opcoes duas" id="disponibilidade"></div></div>
+    <label class="campo">Já trabalhou em sorveteria, lanchonete ou restaurante? <small>Conte rapidinho (opcional)</small>
+      <textarea id="experiencia" maxlength="600" placeholder="Ex.: 1 ano de atendente na lanchonete X"></textarea></label>
+    <label class="esconde" aria-hidden="true">Site<input id="site" tabindex="-1" autocomplete="off"></label>
+    <label class="aceite"><input type="checkbox" id="aceite"><span>Autorizo a <span class="empresa">Gela Boca</span> a guardar os meus dados e
+      respostas para os processos seletivos. Posso pedir para apagar quando quiser.</span></label>
+    <button class="prim" id="enviar" type="submit">Continuar para o questionário →</button>
+    <div id="erro" role="alert"></div>
+    <div class="mini">🔒 Seus dados ficam só com a gestão da <span class="empresa">Gela Boca</span> e não são compartilhados.</div>
+  </form>
+  <div class="cartao" id="aviso"><div class="carregando">Carregando…</div></div>
+</main>
+<script>
+'use strict';
+const $ = s => document.querySelector(s);
+const esc = t => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+const SEL = {areas: new Set(), disponibilidade: new Set()};
+
+async function chamar(metodo, corpo) {
+  let r;
+  try {
+    r = await fetch('/api/trabalhe-conosco', {method: metodo, credentials: 'omit', cache: 'no-store',
+      headers: corpo ? {'Content-Type': 'application/json'} : {}, body: corpo ? JSON.stringify(corpo) : undefined});
+  } catch (e) { throw new Error('Sem internet. Confira a conexão e tente de novo.'); }
+  let d = {};
+  try { d = await r.json(); } catch (e) {}
+  if (!r.ok) throw new Error(d.erro || 'Não deu certo. Tente de novo.');
+  return d;
+}
+function opcoes(id, lista) {
+  $('#' + id).innerHTML = lista.map(o => `<button type="button" class="opcao" data-g="${id}" data-c="${esc(o.chave)}"
+    aria-pressed="false"><span>${esc(o.nome)}</span><span class="v">✔️</span></button>`).join('');
+}
+document.addEventListener('click', e => {
+  const b = e.target.closest('.opcao'); if (!b) return;
+  const s = SEL[b.dataset.g];
+  if (s.has(b.dataset.c)) s.delete(b.dataset.c); else s.add(b.dataset.c);
+  b.classList.toggle('sel', s.has(b.dataset.c)); b.setAttribute('aria-pressed', s.has(b.dataset.c));
+});
+$('#form').addEventListener('submit', async e => {
+  e.preventDefault();
+  $('#erro').textContent = '';
+  const corpo = {nome: $('#nome').value, telefone: $('#telefone').value, idade: $('#idade').value, bairro: $('#bairro').value,
+    areas: [...SEL.areas], disponibilidade: [...SEL.disponibilidade], experiencia: $('#experiencia').value,
+    aceite: $('#aceite').checked, site: $('#site').value};
+  const falta = !corpo.nome.trim() ? 'Escreva o seu nome completo.' : !corpo.telefone.trim() ? 'Escreva o seu WhatsApp.'
+    : !corpo.idade ? 'Escreva a sua idade.' : !corpo.bairro.trim() ? 'Escreva o seu bairro.'
+    : !corpo.areas.length ? 'Escolha pelo menos uma área.' : !corpo.disponibilidade.length ? 'Escolha quando você pode trabalhar.'
+    : !corpo.aceite ? 'Marque que você autoriza guardar os seus dados.' : '';
+  if (falta) { $('#erro').textContent = falta; return; }
+  $('#enviar').disabled = true;
+  try {
+    const r = await chamar('POST', corpo);
+    if (!r.token) { $('#form').hidden = true; $('#aviso').hidden = false;
+      $('#aviso').innerHTML = '<div class="grande">🙌</div><h1 style="text-align:center">Obrigado!</h1>'; return; }
+    location.href = '/perfil/' + encodeURIComponent(r.token);
+  } catch (er) { $('#erro').textContent = er.message; $('#enviar').disabled = false; }
+});
+(async () => {
+  try {
+    const d = await chamar('GET');
+    $('#marca').textContent = '🍦 ' + (d.empresa || 'Gela Boca');
+    document.querySelectorAll('.empresa').forEach(x => x.textContent = d.empresa || 'Gela Boca');
+    opcoes('areas', d.areas); opcoes('disponibilidade', d.disponibilidade);
+    $('#aviso').hidden = true; $('#form').hidden = false;
+  } catch (e) { $('#aviso').innerHTML = `<div class="grande">🔗</div><p style="text-align:center">${esc(e.message)}</p>`; }
+})();
+</script>
+</body>
+</html>

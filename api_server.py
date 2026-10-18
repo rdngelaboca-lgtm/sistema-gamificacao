@@ -192,6 +192,8 @@ CAMINHOS_LIBERADOS_NA_INTERNET += ('/confirmar/', '/vaga/', '/api/presenca/')
 CAMINHOS_LIBERADOS_NA_INTERNET += ('/comunicado/', '/api/comunicado/')
 # [PERFIL DISC] O link da avaliação de perfil: só a página do link, que não abre sem o código secreto.
 CAMINHOS_LIBERADOS_NA_INTERNET += ('/perfil/', '/api/perfil/')
+# [TRABALHE CONOSCO] Página pública do link da bio do Instagram: cadastro do candidato (só cria, não mostra ninguém).
+CAMINHOS_LIBERADOS_NA_INTERNET += ('/trabalhe-conosco', '/api/trabalhe-conosco')
 
 
 @app.before_request
@@ -3088,6 +3090,23 @@ def api_gestao_perfil_candidato(usuario):
     return _resposta_perfil(lambda: perfil_disc.candidato_criar(dados, usuario))
 
 
+@app.route('/api/gestao/perfil/<int:avaliacao_id>/etapa', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_perfil_etapa(usuario, avaliacao_id):
+    import perfil_disc
+    dados = ler_json() or {}
+    return _resposta_perfil(lambda: perfil_disc.definir_etapa(avaliacao_id, str(dados.get('etapa') or ''), usuario))
+
+
+@app.route('/api/gestao/perfil/trabalhe-qr', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_perfil_trabalhe_qr(usuario):
+    import clientes, comunicados_equipe
+    base, local = comunicados_equipe._endereco()
+    url = f"{base}/trabalhe-conosco" if base else ''
+    return jsonify({'url': url, 'local': local, 'svg': clientes.qr_svg(url) if url else None}), 200
+
+
 @app.route('/api/gestao/perfil/<int:avaliacao_id>', methods=['GET'])
 @compras_login(somente_gestor=True)
 def api_gestao_perfil_detalhe(usuario, avaliacao_id):
@@ -3111,6 +3130,23 @@ def pagina_perfil_disc(token):
     resposta.headers['Cache-Control'] = 'no-store'
     resposta.headers['Referrer-Policy'] = 'no-referrer'
     return resposta
+
+
+# Página PÚBLICA do Trabalhe conosco (link da bio do Instagram)
+@app.route('/trabalhe-conosco')
+def pagina_trabalhe_conosco():
+    resposta = app.make_response(render_template('trabalhe_conosco.html'))
+    resposta.headers['Cache-Control'] = 'no-store'
+    return resposta
+
+
+@app.route('/api/trabalhe-conosco', methods=['GET', 'POST'])
+def api_trabalhe_conosco():
+    import perfil_disc
+    if request.method == 'GET':
+        return _resposta_perfil(perfil_disc.trabalhe_dados)
+    dados = ler_json() or {}
+    return _resposta_perfil(lambda: perfil_disc.trabalhe_cadastrar(dados, _ip_do_cliente()))
 
 
 @app.route('/api/perfil/<token>', methods=['GET', 'POST'])

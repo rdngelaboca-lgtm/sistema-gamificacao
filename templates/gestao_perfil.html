@@ -29,6 +29,23 @@
   .tabela th { background: var(--fundo); font-size: 13px; }
   .tabela tr:last-child td { border-bottom: 0; }
   .linha-cand { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .link-trab { background: #fff; border: 1px solid var(--linha); border-left: 5px solid #c13584; border-radius: 12px; padding: 10px 12px;
+    display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; font-size: 14px; }
+  .link-trab a { font-weight: 700; overflow-wrap: anywhere; }
+  .link-trab .acoes { display: flex; gap: 6px; flex-wrap: wrap; }
+  .filtros-c { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .filtros-c .btn { font-size: 13px; padding: 5px 10px; }
+  .filtros-c .btn.sel { background: var(--verde-claro); border-color: var(--verde); }
+  .tag-or { font-size: 11px; font-weight: 700; border-radius: 8px; padding: 1px 7px; background: var(--fundo); color: var(--suave); white-space: nowrap; }
+  .tags { display: flex; gap: 4px; flex-wrap: wrap; }
+  .tag-a { font-size: 12px; font-weight: 700; border-radius: 8px; padding: 2px 8px; background: var(--verde-claro); color: var(--verde-esc); }
+  .pessoa-c .exp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .pessoa-c .etapa select { font: inherit; font-size: 13px; border: 1px solid var(--linha); border-radius: 8px; padding: 3px 6px; }
+  .pessoa-c a.btn { text-decoration: none; color: inherit; }
+  .qr-trab { width: 240px; height: 240px; margin: 0 auto; background: #fff; }
+  .qr-trab svg { width: 100%; height: 100%; }
+  @media print { body * { visibility: hidden; } #modal, #modal * { visibility: visible; } #modal { position: absolute; inset: 0; box-shadow: none; }
+    #modal .botoes, #fechar-modal { display: none; } }
   .pessoa-c.cand { cursor: default; }
   .pessoa-c .acoes { display: flex; gap: 6px; flex-wrap: wrap; }
   .pessoa-c .acoes .btn { font-size: 13px; padding: 5px 9px; }
@@ -103,7 +120,7 @@
 {% endblock %}
 {% block script %}
 // [PERFIL DISC] envio da avaliação para os fixos (WhatsApp no turno de cada um), visão da equipe e relatório de cada pessoa
-const S = {d: null, aba: 'equipe'};
+const S = {d: null, aba: 'equipe', fArea: '', fEtapa: ''};
 const COR = {D: '#e53935', I: '#f9a825', S: '#43a047', C: '#1e88e5'};
 const EMO = {D: '🔴', I: '🟡', S: '🟢', C: '🔵'}, NOME = {D: 'Dominante', I: 'Influente', S: 'Estável', C: 'Conforme'};
 function aoEntrar() { carregar(); }
@@ -123,6 +140,8 @@ function desenhar() {
   document.querySelectorAll('[data-aba]').forEach(b => b.classList.toggle('sel', b.dataset.aba === S.aba));
   const d = S.d; if (!d) return;
   document.querySelector('[data-aba="envios"]').textContent = `📋 Envios${d.pendentes ? ` (${d.pendentes} esperando)` : ''}`;
+  const novos = (d.candidatos || []).filter(c => c.etapa === 'novo' && c.status === 'respondido').length;
+  document.querySelector('[data-aba="candidatos"]').textContent = `🧑‍💼 Processo seletivo${novos ? ` (${novos} novo${novos > 1 ? 's' : ''})` : ''}`;
   $('#conteudo').innerHTML = S.aba === 'equipe' ? htmlEquipe(d) : S.aba === 'envios' ? htmlEnvios(d) : htmlCandidatos(d);
 }
 function htmlEquipe(d) {
@@ -152,24 +171,53 @@ function htmlEnvios(d) {
         ${e.pendente || e.status === 'expirado' || e.status === 'sem_telefone' ? `<button class="btn perigo" data-a="cancelar" data-id="${e.id}">⛔</button>` : ''}</span></div>`).join('')}</div>`;
 }
 function htmlCandidatos(d) {
-  const lista = d.candidatos || [];
-  return `<div class="linha-cand"><button class="btn prim" id="btn-candidato">➕ Avaliar um candidato</button>
-      <span class="mini suave">Para quem vem fazer o processo seletivo (não precisa estar no cadastro nem na escala). O link vai na
-        hora no WhatsApp, sem pontos. O candidato vê só um "obrigado"; o resultado fica aqui.</span></div>
+  const todos = d.candidatos || [];
+  const lista = todos.filter(c => (!S.fArea || (c.areas || []).some(a => a.chave === S.fArea))
+                                && (!S.fEtapa || c.etapa === S.fEtapa));
+  const conta = f => todos.filter(f).length;
+  const chip = (tipo, chave, nome, n) => `<button class="btn ${(tipo === 'area' ? S.fArea : S.fEtapa) === chave ? 'sel' : ''}"
+      data-filtro="${tipo}" data-v="${esc(chave)}">${esc(nome)}${n != null ? ` (${n})` : ''}</button>`;
+  return `<div class="link-trab">${d.link_trabalhe
+      ? `<div><b>📸 Trabalhe conosco</b> — link para a bio do Instagram:<br><a href="${esc(d.link_trabalhe)}" target="_blank" rel="noopener" id="link-trab">${esc(d.link_trabalhe)}</a></div>
+         <div class="acoes"><button class="btn" data-copiar="${esc(d.link_trabalhe)}">🔗 Copiar link</button><button class="btn" id="btn-qr-trab">🔲 QR para imprimir</button></div>`
+      : '<div>📸 Trabalhe conosco: grave o endereço da internet em 📢 Clientes › ⚙️ Ajustes para ter o link do Instagram.</div>'}</div>
+    <div class="linha-cand"><button class="btn prim" id="btn-candidato">➕ Avaliar um candidato</button>
+      <span class="mini suave">Quem se cadastra pelo link do Instagram aparece aqui sozinho, com os dados e o questionário. Para quem
+        vem direto à loja, use ➕ (o link vai na hora no WhatsApp). O candidato vê só um "obrigado"; o resultado fica aqui.</span></div>
     <div class="dica" style="background:#eef6ff;color:#174a7c">ℹ️ Use junto com a entrevista e a experiência: o perfil mostra o jeito
-      de trabalhar, não se a pessoa é boa ou ruim. Não decida só por ele. Apague (🗑️) os dados de quem não for contratado.</div>
+      de trabalhar, não se a pessoa é boa ou ruim. Não decida só por ele. Apague (🗑️) os dados de quem pedir ou não for seguir.</div>
+    ${todos.length ? `<div class="filtros-c"><span class="mini suave">Área:</span>${chip('area', '', 'Todas', todos.length)}
+        ${d.areas.map(a => chip('area', a.chave, a.nome, conta(c => (c.areas || []).some(x => x.chave === a.chave)))).join('')}</div>
+      <div class="filtros-c"><span class="mini suave">Etapa:</span>${chip('etapa', '', 'Todas')}
+        ${d.etapas.map(e => chip('etapa', e.chave, e.nome, conta(c => c.etapa === e.chave))).join('')}</div>` : ''}
     ${lista.length ? `<div class="grade-p">${lista.map(c => `<div class="pessoa-c cand">
-        <span class="nm">${c.icone} ${esc(c.nome)}</span>
-        <span class="mini suave">${c.vaga ? `Vaga: <b>${esc(c.vaga)}</b> · ` : ''}${esc(c.situacao)} · criada ${esc(c.criado)}</span>
+        <span class="nm">${c.icone} ${esc(c.nome)}${c.idade ? ` <span class="mini suave">· ${c.idade} anos</span>` : ''}
+          <span class="tag-or">${c.origem === 'site' ? '📸 Instagram' : '🧑‍💼 Gestão'}</span></span>
+        ${(c.areas || []).length ? `<span class="tags">${c.areas.map(a => `<span class="tag-a">${esc(a.nome)}</span>`).join('')}</span>`
+          : c.vaga ? `<span class="mini">Vaga: <b>${esc(c.vaga)}</b></span>` : ''}
+        ${c.bairro || (c.disponibilidade || []).length ? `<span class="mini">${c.bairro ? `📍 ${esc(c.bairro)}` : ''}${c.bairro && c.disponibilidade.length ? ' · ' : ''}${(c.disponibilidade || []).length ? `🕒 ${c.disponibilidade.map(x => esc(x.nome)).join(', ')}` : ''}</span>` : ''}
+        ${c.experiencia ? `<span class="mini exp" title="${esc(c.experiencia)}">💼 ${esc(c.experiencia)}</span>` : ''}
+        <span class="mini suave">${esc(c.situacao)} · ${c.origem === 'site' ? 'cadastro' : 'criada'} ${esc(c.criado)}</span>
         ${c.pct ? `<span class="pf">${esc(c.perfil_nome)}</span>${barras(c.pct)}
           <span class="mini suave">📍 Combina com: ${c.setores.map(esc).join(', ')}</span>
           ${c.completa.length ? `<span class="mini" style="color:var(--ok);font-weight:700">✨ Traz o que falta na equipe: ${c.completa.map(x => `${x.emoji} ${esc(x.nome)} (${esc(x.curto)})`).join(', ')}</span>` : ''}` : ''}
+        <label class="mini etapa">Etapa: <select data-etapa="${c.id}">${d.etapas.map(e => `<option value="${esc(e.chave)}" ${c.etapa === e.chave ? 'selected' : ''}>${esc(e.nome)}</option>`).join('')}</select></label>
         <span class="acoes">${c.status === 'respondido' ? `<button class="btn" data-rel="${c.id}">📄 Relatório</button>` : ''}
-          ${c.link ? `<button class="btn" data-copiar="${esc(c.link)}" title="Copiar o link para mandar você mesmo">🔗 Copiar link</button>` : ''}
+          ${c.whatsapp ? `<a class="btn" href="${esc(c.whatsapp)}" target="_blank" rel="noopener" title="Abre a conversa no WhatsApp">💬 WhatsApp</a>` : ''}
+          ${c.link && c.origem !== 'site' ? `<button class="btn" data-copiar="${esc(c.link)}" title="Copiar o link para mandar você mesmo">🔗 Copiar link</button>` : ''}
           ${c.pode_agora ? `<button class="btn" data-a="agora" data-id="${c.id}">📤 Mandar de novo</button>` : ''}
-          ${c.pendente ? `<button class="btn perigo" data-a="cancelar" data-id="${c.id}">⛔ Cancelar</button>` : ''}
+          ${c.pendente && c.origem !== 'site' ? `<button class="btn perigo" data-a="cancelar" data-id="${c.id}">⛔ Cancelar</button>` : ''}
           <button class="btn perigo" data-a="apagar" data-id="${c.id}" title="Apaga nome, WhatsApp e respostas">🗑️ Apagar</button></span></div>`).join('')}</div>`
-      : '<div class="vazio-p">Nenhum candidato avaliado ainda.</div>'}`;
+      : `<div class="vazio-p">${todos.length ? 'Ninguém com esse filtro.' : 'Nenhum candidato ainda. Coloque o link do Trabalhe conosco na bio do Instagram.'}</div>`}`;
+}
+async function qrTrabalhe() {
+  let r;
+  try { r = await api('GET', '/api/gestao/perfil/trabalhe-qr'); } catch (e) { return falhou(e); }
+  abrirModal(`<h3>🔲 QR do Trabalhe conosco</h3>
+    <div class="qr-trab" id="qr-trab">${r.svg || '<div class="mini suave" style="padding:8px">Para desenhar o QR, instale no servidor: <b>pip install qrcode</b></div>'}</div>
+    <p style="text-align:center;margin:6px 0"><b>Trabalhe conosco!</b><br><span class="mini">${esc(r.url)}</span></p>
+    <div class="botoes"><button class="btn prim" id="qr-imprimir">🖨️ Imprimir</button></div>`, null, true);
+  $('#qr-imprimir').onclick = () => window.print();
 }
 async function copiar(texto) {
   try { await navigator.clipboard.writeText(texto); status('🔗 Link copiado. Cole no WhatsApp do candidato.'); }
@@ -203,8 +251,17 @@ async function novoCandidato() {
     } catch (e) { falhou(e); b.disabled = false; }
   };
 }
+document.addEventListener('change', async e => {
+  const sel = e.target.closest('[data-etapa]'); if (!sel) return;
+  sel.disabled = true;
+  try { const r = await api('POST', `/api/gestao/perfil/${sel.dataset.etapa}/etapa`, {etapa: sel.value}); status(r.mensagem); await carregar(); }
+  catch (er) { falhou(er); sel.disabled = false; }
+});
 document.addEventListener('click', async e => {
   if (e.target.closest('#btn-candidato')) return novoCandidato();
+  if (e.target.closest('#btn-qr-trab')) return qrTrabalhe();
+  const f = e.target.closest('[data-filtro]');
+  if (f) { if (f.dataset.filtro === 'area') S.fArea = f.dataset.v; else S.fEtapa = f.dataset.v; return desenhar(); }
   const cp = e.target.closest('[data-copiar]'); if (cp) return copiar(cp.dataset.copiar);
   const rel = e.target.closest('[data-rel]'); if (rel) { e.preventDefault(); return relatorio(+rel.dataset.rel); }
   const b = e.target.closest('[data-a]'); if (!b) return;
@@ -304,6 +361,11 @@ async function relatorio(id) {
   abrirModal(`<div class="rel-topo"><h3 style="margin:0">${d.candidato ? '🧑‍💼' : '🧭'} ${esc(d.nome)}${d.candidato ? ` <span class="mini suave">· candidato${d.vaga ? ' · vaga: ' + esc(d.vaga) : ''}</span>` : ''}</h3>
       <div class="rel-perfil" id="r-perfil">${esc(d.perfil_nome)}</div>
       <div class="mini suave">Respondeu ${esc(d.respondido)}${d.anteriores.length ? ` · antes: ${d.anteriores.map(a => `<a href="#" data-rel="${a.id}">${esc(a.perfil_nome)} (${esc(a.respondido)})</a>`).join(', ')}` : ''}</div></div>
+    ${d.candidato && (d.areas || d.bairro) ? `<div class="mini" style="margin-top:6px;line-height:1.6">
+      ${d.idade ? `🎂 ${d.idade} anos · ` : ''}${d.bairro ? `📍 ${esc(d.bairro)} · ` : ''}${(d.areas || []).length ? `Áreas: <b>${d.areas.map(a => esc(a.nome)).join(', ')}</b>` : ''}
+      ${(d.disponibilidade || []).length ? `<br>🕒 ${d.disponibilidade.map(x => esc(x.nome)).join(', ')}` : ''}
+      ${d.experiencia ? `<br>💼 ${esc(d.experiencia)}` : ''}
+      ${d.whatsapp ? `<br><a href="${esc(d.whatsapp)}" target="_blank" rel="noopener">💬 Conversar no WhatsApp</a>` : ''}</div>` : ''}
     <div style="margin:10px 0">${barras(d.pct)}</div>
     <div>${esc(d.resumo)}</div>
     ${d.candidato && d.completa && d.completa.length ? `<div class="dica" style="margin-top:8px;background:#e6f4ea;color:#14532d">✨ Traz o que falta
