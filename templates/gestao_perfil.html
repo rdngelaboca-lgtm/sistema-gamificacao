@@ -67,6 +67,10 @@
   .campo > span { font-weight: 700; font-size: 14px; }
   .campo input { font: inherit; font-size: 15px; border: 1px solid var(--linha); border-radius: 10px; padding: 8px 10px; width: 100%; }
   .grade2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .docs { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 8px 0 12px; }
+  .docs > div { border: 1px solid var(--linha); border-radius: 10px; padding: 8px 10px; display: grid; gap: 2px; }
+  .docs b { font-size: 18px; letter-spacing: .3px; }
+  .btn.falta { border-color: #e0a800; color: #8a5a00; }
   .rapidos { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; align-items: center; }
   .rapidos .btn { font-size: 13px; padding: 5px 10px; }
   .rapidos .btn.sel { background: var(--verde-claro); border-color: var(--verde); }
@@ -218,10 +222,11 @@ function htmlCandidatos(d) {
         <label class="mini etapa">Etapa: <select data-etapa="${c.id}">${d.etapas.map(e => `<option value="${esc(e.chave)}" ${c.etapa === e.chave ? 'selected' : ''}>${esc(e.nome)}</option>`).join('')}</select></label>
         <span class="acoes">${c.status === 'respondido' ? `<button class="btn" data-rel="${c.id}">📄 Relatório</button>` : ''}
           ${c.whatsapp ? `<a class="btn" href="${esc(c.whatsapp)}" target="_blank" rel="noopener" title="Abre a conversa no WhatsApp">💬 WhatsApp</a>` : ''}
+          <button class="btn ${c.documentos ? '' : 'falta'}" data-docs="${c.id}" title="CPF e data de nascimento">🪪 ${c.documentos ? 'CPF e nascimento' : 'Falta CPF/nascimento'}</button>
           ${c.link && c.origem !== 'site' ? `<button class="btn" data-copiar="${esc(c.link)}" title="Copiar o link para mandar você mesmo">🔗 Copiar link</button>` : ''}
           ${c.pode_agora ? `<button class="btn" data-a="agora" data-id="${c.id}">📤 Mandar de novo</button>` : ''}
           ${c.pendente && c.origem !== 'site' ? `<button class="btn perigo" data-a="cancelar" data-id="${c.id}">⛔ Cancelar</button>` : ''}
-          <button class="btn perigo" data-a="apagar" data-id="${c.id}" title="Apaga nome, WhatsApp e respostas">🗑️ Apagar</button></span></div>`).join('')}</div>`
+          <button class="btn perigo" data-a="apagar" data-id="${c.id}" title="Apaga nome, WhatsApp, CPF e respostas">🗑️ Apagar</button></span></div>`).join('')}</div>`
       : `<div class="vazio-p">${todos.length ? 'Ninguém com esse filtro.' : 'Nenhum candidato ainda. Coloque o link do Trabalhe conosco na bio do Instagram.'}</div>`}`;
 }
 async function qrTrabalhe() {
@@ -237,6 +242,44 @@ async function copiar(texto) {
   try { await navigator.clipboard.writeText(texto); status('🔗 Link copiado. Cole no WhatsApp do candidato.'); }
   catch (e) { prompt('Copie o link:', texto); }
 }
+
+// ------------------------------------------------------------------ 🪪 CPF e data de nascimento do candidato
+const so = t => String(t || '').replace(/\D/g, '');
+const MASCARAS = {cpf: n => [n.slice(0, 3), n.slice(3, 6), n.slice(6, 9)].filter(Boolean).join('.') + (n.length > 9 ? '-' + n.slice(9, 11) : ''),
+                  data: n => [n.slice(0, 2), n.slice(2, 4), n.slice(4, 8)].filter(Boolean).join('/')};
+document.addEventListener('input', e => {
+  const m = MASCARAS[e.target.dataset && e.target.dataset.mascara];
+  if (m) e.target.value = m(so(e.target.value));
+});
+const camposDocs = (pre, d) => `<div class="grade2">
+    <label class="campo"><span>CPF${d ? '' : ' <span class="mini suave">(opcional)</span>'}</span><input id="${pre}-cpf" inputmode="numeric" autocomplete="off" data-mascara="cpf" maxlength="14" placeholder="000.000.000-00" value="${esc(d ? d.cpf : '')}"></label>
+    <label class="campo"><span>Nascimento${d ? '' : ' <span class="mini suave">(opcional)</span>'}</span><input id="${pre}-nasc" inputmode="numeric" autocomplete="off" data-mascara="data" maxlength="10" placeholder="dd/mm/aaaa" value="${esc(d ? d.nascimento : '')}"></label></div>`;
+async function documentos(id) {
+  let d;
+  try { d = await api('GET', `/api/gestao/perfil/${id}/documentos`); } catch (e) { return falhou(e); }
+  const tem = d.cpf && d.nascimento;
+  abrirModal(`<h3>🪪 ${esc(d.nome)}</h3>
+    ${d.cpf || d.nascimento ? `<div class="docs">
+      <div><span class="mini suave">CPF</span><b id="dc-cpf-v">${esc(d.cpf || '—')}</b></div>
+      <div><span class="mini suave">Nascimento</span><b id="dc-nasc-v">${esc(d.nascimento || '—')}</b>${d.idade ? `<span class="mini suave">${d.idade} anos</span>` : ''}</div></div>
+      <div class="botoes" style="justify-content:flex-start"><button class="btn prim" id="dc-copiar">📋 Copiar nome, CPF e nascimento</button>
+        ${d.cpf ? '<button class="btn" id="dc-copiar-cpf">📋 Só o CPF</button>' : ''}</div>`
+      : '<p class="mini">Este cadastro ainda não tem CPF nem data de nascimento (cadastro antigo ou criado pela gestão). Pergunte à pessoa e grave aqui.</p>'}
+    <details ${tem ? '' : 'open'} style="margin-top:10px"><summary><b>✏️ ${tem ? 'Corrigir' : 'Gravar CPF e nascimento'}</b></summary>
+      <div style="margin-top:8px">${camposDocs('dc', d)}</div>
+      <div class="botoes"><button class="btn prim" id="dc-gravar">💾 Gravar</button></div></details>
+    <div class="aviso-uso">Dado pessoal: fica só aqui na gestão. Não mande para fora.</div>`, null, true);
+  const copia = (texto, aviso) => navigator.clipboard.writeText(texto).then(() => status(aviso), () => prompt('Copie:', texto));
+  if ($('#dc-copiar')) $('#dc-copiar').onclick = () => copia(`Nome: ${d.nome}\nCPF: ${d.cpf || '-'}\nNascimento: ${d.nascimento || '-'}`, '📋 Nome, CPF e nascimento copiados.');
+  if ($('#dc-copiar-cpf')) $('#dc-copiar-cpf').onclick = () => copia(d.cpf, '📋 CPF copiado.');
+  $('#dc-gravar').onclick = async () => {
+    const b = $('#dc-gravar'); b.disabled = true;
+    try {
+      const r = await api('POST', `/api/gestao/perfil/${id}/documentos`, {cpf: $('#dc-cpf').value, nascimento: $('#dc-nasc').value});
+      status(r.mensagem); fecharModal(); await carregar();
+    } catch (e) { falhou(e); b.disabled = false; }
+  };
+}
 async function novoCandidato() {
   let r;
   try { r = await api('GET', '/api/gestao/perfil/pessoas'); } catch (e) { return falhou(e); }
@@ -250,6 +293,7 @@ async function novoCandidato() {
     <label class="campo"><span>Tipo de vaga</span><select id="cd-tipo" style="font:inherit;font-size:15px;border:1px solid var(--linha);border-radius:10px;padding:8px 10px">
       <option value="">— não sei ainda —</option><option value="fixa">💼 Vaga fixa</option><option value="freela">📅 Freelancer (diárias)</option>
       <option value="ambos">🔁 Fixa ou freelancer</option></select></label>
+    ${camposDocs('cd')}
     <label class="campo"><span>Vale até</span><input type="date" id="cd-valido" value="${esc(r.validade_padrao)}" min="${esc(r.hoje)}" max="${esc(r.validade_max)}"></label>
     <div class="botoes"><button class="btn" id="cd-cancelar">Cancelar</button><button class="btn prim" id="cd-criar">📤 Criar e mandar</button></div>`, null, true);
   $('#cd-cancelar').onclick = fecharModal;
@@ -259,7 +303,8 @@ async function novoCandidato() {
     const b = $('#cd-criar'); b.disabled = true;
     try {
       const r2 = await api('POST', '/api/gestao/perfil/candidatos', {nome: $('#cd-nome').value, telefone: $('#cd-tel').value,
-        vaga: $('#cd-vaga').value, tipo_vaga: $('#cd-tipo').value, valido_ate: $('#cd-valido').value});
+        vaga: $('#cd-vaga').value, tipo_vaga: $('#cd-tipo').value, cpf: $('#cd-cpf').value, nascimento: $('#cd-nasc').value,
+        valido_ate: $('#cd-valido').value});
       abrirModal(`<h3>🧑‍💼 Pronto!</h3><p id="cd-ok">${esc(r2.mensagem)}</p>
         <label class="campo"><span>Link da avaliação</span><input id="cd-link" readonly value="${esc(r2.link)}"></label>
         <div class="botoes"><button class="btn prim" id="cd-copiar">🔗 Copiar link</button></div>`, null, true);
@@ -289,6 +334,7 @@ document.addEventListener('click', async e => {
   if (f) { S[{area: 'fArea', etapa: 'fEtapa', vaga: 'fVaga'}[f.dataset.filtro]] = f.dataset.v; return desenhar(); }
   const cp = e.target.closest('[data-copiar]'); if (cp) return copiar(cp.dataset.copiar);
   const rel = e.target.closest('[data-rel]'); if (rel) { e.preventDefault(); return relatorio(+rel.dataset.rel); }
+  const docs = e.target.closest('[data-docs]'); if (docs) { e.preventDefault(); return documentos(+docs.dataset.docs); }
   const b = e.target.closest('[data-a]'); if (!b) return;
   const acao = b.dataset.a;
   if (acao === 'cancelar' && !confirm('Cancelar esta avaliação? O link deixa de funcionar.')) return;
@@ -390,7 +436,7 @@ async function relatorio(id) {
       <b>${esc(d.tipo_vaga_nome || '')}</b> · ${d.idade ? `🎂 ${d.idade} anos · ` : ''}${d.bairro ? `📍 ${esc(d.bairro)} · ` : ''}${(d.areas || []).length ? `Áreas: <b>${d.areas.map(a => esc(a.nome)).join(', ')}</b>` : ''}
       ${(d.disponibilidade || []).length ? `<br>🕒 ${d.disponibilidade.map(x => esc(x.nome)).join(', ')}` : ''}
       ${d.experiencia ? `<br>💼 ${esc(d.experiencia)}` : ''}
-      ${d.whatsapp ? `<br><a href="${esc(d.whatsapp)}" target="_blank" rel="noopener">💬 Conversar no WhatsApp</a>` : ''}</div>` : ''}
+      ${d.whatsapp ? `<br><a href="${esc(d.whatsapp)}" target="_blank" rel="noopener">💬 Conversar no WhatsApp</a> · ` : '<br>'}<a href="#" data-docs="${d.id}">🪪 CPF e nascimento</a></div>` : ''}
     <div style="margin:10px 0">${barras(d.pct)}</div>
     <div>${esc(d.resumo)}</div>
     ${d.candidato && d.completa && d.completa.length ? `<div class="dica" style="margin-top:8px;background:#e6f4ea;color:#14532d">✨ Traz o que falta

@@ -3106,6 +3106,19 @@ def api_gestao_perfil_tipo_vaga(usuario, avaliacao_id):
     return _resposta_perfil(lambda: perfil_disc.definir_tipo_vaga(avaliacao_id, str(dados.get('tipo_vaga') or ''), usuario))
 
 
+@app.route('/api/gestao/perfil/<int:avaliacao_id>/documentos', methods=['GET', 'POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_perfil_documentos(usuario, avaliacao_id):
+    # 🪪 CPF e data de nascimento do candidato: só abrem quando a gestão clica (fora do painel e dos avisos)
+    import perfil_disc
+    if request.method == 'GET':
+        resposta, codigo = _resposta_perfil(lambda: perfil_disc.documentos(avaliacao_id, usuario))
+        resposta.headers['Cache-Control'] = 'no-store'
+        return resposta, codigo
+    dados = ler_json() or {}
+    return _resposta_perfil(lambda: perfil_disc.definir_documentos(avaliacao_id, dados, usuario))
+
+
 @app.route('/api/gestao/perfil/trabalhe-qr', methods=['GET'])
 @compras_login(somente_gestor=True)
 def api_gestao_perfil_trabalhe_qr(usuario):

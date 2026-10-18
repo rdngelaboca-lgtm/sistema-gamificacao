@@ -6,7 +6,8 @@
 <meta name="theme-color" content="#0E6B63">
 <meta name="description" content="Trabalhe na Gela Boca: faça o seu cadastro e o questionário de perfil.">
 <title>Trabalhe conosco · Gela Boca</title>
-<!-- [TRABALHE CONOSCO] Página PÚBLICA (link da bio do Instagram): /trabalhe-conosco. A pessoa preenche os dados, as áreas
+<!-- [TRABALHE CONOSCO] Página PÚBLICA (link da bio do Instagram): /trabalhe-conosco. A pessoa preenche os dados (com CPF e
+     data de nascimento), o tipo de vaga, as áreas
      que tem interesse e a disponibilidade, autoriza guardar os dados e segue para o questionário de perfil (/perfil/<código>).
      Fica tudo no banco da loja (Gestão › 🧭 Perfil › 🧑‍💼 Processo seletivo). Nada de ninguém aparece aqui. -->
 <style>
@@ -63,8 +64,9 @@
     <p>Preencha os seus dados e depois responda um questionário sobre o seu jeito de trabalhar (uns <b>10 minutos</b>).</p>
     <label class="campo">Nome completo<input id="nome" autocomplete="name" maxlength="150" required></label>
     <label class="campo">WhatsApp <small>com DDD</small><input id="telefone" type="tel" inputmode="tel" autocomplete="tel" placeholder="66 99999-1234" required></label>
+    <label class="campo">CPF<input id="cpf" inputmode="numeric" autocomplete="off" data-mascara="cpf" maxlength="14" placeholder="000.000.000-00" required></label>
     <div class="opcoes duas">
-      <label class="campo">Idade<input id="idade" type="number" inputmode="numeric" min="14" max="80" required></label>
+      <label class="campo">Nascimento<input id="nascimento" inputmode="numeric" autocomplete="off" data-mascara="data" maxlength="10" placeholder="dd/mm/aaaa" required></label>
       <label class="campo">Bairro<input id="bairro" maxlength="100" placeholder="Ex.: Centro" required></label>
     </div>
     <div class="grupo"><b>Que tipo de vaga você procura?</b><small>Escolha uma.</small>
@@ -89,6 +91,23 @@
 const $ = s => document.querySelector(s);
 const esc = t => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
 const SEL = {areas: new Set(), disponibilidade: new Set(), tipo_vaga: new Set()};   // tipo de vaga: só uma escolha
+const so = t => String(t || '').replace(/\D/g, '');
+// CPF 000.000.000-00 e data dd/mm/aaaa enquanto a pessoa digita (só números)
+const MASCARAS = {cpf: n => [n.slice(0, 3), n.slice(3, 6), n.slice(6, 9)].filter(Boolean).join('.') + (n.length > 9 ? '-' + n.slice(9, 11) : ''),
+                  data: n => [n.slice(0, 2), n.slice(2, 4), n.slice(4, 8)].filter(Boolean).join('/')};
+document.addEventListener('input', e => {
+  const m = MASCARAS[e.target.dataset && e.target.dataset.mascara];
+  if (m) e.target.value = m(so(e.target.value));
+});
+function cpfOk(n) {
+  if (n.length !== 11 || /^(\d)\1{10}$/.test(n)) return false;
+  for (const t of [9, 10]) {
+    let soma = 0;
+    for (let i = 0; i < t; i++) soma += +n[i] * (t + 1 - i);
+    if (soma * 10 % 11 % 10 !== +n[t]) return false;
+  }
+  return true;
+}
 
 async function chamar(metodo, corpo) {
   let r;
@@ -116,11 +135,14 @@ document.addEventListener('click', e => {
 $('#form').addEventListener('submit', async e => {
   e.preventDefault();
   $('#erro').textContent = '';
-  const corpo = {nome: $('#nome').value, telefone: $('#telefone').value, idade: $('#idade').value, bairro: $('#bairro').value,
+  const corpo = {nome: $('#nome').value, telefone: $('#telefone').value, cpf: $('#cpf').value, nascimento: $('#nascimento').value,
+    bairro: $('#bairro').value,
     tipo_vaga: [...SEL.tipo_vaga][0] || '', areas: [...SEL.areas], disponibilidade: [...SEL.disponibilidade], experiencia: $('#experiencia').value,
     aceite: $('#aceite').checked, site: $('#site').value};
   const falta = !corpo.nome.trim() ? 'Escreva o seu nome completo.' : !corpo.telefone.trim() ? 'Escreva o seu WhatsApp.'
-    : !corpo.idade ? 'Escreva a sua idade.' : !corpo.bairro.trim() ? 'Escreva o seu bairro.'
+    : !so(corpo.cpf) ? 'Escreva o seu CPF.' : !cpfOk(so(corpo.cpf)) ? 'CPF inválido. Confira os 11 números.'
+    : so(corpo.nascimento).length !== 8 ? 'Escreva a sua data de nascimento (ex.: 25/03/2004).'
+    : !corpo.bairro.trim() ? 'Escreva o seu bairro.'
     : !corpo.tipo_vaga ? 'Escolha que tipo de vaga você procura.'
     : !corpo.areas.length ? 'Escolha pelo menos uma área.' : !corpo.disponibilidade.length ? 'Escolha quando você pode trabalhar.'
     : !corpo.aceite ? 'Marque que você autoriza guardar os seus dados.' : '';
