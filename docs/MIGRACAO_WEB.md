@@ -333,7 +333,8 @@ A gestão escreve o comunicado (título, chamada do WhatsApp, texto, **para quem
 **vale até** — padrão 7 dias — e ⭐ pontos opcionais na gamificação para os fixos que confirmarem a leitura; a
 mensagem do WhatsApp e a página do link avisam o fixo dos pontos antes, e o painel mostra "⭐ ganhou N pontos").
 **Entrega só no horário de trabalho de cada um, pela escala do dia** (os fixos também: a escala fixa já preenche a
-escala do dia): a mensagem sai de 5 min depois da entrada até 10 min antes da saída, nunca no intervalo. Quem está de
+escala do dia): a mensagem sai de **30 min antes da entrada** até 10 min antes da saída, nunca no intervalo.
+**📅 Escalados no dia** (em "Para quem?"): marca só quem tem turno na data escolhida (hoje até 14 dias para frente). Quem está de
 folga ou não tem turno fica com o comunicado **guardado** e recebe no próximo turno; se não trabalhar até o "vale até",
 fica ⌛ expirado. O robô (agendador) olha a fila a cada 2 minutos; quem já está no turno recebe na hora da criação.
 No WhatsApp vai **só a chamada** (frase curta opcional, ex.: "Segue comunicado sobre um feedback positivo de uma

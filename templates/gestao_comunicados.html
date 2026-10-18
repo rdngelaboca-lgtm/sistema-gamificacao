@@ -28,6 +28,9 @@
   .grade2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .rapidos { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
   .rapidos .btn { font-size: 13px; padding: 5px 10px; }
+  .rapidos .dia { display: inline-flex; gap: 4px; align-items: center; }
+  .rapidos input[type=date] { font: inherit; font-size: 13px; padding: 4px 6px; border: 1px solid var(--linha); border-radius: 8px; }
+  .dica-dia { font-size: 12px; color: var(--suave); margin: -2px 0 6px; }
   .pessoas { border: 1px solid var(--linha); border-radius: 10px; max-height: 300px; overflow: auto; }
   .pessoa { display: flex; gap: 10px; align-items: center; padding: 7px 10px; border-bottom: 1px solid var(--linha2); cursor: pointer; }
   .pessoa:last-child { border-bottom: 0; }
@@ -41,7 +44,7 @@
   /* detalhe */
   .texto-com { white-space: pre-wrap; background: var(--fundo); border-radius: 10px; padding: 10px 12px; font-size: 14px; overflow-wrap: anywhere; }
   .filtros { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0 6px; }
-  .filtros .btn.sel { background: var(--verde-claro); border-color: var(--verde); }
+  .filtros .btn.sel, .rapidos .btn.sel { background: var(--verde-claro); border-color: var(--verde); }
   .quem { display: grid; gap: 0; border: 1px solid var(--linha); border-radius: 10px; overflow: hidden; }
   .quem .lin { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 8px 10px;
     border-bottom: 1px solid var(--linha2); }
@@ -57,8 +60,8 @@
     <button class="btn prim" id="btn-novo">✍️ Novo comunicado</button>
     <button class="btn ico" id="atualizar" title="Atualizar">🔄</button></div></section>
   <main class="area">
-    <div class="explica">Cada pessoa recebe o comunicado no WhatsApp <b>só durante o turno dela</b> (pela escala). Na folga ou fora do
-      horário ele fica guardado e vai no próximo turno. A mensagem leva um link com o botão <b>✅ Li e estou ciente</b>: aqui você vê
+    <div class="explica">Cada pessoa recebe o comunicado no WhatsApp <b>a partir de 30 min antes do turno dela</b> (pela escala) e
+      durante o turno, fora do intervalo. Na folga ou fora do horário ele fica guardado e vai antes do próximo turno. A mensagem leva um link com o botão <b>✅ Li e estou ciente</b>: aqui você vê
       quem leu, quem só recebeu e quem ainda espera o turno.</div>
     <div class="alerta" id="aviso-endereco" hidden>⚠️ Falta o endereço da internet (📢 Clientes › ⚙️ Ajustes › QR do balcão): sem ele
       o link de confirmação de leitura não abre no celular, e o comunicado não pode ser criado.</div>
@@ -122,7 +125,11 @@ async function novo() {
       <span class="conta-letras" id="c-conta">0 / 2000</span></label>
     <div class="campo"><span>Para quem?</span>
       <div class="rapidos"><button class="btn" data-rap="todos">👥 Todos</button><button class="btn" data-rap="func">👔 Só fixos</button>
-        <button class="btn" data-rap="free">🧑‍🍳 Só freelancers</button><button class="btn" data-rap="nenhum">Ninguém</button></div>
+        <button class="btn" data-rap="free">🧑‍🍳 Só freelancers</button>
+        <span class="dia"><button class="btn" data-rap="dia">📅 Escalados no dia</button>
+          <input type="date" id="c-dia" value="${esc(r.hoje)}" min="${esc(r.hoje)}" max="${esc(r.dias_escalados_max)}" aria-label="Dia da escala"></span>
+        <button class="btn" data-rap="nenhum">Ninguém</button></div>
+      <div class="dica-dia" id="c-dica-dia" hidden></div>
       <input id="c-busca" placeholder="Procurar pelo nome…" autocomplete="off" style="font:inherit;border:1px solid var(--linha);border-radius:10px;padding:7px 10px">
       <label class="mini suave" style="display:flex;gap:6px;align-items:center;margin:4px 0"><input type="checkbox" id="c-todos-cad">
         Mostrar também quem não trabalhou nem está na escala nos últimos/próximos 30 dias</label>
@@ -135,19 +142,20 @@ async function novo() {
         <span class="mini suave">Só os fixos ganham, ao confirmar a leitura (o WhatsApp e o link avisam). 0 = sem pontos.</span></label>
     </div>
     <details class="campo"><summary>👀 Ver como fica a mensagem no WhatsApp</summary><div class="previa-wpp" id="c-previa"></div></details>
-    <div class="botoes"><button class="btn" id="c-cancelar">Cancelar</button><button class="btn prim" id="c-criar">📨 Criar e enviar no turno de cada um</button></div>`);
+    <div class="botoes"><button class="btn" id="c-cancelar">Cancelar</button><button class="btn prim" id="c-criar" title="Cada um recebe a partir de 30 min antes do seu turno">📨 Criar comunicado</button></div>`);
   const visiveis = () => S.pessoas.filter(p => (todos || p.ativo || marcados.has(p.id)) &&
     (!$('#c-busca').value.trim() || p.nome.toLowerCase().includes($('#c-busca').value.trim().toLowerCase())));
   const desenhar = () => {
     $('#c-pessoas').innerHTML = visiveis().map(p => `<label class="pessoa ${p.whatsapp ? '' : 'sem'}">
         <input type="checkbox" data-p="${esc(p.id)}" ${marcados.has(p.id) ? 'checked' : ''} ${p.whatsapp ? '' : 'disabled'}>
         <span><span class="nm">${esc(p.nome)}</span> <span class="tag">${esc(p.tipo_nome)}</span>
-          <div class="info ${p.agora ? 'agora' : ''}">${!p.whatsapp ? '📵 sem WhatsApp no cadastro' : p.agora ? '🟢 no turno agora: recebe na hora'
-            : p.proximo ? 'próximo turno: ' + esc(p.proximo) : 'sem turno marcado na escala'}</div></span></label>`).join('')
+          <div class="info ${p.agora ? 'agora' : ''}">${!p.whatsapp ? '📵 sem WhatsApp no cadastro'
+            : p.agora ? `🟢 recebe na hora (no turno ou entra em até ${r.antecedencia} min)`
+            : p.proximo ? `próximo turno: ${esc(p.proximo)} · recebe ${esc(p.recebe.slice(-5))}` : 'sem turno marcado na escala'}</div></span></label>`).join('')
       || '<div class="mini suave" style="padding:10px">Ninguém com esse nome.</div>';
     const sel = S.pessoas.filter(p => marcados.has(p.id)), ja = sel.filter(p => p.agora).length;
     $('#c-resumo').textContent = sel.length
-      ? `${sel.length} pessoa(s) · ${ja} no turno agora (recebem na hora) · ${sel.length - ja} no próximo turno de cada um`
+      ? `${sel.length} pessoa(s) · ${ja} recebem na hora · ${sel.length - ja} recebem ${r.antecedencia} min antes do próximo turno de cada um`
       : 'Ninguém escolhido.';
     previa();
   };
@@ -165,13 +173,25 @@ async function novo() {
   $('#c-pessoas').addEventListener('change', e => {
     const c = e.target.closest('[data-p]'); if (!c) return;
     if (c.checked) marcados.add(c.dataset.p); else marcados.delete(c.dataset.p);
+    document.querySelectorAll('[data-rap]').forEach(x => x.classList.remove('sel'));   // mexeu na mão: não é mais o atalho
     desenhar();
   });
-  document.querySelectorAll('[data-rap]').forEach(b => b.onclick = () => {
+  const rapido = rap => {
     marcados.clear();
-    for (const p of S.pessoas) if (p.whatsapp && (todos || p.ativo) && (b.dataset.rap === 'todos' || b.dataset.rap === p.tipo)) marcados.add(p.id);
+    const dia = $('#c-dia').value;
+    for (const p of S.pessoas) {
+      if (!p.whatsapp) continue;
+      if (rap === 'dia' ? (p.dias || []).includes(dia) : (todos || p.ativo) && (rap === 'todos' || rap === p.tipo)) marcados.add(p.id);
+    }
+    document.querySelectorAll('[data-rap]').forEach(x => x.classList.toggle('sel', x.dataset.rap === rap && rap !== 'nenhum'));
+    const dica = $('#c-dica-dia'); dica.hidden = rap !== 'dia';
+    if (rap === 'dia') dica.textContent = marcados.size
+      ? `📅 ${marcados.size} escalado(s) em ${dataBR(dia, true)}. Quem já saiu recebe antes do próximo turno; se o comunicado é só para esse dia, coloque o "Vale até" nesse dia.`
+      : `📅 Ninguém com WhatsApp escalado em ${dataBR(dia, true)}.`;
     desenhar();
-  });
+  };
+  document.querySelectorAll('[data-rap]').forEach(b => b.onclick = () => rapido(b.dataset.rap));
+  $('#c-dia').addEventListener('change', () => { if ($('#c-dia').value) rapido('dia'); });
   $('#c-busca').addEventListener('input', desenhar);
   $('#c-todos-cad').addEventListener('change', e => { todos = e.target.checked; desenhar(); });
   for (const id of ['#c-titulo', '#c-chamada', '#c-texto', '#c-pontos']) $(id).addEventListener('input', previa);

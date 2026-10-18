@@ -2,9 +2,9 @@
 # == comunicados_equipe.py - 📨 Comunicados para a equipe (fixos e freelancers) ==
 # ==============================================================================
 # A gestão escreve um comunicado na Gestão Web (📨 Comunicados) e escolhe quem recebe (fixos e/ou
-# freelancers). Cada pessoa recebe no WhatsApp (número da LOJA) SÓ DURANTE O TURNO DELA, pela escala
-# do dia: quem está de folga (ou sem turno) recebe no próximo turno. Fora do turno o comunicado fica
-# guardado ("⏳ espera o turno").
+# freelancers). Cada pessoa recebe no WhatsApp (número da LOJA) a partir de 30 MIN ANTES DO TURNO DELA
+# (pela escala do dia) e durante o turno: quem está de folga (ou sem turno) recebe no próximo turno.
+# Fora disso o comunicado fica guardado ("⏳ espera o turno").
 # No WhatsApp vai SÓ uma chamada curta ("Segue comunicado sobre…") e um LINK: o comunicado em si a pessoa
 # lê ao abrir o link, que tem o botão "✅ Li e estou ciente". O painel mostra quem leu (e quando), quem
 # abriu, quem recebeu e ainda não abriu e quem espera o turno.
@@ -30,11 +30,12 @@ ST_AGUARDANDO, ST_ENVIANDO, ST_ENVIADO, ST_LIDO = 'aguardando', 'enviando', 'env
 ST_FALHOU, ST_EXPIRADO, ST_SEM_TEL, ST_ENCERRADO = 'falhou', 'expirado', 'sem_telefone', 'encerrado'
 TIPOS = {'func': 'Fixo', 'free': 'Freelancer'}
 
-MARGEM_INICIO_MIN = 5          # manda 5 min depois da entrada (a pessoa já chegou)
+ANTECEDENCIA_MIN = 30          # começa a mandar 30 min ANTES da entrada (a pessoa lê antes de chegar)
 MARGEM_FIM_MIN = 10            # e não nos últimos 10 min do turno (está indo embora)
 VALIDADE_PADRAO_DIAS = 7       # quem não trabalhar nesse tempo: ⌛ expirou
 VALIDADE_MAX_DIAS = 60
 DIAS_ATIVO = 30                # "pessoa ativa": tem turno na escala de 30 dias atrás a 30 dias para frente
+DIAS_ESCALADOS = 14            # 📅 "Escalados no dia": dá para escolher de hoje até 14 dias para frente
 MAX_TENTATIVAS = 3             # WhatsApp falhou: tenta de novo na próxima rodada (até 3 vezes)
 ENVIANDO_PRESO_MIN = 30        # 'enviando' há mais que isso (robô caiu no meio): volta para a fila
 INTERVALO_ENVIO_SEG = 2.5      # entre uma mensagem e outra (o WhatsApp não gosta de rajada)
@@ -179,27 +180,39 @@ def _turnos(de, ate):
 
 
 def _pode_receber(t, agora):
-    """No turno (5 min depois de chegar, até 10 min antes de sair) e fora do intervalo."""
-    if not (t['inicio'] + timedelta(minutes=MARGEM_INICIO_MIN) <= agora < t['fim'] - timedelta(minutes=MARGEM_FIM_MIN)):
+    """De 30 min antes da entrada até 10 min antes de sair, fora do intervalo."""
+    if not (t['inicio'] - timedelta(minutes=ANTECEDENCIA_MIN) <= agora < t['fim'] - timedelta(minutes=MARGEM_FIM_MIN)):
         return False
     return not (t['intervalo'] and t['intervalo'][0] <= agora < t['intervalo'][1])
 
 
 def _quem_trabalha_agora(agora):
-    ontem = agora.date() - timedelta(days=1)       # turno de ontem que vira a meia-noite
-    return {t['chave'] for t in _turnos(ontem, agora.date()) if _pode_receber(t, agora)}
+    """Quem pode receber agora. Olha ontem (turno que vira a meia-noite) e amanhã (entra logo depois da meia-noite)."""
+    dia = agora.date()
+    return {t['chave'] for t in _turnos(dia - timedelta(days=1), dia + timedelta(days=1)) if _pode_receber(t, agora)}
 
 
 def _proximos_turnos(agora, dias=VALIDADE_MAX_DIAS):
-    """{chave: início do turno atual (se ainda vai receber) ou do próximo}."""
+    """{chave: {'recebe': quando a mensagem sai, 'inicio': entrada do turno}} do turno atual (se ainda dá) ou do próximo."""
     prox = {}
     for t in _turnos(agora.date() - timedelta(days=1), agora.date() + timedelta(days=dias)):
         if t['fim'] - timedelta(minutes=MARGEM_FIM_MIN) <= agora:
             continue
-        quando = max(t['inicio'], agora)
-        if t['chave'] not in prox or quando < prox[t['chave']]:
-            prox[t['chave']] = quando
+        recebe = max(t['inicio'] - timedelta(minutes=ANTECEDENCIA_MIN), agora)
+        if t['intervalo'] and t['intervalo'][0] <= recebe < t['intervalo'][1]:
+            recebe = t['intervalo'][1]                  # no intervalo não manda: vai na volta
+        if t['chave'] not in prox or recebe < prox[t['chave']]['recebe']:
+            prox[t['chave']] = {'recebe': recebe, 'inicio': t['inicio']}
     return prox
+
+
+def _hora(v):
+    return v.strftime('%H:%M') if v else ''
+
+
+def _texto_espera(p):
+    """'recebe sáb 17/10 09:30 (entra 10:00)'."""
+    return f"recebe {_quando(p['recebe'])} (entra {_hora(p['inicio'])})" if p else ''
 
 
 # ------------------------------------------------------------------------------
@@ -212,7 +225,13 @@ def pessoas(agora=None):
     """
     garantir_tabelas()
     agora = agora or _agora()
-    recentes = {t['chave'] for t in _turnos(agora.date() - timedelta(days=DIAS_ATIVO), agora.date() + timedelta(days=DIAS_ATIVO))}
+    turnos = _turnos(agora.date() - timedelta(days=DIAS_ATIVO), agora.date() + timedelta(days=DIAS_ATIVO))
+    recentes = {t['chave'] for t in turnos}
+    escalados = {}                                  # 📅 dias com turno, de hoje até 14 dias para frente
+    ate = agora.date() + timedelta(days=DIAS_ESCALADOS)
+    for t in turnos:
+        if agora.date() <= t['inicio'].date() <= ate:
+            escalados.setdefault(t['chave'], set()).add(t['inicio'].date().isoformat())
     prox = _proximos_turnos(agora)
     agora_set = _quem_trabalha_agora(agora)
     lista = []
@@ -226,9 +245,12 @@ def pessoas(agora=None):
         p = prox.get(chave)
         saida.append({'id': f"{tipo}:{pid}", 'tipo': tipo, 'tipo_nome': TIPOS[tipo], 'nome': nome or '?',
                       'whatsapp': bool(R.numero_whatsapp(tel)), 'ativo': chave in recentes,
-                      'agora': chave in agora_set, 'proximo': _quando(p) if p and chave not in agora_set else ''})
+                      'agora': chave in agora_set, 'proximo': _quando(p['inicio']) if p and chave not in agora_set else '',
+                      'recebe': _quando(p['recebe']) if p and chave not in agora_set else '',
+                      'dias': sorted(escalados.get(chave, ()))})
     saida.sort(key=lambda x: (x['tipo'] != 'func', (x['nome'] or '').lower()))
-    return {'pessoas': saida, 'empresa': _empresa(), 'validade_padrao': (agora.date() + timedelta(days=VALIDADE_PADRAO_DIAS)).isoformat(),
+    return {'pessoas': saida, 'empresa': _empresa(), 'hoje': agora.date().isoformat(), 'antecedencia': ANTECEDENCIA_MIN,
+            'dias_escalados_max': (agora.date() + timedelta(days=DIAS_ESCALADOS)).isoformat(), 'validade_padrao': (agora.date() + timedelta(days=VALIDADE_PADRAO_DIAS)).isoformat(),
             'validade_max': (agora.date() + timedelta(days=VALIDADE_MAX_DIAS)).isoformat(), 'link_local': _endereco()[1]}
 
 
@@ -339,7 +361,7 @@ def criar(dados, usuario, agora=None):
     depois = len(escolhidos) - len(ja) - sem_tel
     partes = [f"📨 Comunicado criado para {len(escolhidos)} pessoa(s)."]
     if ja:
-        partes.append(f"{len(ja)} está(ão) no turno agora: recebe(m) em instantes.")
+        partes.append(f"{len(ja)} recebe(m) em instantes (no turno ou entra(m) em até {ANTECEDENCIA_MIN} min).")
     if depois:
         partes.append(f"{depois} recebe(m) no próximo turno.")
     if sem_tel:
@@ -496,7 +518,7 @@ def _situacao(st, enviado, aberto, lido, lembretes, prox, no_turno, erro, tentat
     if st in (ST_AGUARDANDO, ST_ENVIANDO):
         extra = ' (lembrete)' if lembretes else ''
         if no_turno:
-            return '⏳', f"No turno agora: recebe em instantes{extra}"
+            return '⏳', f"Recebe em instantes (no turno ou entra em até {ANTECEDENCIA_MIN} min){extra}"
         return '⏳', (f"Espera o turno: {prox}{extra}" if prox else f"Espera o turno (sem turno na escala ainda){extra}")
     if st == ST_FALHOU:
         return '⚠️', f"WhatsApp falhou ({tentativas}x): {erro or '?'}" + (" · tenta de novo no turno" if tentativas < MAX_TENTATIVAS else "")
@@ -532,7 +554,7 @@ def detalhe(cid, agora=None):
     for did, tipo, pid, nome, st, env, ab, lido, lemb, erro, tent in destinos:
         chave = (tipo, int(pid))
         p = prox.get(chave)
-        ic, txt = _situacao(st, env, ab, lido, lemb, _quando(p) if p else '', chave in agora_set, erro, tent or 0)
+        ic, txt = _situacao(st, env, ab, lido, lemb, _texto_espera(p), chave in agora_set, erro, tent or 0)
         if st == ST_LIDO and tipo == 'func' and cab[4]:
             txt += f" · ⭐ ganhou {cab[4]} pontos"
         pessoas_.append({'id': did, 'nome': nome or '?', 'tipo': tipo, 'tipo_nome': TIPOS.get(tipo, tipo), 'status': st,
