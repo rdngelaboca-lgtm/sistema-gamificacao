@@ -350,13 +350,31 @@ Telegram (Painel do Gestor) continuam como estavam.
 Arquivos: `comunicados_equipe.py`, `templates/gestao_comunicados.html`, `templates/comunicado.html`; tabelas
 `ComunicadosEquipe`, `ComunicadosEquipeDestinos` (criadas sozinhas na primeira vez).
 
+### Novo (só na Web) — 🧭 Perfil da equipe (DISC) (10/2026: Gestão › 🧭 Perfil)
+Avaliação de perfil comportamental **só para os fixos**. A gestão escolhe quem recebe (🆕 quem ainda não fez, 👥 todos,
+📅 escalados no dia ou um a um), a validade e ⭐ pontos opcionais. O link vai no WhatsApp **no mesmo horário dos
+📨 comunicados** (a partir de 30 min antes do turno, fora do intervalo; 📤 Agora manda na hora). No link (`/perfil/<código>`):
+**24 grupos de 4 palavras** — em cada um a pessoa toca na que MAIS e na que MENOS parece com ela (o andamento fica no
+celular: dá para fechar e continuar). O sistema soma 🔴 D Dominante, 🟡 I Influente, 🟢 S Estável e 🔵 C Conforme
+(porcentagens que somam 100; dois fatores fortes e próximos viram perfil combinado, ex.: IS) e monta o **relatório da
+gestão**: pontos fortes, o que motiva, o que desmotiva, como conversar, como dar feedback, como liderar, **onde rende
+mais na loja** (pelos setores da escala: Caixa, Frente Loja, Salão, Varanda, Buffet, Cozinha, Limpeza, Câmara Fria e
+liderança de turno) e pontos de atenção. A pessoa vê só um **resumo positivo** (perfil e pontos fortes) e ganha os pontos
+uma vez. Aba 👥 Equipe: quantos de cada perfil, dicas do que falta na equipe e **sugestões para a escala** (quem combina
+mais com cada setor); aba 📋 Envios: situação de cada link (🔔 Lembrar, 📤 Agora, ⛔ Cancelar). Aviso no grupo da gestão
+quando alguém responde (desliga em 📣 Avisos › 🧭 Perfil da equipe). Questionário próprio, baseado na teoria DISC
+(pública): ferramenta de orientação, não teste certificado — não serve sozinho para contratar ou demitir. Dado pessoal
+(LGPD): só a gestão vê o relatório. Pela internet só ficam abertos `/perfil/` e `/api/perfil/`.
+Arquivos: `perfil_disc.py`, `templates/gestao_perfil.html`, `templates/perfil_disc.html`; tabela `AvaliacoesDisc`
+(criada sozinha na primeira vez; guarda os fatores escolhidos em cada grupo).
+
 ### App de compras — aba Gestão em 3 áreas (10/2026)
 A aba **Gestão** do app (só o gestor vê) foi dividida em **🏪 Loja · 🛒 Compras · 📦 Estoque**, com o número de
 pendências de cada área no botão (Loja: dias sem faturamento lançado; Compras: listas para aprovar + cupons para
 conferir; Estoque: produtos que acabam em até 2 dias). A Gestão abre na última área usada.
 - **🏪 Loja**: cartão da Folha × Faturamento (último dia, mês × meta, falta lançar, previsão de hoje e de amanhã),
   **💰 Lançar faturamento do dia** e a lista **Gestão da loja** com as páginas da Web (Escala, Folha, Pagamentos,
-  Freelancers, 📣 Avisos, 📢 Clientes, 📨 Comunicados).
+  Freelancers, 📣 Avisos, 📢 Clientes, 📨 Comunicados, 🧭 Perfil da equipe).
 - **🛒 Compras**: Resumo (listas, compras em andamento, cupons, compras do mês, listas esquecidas, maiores
   fornecedores) e os relatórios Categorias, Inflação, Mais barato, Preços e Cupons.
 - **📦 Estoque**: Resumo (acabam em até 2 dias, abaixo do mínimo, preços que subiram) e Consumo.
@@ -425,11 +443,11 @@ Cada etapa: construir → testar → usar em paralelo com o PC → marcar ✅ aq
 - Nos outros computadores/celulares da loja (mesma rede): `http://IP-DO-SERVIDOR:5000/gestao`
   (o mesmo endereço do painel da TV, trocando o final por `/gestao`).
 - Pelo app de compras: aba **Gestão › 🏪 Loja › Gestão da loja** (Escala, Folha, Pagamentos, Freelancers, Avisos,
-  Clientes e Comunicados;
+  Clientes, Comunicados e Perfil da equipe;
   abrem direto, sem pedir o PIN de novo).
 - Menu no alto de toda página da Gestão: **🗓️ Escala · 👤 Freelancers · 💰 Pagamentos · 📊 Folha · 📣 Avisos · 📢 Clientes
-  · 📨 Comunicados** (`/gestao/escala`, `/gestao/freelancers`, `/gestao/pagamentos`, `/gestao/folha`, `/gestao/avisos`,
-  `/gestao/clientes`, `/gestao/comunicados`).
+  · 📨 Comunicados · 🧭 Perfil** (`/gestao/escala`, `/gestao/freelancers`, `/gestao/pagamentos`, `/gestao/folha`,
+  `/gestao/avisos`, `/gestao/clientes`, `/gestao/comunicados`, `/gestao/perfil`).
 - Pela internet (fora da loja): liberado para a Gestão desde 10/2026, a pedido do Rodrigo — só gestor,
   com o login do app (nome + PIN, bloqueio após erros). Para fechar: `GESTAO_PELA_INTERNET = False` no config.py.
 - Login: o mesmo do app de compras (nome + PIN); só quem é gestor no app entra.

@@ -190,6 +190,8 @@ CAMINHOS_LIBERADOS_NA_INTERNET += ('/clientes/cadastro', '/api/clientes/cadastro
 CAMINHOS_LIBERADOS_NA_INTERNET += ('/confirmar/', '/vaga/', '/api/presenca/')
 # [COMUNICADOS] O link do comunicado (✅ Li e estou ciente): só a página do link, que não abre sem o código secreto.
 CAMINHOS_LIBERADOS_NA_INTERNET += ('/comunicado/', '/api/comunicado/')
+# [PERFIL DISC] O link da avaliação de perfil: só a página do link, que não abre sem o código secreto.
+CAMINHOS_LIBERADOS_NA_INTERNET += ('/perfil/', '/api/perfil/')
 
 
 @app.before_request
@@ -3042,6 +3044,74 @@ def api_comunicado(token):
     if request.method == 'GET':
         return _resposta_comunicados(lambda: comunicados_equipe.ver(token))
     return _resposta_comunicados(lambda: comunicados_equipe.confirmar_leitura(token))
+
+
+# ---------------- [PERFIL DISC] 🧭 avaliação de perfil comportamental dos fixos ----------------
+def _resposta_perfil(funcao):
+    import perfil_disc
+    try:
+        return jsonify(funcao()), 200
+    except perfil_disc.ErroPerfil as e:
+        return jsonify({"erro": str(e)}), e.status
+    except Exception as e:
+        logger.exception(f"Erro no perfil DISC ({request.path}): {e}")
+        return jsonify({"erro": "Erro no servidor. Tente de novo; se continuar, veja o log."}), 500
+
+
+@app.route('/gestao/perfil')
+def pagina_gestao_perfil():
+    return _pagina_gestao('gestao_perfil.html', 'perfil')
+
+
+@app.route('/api/gestao/perfil', methods=['GET', 'POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_perfil(usuario):
+    import perfil_disc
+    if request.method == 'GET':
+        return _resposta_perfil(perfil_disc.painel)
+    dados = ler_json() or {}
+    return _resposta_perfil(lambda: perfil_disc.enviar(dados, usuario))
+
+
+@app.route('/api/gestao/perfil/pessoas', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_perfil_pessoas(usuario):
+    import perfil_disc
+    return _resposta_perfil(perfil_disc.pessoas)
+
+
+@app.route('/api/gestao/perfil/<int:avaliacao_id>', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_perfil_detalhe(usuario, avaliacao_id):
+    import perfil_disc
+    return _resposta_perfil(lambda: perfil_disc.detalhe(avaliacao_id))
+
+
+@app.route('/api/gestao/perfil/<int:avaliacao_id>/<acao>', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_perfil_acao(usuario, avaliacao_id, acao):
+    import perfil_disc
+    if acao not in ('lembrar', 'agora', 'cancelar'):
+        return jsonify({"erro": "Não encontrado."}), 404
+    return _resposta_perfil(lambda: perfil_disc.acao(avaliacao_id, acao, usuario))
+
+
+# Página PÚBLICA do link da avaliação (sem login: o código secreto do link é a chave).
+@app.route('/perfil/<token>')
+def pagina_perfil_disc(token):
+    resposta = app.make_response(render_template('perfil_disc.html'))
+    resposta.headers['Cache-Control'] = 'no-store'
+    resposta.headers['Referrer-Policy'] = 'no-referrer'
+    return resposta
+
+
+@app.route('/api/perfil/<token>', methods=['GET', 'POST'])
+def api_perfil_disc(token):
+    import perfil_disc
+    if request.method == 'GET':
+        return _resposta_perfil(lambda: perfil_disc.ver(token))
+    dados = ler_json() or {}
+    return _resposta_perfil(lambda: perfil_disc.responder(token, dados))
 
 
 if __name__ == "__main__":

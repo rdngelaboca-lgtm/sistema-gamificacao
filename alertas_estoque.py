@@ -54,6 +54,7 @@ TIPOS_AVISO = [
                                                              'e alerta se o número dos clientes parar'),
     ('presenca', '✅ Presença e vagas', 'Na hora', 'Quem avisou pelo link que NÃO vai poder vir e freelancer que quer '
                                                   'uma vaga (🙋 Vagas da escala)'),
+    ('equipe', '🧭 Perfil da equipe', 'Na hora', 'Quem respondeu a avaliação de perfil (DISC), com o perfil'),
 ]
 CHAVES_AVISO = [t[0] for t in TIPOS_AVISO]
 
