@@ -3080,6 +3080,14 @@ def api_gestao_perfil_pessoas(usuario):
     return _resposta_perfil(perfil_disc.pessoas)
 
 
+@app.route('/api/gestao/perfil/candidatos', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_perfil_candidato(usuario):
+    import perfil_disc
+    dados = ler_json() or {}
+    return _resposta_perfil(lambda: perfil_disc.candidato_criar(dados, usuario))
+
+
 @app.route('/api/gestao/perfil/<int:avaliacao_id>', methods=['GET'])
 @compras_login(somente_gestor=True)
 def api_gestao_perfil_detalhe(usuario, avaliacao_id):
@@ -3091,7 +3099,7 @@ def api_gestao_perfil_detalhe(usuario, avaliacao_id):
 @compras_login(somente_gestor=True)
 def api_gestao_perfil_acao(usuario, avaliacao_id, acao):
     import perfil_disc
-    if acao not in ('lembrar', 'agora', 'cancelar'):
+    if acao not in ('lembrar', 'agora', 'cancelar', 'apagar'):
         return jsonify({"erro": "Não encontrado."}), 404
     return _resposta_perfil(lambda: perfil_disc.acao(avaliacao_id, acao, usuario))
 

@@ -3,8 +3,8 @@
 # ==============================================================================
 # A gestão envia pela Gestão Web (🧭 Perfil) e cada FIXO recebe um LINK no WhatsApp no mesmo horário dos
 # 📨 comunicados: a partir de 30 min antes do turno dele (pela escala), fora do intervalo; na folga espera
-# o próximo turno.
-# No link: 20 perguntas do dia a dia, com 4 respostas; a pessoa toca na que MAIS e na que MENOS combina com ela
+# o próximo turno. 🧑‍💼 CANDIDATOS do processo seletivo (não estão no cadastro) recebem na hora, sem pontos.
+# No link: 24 grupos de 4 palavras; a pessoa toca na que MAIS e na que MENOS combina com ela, em 2 passos
 # (antes uma pergunta de treino, que não conta).
 # O sistema soma D (Dominante), I (Influente), S (Estável) e C (Conforme) e monta:
 #   - o relatório da gestão: o que motiva, o que desmotiva, como conversar, como dar feedback, onde rende
@@ -27,7 +27,7 @@ import comunicados_equipe as CE      # mesmo horário de entrega e mesmos ajudan
 
 logger = logging.getLogger(__name__)
 
-VERSAO = 2                     # 2: perguntas do dia a dia (a 1 tinha palavras soltas)
+VERSAO = 3                     # 1: palavras · 2: perguntas do dia a dia · 3: palavras de novo, com a tela nova
 DIMS = 'DISC'
 NOMES = {'D': 'Dominante', 'I': 'Influente', 'S': 'Estável', 'C': 'Conforme'}
 EMOJI = {'D': '🔴', 'I': '🟡', 'S': '🟢', 'C': '🔵'}
@@ -37,77 +37,29 @@ ST_AGUARDANDO, ST_ENVIANDO, ST_ENVIADO, ST_RESPONDIDO = 'aguardando', 'enviando'
 ST_FALHOU, ST_EXPIRADO, ST_SEM_TEL, ST_CANCELADO = 'falhou', 'expirado', 'sem_telefone', 'cancelado'
 VALIDADE_PADRAO_DIAS, VALIDADE_MAX_DIAS = 7, 30
 SEGUNDO_PLANO = True           # os testes desligam para conferir na hora
+TIPO_FUNC, TIPO_CAND = 'func', 'candidato'   # fixo do cadastro · candidato do processo seletivo
 
-# As perguntas (v2: linguagem simples, do dia a dia da loja, para quem tem pouco estudo). Cada pergunta tem uma
-# resposta de cada fator; a pessoa escolhe a que MAIS e a que MENOS combina com ela.
-PERGUNTAS = [
-    ("Quando a loja está cheia, eu…", {
-        'D': "tomo a frente e resolvo rápido", 'I': "animo o pessoal e converso com os clientes",
-        'S': "faço a minha parte com calma", 'C': "presto atenção para não errar nada"}),
-    ("Quando chega uma regra nova, eu…", {
-        'D': "quero começar logo", 'I': "comento com os colegas",
-        'S': "preciso de um tempo para me acostumar", 'C': "quero entender bem como funciona"}),
-    ("No trabalho, eu gosto mais de…", {
-        'D': "desafios e metas", 'I': "conversar e conhecer gente",
-        'S': "ajudar os colegas", 'C': "fazer tudo bem feito, no capricho"}),
-    ("Quando um cliente reclama, eu…", {
-        'D': "resolvo o problema na hora", 'I': "uso a simpatia para deixar ele feliz de novo",
-        'S': "escuto com paciência", 'C': "explico direitinho o que aconteceu"}),
-    ("Meus colegas dizem que eu sou alguém…", {
-        'D': "que decide rápido", 'I': "animado e divertido",
-        'S': "calmo e paciente", 'C': "caprichoso e organizado"}),
-    ("Quando recebo uma tarefa nova, eu…", {
-        'D': "começo logo, sem enrolar", 'I': "gosto de fazer junto com alguém",
-        'S': "sigo o jeito que me ensinaram", 'C': "pergunto tudo antes de começar"}),
-    ("O que mais me deixa feliz no trabalho é…", {
-        'D': "bater a meta", 'I': "ver o cliente sair sorrindo",
-        'S': "a equipe unida, sem briga", 'C': "ver tudo limpo e organizado"}),
-    ("O que mais me incomoda é…", {
-        'D': "gente lenta ou enrolada", 'I': "ficar sozinho, sem conversar com ninguém",
-        'S': "briga e confusão", 'C': "bagunça e coisa malfeita"}),
-    ("Quando aparece um problema, eu…", {
-        'D': "resolvo do meu jeito, rápido", 'I': "chamo o pessoal para pensar junto",
-        'S': "mantenho a calma e não me desespero", 'C': "procuro a causa com cuidado"}),
-    ("Se eu pudesse escolher, eu trabalharia mais…", {
-        'D': "liderando a equipe", 'I': "atendendo os clientes",
-        'S': "numa função que eu já conheço bem", 'C': "cuidando do estoque e da organização"}),
-    ("Quando alguém me explica uma coisa, eu prefiro que…", {
-        'D': "vá direto ao ponto", 'I': "converse comigo de um jeito leve",
-        'S': "explique com calma, passo a passo", 'C': "mostre todos os detalhes"}),
-    ("Quando a escala ou o combinado muda de última hora, eu…", {
-        'D': "me ajeito e sigo em frente", 'I': "acho bom, gosto de novidade",
-        'S': "fico um pouco incomodado", 'C': "quero saber o motivo da mudança"}),
-    ("No dia a dia, eu sou alguém…", {
-        'D': "rápido e prático", 'I': "falante e alegre",
-        'S': "tranquilo e constante", 'C': "cuidadoso e atento"}),
-    ("Quando um colega erra, eu…", {
-        'D': "falo na hora, sem rodeio", 'I': "brinco para deixar o clima leve",
-        'S': "ajudo a consertar sem fazer barulho", 'C': "mostro qual é o jeito certo"}),
-    ("Numa reunião da equipe, eu…", {
-        'D': "dou minha opinião com firmeza", 'I': "falo bastante e dou ideias",
-        'S': "escuto mais do que falo", 'C': "faço perguntas sobre os detalhes"}),
-    ("O que eu mais quero no trabalho é…", {
-        'D': "crescer e ter mais responsabilidade", 'I': "ser reconhecido e elogiado",
-        'S': "ter segurança e estabilidade", 'C': "fazer as coisas do jeito certo"}),
-    ("Quando estou sob muita pressão, eu…", {
-        'D': "fico mais direto e acelerado", 'I': "falo mais e fico agitado",
-        'S': "fico quieto e continuo fazendo", 'C': "fico mais exigente com os detalhes"}),
-    ("Para aprender uma coisa nova, eu prefiro…", {
-        'D': "fazer na prática, logo de cara", 'I': "aprender junto com outras pessoas",
-        'S': "ver alguém fazendo antes, com calma", 'C': "ter tudo explicado, de preferência anotado"}),
-    ("Quando o movimento está fraco, eu…", {
-        'D': "procuro um jeito de vender mais", 'I': "puxo conversa com os clientes e colegas",
-        'S': "adianto as tarefas de sempre", 'C': "organizo o que está fora do lugar"}),
-    ("Uma qualidade minha é…", {
-        'D': "coragem para encarar desafios", 'I': "simpatia com as pessoas",
-        'S': "paciência e lealdade", 'C': "capricho e atenção aos detalhes"}),
-]
-# ordem das 4 respostas em cada pergunta: 20 das 24 combinações de DISC (sem um quadrado latino), assim cada fator
-# aparece 5 vezes em cada posição e ninguém "acha o padrão"
-ORDENS = ['SCID', 'CSDI', 'DCSI', 'ISDC', 'SDIC', 'CIDS', 'DSIC', 'ICSD', 'SICD', 'CDSI',
-          'DICS', 'IDSC', 'CISD', 'DSCI', 'ICDS', 'SDCI', 'DCIS', 'ISCD', 'SIDC', 'CDIS']
-ENUNCIADOS = [pergunta for pergunta, _ in PERGUNTAS]
-BLOCOS = [[(opcoes[d], d) for d in ordem] for (_, opcoes), ordem in zip(PERGUNTAS, ORDENS)]
+# Palavras de cada fator (24 cada). Cada grupo do questionário tem uma de cada, numa ordem diferente.
+# (v3: voltaram as palavras da v1, com a tela nova: passos 👍/👎, treino e 🔊 Ouvir)
+PALAVRAS = {
+    'D': ['Decidido', 'Competitivo', 'Direto', 'Ousado', 'Determinado', 'Exigente', 'Independente', 'Enérgico',
+          'Objetivo', 'Corajoso', 'Firme', 'Ambicioso', 'Persistente', 'Ágil', 'Desafiador', 'Autoconfiante',
+          'Assertivo', 'Arrojado', 'Empreendedor', 'Franco', 'Dinâmico', 'Destemido', 'Prático', 'Audacioso'],
+    'I': ['Comunicativo', 'Animado', 'Otimista', 'Persuasivo', 'Sociável', 'Entusiasmado', 'Expressivo', 'Divertido',
+          'Inspirador', 'Espontâneo', 'Convincente', 'Extrovertido', 'Alegre', 'Falante', 'Carismático', 'Brincalhão',
+          'Popular', 'Criativo', 'Simpático', 'Empolgado', 'Encantador', 'Contagiante', 'Festeiro', 'Motivador'],
+    'S': ['Paciente', 'Calmo', 'Leal', 'Prestativo', 'Constante', 'Tranquilo', 'Bom ouvinte', 'Cooperativo',
+          'Gentil', 'Previsível', 'Compreensivo', 'Estável', 'Sereno', 'Amigável', 'Acolhedor', 'Dedicado',
+          'Pacífico', 'Confiável', 'Solidário', 'Moderado', 'Atencioso', 'Equilibrado', 'Tolerante', 'Companheiro'],
+    'C': ['Cuidadoso', 'Organizado', 'Preciso', 'Detalhista', 'Analítico', 'Caprichoso', 'Disciplinado', 'Cauteloso',
+          'Perfeccionista', 'Metódico', 'Lógico', 'Criterioso', 'Exato', 'Sistemático', 'Reservado', 'Correto',
+          'Pontual', 'Planejador', 'Observador', 'Rigoroso', 'Minucioso', 'Prudente', 'Formal', 'Zeloso'],
+}
+# ordem das 4 palavras em cada grupo (as 24 combinações de DISC, misturadas): ninguém "acha o padrão"
+ORDENS = ['DISC', 'IDCS', 'SCID', 'CSDI', 'DCSI', 'ISDC', 'SDIC', 'CIDS', 'DSIC', 'ICSD', 'SICD', 'CDSI',
+          'DICS', 'IDSC', 'SCDI', 'CISD', 'DSCI', 'ICDS', 'SDCI', 'CSID', 'DCIS', 'ISCD', 'SIDC', 'CDIS']
+BLOCOS = [[(PALAVRAS[d][k], d) for d in ordem] for k, ordem in enumerate(ORDENS)]
+ENUNCIADOS = ['No trabalho, eu sou…'] * len(BLOCOS)
 N_BLOCOS = len(BLOCOS)
 
 # O que cada fator significa no dia a dia da loja (textos do relatório)
@@ -286,6 +238,9 @@ def garantir_tabelas():
                 Erro NVARCHAR(300) NULL
             )
         """)
+        # 🧑‍💼 processo seletivo: candidato (fora do cadastro, FuncionarioID 0) e a vaga
+        cur.execute("IF COL_LENGTH('AvaliacoesDisc', 'Tipo') IS NULL ALTER TABLE AvaliacoesDisc ADD Tipo VARCHAR(10) NULL")
+        cur.execute("IF COL_LENGTH('AvaliacoesDisc', 'Vaga') IS NULL ALTER TABLE AvaliacoesDisc ADD Vaga NVARCHAR(100) NULL")
         conn.commit()
         _tabelas_ok = True
     finally:
@@ -304,8 +259,8 @@ def _rodar(funcao):
 # ------------------------------------------------------------------------------
 def calcular(escolhas):
     """
-    escolhas: [(fator MAIS, fator MENOS)] das perguntas. Mais = +1, menos = −1; com 20 perguntas cada fator vai de −20 a
-    +20. Somando 20 em cada um (0 a 40) o total dá sempre 80: vira porcentagem que soma 100 (a média é 25%).
+    escolhas: [(fator MAIS, fator MENOS)] dos grupos. Mais = +1, menos = −1; com 24 grupos cada fator vai de −24 a +24.
+    Somando 24 em cada um (0 a 48) o total dá sempre 96: vira porcentagem que soma 100 (a média é 25%).
     """
     bruto = {d: 0 for d in DIMS}
     for mais, menos in escolhas:
@@ -370,7 +325,7 @@ def resumo_pessoa(pct, perfil):
 def _ultimas_por_pessoa(cur):
     """{FuncionarioID: linha da avaliação mais recente}."""
     cur.execute("""SELECT AvaliacaoID, FuncionarioID, Status, RespondidoEm, Perfil, PctD, PctI, PctS, PctC, CriadoEm
-                   FROM AvaliacoesDisc ORDER BY AvaliacaoID""")
+                   FROM AvaliacoesDisc WHERE ISNULL(Tipo, ?) = ? ORDER BY AvaliacaoID""", TIPO_FUNC, TIPO_FUNC)
     ult, resp = {}, {}
     for r in cur.fetchall():
         ult[int(r[1])] = r
@@ -409,13 +364,15 @@ def pessoas(agora=None):
 # ------------------------------------------------------------------------------
 # Enviar
 # ------------------------------------------------------------------------------
-def texto_mensagem(nome, link, pontos=0, lembrete=False):
+def texto_mensagem(nome, link, pontos=0, lembrete=False, candidato=False):
     primeiro = CE._primeiro_nome(nome)
     return ((f"🔔 *Lembrete:* sua avaliação de perfil ainda está esperando você.\n\n" if lembrete else "")
             + f"🧭 *Avaliação de perfil — {CE._empresa()}*\n\n"
             + (f"Olá, {primeiro}!\n" if primeiro else "Olá!\n")
-            + "Queremos te conhecer melhor para organizar a equipe do jeito que combina com você. São "
-            + f"{N_BLOCOS} perguntas rápidas (uns 8 minutos) e não existe resposta certa ou errada.\n\n"
+            + ("Obrigado pelo interesse em trabalhar com a gente! Como parte do processo seletivo, queremos conhecer o "
+               "seu jeito de trabalhar. São " if candidato else
+               "Queremos te conhecer melhor para organizar a equipe do jeito que combina com você. São ")
+            + f"{N_BLOCOS} perguntas rápidas (uns 10 minutos) e não existe resposta certa ou errada.\n\n"
             + (f"⭐ Respondendo você ganha *{pontos} pontos* na gamificação!\n\n" if pontos else "")
             + f"👉 *Toque no link para responder:*\n{link}")
 
@@ -437,17 +394,8 @@ def enviar(dados, usuario, agora=None):
         raise ErroPerfil("Pontos inválidos.")
     if not 0 <= pontos <= 100:
         raise ErroPerfil("Os pontos vão de 0 a 100.")
-    try:
-        valido = date.fromisoformat(str(dados['valido_ate'])) if dados.get('valido_ate') else \
-            agora.date() + timedelta(days=VALIDADE_PADRAO_DIAS)
-    except ValueError:
-        raise ErroPerfil("Data de validade inválida.")
-    if valido < agora.date() or valido > agora.date() + timedelta(days=VALIDADE_MAX_DIAS):
-        raise ErroPerfil(f"A validade vai de hoje até {VALIDADE_MAX_DIAS} dias para frente.")
-    base, local = CE._endereco()
-    if not base or local:
-        raise ErroPerfil("Falta o endereço da internet (📢 Clientes › ⚙️ Ajustes › QR do balcão): sem ele o link da "
-                         "avaliação não abre no celular.", 409)
+    valido = _validade(dados, agora)
+    _exigir_endereco()
     cadastro = {int(f.FuncionarioID): (f.NomeCompleto, getattr(f, 'TelefoneWhatsApp', None)) for f in database.listar_funcionarios()}
     if any(i not in cadastro for i in ids):
         raise ErroPerfil("Alguém da lista não está mais no cadastro. Atualize a página.", 409)
@@ -462,10 +410,10 @@ def enviar(dados, usuario, agora=None):
         for i in ids:
             nome, tel = cadastro[i]
             cur.execute("""INSERT INTO AvaliacoesDisc (FuncionarioID, Nome, Telefone, Token, Status, Pontos, CriadoPor, CriadoEm,
-                                                       ValidoAte, Versao)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                                       ValidoAte, Versao, Tipo)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         i, nome, tel, CE._token(), ST_AGUARDANDO if CE.R.numero_whatsapp(tel) else ST_SEM_TEL,
-                        pontos, usuario.get('nome'), agora, valido, VERSAO)
+                        pontos, usuario.get('nome'), agora, valido, VERSAO, TIPO_FUNC)
         conn.commit()
     except Exception:
         conn.rollback()
@@ -487,6 +435,64 @@ def enviar(dados, usuario, agora=None):
     return {'ok': True, 'mensagem': ' '.join(partes)}
 
 
+def _validade(dados, agora):
+    try:
+        valido = date.fromisoformat(str(dados['valido_ate'])) if dados.get('valido_ate') else \
+            agora.date() + timedelta(days=VALIDADE_PADRAO_DIAS)
+    except ValueError:
+        raise ErroPerfil("Data de validade inválida.")
+    if valido < agora.date() or valido > agora.date() + timedelta(days=VALIDADE_MAX_DIAS):
+        raise ErroPerfil(f"A validade vai de hoje até {VALIDADE_MAX_DIAS} dias para frente.")
+    return valido
+
+
+def _exigir_endereco():
+    base, local = CE._endereco()
+    if not base or local:
+        raise ErroPerfil("Falta o endereço da internet (📢 Clientes › ⚙️ Ajustes › QR do balcão): sem ele o link da "
+                         "avaliação não abre no celular.", 409)
+    return base
+
+
+def candidato_criar(dados, usuario, agora=None):
+    """🧑‍💼 Processo seletivo: candidato (fora do cadastro) recebe o link na hora no WhatsApp, sem pontos.
+    Sem WhatsApp: a gestão copia o link e manda como quiser."""
+    garantir_tabelas()
+    agora = agora or CE._agora()
+    nome = ' '.join(str(dados.get('nome') or '').split())
+    vaga = ' '.join(str(dados.get('vaga') or '').split())
+    tel_txt = str(dados.get('telefone') or '').strip()
+    if not nome:
+        raise ErroPerfil("Escreva o nome do candidato.")
+    if len(nome) > 150 or len(vaga) > 100:
+        raise ErroPerfil("Nome ou vaga grande demais.")
+    tel = CE.R.numero_whatsapp(tel_txt) if tel_txt else ''
+    if tel_txt and not tel:
+        raise ErroPerfil(f"WhatsApp inválido: '{tel_txt}'. Use o DDD + o número (ex.: 66 99999-1234).")
+    valido = _validade(dados, agora)
+    base = _exigir_endereco()
+    token = CE._token()
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        cur.execute("""INSERT INTO AvaliacoesDisc (FuncionarioID, Nome, Telefone, Token, Status, Pontos, CriadoPor, CriadoEm,
+                                                   ValidoAte, Versao, Tipo, Vaga)
+                       VALUES (0, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?); SELECT SCOPE_IDENTITY();""",
+                    nome, tel or None, token, ST_AGUARDANDO if tel else ST_SEM_TEL, usuario.get('nome'), agora, valido,
+                    VERSAO, TIPO_CAND, vaga or None)
+        cur.nextset()
+        aid = int(cur.fetchone()[0])
+        conn.commit()
+    finally:
+        conn.close()
+    logger.info(f"[PERFIL DISC] {usuario.get('nome')} mandou a avaliação para o candidato {aid}.")
+    if tel:
+        _rodar(lambda: processar(agora=agora, forcar_ids=[aid]))
+    return {'ok': True, 'id': aid, 'link': f"{base}/perfil/{token}",
+            'mensagem': f"🧑‍💼 Avaliação de {nome} criada." + (" O link vai no WhatsApp agora." if tel else
+                                                               " Sem WhatsApp: copie o link e mande você mesmo.")}
+
+
 def processar(agora=None, forcar_ids=None):
     """Uma rodada (o robô chama a cada 2 minutos): expira, devolve à fila o que travou e manda para quem está no horário."""
     garantir_tabelas()
@@ -500,7 +506,7 @@ def processar(agora=None, forcar_ids=None):
                         ST_EXPIRADO, ST_AGUARDANDO, ST_FALHOU, agora.date())
             cur.execute("UPDATE AvaliacoesDisc SET Status = ? WHERE Status = ? AND EnviadoEm < ?",
                         ST_AGUARDANDO, ST_ENVIANDO, agora - timedelta(minutes=CE.ENVIANDO_PRESO_MIN))
-            cur.execute("""SELECT AvaliacaoID, FuncionarioID, Nome, Telefone, Token, Pontos, Lembretes FROM AvaliacoesDisc
+            cur.execute("""SELECT AvaliacaoID, FuncionarioID, Nome, Telefone, Token, Pontos, Lembretes, Tipo FROM AvaliacoesDisc
                            WHERE Status = ? OR (Status = ? AND Tentativas < ?)""", ST_AGUARDANDO, ST_FALHOU, CE.MAX_TENTATIVAS)
             fila = cur.fetchall()
             conn.commit()
@@ -514,14 +520,16 @@ def processar(agora=None, forcar_ids=None):
         forcar = {int(i) for i in (forcar_ids or [])}
         no_turno = CE._quem_trabalha_agora(agora) if len(forcar) < len(fila) else set()
         enviados = 0
-        for aid, fid, nome, tel, token, pontos, lembretes in fila:
-            if aid not in forcar and ('func', int(fid)) not in no_turno:
+        for aid, fid, nome, tel, token, pontos, lembretes, tipo in fila:
+            candidato = tipo == TIPO_CAND                 # candidato não tem escala: vai na hora
+            if not candidato and aid not in forcar and ('func', int(fid)) not in no_turno:
                 continue
             if not _mudar(aid, (ST_AGUARDANDO, ST_FALHOU), ST_ENVIANDO, EnviadoEm=agora):
                 continue                                  # outra rodada (ou o outro programa) já pegou
             if enviados:
                 time.sleep(CE.INTERVALO_ENVIO_SEG)
-            ok, resp = CE._mandar(tel, texto_mensagem(nome, f"{base}/perfil/{token}", pontos or 0, lembrete=bool(lembretes)))
+            ok, resp = CE._mandar(tel, texto_mensagem(nome, f"{base}/perfil/{token}", 0 if candidato else (pontos or 0),
+                                                      lembrete=bool(lembretes), candidato=candidato))
             if ok:
                 _mudar(aid, (ST_ENVIANDO,), ST_ENVIADO, EnviadoEm=agora, Erro=None)
                 enviados += 1
@@ -556,7 +564,11 @@ def _mudar(aid, de, para, soma_tentativa=False, **campos):
 # ------------------------------------------------------------------------------
 # Painel da gestão
 # ------------------------------------------------------------------------------
-def _situacao(st, env, ab, resp, lemb, prox, no_turno, erro, tent):
+def _situacao(st, env, ab, resp, lemb, prox, no_turno, erro, tent, candidato=False):
+    if candidato and st in (ST_AGUARDANDO, ST_ENVIANDO):
+        return '⏳', "Enviando no WhatsApp…"
+    if candidato and st == ST_SEM_TEL:
+        return '🔗', "Sem WhatsApp: copie o link e mande você mesmo"
     if st == ST_RESPONDIDO:
         return '✅', f"Respondeu {CE._quando(resp)}"
     if st == ST_ENVIADO:
@@ -582,14 +594,14 @@ def _pct(linha_pd, linha_pi, linha_ps, linha_pc):
 
 
 def painel(agora=None):
-    """Envios (todas as avaliações) e a visão da equipe (a última resposta de cada fixo)."""
+    """Envios dos fixos, a visão da equipe (a última resposta de cada fixo) e os 🧑‍💼 candidatos do processo seletivo."""
     garantir_tabelas()
     agora = agora or CE._agora()
     conn = _conexao()
     try:
         cur = conn.cursor()
         cur.execute("""SELECT AvaliacaoID, FuncionarioID, Nome, Status, EnviadoEm, AbertoEm, RespondidoEm, Lembretes, Erro,
-                              Tentativas, Perfil, PctD, PctI, PctS, PctC, CriadoEm, Pontos, ValidoAte
+                              Tentativas, Perfil, PctD, PctI, PctS, PctC, CriadoEm, Pontos, ValidoAte, Tipo, Vaga, Telefone, Token
                        FROM AvaliacoesDisc ORDER BY AvaliacaoID DESC""")
         linhas = cur.fetchall()
     finally:
@@ -597,23 +609,43 @@ def painel(agora=None):
     ativos = {int(f.FuncionarioID) for f in database.listar_funcionarios()}
     prox = CE._proximos_turnos(agora)
     no_turno = CE._quem_trabalha_agora(agora)
-    envios, equipe, vistos = [], [], set()
-    for (aid, fid, nome, st, env, ab, resp, lemb, erro, tent, perfil, pd, pi, ps, pc, criado, pontos, valido) in linhas:
-        fid = int(fid)
+    base = CE._endereco()[0]
+    envios, equipe, candidatos, vistos = [], [], [], set()
+    for (aid, fid, nome, st, env, ab, resp, lemb, erro, tent, perfil, pd, pi, ps, pc, criado, pontos, valido,
+         tipo, vaga, tel, token) in linhas:
+        fid, candidato = int(fid), tipo == TIPO_CAND
         ic, txt = _situacao(st, env, ab, resp, lemb, CE._texto_espera(prox.get(('func', fid))), ('func', fid) in no_turno,
-                            erro, tent or 0)
-        envios.append({'id': aid, 'funcionario_id': fid, 'nome': nome or '?', 'status': st, 'icone': ic, 'situacao': txt,
-                       'criado': CE._quando(criado), 'perfil': perfil or '', 'perfil_nome': nome_perfil(perfil) if perfil else '',
-                       'pontos': pontos or 0, 'pode_agora': st in (ST_AGUARDANDO, ST_FALHOU, ST_EXPIRADO),
-                       'pendente': st in (ST_AGUARDANDO, ST_ENVIANDO, ST_ENVIADO, ST_FALHOU)})
+                            erro, tent or 0, candidato)
+        item = {'id': aid, 'funcionario_id': fid, 'nome': nome or '?', 'status': st, 'icone': ic, 'situacao': txt,
+                'criado': CE._quando(criado), 'perfil': perfil or '', 'perfil_nome': nome_perfil(perfil) if perfil else '',
+                'pontos': pontos or 0, 'pode_agora': st in (ST_AGUARDANDO, ST_FALHOU, ST_EXPIRADO) and (not candidato or bool(tel)),
+                'pendente': st in (ST_AGUARDANDO, ST_ENVIANDO, ST_ENVIADO, ST_FALHOU) or (candidato and st == ST_SEM_TEL),
+                'link': f"{base}/perfil/{token}" if st not in (ST_RESPONDIDO, ST_CANCELADO, ST_EXPIRADO) else ''}
+        if candidato:
+            item.update(vaga=vaga or '', telefone=tel or '',
+                        pct=_pct(pd, pi, ps, pc) if st == ST_RESPONDIDO else None,
+                        setores=[x['setor'] for x in setores_da_pessoa(_pct(pd, pi, ps, pc))] if st == ST_RESPONDIDO else [])
+            candidatos.append(item)
+            continue
+        envios.append(item)
         if st == ST_RESPONDIDO and fid not in vistos and fid in ativos:
             vistos.add(fid)
             pct = _pct(pd, pi, ps, pc)
             equipe.append({'id': aid, 'funcionario_id': fid, 'nome': nome or '?', 'perfil': perfil, 'perfil_nome': nome_perfil(perfil),
                            'pct': pct, 'respondido': CE._quando(resp), 'setores': [s['setor'] for s in setores_da_pessoa(pct)]})
     equipe.sort(key=lambda x: x['nome'].lower())
+    for c in candidatos:
+        c['completa'] = _o_que_completa(c['pct'], equipe) if c['pct'] else []
     return {'envios': envios[:300], 'equipe': equipe, 'resumo_equipe': _resumo_equipe(equipe),
-            'pendentes': sum(1 for e in envios if e['pendente'])}
+            'pendentes': sum(1 for e in envios if e['pendente']), 'candidatos': candidatos[:300]}
+
+
+def _o_que_completa(pct, equipe):
+    """Os fatores fortes do candidato (30% ou mais) que ninguém da equipe tem forte: o que ele traz de novo."""
+    if not equipe:
+        return []
+    return [{'d': d, 'nome': NOMES[d], 'emoji': EMOJI[d], 'curto': TEXTOS[d]['curto']}
+            for d in DIMS if pct[d] >= 30 and not any(p['pct'][d] >= 30 for p in equipe)]
 
 
 def _resumo_equipe(equipe):
@@ -639,23 +671,30 @@ def detalhe(aid, agora=None):
     conn = _conexao()
     try:
         cur = conn.cursor()
-        cur.execute("""SELECT AvaliacaoID, FuncionarioID, Nome, Status, RespondidoEm, Perfil, PctD, PctI, PctS, PctC, CriadoPor
+        cur.execute("""SELECT AvaliacaoID, FuncionarioID, Nome, Status, RespondidoEm, Perfil, PctD, PctI, PctS, PctC, CriadoPor,
+                              Tipo, Vaga
                        FROM AvaliacoesDisc WHERE AvaliacaoID = ?""", int(aid))
         a = cur.fetchone()
         if not a:
             raise ErroPerfil("Avaliação não encontrada.", 404)
-        cur.execute("""SELECT AvaliacaoID, RespondidoEm, Perfil FROM AvaliacoesDisc
-                       WHERE FuncionarioID = ? AND Status = ? AND AvaliacaoID <> ? ORDER BY AvaliacaoID DESC""",
-                    int(a[1]), ST_RESPONDIDO, int(aid))
-        antes = cur.fetchall()
+        antes = []
+        if a[11] != TIPO_CAND:
+            cur.execute("""SELECT AvaliacaoID, RespondidoEm, Perfil FROM AvaliacoesDisc
+                           WHERE FuncionarioID = ? AND Status = ? AND AvaliacaoID <> ? AND ISNULL(Tipo, ?) = ?
+                           ORDER BY AvaliacaoID DESC""", int(a[1]), ST_RESPONDIDO, int(aid), TIPO_FUNC, TIPO_FUNC)
+            antes = cur.fetchall()
     finally:
         conn.close()
     if a[3] != ST_RESPONDIDO:
         raise ErroPerfil("Esta avaliação ainda não foi respondida.", 409)
     pct = _pct(a[6], a[7], a[8], a[9])
     r = relatorio(pct, a[5])
+    candidato = a[11] == TIPO_CAND
     r.update({'id': a[0], 'nome': a[2] or '?', 'respondido': CE._quando(a[4]), 'perfil_nome': nome_perfil(a[5]),
+              'candidato': candidato, 'vaga': a[12] or '',
               'anteriores': [{'id': x[0], 'respondido': CE._quando(x[1]), 'perfil_nome': nome_perfil(x[2])} for x in antes]})
+    if candidato:
+        r['completa'] = _o_que_completa(pct, painel(agora)['equipe'])
     return r
 
 
@@ -666,13 +705,27 @@ def acao(aid, nome_acao, usuario, agora=None):
     conn = _conexao()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT Status, ValidoAte, Nome FROM AvaliacoesDisc WHERE AvaliacaoID = ?", int(aid))
+        cur.execute("SELECT Status, ValidoAte, Nome, Tipo, Telefone FROM AvaliacoesDisc WHERE AvaliacaoID = ?", int(aid))
         a = cur.fetchone()
     finally:
         conn.close()
     if not a:
         raise ErroPerfil("Avaliação não encontrada.", 404)
-    st, valido, nome = a[0], database._como_data(a[1]), a[2]
+    st, valido, nome, candidato = a[0], database._como_data(a[1]), a[2], a[3] == TIPO_CAND
+    if nome_acao == 'apagar':
+        if not candidato:
+            raise ErroPerfil("Só dá para apagar avaliação de candidato.", 409)
+        conn = _conexao()
+        try:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM AvaliacoesDisc WHERE AvaliacaoID = ? AND Tipo = ?", int(aid), TIPO_CAND)
+            conn.commit()
+        finally:
+            conn.close()
+        logger.info(f"[PERFIL DISC] {usuario.get('nome')} apagou a avaliação do candidato {aid}.")
+        return {'ok': True, 'mensagem': f"🗑️ Avaliação de {nome} apagada (nome, WhatsApp e respostas)."}
+    if candidato and nome_acao in ('lembrar', 'agora') and not a[4]:
+        raise ErroPerfil("Candidato sem WhatsApp: copie o link e mande você mesmo.", 409)
     novo_prazo = max(valido, agora.date() + timedelta(days=VALIDADE_PADRAO_DIAS)) if valido else agora.date()
     if nome_acao == 'lembrar':
         if st != ST_ENVIADO:
@@ -681,8 +734,8 @@ def acao(aid, nome_acao, usuario, agora=None):
         _somar_lembrete(aid)
         _rodar(lambda: processar(agora=agora))
         logger.info(f"[PERFIL DISC] {usuario.get('nome')}: lembrete da avaliação {aid} ({nome}).")
-        return {'ok': True, 'mensagem': f"🔔 {nome} recebe o lembrete {CE.ANTECEDENCIA_MIN} min antes do próximo turno "
-                                         "(ou em instantes, se já estiver no horário)."}
+        return {'ok': True, 'mensagem': f"🔔 {nome} recebe o lembrete " + ("agora." if candidato else
+                f"{CE.ANTECEDENCIA_MIN} min antes do próximo turno (ou em instantes, se já estiver no horário).")}
     if nome_acao == 'agora':
         if st not in (ST_AGUARDANDO, ST_FALHOU, ST_EXPIRADO):
             raise ErroPerfil("Esta avaliação não está esperando envio.", 409)
@@ -715,7 +768,8 @@ def _somar_lembrete(aid):
 def _por_token(cur, token):
     if not token or len(str(token)) > 40:
         return None
-    cur.execute("""SELECT AvaliacaoID, FuncionarioID, Nome, Status, AbertoEm, Pontos, Perfil, PctD, PctI, PctS, PctC, RespondidoEm
+    cur.execute("""SELECT AvaliacaoID, FuncionarioID, Nome, Status, AbertoEm, Pontos, Perfil, PctD, PctI, PctS, PctC, RespondidoEm,
+                          Tipo, Vaga
                    FROM AvaliacoesDisc WHERE Token = ?""", str(token))
     return cur.fetchone()
 
@@ -737,11 +791,15 @@ def ver(token, agora=None):
             conn.commit()
     finally:
         conn.close()
-    nome = CE._primeiro_nome(a[2])
+    nome, candidato = CE._primeiro_nome(a[2]), a[12] == TIPO_CAND
     if a[3] == ST_RESPONDIDO:
+        if candidato:                                     # candidato: só o obrigado (o resultado fica com a gestão)
+            return {'nome': nome, 'empresa': CE._empresa(), 'respondido': True, 'respondido_em': CE._quando(a[11]),
+                    'candidato': True, 'pontos': 0}
         return {'nome': nome, 'empresa': CE._empresa(), 'respondido': True, 'respondido_em': CE._quando(a[11]),
                 'pontos': a[5] or 0, 'resultado': resumo_pessoa(_pct(a[7], a[8], a[9], a[10]), a[6])}
-    return {'nome': nome, 'empresa': CE._empresa(), 'respondido': False, 'pontos': a[5] or 0,
+    return {'nome': nome, 'empresa': CE._empresa(), 'respondido': False, 'pontos': 0 if candidato else (a[5] or 0),
+            'candidato': candidato,
             'blocos': [{'pergunta': ENUNCIADOS[k], 'opcoes': [texto for texto, _ in bloco]} for k, bloco in enumerate(BLOCOS)]}
 
 
@@ -783,13 +841,15 @@ def responder(token, dados, agora=None):
         conn.close()
     if novo:
         logger.info(f"[PERFIL DISC] {a[2]} respondeu: {perfil} {pct}.")
-        if a[5]:
+        if a[5] and a[12] != TIPO_CAND:
             try:
                 database.registrar_pontos_de_bonus(int(a[1]), int(a[5]), "Avaliação de perfil (DISC) respondida",
                                                    getattr(config, 'TAREFA_ID_LEITURA', 38))
             except Exception as e:
                 logger.error(f"[PERFIL DISC] Pontos de {a[2]} não registrados: {e}")
-        _avisar_gestao(f"🧭 <b>{_esc(a[2])}</b> respondeu a avaliação de perfil: <b>{_esc(nome_perfil(perfil))}</b> "
+        quem = (f"🧑‍💼 Candidato <b>{_esc(a[2])}</b>" + (f" ({_esc(a[13])})" if a[13] else '')) if a[12] == TIPO_CAND \
+            else f"🧭 <b>{_esc(a[2])}</b>"
+        _avisar_gestao(f"{quem} respondeu a avaliação de perfil: <b>{_esc(nome_perfil(perfil))}</b> "
                        f"({' · '.join(f'{d} {pct[d]}%' for d in DIMS)}).\n<i>Veja o relatório na Gestão › 🧭 Perfil.</i>")
     return ver(token, agora)
 

@@ -28,6 +28,10 @@
   .tabela th, .tabela td { padding: 8px 10px; border-bottom: 1px solid var(--linha2); text-align: left; vertical-align: top; }
   .tabela th { background: var(--fundo); font-size: 13px; }
   .tabela tr:last-child td { border-bottom: 0; }
+  .linha-cand { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .pessoa-c.cand { cursor: default; }
+  .pessoa-c .acoes { display: flex; gap: 6px; flex-wrap: wrap; }
+  .pessoa-c .acoes .btn { font-size: 13px; padding: 5px 9px; }
   .vazio-p { text-align: center; color: var(--suave); padding: 30px 10px; background: #fff; border: 1px dashed var(--linha); border-radius: 12px; }
   .envios { display: grid; border: 1px solid var(--linha); border-radius: 12px; overflow: hidden; background: #fff; }
   .envios .lin { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 9px 12px;
@@ -79,7 +83,7 @@
     <button class="btn prim" id="btn-enviar">📤 Enviar avaliação</button>
     <button class="btn ico" id="atualizar" title="Atualizar">🔄</button></div></section>
   <main class="area">
-    <details class="explica"><summary><b>O que é o DISC?</b> Uma avaliação rápida (20 perguntas simples do dia a dia da loja) que mostra o jeito
+    <details class="explica"><summary><b>O que é o DISC?</b> Uma avaliação rápida (24 grupos de 4 palavras) que mostra o jeito
       natural de cada fixo trabalhar.</summary>
       <div class="cores">
         <div class="cor D"><b>🔴 D · Dominante</b>Resultado, desafio, decisão rápida.</div>
@@ -92,7 +96,8 @@
         mais na loja. Ele vê só um resumo positivo. É um questionário nosso, baseado na teoria DISC: serve para conhecer e
         orientar a equipe, <b>não para contratar ou demitir sozinho</b>. O relatório é dado pessoal: só a gestão vê.</p>
     </details>
-    <div class="abas"><button class="btn sel" data-aba="equipe">👥 Equipe</button><button class="btn" data-aba="envios">📋 Envios</button></div>
+    <div class="abas"><button class="btn sel" data-aba="equipe">👥 Equipe</button><button class="btn" data-aba="envios">📋 Envios</button>
+      <button class="btn" data-aba="candidatos">🧑‍💼 Processo seletivo</button></div>
     <div id="conteudo"><div class="vazio-p">Carregando…</div></div>
   </main>
 {% endblock %}
@@ -118,7 +123,7 @@ function desenhar() {
   document.querySelectorAll('[data-aba]').forEach(b => b.classList.toggle('sel', b.dataset.aba === S.aba));
   const d = S.d; if (!d) return;
   document.querySelector('[data-aba="envios"]').textContent = `📋 Envios${d.pendentes ? ` (${d.pendentes} esperando)` : ''}`;
-  $('#conteudo').innerHTML = S.aba === 'equipe' ? htmlEquipe(d) : htmlEnvios(d);
+  $('#conteudo').innerHTML = S.aba === 'equipe' ? htmlEquipe(d) : S.aba === 'envios' ? htmlEnvios(d) : htmlCandidatos(d);
 }
 function htmlEquipe(d) {
   if (!d.equipe.length) return `<div class="vazio-p">Ninguém respondeu ainda.<br>Toque em <b>📤 Enviar avaliação</b> para mandar o link para os fixos.
@@ -146,11 +151,66 @@ function htmlEnvios(d) {
         ${e.pode_agora ? `<button class="btn" data-a="agora" data-id="${e.id}" title="Manda já, sem esperar o turno">📤 Agora</button>` : ''}
         ${e.pendente || e.status === 'expirado' || e.status === 'sem_telefone' ? `<button class="btn perigo" data-a="cancelar" data-id="${e.id}">⛔</button>` : ''}</span></div>`).join('')}</div>`;
 }
+function htmlCandidatos(d) {
+  const lista = d.candidatos || [];
+  return `<div class="linha-cand"><button class="btn prim" id="btn-candidato">➕ Avaliar um candidato</button>
+      <span class="mini suave">Para quem vem fazer o processo seletivo (não precisa estar no cadastro nem na escala). O link vai na
+        hora no WhatsApp, sem pontos. O candidato vê só um "obrigado"; o resultado fica aqui.</span></div>
+    <div class="dica" style="background:#eef6ff;color:#174a7c">ℹ️ Use junto com a entrevista e a experiência: o perfil mostra o jeito
+      de trabalhar, não se a pessoa é boa ou ruim. Não decida só por ele. Apague (🗑️) os dados de quem não for contratado.</div>
+    ${lista.length ? `<div class="grade-p">${lista.map(c => `<div class="pessoa-c cand">
+        <span class="nm">${c.icone} ${esc(c.nome)}</span>
+        <span class="mini suave">${c.vaga ? `Vaga: <b>${esc(c.vaga)}</b> · ` : ''}${esc(c.situacao)} · criada ${esc(c.criado)}</span>
+        ${c.pct ? `<span class="pf">${esc(c.perfil_nome)}</span>${barras(c.pct)}
+          <span class="mini suave">📍 Combina com: ${c.setores.map(esc).join(', ')}</span>
+          ${c.completa.length ? `<span class="mini" style="color:var(--ok);font-weight:700">✨ Traz o que falta na equipe: ${c.completa.map(x => `${x.emoji} ${esc(x.nome)} (${esc(x.curto)})`).join(', ')}</span>` : ''}` : ''}
+        <span class="acoes">${c.status === 'respondido' ? `<button class="btn" data-rel="${c.id}">📄 Relatório</button>` : ''}
+          ${c.link ? `<button class="btn" data-copiar="${esc(c.link)}" title="Copiar o link para mandar você mesmo">🔗 Copiar link</button>` : ''}
+          ${c.pode_agora ? `<button class="btn" data-a="agora" data-id="${c.id}">📤 Mandar de novo</button>` : ''}
+          ${c.pendente ? `<button class="btn perigo" data-a="cancelar" data-id="${c.id}">⛔ Cancelar</button>` : ''}
+          <button class="btn perigo" data-a="apagar" data-id="${c.id}" title="Apaga nome, WhatsApp e respostas">🗑️ Apagar</button></span></div>`).join('')}</div>`
+      : '<div class="vazio-p">Nenhum candidato avaliado ainda.</div>'}`;
+}
+async function copiar(texto) {
+  try { await navigator.clipboard.writeText(texto); status('🔗 Link copiado. Cole no WhatsApp do candidato.'); }
+  catch (e) { prompt('Copie o link:', texto); }
+}
+async function novoCandidato() {
+  let r;
+  try { r = await api('GET', '/api/gestao/perfil/pessoas'); } catch (e) { return falhou(e); }
+  if (r.link_local) { alert('Falta o endereço da internet (📢 Clientes › ⚙️ Ajustes › QR do balcão): sem ele o link da avaliação não abre no celular.'); return; }
+  abrirModal(`<h3>🧑‍💼 Avaliar um candidato</h3>
+    <label class="campo"><span>Nome</span><input id="cd-nome" maxlength="150" placeholder="Nome do candidato"></label>
+    <div class="grade2">
+      <label class="campo"><span>WhatsApp <span class="mini suave">(opcional)</span></span><input id="cd-tel" inputmode="tel" placeholder="Ex.: 66 99999-1234">
+        <span class="mini suave">Sem WhatsApp: o sistema mostra o link para você mandar.</span></label>
+      <label class="campo"><span>Vaga <span class="mini suave">(opcional)</span></span><input id="cd-vaga" maxlength="100" placeholder="Ex.: Atendente, Caixa"></label></div>
+    <label class="campo"><span>Vale até</span><input type="date" id="cd-valido" value="${esc(r.validade_padrao)}" min="${esc(r.hoje)}" max="${esc(r.validade_max)}"></label>
+    <div class="botoes"><button class="btn" id="cd-cancelar">Cancelar</button><button class="btn prim" id="cd-criar">📤 Criar e mandar</button></div>`, null, true);
+  $('#cd-cancelar').onclick = fecharModal;
+  $('#cd-nome').focus();
+  $('#cd-criar').onclick = async () => {
+    if (!$('#cd-nome').value.trim()) { alert('Escreva o nome do candidato.'); return $('#cd-nome').focus(); }
+    const b = $('#cd-criar'); b.disabled = true;
+    try {
+      const r2 = await api('POST', '/api/gestao/perfil/candidatos', {nome: $('#cd-nome').value, telefone: $('#cd-tel').value,
+        vaga: $('#cd-vaga').value, valido_ate: $('#cd-valido').value});
+      abrirModal(`<h3>🧑‍💼 Pronto!</h3><p id="cd-ok">${esc(r2.mensagem)}</p>
+        <label class="campo"><span>Link da avaliação</span><input id="cd-link" readonly value="${esc(r2.link)}"></label>
+        <div class="botoes"><button class="btn prim" id="cd-copiar">🔗 Copiar link</button></div>`, null, true);
+      $('#cd-copiar').onclick = () => copiar(r2.link);
+      S.aba = 'candidatos'; setTimeout(carregar, 1200);
+    } catch (e) { falhou(e); b.disabled = false; }
+  };
+}
 document.addEventListener('click', async e => {
+  if (e.target.closest('#btn-candidato')) return novoCandidato();
+  const cp = e.target.closest('[data-copiar]'); if (cp) return copiar(cp.dataset.copiar);
   const rel = e.target.closest('[data-rel]'); if (rel) { e.preventDefault(); return relatorio(+rel.dataset.rel); }
   const b = e.target.closest('[data-a]'); if (!b) return;
   const acao = b.dataset.a;
   if (acao === 'cancelar' && !confirm('Cancelar esta avaliação? O link deixa de funcionar.')) return;
+  if (acao === 'apagar' && !confirm('Apagar esta avaliação do candidato? Some o nome, o WhatsApp e as respostas. Não dá para desfazer.')) return;
   b.disabled = true;
   try { const r = await api('POST', `/api/gestao/perfil/${b.dataset.id}/${acao}`); status(r.mensagem); setTimeout(carregar, 1500); }
   catch (er) { falhou(er); b.disabled = false; }
@@ -179,7 +239,7 @@ async function enviar() {
       <label class="campo"><span>Vale até</span><input type="date" id="p-valido" value="${esc(r.validade_padrao)}" min="${esc(r.hoje)}" max="${esc(r.validade_max)}">
         <span class="mini suave">Quem não receber até lá: ⌛ expira.</span></label>
       <label class="campo"><span>⭐ Pontos na gamificação</span><input type="number" id="p-pontos" min="0" max="100" value="0">
-        <span class="mini suave">Ganha quem responder (a mensagem avisa). 0 = sem pontos.</span></label></div>
+        <span class="mini suave">Ganha quem responder. Aparece no WhatsApp e em todas as telas da avaliação. 0 = sem pontos.</span></label></div>
     <details class="campo"><summary>👀 Ver como fica a mensagem no WhatsApp</summary><div class="previa-wpp" id="p-previa"></div></details>
     <div class="botoes"><button class="btn" id="p-cancelar">Cancelar</button><button class="btn prim" id="p-enviar">📤 Enviar</button></div>`);
   const visiveis = () => P.filter(p => todos || p.ativo || marcados.has(p.id));
@@ -200,7 +260,7 @@ async function enviar() {
     const p = P.find(x => marcados.has(x.id)), nome = p ? p.nome.split(' ')[0] : 'Fulano';
     const pts = Math.max(0, Math.min(100, Math.floor(+$('#p-pontos').value || 0)));
     $('#p-previa').innerHTML = esc(`🧭 *Avaliação de perfil — ${r.empresa}*\n\nOlá, ${nome}!\nQueremos te conhecer melhor para organizar a equipe do jeito ` +
-      `que combina com você. São ${r.perguntas} perguntas rápidas (uns 8 minutos) e não existe resposta certa ou errada.\n\n` +
+      `que combina com você. São ${r.perguntas} perguntas rápidas (uns 10 minutos) e não existe resposta certa ou errada.\n\n` +
       (pts ? `⭐ Respondendo você ganha *${pts} pontos* na gamificação!\n\n` : '') + `👉 *Toque no link para responder:*\n(link)`)
       .replace(/\*([^*\n]+)\*/g, '<b>$1</b>');
   };
@@ -241,11 +301,13 @@ async function relatorio(id) {
   let d;
   try { d = await api('GET', `/api/gestao/perfil/${id}`); } catch (e) { return falhou(e); }
   const sec = (tit, itens, larga) => `<div class="secao ${larga ? 'larga' : ''}"><h4>${tit}</h4><ul>${itens.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>`;
-  abrirModal(`<div class="rel-topo"><h3 style="margin:0">🧭 ${esc(d.nome)}</h3>
+  abrirModal(`<div class="rel-topo"><h3 style="margin:0">${d.candidato ? '🧑‍💼' : '🧭'} ${esc(d.nome)}${d.candidato ? ` <span class="mini suave">· candidato${d.vaga ? ' · vaga: ' + esc(d.vaga) : ''}</span>` : ''}</h3>
       <div class="rel-perfil" id="r-perfil">${esc(d.perfil_nome)}</div>
       <div class="mini suave">Respondeu ${esc(d.respondido)}${d.anteriores.length ? ` · antes: ${d.anteriores.map(a => `<a href="#" data-rel="${a.id}">${esc(a.perfil_nome)} (${esc(a.respondido)})</a>`).join(', ')}` : ''}</div></div>
     <div style="margin:10px 0">${barras(d.pct)}</div>
     <div>${esc(d.resumo)}</div>
+    ${d.candidato && d.completa && d.completa.length ? `<div class="dica" style="margin-top:8px;background:#e6f4ea;color:#14532d">✨ Traz o que falta
+      na equipe: ${d.completa.map(x => `${x.emoji} ${esc(x.nome)} (${esc(x.curto)})`).join(', ')}</div>` : ''}
     <div class="secoes">
       ${sec('💪 Pontos fortes', d.fortes)}${sec('🔋 O que motiva', d.motiva)}
       ${sec('🪫 O que desmotiva', d.desmotiva)}${sec('💬 Como conversar', d.comunicar)}
@@ -255,6 +317,7 @@ async function relatorio(id) {
       <div class="secao larga"><h4>⚠️ Pontos de atenção</h4><ul>${d.atencao.map(x => `<li>${esc(x)}</li>`).join('')}<li>${esc(d.pressao)}</li></ul></div>
     </div>
     <div class="aviso-uso">Ferramenta de orientação (questionário próprio, baseado na teoria DISC): use para conversar e organizar a
-      equipe, não como rótulo nem para decidir contratação ou demissão sozinho. Dado pessoal: não compartilhe fora da gestão.</div>`);
+      equipe, não como rótulo nem para decidir contratação ou demissão sozinho${d.candidato ? ' — no processo seletivo, junto com a entrevista e a experiência' : ''}.
+      Dado pessoal: não compartilhe fora da gestão.</div>`);
 }
 {% endblock %}
