@@ -1987,7 +1987,7 @@ function cartaoAguardandoXml(r) {
     <div class="pequeno suave">NF ${esc(r.numero)} · ${dataBR(r.emissao)}${r.valor != null ? ' · ' + fmtReais(r.valor) : ''}${r.ciencia ? '' : ' · ciência ainda não aceita'}</div>
     ${E.usuario.gestor ? `<button class="btn claro" style="min-height:36px;padding:4px 12px;font-size:13px;width:auto;align-self:flex-start" data-acao="receb-buscar-sefaz" data-chave="${esc(r.chave)}">Buscar agora na SEFAZ</button>` : ''}</div>`;
 }
-TELAS.receber = () => {
+TELAS.receber = p => {
   const d = E.recebimentos;
   const corpo = !d ? `<div class="vazio">${online ? 'Carregando…' : 'Sem internet: a lista ainda não foi baixada neste celular.'}</div>`
     : `<div class="lista-cartoes"><div class="rotulo">Para conferir (${d.pendentes.length})</div>
@@ -1995,16 +1995,23 @@ TELAS.receber = () => {
       ${(d.aguardando_xml || []).length ? `<div class="lista-cartoes"><div class="rotulo">Esperando o XML da SEFAZ (${d.aguardando_xml.length})</div>
         <div class="mini suave">O fornecedor já emitiu, mas a SEFAZ ainda não liberou a nota completa. Ela aparece em "Para conferir" quando chegar.</div>
         ${d.aguardando_xml.map(cartaoAguardandoXml).join('')}</div>` : ''}
-      ${(d.no_estoque || []).length ? `<details class="cartao"><summary style="font-weight:700;cursor:pointer;min-height:28px">Já no estoque, lançadas no computador (${d.no_estoque.length})</summary>
+      ${(d.no_estoque || []).length ? `<details class="cartao" ${p.estoqueFechado ? '' : 'open'} data-acao-toggle="no-estoque"><summary style="font-weight:700;cursor:pointer;min-height:28px">Já no estoque, lançadas no computador (${d.no_estoque.length})</summary>
         <div class="mini suave" style="margin:6px 0">Não precisam de conferência para entrar no estoque (já entraram). Se quiser conferir a entrega, abra a nota.</div>
         <div class="lista-cartoes">${d.no_estoque.map(cartaoRecebimento).join('')}</div></details>` : ''}
-      ${d.conferidas.length ? `<div class="lista-cartoes"><div class="rotulo">Conferidas nos últimos dias</div>${d.conferidas.map(cartaoRecebimento).join('')}</div>` : ''}
+      ${d.conferidas.length ? `<details class="cartao" ${p.conferidasAbertas ? 'open' : ''} data-acao-toggle="conferidas"><summary style="font-weight:700;cursor:pointer;min-height:28px">Conferidas nos últimos dias (${d.conferidas.length})</summary>
+        <div class="lista-cartoes" style="margin-top:8px">${d.conferidas.map(cartaoRecebimento).join('')}</div></details>` : ''}
       ${E.usuario.gestor && (d.ignorados || []).length ? `<details class="cartao"><summary style="font-weight:700;cursor:pointer;min-height:28px">Fornecedores que não aparecem (${d.ignorados.length})${d.qtd_ignoradas ? ` · ${d.qtd_ignoradas} nota(s) escondida(s)` : ''}</summary>
         <div class="mini suave" style="margin:6px 0">Marcados como "não é mercadoria do estoque" (uniforme, gráfica, manutenção…). As notas deles não aparecem para conferir.</div>
         <div class="linhas">${d.ignorados.map(f => `<div class="lin"><div class="grow" style="font-weight:700">${esc(f.fornecedor)}</div>
           <button class="link-btn" data-acao="receb-mostrar-forn" data-cnpj="${esc(f.cnpj)}" data-nome="${esc(f.fornecedor)}">Voltar a mostrar</button></div>`).join('')}</div></details>` : ''}`;
   return `${faixaRede()}${topo('Receber mercadoria', 'Notas que os fornecedores emitiram para a loja')}
     <div class="corpo"><div class="info pequeno">Quando a entrega chegar, abra a nota e bipe os produtos com o leitor de código de barras.</div>${corpo}</div>${navbar('receber')}`;
+};
+// [RECEBER] "Já no estoque" abre expandida e "Conferidas" fechada; o que a pessoa abrir/fechar fica até sair da aba
+TELAS_DEPOIS.receber = p => {
+  const ouvir = (nome, f) => { const det = document.querySelector(`details[data-acao-toggle="${nome}"]`); if (det) det.addEventListener('toggle', () => f(det.open)); };
+  ouvir('no-estoque', aberto => { p.estoqueFechado = !aberto; });
+  ouvir('conferidas', aberto => { p.conferidasAbertas = aberto; });
 };
 async function carregarRecebimentos() {
   try { E.recebimentos = await api('GET', '/api/compras/recebimentos'); limparRecebimentosAntigos(); salvar(); if (T.nome === 'receber') desenhar(); }
