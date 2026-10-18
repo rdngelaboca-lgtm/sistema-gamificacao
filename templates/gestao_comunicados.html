@@ -138,7 +138,7 @@ async function novo() {
     <div class="grade2">
       <label class="campo"><span>Vale até</span><input type="date" id="c-valido" value="${esc(r.validade_padrao)}" max="${esc(r.validade_max)}">
         <span class="mini suave">Quem não trabalhar até lá não recebe (⌛ expira).</span></label>
-      <label class="campo"><span>⭐ Pontos na gamificação (fixos)</span><input type="number" id="c-pontos" min="0" max="100" value="0">
+      <label class="campo"><span>⭐ Pontos na gamificação (fixos)</span><input type="number" id="c-pontos" min="0" step="1" value="0">
         <span class="mini suave">Só os fixos ganham, ao confirmar a leitura (o WhatsApp e o link avisam). 0 = sem pontos.</span></label>
     </div>
     <details class="campo"><summary>👀 Ver como fica a mensagem no WhatsApp</summary><div class="previa-wpp" id="c-previa"></div></details>
@@ -163,7 +163,7 @@ async function novo() {
     const t = $('#c-titulo').value.trim() || 'Título', ch = $('#c-chamada').value.trim().replace(/\s+/g, ' ');
     const p = S.pessoas.find(x => marcados.has(x.id)), nome = p ? p.nome.split(' ')[0] : 'Fulano';
     const frase = ch ? ch[0].toUpperCase() + ch.slice(1) : `Tem um comunicado novo para você: *${t}*.`;
-    const pts = Math.max(0, Math.min(100, Math.floor(+$('#c-pontos').value || 0)));
+    const pts = Math.max(0, Math.floor(+$('#c-pontos').value || 0));
     const linhaPts = pts && (!p || p.tipo === 'func') ? `⭐ Confirmando a leitura você ganha *${pts} pontos* na gamificação!\n\n` : '';
     $('#c-previa').innerHTML = esc(`📢 *Comunicado — ${r.empresa || 'Gela Boca'}*\n\nOlá, ${nome}!\n${frase}\n\n${linhaPts}` +
       `👉 *Toque no link para ler o comunicado e confirmar a leitura:*\n(link)`).replace(/\*([^*\n]+)\*/g, '<b>$1</b>') +

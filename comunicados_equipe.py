@@ -40,6 +40,7 @@ MAX_TENTATIVAS = 3             # WhatsApp falhou: tenta de novo na próxima roda
 ENVIANDO_PRESO_MIN = 30        # 'enviando' há mais que isso (robô caiu no meio): volta para a fila
 INTERVALO_ENVIO_SEG = 2.5      # entre uma mensagem e outra (o WhatsApp não gosta de rajada)
 LIMITE_TITULO, LIMITE_TEXTO, LIMITE_CHAMADA = 120, 2000, 200
+PONTOS_MAX = 1_000_000         # quem decide os pontos é o gestor; isto só protege contra número absurdo digitado errado
 
 SEGUNDO_PLANO = True           # os testes desligam para conferir na hora
 
@@ -104,6 +105,8 @@ def garantir_tabelas():
         """)
         # a chamada curta que vai no WhatsApp (o texto completo fica no link)
         cur.execute("IF COL_LENGTH('ComunicadosEquipe', 'Chamada') IS NULL ALTER TABLE ComunicadosEquipe ADD Chamada NVARCHAR(300) NULL")
+        # pontos que já foram para o SALDO da pessoa (o que ela troca por prêmios); vazio = ainda falta pôr
+        cur.execute("IF COL_LENGTH('ComunicadosEquipeDestinos', 'SaldoOk') IS NULL ALTER TABLE ComunicadosEquipeDestinos ADD SaldoOk BIT NULL")
         conn.commit()
         _tabelas_ok = True
     finally:
@@ -303,8 +306,10 @@ def _ler_dados(dados, agora):
         pontos = int(dados.get('pontos') or 0)
     except (TypeError, ValueError):
         raise ErroComunicado("Pontos inválidos.")
-    if not 0 <= pontos <= 100:
-        raise ErroComunicado("Os pontos vão de 0 a 100.")
+    if pontos < 0:
+        raise ErroComunicado("Os pontos não podem ser negativos.")
+    if pontos > PONTOS_MAX:
+        raise ErroComunicado(f"Pontos demais (máximo {PONTOS_MAX:,}).".replace(',', '.'))
     ids = dados.get('pessoas') or []
     if not isinstance(ids, list) or not ids:
         raise ErroComunicado("Escolha quem vai receber.")
@@ -385,6 +390,11 @@ def processar(agora=None, comunicado_id=None, forcar_ids=None):
     garantir_tabelas()
     agora = agora or _agora()
     base, local = _endereco()
+    if not comunicado_id and not forcar_ids:              # rodada do robô: acerta o saldo de quem ainda não recebeu
+        try:
+            creditar_saldo()
+        except Exception as e:
+            logger.error(f"[COMUNICADOS] Acerto do saldo de pontos falhou: {e}")
     with _trava:
         conn = _conexao()
         try:
@@ -679,8 +689,60 @@ def confirmar_leitura(token, agora=None):
     if novo:
         logger.info(f"[COMUNICADOS] {d[1]} confirmou a leitura de '{d[7]}'.")
         if d[9] and d[4] == 'func':
-            try:
+            try:                                          # igual aos comunicados do Telegram: histórico/ranking + saldo
                 database.registrar_pontos_por_leitura(int(d[5]), int(d[9]), d[7])
             except Exception as e:
                 logger.error(f"[COMUNICADOS] Pontos da leitura de {d[1]} não registrados: {e}")
+            creditar_saldo(d[0])
     return ver(token, agora)
+
+
+def creditar_saldo(destino_id=None):
+    """
+    Põe no SALDO de pontos (o que a pessoa troca por prêmios) os pontos de quem confirmou a leitura e ainda não recebeu.
+    Uma vez só: marca SaldoOk antes de somar. Sem destino_id: acerta todos os que faltam (o robô chama a cada rodada;
+    assim quem confirmou antes desta correção também recebe).
+    """
+    garantir_tabelas()
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        sql = """SELECT D.DestinoID, D.PessoaID, C.Pontos, D.Nome FROM ComunicadosEquipeDestinos D
+                 JOIN ComunicadosEquipe C ON C.ComunicadoID = D.ComunicadoID
+                 WHERE D.Status = ? AND D.Tipo = 'func' AND C.Pontos > 0 AND D.SaldoOk IS NULL"""
+        args = [ST_LIDO]
+        if destino_id:
+            sql += " AND D.DestinoID = ?"
+            args.append(int(destino_id))
+        cur.execute(sql, *args)
+        faltam = cur.fetchall()
+    finally:
+        conn.close()
+    feitos = 0
+    for did, pid, pontos, nome in faltam:
+        if not _marcar_saldo(did, 1):
+            continue                                      # outro programa já pôs
+        try:
+            if database.adicionar_pontos_ao_saldo(int(pid), int(pontos)) is False:
+                raise RuntimeError("sem conexão")
+            feitos += 1
+            logger.info(f"[COMUNICADOS] +{pontos} pontos no saldo de {nome}.")
+        except Exception as e:
+            _marcar_saldo(did, None)                      # tenta de novo na próxima rodada
+            logger.error(f"[COMUNICADOS] Pontos de {nome} não foram para o saldo: {e}")
+    return feitos
+
+
+def _marcar_saldo(did, valor):
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        if valor:
+            cur.execute("UPDATE ComunicadosEquipeDestinos SET SaldoOk = 1 WHERE DestinoID = ? AND SaldoOk IS NULL", int(did))
+        else:
+            cur.execute("UPDATE ComunicadosEquipeDestinos SET SaldoOk = NULL WHERE DestinoID = ?", int(did))
+        ok = cur.rowcount == 1
+        conn.commit()
+        return ok
+    finally:
+        conn.close()

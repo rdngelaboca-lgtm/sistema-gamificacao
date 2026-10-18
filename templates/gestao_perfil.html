@@ -238,7 +238,7 @@ async function enviar() {
     <div class="grade2">
       <label class="campo"><span>Vale até</span><input type="date" id="p-valido" value="${esc(r.validade_padrao)}" min="${esc(r.hoje)}" max="${esc(r.validade_max)}">
         <span class="mini suave">Quem não receber até lá: ⌛ expira.</span></label>
-      <label class="campo"><span>⭐ Pontos na gamificação</span><input type="number" id="p-pontos" min="0" max="100" value="0">
+      <label class="campo"><span>⭐ Pontos na gamificação</span><input type="number" id="p-pontos" min="0" step="1" value="0">
         <span class="mini suave">Ganha quem responder. Aparece no WhatsApp e em todas as telas da avaliação. 0 = sem pontos.</span></label></div>
     <details class="campo"><summary>👀 Ver como fica a mensagem no WhatsApp</summary><div class="previa-wpp" id="p-previa"></div></details>
     <div class="botoes"><button class="btn" id="p-cancelar">Cancelar</button><button class="btn prim" id="p-enviar">📤 Enviar</button></div>`);
@@ -258,7 +258,7 @@ async function enviar() {
   };
   const previa = () => {
     const p = P.find(x => marcados.has(x.id)), nome = p ? p.nome.split(' ')[0] : 'Fulano';
-    const pts = Math.max(0, Math.min(100, Math.floor(+$('#p-pontos').value || 0)));
+    const pts = Math.max(0, Math.floor(+$('#p-pontos').value || 0));
     $('#p-previa').innerHTML = esc(`🧭 *Avaliação de perfil — ${r.empresa}*\n\nOlá, ${nome}!\nQueremos te conhecer melhor para organizar a equipe do jeito ` +
       `que combina com você. São ${r.perguntas} perguntas rápidas (uns 10 minutos) e não existe resposta certa ou errada.\n\n` +
       (pts ? `⭐ Respondendo você ganha *${pts} pontos* na gamificação!\n\n` : '') + `👉 *Toque no link para responder:*\n(link)`)

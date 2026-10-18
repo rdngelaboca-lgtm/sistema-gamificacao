@@ -241,6 +241,8 @@ def garantir_tabelas():
         # 🧑‍💼 processo seletivo: candidato (fora do cadastro, FuncionarioID 0) e a vaga
         cur.execute("IF COL_LENGTH('AvaliacoesDisc', 'Tipo') IS NULL ALTER TABLE AvaliacoesDisc ADD Tipo VARCHAR(10) NULL")
         cur.execute("IF COL_LENGTH('AvaliacoesDisc', 'Vaga') IS NULL ALTER TABLE AvaliacoesDisc ADD Vaga NVARCHAR(100) NULL")
+        # pontos que já foram para o SALDO da pessoa (o que ela troca por prêmios); vazio = ainda falta pôr
+        cur.execute("IF COL_LENGTH('AvaliacoesDisc', 'SaldoOk') IS NULL ALTER TABLE AvaliacoesDisc ADD SaldoOk BIT NULL")
         conn.commit()
         _tabelas_ok = True
     finally:
@@ -392,8 +394,10 @@ def enviar(dados, usuario, agora=None):
         pontos = int(dados.get('pontos') or 0)
     except (TypeError, ValueError):
         raise ErroPerfil("Pontos inválidos.")
-    if not 0 <= pontos <= 100:
-        raise ErroPerfil("Os pontos vão de 0 a 100.")
+    if pontos < 0:
+        raise ErroPerfil("Os pontos não podem ser negativos.")
+    if pontos > CE.PONTOS_MAX:
+        raise ErroPerfil(f"Pontos demais (máximo {CE.PONTOS_MAX:,}).".replace(',', '.'))
     valido = _validade(dados, agora)
     _exigir_endereco()
     cadastro = {int(f.FuncionarioID): (f.NomeCompleto, getattr(f, 'TelefoneWhatsApp', None)) for f in database.listar_funcionarios()}
@@ -498,6 +502,11 @@ def processar(agora=None, forcar_ids=None):
     garantir_tabelas()
     agora = agora or CE._agora()
     base, local = CE._endereco()
+    if not forcar_ids:                                    # rodada do robô: acerta o saldo de quem ainda não recebeu
+        try:
+            creditar_saldo()
+        except Exception as e:
+            logger.error(f"[PERFIL DISC] Acerto do saldo de pontos falhou: {e}")
     with _trava:
         conn = _conexao()
         try:
@@ -842,16 +851,67 @@ def responder(token, dados, agora=None):
     if novo:
         logger.info(f"[PERFIL DISC] {a[2]} respondeu: {perfil} {pct}.")
         if a[5] and a[12] != TIPO_CAND:
-            try:
+            try:                                          # igual aos comunicados do Telegram: histórico/ranking + saldo
                 database.registrar_pontos_de_bonus(int(a[1]), int(a[5]), "Avaliação de perfil (DISC) respondida",
                                                    getattr(config, 'TAREFA_ID_LEITURA', 38))
             except Exception as e:
                 logger.error(f"[PERFIL DISC] Pontos de {a[2]} não registrados: {e}")
+            creditar_saldo(a[0])
         quem = (f"🧑‍💼 Candidato <b>{_esc(a[2])}</b>" + (f" ({_esc(a[13])})" if a[13] else '')) if a[12] == TIPO_CAND \
             else f"🧭 <b>{_esc(a[2])}</b>"
         _avisar_gestao(f"{quem} respondeu a avaliação de perfil: <b>{_esc(nome_perfil(perfil))}</b> "
                        f"({' · '.join(f'{d} {pct[d]}%' for d in DIMS)}).\n<i>Veja o relatório na Gestão › 🧭 Perfil.</i>")
     return ver(token, agora)
+
+
+def creditar_saldo(avaliacao_id=None):
+    """
+    Põe no SALDO de pontos (o que a pessoa troca por prêmios) os pontos de quem respondeu e ainda não recebeu.
+    Uma vez só: marca SaldoOk antes de somar. Sem avaliacao_id: acerta todos os que faltam (o robô chama a cada rodada;
+    assim quem respondeu antes desta correção também recebe). Candidato não ganha pontos.
+    """
+    garantir_tabelas()
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        sql = """SELECT AvaliacaoID, FuncionarioID, Pontos, Nome FROM AvaliacoesDisc
+                 WHERE Status = ? AND ISNULL(Tipo, ?) = ? AND Pontos > 0 AND SaldoOk IS NULL"""
+        args = [ST_RESPONDIDO, TIPO_FUNC, TIPO_FUNC]
+        if avaliacao_id:
+            sql += " AND AvaliacaoID = ?"
+            args.append(int(avaliacao_id))
+        cur.execute(sql, *args)
+        faltam = cur.fetchall()
+    finally:
+        conn.close()
+    feitos = 0
+    for aid, fid, pontos, nome in faltam:
+        if not _marcar_saldo(aid, 1):
+            continue                                      # outro programa já pôs
+        try:
+            if database.adicionar_pontos_ao_saldo(int(fid), int(pontos)) is False:
+                raise RuntimeError("sem conexão")
+            feitos += 1
+            logger.info(f"[PERFIL DISC] +{pontos} pontos no saldo de {nome}.")
+        except Exception as e:
+            _marcar_saldo(aid, None)                      # tenta de novo na próxima rodada
+            logger.error(f"[PERFIL DISC] Pontos de {nome} não foram para o saldo: {e}")
+    return feitos
+
+
+def _marcar_saldo(aid, valor):
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        if valor:
+            cur.execute("UPDATE AvaliacoesDisc SET SaldoOk = 1 WHERE AvaliacaoID = ? AND SaldoOk IS NULL", int(aid))
+        else:
+            cur.execute("UPDATE AvaliacoesDisc SET SaldoOk = NULL WHERE AvaliacaoID = ?", int(aid))
+        ok = cur.rowcount == 1
+        conn.commit()
+        return ok
+    finally:
+        conn.close()
 
 
 def _avisar_gestao(texto):
