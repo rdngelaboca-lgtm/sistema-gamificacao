@@ -43,6 +43,8 @@ TIPO_FUNC, TIPO_CAND = 'func', 'candidato'   # fixo do cadastro · candidato do 
 # 📸 Trabalhe conosco (página pública do Instagram): áreas, disponibilidade e etapas do candidato
 AREAS = [('atendimento', '🍦 Atendimento'), ('cozinha', '👩‍🍳 Cozinha'), ('zeladoria', '🧹 Zeladoria (limpeza)'),
          ('camara', '❄️ Câmara Fria / Repositor'), ('freelancer', '📅 Freelancer (diárias)')]
+AREAS_FORM = [a for a in AREAS if a[0] != 'freelancer']   # "freelancer" virou o tipo de vaga (fica só para cadastros antigos)
+TIPOS_VAGA = [('fixa', '💼 Vaga fixa'), ('freela', '📅 Freelancer (diárias)'), ('ambos', '🔁 Fixa ou freelancer')]
 DISPONIBILIDADE = [('manha', 'Manhã'), ('tarde', 'Tarde'), ('noite', 'Noite'), ('fds', 'Fins de semana e feriados')]
 ETAPAS = [('novo', '🆕 Novo'), ('entrevista', '📞 Entrevista'), ('contratado', '✅ Contratado'), ('nao', '❌ Não seguiu')]
 ORIGEM_SITE, ORIGEM_GESTAO = 'site', 'gestao'
@@ -286,7 +288,7 @@ def garantir_tabelas():
         # 📸 Trabalhe conosco: os dados que o candidato preenche e a etapa dele no processo seletivo
         for coluna, tipo in (('Origem', 'VARCHAR(10)'), ('Areas', 'VARCHAR(100)'), ('Idade', 'INT'), ('Bairro', 'NVARCHAR(100)'),
                              ('Disponibilidade', 'VARCHAR(60)'), ('Experiencia', 'NVARCHAR(600)'), ('Etapa', 'VARCHAR(12)'),
-                             ('AceiteEm', 'DATETIME')):
+                             ('AceiteEm', 'DATETIME'), ('TipoVaga', 'VARCHAR(10)')):
             cur.execute(f"IF COL_LENGTH('AvaliacoesDisc', '{coluna}') IS NULL ALTER TABLE AvaliacoesDisc ADD {coluna} {tipo} NULL")
         conn.commit()
         _tabelas_ok = True
@@ -542,6 +544,9 @@ def candidato_criar(dados, usuario, agora=None):
     agora = agora or CE._agora()
     nome = ' '.join(str(dados.get('nome') or '').split())
     vaga = ' '.join(str(dados.get('vaga') or '').split())
+    tipo_vaga = str(dados.get('tipo_vaga') or '').strip() or None
+    if tipo_vaga and tipo_vaga not in dict(TIPOS_VAGA):
+        raise ErroPerfil("Tipo de vaga inválido.")
     tel_txt = str(dados.get('telefone') or '').strip()
     if not nome:
         raise ErroPerfil("Escreva o nome do candidato.")
@@ -557,10 +562,10 @@ def candidato_criar(dados, usuario, agora=None):
     try:
         cur = conn.cursor()
         cur.execute("""INSERT INTO AvaliacoesDisc (FuncionarioID, Nome, Telefone, Token, Status, Pontos, CriadoPor, CriadoEm,
-                                                   ValidoAte, Versao, Tipo, Vaga, Origem, Etapa)
-                       VALUES (0, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?); SELECT SCOPE_IDENTITY();""",
+                                                   ValidoAte, Versao, Tipo, Vaga, Origem, Etapa, TipoVaga)
+                       VALUES (0, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?); SELECT SCOPE_IDENTITY();""",
                     nome, tel or None, token, ST_AGUARDANDO if tel else ST_SEM_TEL, usuario.get('nome'), agora, valido,
-                    VERSAO, TIPO_CAND, vaga or None, ORIGEM_GESTAO, 'novo')
+                    VERSAO, TIPO_CAND, vaga or None, ORIGEM_GESTAO, 'novo', tipo_vaga)
         cur.nextset()
         aid = int(cur.fetchone()[0])
         conn.commit()
@@ -688,7 +693,7 @@ def painel(agora=None):
         cur = conn.cursor()
         cur.execute("""SELECT AvaliacaoID, FuncionarioID, Nome, Status, EnviadoEm, AbertoEm, RespondidoEm, Lembretes, Erro,
                               Tentativas, Perfil, PctD, PctI, PctS, PctC, CriadoEm, Pontos, ValidoAte, Tipo, Vaga, Telefone, Token,
-                              Origem, Areas, Idade, Bairro, Disponibilidade, Experiencia, Etapa
+                              Origem, Areas, Idade, Bairro, Disponibilidade, Experiencia, Etapa, TipoVaga
                        FROM AvaliacoesDisc ORDER BY AvaliacaoID DESC""")
         linhas = cur.fetchall()
     finally:
@@ -699,7 +704,7 @@ def painel(agora=None):
     base = CE._endereco()[0]
     envios, equipe, candidatos, vistos = [], [], [], set()
     for (aid, fid, nome, st, env, ab, resp, lemb, erro, tent, perfil, pd, pi, ps, pc, criado, pontos, valido,
-         tipo, vaga, tel, token, origem, areas, idade, bairro, dispon, exper, etapa) in linhas:
+         tipo, vaga, tel, token, origem, areas, idade, bairro, dispon, exper, etapa, tipo_vaga) in linhas:
         fid, candidato = int(fid), tipo == TIPO_CAND
         ic, txt = _situacao(st, env, ab, resp, lemb, CE._texto_espera(prox.get(('func', fid))), ('func', fid) in no_turno,
                             erro, tent or 0, candidato)
@@ -714,7 +719,7 @@ def painel(agora=None):
                 item.update(icone='⏳', situacao=f"Ainda não terminou o questionário (cadastro {CE._quando(criado)})")
             item.update(origem=origem or ORIGEM_GESTAO, areas=_rotulos(AREAS, areas), idade=idade, bairro=bairro or '',
                         disponibilidade=_rotulos(DISPONIBILIDADE, dispon), experiencia=exper or '',
-                        etapa=etapa or 'novo', etapa_nome=dict(ETAPAS).get(etapa or 'novo', ''),
+                        etapa=etapa or 'novo', etapa_nome=dict(ETAPAS).get(etapa or 'novo', ''), **_tipo_vaga(tipo_vaga, areas),
                         whatsapp=f"https://wa.me/{tel}" if tel else '')
             item.update(vaga=vaga or '', telefone=tel or '',
                         pct=_pct(pd, pi, ps, pc) if st == ST_RESPONDIDO else None,
@@ -732,8 +737,16 @@ def painel(agora=None):
         c['completa'] = _o_que_completa(c['pct'], equipe) if c['pct'] else []
     return {'envios': envios[:300], 'equipe': equipe, 'resumo_equipe': _resumo_equipe(equipe),
             'pendentes': sum(1 for e in envios if e['pendente']), 'candidatos': candidatos[:500],
-            'areas': [{'chave': c, 'nome': n} for c, n in AREAS], 'etapas': [{'chave': c, 'nome': n} for c, n in ETAPAS],
+            'areas': [{'chave': c, 'nome': n} for c, n in AREAS_FORM], 'etapas': [{'chave': c, 'nome': n} for c, n in ETAPAS],
+            'tipos_vaga': [{'chave': c, 'nome': n} for c, n in TIPOS_VAGA],
             'link_trabalhe': f"{base}/trabalhe-conosco" if base else ''}
+
+
+def _tipo_vaga(guardado, areas):
+    """Fixa, freelancer ou os dois. Cadastro antigo (antes da pergunta): quem marcou a área Freelancer conta como freelancer."""
+    tv = guardado if guardado in dict(TIPOS_VAGA) else ('freela' if 'freelancer' in str(areas or '').split(',') else '')
+    return {'tipo_vaga': tv, 'tipo_vaga_nome': dict(TIPOS_VAGA).get(tv, '❔ Não informou'),
+            'tipo_vaga_informado': guardado in dict(TIPOS_VAGA)}
 
 
 def _rotulos(opcoes, guardado):
@@ -773,7 +786,7 @@ def detalhe(aid, agora=None):
     try:
         cur = conn.cursor()
         cur.execute("""SELECT AvaliacaoID, FuncionarioID, Nome, Status, RespondidoEm, Perfil, PctD, PctI, PctS, PctC, CriadoPor,
-                              Tipo, Vaga, Origem, Areas, Idade, Bairro, Disponibilidade, Experiencia, Telefone
+                              Tipo, Vaga, Origem, Areas, Idade, Bairro, Disponibilidade, Experiencia, Telefone, TipoVaga
                        FROM AvaliacoesDisc WHERE AvaliacaoID = ?""", int(aid))
         a = cur.fetchone()
         if not a:
@@ -798,7 +811,7 @@ def detalhe(aid, agora=None):
         r['completa'] = _o_que_completa(pct, painel(agora)['equipe'])
         r.update(origem=a[13] or ORIGEM_GESTAO, areas=_rotulos(AREAS, a[14]), idade=a[15], bairro=a[16] or '',
                  disponibilidade=_rotulos(DISPONIBILIDADE, a[17]), experiencia=a[18] or '',
-                 whatsapp=f"https://wa.me/{a[19]}" if a[19] else '')
+                 whatsapp=f"https://wa.me/{a[19]}" if a[19] else '', **_tipo_vaga(a[20], a[14]))
     return r
 
 
@@ -873,7 +886,7 @@ def _por_token(cur, token):
     if not token or len(str(token)) > 40:
         return None
     cur.execute("""SELECT AvaliacaoID, FuncionarioID, Nome, Status, AbertoEm, Pontos, Perfil, PctD, PctI, PctS, PctC, RespondidoEm,
-                          Tipo, Vaga, Origem
+                          Tipo, Vaga, Origem, TipoVaga
                    FROM AvaliacoesDisc WHERE Token = ?""", str(token))
     return cur.fetchone()
 
@@ -953,7 +966,9 @@ def responder(token, dados, agora=None):
                 logger.error(f"[PERFIL DISC] Pontos de {a[2]} não registrados: {e}")
             creditar_saldo(a[0])
         quem = (("📸 Trabalhe conosco: " if a[14] == ORIGEM_SITE else "🧑‍💼 Candidato ") + f"<b>{_esc(a[2])}</b>"
-                + (f" ({_esc(a[13])})" if a[13] else '')) if a[12] == TIPO_CAND else f"🧭 <b>{_esc(a[2])}</b>"
+                + (f" ({_esc(a[13])})" if a[13] else '')
+                + (f" · {dict(TIPOS_VAGA)[a[15]]}" if a[15] in dict(TIPOS_VAGA) else '')) if a[12] == TIPO_CAND \
+            else f"🧭 <b>{_esc(a[2])}</b>"
         _avisar_gestao(f"{quem} respondeu a avaliação de perfil: <b>{_esc(nome_perfil(perfil))}</b> "
                        f"({' · '.join(f'{d} {pct[d]}%' for d in DIMS)}).\n<i>Veja o relatório na Gestão › 🧭 Perfil.</i>")
     return ver(token, agora)
@@ -1014,7 +1029,8 @@ def _marcar_saldo(aid, valor):
 # ------------------------------------------------------------------------------
 def trabalhe_dados():
     """O que a página pública precisa (sem nenhum dado de ninguém)."""
-    return {'empresa': CE._empresa(), 'areas': [{'chave': c, 'nome': n} for c, n in AREAS],
+    return {'empresa': CE._empresa(), 'areas': [{'chave': c, 'nome': n} for c, n in AREAS_FORM],
+            'tipos_vaga': [{'chave': c, 'nome': n} for c, n in TIPOS_VAGA],
             'disponibilidade': [{'chave': c, 'nome': n} for c, n in DISPONIBILIDADE], 'grupos': N_BLOCOS}
 
 
@@ -1074,7 +1090,10 @@ def trabalhe_cadastrar(dados, ip, agora=None):
     bairro = _limpo(dados.get('bairro'), 100)
     if len(bairro) < 2:
         raise ErroPerfil("Escreva o seu bairro (e a cidade, se não for Rondonópolis).")
-    areas = _escolhas(dados.get('areas'), AREAS)
+    tipo_vaga = str(dados.get('tipo_vaga') or '').strip()
+    if tipo_vaga not in dict(TIPOS_VAGA):
+        raise ErroPerfil("Escolha que tipo de vaga você procura: fixa, freelancer ou tanto faz.")
+    areas = _escolhas(dados.get('areas'), AREAS_FORM)
     if not areas:
         raise ErroPerfil("Escolha pelo menos uma área que você tem interesse.")
     dispon = _escolhas(dados.get('disponibilidade'), DISPONIBILIDADE)
@@ -1096,17 +1115,17 @@ def trabalhe_cadastrar(dados, ip, agora=None):
                        ORDER BY AvaliacaoID DESC""", TIPO_CAND, ORIGEM_SITE, tel, agora - timedelta(days=DIAS_MESMO_CADASTRO),
                     ST_CANCELADO, ST_EXPIRADO)
         r = cur.fetchone()
-        campos = (nome, vaga, ','.join(areas), idade, bairro, ','.join(dispon), exper or None, agora)
+        campos = (nome, vaga, ','.join(areas), idade, bairro, ','.join(dispon), exper or None, agora, tipo_vaga)
         if r:
             aid, token, st = r
             cur.execute("""UPDATE AvaliacoesDisc SET Nome = ?, Vaga = ?, Areas = ?, Idade = ?, Bairro = ?, Disponibilidade = ?,
-                                  Experiencia = ?, AceiteEm = ? WHERE AvaliacaoID = ?""", *campos, aid)
+                                  Experiencia = ?, AceiteEm = ?, TipoVaga = ? WHERE AvaliacaoID = ?""", *campos, aid)
         else:
             token, st = CE._token(), ST_ENVIADO
             cur.execute("""INSERT INTO AvaliacoesDisc (FuncionarioID, Nome, Vaga, Areas, Idade, Bairro, Disponibilidade, Experiencia,
-                                                       AceiteEm, Telefone, Token, Status, Pontos, CriadoPor, CriadoEm, EnviadoEm,
-                                                       ValidoAte, Versao, Tipo, Origem, Etapa)
-                           VALUES (0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?); SELECT SCOPE_IDENTITY();""",
+                                                       AceiteEm, TipoVaga, Telefone, Token, Status, Pontos, CriadoPor, CriadoEm,
+                                                       EnviadoEm, ValidoAte, Versao, Tipo, Origem, Etapa)
+                           VALUES (0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?); SELECT SCOPE_IDENTITY();""",
                         *campos, tel, token, ST_ENVIADO, '📸 Trabalhe conosco', agora, agora,
                         agora.date() + timedelta(days=VALIDADE_MAX_DIAS), VERSAO, TIPO_CAND, ORIGEM_SITE, 'novo')
             cur.nextset()
@@ -1116,6 +1135,25 @@ def trabalhe_cadastrar(dados, ip, agora=None):
         conn.close()
     logger.info(f"[TRABALHE CONOSCO] Cadastro {'atualizado' if r else 'novo'}: candidato {aid} ({vaga}).")
     return {'ok': True, 'token': token, 'nome': CE._primeiro_nome(nome), 'ja_respondeu': st == ST_RESPONDIDO}
+
+
+def definir_tipo_vaga(aid, tipo_vaga, usuario):
+    """A gestão marca o tipo de vaga (ex.: cadastro antigo, depois de perguntar no WhatsApp)."""
+    if tipo_vaga not in dict(TIPOS_VAGA):
+        raise ErroPerfil("Tipo de vaga inválido.")
+    garantir_tabelas()
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE AvaliacoesDisc SET TipoVaga = ? WHERE AvaliacaoID = ? AND Tipo = ?", tipo_vaga, int(aid), TIPO_CAND)
+        ok = cur.rowcount == 1
+        conn.commit()
+    finally:
+        conn.close()
+    if not ok:
+        raise ErroPerfil("Candidato não encontrado.", 404)
+    logger.info(f"[PERFIL DISC] {usuario.get('nome')}: candidato {aid} → tipo de vaga {tipo_vaga}.")
+    return {'ok': True, 'mensagem': f"Tipo de vaga: {dict(TIPOS_VAGA)[tipo_vaga]}."}
 
 
 def definir_etapa(aid, etapa, usuario):

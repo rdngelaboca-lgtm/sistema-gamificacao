@@ -363,13 +363,15 @@ hora**, sem pontos e sem escala (sem WhatsApp: 🔗 copiar link). O candidato v�
 ele combina na loja e **✨ o que ele traz que falta na equipe**. Use junto com a entrevista; 🗑️ Apagar remove nome, WhatsApp
 e respostas (LGPD). Candidatos não entram na equipe nem nos envios dos fixos (colunas `Tipo` e `Vaga` em `AvaliacoesDisc`).
 **📸 Trabalhe conosco** (link da bio do Instagram: `/trabalhe-conosco`, público): a pessoa preenche nome, WhatsApp, idade,
-bairro, **áreas** (🍦 Atendimento, 👩‍🍳 Cozinha, 🧹 Zeladoria, ❄️ Câmara Fria/Repositor, 📅 Freelancer), disponibilidade,
+bairro, **tipo de vaga** (💼 fixa · 📅 freelancer · 🔁 os dois — pergunta própria, obrigatória), **áreas** (🍦 Atendimento,
+👩‍🍳 Cozinha, 🧹 Zeladoria, ❄️ Câmara Fria/Repositor), disponibilidade,
 experiência e autoriza guardar os dados; segue direto para o questionário. Não manda WhatsApp (o número foi digitado por
 quem quis; o número da loja não pode virar spam). Proteções: campo escondido contra robô, até 5 cadastros por hora no mesmo
 aparelho, e o mesmo WhatsApp em até 60 dias atualiza o cadastro em vez de duplicar. Na aba 🧑‍💼 Processo seletivo: o link
-(🔗 copiar e 🔲 QR para imprimir), filtros por área e por **etapa** (🆕 Novo · 📞 Entrevista · ✅ Contratado · ❌ Não seguiu),
+(🔗 copiar e 🔲 QR para imprimir), filtros por **tipo de vaga** (a fixa mostra também quem topa os dois), área e **etapa** (🆕 Novo · 📞 Entrevista · ✅ Contratado · ❌ Não seguiu),
 💬 WhatsApp do candidato e os dados no relatório. Colunas novas em `AvaliacoesDisc`: `Origem`, `Areas`, `Idade`, `Bairro`,
-`Disponibilidade`, `Experiencia`, `Etapa`, `AceiteEm`; pela internet ficam abertos só `/trabalhe-conosco` e `/api/trabalhe-conosco`. O sistema soma 🔴 D Dominante, 🟡 I Influente, 🟢 S Estável e 🔵 C Conforme
+`Disponibilidade`, `Experiencia`, `Etapa`, `AceiteEm`, `TipoVaga` (cadastro antigo: quem marcou a área Freelancer conta como
+freelancer; quem não marcou fica "❔ Não informou" e a gestão marca no card); pela internet ficam abertos só `/trabalhe-conosco` e `/api/trabalhe-conosco`. O sistema soma 🔴 D Dominante, 🟡 I Influente, 🟢 S Estável e 🔵 C Conforme
 (porcentagens que somam 100; dois fatores fortes e próximos viram perfil combinado, ex.: IS) e monta o **relatório da
 gestão**: pontos fortes, o que motiva, o que desmotiva, como conversar, como dar feedback, como liderar, **onde rende
 mais na loja** — TODAS as funções (Caixa, Recepção, Frente Loja, Salão, Varanda, Buffet, Cozinha, Limpeza, Câmara Fria e

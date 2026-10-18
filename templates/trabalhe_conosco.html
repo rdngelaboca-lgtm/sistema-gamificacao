@@ -67,6 +67,8 @@
       <label class="campo">Idade<input id="idade" type="number" inputmode="numeric" min="14" max="80" required></label>
       <label class="campo">Bairro<input id="bairro" maxlength="100" placeholder="Ex.: Centro" required></label>
     </div>
+    <div class="grupo"><b>Que tipo de vaga você procura?</b><small>Escolha uma.</small>
+      <div class="opcoes" id="tipo_vaga"></div></div>
     <div class="grupo"><b>Em qual área você tem interesse?</b><small>Pode escolher mais de uma.</small>
       <div class="opcoes" id="areas"></div></div>
     <div class="grupo"><b>Quando você pode trabalhar?</b><small>Pode escolher mais de uma.</small>
@@ -86,7 +88,7 @@
 'use strict';
 const $ = s => document.querySelector(s);
 const esc = t => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
-const SEL = {areas: new Set(), disponibilidade: new Set()};
+const SEL = {areas: new Set(), disponibilidade: new Set(), tipo_vaga: new Set()};   // tipo de vaga: só uma escolha
 
 async function chamar(metodo, corpo) {
   let r;
@@ -106,17 +108,20 @@ function opcoes(id, lista) {
 document.addEventListener('click', e => {
   const b = e.target.closest('.opcao'); if (!b) return;
   const s = SEL[b.dataset.g];
-  if (s.has(b.dataset.c)) s.delete(b.dataset.c); else s.add(b.dataset.c);
-  b.classList.toggle('sel', s.has(b.dataset.c)); b.setAttribute('aria-pressed', s.has(b.dataset.c));
+  if (b.dataset.g === 'tipo_vaga') { s.clear(); s.add(b.dataset.c); }
+  else if (s.has(b.dataset.c)) s.delete(b.dataset.c); else s.add(b.dataset.c);
+  document.querySelectorAll(`.opcao[data-g="${b.dataset.g}"]`).forEach(x => {
+    x.classList.toggle('sel', s.has(x.dataset.c)); x.setAttribute('aria-pressed', s.has(x.dataset.c)); });
 });
 $('#form').addEventListener('submit', async e => {
   e.preventDefault();
   $('#erro').textContent = '';
   const corpo = {nome: $('#nome').value, telefone: $('#telefone').value, idade: $('#idade').value, bairro: $('#bairro').value,
-    areas: [...SEL.areas], disponibilidade: [...SEL.disponibilidade], experiencia: $('#experiencia').value,
+    tipo_vaga: [...SEL.tipo_vaga][0] || '', areas: [...SEL.areas], disponibilidade: [...SEL.disponibilidade], experiencia: $('#experiencia').value,
     aceite: $('#aceite').checked, site: $('#site').value};
   const falta = !corpo.nome.trim() ? 'Escreva o seu nome completo.' : !corpo.telefone.trim() ? 'Escreva o seu WhatsApp.'
     : !corpo.idade ? 'Escreva a sua idade.' : !corpo.bairro.trim() ? 'Escreva o seu bairro.'
+    : !corpo.tipo_vaga ? 'Escolha que tipo de vaga você procura.'
     : !corpo.areas.length ? 'Escolha pelo menos uma área.' : !corpo.disponibilidade.length ? 'Escolha quando você pode trabalhar.'
     : !corpo.aceite ? 'Marque que você autoriza guardar os seus dados.' : '';
   if (falta) { $('#erro').textContent = falta; return; }
@@ -133,7 +138,7 @@ $('#form').addEventListener('submit', async e => {
     const d = await chamar('GET');
     $('#marca').textContent = '🍦 ' + (d.empresa || 'Gela Boca');
     document.querySelectorAll('.empresa').forEach(x => x.textContent = d.empresa || 'Gela Boca');
-    opcoes('areas', d.areas); opcoes('disponibilidade', d.disponibilidade);
+    opcoes('tipo_vaga', d.tipos_vaga); opcoes('areas', d.areas); opcoes('disponibilidade', d.disponibilidade);
     $('#aviso').hidden = true; $('#form').hidden = false;
   } catch (e) { $('#aviso').innerHTML = `<div class="grande">🔗</div><p style="text-align:center">${esc(e.message)}</p>`; }
 })();

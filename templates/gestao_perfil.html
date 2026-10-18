@@ -38,6 +38,9 @@
   .filtros-c .btn.sel { background: var(--verde-claro); border-color: var(--verde); }
   .tag-or { font-size: 11px; font-weight: 700; border-radius: 8px; padding: 1px 7px; background: var(--fundo); color: var(--suave); white-space: nowrap; }
   .tags { display: flex; gap: 4px; flex-wrap: wrap; }
+  .tag-v { justify-self: start; font-size: 13px; font-weight: 800; border-radius: 8px; padding: 3px 9px; background: #eef2f1; color: var(--suave); }
+  .tag-v.fixa { background: #e3f2fd; color: #0d47a1; } .tag-v.freela { background: #fff3e0; color: #8a4b00; }
+  .tag-v.ambos { background: #ede7f6; color: #4527a0; } .tag-v.nao { background: #f5f5f5; color: #616161; }
   .tag-a { font-size: 12px; font-weight: 700; border-radius: 8px; padding: 2px 8px; background: var(--verde-claro); color: var(--verde-esc); }
   .pessoa-c .exp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
   .pessoa-c .etapa select { font: inherit; font-size: 13px; border: 1px solid var(--linha); border-radius: 8px; padding: 3px 6px; }
@@ -123,7 +126,7 @@
 {% endblock %}
 {% block script %}
 // [PERFIL DISC] envio da avaliação para os fixos (WhatsApp no turno de cada um), visão da equipe e relatório de cada pessoa
-const S = {d: null, aba: 'equipe', fArea: '', fEtapa: ''};
+const S = {d: null, aba: 'equipe', fArea: '', fEtapa: '', fVaga: ''};
 const COR = {D: '#e53935', I: '#f9a825', S: '#43a047', C: '#1e88e5'};
 const EMO = {D: '🔴', I: '🟡', S: '🟢', C: '🔵'}, NOME = {D: 'Dominante', I: 'Influente', S: 'Estável', C: 'Conforme'};
 function aoEntrar() { carregar(); }
@@ -175,10 +178,12 @@ function htmlEnvios(d) {
 }
 function htmlCandidatos(d) {
   const todos = d.candidatos || [];
+  // "Vaga fixa" também mostra quem topa os dois (o mesmo para freelancer)
+  const naVaga = (c, v) => !v || (v === 'nao' ? !c.tipo_vaga : v === 'ambos' ? c.tipo_vaga === 'ambos' : [v, 'ambos'].includes(c.tipo_vaga));
   const lista = todos.filter(c => (!S.fArea || (c.areas || []).some(a => a.chave === S.fArea))
-                                && (!S.fEtapa || c.etapa === S.fEtapa));
+                                && (!S.fEtapa || c.etapa === S.fEtapa) && naVaga(c, S.fVaga));
   const conta = f => todos.filter(f).length;
-  const chip = (tipo, chave, nome, n) => `<button class="btn ${(tipo === 'area' ? S.fArea : S.fEtapa) === chave ? 'sel' : ''}"
+  const chip = (tipo, chave, nome, n) => `<button class="btn ${({area: S.fArea, etapa: S.fEtapa, vaga: S.fVaga})[tipo] === chave ? 'sel' : ''}"
       data-filtro="${tipo}" data-v="${esc(chave)}">${esc(nome)}${n != null ? ` (${n})` : ''}</button>`;
   return `<div class="link-trab">${d.link_trabalhe
       ? `<div><b>📸 Trabalhe conosco</b> — link para a bio do Instagram:<br><a href="${esc(d.link_trabalhe)}" target="_blank" rel="noopener" id="link-trab">${esc(d.link_trabalhe)}</a></div>
@@ -189,13 +194,19 @@ function htmlCandidatos(d) {
         vem direto à loja, use ➕ (o link vai na hora no WhatsApp). O candidato vê só um "obrigado"; o resultado fica aqui.</span></div>
     <div class="dica" style="background:#eef6ff;color:#174a7c">ℹ️ Use junto com a entrevista e a experiência: o perfil mostra o jeito
       de trabalhar, não se a pessoa é boa ou ruim. Não decida só por ele. Apague (🗑️) os dados de quem pedir ou não for seguir.</div>
-    ${todos.length ? `<div class="filtros-c"><span class="mini suave">Área:</span>${chip('area', '', 'Todas', todos.length)}
+    ${todos.length ? `<div class="filtros-c"><span class="mini suave">Vaga:</span>${chip('vaga', '', 'Todas', todos.length)}
+        ${d.tipos_vaga.map(t => chip('vaga', t.chave, t.chave === 'ambos' ? '🔁 Tanto faz' : t.nome, conta(c => naVaga(c, t.chave)))).join('')}
+        ${conta(c => !c.tipo_vaga) ? chip('vaga', 'nao', '❔ Não informou', conta(c => !c.tipo_vaga)) : ''}</div>
+      <div class="filtros-c"><span class="mini suave">Área:</span>${chip('area', '', 'Todas', todos.length)}
         ${d.areas.map(a => chip('area', a.chave, a.nome, conta(c => (c.areas || []).some(x => x.chave === a.chave)))).join('')}</div>
       <div class="filtros-c"><span class="mini suave">Etapa:</span>${chip('etapa', '', 'Todas')}
         ${d.etapas.map(e => chip('etapa', e.chave, e.nome, conta(c => c.etapa === e.chave))).join('')}</div>` : ''}
     ${lista.length ? `<div class="grade-p">${lista.map(c => `<div class="pessoa-c cand">
         <span class="nm">${c.icone} ${esc(c.nome)}${c.idade ? ` <span class="mini suave">· ${c.idade} anos</span>` : ''}
           <span class="tag-or">${c.origem === 'site' ? '📸 Instagram' : '🧑‍💼 Gestão'}</span></span>
+        <span class="tag-v ${esc(c.tipo_vaga || 'nao')}">${esc(c.tipo_vaga_nome)}</span>
+        ${c.tipo_vaga_informado ? '' : `<label class="mini etapa">Marcar o tipo de vaga: <select data-tipo-vaga="${c.id}">
+          <option value="">❔ Não informou</option>${d.tipos_vaga.map(t => `<option value="${esc(t.chave)}" ${c.tipo_vaga === t.chave ? 'selected' : ''}>${esc(t.nome)}</option>`).join('')}</select></label>`}
         ${(c.areas || []).length ? `<span class="tags">${c.areas.map(a => `<span class="tag-a">${esc(a.nome)}</span>`).join('')}</span>`
           : c.vaga ? `<span class="mini">Vaga: <b>${esc(c.vaga)}</b></span>` : ''}
         ${c.bairro || (c.disponibilidade || []).length ? `<span class="mini">${c.bairro ? `📍 ${esc(c.bairro)}` : ''}${c.bairro && c.disponibilidade.length ? ' · ' : ''}${(c.disponibilidade || []).length ? `🕒 ${c.disponibilidade.map(x => esc(x.nome)).join(', ')}` : ''}</span>` : ''}
@@ -236,6 +247,9 @@ async function novoCandidato() {
       <label class="campo"><span>WhatsApp <span class="mini suave">(opcional)</span></span><input id="cd-tel" inputmode="tel" placeholder="Ex.: 66 99999-1234">
         <span class="mini suave">Sem WhatsApp: o sistema mostra o link para você mandar.</span></label>
       <label class="campo"><span>Vaga <span class="mini suave">(opcional)</span></span><input id="cd-vaga" maxlength="100" placeholder="Ex.: Atendente, Caixa"></label></div>
+    <label class="campo"><span>Tipo de vaga</span><select id="cd-tipo" style="font:inherit;font-size:15px;border:1px solid var(--linha);border-radius:10px;padding:8px 10px">
+      <option value="">— não sei ainda —</option><option value="fixa">💼 Vaga fixa</option><option value="freela">📅 Freelancer (diárias)</option>
+      <option value="ambos">🔁 Fixa ou freelancer</option></select></label>
     <label class="campo"><span>Vale até</span><input type="date" id="cd-valido" value="${esc(r.validade_padrao)}" min="${esc(r.hoje)}" max="${esc(r.validade_max)}"></label>
     <div class="botoes"><button class="btn" id="cd-cancelar">Cancelar</button><button class="btn prim" id="cd-criar">📤 Criar e mandar</button></div>`, null, true);
   $('#cd-cancelar').onclick = fecharModal;
@@ -245,7 +259,7 @@ async function novoCandidato() {
     const b = $('#cd-criar'); b.disabled = true;
     try {
       const r2 = await api('POST', '/api/gestao/perfil/candidatos', {nome: $('#cd-nome').value, telefone: $('#cd-tel').value,
-        vaga: $('#cd-vaga').value, valido_ate: $('#cd-valido').value});
+        vaga: $('#cd-vaga').value, tipo_vaga: $('#cd-tipo').value, valido_ate: $('#cd-valido').value});
       abrirModal(`<h3>🧑‍💼 Pronto!</h3><p id="cd-ok">${esc(r2.mensagem)}</p>
         <label class="campo"><span>Link da avaliação</span><input id="cd-link" readonly value="${esc(r2.link)}"></label>
         <div class="botoes"><button class="btn prim" id="cd-copiar">🔗 Copiar link</button></div>`, null, true);
@@ -255,6 +269,14 @@ async function novoCandidato() {
   };
 }
 document.addEventListener('change', async e => {
+  const tv = e.target.closest('[data-tipo-vaga]');
+  if (tv) {
+    if (!tv.value) return;
+    tv.disabled = true;
+    try { const r = await api('POST', `/api/gestao/perfil/${tv.dataset.tipoVaga}/tipo-vaga`, {tipo_vaga: tv.value}); status(r.mensagem); await carregar(); }
+    catch (er) { falhou(er); tv.disabled = false; }
+    return;
+  }
   const sel = e.target.closest('[data-etapa]'); if (!sel) return;
   sel.disabled = true;
   try { const r = await api('POST', `/api/gestao/perfil/${sel.dataset.etapa}/etapa`, {etapa: sel.value}); status(r.mensagem); await carregar(); }
@@ -264,7 +286,7 @@ document.addEventListener('click', async e => {
   if (e.target.closest('#btn-candidato')) return novoCandidato();
   if (e.target.closest('#btn-qr-trab')) return qrTrabalhe();
   const f = e.target.closest('[data-filtro]');
-  if (f) { if (f.dataset.filtro === 'area') S.fArea = f.dataset.v; else S.fEtapa = f.dataset.v; return desenhar(); }
+  if (f) { S[{area: 'fArea', etapa: 'fEtapa', vaga: 'fVaga'}[f.dataset.filtro]] = f.dataset.v; return desenhar(); }
   const cp = e.target.closest('[data-copiar]'); if (cp) return copiar(cp.dataset.copiar);
   const rel = e.target.closest('[data-rel]'); if (rel) { e.preventDefault(); return relatorio(+rel.dataset.rel); }
   const b = e.target.closest('[data-a]'); if (!b) return;
@@ -365,7 +387,7 @@ async function relatorio(id) {
       <div class="rel-perfil" id="r-perfil">${esc(d.perfil_nome)}</div>
       <div class="mini suave">Respondeu ${esc(d.respondido)}${d.anteriores.length ? ` · antes: ${d.anteriores.map(a => `<a href="#" data-rel="${a.id}">${esc(a.perfil_nome)} (${esc(a.respondido)})</a>`).join(', ')}` : ''}</div></div>
     ${d.candidato && (d.areas || d.bairro) ? `<div class="mini" style="margin-top:6px;line-height:1.6">
-      ${d.idade ? `🎂 ${d.idade} anos · ` : ''}${d.bairro ? `📍 ${esc(d.bairro)} · ` : ''}${(d.areas || []).length ? `Áreas: <b>${d.areas.map(a => esc(a.nome)).join(', ')}</b>` : ''}
+      <b>${esc(d.tipo_vaga_nome || '')}</b> · ${d.idade ? `🎂 ${d.idade} anos · ` : ''}${d.bairro ? `📍 ${esc(d.bairro)} · ` : ''}${(d.areas || []).length ? `Áreas: <b>${d.areas.map(a => esc(a.nome)).join(', ')}</b>` : ''}
       ${(d.disponibilidade || []).length ? `<br>🕒 ${d.disponibilidade.map(x => esc(x.nome)).join(', ')}` : ''}
       ${d.experiencia ? `<br>💼 ${esc(d.experiencia)}` : ''}
       ${d.whatsapp ? `<br><a href="${esc(d.whatsapp)}" target="_blank" rel="noopener">💬 Conversar no WhatsApp</a>` : ''}</div>` : ''}

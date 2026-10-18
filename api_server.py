@@ -3098,6 +3098,14 @@ def api_gestao_perfil_etapa(usuario, avaliacao_id):
     return _resposta_perfil(lambda: perfil_disc.definir_etapa(avaliacao_id, str(dados.get('etapa') or ''), usuario))
 
 
+@app.route('/api/gestao/perfil/<int:avaliacao_id>/tipo-vaga', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_perfil_tipo_vaga(usuario, avaliacao_id):
+    import perfil_disc
+    dados = ler_json() or {}
+    return _resposta_perfil(lambda: perfil_disc.definir_tipo_vaga(avaliacao_id, str(dados.get('tipo_vaga') or ''), usuario))
+
+
 @app.route('/api/gestao/perfil/trabalhe-qr', methods=['GET'])
 @compras_login(somente_gestor=True)
 def api_gestao_perfil_trabalhe_qr(usuario):
