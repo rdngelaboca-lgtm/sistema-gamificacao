@@ -388,6 +388,28 @@ quando alguém responde (desliga em 📣 Avisos › 🧭 Perfil da equipe). Ques
 Arquivos: `perfil_disc.py`, `templates/gestao_perfil.html`, `templates/perfil_disc.html`; tabela `AvaliacoesDisc`
 (criada sozinha na primeira vez; guarda os fatores escolhidos em cada grupo).
 
+### Novo (só na Web) — 👔 Liderança: sócios e líderes (10/2026: Gestão › 👔 Liderança)
+
+Avaliação de perfil no nível da **gestão**, **à parte** do 🧭 Perfil da equipe (que não mudou em nada): módulo
+`perfil_lideranca.py`, tabela própria `AvaliacoesLideranca` (+ `ConfigLideranca` para o acesso), página da gestão
+`/gestao/lideranca` e link público `/lideranca/<código>` (liberado na internet só ele e `/api/lideranca/`).
+- **Papéis:** 👑 sócio(a)/dono(a) · 🧑‍💼 líder da equipe · 🎯 candidato(a) a líder. Sem pontos. Com WhatsApp o link vai na
+  hora (não espera turno); sem WhatsApp: 🔗 copiar o link ou **↗️ Responder aqui** (para o próprio sócio responder).
+- **Questionário:** 24 **situações da gestão** (decisão importante, faturamento caindo, contratar, reunião, erro de
+  funcionário, delegar, mudança grande, conflito, futuro da empresa, dinheiro e custos, cliente reclamando, cobrar a
+  equipe, fornecedor, equipe desmotivada, sócio que discorda, notícia ruim…), cada uma com 4 frases (uma de cada fator,
+  a ordem muda); a pessoa toca na que MAIS e na que MENOS parece com ela. Mesmo cálculo do DISC.
+- **Relatório de gestão:** estilo (🔴 Líder executor · 🟡 inspirador · 🟢 agregador · 🔵 analítico), pontos fortes na gestão,
+  riscos e pontos cegos, como decide, sob pressão, como delega, como se comunica, conflitos, quem precisa ao lado, para se
+  desenvolver, como trabalhar com a pessoa e **as 8 áreas da gestão** (finanças, pessoas, operação, marketing, compras,
+  expansão, crises, gerência da loja) em ✅/🟡/⚠️ com o **porquê**; 🖨️ imprimir.
+- **👥 Time de gestão** (última resposta de cada sócio e líder): quem é forte em cada fator e o que falta na gestão.
+  **🤝 Os sócios juntos:** como se complementam (pelo fator principal de cada um) e a **divisão sugerida das áreas**
+  (quando nenhum dos dois tem o perfil da área, diz isso e sugere apoio de fora). **🎯 Candidato:** o que traz que falta
+  na gestão e como combina com cada sócio; ele vê só o obrigado (sócio e líder veem o estilo e os pontos fortes).
+- **🔒 Quem pode ver:** lista no banco (vazia = qualquer gestor). Depois de escolher, quem está fora vê só um cadeado e as
+  rotas respondem 403. Não dá para se tirar da lista. **Nada vai para o grupo de avisos** (privacidade).
+
 ### App de compras — aba Gestão em 3 áreas (10/2026)
 A aba **Gestão** do app (só o gestor vê) foi dividida em **🏪 Loja · 🛒 Compras · 📦 Estoque**, com o número de
 pendências de cada área no botão (Loja: dias sem faturamento lançado; Compras: listas para aprovar + cupons para

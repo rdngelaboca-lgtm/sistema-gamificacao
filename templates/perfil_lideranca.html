@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#2E4A62">
+<meta name="robots" content="noindex">
+<meta name="referrer" content="no-referrer">
+<title>Gela Boca · Avaliação de liderança</title>
+<!-- [LIDERANÇA] Página PÚBLICA do link da avaliação de liderança (sócios e líderes): /lideranca/<código>. Separada do 🧭 Perfil
+     da equipe (/perfil/), com o mesmo jeito de responder: um treino (não conta) e 24 situações da GESTÃO; em cada uma a pessoa
+     escolhe, em 2 passos, a frase que MAIS e a que MENOS parece com ela. Sem pontos. No fim, o estilo de liderança e os pontos
+     fortes (candidato a líder: só o obrigado). Botão 🔊 Ouvir lê em voz alta. Nada da Gestão aparece aqui. -->
+<style>
+  :root { --verde: #2E4A62; --verde-esc: #1F3446; --verde-claro: #E3EAF1; --texto: #16201F; --suave: #55625F; --linha: #DCE3E1;
+    --erro: #c62828; --mais: #1b7f3a; --mais-claro: #e3f4e8; --menos: #b3261e; --menos-claro: #fdecea;
+    --D: #e53935; --I: #f9a825; --S: #43a047; --C: #1e88e5; }
+  * { box-sizing: border-box; }
+  html { background: #F3F6F5; }
+  body { margin: 0; min-height: 100vh; background: linear-gradient(180deg, #E3EAF1 0%, #F3F6F5 260px) no-repeat; color: var(--texto);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 17px; }
+  main { max-width: 520px; margin: 0 auto; padding: 16px 14px 40px; }
+  .topo { text-align: center; margin-bottom: 10px; }
+  .topo .marca { font-size: 24px; font-weight: 800; color: var(--verde-esc); }
+  .cartao { background: #fff; border: 1px solid var(--linha); border-radius: 18px; padding: 16px; display: grid; gap: 14px; box-shadow: 0 6px 20px #2E4A6214; }
+  .topo .sub { font-size: 14px; color: var(--suave); font-weight: 700; }
+  h1 { font-size: 22px; margin: 0; line-height: 1.25; }
+  h2 { font-size: 20px; margin: 0; line-height: 1.3; }
+  p { margin: 0; line-height: 1.5; }
+  .mini { font-size: 14px; color: var(--suave); line-height: 1.45; }
+  .pontos { border-radius: 12px; padding: 10px 14px; font-weight: 700; background: #FFF6D6; color: #6B4E00; border: 1px solid #F1DE9C; }
+  button { font: inherit; cursor: pointer; }
+  .prim { font-weight: 800; font-size: 20px; border-radius: 14px; padding: 16px; border: 0; background: var(--verde); color: #fff; width: 100%; }
+  .prim[disabled] { opacity: .55; cursor: default; }
+  .sec { font-weight: 700; font-size: 16px; border-radius: 12px; padding: 11px 14px; border: 1px solid var(--linha); background: #fff; color: var(--texto); }
+  .sec[disabled] { opacity: .45; }
+  .linha-btn { display: flex; gap: 8px; justify-content: space-between; align-items: center; }
+  button:focus-visible { outline: 3px solid var(--verde-esc); outline-offset: 2px; }
+  /* como funciona */
+  .como { display: grid; gap: 8px; }
+  .como .p { display: grid; grid-template-columns: 44px 1fr; gap: 10px; align-items: center; border-radius: 12px; padding: 10px 12px; font-weight: 700; }
+  .como .p .ic { font-size: 30px; text-align: center; }
+  .como .p.mais { background: var(--mais-claro); color: var(--mais); }
+  .como .p.menos { background: var(--menos-claro); color: var(--menos); }
+  /* pergunta */
+  .progresso { display: grid; gap: 6px; }
+  .progresso .barra { height: 10px; border-radius: 6px; background: #e4ebe9; overflow: hidden; }
+  .progresso .barra span { display: block; height: 100%; background: var(--verde); transition: width .25s; }
+  .selo { display: inline-block; background: #FFF6D6; color: #6B4E00; border: 1px solid #F1DE9C; border-radius: 999px;
+    padding: 3px 10px; font-weight: 800; font-size: 14px; white-space: nowrap; }
+  .treino { background: #FFF6D6; color: #6B4E00; border-radius: 10px; padding: 6px 10px; font-weight: 800; font-size: 14px; text-align: center; }
+  .enunciado { font-size: 20px; font-weight: 800; line-height: 1.3; }
+  .passo { display: grid; grid-template-columns: 46px 1fr; gap: 10px; align-items: center; border-radius: 14px; padding: 10px 12px;
+    font-weight: 800; font-size: 18px; line-height: 1.25; }
+  .passo .ic { font-size: 32px; text-align: center; }
+  .passo small { display: block; font-size: 13px; font-weight: 700; opacity: .85; }
+  .passo.mais { background: var(--mais-claro); color: var(--mais); border: 2px solid var(--mais); }
+  .passo.menos { background: var(--menos-claro); color: var(--menos); border: 2px solid var(--menos); }
+  .passo.pronto { background: var(--verde-claro); color: var(--verde-esc); border: 2px solid var(--verde); }
+  .opcoes { display: grid; gap: 10px; }
+  .opcao { text-align: left; font-size: 17px; font-weight: 700; line-height: 1.3; padding: 14px 14px; border-radius: 14px;
+    border: 2px solid var(--linha); background: #fff; color: var(--texto); display: grid; grid-template-columns: 1fr auto; gap: 8px;
+    align-items: center; min-height: 60px; }
+  .opcao .sel { font-size: 14px; font-weight: 800; white-space: nowrap; }
+  .opcao.mais { border-color: var(--mais); background: var(--mais-claro); }
+  .opcao.mais .sel { color: var(--mais); }
+  .opcao.menos { border-color: var(--menos); background: var(--menos-claro); }
+  .opcao.menos .sel { color: var(--menos); }
+  .opcao[disabled] { cursor: default; }
+  .ouvir { font-weight: 700; font-size: 15px; border-radius: 999px; padding: 8px 14px; border: 1px solid var(--linha); background: #fff; }
+  /* resultado */
+  .fatores { display: grid; gap: 8px; }
+  .fator { display: grid; grid-template-columns: 124px 1fr; gap: 8px; align-items: center; font-size: 15px; font-weight: 700; }
+  .fator .b { height: 12px; border-radius: 7px; background: #eef2f1; overflow: hidden; }
+  .fator .b span { display: block; height: 100%; }
+  .perfil-grande { font-size: 26px; font-weight: 800; text-align: center; line-height: 1.3; }
+  .lista { margin: 0; padding-left: 22px; line-height: 1.6; }
+  .grande { font-size: 54px; text-align: center; line-height: 1; }
+  #erro { color: var(--erro); font-weight: 700; min-height: 1.2em; }
+  .carregando { text-align: center; color: var(--suave); padding: 30px 0; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <div class="topo"><div class="marca" id="marca">🍦 Gela Boca</div><div class="sub">👔 Avaliação de liderança</div></div>
+  <div class="cartao" id="tela"><div class="carregando">Carregando…</div></div>
+  <div id="erro" role="alert" style="margin-top:10px"></div>
+</main>
+<script>
+'use strict';
+const $ = s => document.querySelector(s);
+const TOKEN = location.pathname.split('/').filter(Boolean)[1] || '';
+const URL_API = `/api/lideranca/${encodeURIComponent(TOKEN)}`;
+const CHAVE = 'lideranca:v1:' + TOKEN;        // o andamento fica no celular: dá para fechar e continuar depois
+const COR = {D: 'var(--D)', I: 'var(--I)', S: 'var(--S)', C: 'var(--C)'};
+let TREINO = {pergunta: 'No fim de semana de folga, eu prefiro…', opcoes: ['🏃 Fazer algo ativo', '🎉 Encontrar os amigos',
+  '🏠 Ficar em casa com a família', '📚 Organizar ou estudar algo'], treino: true};
+const FALA = 'speechSynthesis' in window && typeof SpeechSynthesisUtterance === 'function';
+let D = null, R = [], idx = 0, treino = [null, null], andando = false;
+const esc = t => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+
+function ler() { try { const x = JSON.parse(localStorage.getItem(CHAVE) || 'null'); return x && Array.isArray(x.r) ? x : null; } catch (e) { return null; } }
+function gravar() { try { localStorage.setItem(CHAVE, JSON.stringify({r: R, i: idx})); } catch (e) {} }
+function limpar() { try { localStorage.removeItem(CHAVE); } catch (e) {} }
+function calar() { try { if (FALA) speechSynthesis.cancel(); } catch (e) {} }
+function falar(texto) {
+  if (!FALA) return;
+  try {
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(texto); u.lang = 'pt-BR'; u.rate = 0.92;
+    const voz = (speechSynthesis.getVoices() || []).find(v => /^pt(-|_)BR/i.test(v.lang));
+    if (voz) u.voice = voz;
+    speechSynthesis.speak(u);
+  } catch (e) {}
+}
+
+async function chamar(metodo, corpo) {
+  let r;
+  try {
+    r = await fetch(URL_API, {method: metodo, credentials: 'omit', cache: 'no-store',
+      headers: corpo ? {'Content-Type': 'application/json'} : {}, body: corpo ? JSON.stringify(corpo) : undefined});
+  } catch (e) { throw new Error('Sem internet. Suas respostas ficam guardadas: tente de novo.'); }
+  let d = {};
+  try { d = await r.json(); } catch (e) {}
+  if (!r.ok) throw new Error(d.erro || 'Não deu certo. Tente de novo.');
+  return d;
+}
+const feitos = () => R.filter(x => x && x[0] != null && x[1] != null).length;
+
+const selo = () => '';                         // liderança não tem pontos
+
+function telaInicio() {
+  calar();
+  const n = D.blocos.length, salvo = ler(), ja = salvo ? salvo.r.filter(x => x && x[1] != null).length : 0;
+  $('#tela').innerHTML = `
+    <div class="grande">👔</div>
+    <h1>Olá${D.nome ? ', ' + esc(D.nome) : ''}! ${D.candidato ? 'Obrigado pelo interesse em fazer parte da nossa liderança!' : 'Vamos conhecer o seu estilo de liderança?'}</h1>
+    <p>${D.candidato ? 'Esta avaliação faz parte do processo para a <b>liderança</b>. ' : ''}Ela mostra como você <b>decide, lidera e se
+      comunica</b> na gestão da empresa.</p>
+    <p>São <b>${n} situações</b> do dia a dia da gestão, cada uma com <b>4 frases</b>. Em cada situação:</p>
+    <div class="como"><div class="p mais"><span class="ic">👍</span><span>Primeiro, toque na frase que <b>MAIS</b> parece com você</span></div>
+      <div class="p menos"><span class="ic">👎</span><span>Depois, toque na frase que <b>MENOS</b> parece com você</span></div></div>
+    <p>Não tem resposta certa nem errada: responda como você <b>age de verdade</b>, não como acha que deveria. Leva uns 10 a 15 minutos.</p>
+    <button class="prim" id="comecar">${ja ? `Continuar (${ja} de ${n} respondidas)` : 'Vamos treinar primeiro'}</button>
+    <div class="mini">🔒 ${D.candidato ? `Suas respostas ficam só com os sócios da ${esc(D.empresa)} e são usadas junto com a entrevista.
+      Se quiser, você pode pedir para apagar depois.` : `Suas respostas ficam só com os sócios da ${esc(D.empresa)}, para dividir as
+      responsabilidades e desenvolver a liderança. Não é uma prova.`}</div>`;
+  $('#comecar').onclick = () => {
+    if (salvo && ja) {
+      R = salvo.r.slice(0, n); idx = Math.min(salvo.i || 0, n - 1);
+      while (idx < n - 1 && R[idx] && R[idx][1] != null) idx++;
+      if (feitos() === n) return telaFim();
+      return telaPergunta();
+    }
+    treino = [null, null]; telaPergunta(true);
+  };
+}
+
+function telaPergunta(eTreino) {
+  calar();
+  const n = D.blocos.length, b = eTreino ? TREINO : D.blocos[idx];
+  const r = eTreino ? treino : (R[idx] || [null, null]);
+  const passo = r[0] == null ? 'mais' : r[1] == null ? 'menos' : 'pronto';
+  const oque = eTreino ? 'combina com você' : 'parece com você', alvo = 'na frase';
+  const titulo = {
+    mais: `<span class="ic">👍</span><span><small>Passo 1 de 2</small>Toque ${alvo} que <u>MAIS</u> ${oque}</span>`,
+    menos: `<span class="ic">👎</span><span><small>Passo 2 de 2</small>Agora toque ${alvo} que <u>MENOS</u> ${oque}</span>`,
+    pronto: `<span class="ic">✅</span><span>${eTreino ? 'Muito bem! É assim em todas as situações.' : 'Pronto! Indo para a próxima…'}</span>`}[passo];
+  $('#tela').innerHTML = `
+    ${eTreino ? `<div class="treino">✏️ TREINO · este não conta</div>`
+      : `<div class="progresso"><div class="mini" style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+      <span>Situação ${idx + 1} de ${n}</span>${selo()}<span>${Math.round(100 * feitos() / n)}%</span></div>
+      <div class="barra"><span style="width:${100 * feitos() / n}%"></span></div></div>`}
+    <div class="enunciado" id="enunciado">${esc(b.pergunta)}</div>
+    <div class="passo ${passo}" id="passo">${titulo}</div>
+    <div class="opcoes">${b.opcoes.map((t, i) => `<button class="opcao ${r[0] === i ? 'mais' : r[1] === i ? 'menos' : ''}" data-i="${i}"
+        ${r[0] === i || passo === 'pronto' ? 'disabled' : ''}><span>${esc(t)}</span>
+        <span class="sel">${r[0] === i ? '👍 MAIS' : r[1] === i ? '👎 MENOS' : ''}</span></button>`).join('')}</div>
+    ${eTreino && passo === 'pronto' ? '<button class="prim" id="seguir">Começar as situações</button>' : ''}
+    <div class="linha-btn"><button class="sec" id="voltar" ${!eTreino && idx === 0 && passo === 'mais' ? 'disabled' : ''}>← Voltar</button>
+      ${FALA ? '<button class="ouvir" id="ouvir" title="O celular lê a pergunta em voz alta">🔊 Ouvir</button>' : ''}</div>`;
+  document.querySelectorAll('.opcao').forEach(x => x.onclick = () => escolher(+x.dataset.i, eTreino));
+  $('#voltar').onclick = () => {
+    if (eTreino) return passo === 'mais' ? telaInicio() : (treino = [null, null], telaPergunta(true));
+    if (passo === 'menos') R[idx] = [null, null];
+    else if (idx > 0) { idx--; R[idx] = [R[idx] ? R[idx][0] : null, null]; }
+    else return telaInicio();
+    gravar(); telaPergunta();
+  };
+  const ouvir = $('#ouvir');
+  if (ouvir) ouvir.onclick = () => falar(`${b.pergunta.replace('…', '')}. ` + b.opcoes.map((t, i) => `Frase ${i + 1}: ${t.replace(/^[^\p{L}]+/u, '')}.`).join(' ')
+    + (passo === 'mais' ? ' Toque na que mais parece com você.' : passo === 'menos' ? ' Agora toque na que menos parece com você.' : ''));
+  const seguir = $('#seguir'); if (seguir) seguir.onclick = () => { idx = 0; telaPergunta(); };
+}
+
+function escolher(i, eTreino) {
+  if (andando) return;
+  const r = eTreino ? treino : (R[idx] || [null, null]);
+  if (r[0] == null) { r[0] = i; }
+  else if (r[1] == null && i !== r[0]) { r[1] = i; }
+  else return;
+  if (eTreino) { treino = r; return telaPergunta(true); }
+  R[idx] = r; gravar(); telaPergunta();
+  if (r[1] == null) return;
+  andando = true;
+  setTimeout(() => {                                       // um instante para a pessoa ver o que marcou
+    andando = false;
+    if (idx < D.blocos.length - 1) { idx++; gravar(); telaPergunta(); } else telaFim();
+  }, 700);
+}
+
+function telaFim() {
+  calar();
+  $('#tela').innerHTML = `
+    <div class="grande">✅</div>
+    <h2>Pronto! Você respondeu as ${D.blocos.length} situações.</h2>
+    <p>Toque em <b>Enviar respostas</b> ${D.candidato ? 'para terminar' : 'para ver o seu estilo de liderança'}.</p>
+    <button class="prim" id="enviar">Enviar respostas</button>
+    <div class="linha-btn"><button class="sec" id="voltar">← Voltar e conferir</button><span></span></div>`;
+  $('#voltar').onclick = () => { idx = D.blocos.length - 1; R[idx] = [R[idx][0], null]; gravar(); telaPergunta(); };
+  $('#enviar').onclick = async () => {
+    $('#erro').textContent = ''; $('#enviar').disabled = true;
+    try {
+      const faltam = D.blocos.map((_, k) => k).filter(k => !R[k] || R[k][0] == null || R[k][1] == null);
+      if (faltam.length) { idx = faltam[0]; telaPergunta(); throw new Error(`Falta responder a situação ${faltam[0] + 1}.`); }
+      D = await chamar('POST', {respostas: R}); limpar(); telaResultado();
+    } catch (e) { $('#erro').textContent = e.message; const b = $('#enviar'); if (b) b.disabled = false; }
+  };
+}
+
+function telaResultado() {
+  calar();
+  if (D.candidato) {                                       // candidato a líder: só o obrigado (o resultado fica com os sócios)
+    $('#tela').innerHTML = `<div class="grande">🙌</div>
+      <h2 style="text-align:center" id="perfil">Obrigado${D.nome ? ', ' + esc(D.nome) : ''}! Recebemos as suas respostas.</h2>
+      <p style="text-align:center">Os sócios da ${esc(D.empresa)} vão entrar em contato com você. Boa sorte!</p>`;
+    return;
+  }
+  const r = D.resultado;
+  $('#tela').innerHTML = `
+    <div class="grande">🙌</div>
+    <h2 style="text-align:center">Obrigado${D.nome ? ', ' + esc(D.nome) : ''}!</h2>
+    <div class="mini" style="text-align:center">O seu estilo de liderança é</div>
+    <div class="perfil-grande" id="perfil">${esc(r.nome)}</div>
+    <p>${esc(r.texto)}</p>
+    <div><b>Seus pontos fortes na gestão</b><ul class="lista">${r.fortes.map(f => `<li>${esc(f)}</li>`).join('')}</ul></div>
+    <div class="fatores">${r.fatores.map(f => `<div class="fator"><span>${f.emoji} ${esc(f.nome)}</span>
+      <div class="b"><span style="width:${Math.min(100, f.pct * 2)}%;background:${COR[f.d]}"></span></div></div>`).join('')}</div>
+    <div class="mini">Todo líder tem um pouco de cada cor. A maior mostra o seu jeito mais natural de liderar. O relatório
+      completo (como decide, sob pressão, áreas da gestão, pontos de atenção e como se complementa com os sócios) fica na
+      Gestão › 👔 Liderança.</div>`;
+}
+
+(async () => {
+  try {
+    D = await chamar('GET');
+    if (D.treino) TREINO = Object.assign({}, D.treino, {treino: true});
+    $('#marca').textContent = '🍦 ' + (D.empresa || 'Gela Boca');
+    if (D.respondido) { limpar(); telaResultado(); } else telaInicio();
+  } catch (e) {
+    $('#tela').innerHTML = '<div class="grande">🔗</div>'; $('#erro').textContent = e.message;
+  }
+})();
+</script>
+</body>
+</html>

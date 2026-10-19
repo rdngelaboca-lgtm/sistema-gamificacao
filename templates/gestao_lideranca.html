@@ -1,0 +1,251 @@
+{% extends 'gestao_base.html' %}
+{% block titulo %}Liderança{% endblock %}
+{% block estilo %}
+  .area { padding: 12px 16px 70px; max-width: 1000px; display: grid; gap: 12px; }
+  .explica { font-size: 13px; color: var(--suave); line-height: 1.45; }
+  .bloco { background: #fff; border: 1px solid var(--linha); border-radius: 12px; padding: 12px 14px; display: grid; gap: 8px; }
+  .bloco h3 { margin: 0; font-size: 16px; }
+  .acesso { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; font-size: 14px;
+    background: #fff; border: 1px solid var(--linha); border-left: 5px solid #6d4c41; border-radius: 12px; padding: 8px 12px; }
+  .cadeado { text-align: center; padding: 40px 16px; background: #fff; border: 1px dashed var(--linha); border-radius: 12px; font-weight: 700; }
+  .dica { background: var(--laranja-claro); color: #7a3a10; border-radius: 10px; padding: 8px 12px; font-size: 13px; font-weight: 600; }
+  .dupla { background: #f3eefb; color: #3b2a63; border-radius: 10px; padding: 8px 12px; font-size: 14px; line-height: 1.5; }
+  .cobertura { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+  .cobertura div { border: 1px solid var(--linha); border-left-width: 5px; border-radius: 10px; padding: 6px 10px; font-size: 13px; }
+  .cobertura b { display: block; font-size: 13px; }
+  .cobertura .ninguem { color: var(--erro); font-weight: 700; }
+  .D { border-left-color: #e53935; } .I { border-left-color: #f9a825; } .S { border-left-color: #43a047; } .C { border-left-color: #1e88e5; }
+  .grade-p { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+  .pessoa-c { background: #fff; border: 1px solid var(--linha); border-radius: 12px; padding: 12px; display: grid; gap: 7px; text-align: left; }
+  .pessoa-c .nm { font-weight: 800; font-size: 16px; }
+  .pessoa-c .est { font-weight: 700; font-size: 14px; }
+  .pessoa-c .acoes { display: flex; gap: 6px; flex-wrap: wrap; }
+  .pessoa-c .acoes .btn { font-size: 13px; padding: 5px 9px; text-decoration: none; color: inherit; }
+  .tag-p { justify-self: start; font-size: 12px; font-weight: 800; border-radius: 8px; padding: 2px 8px; background: #efebe9; color: #4e342e; }
+  .tag-p.candidato { background: #e3f2fd; color: #0d47a1; } .tag-p.lider { background: #e8f5e9; color: #1b5e20; }
+  .barras { display: grid; gap: 4px; }
+  .barras .f { display: grid; grid-template-columns: 112px minmax(0, 1fr) 38px; gap: 6px; align-items: center; font-size: 12px; font-weight: 700; }
+  .barras .f > span:first-child { white-space: nowrap; }
+  .barras .b { height: 9px; border-radius: 6px; background: #eef2f1; overflow: hidden; }
+  .barras .b span { display: block; height: 100%; }
+  .barras .n { text-align: right; font-variant-numeric: tabular-nums; }
+  .tabela { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .tabela th, .tabela td { padding: 6px 8px; border-bottom: 1px solid var(--linha2); text-align: left; vertical-align: top; }
+  .tabela th { background: var(--fundo); }
+  .tabela tr:last-child td { border-bottom: 0; }
+  .vazio-p { text-align: center; color: var(--suave); padding: 26px 10px; background: #fff; border: 1px dashed var(--linha); border-radius: 12px; }
+  .campo { display: grid; gap: 4px; margin-bottom: 10px; }
+  .campo > span { font-weight: 700; font-size: 14px; }
+  .campo input, .campo select { font: inherit; font-size: 15px; border: 1px solid var(--linha); border-radius: 10px; padding: 8px 10px; width: 100%; }
+  .grade2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .papeis { display: grid; gap: 6px; margin-bottom: 10px; }
+  .papeis label { display: flex; gap: 8px; align-items: center; border: 1px solid var(--linha); border-radius: 10px; padding: 8px 10px; cursor: pointer; font-weight: 700; }
+  .papeis label small { font-weight: 500; color: var(--suave); }
+  .lista-g label { display: flex; gap: 8px; align-items: center; padding: 6px 0; }
+  /* relatório */
+  .rel-topo { display: grid; gap: 4px; }
+  .rel-estilo { font-size: 22px; font-weight: 800; }
+  .secoes { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+  .secao { background: var(--fundo); border-radius: 10px; padding: 10px 12px; }
+  .secao h4 { margin: 0 0 4px; font-size: 14px; }
+  .secao ul { margin: 0; padding-left: 18px; font-size: 14px; line-height: 1.5; }
+  .secao p { margin: 0; font-size: 14px; line-height: 1.5; }
+  .secao.larga { grid-column: 1 / -1; }
+  .nivel-f { border-left: 4px solid var(--linha); padding: 2px 0 2px 10px; margin: 6px 0; }
+  .nivel-f.combina { border-left-color: var(--ok); } .nivel-f.pode { border-left-color: #f9a825; } .nivel-f.menos { border-left-color: var(--erro); }
+  .aviso-uso { font-size: 12px; color: var(--suave); margin-top: 10px; line-height: 1.45; }
+  @media print { body * { visibility: hidden; } #modal, #modal * { visibility: visible; } #modal { position: absolute; inset: 0; box-shadow: none; }
+    #modal .botoes, #fechar-modal { display: none; } }
+  @media (max-width: 700px) {
+    .area { padding-left: 10px; padding-right: 10px; }
+    .cobertura { grid-template-columns: 1fr 1fr; }
+    .secoes, .grade2 { grid-template-columns: 1fr; }
+  }
+{% endblock %}
+{% block conteudo %}
+  <section class="barra"><div class="linha"><b>👔 Liderança</b>
+    <button class="btn prim" id="btn-nova">➕ Nova avaliação</button>
+    <button class="btn ico" id="atualizar" title="Atualizar">🔄</button></div></section>
+  <main class="area">
+    <details class="explica"><summary><b>O que é?</b> A avaliação de perfil no nível da <b>gestão</b>, para os sócios e os
+      líderes. É separada do 🧭 Perfil da equipe.</summary>
+      <p>São 24 situações da gestão: decisões, equipe, dinheiro, crises, clientes e fornecedores. O relatório mostra o
+        <b>estilo de liderança</b>: como a pessoa decide, como fica sob pressão, como delega e se comunica, como lida com
+        conflitos, em quais <b>áreas da gestão</b> rende mais (com o porquê) e quem ela precisa ao lado. Junta os sócios
+        para mostrar <b>como vocês se complementam</b> e uma divisão sugerida das áreas. Para 👑 sócios, 🧑‍💼 líderes e
+        🎯 candidatos a líder.</p>
+      <p>Não entra no 🧭 Perfil da equipe, não dá pontos e não manda nada para o grupo de avisos. É um questionário nosso,
+        baseado na teoria DISC: serve para orientar e conversar, <b>não para decidir sozinho</b>.</p>
+    </details>
+    <div id="conteudo"><div class="vazio-p">Carregando…</div></div>
+  </main>
+{% endblock %}
+{% block script %}
+// [LIDERANÇA] avaliação de perfil de gestão (sócios, líderes e candidatos a líder) — à parte do 🧭 Perfil da equipe
+const S = {d: null};
+const COR = {D: '#e53935', I: '#f9a825', S: '#43a047', C: '#1e88e5'};
+const EMO = {D: '🔴', I: '🟡', S: '🟢', C: '🔵'}, NOME = {D: 'Dominante', I: 'Influente', S: 'Estável', C: 'Conforme'};
+function aoEntrar() { carregar(); }
+$('#atualizar').onclick = () => carregar();
+$('#btn-nova').onclick = () => nova();
+
+async function carregar() {
+  try { S.d = await api('GET', '/api/gestao/lideranca'); desenhar(); }
+  catch (e) { if (e.status !== 401 && e.status !== 403) falhou(e); }
+}
+function barras(pct) {
+  return `<div class="barras">${'DISC'.split('').map(d => `<div class="f"><span>${EMO[d]} ${NOME[d]}</span>
+    <div class="b"><span style="width:${Math.min(100, pct[d] * 2)}%;background:${COR[d]}"></span></div><span class="n">${pct[d]}%</span></div>`).join('')}</div>`;
+}
+function desenhar() {
+  const d = S.d; if (!d) return;
+  $('#btn-nova').hidden = !!d.bloqueado;
+  if (d.bloqueado) { $('#conteudo').innerHTML = `<div class="cadeado" id="cadeado">${esc(d.mensagem)}</div>`; return; }
+  const nomes = d.acesso.gestores.filter(g => d.acesso.ids.includes(g.id)).map(g => g.nome.split(' ')[0]);
+  $('#conteudo').innerHTML = `
+    <div class="acesso" id="acesso"><span>${d.acesso.restrito ? `🔒 Só <b>${nomes.map(esc).join(', ')}</b> ${nomes.length > 1 ? 'veem' : 'vê'} esta página.`
+        : '🔓 Qualquer gestor vê esta página. <b>Escolha quem pode ver</b> (ex.: só os sócios).'}</span>
+      <button class="btn" id="btn-acesso">🔒 Quem pode ver</button></div>
+    ${htmlTime(d)}${htmlSocios(d)}
+    <div class="bloco"><h3>📋 Avaliações</h3>
+      ${d.avaliacoes.length ? `<div class="grade-p">${d.avaliacoes.map(cartao).join('')}</div>`
+        : `<div class="vazio-p">Nenhuma avaliação ainda. Toque em <b>➕ Nova avaliação</b>: comece por você e pela sua sócia (ou
+           sócio). Para responder você mesmo, crie sem WhatsApp e toque em <b>↗️ Responder aqui</b>.</div>`}</div>`;
+  $('#btn-acesso').onclick = acesso;
+}
+function htmlTime(d) {
+  if (!d.time.length) return '';
+  return `<div class="bloco"><h3>👥 Time de gestão</h3>
+    <div class="mini suave">A resposta mais recente de cada 👑 sócio e 🧑‍💼 líder (os 🎯 candidatos não entram).</div>
+    <div class="cobertura">${d.cobertura.fatores.map(f => `<div class="${f.d}"><b>${f.emoji} ${esc(f.nome)} forte</b>
+      ${f.quem.length ? esc(f.quem.join(', ')) : '<span class="ninguem">ninguém</span>'}</div>`).join('')}</div>
+    ${d.cobertura.faltam.map(t => `<div class="dica">💡 ${esc(t)}</div>`).join('')}
+    <div class="grade-p">${d.time.map(p => `<div class="pessoa-c"><span class="nm">${esc(p.nome)}</span>
+      <span class="tag-p">${esc(p.papel_nome)}</span><span class="est">${esc(p.estilo)}</span>${barras(p.pct)}
+      <div class="acoes"><button class="btn" data-rel="${p.id}">📄 Relatório</button></div></div>`).join('')}</div></div>`;
+}
+function htmlSocios(d) {
+  if (!d.socios.duplas.length) return '';
+  return `<div class="bloco" id="socios"><h3>🤝 Os sócios juntos</h3>
+    ${d.socios.duplas.map(x => `<div class="dupla"><b>${esc(x.nomes)}:</b> ${esc(x.texto)}</div>`).join('')}
+    ${d.socios.divisao.length ? `<div class="mini suave">Divisão sugerida das áreas da gestão, pelo perfil de cada um (é uma
+      sugestão: experiência e gosto também contam).</div>
+      <table class="tabela"><tr><th>Área</th><th>Quem</th><th>Por quê</th></tr>${d.socios.divisao.map(x =>
+        `<tr><td>${esc(x.area)}</td><td><b>${esc(x.quem)}</b></td><td>${esc(x.porque)}</td></tr>`).join('')}</table>` : ''}</div>`;
+}
+function cartao(a) {
+  return `<div class="pessoa-c" data-id="${a.id}"><span class="nm">${a.icone} ${esc(a.nome)}</span>
+    <span class="tag-p ${esc(a.papel)}">${esc(a.papel_nome)}</span>
+    ${a.pct ? `<span class="est">${esc(a.estilo)}</span>${barras(a.pct)}` : ''}
+    ${a.traz && a.traz.length ? `<span class="mini" style="color:var(--ok);font-weight:700">✨ Traz para a gestão: ${a.traz.map(x => `${x.emoji} ${esc(x.nome)} (${esc(x.curto)})`).join(', ')}</span>` : ''}
+    <span class="mini suave">${esc(a.situacao)} · criada ${esc(a.criado)}</span>
+    <div class="acoes">${a.status === 'respondido' ? `<button class="btn" data-rel="${a.id}">📄 Relatório</button>` : ''}
+      ${a.link ? `<a class="btn" href="${esc(a.link)}" target="_blank" rel="noopener" title="Abre o questionário aqui (para você mesmo responder)">↗️ Responder aqui</a>
+        <button class="btn" data-copiar="${esc(a.link)}">🔗 Copiar link</button>` : ''}
+      ${a.whatsapp ? `<a class="btn" href="${esc(a.whatsapp)}" target="_blank" rel="noopener">💬 WhatsApp</a>` : ''}
+      ${a.pode_lembrar ? `<button class="btn" data-a="lembrar" data-id="${a.id}">🔔 Lembrar</button>` : ''}
+      ${a.pode_agora ? `<button class="btn" data-a="agora" data-id="${a.id}">📤 Mandar de novo</button>` : ''}
+      ${a.pendente ? `<button class="btn perigo" data-a="cancelar" data-id="${a.id}">⛔ Cancelar</button>` : ''}
+      <button class="btn perigo" data-a="apagar" data-id="${a.id}" title="Apaga nome, WhatsApp e respostas">🗑️ Apagar</button></div></div>`;
+}
+async function copiar(texto) {
+  try { await navigator.clipboard.writeText(texto); status('🔗 Link copiado.'); }
+  catch (e) { prompt('Copie o link:', texto); }
+}
+
+// ------------------------------------------------------------------ nova avaliação
+function nova() {
+  const d = S.d;
+  if (d.link_local) { alert('Falta o endereço da internet (📢 Clientes › ⚙️ Ajustes › QR do balcão): sem ele o link não abre no celular.'); return; }
+  const dicas = {socio: 'você, sua sócia ou seu sócio', lider: 'quem já lidera a equipe', candidato: 'quem pode vir a liderar'};
+  abrirModal(`<h3>👔 Nova avaliação de liderança</h3>
+    <label class="campo"><span>Nome</span><input id="nv-nome" maxlength="150" placeholder="Nome completo"></label>
+    <div class="papeis">${d.papeis.map((p, i) => `<label><input type="radio" name="nv-papel" value="${esc(p.chave)}" ${i === 0 ? 'checked' : ''}>
+      ${esc(p.nome)} <small>· ${esc(dicas[p.chave] || '')}</small></label>`).join('')}</div>
+    <div class="grade2">
+      <label class="campo"><span>WhatsApp <span class="mini suave">(opcional)</span></span><input id="nv-tel" inputmode="tel" placeholder="Ex.: 66 99999-1234">
+        <span class="mini suave">Sem WhatsApp: você copia o link ou responde aqui mesmo.</span></label>
+      <label class="campo"><span>Vale até</span><input type="date" id="nv-valido" value="${esc(d.validade_padrao)}" min="${esc(d.hoje)}" max="${esc(d.validade_max)}"></label></div>
+    <div class="botoes"><button class="btn" id="nv-cancelar">Cancelar</button><button class="btn prim" id="nv-criar">Criar</button></div>`, null, true);
+  $('#nv-cancelar').onclick = fecharModal;
+  $('#nv-nome').focus();
+  $('#nv-criar').onclick = async () => {
+    if (!$('#nv-nome').value.trim()) { alert('Escreva o nome.'); return $('#nv-nome').focus(); }
+    const b = $('#nv-criar'); b.disabled = true;
+    try {
+      const r = await api('POST', '/api/gestao/lideranca', {nome: $('#nv-nome').value, telefone: $('#nv-tel').value,
+        papel: (document.querySelector('[name="nv-papel"]:checked') || {}).value, valido_ate: $('#nv-valido').value});
+      abrirModal(`<h3>👔 Pronto!</h3><p id="nv-ok">${esc(r.mensagem)}</p>
+        <label class="campo"><span>Link da avaliação</span><input id="nv-link" readonly value="${esc(r.link)}"></label>
+        <div class="botoes"><button class="btn" id="nv-copiar">🔗 Copiar link</button>
+          <a class="btn prim" id="nv-abrir" href="${esc(r.link)}" target="_blank" rel="noopener">↗️ Responder aqui</a></div>`, null, true);
+      $('#nv-copiar').onclick = () => copiar(r.link);
+      setTimeout(carregar, 1200);
+    } catch (e) { falhou(e); b.disabled = false; }
+  };
+}
+
+// ------------------------------------------------------------------ 🔒 quem pode ver
+function acesso() {
+  const d = S.d, eu = BASE.usuario && BASE.usuario.id;
+  abrirModal(`<h3>🔒 Quem pode ver a 👔 Liderança</h3>
+    <p class="mini">Marque quem pode abrir esta página (os relatórios dos sócios e dos líderes ficam aqui). Sem ninguém marcado,
+      qualquer gestor vê. Você precisa estar marcado.</p>
+    <div class="lista-g">${d.acesso.gestores.map(g => `<label><input type="checkbox" value="${g.id}" ${d.acesso.ids.includes(g.id) || (!d.acesso.restrito && g.id === eu) ? 'checked' : ''}>
+      ${esc(g.nome)}${g.id === eu ? ' <span class="mini suave">(você)</span>' : ''}</label>`).join('')}</div>
+    <div class="botoes"><button class="btn" id="ac-todos">Liberar para todos os gestores</button><button class="btn prim" id="ac-gravar">💾 Gravar</button></div>`, null, true);
+  const gravar = async ids => {
+    try { const r = await api('POST', '/api/gestao/lideranca/acesso', {ids}); status(r.mensagem); fecharModal(); await carregar(); }
+    catch (e) { falhou(e); }
+  };
+  $('#ac-gravar').onclick = () => gravar([...document.querySelectorAll('.lista-g input:checked')].map(x => +x.value));
+  $('#ac-todos').onclick = () => { if (confirm('Liberar a 👔 Liderança para qualquer gestor?')) gravar([]); };
+}
+
+document.addEventListener('click', async e => {
+  const cp = e.target.closest('[data-copiar]'); if (cp) return copiar(cp.dataset.copiar);
+  const rel = e.target.closest('[data-rel]'); if (rel) { e.preventDefault(); return relatorio(+rel.dataset.rel); }
+  const b = e.target.closest('[data-a]'); if (!b) return;
+  const acao = b.dataset.a;
+  if (acao === 'cancelar' && !confirm('Cancelar esta avaliação? O link deixa de funcionar.')) return;
+  if (acao === 'apagar' && !confirm('Apagar esta avaliação? Some o nome, o WhatsApp e as respostas. Não dá para desfazer.')) return;
+  b.disabled = true;
+  try { const r = await api('POST', `/api/gestao/lideranca/${b.dataset.id}/${acao}`); status(r.mensagem); setTimeout(carregar, 1200); }
+  catch (er) { falhou(er); b.disabled = false; }
+});
+
+// ------------------------------------------------------------------ relatório de gestão
+async function relatorio(id) {
+  let d;
+  try { d = await api('GET', `/api/gestao/lideranca/${id}`); } catch (e) { return falhou(e); }
+  const lista = (tit, itens, larga) => `<div class="secao ${larga ? 'larga' : ''}"><h4>${tit}</h4><ul>${itens.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>`;
+  const texto = (tit, t, larga) => `<div class="secao ${larga ? 'larga' : ''}"><h4>${tit}</h4><p>${esc(t)}</p></div>`;
+  abrirModal(`<div class="rel-topo"><h3 style="margin:0">👔 ${esc(d.nome)} <span class="mini suave">· ${esc(d.papel_nome)}</span></h3>
+      <div class="rel-estilo" id="r-estilo">${esc(d.estilo)}</div>
+      <div class="mini suave">${esc(d.perfil_nome)} · respondeu ${esc(d.respondido)}${d.anteriores.length ? ` · antes: ${d.anteriores.map(a =>
+        `<a href="#" data-rel="${a.id}">${esc(a.estilo)} (${esc(a.respondido)})</a>`).join(', ')}` : ''}</div></div>
+    <div style="margin:10px 0">${barras(d.pct)}</div>
+    <div>${esc(d.resumo)}</div>
+    ${d.candidato && d.traz && d.traz.length ? `<div class="dica" style="margin-top:8px;background:#e6f4ea;color:#14532d">✨ Traz para a gestão o que
+      falta: ${d.traz.map(x => `${x.emoji} ${esc(x.nome)} (${esc(x.curto)})`).join(', ')}</div>` : ''}
+    <div class="secoes">
+      ${lista('💪 Pontos fortes na gestão', d.fortes)}${lista('⚠️ Riscos e pontos cegos', d.riscos)}
+      ${texto('🧠 Como decide', d.decide)}${texto('🔥 Sob pressão', d.pressao)}
+      ${lista('🤲 Como delega e acompanha', d.delega)}${lista('💬 Como se comunica com a equipe', d.comunica)}
+      ${texto('⚔️ Em conflitos', d.conflito)}${texto('🤝 Precisa ao lado', d.precisa)}
+      <div class="secao larga"><h4>📊 Áreas da gestão <span class="mini suave">(todas, com o porquê)</span></h4>
+        ${['combina', 'pode', 'menos'].map(n => {
+          const as = d.areas.filter(a => a.nivel === n);
+          return as.length ? `<div class="nivel-f ${n}"><b>${esc(as[0].nivel_nome)}</b><ul>${as.map(a => `<li><b>${esc(a.area)}</b>: ${esc(a.porque)}</li>`).join('')}</ul></div>` : '';
+        }).join('')}</div>
+      ${d.com_time.length ? `<div class="secao larga"><h4>🔗 Com o time de gestão</h4>${d.com_time.map(x =>
+        `<p style="margin-bottom:6px"><b>${esc(x.nomes)}</b> <span class="mini suave">(${esc(x.papel_nome)})</span>: ${esc(x.texto)}</p>`).join('')}</div>` : ''}
+      ${lista('🌱 Para se desenvolver', d.desenvolver)}${lista('🙋 Como trabalhar com essa pessoa', d.trabalhar)}
+    </div>
+    <div class="botoes" style="margin-top:10px"><button class="btn" id="r-imprimir">🖨️ Imprimir</button></div>
+    <div class="aviso-uso">Ferramenta de orientação (questionário próprio, baseado na teoria DISC): use para conversar, dividir
+      responsabilidades e desenvolver a liderança, não como rótulo nem para decidir sozinho${d.candidato ? ' — com o candidato, junto com a entrevista e a experiência' : ''}.
+      Dado pessoal: fica só com quem pode ver esta página.</div>`);
+  $('#r-imprimir').onclick = () => window.print();
+}
+{% endblock %}

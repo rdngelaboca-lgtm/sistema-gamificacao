@@ -192,6 +192,8 @@ CAMINHOS_LIBERADOS_NA_INTERNET += ('/confirmar/', '/vaga/', '/api/presenca/')
 CAMINHOS_LIBERADOS_NA_INTERNET += ('/comunicado/', '/api/comunicado/')
 # [PERFIL DISC] O link da avaliação de perfil: só a página do link, que não abre sem o código secreto.
 CAMINHOS_LIBERADOS_NA_INTERNET += ('/perfil/', '/api/perfil/')
+# [LIDERANÇA] O link da avaliação de liderança (sócios e líderes): só a página do link, que não abre sem o código secreto.
+CAMINHOS_LIBERADOS_NA_INTERNET += ('/lideranca/', '/api/lideranca/')
 # [TRABALHE CONOSCO] Página pública do link da bio do Instagram: cadastro do candidato (só cria, não mostra ninguém).
 CAMINHOS_LIBERADOS_NA_INTERNET += ('/trabalhe-conosco', '/api/trabalhe-conosco')
 
@@ -3177,6 +3179,64 @@ def api_perfil_disc(token):
         return _resposta_perfil(lambda: perfil_disc.ver(token))
     dados = ler_json() or {}
     return _resposta_perfil(lambda: perfil_disc.responder(token, dados))
+
+
+# ---------------- [LIDERANÇA] 👔 avaliação de liderança (sócios e líderes) — à parte do 🧭 Perfil da equipe ----------------
+@app.route('/gestao/lideranca')
+def pagina_gestao_lideranca():
+    return _pagina_gestao('gestao_lideranca.html', 'lideranca')
+
+
+@app.route('/api/gestao/lideranca', methods=['GET', 'POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_lideranca(usuario):
+    import perfil_lideranca
+    if request.method == 'GET':
+        return _resposta_perfil(lambda: perfil_lideranca.painel(usuario))
+    dados = ler_json() or {}
+    return _resposta_perfil(lambda: perfil_lideranca.criar(dados, usuario))
+
+
+@app.route('/api/gestao/lideranca/acesso', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_lideranca_acesso(usuario):
+    import perfil_lideranca
+    dados = ler_json() or {}
+    return _resposta_perfil(lambda: perfil_lideranca.salvar_acesso(dados.get('ids'), usuario))
+
+
+@app.route('/api/gestao/lideranca/<int:avaliacao_id>', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_lideranca_detalhe(usuario, avaliacao_id):
+    import perfil_lideranca
+    return _resposta_perfil(lambda: perfil_lideranca.detalhe(avaliacao_id, usuario))
+
+
+@app.route('/api/gestao/lideranca/<int:avaliacao_id>/<acao>', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_lideranca_acao(usuario, avaliacao_id, acao):
+    import perfil_lideranca
+    if acao not in ('lembrar', 'agora', 'cancelar', 'apagar'):
+        return jsonify({"erro": "Não encontrado."}), 404
+    return _resposta_perfil(lambda: perfil_lideranca.acao(avaliacao_id, acao, usuario))
+
+
+# Página PÚBLICA do link da avaliação de liderança (sem login: o código secreto do link é a chave).
+@app.route('/lideranca/<token>')
+def pagina_lideranca(token):
+    resposta = app.make_response(render_template('perfil_lideranca.html'))
+    resposta.headers['Cache-Control'] = 'no-store'
+    resposta.headers['Referrer-Policy'] = 'no-referrer'
+    return resposta
+
+
+@app.route('/api/lideranca/<token>', methods=['GET', 'POST'])
+def api_lideranca(token):
+    import perfil_lideranca
+    if request.method == 'GET':
+        return _resposta_perfil(lambda: perfil_lideranca.ver(token))
+    dados = ler_json() or {}
+    return _resposta_perfil(lambda: perfil_lideranca.responder(token, dados))
 
 
 if __name__ == "__main__":
