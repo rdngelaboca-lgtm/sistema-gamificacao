@@ -823,12 +823,20 @@ def _rotulos(opcoes, guardado):
     return [{'chave': c, 'nome': nomes[c]} for c in str(guardado or '').split(',') if c in nomes]
 
 
+def _forte(p, d):
+    """
+    [DEPURAÇÃO 3] O fator é forte na pessoa: 30% ou mais, ou faz parte do perfil dela. Antes só valia o 30%: o cartão
+    mostrava '🟢 Estável + 🔵 Conforme' (o segundo fator entra no perfil a partir de 27%) e a dica dizia 'Ninguém com C forte'.
+    """
+    return p['pct'][d] >= 30 or d in (p.get('perfil') or '')
+
+
 def _o_que_completa(pct, equipe):
     """Os fatores fortes do candidato (30% ou mais) que ninguém da equipe tem forte: o que ele traz de novo."""
     if not equipe:
         return []
     return [{'d': d, 'nome': NOMES[d], 'emoji': EMOJI[d], 'curto': TEXTOS[d]['curto']}
-            for d in DIMS if pct[d] >= 30 and not any(p['pct'][d] >= 30 for p in equipe)]
+            for d in DIMS if pct[d] >= 30 and not any(_forte(p, d) for p in equipe)]
 
 
 def _por_setor(lista, n=3):
@@ -865,7 +873,7 @@ def _resumo_equipe(equipe):
     if not equipe:
         return {'contagem': {d: 0 for d in DIMS}, 'dicas': [], 'por_setor': []}
     contagem = {d: sum(1 for p in equipe if p['perfil'][0] == d) for d in DIMS}
-    dicas = [FALTA_NA_EQUIPE[d] for d in DIMS if not any(p['pct'][d] >= 30 for p in equipe)]
+    dicas = [FALTA_NA_EQUIPE[d] for d in DIMS if not any(_forte(p, d) for p in equipe)]
     maior = max(DIMS, key=lambda d: contagem[d])
     if len(equipe) >= 3 and contagem[maior] / len(equipe) > .5:
         dicas.append(f"Mais da metade da equipe é {EMOJI[maior]} {NOMES[maior]} ({TEXTOS[maior]['curto']}). "
@@ -1371,7 +1379,10 @@ def vincular(aid, funcionario_id, usuario):
     novo. Marca a etapa ✅ Contratado. Vazio desfaz o vínculo. O processo seletivo continua guardado.
     """
     garantir_tabelas()
-    fid = int(funcionario_id) if str(funcionario_id or '').strip() not in ('', '0', 'None') else None
+    try:
+        fid = int(funcionario_id) if str(funcionario_id or '').strip() not in ('', '0', 'None') else None
+    except (TypeError, ValueError):                      # [DEPURAÇÃO 3] antes: erro 500 sem explicação
+        raise ErroPerfil("Escolha o fixo na lista. Atualize a página.")
     cadastro = {int(f.FuncionarioID): f.NomeCompleto for f in database.listar_funcionarios()}
     if fid and fid not in cadastro:
         raise ErroPerfil("Esse fixo não está mais no cadastro. Atualize a página.", 409)

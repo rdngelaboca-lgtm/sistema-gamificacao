@@ -1101,6 +1101,7 @@ def lancar_faturamento(data_txt, valor_txt, usuario, hoje=None, em_segundo_plano
         threading.Thread(target=premiar, daemon=True).start()
     else:
         premiar()
+    _cache_hist.clear()                  # [DEPURAÇÃO 3] a dica da Escala recalcula com este faturamento (antes: até 10 min depois)
     logger.info(f"Faturamento de {d} lançado pela Web: R$ {v} (antes: {antes}) na meta {meta_id[1]} "
                 f"por {(usuario or {}).get('nome')}.")
     resultado = None

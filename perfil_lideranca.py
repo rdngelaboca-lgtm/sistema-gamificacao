@@ -31,6 +31,7 @@ SEGUNDO_PLANO = True                 # os testes desligam para conferir na hora
 PAPEIS = [('socio', '👑 Sócio(a) / dono(a)'), ('lider', '🧑‍💼 Líder da equipe'), ('candidato', '🎯 Candidato(a) a líder')]
 PAPEL_CANDIDATO = 'candidato'
 FORTE = 30                           # fator "forte" (a média é 25%)
+ERRO_INTERROMPIDO = "o envio foi interrompido no meio (o servidor reiniciou)"
 
 # As 24 situações da gestão: o que a pessoa faria (uma frase de cada fator, a ordem muda em cada uma)
 SITUACOES = [
@@ -527,7 +528,7 @@ def _cobertura(time_):
     if not time_:
         return {'fatores': [], 'faltam': []}
     fatores = [{'d': d, 'nome': NOMES[d], 'emoji': EMOJI[d],
-                'quem': [CE._primeiro_nome(p['nome']) for p in time_ if p['pct'][d] >= FORTE]} for d in DIMS]
+                'quem': [CE._primeiro_nome(p['nome']) for p in time_ if _forte(p, d)]} for d in DIMS]
     return {'fatores': fatores, 'faltam': [FALTA_NA_GESTAO[f['d']] for f in fatores if not f['quem']]}
 
 
@@ -536,7 +537,12 @@ def _traz(pct, time_):
     if not time_:
         return []
     return [{'d': d, 'nome': NOMES[d], 'emoji': EMOJI[d], 'curto': TEXTOS[d]['curto']}
-            for d in DIMS if pct[d] >= FORTE and not any(p['pct'][d] >= FORTE for p in time_)]
+            for d in DIMS if pct[d] >= FORTE and not any(_forte(p, d) for p in time_)]
+
+
+def _forte(p, d):
+    """[DEPURAÇÃO 3] Forte = FORTE% ou mais, ou parte do perfil (o '+ 🔵 Conforme' do cartão entra a partir de 27%)."""
+    return p['pct'][d] >= FORTE or d in (p.get('perfil') or '')
 
 
 # ------------------------------------------------------------------------------
@@ -647,8 +653,9 @@ def _acertar(cur, agora):
     """Expira o que passou do prazo sem ser enviado e devolve à fila o envio que travou."""
     cur.execute("UPDATE AvaliacoesLideranca SET Status = ? WHERE Status IN (?, ?) AND ValidoAte < ?",
                 P.ST_EXPIRADO, P.ST_AGUARDANDO, P.ST_FALHOU, agora.date())
-    cur.execute("UPDATE AvaliacoesLideranca SET Status = ? WHERE Status = ? AND EnviadoEm < ?",
-                P.ST_FALHOU, P.ST_ENVIANDO, agora - timedelta(minutes=CE.ENVIANDO_PRESO_MIN))
+    # [DEPURAÇÃO 3] com o motivo: antes ficava 'WhatsApp falhou: ?' (ou o erro de uma tentativa antiga)
+    cur.execute("UPDATE AvaliacoesLideranca SET Status = ?, Erro = ? WHERE Status = ? AND EnviadoEm < ?",
+                P.ST_FALHOU, ERRO_INTERROMPIDO, P.ST_ENVIANDO, agora - timedelta(minutes=CE.ENVIANDO_PRESO_MIN))
 
 
 # ------------------------------------------------------------------------------

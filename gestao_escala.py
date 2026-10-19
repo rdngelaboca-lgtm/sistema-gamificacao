@@ -495,11 +495,16 @@ def salvar_turno(dados, usuario):
         perguntas.append({'chave': 'jornada', 'titulo': "Jornada longa",
                           'texto': "\n".join(avisos) + "\n\nSalvar mesmo assim?"})
     if escala_id and 'pago' not in confirmados and database.turnos_pagos([escala_id]):
-        perguntas.append({'chave': 'pago', 'titulo': "Turno já pago", 'texto': (
-            "Este turno de freelancer já foi marcado como PAGO.\n\n"
-            "Mudar a escala NÃO altera o valor pago (fica registrado como foi pago).\n"
-            "Se precisar refazer o valor, use '💰 Pagamentos' → '↩️ Desfazer pagamento'.\n\n"
-            "Salvar a alteração na escala mesmo assim?")})
+        if pessoa_mudou:                 # [DEPURAÇÃO 3] o pagamento fica com quem recebeu; quem entra fica A PAGAR
+            texto_pago = (f"Este turno já foi PAGO para {turno_antigo.NomePessoa or '?'}.\n\n"
+                          f"O pagamento de {turno_antigo.NomePessoa or '?'} continua registrado em '💰 Pagamentos' (como "
+                          f"'turno excluído') e {nome_pessoa} fica com o turno A PAGAR.\n\nSalvar a troca mesmo assim?")
+        else:
+            texto_pago = ("Este turno de freelancer já foi marcado como PAGO.\n\n"
+                          "Mudar a escala NÃO altera o valor pago (fica registrado como foi pago).\n"
+                          "Se precisar refazer o valor, use '💰 Pagamentos' → '↩️ Desfazer pagamento'.\n\n"
+                          "Salvar a alteração na escala mesmo assim?")
+        perguntas.append({'chave': 'pago', 'titulo': "Turno já pago", 'texto': texto_pago})
     if perguntas:
         return {'perguntas': perguntas}
 

@@ -11746,6 +11746,20 @@ def listar_funcionarios_por_tarefa(tarefa_id):
     # '_, disponiveis = ...' e quebrava quando o banco estava fora do ar.
     return [], []
 
+def _soltar_pagamento_do_turno(cursor, escala_id):
+    """
+    [DEPURAÇÃO 3] O freelancer do turno mudou. Antes o pagamento ficava preso ao turno (EscalaID): quem entrou no lugar
+    nunca aparecia para pagar (o turno já estava 'pago') ou herdava o horário real e o ajuste do anterior, e ao pagar
+    ficava com o FreelancerID antigo (o recibo ia para o WhatsApp de quem saiu). Agora o que já foi PAGO continua
+    registrado para quem recebeu (em 💰 Pagamentos aparece como 'turno excluído') e a correção pendente do anterior some.
+    """
+    cursor.execute("SELECT 1 FROM sys.tables WHERE name = 'PagamentosFreelancer'")
+    if not cursor.fetchone():
+        return
+    cursor.execute("UPDATE PagamentosFreelancer SET EscalaID = NULL WHERE EscalaID = ? AND Pago = 1", escala_id)
+    cursor.execute("DELETE FROM PagamentosFreelancer WHERE EscalaID = ? AND Pago = 0", escala_id)
+
+
 def salvar_escala_dia_v3(escala_id, data, pos_id, func_id, free_id, h_ent, h_sai, h_int_ini, h_int_fim, foco):
     """
     (VERSÃO V3 - CRUD EXPLÍCITO)
@@ -11774,6 +11788,11 @@ def salvar_escala_dia_v3(escala_id, data, pos_id, func_id, free_id, h_ent, h_sai
                 return False # Conflito detectado!
 
             if escala_id:
+                # [DEPURAÇÃO 3] trocou o FREELANCER do turno: o pagamento (ou a correção pendente) era de quem estava antes
+                cursor.execute("SELECT FreelancerID FROM EscalaDiaria WHERE EscalaID = ?", escala_id)
+                antes = cursor.fetchone()
+                if antes and antes[0] is not None and (free_id is None or int(antes[0]) != int(free_id)):
+                    _soltar_pagamento_do_turno(cursor, escala_id)
                 # UPDATE
                 sql = """
                     UPDATE EscalaDiaria SET 
@@ -12584,8 +12603,8 @@ def marcar_pagamentos_pagos(escala_ids, data_pagamento=None, forma_pagamento='',
                 cursor.execute("UPDATE PagamentosFreelancer SET EntradaEscala = ?, SaidaEscala = ?, TipoDiaria = ?, TipoDia = ?, "
                                "Horas = ?, HorasExtras = ?, ValorDiaria = ?, ValorHoraExtra = ?, ValorExtras = ?, ValorTotal = ?, "
                                "Pago = 1, DataPagamento = ?, FormaPagamento = ?, Ajuste = ?, Observacao = ?, NomeFreelancer = ?, "
-                               "NomePosicao = ?, AtualizadoEm = GETDATE() WHERE PagamentoID = ?",
-                               *valores, calc['Ajuste'], obs, nome, posicao, s[0])
+                               "FreelancerID = ?, NomePosicao = ?, AtualizadoEm = GETDATE() WHERE PagamentoID = ?",
+                               *valores, calc['Ajuste'], obs, nome, fid, posicao, s[0])   # [DEPURAÇÃO 3] quem está no turno AGORA
             else:
                 cursor.execute("INSERT INTO PagamentosFreelancer (EntradaEscala, SaidaEscala, TipoDiaria, TipoDia, Horas, "
                                "HorasExtras, ValorDiaria, ValorHoraExtra, ValorExtras, ValorTotal, DataPagamento, FormaPagamento, "

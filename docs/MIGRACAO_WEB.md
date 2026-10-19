@@ -161,6 +161,18 @@ clique duplo no Copiar não duplica; WhatsApp não manda "None às None" e o aco
 quando a rede cai; trocar freelancer por funcionário apaga a diária curta/longa; a página se atualiza
 ao voltar para a aba.
 
+**Depuração 3 (19/10/2026) — Escala, freelancers, pagamentos, folha, avisos, clientes, comunicados, perfil e
+liderança.** Robô passou nas 120 rotas da Gestão e das páginas públicas com dados certos, vazios e errados.
+- Trocar o **freelancer** de um turno (Web, PC e escala fixa): o que já foi PAGO fica registrado para quem recebeu
+  (💰 Pagamentos: "turno excluído") e quem entrou fica A PAGAR; a correção pendente (horário real, ajuste) do
+  anterior não passa para o novo; ao pagar, o pagamento fica com o freelancer que está no turno (o recibo vai
+  para o WhatsApp certo). A pergunta "Turno já pago" da Web diz quem fica a pagar.
+- 🧭 Perfil e 👔 Liderança: fator "forte" = 30% ou mais **ou** parte do perfil do cartão (o "+ 🔵 Conforme" entra
+  com 27%): a dica "Ninguém com C forte" não aparece mais com alguém 🟢 Estável + 🔵 Conforme na equipe; o
+  "Traz para a equipe" do candidato segue a mesma regra. Vincular com cadastro inválido responde em vez de erro 500.
+- 👔 Liderança: envio de WhatsApp interrompido no meio mostra o motivo (antes "WhatsApp falhou: ?").
+- Folha: lançar o faturamento atualiza na hora a dica de dias parecidos da Escala (antes até 10 minutos depois).
+
 **Depuração do mapa (13/10/2026) — posições encavaladas / fora da planta.** As posições eram guardadas em
 proporção da *área do mapa da janela do programa do PC*, mas a planta tem tamanho fixo (1180 × 600). Abrir
 o programa maximizado regravava esse tamanho e todas as bolinhas saíam do lugar (na Web e no PC). Correção:
