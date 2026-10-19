@@ -388,6 +388,15 @@ quando alguém responde (desliga em 📣 Avisos › 🧭 Perfil da equipe). Ques
 Arquivos: `perfil_disc.py`, `templates/gestao_perfil.html`, `templates/perfil_disc.html`; tabela `AvaliacoesDisc`
 (criada sozinha na primeira vez; guarda os fatores escolhidos em cada grupo).
 
+**🔗 Contratado → cadastro do fixo:** no card do candidato em ✅ Contratado aparece "Vincular ao cadastro do fixo" (já vem
+sugerido o fixo do mesmo WhatsApp ou do mesmo nome). A avaliação dele passa a valer como o perfil do fixo em 👥 Equipe e no
+📤 envio (não entra em "quem ainda não fez"), sem responder de novo e sem apagar o processo seletivo (coluna
+`VinculoFuncionarioID`; "desfazer" no card). Se o fixo responder outra avaliação depois, vale a mais nova.
+**📅 Freelancers escolhidos:** a janela 📤 Enviar avaliação tem 👥 Fixos e 📅 Freelancers (nenhum freelancer vem marcado: você
+escolhe). O link vai no turno do freelancer (igual aos comunicados; 📤 Agora manda na hora), **sem pontos** (não está na
+gamificação). Na 👥 Equipe aparecem os "📅 Freelancers avaliados" (fora da contagem dos fixos) e uma coluna 📅 Freelancers nas
+sugestões para a escala (colunas `Tipo = 'free'` e `FreelancerID`).
+
 ### Novo (só na Web) — 👔 Liderança: sócios e líderes (10/2026: Gestão › 👔 Liderança)
 
 Avaliação de perfil no nível da **gestão**, **à parte** do 🧭 Perfil da equipe (que não mudou em nada): módulo

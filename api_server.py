@@ -3100,6 +3100,15 @@ def api_gestao_perfil_etapa(usuario, avaliacao_id):
     return _resposta_perfil(lambda: perfil_disc.definir_etapa(avaliacao_id, str(dados.get('etapa') or ''), usuario))
 
 
+@app.route('/api/gestao/perfil/<int:avaliacao_id>/vincular', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_perfil_vincular(usuario, avaliacao_id):
+    # 🔗 candidato contratado: a avaliação vale como o perfil do fixo (vazio desfaz)
+    import perfil_disc
+    dados = ler_json() or {}
+    return _resposta_perfil(lambda: perfil_disc.vincular(avaliacao_id, dados.get('funcionario_id'), usuario))
+
+
 @app.route('/api/gestao/perfil/<int:avaliacao_id>/tipo-vaga', methods=['POST'])
 @compras_login(somente_gestor=True)
 def api_gestao_perfil_tipo_vaga(usuario, avaliacao_id):

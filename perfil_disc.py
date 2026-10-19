@@ -14,6 +14,8 @@
 # equipe, não um teste certificado: não serve sozinho para contratar ou demitir.
 # Dado pessoal (LGPD): só a gestão vê o relatório; a página do link explica para que serve.
 # 🪪 CPF e data de nascimento do candidato: só aparecem num botão da gestão (nunca no aviso do grupo nem no log).
+# 🔗 Candidato contratado: a avaliação dele pode ser VINCULADA ao cadastro do fixo e vale como o perfil dele na 👥 Equipe.
+# 📅 Freelancers escolhidos também podem receber (no turno de cada um, igual aos comunicados; sem pontos).
 # ==============================================================================
 import html
 import json
@@ -40,6 +42,7 @@ ST_FALHOU, ST_EXPIRADO, ST_SEM_TEL, ST_CANCELADO = 'falhou', 'expirado', 'sem_te
 VALIDADE_PADRAO_DIAS, VALIDADE_MAX_DIAS = 7, 30
 SEGUNDO_PLANO = True           # os testes desligam para conferir na hora
 TIPO_FUNC, TIPO_CAND = 'func', 'candidato'   # fixo do cadastro · candidato do processo seletivo
+TIPO_FREE = 'free'                            # 📅 freelancer (FreelancerID; FuncionarioID fica 0)
 
 # 📸 Trabalhe conosco (página pública do Instagram): áreas, disponibilidade e etapas do candidato
 AREAS = [('atendimento', '🍦 Atendimento'), ('cozinha', '👩‍🍳 Cozinha'), ('zeladoria', '🧹 Zeladoria (limpeza)'),
@@ -290,7 +293,8 @@ def garantir_tabelas():
         # 📸 Trabalhe conosco: os dados que o candidato preenche e a etapa dele no processo seletivo
         for coluna, tipo in (('Origem', 'VARCHAR(10)'), ('Areas', 'VARCHAR(100)'), ('Idade', 'INT'), ('Bairro', 'NVARCHAR(100)'),
                              ('Disponibilidade', 'VARCHAR(60)'), ('Experiencia', 'NVARCHAR(600)'), ('Etapa', 'VARCHAR(12)'),
-                             ('AceiteEm', 'DATETIME'), ('TipoVaga', 'VARCHAR(10)'), ('Cpf', 'VARCHAR(11)'), ('Nascimento', 'DATE')):
+                             ('AceiteEm', 'DATETIME'), ('TipoVaga', 'VARCHAR(10)'), ('Cpf', 'VARCHAR(11)'), ('Nascimento', 'DATE'),
+                             ('FreelancerID', 'INT'), ('VinculoFuncionarioID', 'INT')):
             cur.execute(f"IF COL_LENGTH('AvaliacoesDisc', '{coluna}') IS NULL ALTER TABLE AvaliacoesDisc ADD {coluna} {tipo} NULL")
         conn.commit()
         _tabelas_ok = True
@@ -405,13 +409,27 @@ def resumo_pessoa(pct, perfil):
 # ------------------------------------------------------------------------------
 # Quem pode receber (só fixos)
 # ------------------------------------------------------------------------------
-def _ultimas_por_pessoa(cur):
-    """{FuncionarioID: linha da avaliação mais recente}."""
-    cur.execute("""SELECT AvaliacaoID, FuncionarioID, Status, RespondidoEm, Perfil, PctD, PctI, PctS, PctC, CriadoEm
-                   FROM AvaliacoesDisc WHERE ISNULL(Tipo, ?) = ? ORDER BY AvaliacaoID""", TIPO_FUNC, TIPO_FUNC)
+def _ultimas_por_pessoa(cur, tipo=TIPO_FUNC):
+    """
+    ({id: avaliação mais recente}, {id: respondida mais recente}). Fixo (id = FuncionarioID): a respondida também pode ser
+    a do 🔗 processo seletivo vinculada ao cadastro. Freelancer (id = FreelancerID).
+    """
+    if tipo == TIPO_FREE:
+        cur.execute("""SELECT AvaliacaoID, FreelancerID, Status, RespondidoEm, Perfil, PctD, PctI, PctS, PctC, CriadoEm
+                       FROM AvaliacoesDisc WHERE Tipo = ? AND FreelancerID IS NOT NULL ORDER BY AvaliacaoID""", TIPO_FREE)
+        linhas, vinculadas = cur.fetchall(), []
+    else:
+        cur.execute("""SELECT AvaliacaoID, FuncionarioID, Status, RespondidoEm, Perfil, PctD, PctI, PctS, PctC, CriadoEm
+                       FROM AvaliacoesDisc WHERE ISNULL(Tipo, ?) = ? ORDER BY AvaliacaoID""", TIPO_FUNC, TIPO_FUNC)
+        linhas = cur.fetchall()
+        cur.execute("""SELECT AvaliacaoID, VinculoFuncionarioID, Status, RespondidoEm, Perfil, PctD, PctI, PctS, PctC, CriadoEm
+                       FROM AvaliacoesDisc WHERE Tipo = ? AND VinculoFuncionarioID IS NOT NULL AND Status = ?""",
+                    TIPO_CAND, ST_RESPONDIDO)
+        vinculadas = cur.fetchall()
     ult, resp = {}, {}
-    for r in cur.fetchall():
-        ult[int(r[1])] = r
+    for r, vinculada in sorted([(r, False) for r in linhas] + [(r, True) for r in vinculadas], key=lambda x: int(x[0][0])):
+        if not vinculada:                                 # a vinculada não conta como "esperando resposta"
+            ult[int(r[1])] = r
         if r[2] == ST_RESPONDIDO:
             resp[int(r[1])] = r
     return ult, resp
@@ -423,16 +441,18 @@ def pessoas(agora=None):
     base = CE.pessoas(agora)                               # mesma lista dos comunicados (turno, WhatsApp, dias)
     conn = _conexao()
     try:
-        ult, resp = _ultimas_por_pessoa(conn.cursor())
+        cur = conn.cursor()
+        por_tipo = {TIPO_FUNC: _ultimas_por_pessoa(cur), TIPO_FREE: _ultimas_por_pessoa(cur, TIPO_FREE)}
     finally:
         conn.close()
     saida = []
     for p in base['pessoas']:
-        if p['tipo'] != 'func':
+        if p['tipo'] not in por_tipo:
             continue
-        fid = int(p['id'].split(':')[1])
-        u, r = ult.get(fid), resp.get(fid)
-        p = dict(p, id=fid,
+        pid = int(p['id'].split(':')[1])
+        ult, resp = por_tipo[p['tipo']]
+        u, r = ult.get(pid), resp.get(pid)
+        p = dict(p,
                  perfil=(r[4] if r else ''), perfil_nome=(nome_perfil(r[4]) if r else ''),
                  respondido_em=(CE._quando(r[3]) if r else ''),
                  pendente=bool(u and u[2] in (ST_AGUARDANDO, ST_ENVIANDO, ST_ENVIADO, ST_FALHOU)))
@@ -468,7 +488,7 @@ def enviar(dados, usuario, agora=None):
     if not isinstance(ids, list) or not ids:
         raise ErroPerfil("Escolha quem vai receber.")
     try:
-        ids = list(dict.fromkeys(int(str(i).split(':')[-1]) for i in ids))
+        ids = list(dict.fromkeys(_chave_pessoa(i) for i in ids))
     except ValueError:
         raise ErroPerfil("Pessoa inválida na lista. Atualize a página.")
     try:
@@ -481,24 +501,29 @@ def enviar(dados, usuario, agora=None):
         raise ErroPerfil(f"Pontos demais (máximo {CE.PONTOS_MAX:,}).".replace(',', '.'))
     valido = _validade(dados, agora)
     _exigir_endereco()
-    cadastro = {int(f.FuncionarioID): (f.NomeCompleto, getattr(f, 'TelefoneWhatsApp', None)) for f in database.listar_funcionarios()}
+    cadastro = {(TIPO_FUNC, int(f.FuncionarioID)): (f.NomeCompleto, getattr(f, 'TelefoneWhatsApp', None))
+                for f in database.listar_funcionarios()}
+    cadastro.update({(TIPO_FREE, int(f.FreelancerID)): (f.Nome, getattr(f, 'Telefone', None)) for f in database.listar_freelancers()})
     if any(i not in cadastro for i in ids):
         raise ErroPerfil("Alguém da lista não está mais no cadastro. Atualize a página.", 409)
     conn = _conexao()
     try:
         cur = conn.cursor()
-        ult, _ = _ultimas_por_pessoa(cur)
-        repetidos = [cadastro[i][0] for i in ids if ult.get(i) and ult[i][2] in (ST_AGUARDANDO, ST_ENVIANDO, ST_ENVIADO, ST_FALHOU)]
+        ultimas = {TIPO_FUNC: _ultimas_por_pessoa(cur)[0], TIPO_FREE: _ultimas_por_pessoa(cur, TIPO_FREE)[0]}
+        repetidos = [cadastro[i][0] for i in ids if ultimas[i[0]].get(i[1]) and ultimas[i[0]][i[1]][2] in
+                     (ST_AGUARDANDO, ST_ENVIANDO, ST_ENVIADO, ST_FALHOU)]
         if repetidos:
             raise ErroPerfil(f"Já tem avaliação esperando resposta de: {', '.join(repetidos)}. Use 🔔 Lembrar ou ⛔ Cancelar "
                              "a anterior.", 409)
-        for i in ids:
-            nome, tel = cadastro[i]
+        for tipo, pid in ids:
+            nome, tel = cadastro[(tipo, pid)]
             cur.execute("""INSERT INTO AvaliacoesDisc (FuncionarioID, Nome, Telefone, Token, Status, Pontos, CriadoPor, CriadoEm,
-                                                       ValidoAte, Versao, Tipo)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                        i, nome, tel, CE._token(), ST_AGUARDANDO if CE.R.numero_whatsapp(tel) else ST_SEM_TEL,
-                        pontos, usuario.get('nome'), agora, valido, VERSAO, TIPO_FUNC)
+                                                       ValidoAte, Versao, Tipo, FreelancerID)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        pid if tipo == TIPO_FUNC else 0, nome, tel, CE._token(),
+                        ST_AGUARDANDO if CE.R.numero_whatsapp(tel) else ST_SEM_TEL,
+                        pontos if tipo == TIPO_FUNC else 0, usuario.get('nome'), agora, valido, VERSAO, tipo,
+                        pid if tipo == TIPO_FREE else None)
         conn.commit()
     except Exception:
         conn.rollback()
@@ -507,10 +532,12 @@ def enviar(dados, usuario, agora=None):
         conn.close()
     logger.info(f"[PERFIL DISC] {usuario.get('nome')} enviou a avaliação para {len(ids)} pessoa(s).")
     no_turno = CE._quem_trabalha_agora(agora)
-    ja = [i for i in ids if ('func', i) in no_turno and CE.R.numero_whatsapp(cadastro[i][1])]
+    ja = [i for i in ids if i in no_turno and CE.R.numero_whatsapp(cadastro[i][1])]
     sem_tel = sum(1 for i in ids if not CE.R.numero_whatsapp(cadastro[i][1]))
+    freelas = sum(1 for i in ids if i[0] == TIPO_FREE)
     _rodar(lambda: processar(agora=agora))
-    partes = [f"🧭 Avaliação enviada para {len(ids)} pessoa(s)."]
+    partes = [f"🧭 Avaliação enviada para {len(ids)} pessoa(s)" + (f" ({freelas} freelancer(s), sem pontos)." if freelas and pontos
+                                                                    else f" ({freelas} freelancer(s))." if freelas else ".")]
     if ja:
         partes.append(f"{len(ja)} recebe(m) em instantes.")
     if len(ids) - len(ja) - sem_tel:
@@ -518,6 +545,15 @@ def enviar(dados, usuario, agora=None):
     if sem_tel:
         partes.append(f"📵 {sem_tel} sem WhatsApp no cadastro.")
     return {'ok': True, 'mensagem': ' '.join(partes)}
+
+
+def _chave_pessoa(i):
+    """'func:10' / 'free:3' → (tipo, id); número sozinho (como era antes) = fixo."""
+    tipo, _, num = str(i).rpartition(':')
+    tipo = tipo or TIPO_FUNC
+    if tipo not in (TIPO_FUNC, TIPO_FREE):
+        raise ValueError(i)
+    return tipo, int(num)
 
 
 def _validade(dados, agora):
@@ -600,7 +636,8 @@ def processar(agora=None, forcar_ids=None):
                         ST_EXPIRADO, ST_AGUARDANDO, ST_FALHOU, agora.date())
             cur.execute("UPDATE AvaliacoesDisc SET Status = ? WHERE Status = ? AND EnviadoEm < ?",
                         ST_AGUARDANDO, ST_ENVIANDO, agora - timedelta(minutes=CE.ENVIANDO_PRESO_MIN))
-            cur.execute("""SELECT AvaliacaoID, FuncionarioID, Nome, Telefone, Token, Pontos, Lembretes, Tipo FROM AvaliacoesDisc
+            cur.execute("""SELECT AvaliacaoID, FuncionarioID, Nome, Telefone, Token, Pontos, Lembretes, Tipo, FreelancerID
+                           FROM AvaliacoesDisc
                            WHERE Status = ? OR (Status = ? AND Tentativas < ?)""", ST_AGUARDANDO, ST_FALHOU, CE.MAX_TENTATIVAS)
             fila = cur.fetchall()
             conn.commit()
@@ -614,15 +651,16 @@ def processar(agora=None, forcar_ids=None):
         forcar = {int(i) for i in (forcar_ids or [])}
         no_turno = CE._quem_trabalha_agora(agora) if len(forcar) < len(fila) else set()
         enviados = 0
-        for aid, fid, nome, tel, token, pontos, lembretes, tipo in fila:
+        for aid, fid, nome, tel, token, pontos, lembretes, tipo, frid in fila:
             candidato = tipo == TIPO_CAND                 # candidato não tem escala: vai na hora
-            if not candidato and aid not in forcar and ('func', int(fid)) not in no_turno:
+            chave = (TIPO_FREE, int(frid or 0)) if tipo == TIPO_FREE else ('func', int(fid))   # freelancer: o turno dele
+            if not candidato and aid not in forcar and chave not in no_turno:
                 continue
             if not _mudar(aid, (ST_AGUARDANDO, ST_FALHOU), ST_ENVIANDO, EnviadoEm=agora):
                 continue                                  # outra rodada (ou o outro programa) já pegou
             if enviados:
                 time.sleep(CE.INTERVALO_ENVIO_SEG)
-            ok, resp = CE._mandar(tel, texto_mensagem(nome, f"{base}/perfil/{token}", 0 if candidato else (pontos or 0),
+            ok, resp = CE._mandar(tel, texto_mensagem(nome, f"{base}/perfil/{token}", 0 if tipo in (TIPO_CAND, TIPO_FREE) else (pontos or 0),
                                                       lembrete=bool(lembretes), candidato=candidato))
             if ok:
                 _mudar(aid, (ST_ENVIANDO,), ST_ENVIADO, EnviadoEm=agora, Erro=None)
@@ -696,20 +734,26 @@ def painel(agora=None):
         cur = conn.cursor()
         cur.execute("""SELECT AvaliacaoID, FuncionarioID, Nome, Status, EnviadoEm, AbertoEm, RespondidoEm, Lembretes, Erro,
                               Tentativas, Perfil, PctD, PctI, PctS, PctC, CriadoEm, Pontos, ValidoAte, Tipo, Vaga, Telefone, Token,
-                              Origem, Areas, Idade, Bairro, Disponibilidade, Experiencia, Etapa, TipoVaga, Cpf, Nascimento
+                              Origem, Areas, Idade, Bairro, Disponibilidade, Experiencia, Etapa, TipoVaga, Cpf, Nascimento,
+                              FreelancerID, VinculoFuncionarioID
                        FROM AvaliacoesDisc ORDER BY AvaliacaoID DESC""")
         linhas = cur.fetchall()
     finally:
         conn.close()
-    ativos = {int(f.FuncionarioID) for f in database.listar_funcionarios()}
+    funcs = database.listar_funcionarios()
+    cadastro = {int(f.FuncionarioID): f.NomeCompleto for f in funcs}
+    tels = {int(f.FuncionarioID): CE.R.numero_whatsapp(getattr(f, 'TelefoneWhatsApp', None)) for f in funcs}
+    ativos = set(cadastro)
+    freelas_ativos = {int(f.FreelancerID) for f in database.listar_freelancers()}
     prox = CE._proximos_turnos(agora)
     no_turno = CE._quem_trabalha_agora(agora)
     base = CE._endereco()[0]
-    envios, equipe, candidatos, vistos = [], [], [], set()
+    envios, equipe, candidatos, freelancers, vistos, vistos_free = [], [], [], [], set(), set()
     for (aid, fid, nome, st, env, ab, resp, lemb, erro, tent, perfil, pd, pi, ps, pc, criado, pontos, valido,
-         tipo, vaga, tel, token, origem, areas, idade, bairro, dispon, exper, etapa, tipo_vaga, cpf, nasc) in linhas:
-        fid, candidato = int(fid), tipo == TIPO_CAND
-        ic, txt = _situacao(st, env, ab, resp, lemb, CE._texto_espera(prox.get(('func', fid))), ('func', fid) in no_turno,
+         tipo, vaga, tel, token, origem, areas, idade, bairro, dispon, exper, etapa, tipo_vaga, cpf, nasc, frid, vinc) in linhas:
+        fid, candidato, freela = int(fid), tipo == TIPO_CAND, tipo == TIPO_FREE
+        chave = (TIPO_FREE, int(frid or 0)) if freela else ('func', fid)
+        ic, txt = _situacao(st, env, ab, resp, lemb, CE._texto_espera(prox.get(chave)), chave in no_turno,
                             erro, tent or 0, candidato)
         item = {'id': aid, 'funcionario_id': fid, 'nome': nome or '?', 'status': st, 'icone': ic, 'situacao': txt,
                 'criado': CE._quando(criado), 'perfil': perfil or '', 'perfil_nome': nome_perfil(perfil) if perfil else '',
@@ -728,18 +772,39 @@ def painel(agora=None):
             item.update(vaga=vaga or '', telefone=tel or '',
                         pct=_pct(pd, pi, ps, pc) if st == ST_RESPONDIDO else None,
                         setores=[x['setor'] for x in setores_da_pessoa(_pct(pd, pi, ps, pc))] if st == ST_RESPONDIDO else [])
+            vinc = int(vinc) if vinc else None            # 🔗 contratado: a avaliação vale como o perfil do fixo
+            item.update(vinculo_id=vinc, vinculo_nome=cadastro.get(vinc, '') if vinc else '')
             candidatos.append(item)
+            if vinc and st == ST_RESPONDIDO and vinc not in vistos and vinc in ativos:
+                vistos.add(vinc)
+                pct = _pct(pd, pi, ps, pc)
+                equipe.append({'id': aid, 'funcionario_id': vinc, 'nome': cadastro[vinc], 'perfil': perfil, 'perfil_nome': nome_perfil(perfil),
+                               'pct': pct, 'respondido': CE._quando(resp), 'setores': [s['setor'] for s in setores_da_pessoa(pct)],
+                               'do_processo': True})
             continue
+        item.update(tipo=tipo or TIPO_FUNC, freelancer=freela)
         envios.append(item)
+        if freela:
+            if st == ST_RESPONDIDO and frid and int(frid) not in vistos_free and int(frid) in freelas_ativos:
+                vistos_free.add(int(frid))
+                pct = _pct(pd, pi, ps, pc)
+                freelancers.append({'id': aid, 'freelancer_id': int(frid), 'nome': nome or '?', 'perfil': perfil,
+                                    'perfil_nome': nome_perfil(perfil), 'pct': pct, 'respondido': CE._quando(resp),
+                                    'setores': [s['setor'] for s in setores_da_pessoa(pct)]})
+            continue
         if st == ST_RESPONDIDO and fid not in vistos and fid in ativos:
             vistos.add(fid)
             pct = _pct(pd, pi, ps, pc)
             equipe.append({'id': aid, 'funcionario_id': fid, 'nome': nome or '?', 'perfil': perfil, 'perfil_nome': nome_perfil(perfil),
                            'pct': pct, 'respondido': CE._quando(resp), 'setores': [s['setor'] for s in setores_da_pessoa(pct)]})
     equipe.sort(key=lambda x: x['nome'].lower())
+    freelancers.sort(key=lambda x: x['nome'].lower())
     for c in candidatos:
         c['completa'] = _o_que_completa(c['pct'], equipe) if c['pct'] else []
+        c['sugestao_vinculo'] = _sugerir_vinculo(c, cadastro, tels) if c['etapa'] == 'contratado' and not c['vinculo_id'] else None
     return {'envios': envios[:300], 'equipe': equipe, 'resumo_equipe': _resumo_equipe(equipe),
+            'freelancers': freelancers, 'freelancers_por_setor': _por_setor(freelancers),
+            'fixos': sorted(({'id': i, 'nome': n} for i, n in cadastro.items()), key=lambda x: (x['nome'] or '').lower()),
             'pendentes': sum(1 for e in envios if e['pendente']), 'candidatos': candidatos[:500],
             'areas': [{'chave': c, 'nome': n} for c, n in AREAS_FORM], 'etapas': [{'chave': c, 'nome': n} for c, n in ETAPAS],
             'tipos_vaga': [{'chave': c, 'nome': n} for c, n in TIPOS_VAGA],
@@ -764,6 +829,36 @@ def _o_que_completa(pct, equipe):
         return []
     return [{'d': d, 'nome': NOMES[d], 'emoji': EMOJI[d], 'curto': TEXTOS[d]['curto']}
             for d in DIMS if pct[d] >= 30 and not any(p['pct'][d] >= 30 for p in equipe)]
+
+
+def _por_setor(lista, n=3):
+    """Quem combina mais com cada setor (as 3 primeiras pessoas da lista)."""
+    saida = []
+    for nome, pesos, motivo in SETORES:
+        notas = sorted(lista, key=lambda p: -sum(w * p['pct'][d] for d, w in pesos.items()))
+        saida.append({'setor': nome, 'motivo': motivo, 'pessoas': [{'nome': p['nome'], 'perfil': p['perfil']} for p in notas[:n]]})
+    return saida if lista else []
+
+
+def _so_letras(t):
+    import unicodedata
+    t = unicodedata.normalize('NFKD', str(t or '')).encode('ascii', 'ignore').decode().lower()
+    return ' '.join(re.sub(r'[^a-z ]', ' ', t).split())
+
+
+def _sugerir_vinculo(c, cadastro, tels=None):
+    """O fixo que parece ser o candidato contratado: mesmo WhatsApp ou mesmo nome (primeiro e último)."""
+    if c.get('telefone'):
+        for fid, tel in (tels or {}).items():
+            if tel and tel == c['telefone']:
+                return fid
+    nome = _so_letras(c.get('nome')).split()
+    if len(nome) >= 1:
+        for fid, n in cadastro.items():
+            outro = _so_letras(n).split()
+            if outro and outro[0] == nome[0] and (len(nome) == 1 or len(outro) == 1 or outro[-1] == nome[-1]):
+                return fid
+    return None
 
 
 def _resumo_equipe(equipe):
@@ -792,16 +887,23 @@ def detalhe(aid, agora=None):
         cur = conn.cursor()
         cur.execute("""SELECT AvaliacaoID, FuncionarioID, Nome, Status, RespondidoEm, Perfil, PctD, PctI, PctS, PctC, CriadoPor,
                               Tipo, Vaga, Origem, Areas, Idade, Bairro, Disponibilidade, Experiencia, Telefone, TipoVaga,
-                              Nascimento
+                              Nascimento, FreelancerID, VinculoFuncionarioID
                        FROM AvaliacoesDisc WHERE AvaliacaoID = ?""", int(aid))
         a = cur.fetchone()
         if not a:
             raise ErroPerfil("Avaliação não encontrada.", 404)
         antes = []
-        if a[11] != TIPO_CAND:
+        if a[11] == TIPO_FREE:
             cur.execute("""SELECT AvaliacaoID, RespondidoEm, Perfil FROM AvaliacoesDisc
-                           WHERE FuncionarioID = ? AND Status = ? AND AvaliacaoID <> ? AND ISNULL(Tipo, ?) = ?
-                           ORDER BY AvaliacaoID DESC""", int(a[1]), ST_RESPONDIDO, int(aid), TIPO_FUNC, TIPO_FUNC)
+                           WHERE FreelancerID = ? AND Status = ? AND AvaliacaoID <> ? AND Tipo = ?
+                           ORDER BY AvaliacaoID DESC""", int(a[22] or 0), ST_RESPONDIDO, int(aid), TIPO_FREE)
+            antes = cur.fetchall()
+        elif a[11] != TIPO_CAND or a[23]:                 # fixo: as dele e a do processo seletivo vinculada
+            fixo = int(a[23]) if a[11] == TIPO_CAND else int(a[1])
+            cur.execute("""SELECT AvaliacaoID, RespondidoEm, Perfil FROM AvaliacoesDisc
+                           WHERE Status = ? AND AvaliacaoID <> ? AND ((FuncionarioID = ? AND ISNULL(Tipo, ?) = ?)
+                                 OR (Tipo = ? AND VinculoFuncionarioID = ?))
+                           ORDER BY AvaliacaoID DESC""", ST_RESPONDIDO, int(aid), fixo, TIPO_FUNC, TIPO_FUNC, TIPO_CAND, fixo)
             antes = cur.fetchall()
     finally:
         conn.close()
@@ -811,7 +913,7 @@ def detalhe(aid, agora=None):
     r = relatorio(pct, a[5])
     candidato = a[11] == TIPO_CAND
     r.update({'id': a[0], 'nome': a[2] or '?', 'respondido': CE._quando(a[4]), 'perfil_nome': nome_perfil(a[5]),
-              'candidato': candidato, 'vaga': a[12] or '',
+              'candidato': candidato, 'vaga': a[12] or '', 'freelancer': a[11] == TIPO_FREE,
               'anteriores': [{'id': x[0], 'respondido': CE._quando(x[1]), 'perfil_nome': nome_perfil(x[2])} for x in antes]})
     if candidato:
         r['completa'] = _o_que_completa(pct, painel(agora)['equipe'])
@@ -819,6 +921,9 @@ def detalhe(aid, agora=None):
                  bairro=a[16] or '',
                  disponibilidade=_rotulos(DISPONIBILIDADE, a[17]), experiencia=a[18] or '',
                  whatsapp=f"https://wa.me/{a[19]}" if a[19] else '', **_tipo_vaga(a[20], a[14]))
+        if a[23]:
+            fixos = {int(f.FuncionarioID): f.NomeCompleto for f in database.listar_funcionarios()}
+            r['vinculo_nome'] = fixos.get(int(a[23]), '')
     return r
 
 
@@ -837,16 +942,18 @@ def acao(aid, nome_acao, usuario, agora=None):
         raise ErroPerfil("Avaliação não encontrada.", 404)
     st, valido, nome, candidato = a[0], database._como_data(a[1]), a[2], a[3] == TIPO_CAND
     if nome_acao == 'apagar':
-        if not candidato:
-            raise ErroPerfil("Só dá para apagar avaliação de candidato.", 409)
+        if a[3] not in (TIPO_CAND, TIPO_FREE):
+            raise ErroPerfil("Só dá para apagar avaliação de candidato ou de freelancer.", 409)
         conn = _conexao()
         try:
             cur = conn.cursor()
-            cur.execute("DELETE FROM AvaliacoesDisc WHERE AvaliacaoID = ? AND Tipo = ?", int(aid), TIPO_CAND)
+            cur.execute("DELETE FROM AvaliacoesDisc WHERE AvaliacaoID = ? AND Tipo = ?", int(aid), a[3])
             conn.commit()
         finally:
             conn.close()
-        logger.info(f"[PERFIL DISC] {usuario.get('nome')} apagou a avaliação do candidato {aid}.")
+        logger.info(f"[PERFIL DISC] {usuario.get('nome')} apagou a avaliação {aid} ({a[3]}).")
+        if not candidato:
+            return {'ok': True, 'mensagem': f"🗑️ Avaliação de {nome} apagada (nome, WhatsApp e respostas)."}
         return {'ok': True, 'mensagem': f"🗑️ Candidato {nome} apagado (nome, WhatsApp, CPF, nascimento e respostas)."}
     if candidato and nome_acao in ('lembrar', 'agora') and not a[4]:
         raise ErroPerfil("Candidato sem WhatsApp: copie o link e mande você mesmo.", 409)
@@ -965,7 +1072,7 @@ def responder(token, dados, agora=None):
         conn.close()
     if novo:
         logger.info(f"[PERFIL DISC] {a[2]} respondeu: {perfil} {pct}.")
-        if a[5] and a[12] != TIPO_CAND:
+        if a[5] and (a[12] or TIPO_FUNC) == TIPO_FUNC:     # pontos: só fixo (candidato e freelancer não estão na gamificação)
             try:                                          # igual aos comunicados do Telegram: histórico/ranking + saldo
                 database.registrar_pontos_de_bonus(int(a[1]), int(a[5]), "Avaliação de perfil (DISC) respondida",
                                                    getattr(config, 'TAREFA_ID_LEITURA', 38))
@@ -975,7 +1082,7 @@ def responder(token, dados, agora=None):
         quem = (("📸 Trabalhe conosco: " if a[14] == ORIGEM_SITE else "🧑‍💼 Candidato ") + f"<b>{_esc(a[2])}</b>"
                 + (f" ({_esc(a[13])})" if a[13] else '')
                 + (f" · {dict(TIPOS_VAGA)[a[15]]}" if a[15] in dict(TIPOS_VAGA) else '')) if a[12] == TIPO_CAND \
-            else f"🧭 <b>{_esc(a[2])}</b>"
+            else (f"📅 Freelancer <b>{_esc(a[2])}</b>" if a[12] == TIPO_FREE else f"🧭 <b>{_esc(a[2])}</b>")
         _avisar_gestao(f"{quem} respondeu a avaliação de perfil: <b>{_esc(nome_perfil(perfil))}</b> "
                        f"({' · '.join(f'{d} {pct[d]}%' for d in DIMS)}).\n<i>Veja o relatório na Gestão › 🧭 Perfil.</i>")
     return ver(token, agora)
@@ -1256,6 +1363,36 @@ def definir_tipo_vaga(aid, tipo_vaga, usuario):
         raise ErroPerfil("Candidato não encontrado.", 404)
     logger.info(f"[PERFIL DISC] {usuario.get('nome')}: candidato {aid} → tipo de vaga {tipo_vaga}.")
     return {'ok': True, 'mensagem': f"Tipo de vaga: {dict(TIPOS_VAGA)[tipo_vaga]}."}
+
+
+def vincular(aid, funcionario_id, usuario):
+    """
+    🔗 Candidato contratado: a avaliação dele passa a valer como o perfil do fixo (👥 Equipe e 📤 envio), sem responder de
+    novo. Marca a etapa ✅ Contratado. Vazio desfaz o vínculo. O processo seletivo continua guardado.
+    """
+    garantir_tabelas()
+    fid = int(funcionario_id) if str(funcionario_id or '').strip() not in ('', '0', 'None') else None
+    cadastro = {int(f.FuncionarioID): f.NomeCompleto for f in database.listar_funcionarios()}
+    if fid and fid not in cadastro:
+        raise ErroPerfil("Esse fixo não está mais no cadastro. Atualize a página.", 409)
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        if fid:
+            cur.execute("UPDATE AvaliacoesDisc SET VinculoFuncionarioID = ?, Etapa = 'contratado' WHERE AvaliacaoID = ? AND Tipo = ?",
+                        fid, int(aid), TIPO_CAND)
+        else:
+            cur.execute("UPDATE AvaliacoesDisc SET VinculoFuncionarioID = NULL WHERE AvaliacaoID = ? AND Tipo = ?", int(aid), TIPO_CAND)
+        ok = cur.rowcount == 1
+        conn.commit()
+    finally:
+        conn.close()
+    if not ok:
+        raise ErroPerfil("Candidato não encontrado.", 404)
+    logger.info(f"[PERFIL DISC] {usuario.get('nome')}: candidato {aid} → cadastro {fid or '(sem vínculo)'}.")
+    if not fid:
+        return {'ok': True, 'mensagem': "🔗 Vínculo desfeito: a avaliação volta a ser só do processo seletivo."}
+    return {'ok': True, 'mensagem': f"🔗 Vinculado ao cadastro de {cadastro[fid]}: o perfil já aparece em 👥 Equipe."}
 
 
 def definir_etapa(aid, etapa, usuario):
