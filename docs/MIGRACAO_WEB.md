@@ -107,6 +107,7 @@ mas não deixa **mexer**. Os funcionários usam o bot do Telegram (continua igua
 | Histórico e pendências de hoje do funcionário | Gestão › Equipe › Funcionários | ⬜ |
 | Zerar pontos do mês | Gestão › Equipe › Funcionários | ⬜ |
 | 📢 Lançar tarefas no grupo (falta/atestado) | Gestão › Equipe › Funcionários | ⬜ |
+| 🔁 Transferir as tarefas fixas (diárias, semanais e mensais) para outro funcionário — ou copiar (os dois ficam); escolhe quais; não duplica o que o outro já tem; quem entrega mantém o histórico (no PC desde 10/2026: Funcionários › Tarefas Ativas ou Ações) | Gestão › Equipe › Funcionários | ⬜ |
 | Grupos: criar, editar, excluir, membros | Gestão › Equipe › Grupos | ⬜ |
 | Catálogo de tarefas (modelos) | Gestão › Equipe › Tarefas | ⬜ |
 | Atribuir tarefas (com recorrência), desatribuir | Gestão › Equipe › Atribuir | ⬜ |

@@ -1204,6 +1204,113 @@ def encerrar_atribuicao_tarefa(atribuicao_id):
         finally:
             conn.close()
 
+# 🔁 [TRANSFERIR TAREFAS] Passar as tarefas FIXAS (Diária, Semanal e Mensal) de um funcionário para outro
+TIPOS_FIXOS = ('Diaria', 'Semanal', 'Mensal')
+_DIAS_SEMANA_CURTO = {'1': 'Dom', '2': 'Seg', '3': 'Ter', '4': 'Qua', '5': 'Qui', '6': 'Sex', '7': 'Sab'}
+
+
+def _valor_freq(valor):
+    """'3', 3 e 3.0 são o mesmo dia; vazio (Diária) vira ''."""
+    if valor is None:
+        return ''
+    texto = str(valor).strip()
+    return texto[:-2] if texto.endswith('.0') else texto
+
+
+def _nome_frequencia(tipo, valor):
+    valor = _valor_freq(valor)
+    if tipo == 'Semanal':
+        return f"Semanal ({_DIAS_SEMANA_CURTO.get(valor, valor)})"
+    if tipo == 'Mensal':
+        return f"Mensal (Dia {valor})"
+    return tipo or ''
+
+
+def listar_tarefas_fixas(funcionario_id):
+    """
+    As tarefas FIXAS ativas do funcionário (Diária, Semanal e Mensal) e quantas ÚNICAS ainda estão abertas
+    (as únicas são de um dia só e não entram na transferência).
+    Devolve ([{'id', 'tarefa_id', 'titulo', 'tipo', 'valor', 'frequencia'}], numero_de_unicas).
+    """
+    conn = get_db_connection()
+    if not conn:
+        raise ConnectionError("Sem conexão com o banco de dados.")
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT TA.AtribuicaoID, TA.TarefaID, T.Titulo, TA.TipoFrequencia, TA.ValorFrequencia
+            FROM TarefasAtribuidas TA
+            JOIN Tarefas T ON T.TarefaID = TA.TarefaID
+            WHERE TA.FuncionarioID = ? AND TA.DataFimVigencia IS NULL AND TA.TipoFrequencia IN (?, ?, ?)
+            ORDER BY T.Titulo, TA.TipoFrequencia, TA.ValorFrequencia
+        """, int(funcionario_id), *TIPOS_FIXOS)
+        fixas = [{'id': int(r[0]), 'tarefa_id': int(r[1]), 'titulo': r[2] or '', 'tipo': r[3],
+                  'valor': _valor_freq(r[4]), 'frequencia': _nome_frequencia(r[3], r[4])} for r in cursor.fetchall()]
+        cursor.execute("""
+            SELECT COUNT(1) FROM TarefasAtribuidas TA
+            WHERE TA.FuncionarioID = ? AND TA.DataFimVigencia IS NULL AND TA.TipoFrequencia = 'Unica'
+              AND NOT EXISTS (SELECT 1 FROM Entregas E WHERE E.AtribuicaoID = TA.AtribuicaoID AND E.StatusValidacao = 'Aprovada')
+        """, int(funcionario_id))
+        return fixas, int(cursor.fetchone()[0] or 0)
+    finally:
+        conn.close()
+
+
+def transferir_tarefas_fixas(funcionario_origem_id, funcionario_destino_id, atribuicao_ids=None, manter_na_origem=False):
+    """
+    🔁 Passa as tarefas FIXAS (Diária, Semanal e Mensal) de um funcionário para outro, tudo numa transação só
+    (ou passa tudo, ou nada muda).
+    - Não apaga nada: a atribuição de quem entrega é ENCERRADA (DataFimVigencia), e o histórico de entregas fica.
+    - Quem recebe ganha uma atribuição nova igual (mesma tarefa, frequência, dia e descrição), valendo a partir de agora.
+    - Se quem recebe já tem a mesma tarefa no mesmo dia, não duplica (mas sai de quem entregou).
+    atribuicao_ids: só estas (None = todas as fixas). manter_na_origem=True: COPIA (os dois ficam com a tarefa).
+    Devolve {'transferidas': [títulos], 'ja_tinha': [títulos]}.
+    """
+    origem, destino = int(funcionario_origem_id), int(funcionario_destino_id)
+    if origem == destino:
+        raise ValueError("Escolha outro funcionário para receber as tarefas.")
+    fixas, _ = listar_tarefas_fixas(origem)
+    if atribuicao_ids is not None:
+        escolhidas = {int(x) for x in atribuicao_ids}
+        fixas = [f for f in fixas if f['id'] in escolhidas]
+    if not fixas:
+        raise ValueError("Nenhuma tarefa fixa para transferir.")
+    conn = get_db_connection()
+    if not conn:
+        raise ConnectionError("Sem conexão com o banco de dados.")
+    transferidas, ja_tinha = [], []
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT TarefaID, TipoFrequencia, ValorFrequencia FROM TarefasAtribuidas "
+                       "WHERE FuncionarioID = ? AND DataFimVigencia IS NULL", destino)
+        ja_ativas = {(int(r[0]), r[1], _valor_freq(r[2])) for r in cursor.fetchall()}
+        for f in fixas:
+            cursor.execute("SELECT DescricaoOverride FROM TarefasAtribuidas WHERE AtribuicaoID = ?", f['id'])
+            linha = cursor.fetchone()
+            chave = (f['tarefa_id'], f['tipo'], f['valor'])
+            if chave in ja_ativas:
+                ja_tinha.append(f"{f['titulo']} — {f['frequencia']}")
+            else:
+                cursor.execute("""
+                    INSERT INTO TarefasAtribuidas (TarefaID, FuncionarioID, TipoFrequencia, ValorFrequencia, DataInicioVigencia, DescricaoOverride)
+                    VALUES (?, ?, ?, ?, GETDATE(), ?)
+                """, f['tarefa_id'], destino, f['tipo'], f['valor'] or None, linha[0] if linha else None)
+                ja_ativas.add(chave)
+                transferidas.append(f"{f['titulo']} — {f['frequencia']}")
+            if not manter_na_origem:
+                cursor.execute("UPDATE TarefasAtribuidas SET DataFimVigencia = GETDATE() "
+                               "WHERE AtribuicaoID = ? AND DataFimVigencia IS NULL", f['id'])
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    logger.info(f"[TRANSFERIR TAREFAS] {'Copiadas' if manter_na_origem else 'Transferidas'} {len(transferidas)} tarefa(s) fixa(s) "
+                f"do funcionário {origem} para o {destino} ({len(ja_tinha)} ele já tinha).")
+    return {'transferidas': transferidas, 'ja_tinha': ja_tinha}
+
+
 def verificar_atribuicao_especifica_existente(tarefa_id, funcionario_id, tipo_frequencia, valor_frequencia):
     """
     Verifica se uma atribuição ATIVA e EXATA (mesma tarefa, func, freq e valor) já existe.

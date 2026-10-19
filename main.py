@@ -1026,6 +1026,9 @@ class App:
         self.tree_tarefas_funcionario.heading('Tarefa', text='Tarefa'); self.tree_tarefas_funcionario.column('Tarefa', width=300)
         self.tree_tarefas_funcionario.heading('Frequência', text='Frequência'); self.tree_tarefas_funcionario.column('Frequência', width=150)
         self.tree_tarefas_funcionario.pack(fill=tk.BOTH, expand=True)
+        # 🔁 [TRANSFERIR TAREFAS] passar as tarefas fixas deste funcionário para outro
+        ttk.Button(frame_direita_tarefas, text="🔁 Transferir Tarefas Fixas para Outro Funcionário",
+                   command=self.abrir_janela_transferir_tarefas).pack(pady=(8, 0), anchor='e', ipadx=6, ipady=3)
 
         # Aba 3: Ações para o funcionário selecionado
         frame_direita_acoes = ttk.Frame(self.notebook_funcionarios, padding="30")
@@ -1034,6 +1037,7 @@ class App:
         btn_editar_func = ttk.Button(frame_direita_acoes, text="Editar Cadastro do Funcionário", command=self.abrir_janela_edicao_funcionario); btn_editar_func.pack(pady=10, fill='x', ipady=5)
         btn_ver_historico = ttk.Button(frame_direita_acoes, text="Ver Histórico Completo", command=self.abrir_janela_historico); btn_ver_historico.pack(pady=10, fill='x', ipady=5)
         btn_ver_pendencias = ttk.Button(frame_direita_acoes, text="Ver Pendências de Hoje", command=self.abrir_janela_pendencias); btn_ver_pendencias.pack(pady=10, fill='x', ipady=5)
+        btn_transferir = ttk.Button(frame_direita_acoes, text="🔁 Transferir Tarefas Fixas para Outro Funcionário", command=self.abrir_janela_transferir_tarefas); btn_transferir.pack(pady=10, fill='x', ipady=5)
         btn_zerar_pontos = ttk.Button(frame_direita_acoes, text="Zerar Pontos do Mês", command=self.zerar_pontos_do_funcionario_selecionado); btn_zerar_pontos.pack(pady=10, fill='x', ipady=5)
         btn_excluir_func = ttk.Button(frame_direita_acoes, text="Excluir Funcionário", command=self.excluir_funcionario_selecionado, style="Danger.TButton"); btn_excluir_func.pack(pady=10, fill='x', ipady=5)
         
@@ -2381,6 +2385,124 @@ class App:
                 return
             messagebox.showinfo("Sucesso", "Funcionário excluído.")
             self.atualizar_todas_as_listas()
+
+    def abrir_janela_transferir_tarefas(self):
+        """
+        🔁 [TRANSFERIR TAREFAS] Passa as tarefas FIXAS (Diária, Semanal e Mensal) do funcionário selecionado para outro.
+        Todas vêm marcadas; dá para tirar alguma com Ctrl+clique. Opção de COPIAR (os dois ficam com a tarefa).
+        O histórico de entregas de quem entrega fica guardado (a atribuição é encerrada, não apagada).
+        """
+        indices = self.lista_funcionarios.curselection()
+        if not indices:
+            messagebox.showwarning("Aviso", "Selecione na lista o funcionário que vai ENTREGAR as tarefas.", parent=self.root)
+            return
+        origem = self.dados_funcionarios[self.lista_funcionarios.get(indices[0])]
+        try:
+            fixas, unicas = database.listar_tarefas_fixas(origem.FuncionarioID)
+        except Exception as e:
+            logger.exception(f"Erro ao listar as tarefas fixas do funcionário {origem.FuncionarioID}: {e}")
+            messagebox.showerror("Erro", f"Não foi possível carregar as tarefas fixas:\n{e}", parent=self.root)
+            return
+        if not fixas:
+            messagebox.showinfo("Transferir Tarefas", f"{origem.NomeCompleto} não tem tarefas fixas (diárias, semanais ou mensais) ativas.",
+                                parent=self.root)
+            return
+        destinos = {f"{f.NomeCompleto} (ID {f.FuncionarioID})": f for f in self.dados_funcionarios.values()
+                    if f.FuncionarioID != origem.FuncionarioID}
+
+        popup = Toplevel(self.root)
+        popup.title(f"Transferir Tarefas Fixas - {origem.NomeCompleto}")
+        popup.geometry("760x560")
+        popup.transient(self.root)
+        self.popup_transferir = popup
+        frame = ttk.Frame(popup, padding="12")
+        frame.pack(fill=tk.BOTH, expand=True)
+        frame.columnconfigure(1, weight=1)
+        frame.rowconfigure(3, weight=1)
+
+        ttk.Label(frame, text="De:", font=("Arial", 11, "bold")).grid(row=0, column=0, sticky="w", pady=4)
+        ttk.Label(frame, text=origem.NomeCompleto, font=("Arial", 11)).grid(row=0, column=1, sticky="w", pady=4)
+        ttk.Label(frame, text="Para:", font=("Arial", 11, "bold")).grid(row=1, column=0, sticky="w", pady=4)
+        combo_destino = ttk.Combobox(frame, state="readonly", width=45, values=sorted(destinos, key=str.lower))
+        combo_destino.grid(row=1, column=1, sticky="w", pady=4)
+        self.combo_transferir_destino = combo_destino
+
+        ttk.Label(frame, text=f"Tarefas fixas de {origem.NomeCompleto} — todas já vêm marcadas (Ctrl+clique tira ou põe uma):"
+                  ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(10, 4))
+        frame_lista = ttk.Frame(frame)
+        frame_lista.grid(row=3, column=0, columnspan=2, sticky="nsew")
+        frame_lista.rowconfigure(0, weight=1); frame_lista.columnconfigure(0, weight=1)
+        tree = ttk.Treeview(frame_lista, columns=('ID', 'Tarefa', 'Frequência'), show='headings', selectmode='extended')
+        tree.heading('ID', text='ID'); tree.column('ID', width=60, anchor='center')
+        tree.heading('Tarefa', text='Tarefa'); tree.column('Tarefa', width=430)
+        tree.heading('Frequência', text='Frequência'); tree.column('Frequência', width=130)
+        barra = ttk.Scrollbar(frame_lista, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=barra.set)
+        tree.grid(row=0, column=0, sticky="nsew"); barra.grid(row=0, column=1, sticky="ns")
+        for f in fixas:
+            tree.insert("", "end", iid=str(f['id']), values=(f['id'], f['titulo'], f['frequencia']))
+        tree.selection_set(tree.get_children())
+        self.tree_transferir = tree
+
+        frame_marcar = ttk.Frame(frame)
+        frame_marcar.grid(row=4, column=0, columnspan=2, sticky="w", pady=4)
+        ttk.Button(frame_marcar, text="Marcar todas", command=lambda: tree.selection_set(tree.get_children())).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(frame_marcar, text="Desmarcar todas", command=lambda: tree.selection_remove(tree.get_children())).pack(side=tk.LEFT)
+        contagem = ttk.Label(frame_marcar, text="")
+        contagem.pack(side=tk.LEFT, padx=12)
+        tree.bind('<<TreeviewSelect>>', lambda e: contagem.config(text=f"{len(tree.selection())} de {len(fixas)} marcada(s)"))
+        contagem.config(text=f"{len(fixas)} de {len(fixas)} marcada(s)")
+        if unicas:
+            ttk.Label(frame, foreground="gray", text=f"ℹ️ {unicas} tarefa(s) ÚNICA(s) (de um dia só) ficam com {origem.NomeCompleto}: "
+                      "não entram na transferência.").grid(row=5, column=0, columnspan=2, sticky="w")
+
+        var_copiar = tk.BooleanVar(value=False)
+        ttk.Checkbutton(frame, variable=var_copiar,
+                        text=f"Copiar em vez de transferir (as tarefas continuam também com {origem.NomeCompleto})"
+                        ).grid(row=6, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        self.var_transferir_copiar = var_copiar
+
+        def confirmar():
+            nome_destino = combo_destino.get()
+            if nome_destino not in destinos:
+                messagebox.showwarning("Aviso", "Escolha em 'Para' quem vai receber as tarefas.", parent=popup)
+                return
+            ids = [int(i) for i in tree.selection()]
+            if not ids:
+                messagebox.showwarning("Aviso", "Marque pelo menos uma tarefa.", parent=popup)
+                return
+            destino, copiar = destinos[nome_destino], var_copiar.get()
+            if not messagebox.askyesno(
+                    "Confirmar",
+                    f"{'Copiar' if copiar else 'Transferir'} {len(ids)} tarefa(s) fixa(s) de {origem.NomeCompleto} para "
+                    f"{destino.NomeCompleto}?\n\nA partir de agora elas são enviadas para {destino.NomeCompleto}"
+                    + (f" e continuam também com {origem.NomeCompleto}." if copiar else
+                       f" e saem de {origem.NomeCompleto}.\nO histórico de entregas de {origem.NomeCompleto} fica guardado."),
+                    parent=popup):
+                return
+            try:
+                r = database.transferir_tarefas_fixas(origem.FuncionarioID, destino.FuncionarioID, ids, manter_na_origem=copiar)
+            except Exception as e:
+                logger.exception(f"Erro ao transferir tarefas de {origem.FuncionarioID} para {destino.FuncionarioID}: {e}")
+                messagebox.showerror("Erro", f"Não foi possível transferir. Nada foi alterado.\n\nDetalhe: {e}", parent=popup)
+                return
+            msg = f"✅ {len(r['transferidas'])} tarefa(s) {'copiada(s)' if copiar else 'transferida(s)'} para {destino.NomeCompleto}."
+            if r['ja_tinha']:
+                msg += (f"\n\n{destino.NomeCompleto} já tinha {len(r['ja_tinha'])} delas (não duplicou):\n• "
+                        + "\n• ".join(r['ja_tinha'][:15]) + ("\n• ..." if len(r['ja_tinha']) > 15 else ""))
+            popup.destroy()
+            messagebox.showinfo("Transferir Tarefas", msg, parent=self.root)
+            self.on_funcionario_selecionado(None)
+            try:
+                self.atualizar_lista_atribuicoes_ativas()
+            except Exception as e:
+                logger.warning(f"Não atualizou a lista de atribuições ativas: {e}")
+
+        frame_botoes = ttk.Frame(frame)
+        frame_botoes.grid(row=7, column=0, columnspan=2, sticky="e", pady=(12, 0))
+        ttk.Button(frame_botoes, text="Cancelar", command=popup.destroy).pack(side=tk.LEFT, padx=5)
+        self.btn_transferir_confirmar = ttk.Button(frame_botoes, text="🔁 Transferir", command=confirmar)
+        self.btn_transferir_confirmar.pack(side=tk.LEFT, padx=5, ipadx=8)
 
     def forcar_drop_selecionado(self):
         """Aciona o agendador para enviar as tarefas do funcionário selecionado para o grupo AGORA."""
