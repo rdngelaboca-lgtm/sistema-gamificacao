@@ -459,6 +459,12 @@ computador. Módulo `atendimento.py`, página `templates/atendimento.html`; tabe
   (com quem está com a central aberta) e as conversas abertas. **Aviso no grupo da gestão** quando um cliente espera mais
   de X minutos (padrão 5; 0 desliga; tipo 💬 Atendimento no WhatsApp em 📣 Avisos), uma vez por espera (agendador, 1 min).
 - Liberado na internet junto com a Gestão (`/atendimento`, `/api/atendimento`), sempre com login.
+- **📡 Diagnóstico (só a gestão vê, embaixo da busca):** quando chegou a última mensagem de cliente da Z-API; avisa se
+  nunca chegou nenhuma (ou só avisos de entregue/lida), se o webhook é de **outra instância** (final do ID) e se uma
+  mensagem chegou mas deu erro ao gravar (o motivo). A Web precisa repetir: ID da instância comparado sem diferenciar
+  maiúsculas; corpo lido mesmo sem `Content-Type: application/json`; cliente com número oculto (`...@lid`) entra como
+  "número oculto pelo WhatsApp"; a cópia do que o próprio sistema mandou (`fromApi`) não entra de novo (e, sem esse
+  campo, texto igual mandado pela central nos últimos 2 min também não).
 - **Próxima fase:** pedido na lateral (itens, total, Pix copia e cola, comanda) e vendas WhatsApp × 99Food.
 
 ### App de compras — aba Gestão em 3 áreas (10/2026)

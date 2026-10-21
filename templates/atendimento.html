@@ -82,6 +82,8 @@
   .chip.at { background: var(--verde-claro); color: #0B5A52; }
   .chip.enc { background: #ECEFEF; color: #4A5554; }
   .vazio { padding: 24px 16px; color: var(--suave); text-align: center; }
+  #diag { border-radius: 8px; padding: 7px 9px; background: #F3F6F5; color: var(--suave); }
+  #diag.alerta { background: var(--laranja-claro); color: #7A2E05; }
 
   .chat-topo { padding: 10px 14px; border-bottom: 1px solid var(--linha2); display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
   .chat-topo .quem { flex: 1; min-width: 160px; display: flex; flex-direction: column; }
@@ -216,6 +218,7 @@
               <button type="button" data-filtro="encerradas">Encerradas</button>
             </div>
             <input id="busca" type="search" placeholder="Buscar nome ou telefone" aria-label="Buscar nome ou telefone">
+            <div id="diag" class="mini" hidden role="status"></div>
           </div>
           <div id="lista"><div class="vazio">Carregando…</div></div>
         </section>
@@ -445,7 +448,9 @@ let idBusca = null;
 $('#busca').addEventListener('input', () => { clearTimeout(idBusca); idBusca = setTimeout(() => { S.busca = $('#busca').value.trim(); atualizar(); }, 350); });
 
 async function atualizar() {
-  if (!S.eu || S.aba !== 'conversas') return;
+  // [DEPURAÇÃO CENTRAL] uma de cada vez: com a internet lenta, uma resposta antiga chegava por cima da nova
+  if (!S.eu || S.aba !== 'conversas' || S.atualizando) return;
+  S.atualizando = true;
   try {
     const p = await api('GET', '/api/atendimento/painel?busca=' + encodeURIComponent(S.busca));
     const sinal = p.conversas.reduce((s, c) => s + c.nao_lidas, 0) + p.esperando * 1000;
@@ -454,9 +459,25 @@ async function atualizar() {
     S.painel = p;
     $('#n-esperando').textContent = p.esperando ? `${p.esperando} esperando` : '';
     document.title = (p.esperando ? `(${p.esperando}) ` : '') + 'Atendimento · Gela Boca';
+    desenharDiag(p.diagnostico);
     desenharLista();
     if (S.aberta) await carregarConversa(false);
   } catch (e) { if (e.status !== 401) $('#lista').innerHTML = `<div class="vazio n-erro">${esc(e.message)}</div>`; }
+  finally { S.atualizando = false; }
+}
+// [DEPURAÇÃO CENTRAL] só a gestão: a mensagem chegou da Z-API? de qual instância? deu erro ao gravar?
+function desenharDiag(d) {
+  const el = $('#diag');
+  if (!d) { el.hidden = true; return; }
+  let txt, alerta = true;
+  if (d.erro) txt = `⚠️ Uma mensagem chegou às ${d.erro_em} mas não entrou na central: ${d.erro}. Mande um print desta tela para o suporte.`;
+  else if (d.outra_instancia) txt = `⚠️ A Z-API está mandando o webhook de OUTRA instância (final …${d.outra_instancia}). Cole o endereço `
+    + 'de 📢 Clientes › ⚙️ Ajustes na instância do NÚMERO DOS CLIENTES.';
+  else if (d.nunca) txt = (d.so_status ? '📡 Da Z-API só chegaram avisos de entregue/lida, nenhuma mensagem de cliente. '
+    : '📡 Nenhuma mensagem de cliente chegou da Z-API ainda. ')
+    + 'Confira o endereço de 📢 Clientes › ⚙️ Ajustes nos campos "Ao receber" e "Status" da Z-API e mande um "oi" de outro celular.';
+  else { txt = `📡 Última mensagem de cliente recebida: ${d.msg}`; alerta = false; }
+  el.textContent = txt; el.classList.toggle('alerta', alerta); el.hidden = false;
 }
 function chipConversa(c) {
   if (c.status === 'esperando') return `<span class="chip esp">Esperando${c.aguardando_min ? ` há ${c.aguardando_min} min` : ''}</span>`;

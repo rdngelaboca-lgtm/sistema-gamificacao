@@ -218,6 +218,30 @@ def _param(chave, padrao=None):
         conn.close()
 
 
+def _params_todos():
+    garantir_tabelas()
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT Chave, Valor FROM ParametrosAtendimento")
+        return {c: v for c, v in cur.fetchall()}
+    finally:
+        conn.close()
+
+
+def _salvar_params(valores):
+    garantir_tabelas()
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        for chave, valor in valores.items():
+            cur.execute("DELETE FROM ParametrosAtendimento WHERE Chave = ?", chave)
+            cur.execute("INSERT INTO ParametrosAtendimento (Chave, Valor) VALUES (?, ?)", chave, str(valor)[:400])
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _salvar_param(chave, valor):
     garantir_tabelas()
     conn = _conexao()
@@ -812,6 +836,57 @@ def do_webhook(p, acao=None):
         _do_webhook(p if isinstance(p, dict) else {}, acao)
     except Exception as e:
         logger.error(f"[ATENDIMENTO] Mensagem do webhook não entrou na central: {e}", exc_info=True)
+        # [DEPURAÇÃO CENTRAL] antes ficava só no log: a gestão via a central vazia sem saber por quê
+        try:
+            _salvar_params({'erro_em': _agora().isoformat(), 'erro_txt': str(e)[:300]})
+        except Exception as e2:
+            logger.error(f"[ATENDIMENTO] Nem o erro foi gravado: {e2}")
+
+
+def _telefone(p):
+    """O WhatsApp do cliente; [DEPURAÇÃO CENTRAL] número oculto pelo WhatsApp ('...@lid') também vale (antes a mensagem sumia)."""
+    import clientes
+    try:
+        return clientes.normalizar_telefone(p.get('phone'))
+    except clientes.ErroClientes:
+        pass
+    for v in (p.get('phone'), p.get('chatLid')):
+        v = str(v or '').strip()
+        if re.fullmatch(r'\d{6,15}@lid', v):
+            return v
+    return None
+
+
+def _tel_txt(tel):
+    import clientes
+    return "número oculto pelo WhatsApp" if '@lid' in str(tel or '') else clientes.fmt_telefone(tel)
+
+
+def anotar_webhook(p, motivo, agora=None):
+    """[DEPURAÇÃO CENTRAL] O que chegou da Z-API por último: a central mostra para a gestão (diagnóstico)."""
+    agora = agora or _agora()
+    p = p if isinstance(p, dict) else {}
+    valores = {'webhook_em': agora.isoformat(), 'webhook_motivo': str(motivo or '')[:40]}
+    if motivo == 'outra_instancia':
+        valores.update(outra_instancia_em=agora.isoformat(), outra_instancia_fim=str(p.get('instanceId') or '')[-4:])
+    elif (p.get('type') in (None, 'ReceivedCallback') and not p.get('fromMe') and not p.get('isGroup')
+          and not (p.get('ids') and p.get('status'))):
+        valores['webhook_msg_em'] = agora.isoformat()
+    _salvar_params(valores)
+
+
+def diagnostico(agora=None):
+    """Para a gestão: chegou mensagem? de qual instância? deu erro ao gravar?"""
+    agora = agora or _agora()
+    p = _params_todos()
+    msg_em, ult_em = _dt(p.get('webhook_msg_em')), _dt(p.get('webhook_em'))
+    erro_em, ok_em, outra_em = _dt(p.get('erro_em')), _dt(p.get('central_ok_em')), _dt(p.get('outra_instancia_em'))
+    d = {'nunca': not msg_em, 'so_status': bool(ult_em and not msg_em), 'msg': _quando(msg_em, agora) if msg_em else ''}
+    if erro_em and (not ok_em or erro_em > ok_em) and agora - erro_em < timedelta(days=1):
+        d['erro'], d['erro_em'] = p.get('erro_txt') or '?', _quando(erro_em, agora)
+    if outra_em and (not msg_em or outra_em >= msg_em) and agora - outra_em < timedelta(days=1):
+        d['outra_instancia'] = p.get('outra_instancia_fim') or '?'
+    return d
 
 
 def _do_webhook(p, acao):
@@ -821,17 +896,16 @@ def _do_webhook(p, acao):
         return
     if p.get('type') and p.get('type') != 'ReceivedCallback':
         return
-    if acao == 'repetida':
-        return
+    if acao == 'repetida' or (p.get('fromMe') and p.get('fromApi')):
+        return                              # o que o sistema manda (central, campanhas, automáticas) já está registrado
     import clientes
     texto, tipo = clientes._conteudo(p)
     if not tipo:
         return
-    try:
-        tel = clientes.normalizar_telefone(p.get('phone'))
-    except clientes.ErroClientes:
+    tel = _telefone(p)
+    if not tel:
         return
-    texto = _texto_limpo(_texto_recebido(p, texto, tipo), 2000)
+    texto = _texto_limpo(_texto_recebido(p, texto, tipo), MAX_TEXTO_BOTAO)
     midia = _midia(p, tipo)
     mid = str(p.get('messageId') or '')[:80] or None
     agora = _agora()
@@ -847,22 +921,27 @@ def _do_webhook(p, acao):
             cur.execute("SELECT ConversaID, Status, EsperandoDesde, Nome FROM AtendimentoConversas WHERE Telefone = ?", tel)
             c = cur.fetchone()
             if p.get('fromMe'):
-                # Mandada pelo celular (ou automática): entra numa conversa que já existe. Nunca cria conversa nova
-                # (senão cada mensagem das campanhas viraria uma conversa).
+                # Mandada pelo celular: entra numa conversa que já existe. Nunca cria conversa nova (senão cada
+                # mensagem das campanhas viraria uma conversa). [DEPURAÇÃO CENTRAL] O que o SISTEMA manda (fromApi:
+                # a própria central, campanhas, respostas automáticas) já está registrado: antes a cópia chegava antes
+                # de o número da mensagem ser gravado e a mensagem aparecia duas vezes.
                 if not c:
                     return
+                img = p.get('image') if isinstance(p.get('image'), dict) else {}
+                ecos = [texto, _texto_limpo(img.get('caption'), MAX_TEXTO_BOTAO)] if img else [texto]
+                cur.execute(f"SELECT 1 FROM AtendimentoMensagens WHERE ConversaID = ? AND De = ? AND PorID IS NOT NULL "
+                            f"AND CriadaEm >= ? AND Texto IN ({','.join('?' * len(ecos))})",
+                            c[0], DE_LOJA, agora - timedelta(minutes=2), *ecos)
+                if cur.fetchone():
+                    return                          # sem o fromApi: é a cópia do que a central acabou de mandar
                 cur.execute("INSERT INTO AtendimentoMensagens (ConversaID, De, Tipo, Texto, MidiaUrl, PorNome, ZapiID, Status, CriadaEm) "
-                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", c[0], DE_LOJA, tipo, texto, midia,
-                            'Automática' if p.get('fromApi') else 'Pelo celular', mid, M_ENVIADA, agora)
-                if p.get('fromApi'):
-                    cur.execute("UPDATE AtendimentoConversas SET UltimaEm = ?, UltimaPrevia = ? WHERE ConversaID = ?",
-                                agora, _previa(texto), c[0])
-                else:                               # alguém respondeu pelo celular: o cliente não está mais esperando
-                    cur.execute("UPDATE AtendimentoConversas SET UltimaEm = ?, UltimaPrevia = ?, EsperandoDesde = NULL, "
-                                "AvisadoEm = NULL WHERE ConversaID = ?", agora, _previa(texto), c[0])
+                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", c[0], DE_LOJA, tipo, texto, midia, 'Pelo celular', mid,
+                            M_ENVIADA, agora)
+                cur.execute("UPDATE AtendimentoConversas SET UltimaEm = ?, UltimaPrevia = ?, EsperandoDesde = NULL, "
+                            "AvisadoEm = NULL WHERE ConversaID = ?", agora, _previa(texto), c[0])   # o cliente foi respondido
                 conn.commit()
                 return
-            cli = clientes._achar_cliente(cur, tel)
+            cli = clientes._achar_cliente(cur, tel) if '@lid' not in tel else None
             perfil = clientes._limpo(p.get('senderName') or p.get('chatName'), 150) or None
             nome = (cli[1] if cli else None) or (c[3] if c else None) or perfil    # o cadastro vale; senão, o 1º nome visto
             auto = acao in AUTOMATICAS
@@ -889,6 +968,9 @@ def _do_webhook(p, acao):
             if auto:
                 cur.execute("INSERT INTO AtendimentoMensagens (ConversaID, De, Tipo, Texto, CriadaEm) VALUES (?, ?, 'texto', ?, ?)",
                             cid, DE_SISTEMA, AUTOMATICAS[acao], agora)
+            conn.commit()
+            cur.execute("DELETE FROM ParametrosAtendimento WHERE Chave = 'central_ok_em'")
+            cur.execute("INSERT INTO ParametrosAtendimento (Chave, Valor) VALUES ('central_ok_em', ?)", agora.isoformat())
             conn.commit()
         finally:
             conn.close()
@@ -942,7 +1024,7 @@ def _pode_ver(c, usuario):
 
 def _conv_json(c, usuario, agora):
     import clientes
-    return {'id': c['id'], 'nome': c['nome'] or clientes.fmt_telefone(c['telefone']), 'telefone': clientes.fmt_telefone(c['telefone']),
+    return {'id': c['id'], 'nome': c['nome'] or _tel_txt(c['telefone']), 'telefone': _tel_txt(c['telefone']),
             'status': c['status'], 'atendente': c['atendente'], 'minha': c['atendente_id'] == usuario['id'],
             'aguardando_min': _minutos(c['esperando_desde'], agora) if c['status'] != ST_ENCERRADA else None,
             'nao_lidas': c['nao_lidas'], 'hora': _quando(c['ultima'], agora), 'previa': c['previa'],
@@ -987,7 +1069,7 @@ def painel(usuario, busca='', agora=None):
             'aguardando': sum(1 for c in lista if c['status'] != ST_ENCERRADA and c['esperando_desde']),
             'minhas': sum(1 for c in lista if c['status'] == ST_ATENDENDO and c['atendente_id'] == usuario['id']),
             'equipe': [e for e in equipe if e['chave'] != f"a{usuario['id']}" or usuario['tipo'] != 'atendente'],
-            'eu': usuario, 'hora': f"{agora:%H:%M}"}
+            'eu': usuario, 'hora': f"{agora:%H:%M}", 'diagnostico': diagnostico(agora) if usuario['gestor'] else None}
 
 
 def _msg_json(r, agora):
@@ -1042,7 +1124,7 @@ def conversa(cid, usuario, abrir=False, agora=None):
                     "FROM AtendimentoMensagens WHERE ConversaID = ? ORDER BY MensagemID DESC", cid)
         mensagens = [_msg_json(r, agora) for r in reversed(cur.fetchall())]
         import clientes
-        cli = clientes._achar_cliente(cur, c['telefone'])
+        cli = clientes._achar_cliente(cur, c['telefone']) if '@lid' not in c['telefone'] else None
         if cli and cli[0] != c['cliente_id']:          # cadastrou depois (QR do balcão): a conversa passa a saber
             cur.execute("UPDATE AtendimentoConversas SET ClienteID = ?, Nome = ? WHERE ConversaID = ?", cli[0], cli[1], cid)
             c.update(cliente_id=cli[0], nome=cli[1])
@@ -1277,7 +1359,7 @@ def visao(usuario, periodo='hoje', agora=None):
         'periodo': periodo,
         'numeros': {'conversas': len(conversas), 'aguardando': sum(1 for c in abertas if c['esperando_desde']),
                     'resposta_media': _fmt_min(media), 'mensagens': sum(p['mensagens'] for p in pessoas.values())},
-        'agora': [{'id': c['id'], 'nome': c['nome'] or clientes.fmt_telefone(c['telefone']), 'status': c['status'],
+        'agora': [{'id': c['id'], 'nome': c['nome'] or _tel_txt(c['telefone']), 'status': c['status'],
                    'atendente': c['atendente'], 'aguardando_min': _minutos(c['esperando_desde'], agora), 'previa': c['previa']}
                   for c in abertas[:100]],
         'pessoas': sorted(({'nome': p['nome'], 'mensagens': p['mensagens'], 'conversas': len(p['conversas']),
@@ -1341,7 +1423,7 @@ def avisar_esperando(agora=None, enviar=None):
     import clientes
     novos.sort(key=lambda c: c['esperando_desde'])
     texto = ("💬 <b>Cliente esperando resposta no WhatsApp</b>\n"
-             + "\n".join(f"• {_esc(c['nome'] or clientes.fmt_telefone(c['telefone']))} — há {_minutos(c['esperando_desde'], agora)} min "
+             + "\n".join(f"• {_esc(c['nome'] or _tel_txt(c['telefone']))} — há {_minutos(c['esperando_desde'], agora)} min "
                          f"({_esc(c['atendente']) if c['status'] == ST_ATENDENDO and c['atendente'] else 'ninguém atendendo'})"
                          for c in novos[:15])
              + (f"\n… e mais {len(novos) - 15}." if len(novos) > 15 else '')

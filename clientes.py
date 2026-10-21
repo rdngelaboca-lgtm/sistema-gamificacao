@@ -1380,9 +1380,25 @@ def processar_webhook(segredo, payload, em_segundo_plano=True):
     if not certo or not hmac.compare_digest(certo, str(segredo or '')):
         raise ErroClientes("Não encontrado.", 404)
     p = payload if isinstance(payload, dict) else {}
+    r = _processar_webhook(p, em_segundo_plano)
+    _anotar_chegada(p, r.pop('motivo', None) or r.get('acao'))
+    return r
+
+
+def _anotar_chegada(p, motivo):
+    """[DEPURAÇÃO CENTRAL] O que chegou da Z-API por último (a 💬 Central mostra para a gestão). Nunca atrapalha."""
+    try:
+        import atendimento
+        atendimento.anotar_webhook(p, motivo)
+    except Exception as e:
+        logger.error(f"[CLIENTES] Diagnóstico do webhook não gravado: {e}")
+
+
+def _processar_webhook(p, em_segundo_plano):
     inst = _numero()['zapi_instancia']
-    if p.get('instanceId') and inst and str(p.get('instanceId')) != inst:
-        return {'ok': True, 'acao': 'ignorada'}
+    # [DEPURAÇÃO CENTRAL] o ID gravado em minúsculas (ou com espaço) fazia TODAS as mensagens serem ignoradas, sem aviso
+    if p.get('instanceId') and inst and str(p.get('instanceId')).strip().upper() != inst.strip().upper():
+        return {'ok': True, 'acao': 'ignorada', 'motivo': 'outra_instancia'}
     if p.get('type') == 'MessageStatusCallback' or (p.get('ids') and p.get('status') and 'text' not in p):
         r = _status_entrega(p)
         _central(p)
@@ -1399,7 +1415,8 @@ def processar_webhook(segredo, payload, em_segundo_plano=True):
     try:
         tel = normalizar_telefone(p.get('phone'))
     except ErroClientes:
-        return {'ok': True, 'acao': 'ignorada'}
+        _central(p)                         # [DEPURAÇÃO CENTRAL] número oculto pelo WhatsApp (@lid): a central ainda recebe
+        return {'ok': True, 'acao': 'ignorada', 'motivo': 'telefone'}
     palavra = _palavra(texto) if tipo == 'texto' else ''
     mid = str(p.get('messageId') or '')[:80] or None
     agora = datetime.now().replace(microsecond=0)

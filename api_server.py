@@ -2880,7 +2880,8 @@ def api_clientes_cadastro():
 @app.route('/webhook/zapi-clientes/<segredo>', methods=['POST'])
 def webhook_zapi_clientes(segredo):
     import clientes
-    return _resposta_clientes(lambda: clientes.processar_webhook(segredo, request.get_json(silent=True)))
+    # [DEPURAÇÃO CENTRAL] force: lê o JSON mesmo se a Z-API não mandar 'Content-Type: application/json' (antes: corpo vazio, ignorado)
+    return _resposta_clientes(lambda: clientes.processar_webhook(segredo, request.get_json(silent=True, force=True)))
 
 
 # ---------------- [PRESENÇA] ✅ confirmar presença (escala) e 📢 vagas para freelancers ----------------
