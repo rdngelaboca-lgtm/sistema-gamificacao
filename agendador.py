@@ -1106,6 +1106,15 @@ def processar_comunicados_equipe():
     comunicados_equipe.processar()
 
 
+def avisar_atendimento_esperando():
+    """[ATENDIMENTO] De minuto em minuto: cliente esperando resposta na central há mais de X minutos avisa a gestão."""
+    try:
+        import atendimento
+    except ImportError:
+        return
+    atendimento.avisar_esperando()
+
+
 def processar_perfil_disc():
     """[PERFIL DISC] A cada 2 minutos: o link da avaliação de perfil vai para quem está no horário (igual aos comunicados)."""
     try:
@@ -1367,6 +1376,7 @@ def configurar_agendamentos():
     schedule.every(1).minutes.do(run_threaded, processar_campanhas_clientes)          # [CLIENTES] a fila
     schedule.every(2).minutes.do(run_threaded, processar_comunicados_equipe)          # [COMUNICADOS] no turno de cada um
     schedule.every(2).minutes.do(run_threaded, processar_perfil_disc)                 # [PERFIL DISC] no turno de cada um
+    schedule.every(1).minutes.do(run_threaded, avisar_atendimento_esperando)          # [ATENDIMENTO] cliente esperando
     schedule.every().day.at(HORARIO_ANIVERSARIOS_CLIENTES).do(run_threaded, verificar_aniversarios_clientes)
     for horario in HORARIOS_RESUMO_NOTAS:                   # [AVISOS LIMPOS] resumo das notas novas
         schedule.every().day.at(horario).do(run_threaded, verificar_resumo_notas)

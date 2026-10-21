@@ -182,6 +182,8 @@ CAMINHOS_LIBERADOS_NA_INTERNET = tuple(getattr(config, 'TUNEL_CAMINHOS_LIBERADOS
 # coloque no config.py:  GESTAO_PELA_INTERNET = False
 if getattr(config, 'GESTAO_PELA_INTERNET', True):
     CAMINHOS_LIBERADOS_NA_INTERNET += ('/gestao', '/api/gestao')
+    # [ATENDIMENTO] a central também (atendente com o próprio PIN, com o mesmo bloqueio depois de erros)
+    CAMINHOS_LIBERADOS_NA_INTERNET += ('/atendimento', '/api/atendimento')
 # [CLIENTES] O cliente se cadastra pelo QR do balcão (página pública, só o formulário) e a Z-API avisa
 # quem respondeu SAIR (com um segredo no endereço). Nada mais da área de clientes fica aberto.
 CAMINHOS_LIBERADOS_NA_INTERNET += ('/clientes/cadastro', '/api/clientes/cadastro', '/webhook/zapi-clientes/')
@@ -3246,6 +3248,239 @@ def api_lideranca(token):
         return _resposta_perfil(lambda: perfil_lideranca.ver(token))
     dados = ler_json() or {}
     return _resposta_perfil(lambda: perfil_lideranca.responder(token, dados))
+
+
+# ---------------- [ATENDIMENTO] 💬 Central de Atendimento do WhatsApp (número dos clientes) ----------------
+# O atendente entra com o PRÓPRIO nome e PIN (session['atendente']) e só vê a central; o gestor entra com o
+# login da Gestão (session['compras_usuario']). Nada disto deixa o atendente entrar no resto da Gestão.
+def _resposta_atendimento(funcao):
+    import atendimento
+    import clientes
+    try:
+        return jsonify(funcao()), 200
+    except atendimento.ErroAtendimento as e:
+        return jsonify({"erro": str(e)}), e.status
+    except clientes.ErroClientes as e:
+        return jsonify({"erro": str(e)}), e.status
+    except Exception as e:
+        logger.exception(f"Erro na central de atendimento ({request.path}): {e}")
+        return jsonify({"erro": "Erro no servidor. Tente de novo; se continuar, veja o log."}), 500
+
+
+def atendimento_login(f):
+    """Protege as rotas da central: atendente ativo (PIN da central) ou gestor (login da Gestão)."""
+    @wraps(f)
+    def interno(*args, **kwargs):
+        import atendimento
+        try:
+            usuario = atendimento.usuario_da_sessao(session.get('atendente'), session.get('compras_usuario'))
+        except Exception as e:
+            logger.error(f"Central de atendimento: falha ao conferir o usuário: {e}")
+            return jsonify({"erro": "Sem conexão com o banco de dados."}), 503
+        if not usuario:
+            session.pop('atendente', None)
+            return jsonify({"erro": "Entre com o seu nome e PIN.", "login": True}), 401
+        return f(usuario, *args, **kwargs)
+    return interno
+
+
+@app.route('/atendimento')
+@app.route('/atendimento/')
+def pagina_atendimento():
+    resposta = app.make_response(render_template('atendimento.html'))
+    resposta.headers['Cache-Control'] = 'no-store'
+    return resposta
+
+
+@app.route('/api/atendimento/usuarios', methods=['GET'])
+def api_atendimento_usuarios():
+    import atendimento
+    return _resposta_atendimento(atendimento.usuarios_login)
+
+
+@app.route('/api/atendimento/login', methods=['POST'])
+def api_atendimento_login():
+    import atendimento
+    ip = _ip_do_cliente()
+    if _ip_bloqueado(ip):
+        return jsonify({"erro": "Muitas tentativas erradas deste aparelho. Espere 15 minutos."}), 429
+    dados = ler_json() or {}
+    try:
+        usuario = atendimento.login(dados.get('chave'), dados.get('pin'))
+    except atendimento.ErroAtendimento as e:
+        if e.status in (401, 403):
+            _erros_login_por_ip.setdefault(ip, []).append(_time.time())
+        logger.warning(f"Central de atendimento: login recusado ({dados.get('chave')}, IP {ip}): {e}")
+        return jsonify({"erro": str(e)}), e.status
+    except Exception as e:
+        logger.exception(f"Central de atendimento: erro no login: {e}")
+        return jsonify({"erro": "Sem conexão com o banco de dados."}), 503
+    # Um login por vez neste navegador: o atendente não herda o login de gestor de quem usou o computador antes
+    session.pop('atendente', None)
+    session.pop('compras_usuario', None)
+    if usuario['tipo'] == 'atendente':
+        session['atendente'] = {'id': usuario['id'], 'nome': usuario['nome']}
+    else:
+        session['compras_usuario'] = {'id': usuario['id'], 'nome': usuario['nome'], 'gestor': True}
+    session.permanent = True
+    logger.info(f"Central de atendimento: login de {usuario['nome']} ({usuario['tipo']}, IP {ip})")
+    return jsonify({"usuario": usuario})
+
+
+@app.route('/api/atendimento/sair', methods=['POST'])
+def api_atendimento_sair():
+    session.pop('atendente', None)
+    session.pop('compras_usuario', None)
+    return jsonify({"ok": True})
+
+
+@app.route('/api/atendimento/eu', methods=['GET'])
+@atendimento_login
+def api_atendimento_eu(usuario):
+    return jsonify({"usuario": usuario})
+
+
+@app.route('/api/atendimento/painel', methods=['GET'])
+@atendimento_login
+def api_atendimento_painel(usuario):
+    import atendimento
+    return _resposta_atendimento(lambda: atendimento.painel(usuario, request.args.get('busca', '')))
+
+
+@app.route('/api/atendimento/conversas/<int:conversa_id>', methods=['GET'])
+@atendimento_login
+def api_atendimento_conversa(usuario, conversa_id):
+    import atendimento
+    return _resposta_atendimento(lambda: atendimento.conversa(conversa_id, usuario, abrir=request.args.get('abrir') == '1'))
+
+
+@app.route('/api/atendimento/conversas/<int:conversa_id>/enviar', methods=['POST'])
+@atendimento_login
+def api_atendimento_enviar(usuario, conversa_id):
+    import atendimento
+    return _resposta_atendimento(lambda: atendimento.enviar(conversa_id, ler_json() or {}, usuario))
+
+
+@app.route('/api/atendimento/conversas/<int:conversa_id>/reenviar/<int:mensagem_id>', methods=['POST'])
+@atendimento_login
+def api_atendimento_reenviar(usuario, conversa_id, mensagem_id):
+    import atendimento
+    return _resposta_atendimento(lambda: atendimento.reenviar(conversa_id, mensagem_id, usuario))
+
+
+@app.route('/api/atendimento/conversas/<int:conversa_id>/<acao>', methods=['POST'])
+@atendimento_login
+def api_atendimento_acao(usuario, conversa_id, acao):
+    import atendimento
+    if acao not in ('assumir', 'encerrar', 'transferir'):
+        return jsonify({"erro": "Não encontrado."}), 404
+    return _resposta_atendimento(lambda: atendimento.acao(conversa_id, acao, ler_json() or {}, usuario))
+
+
+@app.route('/api/atendimento/cardapio', methods=['GET'])
+@atendimento_login
+def api_atendimento_cardapio(usuario):
+    import atendimento
+    return _resposta_atendimento(lambda: atendimento.cardapio(usuario))
+
+
+@app.route('/api/atendimento/produtos', methods=['POST'])
+@atendimento_login
+def api_atendimento_produtos(usuario):
+    import atendimento
+    return _resposta_atendimento(lambda: atendimento.salvar_produtos(ler_json() or {}, usuario))
+
+
+@app.route('/api/atendimento/botoes', methods=['POST'])
+@app.route('/api/atendimento/botoes/<int:botao_id>', methods=['POST'])
+@atendimento_login
+def api_atendimento_botao(usuario, botao_id=None):
+    import atendimento
+    return _resposta_atendimento(lambda: atendimento.salvar_botao(botao_id, ler_json() or {}, usuario))
+
+
+@app.route('/api/atendimento/botoes/<int:botao_id>/excluir', methods=['POST'])
+@atendimento_login
+def api_atendimento_botao_excluir(usuario, botao_id):
+    import atendimento
+    return _resposta_atendimento(lambda: atendimento.excluir_botao(botao_id, usuario))
+
+
+@app.route('/api/atendimento/botoes/<int:botao_id>/mover', methods=['POST'])
+@atendimento_login
+def api_atendimento_botao_mover(usuario, botao_id):
+    import atendimento
+    return _resposta_atendimento(lambda: atendimento.mover_botao(botao_id, ler_json() or {}, usuario))
+
+
+@app.route('/api/atendimento/previa', methods=['POST'])
+@atendimento_login
+def api_atendimento_previa(usuario):
+    import atendimento
+    return _resposta_atendimento(lambda: atendimento.previa(ler_json() or {}))
+
+
+@app.route('/api/atendimento/foto', methods=['POST'])
+@atendimento_login
+def api_atendimento_foto(usuario):
+    import clientes
+    return _resposta_atendimento(lambda: clientes.salvar_foto((ler_json() or {}).get('foto')))
+
+
+@app.route('/api/atendimento/foto/<nome>', methods=['GET'])
+@atendimento_login
+def api_atendimento_ver_foto(usuario, nome):
+    import clientes
+    from flask import send_file
+    try:
+        return send_file(clientes.caminho_foto(nome), max_age=3600)
+    except clientes.ErroClientes as e:
+        return jsonify({"erro": str(e)}), e.status
+
+
+@app.route('/api/atendimento/visao', methods=['GET'])
+@atendimento_login
+def api_atendimento_visao(usuario):
+    import atendimento
+    return _resposta_atendimento(lambda: atendimento.visao(usuario, request.args.get('periodo', 'hoje')))
+
+
+@app.route('/api/atendimento/aviso', methods=['POST'])
+@atendimento_login
+def api_atendimento_aviso(usuario):
+    import atendimento
+    return _resposta_atendimento(lambda: atendimento.salvar_aviso(ler_json() or {}, usuario))
+
+
+@app.route('/api/atendimento/atendentes', methods=['GET', 'POST'])
+@atendimento_login
+def api_atendimento_atendentes(usuario):
+    import atendimento
+    if request.method == 'GET':
+        return _resposta_atendimento(lambda: atendimento.atendentes(usuario))
+    dados = ler_json() or {}
+
+    def novo():
+        try:
+            fid = int(dados.get('funcionario_id'))
+        except (TypeError, ValueError):
+            raise atendimento.ErroAtendimento("Escolha o funcionário.")
+        return atendimento.salvar_atendente(fid, dados, usuario, novo=True)
+    return _resposta_atendimento(novo)
+
+
+@app.route('/api/atendimento/atendentes/<int:funcionario_id>', methods=['POST'])
+@atendimento_login
+def api_atendimento_atendente(usuario, funcionario_id):
+    import atendimento
+    return _resposta_atendimento(lambda: atendimento.salvar_atendente(funcionario_id, ler_json() or {}, usuario))
+
+
+@app.route('/api/atendimento/atendentes/<int:funcionario_id>/excluir', methods=['POST'])
+@atendimento_login
+def api_atendimento_atendente_excluir(usuario, funcionario_id):
+    import atendimento
+    return _resposta_atendimento(lambda: atendimento.excluir_atendente(funcionario_id, usuario))
 
 
 if __name__ == "__main__":

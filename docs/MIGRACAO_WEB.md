@@ -431,6 +431,36 @@ Avaliação de perfil no nível da **gestão**, **à parte** do 🧭 Perfil da e
 - **🔒 Quem pode ver:** lista no banco (vazia = qualquer gestor). Depois de escolher, quem está fora vê só um cadeado e as
   rotas respondem 403. Não dá para se tirar da lista. **Nada vai para o grupo de avisos** (privacidade).
 
+### Novo (só na Web) — 💬 Central de Atendimento do WhatsApp (10/2026: `/atendimento`, menu Gestão › 💬 Atendimento)
+
+Atendimento e vendas pelo **número dos clientes** (o mesmo das campanhas: 2ª instância da Z-API, nunca o da loja), num
+computador. Módulo `atendimento.py`, página `templates/atendimento.html`; tabelas `AtendimentoConversas`,
+`AtendimentoMensagens`, `AtendimentoAtendentes`, `AtendimentoProdutos`, `AtendimentoBotoes`, `ParametrosAtendimento`.
+- **As mensagens chegam** pelo webhook "Ao receber" que o 📢 Clientes já usa (`clientes.processar_webhook` chama
+  `atendimento.do_webhook`; se a central falhar, o SAIR/VOLTAR/reservas seguem iguais). Uma conversa por WhatsApp:
+  🔴 esperando (o mais antigo primeiro) · em atendimento · encerrada (volta para "esperando" se o cliente escrever).
+  Foto, áudio, vídeo, arquivo e localização (link do mapa) aparecem na conversa. Resposta automática do 📢 Clientes
+  (SAIR, VOLTAR, reserva) entra na conversa sem deixá-la esperando. ✔️✔️ entregue/lida pelo webhook "Status".
+  Mandada pelo celular entra na conversa que já existe (precisa ligar "notificar as enviadas por mim" na Z-API);
+  mensagem de campanha nunca cria conversa.
+- **Login:** atendente com o **próprio PIN** (cadastrado pela gestão a partir do cadastro de funcionários; 5 erros =
+  15 min bloqueado, igual ao app), sem acesso ao resto da Gestão. Gestor entra com o PIN do app (ou já logado na
+  Gestão). Entrar como atendente tira o login de gestor daquele navegador. Permissões por atendente: ver as conversas
+  dos outros · mudar botões e preços · ver a visão da gestão.
+- **Atender:** abrir uma conversa esperando = assumir (fica registrado); responder a de outro = assumir; ➡️ passar para
+  outra pessoa; encerrar. Tudo o que vai fica com o nome de quem mandou. Texto, foto (o computador diminui), Enter manda.
+  ⚠️ não foi → "Mandar de novo". Plim e contador no título quando chega mensagem (a página pergunta a cada 3 s).
+- **Botões prontos** em 3 grupos (🍧 Produtos com foto + preços · Entrega e pagamento · Andamento do pedido): um clique
+  manda para o cliente. No texto, `{nome}` = primeiro nome do cliente e `[Categoria]` = a lista dos itens da tabela
+  dessa categoria que **tem hoje**, com o preço (complemento grátis sem preço, pago com "+R$").
+- **Tabela de preços** (a mesma do 99Food; começou com os 3 açaís e os 24 complementos): categoria, nome, preço,
+  complemento, "tem hoje". Mudou aqui, todos os botões mandam o preço novo.
+- **📊 Visão da gestão:** conversas, esperando resposta agora, tempo médio até a 1ª resposta, mensagens, por pessoa
+  (com quem está com a central aberta) e as conversas abertas. **Aviso no grupo da gestão** quando um cliente espera mais
+  de X minutos (padrão 5; 0 desliga; tipo 💬 Atendimento no WhatsApp em 📣 Avisos), uma vez por espera (agendador, 1 min).
+- Liberado na internet junto com a Gestão (`/atendimento`, `/api/atendimento`), sempre com login.
+- **Próxima fase:** pedido na lateral (itens, total, Pix copia e cola, comanda) e vendas WhatsApp × 99Food.
+
 ### App de compras — aba Gestão em 3 áreas (10/2026)
 A aba **Gestão** do app (só o gestor vê) foi dividida em **🏪 Loja · 🛒 Compras · 📦 Estoque**, com o número de
 pendências de cada área no botão (Loja: dias sem faturamento lançado; Compras: listas para aprovar + cupons para

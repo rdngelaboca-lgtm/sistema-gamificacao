@@ -1,0 +1,884 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0E6B63">
+<title>Atendimento · Gela Boca</title>
+<!-- [ATENDIMENTO] 💬 Central de Atendimento do WhatsApp (número dos clientes): conversas ao vivo, botões com foto e
+     preços da tabela, visão da gestão e atendentes. O atendente entra com o próprio nome e PIN. -->
+<style>
+  :root {
+    --fundo: #F3F6F5; --cartao: #FFFFFF; --texto: #16201F; --suave: #55625F; --linha: #DCE3E1; --linha2: #E6ECEA;
+    --verde: #0E6B63; --verde-esc: #0B564F; --verde-claro: #DDEFEC; --laranja: #9A3A07; --laranja-claro: #FDEBD8;
+    --roxo: #4A1C5E; --roxo-claro: #F6EEF9; --roxo-linha: #D7C2E0; --ambar: #6E2F05; --ambar-claro: #FDF3E7; --ambar-linha: #F1CFA8;
+    --erro: #c62828; --aviso: #b26a00; --ok: #1b7a2f; color-scheme: light;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--fundo); color: var(--texto); height: 100%;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 15px; }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  [hidden] { display: none !important; }
+  .mini { font-size: 13px; } .suave { color: var(--suave); }
+  .btn { border: 1px solid var(--linha); background: var(--cartao); border-radius: 10px; padding: 7px 12px; font-weight: 600;
+    display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; text-decoration: none; color: var(--texto); }
+  .btn:hover { background: var(--linha2); }
+  .btn.prim { background: var(--verde); color: #fff; border-color: var(--verde); }
+  .btn.prim:hover { background: var(--verde-esc); }
+  .btn.perigo { color: var(--erro); }
+  .btn[disabled] { opacity: .5; cursor: default; }
+  input[type=text], input[type=search], input[type=password], input[type=number], input:not([type]), select, textarea {
+    border: 1px solid var(--linha); border-radius: 8px; padding: 7px 9px; background: #fff; }
+  input:focus, select:focus, textarea:focus, button:focus-visible, a:focus-visible { outline: 2px solid var(--verde); outline-offset: 1px; }
+  .n-erro { color: var(--erro); } .n-aviso { color: var(--aviso); } .n-ok { color: var(--ok); }
+
+  /* ---------- login ---------- */
+  #login { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 16px; }
+  #login form { background: #fff; border: 1px solid var(--linha); border-radius: 16px; padding: 26px; width: min(380px, 100%);
+    display: flex; flex-direction: column; gap: 12px; }
+  #login h2 { margin: 0; } #login input, #login select { width: 100%; padding: 11px; font-size: 16px; }
+  #login .btn { justify-content: center; padding: 12px; font-size: 16px; }
+  #erro-login { color: var(--erro); min-height: 1.2em; }
+
+  /* ---------- topo ---------- */
+  #app { display: flex; flex-direction: column; height: 100vh; }
+  header { background: var(--verde); color: #fff; display: flex; align-items: center; gap: 8px 14px; padding: 8px 16px; flex-wrap: wrap; }
+  header .marca { font-weight: 800; font-size: 17px; }
+  header nav { display: flex; gap: 4px; flex-wrap: wrap; }
+  header nav button { color: #fff; background: transparent; border: 0; padding: 7px 11px; border-radius: 8px; font-weight: 600; }
+  header nav button.ativo { background: rgba(255,255,255,.2); }
+  header .dir { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  header .dir a, header .dir button { color: #fff; background: transparent; border: 1px solid rgba(255,255,255,.45);
+    border-radius: 8px; padding: 6px 11px; text-decoration: none; font-weight: 600; }
+  main { flex: 1; min-height: 0; overflow: auto; }
+
+  /* ---------- conversas ---------- */
+  #aba-conversas { display: flex; flex-direction: column; height: 100%; }
+  .central { flex: 1; min-height: 0; display: flex; gap: 12px; padding: 12px; }
+  .col { background: #fff; border: 1px solid var(--linha); border-radius: 12px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+  .col-conversas { flex: 0 0 310px; }
+  .col-chat { flex: 1 1 auto; min-width: 0; }
+  .col-cliente { flex: 0 0 260px; overflow: auto; padding: 14px; gap: 8px; }
+  .col h2 { margin: 0; font-size: 17px; }
+  .topo-lista { padding: 12px 14px 8px; display: flex; flex-direction: column; gap: 8px; }
+  .filtros { display: flex; gap: 6px; flex-wrap: wrap; }
+  .filtros button { border: 1px solid var(--linha); background: #fff; border-radius: 999px; padding: 6px 11px; font-weight: 600; font-size: 13px; }
+  .filtros button.ativo { background: var(--verde); color: #fff; border-color: var(--verde); }
+  #busca { width: 100%; }
+  #lista { flex: 1; overflow-y: auto; border-top: 1px solid var(--linha2); }
+  .conv { width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--linha2); background: #fff; padding: 10px 14px;
+    display: flex; flex-direction: column; gap: 4px; }
+  .conv:hover { background: #F7FAF9; }
+  .conv.sel { background: var(--verde-claro); }
+  .conv .l1 { display: flex; gap: 8px; align-items: center; }
+  .conv .nome { font-weight: 700; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .conv .hora { font-size: 12px; color: var(--suave); }
+  .conv .previa { font-size: 13px; color: var(--suave); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+  .badge { min-width: 22px; height: 22px; border-radius: 11px; background: #C2410C; color: #fff; font-size: 12px; font-weight: 700;
+    display: inline-flex; align-items: center; justify-content: center; padding: 0 6px; }
+  .chip { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; display: inline-block; }
+  .chip.esp { background: var(--laranja-claro); color: var(--laranja); }
+  .chip.at { background: var(--verde-claro); color: #0B5A52; }
+  .chip.enc { background: #ECEFEF; color: #4A5554; }
+  .vazio { padding: 24px 16px; color: var(--suave); text-align: center; }
+
+  .chat-topo { padding: 10px 14px; border-bottom: 1px solid var(--linha2); display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+  .chat-topo .quem { flex: 1; min-width: 160px; display: flex; flex-direction: column; }
+  .chat-topo .quem b { font-size: 16px; }
+  #aviso-outro { background: var(--laranja-claro); color: #7A2E05; padding: 9px 14px; font-size: 14px; }
+  #mensagens { flex: 1; overflow-y: auto; background: #EEF2F1; padding: 14px; display: flex; flex-direction: column; gap: 8px; }
+  .msg { display: flex; }
+  .msg.loja { justify-content: flex-end; }
+  .msg.sistema { justify-content: center; }
+  .balao { max-width: 70%; border-radius: 12px; padding: 8px 11px; display: flex; flex-direction: column; gap: 5px; word-wrap: break-word; }
+  .msg.cliente .balao { background: #fff; border: 1px solid var(--linha); border-bottom-left-radius: 4px; }
+  .msg.loja .balao { background: #DDF3EE; border: 1px solid #BFE5DC; border-bottom-right-radius: 4px; }
+  .msg.loja.falhou .balao { background: #FDECEC; border-color: #F2B8B5; }
+  .msg.sistema .balao { background: transparent; color: var(--suave); font-size: 12px; text-align: center; max-width: 90%; }
+  .balao .txt { white-space: pre-wrap; font-size: 15px; }
+  .balao .meta { font-size: 11px; color: #3F5250; align-self: flex-end; display: flex; gap: 6px; align-items: center; }
+  .balao img { max-width: 260px; max-height: 260px; border-radius: 8px; display: block; }
+  .balao audio, .balao video { max-width: 280px; }
+  .lida { color: #1565C0; font-weight: 700; }
+  #form-msg { display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--linha2); align-items: flex-end; }
+  #msg { flex: 1; min-width: 0; resize: none; height: 44px; max-height: 140px; font-size: 15px; padding: 10px 12px; }
+  .btn-foto { width: 44px; height: 44px; justify-content: center; padding: 0; }
+  #foto-pronta { padding: 6px 14px 0; display: flex; gap: 10px; align-items: center; font-size: 13px; }
+  #foto-pronta img { height: 56px; border-radius: 6px; }
+  .cli-linha { font-size: 14px; } .cli-linha b { display: block; font-size: 12px; color: var(--suave); font-weight: 600; }
+
+  #botoes { background: #fff; border-top: 1px solid var(--linha); padding: 10px 14px 12px; display: flex; flex-wrap: wrap;
+    gap: 10px 24px; align-items: flex-start; max-height: 38vh; overflow: auto; }
+  .grupo { display: flex; flex-direction: column; gap: 6px; }
+  .grupo .tit { font-size: 12px; font-weight: 700; letter-spacing: .04em; }
+  .grupo .lista-b { display: flex; flex-wrap: wrap; gap: 6px; }
+  .bt { min-height: 42px; padding: 0 14px; border-radius: 10px; font-weight: 600; font-size: 14px; }
+  .bt.produtos { border: 1px solid var(--roxo-linha); background: var(--roxo-claro); color: var(--roxo); }
+  .bt.entrega { border: 1px solid #BFE5DC; background: #EAF6F3; color: #0B4A44; }
+  .bt.andamento { border: 1px solid var(--ambar-linha); background: var(--ambar-claro); color: var(--ambar); }
+  .bt[disabled] { opacity: .45; cursor: default; }
+
+  /* ---------- outras abas ---------- */
+  .pagina { max-width: 1360px; margin: 0 auto; padding: 18px; display: flex; flex-direction: column; gap: 16px; }
+  .caixa { background: #fff; border: 1px solid var(--linha); border-radius: 12px; padding: 16px; }
+  .caixa h2 { margin: 0 0 10px; font-size: 18px; }
+  .lado { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+  .lado > * { flex: 1 1 460px; min-width: 0; }
+  .lado > .caixa-tabela { flex: 3 1 640px; } .lado > .caixa-botoes { flex: 2 1 380px; }
+  table.grade { width: 100%; border-collapse: collapse; font-size: 14px; }
+  table.grade th { text-align: left; padding: 7px; border-bottom: 1px solid var(--linha); color: var(--suave); font-size: 13px; }
+  table.grade td { padding: 6px 7px; border-bottom: 1px solid var(--linha2); vertical-align: middle; }
+  .rolagem { overflow-x: auto; }
+  .cat { border: 1px solid var(--linha2); border-radius: 10px; padding: 10px; margin-bottom: 12px; }
+  .cat-topo { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; flex-wrap: wrap; }
+  .cat-topo input { font-weight: 700; flex: 1; min-width: 160px; }
+  .item { display: grid; grid-template-columns: minmax(0, 1fr) 110px auto auto auto; gap: 6px; align-items: center; padding: 3px 0; }
+  .item input[type=text] { width: 100%; }
+  .item label { font-size: 12px; color: var(--suave); display: flex; gap: 4px; align-items: center; white-space: nowrap; }
+  .numeros { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+  .numero { background: #fff; border: 1px solid var(--linha); border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 4px; }
+  .numero b { font-size: 28px; }
+  .bolinha { width: 9px; height: 9px; border-radius: 50%; display: inline-block; background: #B9C4C2; margin-right: 6px; }
+  .bolinha.on { background: #0E8A5F; }
+  .linha-b { display: flex; gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--linha2); }
+  .linha-b .n { flex: 1; font-weight: 600; }
+  .marcador { border: 1px dashed var(--roxo-linha); background: var(--roxo-claro); color: var(--roxo); border-radius: 999px; padding: 3px 9px; font-size: 13px; }
+  .previa-zap { background: #EEF2F1; border-radius: 12px; padding: 12px; display: flex; justify-content: flex-end; }
+  .previa-zap .balao { background: #DDF3EE; border: 1px solid #BFE5DC; max-width: 100%; }
+
+  #status { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); background: #263238; color: #fff; padding: 9px 16px;
+    border-radius: 10px; font-weight: 600; max-width: 92vw; box-shadow: 0 4px 14px #0004; z-index: 50; white-space: pre-line; }
+  #status.erro { background: var(--erro); }
+  #fundo-modal { position: fixed; inset: 0; background: #0006; z-index: 40; display: flex; align-items: center; justify-content: center; padding: 12px; }
+  #modal { background: #fff; border-radius: 14px; padding: 16px; width: min(820px, 100%); max-height: 92vh; overflow: auto; }
+  #modal.estreito { width: min(460px, 100%); }
+  #modal h3 { margin: 0 0 10px; }
+  .form { display: grid; gap: 10px; }
+  .form label { font-size: 13px; font-weight: 700; color: var(--suave); display: flex; flex-direction: column; gap: 4px; }
+  .form input, .form select, .form textarea { width: 100%; font-size: 15px; }
+  .form label.check { flex-direction: row; align-items: center; gap: 8px; font-weight: 600; color: var(--texto); }
+  .form label.check input { width: auto; }
+
+  @media (max-width: 900px) {
+    #app { height: auto; min-height: 100vh; }
+    .central { flex-direction: column; }
+    .col-conversas, .col-cliente { flex: none; max-height: 45vh; }
+    .col-chat { min-height: 70vh; }
+    #botoes { max-height: none; }
+    .item { grid-template-columns: minmax(0, 1fr) 90px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="login" hidden>
+  <form id="form-login">
+    <div class="mini" style="color: var(--verde); font-weight: 700">Gela Boca</div>
+    <h2>Central de Atendimento</h2>
+    <label class="mini suave" for="login-usuario">Quem é você?</label>
+    <select id="login-usuario"></select>
+    <label class="mini suave" for="login-pin">PIN</label>
+    <input id="login-pin" type="password" inputmode="numeric" autocomplete="current-password" maxlength="8">
+    <button class="btn prim" type="submit">Entrar</button>
+    <div id="erro-login"></div>
+    <div class="mini suave">Atendente: o PIN que a gestão cadastrou para você. Gestão: o mesmo PIN do app de compras.</div>
+  </form>
+</div>
+
+<div id="app" hidden>
+  <header>
+    <span class="marca">Gela Boca · Atendimento</span>
+    <nav aria-label="Abas da central">
+      <button type="button" data-aba="conversas" class="ativo">💬 Conversas</button>
+      <button type="button" data-aba="botoes" hidden>🍧 Botões e preços</button>
+      <button type="button" data-aba="visao" hidden>📊 Visão da gestão</button>
+      <button type="button" data-aba="atendentes" hidden>👥 Atendentes</button>
+    </nav>
+    <div class="dir">
+      <span id="quem" class="mini"></span>
+      <a id="link-gestao" href="/gestao/escala" hidden>Gestão</a>
+      <button id="btn-sair" type="button">Sair</button>
+    </div>
+  </header>
+  <main>
+    <section id="aba-conversas" class="aba">
+      <div class="central">
+        <section class="col col-conversas" aria-label="Conversas">
+          <div class="topo-lista">
+            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px">
+              <h2>Conversas</h2><span id="n-esperando" class="mini" style="color:var(--laranja);font-weight:700"></span>
+            </div>
+            <div class="filtros" role="group" aria-label="Mostrar">
+              <button type="button" data-filtro="todas" class="ativo">Todas</button>
+              <button type="button" data-filtro="esperando">Esperando</button>
+              <button type="button" data-filtro="minhas">Minhas</button>
+              <button type="button" data-filtro="encerradas">Encerradas</button>
+            </div>
+            <input id="busca" type="search" placeholder="Buscar nome ou telefone" aria-label="Buscar nome ou telefone">
+          </div>
+          <div id="lista"><div class="vazio">Carregando…</div></div>
+        </section>
+
+        <section class="col col-chat" aria-label="Conversa aberta">
+          <div id="chat-vazio" class="vazio" style="margin:auto">Escolha uma conversa à esquerda.<br>
+            <span class="mini">As que estão <b>esperando</b> aparecem primeiro: quem abre, assume o atendimento.</span></div>
+          <div id="chat" hidden style="display:flex;flex-direction:column;flex:1;min-height:0">
+            <div class="chat-topo">
+              <div class="quem"><b id="chat-nome"></b><span id="chat-info" class="mini suave"></span></div>
+              <button class="btn" type="button" id="b-assumir">Assumir</button>
+              <button class="btn" type="button" id="b-passar">Passar para outra pessoa</button>
+              <button class="btn" type="button" id="b-encerrar">Encerrar conversa</button>
+            </div>
+            <div id="aviso-outro" hidden></div>
+            <div id="mensagens" aria-live="polite"></div>
+            <div id="foto-pronta" hidden><img alt="Foto que vai junto"><span>A foto vai junto com a mensagem.</span>
+              <button class="btn" type="button" id="b-tirar-foto">Tirar a foto</button></div>
+            <form id="form-msg">
+              <label class="btn btn-foto" title="Mandar uma foto" aria-label="Mandar uma foto">📷<input id="arquivo-foto" type="file" accept="image/*" hidden></label>
+              <textarea id="msg" placeholder="Escreva a mensagem (Enter manda · Shift+Enter pula linha)" aria-label="Mensagem" maxlength="1500"></textarea>
+              <button class="btn prim" type="submit" id="b-enviar" style="height:44px">Enviar</button>
+            </form>
+          </div>
+        </section>
+
+        <aside class="col col-cliente" aria-label="Cliente" id="cliente"><div class="vazio">O cliente aparece aqui.</div></aside>
+      </div>
+      <footer id="botoes" aria-label="Botões prontos"></footer>
+    </section>
+
+    <section id="aba-botoes" class="aba" hidden>
+      <div class="pagina">
+        <div class="lado">
+          <div class="caixa caixa-tabela">
+            <h2>Tabela de preços</h2>
+            <p class="mini suave" style="margin-top:0">Os mesmos preços do 99Food. Mudou aqui, todos os botões já mandam o preço novo.
+              Tirando o "tem hoje", o item some das mensagens (ex.: sabor que acabou). Complemento aparece sem preço (ou com o
+              "+R$" se for pago).</p>
+            <div id="tabela"></div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button class="btn" type="button" id="b-nova-cat">+ Categoria</button>
+              <button class="btn prim" type="button" id="b-salvar-tabela">💾 Salvar preços</button>
+            </div>
+          </div>
+          <div class="caixa caixa-botoes">
+            <h2>Botões da central</h2>
+            <p class="mini suave" style="margin-top:0">Um clique na conversa manda o texto (e a foto) para o cliente.</p>
+            <div id="lista-botoes"></div>
+            <button class="btn" type="button" id="b-novo-botao" style="margin-top:10px">+ Novo botão</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="aba-visao" class="aba" hidden>
+      <div class="pagina">
+        <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+          <h2 style="margin:0;flex:1">Atendimento no WhatsApp</h2>
+          <div class="filtros" role="group" aria-label="Período">
+            <button type="button" data-periodo="hoje" class="ativo">Hoje</button>
+            <button type="button" data-periodo="7">7 dias</button>
+            <button type="button" data-periodo="mes">Este mês</button>
+          </div>
+        </div>
+        <div class="numeros" id="numeros"></div>
+        <div class="lado">
+          <div class="caixa"><h2>Conversas agora</h2><div class="rolagem" id="visao-agora"></div></div>
+          <div class="caixa"><h2>Por pessoa</h2><div class="rolagem" id="visao-pessoas"></div>
+            <div class="mini suave" style="margin-top:8px"><span class="bolinha on"></span>com a central aberta agora</div></div>
+        </div>
+        <form class="caixa" id="form-aviso" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+          <label for="aviso-min" style="font-weight:600">Avisar no grupo da gestão quando um cliente esperar mais de</label>
+          <input id="aviso-min" type="number" min="0" max="240" style="width:80px">
+          <span>minutos sem resposta</span>
+          <button class="btn prim" type="submit">Salvar</button>
+          <span class="mini suave">(0 desliga · o aviso também liga/desliga em Gestão › 📣 Avisos)</span>
+        </form>
+      </div>
+    </section>
+
+    <section id="aba-atendentes" class="aba" hidden>
+      <div class="pagina">
+        <div class="caixa">
+          <h2>Atendentes e permissões</h2>
+          <p class="mini suave" style="margin-top:0">Atendente não é gestor: entra só na central (não vê Escala, Pagamentos, Folha...).
+            Tudo o que ele manda fica com o nome dele.</p>
+          <div class="rolagem" id="lista-atendentes"></div>
+        </div>
+        <form class="caixa form" id="form-novo-atendente">
+          <h2 style="margin:0">Novo atendente</h2>
+          <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end">
+            <label style="flex:2 1 240px">Funcionário (do cadastro)<select id="na-func"></select></label>
+            <label style="flex:1 1 140px">PIN (4 números)<input id="na-pin" inputmode="numeric" maxlength="4" autocomplete="off"></label>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:14px">
+            <label class="check"><input type="checkbox" id="na-ver" checked> Ver as conversas dos outros</label>
+            <label class="check"><input type="checkbox" id="na-editar"> Mudar botões e preços</label>
+            <label class="check"><input type="checkbox" id="na-gestao"> Ver a visão da gestão</label>
+          </div>
+          <div><button class="btn prim" type="submit">Criar atendente</button></div>
+        </form>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div id="fundo-modal" hidden><div id="modal" role="dialog" aria-modal="true"></div></div>
+<div id="status" hidden role="status"></div>
+
+<script>
+'use strict';
+const $ = s => document.querySelector(s);
+const esc = t => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+const S = {eu: null, aba: 'conversas', filtro: 'todas', busca: '', painel: null, aberta: null, conversa: null, chaveMsgs: '',
+           cardapio: null, foto: null, enviando: false, ultimoSinal: null, periodo: 'hoje', timer: null, audio: null};
+const GRUPOS = [['produtos', 'PRODUTOS (FOTO + PREÇOS)'], ['entrega', 'ENTREGA E PAGAMENTO'], ['andamento', 'ANDAMENTO DO PEDIDO']];
+
+let idStatus = null;
+function status(msg, tipo) {
+  const el = $('#status');
+  el.textContent = msg; el.className = tipo || ''; el.hidden = false;
+  clearTimeout(idStatus); idStatus = setTimeout(() => { el.hidden = true; }, 7000);
+}
+class ErroApi extends Error { constructor(m, st) { super(m); this.status = st; } }
+async function api(metodo, url, corpo) {
+  let r;
+  try {
+    r = await fetch(url, {method: metodo, credentials: 'same-origin', cache: 'no-store',
+      headers: corpo ? {'Content-Type': 'application/json'} : {}, body: corpo ? JSON.stringify(corpo) : undefined});
+  } catch (e) { throw new ErroApi('Sem conexão com o servidor da loja.', 0); }
+  let d = null;
+  try { d = await r.json(); } catch (e) {}
+  if (!r.ok) {
+    if (r.status === 401 && d && d.login) mostrarLogin();
+    throw new ErroApi((d && d.erro) || `Erro ${r.status}`, r.status);
+  }
+  return d;
+}
+function falhou(e) { status(e.message || String(e), 'erro'); }
+
+function abrirModal(html, estreito) {
+  $('#modal').innerHTML = html + '<div style="text-align:right;margin-top:12px"><button class="btn" type="button" id="fechar-modal">Fechar</button></div>';
+  $('#modal').classList.toggle('estreito', !!estreito);
+  $('#fundo-modal').hidden = false;
+  $('#fechar-modal').onclick = fecharModal;
+}
+function fecharModal() { $('#fundo-modal').hidden = true; $('#modal').innerHTML = ''; }
+$('#fundo-modal').addEventListener('click', e => { if (e.target.id === 'fundo-modal') fecharModal(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#fundo-modal').hidden) fecharModal(); });
+
+// "plim" quando chega mensagem (o navegador só deixa tocar depois do primeiro clique na página)
+function plim() {
+  try {
+    S.audio = S.audio || new (window.AudioContext || window.webkitAudioContext)();
+    const o = S.audio.createOscillator(), g = S.audio.createGain();
+    o.frequency.value = 880; g.gain.value = 0.08;
+    o.connect(g); g.connect(S.audio.destination);
+    o.start(); o.stop(S.audio.currentTime + 0.18);
+  } catch (e) {}
+}
+
+// ------------------------------------------------------------------ login
+async function mostrarLogin() {
+  clearInterval(S.timer); S.timer = null; S.eu = null;
+  $('#app').hidden = true; $('#login').hidden = false;
+  try {
+    const lista = await api('GET', '/api/atendimento/usuarios');
+    $('#login-usuario').innerHTML = '<option value="">Seu nome…</option>' + lista.map(u => `<option value="${esc(u.chave)}">${esc(u.nome)}</option>`).join('');
+  } catch (e) { $('#erro-login').textContent = e.message; }
+}
+$('#form-login').addEventListener('submit', async ev => {
+  ev.preventDefault();
+  $('#erro-login').textContent = '';
+  const chave = $('#login-usuario').value, pin = $('#login-pin').value.trim();
+  if (!chave || !pin) { $('#erro-login').textContent = 'Escolha seu nome e digite o PIN.'; return; }
+  try {
+    const r = await api('POST', '/api/atendimento/login', {chave, pin});
+    $('#login-pin').value = '';
+    entrar(r.usuario);
+  } catch (e) { $('#erro-login').textContent = e.message; }
+});
+$('#btn-sair').onclick = async () => {
+  if (!confirm('Sair da central neste computador?')) return;
+  try { await api('POST', '/api/atendimento/sair'); } catch (e) {}
+  location.reload();
+};
+async function iniciar() {
+  try { entrar((await api('GET', '/api/atendimento/eu')).usuario); }
+  catch (e) { if (e.status !== 401) { mostrarLogin(); $('#erro-login').textContent = e.message; } }
+}
+function entrar(eu) {
+  S.eu = eu;
+  $('#login').hidden = true; $('#app').hidden = false;
+  $('#quem').textContent = `👤 ${eu.nome}${eu.tipo === 'gestor' ? ' (gestão)' : ''}`;
+  $('#link-gestao').hidden = !eu.gestor;
+  document.querySelector('[data-aba="botoes"]').hidden = !eu.editar;
+  document.querySelector('[data-aba="visao"]').hidden = !eu.ver_gestao;
+  document.querySelector('[data-aba="atendentes"]').hidden = !eu.gestor;
+  carregarBotoes();
+  atualizar();
+  clearInterval(S.timer);
+  S.tique = 0;                         // aba aberta: a cada 3 s; em segundo plano: a cada 6 s (o plim continua avisando)
+  S.timer = setInterval(() => { S.tique++; if (!document.hidden || S.tique % 2 === 0) atualizar(); }, 3000);
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden && S.eu) atualizar(); });
+
+// ------------------------------------------------------------------ abas
+document.querySelectorAll('[data-aba]').forEach(b => b.onclick = () => irPara(b.dataset.aba));
+function irPara(aba) {
+  S.aba = aba;
+  document.querySelectorAll('[data-aba]').forEach(b => b.classList.toggle('ativo', b.dataset.aba === aba));
+  document.querySelectorAll('.aba').forEach(s => { s.hidden = s.id !== 'aba-' + aba; });
+  if (aba === 'conversas') { desenharBotoes(); atualizar(); }
+  if (aba === 'botoes') carregarCardapio();
+  if (aba === 'visao') carregarVisao();
+  if (aba === 'atendentes') carregarAtendentes();
+}
+
+// ------------------------------------------------------------------ lista de conversas
+document.querySelectorAll('[data-filtro]').forEach(b => b.onclick = () => {
+  S.filtro = b.dataset.filtro;
+  document.querySelectorAll('[data-filtro]').forEach(x => x.classList.toggle('ativo', x === b));
+  desenharLista();
+});
+let idBusca = null;
+$('#busca').addEventListener('input', () => { clearTimeout(idBusca); idBusca = setTimeout(() => { S.busca = $('#busca').value.trim(); atualizar(); }, 350); });
+
+async function atualizar() {
+  if (!S.eu || S.aba !== 'conversas') return;
+  try {
+    const p = await api('GET', '/api/atendimento/painel?busca=' + encodeURIComponent(S.busca));
+    const sinal = p.conversas.reduce((s, c) => s + c.nao_lidas, 0) + p.esperando * 1000;
+    if (S.ultimoSinal !== null && sinal > S.ultimoSinal) plim();
+    S.ultimoSinal = sinal;
+    S.painel = p;
+    $('#n-esperando').textContent = p.esperando ? `${p.esperando} esperando` : '';
+    document.title = (p.esperando ? `(${p.esperando}) ` : '') + 'Atendimento · Gela Boca';
+    desenharLista();
+    if (S.aberta) await carregarConversa(false);
+  } catch (e) { if (e.status !== 401) $('#lista').innerHTML = `<div class="vazio n-erro">${esc(e.message)}</div>`; }
+}
+function chipConversa(c) {
+  if (c.status === 'esperando') return `<span class="chip esp">Esperando${c.aguardando_min ? ` há ${c.aguardando_min} min` : ''}</span>`;
+  if (c.status === 'atendendo') return `<span class="chip at">${c.minha ? 'Com você' : 'Atendendo: ' + esc(c.atendente)}</span>`
+    + (c.aguardando_min !== null && c.aguardando_min >= 2 ? ` <span class="chip esp">sem resposta há ${c.aguardando_min} min</span>` : '');
+  return `<span class="chip enc">Encerrada${c.atendente ? ' · ' + esc(c.atendente) : ''}</span>`;
+}
+function desenharLista() {
+  if (!S.painel) return;
+  const f = S.filtro;
+  const lista = S.painel.conversas.filter(c => f === 'todas' ? c.status !== 'encerrada' || S.busca
+    : f === 'esperando' ? c.status === 'esperando' : f === 'minhas' ? c.minha && c.status === 'atendendo' : c.status === 'encerrada');
+  $('#lista').innerHTML = lista.map(c => `
+    <button type="button" class="conv${c.id === S.aberta ? ' sel' : ''}" data-id="${c.id}">
+      <div class="l1"><span class="nome">${esc(c.nome)}</span><span class="hora">${esc(c.hora)}</span></div>
+      <div class="l1"><span class="previa">${esc(c.previa)}</span>${c.nao_lidas && c.id !== S.aberta ? `<span class="badge">${c.nao_lidas}</span>` : ''}</div>
+      <div>${chipConversa(c)}</div>
+    </button>`).join('') || `<div class="vazio">${f === 'esperando' ? 'Ninguém esperando. 👍' : S.busca ? 'Nada encontrado.' : 'Nenhuma conversa aqui ainda.'}</div>`;
+}
+$('#lista').addEventListener('click', e => {
+  const b = e.target.closest('.conv');
+  if (b) abrirConversa(+b.dataset.id);
+});
+
+// ------------------------------------------------------------------ conversa aberta
+async function abrirConversa(id) {
+  S.aberta = id; S.chaveMsgs = ''; S.foto = null; $('#foto-pronta').hidden = true;
+  $('#chat-vazio').hidden = true; $('#chat').hidden = false;
+  $('#mensagens').innerHTML = '<div class="vazio">Carregando…</div>';
+  desenharLista();
+  await carregarConversa(true);
+  $('#msg').focus();
+  atualizar();
+}
+async function carregarConversa(abrir) {
+  const id = S.aberta;
+  try {
+    const r = await api('GET', `/api/atendimento/conversas/${id}${abrir ? '?abrir=1' : ''}`);
+    if (id !== S.aberta) return;
+    S.conversa = r;
+    desenharConversa(r);
+  } catch (e) {
+    if (id !== S.aberta) return;
+    if (e.status === 403 || e.status === 404) { S.aberta = null; $('#chat').hidden = true; $('#chat-vazio').hidden = false; desenharBotoes(); }
+    if (abrir || e.status === 403 || e.status === 404) falhou(e);
+  }
+}
+const ICONE = {enviando: '🕓', enviada: '✓', entregue: '✓✓', lida: '<span class="lida">✓✓</span>'};
+function midia(m) {
+  if (!m.midia) return '';
+  const u = esc(m.midia);
+  if (m.tipo === 'foto' || m.tipo === 'figurinha') return `<a href="${u}" target="_blank" rel="noopener"><img src="${u}" alt="Foto do cliente"></a>`;
+  if (m.tipo === 'audio') return `<audio controls preload="none" src="${u}"></audio>`;
+  if (m.tipo === 'video') return `<video controls preload="none" src="${u}"></video>`;
+  if (m.tipo === 'local') return `<a href="${u}" target="_blank" rel="noopener">📍 Ver no mapa</a>`;
+  return `<a href="${u}" target="_blank" rel="noopener">📄 Abrir o arquivo</a>`;
+}
+function desenharConversa(r) {
+  const c = r.conversa;
+  $('#chat-nome').textContent = c.nome;
+  $('#chat-info').textContent = `${c.telefone} · ` + (c.status === 'esperando' ? 'Esperando atendimento'
+    : c.status === 'atendendo' ? (c.minha ? 'Atendendo: você' : 'Atendendo: ' + c.atendente) : 'Encerrada');
+  $('#b-assumir').hidden = c.minha && c.status === 'atendendo';
+  $('#b-encerrar').hidden = c.status === 'encerrada';
+  $('#aviso-outro').hidden = !r.de_outro;
+  $('#aviso-outro').textContent = r.de_outro ? `${c.atendente} está atendendo esta conversa. Se você responder, ela passa para você.` : '';
+  const chave = JSON.stringify(r.mensagens);
+  if (chave !== S.chaveMsgs) {
+    const caixa = $('#mensagens');
+    const noFim = !S.chaveMsgs || caixa.scrollHeight - caixa.scrollTop - caixa.clientHeight < 80;
+    S.chaveMsgs = chave;
+    caixa.innerHTML = r.mensagens.map(m => {
+      if (m.de === 'sistema') return `<div class="msg sistema"><div class="balao">${esc(m.texto)} · ${esc(m.hora)}</div></div>`;
+      const foto = m.foto ? `<a href="${esc(m.foto)}" target="_blank" rel="noopener"><img src="${esc(m.foto)}" alt="Foto enviada"></a>` : '';
+      const st = m.de === 'loja' ? (m.status === 'falhou'
+        ? `<span class="n-erro">⚠️ não foi${m.erro ? ': ' + esc(m.erro) : ''}</span> <button class="btn" type="button" data-reenviar="${m.id}" style="padding:2px 8px;font-size:12px">Mandar de novo</button>`
+        : (ICONE[m.status] || '')) : '';
+      const por = m.de === 'loja' && m.por ? ` · ${esc(m.por)}` : '';
+      return `<div class="msg ${m.de}${m.status === 'falhou' ? ' falhou' : ''}"><div class="balao">${midia(m)}${foto}
+        ${m.texto ? `<div class="txt">${esc(m.texto)}</div>` : ''}<div class="meta">${esc(m.hora)}${por} ${st}</div></div></div>`;
+    }).join('') || '<div class="vazio">Sem mensagens ainda.</div>';
+    if (noFim) caixa.scrollTop = caixa.scrollHeight;
+  }
+  const cli = r.cliente;
+  $('#cliente').innerHTML = `<h2>Cliente</h2>
+    <div class="cli-linha"><b>Nome</b>${esc(c.nome)}</div>
+    <div class="cli-linha"><b>WhatsApp</b>${esc(c.telefone)}</div>` + (cli.cadastrado ? `
+    <div class="cli-linha"><b>Cadastro de clientes</b>Sim${cli.recebe_ofertas ? ' · aceita receber ofertas' : ' · não recebe ofertas'}</div>
+    ${cli.aniversario ? `<div class="cli-linha"><b>Aniversário</b>${esc(cli.aniversario)}</div>` : ''}
+    ${cli.etiquetas.length ? `<div class="cli-linha"><b>Etiquetas</b>${cli.etiquetas.map(esc).join(', ')}</div>` : ''}`
+    : `<div class="cli-linha"><b>Cadastro de clientes</b>Ainda não está no cadastro${S.eu.gestor ? ' (Gestão › 📢 Clientes)' : ''}.</div>`);
+  desenharBotoes();
+}
+$('#mensagens').addEventListener('click', async e => {
+  const b = e.target.closest('[data-reenviar]');
+  if (!b || b.disabled) return;
+  b.disabled = true;
+  try { await api('POST', `/api/atendimento/conversas/${S.aberta}/reenviar/${b.dataset.reenviar}`); await carregarConversa(false); }
+  catch (err) { falhou(err); b.disabled = false; }
+});
+
+async function enviar(corpo) {
+  if (!S.aberta || S.enviando) return false;
+  S.enviando = true;
+  try {
+    await api('POST', `/api/atendimento/conversas/${S.aberta}/enviar`, corpo);
+    await carregarConversa(false);
+    return true;
+  } catch (e) { falhou(e); return false; }
+  finally { S.enviando = false; }
+}
+$('#form-msg').addEventListener('submit', async ev => {
+  ev.preventDefault();
+  const texto = $('#msg').value.trim();
+  if (!texto && !S.foto) return;
+  if (await enviar({texto, foto: S.foto})) { $('#msg').value = ''; S.foto = null; $('#foto-pronta').hidden = true; ajustarAltura(); }
+});
+$('#msg').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('#form-msg').requestSubmit(); }
+});
+function ajustarAltura() { const t = $('#msg'); t.style.height = '44px'; t.style.height = Math.min(140, t.scrollHeight + 2) + 'px'; }
+$('#msg').addEventListener('input', ajustarAltura);
+
+function reduzirFoto(arquivo) {
+  return new Promise((ok, falha) => {
+    const url = URL.createObjectURL(arquivo), img = new Image();
+    img.onload = () => {
+      const escala = Math.min(1, 1280 / Math.max(img.naturalWidth, img.naturalHeight));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.naturalWidth * escala); c.height = Math.round(img.naturalHeight * escala);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url); ok(c.toDataURL('image/jpeg', 0.82));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); falha(new Error('Não consegui abrir essa foto. Tente outra.')); };
+    img.src = url;
+  });
+}
+async function subirFoto(arquivo) {
+  const dataUrl = await reduzirFoto(arquivo);
+  const r = await api('POST', '/api/atendimento/foto', {foto: dataUrl});
+  return {nome: r.foto, url: dataUrl};
+}
+$('#arquivo-foto').addEventListener('change', async e => {
+  const f = e.target.files[0]; e.target.value = '';
+  if (!f) return;
+  try {
+    status('Preparando a foto…');
+    const r = await subirFoto(f);
+    S.foto = r.nome; $('#foto-pronta img').src = r.url; $('#foto-pronta').hidden = false;
+    $('#status').hidden = true; $('#msg').focus();
+  } catch (err) { falhou(err); }
+});
+$('#b-tirar-foto').onclick = () => { S.foto = null; $('#foto-pronta').hidden = true; };
+
+async function acao(nome, corpo) {
+  try {
+    const r = await api('POST', `/api/atendimento/conversas/${S.aberta}/${nome}`, corpo || {});
+    status(r.mensagem); await atualizar();
+  } catch (e) { falhou(e); }
+}
+$('#b-assumir').onclick = () => acao('assumir');
+$('#b-encerrar').onclick = () => { if (confirm('Encerrar esta conversa? Se o cliente escrever de novo, ela volta para "esperando".')) acao('encerrar'); };
+$('#b-passar').onclick = async () => {
+  let lista = [];
+  try { lista = await api('GET', '/api/atendimento/usuarios'); } catch (e) { return falhou(e); }
+  const eu = (S.eu.tipo === 'gestor' ? 'g' : 'a') + S.eu.id;
+  lista = lista.filter(u => u.chave !== eu);
+  if (!lista.length) { alert('Não tem outra pessoa cadastrada para passar a conversa.'); return; }
+  abrirModal(`<h3>Passar a conversa</h3><form class="form" id="form-passar">
+    <label>Para quem?<select id="passar-para">${lista.map(u => `<option value="${esc(u.chave)}">${esc(u.nome)}</option>`).join('')}</select></label>
+    <div><button class="btn prim" type="submit">Passar</button></div></form>`, true);
+  $('#form-passar').addEventListener('submit', async ev => {
+    ev.preventDefault(); const para = $('#passar-para').value; fecharModal(); await acao('transferir', {para});
+  });
+};
+
+// ------------------------------------------------------------------ botões do rodapé
+async function carregarBotoes() {
+  try { S.cardapio = await api('GET', '/api/atendimento/cardapio'); desenharBotoes(); } catch (e) { falhou(e); }
+}
+function desenharBotoes() {
+  if (!S.cardapio) return;
+  const sem = !S.aberta;
+  $('#botoes').innerHTML = GRUPOS.map(([g, tit]) => {
+    const bs = S.cardapio.botoes.filter(b => b.ativo && b.grupo === g);
+    if (!bs.length) return '';
+    const cor = {produtos: 'var(--roxo)', entrega: '#0B5A52', andamento: 'var(--ambar)'}[g];
+    return `<div class="grupo"><span class="tit" style="color:${cor}">${tit}</span><div class="lista-b">${bs.map(b =>
+      `<button type="button" class="bt ${g}" data-botao="${b.id}" ${sem ? 'disabled' : ''} title="${esc(b.foto ? 'Manda a foto e o texto' : 'Manda o texto')}">${b.foto ? '📷 ' : ''}${esc(b.nome)}</button>`).join('')}</div></div>`;
+  }).join('') + (S.eu && S.eu.editar ? '<button type="button" class="btn" id="b-editar-botoes" style="align-self:flex-end;margin-left:auto">Editar botões e preços</button>' : '');
+  const ed = $('#b-editar-botoes');
+  if (ed) ed.onclick = () => irPara('botoes');
+}
+$('#botoes').addEventListener('click', async e => {
+  const b = e.target.closest('[data-botao]');
+  if (!b || b.disabled) return;
+  b.disabled = true;
+  if (await enviar({botao_id: +b.dataset.botao})) status(`"${b.textContent.replace('📷 ', '')}" enviado.`);
+  b.disabled = !S.aberta;
+});
+
+// ------------------------------------------------------------------ 🍧 botões e preços
+async function carregarCardapio() {
+  try { S.cardapio = await api('GET', '/api/atendimento/cardapio'); desenharTabela(); desenharListaBotoes(); }
+  catch (e) { falhou(e); }
+}
+function linhaItem(p) {
+  return `<div class="item" data-id="${p.id || ''}">
+    <input type="text" class="i-nome" value="${esc(p.nome)}" aria-label="Nome do item" maxlength="120">
+    <input type="text" class="i-preco" value="${esc(p.preco)}" aria-label="Preço de ${esc(p.nome)}" inputmode="decimal">
+    <label><input type="checkbox" class="i-adic" ${p.adicional ? 'checked' : ''}> complemento</label>
+    <label><input type="checkbox" class="i-hoje" ${p.tem_hoje ? 'checked' : ''}> tem hoje</label>
+    <button type="button" class="btn perigo i-tirar" aria-label="Tirar ${esc(p.nome)}" style="padding:4px 9px">×</button></div>`;
+}
+function blocoCategoria(nome, itens) {
+  return `<div class="cat"><div class="cat-topo"><input type="text" class="c-nome" value="${esc(nome)}" aria-label="Nome da categoria" maxlength="60">
+    <span class="mini suave">no texto: <span class="marcador">[${esc(nome)}]</span></span></div>
+    <div class="c-itens">${itens.map(linhaItem).join('')}</div>
+    <button type="button" class="btn c-mais" style="margin-top:6px">+ Item</button></div>`;
+}
+function desenharTabela() {
+  const cats = {};
+  S.cardapio.produtos.forEach(p => { (cats[p.categoria] = cats[p.categoria] || []).push(p); });
+  $('#tabela').innerHTML = S.cardapio.categorias.map(c => blocoCategoria(c, cats[c] || [])).join('')
+    || '<div class="vazio">Nenhum item. Toque em + Categoria.</div>';
+}
+$('#tabela').addEventListener('click', e => {
+  if (e.target.closest('.i-tirar')) { e.target.closest('.item').remove(); return; }
+  const mais = e.target.closest('.c-mais');
+  if (mais) {
+    const cat = mais.closest('.cat'), ultimo = cat.querySelector('.item:last-child .i-adic');
+    cat.querySelector('.c-itens').insertAdjacentHTML('beforeend', linhaItem({nome: '', preco: '', adicional: ultimo ? ultimo.checked : false, tem_hoje: true}));
+    cat.querySelector('.item:last-child .i-nome').focus();
+  }
+});
+$('#b-nova-cat').onclick = () => {
+  const nome = (prompt('Nome da categoria (ex.: Picolés, Potes):') || '').trim();
+  if (!nome) return;
+  if (/[\[\]]/.test(nome)) { alert('A categoria não pode ter [ ].'); return; }
+  if ($('#tabela .vazio')) $('#tabela').innerHTML = '';
+  $('#tabela').insertAdjacentHTML('beforeend', blocoCategoria(nome, [{nome: '', preco: '', adicional: false, tem_hoje: true}]));
+};
+$('#b-salvar-tabela').onclick = async () => {
+  const produtos = [];
+  document.querySelectorAll('#tabela .cat').forEach(cat => {
+    const categoria = cat.querySelector('.c-nome').value.trim();
+    cat.querySelectorAll('.item').forEach(it => {
+      const nome = it.querySelector('.i-nome').value.trim();
+      if (!nome && !it.dataset.id && !it.querySelector('.i-preco').value.trim()) return;      // linha nova em branco
+      produtos.push({id: it.dataset.id ? +it.dataset.id : null, categoria, nome, preco: it.querySelector('.i-preco').value,
+                     adicional: it.querySelector('.i-adic').checked, tem_hoje: it.querySelector('.i-hoje').checked});
+    });
+  });
+  const b = $('#b-salvar-tabela'); b.disabled = true;
+  try {
+    S.cardapio = await api('POST', '/api/atendimento/produtos', {produtos});
+    desenharTabela(); desenharListaBotoes(); desenharBotoes(); status(S.cardapio.mensagem);
+  } catch (e) { falhou(e); }
+  b.disabled = false;
+};
+function desenharListaBotoes() {
+  $('#lista-botoes').innerHTML = GRUPOS.map(([g, tit]) => {
+    const bs = S.cardapio.botoes.filter(b => b.grupo === g);
+    return `<div style="margin-bottom:10px"><div class="mini" style="font-weight:700;color:var(--suave)">${tit}</div>${bs.map((b, i) => `
+      <div class="linha-b"><span class="n">${b.foto ? '📷 ' : ''}${esc(b.nome)}${b.ativo ? '' : ' <span class="chip enc">desligado</span>'}</span>
+        <button class="btn" type="button" data-mover="${b.id}" data-dir="cima" ${i ? '' : 'disabled'} aria-label="Subir ${esc(b.nome)}" style="padding:4px 9px">↑</button>
+        <button class="btn" type="button" data-mover="${b.id}" data-dir="baixo" ${i < bs.length - 1 ? '' : 'disabled'} aria-label="Descer ${esc(b.nome)}" style="padding:4px 9px">↓</button>
+        <button class="btn" type="button" data-editar="${b.id}">Editar</button></div>`).join('') || '<div class="mini suave">nenhum</div>'}</div>`;
+  }).join('');
+}
+$('#lista-botoes').addEventListener('click', async e => {
+  const m = e.target.closest('[data-mover]');
+  if (m && !m.disabled) {
+    try { S.cardapio = await api('POST', `/api/atendimento/botoes/${m.dataset.mover}/mover`, {direcao: m.dataset.dir}); desenharListaBotoes(); desenharBotoes(); }
+    catch (err) { falhou(err); }
+    return;
+  }
+  const ed = e.target.closest('[data-editar]');
+  if (ed) editarBotao(S.cardapio.botoes.find(b => b.id === +ed.dataset.editar));
+});
+$('#b-novo-botao').onclick = () => editarBotao(null);
+function editarBotao(b) {
+  const atual = b || {nome: '', grupo: 'produtos', texto: '', foto: '', foto_url: '', ativo: true};
+  let foto = atual.foto, fotoUrl = atual.foto_url;
+  abrirModal(`<h3>${b ? 'Editar botão' : 'Novo botão'}</h3>
+    <form class="form" id="form-botao">
+      <div class="lado" style="gap:12px">
+        <div class="form">
+          <label>Nome do botão<input id="eb-nome" value="${esc(atual.nome)}" maxlength="30"></label>
+          <label>Grupo<select id="eb-grupo">${S.cardapio.grupos.map(g => `<option value="${g.chave}" ${g.chave === atual.grupo ? 'selected' : ''}>${esc(g.nome)}</option>`).join('')}</select></label>
+          <label>Texto da mensagem<textarea id="eb-texto" rows="7" maxlength="1500">${esc(atual.texto)}</textarea></label>
+          <div class="mini suave">Toque para pôr no texto: <span class="marcador" data-por="{nome}" role="button" tabindex="0">{nome}</span> (o nome do cliente)
+            ${S.cardapio.categorias.map(c => `<span class="marcador" data-por="[${esc(c)}]" role="button" tabindex="0">[${esc(c)}]</span>`).join(' ')}
+            — a categoria vira a lista com os preços, só com o que tem hoje.</div>
+          <div><span class="mini" style="font-weight:700;color:var(--suave)">Foto que vai junto</span>
+            <div style="display:flex;gap:8px;align-items:center;margin-top:4px;flex-wrap:wrap">
+              <img id="eb-foto-img" alt="Foto do botão" style="height:64px;border-radius:6px" ${fotoUrl ? `src="${esc(fotoUrl)}"` : 'hidden'}>
+              <label class="btn" style="flex-direction:row">Escolher foto<input type="file" accept="image/*" id="eb-arquivo" hidden></label>
+              <button type="button" class="btn" id="eb-sem-foto" ${foto ? '' : 'hidden'}>Sem foto</button></div></div>
+          <label class="check"><input type="checkbox" id="eb-ativo" ${atual.ativo ? 'checked' : ''}> Aparece na central</label>
+        </div>
+        <div><span class="mini" style="font-weight:700;color:var(--suave)">Como o cliente recebe (com "Maria")</span>
+          <div class="previa-zap" style="margin-top:4px"><div class="balao"><img id="eb-prev-img" alt="" ${fotoUrl ? `src="${esc(fotoUrl)}"` : 'hidden'}><div class="txt" id="eb-previa"></div></div></div></div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn prim" type="submit">💾 Salvar botão</button>
+        ${b ? '<button class="btn perigo" type="button" id="eb-apagar">Apagar botão</button>' : ''}</div>
+    </form>`);
+  let idPrev = null;
+  const prev = () => { clearTimeout(idPrev); idPrev = setTimeout(async () => {
+    try { $('#eb-previa').textContent = (await api('POST', '/api/atendimento/previa', {texto: $('#eb-texto').value})).texto; } catch (e) {}
+  }, 300); };
+  const mostrarFoto = () => {
+    for (const id of ['#eb-foto-img', '#eb-prev-img']) { $(id).hidden = !fotoUrl; if (fotoUrl) $(id).src = fotoUrl; }
+    $('#eb-sem-foto').hidden = !foto;
+  };
+  $('#eb-texto').addEventListener('input', prev); prev();
+  $('#modal').querySelectorAll('[data-por]').forEach(x => x.onclick = () => {
+    const t = $('#eb-texto'), p = t.selectionStart ?? t.value.length;
+    t.value = t.value.slice(0, p) + x.dataset.por + t.value.slice(t.selectionEnd ?? p); t.focus(); prev();
+  });
+  $('#eb-arquivo').addEventListener('change', async e => {
+    const f = e.target.files[0]; e.target.value = '';
+    if (!f) return;
+    try { const r = await subirFoto(f); foto = r.nome; fotoUrl = r.url; mostrarFoto(); } catch (err) { falhou(err); }
+  });
+  $('#eb-sem-foto').onclick = () => { foto = ''; fotoUrl = ''; mostrarFoto(); };
+  $('#form-botao').addEventListener('submit', async ev => {
+    ev.preventDefault();
+    try {
+      S.cardapio = await api('POST', b ? `/api/atendimento/botoes/${b.id}` : '/api/atendimento/botoes',
+        {nome: $('#eb-nome').value, grupo: $('#eb-grupo').value, texto: $('#eb-texto').value, foto, ativo: $('#eb-ativo').checked});
+      fecharModal(); desenharListaBotoes(); desenharBotoes(); status(S.cardapio.mensagem);
+    } catch (e) { falhou(e); }
+  });
+  const ap = $('#eb-apagar');
+  if (ap) ap.onclick = async () => {
+    if (!confirm(`Apagar o botão "${b.nome}"?`)) return;
+    try { S.cardapio = await api('POST', `/api/atendimento/botoes/${b.id}/excluir`); fecharModal(); desenharListaBotoes(); desenharBotoes(); status(S.cardapio.mensagem); }
+    catch (e) { falhou(e); }
+  };
+}
+
+// ------------------------------------------------------------------ 📊 visão da gestão
+document.querySelectorAll('[data-periodo]').forEach(b => b.onclick = () => {
+  S.periodo = b.dataset.periodo;
+  document.querySelectorAll('[data-periodo]').forEach(x => x.classList.toggle('ativo', x === b));
+  carregarVisao();
+});
+async function carregarVisao() {
+  try {
+    const v = await api('GET', '/api/atendimento/visao?periodo=' + S.periodo);
+    const n = v.numeros;
+    $('#numeros').innerHTML = [['Conversas', n.conversas], ['Esperando resposta agora', n.aguardando],
+      ['Tempo médio até a 1ª resposta', n.resposta_media], ['Mensagens enviadas', n.mensagens]]
+      .map(([t, x], i) => `<div class="numero"${i === 1 && n.aguardando ? ' style="background:var(--laranja-claro);border-color:var(--ambar-linha)"' : ''}><span class="mini suave">${t}</span><b>${esc(x)}</b></div>`).join('');
+    $('#visao-agora').innerHTML = v.agora.length ? `<table class="grade"><thead><tr><th>Cliente</th><th>Situação</th><th>Atendente</th><th>Última mensagem</th></tr></thead><tbody>${
+      v.agora.map(c => `<tr><td><b>${esc(c.nome)}</b></td><td>${c.status === 'esperando' ? `<span class="chip esp">Esperando${c.aguardando_min ? ` há ${c.aguardando_min} min` : ''}</span>`
+        : `<span class="chip at">Em atendimento</span>${c.aguardando_min ? ` <span class="chip esp">sem resposta há ${c.aguardando_min} min</span>` : ''}`}</td>
+        <td>${esc(c.atendente || '—')}</td><td>${esc(c.previa)}</td></tr>`).join('')}</tbody></table>` : '<div class="vazio">Nenhuma conversa aberta agora.</div>';
+    $('#visao-pessoas').innerHTML = v.pessoas.length ? `<table class="grade"><thead><tr><th>Quem</th><th>Conversas</th><th>Mensagens</th><th>1ª resposta (média)</th></tr></thead><tbody>${
+      v.pessoas.map(p => `<tr><td><span class="bolinha${p.online ? ' on' : ''}"></span><b>${esc(p.nome)}</b>${p.atendente ? '' : ' <span class="mini suave">(gestão)</span>'}</td>
+        <td>${p.conversas}</td><td>${p.mensagens}</td><td>${esc(p.resposta_media)}</td></tr>`).join('')}</tbody></table>` : '<div class="vazio">Ninguém atendeu neste período.</div>';
+    $('#aviso-min').value = v.aviso_minutos;
+  } catch (e) { falhou(e); }
+}
+$('#form-aviso').addEventListener('submit', async ev => {
+  ev.preventDefault();
+  try { status((await api('POST', '/api/atendimento/aviso', {minutos: $('#aviso-min').value})).mensagem); } catch (e) { falhou(e); }
+});
+
+// ------------------------------------------------------------------ 👥 atendentes
+async function carregarAtendentes() {
+  try { desenharAtendentes(await api('GET', '/api/atendimento/atendentes')); } catch (e) { falhou(e); }
+}
+function desenharAtendentes(r) {
+  S.atendentes = r.atendentes;
+  const marca = (a, k, rot) => `<td><input type="checkbox" data-perm="${k}" data-id="${a.id}" ${a[k] ? 'checked' : ''} aria-label="${esc(a.nome)}: ${rot}"></td>`;
+  $('#lista-atendentes').innerHTML = r.atendentes.length ? `<table class="grade"><thead><tr><th>Atendente</th><th>Ver conversas dos outros</th>
+    <th>Mudar botões e preços</th><th>Ver a visão da gestão</th><th>Ativo</th><th></th></tr></thead><tbody>${r.atendentes.map(a => `<tr>
+    <td><span class="bolinha${a.online ? ' on' : ''}"></span><b>${esc(a.nome)}</b>${a.bloqueado ? ' <span class="chip esp">bloqueado (errou o PIN)</span>' : ''}</td>
+    ${marca(a, 'ver_todas', 'ver conversas dos outros')}${marca(a, 'editar', 'mudar botões e preços')}${marca(a, 'ver_gestao', 'ver a visão da gestão')}${marca(a, 'ativo', 'ativo')}
+    <td style="white-space:nowrap"><button class="btn" type="button" data-pin="${a.id}">Trocar PIN</button>
+      <button class="btn perigo" type="button" data-tirar="${a.id}">Remover</button></td></tr>`).join('')}</tbody></table>`
+    : '<div class="vazio">Nenhum atendente ainda. Cadastre abaixo.</div>';
+  $('#na-func').innerHTML = '<option value="">Escolha…</option>' + r.funcionarios.map(f => `<option value="${f.id}">${esc(f.nome)}</option>`).join('');
+  if (r.mensagem) status(r.mensagem);
+}
+function permsDe(id) {
+  const p = {};
+  document.querySelectorAll(`#lista-atendentes [data-id="${id}"]`).forEach(x => { p[x.dataset.perm] = x.checked; });
+  return p;
+}
+$('#lista-atendentes').addEventListener('change', async e => {
+  const x = e.target.closest('[data-perm]');
+  if (!x) return;
+  try { desenharAtendentes(await api('POST', `/api/atendimento/atendentes/${x.dataset.id}`, permsDe(x.dataset.id))); }
+  catch (err) { falhou(err); carregarAtendentes(); }
+});
+$('#lista-atendentes').addEventListener('click', async e => {
+  const p = e.target.closest('[data-pin]'), t = e.target.closest('[data-tirar]');
+  if (p) {
+    const pin = (prompt('PIN novo (4 números):') || '').trim();
+    if (!pin) return;
+    try { desenharAtendentes(await api('POST', `/api/atendimento/atendentes/${p.dataset.pin}`, Object.assign(permsDe(p.dataset.pin), {pin}))); }
+    catch (err) { falhou(err); }
+  }
+  if (t) {
+    const a = S.atendentes.find(x => x.id === +t.dataset.tirar);
+    if (!confirm(`Remover ${a ? a.nome : 'o atendente'} da central?`)) return;
+    try { desenharAtendentes(await api('POST', `/api/atendimento/atendentes/${t.dataset.tirar}/excluir`)); } catch (err) { falhou(err); }
+  }
+});
+$('#form-novo-atendente').addEventListener('submit', async ev => {
+  ev.preventDefault();
+  try {
+    desenharAtendentes(await api('POST', '/api/atendimento/atendentes', {funcionario_id: $('#na-func').value, pin: $('#na-pin').value,
+      ver_todas: $('#na-ver').checked, editar: $('#na-editar').checked, ver_gestao: $('#na-gestao').checked}));
+    $('#na-pin').value = '';
+  } catch (e) { falhou(e); }
+});
+
+iniciar();
+</script>
+</body>
+</html>

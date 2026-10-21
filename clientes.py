@@ -1384,8 +1384,12 @@ def processar_webhook(segredo, payload, em_segundo_plano=True):
     if p.get('instanceId') and inst and str(p.get('instanceId')) != inst:
         return {'ok': True, 'acao': 'ignorada'}
     if p.get('type') == 'MessageStatusCallback' or (p.get('ids') and p.get('status') and 'text' not in p):
-        return _status_entrega(p)
+        r = _status_entrega(p)
+        _central(p)
+        return r
     if p.get('fromMe') or p.get('isGroup') or p.get('isNewsletter') or p.get('broadcast') or p.get('isStatusReply'):
+        if p.get('fromMe'):
+            _central(p)                     # [ATENDIMENTO] respondida pelo celular: entra na conversa da central
         return {'ok': True, 'acao': 'ignorada'}
     if p.get('type') and p.get('type') != 'ReceivedCallback':
         return {'ok': True, 'acao': 'ignorada'}
@@ -1402,7 +1406,18 @@ def processar_webhook(segredo, payload, em_segundo_plano=True):
     garantir_tabelas()
     rodar = _em_segundo_plano if em_segundo_plano else (lambda f, *a: f(*a))
     with _trava_webhook:
-        return _guardar_resposta(p, tel, texto, tipo, palavra, mid, agora, rodar)
+        r = _guardar_resposta(p, tel, texto, tipo, palavra, mid, agora, rodar)
+    _central(p, r.get('acao'))
+    return r
+
+
+def _central(p, acao=None):
+    """[ATENDIMENTO] A mensagem também entra na 💬 Central de Atendimento (se falhar, o 📢 Clientes segue igual)."""
+    try:
+        import atendimento
+        atendimento.do_webhook(p, acao)
+    except Exception as e:
+        logger.error(f"[CLIENTES] A central de atendimento não recebeu a mensagem: {e}")
 
 
 def _guardar_resposta(p, tel, texto, tipo, palavra, mid, agora, rodar):
