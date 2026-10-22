@@ -123,7 +123,8 @@ def garantir_tabelas():
                 UltimaPrevia NVARCHAR(200) NULL,
                 CriadaEm DATETIME NOT NULL,
                 EncerradaEm DATETIME NULL,
-                Lid VARCHAR(30) NULL
+                Lid VARCHAR(30) NULL,
+                LidConferidoEm DATETIME NULL
             )
         """)
         cur.execute("""
@@ -207,6 +208,8 @@ def garantir_tabelas():
         cur.execute("IF COL_LENGTH('AtendimentoBotoes', 'PaiID') IS NULL ALTER TABLE AtendimentoBotoes ADD PaiID INT NULL")
         # [CELULAR] o código @lid da conversa: a mensagem mandada pelo celular às vezes vem com ele no lugar do número
         cur.execute("IF COL_LENGTH('AtendimentoConversas', 'Lid') IS NULL ALTER TABLE AtendimentoConversas ADD Lid VARCHAR(30) NULL")
+        cur.execute("IF COL_LENGTH('AtendimentoConversas', 'LidConferidoEm') IS NULL "
+                    "ALTER TABLE AtendimentoConversas ADD LidConferidoEm DATETIME NULL")
         cur.execute("SELECT Valor FROM ParametrosAtendimento WHERE Chave = 'botoes_v2'")
         if not cur.fetchone():                    # uma vez só: Complementos vai para dentro do Açaí; "Em preparo" sai
             for filho, pai in DENTRO_INICIAIS:
@@ -866,7 +869,8 @@ def _texto_recebido(p, texto, tipo):
 def do_webhook(p, acao=None):
     """Chamado pelo clientes.processar_webhook (o segredo já foi conferido). Nunca atrapalha o 📢 Clientes."""
     try:
-        _do_webhook(p if isinstance(p, dict) else {}, acao)
+        if _do_webhook(p if isinstance(p, dict) else {}, acao) == PROCURAR_LID:
+            _rodar(_procurar_lid, dict(p))
     except Exception as e:
         logger.error(f"[ATENDIMENTO] Mensagem do webhook não entrou na central: {e}", exc_info=True)
         # [DEPURAÇÃO CENTRAL] antes ficava só no log: a gestão via a central vazia sem saber por quê
@@ -881,13 +885,15 @@ def do_webhook(p, acao=None):
 def _telefone(p):
     """O WhatsApp do cliente; [DEPURAÇÃO CENTRAL] número oculto pelo WhatsApp ('...@lid') também vale (antes a mensagem sumia)."""
     import clientes
-    try:
-        return clientes.normalizar_telefone(p.get('phone'))
-    except clientes.ErroClientes:
-        pass
-    for v in (p.get('phone'), p.get('chatLid')):
+    fone = str(p.get('phone') or '').strip()
+    if '@' not in fone:                     # [CELULAR] '5544...@lid' é código, não número (antes virava um telefone falso)
+        try:
+            return clientes.normalizar_telefone(fone)
+        except clientes.ErroClientes:
+            pass
+    for v in (fone, p.get('chatLid')):
         v = str(v or '').strip()
-        if re.fullmatch(r'\d{6,15}@lid', v):
+        if _LID.fullmatch(v):
             return v
     return None
 
@@ -938,7 +944,79 @@ def _do_sistema(cur, tel, mid, texto, agora):
 
 
 def _fim_tel(tel):
-    return "código @lid (sem o número)" if '@lid' in str(tel or '') else f"…{str(tel or '')[-4:]}"
+    t = str(tel or '')
+    return f"código @lid …{t.split('@')[0][-4:]} (sem o número)" if '@lid' in t else f"…{t[-4:]}"
+
+
+PROCURAR_LID, LID_DE_NOVO = 'procurar_lid', 'lid_de_novo'
+
+
+def _guardar_lid(cur, cid, lid):
+    cur.execute("UPDATE AtendimentoConversas SET Lid = ? WHERE ConversaID = ? AND (Lid IS NULL OR Lid <> ?)", lid, cid, lid)
+
+
+def _lid_por_telefone(tel):
+    """[CELULAR] O código @lid deste WhatsApp, perguntando à Z-API (o 'phone-exists' devolve o 'lid'). None se não deu."""
+    import clientes
+    ok, r = clientes._zapi('GET', f"phone-exists/{tel}", timeout=8)
+    lid = str((r.get('lid') if ok and isinstance(r, dict) else '') or '').strip()
+    if re.fullmatch(r'\d{6,20}', lid):
+        lid += '@lid'
+    return lid if _LID.fullmatch(lid) else None
+
+
+def completar_lids(limite=10, agora=None):
+    """[CELULAR] Conversas (últimos 30 dias) que ainda não sabem o próprio @lid: pergunta à Z-API, no máximo uma vez
+    por dia cada uma. Devolve quantas aprenderam."""
+    agora = agora or _agora()
+    garantir_tabelas()
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        cur.execute(f"SELECT TOP {int(limite)} ConversaID, Telefone FROM AtendimentoConversas WHERE Lid IS NULL "
+                    "AND Telefone NOT LIKE ? AND UltimaEm >= ? AND (LidConferidoEm IS NULL OR LidConferidoEm < ?) "
+                    "ORDER BY UltimaEm DESC", '%@lid', agora - timedelta(days=30), agora - timedelta(days=1))
+        lista = cur.fetchall()
+    finally:
+        conn.close()
+    aprendeu = 0
+    for cid, tel in lista:
+        lid = _lid_por_telefone(tel)
+        conn = _conexao()
+        try:
+            conn.cursor().execute("UPDATE AtendimentoConversas SET Lid = COALESCE(?, Lid), LidConferidoEm = ? WHERE ConversaID = ?",
+                                  lid, agora, cid)
+            conn.commit()
+        finally:
+            conn.close()
+        aprendeu += bool(lid)
+    return aprendeu
+
+
+def _procurar_lid(p):
+    """[CELULAR] A resposta do celular veio só com o @lid e nenhuma conversa conhece esse código: pergunta à Z-API o
+    @lid das conversas que ainda não têm e tenta de novo (uma vez). Em segundo plano: o webhook responde na hora."""
+    try:
+        n = completar_lids()
+        logger.info(f"[ATENDIMENTO] @lid de {n} conversa(s) aprendido(s) para achar a resposta do celular.")
+    except Exception as e:
+        logger.error(f"[ATENDIMENTO] Não deu para perguntar o @lid das conversas: {e}")
+    do_webhook(p, LID_DE_NOVO)
+
+
+def _conferir_lid(cid, tel):
+    """[CELULAR] Conversa nova sem o @lid na mensagem do cliente: pergunta à Z-API (para casar a resposta do celular)."""
+    try:
+        lid = _lid_por_telefone(tel)
+        conn = _conexao()
+        try:
+            conn.cursor().execute("UPDATE AtendimentoConversas SET Lid = COALESCE(?, Lid), LidConferidoEm = ? WHERE ConversaID = ?",
+                                  lid, _agora(), cid)
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning(f"[ATENDIMENTO] @lid da conversa {cid} não conferido: {e}")
 
 
 def _anotar_celular(resultado, p):
@@ -1024,9 +1102,14 @@ def _do_webhook(p, acao):
         try:
             cur = conn.cursor()
             if mid:
-                cur.execute("SELECT 1 FROM AtendimentoMensagens WHERE ZapiID = ?", mid)
-                if cur.fetchone():
-                    return                          # já está (a mesma mensagem duas vezes, ou foi a central que mandou)
+                cur.execute("SELECT ConversaID FROM AtendimentoMensagens WHERE ZapiID = ?", mid)
+                ja = cur.fetchone()
+                if ja:                              # já está (a mesma mensagem duas vezes, ou foi a central que mandou)
+                    lid = _lid_do_chat(p, tel) if p.get('fromMe') else None
+                    if lid:                         # [CELULAR] a cópia do que a central mandou ensina o @lid da conversa
+                        _guardar_lid(cur, ja[0], lid)
+                        conn.commit()
+                    return
             if p.get('fromMe'):
                 # Mandada pelo celular: entra numa conversa que já existe. Nunca cria conversa nova (senão cada
                 # mensagem das campanhas viraria uma conversa). [CELULAR] Antes, tudo o que vinha marcado 'fromApi'
@@ -1034,8 +1117,12 @@ def _do_webhook(p, acao):
                 # Agora só fica de fora o que é do próprio sistema (a cópia da central, campanha, resposta automática).
                 c = _achar_conversa(cur, tel, p)
                 if not c:
-                    if not (p.get('fromApi') and _do_sistema(cur, tel, mid, texto, agora)):
-                        _anotar_celular(f"não entrou: nenhuma conversa na central com {_fim_tel(tel)}", p)
+                    if p.get('fromApi') and _do_sistema(cur, tel, mid, texto, agora):
+                        return
+                    if _lid_do_chat(p, tel) and acao != LID_DE_NOVO:
+                        return PROCURAR_LID         # só o @lid: pergunta à Z-API de quem é e tenta de novo (fora da trava)
+                    _anotar_celular(f"não entrou: nenhuma conversa na central com {_fim_tel(tel)}"
+                                    + (" (a Z-API não disse de qual conversa é esse código)" if acao == LID_DE_NOVO else ''), p)
                     return
                 img = p.get('image') if isinstance(p.get('image'), dict) else {}
                 ecos = [texto, _texto_limpo(img.get('caption'), MAX_TEXTO_BOTAO)] if img else [texto]
@@ -1089,8 +1176,13 @@ def _do_webhook(p, acao):
             cur.execute("INSERT INTO AtendimentoMensagens (ConversaID, De, Tipo, Texto, MidiaUrl, ZapiID, CriadaEm) "
                         "VALUES (?, ?, ?, ?, ?, ?, ?)", cid, DE_CLIENTE, tipo, texto, midia, mid, agora)
             lid = _lid_do_chat(p, tel)               # [CELULAR] para achar a conversa quando a resposta vier com o @lid
+            conferir_lid = False
             if lid:
-                cur.execute("UPDATE AtendimentoConversas SET Lid = ? WHERE ConversaID = ? AND (Lid IS NULL OR Lid <> ?)", lid, cid, lid)
+                _guardar_lid(cur, cid, lid)
+            elif '@lid' not in tel:                 # a mensagem não trouxe o @lid: pergunta à Z-API (depois de gravar)
+                cur.execute("SELECT 1 FROM AtendimentoConversas WHERE ConversaID = ? AND Lid IS NULL "
+                            "AND (LidConferidoEm IS NULL OR LidConferidoEm < ?)", cid, agora - timedelta(days=1))
+                conferir_lid = bool(cur.fetchone())
             if auto:
                 cur.execute("INSERT INTO AtendimentoMensagens (ConversaID, De, Tipo, Texto, CriadaEm) VALUES (?, ?, 'texto', ?, ?)",
                             cid, DE_SISTEMA, AUTOMATICAS[acao], agora)
@@ -1098,6 +1190,8 @@ def _do_webhook(p, acao):
             cur.execute("DELETE FROM ParametrosAtendimento WHERE Chave = 'central_ok_em'")
             cur.execute("INSERT INTO ParametrosAtendimento (Chave, Valor) VALUES ('central_ok_em', ?)", agora.isoformat())
             conn.commit()
+            if conferir_lid:
+                _rodar(_conferir_lid, cid, tel)
         finally:
             conn.close()
 
@@ -1118,6 +1212,13 @@ def _status_entrega(p):
         for i in ids:
             cur.execute(f"UPDATE AtendimentoMensagens SET Status = ? WHERE ZapiID = ? AND Status IN ({','.join('?' * len(antes))})",
                         novo, i, *antes)
+        lid = _lid_do_chat({'fromMe': True, 'chatLid': p.get('chatLid')}, str(p.get('phone') or '').strip())
+        if lid:                                     # [CELULAR] o aviso de entregue/lida também ensina o @lid da conversa
+            cur.execute(f"SELECT ConversaID FROM AtendimentoMensagens WHERE De = ? AND ZapiID IN ({','.join('?' * len(ids))})",
+                        DE_LOJA, *ids)
+            r = cur.fetchone()
+            if r:
+                _guardar_lid(cur, r[0], lid)
         conn.commit()
     finally:
         conn.close()

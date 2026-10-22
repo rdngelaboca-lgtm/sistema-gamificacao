@@ -1413,6 +1413,8 @@ def _processar_webhook(p, em_segundo_plano):
     if not tipo:
         return {'ok': True, 'acao': 'ignorada'}
     try:
+        if '@' in str(p.get('phone') or ''):    # [CELULAR] '5544...@lid' é o código do WhatsApp, não um número
+            raise ErroClientes("número oculto pelo WhatsApp")
         tel = normalizar_telefone(p.get('phone'))
     except ErroClientes:
         _central(p)                         # [DEPURAÇÃO CENTRAL] número oculto pelo WhatsApp (@lid): a central ainda recebe

@@ -448,6 +448,12 @@ computador. Módulo `atendimento.py`, página `templates/atendimento.html`; tabe
   `CampanhaEnvios`, SAIR/VOLTAR → "Automática"); o resto é "Pelo celular", tira o cliente da espera e a conversa fica
   com "Celular" (se o cliente escrever de novo, volta para esperando). O 📡 mostra o que houve com a última mandada
   pelo celular (entrou / sem conversa com …1234 / erro).
+  **@lid:** a resposta do celular costuma vir com o código `@lid` no lugar do número (a Z-API diz que não dá para
+  converter o código em número; o `chatLid` é o identificador estável). A conversa aprende o próprio `@lid` por:
+  `chatLid`/`senderLid` da mensagem do cliente; a cópia (`fromMe`) e o aviso de entregue/lida das mensagens da central;
+  e o `phone-exists` da Z-API (devolve o `lid`; uma vez por dia por conversa, coluna `LidConferidoEm`). Chegou um
+  `@lid` que ninguém conhece: pergunta o das conversas dos últimos 30 dias (até 10) em segundo plano e tenta de novo
+  uma vez. Código `@lid` nunca é lido como telefone (antes `5544…@lid` virava um número falso).
 - **Login:** atendente com o **próprio PIN** (cadastrado pela gestão a partir do cadastro de funcionários; 5 erros =
   15 min bloqueado, igual ao app), sem acesso ao resto da Gestão. Gestor entra com o PIN do app (ou já logado na
   Gestão). Entrar como atendente tira o login de gestor daquele navegador. Permissões por atendente: ver as conversas
