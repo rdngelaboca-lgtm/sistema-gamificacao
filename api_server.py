@@ -3369,6 +3369,13 @@ def api_atendimento_reenviar(usuario, conversa_id, mensagem_id):
     return _resposta_atendimento(lambda: atendimento.reenviar(conversa_id, mensagem_id, usuario))
 
 
+@app.route('/api/atendimento/conversas/<int:conversa_id>/contato', methods=['POST'])
+@atendimento_login
+def api_atendimento_contato(usuario, conversa_id):
+    import atendimento
+    return _resposta_atendimento(lambda: atendimento.salvar_contato(conversa_id, ler_json() or {}, usuario))
+
+
 @app.route('/api/atendimento/conversas/<int:conversa_id>/<acao>', methods=['POST'])
 @atendimento_login
 def api_atendimento_acao(usuario, conversa_id, acao):

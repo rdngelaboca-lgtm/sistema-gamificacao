@@ -451,7 +451,10 @@ computador. Módulo `atendimento.py`, página `templates/atendimento.html`; tabe
   outra pessoa; encerrar. Tudo o que vai fica com o nome de quem mandou. Texto, foto (o computador diminui), Enter manda.
   ⚠️ não foi → "Mandar de novo". Plim e contador no título quando chega mensagem (a página pergunta a cada 3 s).
 - **Botões prontos** em 3 grupos (🍧 Produtos com foto + preços · Entrega e pagamento · Andamento do pedido): um clique
-  manda para o cliente. No texto, `{nome}` = primeiro nome do cliente e `[Categoria]` = a lista dos itens da tabela
+  manda para o cliente. Os **produtos ficam na lateral direita** (cartão com a foto), embaixo do cliente; entrega e
+  andamento no rodapé. Um botão pode ficar **dentro de outro** (coluna `PaiID`, um nível só, mesmo grupo do de fora):
+  aparece como "+ nome" no cartão (ex.: "+ Complementos" dentro do Açaí). Apagar o de fora solta os de dentro.
+  Ajuste único (`botoes_v2`): Complementos entrou no Açaí e o "Em preparo" (texto original) saiu. No texto, `{nome}` = primeiro nome do cliente e `[Categoria]` = a lista dos itens da tabela
   dessa categoria que **tem hoje**, com o preço (complemento grátis sem preço, pago com "+R$").
 - **Tabela de preços** (a mesma do 99Food; começou com os 3 açaís e os 24 complementos): categoria, nome, preço,
   complemento, "tem hoje". Mudou aqui, todos os botões mandam o preço novo.
@@ -459,7 +462,12 @@ computador. Módulo `atendimento.py`, página `templates/atendimento.html`; tabe
   (com quem está com a central aberta) e as conversas abertas. **Aviso no grupo da gestão** quando um cliente espera mais
   de X minutos (padrão 5; 0 desliga; tipo 💬 Atendimento no WhatsApp em 📣 Avisos), uma vez por espera (agendador, 1 min).
 - Liberado na internet junto com a Gestão (`/atendimento`, `/api/atendimento`), sempre com login.
-- **📡 Diagnóstico (só a gestão vê, embaixo da busca):** quando chegou a última mensagem de cliente da Z-API; avisa se
+- **💾 Salvar contato** (lateral do cliente, quem pode ver a conversa): põe no cadastro do 📢 Clientes com o nome e o
+  WhatsApp da conversa (origem "conversa no WhatsApp"), aniversário opcional, ofertas só marcando que o cliente
+  autorizou; e, se marcado, na **agenda do celular** dos clientes (Z-API `contacts/add`; se recusar, o cadastro vale e a
+  mensagem diz o motivo). Número oculto (`@lid`) não salva. Já cadastrado: avisa, não duplica.
+- **📡 Diagnóstico (só a gestão vê, embaixo da busca):** quando chegou a última mensagem de cliente da Z-API (vale
+  também a última mensagem de cliente já gravada na central); avisa se
   nunca chegou nenhuma (ou só avisos de entregue/lida), se o webhook é de **outra instância** (final do ID) e se uma
   mensagem chegou mas deu erro ao gravar (o motivo). A Web precisa repetir: ID da instância comparado sem diferenciar
   maiúsculas; corpo lido mesmo sem `Content-Type: application/json`; cliente com número oculto (`...@lid`) entra como

@@ -72,10 +72,11 @@ BOTOES_INICIAIS = [
     ('Pagamento', 'entrega', "Como você prefere pagar: Pix, cartão (a maquininha vai junto) ou dinheiro? "
                              "Se for dinheiro, precisa de troco para quanto?"),
     ('Pedido confirmado', 'andamento', "Pedido confirmado, {nome}! ✅ Já foi para o preparo."),
-    ('Em preparo', 'andamento', "Seu pedido está sendo preparado 🍧"),
     ('Saiu para entrega', 'andamento', "Seu pedido saiu para entrega! 🛵"),
     ('Agradecer', 'andamento', "Obrigado pelo pedido, {nome}! Bom açaí! 💜"),
 ]
+# [CENTRAL v2] botão que fica DENTRO de outro, como um "+" (Complementos dentro do Açaí)
+DENTRO_INICIAIS = [('Complementos', 'Açaí')]
 
 _tabelas_ok = False
 _trava = threading.Lock()
@@ -181,7 +182,8 @@ def garantir_tabelas():
                 Texto NVARCHAR(1500) NOT NULL,
                 Foto VARCHAR(60) NULL,
                 Ordem INT NOT NULL DEFAULT 0,
-                Ativo BIT NOT NULL DEFAULT 1
+                Ativo BIT NOT NULL DEFAULT 1,
+                PaiID INT NULL
             )
         """)
         cur.execute("""
@@ -200,6 +202,19 @@ def garantir_tabelas():
                 cur.execute("INSERT INTO AtendimentoBotoes (Nome, Grupo, Texto, Foto, Ordem, Ativo) VALUES (?, ?, ?, NULL, ?, 1)",
                             nome, grupo, texto, k)
             cur.execute("INSERT INTO ParametrosAtendimento (Chave, Valor) VALUES ('iniciado', ?)", _agora().isoformat())
+        # [CENTRAL v2] botão dentro de outro (o "+ Complementos" no Açaí)
+        cur.execute("IF COL_LENGTH('AtendimentoBotoes', 'PaiID') IS NULL ALTER TABLE AtendimentoBotoes ADD PaiID INT NULL")
+        cur.execute("SELECT Valor FROM ParametrosAtendimento WHERE Chave = 'botoes_v2'")
+        if not cur.fetchone():                    # uma vez só: Complementos vai para dentro do Açaí; "Em preparo" sai
+            for filho, pai in DENTRO_INICIAIS:
+                cur.execute("SELECT BotaoID, Grupo FROM AtendimentoBotoes WHERE Nome = ? AND PaiID IS NULL", pai)
+                r = cur.fetchone()
+                if r:
+                    cur.execute("UPDATE AtendimentoBotoes SET PaiID = ? WHERE Nome = ? AND Grupo = ? AND PaiID IS NULL AND BotaoID <> ?",
+                                r[0], filho, r[1], r[0])
+            cur.execute("DELETE FROM AtendimentoBotoes WHERE Nome = 'Em preparo' AND Grupo = 'andamento' AND Texto = ?",
+                        "Seu pedido está sendo preparado 🍧")
+            cur.execute("INSERT INTO ParametrosAtendimento (Chave, Valor) VALUES ('botoes_v2', ?)", _agora().isoformat())
         conn.commit()
         _tabelas_ok = True
     finally:
@@ -499,11 +514,11 @@ def renderizar(texto, nome_cliente, produtos):
 
 def _botao_json(r):
     return {'id': r[0], 'nome': r[1], 'grupo': r[2], 'texto': r[3], 'foto': r[4] or '', 'ordem': int(r[5] or 0),
-            'ativo': bool(r[6]), 'foto_url': f"/api/atendimento/foto/{r[4]}" if r[4] else ''}
+            'ativo': bool(r[6]), 'foto_url': f"/api/atendimento/foto/{r[4]}" if r[4] else '', 'pai_id': r[7]}
 
 
 def _botoes(cur, so_ativos=False):
-    cur.execute("SELECT BotaoID, Nome, Grupo, Texto, Foto, Ordem, Ativo FROM AtendimentoBotoes")
+    cur.execute("SELECT BotaoID, Nome, Grupo, Texto, Foto, Ordem, Ativo, PaiID FROM AtendimentoBotoes")
     linhas = sorted(cur.fetchall(), key=lambda r: ([g for g, _ in GRUPOS].index(r[2]) if r[2] in dict(GRUPOS) else 9,
                                                    int(r[5] or 0), r[0]))
     return [_botao_json(r) for r in linhas if r[6] or not so_ativos]
@@ -620,20 +635,33 @@ def salvar_botao(botao_id, dados, usuario):
         raise ErroAtendimento("Escreva o texto da mensagem.")
     foto = _ler_foto(dados.get('foto'))
     ativo = bool(dados.get('ativo', True))
+    pai_id = dados.get('pai_id')
+    pai_id = _id(pai_id, "o botão de fora") if pai_id not in (None, '', 0, '0') else None
     garantir_tabelas()
     conn = _conexao()
     try:
         cur = conn.cursor()
+        if pai_id:                                  # [CENTRAL v2] fica dentro de outro botão (um nível só)
+            todos = _botoes(cur)
+            pai = next((x for x in todos if x['id'] == pai_id), None)
+            if not pai or pai_id == botao_id:
+                raise ErroAtendimento("O botão de fora não existe mais. Atualize a página.", 409)
+            if pai['pai_id']:
+                raise ErroAtendimento(f"{pai['nome']} já fica dentro de outro botão. Escolha um botão principal.")
+            if botao_id and any(x['pai_id'] == botao_id for x in todos):
+                raise ErroAtendimento(f"{nome} tem botões dentro dele: ele não pode ficar dentro de outro.")
+            grupo = pai['grupo']                    # aparece junto com o de fora
         if botao_id:
-            cur.execute("UPDATE AtendimentoBotoes SET Nome = ?, Grupo = ?, Texto = ?, Foto = ?, Ativo = ? WHERE BotaoID = ?",
-                        nome, grupo, texto, foto, 1 if ativo else 0, botao_id)
+            cur.execute("UPDATE AtendimentoBotoes SET Nome = ?, Grupo = ?, Texto = ?, Foto = ?, Ativo = ?, PaiID = ? WHERE BotaoID = ?",
+                        nome, grupo, texto, foto, 1 if ativo else 0, pai_id, botao_id)
             if cur.rowcount != 1:
                 raise ErroAtendimento("Botão não encontrado. Atualize a página.", 404)
+            cur.execute("UPDATE AtendimentoBotoes SET Grupo = ? WHERE PaiID = ?", grupo, botao_id)   # os de dentro vão junto
         else:
             cur.execute("SELECT MAX(Ordem) FROM AtendimentoBotoes")
             r = cur.fetchone()
-            cur.execute("INSERT INTO AtendimentoBotoes (Nome, Grupo, Texto, Foto, Ordem, Ativo) VALUES (?, ?, ?, ?, ?, ?)",
-                        nome, grupo, texto, foto, int((r[0] if r else 0) or 0) + 1, 1 if ativo else 0)
+            cur.execute("INSERT INTO AtendimentoBotoes (Nome, Grupo, Texto, Foto, Ordem, Ativo, PaiID) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        nome, grupo, texto, foto, int((r[0] if r else 0) or 0) + 1, 1 if ativo else 0, pai_id)
         conn.commit()
     finally:
         conn.close()
@@ -651,6 +679,8 @@ def excluir_botao(botao_id, usuario):
         cur = conn.cursor()
         cur.execute("DELETE FROM AtendimentoBotoes WHERE BotaoID = ?", botao_id)
         apagou = cur.rowcount == 1
+        if apagou:
+            cur.execute("UPDATE AtendimentoBotoes SET PaiID = NULL WHERE PaiID = ?", botao_id)
         conn.commit()
     finally:
         conn.close()
@@ -673,7 +703,7 @@ def mover_botao(botao_id, dados, usuario):
         b = next((x for x in todos if x['id'] == botao_id), None)
         if not b:
             raise ErroAtendimento("Botão não encontrado. Atualize a página.", 404)
-        grupo = [x for x in todos if x['grupo'] == b['grupo']]
+        grupo = [x for x in todos if x['grupo'] == b['grupo'] and x['pai_id'] == b['pai_id']]   # mesmo lugar
         i = grupo.index(b)
         j = i + passo
         if 0 <= j < len(grupo):
@@ -879,7 +909,17 @@ def diagnostico(agora=None):
     """Para a gestão: chegou mensagem? de qual instância? deu erro ao gravar?"""
     agora = agora or _agora()
     p = _params_todos()
-    msg_em, ult_em = _dt(p.get('webhook_msg_em')), _dt(p.get('webhook_em'))
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT MAX(CriadaEm) FROM AtendimentoMensagens WHERE De = ?", DE_CLIENTE)
+        r = cur.fetchone()
+    finally:
+        conn.close()
+    # [CENTRAL v2] vale também a mensagem de cliente que já está na central (chegou antes desta versão, ou o aviso
+    # da Z-API veio diferente): antes a tela dizia "nenhuma mensagem chegou" com as conversas ali na lista
+    datas = [x for x in (_dt(p.get('webhook_msg_em')), _dt(p.get('central_ok_em')), _dt(r[0] if r else None)) if x]
+    msg_em, ult_em = (max(datas) if datas else None), _dt(p.get('webhook_em'))
     erro_em, ok_em, outra_em = _dt(p.get('erro_em')), _dt(p.get('central_ok_em')), _dt(p.get('outra_instancia_em'))
     d = {'nunca': not msg_em, 'so_status': bool(ult_em and not msg_em), 'msg': _quando(msg_em, agora) if msg_em else ''}
     if erro_em and (not ok_em or erro_em > ok_em) and agora - erro_em < timedelta(days=1):
@@ -1028,6 +1068,7 @@ def _conv_json(c, usuario, agora):
             'status': c['status'], 'atendente': c['atendente'], 'minha': c['atendente_id'] == usuario['id'],
             'aguardando_min': _minutos(c['esperando_desde'], agora) if c['status'] != ST_ENCERRADA else None,
             'nao_lidas': c['nao_lidas'], 'hora': _quando(c['ultima'], agora), 'previa': c['previa'],
+            'oculto': '@lid' in str(c['telefone'] or ''),
             'cadastrado': bool(c['cliente_id'])}
 
 
@@ -1289,6 +1330,66 @@ def acao(cid, nome_acao, dados, usuario, agora=None):
         conn.close()
     logger.info(f"[ATENDIMENTO] {nota} (conversa {cid})")
     return {'ok': True, 'mensagem': mensagem}
+
+
+# ------------------------------------------------------------------------------
+# [CENTRAL v2] 💾 Salvar o contato: no cadastro do 📢 Clientes e na agenda do celular dos clientes
+# ------------------------------------------------------------------------------
+def _agenda_celular(telefone, nome):
+    """Põe o contato na agenda do celular do número dos clientes (com os dois salvos, o cliente vê o status da loja).
+    (True, '') ou (False, motivo). Se a Z-API não aceitar, o cadastro vale do mesmo jeito."""
+    import clientes
+    primeiro, _, resto = nome.partition(' ')
+    ok, r = clientes._zapi('POST', 'contacts/add', [{'firstName': primeiro, 'lastName': resto, 'phone': telefone}], timeout=15)
+    if ok and isinstance(r, dict) and r.get('success') is False:
+        ok, r = False, '; '.join(str(e) for e in (r.get('errors') or [])[:3]) or "a Z-API não confirmou"
+    return ok, ('' if ok else clientes._sem_segredo(str(r or ''))[:150])
+
+
+def salvar_contato(cid, dados, usuario, agora=None):
+    """O cliente da conversa entra no cadastro de clientes (nome e WhatsApp já preenchidos) e, se marcado, na agenda
+    do celular. Receber as ofertas só com a autorização dele (a caixinha)."""
+    agora = agora or _agora()
+    import clientes
+    garantir_tabelas()
+    clientes.garantir_tabelas()
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        c = _conversa(cur, cid)
+        if not _pode_ver(c, usuario):
+            raise ErroAtendimento(f"Esta conversa está com {c['atendente'] or 'outro atendente'}.", 403)
+        if '@lid' in c['telefone']:
+            raise ErroAtendimento("O WhatsApp escondeu o número deste cliente: peça o número a ele para salvar o contato.", 409)
+        ja = clientes._achar_cliente(cur, c['telefone'])
+    finally:
+        conn.close()
+    if ja:
+        raise ErroAtendimento(f"Já está no cadastro de clientes como {ja[1]}. Atualize a página.", 409)
+    nome = clientes._limpo(dados.get('nome'), 120) or clientes._limpo(c['nome'], 120)
+    aceite = bool(dados.get('aceite'))
+    r = clientes.salvar(None, {'nome': nome, 'telefone': c['telefone'], 'aniversario': dados.get('aniversario'),
+                               'aceite': aceite}, usuario)
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE Clientes SET Origem = 'whatsapp' WHERE ClienteID = ?", r['id'])
+        cur.execute("UPDATE AtendimentoConversas SET ClienteID = ?, Nome = ? WHERE ConversaID = ?", r['id'], nome, cid)
+        cur.execute("INSERT INTO AtendimentoMensagens (ConversaID, De, Tipo, Texto, PorID, PorNome, CriadaEm) "
+                    "VALUES (?, ?, 'texto', ?, ?, ?, ?)", cid, DE_SISTEMA, f"{usuario['nome']} salvou o contato.",
+                    usuario['id'], usuario['nome'], agora)
+        conn.commit()
+    finally:
+        conn.close()
+    agenda, motivo = _agenda_celular(c['telefone'], nome) if dados.get('agenda', True) else (None, '')
+    logger.info(f"[ATENDIMENTO] {usuario['nome']}: salvou o contato da conversa {cid} (cliente {r['id']}; "
+                f"agenda: {'sim' if agenda else 'não' if agenda is False else 'não pediu'}).")
+    mensagem = f"{nome} salvo no cadastro de clientes" + (" e na agenda do celular." if agenda else ".")
+    if agenda is False:
+        mensagem += f" Na agenda do celular não deu ({motivo}): salve pelo celular, se quiser."
+    if not aceite:
+        mensagem += " Ainda não recebe as ofertas (não autorizou)."
+    return {'ok': True, 'mensagem': mensagem, 'agenda': agenda, 'cliente_id': r['id']}
 
 
 # ------------------------------------------------------------------------------

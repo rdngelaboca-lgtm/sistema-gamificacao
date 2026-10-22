@@ -59,7 +59,18 @@
   .col { background: #fff; border: 1px solid var(--linha); border-radius: 12px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
   .col-conversas { flex: 0 0 310px; }
   .col-chat { flex: 1 1 auto; min-width: 0; }
-  .col-cliente { flex: 0 0 260px; overflow: auto; padding: 14px; gap: 8px; }
+  .col-cliente { flex: 0 0 300px; overflow: auto; padding: 14px; gap: 14px; }
+  #cliente { display: flex; flex-direction: column; gap: 8px; }
+  #form-contato { background: #F7FAF9; border: 1px solid var(--linha2); border-radius: 10px; padding: 10px; gap: 8px; }
+  /* [CENTRAL v2] produtos na lateral: um cartão por produto, com os "+" (ex.: + Complementos) dentro */
+  #produtos { border-top: 1px solid var(--linha2); padding-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+  #produtos .tit { font-size: 12px; font-weight: 700; letter-spacing: .04em; color: var(--roxo); }
+  .prod { border: 1px solid var(--roxo-linha); background: var(--roxo-claro); border-radius: 12px; padding: 6px;
+    display: flex; flex-direction: column; gap: 6px; }
+  .prod > .bt { width: 100%; display: flex; align-items: center; gap: 10px; text-align: left; background: #fff; min-height: 52px; font-size: 15px; }
+  .prod > .bt img { width: 40px; height: 40px; object-fit: cover; border-radius: 8px; flex: none; }
+  .prod .dentro { display: flex; flex-wrap: wrap; gap: 6px; }
+  .bt.mais { min-height: 36px; font-size: 13px; padding: 0 11px; }
   .col h2 { margin: 0; font-size: 17px; }
   .topo-lista { padding: 12px 14px 8px; display: flex; flex-direction: column; gap: 8px; }
   .filtros { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -245,7 +256,10 @@
           </div>
         </section>
 
-        <aside class="col col-cliente" aria-label="Cliente" id="cliente"><div class="vazio">O cliente aparece aqui.</div></aside>
+        <aside class="col col-cliente" aria-label="Cliente e produtos">
+          <div id="cliente"><div class="vazio">O cliente aparece aqui.</div></div>
+          <div id="produtos" aria-label="Produtos"></div>
+        </aside>
       </div>
       <footer id="botoes" aria-label="Botões prontos"></footer>
     </section>
@@ -333,7 +347,7 @@
 'use strict';
 const $ = s => document.querySelector(s);
 const esc = t => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
-const S = {eu: null, aba: 'conversas', filtro: 'todas', busca: '', painel: null, aberta: null, conversa: null, chaveMsgs: '',
+const S = {eu: null, aba: 'conversas', filtro: 'todas', busca: '', painel: null, aberta: null, conversa: null, chaveMsgs: '', chaveCli: '',
            cardapio: null, foto: null, enviando: false, ultimoSinal: null, periodo: 'hoje', timer: null, audio: null};
 const GRUPOS = [['produtos', 'PRODUTOS (FOTO + PREÇOS)'], ['entrega', 'ENTREGA E PAGAMENTO'], ['andamento', 'ANDAMENTO DO PEDIDO']];
 
@@ -504,7 +518,7 @@ $('#lista').addEventListener('click', e => {
 
 // ------------------------------------------------------------------ conversa aberta
 async function abrirConversa(id) {
-  S.aberta = id; S.chaveMsgs = ''; S.foto = null; $('#foto-pronta').hidden = true;
+  S.aberta = id; S.chaveMsgs = ''; S.chaveCli = ''; S.foto = null; $('#foto-pronta').hidden = true;
   $('#chat-vazio').hidden = true; $('#chat').hidden = false;
   $('#mensagens').innerHTML = '<div class="vazio">Carregando…</div>';
   desenharLista();
@@ -561,16 +575,51 @@ function desenharConversa(r) {
     }).join('') || '<div class="vazio">Sem mensagens ainda.</div>';
     if (noFim) caixa.scrollTop = caixa.scrollHeight;
   }
-  const cli = r.cliente;
+  desenharCliente(c, r.cliente);
+  desenharBotoes();
+}
+// [CENTRAL v2] só redesenha quando muda (a página pergunta a cada 3 s: não pode apagar o que o atendente está digitando)
+function desenharCliente(c, cli) {
+  const chave = JSON.stringify([c.id, c.nome, c.telefone, cli]), form = $('#form-contato');
+  if (chave === S.chaveCli || (form && !form.hidden && S.chaveCli.startsWith(`[${c.id},`))) return;
+  S.chaveCli = chave;
   $('#cliente').innerHTML = `<h2>Cliente</h2>
     <div class="cli-linha"><b>Nome</b>${esc(c.nome)}</div>
     <div class="cli-linha"><b>WhatsApp</b>${esc(c.telefone)}</div>` + (cli.cadastrado ? `
     <div class="cli-linha"><b>Cadastro de clientes</b>Sim${cli.recebe_ofertas ? ' · aceita receber ofertas' : ' · não recebe ofertas'}</div>
     ${cli.aniversario ? `<div class="cli-linha"><b>Aniversário</b>${esc(cli.aniversario)}</div>` : ''}
     ${cli.etiquetas.length ? `<div class="cli-linha"><b>Etiquetas</b>${cli.etiquetas.map(esc).join(', ')}</div>` : ''}`
-    : `<div class="cli-linha"><b>Cadastro de clientes</b>Ainda não está no cadastro${S.eu.gestor ? ' (Gestão › 📢 Clientes)' : ''}.</div>`);
-  desenharBotoes();
+    : c.oculto ? `<div class="cli-linha"><b>Cadastro de clientes</b>O WhatsApp escondeu o número: peça o número ao cliente para salvar o contato.</div>`
+    : `<div class="cli-linha"><b>Cadastro de clientes</b>Ainda não está no cadastro.</div>
+    <button class="btn prim" type="button" id="b-contato">💾 Salvar contato</button>
+    <form id="form-contato" class="form" hidden>
+      <label>Nome<input id="ct-nome" maxlength="120" value="${esc(c.nome === c.telefone ? '' : c.nome)}" autocomplete="off"></label>
+      <label>Aniversário (opcional)<input id="ct-aniv" maxlength="10" placeholder="dia/mês, ex.: 15/03" autocomplete="off"></label>
+      <label class="check"><input type="checkbox" id="ct-agenda" checked> Pôr também na agenda do celular</label>
+      <label class="check"><input type="checkbox" id="ct-aceite"> O cliente aceitou receber as ofertas</label>
+      <div class="mini suave">Pergunte antes: "Posso te mandar nossas promoções por aqui?" Com o contato na agenda, o cliente também vê o status da loja.</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn prim" type="submit">Salvar</button>
+        <button class="btn" type="button" id="ct-cancelar">Cancelar</button></div>
+    </form>`);
 }
+$('#cliente').addEventListener('click', e => {
+  if (e.target.closest('#b-contato')) { $('#b-contato').hidden = true; $('#form-contato').hidden = false; $('#ct-nome').focus(); }
+  if (e.target.closest('#ct-cancelar')) { $('#form-contato').hidden = true; $('#b-contato').hidden = false; }
+});
+$('#cliente').addEventListener('submit', async ev => {
+  if (ev.target.id !== 'form-contato') return;
+  ev.preventDefault();
+  const b = ev.target.querySelector('[type=submit]');
+  if (b.disabled) return;
+  b.disabled = true;
+  const id = S.aberta;
+  try {
+    const r = await api('POST', `/api/atendimento/conversas/${id}/contato`, {nome: $('#ct-nome').value, aniversario: $('#ct-aniv').value,
+      agenda: $('#ct-agenda').checked, aceite: $('#ct-aceite').checked});
+    status(r.mensagem, r.agenda === false ? 'erro' : '');
+    if (id === S.aberta) { S.chaveCli = ''; $('#form-contato').hidden = true; await carregarConversa(false); atualizar(); }
+  } catch (e) { falhou(e); b.disabled = false; }
+});
 $('#mensagens').addEventListener('click', async e => {
   const b = e.target.closest('[data-reenviar]');
   if (!b || b.disabled) return;
@@ -658,26 +707,41 @@ $('#b-passar').onclick = async () => {
 async function carregarBotoes() {
   try { S.cardapio = await api('GET', '/api/atendimento/cardapio'); desenharBotoes(); } catch (e) { falhou(e); }
 }
+function dentroDe(b) { return S.cardapio.botoes.filter(x => x.ativo && x.pai_id === b.id); }
 function desenharBotoes() {
   if (!S.cardapio) return;
-  const sem = !S.aberta;
-  $('#botoes').innerHTML = GRUPOS.map(([g, tit]) => {
-    const bs = S.cardapio.botoes.filter(b => b.ativo && b.grupo === g);
+  const sem = !S.aberta ? 'disabled' : '';
+  const dica = b => esc(b.foto ? 'Manda a foto e o texto' : 'Manda o texto');
+  const mais = (b, g) => `<button type="button" class="bt ${g} mais" data-botao="${b.id}" ${sem} title="${dica(b)}">+ ${esc(b.nome)}</button>`;
+  const existe = id => S.cardapio.botoes.some(x => x.id === id);
+  const principais = g => S.cardapio.botoes.filter(b => b.ativo && b.grupo === g && !(b.pai_id && existe(b.pai_id)));
+  // [CENTRAL v2] 🍧 produtos na lateral direita: cartão com a foto e os "+" de dentro (ex.: + Complementos no Açaí)
+  const prods = principais('produtos');
+  $('#produtos').innerHTML = prods.length ? `<span class="tit">🍧 PRODUTOS</span>${prods.map(b => `<div class="prod">
+      <button type="button" class="bt produtos" data-botao="${b.id}" ${sem} title="${dica(b)}">${b.foto_url
+        ? `<img src="${esc(b.foto_url)}" alt="">` : ''}<span>${esc(b.nome)}</span></button>
+      ${dentroDe(b).length ? `<div class="dentro">${dentroDe(b).map(x => mais(x, 'produtos')).join('')}</div>` : ''}</div>`).join('')}
+    ${sem ? '<div class="mini suave">Abra uma conversa para mandar.</div>' : ''}` : '';
+  $('#botoes').innerHTML = GRUPOS.filter(([g]) => g !== 'produtos').map(([g, tit]) => {
+    const bs = principais(g);
     if (!bs.length) return '';
-    const cor = {produtos: 'var(--roxo)', entrega: '#0B5A52', andamento: 'var(--ambar)'}[g];
+    const cor = {entrega: '#0B5A52', andamento: 'var(--ambar)'}[g];
     return `<div class="grupo"><span class="tit" style="color:${cor}">${tit}</span><div class="lista-b">${bs.map(b =>
-      `<button type="button" class="bt ${g}" data-botao="${b.id}" ${sem ? 'disabled' : ''} title="${esc(b.foto ? 'Manda a foto e o texto' : 'Manda o texto')}">${b.foto ? '📷 ' : ''}${esc(b.nome)}</button>`).join('')}</div></div>`;
+      `<button type="button" class="bt ${g}" data-botao="${b.id}" ${sem} title="${dica(b)}">${b.foto ? '📷 ' : ''}${esc(b.nome)}</button>`
+      + dentroDe(b).map(x => mais(x, g)).join('')).join('')}</div></div>`;
   }).join('') + (S.eu && S.eu.editar ? '<button type="button" class="btn" id="b-editar-botoes" style="align-self:flex-end;margin-left:auto">Editar botões e preços</button>' : '');
   const ed = $('#b-editar-botoes');
   if (ed) ed.onclick = () => irPara('botoes');
 }
-$('#botoes').addEventListener('click', async e => {
+$('#produtos').addEventListener('click', e => mandarBotao(e));
+$('#botoes').addEventListener('click', e => mandarBotao(e));
+async function mandarBotao(e) {
   const b = e.target.closest('[data-botao]');
   if (!b || b.disabled) return;
   b.disabled = true;
-  if (await enviar({botao_id: +b.dataset.botao})) status(`"${b.textContent.replace('📷 ', '')}" enviado.`);
+  if (await enviar({botao_id: +b.dataset.botao})) status(`"${b.textContent.replace('📷 ', '').replace('+ ', '').trim()}" enviado.`);
   b.disabled = !S.aberta;
-});
+}
 
 // ------------------------------------------------------------------ 🍧 botões e preços
 async function carregarCardapio() {
@@ -739,13 +803,18 @@ $('#b-salvar-tabela').onclick = async () => {
   b.disabled = false;
 };
 function desenharListaBotoes() {
-  $('#lista-botoes').innerHTML = GRUPOS.map(([g, tit]) => {
-    const bs = S.cardapio.botoes.filter(b => b.grupo === g);
-    return `<div style="margin-bottom:10px"><div class="mini" style="font-weight:700;color:var(--suave)">${tit}</div>${bs.map((b, i) => `
-      <div class="linha-b"><span class="n">${b.foto ? '📷 ' : ''}${esc(b.nome)}${b.ativo ? '' : ' <span class="chip enc">desligado</span>'}</span>
+  const ids = new Set(S.cardapio.botoes.map(b => b.id));
+  const linha = (b, i, n, dentro) => `
+      <div class="linha-b"${dentro ? ' style="padding-left:22px"' : ''}><span class="n">${dentro ? '↳ + ' : ''}${b.foto ? '📷 ' : ''}${esc(b.nome)}${b.ativo ? '' : ' <span class="chip enc">desligado</span>'}</span>
         <button class="btn" type="button" data-mover="${b.id}" data-dir="cima" ${i ? '' : 'disabled'} aria-label="Subir ${esc(b.nome)}" style="padding:4px 9px">↑</button>
-        <button class="btn" type="button" data-mover="${b.id}" data-dir="baixo" ${i < bs.length - 1 ? '' : 'disabled'} aria-label="Descer ${esc(b.nome)}" style="padding:4px 9px">↓</button>
-        <button class="btn" type="button" data-editar="${b.id}">Editar</button></div>`).join('') || '<div class="mini suave">nenhum</div>'}</div>`;
+        <button class="btn" type="button" data-mover="${b.id}" data-dir="baixo" ${i < n - 1 ? '' : 'disabled'} aria-label="Descer ${esc(b.nome)}" style="padding:4px 9px">↓</button>
+        <button class="btn" type="button" data-editar="${b.id}">Editar</button></div>`;
+  $('#lista-botoes').innerHTML = GRUPOS.map(([g, tit]) => {
+    const bs = S.cardapio.botoes.filter(b => b.grupo === g && !(b.pai_id && ids.has(b.pai_id)));
+    return `<div style="margin-bottom:10px"><div class="mini" style="font-weight:700;color:var(--suave)">${tit}</div>${bs.map((b, i) => {
+      const filhos = S.cardapio.botoes.filter(x => x.pai_id === b.id);
+      return linha(b, i, bs.length, false) + filhos.map((x, j) => linha(x, j, filhos.length, true)).join('');
+    }).join('') || '<div class="mini suave">nenhum</div>'}</div>`;
   }).join('');
 }
 $('#lista-botoes').addEventListener('click', async e => {
@@ -760,7 +829,9 @@ $('#lista-botoes').addEventListener('click', async e => {
 });
 $('#b-novo-botao').onclick = () => editarBotao(null);
 function editarBotao(b) {
-  const atual = b || {nome: '', grupo: 'produtos', texto: '', foto: '', foto_url: '', ativo: true};
+  const atual = b || {nome: '', grupo: 'produtos', texto: '', foto: '', foto_url: '', ativo: true, pai_id: null};
+  const temDentro = b && S.cardapio.botoes.some(x => x.pai_id === b.id);
+  const fora = S.cardapio.botoes.filter(x => !x.pai_id && (!b || x.id !== b.id));
   let foto = atual.foto, fotoUrl = atual.foto_url;
   abrirModal(`<h3>${b ? 'Editar botão' : 'Novo botão'}</h3>
     <form class="form" id="form-botao">
@@ -768,6 +839,9 @@ function editarBotao(b) {
         <div class="form">
           <label>Nome do botão<input id="eb-nome" value="${esc(atual.nome)}" maxlength="30"></label>
           <label>Grupo<select id="eb-grupo">${S.cardapio.grupos.map(g => `<option value="${g.chave}" ${g.chave === atual.grupo ? 'selected' : ''}>${esc(g.nome)}</option>`).join('')}</select></label>
+          <label>Fica dentro de outro botão? (aparece como "+ ${esc(atual.nome || 'nome')}" nele)<select id="eb-pai" ${temDentro ? 'disabled' : ''}>
+            <option value="">Não: botão normal</option>${fora.map(x => `<option value="${x.id}" ${x.id === atual.pai_id ? 'selected' : ''}>Dentro de: ${esc(x.nome)}</option>`).join('')}</select>
+            ${temDentro ? '<span class="mini suave" style="font-weight:400">Este botão tem outros dentro dele.</span>' : ''}</label>
           <label>Texto da mensagem<textarea id="eb-texto" rows="7" maxlength="1500">${esc(atual.texto)}</textarea></label>
           <div class="mini suave">Toque para pôr no texto: <span class="marcador" data-por="{nome}" role="button" tabindex="0">{nome}</span> (o nome do cliente)
             ${S.cardapio.categorias.map(c => `<span class="marcador" data-por="[${esc(c)}]" role="button" tabindex="0">[${esc(c)}]</span>`).join(' ')}
@@ -794,6 +868,12 @@ function editarBotao(b) {
     $('#eb-sem-foto').hidden = !foto;
   };
   $('#eb-texto').addEventListener('input', prev); prev();
+  const acertarGrupo = () => {                   // o de dentro fica no mesmo grupo do de fora
+    const pai = S.cardapio.botoes.find(x => x.id === +$('#eb-pai').value);
+    if (pai) $('#eb-grupo').value = pai.grupo;
+    $('#eb-grupo').disabled = !!pai;
+  };
+  $('#eb-pai').addEventListener('change', acertarGrupo); acertarGrupo();
   $('#modal').querySelectorAll('[data-por]').forEach(x => x.onclick = () => {
     const t = $('#eb-texto'), p = t.selectionStart ?? t.value.length;
     t.value = t.value.slice(0, p) + x.dataset.por + t.value.slice(t.selectionEnd ?? p); t.focus(); prev();
@@ -808,7 +888,8 @@ function editarBotao(b) {
     ev.preventDefault();
     try {
       S.cardapio = await api('POST', b ? `/api/atendimento/botoes/${b.id}` : '/api/atendimento/botoes',
-        {nome: $('#eb-nome').value, grupo: $('#eb-grupo').value, texto: $('#eb-texto').value, foto, ativo: $('#eb-ativo').checked});
+        {nome: $('#eb-nome').value, grupo: $('#eb-grupo').value, texto: $('#eb-texto').value, foto, ativo: $('#eb-ativo').checked,
+         pai_id: temDentro ? null : ($('#eb-pai').value ? +$('#eb-pai').value : null)});
       fecharModal(); desenharListaBotoes(); desenharBotoes(); status(S.cardapio.mensagem);
     } catch (e) { falhou(e); }
   });
