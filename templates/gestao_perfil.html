@@ -100,6 +100,47 @@
   .nivel-f.combina { border-left-color: var(--ok); } .nivel-f.pode { border-left-color: #f9a825; } .nivel-f.menos { border-left-color: var(--erro); }
   .nivel-f ul { margin-top: 2px; }
   .aviso-uso { font-size: 12px; color: var(--suave); margin-top: 10px; line-height: 1.45; }
+  /* [TELA] processo seletivo organizado: barra de cima, etapas em abas, filtros numa linha, cartões iguais */
+  .barra-cand { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .barra-cand .insta { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; background: #fff; border: 1px solid var(--linha);
+    border-left: 4px solid #c13584; border-radius: 10px; padding: 4px 8px; font-size: 13px; font-weight: 700; }
+  .barra-cand .insta .btn { font-size: 13px; padding: 4px 9px; }
+  .como-cand { flex-basis: 100%; }
+  .como-cand summary { cursor: pointer; font-size: 13px; color: var(--suave); font-weight: 700; }
+  .como-cand .mini { margin-top: 6px; line-height: 1.5; }
+  .etapas { display: flex; gap: 6px; flex-wrap: wrap; }
+  .etapas .btn { font-size: 14px; padding: 6px 12px; }
+  .etapas .btn b { background: var(--fundo); border-radius: 8px; padding: 0 6px; margin-left: 2px; }
+  .etapas .btn.sel { background: var(--verde); border-color: var(--verde); color: #fff; }
+  .etapas .btn.sel b { background: #ffffff33; }
+  .filtros-linha { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .filtros-linha label { font-size: 13px; color: var(--suave); font-weight: 700; display: inline-flex; gap: 6px; align-items: center; }
+  .filtros-linha select, .filtros-linha input, .sel-etapa { font: inherit; font-size: 13px; border: 1px solid var(--linha); border-radius: 8px;
+    padding: 5px 8px; background: #fff; }
+  .filtros-linha input { flex: 1; min-width: 160px; }
+  .cand2 { background: #fff; border: 1px solid var(--linha); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 7px; }
+  .cand2 .topo { display: flex; gap: 8px; align-items: flex-start; }
+  .cand2 .topo .nm { flex: 1; min-width: 0; font-weight: 800; font-size: 16px; }
+  .cand2 .info { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; font-size: 13px; }
+  .cand2 .info.exp { color: var(--suave); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .cand2 .res { background: var(--fundo); border-radius: 10px; padding: 8px 10px; display: grid; gap: 5px; font-size: 14px; }
+  .cand2 .pend { background: var(--fundo); border-radius: 10px; padding: 8px 10px; font-size: 13px; color: var(--suave); }
+  .cand2 .pe { margin-top: auto; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; padding-top: 4px; border-top: 1px solid var(--linha2); }
+  .cand2 .pe .btn { font-size: 13px; padding: 5px 9px; text-decoration: none; color: inherit; }
+  .cand2 .pe .rodape { margin-left: auto; font-size: 12px; color: var(--suave); }
+  .falta-doc { color: #8a5a00; font-weight: 700; }
+  .disc-barra { display: flex; height: 10px; border-radius: 6px; overflow: hidden; background: #eef2f1; }
+  .disc-barra span { display: block; height: 100%; }
+  .disc-leg { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; font-weight: 700; color: var(--suave); }
+  .motiv-linha { font-size: 13px; color: #6b4e00; }
+  .menu-op { display: grid; gap: 8px; }
+  .menu-op > .btn { justify-content: flex-start; text-align: left; }
+  .menu-op .vinc { display: flex; gap: 6px; flex-wrap: wrap; }
+  .menu-op select { font: inherit; font-size: 14px; border: 1px solid var(--linha); border-radius: 8px; padding: 6px 8px; }
+  /* [MOTIVAÇÃO] equipe e relatório */
+  .motiv-equipe { background: #fffaf0; border: 1px solid #f1de9c; border-radius: 12px; padding: 10px 12px; display: grid; gap: 8px; margin: 4px 0 12px; }
+  .motiv-equipe .contagem span { border-left: 5px solid #f0a500; }
+  .barras.m .f { grid-template-columns: 150px minmax(0, 1fr) 34px; }
   @media (max-width: 700px) {
     .area { padding-left: 10px; padding-right: 10px; }
     .cores, .secoes, .grade2 { grid-template-columns: 1fr; }
@@ -109,12 +150,13 @@
   }
 {% endblock %}
 {% block conteudo %}
-  <section class="barra"><div class="linha"><b>🧭 Perfil da equipe (DISC)</b>
+  <section class="barra"><div class="linha"><b>🧭 Perfil da equipe</b>
     <button class="btn prim" id="btn-enviar">📤 Enviar avaliação</button>
     <button class="btn ico" id="atualizar" title="Atualizar">🔄</button></div></section>
   <main class="area">
-    <details class="explica"><summary><b>O que é o DISC?</b> Uma avaliação rápida (24 grupos de 4 palavras) que mostra o jeito
-      natural de cada fixo (e dos 📅 freelancers que você escolher) trabalhar.</summary>
+    <details class="explica"><summary><b>Como funciona?</b> Uma avaliação em 2 partes: 🧭 o perfil DISC (24 grupos de 4 palavras), que
+      mostra o jeito natural de trabalhar, e 🔋 o que motiva (28 perguntas de escolher uma entre duas: 💰 ganhos, 🏆 reconhecimento,
+      📈 crescimento, 🤝 equipe, 🛡️ segurança, 🗽 autonomia, 🎯 desafio e 💜 propósito).</summary>
       <div class="cores">
         <div class="cor D"><b>🔴 D · Dominante</b>Resultado, desafio, decisão rápida.</div>
         <div class="cor I"><b>🟡 I · Influente</b>Comunicação, entusiasmo, gente.</div>
@@ -135,7 +177,7 @@
 {% endblock %}
 {% block script %}
 // [PERFIL DISC] envio da avaliação para os fixos (WhatsApp no turno de cada um), visão da equipe e relatório de cada pessoa
-const S = {d: null, aba: 'equipe', fArea: '', fEtapa: '', fVaga: ''};
+const S = {d: null, aba: 'equipe', fArea: '', fEtapa: '', fVaga: '', fBusca: ''};
 const COR = {D: '#e53935', I: '#f9a825', S: '#43a047', C: '#1e88e5'};
 const EMO = {D: '🔴', I: '🟡', S: '🟢', C: '🔵'}, NOME = {D: 'Dominante', I: 'Influente', S: 'Estável', C: 'Conforme'};
 function aoEntrar() { carregar(); }
@@ -167,13 +209,22 @@ function htmlEquipe(d) {
   const cartao = p => `<button class="pessoa-c" data-rel="${p.id}">
         <span class="nm">${esc(p.nome)}</span>${p.do_processo ? '<span class="tag-or" title="A avaliação do processo seletivo, vinculada ao cadastro">🔗 do processo seletivo</span>' : ''}
         <span class="pf">${esc(p.perfil_nome)}</span>${barras(p.pct)}
+        ${p.motivo ? `<span class="motiv-linha">🔋 Motiva: <b>${esc(p.motivo)}</b></span>` : '<span class="mini suave">🔋 Motivação: ainda não respondeu</span>'}
         <span class="mini suave">📍 Combina com: ${p.setores.map(esc).join(', ')} · respondeu ${esc(p.respondido)}</span></button>`;
   const quem = lista => (lista || []).map(p => `${EMO[p.perfil[0]]} ${esc(p.nome.split(' ')[0])}`).join('<br>') || '<span class="mini suave">—</span>';
   const porFree = {}; (d.freelancers_por_setor || []).forEach(x => porFree[x.setor] = x.pessoas);
   const porFixo = {}; r.por_setor.forEach(x => porFixo[x.setor] = x.pessoas);
   const setores = r.por_setor.length ? r.por_setor : (d.freelancers_por_setor || []);
+  const mq = d.motivacao_equipe || {contagem: []};
+  const blocoMotiv = mq.contagem.length ? `<div class="motiv-equipe"><b>🔋 O que move a equipe</b>
+      <div class="contagem">${mq.contagem.map(x => `<span>${x.emoji} ${esc(x.nome)}: ${x.pessoas}</span>`).join('')}</div>
+      ${mq.dicas.map(t => `<div class="mini">💡 ${esc(t)}</div>`).join('')}
+      ${mq.premios.length ? `<div class="mini"><b>🎁 Prêmios que mais motivam a equipe:</b> ${mq.premios.map(esc).join(' · ')}</div>` : ''}
+      ${(d.so_motivacao || []).length ? `<div class="mini suave">Só responderam a motivação (sem o perfil): ${d.so_motivacao.map(x => `<a href="#" data-rel="${x.id}">${esc(x.nome)}</a> (${esc(x.motivo)})`).join(', ')}</div>` : ''}</div>`
+    : '<div class="motiv-equipe mini">🔋 Ninguém respondeu ainda o que motiva. Em <b>📤 Enviar avaliação</b>, escolha <b>🔋 Só a motivação</b> para quem já fez o perfil.</div>';
   return `${d.equipe.length ? `<div class="contagem">${'DISC'.split('').map(x => `<span style="border-left:5px solid ${COR[x]}">${EMO[x]} ${NOME[x]}: ${r.contagem[x]}</span>`).join('')}</div>
     ${r.dicas.map(t => `<div class="dica">💡 ${esc(t)}</div>`).join('')}
+    ${blocoMotiv}
     <div class="grade-p">${d.equipe.map(cartao).join('')}</div>` : '<div class="vazio-p">Nenhum fixo respondeu ainda.</div>'}
     ${free.length ? `<h3 style="margin:8px 0 0;font-size:16px" id="titulo-freelas">📅 Freelancers avaliados</h3>
       <div class="mini suave">Para colocar cada um no lugar certo. Não entram na contagem da equipe fixa acima.</div>
@@ -188,67 +239,88 @@ function htmlEquipe(d) {
 function htmlEnvios(d) {
   if (!d.envios.length) return '<div class="vazio-p">Nenhuma avaliação enviada ainda.</div>';
   return `<div class="envios">${d.envios.map(e => `<div class="lin"><span class="ic">${e.icone}</span>
-      <span><span class="nm">${esc(e.nome)}</span>${e.freelancer ? ' <span class="tag-or">📅 Freelancer</span>' : ''}${e.perfil ? ` · <b>${esc(e.perfil_nome)}</b>` : ''}
+      <span><span class="nm">${esc(e.nome)}</span>${e.freelancer ? ' <span class="tag-or">📅 Freelancer</span>' : ''}${e.partes !== 'disc' ? ` <span class="tag-or">${esc(e.partes_nome)}</span>` : ''}${e.perfil ? ` · <b>${esc(e.perfil_nome)}</b>` : ''}${e.motivo ? ` · 🔋 ${esc(e.motivo)}` : ''}
         <div class="sit">${esc(e.situacao)} · enviada ${esc(e.criado)}${e.pontos ? ` · ⭐ ${e.pontos}` : ''}</div></span>
       <span class="acoes">${e.status === 'respondido' ? `<button class="btn" data-rel="${e.id}">📄 Relatório</button>` : ''}
         ${e.status === 'enviado' ? `<button class="btn" data-a="lembrar" data-id="${e.id}">🔔 Lembrar</button>` : ''}
         ${e.pode_agora ? `<button class="btn" data-a="agora" data-id="${e.id}" title="Manda já, sem esperar o turno">📤 Agora</button>` : ''}
         ${e.pendente || e.status === 'expirado' || e.status === 'sem_telefone' ? `<button class="btn perigo" data-a="cancelar" data-id="${e.id}">⛔</button>` : ''}</span></div>`).join('')}</div>`;
 }
+function discMini(pct) {                                 // [TELA] o perfil numa barra só (cabe no cartão)
+  return `<div class="disc-barra">${'DISC'.split('').map(d => `<span style="width:${pct[d]}%;background:${COR[d]}" title="${NOME[d]} ${pct[d]}%"></span>`).join('')}</div>
+    <div class="disc-leg">${'DISC'.split('').map(d => `<span>${EMO[d]} ${pct[d]}%</span>`).join('')}</div>`;
+}
+// "Vaga fixa" também mostra quem topa os dois (o mesmo para freelancer)
+const naVaga = (c, v) => !v || (v === 'nao' ? !c.tipo_vaga : v === 'ambos' ? c.tipo_vaga === 'ambos' : [v, 'ambos'].includes(c.tipo_vaga));
 function htmlCandidatos(d) {
-  const todos = d.candidatos || [];
-  // "Vaga fixa" também mostra quem topa os dois (o mesmo para freelancer)
-  const naVaga = (c, v) => !v || (v === 'nao' ? !c.tipo_vaga : v === 'ambos' ? c.tipo_vaga === 'ambos' : [v, 'ambos'].includes(c.tipo_vaga));
-  const lista = todos.filter(c => (!S.fArea || (c.areas || []).some(a => a.chave === S.fArea))
-                                && (!S.fEtapa || c.etapa === S.fEtapa) && naVaga(c, S.fVaga));
-  const conta = f => todos.filter(f).length;
-  const chip = (tipo, chave, nome, n) => `<button class="btn ${({area: S.fArea, etapa: S.fEtapa, vaga: S.fVaga})[tipo] === chave ? 'sel' : ''}"
-      data-filtro="${tipo}" data-v="${esc(chave)}">${esc(nome)}${n != null ? ` (${n})` : ''}</button>`;
-  return `<div class="link-trab">${d.link_trabalhe
-      ? `<div><b>📸 Trabalhe conosco</b> — link para a bio do Instagram:<br><a href="${esc(d.link_trabalhe)}" target="_blank" rel="noopener" id="link-trab">${esc(d.link_trabalhe)}</a></div>
-         <div class="acoes"><button class="btn" data-copiar="${esc(d.link_trabalhe)}">🔗 Copiar link</button><button class="btn" id="btn-qr-trab">🔲 QR para imprimir</button></div>`
-      : '<div>📸 Trabalhe conosco: grave o endereço da internet em 📢 Clientes › ⚙️ Ajustes para ter o link do Instagram.</div>'}</div>
-    <div class="linha-cand"><button class="btn prim" id="btn-candidato">➕ Avaliar um candidato</button>
-      <span class="mini suave">Quem se cadastra pelo link do Instagram aparece aqui sozinho, com os dados e o questionário. Para quem
-        vem direto à loja, use ➕ (o link vai na hora no WhatsApp). O candidato vê só um "obrigado"; o resultado fica aqui.</span></div>
-    <div class="dica" style="background:#eef6ff;color:#174a7c">ℹ️ Use junto com a entrevista e a experiência: o perfil mostra o jeito
-      de trabalhar, não se a pessoa é boa ou ruim. Não decida só por ele. Apague (🗑️) os dados de quem pedir ou não for seguir.</div>
-    ${todos.length ? `<div class="filtros-c"><span class="mini suave">Vaga:</span>${chip('vaga', '', 'Todas', todos.length)}
-        ${d.tipos_vaga.map(t => chip('vaga', t.chave, t.chave === 'ambos' ? '🔁 Tanto faz' : t.nome, conta(c => naVaga(c, t.chave)))).join('')}
-        ${conta(c => !c.tipo_vaga) ? chip('vaga', 'nao', '❔ Não informou', conta(c => !c.tipo_vaga)) : ''}</div>
-      <div class="filtros-c"><span class="mini suave">Área:</span>${chip('area', '', 'Todas', todos.length)}
-        ${d.areas.map(a => chip('area', a.chave, a.nome, conta(c => (c.areas || []).some(x => x.chave === a.chave)))).join('')}</div>
-      <div class="filtros-c"><span class="mini suave">Etapa:</span>${chip('etapa', '', 'Todas')}
-        ${d.etapas.map(e => chip('etapa', e.chave, e.nome, conta(c => c.etapa === e.chave))).join('')}</div>` : ''}
-    ${lista.length ? `<div class="grade-p">${lista.map(c => `<div class="pessoa-c cand">
-        <span class="nm">${c.icone} ${esc(c.nome)}${c.idade ? ` <span class="mini suave">· ${c.idade} anos</span>` : ''}
-          <span class="tag-or">${c.origem === 'site' ? '📸 Instagram' : '🧑‍💼 Gestão'}</span></span>
-        <span class="tag-v ${esc(c.tipo_vaga || 'nao')}">${esc(c.tipo_vaga_nome)}</span>
-        ${c.tipo_vaga_informado ? '' : `<label class="mini etapa">Marcar o tipo de vaga: <select data-tipo-vaga="${c.id}">
-          <option value="">❔ Não informou</option>${d.tipos_vaga.map(t => `<option value="${esc(t.chave)}" ${c.tipo_vaga === t.chave ? 'selected' : ''}>${esc(t.nome)}</option>`).join('')}</select></label>`}
-        ${(c.areas || []).length ? `<span class="tags">${c.areas.map(a => `<span class="tag-a">${esc(a.nome)}</span>`).join('')}</span>`
-          : c.vaga ? `<span class="mini">Vaga: <b>${esc(c.vaga)}</b></span>` : ''}
-        ${c.bairro || (c.disponibilidade || []).length ? `<span class="mini">${c.bairro ? `📍 ${esc(c.bairro)}` : ''}${c.bairro && c.disponibilidade.length ? ' · ' : ''}${(c.disponibilidade || []).length ? `🕒 ${c.disponibilidade.map(x => esc(x.nome)).join(', ')}` : ''}</span>` : ''}
-        ${c.experiencia ? `<span class="mini exp" title="${esc(c.experiencia)}">💼 ${esc(c.experiencia)}</span>` : ''}
-        <span class="mini suave">${esc(c.situacao)} · ${c.origem === 'site' ? 'cadastro' : 'criada'} ${esc(c.criado)}</span>
-        ${c.pct ? `<span class="pf">${esc(c.perfil_nome)}</span>${barras(c.pct)}
-          <span class="mini suave">📍 Combina com: ${c.setores.map(esc).join(', ')}</span>
-          ${c.completa.length ? `<span class="mini" style="color:var(--ok);font-weight:700">✨ Traz o que falta na equipe: ${c.completa.map(x => `${x.emoji} ${esc(x.nome)} (${esc(x.curto)})`).join(', ')}</span>` : ''}` : ''}
-        <label class="mini etapa">Etapa: <select data-etapa="${c.id}">${d.etapas.map(e => `<option value="${esc(e.chave)}" ${c.etapa === e.chave ? 'selected' : ''}>${esc(e.nome)}</option>`).join('')}</select></label>
-        ${c.vinculo_id ? `<span class="mini vinc"><b style="color:var(--ok)">🔗 Vinculado ao cadastro de ${esc(c.vinculo_nome || 'um fixo')}</b> · vale como o perfil
-            dele(a) em 👥 Equipe <button class="btn" data-desvincular="${c.id}" title="A avaliação volta a ser só do processo seletivo">desfazer</button></span>`
-          : c.etapa === 'contratado' ? `<span class="mini vinc">🔗 Vincular ao cadastro do fixo (vale como o perfil dele, sem responder de novo):
-            <select data-vinc="${c.id}"><option value="">— escolha o fixo —</option>${(d.fixos || []).map(f => `<option value="${f.id}" ${c.sugestao_vinculo === f.id ? 'selected' : ''}>${esc(f.nome)}</option>`).join('')}</select>
-            <button class="btn prim" data-vincular="${c.id}">🔗 Vincular</button></span>` : ''}
-        <span class="acoes">${c.status === 'respondido' ? `<button class="btn" data-rel="${c.id}">📄 Relatório</button>` : ''}
-          ${c.whatsapp ? `<a class="btn" href="${esc(c.whatsapp)}" target="_blank" rel="noopener" title="Abre a conversa no WhatsApp">💬 WhatsApp</a>` : ''}
-          <button class="btn ${c.documentos ? '' : 'falta'}" data-docs="${c.id}" title="CPF e data de nascimento">🪪 ${c.documentos ? 'CPF e nascimento' : 'Falta CPF/nascimento'}</button>
-          ${c.link && c.origem !== 'site' ? `<button class="btn" data-copiar="${esc(c.link)}" title="Copiar o link para mandar você mesmo">🔗 Copiar link</button>` : ''}
-          ${c.pode_agora ? `<button class="btn" data-a="agora" data-id="${c.id}">📤 Mandar de novo</button>` : ''}
-          ${c.pendente && c.origem !== 'site' ? `<button class="btn perigo" data-a="cancelar" data-id="${c.id}">⛔ Cancelar</button>` : ''}
-          <button class="btn perigo" data-a="apagar" data-id="${c.id}" title="Apaga nome, WhatsApp, CPF e respostas"
-            ${c.vinculo_id ? `data-aviso="Apagar esta avaliação? Ela vale como o perfil de ${esc(c.vinculo_nome)} na 👥 Equipe e some de lá também. Não dá para desfazer."` : ''}>🗑️ Apagar</button></span></div>`).join('')}</div>`
+  const todos = d.candidatos || [], busca = S.fBusca.trim().toLowerCase();
+  const filtrados = todos.filter(c => (!S.fArea || (c.areas || []).some(a => a.chave === S.fArea)) && naVaga(c, S.fVaga)
+                                      && (!busca || String(c.nome || '').toLowerCase().includes(busca)));
+  const lista = filtrados.filter(c => !S.fEtapa || c.etapa === S.fEtapa);
+  const opt = (v, nome, atual) => `<option value="${esc(v)}" ${atual === v ? 'selected' : ''}>${esc(nome)}</option>`;
+  return `<div class="barra-cand"><button class="btn prim" id="btn-candidato">➕ Avaliar um candidato</button>
+      ${d.link_trabalhe ? `<span class="insta">📸 Trabalhe conosco (bio do Instagram):
+          <button class="btn" data-copiar="${esc(d.link_trabalhe)}" title="${esc(d.link_trabalhe)}">🔗 Copiar link</button>
+          <button class="btn" id="btn-qr-trab">🔲 QR</button></span>`
+        : '<span class="mini suave">📸 Trabalhe conosco: grave o endereço da internet em 📢 Clientes › ⚙️ Ajustes para ter o link do Instagram.</span>'}
+      <details class="como-cand"><summary>ℹ️ Como funciona</summary><div class="mini">Quem se cadastra pelo link do Instagram aparece aqui
+        sozinho, com os dados e o questionário (🧭 perfil + 🔋 o que motiva). Para quem vem direto à loja, use ➕ (o link vai na hora no
+        WhatsApp). O candidato vê só um "obrigado"; o resultado fica aqui.<br>ℹ️ Use junto com a entrevista e a experiência: o perfil
+        mostra o jeito de trabalhar, não se a pessoa é boa ou ruim. Não decida só por ele. Apague (⋯ › 🗑️) os dados de quem pedir ou
+        não for seguir.</div></details></div>
+    ${todos.length ? `<div class="etapas" role="group" aria-label="Etapa">
+        <button class="btn ${!S.fEtapa ? 'sel' : ''}" data-filtro="etapa" data-v="">Todos <b>${filtrados.length}</b></button>
+        ${d.etapas.map(e => `<button class="btn ${S.fEtapa === e.chave ? 'sel' : ''}" data-filtro="etapa" data-v="${esc(e.chave)}">${esc(e.nome)} <b>${filtrados.filter(c => c.etapa === e.chave).length}</b></button>`).join('')}</div>
+      <div class="filtros-linha">
+        <label>Vaga <select data-sel="fVaga">${opt('', 'Todas', S.fVaga)}${d.tipos_vaga.map(t => opt(t.chave, t.chave === 'ambos' ? '🔁 Tanto faz' : t.nome, S.fVaga)).join('')}${opt('nao', '❔ Não informou', S.fVaga)}</select></label>
+        <label>Área <select data-sel="fArea">${opt('', 'Todas', S.fArea)}${d.areas.map(a => opt(a.chave, a.nome, S.fArea)).join('')}</select></label>
+        <input type="search" id="busca-cand" placeholder="🔎 Buscar pelo nome" value="${esc(S.fBusca)}" aria-label="Buscar candidato pelo nome"></div>` : ''}
+    ${lista.length ? `<div class="grade-p">${lista.map(c => cartaoCandidato(c, d)).join('')}</div>`
       : `<div class="vazio-p">${todos.length ? 'Ninguém com esse filtro.' : 'Nenhum candidato ainda. Coloque o link do Trabalhe conosco na bio do Instagram.'}</div>`}`;
+}
+function cartaoCandidato(c, d) {
+  return `<div class="cand2" data-cand="${c.id}">
+    <div class="topo"><span class="nm">${esc(c.nome)}${c.idade ? ` <span class="mini suave">· ${c.idade} anos</span>` : ''}</span>
+      <select class="sel-etapa" data-etapa="${c.id}" aria-label="Etapa de ${esc(c.nome)}">${d.etapas.map(e => `<option value="${esc(e.chave)}" ${c.etapa === e.chave ? 'selected' : ''}>${esc(e.nome)}</option>`).join('')}</select></div>
+    <div class="info"><span class="tag-v ${esc(c.tipo_vaga || 'nao')}">${esc(c.tipo_vaga_nome)}</span>
+      ${(c.areas || []).map(a => `<span class="tag-a">${esc(a.nome)}</span>`).join('')}
+      ${!(c.areas || []).length && c.vaga ? `<span>Vaga: <b>${esc(c.vaga)}</b></span>` : ''}</div>
+    ${c.bairro || (c.disponibilidade || []).length ? `<div class="info">${c.bairro ? `<span>📍 ${esc(c.bairro)}</span>` : ''}${(c.disponibilidade || []).length ? `<span>🕒 ${c.disponibilidade.map(x => esc(x.nome)).join(', ')}</span>` : ''}</div>` : ''}
+    ${c.experiencia ? `<div class="info exp" title="${esc(c.experiencia)}">💼 ${esc(c.experiencia)}</div>` : ''}
+    ${c.pct || c.motivacao ? `<div class="res">
+        ${c.pct ? `<b>🧭 ${esc(c.perfil_nome)}</b>${discMini(c.pct)}` : ''}
+        ${c.motivacao ? `<div class="motiv-linha">🔋 Motiva: <b>${esc(c.motivacao)}</b></div>` : ''}
+        ${(c.setores || []).length ? `<div class="mini suave">📍 Combina com: ${c.setores.map(esc).join(', ')}</div>` : ''}
+        ${(c.completa || []).length ? `<div class="mini" style="color:var(--ok);font-weight:700">✨ Traz o que falta na equipe: ${c.completa.map(x => `${x.emoji} ${esc(x.nome)}`).join(', ')}</div>` : ''}</div>`
+      : `<div class="pend">${c.icone} ${esc(c.situacao)}</div>`}
+    ${c.vinculo_id ? `<div class="mini" style="color:var(--ok);font-weight:700">🔗 Vinculado ao cadastro de ${esc(c.vinculo_nome || 'um fixo')}</div>`
+      : c.etapa === 'contratado' ? '<div class="mini" style="color:#8a5a00;font-weight:700">🔗 Contratado: vincule ao cadastro do fixo em ⋯</div>' : ''}
+    <div class="pe">${c.status === 'respondido' ? `<button class="btn" data-rel="${c.id}">📄 Relatório</button>` : ''}
+      ${c.whatsapp ? `<a class="btn" href="${esc(c.whatsapp)}" target="_blank" rel="noopener" title="Abre a conversa no WhatsApp">💬 WhatsApp</a>` : ''}
+      ${c.link && c.origem !== 'site' && c.status !== 'respondido' ? `<button class="btn" data-copiar="${esc(c.link)}" title="Copiar o link para mandar você mesmo">🔗 Link</button>` : ''}
+      <button class="btn" data-mais="${c.id}" title="Mais opções" aria-label="Mais opções de ${esc(c.nome)}">⋯</button>
+      <span class="rodape">${c.origem === 'site' ? '📸' : '🧑‍💼'} ${esc(c.criado)}${c.documentos ? '' : ' · <span class="falta-doc">🪪 falta CPF</span>'}</span></div></div>`;
+}
+// [TELA] ⋯ as ações que se usam pouco ficam aqui (o cartão fica limpo)
+function maisOpcoes(id) {
+  const d = S.d, c = (d.candidatos || []).find(x => x.id === id);
+  if (!c) return;
+  abrirModal(`<h3>⋯ ${esc(c.nome)}</h3><div class="menu-op">
+      <button class="btn ${c.documentos ? '' : 'falta'}" data-docs="${c.id}">🪪 ${c.documentos ? 'CPF e nascimento' : 'Falta CPF/nascimento: gravar'}</button>
+      ${c.link && c.status !== 'respondido' ? `<button class="btn" data-copiar="${esc(c.link)}">🔗 Copiar o link da avaliação</button>` : ''}
+      ${c.pode_agora ? `<button class="btn" data-a="agora" data-id="${c.id}">📤 Mandar de novo no WhatsApp</button>` : ''}
+      <label class="campo"><span>💼 Tipo de vaga</span><select data-tipo-vaga="${c.id}">
+        ${c.tipo_vaga_informado ? '' : '<option value="">❔ Não informou</option>'}${d.tipos_vaga.map(t => `<option value="${esc(t.chave)}" ${c.tipo_vaga === t.chave ? 'selected' : ''}>${esc(t.nome)}</option>`).join('')}</select></label>
+      ${c.etapa === 'contratado' ? (c.vinculo_id
+        ? `<div class="mini">🔗 Vinculado ao cadastro de <b>${esc(c.vinculo_nome || 'um fixo')}</b>: vale como o perfil dele(a) em 👥 Equipe.
+            <button class="btn" data-desvincular="${c.id}" title="A avaliação volta a ser só do processo seletivo">desfazer</button></div>`
+        : `<div class="campo"><span>🔗 Vincular ao cadastro do fixo <span class="mini suave">(vale como o perfil dele, sem responder de novo)</span></span>
+            <span class="vinc"><select data-vinc="${c.id}"><option value="">— escolha o fixo —</option>${(d.fixos || []).map(f => `<option value="${f.id}" ${c.sugestao_vinculo === f.id ? 'selected' : ''}>${esc(f.nome)}</option>`).join('')}</select>
+            <button class="btn prim" data-vincular="${c.id}">🔗 Vincular</button></span></div>`) : ''}
+      ${c.pendente && c.origem !== 'site' ? `<button class="btn perigo" data-a="cancelar" data-id="${c.id}">⛔ Cancelar a avaliação</button>` : ''}
+      <button class="btn perigo" data-a="apagar" data-id="${c.id}" title="Apaga nome, WhatsApp, CPF e respostas"
+        ${c.vinculo_id ? `data-aviso="Apagar esta avaliação? Ela vale como o perfil de ${esc(c.vinculo_nome)} na 👥 Equipe e some de lá também. Não dá para desfazer."` : ''}>🗑️ Apagar os dados</button>
+    </div>`, null, true);
 }
 async function qrTrabalhe() {
   let r;
@@ -334,12 +406,15 @@ async function novoCandidato() {
     } catch (e) { falhou(e); b.disabled = false; }
   };
 }
+const noModal = el => !!el.closest('#modal');
 document.addEventListener('change', async e => {
+  const fs = e.target.closest('[data-sel]');                // [TELA] filtros de vaga e área
+  if (fs) { S[fs.dataset.sel] = fs.value; return desenhar(); }
   const tv = e.target.closest('[data-tipo-vaga]');
   if (tv) {
     if (!tv.value) return;
     tv.disabled = true;
-    try { const r = await api('POST', `/api/gestao/perfil/${tv.dataset.tipoVaga}/tipo-vaga`, {tipo_vaga: tv.value}); status(r.mensagem); await carregar(); }
+    try { const r = await api('POST', `/api/gestao/perfil/${tv.dataset.tipoVaga}/tipo-vaga`, {tipo_vaga: tv.value}); status(r.mensagem); if (noModal(tv)) fecharModal(); await carregar(); }
     catch (er) { falhou(er); tv.disabled = false; }
     return;
   }
@@ -348,8 +423,23 @@ document.addEventListener('change', async e => {
   try { const r = await api('POST', `/api/gestao/perfil/${sel.dataset.etapa}/etapa`, {etapa: sel.value}); status(r.mensagem); await carregar(); }
   catch (er) { falhou(er); sel.disabled = false; }
 });
+document.addEventListener('input', e => {                    // [TELA] busca pelo nome (sem perder o cursor)
+  if (e.target.id !== 'busca-cand') return;
+  S.fBusca = e.target.value; const pos = e.target.selectionStart;
+  desenhar();
+  const b = $('#busca-cand'); if (b) { b.focus(); try { b.setSelectionRange(pos, pos); } catch (er) {} }
+});
 document.addEventListener('click', async e => {
   if (e.target.closest('#btn-candidato')) return novoCandidato();
+  const mo = e.target.closest('[data-mais]'); if (mo) return maisOpcoes(+mo.dataset.mais);
+  const sm = e.target.closest('[data-so-motiv]');           // [MOTIVAÇÃO] do relatório: manda só a parte que falta
+  if (sm) {
+    if (!confirm('Mandar só a avaliação de motivação (28 perguntas rápidas) no WhatsApp, no turno da pessoa?')) return;
+    sm.disabled = true;
+    try { const r = await api('POST', '/api/gestao/perfil', {pessoas: [sm.dataset.soMotiv], partes: 'motiv', pontos: 0}); fecharModal(); status(r.mensagem); S.aba = 'envios'; setTimeout(carregar, 1200); }
+    catch (er) { falhou(er); sm.disabled = false; }
+    return;
+  }
   if (e.target.closest('#btn-qr-trab')) return qrTrabalhe();
   const f = e.target.closest('[data-filtro]');
   if (f) { S[{area: 'fArea', etapa: 'fEtapa', vaga: 'fVaga'}[f.dataset.filtro]] = f.dataset.v; return desenhar(); }
@@ -361,7 +451,7 @@ document.addEventListener('click', async e => {
     if (vc.dataset.vincular && !fid) { alert('Escolha o fixo do cadastro.'); return; }
     if (vc.dataset.desvincular && !confirm('Desfazer o vínculo? A avaliação volta a ser só do processo seletivo.')) return;
     vc.disabled = true;
-    try { const r = await api('POST', `/api/gestao/perfil/${id}/vincular`, {funcionario_id: fid ? +fid : null}); status(r.mensagem); await carregar(); }
+    try { const r = await api('POST', `/api/gestao/perfil/${id}/vincular`, {funcionario_id: fid ? +fid : null}); status(r.mensagem); if (noModal(vc)) fecharModal(); await carregar(); }
     catch (er) { falhou(er); vc.disabled = false; }
     return;
   }
@@ -372,7 +462,7 @@ document.addEventListener('click', async e => {
   if (acao === 'cancelar' && !confirm('Cancelar esta avaliação? O link deixa de funcionar.')) return;
   if (acao === 'apagar' && !confirm(b.dataset.aviso || 'Apagar esta avaliação do candidato? Some o nome, o WhatsApp e as respostas. Não dá para desfazer.')) return;
   b.disabled = true;
-  try { const r = await api('POST', `/api/gestao/perfil/${b.dataset.id}/${acao}`); status(r.mensagem); setTimeout(carregar, 1500); }
+  try { const r = await api('POST', `/api/gestao/perfil/${b.dataset.id}/${acao}`); status(r.mensagem); if (noModal(b)) fecharModal(); setTimeout(carregar, 1500); }
   catch (er) { falhou(er); b.disabled = false; }
 });
 
@@ -383,11 +473,16 @@ async function enviar() {
   if (r.link_local) { alert('Falta o endereço da internet (📢 Clientes › ⚙️ Ajustes › QR do balcão): sem ele o link da avaliação não abre no celular.'); return; }
   const P = r.pessoas, podem = p => p.whatsapp && !p.pendente;
   const marcados = new Set(P.filter(p => p.tipo === 'func' && podem(p) && p.ativo && !p.perfil).map(p => p.id));
-  let todos = false, grupo = 'func';
+  let todos = false, grupo = 'func', partes = 'disc_motiv';          // [MOTIVAÇÃO] perfil + motivação, ou só a motivação
+  const fez = p => partes === 'motiv' ? !!p.motivo : !!p.perfil;
   const nFree = P.filter(p => p.tipo === 'free').length;
-  abrirModal(`<h3>📤 Enviar avaliação de perfil (DISC)</h3>
+  abrirModal(`<h3>📤 Enviar avaliação</h3>
     <div class="mini suave" style="margin-bottom:8px">Para os fixos e, se quiser, 📅 freelancers escolhidos. Cada um recebe o link no
       WhatsApp a partir de ${r.antecedencia} min antes do turno dele (na folga, espera o próximo turno).</div>
+    <div class="campo"><span>O que enviar?</span>
+      <div class="rapidos" id="p-partes"><button class="btn sel" data-partes="disc_motiv">🧭 Perfil + 🔋 Motivação</button>
+        <button class="btn" data-partes="motiv">🔋 Só a motivação</button></div>
+      <span class="mini suave" id="p-partes-info">As 2 partes: o jeito de trabalhar (${r.perguntas} grupos de palavras) e o que motiva (${r.perguntas_motivacao} perguntas rápidas). Uns 12 minutos.</span></div>
     <div class="rapidos" id="p-grupos"><button class="btn sel" data-grupo="func">👥 Fixos</button>
       <button class="btn" data-grupo="free" ${nFree ? '' : 'disabled title="Nenhum freelancer no cadastro"'}>📅 Freelancers</button></div>
     <div class="campo"><span>Para quem?</span>
@@ -410,7 +505,7 @@ async function enviar() {
   const desenharLista = () => {
     $('#p-lista').innerHTML = visiveis().map(p => `<label class="${podem(p) ? '' : 'sem'}">
         <input type="checkbox" data-p="${p.id}" ${marcados.has(p.id) ? 'checked' : ''} ${podem(p) ? '' : 'disabled'}>
-        <span><span class="nm">${esc(p.nome)}</span>${p.perfil ? ` · <span class="mini">${esc(p.perfil_nome)} (${esc(p.respondido_em)})</span>` : ''}
+        <span><span class="nm">${esc(p.nome)}</span>${p.perfil ? ` · <span class="mini">${esc(p.perfil_nome)} (${esc(p.respondido_em)})</span>` : ''}${p.motivo ? ` · <span class="mini">🔋 ${esc(p.motivo)}</span>` : ''}
           <div class="info ${p.agora && podem(p) ? 'agora' : ''}">${!p.whatsapp ? '📵 sem WhatsApp no cadastro'
             : p.pendente ? '⏳ já tem uma avaliação esperando resposta (veja em 📋 Envios)'
             : p.agora ? `🟢 recebe na hora (no turno ou entra em até ${r.antecedencia} min)`
@@ -423,8 +518,11 @@ async function enviar() {
   const previa = () => {
     const p = P.find(x => marcados.has(x.id)), nome = p ? p.nome.split(' ')[0] : 'Fulano';
     const pts = p && p.tipo === 'free' ? 0 : Math.max(0, Math.floor(+$('#p-pontos').value || 0));
-    $('#p-previa').innerHTML = esc(`🧭 *Avaliação de perfil — ${r.empresa}*\n\nOlá, ${nome}!\nQueremos te conhecer melhor para organizar a equipe do jeito ` +
-      `que combina com você. São ${r.perguntas} perguntas rápidas (uns 10 minutos) e não existe resposta certa ou errada.\n\n` +
+    $('#p-previa').innerHTML = esc((partes === 'motiv' ? `🔋 *O que te motiva — ${r.empresa}*\n\nOlá, ${nome}!\nQueremos saber o que te motiva no ` +
+      `trabalho, para cuidar melhor de você e da equipe. São ${r.perguntas_motivacao} perguntas rápidas de escolher uma entre duas (uns 3 minutos)`
+      : `🧭 *Avaliação de perfil — ${r.empresa}*\n\nOlá, ${nome}!\nQueremos te conhecer melhor para organizar a equipe do jeito ` +
+      `que combina com você. São 2 partes rápidas: o seu jeito de trabalhar (${r.perguntas} perguntas) e o que te motiva (uns 12 minutos no total)`) +
+      ` e não existe resposta certa ou errada.\n\n` +
       (pts ? `⭐ Respondendo você ganha *${pts} pontos* na gamificação!\n\n` : '') + `👉 *Toque no link para responder:*\n(link)`)
       .replace(/\*([^*\n]+)\*/g, '<b>$1</b>');
   };
@@ -433,7 +531,7 @@ async function enviar() {
     const dia = $('#p-dia').value;
     for (const p of P) {
       if (!podem(p) || p.tipo !== grupo) continue;
-      if (rap === 'dia' ? (p.dias || []).includes(dia) : rap === 'nao' ? (todos || p.ativo) && !p.perfil : rap === 'todos' && (todos || p.ativo)) marcados.add(p.id);
+      if (rap === 'dia' ? (p.dias || []).includes(dia) : rap === 'nao' ? (todos || p.ativo) && !fez(p) : rap === 'todos' && (todos || p.ativo)) marcados.add(p.id);
     }
     document.querySelectorAll('[data-rap]').forEach(x => x.classList.toggle('sel', x.dataset.rap === rap && rap !== 'nenhum'));
     desenharLista();
@@ -452,6 +550,14 @@ async function enviar() {
     desenharLista();
   });
   $('#p-dia').addEventListener('change', () => { if ($('#p-dia').value) rapido('dia'); });
+  document.querySelectorAll('[data-partes]').forEach(b => b.onclick = () => {
+    partes = b.dataset.partes;
+    document.querySelectorAll('[data-partes]').forEach(x => x.classList.toggle('sel', x === b));
+    $('#p-partes-info').textContent = partes === 'motiv'
+      ? `Só o que motiva (${r.perguntas_motivacao} perguntas rápidas, uns 3 minutos): para quem já fez o perfil. "🆕 Quem ainda não fez" marca quem ainda não respondeu a motivação.`
+      : `As 2 partes: o jeito de trabalhar (${r.perguntas} grupos de palavras) e o que motiva (${r.perguntas_motivacao} perguntas rápidas). Uns 12 minutos.`;
+    rapido('nao');
+  });
   $('#p-todos-cad').addEventListener('change', e => { todos = e.target.checked; desenharLista(); });
   $('#p-pontos').addEventListener('input', previa);
   $('#p-cancelar').onclick = fecharModal;
@@ -459,7 +565,7 @@ async function enviar() {
     if (!marcados.size) { alert('Escolha quem vai receber.'); return; }
     const b = $('#p-enviar'); b.disabled = true;
     try {
-      const r2 = await api('POST', '/api/gestao/perfil', {pessoas: [...marcados], pontos: +$('#p-pontos').value || 0, valido_ate: $('#p-valido').value});
+      const r2 = await api('POST', '/api/gestao/perfil', {pessoas: [...marcados], pontos: +$('#p-pontos').value || 0, valido_ate: $('#p-valido').value, partes});
       fecharModal(); status(r2.mensagem); S.aba = 'envios'; setTimeout(carregar, 1200);
     } catch (e) { falhou(e); b.disabled = false; }
   };
@@ -467,25 +573,39 @@ async function enviar() {
 }
 
 // ------------------------------------------------------------------ relatório de uma pessoa
+// [MOTIVAÇÃO] o que move a pessoa: barras das 8 motivações, como motivar, prêmios que funcionam e o que evitar
+function motivacaoRel(d, sec) {
+  const m = d.motivacao;
+  if (!m) return `<div class="motiv-equipe" style="margin-top:10px"><b>🔋 O que motiva</b><span class="mini">Ainda não respondeu a parte da motivação.</span>
+      ${d.chave_pessoa ? `<div><button class="btn" data-so-motiv="${esc(d.chave_pessoa)}">📤 Mandar só a motivação</button></div>` : ''}</div>`;
+  return `<div class="motiv-equipe" style="margin-top:10px" id="r-motivacao"><b>🔋 O que motiva${d.motivacao_de ? ` <span class="mini suave">(respondeu ${esc(d.motivacao_de)})</span>` : ''}</b>
+      <div class="rel-perfil" style="font-size:19px">${esc(m.nome)}</div>
+      ${m.oque.map(t => `<div class="mini">${esc(t)}</div>`).join('')}
+      <div class="barras m">${m.fatores.map(f => `<div class="f"><span>${f.emoji} ${esc(f.nome)}</span>
+        <div class="b"><span style="width:${f.pct}%;background:#f0a500"></span></div><span class="n">${f.pontos}/7</span></div>`).join('')}</div>
+      <div class="secoes" style="margin-top:4px">${sec('💡 Como motivar', m.como)}${sec('🎁 Prêmios que funcionam', m.premios)}
+        ${sec('🚫 Evite', m.evite)}${sec('⬇️ Pesa menos para ele(a)', m.menos.map(x => `${x.emoji} ${x.nome} (${x.curto})`))}</div></div>`;
+}
 async function relatorio(id) {
   let d;
   try { d = await api('GET', `/api/gestao/perfil/${id}`); } catch (e) { return falhou(e); }
   const sec = (tit, itens, larga) => `<div class="secao ${larga ? 'larga' : ''}"><h4>${tit}</h4><ul>${itens.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>`;
   abrirModal(`<div class="rel-topo"><h3 style="margin:0">${d.candidato ? '🧑‍💼' : d.freelancer ? '📅' : '🧭'} ${esc(d.nome)}${d.candidato ? ` <span class="mini suave">· candidato${d.vaga ? ' · vaga: ' + esc(d.vaga) : ''}</span>` : d.freelancer ? ' <span class="mini suave">· freelancer</span>' : ''}</h3>
       ${d.vinculo_nome ? `<div class="mini" style="color:var(--ok);font-weight:700">🔗 Vinculado ao cadastro de ${esc(d.vinculo_nome)}: vale como o perfil dele(a) na equipe.</div>` : ''}
-      <div class="rel-perfil" id="r-perfil">${esc(d.perfil_nome)}</div>
-      <div class="mini suave">Respondeu ${esc(d.respondido)}${d.anteriores.length ? ` · antes: ${d.anteriores.map(a => `<a href="#" data-rel="${a.id}">${esc(a.perfil_nome)} (${esc(a.respondido)})</a>`).join(', ')}` : ''}</div></div>
+      <div class="rel-perfil" id="r-perfil">${d.sem_perfil ? '🧭 Ainda não fez o perfil' : esc(d.perfil_nome)}</div>
+      <div class="mini suave">Respondeu ${esc(d.respondido)}${d.perfil_de ? ` · o perfil é de ${esc(d.perfil_de)}` : ''}${d.anteriores.length ? ` · antes: ${d.anteriores.map(a => `<a href="#" data-rel="${a.id}">${esc(a.perfil_nome)} (${esc(a.respondido)})</a>`).join(', ')}` : ''}</div></div>
     ${d.candidato && (d.areas || d.bairro) ? `<div class="mini" style="margin-top:6px;line-height:1.6">
       <b>${esc(d.tipo_vaga_nome || '')}</b> · ${d.idade ? `🎂 ${d.idade} anos · ` : ''}${d.bairro ? `📍 ${esc(d.bairro)} · ` : ''}${(d.areas || []).length ? `Áreas: <b>${d.areas.map(a => esc(a.nome)).join(', ')}</b>` : ''}
       ${(d.disponibilidade || []).length ? `<br>🕒 ${d.disponibilidade.map(x => esc(x.nome)).join(', ')}` : ''}
       ${d.experiencia ? `<br>💼 ${esc(d.experiencia)}` : ''}
       ${d.whatsapp ? `<br><a href="${esc(d.whatsapp)}" target="_blank" rel="noopener">💬 Conversar no WhatsApp</a> · ` : '<br>'}<a href="#" data-docs="${d.id}">🪪 CPF e nascimento</a></div>` : ''}
-    <div style="margin:10px 0">${barras(d.pct)}</div>
-    <div>${esc(d.resumo)}</div>
+    ${d.sem_perfil ? '' : `<div style="margin:10px 0">${barras(d.pct)}</div>
+    <div>${esc(d.resumo)}</div>`}
     ${d.candidato && d.completa && d.completa.length ? `<div class="dica" style="margin-top:8px;background:#e6f4ea;color:#14532d">✨ Traz o que falta
       na equipe: ${d.completa.map(x => `${x.emoji} ${esc(x.nome)} (${esc(x.curto)})`).join(', ')}</div>` : ''}
-    <div class="secoes">
-      ${sec('💪 Pontos fortes', d.fortes)}${sec('🔋 O que motiva', d.motiva)}
+    ${motivacaoRel(d, sec)}
+    ${d.sem_perfil ? '' : `<div class="secoes">
+      ${sec('💪 Pontos fortes', d.fortes)}${sec('🔋 O que motiva (pelo perfil)', d.motiva)}
       ${sec('🪫 O que desmotiva', d.desmotiva)}${sec('💬 Como conversar', d.comunicar)}
       ${sec('🗣️ Como dar feedback', d.feedback)}${sec('🧑‍🏫 Como liderar', d.liderar)}
       <div class="secao larga"><h4>📍 Onde rende mais na loja <span class="mini suave">(todas as funções, com o porquê)</span></h4>
@@ -495,8 +615,8 @@ async function relatorio(id) {
         }).join('')}
         <div class="mini" style="margin-top:6px"><b>Tarefas que combinam:</b> ${d.funcoes.map(esc).join(' · ')}</div></div>
       <div class="secao larga"><h4>⚠️ Pontos de atenção</h4><ul>${d.atencao.map(x => `<li>${esc(x)}</li>`).join('')}<li>${esc(d.pressao)}</li></ul></div>
-    </div>
-    <div class="aviso-uso">Ferramenta de orientação (questionário próprio, baseado na teoria DISC): use para conversar e organizar a
+    </div>`}
+    <div class="aviso-uso">Ferramenta de orientação (questionários próprios: perfil baseado na teoria DISC e o que motiva): use para conversar e organizar a
       equipe, não como rótulo nem para decidir contratação ou demissão sozinho${d.candidato ? ' — no processo seletivo, junto com a entrevista e a experiência' : ''}.
       Dado pessoal: não compartilhe fora da gestão.</div>`);
 }

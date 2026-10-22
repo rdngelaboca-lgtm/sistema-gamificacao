@@ -10,7 +10,9 @@
 <!-- [PERFIL DISC] Página PÚBLICA do link do WhatsApp: /perfil/<código>. Uma pergunta de treino (não conta) e os grupos de
      palavras: em cada um a pessoa escolhe, em 2 passos, a que MAIS e a que MENOS combina com ela. O selo ⭐ mostra os pontos
      em todas as telas. No fim, um resumo positivo do perfil (candidato do processo seletivo: só o obrigado). Botão 🔊 Ouvir
-     lê em voz alta. Nada da Gestão aparece aqui. -->
+     lê em voz alta. Nada da Gestão aparece aqui.
+     [MOTIVAÇÃO] Parte 2 (ou a única, no link "só a motivação"): perguntas de escolher uma entre duas coisas boas
+     (toque na que MAIS anima). No fim, também "o que mais te motiva". -->
 <style>
   :root { --verde: #0E6B63; --verde-esc: #0B564F; --verde-claro: #DDEFEC; --texto: #16201F; --suave: #55625F; --linha: #DCE3E1;
     --erro: #c62828; --mais: #1b7f3a; --mais-claro: #e3f4e8; --menos: #b3261e; --menos-claro: #fdecea;
@@ -75,6 +77,12 @@
   .perfil-grande { font-size: 26px; font-weight: 800; text-align: center; line-height: 1.3; }
   .lista { margin: 0; padding-left: 22px; line-height: 1.6; }
   .grande { font-size: 54px; text-align: center; line-height: 1; }
+  /* [MOTIVAÇÃO] as 2 partes e a escolha entre duas */
+  .partes { display: grid; gap: 8px; }
+  .partes > div { border: 1px solid var(--linha); border-radius: 12px; padding: 10px 12px; display: grid; gap: 2px; background: #fbfdfc; }
+  .opcoes.duas .opcao { min-height: 76px; }
+  .ou { text-align: center; font-weight: 800; color: var(--suave); font-size: 14px; margin: -4px 0; }
+  .motiv { border-radius: 14px; background: #fff8e6; border: 1px solid #f1de9c; padding: 12px; display: grid; gap: 6px; }
   #erro { color: var(--erro); font-weight: 700; min-height: 1.2em; }
   .carregando { text-align: center; color: var(--suave); padding: 30px 0; }
   [hidden] { display: none !important; }
@@ -95,11 +103,11 @@ const CHAVE = 'disc:v2:' + TOKEN;             // o andamento fica no celular: d�
 const COR = {D: 'var(--D)', I: 'var(--I)', S: 'var(--S)', C: 'var(--C)'};
 const TREINO = {pergunta: 'Qual sabor de sorvete você…', opcoes: ['🍫 Chocolate', '🍓 Morango', '🍦 Creme', '🍋 Limão'], treino: true};
 const FALA = 'speechSynthesis' in window && typeof SpeechSynthesisUtterance === 'function';
-let D = null, R = [], idx = 0, treino = [null, null], andando = false;
+let D = null, R = [], idx = 0, treino = [null, null], andando = false, M = [], midx = 0;
 const esc = t => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
 
 function ler() { try { const x = JSON.parse(localStorage.getItem(CHAVE) || 'null'); return x && Array.isArray(x.r) ? x : null; } catch (e) { return null; } }
-function gravar() { try { localStorage.setItem(CHAVE, JSON.stringify({r: R, i: idx})); } catch (e) {} }
+function gravar() { try { localStorage.setItem(CHAVE, JSON.stringify({r: R, i: idx, m: M, j: midx})); } catch (e) {} }
 function limpar() { try { localStorage.removeItem(CHAVE); } catch (e) {} }
 function calar() { try { if (FALA) speechSynthesis.cancel(); } catch (e) {} }
 function falar(texto) {
@@ -125,32 +133,48 @@ async function chamar(metodo, corpo) {
   return d;
 }
 const feitos = () => R.filter(x => x && x[0] != null && x[1] != null).length;
+// [MOTIVAÇÃO] o link pode ter o perfil, a motivação ou os dois
+const temDisc = () => (D.blocos || []).length > 0, temMotiv = () => (D.pares || []).length > 0;
+const feitosM = () => M.filter(x => x === 0 || x === 1).length;
+const total = () => (temDisc() ? D.blocos.length : 0) + (temMotiv() ? D.pares.length : 0);
 
 const selo = () => D.pontos ? `<span class="selo" title="Pontos que você ganha ao terminar">⭐ ${D.pontos} pontos</span>` : '';
 
 function telaInicio() {
   calar();
-  const n = D.blocos.length, salvo = ler(), ja = salvo ? salvo.r.filter(x => x && x[1] != null).length : 0;
+  const n = D.blocos.length, np = (D.pares || []).length, so = !temDisc(), salvo = ler();
+  const ja = salvo ? salvo.r.filter(x => x && x[1] != null).length + (salvo.m || []).filter(x => x === 0 || x === 1).length : 0;
   $('#tela').innerHTML = `
-    <div class="grande">🧭</div>
-    <h1>Olá${D.nome ? ', ' + esc(D.nome) : ''}! ${D.candidato ? 'Obrigado pelo interesse em trabalhar com a gente!' : 'Vamos conhecer o seu jeito de trabalhar?'}</h1>
-    ${D.candidato ? `<p>Esta avaliação faz parte do <b>processo seletivo</b>. Ela mostra o seu jeito de trabalhar.</p>` : ''}
-    <p>São <b>${n} grupos</b> com <b>4 palavras</b> cada. Em cada grupo:</p>
-    <div class="como"><div class="p mais"><span class="ic">👍</span><span>Primeiro, toque na palavra que <b>MAIS</b> combina com você</span></div>
-      <div class="p menos"><span class="ic">👎</span><span>Depois, toque na palavra que <b>MENOS</b> combina com você</span></div></div>
-    <p>Não tem resposta certa nem errada. Responda como você <b>é de verdade</b>. Leva uns 10 minutos.</p>
+    <div class="grande">${so ? '🔋' : '🧭'}</div>
+    <h1>Olá${D.nome ? ', ' + esc(D.nome) : ''}! ${D.candidato ? 'Obrigado pelo interesse em trabalhar com a gente!'
+      : so ? 'O que te motiva no trabalho?' : 'Vamos conhecer o seu jeito de trabalhar?'}</h1>
+    ${D.candidato ? `<p>Esta avaliação faz parte do <b>processo seletivo</b>. Ela mostra o seu jeito de trabalhar${temMotiv() ? ' e o que te motiva' : ''}.</p>` : ''}
+    ${so ? `<p>São <b>${np} perguntas rápidas</b>. Em cada uma aparecem <b>duas coisas boas</b>: toque na que <b>MAIS te anima</b>.</p>
+      <div class="como"><div class="p mais"><span class="ic">👆</span><span>As duas são boas: escolha a que pesa mais para você</span></div></div>
+      <p>Não tem resposta certa nem errada. Leva uns 3 minutos.</p>`
+    : `${temMotiv() ? `<div class="partes"><div><b>1️⃣ O seu jeito de trabalhar</b><span class="mini">${n} grupos de 4 palavras</span></div>
+        <div><b>2️⃣ O que te motiva</b><span class="mini">${np} perguntas rápidas de escolher uma entre duas</span></div></div>` : ''}
+      <p>${temMotiv() ? 'Na parte 1 são' : 'São'} <b>${n} grupos</b> com <b>4 palavras</b> cada. Em cada grupo:</p>
+      <div class="como"><div class="p mais"><span class="ic">👍</span><span>Primeiro, toque na palavra que <b>MAIS</b> combina com você</span></div>
+        <div class="p menos"><span class="ic">👎</span><span>Depois, toque na palavra que <b>MENOS</b> combina com você</span></div></div>
+      <p>Não tem resposta certa nem errada. Responda como você <b>é de verdade</b>. Leva uns ${temMotiv() ? 12 : 10} minutos.</p>`}
     ${D.pontos ? `<div class="pontos">⭐ Respondendo tudo você ganha <b>${D.pontos} pontos</b> na gamificação!</div>` : ''}
-    <button class="prim" id="comecar">${ja ? `Continuar (${ja} de ${n} respondidos)` : 'Vamos treinar primeiro'}</button>
+    <button class="prim" id="comecar">${ja ? `Continuar (${ja} de ${total()} respondidas)` : so ? 'Começar' : 'Vamos treinar primeiro'}</button>
     <div class="mini">🔒 ${D.candidato ? `Suas respostas ficam só com a gestão da ${esc(D.empresa)} e são usadas junto com a entrevista.
       Se quiser, você pode pedir para apagar depois.` : `Suas respostas ficam só com a gestão da ${esc(D.empresa)}, para organizar a
       equipe e ajudar no seu crescimento. Não é uma prova.`}</div>`;
   $('#comecar').onclick = () => {
     if (salvo && ja) {
-      R = salvo.r.slice(0, n); idx = Math.min(salvo.i || 0, n - 1);
-      while (idx < n - 1 && R[idx] && R[idx][1] != null) idx++;
-      if (feitos() === n) return telaFim();
-      return telaPergunta();
+      R = (salvo.r || []).slice(0, n); M = (salvo.m || []).slice(0, np);
+      if (temDisc() && feitos() < n) {
+        idx = Math.min(salvo.i || 0, n - 1);
+        while (idx < n - 1 && R[idx] && R[idx][1] != null) idx++;
+        return telaPergunta();
+      }
+      if (temMotiv() && feitosM() < np) { midx = Math.max(0, D.pares.findIndex((_, k) => M[k] !== 0 && M[k] !== 1)); return telaPar(); }
+      return telaFim();
     }
+    if (so) { midx = 0; return telaPar(); }
     treino = [null, null]; telaPergunta(true);
   };
 }
@@ -168,7 +192,7 @@ function telaPergunta(eTreino) {
   $('#tela').innerHTML = `
     ${eTreino ? `<div class="treino">🍦 TREINO · este não conta</div>${D.pontos ? `<div style="text-align:center">${selo()}</div>` : ''}`
       : `<div class="progresso"><div class="mini" style="display:flex;justify-content:space-between;align-items:center;gap:8px">
-      <span>Grupo ${idx + 1} de ${n}</span>${selo()}<span>${Math.round(100 * feitos() / n)}%</span></div>
+      <span>${temMotiv() ? 'Parte 1 · ' : ''}Grupo ${idx + 1} de ${n}</span>${selo()}<span>${Math.round(100 * feitos() / n)}%</span></div>
       <div class="barra"><span style="width:${100 * feitos() / n}%"></span></div></div>`}
     <div class="enunciado" id="enunciado">${esc(b.pergunta)}</div>
     <div class="passo ${passo}" id="passo">${titulo}</div>
@@ -204,26 +228,81 @@ function escolher(i, eTreino) {
   andando = true;
   setTimeout(() => {                                       // um instante para a pessoa ver o que marcou
     andando = false;
-    if (idx < D.blocos.length - 1) { idx++; gravar(); telaPergunta(); } else telaFim();
+    if (idx < D.blocos.length - 1) { idx++; gravar(); telaPergunta(); } else if (temMotiv()) telaParte2(); else telaFim();
   }, 700);
+}
+
+// ------------------------------------------------------------------ [MOTIVAÇÃO] parte 2: escolher uma entre duas
+function telaParte2() {
+  calar();
+  $('#tela').innerHTML = `
+    <div class="grande">🔋</div>
+    <div class="treino" style="background:var(--verde-claro);color:var(--verde-esc)">✅ Parte 1 pronta! Falta pouco.</div>
+    <h2>Parte 2 de 2: o que te motiva</h2>
+    <p>São <b>${D.pares.length} perguntas rápidas</b>. Em cada uma aparecem <b>duas coisas boas</b>: toque na que <b>MAIS te anima</b>.</p>
+    <div class="como"><div class="p mais"><span class="ic">👆</span><span>As duas são boas: escolha a que pesa mais para você</span></div></div>
+    <p>Leva uns 3 minutos.</p>
+    <button class="prim" id="parte2">Começar a parte 2</button>
+    <div class="linha-btn"><button class="sec" id="voltar">← Voltar</button><span></span></div>`;
+  $('#parte2').onclick = () => { midx = Math.max(0, D.pares.findIndex((_, k) => M[k] !== 0 && M[k] !== 1)); telaPar(); };
+  $('#voltar').onclick = () => { idx = D.blocos.length - 1; R[idx] = [R[idx][0], null]; gravar(); telaPergunta(); };
+}
+
+function telaPar() {
+  calar();
+  const np = D.pares.length, p = D.pares[midx], marcado = M[midx];
+  $('#tela').innerHTML = `
+    <div class="progresso"><div class="mini" style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+      <span>${temDisc() ? 'Parte 2 · ' : ''}Pergunta ${midx + 1} de ${np}</span>${selo()}<span>${Math.round(100 * feitosM() / np)}%</span></div>
+      <div class="barra"><span style="width:${100 * feitosM() / np}%"></span></div></div>
+    <div class="enunciado" id="enunciado">${esc(p.pergunta)}</div>
+    <div class="opcoes duas">${p.opcoes.map((t, i) => `<button class="opcao ${marcado === i ? 'mais' : ''}" data-par="${i}"><span>${esc(t)}</span>
+      <span class="sel">${marcado === i ? '👆 ESTA' : ''}</span></button>`).join('<div class="ou">ou</div>')}</div>
+    <div class="linha-btn"><button class="sec" id="voltar">← Voltar</button>
+      ${FALA ? '<button class="ouvir" id="ouvir" title="O celular lê a pergunta em voz alta">🔊 Ouvir</button>' : ''}</div>`;
+  document.querySelectorAll('[data-par]').forEach(x => x.onclick = () => escolherPar(+x.dataset.par));
+  $('#voltar').onclick = () => {
+    if (midx > 0) { midx--; gravar(); return telaPar(); }
+    return temDisc() ? telaParte2() : telaInicio();
+  };
+  const ouvir = $('#ouvir');
+  if (ouvir) ouvir.onclick = () => falar(`${p.pergunta} ${p.opcoes[0]}. Ou: ${p.opcoes[1]}. Toque na que mais te anima.`);
+}
+
+function escolherPar(i) {
+  if (andando) return;
+  M[midx] = i; gravar(); telaPar();
+  andando = true;
+  setTimeout(() => {                                       // um instante para a pessoa ver o que marcou
+    andando = false;
+    if (midx < D.pares.length - 1) { midx++; gravar(); telaPar(); } else telaFim();
+  }, 450);
 }
 
 function telaFim() {
   calar();
   $('#tela').innerHTML = `
     <div class="grande">✅</div>
-    <h2>Pronto! Você respondeu os ${D.blocos.length} grupos.</h2>
+    <h2>Pronto! Você respondeu ${temDisc() && temMotiv() ? 'as 2 partes' : temDisc() ? `os ${D.blocos.length} grupos` : `as ${D.pares.length} perguntas`}.</h2>
     <p>Toque em <b>Enviar respostas</b> ${D.candidato ? 'para terminar' : 'para ver o seu resultado'}.</p>
     ${D.pontos ? `<div class="pontos">⭐ Envie para ganhar os seus <b>${D.pontos} pontos</b>!</div>` : ''}
     <button class="prim" id="enviar">Enviar respostas</button>
     <div class="linha-btn"><button class="sec" id="voltar">← Voltar e conferir</button><span></span></div>`;
-  $('#voltar').onclick = () => { idx = D.blocos.length - 1; R[idx] = [R[idx][0], null]; gravar(); telaPergunta(); };
+  $('#voltar').onclick = () => {
+    if (temMotiv()) { midx = D.pares.length - 1; return telaPar(); }
+    idx = D.blocos.length - 1; R[idx] = [R[idx][0], null]; gravar(); telaPergunta();
+  };
   $('#enviar').onclick = async () => {
     $('#erro').textContent = ''; $('#enviar').disabled = true;
     try {
-      const faltam = D.blocos.map((_, k) => k).filter(k => !R[k] || R[k][0] == null || R[k][1] == null);
+      const faltam = temDisc() ? D.blocos.map((_, k) => k).filter(k => !R[k] || R[k][0] == null || R[k][1] == null) : [];
       if (faltam.length) { idx = faltam[0]; telaPergunta(); throw new Error(`Falta responder o grupo ${faltam[0] + 1}.`); }
-      D = await chamar('POST', {respostas: R}); limpar(); telaResultado();
+      const faltamM = temMotiv() ? D.pares.map((_, k) => k).filter(k => M[k] !== 0 && M[k] !== 1) : [];
+      if (faltamM.length) { midx = faltamM[0]; telaPar(); throw new Error(`Falta responder a pergunta ${faltamM[0] + 1}${temDisc() ? ' da parte 2' : ''}.`); }
+      const corpo = {};
+      if (temDisc()) corpo.respostas = R;
+      if (temMotiv()) corpo.motivos = M;
+      D = await chamar('POST', corpo); limpar(); telaResultado();
     } catch (e) { $('#erro').textContent = e.message; const b = $('#enviar'); if (b) b.disabled = false; }
   };
 }
@@ -236,19 +315,23 @@ function telaResultado() {
       <p style="text-align:center">A equipe da ${esc(D.empresa)} vai entrar em contato com você. Boa sorte!</p>`;
     return;
   }
-  const r = D.resultado;
+  const r = D.resultado, m = D.motivacao;
   $('#tela').innerHTML = `
     <div class="grande">🙌</div>
     <h2 style="text-align:center">Obrigado${D.nome ? ', ' + esc(D.nome) : ''}!</h2>
-    <div class="mini" style="text-align:center">O seu perfil é</div>
+    ${r ? `<div class="mini" style="text-align:center">O seu perfil é</div>
     <div class="perfil-grande" id="perfil">${esc(r.nome)}</div>
     <p>${esc(r.texto)}</p>
     <div><b>Seus pontos fortes</b><ul class="lista">${r.fortes.map(f => `<li>${esc(f)}</li>`).join('')}</ul></div>
     <div class="fatores">${r.fatores.map(f => `<div class="fator"><span>${f.emoji} ${esc(f.nome)}</span>
-      <div class="b"><span style="width:${Math.min(100, f.pct * 2)}%;background:${COR[f.d]}"></span></div></div>`).join('')}</div>
+      <div class="b"><span style="width:${Math.min(100, f.pct * 2)}%;background:${COR[f.d]}"></span></div></div>`).join('')}</div>` : ''}
+    ${m ? `<div class="motiv"><div class="mini" style="text-align:center">🔋 O que mais te motiva</div>
+      <div class="perfil-grande" id="motivo" style="font-size:22px">${esc(m.nome)}</div>
+      <ul class="lista">${m.textos.map(t => `<li>${esc(t)}</li>`).join('')}</ul></div>` : ''}
     ${D.pontos ? `<div class="pontos">⭐ +${D.pontos} pontos na gamificação.</div>` : ''}
-    <div class="mini">Todo mundo tem um pouco de cada cor. A maior mostra o seu jeito mais natural de trabalhar. É só um jeito
-      de se conhecer, não um rótulo: a gestão vai usar para organizar a equipe do jeito que combina com cada um.</div>`;
+    <div class="mini">${r ? `Todo mundo tem um pouco de cada cor. A maior mostra o seu jeito mais natural de trabalhar. É só um jeito
+      de se conhecer, não um rótulo: a gestão vai usar para organizar a equipe do jeito que combina com cada um.`
+      : 'É só um jeito de se conhecer: a gestão vai usar para cuidar melhor de você e da equipe.'}</div>`;
 }
 
 (async () => {

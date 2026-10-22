@@ -16,6 +16,8 @@
 # 🪪 CPF e data de nascimento do candidato: só aparecem num botão da gestão (nunca no aviso do grupo nem no log).
 # 🔗 Candidato contratado: a avaliação dele pode ser VINCULADA ao cadastro do fixo e vale como o perfil dele na 👥 Equipe.
 # 📅 Freelancers escolhidos também podem receber (no turno de cada um, igual aos comunicados; sem pontos).
+# 🔋 [MOTIVAÇÃO] O link novo tem 2 partes: o perfil (DISC) e "o que te motiva" (perfil_motivacao.py, 28 perguntas de
+# escolher uma entre duas). Para quem já fez o perfil, dá para mandar só a motivação (Partes = 'motiv').
 # ==============================================================================
 import html
 import json
@@ -28,6 +30,7 @@ from datetime import date, datetime, timedelta
 import config
 import database
 import comunicados_equipe as CE      # mesmo horário de entrega e mesmos ajudantes (endereço, nome, WhatsApp)
+import perfil_motivacao as PM        # [MOTIVAÇÃO] a 2ª parte: o que motiva a pessoa
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +59,27 @@ CADASTROS_POR_IP = (5, 3600)   # no máximo 5 cadastros por hora no mesmo aparel
 CADASTROS_POR_DIA = 300
 DIAS_MESMO_CADASTRO = 60       # o mesmo WhatsApp (ou CPF) de novo em até 60 dias: atualiza o cadastro em vez de criar outro
 IDADE_MIN, IDADE_MAX = 14, 80
+# [MOTIVAÇÃO] o que o link pede: só o perfil (links antigos), perfil + motivação (o padrão) ou só a motivação
+P_DISC, P_DISC_MOTIV, P_MOTIV = 'disc', 'disc_motiv', 'motiv'
+PARTES = {P_DISC: '🧭 Perfil', P_DISC_MOTIV: '🧭 Perfil + 🔋 Motivação', P_MOTIV: '🔋 Só a motivação'}
+PARTES_PADRAO = P_DISC_MOTIV
+
+
+def _tem_disc(partes):
+    return (partes or P_DISC) in (P_DISC, P_DISC_MOTIV)
+
+
+def _tem_motiv(partes):
+    return partes in (P_DISC_MOTIV, P_MOTIV)
+
+
+def _motivos(valor):
+    """{motivação: pontos} gravado (JSON) ou None."""
+    try:
+        d = json.loads(valor) if valor else None
+    except (TypeError, ValueError):
+        return None
+    return {k: int(d.get(k) or 0) for k in PM.CHAVES} if isinstance(d, dict) else None
 _trava_cadastro = threading.Lock()
 _cadastros_por_ip, _cadastros_do_dia = {}, {'dia': None, 'n': 0}
 
@@ -294,7 +318,10 @@ def garantir_tabelas():
         for coluna, tipo in (('Origem', 'VARCHAR(10)'), ('Areas', 'VARCHAR(100)'), ('Idade', 'INT'), ('Bairro', 'NVARCHAR(100)'),
                              ('Disponibilidade', 'VARCHAR(60)'), ('Experiencia', 'NVARCHAR(600)'), ('Etapa', 'VARCHAR(12)'),
                              ('AceiteEm', 'DATETIME'), ('TipoVaga', 'VARCHAR(10)'), ('Cpf', 'VARCHAR(11)'), ('Nascimento', 'DATE'),
-                             ('FreelancerID', 'INT'), ('VinculoFuncionarioID', 'INT')):
+                             ('FreelancerID', 'INT'), ('VinculoFuncionarioID', 'INT'),
+                             # [MOTIVAÇÃO] as partes do link e o resultado de "o que te motiva"
+                             ('Partes', 'VARCHAR(12)'), ('Motivos', 'NVARCHAR(300)'), ('MotivoRespostas', 'NVARCHAR(1000)'),
+                             ('MotivoEm', 'DATETIME')):
             cur.execute(f"IF COL_LENGTH('AvaliacoesDisc', '{coluna}') IS NULL ALTER TABLE AvaliacoesDisc ADD {coluna} {tipo} NULL")
         conn.commit()
         _tabelas_ok = True
@@ -430,9 +457,28 @@ def _ultimas_por_pessoa(cur, tipo=TIPO_FUNC):
     for r, vinculada in sorted([(r, False) for r in linhas] + [(r, True) for r in vinculadas], key=lambda x: int(x[0][0])):
         if not vinculada:                                 # a vinculada não conta como "esperando resposta"
             ult[int(r[1])] = r
-        if r[2] == ST_RESPONDIDO:
+        if r[2] == ST_RESPONDIDO and r[4]:                # [MOTIVAÇÃO] o link só da motivação não tem perfil
             resp[int(r[1])] = r
     return ult, resp
+
+
+def _motivos_por_pessoa(cur):
+    """[MOTIVAÇÃO] {(tipo, id): (pontos, quando respondeu, AvaliacaoID)}: a motivação mais recente de cada fixo
+    (também a do 🔗 processo seletivo vinculada ao cadastro) e de cada 📅 freelancer."""
+    cur.execute("""SELECT AvaliacaoID, FuncionarioID, Tipo, FreelancerID, VinculoFuncionarioID, Motivos, MotivoEm
+                   FROM AvaliacoesDisc WHERE Status = ? AND Motivos IS NOT NULL""", ST_RESPONDIDO)
+    saida = {}
+    for aid, fid, tipo, frid, vinc, motivos, em in sorted(cur.fetchall(), key=lambda r: int(r[0])):
+        if tipo == TIPO_FREE:
+            chave = (TIPO_FREE, int(frid)) if frid else None
+        elif tipo == TIPO_CAND:
+            chave = (TIPO_FUNC, int(vinc)) if vinc else None
+        else:
+            chave = (TIPO_FUNC, int(fid))
+        m = _motivos(motivos)
+        if chave and m:
+            saida[chave] = (m, em, int(aid))
+    return saida
 
 
 def pessoas(agora=None):
@@ -443,6 +489,7 @@ def pessoas(agora=None):
     try:
         cur = conn.cursor()
         por_tipo = {TIPO_FUNC: _ultimas_por_pessoa(cur), TIPO_FREE: _ultimas_por_pessoa(cur, TIPO_FREE)}
+        motivos = _motivos_por_pessoa(cur)
     finally:
         conn.close()
     saida = []
@@ -455,10 +502,11 @@ def pessoas(agora=None):
         p = dict(p,
                  perfil=(r[4] if r else ''), perfil_nome=(nome_perfil(r[4]) if r else ''),
                  respondido_em=(CE._quando(r[3]) if r else ''),
+                 motivo=(PM.nome(motivos[(p['tipo'], pid)][0]) if (p['tipo'], pid) in motivos else ''),
                  pendente=bool(u and u[2] in (ST_AGUARDANDO, ST_ENVIANDO, ST_ENVIADO, ST_FALHOU)))
         saida.append(p)
     return {'pessoas': saida, 'hoje': base['hoje'], 'antecedencia': base['antecedencia'], 'empresa': base['empresa'],
-            'perguntas': N_BLOCOS,
+            'perguntas': N_BLOCOS, 'perguntas_motivacao': PM.N_PARES,
             'dias_escalados_max': base['dias_escalados_max'], 'link_local': base['link_local'],
             'validade_padrao': (agora.date() + timedelta(days=VALIDADE_PADRAO_DIAS)).isoformat(),
             'validade_max': (agora.date() + timedelta(days=VALIDADE_MAX_DIAS)).isoformat()}
@@ -467,15 +515,20 @@ def pessoas(agora=None):
 # ------------------------------------------------------------------------------
 # Enviar
 # ------------------------------------------------------------------------------
-def texto_mensagem(nome, link, pontos=0, lembrete=False, candidato=False):
+def texto_mensagem(nome, link, pontos=0, lembrete=False, candidato=False, partes=None):
     primeiro = CE._primeiro_nome(nome)
-    return ((f"🔔 *Lembrete:* sua avaliação de perfil ainda está esperando você.\n\n" if lembrete else "")
-            + f"🧭 *Avaliação de perfil — {CE._empresa()}*\n\n"
+    so_motiv = partes == P_MOTIV
+    quanto = (f"{PM.N_PARES} perguntas rápidas de escolher uma entre duas (uns 3 minutos)" if so_motiv else
+              f"2 partes rápidas: o seu jeito de trabalhar ({N_BLOCOS} perguntas) e o que te motiva (uns 12 minutos no total)"
+              if _tem_motiv(partes) else f"{N_BLOCOS} perguntas rápidas (uns 10 minutos)")
+    return ((f"🔔 *Lembrete:* sua avaliação ainda está esperando você.\n\n" if lembrete else "")
+            + (f"🔋 *O que te motiva — {CE._empresa()}*\n\n" if so_motiv else f"🧭 *Avaliação de perfil — {CE._empresa()}*\n\n")
             + (f"Olá, {primeiro}!\n" if primeiro else "Olá!\n")
             + ("Obrigado pelo interesse em trabalhar com a gente! Como parte do processo seletivo, queremos conhecer o "
                "seu jeito de trabalhar. São " if candidato else
+               "Queremos saber o que te motiva no trabalho, para cuidar melhor de você e da equipe. São " if so_motiv else
                "Queremos te conhecer melhor para organizar a equipe do jeito que combina com você. São ")
-            + f"{N_BLOCOS} perguntas rápidas (uns 10 minutos) e não existe resposta certa ou errada.\n\n"
+            + f"{quanto} e não existe resposta certa ou errada.\n\n"
             + (f"⭐ Respondendo você ganha *{pontos} pontos* na gamificação!\n\n" if pontos else "")
             + f"👉 *Toque no link para responder:*\n{link}")
 
@@ -500,6 +553,9 @@ def enviar(dados, usuario, agora=None):
     if pontos > CE.PONTOS_MAX:
         raise ErroPerfil(f"Pontos demais (máximo {CE.PONTOS_MAX:,}).".replace(',', '.'))
     valido = _validade(dados, agora)
+    partes = dados.get('partes') or PARTES_PADRAO      # [MOTIVAÇÃO] perfil + motivação, ou só a motivação
+    if partes not in (P_DISC_MOTIV, P_MOTIV):
+        raise ErroPerfil("Escolha o que enviar: o perfil com a motivação, ou só a motivação.")
     _exigir_endereco()
     cadastro = {(TIPO_FUNC, int(f.FuncionarioID)): (f.NomeCompleto, getattr(f, 'TelefoneWhatsApp', None))
                 for f in database.listar_funcionarios()}
@@ -518,33 +574,33 @@ def enviar(dados, usuario, agora=None):
         for tipo, pid in ids:
             nome, tel = cadastro[(tipo, pid)]
             cur.execute("""INSERT INTO AvaliacoesDisc (FuncionarioID, Nome, Telefone, Token, Status, Pontos, CriadoPor, CriadoEm,
-                                                       ValidoAte, Versao, Tipo, FreelancerID)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                                       ValidoAte, Versao, Tipo, FreelancerID, Partes)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         pid if tipo == TIPO_FUNC else 0, nome, tel, CE._token(),
                         ST_AGUARDANDO if CE.R.numero_whatsapp(tel) else ST_SEM_TEL,
                         pontos if tipo == TIPO_FUNC else 0, usuario.get('nome'), agora, valido, VERSAO, tipo,
-                        pid if tipo == TIPO_FREE else None)
+                        pid if tipo == TIPO_FREE else None, partes)
         conn.commit()
     except Exception:
         conn.rollback()
         raise
     finally:
         conn.close()
-    logger.info(f"[PERFIL DISC] {usuario.get('nome')} enviou a avaliação para {len(ids)} pessoa(s).")
+    logger.info(f"[PERFIL DISC] {usuario.get('nome')} enviou a avaliação ({partes}) para {len(ids)} pessoa(s).")
     no_turno = CE._quem_trabalha_agora(agora)
     ja = [i for i in ids if i in no_turno and CE.R.numero_whatsapp(cadastro[i][1])]
     sem_tel = sum(1 for i in ids if not CE.R.numero_whatsapp(cadastro[i][1]))
     freelas = sum(1 for i in ids if i[0] == TIPO_FREE)
     _rodar(lambda: processar(agora=agora))
-    partes = [f"🧭 Avaliação enviada para {len(ids)} pessoa(s)" + (f" ({freelas} freelancer(s), sem pontos)." if freelas and pontos
-                                                                    else f" ({freelas} freelancer(s))." if freelas else ".")]
+    frases = [("🔋 Motivação" if partes == P_MOTIV else "🧭 Avaliação") + f" enviada para {len(ids)} pessoa(s)"
+              + (f" ({freelas} freelancer(s), sem pontos)." if freelas and pontos else f" ({freelas} freelancer(s))." if freelas else ".")]
     if ja:
-        partes.append(f"{len(ja)} recebe(m) em instantes.")
+        frases.append(f"{len(ja)} recebe(m) em instantes.")
     if len(ids) - len(ja) - sem_tel:
-        partes.append(f"{len(ids) - len(ja) - sem_tel} recebe(m) {CE.ANTECEDENCIA_MIN} min antes do próximo turno.")
+        frases.append(f"{len(ids) - len(ja) - sem_tel} recebe(m) {CE.ANTECEDENCIA_MIN} min antes do próximo turno.")
     if sem_tel:
-        partes.append(f"📵 {sem_tel} sem WhatsApp no cadastro.")
-    return {'ok': True, 'mensagem': ' '.join(partes)}
+        frases.append(f"📵 {sem_tel} sem WhatsApp no cadastro.")
+    return {'ok': True, 'mensagem': ' '.join(frases)}
 
 
 def _chave_pessoa(i):
@@ -601,10 +657,11 @@ def candidato_criar(dados, usuario, agora=None):
     try:
         cur = conn.cursor()
         cur.execute("""INSERT INTO AvaliacoesDisc (FuncionarioID, Nome, Telefone, Token, Status, Pontos, CriadoPor, CriadoEm,
-                                                   ValidoAte, Versao, Tipo, Vaga, Origem, Etapa, TipoVaga, Cpf, Nascimento, Idade)
-                       VALUES (0, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?); SELECT SCOPE_IDENTITY();""",
+                                                   ValidoAte, Versao, Tipo, Vaga, Origem, Etapa, TipoVaga, Cpf, Nascimento, Idade,
+                                                   Partes)
+                       VALUES (0, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?); SELECT SCOPE_IDENTITY();""",
                     nome, tel or None, token, ST_AGUARDANDO if tel else ST_SEM_TEL, usuario.get('nome'), agora, valido,
-                    VERSAO, TIPO_CAND, vaga or None, ORIGEM_GESTAO, 'novo', tipo_vaga, cpf, nasc, idade)
+                    VERSAO, TIPO_CAND, vaga or None, ORIGEM_GESTAO, 'novo', tipo_vaga, cpf, nasc, idade, PARTES_PADRAO)
         cur.nextset()
         aid = int(cur.fetchone()[0])
         conn.commit()
@@ -636,7 +693,7 @@ def processar(agora=None, forcar_ids=None):
                         ST_EXPIRADO, ST_AGUARDANDO, ST_FALHOU, agora.date())
             cur.execute("UPDATE AvaliacoesDisc SET Status = ? WHERE Status = ? AND EnviadoEm < ?",
                         ST_AGUARDANDO, ST_ENVIANDO, agora - timedelta(minutes=CE.ENVIANDO_PRESO_MIN))
-            cur.execute("""SELECT AvaliacaoID, FuncionarioID, Nome, Telefone, Token, Pontos, Lembretes, Tipo, FreelancerID
+            cur.execute("""SELECT AvaliacaoID, FuncionarioID, Nome, Telefone, Token, Pontos, Lembretes, Tipo, FreelancerID, Partes
                            FROM AvaliacoesDisc
                            WHERE Status = ? OR (Status = ? AND Tentativas < ?)""", ST_AGUARDANDO, ST_FALHOU, CE.MAX_TENTATIVAS)
             fila = cur.fetchall()
@@ -651,7 +708,7 @@ def processar(agora=None, forcar_ids=None):
         forcar = {int(i) for i in (forcar_ids or [])}
         no_turno = CE._quem_trabalha_agora(agora) if len(forcar) < len(fila) else set()
         enviados = 0
-        for aid, fid, nome, tel, token, pontos, lembretes, tipo, frid in fila:
+        for aid, fid, nome, tel, token, pontos, lembretes, tipo, frid, partes in fila:
             candidato = tipo == TIPO_CAND                 # candidato não tem escala: vai na hora
             chave = (TIPO_FREE, int(frid or 0)) if tipo == TIPO_FREE else ('func', int(fid))   # freelancer: o turno dele
             if not candidato and aid not in forcar and chave not in no_turno:
@@ -661,7 +718,7 @@ def processar(agora=None, forcar_ids=None):
             if enviados:
                 time.sleep(CE.INTERVALO_ENVIO_SEG)
             ok, resp = CE._mandar(tel, texto_mensagem(nome, f"{base}/perfil/{token}", 0 if tipo in (TIPO_CAND, TIPO_FREE) else (pontos or 0),
-                                                      lembrete=bool(lembretes), candidato=candidato))
+                                                      lembrete=bool(lembretes), candidato=candidato, partes=partes))
             if ok:
                 _mudar(aid, (ST_ENVIANDO,), ST_ENVIADO, EnviadoEm=agora, Erro=None)
                 enviados += 1
@@ -735,9 +792,10 @@ def painel(agora=None):
         cur.execute("""SELECT AvaliacaoID, FuncionarioID, Nome, Status, EnviadoEm, AbertoEm, RespondidoEm, Lembretes, Erro,
                               Tentativas, Perfil, PctD, PctI, PctS, PctC, CriadoEm, Pontos, ValidoAte, Tipo, Vaga, Telefone, Token,
                               Origem, Areas, Idade, Bairro, Disponibilidade, Experiencia, Etapa, TipoVaga, Cpf, Nascimento,
-                              FreelancerID, VinculoFuncionarioID
+                              FreelancerID, VinculoFuncionarioID, Partes, Motivos
                        FROM AvaliacoesDisc ORDER BY AvaliacaoID DESC""")
         linhas = cur.fetchall()
+        motivos_de = _motivos_por_pessoa(cur)               # [MOTIVAÇÃO] a última de cada pessoa
     finally:
         conn.close()
     funcs = database.listar_funcionarios()
@@ -750,7 +808,8 @@ def painel(agora=None):
     base = CE._endereco()[0]
     envios, equipe, candidatos, freelancers, vistos, vistos_free = [], [], [], [], set(), set()
     for (aid, fid, nome, st, env, ab, resp, lemb, erro, tent, perfil, pd, pi, ps, pc, criado, pontos, valido,
-         tipo, vaga, tel, token, origem, areas, idade, bairro, dispon, exper, etapa, tipo_vaga, cpf, nasc, frid, vinc) in linhas:
+         tipo, vaga, tel, token, origem, areas, idade, bairro, dispon, exper, etapa, tipo_vaga, cpf, nasc, frid, vinc,
+         partes, motivos) in linhas:
         fid, candidato, freela = int(fid), tipo == TIPO_CAND, tipo == TIPO_FREE
         chave = (TIPO_FREE, int(frid or 0)) if freela else ('func', fid)
         ic, txt = _situacao(st, env, ab, resp, lemb, CE._texto_espera(prox.get(chave)), chave in no_turno,
@@ -759,7 +818,9 @@ def painel(agora=None):
                 'criado': CE._quando(criado), 'perfil': perfil or '', 'perfil_nome': nome_perfil(perfil) if perfil else '',
                 'pontos': pontos or 0, 'pode_agora': st in (ST_AGUARDANDO, ST_FALHOU, ST_EXPIRADO) and (not candidato or bool(tel)),
                 'pendente': st in (ST_AGUARDANDO, ST_ENVIANDO, ST_ENVIADO, ST_FALHOU) or (candidato and st == ST_SEM_TEL),
-                'link': f"{base}/perfil/{token}" if st not in (ST_RESPONDIDO, ST_CANCELADO, ST_EXPIRADO) else ''}
+                'link': f"{base}/perfil/{token}" if st not in (ST_RESPONDIDO, ST_CANCELADO, ST_EXPIRADO) else '',
+                'partes': partes or P_DISC, 'partes_nome': PARTES.get(partes or P_DISC, ''),
+                'motivo': PM.nome(_motivos(motivos)) if motivos else ''}
         if candidato:
             site = origem == ORIGEM_SITE
             if site and st == ST_ENVIADO:                 # cadastrou pelo Instagram e ainda está no questionário
@@ -770,12 +831,12 @@ def painel(agora=None):
                         etapa=etapa or 'novo', etapa_nome=dict(ETAPAS).get(etapa or 'novo', ''), **_tipo_vaga(tipo_vaga, areas),
                         whatsapp=f"https://wa.me/{tel}" if tel else '')
             item.update(vaga=vaga or '', telefone=tel or '',
-                        pct=_pct(pd, pi, ps, pc) if st == ST_RESPONDIDO else None,
-                        setores=[x['setor'] for x in setores_da_pessoa(_pct(pd, pi, ps, pc))] if st == ST_RESPONDIDO else [])
+                        pct=_pct(pd, pi, ps, pc) if st == ST_RESPONDIDO and perfil else None,
+                        setores=[x['setor'] for x in setores_da_pessoa(_pct(pd, pi, ps, pc))] if st == ST_RESPONDIDO and perfil else [])
             vinc = int(vinc) if vinc else None            # 🔗 contratado: a avaliação vale como o perfil do fixo
             item.update(vinculo_id=vinc, vinculo_nome=cadastro.get(vinc, '') if vinc else '')
             candidatos.append(item)
-            if vinc and st == ST_RESPONDIDO and vinc not in vistos and vinc in ativos:
+            if vinc and st == ST_RESPONDIDO and perfil and vinc not in vistos and vinc in ativos:
                 vistos.add(vinc)
                 pct = _pct(pd, pi, ps, pc)
                 equipe.append({'id': aid, 'funcionario_id': vinc, 'nome': cadastro[vinc], 'perfil': perfil, 'perfil_nome': nome_perfil(perfil),
@@ -785,24 +846,34 @@ def painel(agora=None):
         item.update(tipo=tipo or TIPO_FUNC, freelancer=freela)
         envios.append(item)
         if freela:
-            if st == ST_RESPONDIDO and frid and int(frid) not in vistos_free and int(frid) in freelas_ativos:
+            if st == ST_RESPONDIDO and perfil and frid and int(frid) not in vistos_free and int(frid) in freelas_ativos:
                 vistos_free.add(int(frid))
                 pct = _pct(pd, pi, ps, pc)
                 freelancers.append({'id': aid, 'freelancer_id': int(frid), 'nome': nome or '?', 'perfil': perfil,
                                     'perfil_nome': nome_perfil(perfil), 'pct': pct, 'respondido': CE._quando(resp),
                                     'setores': [s['setor'] for s in setores_da_pessoa(pct)]})
             continue
-        if st == ST_RESPONDIDO and fid not in vistos and fid in ativos:
+        if st == ST_RESPONDIDO and perfil and fid not in vistos and fid in ativos:
             vistos.add(fid)
             pct = _pct(pd, pi, ps, pc)
             equipe.append({'id': aid, 'funcionario_id': fid, 'nome': nome or '?', 'perfil': perfil, 'perfil_nome': nome_perfil(perfil),
                            'pct': pct, 'respondido': CE._quando(resp), 'setores': [s['setor'] for s in setores_da_pessoa(pct)]})
     equipe.sort(key=lambda x: x['nome'].lower())
     freelancers.sort(key=lambda x: x['nome'].lower())
+    # [MOTIVAÇÃO] o que motiva cada um (a última resposta da pessoa, mesmo que tenha vindo num link só da motivação)
+    for lista, tipo, campo in ((equipe, TIPO_FUNC, 'funcionario_id'), (freelancers, TIPO_FREE, 'freelancer_id')):
+        for p in lista:
+            m = motivos_de.get((tipo, p[campo]))
+            p.update(motivo=PM.nome(m[0]) if m else '', motivo_id=m[2] if m else None)
+    so_motivacao = sorted(({'id': m[2], 'nome': cadastro[i], 'motivo': PM.nome(m[0])} for (t, i), m in motivos_de.items()
+                           if t == TIPO_FUNC and i in ativos and i not in vistos), key=lambda x: x['nome'].lower())
     for c in candidatos:
         c['completa'] = _o_que_completa(c['pct'], equipe) if c['pct'] else []
+        c['motivacao'] = c.pop('motivo', '')
         c['sugestao_vinculo'] = _sugerir_vinculo(c, cadastro, tels) if c['etapa'] == 'contratado' and not c['vinculo_id'] else None
     return {'envios': envios[:300], 'equipe': equipe, 'resumo_equipe': _resumo_equipe(equipe),
+            'motivacao_equipe': PM.resumo_equipe([m[0] for (t, i), m in motivos_de.items() if t == TIPO_FUNC and i in ativos]),
+            'so_motivacao': so_motivacao,
             'freelancers': freelancers, 'freelancers_por_setor': _por_setor(freelancers),
             'fixos': sorted(({'id': i, 'nome': n} for i, n in cadastro.items()), key=lambda x: (x['nome'] or '').lower()),
             'pendentes': sum(1 for e in envios if e['pendente']), 'candidatos': candidatos[:500],
@@ -887,7 +958,10 @@ def _resumo_equipe(equipe):
 
 
 def detalhe(aid, agora=None):
-    """O relatório completo de uma avaliação respondida (e as anteriores da mesma pessoa)."""
+    """
+    O relatório de uma avaliação respondida (e as anteriores da mesma pessoa). [MOTIVAÇÃO] Junta o perfil (DISC) e o
+    que motiva: se este link tem só uma das partes, a outra vem da última resposta da mesma pessoa.
+    """
     garantir_tabelas()
     agora = agora or CE._agora()
     conn = _conexao()
@@ -895,36 +969,51 @@ def detalhe(aid, agora=None):
         cur = conn.cursor()
         cur.execute("""SELECT AvaliacaoID, FuncionarioID, Nome, Status, RespondidoEm, Perfil, PctD, PctI, PctS, PctC, CriadoPor,
                               Tipo, Vaga, Origem, Areas, Idade, Bairro, Disponibilidade, Experiencia, Telefone, TipoVaga,
-                              Nascimento, FreelancerID, VinculoFuncionarioID
+                              Nascimento, FreelancerID, VinculoFuncionarioID, Partes, Motivos, MotivoEm
                        FROM AvaliacoesDisc WHERE AvaliacaoID = ?""", int(aid))
         a = cur.fetchone()
         if not a:
             raise ErroPerfil("Avaliação não encontrada.", 404)
-        antes = []
+        colunas = "AvaliacaoID, RespondidoEm, Perfil, PctD, PctI, PctS, PctC, Motivos, MotivoEm"
+        outras = []                                       # as outras respondidas da MESMA pessoa (a mais nova primeiro)
         if a[11] == TIPO_FREE:
-            cur.execute("""SELECT AvaliacaoID, RespondidoEm, Perfil FROM AvaliacoesDisc
-                           WHERE FreelancerID = ? AND Status = ? AND AvaliacaoID <> ? AND Tipo = ?
-                           ORDER BY AvaliacaoID DESC""", int(a[22] or 0), ST_RESPONDIDO, int(aid), TIPO_FREE)
-            antes = cur.fetchall()
+            cur.execute(f"""SELECT {colunas} FROM AvaliacoesDisc
+                            WHERE FreelancerID = ? AND Status = ? AND AvaliacaoID <> ? AND Tipo = ?
+                            ORDER BY AvaliacaoID DESC""", int(a[22] or 0), ST_RESPONDIDO, int(aid), TIPO_FREE)
+            outras = cur.fetchall()
         elif a[11] != TIPO_CAND or a[23]:                 # fixo: as dele e a do processo seletivo vinculada
             fixo = int(a[23]) if a[11] == TIPO_CAND else int(a[1])
-            cur.execute("""SELECT AvaliacaoID, RespondidoEm, Perfil FROM AvaliacoesDisc
-                           WHERE Status = ? AND AvaliacaoID <> ? AND ((FuncionarioID = ? AND ISNULL(Tipo, ?) = ?)
-                                 OR (Tipo = ? AND VinculoFuncionarioID = ?))
-                           ORDER BY AvaliacaoID DESC""", ST_RESPONDIDO, int(aid), fixo, TIPO_FUNC, TIPO_FUNC, TIPO_CAND, fixo)
-            antes = cur.fetchall()
+            cur.execute(f"""SELECT {colunas} FROM AvaliacoesDisc
+                            WHERE Status = ? AND AvaliacaoID <> ? AND ((FuncionarioID = ? AND ISNULL(Tipo, ?) = ?)
+                                  OR (Tipo = ? AND VinculoFuncionarioID = ?))
+                            ORDER BY AvaliacaoID DESC""", ST_RESPONDIDO, int(aid), fixo, TIPO_FUNC, TIPO_FUNC, TIPO_CAND, fixo)
+            outras = cur.fetchall()
     finally:
         conn.close()
     if a[3] != ST_RESPONDIDO:
         raise ErroPerfil("Esta avaliação ainda não foi respondida.", 409)
-    pct = _pct(a[6], a[7], a[8], a[9])
-    r = relatorio(pct, a[5])
     candidato = a[11] == TIPO_CAND
-    r.update({'id': a[0], 'nome': a[2] or '?', 'respondido': CE._quando(a[4]), 'perfil_nome': nome_perfil(a[5]),
+    # o perfil: deste link ou o último da pessoa
+    disc = (a[4], a[5], a[6], a[7], a[8], a[9]) if a[5] else next(((x[1], x[2], x[3], x[4], x[5], x[6]) for x in outras if x[2]), None)
+    if disc:
+        pct = _pct(*disc[2:])
+        r = relatorio(pct, disc[1])
+        r['perfil_de'] = '' if a[5] else CE._quando(disc[0])         # veio de outro link: diz de quando é
+    else:
+        pct, r = None, {'perfil': '', 'nome': '', 'pct': None, 'sem_perfil': True}
+    # o que motiva: deste link ou a última da pessoa
+    motiv = (_motivos(a[25]), a[26]) if a[25] else next(((_motivos(x[7]), x[8]) for x in outras if x[7]), (None, None))
+    r.update({'id': a[0], 'nome': a[2] or '?', 'respondido': CE._quando(a[4]), 'perfil_nome': nome_perfil(disc[1]) if disc else '',
               'candidato': candidato, 'vaga': a[12] or '', 'freelancer': a[11] == TIPO_FREE,
-              'anteriores': [{'id': x[0], 'respondido': CE._quando(x[1]), 'perfil_nome': nome_perfil(x[2])} for x in antes]})
+              'partes': a[24] or P_DISC,
+              'motivacao': PM.relatorio(motiv[0]) if motiv[0] else None,
+              'motivacao_de': '' if a[25] or not motiv[0] else CE._quando(motiv[1]),
+              'chave_pessoa': None if candidato and not a[23] else (f"{TIPO_FREE}:{int(a[22])}" if a[11] == TIPO_FREE
+                                                                     else f"{TIPO_FUNC}:{int(a[23]) if candidato else int(a[1])}"),
+              'anteriores': [{'id': x[0], 'respondido': CE._quando(x[1]), 'perfil_nome': nome_perfil(x[2])}
+                             for x in outras if x[2] and (not disc or a[5] or x[1] != disc[0])]})
     if candidato:
-        r['completa'] = _o_que_completa(pct, painel(agora)['equipe'])
+        r['completa'] = _o_que_completa(pct, painel(agora)['equipe']) if pct else []
         r.update(origem=a[13] or ORIGEM_GESTAO, areas=_rotulos(AREAS, a[14]), idade=_idade_hoje(a[21], a[15], agora),
                  bairro=a[16] or '',
                  disponibilidade=_rotulos(DISPONIBILIDADE, a[17]), experiencia=a[18] or '',
@@ -1008,7 +1097,7 @@ def _por_token(cur, token):
     if not token or len(str(token)) > 40:
         return None
     cur.execute("""SELECT AvaliacaoID, FuncionarioID, Nome, Status, AbertoEm, Pontos, Perfil, PctD, PctI, PctS, PctC, RespondidoEm,
-                          Tipo, Vaga, Origem, TipoVaga
+                          Tipo, Vaga, Origem, TipoVaga, Partes, Motivos
                    FROM AvaliacoesDisc WHERE Token = ?""", str(token))
     return cur.fetchone()
 
@@ -1030,23 +1119,25 @@ def ver(token, agora=None):
             conn.commit()
     finally:
         conn.close()
-    nome, candidato = CE._primeiro_nome(a[2]), a[12] == TIPO_CAND
+    nome, candidato, partes = CE._primeiro_nome(a[2]), a[12] == TIPO_CAND, a[16] or P_DISC
     if a[3] == ST_RESPONDIDO:
         if candidato:                                     # candidato: só o obrigado (o resultado fica com a gestão)
             return {'nome': nome, 'empresa': CE._empresa(), 'respondido': True, 'respondido_em': CE._quando(a[11]),
-                    'candidato': True, 'pontos': 0}
+                    'candidato': True, 'pontos': 0, 'partes': partes}
+        motivos = _motivos(a[17])
         return {'nome': nome, 'empresa': CE._empresa(), 'respondido': True, 'respondido_em': CE._quando(a[11]),
-                'pontos': a[5] or 0, 'resultado': resumo_pessoa(_pct(a[7], a[8], a[9], a[10]), a[6])}
+                'pontos': a[5] or 0, 'partes': partes,
+                'resultado': resumo_pessoa(_pct(a[7], a[8], a[9], a[10]), a[6]) if a[6] else None,
+                'motivacao': PM.resumo_pessoa(motivos) if motivos else None}
     return {'nome': nome, 'empresa': CE._empresa(), 'respondido': False, 'pontos': 0 if candidato else (a[5] or 0),
-            'candidato': candidato,
-            'blocos': [{'pergunta': ENUNCIADOS[k], 'opcoes': [texto for texto, _ in bloco]} for k, bloco in enumerate(BLOCOS)]}
+            'candidato': candidato, 'partes': partes,
+            'blocos': [{'pergunta': ENUNCIADOS[k], 'opcoes': [texto for texto, _ in bloco]} for k, bloco in enumerate(BLOCOS)]
+            if _tem_disc(partes) else [],
+            'pares': PM.perguntas() if _tem_motiv(partes) else []}       # [MOTIVAÇÃO] a 2ª parte (ou a única)
 
 
-def responder(token, dados, agora=None):
-    """Recebe as escolhas [[índice MAIS, índice MENOS], …] de cada pergunta, calcula, guarda e dá os pontos (uma vez só)."""
-    garantir_tabelas()
-    agora = agora or CE._agora()
-    respostas = (dados or {}).get('respostas')
+def _escolhas_disc(respostas):
+    """[[índice MAIS, índice MENOS], …] de cada grupo de palavras → [(fator MAIS, fator MENOS)]."""
     if not isinstance(respostas, list) or len(respostas) != N_BLOCOS:
         raise ErroPerfil(f"Responda as {N_BLOCOS} perguntas antes de enviar.")
     escolhas = []
@@ -1058,28 +1149,54 @@ def responder(token, dados, agora=None):
         if not (0 <= mais < 4 and 0 <= menos < 4) or mais == menos:
             raise ErroPerfil(f"Pergunta {k + 1}: a resposta do MAIS e a do MENOS precisam ser diferentes.")
         escolhas.append((BLOCOS[k][mais][1], BLOCOS[k][menos][1]))
-    pct, perfil = calcular(escolhas)
+    return escolhas
+
+
+def responder(token, dados, agora=None):
+    """Recebe as respostas das partes do link (perfil: [[MAIS, MENOS], …]; [MOTIVAÇÃO]: o lado escolhido em cada
+    pergunta), calcula, guarda e dá os pontos (uma vez só)."""
+    garantir_tabelas()
+    agora = agora or CE._agora()
+    dados = dados if isinstance(dados, dict) else {}
+    conn = _conexao()
+    try:
+        a = _por_token(conn.cursor(), token)
+    finally:
+        conn.close()
+    if not a or a[3] in (ST_CANCELADO,):
+        raise ErroPerfil("Link inválido ou cancelado. Peça para a gestão mandar de novo.", 404)
+    if a[3] == ST_EXPIRADO:
+        raise ErroPerfil("O prazo desta avaliação acabou. Peça para a gestão mandar de novo.", 410)
+    partes = a[16] or P_DISC
+    escolhas = pct = perfil = motivos = escolhidas = None
+    if _tem_disc(partes):
+        escolhas = _escolhas_disc(dados.get('respostas'))
+        pct, perfil = calcular(escolhas)
+    if _tem_motiv(partes):
+        try:
+            motivos, escolhidas = PM.calcular(dados.get('motivos'))
+        except PM.ErroMotivacao as e:
+            raise ErroPerfil(str(e))
     novo = False
     conn = _conexao()
     try:
         cur = conn.cursor()
-        a = _por_token(cur, token)
-        if not a or a[3] in (ST_CANCELADO,):
-            raise ErroPerfil("Link inválido ou cancelado. Peça para a gestão mandar de novo.", 404)
-        if a[3] == ST_EXPIRADO:
-            raise ErroPerfil("O prazo desta avaliação acabou. Peça para a gestão mandar de novo.", 410)
         if a[3] != ST_RESPONDIDO:                         # já respondeu (ex.: tocou duas vezes): fica a primeira resposta
             cur.execute("""UPDATE AvaliacoesDisc SET Status = ?, RespondidoEm = ?, AbertoEm = ISNULL(AbertoEm, ?), Respostas = ?,
-                                  Versao = ?, PctD = ?, PctI = ?, PctS = ?, PctC = ?, Perfil = ?
+                                  Versao = ?, PctD = ?, PctI = ?, PctS = ?, PctC = ?, Perfil = ?,
+                                  Motivos = ?, MotivoRespostas = ?, MotivoEm = ?
                            WHERE AvaliacaoID = ? AND Status <> ?""",
-                        ST_RESPONDIDO, agora, agora, json.dumps(escolhas), VERSAO, pct['D'], pct['I'], pct['S'], pct['C'],
-                        perfil, a[0], ST_RESPONDIDO)
+                        ST_RESPONDIDO, agora, agora, json.dumps(escolhas) if escolhas else None, VERSAO,
+                        *((pct['D'], pct['I'], pct['S'], pct['C']) if pct else (None,) * 4), perfil,
+                        json.dumps(motivos) if motivos else None, json.dumps(escolhidas) if escolhidas else None,
+                        agora if motivos else None, a[0], ST_RESPONDIDO)
             novo = cur.rowcount == 1
             conn.commit()
     finally:
         conn.close()
     if novo:
-        logger.info(f"[PERFIL DISC] {a[2]} respondeu: {perfil} {pct}.")
+        logger.info(f"[PERFIL DISC] {a[2]} respondeu: {perfil or '-'} {pct or ''}"
+                    + (f" · motivação: {PM.nome(motivos)}" if motivos else '') + ".")
         if a[5] and (a[12] or TIPO_FUNC) == TIPO_FUNC:     # pontos: só fixo (candidato e freelancer não estão na gamificação)
             try:                                          # igual aos comunicados do Telegram: histórico/ranking + saldo
                 database.registrar_pontos_de_bonus(int(a[1]), int(a[5]), "Avaliação de perfil (DISC) respondida",
@@ -1091,8 +1208,10 @@ def responder(token, dados, agora=None):
                 + (f" ({_esc(a[13])})" if a[13] else '')
                 + (f" · {dict(TIPOS_VAGA)[a[15]]}" if a[15] in dict(TIPOS_VAGA) else '')) if a[12] == TIPO_CAND \
             else (f"📅 Freelancer <b>{_esc(a[2])}</b>" if a[12] == TIPO_FREE else f"🧭 <b>{_esc(a[2])}</b>")
-        _avisar_gestao(f"{quem} respondeu a avaliação de perfil: <b>{_esc(nome_perfil(perfil))}</b> "
-                       f"({' · '.join(f'{d} {pct[d]}%' for d in DIMS)}).\n<i>Veja o relatório na Gestão › 🧭 Perfil.</i>")
+        oque = (f"a avaliação de perfil: <b>{_esc(nome_perfil(perfil))}</b> ({' · '.join(f'{d} {pct[d]}%' for d in DIMS)})"
+                if perfil else "o que motiva")
+        _avisar_gestao(f"{quem} respondeu {oque}." + (f"\n🔋 O que mais motiva: <b>{_esc(PM.nome(motivos))}</b>." if motivos else '')
+                       + "\n<i>Veja o relatório na Gestão › 🧭 Perfil.</i>")
     return ver(token, agora)
 
 
@@ -1341,10 +1460,10 @@ def trabalhe_cadastrar(dados, ip, agora=None):
             token, st = CE._token(), ST_ENVIADO
             cur.execute("""INSERT INTO AvaliacoesDisc (FuncionarioID, Nome, Vaga, Areas, Idade, Bairro, Disponibilidade, Experiencia,
                                                        AceiteEm, TipoVaga, Cpf, Nascimento, Telefone, Token, Status, Pontos,
-                                                       CriadoPor, CriadoEm, EnviadoEm, ValidoAte, Versao, Tipo, Origem, Etapa)
-                           VALUES (0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?); SELECT SCOPE_IDENTITY();""",
+                                                       CriadoPor, CriadoEm, EnviadoEm, ValidoAte, Versao, Tipo, Origem, Etapa, Partes)
+                           VALUES (0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?); SELECT SCOPE_IDENTITY();""",
                         *campos, token, ST_ENVIADO, '📸 Trabalhe conosco', agora, agora,
-                        agora.date() + timedelta(days=VALIDADE_MAX_DIAS), VERSAO, TIPO_CAND, ORIGEM_SITE, 'novo')
+                        agora.date() + timedelta(days=VALIDADE_MAX_DIAS), VERSAO, TIPO_CAND, ORIGEM_SITE, 'novo', PARTES_PADRAO)
             cur.nextset()
             aid = int(cur.fetchone()[0])
         conn.commit()
