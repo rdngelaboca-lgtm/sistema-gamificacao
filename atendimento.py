@@ -122,7 +122,8 @@ def garantir_tabelas():
                 UltimaEm DATETIME NULL,
                 UltimaPrevia NVARCHAR(200) NULL,
                 CriadaEm DATETIME NOT NULL,
-                EncerradaEm DATETIME NULL
+                EncerradaEm DATETIME NULL,
+                Lid VARCHAR(30) NULL
             )
         """)
         cur.execute("""
@@ -204,6 +205,8 @@ def garantir_tabelas():
             cur.execute("INSERT INTO ParametrosAtendimento (Chave, Valor) VALUES ('iniciado', ?)", _agora().isoformat())
         # [CENTRAL v2] botão dentro de outro (o "+ Complementos" no Açaí)
         cur.execute("IF COL_LENGTH('AtendimentoBotoes', 'PaiID') IS NULL ALTER TABLE AtendimentoBotoes ADD PaiID INT NULL")
+        # [CELULAR] o código @lid da conversa: a mensagem mandada pelo celular às vezes vem com ele no lugar do número
+        cur.execute("IF COL_LENGTH('AtendimentoConversas', 'Lid') IS NULL ALTER TABLE AtendimentoConversas ADD Lid VARCHAR(30) NULL")
         cur.execute("SELECT Valor FROM ParametrosAtendimento WHERE Chave = 'botoes_v2'")
         if not cur.fetchone():                    # uma vez só: Complementos vai para dentro do Açaí; "Em preparo" sai
             for filho, pai in DENTRO_INICIAIS:
@@ -871,6 +874,8 @@ def do_webhook(p, acao=None):
             _salvar_params({'erro_em': _agora().isoformat(), 'erro_txt': str(e)[:300]})
         except Exception as e2:
             logger.error(f"[ATENDIMENTO] Nem o erro foi gravado: {e2}")
+        if isinstance(p, dict) and p.get('fromMe'):
+            _anotar_celular(f"não entrou: erro ao gravar ({str(e)[:120]})", p)
 
 
 def _telefone(p):
@@ -885,6 +890,66 @@ def _telefone(p):
         if re.fullmatch(r'\d{6,15}@lid', v):
             return v
     return None
+
+
+_LID = re.compile(r'\d{6,20}@lid')
+
+
+def _lid_do_chat(p, tel):
+    """[CELULAR] O código @lid da conversa (o WhatsApp usa no lugar do número). Na mensagem que a LOJA mandou,
+    só o chatLid é do cliente (o senderLid é o da própria loja)."""
+    for v in ((tel, p.get('chatLid')) if p.get('fromMe') else (tel, p.get('chatLid'), p.get('senderLid'))):
+        v = str(v or '').strip()
+        if _LID.fullmatch(v):
+            return v
+    return None
+
+
+def _achar_conversa(cur, tel, p):
+    """[CELULAR] A conversa da mensagem que a loja mandou pelo celular: o número igual; senão o mesmo celular com
+    ou sem o 9 (o WhatsApp manda dos dois jeitos); senão pelo código @lid. (ConversaID, Status, EsperandoDesde, Nome, Telefone)"""
+    cols = "ConversaID, Status, EsperandoDesde, Nome, Telefone"
+    cur.execute(f"SELECT {cols} FROM AtendimentoConversas WHERE Telefone = ?", tel)
+    c = cur.fetchone()
+    if not c and '@lid' not in tel and len(tel) >= 12:
+        cur.execute(f"SELECT {cols} FROM AtendimentoConversas WHERE Telefone LIKE ?", tel[:4] + '%' + tel[-8:])
+        achadas = [x for x in cur.fetchall() if '@lid' not in x[4] and x[4][:4] == tel[:4] and x[4][-8:] == tel[-8:]]
+        c = achadas[0] if len(achadas) == 1 else None
+    lid = _lid_do_chat(p, tel)
+    if not c and lid:
+        cur.execute(f"SELECT TOP 1 {cols} FROM AtendimentoConversas WHERE Lid = ? ORDER BY UltimaEm DESC", lid)
+        c = cur.fetchone()
+    return c
+
+
+def _do_sistema(cur, tel, mid, texto, agora):
+    """[CELULAR] A cópia marcada 'fromApi' é de algo que o sistema mandou? (campanha ou resposta automática do 📢 Clientes)
+    O que não for reconhecido é tratado como mandado pelo celular: antes TUDO com 'fromApi' era jogado fora."""
+    import clientes
+    if texto in (_texto_limpo(clientes.TEXTO_SAIU, MAX_TEXTO_BOTAO), _texto_limpo(clientes.TEXTO_VOLTOU, MAX_TEXTO_BOTAO)):
+        return True
+    try:
+        cur.execute("SELECT 1 FROM CampanhaEnvios WHERE MensagemID = ? OR (Telefone = ? AND EnviadoEm >= ?)",
+                    mid or '-', tel, agora - timedelta(minutes=10))
+        return bool(cur.fetchone())
+    except Exception as e:
+        logger.warning(f"[ATENDIMENTO] Campanhas indisponíveis para conferir a cópia: {e}")
+        return False
+
+
+def _fim_tel(tel):
+    return "código @lid (sem o número)" if '@lid' in str(tel or '') else f"…{str(tel or '')[-4:]}"
+
+
+def _anotar_celular(resultado, p):
+    """[CELULAR] O que aconteceu com a última mensagem que a loja mandou pelo celular (a gestão vê no 📡; vai no log)."""
+    p = p if isinstance(p, dict) else {}
+    logger.info(f"[ATENDIMENTO] Mandada pelo celular: {resultado} (fromApi={bool(p.get('fromApi'))}, "
+                f"phone={'@lid' if '@lid' in str(p.get('phone') or '') else 'número'}, chatLid={'sim' if p.get('chatLid') else 'não'})")
+    try:
+        _salvar_params({'celular_em': _agora().isoformat(), 'celular_res': str(resultado)[:200]})
+    except Exception as e:
+        logger.error(f"[ATENDIMENTO] Diagnóstico do celular não gravado: {e}")
 
 
 def _tel_txt(tel):
@@ -926,6 +991,8 @@ def diagnostico(agora=None):
         d['erro'], d['erro_em'] = p.get('erro_txt') or '?', _quando(erro_em, agora)
     if outra_em and (not msg_em or outra_em >= msg_em) and agora - outra_em < timedelta(days=1):
         d['outra_instancia'] = p.get('outra_instancia_fim') or '?'
+    cel_em = _dt(p.get('celular_em'))                # [CELULAR] a última mandada pelo celular: entrou? por que não?
+    d['celular'] = {'quando': _quando(cel_em, agora), 'res': p.get('celular_res') or ''} if cel_em else None
     return d
 
 
@@ -936,14 +1003,16 @@ def _do_webhook(p, acao):
         return
     if p.get('type') and p.get('type') != 'ReceivedCallback':
         return
-    if acao == 'repetida' or (p.get('fromMe') and p.get('fromApi')):
-        return                              # o que o sistema manda (central, campanhas, automáticas) já está registrado
+    if acao == 'repetida':
+        return
     import clientes
     texto, tipo = clientes._conteudo(p)
     if not tipo:
         return
     tel = _telefone(p)
     if not tel:
+        if p.get('fromMe'):
+            _anotar_celular("não entrou: a Z-API não mandou o número do cliente", p)
         return
     texto = _texto_limpo(_texto_recebido(p, texto, tipo), MAX_TEXTO_BOTAO)
     midia = _midia(p, tipo)
@@ -958,14 +1027,15 @@ def _do_webhook(p, acao):
                 cur.execute("SELECT 1 FROM AtendimentoMensagens WHERE ZapiID = ?", mid)
                 if cur.fetchone():
                     return                          # já está (a mesma mensagem duas vezes, ou foi a central que mandou)
-            cur.execute("SELECT ConversaID, Status, EsperandoDesde, Nome FROM AtendimentoConversas WHERE Telefone = ?", tel)
-            c = cur.fetchone()
             if p.get('fromMe'):
                 # Mandada pelo celular: entra numa conversa que já existe. Nunca cria conversa nova (senão cada
-                # mensagem das campanhas viraria uma conversa). [DEPURAÇÃO CENTRAL] O que o SISTEMA manda (fromApi:
-                # a própria central, campanhas, respostas automáticas) já está registrado: antes a cópia chegava antes
-                # de o número da mensagem ser gravado e a mensagem aparecia duas vezes.
+                # mensagem das campanhas viraria uma conversa). [CELULAR] Antes, tudo o que vinha marcado 'fromApi'
+                # era jogado fora e a conversa só era achada pelo número exato: as respostas do celular sumiam.
+                # Agora só fica de fora o que é do próprio sistema (a cópia da central, campanha, resposta automática).
+                c = _achar_conversa(cur, tel, p)
                 if not c:
+                    if not (p.get('fromApi') and _do_sistema(cur, tel, mid, texto, agora)):
+                        _anotar_celular(f"não entrou: nenhuma conversa na central com {_fim_tel(tel)}", p)
                     return
                 img = p.get('image') if isinstance(p.get('image'), dict) else {}
                 ecos = [texto, _texto_limpo(img.get('caption'), MAX_TEXTO_BOTAO)] if img else [texto]
@@ -973,14 +1043,25 @@ def _do_webhook(p, acao):
                             f"AND CriadaEm >= ? AND Texto IN ({','.join('?' * len(ecos))})",
                             c[0], DE_LOJA, agora - timedelta(minutes=2), *ecos)
                 if cur.fetchone():
-                    return                          # sem o fromApi: é a cópia do que a central acabou de mandar
+                    return                          # a cópia do que a central acabou de mandar (chegou antes do número dela)
+                sistema = bool(p.get('fromApi')) and _do_sistema(cur, tel, mid, texto, agora)
                 cur.execute("INSERT INTO AtendimentoMensagens (ConversaID, De, Tipo, Texto, MidiaUrl, PorNome, ZapiID, Status, CriadaEm) "
-                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", c[0], DE_LOJA, tipo, texto, midia, 'Pelo celular', mid,
-                            M_ENVIADA, agora)
-                cur.execute("UPDATE AtendimentoConversas SET UltimaEm = ?, UltimaPrevia = ?, EsperandoDesde = NULL, "
-                            "AvisadoEm = NULL WHERE ConversaID = ?", agora, _previa(texto), c[0])   # o cliente foi respondido
+                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", c[0], DE_LOJA, tipo, texto, midia,
+                            'Automática' if sistema else 'Pelo celular', mid, M_ENVIADA, agora)
+                if sistema:                         # campanha / resposta automática: não é alguém respondendo
+                    cur.execute("UPDATE AtendimentoConversas SET UltimaEm = ?, UltimaPrevia = ? WHERE ConversaID = ?",
+                                agora, _previa(texto), c[0])
+                else:                               # alguém respondeu pelo celular: o cliente não está mais esperando
+                    cur.execute("UPDATE AtendimentoConversas SET UltimaEm = ?, UltimaPrevia = ?, EsperandoDesde = NULL, "
+                                "AvisadoEm = NULL WHERE ConversaID = ?", agora, _previa(texto), c[0])
+                    cur.execute("UPDATE AtendimentoConversas SET Status = ?, AtendenteNome = ? WHERE ConversaID = ? AND Status = ?",
+                                ST_ATENDENDO, 'Celular', c[0], ST_ESPERANDO)
                 conn.commit()
+                if not sistema:
+                    _anotar_celular(f"entrou na conversa de {c[3] or _tel_txt(c[4])}", p)
                 return
+            cur.execute("SELECT ConversaID, Status, EsperandoDesde, Nome, AtendenteID FROM AtendimentoConversas WHERE Telefone = ?", tel)
+            c = cur.fetchone()
             cli = clientes._achar_cliente(cur, tel) if '@lid' not in tel else None
             perfil = clientes._limpo(p.get('senderName') or p.get('chatName'), 150) or None
             nome = (cli[1] if cli else None) or (c[3] if c else None) or perfil    # o cadastro vale; senão, o 1º nome visto
@@ -994,7 +1075,9 @@ def _do_webhook(p, acao):
                 cid = int(cur.fetchone()[0])
             else:
                 cid, st, desde = c[0], c[1], c[2]
-                if not auto and st == ST_ENCERRADA:   # voltou a falar depois de encerrada: espera alguém de novo
+                # voltou a falar depois de encerrada (ou depois da resposta pelo celular, que ninguém da central
+                # assumiu): espera alguém de novo
+                if not auto and (st == ST_ENCERRADA or (st == ST_ATENDENDO and c[4] is None)):
                     cur.execute("UPDATE AtendimentoConversas SET Status = ?, AtendenteID = NULL, AtendenteNome = NULL, EsperandoDesde = ?, "
                                 "AvisadoEm = NULL, EncerradaEm = NULL, NaoLidas = NaoLidas + 1, UltimaEm = ?, UltimaPrevia = ?, "
                                 "Nome = ?, ClienteID = ? WHERE ConversaID = ?",
@@ -1005,6 +1088,9 @@ def _do_webhook(p, acao):
                                 desde if (auto or desde) else agora, agora, _previa(texto), nome, cli[0] if cli else None, cid)
             cur.execute("INSERT INTO AtendimentoMensagens (ConversaID, De, Tipo, Texto, MidiaUrl, ZapiID, CriadaEm) "
                         "VALUES (?, ?, ?, ?, ?, ?, ?)", cid, DE_CLIENTE, tipo, texto, midia, mid, agora)
+            lid = _lid_do_chat(p, tel)               # [CELULAR] para achar a conversa quando a resposta vier com o @lid
+            if lid:
+                cur.execute("UPDATE AtendimentoConversas SET Lid = ? WHERE ConversaID = ? AND (Lid IS NULL OR Lid <> ?)", lid, cid, lid)
             if auto:
                 cur.execute("INSERT INTO AtendimentoMensagens (ConversaID, De, Tipo, Texto, CriadaEm) VALUES (?, ?, 'texto', ?, ?)",
                             cid, DE_SISTEMA, AUTOMATICAS[acao], agora)
@@ -1306,8 +1392,9 @@ def acao(cid, nome_acao, dados, usuario, agora=None):
                 return {'ok': True, 'mensagem': "A conversa já estava encerrada."}
             nota = f"Conversa encerrada por {usuario['nome']}."
             cur.execute("UPDATE AtendimentoConversas SET Status = ?, EsperandoDesde = NULL, AvisadoEm = NULL, NaoLidas = 0, "
-                        "EncerradaEm = ?, AtendenteID = COALESCE(AtendenteID, ?), AtendenteNome = COALESCE(AtendenteNome, ?) "
-                        "WHERE ConversaID = ?", ST_ENCERRADA, agora, usuario['id'], usuario['nome'], cid)
+                        "EncerradaEm = ?, AtendenteNome = CASE WHEN AtendenteID IS NULL THEN ? ELSE AtendenteNome END, "
+                        "AtendenteID = COALESCE(AtendenteID, ?) WHERE ConversaID = ?",          # [CELULAR] 'Celular' vira quem encerrou
+                        ST_ENCERRADA, agora, usuario['nome'], usuario['id'], cid)
             mensagem = "Conversa encerrada. Se o cliente escrever de novo, ela volta para 'esperando'."
         elif nome_acao == 'transferir':
             m = re.fullmatch(r'([ag])(\d{1,9})', str(dados.get('para') or ''))

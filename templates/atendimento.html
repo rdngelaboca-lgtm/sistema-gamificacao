@@ -110,7 +110,7 @@
   .chip.at { background: var(--verde-claro); color: #0B5A52; }
   .chip.enc { background: #ECEFEF; color: #4A5554; }
   .vazio { padding: 24px 16px; color: var(--suave); text-align: center; }
-  #diag { border-radius: 8px; padding: 4px 8px; background: #F3F6F5; color: var(--suave); font-size: 12px; }
+  #diag { border-radius: 8px; padding: 4px 8px; background: #F3F6F5; color: var(--suave); font-size: 12px; white-space: pre-line; }
   #diag.alerta { background: var(--laranja-claro); color: #7A2E05; }
 
   .chat-topo { padding: 5px 12px; border-bottom: 1px solid var(--linha2); display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
@@ -532,6 +532,9 @@ function desenharDiag(d) {
     : '📡 Nenhuma mensagem de cliente chegou da Z-API ainda. ')
     + 'Confira o endereço de 📢 Clientes › ⚙️ Ajustes nos campos "Ao receber" e "Status" da Z-API e mande um "oi" de outro celular.';
   else { txt = `📡 Última mensagem de cliente: ${d.msg}`; alerta = false; }
+  // [CELULAR] e a última que a loja mandou pelo celular: entrou na conversa? se não, por quê
+  txt += '\n' + (d.celular ? `📱 Mandada pelo celular às ${d.celular.quando}: ${d.celular.res}`
+    : '📱 Nenhuma mensagem mandada pelo celular chegou da Z-API ainda');
   el.textContent = txt; el.classList.toggle('alerta', alerta); el.hidden = false;
 }
 function chipConversa(c) {

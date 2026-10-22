@@ -442,7 +442,12 @@ computador. Módulo `atendimento.py`, página `templates/atendimento.html`; tabe
   Foto, áudio, vídeo, arquivo e localização (link do mapa) aparecem na conversa. Resposta automática do 📢 Clientes
   (SAIR, VOLTAR, reserva) entra na conversa sem deixá-la esperando. ✔️✔️ entregue/lida pelo webhook "Status".
   Mandada pelo celular entra na conversa que já existe (precisa ligar "notificar as enviadas por mim" na Z-API);
-  mensagem de campanha nunca cria conversa.
+  mensagem de campanha nunca cria conversa. A conversa é achada pelo número igual, com/sem o 9, ou pelo código
+  `@lid` (coluna `Lid`, guardada quando o cliente escreve). Não confiar só no `fromApi`: fica de fora apenas o que o
+  sistema reconhece como dele (cópia da central — número da mensagem ou mesmo texto em 2 min —, campanha em
+  `CampanhaEnvios`, SAIR/VOLTAR → "Automática"); o resto é "Pelo celular", tira o cliente da espera e a conversa fica
+  com "Celular" (se o cliente escrever de novo, volta para esperando). O 📡 mostra o que houve com a última mandada
+  pelo celular (entrou / sem conversa com …1234 / erro).
 - **Login:** atendente com o **próprio PIN** (cadastrado pela gestão a partir do cadastro de funcionários; 5 erros =
   15 min bloqueado, igual ao app), sem acesso ao resto da Gestão. Gestor entra com o PIN do app (ou já logado na
   Gestão). Entrar como atendente tira o login de gestor daquele navegador. Permissões por atendente: ver as conversas
