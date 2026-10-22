@@ -467,6 +467,9 @@ computador. Módulo `atendimento.py`, página `templates/atendimento.html`; tabe
   compras (escopo `/compras/`); com `window-controls-overlay` o topo verde ocupa a barra de título. "Gestão" abre em
   outra janela. Tela compacta para 1280 × ~650 (Windows em 150%): topo e rodapé numa linha, filtros numa linha,
   conversa da lista em 2 linhas, ações curtas ("➡️ Passar", "✔️ Encerrar") — a área da conversa foi de 311 para 451 px.
+  Botão "⬇️ Instalar app" (evento `beforeinstallprompt`: só aparece no Chrome quando dá para instalar). O app de compras
+  passou a abranger o sistema todo (`scope: "/"`, `id: "/compras/"` — mesma identidade): Gestão e central abertas por
+  dentro dele também ficam sem a faixa do endereço (o Chrome aplica ao fechar todas as janelas do app).
 - **💾 Salvar contato** (lateral do cliente, quem pode ver a conversa): põe no cadastro do 📢 Clientes com o nome e o
   WhatsApp da conversa (origem "conversa no WhatsApp"), aniversário opcional, ofertas só marcando que o cliente
   autorizou; e, se marcado, na **agenda do celular** dos clientes (Z-API `contacts/add`; se recusar, o cadastro vale e a

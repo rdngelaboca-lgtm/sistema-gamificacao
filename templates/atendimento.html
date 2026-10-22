@@ -229,6 +229,7 @@
       <button type="button" data-aba="atendentes" hidden>👥 Atendentes</button>
     </nav>
     <div class="dir">
+      <button id="b-instalar" type="button" hidden title="Instalar a central como app neste computador (janela própria, sem a faixa do endereço)">⬇️ Instalar app</button>
       <span id="quem" class="mini"></span>
       <a id="link-gestao" href="/gestao/escala" target="_blank" rel="noopener" hidden>Gestão</a>
       <button id="btn-sair" type="button">Sair</button>
@@ -456,6 +457,20 @@ function entrar(eu) {
   S.timer = setInterval(() => { S.tique++; if (!document.hidden || S.tique % 2 === 0) atualizar(); }, 3000);
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden && S.eu) atualizar(); });
+
+// [TELA] ⬇️ Instalar app: o Chrome avisa quando a central pode virar app (aberta no navegador e ainda não instalada)
+let pedidoInstalar = null;
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); pedidoInstalar = e; $('#b-instalar').hidden = false; });
+window.addEventListener('appinstalled', () => {
+  pedidoInstalar = null; $('#b-instalar').hidden = true;
+  status('Central instalada! Abra pelo ícone 💬 (dá para fixar na barra de tarefas).');
+});
+$('#b-instalar').onclick = async () => {
+  if (!pedidoInstalar) return;
+  const pedido = pedidoInstalar; pedidoInstalar = null; $('#b-instalar').hidden = true;
+  pedido.prompt();
+  try { if ((await pedido.userChoice).outcome !== 'accepted') status('Tudo bem: para instalar depois, menu ⋮ do Chrome › Transmitir, salvar e compartilhar › Instalar página como app.'); } catch (e) {}
+};
 
 // ------------------------------------------------------------------ abas
 document.querySelectorAll('[data-aba]').forEach(b => b.onclick = () => irPara(b.dataset.aba));
