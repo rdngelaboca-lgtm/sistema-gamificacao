@@ -518,7 +518,7 @@ def pessoas(agora=None):
 def texto_mensagem(nome, link, pontos=0, lembrete=False, candidato=False, partes=None):
     primeiro = CE._primeiro_nome(nome)
     so_motiv = partes == P_MOTIV
-    quanto = (f"{PM.N_PARES} perguntas rápidas de escolher uma entre duas (uns 3 minutos)" if so_motiv else
+    quanto = (f"{PM.N_PARES} perguntas rápidas de escolher a frase que mais combina com você (uns 3 minutos)" if so_motiv else
               f"2 partes rápidas: o seu jeito de trabalhar ({N_BLOCOS} perguntas) e o que te motiva (uns 12 minutos no total)"
               if _tem_motiv(partes) else f"{N_BLOCOS} perguntas rápidas (uns 10 minutos)")
     return ((f"🔔 *Lembrete:* sua avaliação ainda está esperando você.\n\n" if lembrete else "")
@@ -526,7 +526,7 @@ def texto_mensagem(nome, link, pontos=0, lembrete=False, candidato=False, partes
             + (f"Olá, {primeiro}!\n" if primeiro else "Olá!\n")
             + ("Obrigado pelo interesse em trabalhar com a gente! Como parte do processo seletivo, queremos conhecer o "
                "seu jeito de trabalhar. São " if candidato else
-               "Queremos saber o que te motiva no trabalho, para cuidar melhor de você e da equipe. São " if so_motiv else
+               "Queremos conhecer melhor o que te motiva no trabalho. São " if so_motiv else
                "Queremos te conhecer melhor para organizar a equipe do jeito que combina com você. São ")
             + f"{quanto} e não existe resposta certa ou errada.\n\n"
             + (f"⭐ Respondendo você ganha *{pontos} pontos* na gamificação!\n\n" if pontos else "")

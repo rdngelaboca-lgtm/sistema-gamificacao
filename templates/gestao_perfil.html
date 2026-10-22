@@ -155,8 +155,8 @@
     <button class="btn ico" id="atualizar" title="Atualizar">🔄</button></div></section>
   <main class="area">
     <details class="explica"><summary><b>Como funciona?</b> Uma avaliação em 2 partes: 🧭 o perfil DISC (24 grupos de 4 palavras), que
-      mostra o jeito natural de trabalhar, e 🔋 o que motiva (28 perguntas de escolher uma entre duas: 💰 ganhos, 🏆 reconhecimento,
-      📈 crescimento, 🤝 equipe, 🛡️ segurança, 🗽 autonomia, 🎯 desafio e 💜 propósito).</summary>
+      mostra o jeito natural de trabalhar, e 🔋 o que motiva (28 perguntas de "qual frase combina mais com você": 💰 financeiro,
+      🏆 reconhecimento, 📚 aprendizado, 🤝 equipe, 🛡️ estabilidade, 🗽 autonomia, 🎯 desafio e 💜 propósito).</summary>
       <div class="cores">
         <div class="cor D"><b>🔴 D · Dominante</b>Resultado, desafio, decisão rápida.</div>
         <div class="cor I"><b>🟡 I · Influente</b>Comunicação, entusiasmo, gente.</div>
@@ -518,8 +518,8 @@ async function enviar() {
   const previa = () => {
     const p = P.find(x => marcados.has(x.id)), nome = p ? p.nome.split(' ')[0] : 'Fulano';
     const pts = p && p.tipo === 'free' ? 0 : Math.max(0, Math.floor(+$('#p-pontos').value || 0));
-    $('#p-previa').innerHTML = esc((partes === 'motiv' ? `🔋 *O que te motiva — ${r.empresa}*\n\nOlá, ${nome}!\nQueremos saber o que te motiva no ` +
-      `trabalho, para cuidar melhor de você e da equipe. São ${r.perguntas_motivacao} perguntas rápidas de escolher uma entre duas (uns 3 minutos)`
+    $('#p-previa').innerHTML = esc((partes === 'motiv' ? `🔋 *O que te motiva — ${r.empresa}*\n\nOlá, ${nome}!\nQueremos conhecer melhor o que te ` +
+      `motiva no trabalho. São ${r.perguntas_motivacao} perguntas rápidas de escolher a frase que mais combina com você (uns 3 minutos)`
       : `🧭 *Avaliação de perfil — ${r.empresa}*\n\nOlá, ${nome}!\nQueremos te conhecer melhor para organizar a equipe do jeito ` +
       `que combina com você. São 2 partes rápidas: o seu jeito de trabalhar (${r.perguntas} perguntas) e o que te motiva (uns 12 minutos no total)`) +
       ` e não existe resposta certa ou errada.\n\n` +

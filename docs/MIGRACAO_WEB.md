@@ -409,11 +409,12 @@ escolhe). O link vai no turno do freelancer (igual aos comunicados; 📤 Agora m
 gamificação). Na 👥 Equipe aparecem os "📅 Freelancers avaliados" (fora da contagem dos fixos) e uma coluna 📅 Freelancers nas
 sugestões para a escala (colunas `Tipo = 'free'` e `FreelancerID`).
 
-**🔋 O que motiva (10/2026, parte 2 do link):** depois das 24 palavras vem a **parte 2: 28 perguntas de escolher uma entre
-duas** ("O que mais te anima no trabalho?": "Ganhar um bônus quando a loja bate a meta" **ou** "Ver o cliente sair feliz com o
-pedido"…). São 8 motivações — 💰 Ganhos, 🏆 Reconhecimento, 📈 Crescimento, 🤝 Equipe, 🛡️ Segurança, 🗽 Autonomia, 🎯 Desafio e
-💜 Propósito —, cada uma disputa uma vez com cada outra (28 duplas, frases diferentes, metade das vezes em cima) e ganha uma
-nota de 0 a 7. A pessoa vê as 2 que mais a movem; a gestão vê as 8 barras, **💡 como motivar**, **🎁 prêmios que funcionam**,
+**🔋 O que motiva (10/2026, parte 2 do link):** depois das 24 palavras vem a **parte 2: 28 perguntas de "Qual frase combina
+mais com você?"** ("Gosto de ver o cliente saindo feliz" **ou** "Trabalho pensando nas coisas que quero conquistar"…). As frases
+**descrevem a pessoa** — não são coisas que a loja daria (bônus, aumento, comissão, folga, curso) —, e a tela avisa que nada muda
+no pagamento, na escala ou nas folgas por causa das respostas: assim ninguém responde pensando no que vai ganhar. São 8
+motivações — 💰 Financeiro, 🏆 Reconhecimento, 📚 Aprendizado, 🤝 Equipe, 🛡️ Estabilidade, 🗽 Autonomia, 🎯 Desafio e 💜 Propósito
+—, cada uma disputa uma vez com cada outra (28 duplas, frases diferentes, metade das vezes em cima) e ganha uma nota de 0 a 7. A pessoa vê as 2 que mais a movem; a gestão vê as 8 barras, **💡 como motivar**, **🎁 prêmios que funcionam**,
 **🚫 evite** e o que pesa menos. Na 👥 Equipe: "🔋 Motiva: …" em cada card e o bloco **🔋 O que move a equipe** (quantos de cada,
 dicas e os prêmios que mais motivam a equipe toda — bom para escolher a premiação da gamificação). O candidato também
 responde (só a gestão vê). O link novo tem as 2 partes (uns 12 min); quem já fez o perfil recebe **🔋 Só a motivação** (uns
