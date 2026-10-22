@@ -2117,7 +2117,8 @@ def ajustes(host_url):
     url, local = endereco_cadastro(host_url)
     # o webhook usa o endereço da internet gravado (aberto pelo localhost, a Z-API não alcançaria)
     base = (_params('url_publica').get('url_publica') or '').strip() or str(host_url or '')
-    return {'numero': ajustes_numero(), 'aniversario': config_aniversario(),
+    import agenda_whatsapp
+    return {'numero': ajustes_numero(), 'aniversario': config_aniversario(), 'agenda': agenda_whatsapp.ajustes(),
             'hoje_aniversariantes': len(aniversariantes()),
             'webhook': base.rstrip('/') + f"/webhook/zapi-clientes/{webhook_segredo()}",
             'qr': {'url': url, 'local': local, 'svg': qr_svg(url), 'url_gravada': _params('url_publica').get('url_publica') or ''},

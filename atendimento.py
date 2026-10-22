@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 ST_ESPERANDO, ST_ATENDENDO, ST_ENCERRADA = 'esperando', 'atendendo', 'encerrada'
 DE_CLIENTE, DE_LOJA, DE_SISTEMA = 'cliente', 'loja', 'sistema'
 M_ENVIANDO, M_ENVIADA, M_ENTREGUE, M_LIDA, M_FALHOU = 'enviando', 'enviada', 'entregue', 'lida', 'falhou'
+POR_AGENDA = '📅 Agenda'          # [AGENDA] confirmação, lembrete e pós-venda que a agenda mandou pelo número dos clientes
 GRUPOS = [('produtos', 'Produtos (foto + preços)'), ('entrega', 'Entrega e pagamento'), ('andamento', 'Andamento do pedido')]
 MAX_TEXTO = 1500                  # o que o atendente digita
 MAX_TEXTO_BOTAO = 4000            # o botão já com a lista de itens
@@ -934,6 +935,10 @@ def _do_sistema(cur, tel, mid, texto, agora):
     import clientes
     if texto in (_texto_limpo(clientes.TEXTO_SAIU, MAX_TEXTO_BOTAO), _texto_limpo(clientes.TEXTO_VOLTOU, MAX_TEXTO_BOTAO)):
         return True
+    cur.execute("SELECT 1 FROM AtendimentoMensagens WHERE PorNome = ? AND Texto = ? AND CriadaEm >= ?",   # [AGENDA]
+                POR_AGENDA, texto, agora - timedelta(minutes=10))
+    if cur.fetchone():
+        return True
     try:
         cur.execute("SELECT 1 FROM CampanhaEnvios WHERE MensagemID = ? OR (Telefone = ? AND EnviadoEm >= ?)",
                     mid or '-', tel, agora - timedelta(minutes=10))
@@ -1126,11 +1131,11 @@ def _do_webhook(p, acao):
                     return
                 img = p.get('image') if isinstance(p.get('image'), dict) else {}
                 ecos = [texto, _texto_limpo(img.get('caption'), MAX_TEXTO_BOTAO)] if img else [texto]
-                cur.execute(f"SELECT 1 FROM AtendimentoMensagens WHERE ConversaID = ? AND De = ? AND PorID IS NOT NULL "
+                cur.execute(f"SELECT 1 FROM AtendimentoMensagens WHERE ConversaID = ? AND De = ? AND (PorID IS NOT NULL OR PorNome = ?) "
                             f"AND CriadaEm >= ? AND Texto IN ({','.join('?' * len(ecos))})",
-                            c[0], DE_LOJA, agora - timedelta(minutes=2), *ecos)
+                            c[0], DE_LOJA, POR_AGENDA, agora - timedelta(minutes=2), *ecos)
                 if cur.fetchone():
-                    return                          # a cópia do que a central acabou de mandar (chegou antes do número dela)
+                    return                          # a cópia do que a central (ou a 📅 agenda) acabou de mandar
                 sistema = bool(p.get('fromApi')) and _do_sistema(cur, tel, mid, texto, agora)
                 cur.execute("INSERT INTO AtendimentoMensagens (ConversaID, De, Tipo, Texto, MidiaUrl, PorNome, ZapiID, Status, CriadaEm) "
                             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", c[0], DE_LOJA, tipo, texto, midia,
@@ -1394,6 +1399,70 @@ def _mandar(msg_id, telefone, texto, foto):
         logger.error(f"[ATENDIMENTO] Mensagem {msg_id} não foi: {clientes._sem_segredo(r)}")
 
 
+# ------------------------------------------------------------------------------
+# [AGENDA] Confirmação, lembrete e pós-venda da agenda (mandados pelo agenda_whatsapp.py)
+# ------------------------------------------------------------------------------
+def agenda_antes(telefone, texto, nome=None, agora=None):
+    """
+    Antes de mandar: a mensagem entra na conversa do cliente como "📅 Agenda" (sem conversa, cria uma já encerrada:
+    ninguém fica esperando). Assim a cópia que a Z-API devolve não vira "respondida pelo celular" e, quando o cliente
+    responder, quem atender já vê o que foi mandado. Devolve o MensagemID.
+    """
+    import clientes
+    agora = agora or _agora()
+    texto = _texto_limpo(texto, MAX_TEXTO_BOTAO)
+    garantir_tabelas()
+    with _trava:
+        conn = _conexao()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT ConversaID FROM AtendimentoConversas WHERE Telefone = ?", telefone)
+            c = cur.fetchone()
+            if c:
+                cid = int(c[0])
+                cur.execute("UPDATE AtendimentoConversas SET UltimaEm = ?, UltimaPrevia = ? WHERE ConversaID = ?",
+                            agora, _previa(texto), cid)
+            else:
+                cli = clientes._achar_cliente(cur, telefone)
+                nome = (cli[1] if cli else None) or clientes._limpo(nome, 150) or None
+                cur.execute("INSERT INTO AtendimentoConversas (Telefone, Nome, ClienteID, Status, NaoLidas, UltimaEm, UltimaPrevia, "
+                            "CriadaEm, EncerradaEm) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?); SELECT SCOPE_IDENTITY();",
+                            telefone, nome, cli[0] if cli else None, ST_ENCERRADA, agora, _previa(texto), agora, agora)
+                cur.nextset()
+                cid = int(cur.fetchone()[0])
+            cur.execute("INSERT INTO AtendimentoMensagens (ConversaID, De, Tipo, Texto, PorNome, Status, CriadaEm) "
+                        "VALUES (?, ?, 'texto', ?, ?, ?, ?); SELECT SCOPE_IDENTITY();",
+                        cid, DE_LOJA, texto, POR_AGENDA, M_ENVIANDO, agora)
+            cur.nextset()
+            msg_id = int(cur.fetchone()[0])
+            conn.commit()
+            return msg_id
+        finally:
+            conn.close()
+
+
+def agenda_depois(msg_id, ok, zapi_id=None):
+    """Depois de mandar: guarda o número da mensagem (para o ✔️✔️ entregue/lida). Se não foi, tira a mensagem (e a
+    conversa criada só para ela): o robô da agenda tenta de novo mais tarde."""
+    with _trava:
+        conn = _conexao()
+        try:
+            cur = conn.cursor()
+            if ok:
+                cur.execute("UPDATE AtendimentoMensagens SET Status = ?, ZapiID = ? WHERE MensagemID = ?",
+                            M_ENVIADA, str(zapi_id or '')[:80] or None, int(msg_id))
+            else:
+                cur.execute("SELECT ConversaID FROM AtendimentoMensagens WHERE MensagemID = ?", int(msg_id))
+                c = cur.fetchone()
+                cur.execute("DELETE FROM AtendimentoMensagens WHERE MensagemID = ?", int(msg_id))
+                if c:
+                    cur.execute("DELETE FROM AtendimentoConversas WHERE ConversaID = ? AND NOT EXISTS "
+                                "(SELECT 1 FROM AtendimentoMensagens WHERE ConversaID = ?)", c[0], c[0])
+            conn.commit()
+        finally:
+            conn.close()
+
+
 def _exigir_numero():
     import clientes
     if not clientes.configurado():
@@ -1629,6 +1698,8 @@ def visao(usuario, periodo='hoje', agora=None):
         if de == DE_CLIENTE:
             conversas.add(conv_id)
             pend = pend or criada
+        elif de == DE_LOJA and por_nome == POR_AGENDA:
+            continue                                     # [AGENDA] mensagem automática da agenda: ninguém respondeu
         elif de == DE_LOJA and not por_id:
             pend = None                                  # respondeu pelo celular (ou automática): o cliente foi atendido
         elif de == DE_LOJA:

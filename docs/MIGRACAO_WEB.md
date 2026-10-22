@@ -516,6 +516,15 @@ computador. Módulo `atendimento.py`, página `templates/atendimento.html`; tabe
   campo, texto igual mandado pela central nos últimos 2 min também não).
 - **Próxima fase:** pedido na lateral (itens, total, Pix copia e cola, comanda) e vendas WhatsApp × 99Food.
 
+**📅 Agenda pelo número dos clientes (10/2026):** a confirmação do agendamento (na hora em que é criado), o lembrete do
+dia anterior (D-1, 10h) e o pós-venda (D+1) saem pelo **número dos clientes** em vez do número da loja. A mensagem entra na
+💬 Central como "📅 Agenda" (cliente sem conversa: cria uma já encerrada, ninguém fica esperando); quando o cliente
+responde, a conversa abre com a confirmação junto. A cópia que a Z-API devolve não vira "respondida pelo celular", não
+conta como resposta de atendente e o ✔️✔️ entregue/lida aparece. Se o envio falha, a mensagem sai da central e o robô tenta
+de novo. Chave em 📢 Clientes › ⚙️ Ajustes › **📅 Mensagens da agenda** (número dos clientes · número da loja); sem o número
+dos clientes configurado, sai pelo da loja. Arquivo novo `agenda_whatsapp.py` (usado pelo `api_server.py` na rota
+`/agendamentos/novo` e pelo `agendador_lembretes.py`); a escolha fica em `ParametrosClientes` (`agenda_numero`).
+
 ### App de compras — aba Gestão em 3 áreas (10/2026)
 A aba **Gestão** do app (só o gestor vê) foi dividida em **🏪 Loja · 🛒 Compras · 📦 Estoque**, com o número de
 pendências de cada área no botão (Loja: dias sem faturamento lançado; Compras: listas para aprovar + cupons para

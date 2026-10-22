@@ -500,8 +500,9 @@ def rota_criar_agendamento():
                     f"Agradecemos a preferência! 🍦"
                 )
 
-                # Envia imediatamente
-                ok, resp = notificador_whatsapp.enviar_mensagem_whatsapp(telefone_cliente, msg_zap)
+                # Envia imediatamente ([AGENDA] pelo número dos clientes: a resposta cai na 💬 Central)
+                import agenda_whatsapp
+                ok, resp = agenda_whatsapp.enviar(telefone_cliente, msg_zap, dados['nome_cliente'])
                 
                 if ok:
                     # Marca no banco que já enviou a mensagem de criação
@@ -2820,6 +2821,14 @@ def api_gestao_clientes_respostas(usuario):
 def api_gestao_clientes_ajustes(usuario):
     import clientes
     return _resposta_clientes(lambda: clientes.ajustes(request.host_url))
+
+
+@app.route('/api/gestao/clientes/agenda', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_clientes_agenda(usuario):
+    """[AGENDA] Por qual número saem a confirmação, o lembrete e o pós-venda da agenda."""
+    import agenda_whatsapp
+    return _resposta_clientes(lambda: agenda_whatsapp.salvar(ler_json() or {}, usuario))
 
 
 @app.route('/api/gestao/clientes/conexao', methods=['GET'])

@@ -7,6 +7,7 @@
 #   • 08:00 das segundas-feiras -> Telegram (grupo): agenda da SEMANA (seg a dom)
 #   • 10:00  -> WhatsApp (cliente): confirmação dos eventos de AMANHÃ (D-1)
 #   • 14:10  -> WhatsApp (cliente): pós-venda dos eventos de ONTEM (D+1)
+#   [AGENDA] O WhatsApp do cliente sai pelo número dos clientes (o da 💬 Central): veja agenda_whatsapp.py.
 #
 # Como rodar:  python agendador_lembretes.py        (para parar: Ctrl+C)
 #
@@ -73,7 +74,7 @@ from datetime import datetime, date, timedelta
 import config
 import database
 import notificador_telegram
-import notificador_whatsapp
+import agenda_whatsapp          # [AGENDA] pelo número dos clientes (ou o da loja, conforme ⚙️ Ajustes)
 
 # ------------------------------------------------------------------------------
 # Configurações (pode mudar os horários aqui, sempre no formato "HH:MM")
@@ -329,8 +330,8 @@ def _disparar_whatsapp(tipo, pendentes, montar_mensagem, flag_banco, nome_rotina
         try:
             nome = primeiro_nome(_campo(ag, 'NomeCliente'))
             mensagem = montar_mensagem(ag, nome)
-            sucesso, resposta = notificador_whatsapp.enviar_mensagem_whatsapp(
-                _campo(ag, 'TelefoneCliente'), mensagem)
+            sucesso, resposta = agenda_whatsapp.enviar(
+                _campo(ag, 'TelefoneCliente'), mensagem, _campo(ag, 'NomeCliente'))
         except Exception as e:
             logger.error(f"--> {nome_rotina}: erro ao processar agendamento {ag_id}: {e}", exc_info=True)
             falhas += 1

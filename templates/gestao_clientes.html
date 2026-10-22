@@ -233,6 +233,16 @@
           </ol></details>
       </div>
       <div class="caixa" style="margin-top:12px">
+        <h3>📅 Mensagens da agenda</h3>
+        <div class="mini suave">A <b>confirmação do agendamento</b>, o <b>lembrete do dia anterior</b> e o <b>pós-venda</b> vão para o cliente pelo:</div>
+        <form id="form-agenda" class="form" style="margin-top:6px">
+          <div id="ag-opcoes"></div>
+          <div class="mini suave">Pelo número dos clientes, a resposta do cliente cai na 💬 Central, já com a mensagem da agenda na conversa.</div>
+          <div id="ag-aviso" class="mini n-aviso"></div>
+          <div><button class="btn prim" type="submit">💾 Salvar</button></div>
+        </form>
+      </div>
+      <div class="caixa" style="margin-top:12px">
         <h3>🔗 Respostas, "SAIR", reservas e ✔️✔️ lida (webhooks)</h3>
         <div class="mini suave">Para o sistema ver as <b>respostas</b> dos clientes (aba 💬, "SAIR", "QUERO") e saber quem <b>recebeu e leu</b>,
           cole este endereço no painel da Z-API, na instância dos clientes, em <b>Webhooks</b>, nos dois campos:
@@ -861,6 +871,11 @@ async function carregarAjustes() {
   $('#aj-webhook').value = a.webhook;
   $('#aj-webhook-aviso').textContent = /\/\/(localhost|127\.|192\.168\.|10\.|[\d.]+:)/.test(a.webhook)
     ? 'Este endereço é da rede da loja: abra a Gestão pelo endereço da internet para copiar o certo.' : '';
+  const ag = a.agenda;                                         // [AGENDA] por qual número sai a agenda
+  $('#ag-opcoes').innerHTML = ag.opcoes.map(o => `<label class="check"><input type="radio" name="ag-num" value="${esc(o.chave)}"
+    ${o.chave === ag.numero ? 'checked' : ''}> ${esc(o.nome)}</label>`).join('');
+  $('#ag-aviso').textContent = ag.numero === 'clientes' && !ag.clientes_configurado
+    ? '⚠️ O número dos clientes ainda não está configurado: por enquanto a agenda sai pelo número da loja.' : '';
   $('#an-ligado').checked = a.aniversario.ligado; $('#an-texto').value = a.aniversario.texto;
   S.aniv.foto = a.aniversario.foto || null; mostrarFotoAniv();
   $('#an-hoje').textContent = `Hoje: ${a.hoje_aniversariantes} aniversariante(s) que recebem.`;
@@ -880,6 +895,12 @@ $('#form-numero').onsubmit = async ev => {
     $('#aj-inst').value = $('#aj-token').value = $('#aj-client').value = '';
     status('Número dos clientes salvo. Toque em 🔌 Testar conexão.'); carregarAjustes(); carregarClientes();
   } catch (e) { falhou(e); }
+};
+$('#form-agenda').onsubmit = async ev => {
+  ev.preventDefault();
+  const v = (document.querySelector('input[name="ag-num"]:checked') || {}).value;
+  try { const r = await api('POST', '/api/gestao/clientes/agenda', {numero: v}); status(r.mensagem); carregarAjustes(); }
+  catch (e) { falhou(e); }
 };
 $('#aj-testar').onclick = async () => {
   $('#aj-conexao').textContent = 'Testando…';
