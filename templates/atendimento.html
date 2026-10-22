@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#0E6B63">
 <title>Atendimento · Gela Boca</title>
+<!-- [TELA] instalada como app (Chrome › Instalar): janela própria, sem a faixa do endereço; o topo verde vira a barra de título -->
+<link rel="manifest" href="/atendimento/manifest.webmanifest">
+<link rel="icon" href="/atendimento/arquivos/icone-192.png">
 <!-- [ATENDIMENTO] 💬 Central de Atendimento do WhatsApp (número dos clientes): conversas ao vivo, botões com foto e
      preços da tabela, visão da gestão e atendentes. O atendente entra com o próprio nome e PIN. -->
 <style>
@@ -43,43 +46,57 @@
 
   /* ---------- topo ---------- */
   #app { display: flex; flex-direction: column; height: 100vh; }
-  header { background: var(--verde); color: #fff; display: flex; align-items: center; gap: 8px 14px; padding: 8px 16px; flex-wrap: wrap; }
-  header .marca { font-weight: 800; font-size: 17px; }
-  header nav { display: flex; gap: 4px; flex-wrap: wrap; }
-  header nav button { color: #fff; background: transparent; border: 0; padding: 7px 11px; border-radius: 8px; font-weight: 600; }
+  /* [TELA] tudo mais baixo e mais junto: sobra altura para a conversa */
+  header { background: var(--verde); color: #fff; display: flex; align-items: center; gap: 4px 12px; padding: 4px 12px; flex-wrap: wrap; }
+  header .marca { font-weight: 800; font-size: 15px; }
+  header nav { display: flex; gap: 2px; flex-wrap: wrap; }
+  header nav button { color: #fff; background: transparent; border: 0; padding: 5px 10px; border-radius: 8px; font-weight: 600; font-size: 14px; }
   header nav button.ativo { background: rgba(255,255,255,.2); }
-  header .dir { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  header .dir { margin-left: auto; display: flex; align-items: center; gap: 6px; }
   header .dir a, header .dir button { color: #fff; background: transparent; border: 1px solid rgba(255,255,255,.45);
-    border-radius: 8px; padding: 6px 11px; text-decoration: none; font-weight: 600; }
+    border-radius: 8px; padding: 3px 10px; text-decoration: none; font-weight: 600; font-size: 14px; }
+  /* [TELA] instalada como app: o topo verde ocupa a barra de título (os botões da janela ficam à direita) */
+  @media (display-mode: window-controls-overlay) {
+    header { padding-left: max(12px, env(titlebar-area-x, 0px));
+      padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 8px);
+      min-height: env(titlebar-area-height, 33px); -webkit-app-region: drag; app-region: drag; }
+    header nav, header button, header a { -webkit-app-region: no-drag; app-region: no-drag; }
+  }
   main { flex: 1; min-height: 0; overflow: auto; }
 
   /* ---------- conversas ---------- */
   #aba-conversas { display: flex; flex-direction: column; height: 100%; }
-  .central { flex: 1; min-height: 0; display: flex; gap: 12px; padding: 12px; }
+  .central { flex: 1; min-height: 0; display: flex; gap: 8px; padding: 8px; }
   .col { background: #fff; border: 1px solid var(--linha); border-radius: 12px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
-  .col-conversas { flex: 0 0 310px; }
+  .col-conversas { flex: 0 0 300px; }
   .col-chat { flex: 1 1 auto; min-width: 0; }
-  .col-cliente { flex: 0 0 300px; overflow: auto; padding: 14px; gap: 14px; }
-  #cliente { display: flex; flex-direction: column; gap: 8px; }
+  .col-cliente { flex: 0 0 270px; overflow: auto; padding: 10px 12px; gap: 10px; }
+  #cliente { display: flex; flex-direction: column; gap: 5px; }
   #form-contato { background: #F7FAF9; border: 1px solid var(--linha2); border-radius: 10px; padding: 10px; gap: 8px; }
   /* [CENTRAL v2] produtos na lateral: um cartão por produto, com os "+" (ex.: + Complementos) dentro */
-  #produtos { border-top: 1px solid var(--linha2); padding-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+  #produtos { border-top: 1px solid var(--linha2); padding-top: 10px; display: flex; flex-direction: column; gap: 6px; }
   #produtos .tit { font-size: 12px; font-weight: 700; letter-spacing: .04em; color: var(--roxo); }
-  .prod { border: 1px solid var(--roxo-linha); background: var(--roxo-claro); border-radius: 12px; padding: 6px;
-    display: flex; flex-direction: column; gap: 6px; }
-  .prod > .bt { width: 100%; display: flex; align-items: center; gap: 10px; text-align: left; background: #fff; min-height: 52px; font-size: 15px; }
-  .prod > .bt img { width: 40px; height: 40px; object-fit: cover; border-radius: 8px; flex: none; }
-  .prod .dentro { display: flex; flex-wrap: wrap; gap: 6px; }
-  .bt.mais { min-height: 36px; font-size: 13px; padding: 0 11px; }
+  .prod { border: 1px solid var(--roxo-linha); background: var(--roxo-claro); border-radius: 12px; padding: 5px;
+    display: flex; flex-direction: column; gap: 5px; }
+  .prod > .bt { width: 100%; display: flex; align-items: center; gap: 10px; text-align: left; background: #fff; min-height: 44px; font-size: 14.5px; }
+  .prod > .bt img { width: 34px; height: 34px; object-fit: cover; border-radius: 7px; flex: none; }
+  .prod .dentro { display: flex; flex-wrap: wrap; gap: 5px; }
+  .bt.mais { min-height: 30px; font-size: 12.5px; padding: 0 10px; }
   .col h2 { margin: 0; font-size: 17px; }
-  .topo-lista { padding: 12px 14px 8px; display: flex; flex-direction: column; gap: 8px; }
+  .topo-lista { padding: 6px 10px 8px; display: flex; flex-direction: column; gap: 6px; }
+  .topo-lista .filtros { gap: 2px; justify-content: space-between; }
+  .topo-lista .filtros button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; padding: 4px 0;
+    font-size: 12.5px; color: var(--suave); }
+  .topo-lista .filtros button.ativo { background: none; color: var(--verde); border-bottom-color: var(--verde); }
+  .cont { background: #C2410C; color: #fff; border-radius: 9px; font-size: 11px; padding: 0 5px; margin-left: 3px; }
   .filtros { display: flex; gap: 6px; flex-wrap: wrap; }
   .filtros button { border: 1px solid var(--linha); background: #fff; border-radius: 999px; padding: 6px 11px; font-weight: 600; font-size: 13px; }
   .filtros button.ativo { background: var(--verde); color: #fff; border-color: var(--verde); }
-  #busca { width: 100%; }
+  #busca { width: 100%; padding: 5px 9px; }
   #lista { flex: 1; overflow-y: auto; border-top: 1px solid var(--linha2); }
-  .conv { width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--linha2); background: #fff; padding: 10px 14px;
-    display: flex; flex-direction: column; gap: 4px; }
+  .conv { width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--linha2); background: #fff; padding: 6px 10px;
+    display: flex; flex-direction: column; gap: 3px; }
+  .conv .chip { flex: none; font-size: 11px; padding: 1px 7px; }
   .conv:hover { background: #F7FAF9; }
   .conv.sel { background: var(--verde-claro); }
   .conv .l1 { display: flex; gap: 8px; align-items: center; }
@@ -93,18 +110,19 @@
   .chip.at { background: var(--verde-claro); color: #0B5A52; }
   .chip.enc { background: #ECEFEF; color: #4A5554; }
   .vazio { padding: 24px 16px; color: var(--suave); text-align: center; }
-  #diag { border-radius: 8px; padding: 7px 9px; background: #F3F6F5; color: var(--suave); }
+  #diag { border-radius: 8px; padding: 4px 8px; background: #F3F6F5; color: var(--suave); font-size: 12px; }
   #diag.alerta { background: var(--laranja-claro); color: #7A2E05; }
 
-  .chat-topo { padding: 10px 14px; border-bottom: 1px solid var(--linha2); display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+  .chat-topo { padding: 5px 12px; border-bottom: 1px solid var(--linha2); display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
   .chat-topo .quem { flex: 1; min-width: 160px; display: flex; flex-direction: column; }
-  .chat-topo .quem b { font-size: 16px; }
-  #aviso-outro { background: var(--laranja-claro); color: #7A2E05; padding: 9px 14px; font-size: 14px; }
-  #mensagens { flex: 1; overflow-y: auto; background: #EEF2F1; padding: 14px; display: flex; flex-direction: column; gap: 8px; }
+  .chat-topo .quem b { font-size: 15px; }
+  .btn.peq { padding: 4px 10px; font-size: 13px; }
+  #aviso-outro { background: var(--laranja-claro); color: #7A2E05; padding: 6px 12px; font-size: 13px; }
+  #mensagens { flex: 1; overflow-y: auto; background: #EEF2F1; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
   .msg { display: flex; }
   .msg.loja { justify-content: flex-end; }
   .msg.sistema { justify-content: center; }
-  .balao { max-width: 70%; border-radius: 12px; padding: 8px 11px; display: flex; flex-direction: column; gap: 5px; word-wrap: break-word; }
+  .balao { max-width: 72%; border-radius: 12px; padding: 6px 10px; display: flex; flex-direction: column; gap: 5px; word-wrap: break-word; }
   .msg.cliente .balao { background: #fff; border: 1px solid var(--linha); border-bottom-left-radius: 4px; }
   .msg.loja .balao { background: #DDF3EE; border: 1px solid #BFE5DC; border-bottom-right-radius: 4px; }
   .msg.loja.falhou .balao { background: #FDECEC; border-color: #F2B8B5; }
@@ -114,19 +132,21 @@
   .balao img { max-width: 260px; max-height: 260px; border-radius: 8px; display: block; }
   .balao audio, .balao video { max-width: 280px; }
   .lida { color: #1565C0; font-weight: 700; }
-  #form-msg { display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--linha2); align-items: flex-end; }
-  #msg { flex: 1; min-width: 0; resize: none; height: 44px; max-height: 140px; font-size: 15px; padding: 10px 12px; }
-  .btn-foto { width: 44px; height: 44px; justify-content: center; padding: 0; }
+  #form-msg { display: flex; gap: 8px; padding: 7px 12px; border-top: 1px solid var(--linha2); align-items: flex-end; }
+  #msg { flex: 1; min-width: 0; resize: none; height: 40px; max-height: 140px; font-size: 15px; padding: 8px 11px; }
+  .btn-foto { width: 40px; height: 40px; justify-content: center; padding: 0; }
   #foto-pronta { padding: 6px 14px 0; display: flex; gap: 10px; align-items: center; font-size: 13px; }
   #foto-pronta img { height: 56px; border-radius: 6px; }
-  .cli-linha { font-size: 14px; } .cli-linha b { display: block; font-size: 12px; color: var(--suave); font-weight: 600; }
+  .cli-linha { font-size: 13.5px; display: grid; grid-template-columns: 80px minmax(0, 1fr); gap: 6px; align-items: baseline; }
+  .cli-linha b { font-size: 11.5px; color: var(--suave); font-weight: 600; }
+  #cliente h2 { font-size: 15px; }
 
-  #botoes { background: #fff; border-top: 1px solid var(--linha); padding: 10px 14px 12px; display: flex; flex-wrap: wrap;
-    gap: 10px 24px; align-items: flex-start; max-height: 38vh; overflow: auto; }
-  .grupo { display: flex; flex-direction: column; gap: 6px; }
-  .grupo .tit { font-size: 12px; font-weight: 700; letter-spacing: .04em; }
-  .grupo .lista-b { display: flex; flex-wrap: wrap; gap: 6px; }
-  .bt { min-height: 42px; padding: 0 14px; border-radius: 10px; font-weight: 600; font-size: 14px; }
+  #botoes { background: #fff; border-top: 1px solid var(--linha); padding: 5px 10px; display: flex; flex-wrap: wrap;
+    gap: 5px 18px; align-items: center; max-height: 30vh; overflow: auto; }
+  .grupo { display: flex; align-items: center; gap: 8px; }
+  .grupo .tit { font-size: 10.5px; font-weight: 700; letter-spacing: .03em; max-width: 76px; line-height: 1.15; }
+  .grupo .lista-b { display: flex; flex-wrap: wrap; gap: 5px; }
+  .bt { min-height: 34px; padding: 0 12px; border-radius: 9px; font-weight: 600; font-size: 13.5px; }
   .bt.produtos { border: 1px solid var(--roxo-linha); background: var(--roxo-claro); color: var(--roxo); }
   .bt.entrega { border: 1px solid #BFE5DC; background: #EAF6F3; color: #0B4A44; }
   .bt.andamento { border: 1px solid var(--ambar-linha); background: var(--ambar-claro); color: var(--ambar); }
@@ -210,7 +230,7 @@
     </nav>
     <div class="dir">
       <span id="quem" class="mini"></span>
-      <a id="link-gestao" href="/gestao/escala" hidden>Gestão</a>
+      <a id="link-gestao" href="/gestao/escala" target="_blank" rel="noopener" hidden>Gestão</a>
       <button id="btn-sair" type="button">Sair</button>
     </div>
   </header>
@@ -219,12 +239,9 @@
       <div class="central">
         <section class="col col-conversas" aria-label="Conversas">
           <div class="topo-lista">
-            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px">
-              <h2>Conversas</h2><span id="n-esperando" class="mini" style="color:var(--laranja);font-weight:700"></span>
-            </div>
             <div class="filtros" role="group" aria-label="Mostrar">
               <button type="button" data-filtro="todas" class="ativo">Todas</button>
-              <button type="button" data-filtro="esperando">Esperando</button>
+              <button type="button" data-filtro="esperando">Esperando<span id="n-esperando" class="cont" hidden></span></button>
               <button type="button" data-filtro="minhas">Minhas</button>
               <button type="button" data-filtro="encerradas">Encerradas</button>
             </div>
@@ -240,9 +257,9 @@
           <div id="chat" hidden style="display:flex;flex-direction:column;flex:1;min-height:0">
             <div class="chat-topo">
               <div class="quem"><b id="chat-nome"></b><span id="chat-info" class="mini suave"></span></div>
-              <button class="btn" type="button" id="b-assumir">Assumir</button>
-              <button class="btn" type="button" id="b-passar">Passar para outra pessoa</button>
-              <button class="btn" type="button" id="b-encerrar">Encerrar conversa</button>
+              <button class="btn peq" type="button" id="b-assumir">Assumir</button>
+              <button class="btn peq" type="button" id="b-passar" title="Passar para outra pessoa">➡️ Passar</button>
+              <button class="btn peq" type="button" id="b-encerrar" title="Encerrar conversa">✔️ Encerrar</button>
             </div>
             <div id="aviso-outro" hidden></div>
             <div id="mensagens" aria-live="polite"></div>
@@ -251,7 +268,7 @@
             <form id="form-msg">
               <label class="btn btn-foto" title="Mandar uma foto" aria-label="Mandar uma foto">📷<input id="arquivo-foto" type="file" accept="image/*" hidden></label>
               <textarea id="msg" placeholder="Escreva a mensagem (Enter manda · Shift+Enter pula linha)" aria-label="Mensagem" maxlength="1500"></textarea>
-              <button class="btn prim" type="submit" id="b-enviar" style="height:44px">Enviar</button>
+              <button class="btn prim" type="submit" id="b-enviar" style="height:40px">Enviar</button>
             </form>
           </div>
         </section>
@@ -471,7 +488,7 @@ async function atualizar() {
     if (S.ultimoSinal !== null && sinal > S.ultimoSinal) plim();
     S.ultimoSinal = sinal;
     S.painel = p;
-    $('#n-esperando').textContent = p.esperando ? `${p.esperando} esperando` : '';
+    $('#n-esperando').textContent = p.esperando || ''; $('#n-esperando').hidden = !p.esperando;
     document.title = (p.esperando ? `(${p.esperando}) ` : '') + 'Atendimento · Gela Boca';
     desenharDiag(p.diagnostico);
     desenharLista();
@@ -490,14 +507,14 @@ function desenharDiag(d) {
   else if (d.nunca) txt = (d.so_status ? '📡 Da Z-API só chegaram avisos de entregue/lida, nenhuma mensagem de cliente. '
     : '📡 Nenhuma mensagem de cliente chegou da Z-API ainda. ')
     + 'Confira o endereço de 📢 Clientes › ⚙️ Ajustes nos campos "Ao receber" e "Status" da Z-API e mande um "oi" de outro celular.';
-  else { txt = `📡 Última mensagem de cliente recebida: ${d.msg}`; alerta = false; }
+  else { txt = `📡 Última mensagem de cliente: ${d.msg}`; alerta = false; }
   el.textContent = txt; el.classList.toggle('alerta', alerta); el.hidden = false;
 }
 function chipConversa(c) {
-  if (c.status === 'esperando') return `<span class="chip esp">Esperando${c.aguardando_min ? ` há ${c.aguardando_min} min` : ''}</span>`;
-  if (c.status === 'atendendo') return `<span class="chip at">${c.minha ? 'Com você' : 'Atendendo: ' + esc(c.atendente)}</span>`
-    + (c.aguardando_min !== null && c.aguardando_min >= 2 ? ` <span class="chip esp">sem resposta há ${c.aguardando_min} min</span>` : '');
-  return `<span class="chip enc">Encerrada${c.atendente ? ' · ' + esc(c.atendente) : ''}</span>`;
+  if (c.status === 'esperando') return `<span class="chip esp">Esperando${c.aguardando_min ? ` ${c.aguardando_min} min` : ''}</span>`;
+  if (c.status === 'atendendo') return `<span class="chip at" title="${c.minha ? 'Você está atendendo' : 'Atendendo: ' + esc(c.atendente)}">${c.minha ? 'Com você' : esc(c.atendente)}</span>`
+    + (c.aguardando_min !== null && c.aguardando_min >= 2 ? `<span class="chip esp" title="Cliente sem resposta há ${c.aguardando_min} min">⏱ ${c.aguardando_min} min</span>` : '');
+  return `<span class="chip enc" title="Encerrada${c.atendente ? ' · ' + esc(c.atendente) : ''}">Encerrada</span>`;
 }
 function desenharLista() {
   if (!S.painel) return;
@@ -507,8 +524,7 @@ function desenharLista() {
   $('#lista').innerHTML = lista.map(c => `
     <button type="button" class="conv${c.id === S.aberta ? ' sel' : ''}" data-id="${c.id}">
       <div class="l1"><span class="nome">${esc(c.nome)}</span><span class="hora">${esc(c.hora)}</span></div>
-      <div class="l1"><span class="previa">${esc(c.previa)}</span>${c.nao_lidas && c.id !== S.aberta ? `<span class="badge">${c.nao_lidas}</span>` : ''}</div>
-      <div>${chipConversa(c)}</div>
+      <div class="l1">${chipConversa(c)}<span class="previa">${esc(c.previa)}</span>${c.nao_lidas && c.id !== S.aberta ? `<span class="badge">${c.nao_lidas}</span>` : ''}</div>
     </button>`).join('') || `<div class="vazio">${f === 'esperando' ? 'Ninguém esperando. 👍' : S.busca ? 'Nada encontrado.' : 'Nenhuma conversa aqui ainda.'}</div>`;
 }
 $('#lista').addEventListener('click', e => {
@@ -586,11 +602,11 @@ function desenharCliente(c, cli) {
   $('#cliente').innerHTML = `<h2>Cliente</h2>
     <div class="cli-linha"><b>Nome</b>${esc(c.nome)}</div>
     <div class="cli-linha"><b>WhatsApp</b>${esc(c.telefone)}</div>` + (cli.cadastrado ? `
-    <div class="cli-linha"><b>Cadastro de clientes</b>Sim${cli.recebe_ofertas ? ' · aceita receber ofertas' : ' · não recebe ofertas'}</div>
+    <div class="cli-linha"><b>Cadastro</b>Sim${cli.recebe_ofertas ? ' · aceita receber ofertas' : ' · não recebe ofertas'}</div>
     ${cli.aniversario ? `<div class="cli-linha"><b>Aniversário</b>${esc(cli.aniversario)}</div>` : ''}
     ${cli.etiquetas.length ? `<div class="cli-linha"><b>Etiquetas</b>${cli.etiquetas.map(esc).join(', ')}</div>` : ''}`
-    : c.oculto ? `<div class="cli-linha"><b>Cadastro de clientes</b>O WhatsApp escondeu o número: peça o número ao cliente para salvar o contato.</div>`
-    : `<div class="cli-linha"><b>Cadastro de clientes</b>Ainda não está no cadastro.</div>
+    : c.oculto ? `<div class="cli-linha"><b>Cadastro</b>O WhatsApp escondeu o número: peça o número ao cliente para salvar o contato.</div>`
+    : `<div class="cli-linha"><b>Cadastro</b>Ainda não está no cadastro.</div>
     <button class="btn prim" type="button" id="b-contato">💾 Salvar contato</button>
     <form id="form-contato" class="form" hidden>
       <label>Nome<input id="ct-nome" maxlength="120" value="${esc(c.nome === c.telefone ? '' : c.nome)}" autocomplete="off"></label>
@@ -729,7 +745,7 @@ function desenharBotoes() {
     return `<div class="grupo"><span class="tit" style="color:${cor}">${tit}</span><div class="lista-b">${bs.map(b =>
       `<button type="button" class="bt ${g}" data-botao="${b.id}" ${sem} title="${dica(b)}">${b.foto ? '📷 ' : ''}${esc(b.nome)}</button>`
       + dentroDe(b).map(x => mais(x, g)).join('')).join('')}</div></div>`;
-  }).join('') + (S.eu && S.eu.editar ? '<button type="button" class="btn" id="b-editar-botoes" style="align-self:flex-end;margin-left:auto">Editar botões e preços</button>' : '');
+  }).join('') + (S.eu && S.eu.editar ? '<button type="button" class="btn peq" id="b-editar-botoes" style="margin-left:auto" title="Editar botões e preços">✏️ Editar botões</button>' : '');
   const ed = $('#b-editar-botoes');
   if (ed) ed.onclick = () => irPara('botoes');
 }

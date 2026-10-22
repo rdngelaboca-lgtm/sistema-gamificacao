@@ -462,6 +462,11 @@ computador. Módulo `atendimento.py`, página `templates/atendimento.html`; tabe
   (com quem está com a central aberta) e as conversas abertas. **Aviso no grupo da gestão** quando um cliente espera mais
   de X minutos (padrão 5; 0 desliga; tipo 💬 Atendimento no WhatsApp em 📣 Avisos), uma vez por espera (agendador, 1 min).
 - Liberado na internet junto com a Gestão (`/atendimento`, `/api/atendimento`), sempre com login.
+- **App próprio no computador** (`static/atendimento/manifest.webmanifest`, escopo `/atendimento`, ícone de balão): instalado
+  pelo Chrome abre em janela própria, sem a faixa do endereço que aparecia quando a central abria dentro do app de
+  compras (escopo `/compras/`); com `window-controls-overlay` o topo verde ocupa a barra de título. "Gestão" abre em
+  outra janela. Tela compacta para 1280 × ~650 (Windows em 150%): topo e rodapé numa linha, filtros numa linha,
+  conversa da lista em 2 linhas, ações curtas ("➡️ Passar", "✔️ Encerrar") — a área da conversa foi de 311 para 451 px.
 - **💾 Salvar contato** (lateral do cliente, quem pode ver a conversa): põe no cadastro do 📢 Clientes com o nome e o
   WhatsApp da conversa (origem "conversa no WhatsApp"), aniversário opcional, ofertas só marcando que o cliente
   autorizou; e, se marcado, na **agenda do celular** dos clientes (Z-API `contacts/add`; se recusar, o cadastro vale e a

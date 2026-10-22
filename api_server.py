@@ -3293,6 +3293,22 @@ def pagina_atendimento():
     return resposta
 
 
+# [TELA] A central como app próprio no computador (janela sem a faixa do endereço, com o próprio ícone).
+PASTA_ATENDIMENTO = os.path.join(BASE_DIR, 'static', 'atendimento')
+
+
+@app.route('/atendimento/manifest.webmanifest')
+def atendimento_manifest():
+    resposta = send_from_directory(PASTA_ATENDIMENTO, 'manifest.webmanifest', mimetype='application/manifest+json')
+    resposta.headers['Cache-Control'] = 'no-cache'
+    return resposta
+
+
+@app.route('/atendimento/arquivos/<path:nome>')
+def atendimento_arquivos(nome):
+    return send_from_directory(PASTA_ATENDIMENTO, nome)
+
+
 @app.route('/api/atendimento/usuarios', methods=['GET'])
 def api_atendimento_usuarios():
     import atendimento
