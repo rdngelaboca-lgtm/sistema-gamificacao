@@ -166,7 +166,13 @@
   .cat { border: 1px solid var(--linha2); border-radius: 10px; padding: 10px; margin-bottom: 12px; }
   .cat-topo { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; flex-wrap: wrap; }
   .cat-topo input { font-weight: 700; flex: 1; min-width: 160px; }
-  .item { display: grid; grid-template-columns: minmax(0, 1fr) 110px auto auto auto; gap: 6px; align-items: center; padding: 3px 0; }
+  .item { display: grid; grid-template-columns: 22px minmax(0, 1fr) 110px auto auto auto; gap: 6px; align-items: center; padding: 3px 0; }
+  /* [ORDEM] alça para arrastar o item (ou setas ↑ ↓ com ela selecionada) e o 🔤 A–Z da categoria */
+  .i-arrastar { border: 0; background: none; color: var(--suave); font-size: 18px; line-height: 1; padding: 4px 0; cursor: grab; touch-action: none; }
+  .i-arrastar:hover { color: var(--verde); }
+  .item.arrastando { background: var(--verde-claro); border-radius: 8px; box-shadow: 0 2px 8px #0002; }
+  #tabela.movendo, #tabela.movendo * { user-select: none; cursor: grabbing !important; }
+  .barra-salvar { position: sticky; bottom: 0; background: #fff; padding: 8px 0 2px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   .item input[type=text] { width: 100%; }
   .item label { font-size: 12px; color: var(--suave); display: flex; gap: 4px; align-items: center; white-space: nowrap; }
   .numeros { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
@@ -199,7 +205,7 @@
     .col-conversas, .col-cliente { flex: none; max-height: 45vh; }
     .col-chat { min-height: 70vh; }
     #botoes { max-height: none; }
-    .item { grid-template-columns: minmax(0, 1fr) 90px; }
+    .item { grid-template-columns: 22px minmax(0, 1fr) 90px; }
   }
 </style>
 </head>
@@ -291,9 +297,10 @@
               Tirando o "tem hoje", o item some das mensagens (ex.: sabor que acabou). Complemento aparece sem preço (ou com o
               "+R$" se for pago).</p>
             <div id="tabela"></div>
-            <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <div class="barra-salvar">
               <button class="btn" type="button" id="b-nova-cat">+ Categoria</button>
               <button class="btn prim" type="button" id="b-salvar-tabela">💾 Salvar preços</button>
+              <span id="tabela-mudou" class="mini n-aviso" hidden>⚠️ Tem mudança sem salvar</span>
             </div>
           </div>
           <div class="caixa caixa-botoes">
@@ -475,6 +482,8 @@ $('#b-instalar').onclick = async () => {
 // ------------------------------------------------------------------ abas
 document.querySelectorAll('[data-aba]').forEach(b => b.onclick = () => irPara(b.dataset.aba));
 function irPara(aba) {
+  if (S.aba === 'botoes' && S.tabelaMudou && !confirm('A tabela de preços tem mudança que não foi salva. Sair sem salvar?')) return;
+  marcarMudou(false);
   S.aba = aba;
   document.querySelectorAll('[data-aba]').forEach(b => b.classList.toggle('ativo', b.dataset.aba === aba));
   document.querySelectorAll('.aba').forEach(s => { s.hidden = s.id !== 'aba-' + aba; });
@@ -781,6 +790,7 @@ async function carregarCardapio() {
 }
 function linhaItem(p) {
   return `<div class="item" data-id="${p.id || ''}">
+    <button type="button" class="i-arrastar" title="Arraste para mudar a ordem (ou clique e use as setas ↑ ↓)" aria-label="Mudar a ordem de ${esc(p.nome || 'item novo')}">⠿</button>
     <input type="text" class="i-nome" value="${esc(p.nome)}" aria-label="Nome do item" maxlength="120">
     <input type="text" class="i-preco" value="${esc(p.preco)}" aria-label="Preço de ${esc(p.nome)}" inputmode="decimal">
     <label><input type="checkbox" class="i-adic" ${p.adicional ? 'checked' : ''}> complemento</label>
@@ -789,7 +799,8 @@ function linhaItem(p) {
 }
 function blocoCategoria(nome, itens) {
   return `<div class="cat"><div class="cat-topo"><input type="text" class="c-nome" value="${esc(nome)}" aria-label="Nome da categoria" maxlength="60">
-    <span class="mini suave">no texto: <span class="marcador">[${esc(nome)}]</span></span></div>
+    <span class="mini suave">no texto: <span class="marcador">[${esc(nome)}]</span></span>
+    <button type="button" class="btn c-az" title="Põe os itens desta categoria em ordem alfabética" style="padding:4px 10px">🔤 A–Z</button></div>
     <div class="c-itens">${itens.map(linhaItem).join('')}</div>
     <button type="button" class="btn c-mais" style="margin-top:6px">+ Item</button></div>`;
 }
@@ -798,14 +809,64 @@ function desenharTabela() {
   S.cardapio.produtos.forEach(p => { (cats[p.categoria] = cats[p.categoria] || []).push(p); });
   $('#tabela').innerHTML = S.cardapio.categorias.map(c => blocoCategoria(c, cats[c] || [])).join('')
     || '<div class="vazio">Nenhum item. Toque em + Categoria.</div>';
+  marcarMudou(false);
 }
+// [ORDEM] aviso de "não salvo": mudar a ordem (ou um preço) só vale depois do 💾 Salvar preços
+function marcarMudou(sim = true) { S.tabelaMudou = sim; $('#tabela-mudou').hidden = !sim; }
+$('#tabela').addEventListener('input', () => marcarMudou());
+$('#tabela').addEventListener('change', () => marcarMudou());
+window.addEventListener('beforeunload', e => { if (S.tabelaMudou && S.aba === 'botoes') { e.preventDefault(); e.returnValue = ''; } });
+const nomeItem = it => it.querySelector('.i-nome').value.trim();
+function ordenarAZ(cat) {
+  const c = cat.querySelector('.c-itens');
+  [...c.children].sort((a, b) => (!nomeItem(a)) - (!nomeItem(b))          // linha em branco fica no fim
+      || nomeItem(a).localeCompare(nomeItem(b), 'pt-BR', {sensitivity: 'base', numeric: true}))
+    .forEach(x => c.appendChild(x));
+  marcarMudou();
+}
+// arrastar pela alça ⠿ (só dentro da mesma categoria; perto da borda a página rola sozinha)
+let movendo = null, vizinhoAntes = null;
+$('#tabela').addEventListener('pointerdown', e => {
+  const h = e.target.closest('.i-arrastar');
+  if (!h || e.button !== 0) return;
+  e.preventDefault();
+  movendo = h.closest('.item'); vizinhoAntes = movendo.nextElementSibling;
+  movendo.classList.add('arrastando'); $('#tabela').classList.add('movendo');
+});
+document.addEventListener('pointermove', e => {
+  if (!movendo) return;
+  const lista = movendo.parentNode, outros = [...lista.children].filter(x => x !== movendo);
+  const antesDe = outros.find(x => { const r = x.getBoundingClientRect(); return e.clientY < r.top + r.height / 2; });
+  if ((antesDe || null) !== movendo.nextElementSibling) lista.insertBefore(movendo, antesDe || null);
+  const area = document.querySelector('main');
+  if (e.clientY < 70) area.scrollBy(0, -14); else if (e.clientY > innerHeight - 70) area.scrollBy(0, 14);
+});
+function soltar() {
+  if (!movendo) return;
+  movendo.classList.remove('arrastando'); $('#tabela').classList.remove('movendo');
+  if (movendo.nextElementSibling !== vizinhoAntes) marcarMudou();          // só clicou na alça: nada mudou
+  movendo = null;
+}
+document.addEventListener('pointerup', soltar);
+document.addEventListener('pointercancel', soltar);
+$('#tabela').addEventListener('keydown', e => {             // pelo teclado: alça selecionada + ↑ ↓
+  const h = e.target.closest('.i-arrastar');
+  if (!h || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
+  e.preventDefault();
+  const it = h.closest('.item'), alvo = e.key === 'ArrowUp' ? it.previousElementSibling : it.nextElementSibling;
+  if (!alvo) return;
+  it.parentNode.insertBefore(it, e.key === 'ArrowUp' ? alvo : alvo.nextElementSibling);
+  h.focus(); marcarMudou();
+});
 $('#tabela').addEventListener('click', e => {
-  if (e.target.closest('.i-tirar')) { e.target.closest('.item').remove(); return; }
+  if (e.target.closest('.i-tirar')) { e.target.closest('.item').remove(); marcarMudou(); return; }
+  const az = e.target.closest('.c-az');
+  if (az) { ordenarAZ(az.closest('.cat')); return; }
   const mais = e.target.closest('.c-mais');
   if (mais) {
     const cat = mais.closest('.cat'), ultimo = cat.querySelector('.item:last-child .i-adic');
     cat.querySelector('.c-itens').insertAdjacentHTML('beforeend', linhaItem({nome: '', preco: '', adicional: ultimo ? ultimo.checked : false, tem_hoje: true}));
-    cat.querySelector('.item:last-child .i-nome').focus();
+    cat.querySelector('.item:last-child .i-nome').focus(); marcarMudou();
   }
 });
 $('#b-nova-cat').onclick = () => {
@@ -814,6 +875,7 @@ $('#b-nova-cat').onclick = () => {
   if (/[\[\]]/.test(nome)) { alert('A categoria não pode ter [ ].'); return; }
   if ($('#tabela .vazio')) $('#tabela').innerHTML = '';
   $('#tabela').insertAdjacentHTML('beforeend', blocoCategoria(nome, [{nome: '', preco: '', adicional: false, tem_hoje: true}]));
+  marcarMudou();
 };
 $('#b-salvar-tabela').onclick = async () => {
   const produtos = [];

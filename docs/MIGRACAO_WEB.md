@@ -457,7 +457,10 @@ computador. Módulo `atendimento.py`, página `templates/atendimento.html`; tabe
   Ajuste único (`botoes_v2`): Complementos entrou no Açaí e o "Em preparo" (texto original) saiu. No texto, `{nome}` = primeiro nome do cliente e `[Categoria]` = a lista dos itens da tabela
   dessa categoria que **tem hoje**, com o preço (complemento grátis sem preço, pago com "+R$").
 - **Tabela de preços** (a mesma do 99Food; começou com os 3 açaís e os 24 complementos): categoria, nome, preço,
-  complemento, "tem hoje". Mudou aqui, todos os botões mandam o preço novo.
+  complemento, "tem hoje". Mudou aqui, todos os botões mandam o preço novo. **Ordem dos itens** (é a ordem das
+  listas nas mensagens): 🔤 A–Z por categoria (entende números: 300, 500, 700), arrastar pela alça ⠿ (só dentro da
+  categoria; perto da borda a página rola) ou alça + setas ↑ ↓. Aviso "mudança sem salvar" e pergunta antes de sair da
+  aba; o 💾 Salvar fica sempre à vista. O servidor já grava na ordem da lista (nada mudou nele).
 - **📊 Visão da gestão:** conversas, esperando resposta agora, tempo médio até a 1ª resposta, mensagens, por pessoa
   (com quem está com a central aberta) e as conversas abertas. **Aviso no grupo da gestão** quando um cliente espera mais
   de X minutos (padrão 5; 0 desliga; tipo 💬 Atendimento no WhatsApp em 📣 Avisos), uma vez por espera (agendador, 1 min).
