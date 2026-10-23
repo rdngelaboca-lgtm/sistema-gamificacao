@@ -31,7 +31,7 @@
   .btn.prim:hover { background: var(--verde-esc); }
   .btn.perigo { color: var(--erro); }
   .btn[disabled] { opacity: .5; cursor: default; }
-  input[type=text], input[type=search], input[type=password], input[type=number], input:not([type]), select, textarea {
+  input[type=text], input[type=search], input[type=password], input[type=number], input[type=time], input:not([type]), select, textarea {
     border: 1px solid var(--linha); border-radius: 8px; padding: 7px 9px; background: #fff; }
   input:focus, select:focus, textarea:focus, button:focus-visible, a:focus-visible { outline: 2px solid var(--verde); outline-offset: 1px; }
   .n-erro { color: var(--erro); } .n-aviso { color: var(--aviso); } .n-ok { color: var(--ok); }
@@ -198,6 +198,8 @@
   .form input, .form select, .form textarea { width: 100%; font-size: 15px; }
   .form label.check { flex-direction: row; align-items: center; gap: 8px; font-weight: 600; color: var(--texto); }
   .form label.check input { width: auto; }
+  .previa-h { white-space: pre-wrap; background: #E7F6EC; border-radius: 10px; padding: 10px 12px; font-size: 14px; margin-top: 6px; }
+  .h-aberto { color: var(--verde); font-weight: 700; } .h-fechado { color: var(--ambar, #b26b00); font-weight: 700; }
 
   @media (max-width: 900px) {
     #app { height: auto; min-height: 100vh; }
@@ -334,7 +336,25 @@
           <input id="aviso-min" type="number" min="0" max="240" style="width:80px">
           <span>minutos sem resposta</span>
           <button class="btn prim" type="submit">Salvar</button>
-          <span class="mini suave">(0 desliga · o aviso também liga/desliga em Gestão › 📣 Avisos)</span>
+          <span class="mini suave">(0 desliga · o aviso também liga/desliga em Gestão › 📣 Avisos · fora do horário de atendimento, espera abrir)</span>
+        </form>
+        <form class="caixa form" id="form-horario">
+          <h2 style="margin:0">🕐 Horário de atendimento no WhatsApp</h2>
+          <p class="mini suave" style="margin:0">Quem mandar mensagem fora do horário recebe <b>na hora</b> o horário de atendimento e o
+            link do delivery (uma vez por cliente enquanto estiver fechado). A conversa continua esperando: quem abrir a central responde.</p>
+          <label class="check"><input type="checkbox" id="h-ligado"> Mandar a resposta automática</label>
+          <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end">
+            <label style="flex:0 1 130px">Abre às<input id="h-inicio" type="time" required></label>
+            <label style="flex:0 1 130px">Fecha às<input id="h-fim" type="time" required></label>
+            <label style="flex:3 1 260px">🛵 Link do delivery<input id="h-link" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://…"></label>
+          </div>
+          <div id="h-modos" style="display:flex;flex-wrap:wrap;gap:14px"></div>
+          <label>Mensagem fora do horário<textarea id="h-texto-fora" rows="4" maxlength="400"></textarea></label>
+          <label id="h-dentro-lbl">Mensagem dentro do horário<textarea id="h-texto-dentro" rows="4" maxlength="400"></textarea></label>
+          <div class="mini suave">Use <b>{nome}</b> (1º nome do cliente), <b>{inicio}</b>, <b>{fim}</b> e <b>{link}</b>. Em branco volta ao texto padrão.</div>
+          <div><span class="mini suave">👀 Como o cliente vê:</span><div id="h-previa" class="previa-h"></div></div>
+          <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+            <button class="btn prim" type="submit">💾 Salvar horário</button><span id="h-agora" class="mini"></span></div>
         </form>
       </div>
     </section>
@@ -489,7 +509,7 @@ function irPara(aba) {
   document.querySelectorAll('.aba').forEach(s => { s.hidden = s.id !== 'aba-' + aba; });
   if (aba === 'conversas') { desenharBotoes(); atualizar(); }
   if (aba === 'botoes') carregarCardapio();
-  if (aba === 'visao') carregarVisao();
+  if (aba === 'visao') { carregarVisao(); carregarHorario(); }
   if (aba === 'atendentes') carregarAtendentes();
 }
 
@@ -1020,6 +1040,45 @@ async function carregarVisao() {
     $('#aviso-min').value = v.aviso_minutos;
   } catch (e) { falhou(e); }
 }
+// ------------------------------------------------------------------ 🕐 horário de atendimento (resposta automática)
+async function carregarHorario() {
+  try { desenharHorario(await api('GET', '/api/atendimento/horario')); } catch (e) { falhou(e); }
+}
+function desenharHorario(h) {
+  S.horario = h;
+  $('#h-ligado').checked = h.ligado; $('#h-inicio').value = h.inicio; $('#h-fim').value = h.fim; $('#h-link').value = h.link;
+  $('#h-modos').innerHTML = h.modos.map(m => `<label class="check"><input type="radio" name="h-modo" value="${esc(m.chave)}"
+    ${m.chave === h.modo ? 'checked' : ''}> ${esc(m.nome)}</label>`).join('');
+  $('#h-texto-fora').value = h.texto_fora; $('#h-texto-dentro').value = h.texto_dentro;
+  $('#h-agora').innerHTML = h.agora_aberto ? '<span class="h-aberto">🟢 Agora: dentro do horário</span>'
+    : '<span class="h-fechado">🌙 Agora: fora do horário</span>';
+  previaHorario();
+}
+function previaHorario() {
+  const modo = (document.querySelector('input[name="h-modo"]:checked') || {}).value || 'fora';
+  $('#h-dentro-lbl').hidden = modo !== 'sempre';
+  const link = $('#h-link').value.trim(), hh = v => (v || '').replace(':', 'h');
+  const monta = (t, padrao) => {
+    t = (t.trim() || padrao);
+    if (!link) t = t.split('\n\n').filter(x => !x.includes('{link}')).join('\n\n');
+    return t.replace(/\{\s*nome\s*\}/gi, 'Maria').replace(/\{inicio\}/g, hh($('#h-inicio').value)).replace(/\{fim\}/g, hh($('#h-fim').value))
+      .replace(/\{link\}/g, link).replace(/\*([^*\n]+)\*/g, '$1');
+  };
+  const h = S.horario || {};
+  $('#h-previa').textContent = monta($('#h-texto-fora').value, h.texto_fora_padrao || '')
+    + (modo === 'sempre' ? '\n\n— dentro do horário —\n' + monta($('#h-texto-dentro').value, h.texto_dentro_padrao || '') : '');
+}
+['#h-inicio', '#h-fim', '#h-link', '#h-texto-fora', '#h-texto-dentro'].forEach(id => $(id).addEventListener('input', previaHorario));
+$('#h-modos').addEventListener('change', previaHorario);
+$('#form-horario').addEventListener('submit', async ev => {
+  ev.preventDefault();
+  try {
+    const r = await api('POST', '/api/atendimento/horario', {ligado: $('#h-ligado').checked, inicio: $('#h-inicio').value, fim: $('#h-fim').value,
+      modo: (document.querySelector('input[name="h-modo"]:checked') || {}).value, link: $('#h-link').value,
+      texto_fora: $('#h-texto-fora').value, texto_dentro: $('#h-texto-dentro').value});
+    desenharHorario(r); status(r.mensagem);
+  } catch (e) { falhou(e); }
+});
 $('#form-aviso').addEventListener('submit', async ev => {
   ev.preventDefault();
   try { status((await api('POST', '/api/atendimento/aviso', {minutos: $('#aviso-min').value})).mensagem); } catch (e) { falhou(e); }

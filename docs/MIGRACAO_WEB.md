@@ -525,6 +525,16 @@ de novo. Chave em 📢 Clientes › ⚙️ Ajustes › **📅 Mensagens da agend
 dos clientes configurado, sai pelo da loja. Arquivo novo `agenda_whatsapp.py` (usado pelo `api_server.py` na rota
 `/agendamentos/novo` e pelo `agendador_lembretes.py`); a escolha fica em `ParametrosClientes` (`agenda_numero`).
 
+**🕐 Horário de atendimento no WhatsApp (10/2026):** na 💬 Central › 📊 Visão da gestão › **🕐 Horário de atendimento**:
+abre/fecha (padrão 13:00–21:20), 🛵 link do delivery e o texto (com {nome}, {inicio}, {fim}, {link}; prévia ao vivo).
+Quem escreve **fora do horário** recebe na hora a mensagem com o horário e o link do delivery — uma vez por cliente em cada
+período fechado (de quando fecha até abrir), nunca no meio de uma conversa que a loja respondeu na última hora, e nunca junto
+com as respostas automáticas do SAIR/VOLTAR/QUERO. Modo **"sempre"**: também dentro do horário, 1 vez por dia, com um texto
+próprio. A mensagem entra na conversa como "🕐 Horário" (a cópia da Z-API não vira "pelo celular" e não conta como resposta
+de atendente); a conversa continua esperando. Fora do horário, o aviso de "cliente esperando" no grupo da gestão espera abrir.
+Vem **desligado**: a gestão cola o link e liga. Guardado em `ParametrosAtendimento` (`horario_*`, `delivery_link`); rota
+`/api/atendimento/horario`.
+
 ### App de compras — aba Gestão em 3 áreas (10/2026)
 A aba **Gestão** do app (só o gestor vê) foi dividida em **🏪 Loja · 🛒 Compras · 📦 Estoque**, com o número de
 pendências de cada área no botão (Loja: dias sem faturamento lançado; Compras: listas para aprovar + cupons para

@@ -33,6 +33,8 @@ ST_ESPERANDO, ST_ATENDENDO, ST_ENCERRADA = 'esperando', 'atendendo', 'encerrada'
 DE_CLIENTE, DE_LOJA, DE_SISTEMA = 'cliente', 'loja', 'sistema'
 M_ENVIANDO, M_ENVIADA, M_ENTREGUE, M_LIDA, M_FALHOU = 'enviando', 'enviada', 'entregue', 'lida', 'falhou'
 POR_AGENDA = '📅 Agenda'          # [AGENDA] confirmação, lembrete e pós-venda que a agenda mandou pelo número dos clientes
+POR_HORARIO = '🕐 Horário'        # [HORÁRIO] a resposta automática com o horário de atendimento e o link do delivery
+AUTOMATICAS_LOJA = (POR_AGENDA, POR_HORARIO)       # mandadas pelo sistema: não são "alguém respondeu"
 GRUPOS = [('produtos', 'Produtos (foto + preços)'), ('entrega', 'Entrega e pagamento'), ('andamento', 'Andamento do pedido')]
 MAX_TEXTO = 1500                  # o que o atendente digita
 MAX_TEXTO_BOTAO = 4000            # o botão já com a lista de itens
@@ -935,8 +937,8 @@ def _do_sistema(cur, tel, mid, texto, agora):
     import clientes
     if texto in (_texto_limpo(clientes.TEXTO_SAIU, MAX_TEXTO_BOTAO), _texto_limpo(clientes.TEXTO_VOLTOU, MAX_TEXTO_BOTAO)):
         return True
-    cur.execute("SELECT 1 FROM AtendimentoMensagens WHERE PorNome = ? AND Texto = ? AND CriadaEm >= ?",   # [AGENDA]
-                POR_AGENDA, texto, agora - timedelta(minutes=10))
+    cur.execute("SELECT 1 FROM AtendimentoMensagens WHERE PorNome IN (?, ?) AND Texto = ? AND CriadaEm >= ?",   # [AGENDA] [HORÁRIO]
+                *AUTOMATICAS_LOJA, texto, agora - timedelta(minutes=10))
     if cur.fetchone():
         return True
     try:
@@ -1102,6 +1104,8 @@ def _do_webhook(p, acao):
     mid = str(p.get('messageId') or '')[:80] or None
     agora = _agora()
     garantir_tabelas()
+    cfg_horario = None if p.get('fromMe') or acao in AUTOMATICAS else horario()     # [HORÁRIO]
+    resposta_horario = None
     with _trava:
         conn = _conexao()
         try:
@@ -1131,11 +1135,11 @@ def _do_webhook(p, acao):
                     return
                 img = p.get('image') if isinstance(p.get('image'), dict) else {}
                 ecos = [texto, _texto_limpo(img.get('caption'), MAX_TEXTO_BOTAO)] if img else [texto]
-                cur.execute(f"SELECT 1 FROM AtendimentoMensagens WHERE ConversaID = ? AND De = ? AND (PorID IS NOT NULL OR PorNome = ?) "
+                cur.execute(f"SELECT 1 FROM AtendimentoMensagens WHERE ConversaID = ? AND De = ? AND (PorID IS NOT NULL OR PorNome IN (?, ?)) "
                             f"AND CriadaEm >= ? AND Texto IN ({','.join('?' * len(ecos))})",
-                            c[0], DE_LOJA, POR_AGENDA, agora - timedelta(minutes=2), *ecos)
+                            c[0], DE_LOJA, *AUTOMATICAS_LOJA, agora - timedelta(minutes=2), *ecos)
                 if cur.fetchone():
-                    return                          # a cópia do que a central (ou a 📅 agenda) acabou de mandar
+                    return                          # a cópia do que a central (ou a 📅 agenda / 🕐 horário) acabou de mandar
                 sistema = bool(p.get('fromApi')) and _do_sistema(cur, tel, mid, texto, agora)
                 cur.execute("INSERT INTO AtendimentoMensagens (ConversaID, De, Tipo, Texto, MidiaUrl, PorNome, ZapiID, Status, CriadaEm) "
                             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", c[0], DE_LOJA, tipo, texto, midia,
@@ -1191,6 +1195,14 @@ def _do_webhook(p, acao):
             if auto:
                 cur.execute("INSERT INTO AtendimentoMensagens (ConversaID, De, Tipo, Texto, CriadaEm) VALUES (?, ?, 'texto', ?, ?)",
                             cid, DE_SISTEMA, AUTOMATICAS[acao], agora)
+            elif cfg_horario and cfg_horario['ligado']:   # [HORÁRIO] fora do horário: avisa o horário e o link do delivery
+                th = _texto_horario(cur, cid, cfg_horario, nome, agora)
+                if th:
+                    cur.execute("INSERT INTO AtendimentoMensagens (ConversaID, De, Tipo, Texto, PorNome, Status, CriadaEm) "
+                                "VALUES (?, ?, 'texto', ?, ?, ?, ?); SELECT SCOPE_IDENTITY();",
+                                cid, DE_LOJA, th, POR_HORARIO, M_ENVIANDO, agora)
+                    cur.nextset()
+                    resposta_horario = (int(cur.fetchone()[0]), th)
             conn.commit()
             cur.execute("DELETE FROM ParametrosAtendimento WHERE Chave = 'central_ok_em'")
             cur.execute("INSERT INTO ParametrosAtendimento (Chave, Valor) VALUES ('central_ok_em', ?)", agora.isoformat())
@@ -1199,6 +1211,9 @@ def _do_webhook(p, acao):
                 _rodar(_conferir_lid, cid, tel)
         finally:
             conn.close()
+    if resposta_horario:
+        logger.info(f"[ATENDIMENTO] 🕐 Resposta automática do horário para {_fim_tel(tel)}.")
+        _rodar(_mandar, resposta_horario[0], tel, resposta_horario[1], None)
 
 
 def _status_entrega(p):
@@ -1698,8 +1713,8 @@ def visao(usuario, periodo='hoje', agora=None):
         if de == DE_CLIENTE:
             conversas.add(conv_id)
             pend = pend or criada
-        elif de == DE_LOJA and por_nome == POR_AGENDA:
-            continue                                     # [AGENDA] mensagem automática da agenda: ninguém respondeu
+        elif de == DE_LOJA and por_nome in AUTOMATICAS_LOJA:
+            continue                                     # [AGENDA] [HORÁRIO] mensagem automática: ninguém respondeu
         elif de == DE_LOJA and not por_id:
             pend = None                                  # respondeu pelo celular (ou automática): o cliente foi atendido
         elif de == DE_LOJA:
@@ -1755,6 +1770,136 @@ def _esc(t):
     return html.escape(str(t or ''), quote=False)
 
 
+# ------------------------------------------------------------------------------
+# [HORÁRIO] Horário de atendimento no WhatsApp + resposta automática com o link do delivery
+# ------------------------------------------------------------------------------
+# Quem escreve fora do horário recebe na hora uma mensagem com o horário e o link do delivery (no modo "sempre",
+# também dentro do horário). Uma vez por período fechado (ou por dia, dentro do horário) para cada cliente, e nunca
+# no meio de uma conversa que a loja respondeu há pouco. A mensagem entra na conversa como "🕐 Horário" e a conversa
+# continua esperando: quem abrir a central responde. Fora do horário, o aviso de "cliente esperando" no grupo da
+# gestão espera abrir.
+HORARIO_PADRAO = ('13:00', '21:20')
+MODOS_HORARIO = {'fora': "Só fora do horário", 'sempre': "Sempre (também dentro do horário, 1 vez por dia)"}
+MAX_TEXTO_HORARIO = 400
+SEM_RESPONDER_MIN = 60            # a loja respondeu há menos que isso: é conversa em andamento, não manda
+TEXTO_FORA_PADRAO = ("Olá, {nome}! 👋 Nosso atendimento pelo WhatsApp é das *{inicio} às {fim}*. "
+                     "Assim que abrirmos, respondemos você por aqui. 😊\n\n"
+                     "🛵 Quer pedir agora? Faça seu pedido pelo nosso delivery:\n{link}")
+TEXTO_DENTRO_PADRAO = ("Olá, {nome}! 👋 Recebemos sua mensagem e já vamos te atender. "
+                       "Nosso atendimento pelo WhatsApp é das *{inicio} às {fim}*.\n\n"
+                       "🛵 Para pedir mais rápido, use nosso delivery:\n{link}")
+
+
+def _hora(txt, padrao):
+    m = re.fullmatch(r'(\d{1,2})[:h](\d{2})', str(txt or '').strip())
+    if not m or int(m.group(1)) > 23 or int(m.group(2)) > 59:
+        return padrao
+    return f"{int(m.group(1)):02d}:{m.group(2)}"
+
+
+def _hora_txt(hhmm):
+    """'13:00' -> '13h00' (como a loja escreve)."""
+    return hhmm.replace(':', 'h')
+
+
+def horario():
+    p = _params_todos()
+    return {'ligado': p.get('horario_ligado') == '1',
+            'inicio': _hora(p.get('horario_inicio'), HORARIO_PADRAO[0]),
+            'fim': _hora(p.get('horario_fim'), HORARIO_PADRAO[1]),
+            'modo': p.get('horario_modo') if p.get('horario_modo') in MODOS_HORARIO else 'fora',
+            'link': p.get('delivery_link') or '',
+            'texto_fora': p.get('horario_texto_fora') or TEXTO_FORA_PADRAO,
+            'texto_dentro': p.get('horario_texto_dentro') or TEXTO_DENTRO_PADRAO}
+
+
+def _minuto(hhmm):
+    h, m = hhmm.split(':')
+    return int(h) * 60 + int(m)
+
+
+def _no_horario(h, agora):
+    ini, fim, ag = _minuto(h['inicio']), _minuto(h['fim']), agora.hour * 60 + agora.minute
+    return ini <= ag < fim if ini < fim else (ag >= ini or ag < fim)      # fim antes do início: passa da meia-noite
+
+
+def _inicio_periodo(h, agora):
+    """Desde quando conta "já avisou": dentro do horário, desde que abriu; fora, desde que fechou."""
+    dentro = _no_horario(h, agora)
+    marco = h['inicio'] if dentro else h['fim']
+    hh, mm = (int(x) for x in marco.split(':'))
+    m = agora.replace(hour=hh, minute=mm, second=0, microsecond=0)
+    return m if m <= agora else m - timedelta(days=1)
+
+
+def montar_texto_horario(h, nome=None, dentro=False):
+    """O texto com {nome}, {inicio}, {fim} e {link}. Sem link: tira o parágrafo do delivery."""
+    import clientes
+    t = (h['texto_dentro'] if dentro else h['texto_fora']).replace('\r\n', '\n')
+    if not h['link']:
+        t = '\n\n'.join(x for x in t.split('\n\n') if '{link}' not in x)
+    t = t.replace('{inicio}', _hora_txt(h['inicio'])).replace('{fim}', _hora_txt(h['fim'])).replace('{link}', h['link'])
+    return clientes.personalizar(t, nome, rodape=False)
+
+
+def _texto_horario(cur, cid, h, nome, agora):
+    """O que mandar agora para esta conversa (None: não manda)."""
+    dentro = _no_horario(h, agora)
+    if dentro and h['modo'] != 'sempre':
+        return None
+    cur.execute("SELECT 1 FROM AtendimentoMensagens WHERE ConversaID = ? AND PorNome = ? AND CriadaEm >= ?",
+                cid, POR_HORARIO, _inicio_periodo(h, agora))
+    if cur.fetchone():
+        return None                                   # já avisou neste período
+    cur.execute("SELECT 1 FROM AtendimentoMensagens WHERE ConversaID = ? AND De = ? AND CriadaEm >= ? "
+                "AND (PorNome IS NULL OR PorNome NOT IN (?, ?, 'Automática'))",
+                cid, DE_LOJA, agora - timedelta(minutes=SEM_RESPONDER_MIN), *AUTOMATICAS_LOJA)
+    if cur.fetchone():
+        return None                                   # conversa em andamento: alguém da loja respondeu há pouco
+    return _texto_limpo(montar_texto_horario(h, nome, dentro), MAX_TEXTO_BOTAO) or None
+
+
+def horario_tela(agora=None):
+    h = horario()
+    agora = agora or _agora()
+    return dict(h, modos=[{'chave': k, 'nome': n} for k, n in MODOS_HORARIO.items()], agora_aberto=_no_horario(h, agora),
+                previa_fora=montar_texto_horario(h, 'Maria'), previa_dentro=montar_texto_horario(h, 'Maria', True),
+                texto_fora_padrao=TEXTO_FORA_PADRAO, texto_dentro_padrao=TEXTO_DENTRO_PADRAO)
+
+
+def salvar_horario(dados, usuario):
+    _exigir(usuario, 'ver_gestao', "Só a gestão muda o horário de atendimento.")
+    dados = dados if isinstance(dados, dict) else {}
+    ini, fim = _hora(dados.get('inicio'), None), _hora(dados.get('fim'), None)
+    if not ini or not fim:
+        raise ErroAtendimento("Horário inválido. Use o formato 13:00.")
+    if ini == fim:
+        raise ErroAtendimento("O horário de abrir e o de fechar não podem ser iguais.")
+    modo = dados.get('modo') if dados.get('modo') in MODOS_HORARIO else None
+    if not modo:
+        raise ErroAtendimento("Escolha quando a mensagem vai.")
+    link = re.sub(r'\s+', '', str(dados.get('link') or ''))[:300]
+    if link and not re.fullmatch(r'https?://[^\s<>"]+\.[^\s<>"]+', link):
+        raise ErroAtendimento("Link do delivery inválido: copie o endereço completo (começa com https://).")
+    textos = {}
+    for chave, padrao in (('texto_fora', TEXTO_FORA_PADRAO), ('texto_dentro', TEXTO_DENTRO_PADRAO)):
+        t = _texto_limpo(dados.get(chave), MAX_TEXTO_HORARIO + 1)
+        if len(t) > MAX_TEXTO_HORARIO:
+            raise ErroAtendimento(f"A mensagem pode ter no máximo {MAX_TEXTO_HORARIO} letras.")
+        textos[chave] = t if t and t != _texto_limpo(padrao, MAX_TEXTO_BOTAO) else ''
+    ligado = bool(dados.get('ligado'))
+    if ligado and '{link}' in (textos['texto_fora'] or TEXTO_FORA_PADRAO) and not link:
+        raise ErroAtendimento("Cole o link do delivery (ou tire o {link} da mensagem).")
+    _salvar_params({'horario_ligado': '1' if ligado else '0', 'horario_inicio': ini, 'horario_fim': fim, 'horario_modo': modo,
+                    'delivery_link': link, 'horario_texto_fora': textos['texto_fora'],
+                    'horario_texto_dentro': textos['texto_dentro']})
+    logger.info(f"[ATENDIMENTO] {usuario['nome']}: horário de atendimento {ini}–{fim} ({modo}), resposta automática "
+                f"{'ligada' if ligado else 'desligada'}.")
+    return dict(horario_tela(), ok=True,
+                mensagem=(f"Resposta automática ligada: horário {_hora_txt(ini)} às {_hora_txt(fim)}." if ligado
+                          else "Horário salvo. A resposta automática está desligada."))
+
+
 def avisar_esperando(agora=None, enviar=None):
     """
     [AGENDADOR] De minuto em minuto: cliente esperando resposta há mais de X minutos vai num aviso só para o grupo da
@@ -1763,6 +1908,9 @@ def avisar_esperando(agora=None, enviar=None):
     agora = agora or _agora()
     minutos = aviso_minutos()
     if not minutos:
+        return 0
+    h = horario()
+    if h['ligado'] and not _no_horario(h, agora):     # [HORÁRIO] fechado: o aviso sai quando abrir
         return 0
     garantir_tabelas()
     conn = _conexao()

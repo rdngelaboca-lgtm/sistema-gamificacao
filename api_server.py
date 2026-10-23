@@ -3485,6 +3485,16 @@ def api_atendimento_aviso(usuario):
     return _resposta_atendimento(lambda: atendimento.salvar_aviso(ler_json() or {}, usuario))
 
 
+@app.route('/api/atendimento/horario', methods=['GET', 'POST'])
+@atendimento_login
+def api_atendimento_horario(usuario):
+    """[HORÁRIO] Horário de atendimento no WhatsApp e a resposta automática (com o link do delivery)."""
+    import atendimento
+    if request.method == 'POST':
+        return _resposta_atendimento(lambda: atendimento.salvar_horario(ler_json() or {}, usuario))
+    return _resposta_atendimento(atendimento.horario_tela)
+
+
 @app.route('/api/atendimento/atendentes', methods=['GET', 'POST'])
 @atendimento_login
 def api_atendimento_atendentes(usuario):
