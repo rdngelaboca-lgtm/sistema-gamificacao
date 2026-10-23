@@ -428,6 +428,14 @@ em listas e 🔎 busca pelo nome. Cada card mostra só o essencial (nome, idade,
 barra DISC, 🔋 o que motiva e onde combina) e os botões 📄 Relatório, 💬 WhatsApp e **⋯** (🪪 CPF e nascimento, 🔗 copiar link,
 📤 mandar agora, tipo de vaga, vincular ao fixo, cancelar e 🗑️ apagar).
 
+### Novo (só na Web) — 📋 Tarefas: relatório do catálogo (10/2026: Gestão › 📋 Tarefas)
+Todos os modelos do "Catálogo de Modelos de Tarefa" (tabela `Tarefas`) com **título, descrição, setor, pontos e ID**,
+agrupados por setor (sem setor no fim) e em ordem natural (2º antes de 10º). 🔎 busca no título e na descrição, filtro de
+setor e "só as sem descrição" (⚠️ marca quem está sem). **🖨️ Imprimir / PDF** (sem o menu, com a data) e **📥 Excel** (.xlsx,
+mesmo gerador dos 💰 Pagamentos). Só leitura: criar, editar e excluir continuam no programa da Gamificação (aba Tarefas).
+Arquivos: `tarefas_relatorio.py`, `templates/gestao_tarefas.html`; rotas `/gestao/tarefas`, `/api/gestao/tarefas` e
+`/api/gestao/tarefas/excel` (só gestor).
+
 ### Novo (só na Web) — 👔 Liderança: sócios e líderes (10/2026: Gestão › 👔 Liderança)
 
 Avaliação de perfil no nível da **gestão**, **à parte** do 🧭 Perfil da equipe (que não mudou em nada): módulo
