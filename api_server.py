@@ -3203,39 +3203,6 @@ def api_perfil_disc(token):
 
 
 # ---------------- [LIDERANÇA] 👔 avaliação de liderança (sócios e líderes) — à parte do 🧭 Perfil da equipe ----------------
-@app.route('/gestao/tarefas')
-def pagina_gestao_tarefas():
-    """📋 Relatório dos modelos de tarefa (título e descrição) para ler, imprimir ou baixar."""
-    return _pagina_gestao('gestao_tarefas.html', 'tarefas')
-
-
-@app.route('/api/gestao/tarefas', methods=['GET'])
-@compras_login(somente_gestor=True)
-def api_gestao_tarefas(usuario):
-    import tarefas_relatorio
-    try:
-        return jsonify(tarefas_relatorio.listar()), 200
-    except Exception as e:
-        logger.exception(f"Erro no relatório de tarefas: {e}")
-        return jsonify({"erro": "Não consegui ler as tarefas do banco. Veja o log."}), 500
-
-
-@app.route('/api/gestao/tarefas/excel', methods=['GET'])
-@compras_login(somente_gestor=True)
-def api_gestao_tarefas_excel(usuario):
-    import tarefas_relatorio
-    try:
-        conteudo, nome = tarefas_relatorio.planilha()
-    except Exception as e:
-        logger.exception(f"Erro ao gerar a planilha de tarefas: {e}")
-        return jsonify({"erro": "Erro no servidor ao gerar a planilha. Veja o log."}), 500
-    resposta = app.make_response(conteudo)
-    resposta.headers['Content-Type'] = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-    resposta.headers['Content-Disposition'] = f'attachment; filename="{nome}"'
-    resposta.headers['Cache-Control'] = 'no-store'
-    return resposta
-
-
 @app.route('/gestao/lideranca')
 def pagina_gestao_lideranca():
     return _pagina_gestao('gestao_lideranca.html', 'lideranca')
