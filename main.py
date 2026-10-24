@@ -123,6 +123,36 @@ def reais_br(valor):
     return f"R$ {float(valor or 0):,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
 
 
+def ler_reais(texto):
+    """[METAS] '12.786,58' / '12786,58' / '12786.58' / 'R$ 1.234' -> float (ValueError se não for um valor)."""
+    import re
+    t = str(texto or '').replace('R$', '').replace(' ', '').strip()
+    if ',' in t:                                    # jeito brasileiro: ponto separa milhar, vírgula os centavos
+        t = t.replace('.', '').replace(',', '.')
+    elif t.count('.') > 1 or re.fullmatch(r'\d{1,3}(\.\d{3})+', t):
+        t = t.replace('.', '')                      # '12.786' = doze mil
+    if not re.fullmatch(r'\d+(\.\d{1,2})?', t):
+        raise ValueError(f"valor inválido: {texto!r}")
+    return float(t)
+
+
+# [METAS] dias depois do fim do período em que a meta ainda aparece para lançar (um dia esquecido)
+DIAS_LANCAR_DEPOIS = 15
+
+
+def status_meta_txt(status, inicio, fim, hoje):
+    """[METAS] O status como a gestão entende. 'Concluida' no banco = a meta foi batida e o prêmio, pago."""
+    if status == 'Concluida':
+        return '✅ Batida'
+    if status != 'Ativa':
+        return status or '---'
+    if inicio and hoje < inicio:
+        return '🕒 Futura'
+    if fim and hoje > fim:
+        return '⏹️ Encerrada'
+    return '▶️ Em andamento'
+
+
 def formatar_data_hora(valor, formato="%d/%m/%Y %H:%M"):
     """Formata data/hora com segurança: devolve '---' se estiver vazia em vez de travar a tela."""
     if valor is None:
@@ -3254,7 +3284,7 @@ class App:
         frame_lancamento = ttk.LabelFrame(main_frame, text="Lançar Apuração Diária (Vendas R$)", padding="10")
         frame_lancamento.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         frame_lancamento.columnconfigure(1, weight=1)
-        ttk.Label(frame_lancamento, text="Meta Principal Ativa:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
+        ttk.Label(frame_lancamento, text="Meta (pela data):").grid(row=0, column=0, padx=5, pady=5, sticky="w")
         self.combo_metas_ativas = ttk.Combobox(frame_lancamento, state="readonly")
         self.combo_metas_ativas.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
         ttk.Label(frame_lancamento, text="Data da Apuração:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
@@ -3265,6 +3295,13 @@ class App:
         self.entry_valor_dia.grid(row=2, column=1, padx=5, pady=5, sticky="w")
         btn_lancar = ttk.Button(frame_lancamento, text="Lançar Apuração Diária", command=self.lancar_apuracao_diaria)
         btn_lancar.grid(row=3, column=1, padx=5, pady=10, sticky="e")
+        # [METAS] a meta vem pela data escolhida (inclusive depois de batida); Enter no valor também lança
+        self._metas_lancamento = []
+        self.date_apuracao.bind("<<DateEntrySelected>>", self.escolher_meta_da_data)
+        self.entry_valor_dia.bind("<Return>", lambda e: self.lancar_apuracao_diaria())
+        ttk.Label(frame_lancamento, text="Valor: 12.786,58 ou 12786,58. A meta continua recebendo lançamentos depois de "
+                                         "batida, até o fim do mês.", font=("Arial", 9, "italic")).grid(
+            row=4, column=0, columnspan=2, padx=5, sticky="w")
 
         # --- NOVO: Frame Intermediário para Lucro (Linha 1) ---
         frame_linha_lucro = ttk.Frame(main_frame)
@@ -3371,6 +3408,13 @@ class App:
         self.lbl_progresso_percentual.pack(anchor="w", pady=5)
         self.lbl_projecao_vendas = ttk.Label(frame_resumo, text="Projeção Final: R$ 0,00", font=("Arial", 12, "italic"))
         self.lbl_projecao_vendas.pack(anchor="w", pady=(15, 5))
+        # [METAS] quanto falta (ou passou), média por dia e os dias do período sem lançamento
+        self.lbl_falta = ttk.Label(frame_resumo, text="", font=("Arial", 12, "bold"))
+        self.lbl_falta.pack(anchor="w", pady=5)
+        self.lbl_media = ttk.Label(frame_resumo, text="", font=("Arial", 11))
+        self.lbl_media.pack(anchor="w", pady=5)
+        self.lbl_dias_sem = ttk.Label(frame_resumo, text="", font=("Arial", 10), wraplength=360, justify="left")
+        self.lbl_dias_sem.pack(anchor="w", pady=5)
         # Inicialização automática dos dados da aba
         self.carregar_dados_metas()
         self.atualizar_lista_lucros()
@@ -3380,6 +3424,8 @@ class App:
         for i in self.tree_detalhes_apuracoes.get_children(): self.tree_detalhes_apuracoes.delete(i)
         self.lbl_total_atingido.config(text="Total Atingido: R$ 0,00"); self.lbl_progresso_percentual.config(text="Progresso: 0.00%")
         self.lbl_projecao_vendas.config(text="Projeção Final: R$ 0,00")
+        for lbl in (self.lbl_falta, self.lbl_media, self.lbl_dias_sem):
+            lbl.config(text="")
 
         selecionados = self.tree_metas_principais.selection()
         if not selecionados: return
@@ -3398,7 +3444,7 @@ class App:
 
         total_atingido = 0.0
         for apuracao in apuracoes:
-            data_f = apuracao.DataApuracao.strftime('%d/%m/%Y'); valor_f = f"{apuracao.ValorDia:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            data_f = formatar_data_hora(para_data(apuracao.DataApuracao), '%d/%m/%Y'); valor_f = f"{apuracao.ValorDia:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
             self.tree_detalhes_apuracoes.insert("", "end", values=(data_f, valor_f)); total_atingido += float(apuracao.ValorDia)
 
         percentual = (total_atingido / valor_meta_total) * 100 if valor_meta_total > 0 else 0
@@ -3411,6 +3457,24 @@ class App:
             projecao = media_diaria * total_dias_meta
             projecao_f = f"R$ {projecao:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
             self.lbl_projecao_vendas.config(text=f"Projeção Final: {projecao_f}")
+            self.lbl_media.config(text=f"Média por dia lançado: {reais_br(media_diaria)}")
+        if valor_meta_total > 0:
+            diferenca = valor_meta_total - total_atingido
+            self.lbl_falta.config(text=f"Falta {reais_br(diferenca)} para a meta" if diferenca > 0.004
+                                  else f"🎉 Passou {reais_br(-diferenca)} da meta")
+        try:                                              # [METAS] dias do período (até hoje) sem lançamento
+            ini_d = datetime.strptime(data_inicio_str, '%d/%m/%Y').date()
+            fim_d = min(datetime.strptime(data_fim_str, '%d/%m/%Y').date(), datetime.now().date() - timedelta(days=1))
+            lancados = {para_data(a.DataApuracao) for a in apuracoes}
+            faltam = [ini_d + timedelta(days=k) for k in range((fim_d - ini_d).days + 1)
+                      if ini_d + timedelta(days=k) not in lancados]
+            if fim_d >= ini_d:
+                self.lbl_dias_sem.config(text=(f"⚠️ {len(faltam)} dia(s) sem lançamento: "
+                                               + ", ".join(d.strftime('%d/%m') for d in faltam[:12])
+                                               + (" …" if len(faltam) > 12 else "")) if faltam
+                                         else "✅ Todos os dias (até ontem) lançados")
+        except ValueError:
+            pass
 
         # [CORREÇÃO] Recarrega metas do banco para garantir status atualizado (Atomicidade)
         metas_banco = database.listar_metas_principais()
@@ -3593,10 +3657,10 @@ class App:
             # 4. Função Interna (Closure)
             # Agora 'meta_id_contexto' JÁ EXISTE (foi criada no passo 1), então não dará erro.
             def salvar_edicao(meta_id_fixo=meta_id_contexto):
-                nova_valor_str = entry_novo_valor.get().replace(",", ".")
+                nova_valor_str = entry_novo_valor.get().strip()
 
                 try:
-                    novo_valor = float(nova_valor_str)
+                    novo_valor = ler_reais(nova_valor_str)   # [METAS] aceita 12.786,58
                     data_db_format = datetime.strptime(data_lancamento_str, '%d/%m/%Y').strftime('%Y-%m-%d')
 
                     # Usa o ID fixo que congelamos no argumento
@@ -3669,15 +3733,38 @@ class App:
         meta_selecionada_str = self.combo_metas_ativas.get()
         data_apuracao_obj = self.date_apuracao.get_date() # Pega o objeto date
         data_apuracao_str = data_apuracao_obj.strftime('%Y-%m-%d') # Formata para o banco
-        valor_dia_str = self.entry_valor_dia.get().replace(',', '.')
-        
-        if not meta_selecionada_str or not valor_dia_str:
-            messagebox.showwarning("Aviso", "Selecione uma meta e preencha o valor vendido no dia.")
+        valor_dia_str = self.entry_valor_dia.get().strip()
+
+        if not meta_selecionada_str:
+            messagebox.showwarning("Aviso", f"Nenhuma meta cobre o dia {data_apuracao_obj:%d/%m/%Y}.\n\n"
+                                            "Crie a meta do mês em 'Criar Nova Meta Principal...' ou escolha outra data.")
             return
-                
+        if not valor_dia_str:
+            messagebox.showwarning("Aviso", "Preencha o valor vendido no dia.")
+            return
+        # [METAS] validações antes de gravar
+        if data_apuracao_obj > datetime.now().date():
+            messagebox.showerror("Data", "Não dá para lançar o faturamento de um dia que ainda não chegou.")
+            return
+        try:
+            valor_dia = ler_reais(valor_dia_str)
+        except ValueError:
+            messagebox.showerror("Erro de Formato", f"Valor inválido: '{valor_dia_str}'.\nUse, por exemplo, 12.786,58 ou 12786,58.")
+            return
+
         try:
             meta_id = int(meta_selecionada_str.split('(ID: ')[1][:-1])
-            valor_dia = float(valor_dia_str)
+            meta = next((m for m in self._metas_lancamento if m[0] == meta_id), None)
+            if meta and not (meta[2] <= data_apuracao_obj <= meta[3]):
+                messagebox.showerror("Meta errada", f"O dia {data_apuracao_obj:%d/%m/%Y} não está no período da meta "
+                                                    f"'{meta[1]}' ({meta[2]:%d/%m} a {meta[3]:%d/%m}). Escolha a meta certa.")
+                return
+            antes = next((float(a.ValorDia) for a in database.listar_apuracoes_por_meta_principal(meta_id)
+                          if para_data(a.DataApuracao) == data_apuracao_obj), None)
+            if antes is not None and abs(antes - valor_dia) > 0.004 and not messagebox.askyesno(
+                    "Já tem lançamento", f"O dia {data_apuracao_obj:%d/%m/%Y} já tem {reais_br(antes)} lançado.\n\n"
+                                         f"Trocar por {reais_br(valor_dia)}?"):
+                return
             # Use um ID de gestor fixo ou busque o do usuário logado se tiver sistema de login
             id_funcionario_logado = ID_GESTOR  # [DEPURAÇÃO] vem do config.py (antes: 2 fixo)
                 
@@ -3689,7 +3776,13 @@ class App:
                 apuracao_id = resultado # Captura o ID retornado pelo banco
                 messagebox.showinfo("Sucesso", "Apuração diária lançada com sucesso!") #
                 self.entry_valor_dia.delete(0, tk.END)
-                self.on_meta_principal_selecionada(None) # Atualiza a lista de detalhes
+                # [METAS] mostra a meta em que entrou (antes atualizava a que estivesse clicada, ou nenhuma)
+                iid = str(meta_id)
+                if self.tree_metas_principais.exists(iid) and self.tree_metas_principais.selection() != (iid,):
+                    self.tree_metas_principais.selection_set(iid)      # o <<TreeviewSelect>> atualiza os detalhes
+                    self.tree_metas_principais.see(iid)
+                else:
+                    self.on_meta_principal_selecionada(None)
 
                 # [CORREÇÃO] Executa a verificação e envio de notificações em Thread separada
                 # Isso evita que a interface do Tkinter congele enquanto o bot envia mensagens.
@@ -3706,20 +3799,24 @@ class App:
                  logger.warning("Lançamento no DB falhou. Premiação não verificada.")
                  messagebox.showerror("Erro", f"Não foi possível salvar a apuração no banco de dados.\nDetalhe: {resultado}") #
         except (ValueError, IndexError):
-            messagebox.showerror("Erro de Formato", "Verifique o valor vendido e a seleção da meta.")
+            messagebox.showerror("Erro de Formato", "Verifique a seleção da meta.")
         except Exception as e:
              messagebox.showerror("Erro Inesperado", f"Ocorreu um erro: {e}")
 
 # Em main.py, SUBSTITUA a função carregar_dados_metas por esta:
 
     def carregar_dados_metas(self):
-        """Carrega as metas principais na lista e popula o combobox de metas ativas."""
+        """
+        Carrega as metas na lista e no combo de lançamento. [META BATIDA] A meta continua recebendo lançamentos
+        depois de batida ('Concluida' no banco = prêmio do mês pago) até o fim do período; o combo também traz as
+        que terminaram há pouco (para lançar um dia esquecido). A meta escolhida é a que cobre a data da apuração.
+        """
         for i in self.tree_metas_principais.get_children():
             self.tree_metas_principais.delete(i)
-        
+
         metas = database.listar_metas_principais()
-        metas_ativas = []
-        data_hoje = datetime.now().date() # Pega a data de HOJE
+        self._metas_lancamento = []          # (id, nome, início, fim, status)
+        data_hoje = datetime.now().date()
 
         for meta in metas:
             # [DEPURAÇÃO] Se a coluna for DATETIME (e não DATE), comparar datetime com date
@@ -3731,20 +3828,30 @@ class App:
             data_fim_f = data_fim_obj.strftime('%d/%m/%Y') if data_fim_obj else "---"
             valor_total_f = f"R$ {float(meta.ValorMetaTotal or 0):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-            self.tree_metas_principais.insert("", "end", values=(
-                meta.MetaPrincipalID, meta.NomeMeta, valor_total_f, data_inicio_f, data_fim_f, meta.Status
+            self.tree_metas_principais.insert("", "end", iid=str(meta.MetaPrincipalID), values=(
+                meta.MetaPrincipalID, meta.NomeMeta, valor_total_f, data_inicio_f, data_fim_f,
+                status_meta_txt(meta.Status, data_inicio_obj, data_fim_obj, data_hoje)
             ))
+            if (meta.Status in ('Ativa', 'Concluida') and data_inicio_obj and data_fim_obj
+                    and data_inicio_obj <= data_hoje and data_fim_obj >= data_hoje - timedelta(days=DIAS_LANCAR_DEPOIS)):
+                self._metas_lancamento.append((int(meta.MetaPrincipalID), meta.NomeMeta, data_inicio_obj, data_fim_obj, meta.Status))
 
-            # Verifica o Status E TAMBÉM o intervalo de datas
-            if meta.Status == 'Ativa' and data_inicio_obj and data_fim_obj and (data_inicio_obj <= data_hoje <= data_fim_obj):
-                metas_ativas.append(f"{meta.NomeMeta} (ID: {meta.MetaPrincipalID})")
-            # --- FIM DA CORREÇÃO ---
-                
-        self.combo_metas_ativas['values'] = metas_ativas
-        if metas_ativas:
-            self.combo_metas_ativas.current(0)
+        self.combo_metas_ativas['values'] = [
+            f"{nome} · {ini:%d/%m} a {fim:%d/%m}{' · ✅ batida' if st == 'Concluida' else ''} (ID: {mid})"
+            for mid, nome, ini, fim, st in self._metas_lancamento]
+        self.escolher_meta_da_data()
+
+    def escolher_meta_da_data(self, event=None):
+        """[METAS] Põe no combo a meta cujo período tem a data da apuração (vazio se nenhuma cobre a data)."""
+        try:
+            dia = self.date_apuracao.get_date()
+        except Exception:
+            dia = datetime.now().date()
+        cobre = [k for k, m in enumerate(self._metas_lancamento) if m[2] <= dia <= m[3]]
+        if cobre:
+            self.combo_metas_ativas.current(cobre[0])
         else:
-            self.combo_metas_ativas.set('')  # [DEPURAÇÃO] não deixa uma meta encerrada "presa" no combo
+            self.combo_metas_ativas.set('')  # [DEPURAÇÃO] não deixa uma meta de outro período "presa" no combo
 
 
     def abrir_janela_criar_meta_principal(self):

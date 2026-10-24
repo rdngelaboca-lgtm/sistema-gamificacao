@@ -4505,8 +4505,12 @@ def buscar_meta_principal_do_dia():
                 MP.ValorMetaTotal,
                 (SELECT SUM(ValorDia) FROM MetasDiariasApuracoes MDA WHERE MDA.MetaPrincipalID = MP.MetaPrincipalID) as ValorAtingidoTotal
             FROM MetasPrincipais MP
-            WHERE CONVERT(DATE, GETDATE()) BETWEEN MP.DataInicio AND MP.DataFim AND MP.Status = 'Ativa'
+            WHERE CONVERT(DATE, GETDATE()) BETWEEN CONVERT(DATE, MP.DataInicio) AND CONVERT(DATE, MP.DataFim)
+              AND MP.Status IN ('Ativa', 'Concluida')
+            ORDER BY CASE WHEN MP.Status = 'Ativa' THEN 0 ELSE 1 END, MP.DataInicio DESC
             """
+            # [META BATIDA] 'Concluida' = o prêmio do mês já foi pago; a meta continua valendo até o fim do período
+            # (o painel e o /status mostram o que passou de 100%).
             cursor.execute(sql)
             meta_ativa = cursor.fetchone()
             if meta_ativa:
@@ -4734,8 +4738,10 @@ def buscar_meta_ativa_id_hoje():
                 SELECT TOP 1 MetaPrincipalID
                 FROM MetasPrincipais MP
                 WHERE CONVERT(DATE, GETDATE()) BETWEEN CONVERT(DATE, MP.DataInicio) AND CONVERT(DATE, MP.DataFim)
-                  AND MP.Status = 'Ativa'
+                  AND MP.Status IN ('Ativa', 'Concluida')
+                ORDER BY CASE WHEN MP.Status = 'Ativa' THEN 0 ELSE 1 END, MP.DataInicio DESC
             """
+            # [META BATIDA] antes só 'Ativa': depois de bater a meta (e pagar o prêmio) o /lancar parava de funcionar
             # --- FIM DA CORREÇÃO ---
             
             cursor.execute(sql)

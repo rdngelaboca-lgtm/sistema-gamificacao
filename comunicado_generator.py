@@ -104,7 +104,7 @@ async def status_meta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     percentual = (atingido / total) * 100 if total > 0 else 0
     
     # Barra de progresso (sem alteração)
-    blocos_cheios = int(percentual // 10); blocos_vazios = 10 - blocos_cheios
+    blocos_cheios = max(0, min(10, int(percentual // 10))); blocos_vazios = 10 - blocos_cheios   # [META BATIDA] passou de 100%
     barra_progresso = '▓' * blocos_cheios + '░' * blocos_vazios
 
     # Cálculo da projeção (sem alteração)
@@ -1319,7 +1319,7 @@ async def acompanhar_metas(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     total = dados_meta['valor_meta']
     percentual = (atingido / total) * 100 if total > 0 else 0
 
-    blocos_cheios = int(percentual // 10)
+    blocos_cheios = max(0, min(10, int(percentual // 10)))   # [META BATIDA] passou de 100%: não estoura a barra
     blocos_vazios = 10 - blocos_cheios
     barra_progresso = '▓' * blocos_cheios + '░' * blocos_vazios
 
