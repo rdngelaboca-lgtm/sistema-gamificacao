@@ -133,6 +133,15 @@
   .disc-barra span { display: block; height: 100%; }
   .disc-leg { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; font-weight: 700; color: var(--suave); }
   .motiv-linha { font-size: 13px; color: #6b4e00; }
+  .apr-linha { font-size: 13px; color: #1d3d7a; }
+  .motiv-equipe.apr-equipe { background: #eef4ff; border-color: #c9d8f5; }
+  .motiv-equipe.apr-equipe .contagem span { border-left-color: #3f6fd8; }
+  .falta-rel { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; background: #fff7e0; border: 1px solid #f1de9c;
+    border-radius: 10px; padding: 6px 10px; font-size: 13px; margin-top: 8px; }
+  .partes-env { display: flex; gap: 8px; flex-wrap: wrap; }
+  .partes-env label { display: flex; gap: 6px; align-items: center; border: 1px solid var(--linha); border-radius: 10px; padding: 6px 10px;
+    font-weight: 700; font-size: 14px; cursor: pointer; background: #fff; }
+  .partes-env label:has(input:checked) { border-color: var(--verde); background: var(--verde-claro); }
   .menu-op { display: grid; gap: 8px; }
   .menu-op > .btn { justify-content: flex-start; text-align: left; }
   .menu-op .vinc { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -154,9 +163,11 @@
     <button class="btn prim" id="btn-enviar">📤 Enviar avaliação</button>
     <button class="btn ico" id="atualizar" title="Atualizar">🔄</button></div></section>
   <main class="area">
-    <details class="explica"><summary><b>Como funciona?</b> Uma avaliação em 2 partes: 🧭 o perfil DISC (24 grupos de 4 palavras), que
-      mostra o jeito natural de trabalhar, e 🔋 o que motiva (28 perguntas de "qual frase combina mais com você": 💰 financeiro,
-      🏆 reconhecimento, 📚 aprendizado, 🤝 equipe, 🛡️ estabilidade, 🗽 autonomia, 🎯 desafio e 💜 propósito).</summary>
+    <details class="explica"><summary><b>Como funciona?</b> Uma avaliação em 3 partes: 🧭 o perfil DISC (24 grupos de 4 palavras), que
+      mostra o jeito natural de trabalhar; 🔋 o que motiva (28 perguntas de "qual frase combina mais com você": 💰 financeiro,
+      🏆 reconhecimento, 📚 aprendizado, 🤝 equipe, 🛡️ estabilidade, 🗽 autonomia, 🎯 desafio e 💜 propósito); e 🧠 como aprende
+      (12 situações do dia a dia: 👀 vendo, 👂 ouvindo, ✍️ lendo/anotando ou 🖐️ fazendo). Dá para mandar as partes juntas ou
+      separadas.</summary>
       <div class="cores">
         <div class="cor D"><b>🔴 D · Dominante</b>Resultado, desafio, decisão rápida.</div>
         <div class="cor I"><b>🟡 I · Influente</b>Comunicação, entusiasmo, gente.</div>
@@ -210,6 +221,7 @@ function htmlEquipe(d) {
         <span class="nm">${esc(p.nome)}</span>${p.do_processo ? '<span class="tag-or" title="A avaliação do processo seletivo, vinculada ao cadastro">🔗 do processo seletivo</span>' : ''}
         <span class="pf">${esc(p.perfil_nome)}</span>${barras(p.pct)}
         ${p.motivo ? `<span class="motiv-linha">🔋 Motiva: <b>${esc(p.motivo)}</b></span>` : '<span class="mini suave">🔋 Motivação: ainda não respondeu</span>'}
+        ${p.aprende ? `<span class="apr-linha">🧠 Aprende: <b>${esc(p.aprende)}</b></span>` : '<span class="mini suave">🧠 Como aprende: ainda não respondeu</span>'}
         <span class="mini suave">📍 Combina com: ${p.setores.map(esc).join(', ')} · respondeu ${esc(p.respondido)}</span></button>`;
   const quem = lista => (lista || []).map(p => `${EMO[p.perfil[0]]} ${esc(p.nome.split(' ')[0])}`).join('<br>') || '<span class="mini suave">—</span>';
   const porFree = {}; (d.freelancers_por_setor || []).forEach(x => porFree[x.setor] = x.pessoas);
@@ -221,10 +233,18 @@ function htmlEquipe(d) {
       ${mq.dicas.map(t => `<div class="mini">💡 ${esc(t)}</div>`).join('')}
       ${mq.premios.length ? `<div class="mini"><b>🎁 Prêmios que mais motivam a equipe:</b> ${mq.premios.map(esc).join(' · ')}</div>` : ''}
       ${(d.so_motivacao || []).length ? `<div class="mini suave">Só responderam a motivação (sem o perfil): ${d.so_motivacao.map(x => `<a href="#" data-rel="${x.id}">${esc(x.nome)}</a> (${esc(x.motivo)})`).join(', ')}</div>` : ''}</div>`
-    : '<div class="motiv-equipe mini">🔋 Ninguém respondeu ainda o que motiva. Em <b>📤 Enviar avaliação</b>, escolha <b>🔋 Só a motivação</b> para quem já fez o perfil.</div>';
+    : '<div class="motiv-equipe mini">🔋 Ninguém respondeu ainda o que motiva. Em <b>📤 Enviar avaliação</b>, marque <b>🔋 Motivação</b>.</div>';
+  const aq = d.aprendizado_equipe || {contagem: []};          // [APRENDIZADO] como a equipe aprende
+  const blocoApr = aq.contagem.length ? `<div class="motiv-equipe apr-equipe" id="apr-equipe"><b>🧠 Como a equipe aprende</b>
+      <div class="contagem">${aq.contagem.map(x => `<span>${x.emoji} ${esc(x.nome)}: ${x.pessoas}</span>`).join('')}</div>
+      ${aq.dicas.map(t => `<div class="mini">💡 ${esc(t)}</div>`).join('')}
+      <div class="mini">🧑‍🏫 ${esc(aq.dica)}</div>
+      ${(d.so_aprendizado || []).length ? `<div class="mini suave">Só responderam como aprende (sem o perfil): ${d.so_aprendizado.map(x => `<a href="#" data-rel="${x.id}">${esc(x.nome)}</a> (${esc(x.aprende)})`).join(', ')}</div>` : ''}</div>`
+    : '<div class="motiv-equipe apr-equipe mini" id="apr-equipe">🧠 Ninguém respondeu ainda como aprende. Em <b>📤 Enviar avaliação</b>, marque <b>🧠 Como aprende</b> (com "só o que falta", quem já fez o resto recebe só essa parte).</div>';
   return `${d.equipe.length ? `<div class="contagem">${'DISC'.split('').map(x => `<span style="border-left:5px solid ${COR[x]}">${EMO[x]} ${NOME[x]}: ${r.contagem[x]}</span>`).join('')}</div>
     ${r.dicas.map(t => `<div class="dica">💡 ${esc(t)}</div>`).join('')}
     ${blocoMotiv}
+    ${blocoApr}
     <div class="grade-p">${d.equipe.map(cartao).join('')}</div>` : '<div class="vazio-p">Nenhum fixo respondeu ainda.</div>'}
     ${free.length ? `<h3 style="margin:8px 0 0;font-size:16px" id="titulo-freelas">📅 Freelancers avaliados</h3>
       <div class="mini suave">Para colocar cada um no lugar certo. Não entram na contagem da equipe fixa acima.</div>
@@ -239,7 +259,7 @@ function htmlEquipe(d) {
 function htmlEnvios(d) {
   if (!d.envios.length) return '<div class="vazio-p">Nenhuma avaliação enviada ainda.</div>';
   return `<div class="envios">${d.envios.map(e => `<div class="lin"><span class="ic">${e.icone}</span>
-      <span><span class="nm">${esc(e.nome)}</span>${e.freelancer ? ' <span class="tag-or">📅 Freelancer</span>' : ''}${e.partes !== 'disc' ? ` <span class="tag-or">${esc(e.partes_nome)}</span>` : ''}${e.perfil ? ` · <b>${esc(e.perfil_nome)}</b>` : ''}${e.motivo ? ` · 🔋 ${esc(e.motivo)}` : ''}
+      <span><span class="nm">${esc(e.nome)}</span>${e.freelancer ? ' <span class="tag-or">📅 Freelancer</span>' : ''}${e.partes !== 'disc' ? ` <span class="tag-or">${esc(e.partes_nome)}</span>` : ''}${e.perfil ? ` · <b>${esc(e.perfil_nome)}</b>` : ''}${e.motivo ? ` · 🔋 ${esc(e.motivo)}` : ''}${e.aprende ? ` · 🧠 ${esc(e.aprende)}` : ''}
         <div class="sit">${esc(e.situacao)} · enviada ${esc(e.criado)}${e.pontos ? ` · ⭐ ${e.pontos}` : ''}</div></span>
       <span class="acoes">${e.status === 'respondido' ? `<button class="btn" data-rel="${e.id}">📄 Relatório</button>` : ''}
         ${e.status === 'enviado' ? `<button class="btn" data-a="lembrar" data-id="${e.id}">🔔 Lembrar</button>` : ''}
@@ -287,9 +307,10 @@ function cartaoCandidato(c, d) {
       ${!(c.areas || []).length && c.vaga ? `<span>Vaga: <b>${esc(c.vaga)}</b></span>` : ''}</div>
     ${c.bairro || (c.disponibilidade || []).length ? `<div class="info">${c.bairro ? `<span>📍 ${esc(c.bairro)}</span>` : ''}${(c.disponibilidade || []).length ? `<span>🕒 ${c.disponibilidade.map(x => esc(x.nome)).join(', ')}</span>` : ''}</div>` : ''}
     ${c.experiencia ? `<div class="info exp" title="${esc(c.experiencia)}">💼 ${esc(c.experiencia)}</div>` : ''}
-    ${c.pct || c.motivacao ? `<div class="res">
+    ${c.pct || c.motivacao || c.aprende ? `<div class="res">
         ${c.pct ? `<b>🧭 ${esc(c.perfil_nome)}</b>${discMini(c.pct)}` : ''}
         ${c.motivacao ? `<div class="motiv-linha">🔋 Motiva: <b>${esc(c.motivacao)}</b></div>` : ''}
+        ${c.aprende ? `<div class="apr-linha">🧠 Aprende: <b>${esc(c.aprende)}</b></div>` : ''}
         ${(c.setores || []).length ? `<div class="mini suave">📍 Combina com: ${c.setores.map(esc).join(', ')}</div>` : ''}
         ${(c.completa || []).length ? `<div class="mini" style="color:var(--ok);font-weight:700">✨ Traz o que falta na equipe: ${c.completa.map(x => `${x.emoji} ${esc(x.nome)}`).join(', ')}</div>` : ''}</div>`
       : `<div class="pend">${c.icone} ${esc(c.situacao)}</div>`}
@@ -432,12 +453,14 @@ document.addEventListener('input', e => {                    // [TELA] busca pel
 document.addEventListener('click', async e => {
   if (e.target.closest('#btn-candidato')) return novoCandidato();
   const mo = e.target.closest('[data-mais]'); if (mo) return maisOpcoes(+mo.dataset.mais);
-  const sm = e.target.closest('[data-so-motiv]');           // [MOTIVAÇÃO] do relatório: manda só a parte que falta
+  const sm = e.target.closest('[data-mandar-falta]');       // [MOTIVAÇÃO] [APRENDIZADO] do relatório: manda só as partes que faltam
   if (sm) {
-    if (!confirm('Mandar só a avaliação de motivação (28 perguntas rápidas) no WhatsApp, no turno da pessoa?')) return;
+    if (!confirm(`Mandar no WhatsApp o que falta (${sm.dataset.nomes}), no turno da pessoa?`)) return;
     sm.disabled = true;
-    try { const r = await api('POST', '/api/gestao/perfil', {pessoas: [sm.dataset.soMotiv], partes: 'motiv', pontos: 0}); fecharModal(); status(r.mensagem); S.aba = 'envios'; setTimeout(carregar, 1200); }
-    catch (er) { falhou(er); sm.disabled = false; }
+    try {
+      const r = await api('POST', '/api/gestao/perfil', {pessoas: [sm.dataset.mandarFalta], partes: sm.dataset.partes.split(','), pontos: 0});
+      fecharModal(); status(r.mensagem); S.aba = 'envios'; setTimeout(carregar, 1200);
+    } catch (er) { falhou(er); sm.disabled = false; }
     return;
   }
   if (e.target.closest('#btn-qr-trab')) return qrTrabalhe();
@@ -472,17 +495,23 @@ async function enviar() {
   try { r = await api('GET', '/api/gestao/perfil/pessoas'); } catch (e) { return falhou(e); }
   if (r.link_local) { alert('Falta o endereço da internet (📢 Clientes › ⚙️ Ajustes › QR do balcão): sem ele o link da avaliação não abre no celular.'); return; }
   const P = r.pessoas, podem = p => p.whatsapp && !p.pendente;
-  const marcados = new Set(P.filter(p => p.tipo === 'func' && podem(p) && p.ativo && !p.perfil).map(p => p.id));
-  let todos = false, grupo = 'func', partes = 'disc_motiv';          // [MOTIVAÇÃO] perfil + motivação, ou só a motivação
-  const fez = p => partes === 'motiv' ? !!p.motivo : !!p.perfil;
+  // [MOTIVAÇÃO] [APRENDIZADO] as partes marcadas; com "só o que falta", cada um recebe só o que ainda não respondeu
+  let todos = false, grupo = 'func', partes = ['disc', 'motiv', 'apr'], soFalta = true;
+  const feita = (p, x) => x === 'disc' ? !!p.perfil : x === 'motiv' ? !!p.motivo : !!p.aprende;
+  const fez = p => partes.every(x => feita(p, x));
+  const codigo = lista => r.partes.find(x => x.partes.length === lista.length && lista.every(y => x.partes.includes(y)));
+  const marcados = new Set(P.filter(p => p.tipo === 'func' && podem(p) && p.ativo && !fez(p)).map(p => p.id));
   const nFree = P.filter(p => p.tipo === 'free').length;
   abrirModal(`<h3>📤 Enviar avaliação</h3>
     <div class="mini suave" style="margin-bottom:8px">Para os fixos e, se quiser, 📅 freelancers escolhidos. Cada um recebe o link no
       WhatsApp a partir de ${r.antecedencia} min antes do turno dele (na folga, espera o próximo turno).</div>
     <div class="campo"><span>O que enviar?</span>
-      <div class="rapidos" id="p-partes"><button class="btn sel" data-partes="disc_motiv">🧭 Perfil + 🔋 Motivação</button>
-        <button class="btn" data-partes="motiv">🔋 Só a motivação</button></div>
-      <span class="mini suave" id="p-partes-info">As 2 partes: o jeito de trabalhar (${r.perguntas} grupos de palavras) e o que motiva (${r.perguntas_motivacao} perguntas rápidas). Uns 12 minutos.</span></div>
+      <div class="partes-env" id="p-partes"><label><input type="checkbox" data-parte="disc" checked> 🧭 Perfil</label>
+        <label><input type="checkbox" data-parte="motiv" checked> 🔋 Motivação</label>
+        <label><input type="checkbox" data-parte="apr" checked> 🧠 Como aprende</label></div>
+      <label class="mini" style="display:flex;gap:6px;align-items:center;margin:4px 0"><input type="checkbox" id="p-so-falta" checked>
+        <span><b>Mandar só o que falta para cada um</b> (quem já fez o perfil não refaz: recebe só a motivação e/ou como aprende)</span></label>
+      <span class="mini suave" id="p-partes-info"></span></div>
     <div class="rapidos" id="p-grupos"><button class="btn sel" data-grupo="func">👥 Fixos</button>
       <button class="btn" data-grupo="free" ${nFree ? '' : 'disabled title="Nenhum freelancer no cadastro"'}>📅 Freelancers</button></div>
     <div class="campo"><span>Para quem?</span>
@@ -505,7 +534,7 @@ async function enviar() {
   const desenharLista = () => {
     $('#p-lista').innerHTML = visiveis().map(p => `<label class="${podem(p) ? '' : 'sem'}">
         <input type="checkbox" data-p="${p.id}" ${marcados.has(p.id) ? 'checked' : ''} ${podem(p) ? '' : 'disabled'}>
-        <span><span class="nm">${esc(p.nome)}</span>${p.perfil ? ` · <span class="mini">${esc(p.perfil_nome)} (${esc(p.respondido_em)})</span>` : ''}${p.motivo ? ` · <span class="mini">🔋 ${esc(p.motivo)}</span>` : ''}
+        <span><span class="nm">${esc(p.nome)}</span>${p.perfil ? ` · <span class="mini">${esc(p.perfil_nome)} (${esc(p.respondido_em)})</span>` : ''}${p.motivo ? ` · <span class="mini">🔋 ${esc(p.motivo)}</span>` : ''}${p.aprende ? ` · <span class="mini">🧠 ${esc(p.aprende)}</span>` : ''}
           <div class="info ${p.agora && podem(p) ? 'agora' : ''}">${!p.whatsapp ? '📵 sem WhatsApp no cadastro'
             : p.pendente ? '⏳ já tem uma avaliação esperando resposta (veja em 📋 Envios)'
             : p.agora ? `🟢 recebe na hora (no turno ou entra em até ${r.antecedencia} min)`
@@ -518,13 +547,19 @@ async function enviar() {
   const previa = () => {
     const p = P.find(x => marcados.has(x.id)), nome = p ? p.nome.split(' ')[0] : 'Fulano';
     const pts = p && p.tipo === 'free' ? 0 : Math.max(0, Math.floor(+$('#p-pontos').value || 0));
-    $('#p-previa').innerHTML = esc((partes === 'motiv' ? `🔋 *O que te motiva — ${r.empresa}*\n\nOlá, ${nome}!\nQueremos conhecer melhor o que te ` +
-      `motiva no trabalho. São ${r.perguntas_motivacao} perguntas rápidas de escolher a frase que mais combina com você (uns 3 minutos)`
-      : `🧭 *Avaliação de perfil — ${r.empresa}*\n\nOlá, ${nome}!\nQueremos te conhecer melhor para organizar a equipe do jeito ` +
-      `que combina com você. São 2 partes rápidas: o seu jeito de trabalhar (${r.perguntas} perguntas) e o que te motiva (uns 12 minutos no total)`) +
-      ` e não existe resposta certa ou errada.\n\n` +
+    const c = codigo(soFalta && p ? partes.filter(x => !feita(p, x)) : partes) || codigo(partes);   // a mensagem da 1ª pessoa marcada
+    if (!c) { $('#p-previa').textContent = 'Marque o que enviar.'; return; }
+    $('#p-previa').innerHTML = esc((c.codigo === 'motiv' ? `🔋 *O que te motiva — ${r.empresa}*\n\nOlá, ${nome}!\nQueremos conhecer melhor o que te motiva no trabalho. São `
+      : c.codigo === 'apr' ? `🧠 *Como você aprende — ${r.empresa}*\n\nOlá, ${nome}!\nQueremos saber como você aprende melhor, para ensinar do jeito que funciona para você. São `
+      : `🧭 *Avaliação de perfil — ${r.empresa}*\n\nOlá, ${nome}!\nQueremos te conhecer melhor para organizar a equipe do jeito que combina com você. São `)
+      + `${c.texto} e não existe resposta certa ou errada.\n\n` +
       (pts ? `⭐ Respondendo você ganha *${pts} pontos* na gamificação!\n\n` : '') + `👉 *Toque no link para responder:*\n(link)`)
       .replace(/\*([^*\n]+)\*/g, '<b>$1</b>');
+  };
+  const infoPartes = () => {
+    const c = codigo(partes);
+    $('#p-partes-info').textContent = !c ? 'Marque pelo menos uma parte.'
+      : `${c.nome}: ${c.texto}.` + (soFalta ? ' "🆕 Quem ainda não fez" marca quem ainda não respondeu alguma das partes marcadas.' : '');
   };
   const rapido = rap => {
     for (const p of P) if (p.tipo === grupo) marcados.delete(p.id);       // os atalhos valem só para o grupo da tela
@@ -550,14 +585,11 @@ async function enviar() {
     desenharLista();
   });
   $('#p-dia').addEventListener('change', () => { if ($('#p-dia').value) rapido('dia'); });
-  document.querySelectorAll('[data-partes]').forEach(b => b.onclick = () => {
-    partes = b.dataset.partes;
-    document.querySelectorAll('[data-partes]').forEach(x => x.classList.toggle('sel', x === b));
-    $('#p-partes-info').textContent = partes === 'motiv'
-      ? `Só o que motiva (${r.perguntas_motivacao} perguntas rápidas, uns 3 minutos): para quem já fez o perfil. "🆕 Quem ainda não fez" marca quem ainda não respondeu a motivação.`
-      : `As 2 partes: o jeito de trabalhar (${r.perguntas} grupos de palavras) e o que motiva (${r.perguntas_motivacao} perguntas rápidas). Uns 12 minutos.`;
-    rapido('nao');
+  $('#p-partes').addEventListener('change', () => {
+    partes = [...document.querySelectorAll('[data-parte]')].filter(x => x.checked).map(x => x.dataset.parte);
+    infoPartes(); rapido('nao');
   });
+  $('#p-so-falta').addEventListener('change', e => { soFalta = e.target.checked; infoPartes(); previa(); });
   $('#p-todos-cad').addEventListener('change', e => { todos = e.target.checked; desenharLista(); });
   $('#p-pontos').addEventListener('input', previa);
   $('#p-cancelar').onclick = fecharModal;
@@ -565,10 +597,13 @@ async function enviar() {
     if (!marcados.size) { alert('Escolha quem vai receber.'); return; }
     const b = $('#p-enviar'); b.disabled = true;
     try {
-      const r2 = await api('POST', '/api/gestao/perfil', {pessoas: [...marcados], pontos: +$('#p-pontos').value || 0, valido_ate: $('#p-valido').value, partes});
+      if (!codigo(partes)) { alert('Marque o que enviar.'); b.disabled = false; return; }
+      const r2 = await api('POST', '/api/gestao/perfil', {pessoas: [...marcados], pontos: +$('#p-pontos').value || 0, valido_ate: $('#p-valido').value,
+        partes, so_falta: soFalta});
       fecharModal(); status(r2.mensagem); S.aba = 'envios'; setTimeout(carregar, 1200);
     } catch (e) { falhou(e); b.disabled = false; }
   };
+  infoPartes();
   desenharLista();
 }
 
@@ -576,8 +611,7 @@ async function enviar() {
 // [MOTIVAÇÃO] o que move a pessoa: barras das 8 motivações, como motivar, prêmios que funcionam e o que evitar
 function motivacaoRel(d, sec) {
   const m = d.motivacao;
-  if (!m) return `<div class="motiv-equipe" style="margin-top:10px"><b>🔋 O que motiva</b><span class="mini">Ainda não respondeu a parte da motivação.</span>
-      ${d.chave_pessoa ? `<div><button class="btn" data-so-motiv="${esc(d.chave_pessoa)}">📤 Mandar só a motivação</button></div>` : ''}</div>`;
+  if (!m) return `<div class="motiv-equipe" style="margin-top:10px"><b>🔋 O que motiva</b><span class="mini">Ainda não respondeu a parte da motivação.</span></div>`;
   return `<div class="motiv-equipe" style="margin-top:10px" id="r-motivacao"><b>🔋 O que motiva${d.motivacao_de ? ` <span class="mini suave">(respondeu ${esc(d.motivacao_de)})</span>` : ''}</b>
       <div class="rel-perfil" style="font-size:19px">${esc(m.nome)}</div>
       ${m.oque.map(t => `<div class="mini">${esc(t)}</div>`).join('')}
@@ -585,6 +619,26 @@ function motivacaoRel(d, sec) {
         <div class="b"><span style="width:${f.pct}%;background:#f0a500"></span></div><span class="n">${f.pontos}/7</span></div>`).join('')}</div>
       <div class="secoes" style="margin-top:4px">${sec('💡 Como motivar', m.como)}${sec('🎁 Prêmios que funcionam', m.premios)}
         ${sec('🚫 Evite', m.evite)}${sec('⬇️ Pesa menos para ele(a)', m.menos.map(x => `${x.emoji} ${x.nome} (${x.curto})`))}</div></div>`;
+}
+// [APRENDIZADO] como a pessoa aprende: barras dos 4 jeitos, como ensinar, como mandar recados e o que evitar
+function aprendizadoRel(d, sec) {
+  const a = d.aprendizado;
+  if (!a) return `<div class="motiv-equipe apr-equipe" style="margin-top:10px"><b>🧠 Como aprende</b><span class="mini">Ainda não respondeu como aprende.</span></div>`;
+  return `<div class="motiv-equipe apr-equipe" style="margin-top:10px" id="r-aprendizado"><b>🧠 Como aprende${d.aprendizado_de ? ` <span class="mini suave">(respondeu ${esc(d.aprendizado_de)})</span>` : ''}</b>
+      <div class="rel-perfil" style="font-size:19px">${esc(a.nome)}</div>
+      ${a.oque.map(t => `<div class="mini">${esc(t)}</div>`).join('')}
+      <div class="barras m">${a.canais.map(f => `<div class="f"><span>${f.emoji} ${esc(f.nome)}</span>
+        <div class="b"><span style="width:${f.pct}%;background:#3f6fd8"></span></div><span class="n">${f.pontos}/12</span></div>`).join('')}</div>
+      <div class="secoes" style="margin-top:4px">${sec('🧑‍🏫 Como ensinar', a.ensinar)}${sec('📣 Como mandar recados', a.recados)}
+        ${sec('🚫 Evite', a.evite)}${sec('💡 Dica geral', [a.dica])}</div></div>`;
+}
+// [MOTIVAÇÃO] [APRENDIZADO] o que a pessoa ainda não respondeu, com o botão para mandar só isso
+function faltaRel(d) {
+  const falta = [d.sem_perfil && ['disc', '🧭 Perfil'], !d.motivacao && ['motiv', '🔋 Motivação'], !d.aprendizado && ['apr', '🧠 Como aprende']].filter(Boolean);
+  if (!falta.length || !d.chave_pessoa) return '';
+  const nomes = falta.map(x => x[1]).join(' + ');
+  return `<div class="falta-rel">⏳ Falta responder: <b>${esc(nomes)}</b>
+    <button class="btn" data-mandar-falta="${esc(d.chave_pessoa)}" data-partes="${falta.map(x => x[0]).join(',')}" data-nomes="${esc(nomes)}">📤 Mandar o que falta</button></div>`;
 }
 async function relatorio(id) {
   let d;
@@ -603,7 +657,9 @@ async function relatorio(id) {
     <div>${esc(d.resumo)}</div>`}
     ${d.candidato && d.completa && d.completa.length ? `<div class="dica" style="margin-top:8px;background:#e6f4ea;color:#14532d">✨ Traz o que falta
       na equipe: ${d.completa.map(x => `${x.emoji} ${esc(x.nome)} (${esc(x.curto)})`).join(', ')}</div>` : ''}
+    ${faltaRel(d)}
     ${motivacaoRel(d, sec)}
+    ${aprendizadoRel(d, sec)}
     ${d.sem_perfil ? '' : `<div class="secoes">
       ${sec('💪 Pontos fortes', d.fortes)}${sec('🔋 O que motiva (pelo perfil)', d.motiva)}
       ${sec('🪫 O que desmotiva', d.desmotiva)}${sec('💬 Como conversar', d.comunicar)}
@@ -616,7 +672,8 @@ async function relatorio(id) {
         <div class="mini" style="margin-top:6px"><b>Tarefas que combinam:</b> ${d.funcoes.map(esc).join(' · ')}</div></div>
       <div class="secao larga"><h4>⚠️ Pontos de atenção</h4><ul>${d.atencao.map(x => `<li>${esc(x)}</li>`).join('')}<li>${esc(d.pressao)}</li></ul></div>
     </div>`}
-    <div class="aviso-uso">Ferramenta de orientação (questionários próprios: perfil baseado na teoria DISC e o que motiva): use para conversar e organizar a
+    <div class="aviso-uso">Ferramenta de orientação (questionários próprios: perfil baseado na teoria DISC, o que motiva e como aprende — o jeito
+      preferido, não o único: todo mundo aprende melhor com mais de um): use para conversar e organizar a
       equipe, não como rótulo nem para decidir contratação ou demissão sozinho${d.candidato ? ' — no processo seletivo, junto com a entrevista e a experiência' : ''}.
       Dado pessoal: não compartilhe fora da gestão.</div>`);
 }

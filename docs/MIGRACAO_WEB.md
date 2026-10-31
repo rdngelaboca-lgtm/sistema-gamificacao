@@ -422,6 +422,18 @@ responde (só a gestão vê). O link novo tem as 2 partes (uns 12 min); quem já
 pessoa (se vieram em links diferentes, diz de quando é cada uma); vale a mais nova. Links antigos (só o perfil) continuam
 funcionando. Colunas novas em `AvaliacoesDisc`: `Partes` (`disc` antigo · `disc_motiv` · `motiv`), `Motivos` (as notas),
 `MotivoRespostas` (o que escolheu em cada dupla) e `MotivoEm`. Arquivo novo: `perfil_motivacao.py`.
+**🧠 Como aprende (10/2026, parte 3 do link):** 12 situações do dia a dia da loja ("Para aprender uma receita nova de
+sobremesa, eu prefiro…") com 4 respostas — uma de cada jeito de aprender (modelo VAK/VARK): 👀 Visual (ver), 👂 Auditivo
+(ouvir), ✍️ Leitura e escrita (ler/anotar) e 🖐️ Prático (fazer). A ordem das respostas muda em rodízio (cada jeito fica 3 vezes
+em cada posição). Nota de 0 a 12 por jeito; o principal (e o 2º, se colado) ou "🔄 Vários jeitos" quando está tudo parecido.
+A pessoa vê o lado positivo; a gestão vê as barras, **🧑‍🏫 como ensinar**, **📣 como mandar recados** e **🚫 evite**, e na
+👥 Equipe o bloco **🧠 Como a equipe aprende** (quantos de cada jeito e as dicas de treinamento). É preferência, não
+capacidade: a dica geral é mostrar + explicar + deixar fazer, começando pelo jeito preferido. As partes do link viraram um
+conjunto (`CONJUNTOS` em `perfil_disc.py`: `disc`, `motiv`, `apr`, `disc_motiv`, `motiv_apr`, `disc_apr`, `tudo` — os códigos
+antigos continuam valendo). Na janela 📤 Enviar avaliação as partes são caixas (🧭 Perfil · 🔋 Motivação · 🧠 Como aprende) e
+**"Mandar só o que falta para cada um"** (ligado): quem já fez o perfil recebe só o que falta. No relatório, "⏳ Falta
+responder… 📤 Mandar o que falta". O candidato continua com perfil + motivação. Colunas novas em `AvaliacoesDisc`:
+`Aprendizado` (as notas), `AprendizadoRespostas` e `AprendizadoEm`. Arquivo novo: `perfil_aprendizado.py`.
 **Tela do 🧑‍💼 Processo seletivo reorganizada:** barra com ➕ Avaliar um candidato, 📸 Trabalhe conosco (🔗 copiar e 🔲 QR) e
 ℹ️ Como funciona; abas de etapa com a contagem (Todos · 🆕 Novo · 📞 Entrevista · ✅ Contratado · ❌ Não seguiu); Vaga e Área
 em listas e 🔎 busca pelo nome. Cada card mostra só o essencial (nome, idade, etapa, tipo de vaga, áreas, bairro, perfil com a
