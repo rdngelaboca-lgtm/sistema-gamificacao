@@ -434,6 +434,22 @@ antigos continuam valendo). Na janela 📤 Enviar avaliação as partes são cai
 **"Mandar só o que falta para cada um"** (ligado): quem já fez o perfil recebe só o que falta. No relatório, "⏳ Falta
 responder… 📤 Mandar o que falta". O candidato continua com perfil + motivação. Colunas novas em `AvaliacoesDisc`:
 `Aprendizado` (as notas), `AprendizadoRespostas` e `AprendizadoEm`. Arquivo novo: `perfil_aprendizado.py`.
+**📘 Relatórios (10/2026):** o relatório da gestão (📄 Relatório) ficou em **6 partes numeradas**, com um índice no topo:
+1. 🧭 Quem é (💪 pontos fortes e ⚠️ pontos de atenção) · 2. 💬 Como lidar no dia a dia (conversar, feedback, liderar) ·
+3. 💚 Como cuidar e motivar (💚 como cuidar, o que motiva pelo perfil, 🪫 o que desmotiva, **🚨 sinais de que não está bem** e a
+🔋 motivação do questionário) · 4. ⚡ Conflitos e pressão (**😤 como reage** e **🕊️ como lidar com o conflito**) ·
+5. 🧑‍🏫 Como ensinar (🧠 o jeito de aprender + **pelo perfil**) · 6. 📍 Onde se encaixa melhor (todas as funções da loja, com
+o porquê). Sem o perfil, ficam só as partes que têm dado. **🖨️ Imprimir / PDF** imprime só o relatório, inteiro, sem os
+botões. **📤 Enviar relatório para a pessoa** libera no MESMO link dela o **relatório de autoconhecimento** e manda o link no
+WhatsApp na hora (sem WhatsApp, ou se falhar, fica liberado e a tela copia o link): 🧭 seu jeito de trabalhar, 💪 pontos
+fortes, 🌱 pontos para desenvolver e ✅ como desenvolver, 📍 onde rende mais (só as funções que combinam), ⚡ quando o dia
+aperta, 🤝 nos conflitos, 👥 como trabalhar com colegas de cada jeito, 🔋 o que motiva, 🧠 como aprende (com dicas para
+aprender mais rápido) e 🎯 um desafio do mês; botão 🖨️ Salvar em PDF. A pessoa **não** vê as notas da gestão (pontos de
+atenção, sinais, funções menos indicadas, como lidar). Junta as partes de links diferentes da mesma pessoa (como o relatório da
+gestão). Candidato: só depois de ✅ contratado e 🔗 vinculado. Depois de liberado, a gestão vê "📘 Liberado …", 👁️ Ver o que a
+pessoa vê e 🔗 Copiar link, e pode mandar de novo. Textos novos em `perfil_relatorios.py` (`EXTRA` por fator DISC; o perfil
+combinado junta um pouco do 2º fator) e as dicas `aprender` em `perfil_aprendizado.py`. Coluna nova em `AvaliacoesDisc`:
+`RelatorioEm`. Rota nova: `POST /api/gestao/perfil/<id>/relatorio-pessoa` (só gestor).
 **Tela do 🧑‍💼 Processo seletivo reorganizada:** barra com ➕ Avaliar um candidato, 📸 Trabalhe conosco (🔗 copiar e 🔲 QR) e
 ℹ️ Como funciona; abas de etapa com a contagem (Todos · 🆕 Novo · 📞 Entrevista · ✅ Contratado · ❌ Não seguiu); Vaga e Área
 em listas e 🔎 busca pelo nome. Cada card mostra só o essencial (nome, idade, etapa, tipo de vaga, áreas, bairro, perfil com a

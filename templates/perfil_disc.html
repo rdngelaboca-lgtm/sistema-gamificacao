@@ -14,7 +14,10 @@
      [MOTIVAÇÃO] Parte 2 (ou a única, no link "só a motivação"): duas frases sobre a pessoa, toque na que MAIS combina
      (não são promessas: nada muda no pagamento ou na escala). No fim, também "o que mais te motiva".
      [APRENDIZADO] Parte 3 (ou a única): situações do dia a dia com 4 respostas; toque na que MAIS combina. As partes vêm
-     na ordem perfil → motivação → como aprende, só as que o link tem. -->
+     na ordem perfil → motivação → como aprende, só as que o link tem.
+     📘 [RELATÓRIOS] Quando a gestão libera (📤 Enviar relatório para a pessoa), o mesmo link mostra o relatório de
+     autoconhecimento: pontos fortes, pontos para desenvolver e como, onde rende mais, conflitos, colegas, o que motiva,
+     como aprende e o desafio do mês. Botão 🖨️ Salvar em PDF. -->
 <style>
   :root { --verde: #0E6B63; --verde-esc: #0B564F; --verde-claro: #DDEFEC; --texto: #16201F; --suave: #55625F; --linha: #DCE3E1;
     --erro: #c62828; --mais: #1b7f3a; --mais-claro: #e3f4e8; --menos: #b3261e; --menos-claro: #fdecea;
@@ -90,6 +93,26 @@
   #erro { color: var(--erro); font-weight: 700; min-height: 1.2em; }
   .carregando { text-align: center; color: var(--suave); padding: 30px 0; }
   [hidden] { display: none !important; }
+  /* 📘 [RELATÓRIOS] o relatório de autoconhecimento */
+  .rel-cab { text-align: center; display: grid; gap: 6px; }
+  .bloco { border: 1px solid var(--linha); border-radius: 14px; padding: 12px; display: grid; gap: 8px; background: #fbfdfc; }
+  .bloco h3 { margin: 0; font-size: 18px; }
+  .bloco .lista { padding-left: 20px; }
+  .bloco.forte { background: #e9f6ee; border-color: #bfe3cb; }
+  .bloco.cresce { background: #fff8e6; border-color: #f1de9c; }
+  .bloco.desafio { background: var(--verde-claro); border-color: var(--verde); text-align: center; font-weight: 700; }
+  .fatores.m .fator { grid-template-columns: 168px 1fr; }
+  .colega { display: grid; gap: 2px; font-size: 15px; line-height: 1.45; }
+  .acoes-rel { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+  @media print {
+    html, body { background: #fff !important; }
+    body { font-size: 13px; }
+    main { max-width: none; padding: 0; }
+    .cartao { box-shadow: none; border: 0; padding: 0; gap: 10px; }
+    .nao-imprimir, #erro { display: none !important; }
+    .bloco { break-inside: avoid; }
+    * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
 </style>
 </head>
 <body>
@@ -388,8 +411,43 @@ function telaFim() {
   };
 }
 
+// 📘 [RELATÓRIOS] o relatório de autoconhecimento (só aparece quando a gestão libera)
+function telaRelatorio() {
+  const rel = D.relatorio, p = rel.perfil, m = rel.motivacao, ap = rel.aprendizado;
+  const lista = itens => `<ul class="lista">${itens.map(x => `<li>${esc(x)}</li>`).join('')}</ul>`;
+  const bloco = (cls, titulo, corpo) => `<section class="bloco ${cls}"><h3>${titulo}</h3>${corpo}</section>`;
+  const barras = (fs, cor) => `<div class="fatores${cor ? ' m' : ''}">${fs.map(f => `<div class="fator"><span>${f.emoji} ${esc(f.nome)}</span>
+      <div class="b"><span style="width:${Math.min(100, cor ? f.pct : f.pct * 2)}%;background:${cor || COR[f.d]}"></span></div></div>`).join('')}</div>`;
+  $('#tela').innerHTML = `
+    <div class="rel-cab"><div class="grande">📘</div>
+      <h2 id="relatorio">Seu relatório${rel.nome ? ', ' + esc(rel.nome) : ''}</h2>
+      <div class="mini">${esc(D.empresa)}${D.respondido_em ? ' · respondido ' + esc(D.respondido_em) : ''}</div>
+      <p class="mini">${esc(rel.lembrete)}</p>
+      <div class="acoes-rel nao-imprimir"><button class="sec" id="imprimir">🖨️ Salvar em PDF</button></div></div>
+    ${p ? bloco('', '🧭 Seu jeito de trabalhar', `<div class="perfil-grande" id="perfil">${esc(p.nome)}</div><p>${esc(p.texto)}</p>${barras(p.fatores)}
+        <div class="mini">Todo mundo tem um pouco de cada cor. A maior mostra o seu jeito mais natural de trabalhar.</div>`)
+      + bloco('forte', '💪 Seus pontos fortes', lista(p.fortes))
+      + bloco('cresce', '🌱 Pontos para desenvolver', lista(p.desenvolver))
+      + bloco('', '✅ Como desenvolver', lista(p.dicas))
+      + bloco('', '📍 Onde você rende mais', `<p>${esc(p.ambiente)}</p>${p.funcoes.length ? `<ul class="lista">${p.funcoes.map(f =>
+          `<li><b>${esc(f.setor)}</b></li>`).join('')}</ul>` : ''}`)
+      + bloco('', '⚡ Quando o dia aperta', `<p>${esc(p.pressao)}</p>`)
+      + bloco('', '🤝 Nos conflitos', `<p>${esc(p.conflito)}</p>`)
+      + bloco('', '👥 Trabalhando com colegas de outros jeitos', p.colegas.map(c =>
+          `<div class="colega"><b>${c.emoji} Com quem é ${esc(c.nome)}:</b><span>${esc(c.texto)}</span></div>`).join(''))
+      : ''}
+    ${m ? bloco('', '🔋 O que te motiva', `<div class="perfil-grande" id="motivo" style="font-size:22px">${esc(m.nome)}</div>${lista(m.textos)}
+        ${barras(m.fatores.slice(0, 4), '#f0a500')}`) : ''}
+    ${ap ? bloco('', '🧠 Como você aprende melhor', `<div class="perfil-grande" id="aprende" style="font-size:22px">${esc(ap.nome)}</div>
+        ${lista(ap.textos)}<b>Dicas para aprender mais rápido</b>${lista(ap.dicas)}`) : ''}
+    ${p ? bloco('desafio', '🎯 Seu desafio do mês', `<p>${esc(p.desafio)}</p>`) : ''}
+    <div class="mini" style="text-align:center">Quer conversar sobre o seu relatório? Fale com a gestão. 😊</div>`;
+  $('#imprimir').onclick = () => window.print();
+}
+
 function telaResultado() {
   calar();
+  if (D.relatorio) return telaRelatorio();
   if (D.candidato) {                                       // candidato: só o obrigado (o resultado fica com a gestão)
     $('#tela').innerHTML = `<div class="grande">🙌</div>
       <h2 style="text-align:center" id="perfil">Obrigado${D.nome ? ', ' + esc(D.nome) : ''}! Recebemos as suas respostas.</h2>

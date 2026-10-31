@@ -74,7 +74,9 @@ TEXTOS = {
         'recados': ["Recado com foto, print ou imagem.", "Cartaz visual no lugar da tarefa."],
         'evite': ["Explicar só falando, sem mostrar", "Texto longo sem nenhuma imagem"],
         'pessoa': "Você aprende melhor vendo: com um exemplo, uma foto ou um vídeo você já pega o jeito.",
-        'equipe': "use vídeos curtos, fotos do padrão certo e cartazes visuais nos setores."},
+        'equipe': "use vídeos curtos, fotos do padrão certo e cartazes visuais nos setores.",
+        'aprender': ["Peça para ver a tarefa sendo feita antes de tentar", "Tire foto do jeito certo e guarde no celular",
+                     "Desenhe ou faça um esquema do passo a passo"]},
     'auditivo': {
         'oque': "Aprende melhor ouvindo e conversando: explicação falada, áudio e troca de ideias.",
         'ensinar': ["Explique falando, passo a passo, e peça para repetir com as palavras dele(a).",
@@ -83,7 +85,9 @@ TEXTOS = {
         'recados': ["Áudio curto ou conversa rápida no começo do turno.", "Reunião falada, com tempo para perguntas."],
         'evite': ["Só mandar texto ou manual para ler", "Treinar no barulho, sem conversar"],
         'pessoa': "Você aprende melhor ouvindo: uma boa explicação e uma conversa deixam tudo claro.",
-        'equipe': "explique falando no começo do turno, use áudios e deixe tempo para perguntas."},
+        'equipe': "explique falando no começo do turno, use áudios e deixe tempo para perguntas.",
+        'aprender': ["Peça para te explicarem falando e repita com as suas palavras", "Grave um áudio com o passo a passo para ouvir de novo",
+                     "Tire as dúvidas na hora: perguntar é parte do aprender"]},
     'leitura': {
         'oque': "Aprende melhor lendo e escrevendo: receita escrita, lista, procedimento e anotação.",
         'ensinar': ["Entregue o passo a passo escrito (receita, checklist, procedimento).",
@@ -92,7 +96,9 @@ TEXTOS = {
         'recados': ["Recado por escrito, em tópicos.", "Lista ou checklist para marcar."],
         'evite': ["Explicar uma vez só, de boca, sem nada escrito", "Mudar o procedimento sem atualizar o papel"],
         'pessoa': "Você aprende melhor lendo e anotando: com o passo a passo escrito, você não esquece.",
-        'equipe': "deixe receitas, checklists e procedimentos escritos e mande os recados também por escrito."},
+        'equipe': "deixe receitas, checklists e procedimentos escritos e mande os recados também por escrito.",
+        'aprender': ["Anote o passo a passo enquanto aprende", "Peça a receita ou o checklist por escrito",
+                     "Releia suas anotações antes do turno"]},
     'pratico': {
         'oque': "Aprende melhor fazendo: mão na massa, testar e repetir.",
         'ensinar': ["Treine na prática, no próprio setor, com alguém do lado no começo.",
@@ -101,7 +107,9 @@ TEXTOS = {
         'recados': ["Mostre no lugar, na prática.", "Explicação curta e direto para a ação."],
         'evite': ["Treinamento longo só de teoria", "Ficar muito tempo só olhando, sem fazer"],
         'pessoa': "Você aprende melhor fazendo: colocando a mão na massa, você aprende rápido.",
-        'equipe': "treine no turno, mão na massa, com alguém experiente do lado nos primeiros dias."},
+        'equipe': "treine no turno, mão na massa, com alguém experiente do lado nos primeiros dias.",
+        'aprender': ["Peça para fazer logo, com alguém do lado no começo", "Repita a tarefa algumas vezes até ficar automático",
+                     "Quando errar, refaça na hora: é assim que você fixa"]},
 }
 DICA_GERAL = ("Para todo mundo: mostre, explique e deixe fazer. Usar mais de um jeito ajuda qualquer pessoa a "
               "aprender; comece pelo jeito preferido dela.")

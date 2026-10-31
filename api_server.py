@@ -3129,6 +3129,14 @@ def api_gestao_perfil_tipo_vaga(usuario, avaliacao_id):
     return _resposta_perfil(lambda: perfil_disc.definir_tipo_vaga(avaliacao_id, str(dados.get('tipo_vaga') or ''), usuario))
 
 
+@app.route('/api/gestao/perfil/<int:avaliacao_id>/relatorio-pessoa', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_perfil_relatorio_pessoa(usuario, avaliacao_id):
+    # 📘 [RELATÓRIOS] libera o relatório de autoconhecimento no link da pessoa e manda no WhatsApp dela
+    import perfil_disc
+    return _resposta_perfil(lambda: perfil_disc.enviar_relatorio_pessoa(avaliacao_id, usuario))
+
+
 @app.route('/api/gestao/perfil/<int:avaliacao_id>/documentos', methods=['GET', 'POST'])
 @compras_login(somente_gestor=True)
 def api_gestao_perfil_documentos(usuario, avaliacao_id):

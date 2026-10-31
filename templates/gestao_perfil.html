@@ -50,8 +50,17 @@
   .pessoa-c .vinc .btn { font-size: 13px; padding: 4px 9px; }
   .qr-trab { width: 240px; height: 240px; margin: 0 auto; background: #fff; }
   .qr-trab svg { width: 100%; height: 100%; }
-  @media print { body * { visibility: hidden; } #modal, #modal * { visibility: visible; } #modal { position: absolute; inset: 0; box-shadow: none; }
-    #modal .botoes, #fechar-modal { display: none; } }
+  /* 📘 [RELATÓRIOS] imprimir / salvar em PDF: só a janela, inteira (sem a rolagem), sem os botões */
+  @media print {
+    #app, #status, #login { display: none !important; }
+    html, body { background: #fff !important; }
+    #fundo-modal { position: static; display: block; background: none; padding: 0; }
+    #modal { width: auto; max-height: none; overflow: visible; padding: 0; border-radius: 0; box-shadow: none; }
+    #modal .botoes, #modal .nao-imprimir, #fechar-modal { display: none !important; }
+    .secao, .nivel-f, .motiv-equipe, .tit-rel { break-inside: avoid; }
+    .tit-rel { break-after: avoid; }
+    * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
   .pessoa-c.cand { cursor: default; }
   .pessoa-c .acoes { display: flex; gap: 6px; flex-wrap: wrap; }
   .pessoa-c .acoes .btn { font-size: 13px; padding: 5px 9px; }
@@ -100,6 +109,17 @@
   .nivel-f.combina { border-left-color: var(--ok); } .nivel-f.pode { border-left-color: #f9a825; } .nivel-f.menos { border-left-color: var(--erro); }
   .nivel-f ul { margin-top: 2px; }
   .aviso-uso { font-size: 12px; color: var(--suave); margin-top: 10px; line-height: 1.45; }
+  /* 📘 [RELATÓRIOS] o relatório da gestão em partes numeradas + enviar para a pessoa + imprimir */
+  .acoes-rel { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+  .acoes-rel .btn { font-size: 13px; padding: 6px 10px; }
+  .rel-pessoa { font-size: 13px; color: var(--suave); display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .indice-rel { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .indice-rel button { font: inherit; font-size: 12px; font-weight: 700; border: 1px solid var(--linha); background: #fff; border-radius: 999px;
+    padding: 3px 9px; cursor: pointer; color: inherit; }
+  .tit-rel { margin: 16px 0 0; padding-top: 10px; border-top: 2px solid var(--linha); font-size: 17px; display: flex; gap: 8px;
+    align-items: baseline; flex-wrap: wrap; }
+  .tit-rel small { font-size: 12px; font-weight: 600; color: var(--suave); }
+  .secao.cuidado { background: #eef7f0; } .secao.alerta { background: #fdf1ef; }
   /* [TELA] processo seletivo organizado: barra de cima, etapas em abas, filtros numa linha, cartões iguais */
   .barra-cand { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .barra-cand .insta { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; background: #fff; border: 1px solid var(--linha);
@@ -177,9 +197,12 @@
       <p>Cada fixo (ou freelancer escolhido, sem pontos) recebe o link no WhatsApp <b>a partir de 30 min antes do turno</b>
         (igual aos 📨 comunicados). Contratou alguém do processo seletivo? Marque ✅ Contratado e 🔗 vincule ao cadastro: a
         avaliação dele vale como o perfil do fixo, sem responder de novo. Quando ele
-        responde, aparece aqui o relatório: o que motiva, o que desmotiva, como conversar, como dar feedback e onde ele rende
-        mais na loja. Ele vê só um resumo positivo. É um questionário nosso, baseado na teoria DISC: serve para conhecer e
-        orientar a equipe, <b>não para contratar ou demitir sozinho</b>. O relatório é dado pessoal: só a gestão vê.</p>
+        responde, aparece aqui o relatório em 6 partes: quem é, como lidar, como cuidar e motivar, conflitos, como ensinar e
+        onde se encaixa melhor (dá para 🖨️ imprimir ou salvar em PDF). Ele vê só um resumo positivo, até você tocar em
+        <b>📤 Enviar relatório para a pessoa</b>: aí o mesmo link mostra o relatório de autoconhecimento dele (pontos fortes,
+        pontos para desenvolver, onde rende mais, conflitos, o que motiva, como aprende e um desafio do mês), sem as notas da
+        gestão. É um questionário nosso, baseado na teoria DISC: serve para conhecer e orientar a equipe, <b>não para contratar
+        ou demitir sozinho</b>. O relatório da gestão é dado pessoal: só a gestão vê.</p>
     </details>
     <div class="abas"><button class="btn sel" data-aba="equipe">👥 Equipe</button><button class="btn" data-aba="envios">📋 Envios</button>
       <button class="btn" data-aba="candidatos">🧑‍💼 Processo seletivo</button></div>
@@ -352,8 +375,8 @@ async function qrTrabalhe() {
     <div class="botoes"><button class="btn prim" id="qr-imprimir">🖨️ Imprimir</button></div>`, null, true);
   $('#qr-imprimir').onclick = () => window.print();
 }
-async function copiar(texto) {
-  try { await navigator.clipboard.writeText(texto); status('🔗 Link copiado. Cole no WhatsApp do candidato.'); }
+async function copiar(texto, msg) {
+  try { await navigator.clipboard.writeText(texto); status(msg || '🔗 Link copiado. Cole no WhatsApp do candidato.'); }
   catch (e) { prompt('Copie o link:', texto); }
 }
 
@@ -464,9 +487,12 @@ document.addEventListener('click', async e => {
     return;
   }
   if (e.target.closest('#btn-qr-trab')) return qrTrabalhe();
+  const rp = e.target.closest('[data-rel-pessoa]'); if (rp) return relatorioPessoa(rp);     // 📘 [RELATÓRIOS]
+  const ir = e.target.closest('[data-ir]');
+  if (ir) { const alvo = document.getElementById(ir.dataset.ir); if (alvo) alvo.scrollIntoView({behavior: 'smooth', block: 'start'}); return; }
   const f = e.target.closest('[data-filtro]');
   if (f) { S[{area: 'fArea', etapa: 'fEtapa', vaga: 'fVaga'}[f.dataset.filtro]] = f.dataset.v; return desenhar(); }
-  const cp = e.target.closest('[data-copiar]'); if (cp) return copiar(cp.dataset.copiar);
+  const cp = e.target.closest('[data-copiar]'); if (cp) return copiar(cp.dataset.copiar, cp.dataset.msg);
   const vc = e.target.closest('[data-vincular], [data-desvincular]');
   if (vc) {                                               // 🔗 a avaliação do contratado vale como o perfil do fixo
     const id = vc.dataset.vincular || vc.dataset.desvincular, sel = document.querySelector(`[data-vinc="${id}"]`);
@@ -640,41 +666,78 @@ function faltaRel(d) {
   return `<div class="falta-rel">⏳ Falta responder: <b>${esc(nomes)}</b>
     <button class="btn" data-mandar-falta="${esc(d.chave_pessoa)}" data-partes="${falta.map(x => x[0]).join(',')}" data-nomes="${esc(nomes)}">📤 Mandar o que falta</button></div>`;
 }
+// 📘 [RELATÓRIOS] a linha "enviar o relatório para a pessoa" (e quando já foi)
+function linhaRelPessoa(d) {
+  if (!d.pode_relatorio) return d.candidato ? `<span class="rel-pessoa">📘 O relatório para a pessoa fica disponível depois de ✅ contratado e 🔗 vinculado.</span>` : '';
+  return `<button class="btn" data-rel-pessoa="${d.id}" data-nome="${esc(d.nome)}" data-tel="${d.tem_whatsapp ? 1 : ''}">📤 ${d.relatorio_pessoa_em ? 'Enviar de novo' : 'Enviar relatório para a pessoa'}</button>
+    <span class="rel-pessoa" id="rel-pessoa-info">${d.relatorio_pessoa_em ? `📘 Liberado ${esc(d.relatorio_pessoa_em)}` : ''}
+      ${d.link_relatorio ? `<a href="${esc(d.link_relatorio)}" target="_blank" rel="noopener">👁️ Ver o que a pessoa vê</a>
+        <button class="btn" data-copiar="${esc(d.link_relatorio)}" data-msg="🔗 Link do relatório copiado.">🔗 Copiar link</button>` : ''}</span>`;
+}
+async function relatorioPessoa(b) {
+  const nome = b.dataset.nome;
+  if (!confirm(`Mandar para ${nome} o relatório de autoconhecimento${b.dataset.tel ? ' no WhatsApp (agora)' : ''}?\n\n` +
+      'Ele(a) vai ver: pontos fortes, pontos para desenvolver e como, onde rende mais, quando o dia aperta, conflitos, ' +
+      'como trabalhar com os colegas, o que motiva, como aprende e um desafio do mês.\n\n' +
+      'Não vai ver: os pontos de atenção, os sinais, as funções menos indicadas nem as dicas da gestão.')) return;
+  b.disabled = true;
+  try {
+    const r = await api('POST', `/api/gestao/perfil/${b.dataset.relPessoa}/relatorio-pessoa`, {});
+    status(r.mensagem, r.enviado ? '' : 'aviso');
+    const info = $('#rel-pessoa-info');
+    if (info) info.innerHTML = `📘 Liberado ${esc(r.quando)} <a href="${esc(r.link)}" target="_blank" rel="noopener">👁️ Ver o que a pessoa vê</a>
+      <button class="btn" data-copiar="${esc(r.link)}" data-msg="🔗 Link do relatório copiado.">🔗 Copiar link</button>`;
+    b.textContent = '📤 Enviar de novo'; b.disabled = false;
+    if (!r.enviado) copiar(r.link, '🔗 Link do relatório copiado: cole no WhatsApp da pessoa.');
+  } catch (e) { falhou(e); b.disabled = false; }
+}
 async function relatorio(id) {
   let d;
   try { d = await api('GET', `/api/gestao/perfil/${id}`); } catch (e) { return falhou(e); }
-  const sec = (tit, itens, larga) => `<div class="secao ${larga ? 'larga' : ''}"><h4>${tit}</h4><ul>${itens.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>`;
-  abrirModal(`<div class="rel-topo"><h3 style="margin:0">${d.candidato ? '🧑‍💼' : d.freelancer ? '📅' : '🧭'} ${esc(d.nome)}${d.candidato ? ` <span class="mini suave">· candidato${d.vaga ? ' · vaga: ' + esc(d.vaga) : ''}</span>` : d.freelancer ? ' <span class="mini suave">· freelancer</span>' : ''}</h3>
-      ${d.vinculo_nome ? `<div class="mini" style="color:var(--ok);font-weight:700">🔗 Vinculado ao cadastro de ${esc(d.vinculo_nome)}: vale como o perfil dele(a) na equipe.</div>` : ''}
-      <div class="rel-perfil" id="r-perfil">${d.sem_perfil ? '🧭 Ainda não fez o perfil' : esc(d.perfil_nome)}</div>
-      <div class="mini suave">Respondeu ${esc(d.respondido)}${d.perfil_de ? ` · o perfil é de ${esc(d.perfil_de)}` : ''}${d.anteriores.length ? ` · antes: ${d.anteriores.map(a => `<a href="#" data-rel="${a.id}">${esc(a.perfil_nome)} (${esc(a.respondido)})</a>`).join(', ')}` : ''}</div></div>
-    ${d.candidato && (d.areas || d.bairro) ? `<div class="mini" style="margin-top:6px;line-height:1.6">
-      <b>${esc(d.tipo_vaga_nome || '')}</b> · ${d.idade ? `🎂 ${d.idade} anos · ` : ''}${d.bairro ? `📍 ${esc(d.bairro)} · ` : ''}${(d.areas || []).length ? `Áreas: <b>${d.areas.map(a => esc(a.nome)).join(', ')}</b>` : ''}
-      ${(d.disponibilidade || []).length ? `<br>🕒 ${d.disponibilidade.map(x => esc(x.nome)).join(', ')}` : ''}
-      ${d.experiencia ? `<br>💼 ${esc(d.experiencia)}` : ''}
-      ${d.whatsapp ? `<br><a href="${esc(d.whatsapp)}" target="_blank" rel="noopener">💬 Conversar no WhatsApp</a> · ` : '<br>'}<a href="#" data-docs="${d.id}">🪪 CPF e nascimento</a></div>` : ''}
-    ${d.sem_perfil ? '' : `<div style="margin:10px 0">${barras(d.pct)}</div>
-    <div>${esc(d.resumo)}</div>`}
-    ${d.candidato && d.completa && d.completa.length ? `<div class="dica" style="margin-top:8px;background:#e6f4ea;color:#14532d">✨ Traz o que falta
-      na equipe: ${d.completa.map(x => `${x.emoji} ${esc(x.nome)} (${esc(x.curto)})`).join(', ')}</div>` : ''}
-    ${faltaRel(d)}
-    ${motivacaoRel(d, sec)}
-    ${aprendizadoRel(d, sec)}
-    ${d.sem_perfil ? '' : `<div class="secoes">
-      ${sec('💪 Pontos fortes', d.fortes)}${sec('🔋 O que motiva (pelo perfil)', d.motiva)}
-      ${sec('🪫 O que desmotiva', d.desmotiva)}${sec('💬 Como conversar', d.comunicar)}
-      ${sec('🗣️ Como dar feedback', d.feedback)}${sec('🧑‍🏫 Como liderar', d.liderar)}
+  const sec = (tit, itens, larga, cls) => `<div class="secao ${larga ? 'larga' : ''} ${cls || ''}"><h4>${tit}</h4><ul>${itens.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>`;
+  const g = d.gestao, temP = !d.sem_perfil;
+  // as partes do relatório (numeradas na ordem; sem o perfil, ficam só as que têm dado)
+  const partes = [
+    temP && ['quem', '🧭 Quem é', 'pontos fortes e pontos fracos', `<div class="secoes">${sec('💪 Pontos fortes', d.fortes)}
+      ${sec('⚠️ Pontos de atenção (pontos fracos)', d.atencao, false, 'alerta')}</div>`],
+    temP && ['lidar', '💬 Como lidar no dia a dia', 'conversar, dar feedback e liderar', `<div class="secoes">
+      ${sec('💬 Como conversar', d.comunicar)}${sec('🗣️ Como dar feedback', d.feedback)}${sec('🧑‍🏫 Como liderar', d.liderar, true)}</div>`],
+    ['cuidar', '💚 Como cuidar e motivar', 'o que move, o que desanima e os sinais de alerta', `${temP ? `<div class="secoes">
+      ${sec('💚 Como cuidar', g.cuidar, false, 'cuidado')}${sec('🔋 O que motiva (pelo perfil)', d.motiva)}
+      ${sec('🪫 O que desmotiva', d.desmotiva)}${sec('🚨 Sinais de que não está bem', g.sinais, false, 'alerta')}</div>` : ''}${motivacaoRel(d, sec)}`],
+    temP && ['conflitos', '⚡ Conflitos e pressão', 'como reage e como conduzir', `<div class="secoes">
+      ${sec('😤 Como reage', [g.conflito_reage, d.pressao])}${sec('🕊️ Como lidar com o conflito', g.conflito_lidar, false, 'cuidado')}</div>`],
+    ['ensinar', '🧑‍🏫 Como ensinar', 'o jeito de aprender e o jeito do perfil', `${aprendizadoRel(d, sec)}${temP ? `<div class="secoes">
+      ${sec('🧭 Pelo perfil', g.ensinar, true)}</div>` : ''}`],
+    temP && ['onde', '📍 Onde se encaixa melhor', 'as funções da loja, da que mais combina para a que menos', `<div class="secoes">
       <div class="secao larga"><h4>📍 Onde rende mais na loja <span class="mini suave">(todas as funções, com o porquê)</span></h4>
         ${['combina', 'pode', 'menos'].map(n => {
           const fs = (d.funcoes_loja || []).filter(f => f.nivel === n);
           return fs.length ? `<div class="nivel-f ${n}"><b>${esc(fs[0].nivel_nome)}</b><ul>${fs.map(f => `<li><b>${esc(f.setor)}</b>: ${esc(f.porque)}</li>`).join('')}</ul></div>` : '';
         }).join('')}
-        <div class="mini" style="margin-top:6px"><b>Tarefas que combinam:</b> ${d.funcoes.map(esc).join(' · ')}</div></div>
-      <div class="secao larga"><h4>⚠️ Pontos de atenção</h4><ul>${d.atencao.map(x => `<li>${esc(x)}</li>`).join('')}<li>${esc(d.pressao)}</li></ul></div>
-    </div>`}
+        <div class="mini" style="margin-top:6px"><b>Tarefas que combinam:</b> ${d.funcoes.map(esc).join(' · ')}</div></div></div>`],
+  ].filter(Boolean);
+  abrirModal(`<div class="rel-topo"><h3 style="margin:0">${d.candidato ? '🧑‍💼' : d.freelancer ? '📅' : '🧭'} ${esc(d.nome)}${d.candidato ? ` <span class="mini suave">· candidato${d.vaga ? ' · vaga: ' + esc(d.vaga) : ''}</span>` : d.freelancer ? ' <span class="mini suave">· freelancer</span>' : ''}</h3>
+      ${d.vinculo_nome ? `<div class="mini" style="color:var(--ok);font-weight:700">🔗 Vinculado ao cadastro de ${esc(d.vinculo_nome)}: vale como o perfil dele(a) na equipe.</div>` : ''}
+      <div class="rel-perfil" id="r-perfil">${d.sem_perfil ? '🧭 Ainda não fez o perfil' : esc(d.perfil_nome)}</div>
+      <div class="mini suave">Respondeu ${esc(d.respondido)}${d.perfil_de ? ` · o perfil é de ${esc(d.perfil_de)}` : ''}${d.anteriores.length ? ` · antes: ${d.anteriores.map(a => `<a href="#" data-rel="${a.id}">${esc(a.perfil_nome)} (${esc(a.respondido)})</a>`).join(', ')}` : ''}</div></div>
+    <div class="acoes-rel nao-imprimir"><button class="btn" id="imprimir-rel">🖨️ Imprimir / PDF</button>${linhaRelPessoa(d)}</div>
+    ${d.candidato && (d.areas || d.bairro) ? `<div class="mini" style="margin-top:6px;line-height:1.6">
+      <b>${esc(d.tipo_vaga_nome || '')}</b> · ${d.idade ? `🎂 ${d.idade} anos · ` : ''}${d.bairro ? `📍 ${esc(d.bairro)} · ` : ''}${(d.areas || []).length ? `Áreas: <b>${d.areas.map(a => esc(a.nome)).join(', ')}</b>` : ''}
+      ${(d.disponibilidade || []).length ? `<br>🕒 ${d.disponibilidade.map(x => esc(x.nome)).join(', ')}` : ''}
+      ${d.experiencia ? `<br>💼 ${esc(d.experiencia)}` : ''}
+      ${d.whatsapp ? `<br><a class="nao-imprimir" href="${esc(d.whatsapp)}" target="_blank" rel="noopener">💬 Conversar no WhatsApp</a> · ` : '<br>'}<a class="nao-imprimir" href="#" data-docs="${d.id}">🪪 CPF e nascimento</a></div>` : ''}
+    ${d.sem_perfil ? '' : `<div style="margin:10px 0">${barras(d.pct)}</div>
+    <div>${esc(d.resumo)}</div>`}
+    ${d.candidato && d.completa && d.completa.length ? `<div class="dica" style="margin-top:8px;background:#e6f4ea;color:#14532d">✨ Traz o que falta
+      na equipe: ${d.completa.map(x => `${x.emoji} ${esc(x.nome)} (${esc(x.curto)})`).join(', ')}</div>` : ''}
+    <div class="nao-imprimir">${faltaRel(d)}</div>
+    <div class="indice-rel nao-imprimir">${partes.map((p, i) => `<button data-ir="r-${p[0]}">${i + 1}. ${p[1]}</button>`).join('')}</div>
+    ${partes.map((p, i) => `<h3 class="tit-rel" id="r-${p[0]}">${i + 1}. ${p[1]} <small>${esc(p[2])}</small></h3>${p[3]}`).join('')}
     <div class="aviso-uso">Ferramenta de orientação (questionários próprios: perfil baseado na teoria DISC, o que motiva e como aprende — o jeito
       preferido, não o único: todo mundo aprende melhor com mais de um): use para conversar e organizar a
       equipe, não como rótulo nem para decidir contratação ou demissão sozinho${d.candidato ? ' — no processo seletivo, junto com a entrevista e a experiência' : ''}.
       Dado pessoal: não compartilhe fora da gestão.</div>`);
+  $('#imprimir-rel').onclick = () => window.print();
 }
 {% endblock %}

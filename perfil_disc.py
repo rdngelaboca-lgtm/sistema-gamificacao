@@ -20,6 +20,9 @@
 # escolher uma entre duas). Para quem já fez o perfil, dá para mandar só a motivação (Partes = 'motiv').
 # 🧠 [APRENDIZADO] 3ª parte: "como você aprende" (perfil_aprendizado.py: visual, auditivo, leitura/escrita, prático;
 # 12 situações). As partes do link são um conjunto (CONJUNTOS): perfil, motivação e/ou como aprende.
+# 📘 [RELATÓRIOS] (perfil_relatorios.py) A gestão pode mandar para a pessoa o relatório de AUTOCONHECIMENTO (pontos fortes,
+# pontos para desenvolver, onde rende mais, conflitos, o que motiva, como aprende): fica no mesmo link (RelatorioEm).
+# O relatório da gestão ganhou como cuidar, sinais de que não está bem, conflitos e como ensinar pelo perfil.
 # ==============================================================================
 import html
 import json
@@ -34,6 +37,7 @@ import database
 import comunicados_equipe as CE      # mesmo horário de entrega e mesmos ajudantes (endereço, nome, WhatsApp)
 import perfil_motivacao as PM        # [MOTIVAÇÃO] a 2ª parte: o que motiva a pessoa
 import perfil_aprendizado as PA      # [APRENDIZADO] a 3ª parte: como a pessoa aprende
+import perfil_relatorios as PR       # [RELATÓRIOS] o relatório da pessoa e os blocos novos da gestão
 
 logger = logging.getLogger(__name__)
 
@@ -360,7 +364,9 @@ def garantir_tabelas():
                              ('MotivoEm', 'DATETIME'),
                              # [APRENDIZADO] como a pessoa aprende
                              ('Aprendizado', 'NVARCHAR(200)'), ('AprendizadoRespostas', 'NVARCHAR(400)'),
-                             ('AprendizadoEm', 'DATETIME')):
+                             ('AprendizadoEm', 'DATETIME'),
+                             # [RELATÓRIOS] quando a gestão liberou (e mandou) o relatório para a pessoa
+                             ('RelatorioEm', 'DATETIME')):
             cur.execute(f"IF COL_LENGTH('AvaliacoesDisc', '{coluna}') IS NULL ALTER TABLE AvaliacoesDisc ADD {coluna} {tipo} NULL")
         conn.commit()
         _tabelas_ok = True
@@ -1052,6 +1058,44 @@ def _resumo_equipe(equipe):
     return {'contagem': contagem, 'dicas': dicas, 'por_setor': por_setor}
 
 
+_COLUNAS_DETALHE = """AvaliacaoID, FuncionarioID, Nome, Status, RespondidoEm, Perfil, PctD, PctI, PctS, PctC, CriadoPor,
+                       Tipo, Vaga, Origem, Areas, Idade, Bairro, Disponibilidade, Experiencia, Telefone, TipoVaga,
+                       Nascimento, FreelancerID, VinculoFuncionarioID, Partes, Motivos, MotivoEm, Aprendizado, AprendizadoEm,
+                       RelatorioEm, Token"""
+
+
+def _com_anteriores(cur, aid):
+    """A avaliação e as outras respondidas da MESMA pessoa (a mais nova primeiro)."""
+    cur.execute(f"SELECT {_COLUNAS_DETALHE} FROM AvaliacoesDisc WHERE AvaliacaoID = ?", int(aid))
+    a = cur.fetchone()
+    if not a:
+        return None, []
+    colunas = "AvaliacaoID, RespondidoEm, Perfil, PctD, PctI, PctS, PctC, Motivos, MotivoEm, Aprendizado, AprendizadoEm"
+    outras = []
+    if a[11] == TIPO_FREE:
+        cur.execute(f"""SELECT {colunas} FROM AvaliacoesDisc
+                        WHERE FreelancerID = ? AND Status = ? AND AvaliacaoID <> ? AND Tipo = ?
+                        ORDER BY AvaliacaoID DESC""", int(a[22] or 0), ST_RESPONDIDO, int(aid), TIPO_FREE)
+        outras = cur.fetchall()
+    elif a[11] != TIPO_CAND or a[23]:                     # fixo: as dele e a do processo seletivo vinculada
+        fixo = int(a[23]) if a[11] == TIPO_CAND else int(a[1])
+        cur.execute(f"""SELECT {colunas} FROM AvaliacoesDisc
+                        WHERE Status = ? AND AvaliacaoID <> ? AND ((FuncionarioID = ? AND ISNULL(Tipo, ?) = ?)
+                              OR (Tipo = ? AND VinculoFuncionarioID = ?))
+                        ORDER BY AvaliacaoID DESC""", ST_RESPONDIDO, int(aid), fixo, TIPO_FUNC, TIPO_FUNC, TIPO_CAND, fixo)
+        outras = cur.fetchall()
+    return a, outras
+
+
+def _juntar(a, outras):
+    """[MOTIVAÇÃO] [APRENDIZADO] O perfil, o que motiva e como aprende: deste link ou da última resposta da mesma pessoa.
+    Devolve (disc, motiv, apr): disc = (RespondidoEm, Perfil, PctD, PctI, PctS, PctC) ou None; motiv/apr = (pontos, quando)."""
+    disc = (a[4], a[5], a[6], a[7], a[8], a[9]) if a[5] else next(((x[1], x[2], x[3], x[4], x[5], x[6]) for x in outras if x[2]), None)
+    motiv = (_motivos(a[25]), a[26]) if a[25] else next(((_motivos(x[7]), x[8]) for x in outras if x[7]), (None, None))
+    apr = (_aprende(a[27]), a[28]) if a[27] else next(((_aprende(x[9]), x[10]) for x in outras if x[9]), (None, None))
+    return disc, motiv, apr
+
+
 def detalhe(aid, agora=None):
     """
     O relatório de uma avaliação respondida (e as anteriores da mesma pessoa). [MOTIVAÇÃO] [APRENDIZADO] Junta o perfil
@@ -1061,45 +1105,21 @@ def detalhe(aid, agora=None):
     agora = agora or CE._agora()
     conn = _conexao()
     try:
-        cur = conn.cursor()
-        cur.execute("""SELECT AvaliacaoID, FuncionarioID, Nome, Status, RespondidoEm, Perfil, PctD, PctI, PctS, PctC, CriadoPor,
-                              Tipo, Vaga, Origem, Areas, Idade, Bairro, Disponibilidade, Experiencia, Telefone, TipoVaga,
-                              Nascimento, FreelancerID, VinculoFuncionarioID, Partes, Motivos, MotivoEm, Aprendizado, AprendizadoEm
-                       FROM AvaliacoesDisc WHERE AvaliacaoID = ?""", int(aid))
-        a = cur.fetchone()
+        a, outras = _com_anteriores(conn.cursor(), aid)
         if not a:
             raise ErroPerfil("Avaliação não encontrada.", 404)
-        colunas = "AvaliacaoID, RespondidoEm, Perfil, PctD, PctI, PctS, PctC, Motivos, MotivoEm, Aprendizado, AprendizadoEm"
-        outras = []                                       # as outras respondidas da MESMA pessoa (a mais nova primeiro)
-        if a[11] == TIPO_FREE:
-            cur.execute(f"""SELECT {colunas} FROM AvaliacoesDisc
-                            WHERE FreelancerID = ? AND Status = ? AND AvaliacaoID <> ? AND Tipo = ?
-                            ORDER BY AvaliacaoID DESC""", int(a[22] or 0), ST_RESPONDIDO, int(aid), TIPO_FREE)
-            outras = cur.fetchall()
-        elif a[11] != TIPO_CAND or a[23]:                 # fixo: as dele e a do processo seletivo vinculada
-            fixo = int(a[23]) if a[11] == TIPO_CAND else int(a[1])
-            cur.execute(f"""SELECT {colunas} FROM AvaliacoesDisc
-                            WHERE Status = ? AND AvaliacaoID <> ? AND ((FuncionarioID = ? AND ISNULL(Tipo, ?) = ?)
-                                  OR (Tipo = ? AND VinculoFuncionarioID = ?))
-                            ORDER BY AvaliacaoID DESC""", ST_RESPONDIDO, int(aid), fixo, TIPO_FUNC, TIPO_FUNC, TIPO_CAND, fixo)
-            outras = cur.fetchall()
     finally:
         conn.close()
     if a[3] != ST_RESPONDIDO:
         raise ErroPerfil("Esta avaliação ainda não foi respondida.", 409)
     candidato = a[11] == TIPO_CAND
-    # o perfil: deste link ou o último da pessoa
-    disc = (a[4], a[5], a[6], a[7], a[8], a[9]) if a[5] else next(((x[1], x[2], x[3], x[4], x[5], x[6]) for x in outras if x[2]), None)
+    disc, motiv, apr = _juntar(a, outras)                # cada parte: deste link ou a última da pessoa
     if disc:
         pct = _pct(*disc[2:])
         r = relatorio(pct, disc[1])
         r['perfil_de'] = '' if a[5] else CE._quando(disc[0])         # veio de outro link: diz de quando é
     else:
         pct, r = None, {'perfil': '', 'nome': '', 'pct': None, 'sem_perfil': True}
-    # o que motiva: deste link ou a última da pessoa
-    motiv = (_motivos(a[25]), a[26]) if a[25] else next(((_motivos(x[7]), x[8]) for x in outras if x[7]), (None, None))
-    # [APRENDIZADO] como aprende: deste link ou a última da pessoa
-    apr = (_aprende(a[27]), a[28]) if a[27] else next(((_aprende(x[9]), x[10]) for x in outras if x[9]), (None, None))
     r.update({'id': a[0], 'nome': a[2] or '?', 'respondido': CE._quando(a[4]), 'perfil_nome': nome_perfil(disc[1]) if disc else '',
               'candidato': candidato, 'vaga': a[12] or '', 'freelancer': a[11] == TIPO_FREE,
               'partes': a[24] or P_DISC,
@@ -1111,6 +1131,14 @@ def detalhe(aid, agora=None):
                                                                      else f"{TIPO_FUNC}:{int(a[23]) if candidato else int(a[1])}"),
               'anteriores': [{'id': x[0], 'respondido': CE._quando(x[1]), 'perfil_nome': nome_perfil(x[2])}
                              for x in outras if x[2] and (not disc or a[5] or x[1] != disc[0])]})
+    # 📘 [RELATÓRIOS] como cuidar, sinais, conflitos e como ensinar (pelo perfil) + o relatório da própria pessoa
+    r['gestao'] = PR.para_gestao(disc[1]) if disc else None
+    r['pode_relatorio'] = not candidato or bool(a[23])     # candidato só depois de contratado e vinculado
+    r['relatorio_pessoa_em'] = CE._quando(a[29]) if a[29] else ''
+    r['tem_whatsapp'] = bool(a[19])
+    if a[29]:
+        base, local = CE._endereco()
+        r['link_relatorio'] = f"{base}/perfil/{a[30]}" if base and not local else ''
     if candidato:
         r['completa'] = _o_que_completa(pct, painel(agora)['equipe']) if pct else []
         r.update(origem=a[13] or ORIGEM_GESTAO, areas=_rotulos(AREAS, a[14]), idade=_idade_hoje(a[21], a[15], agora),
@@ -1179,6 +1207,59 @@ def acao(aid, nome_acao, usuario, agora=None):
     raise ErroPerfil("Ação desconhecida.", 404)
 
 
+def texto_relatorio(nome, link):
+    """📘 [RELATÓRIOS] A mensagem do WhatsApp com o link do relatório de autoconhecimento."""
+    primeiro = CE._primeiro_nome(nome)
+    return (f"📘 *Seu relatório de autoconhecimento — {CE._empresa()}*\n\n"
+            + (f"Olá, {primeiro}!\n" if primeiro else "Olá!\n")
+            + "Preparamos um relatório só seu, com o que você respondeu na avaliação: seus pontos fortes, o que dá para "
+              "desenvolver, onde você rende mais, o que te motiva e como você aprende melhor.\n\n"
+              "Não é nota nem rótulo: é para você se conhecer melhor. Se quiser, converse com a gente sobre ele. 😊\n\n"
+            + f"👉 *Toque no link para ver:*\n{link}")
+
+
+def enviar_relatorio_pessoa(aid, usuario, agora=None):
+    """📘 [RELATÓRIOS] Libera o relatório de autoconhecimento no link da pessoa e manda no WhatsApp dela na hora.
+    Sem WhatsApp (ou se não for): o relatório fica liberado e a gestão copia o link."""
+    garantir_tabelas()
+    agora = agora or CE._agora()
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT Status, Nome, Tipo, Telefone, Token, VinculoFuncionarioID FROM AvaliacoesDisc WHERE AvaliacaoID = ?",
+                    int(aid))
+        a = cur.fetchone()
+    finally:
+        conn.close()
+    if not a:
+        raise ErroPerfil("Avaliação não encontrada.", 404)
+    st, nome, tipo, tel, token, vinculo = a
+    if st != ST_RESPONDIDO:
+        raise ErroPerfil("Esta avaliação ainda não foi respondida.", 409)
+    if tipo == TIPO_CAND and not vinculo:
+        raise ErroPerfil("O relatório é para quem já está na equipe. Contratou? Marque ✅ Contratado e 🔗 vincule ao cadastro "
+                         "primeiro.", 409)
+    base = _exigir_endereco()
+    link = f"{base}/perfil/{token}"
+    conn = _conexao()
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE AvaliacoesDisc SET RelatorioEm = ? WHERE AvaliacaoID = ?", agora, int(aid))
+        conn.commit()
+    finally:
+        conn.close()
+    ok, resp = CE._mandar(tel, texto_relatorio(nome, link)) if tel else (False, '')
+    if tel and not ok:
+        logger.error(f"[PERFIL DISC] O relatório da avaliação {aid} não foi no WhatsApp: {resp}")
+    logger.info(f"[PERFIL DISC] {usuario.get('nome')} liberou o relatório da avaliação {aid} para a pessoa"
+                + (" (WhatsApp)." if ok else " (sem WhatsApp)."))
+    primeiro = CE._primeiro_nome(nome) or nome
+    mensagem = (f"📘 Relatório enviado para {primeiro} no WhatsApp." if ok else
+                f"📘 Relatório liberado no link de {primeiro}, mas o WhatsApp não foi. Copie o link e mande você mesmo."
+                if tel else f"📘 Relatório liberado no link de {primeiro}. Sem WhatsApp: copie o link e mande você mesmo.")
+    return {'ok': True, 'enviado': bool(ok), 'link': link, 'mensagem': mensagem, 'quando': CE._quando(agora)}
+
+
 def _somar_lembrete(aid):
     conn = _conexao()
     try:
@@ -1196,7 +1277,7 @@ def _por_token(cur, token):
     if not token or len(str(token)) > 40:
         return None
     cur.execute("""SELECT AvaliacaoID, FuncionarioID, Nome, Status, AbertoEm, Pontos, Perfil, PctD, PctI, PctS, PctC, RespondidoEm,
-                          Tipo, Vaga, Origem, TipoVaga, Partes, Motivos, Aprendizado
+                          Tipo, Vaga, Origem, TipoVaga, Partes, Motivos, Aprendizado, RelatorioEm, VinculoFuncionarioID
                    FROM AvaliacoesDisc WHERE Token = ?""", str(token))
     return cur.fetchone()
 
@@ -1220,21 +1301,36 @@ def ver(token, agora=None):
         conn.close()
     nome, candidato, partes = CE._primeiro_nome(a[2]), a[12] == TIPO_CAND, a[16] or P_DISC
     if a[3] == ST_RESPONDIDO:
+        # 📘 [RELATÓRIOS] a gestão liberou o relatório de autoconhecimento (candidato: só depois de contratado e vinculado)
+        relatorio_pessoa = _relatorio_do_link(a[0], nome) if a[19] and (not candidato or a[20]) else None
         if candidato:                                     # candidato: só o obrigado (o resultado fica com a gestão)
             return {'nome': nome, 'empresa': CE._empresa(), 'respondido': True, 'respondido_em': CE._quando(a[11]),
-                    'candidato': True, 'pontos': 0, 'partes': partes}
+                    'candidato': True, 'pontos': 0, 'partes': partes, 'relatorio': relatorio_pessoa}
         motivos, aprende = _motivos(a[17]), _aprende(a[18])
         return {'nome': nome, 'empresa': CE._empresa(), 'respondido': True, 'respondido_em': CE._quando(a[11]),
                 'pontos': a[5] or 0, 'partes': partes,
                 'resultado': resumo_pessoa(_pct(a[7], a[8], a[9], a[10]), a[6]) if a[6] else None,
                 'motivacao': PM.resumo_pessoa(motivos) if motivos else None,
-                'aprendizado': PA.resumo_pessoa(aprende) if aprende else None}
+                'aprendizado': PA.resumo_pessoa(aprende) if aprende else None, 'relatorio': relatorio_pessoa}
     return {'nome': nome, 'empresa': CE._empresa(), 'respondido': False, 'pontos': 0 if candidato else (a[5] or 0),
             'candidato': candidato, 'partes': partes,
             'blocos': [{'pergunta': ENUNCIADOS[k], 'opcoes': [texto for texto, _ in bloco]} for k, bloco in enumerate(BLOCOS)]
             if _tem_disc(partes) else [],
             'pares': PM.perguntas() if _tem_motiv(partes) else [],       # [MOTIVAÇÃO] a 2ª parte (ou a única)
             'aprende': PA.perguntas() if _tem_apr(partes) else []}       # [APRENDIZADO] a 3ª parte (ou a única)
+
+
+def _relatorio_do_link(aid, nome):
+    """📘 [RELATÓRIOS] O relatório de autoconhecimento: as 3 partes (deste link ou da última resposta da mesma pessoa)."""
+    conn = _conexao()
+    try:
+        a, outras = _com_anteriores(conn.cursor(), aid)
+    finally:
+        conn.close()
+    if not a:
+        return None
+    disc, motiv, apr = _juntar(a, outras)
+    return PR.para_pessoa(nome, _pct(*disc[2:]) if disc else None, disc[1] if disc else None, motiv[0], apr[0])
 
 
 def _escolhas_disc(respostas):
