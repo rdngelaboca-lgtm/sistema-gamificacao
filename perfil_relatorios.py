@@ -152,7 +152,7 @@ def para_pessoa(nome, pct, perfil, motivos=None, aprende=None):
             'ambiente': EXTRA[p]['ambiente'], 'pressao': EXTRA[p]['pressao'], 'conflito': EXTRA[p]['conflito'],
             'desafio': EXTRA[p]['desafio'],
             # onde rende mais: só o que combina (ou, se nada combinar muito, o que pode funcionar) — nunca o "menos indicado"
-            'funcoes': [{'setor': f['setor'], 'porque': f['porque']} for f in
+            'funcoes': [{'setor': f['setor'], 'porque': f['porque'], 'ajuda': f['ajuda']} for f in
                         ([f for f in rel['funcoes_loja'] if f['nivel'] == 'combina'][:4]
                          or [f for f in rel['funcoes_loja'] if f['nivel'] == 'pode'][:2])],
             'colegas': [{'d': d, 'emoji': P.EMOJI[d], 'nome': P.NOMES[d], 'texto': EXTRA[d]['com_quem']} for d in P.DIMS],

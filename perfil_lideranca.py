@@ -260,6 +260,86 @@ AREAS = [
 ]
 NIVEIS = P.NIVEIS
 
+# 🛠️ [DETALHES] Em cada área: o que o responsável ENTREGA e COMO cada perfil pode ajudar na prática (pelo fator que a área pede)
+AJUDA_AREAS = {
+    '💰 Finanças, custos e preços': {
+        'entrega': "Fechamento do mês até o dia 5 (faturamento, custos, folha e lucro) e a revisão dos preços a cada 3 meses.",
+        'ajuda': {
+            'C': ["Montar e conferir o fechamento do mês (faturamento, custos, folha e lucro)",
+                  "Acompanhar a margem dos produtos e o custo do quilo do buffet",
+                  "Definir um orçamento por área e conferir o que foi gasto"],
+            'D': ["Decidir os reajustes de preço quando os custos sobem", "Cortar rápido o gasto que não traz retorno",
+                  "Negociar prazos e condições com bancos e fornecedores grandes"]}},
+    '👥 Pessoas, cultura e treinamento': {
+        'entrega': "Equipe completa e treinada: integração dos novatos, conversa individual todo mês e a troca de funcionários "
+                   "acompanhada.",
+        'ajuda': {
+            'S': ["Fazer a integração dos novatos e acompanhar as primeiras semanas",
+                  "Conversas individuais com a equipe (como está, o que precisa)", "Cuidar do clima e resolver cedo os atritos"],
+            'I': ["Comunicar a cultura e os valores da loja nas reuniões",
+                  "Criar reconhecimentos e campanhas internas (destaque do mês, metas da equipe)",
+                  "Conduzir treinamentos animados e reuniões de equipe"],
+            'C': ["Organizar o manual da loja, as receitas e os checklists de treinamento", "Montar a trilha de treinamento por função",
+                  "Acompanhar os indicadores da equipe (faltas, atrasos, troca de funcionários)"]}},
+    '⚙️ Operação e padrão da loja': {
+        'entrega': "Loja no padrão todos os dias: checklists de abertura e fechamento, higiene, validade e qualidade dos produtos.",
+        'ajuda': {
+            'C': ["Criar e revisar os checklists de abertura, fechamento e higiene",
+                  "Conferir o padrão (porções, apresentação do buffet, validade)", "Deixar a loja pronta para a vigilância sanitária"],
+            'S': ["Manter a rotina da loja funcionando, todo dia do mesmo jeito", "Acompanhar de perto a escala e as trocas de turno",
+                  "Garantir que os combinados virem hábito na equipe"],
+            'D': ["Resolver na hora os problemas do dia (equipamento, falta de produto, cliente)",
+                  "Tomar decisões rápidas nos dias de movimento forte", "Cobrar a correção quando o padrão não é seguido"]}},
+    '📣 Marketing, vendas e clientes': {
+        'entrega': "Calendário de campanhas do mês, redes sociais ativas e o retorno de cada ação (quanto vendeu).",
+        'ajuda': {
+            'I': ["Planejar as campanhas e os lançamentos de sabores", "Cuidar do Instagram, das parcerias e dos eventos",
+                  "Ouvir os clientes e transformar elogios e reclamações em ações"],
+            'D': ["Definir metas de venda e acompanhar o resultado de cada campanha",
+                  "Testar promoções novas e cortar as que não dão resultado",
+                  "Buscar novos canais de venda (delivery, empresas, eventos)"]}},
+    '📦 Compras, fornecedores e estoque': {
+        'entrega': "Estoque sem falta e sem perda: lista de compras, comparação de preços e controle da validade.",
+        'ajuda': {
+            'C': ["Comparar os preços e conferir as notas e as quantidades", "Controlar o estoque mínimo e a validade",
+                  "Acompanhar o custo das compras mês a mês"],
+            'D': ["Negociar preço, prazo e bonificação com os fornecedores",
+                  "Trocar de fornecedor quando o preço ou a qualidade não servem", "Decidir as compras grandes nas oportunidades"],
+            'S': ["Manter boas parcerias de longo prazo com os fornecedores", "Cuidar da rotina de pedidos e recebimentos",
+                  "Garantir a entrega no prazo para não faltar produto"]}},
+    '🚀 Estratégia e expansão (novas lojas)': {
+        'entrega': "Plano do ano com metas, investimentos e o estudo de cada oportunidade nova (loja, canal ou produto).",
+        'ajuda': {
+            'D': ["Definir as metas do ano e puxar o crescimento",
+                  "Avaliar e decidir as oportunidades (nova loja, novo ponto, novo canal)",
+                  "Liderar os projetos de expansão do começo ao fim"],
+            'I': ["Apresentar as ideias para sócios, bancos e parceiros", "Construir a marca na cidade e criar relacionamentos",
+                  "Pesquisar o que os clientes querem para os produtos novos"],
+            'C': ["Calcular o investimento, o retorno e o prazo de cada projeto", "Montar o plano de negócio e os cenários",
+                  "Acompanhar se o projeto está dando o retorno previsto"]}},
+    '🔥 Crises e decisões difíceis': {
+        'entrega': "Um plano para os imprevistos (equipamento quebrado, falta de pessoal, queda de vendas) e quem decide em "
+                   "cada caso.",
+        'ajuda': {
+            'D': ["Assumir a frente e decidir quando algo grave acontece",
+                  "Ter as conversas difíceis (desligamento, cobrança, fornecedor)", "Agir rápido para conter o prejuízo"],
+            'C': ["Analisar a causa do problema com os números", "Montar o plano para não repetir (regra, processo)",
+                  "Avaliar os riscos antes das decisões grandes"],
+            'S': ["Manter a equipe calma e informada durante a crise", "Cuidar das pessoas afetadas pela decisão",
+                  "Garantir que a rotina continue funcionando"]}},
+    '🧑‍🤝‍🧑 Gerência da loja (liderar a equipe no dia a dia)': {
+        'entrega': "Turnos cobertos, equipe alinhada e as metas do dia acompanhadas, com uma conversa rápida no começo do turno.",
+        'ajuda': {
+            'D': ["Cobrar as metas do dia e a execução das tarefas", "Decidir no turno sem depender dos sócios",
+                  "Corrigir na hora o que está fora do padrão"],
+            'S': ["Cuidar da equipe no dia a dia e apoiar quem tem dificuldade", "Manter a escala organizada e os combinados",
+                  "Ser a referência de confiança para a equipe"],
+            'I': ["Motivar a equipe no começo do turno", "Reconhecer quem se destacou no dia",
+                  "Criar um clima bom com a equipe e os clientes"]}},
+}
+for _area in AREAS:                                       # cada área ganha o que entrega e como cada fator ajuda
+    _area.update(AJUDA_AREAS[_area['nome']])
+
 # O que falta quando ninguém da gestão tem o fator forte
 FALTA_NA_GESTAO = {
     'D': 'Ninguém na gestão com 🔴 Dominante forte: falta quem puxe metas, decisões rápidas e crescimento. Combinem metas '
@@ -528,10 +608,21 @@ def areas_da_pessoa(pct):
             if pct[d] >= 40:                                            # fator muito forte que atrapalha: desce um nível
                 nivel = {'combina': 'pode', 'pode': 'menos'}.get(nivel, nivel)
                 porque += f" Atenção: {aviso}."
-        saida.append({'area': area['nome'], 'nivel': nivel, 'nivel_nome': NIVEIS[nivel], 'porque': porque, 'nota': round(nota, 1)})
+        saida.append({'area': area['nome'], 'nivel': nivel, 'nivel_nome': NIVEIS[nivel], 'porque': porque, 'nota': round(nota, 1),
+                      **_como_ajuda(area, pct, nivel, forte, falta)})
     ordem = {'combina': 0, 'pode': 1, 'menos': 2}
     saida.sort(key=lambda x: (ordem[x['nivel']], -x['nota']))
     return saida
+
+
+def _como_ajuda(area, pct, nivel, forte, falta):
+    """🛠️ [DETALHES] Como a pessoa pode ajudar na área (pelo fator dela que a área mais aproveita, + um pouco do 2º fator
+    que a área pede, se for forte) ou, se a área é menos indicada, quem chamar para apoiar."""
+    if nivel == 'menos':
+        return {'ajuda': [], 'apoio': f"Chame quem é forte em {EMOJI[falta]} {NOMES[falta]} para apoiar em: {area['pede'][falta]}. "
+                                      f"Aqui, ajuda mais em: {area['pede'][forte]}."}
+    seg = next((d for d in sorted(area['pesos'], key=lambda d: -area['pesos'][d] * pct[d]) if d != forte and pct[d] >= 25), None)
+    return {'ajuda': area['ajuda'][forte][:3] + (area['ajuda'][seg][:1] if seg else []), 'apoio': ''}
 
 
 def estilo(perfil):
@@ -606,20 +697,42 @@ def _dupla(a, b):
 def _divisao(socios):
     """Divisão sugerida das áreas entre os sócios: quem tem o perfil que a área mais pede."""
     saida = []
+    forte_de = lambda area, s: max(area['pesos'], key=lambda d: area['pesos'][d] * s['pct'][d])
     for area in AREAS:
         notas = sorted(((_nota(area, s['pct']), s) for s in socios), key=lambda x: -x[0])
         melhor, nota = notas[0][1], notas[0][0]
-        forte = max(area['pesos'], key=lambda d: area['pesos'][d] * melhor['pct'][d])
+        forte = forte_de(area, melhor)
+        apoio, como_titulo = '', 'Como pode ajudar'
         if nota < 22:                                     # nem o melhor tem o perfil que a área pede
             principal = max(area['pesos'], key=area['pesos'].get)
             quem = 'Nenhum dos dois' if len(socios) == 2 else 'Ninguém'
             porque = (f"a área pede {area['pede'][principal]} e nenhum perfil é forte nisso: vale um apoio de fora "
                       f"(ex.: contador, consultor) ou um líder com esse perfil")
+            como, como_titulo = area['ajuda'][principal][:3], 'O que o apoio de fora precisa fazer'
+            apoio = f"Enquanto isso, {CE._primeiro_nome(melhor['nome'])} acompanha em: {area['pede'][forte]}."
         elif len(notas) > 1 and nota - notas[1][0] < 2:
             quem, porque = 'Os dois (dividam)' if len(socios) == 2 else 'Dividam', 'perfis parecidos para esta área'
+            fortes = [(CE._primeiro_nome(s['nome']), forte_de(area, s)) for _, s in notas]
+            if len({f for _, f in fortes}) > 1:           # cada um puxa um lado da área
+                como = [f"{n}: {area['ajuda'][f][0].lower()[0] + area['ajuda'][f][0][1:]}" for n, f in fortes]
+                apoio = "Cada um puxa um lado: " + ' · '.join(f"{n} — {area['pede'][f]}" for n, f in fortes) + '.'
+            else:
+                como = area['ajuda'][forte][:3]
+                apoio = "Os dois têm o mesmo ponto forte aqui: dividam as tarefas e combinem quem dá a palavra final."
         else:
             quem, porque = CE._primeiro_nome(melhor['nome']), f"{area['pede'][forte]} ({_fator(melhor['pct'], forte)})"
-        saida.append({'area': area['nome'], 'quem': quem, 'porque': porque})
+            como = area['ajuda'][forte][:3]
+            outros = [s for _, s in notas[1:]]
+            if outros:
+                o = outros[0]
+                # o outro sócio apoia pelo fator dele que a área pede e que o responsável não cobre (se tiver um razoável)
+                fo = next((d for d in sorted(area['pesos'], key=lambda d: -area['pesos'][d] * o['pct'][d])
+                           if d != forte and o['pct'][d] >= 22), None)
+                apoio = (f"{CE._primeiro_nome(o['nome'])} apoia em: {area['pede'][fo]} ({_fator(o['pct'], fo)})." if fo else
+                         f"{CE._primeiro_nome(o['nome'])} ajuda no que {CE._primeiro_nome(melhor['nome'])} pedir, sem fazer em "
+                         f"dobro: combinem quem dá a palavra final.")
+        saida.append({'area': area['nome'], 'quem': quem, 'porque': porque, 'como': como, 'como_titulo': como_titulo,
+                      'entrega': area['entrega'], 'apoio': apoio})
     return saida
 
 

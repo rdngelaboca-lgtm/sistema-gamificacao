@@ -450,6 +450,9 @@ gestão). Candidato: só depois de ✅ contratado e 🔗 vinculado. Depois de li
 pessoa vê e 🔗 Copiar link, e pode mandar de novo. Textos novos em `perfil_relatorios.py` (`EXTRA` por fator DISC; o perfil
 combinado junta um pouco do 2º fator) e as dicas `aprender` em `perfil_aprendizado.py`. Coluna nova em `AvaliacoesDisc`:
 `RelatorioEm`. Rota nova: `POST /api/gestao/perfil/<id>/relatorio-pessoa` (só gestor).
+**🛠️ Como pode ajudar em cada função (11/2026):** cada uma das 10 funções da loja tem 2 jeitos práticos de ajudar por fator
+(`AJUDA_SETOR` em `perfil_disc.py`). No relatório da gestão (📍 Onde se encaixa melhor) e no da pessoa (📍 Onde você rende
+mais), cada função ✅/🟡 mostra "Como pode ajudar" (pelo fator da pessoa que a função mais aproveita + 1 do 2º, se for forte).
 **Tela do 🧑‍💼 Processo seletivo reorganizada:** barra com ➕ Avaliar um candidato, 📸 Trabalhe conosco (🔗 copiar e 🔲 QR) e
 ℹ️ Como funciona; abas de etapa com a contagem (Todos · 🆕 Novo · 📞 Entrevista · ✅ Contratado · ❌ Não seguiu); Vaga e Área
 em listas e 🔎 busca pelo nome. Cada card mostra só o essencial (nome, idade, etapa, tipo de vaga, áreas, bairro, perfil com a
@@ -490,6 +493,12 @@ Avaliação de perfil no nível da **gestão**, **à parte** do 🧭 Perfil da e
   entra na cobertura nem nos sócios juntos. 🖨️ Imprimir / PDF agora imprime o relatório inteiro, sem botões. Colunas novas
   em `AvaliacoesLideranca`: `Partes`, `Motivos`, `MotivoRespostas`, `MotivoEm`, `Aprendizado`, `AprendizadoRespostas`,
   `AprendizadoEm`. Ação nova: `POST /api/gestao/lideranca/<id>/falta`.
+- **🛠️ Como cada perfil pode ajudar (11/2026):** cada uma das 8 áreas da gestão tem o que o responsável **entrega** e 3 jeitos
+  práticos de ajudar **por fator** que a área pede (`AJUDA_AREAS`). No relatório individual, cada área ✅/🟡 mostra "🛠️ Como
+  pode ajudar" (pelo fator da pessoa que a área mais aproveita + 1 do 2º fator, se for forte); a ⚠️ mostra "🤝 Apoio" (quem
+  chamar). A **divisão sugerida** dos sócios virou cartões: quem, por quê, 🛠️ como pode ajudar, 📦 o que entregar e 🤝 o
+  apoio do outro sócio (pelo fator dele que a área pede e o responsável não cobre); "Os dois (dividam)" diz o lado de cada
+  um; "Nenhum dos dois" diz o que o apoio de fora precisa fazer.
 
 ### Novo (só na Web) — 💬 Central de Atendimento do WhatsApp (10/2026: `/atendimento`, menu Gestão › 💬 Atendimento)
 

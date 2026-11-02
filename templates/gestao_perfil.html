@@ -108,6 +108,11 @@
   .nivel-f { border-left: 4px solid var(--linha); padding: 2px 0 2px 10px; margin: 6px 0; }
   .nivel-f.combina { border-left-color: var(--ok); } .nivel-f.pode { border-left-color: #f9a825; } .nivel-f.menos { border-left-color: var(--erro); }
   .nivel-f ul { margin-top: 2px; }
+  .nivel-f > ul > li { margin-bottom: 4px; }
+  /* 🛠️ [DETALHES] como pode ajudar em cada função */
+  .ajuda { font-size: 13px; color: #2f4f4a; margin: 2px 0 4px; }
+  .ajuda > span { font-weight: 700; }
+  .ajuda ul { margin: 0; padding-left: 18px; list-style: '→ '; }
   .aviso-uso { font-size: 12px; color: var(--suave); margin-top: 10px; line-height: 1.45; }
   /* 📘 [RELATÓRIOS] o relatório da gestão em partes numeradas + enviar para a pessoa + imprimir */
   .acoes-rel { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
@@ -710,10 +715,11 @@ async function relatorio(id) {
     ['ensinar', '🧑‍🏫 Como ensinar', 'o jeito de aprender e o jeito do perfil', `${aprendizadoRel(d, sec)}${temP ? `<div class="secoes">
       ${sec('🧭 Pelo perfil', g.ensinar, true)}</div>` : ''}`],
     temP && ['onde', '📍 Onde se encaixa melhor', 'as funções da loja, da que mais combina para a que menos', `<div class="secoes">
-      <div class="secao larga"><h4>📍 Onde rende mais na loja <span class="mini suave">(todas as funções, com o porquê)</span></h4>
+      <div class="secao larga"><h4>📍 Onde rende mais na loja <span class="mini suave">(todas as funções, com o porquê e como pode ajudar)</span></h4>
         ${['combina', 'pode', 'menos'].map(n => {
           const fs = (d.funcoes_loja || []).filter(f => f.nivel === n);
-          return fs.length ? `<div class="nivel-f ${n}"><b>${esc(fs[0].nivel_nome)}</b><ul>${fs.map(f => `<li><b>${esc(f.setor)}</b>: ${esc(f.porque)}</li>`).join('')}</ul></div>` : '';
+          return fs.length ? `<div class="nivel-f ${n}"><b>${esc(fs[0].nivel_nome)}</b><ul>${fs.map(f => `<li><b>${esc(f.setor)}</b>: ${esc(f.porque)}
+            ${(f.ajuda || []).length ? `<div class="ajuda"><span>🛠️ Como pode ajudar:</span><ul>${f.ajuda.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}</li>`).join('')}</ul></div>` : '';
         }).join('')}
         <div class="mini" style="margin-top:6px"><b>Tarefas que combinam:</b> ${d.funcoes.map(esc).join(' · ')}</div></div></div>`],
   ].filter(Boolean);

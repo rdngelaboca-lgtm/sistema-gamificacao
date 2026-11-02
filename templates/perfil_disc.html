@@ -102,6 +102,8 @@
   .bloco.cresce { background: #fff8e6; border-color: #f1de9c; }
   .bloco.desafio { background: var(--verde-claro); border-color: var(--verde); text-align: center; font-weight: 700; }
   .fatores.m .fator { grid-template-columns: 168px 1fr; }
+  .ajuda { font-size: 15px; color: var(--suave); }
+  .ajuda ul { margin: 2px 0 6px; padding-left: 18px; list-style: '→ '; }
   .colega { display: grid; gap: 2px; font-size: 15px; line-height: 1.45; }
   .acoes-rel { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
   @media print {
@@ -430,7 +432,8 @@ function telaRelatorio() {
       + bloco('cresce', '🌱 Pontos para desenvolver', lista(p.desenvolver))
       + bloco('', '✅ Como desenvolver', lista(p.dicas))
       + bloco('', '📍 Onde você rende mais', `<p>${esc(p.ambiente)}</p>${p.funcoes.length ? `<ul class="lista">${p.funcoes.map(f =>
-          `<li><b>${esc(f.setor)}</b></li>`).join('')}</ul>` : ''}`)
+          `<li><b>${esc(f.setor)}</b>${(f.ajuda || []).length ? `<div class="ajuda">Como você pode ajudar:<ul>${f.ajuda.map(x =>
+          `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}</li>`).join('')}</ul>` : ''}`)
       + bloco('', '⚡ Quando o dia aperta', `<p>${esc(p.pressao)}</p>`)
       + bloco('', '🤝 Nos conflitos', `<p>${esc(p.conflito)}</p>`)
       + bloco('', '👥 Trabalhando com colegas de outros jeitos', p.colegas.map(c =>

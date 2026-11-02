@@ -54,6 +54,17 @@
   .nivel-f { border-left: 4px solid var(--linha); padding: 2px 0 2px 10px; margin: 6px 0; }
   .nivel-f.combina { border-left-color: var(--ok); } .nivel-f.pode { border-left-color: #f9a825; } .nivel-f.menos { border-left-color: var(--erro); }
   .aviso-uso { font-size: 12px; color: var(--suave); margin-top: 10px; line-height: 1.45; }
+  /* 🛠️ [DETALHES] a divisão das áreas em cartões e o "como pode ajudar" */
+  .areas-g { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .area-c { border: 1px solid var(--linha); border-left: 5px solid #7e57c2; border-radius: 10px; padding: 8px 10px; display: grid;
+    gap: 4px; background: #fff; font-size: 14px; }
+  .area-t { display: flex; gap: 8px; justify-content: space-between; align-items: baseline; flex-wrap: wrap; }
+  .area-t .quem { font-weight: 800; background: #f3eefb; color: #3b2a63; border-radius: 8px; padding: 1px 8px; white-space: nowrap; }
+  .ajuda { font-size: 13px; color: #2f3f4f; }
+  .ajuda > span, .ajuda > b { font-weight: 700; }
+  .ajuda ul { margin: 0; padding-left: 18px; list-style: '→ '; }
+  .apoio { color: #3b2a63; }
+  .nivel-f > ul > li { margin-bottom: 5px; }
   /* 🔋🧠 [LIDERANÇA+] */
   .linha-m { font-size: 13px; color: #6b4e00; } .linha-a { font-size: 13px; color: #1d3d7a; }
   .falta-l { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; background: #fff7e0; border: 1px solid #f1de9c;
@@ -77,13 +88,13 @@
     #fundo-modal { position: static; display: block; background: none; padding: 0; }
     #modal { width: auto; max-height: none; overflow: visible; padding: 0; border-radius: 0; box-shadow: none; }
     #modal .botoes, #modal .nao-imprimir, #fechar-modal { display: none !important; }
-    .secao, .bloco-m, .nivel-f { break-inside: avoid; }
+    .secao, .bloco-m, .nivel-f > ul > li, .area-c { break-inside: avoid; }
     * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   }
   @media (max-width: 700px) {
     .area { padding-left: 10px; padding-right: 10px; }
     .cobertura { grid-template-columns: 1fr 1fr; }
-    .secoes, .grade2 { grid-template-columns: 1fr; }
+    .secoes, .grade2, .areas-g { grid-template-columns: 1fr; }
   }
 {% endblock %}
 {% block conteudo %}
@@ -181,9 +192,14 @@ function htmlSocios(d) {
   return `<div class="bloco" id="socios"><h3>🤝 Os sócios juntos</h3>
     ${d.socios.duplas.map(x => `<div class="dupla"><b>${esc(x.nomes)}:</b> ${esc(x.texto)}</div>`).join('')}
     ${d.socios.divisao.length ? `<div class="mini suave">Divisão sugerida das áreas da gestão, pelo perfil de cada um (é uma
-      sugestão: experiência e gosto também contam).</div>
-      <table class="tabela"><tr><th>Área</th><th>Quem</th><th>Por quê</th></tr>${d.socios.divisao.map(x =>
-        `<tr><td>${esc(x.area)}</td><td><b>${esc(x.quem)}</b></td><td>${esc(x.porque)}</td></tr>`).join('')}</table>` : ''}</div>`;
+      sugestão: experiência e gosto também contam). Em cada área: quem cuida, por quê, como pode ajudar na prática, o que
+      entregar e como o outro sócio apoia.</div>
+      <div class="areas-g" id="divisao">${d.socios.divisao.map(x => `<div class="area-c">
+        <div class="area-t"><b>${esc(x.area)}</b><span class="quem">👤 ${esc(x.quem)}</span></div>
+        <div class="mini"><b>Por quê:</b> ${esc(x.porque)}</div>
+        ${(x.como || []).length ? `<div class="ajuda"><b>🛠️ ${esc(x.como_titulo || 'Como pode ajudar')}:</b><ul>${x.como.map(c => `<li>${esc(c)}</li>`).join('')}</ul></div>` : ''}
+        ${x.entrega ? `<div class="mini"><b>📦 O que entregar:</b> ${esc(x.entrega)}</div>` : ''}
+        ${x.apoio ? `<div class="mini apoio"><b>🤝 Apoio:</b> ${esc(x.apoio)}</div>` : ''}</div>`).join('')}</div>` : ''}</div>`;
 }
 function cartao(a) {
   return `<div class="pessoa-c" data-id="${a.id}"><span class="nm">${a.icone} ${esc(a.nome)}</span>
@@ -330,10 +346,12 @@ async function relatorio(id) {
       ${texto('🧠 Como decide', d.decide)}${texto('🔥 Sob pressão', d.pressao)}
       ${lista('🤲 Como delega e acompanha', d.delega)}${lista('💬 Como se comunica com a equipe', d.comunica)}
       ${texto('⚔️ Em conflitos', d.conflito)}${texto('🤝 Precisa ao lado', d.precisa)}
-      <div class="secao larga"><h4>📊 Áreas da gestão <span class="mini suave">(todas, com o porquê)</span></h4>
+      <div class="secao larga"><h4>📊 Áreas da gestão <span class="mini suave">(todas, com o porquê e como pode ajudar)</span></h4>
         ${['combina', 'pode', 'menos'].map(n => {
           const as = d.areas.filter(a => a.nivel === n);
-          return as.length ? `<div class="nivel-f ${n}"><b>${esc(as[0].nivel_nome)}</b><ul>${as.map(a => `<li><b>${esc(a.area)}</b>: ${esc(a.porque)}</li>`).join('')}</ul></div>` : '';
+          return as.length ? `<div class="nivel-f ${n}"><b>${esc(as[0].nivel_nome)}</b><ul>${as.map(a => `<li><b>${esc(a.area)}</b>: ${esc(a.porque)}
+            ${(a.ajuda || []).length ? `<div class="ajuda"><span>🛠️ Como pode ajudar:</span><ul>${a.ajuda.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
+            ${a.apoio ? `<div class="ajuda"><span>🤝 Apoio:</span> ${esc(a.apoio)}</div>` : ''}</li>`).join('')}</ul></div>` : '';
         }).join('')}</div>
       ${d.com_time.length ? `<div class="secao larga"><h4>🔗 Com o time de gestão</h4>${d.com_time.map(x =>
         `<p style="margin-bottom:6px"><b>${esc(x.nomes)}</b> <span class="mini suave">(${esc(x.papel_nome)})</span>: ${esc(x.texto)}</p>`).join('')}</div>` : ''}

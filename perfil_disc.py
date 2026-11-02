@@ -275,6 +275,40 @@ NECESSIDADES = {
                     'D': 'agilidade para repor'},
     'Liderança de turno': {'D': 'decidir rápido e assumir a frente', 'I': 'puxar e animar a equipe', 'C': 'cobrar o padrão'},
 }
+# 🛠️ [DETALHES] COMO cada fator ajuda em cada função, na prática (o relatório mostra pelo fator da pessoa que a função
+# mais aproveita e, se ela também for forte no 2º fator que a função pede, mais um jeito)
+AJUDA_SETOR = {
+    'Caixa': {'C': ["Conferir o troco e o cupom com atenção", "Fechar o caixa sem diferença"],
+              'I': ["Agradecer e convidar o cliente para voltar", "Oferecer um adicional ou a promoção no fim da compra"],
+              'S': ["Manter a calma com a fila grande", "Ter paciência com o cliente indeciso ou com criança"]},
+    'Recepção': {'I': ["Receber quem chega com um sorriso e explicar o buffet", "Apresentar os sabores novos e as promoções"],
+                 'S': ["Explicar com paciência, quantas vezes precisar", "Ajudar famílias e idosos a se servirem"],
+                 'D': ["Organizar a entrada quando chega muita gente junto", "Resolver na hora a dúvida ou a reclamação"]},
+    'Frente Loja': {'I': ["Sugerir sabores e acompanhamentos (vende mais)", "Puxar conversa e encantar o cliente"],
+                    'S': ["Atender com calma o cliente indeciso", "Manter o balcão organizado e abastecido"],
+                    'D': ["Dar agilidade no horário de pico", "Resolver rápido o problema do cliente"]},
+    'Salão': {'S': ["Manter as mesas limpas e o salão em ordem o tempo todo", "Atender as mesas com calma e atenção"],
+              'I': ["Conversar com os clientes e perguntar se está tudo bem", "Deixar o ambiente acolhedor"],
+              'C': ["Organizar o salão no padrão (mesas, cadeiras, guardanapos)", "Perceber o que está fora do lugar"]},
+    'Varanda': {'I': ["Receber e conversar com os clientes da varanda", "Avisar das promoções e dos sabores do dia"],
+                'S': ["Cuidar das mesas e do movimento com paciência", "Manter a varanda limpa e organizada"],
+                'D': ["Dar conta do movimento quando enche", "Resolver rápido o que o cliente precisa"]},
+    'Buffet': {'S': ["Repor no ritmo certo, sem deixar faltar", "Manter o buffet bonito o dia todo"],
+               'C': ["Cuidar da apresentação, da temperatura e da validade", "Seguir o padrão de cada cuba e de cada sabor"],
+               'D': ["Repor rápido no horário de pico", "Avisar logo quando um produto está acabando"]},
+    'Cozinha': {'C': ["Seguir a receita e a higiene à risca", "Controlar a validade e as etiquetas"],
+                'S': ["Produzir sempre do mesmo jeito, com constância", "Deixar a cozinha organizada no fim do turno"],
+                'D': ["Dar conta da produção quando aperta", "Resolver a falta de ingrediente ou de equipamento"]},
+    'Limpeza': {'S': ["Seguir a rotina de limpeza sem pular etapa", "Manter a loja limpa durante todo o turno"],
+                'C': ["Caprichar nos detalhes (cantos, vidros, banheiros)", "Seguir o checklist de higiene"]},
+    'Camara Fria': {'C': ["Organizar o estoque pela validade (o mais antigo na frente)", "Contar o estoque e avisar o que está acabando"],
+                    'S': ["Manter a organização sempre em dia", "Cuidar do estoque com paciência, mesmo trabalhando sozinho(a)"],
+                    'D': ["Repor rápido quando a loja pede", "Agilizar o recebimento das mercadorias"]},
+    'Liderança de turno': {'D': ["Decidir no pico e distribuir as tarefas", "Cobrar o padrão e resolver os problemas do turno"],
+                           'I': ["Animar a equipe antes do movimento começar", "Reconhecer na hora quem se destacou no turno"],
+                           'C': ["Conferir os checklists de abertura e fechamento", "Acompanhar as metas e o padrão do turno"]},
+}
+
 # Quando um fator MUITO forte atrapalha a função (mesmo combinando no resto)
 CONFLITOS = {
     'Camara Fria': {'I': 'é um trabalho mais sozinho, e quem é muito 🟡 Influente desanima sem gente para conversar'},
@@ -440,7 +474,11 @@ def funcoes_da_pessoa(pct):
             if pct[d] >= 40:                                            # fator muito forte que atrapalha: desce um nível
                 nivel = {'combina': 'pode', 'pode': 'menos'}.get(nivel, nivel)
                 porque += f" Atenção: {aviso}."
-        saida.append({'setor': nome, 'nivel': nivel, 'nivel_nome': NIVEIS[nivel], 'porque': porque, 'nota': round(nota, 1)})
+        # 🛠️ [DETALHES] como pode ajudar nesta função (a menos indicada não ganha dica: o porquê já explica)
+        seg = next((d for d in sorted(pesos, key=lambda d: -pesos[d] * pct[d]) if d != forte and pct[d] >= 25), None)
+        ajuda = (AJUDA_SETOR[nome][forte] + (AJUDA_SETOR[nome][seg][:1] if seg else [])) if nivel != 'menos' else []
+        saida.append({'setor': nome, 'nivel': nivel, 'nivel_nome': NIVEIS[nivel], 'porque': porque, 'nota': round(nota, 1),
+                      'ajuda': ajuda})
     ordem_nivel = {'combina': 0, 'pode': 1, 'menos': 2}
     saida.sort(key=lambda x: (ordem_nivel[x['nivel']], -x['nota']))
     return saida
