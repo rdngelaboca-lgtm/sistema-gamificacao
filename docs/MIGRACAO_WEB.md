@@ -477,6 +477,19 @@ Avaliação de perfil no nível da **gestão**, **à parte** do 🧭 Perfil da e
   na gestão e como combina com cada sócio; ele vê só o obrigado (sócio e líder veem o estilo e os pontos fortes).
 - **🔒 Quem pode ver:** lista no banco (vazia = qualquer gestor). Depois de escolher, quem está fora vê só um cadeado e as
   rotas respondem 403. Não dá para se tirar da lista. **Nada vai para o grupo de avisos** (privacidade).
+- **🔋🧠 O que motiva e como aprende (11/2026):** o link de liderança pode ter mais 2 partes, as mesmas perguntas do
+  🧭 Perfil (🔋 28 perguntas de "qual frase combina mais com você" e 🧠 12 situações), com **textos de gestão** no relatório:
+  🔋 **o que move na gestão**, 💡 como manter motivado(a), ⚠️ cuidado e o que pesa menos (`MOTIV_GESTAO`); 🧠 **como
+  aprende e se informa**, 📊 como apresentar uma proposta, 🤝 como combinar e fazer reuniões e 📚 como se desenvolver como
+  gestor(a) (`APR_GESTAO`). Em ➕ Nova avaliação, "O que enviar?" tem as 3 caixas (vêm marcadas; sem dizer pela API = só o
+  perfil, como antes). As partes da **mesma pessoa** (mesmo nome, candidato à parte) se juntam: o 👥 Time mostra o estilo,
+  🔋 Move e 🧠 Aprende de cada um, e **⏳ Falta … 📤 Mandar o que falta** cria um link só com o que ela não respondeu (com
+  WhatsApp vai na hora; sem, ↗️ Responder aqui / 🔗 Copiar link). Com 2 ou mais faltando: **📤 Mandar o que falta para
+  todos**. Não manda duas vezes (se já tem link esperando, o card mostra "⏳ Link esperando"). Bloco novo **🔋🧠 Como cada
+  um funciona** (o que move cada um e como passar uma proposta para cada um). Quem só fez 🔋/🧠 aparece no time, mas não
+  entra na cobertura nem nos sócios juntos. 🖨️ Imprimir / PDF agora imprime o relatório inteiro, sem botões. Colunas novas
+  em `AvaliacoesLideranca`: `Partes`, `Motivos`, `MotivoRespostas`, `MotivoEm`, `Aprendizado`, `AprendizadoRespostas`,
+  `AprendizadoEm`. Ação nova: `POST /api/gestao/lideranca/<id>/falta`.
 
 ### Novo (só na Web) — 💬 Central de Atendimento do WhatsApp (10/2026: `/atendimento`, menu Gestão › 💬 Atendimento)
 

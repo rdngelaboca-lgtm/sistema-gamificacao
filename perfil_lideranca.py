@@ -12,6 +12,10 @@
 # Papéis: 👑 sócio(a) · 🧑‍💼 líder da equipe · 🎯 candidato(a) a líder. Sem pontos.
 # 🔒 Privacidade: nada vai para o grupo de avisos; "quem pode ver" fica no banco (vazio = qualquer gestor).
 # Mesma base do DISC (William Marston, teoria pública): questionário NOSSO, para orientar, não é teste certificado.
+# 🔋🧠 [LIDERANÇA+] O link pode ter 3 partes, como o 🧭 Perfil: o perfil de liderança, 🔋 o que motiva (as mesmas 28
+# perguntas de perfil_motivacao.py) e 🧠 como aprende (as mesmas 12 de perfil_aprendizado.py). O relatório usa textos de
+# GESTÃO (o que move na gestão, como manter motivado(a), como apresentar propostas e combinar, como se desenvolver).
+# As partes da mesma pessoa (mesmo nome) se juntam; "📤 Mandar o que falta" cria um link só com o que ela não respondeu.
 # ==============================================================================
 import json
 import logging
@@ -21,6 +25,8 @@ from datetime import timedelta
 import database
 import comunicados_equipe as CE      # endereço, empresa, nome, WhatsApp, código do link
 import perfil_disc as P              # cálculo do DISC, nomes e situações (o módulo do perfil da equipe não muda)
+import perfil_motivacao as PM        # [LIDERANÇA+] 🔋 as perguntas e o cálculo de "o que te motiva"
+import perfil_aprendizado as PA      # [LIDERANÇA+] 🧠 as perguntas e o cálculo de "como você aprende"
 
 logger = logging.getLogger(__name__)
 
@@ -291,6 +297,77 @@ IGUAIS = {
          'prazos para decidir e invistam em marketing e relacionamento.',
 }
 
+# 🔋 [LIDERANÇA+] O que cada motivação significa NA GESTÃO: como aparece, o cuidado e como manter motivado(a)
+MOTIV_GESTAO = {
+    'dinheiro': {
+        'gestao': "Na gestão, se move pelo resultado financeiro: lucro, retorno do que investe e a empresa garantindo os planos.",
+        'cuidado': "Pode cortar custos que pesam na equipe ou no padrão para melhorar o resultado do mês.",
+        'manter': ["Acompanhar o lucro e o caixa do mês com números claros", "Metas financeiras com participação no resultado",
+                   "Mostrar o retorno de cada investimento (quanto voltou)"]},
+    'reconhecimento': {
+        'gestao': "Se move por ver o trabalho reconhecido: elogio da equipe, dos clientes e dos sócios, e a marca bem falada.",
+        'cuidado': "Pode se magoar quando o esforço não é notado e evitar decisões que desagradam.",
+        'manter': ["Reconhecer em voz alta as conquistas dele(a) na gestão", "Dar crédito pelas ideias que deram certo",
+                   "Compartilhar os elogios de clientes e da equipe"]},
+    'crescimento': {
+        'gestao': "Se move por aprender e evoluir: ideias novas, cursos, conhecer outras empresas e ver a gestão melhorar.",
+        'cuidado': "Pode começar muitas novidades ao mesmo tempo e se entediar com a rotina da gestão.",
+        'manter': ["Cursos, eventos e visitas a outras lojas", "Projetos novos para conduzir (cardápio, sistema, processo)",
+                   "Conversas sobre o futuro e os próximos passos da empresa"]},
+    'equipe': {
+        'gestao': "Se move pelas pessoas: equipe unida, sócios alinhados e um clima bom de trabalho.",
+        'cuidado': "Pode evitar conflitos e demorar para cobrar ou desligar quem não rende, para não estragar o clima.",
+        'manter': ["Momentos com a equipe (reuniões leves, confraternizações)", "Decisões importantes tomadas junto com os sócios",
+                   "Cuidar do clima: resolver logo os atritos"]},
+    'seguranca': {
+        'gestao': "Se move pela segurança: empresa sólida, caixa organizado, regras claras e pouco risco.",
+        'cuidado': "Pode adiar investimentos e mudanças necessárias por receio do risco.",
+        'manter': ["Reserva de caixa e planejamento financeiro", "Mudanças combinadas com antecedência e em etapas",
+                   "Papéis claros: quem decide o quê"]},
+    'autonomia': {
+        'gestao': "Se move pela liberdade: decidir na própria área, testar ideias e não depender de aprovação para tudo.",
+        'cuidado': "Pode decidir sozinho(a) sem avisar os sócios e gerar atrito.",
+        'manter': ["Uma área da gestão sob a responsabilidade dele(a)", "Combinar o limite: até onde decide sozinho(a)",
+                   "Espaço para testar ideias novas"]},
+    'desafio': {
+        'gestao': "Se move por desafios: metas ousadas, crescer, abrir novas frentes e resolver problemas difíceis.",
+        'cuidado': "Pode desanimar quando a empresa entra numa fase de rotina e manutenção.",
+        'manter': ["Metas desafiadoras com o placar à vista", "Projetos de crescimento (nova loja, novo canal, delivery)",
+                   "Problemas difíceis para resolver"]},
+    'proposito': {
+        'gestao': "Se move pelo sentido: fazer diferença para clientes, equipe e cidade, numa empresa que trata bem as pessoas.",
+        'cuidado': "Pode sofrer com decisões que parecem frias, mesmo quando são necessárias para a empresa.",
+        'manter': ["Mostrar o impacto da empresa (clientes felizes, equipe crescendo)", "Ações sociais e projetos com a comunidade",
+                   "Explicar o porquê das decisões difíceis"]},
+}
+# 🧠 [LIDERANÇA+] Como aprende NA GESTÃO: como apresentar uma proposta, como combinar e como se desenvolver como gestor(a)
+APR_GESTAO = {
+    'visual': {
+        'apresentar': "Apresente propostas e números com gráficos, painéis e imagens (ex.: o gráfico do mês).",
+        'combinar': "Nas reuniões, mostre os pontos num quadro ou na tela; depois mande um resumo visual.",
+        'desenvolver': ["Vídeos e aulas online sobre gestão", "Visitar outras lojas para ver como fazem",
+                        "Painéis e gráficos para acompanhar a empresa"]},
+    'auditivo': {
+        'apresentar': "Apresente conversando: explique o raciocínio e deixe espaço para perguntas.",
+        'combinar': "Prefere resolver numa conversa ou ligação; mande áudio em vez de texto longo.",
+        'desenvolver': ["Podcasts e palestras sobre gestão", "Mentoria e conversa com outros empresários",
+                        "Grupos de troca de experiência"]},
+    'leitura': {
+        'apresentar': "Mande a proposta por escrito antes (tópicos ou planilha) e dê tempo para ler.",
+        'combinar': "Registre os combinados por escrito (um resumo curto no WhatsApp ou e-mail).",
+        'desenvolver': ["Livros e artigos sobre gestão", "Relatórios e planilhas para acompanhar a empresa",
+                        "Cursos com material escrito"]},
+    'pratico': {
+        'apresentar': "Mostre na prática: um teste pequeno, uma amostra ou um piloto antes de decidir.",
+        'combinar': "Combine o próximo passo concreto: quem faz o quê e até quando.",
+        'desenvolver': ["Testar ideias em pequena escala (piloto)", "Aprender com quem faz: visitas e imersões",
+                        "Cursos práticos, com exercício"]},
+}
+DICA_APR_GESTAO = ("Entre sócios e líderes: passe a informação no jeito de cada um e confirme o combinado de mais de um jeito "
+                   "(falado e por escrito).")
+# As partes do link (os mesmos códigos do 🧭 Perfil: perfil_disc.CONJUNTOS)
+NOMES_PARTES = {'disc': '👔 Perfil de liderança', 'motiv': '🔋 O que motiva', 'apr': '🧠 Como aprende'}
+
 _tabelas_ok = False
 _trava = threading.Lock()
 
@@ -337,6 +414,11 @@ def garantir_tabelas():
                 Valor NVARCHAR(300) NULL
             )
         """)
+        # 🔋🧠 [LIDERANÇA+] as partes do link, o que motiva e como aprende
+        for coluna, tipo in (('Partes', 'VARCHAR(12)'), ('Motivos', 'NVARCHAR(300)'), ('MotivoRespostas', 'NVARCHAR(1000)'),
+                             ('MotivoEm', 'DATETIME'), ('Aprendizado', 'NVARCHAR(200)'), ('AprendizadoRespostas', 'NVARCHAR(400)'),
+                             ('AprendizadoEm', 'DATETIME')):
+            cur.execute(f"IF COL_LENGTH('AvaliacoesLideranca', '{coluna}') IS NULL ALTER TABLE AvaliacoesLideranca ADD {coluna} {tipo} NULL")
         conn.commit()
         _tabelas_ok = True
     finally:
@@ -480,6 +562,35 @@ def resumo_pessoa(pct, perfil):
             'fatores': [{'d': d, 'nome': NOMES[d], 'emoji': EMOJI[d], 'pct': pct[d]} for d in DIMS]}
 
 
+def nome_partes(partes):
+    return ' + '.join(NOMES_PARTES[p] for p in P._partes_de(partes))
+
+
+def motivacao_gestao(pontos):
+    """🔋 [LIDERANÇA+] O que move a pessoa NA GESTÃO, como manter motivado(a), o cuidado e o que pesa menos."""
+    top = PM.principais(pontos)[:2]
+    o = PM._ordem(pontos)
+    return {'nome': PM.nome(pontos), 'fatores': PM.fatores(pontos),
+            'principais': [{'chave': k, 'emoji': PM.EMOJI[k], 'nome': PM.NOMES[k]} for k in top],
+            'oque': [MOTIV_GESTAO[k]['gestao'] for k in top],
+            'manter': MOTIV_GESTAO[top[0]]['manter'] + [x for k in top[1:] for x in MOTIV_GESTAO[k]['manter'][:1]],
+            'cuidado': [MOTIV_GESTAO[k]['cuidado'] for k in top],
+            'menos': [{'chave': k, 'emoji': PM.EMOJI[k], 'nome': PM.NOMES[k], 'curto': PM.CURTO[k]} for k in o[-2:]]}
+
+
+def aprendizado_gestao(pontos):
+    """🧠 [LIDERANÇA+] Como a pessoa aprende NA GESTÃO: como apresentar uma proposta, como combinar e como se desenvolver."""
+    varios = PA.varios(pontos)
+    top = PA._ordem(pontos)[:2] if varios else PA.principais(pontos)
+    return {'nome': PA.nome(pontos), 'varios': varios, 'canais': PA.canais(pontos),
+            'principais': [{'chave': k, 'emoji': PA.EMOJI[k], 'nome': PA.NOMES[k]} for k in top],
+            'oque': ([f"Aprende bem de vários jeitos; um pouco mais {PA.CURTO[top[0]].split(':')[0]}."] if varios
+                     else [PA.TEXTOS[k]['oque'] for k in top]),
+            'apresentar': [APR_GESTAO[k]['apresentar'] for k in top], 'combinar': [APR_GESTAO[k]['combinar'] for k in top],
+            'desenvolver': APR_GESTAO[top[0]]['desenvolver'] + [x for k in top[1:] for x in APR_GESTAO[k]['desenvolver'][:1]],
+            'dica': DICA_APR_GESTAO}
+
+
 def _dupla(a, b):
     """Como duas pessoas combinam na gestão, pelo fator principal de cada uma."""
     fa, fb = a['perfil'][0], b['perfil'][0]
@@ -512,19 +623,44 @@ def _divisao(socios):
     return saida
 
 
+def _chave(i):
+    """A mesma pessoa: o mesmo nome (sem diferença de maiúscula e espaço); o candidato fica à parte do time."""
+    return (i['papel'] == PAPEL_CANDIDATO, ' '.join(i['nome'].lower().split()))
+
+
+def _juntar(lista):
+    """[LIDERANÇA+] As respondidas da mesma pessoa (a mais nova primeiro) → a última com o perfil, com a motivação e com
+    como aprende (podem vir de links diferentes)."""
+    return (next((i for i in lista if i['pct']), None), next((i for i in lista if i['motivos']), None),
+            next((i for i in lista if i['aprende']), None))
+
+
+def _pessoas(respondidas):
+    """[LIDERANÇA+] Uma linha por pessoa, com as 3 partes juntas. 'id' é a avaliação mais nova (o 📄 Relatório junta o resto)."""
+    grupos = {}
+    for i in respondidas:                                 # já vem da mais nova para a mais antiga
+        grupos.setdefault(_chave(i), []).append(i)
+    saida = []
+    for lista in grupos.values():
+        disc, motiv, apr = _juntar(lista)
+        falta = [p for p, tem in (('disc', disc), ('motiv', motiv), ('apr', apr)) if not tem]
+        tel = next((i['telefone'] for i in lista if i['telefone']), '')
+        saida.append(dict(lista[0], pct=disc['pct'] if disc else None, perfil=disc['perfil'] if disc else '',
+                          estilo=disc['estilo'] if disc else '', perfil_nome=disc['perfil_nome'] if disc else '',
+                          motivos=motiv['motivos'] if motiv else None, aprende=apr['aprende'] if apr else None,
+                          motiva=PM.nome(motiv['motivos']) if motiv else '', aprende_nome=PA.nome(apr['aprende']) if apr else '',
+                          falta=falta, falta_nome=' + '.join(NOMES_PARTES[p] for p in falta), tem_telefone=bool(tel)))
+    return saida
+
+
 def _time(respondidas):
-    """O time de gestão: a resposta mais recente de cada sócio e líder (candidato não entra)."""
-    vistos, time_ = set(), []
-    for a in respondidas:                                 # já vem da mais nova para a mais antiga
-        chave = ' '.join(a['nome'].lower().split())
-        if a['papel'] == PAPEL_CANDIDATO or chave in vistos:
-            continue
-        vistos.add(chave)
-        time_.append(a)
-    return time_
+    """O time de gestão: cada sócio e líder (candidato não entra), com as partes juntas. [LIDERANÇA+] Quem ainda não fez o
+    perfil de liderança aparece, mas não entra na cobertura nem nos sócios juntos."""
+    return [p for p in _pessoas(respondidas) if p['papel'] != PAPEL_CANDIDATO]
 
 
 def _cobertura(time_):
+    time_ = [p for p in time_ if p['pct']]
     if not time_:
         return {'fatores': [], 'faltam': []}
     fatores = [{'d': d, 'nome': NOMES[d], 'emoji': EMOJI[d],
@@ -534,7 +670,8 @@ def _cobertura(time_):
 
 def _traz(pct, time_):
     """Os fatores fortes do candidato que ninguém do time de gestão tem forte: o que ele traz de novo."""
-    if not time_:
+    time_ = [p for p in time_ if p['pct']]
+    if not time_ or not pct:
         return []
     return [{'d': d, 'nome': NOMES[d], 'emoji': EMOJI[d], 'curto': TEXTOS[d]['curto']}
             for d in DIMS if pct[d] >= FORTE and not any(_forte(p, d) for p in time_)]
@@ -548,15 +685,30 @@ def _forte(p, d):
 # ------------------------------------------------------------------------------
 # Criar e mandar
 # ------------------------------------------------------------------------------
-def texto_mensagem(nome, link, papel, lembrete=False):
+def _quanto(partes):
+    """[LIDERANÇA+] O tamanho do questionário no texto do WhatsApp."""
+    ps = P._partes_de(partes)
+    info = {'disc': ("o seu estilo de liderança", f"{N_BLOCOS} situações", 12), 'motiv': ("o que te motiva", f"{PM.N_PARES} perguntas", 3),
+            'apr': ("como você aprende melhor", f"{PA.N_PERGUNTAS} perguntas", 3)}
+    if ps == ('disc',):
+        return f"{N_BLOCOS} situações do dia a dia da gestão (uns 10 a 15 minutos)"
+    if len(ps) == 1:
+        return f"{info[ps[0]][1]} rápidas sobre {info[ps[0]][0]} (uns 3 minutos)"
+    itens = [f"{info[p][0]} ({info[p][1]})" for p in ps]
+    return f"{len(ps)} partes: {', '.join(itens[:-1])} e {itens[-1]} (uns {sum(info[p][2] for p in ps)} minutos no total)"
+
+
+def texto_mensagem(nome, link, papel, lembrete=False, partes=None):
     primeiro = CE._primeiro_nome(nome)
+    tem_disc = P._tem_disc(partes)
     return ((f"🔔 *Lembrete:* sua avaliação de liderança ainda está esperando você.\n\n" if lembrete else "")
             + f"👔 *Avaliação de perfil de liderança — {CE._empresa()}*\n\n"
             + (f"Olá, {primeiro}!\n" if primeiro else "Olá!\n")
             + ("Obrigado pelo interesse em fazer parte da nossa liderança! Como parte do processo, queremos conhecer o "
                "seu estilo de gestão. " if papel == PAPEL_CANDIDATO else
-               "Queremos conhecer o seu estilo de gestão: como você decide, lidera e se comunica. ")
-            + f"São {N_BLOCOS} situações do dia a dia da gestão (uns 10 a 15 minutos) e não existe resposta certa ou errada.\n\n"
+               "Queremos conhecer o seu estilo de gestão: como você decide, lidera e se comunica. " if tem_disc else
+               "Queremos completar a sua avaliação de liderança. ")
+            + f"São {_quanto(partes)} e não existe resposta certa ou errada.\n\n"
             + f"👉 *Toque no link para responder:*\n{link}")
 
 
@@ -581,27 +733,38 @@ def criar(dados, usuario, agora=None):
     tel = CE.R.numero_whatsapp(tel_txt) if tel_txt else ''
     if tel_txt and not tel:
         raise ErroPerfil(f"WhatsApp inválido: '{tel_txt}'. Use o DDD + o número (ex.: 66 99999-1234).")
+    # 🔋🧠 [LIDERANÇA+] o que o link pede (sem dizer: só o perfil de liderança, como era antes)
+    partes = P._codigo_partes(dados['partes']) if dados.get('partes') is not None else P.P_DISC
+    if not partes:
+        raise ErroPerfil("Escolha o que enviar: o perfil de liderança, o que motiva e/ou como aprende.")
     valido = _validade(dados, agora)
+    aid, link = _inserir(nome, tel, papel, partes, valido, usuario, agora)
+    logger.info(f"[LIDERANÇA] {usuario.get('nome')} criou a avaliação {aid} ({papel}, {partes}).")
+    return {'ok': True, 'id': aid, 'link': link,
+            'mensagem': f"👔 Avaliação de {nome} criada ({nome_partes(partes)})." + (" O link vai no WhatsApp agora." if tel else
+                        " Sem WhatsApp: copie o link (ou abra aqui mesmo para responder).")}
+
+
+def _inserir(nome, tel, papel, partes, valido, usuario, agora):
+    """Grava a avaliação e, com WhatsApp, manda o link na hora. Devolve (id, link)."""
     base = P._exigir_endereco()
     token = CE._token()
     conn = P._conexao()
     try:
         cur = conn.cursor()
-        cur.execute("""INSERT INTO AvaliacoesLideranca (Nome, Telefone, Papel, Token, Status, CriadoPor, CriadoEm, ValidoAte, Versao)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?); SELECT SCOPE_IDENTITY();""",
+        cur.execute("""INSERT INTO AvaliacoesLideranca (Nome, Telefone, Papel, Token, Status, CriadoPor, CriadoEm, ValidoAte, Versao,
+                                                        Partes)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?); SELECT SCOPE_IDENTITY();""",
                     nome, tel or None, papel, token, P.ST_AGUARDANDO if tel else P.ST_SEM_TEL, usuario.get('nome'), agora,
-                    valido, VERSAO)
+                    valido, VERSAO, partes)
         cur.nextset()
         aid = int(cur.fetchone()[0])
         conn.commit()
     finally:
         conn.close()
-    logger.info(f"[LIDERANÇA] {usuario.get('nome')} criou a avaliação {aid} ({papel}).")
     if tel:
         _rodar(lambda: _enviar(aid, agora))
-    return {'ok': True, 'id': aid, 'link': f"{base}/lideranca/{token}",
-            'mensagem': f"👔 Avaliação de {nome} criada." + (" O link vai no WhatsApp agora." if tel else
-                                                            " Sem WhatsApp: copie o link (ou abra aqui mesmo para responder).")}
+    return aid, f"{base}/lideranca/{token}"
 
 
 def _mudar(aid, de, para, soma_tentativa=False, **campos):
@@ -632,7 +795,8 @@ def _enviar(aid, agora=None):
         conn = P._conexao()
         try:
             cur = conn.cursor()
-            cur.execute("SELECT Nome, Telefone, Token, Papel, Lembretes FROM AvaliacoesLideranca WHERE AvaliacaoID = ?", int(aid))
+            cur.execute("SELECT Nome, Telefone, Token, Papel, Lembretes, Partes FROM AvaliacoesLideranca WHERE AvaliacaoID = ?",
+                        int(aid))
             a = cur.fetchone()
         finally:
             conn.close()
@@ -640,7 +804,7 @@ def _enviar(aid, agora=None):
             return False
         if not _mudar(aid, (P.ST_AGUARDANDO, P.ST_FALHOU), P.ST_ENVIANDO, EnviadoEm=agora):
             return False
-        ok, resp = CE._mandar(a[1], texto_mensagem(a[0], f"{base}/lideranca/{a[2]}", a[3], lembrete=bool(a[4])))
+        ok, resp = CE._mandar(a[1], texto_mensagem(a[0], f"{base}/lideranca/{a[2]}", a[3], lembrete=bool(a[4]), partes=a[5]))
         if ok:
             _mudar(aid, (P.ST_ENVIANDO,), P.ST_ENVIADO, EnviadoEm=agora, Erro=None)
         else:
@@ -662,11 +826,12 @@ def _acertar(cur, agora):
 # Página da gestão
 # ------------------------------------------------------------------------------
 _COLUNAS = """AvaliacaoID, Nome, Telefone, Papel, Token, Status, Tentativas, Lembretes, CriadoEm, ValidoAte, EnviadoEm,
-              AbertoEm, RespondidoEm, Perfil, PctD, PctI, PctS, PctC, Erro"""
+              AbertoEm, RespondidoEm, Perfil, PctD, PctI, PctS, PctC, Erro, Partes, Motivos, Aprendizado"""
 
 
 def _item(r, base):
-    (aid, nome, tel, papel, token, st, tent, lemb, criado, valido, env, ab, resp, perfil, pd, pi, ps, pc, erro) = r
+    (aid, nome, tel, papel, token, st, tent, lemb, criado, valido, env, ab, resp, perfil, pd, pi, ps, pc, erro,
+     partes, motivos, aprende) = r
     if st in (P.ST_AGUARDANDO, P.ST_ENVIANDO):
         ic, txt = '⏳', "Enviando no WhatsApp…"
     elif st == P.ST_SEM_TEL:
@@ -676,7 +841,9 @@ def _item(r, base):
     else:
         ic, txt = P._situacao(st, env, ab, resp, lemb, '', False, erro, tent or 0, True)
     respondido = st == P.ST_RESPONDIDO
-    pct = P._pct(pd, pi, ps, pc) if respondido else None
+    pct = P._pct(pd, pi, ps, pc) if respondido and perfil else None      # [LIDERANÇA+] link sem o perfil: sem barras
+    motivos = P._motivos(motivos) if respondido else None
+    aprende = P._aprende(aprende) if respondido else None
     return {'id': int(aid), 'nome': nome or '?', 'papel': papel, 'papel_nome': dict(PAPEIS).get(papel, papel), 'status': st,
             'icone': ic, 'situacao': txt, 'criado': CE._quando(criado), 'telefone': tel or '',
             'whatsapp': f"https://wa.me/{tel}" if tel else '',
@@ -684,8 +851,11 @@ def _item(r, base):
             'pode_agora': bool(tel) and st in (P.ST_AGUARDANDO, P.ST_FALHOU, P.ST_EXPIRADO),
             'pode_lembrar': bool(tel) and st == P.ST_ENVIADO,
             'pendente': st in (P.ST_AGUARDANDO, P.ST_ENVIANDO, P.ST_ENVIADO, P.ST_FALHOU, P.ST_SEM_TEL),
-            'perfil': perfil or '', 'perfil_nome': P.nome_perfil(perfil) if respondido else '',
-            'estilo': estilo(perfil) if respondido else '', 'pct': pct, 'respondido': CE._quando(resp)}
+            'perfil': perfil or '', 'perfil_nome': P.nome_perfil(perfil) if pct else '',
+            'estilo': estilo(perfil) if pct else '', 'pct': pct, 'respondido': CE._quando(resp),
+            'partes': partes or P.P_DISC, 'partes_nome': nome_partes(partes),
+            'motivos': motivos, 'aprende': aprende, 'motiva': PM.nome(motivos) if motivos else '',
+            'aprende_nome': PA.nome(aprende) if aprende else ''}
 
 
 def _linhas(agora):
@@ -709,7 +879,7 @@ def painel(usuario, agora=None):
     itens = [_item(r, base) for r in _linhas(agora)]
     respondidas = [i for i in itens if i['status'] == P.ST_RESPONDIDO]
     time_ = _time(respondidas)
-    socios = [p for p in time_ if p['papel'] == 'socio']
+    socios = [p for p in time_ if p['papel'] == 'socio' and p['pct']]
     for i in itens:
         if i['papel'] == PAPEL_CANDIDATO and i['pct']:
             i['traz'] = _traz(i['pct'], time_)
@@ -719,16 +889,45 @@ def painel(usuario, agora=None):
     except Exception as e:
         logger.error(f"[LIDERANÇA] Não listei os gestores: {e}")
         lista_gestores = []
-    return {'avaliacoes': itens[:300], 'papeis': [{'chave': c, 'nome': n} for c, n in PAPEIS],
+    return {'avaliacoes': [_publico(i) for i in itens[:300]], 'papeis': [{'chave': c, 'nome': n} for c, n in PAPEIS],
             'time': [{'id': p['id'], 'nome': p['nome'], 'papel_nome': p['papel_nome'], 'estilo': p['estilo'],
-                      'perfil_nome': p['perfil_nome'], 'pct': p['pct']} for p in time_],
+                      'perfil_nome': p['perfil_nome'], 'pct': p['pct'], 'motiva': p['motiva'], 'aprende': p['aprende_nome'],
+                      'falta': p['falta'], 'falta_nome': p['falta_nome'], 'tem_telefone': p['tem_telefone'],
+                      'pendente': _pendente(itens, p)} for p in time_],
             'cobertura': _cobertura(time_),
             'socios': {'duplas': [_dupla(socios[i], socios[j]) for i in range(len(socios)) for j in range(i + 1, len(socios))],
                        'divisao': _divisao(socios) if len(socios) >= 2 else []},
+            'como_cada_um': _como_cada_um(time_),
+            'partes': [{'chave': p, 'nome': NOMES_PARTES[p]} for p in ('disc', 'motiv', 'apr')],
             'acesso': {'restrito': bool(ids), 'ids': sorted(ids), 'gestores': lista_gestores},
             'perguntas': N_BLOCOS, 'link_local': bool(local or not base), 'hoje': agora.date().isoformat(),
             'validade_padrao': (agora.date() + timedelta(days=P.VALIDADE_PADRAO_DIAS)).isoformat(),
             'validade_max': (agora.date() + timedelta(days=P.VALIDADE_MAX_DIAS)).isoformat()}
+
+
+def _publico(i):
+    """O cartão da avaliação na tela (sem as notas cruas da motivação e do aprendizado)."""
+    return {k: v for k, v in i.items() if k not in ('motivos', 'aprende')}
+
+
+def _pendente(itens, pessoa):
+    """[LIDERANÇA+] Um link da mesma pessoa ainda esperando resposta (para não mandar o que falta duas vezes)."""
+    return next(({'id': i['id'], 'partes_nome': i['partes_nome'], 'link': i['link']} for i in itens
+                 if i['pendente'] and _chave(i) == _chave(pessoa)), None)
+
+
+def _como_cada_um(time_):
+    """🔋🧠 [LIDERANÇA+] O que move cada um e como passar uma informação para cada um (sócios e líderes)."""
+    saida = []
+    for p in time_:
+        if not p['motivos'] and not p['aprende']:
+            continue
+        m = motivacao_gestao(p['motivos']) if p['motivos'] else None
+        a = aprendizado_gestao(p['aprende']) if p['aprende'] else None
+        saida.append({'nome': CE._primeiro_nome(p['nome']) or p['nome'], 'motiva': m['nome'] if m else '',
+                      'move': m['oque'][0] if m else '', 'aprende': a['nome'] if a else '',
+                      'apresentar': a['apresentar'][0] if a else ''})
+    return saida
 
 
 def detalhe(aid, usuario, agora=None):
@@ -742,26 +941,70 @@ def detalhe(aid, usuario, agora=None):
         raise ErroPerfil("Avaliação não encontrada.", 404)
     if a['status'] != P.ST_RESPONDIDO:
         raise ErroPerfil("Esta avaliação ainda não foi respondida.", 409)
-    r = relatorio(a['pct'], a['perfil'])
     respondidas = [i for i in itens if i['status'] == P.ST_RESPONDIDO]
-    time_ = [p for p in _time(respondidas) if p['id'] != a['id']]
-    chave = ' '.join(a['nome'].lower().split())
-    r.update({'id': a['id'], 'nome': a['nome'], 'perfil_nome': a['perfil_nome'], 'papel': a['papel'], 'papel_nome': a['papel_nome'], 'respondido': a['respondido'],
-              'candidato': a['papel'] == PAPEL_CANDIDATO,
-              'com_time': [dict(_dupla(a, p), papel_nome=p['papel_nome']) for p in time_
-                           if ' '.join(p['nome'].lower().split()) != chave],
-              'anteriores': [{'id': i['id'], 'respondido': i['respondido'], 'estilo': i['estilo']} for i in respondidas
-                             if i['id'] != a['id'] and ' '.join(i['nome'].lower().split()) == chave]})
-    if r['candidato']:
-        r['traz'] = _traz(a['pct'], time_)
+    mesma = [i for i in respondidas if _chave(i) == _chave(a)]
+    # [LIDERANÇA+] cada parte: deste link ou a última resposta da mesma pessoa
+    disc = a if a['pct'] else _juntar(mesma)[0]
+    motiv = a if a['motivos'] else _juntar(mesma)[1]
+    apr = a if a['aprende'] else _juntar(mesma)[2]
+    if disc:
+        r = relatorio(disc['pct'], disc['perfil'])
+        r['perfil_de'] = '' if disc is a else disc['respondido']
+    else:
+        r = {'perfil': '', 'nome': '', 'estilo': '', 'pct': None, 'sem_perfil': True}
+    time_ = [p for p in _time(respondidas) if _chave(p) != _chave(a) and p['pct']]
+    eu = dict(a, pct=disc['pct'], perfil=disc['perfil']) if disc else None
+    falta = [p for p, tem in (('disc', disc), ('motiv', motiv), ('apr', apr)) if not tem]
+    r.update({'id': a['id'], 'nome': a['nome'], 'perfil_nome': disc['perfil_nome'] if disc else '', 'papel': a['papel'],
+              'papel_nome': a['papel_nome'], 'respondido': a['respondido'], 'candidato': a['papel'] == PAPEL_CANDIDATO,
+              'com_time': [dict(_dupla(eu, p), papel_nome=p['papel_nome']) for p in time_] if eu else [],
+              'anteriores': [{'id': i['id'], 'respondido': i['respondido'], 'estilo': i['estilo']} for i in mesma
+                             if i['pct'] and i['id'] != a['id'] and i is not disc],
+              'motivacao': motivacao_gestao(motiv['motivos']) if motiv else None,
+              'motivacao_de': '' if not motiv or motiv is a else motiv['respondido'],
+              'aprendizado': aprendizado_gestao(apr['aprende']) if apr else None,
+              'aprendizado_de': '' if not apr or apr is a else apr['respondido'],
+              'falta': falta, 'falta_nome': ' + '.join(NOMES_PARTES[p] for p in falta),
+              'pendente': _pendente(itens, a)})
+    if r['candidato'] and disc:
+        r['traz'] = _traz(disc['pct'], time_)
     return r
 
 
+def mandar_falta(aid, usuario, agora=None):
+    """🔋🧠 [LIDERANÇA+] Um link novo só com o que a pessoa ainda não respondeu (ex.: quem já fez o perfil de liderança
+    recebe só 🔋 o que motiva e 🧠 como aprende). Com WhatsApp vai na hora; sem, a gestão copia o link."""
+    exigir_acesso(usuario)
+    agora = agora or CE._agora()
+    itens = [_item(r, CE._endereco()[0]) for r in _linhas(agora)]
+    a = next((i for i in itens if i['id'] == int(aid)), None)
+    if not a:
+        raise ErroPerfil("Avaliação não encontrada.", 404)
+    mesma = [i for i in itens if _chave(i) == _chave(a)]
+    disc, motiv, apr = _juntar([i for i in mesma if i['status'] == P.ST_RESPONDIDO])
+    falta = [p for p, tem in (('disc', disc), ('motiv', motiv), ('apr', apr)) if not tem]
+    if not falta:
+        raise ErroPerfil(f"{a['nome']} já respondeu as 3 partes.", 409)
+    pendente = _pendente(itens, a)
+    if pendente:
+        raise ErroPerfil(f"{a['nome']} já tem um link esperando resposta ({pendente['partes_nome']}). Use 🔔 Lembrar ou "
+                         f"🔗 Copiar link em 📋 Avaliações (ou ⛔ cancele esse link e mande de novo).", 409)
+    partes = P._codigo_partes(falta)
+    tel = next((i['telefone'] for i in mesma if i['telefone']), '')
+    novo, link = _inserir(a['nome'], tel, a['papel'], partes, agora.date() + timedelta(days=P.VALIDADE_PADRAO_DIAS), usuario, agora)
+    logger.info(f"[LIDERANÇA] {usuario.get('nome')} mandou o que falta ({partes}) para a avaliação {aid} → {novo}.")
+    return {'ok': True, 'id': novo, 'link': link, 'whatsapp': bool(tel),
+            'mensagem': f"📤 {nome_partes(partes)} para {CE._primeiro_nome(a['nome']) or a['nome']}: "
+                        + ("o link vai no WhatsApp agora." if tel else "sem WhatsApp, copie o link (ou responda aqui mesmo).")}
+
+
 def acao(aid, nome_acao, usuario, agora=None):
-    """🔔 lembrar · 📤 mandar agora · ⛔ cancelar · 🗑️ apagar."""
+    """🔔 lembrar · 📤 mandar agora · ⛔ cancelar · 🗑️ apagar · 🔋🧠 mandar o que falta."""
     exigir_acesso(usuario)
     garantir_tabelas()
     agora = agora or CE._agora()
+    if nome_acao == 'falta':
+        return mandar_falta(aid, usuario, agora)
     conn = P._conexao()
     try:
         cur = conn.cursor()
@@ -819,7 +1062,8 @@ def acao(aid, nome_acao, usuario, agora=None):
 def _por_token(cur, token):
     if not token or len(str(token)) > 40:
         return None
-    cur.execute("""SELECT AvaliacaoID, Nome, Papel, Status, AbertoEm, Perfil, PctD, PctI, PctS, PctC, RespondidoEm
+    cur.execute("""SELECT AvaliacaoID, Nome, Papel, Status, AbertoEm, Perfil, PctD, PctI, PctS, PctC, RespondidoEm,
+                          Partes, Motivos, Aprendizado
                    FROM AvaliacoesLideranca WHERE Token = ?""", str(token))
     return cur.fetchone()
 
@@ -841,50 +1085,83 @@ def ver(token, agora=None):
             conn.commit()
     finally:
         conn.close()
-    nome, candidato = CE._primeiro_nome(a[1]), a[2] == PAPEL_CANDIDATO
-    comum = {'nome': nome, 'empresa': CE._empresa(), 'candidato': candidato, 'papel_nome': dict(PAPEIS).get(a[2], '')}
+    nome, candidato, partes = CE._primeiro_nome(a[1]), a[2] == PAPEL_CANDIDATO, a[11] or P.P_DISC
+    comum = {'nome': nome, 'empresa': CE._empresa(), 'candidato': candidato, 'papel_nome': dict(PAPEIS).get(a[2], ''),
+             'partes': partes}
     if a[3] == P.ST_RESPONDIDO:
         if candidato:                                     # candidato: só o obrigado (o resultado fica com os sócios)
             return dict(comum, respondido=True, respondido_em=CE._quando(a[10]))
+        motivos, aprende = P._motivos(a[12]), P._aprende(a[13])
         return dict(comum, respondido=True, respondido_em=CE._quando(a[10]),
-                    resultado=resumo_pessoa(P._pct(a[6], a[7], a[8], a[9]), a[5]))
-    return dict(comum, respondido=False, treino=TREINO,
-                blocos=[{'pergunta': SITUACOES[k][0], 'opcoes': [texto for texto, _ in bloco]} for k, bloco in enumerate(BLOCOS)])
+                    resultado=resumo_pessoa(P._pct(a[6], a[7], a[8], a[9]), a[5]) if a[5] else None,
+                    motivacao=PM.resumo_pessoa(motivos) if motivos else None,       # [LIDERANÇA+] o lado positivo
+                    aprendizado=PA.resumo_pessoa(aprende) if aprende else None)
+    tem_disc = P._tem_disc(partes)
+    return dict(comum, respondido=False, treino=TREINO if tem_disc else None,
+                blocos=[{'pergunta': SITUACOES[k][0], 'opcoes': [texto for texto, _ in bloco]} for k, bloco in enumerate(BLOCOS)]
+                if tem_disc else [],
+                pares=PM.perguntas() if P._tem_motiv(partes) else [],          # [LIDERANÇA+] 🔋 parte 2 (ou a única)
+                aprende=PA.perguntas() if P._tem_apr(partes) else [])          # [LIDERANÇA+] 🧠 parte 3 (ou a única)
 
 
 def responder(token, dados, agora=None):
-    """Recebe as escolhas [[índice MAIS, índice MENOS], …] de cada situação, calcula e guarda (uma vez só)."""
+    """Recebe as respostas das partes do link (perfil: [[MAIS, MENOS], …] de cada situação; [LIDERANÇA+] 🔋 o lado escolhido
+    em cada pergunta; 🧠 a resposta de cada situação), calcula e guarda (uma vez só)."""
     garantir_tabelas()
     agora = agora or CE._agora()
-    respostas = (dados or {}).get('respostas') if isinstance(dados, dict) else None
-    if not isinstance(respostas, list) or len(respostas) != N_BLOCOS:
-        raise ErroPerfil(f"Responda as {N_BLOCOS} situações antes de enviar.")
-    escolhas = []
-    for k, r in enumerate(respostas):
+    dados = dados if isinstance(dados, dict) else {}
+    conn = P._conexao()
+    try:
+        a = _por_token(conn.cursor(), token)
+    finally:
+        conn.close()
+    if not a or a[3] == P.ST_CANCELADO:
+        raise ErroPerfil("Link inválido ou cancelado. Peça um link novo.", 404)
+    if a[3] == P.ST_EXPIRADO:
+        raise ErroPerfil("O prazo desta avaliação acabou. Peça um link novo.", 410)
+    partes = a[11] or P.P_DISC
+    escolhas = pct = perfil = motivos = escolhidas = aprende = aprende_escolhas = None
+    if P._tem_disc(partes):
+        respostas = dados.get('respostas')
+        if not isinstance(respostas, list) or len(respostas) != N_BLOCOS:
+            raise ErroPerfil(f"Responda as {N_BLOCOS} situações antes de enviar.")
+        escolhas = []
+        for k, r in enumerate(respostas):
+            try:
+                mais, menos = int(r[0]), int(r[1])
+            except (TypeError, ValueError, IndexError):
+                raise ErroPerfil(f"Situação {k + 1} incompleta: escolha a frase que MAIS e a que MENOS parece com você.")
+            if not (0 <= mais < 4 and 0 <= menos < 4) or mais == menos:
+                raise ErroPerfil(f"Situação {k + 1}: a frase do MAIS e a do MENOS precisam ser diferentes.")
+            escolhas.append((BLOCOS[k][mais][1], BLOCOS[k][menos][1]))
+        pct, perfil = P.calcular(escolhas)
+    if P._tem_motiv(partes):
         try:
-            mais, menos = int(r[0]), int(r[1])
-        except (TypeError, ValueError, IndexError):
-            raise ErroPerfil(f"Situação {k + 1} incompleta: escolha a frase que MAIS e a que MENOS parece com você.")
-        if not (0 <= mais < 4 and 0 <= menos < 4) or mais == menos:
-            raise ErroPerfil(f"Situação {k + 1}: a frase do MAIS e a do MENOS precisam ser diferentes.")
-        escolhas.append((BLOCOS[k][mais][1], BLOCOS[k][menos][1]))
-    pct, perfil = P.calcular(escolhas)
+            motivos, escolhidas = PM.calcular(dados.get('motivos'))
+        except PM.ErroMotivacao as e:
+            raise ErroPerfil(str(e))
+    if P._tem_apr(partes):
+        try:
+            aprende, aprende_escolhas = PA.calcular(dados.get('aprendizado'))
+        except PA.ErroAprendizado as e:
+            raise ErroPerfil(str(e))
     conn = P._conexao()
     try:
         cur = conn.cursor()
-        a = _por_token(cur, token)
-        if not a or a[3] == P.ST_CANCELADO:
-            raise ErroPerfil("Link inválido ou cancelado. Peça um link novo.", 404)
-        if a[3] == P.ST_EXPIRADO:
-            raise ErroPerfil("O prazo desta avaliação acabou. Peça um link novo.", 410)
         if a[3] != P.ST_RESPONDIDO:                       # já respondeu (ex.: tocou duas vezes): fica a primeira resposta
             cur.execute("""UPDATE AvaliacoesLideranca SET Status = ?, RespondidoEm = ?, AbertoEm = ISNULL(AbertoEm, ?),
-                                  Respostas = ?, Versao = ?, PctD = ?, PctI = ?, PctS = ?, PctC = ?, Perfil = ?
+                                  Respostas = ?, Versao = ?, PctD = ?, PctI = ?, PctS = ?, PctC = ?, Perfil = ?,
+                                  Motivos = ?, MotivoRespostas = ?, MotivoEm = ?,
+                                  Aprendizado = ?, AprendizadoRespostas = ?, AprendizadoEm = ?
                            WHERE AvaliacaoID = ? AND Status <> ?""",
-                        P.ST_RESPONDIDO, agora, agora, json.dumps(escolhas), VERSAO, pct['D'], pct['I'], pct['S'], pct['C'],
-                        perfil, a[0], P.ST_RESPONDIDO)
+                        P.ST_RESPONDIDO, agora, agora, json.dumps(escolhas) if escolhas else None, VERSAO,
+                        *((pct['D'], pct['I'], pct['S'], pct['C']) if pct else (None,) * 4), perfil,
+                        json.dumps(motivos) if motivos else None, json.dumps(escolhidas) if escolhidas else None,
+                        agora if motivos else None,
+                        json.dumps(aprende) if aprende else None, json.dumps(aprende_escolhas) if aprende_escolhas else None,
+                        agora if aprende else None, a[0], P.ST_RESPONDIDO)
             if cur.rowcount == 1:
-                logger.info(f"[LIDERANÇA] Avaliação {a[0]} respondida.")
+                logger.info(f"[LIDERANÇA] Avaliação {a[0]} respondida ({partes}).")
             conn.commit()
     finally:
         conn.close()

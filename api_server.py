@@ -3245,7 +3245,7 @@ def api_gestao_lideranca_detalhe(usuario, avaliacao_id):
 @compras_login(somente_gestor=True)
 def api_gestao_lideranca_acao(usuario, avaliacao_id, acao):
     import perfil_lideranca
-    if acao not in ('lembrar', 'agora', 'cancelar', 'apagar'):
+    if acao not in ('lembrar', 'agora', 'cancelar', 'apagar', 'falta'):      # [LIDERANÇA+] falta = mandar só o que falta
         return jsonify({"erro": "Não encontrado."}), 404
     return _resposta_perfil(lambda: perfil_lideranca.acao(avaliacao_id, acao, usuario))
 

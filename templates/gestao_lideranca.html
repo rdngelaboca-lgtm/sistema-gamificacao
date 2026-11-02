@@ -54,8 +54,32 @@
   .nivel-f { border-left: 4px solid var(--linha); padding: 2px 0 2px 10px; margin: 6px 0; }
   .nivel-f.combina { border-left-color: var(--ok); } .nivel-f.pode { border-left-color: #f9a825; } .nivel-f.menos { border-left-color: var(--erro); }
   .aviso-uso { font-size: 12px; color: var(--suave); margin-top: 10px; line-height: 1.45; }
-  @media print { body * { visibility: hidden; } #modal, #modal * { visibility: visible; } #modal { position: absolute; inset: 0; box-shadow: none; }
-    #modal .botoes, #fechar-modal { display: none; } }
+  /* 🔋🧠 [LIDERANÇA+] */
+  .linha-m { font-size: 13px; color: #6b4e00; } .linha-a { font-size: 13px; color: #1d3d7a; }
+  .falta-l { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; background: #fff7e0; border: 1px solid #f1de9c;
+    border-radius: 10px; padding: 5px 8px; font-size: 12px; }
+  .falta-l .btn { font-size: 12px; padding: 4px 8px; }
+  .sem-perfil { font-size: 13px; color: var(--suave); font-weight: 700; }
+  .partes-l { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+  .partes-l label { display: flex; gap: 6px; align-items: center; border: 1px solid var(--linha); border-radius: 10px; padding: 6px 10px;
+    font-weight: 700; font-size: 14px; cursor: pointer; background: #fff; }
+  .partes-l label:has(input:checked) { border-color: var(--verde); background: var(--verde-claro); }
+  .bloco-m { background: #fffaf0; border: 1px solid #f1de9c; border-radius: 12px; padding: 10px 12px; margin-top: 10px; display: grid; gap: 6px; }
+  .bloco-m.apr { background: #eef4ff; border-color: #c9d8f5; }
+  .bloco-m .secoes { margin-top: 0; }
+  .barras.m .f { grid-template-columns: 150px minmax(0, 1fr) 34px; }
+  .falta-rel { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; background: #fff7e0; border: 1px solid #f1de9c;
+    border-radius: 10px; padding: 6px 10px; font-size: 13px; margin-top: 8px; }
+  /* imprimir: só o relatório, inteiro (sem cortar na rolagem) e sem os botões */
+  @media print {
+    #app, #status, #login { display: none !important; }
+    html, body { background: #fff !important; }
+    #fundo-modal { position: static; display: block; background: none; padding: 0; }
+    #modal { width: auto; max-height: none; overflow: visible; padding: 0; border-radius: 0; box-shadow: none; }
+    #modal .botoes, #modal .nao-imprimir, #fechar-modal { display: none !important; }
+    .secao, .bloco-m, .nivel-f { break-inside: avoid; }
+    * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
   @media (max-width: 700px) {
     .area { padding-left: 10px; padding-right: 10px; }
     .cobertura { grid-template-columns: 1fr 1fr; }
@@ -74,6 +98,9 @@
         conflitos, em quais <b>áreas da gestão</b> rende mais (com o porquê) e quem ela precisa ao lado. Junta os sócios
         para mostrar <b>como vocês se complementam</b> e uma divisão sugerida das áreas. Para 👑 sócios, 🧑‍💼 líderes e
         🎯 candidatos a líder.</p>
+      <p>🔋🧠 Junto (ou depois) dá para mandar <b>o que motiva</b> (28 perguntas rápidas) e <b>como aprende</b> (12): o relatório
+        mostra o que move a pessoa na gestão, como manter motivado(a), como apresentar uma proposta para ela e como ela se
+        desenvolve. Quem já fez o perfil de liderança recebe só o que falta (<b>📤 Mandar o que falta</b>).</p>
       <p>Não entra no 🧭 Perfil da equipe, não dá pontos e não manda nada para o grupo de avisos. É um questionário nosso,
         baseado na teoria DISC: serve para orientar e conversar, <b>não para decidir sozinho</b>.</p>
     </details>
@@ -106,7 +133,7 @@ function desenhar() {
     <div class="acesso" id="acesso"><span>${d.acesso.restrito ? `🔒 Só <b>${nomes.map(esc).join(', ')}</b> ${nomes.length > 1 ? 'veem' : 'vê'} esta página.`
         : '🔓 Qualquer gestor vê esta página. <b>Escolha quem pode ver</b> (ex.: só os sócios).'}</span>
       <button class="btn" id="btn-acesso">🔒 Quem pode ver</button></div>
-    ${htmlTime(d)}${htmlSocios(d)}
+    ${htmlTime(d)}${htmlComo(d)}${htmlSocios(d)}
     <div class="bloco"><h3>📋 Avaliações</h3>
       ${d.avaliacoes.length ? `<div class="grade-p">${d.avaliacoes.map(cartao).join('')}</div>`
         : `<div class="vazio-p">Nenhuma avaliação ainda. Toque em <b>➕ Nova avaliação</b>: comece por você e pela sua sócia (ou
@@ -115,14 +142,39 @@ function desenhar() {
 }
 function htmlTime(d) {
   if (!d.time.length) return '';
-  return `<div class="bloco"><h3>👥 Time de gestão</h3>
+  const mandar = d.time.filter(p => p.falta.length && !p.pendente);
+  return `<div class="bloco" id="time"><h3>👥 Time de gestão</h3>
     <div class="mini suave">A resposta mais recente de cada 👑 sócio e 🧑‍💼 líder (os 🎯 candidatos não entram).</div>
-    <div class="cobertura">${d.cobertura.fatores.map(f => `<div class="${f.d}"><b>${f.emoji} ${esc(f.nome)} forte</b>
-      ${f.quem.length ? esc(f.quem.join(', ')) : '<span class="ninguem">ninguém</span>'}</div>`).join('')}</div>
+    ${d.cobertura.fatores.length ? `<div class="cobertura">${d.cobertura.fatores.map(f => `<div class="${f.d}"><b>${f.emoji} ${esc(f.nome)} forte</b>
+      ${f.quem.length ? esc(f.quem.join(', ')) : '<span class="ninguem">ninguém</span>'}</div>`).join('')}</div>` : ''}
     ${d.cobertura.faltam.map(t => `<div class="dica">💡 ${esc(t)}</div>`).join('')}
-    <div class="grade-p">${d.time.map(p => `<div class="pessoa-c"><span class="nm">${esc(p.nome)}</span>
-      <span class="tag-p">${esc(p.papel_nome)}</span><span class="est">${esc(p.estilo)}</span>${barras(p.pct)}
+    ${mandar.length > 1 ? `<div class="falta-l" id="falta-todos">⏳ ${mandar.length} pessoas ainda não responderam tudo
+      <button class="btn" data-falta-todos="${mandar.map(p => p.id).join(',')}">📤 Mandar o que falta para todos</button></div>` : ''}
+    <div class="grade-p">${d.time.map(p => `<div class="pessoa-c" data-pessoa="${p.id}"><span class="nm">${esc(p.nome)}</span>
+      <span class="tag-p">${esc(p.papel_nome)}</span>
+      ${p.pct ? `<span class="est">${esc(p.estilo)}</span>${barras(p.pct)}` : '<span class="sem-perfil">👔 Ainda não fez o perfil de liderança</span>'}
+      ${p.motiva ? `<span class="linha-m">🔋 Move: <b>${esc(p.motiva)}</b></span>` : ''}
+      ${p.aprende ? `<span class="linha-a">🧠 Aprende: <b>${esc(p.aprende)}</b></span>` : ''}
+      ${faltaLinha(p)}
       <div class="acoes"><button class="btn" data-rel="${p.id}">📄 Relatório</button></div></div>`).join('')}</div></div>`;
+}
+// 🔋🧠 [LIDERANÇA+] o que falta responder (e o botão para mandar só isso), ou o link que já está esperando
+function faltaLinha(p) {
+  if (!p.falta || !p.falta.length) return '';
+  if (p.pendente) return `<div class="falta-l">⏳ Link esperando: ${esc(p.pendente.partes_nome)}
+    ${p.pendente.link ? `<a class="btn" href="${esc(p.pendente.link)}" target="_blank" rel="noopener">↗️ Responder aqui</a>
+      <button class="btn" data-copiar="${esc(p.pendente.link)}">🔗 Copiar link</button>` : ''}</div>`;
+  return `<div class="falta-l"><span>⏳ Falta: <b>${esc(p.falta_nome)}</b></span>
+    <button class="btn" data-falta="${p.id}" data-nome="${esc(p.nome)}" data-oque="${esc(p.falta_nome)}" data-tel="${p.tem_telefone ? 1 : ''}">📤 Mandar o que falta</button></div>`;
+}
+// 🔋🧠 [LIDERANÇA+] o que move cada um e como apresentar uma proposta para cada um
+function htmlComo(d) {
+  if (!d.como_cada_um.length) return '';
+  return `<div class="bloco" id="como-cada-um"><h3>🔋🧠 Como cada um funciona</h3>
+    <div class="mini suave">O que move cada um na gestão e o melhor jeito de passar uma proposta ou um combinado.</div>
+    <table class="tabela"><tr><th>Quem</th><th>🔋 O que move</th><th>🧠 Como passar uma proposta</th></tr>${d.como_cada_um.map(x =>
+      `<tr><td><b>${esc(x.nome)}</b></td><td>${x.motiva ? `<b>${esc(x.motiva)}</b><br><span class="mini">${esc(x.move)}</span>` : '<span class="mini suave">ainda não respondeu</span>'}</td>
+        <td>${x.aprende ? `<b>${esc(x.aprende)}</b><br><span class="mini">${esc(x.apresentar)}</span>` : '<span class="mini suave">ainda não respondeu</span>'}</td></tr>`).join('')}</table></div>`;
 }
 function htmlSocios(d) {
   if (!d.socios.duplas.length) return '';
@@ -136,7 +188,10 @@ function htmlSocios(d) {
 function cartao(a) {
   return `<div class="pessoa-c" data-id="${a.id}"><span class="nm">${a.icone} ${esc(a.nome)}</span>
     <span class="tag-p ${esc(a.papel)}">${esc(a.papel_nome)}</span>
+    ${a.status === 'respondido' || a.partes !== 'disc' ? `<span class="mini suave">${esc(a.partes_nome)}</span>` : ''}
     ${a.pct ? `<span class="est">${esc(a.estilo)}</span>${barras(a.pct)}` : ''}
+    ${a.motiva ? `<span class="linha-m">🔋 Move: <b>${esc(a.motiva)}</b></span>` : ''}
+    ${a.aprende_nome ? `<span class="linha-a">🧠 Aprende: <b>${esc(a.aprende_nome)}</b></span>` : ''}
     ${a.traz && a.traz.length ? `<span class="mini" style="color:var(--ok);font-weight:700">✨ Traz para a gestão: ${a.traz.map(x => `${x.emoji} ${esc(x.nome)} (${esc(x.curto)})`).join(', ')}</span>` : ''}
     <span class="mini suave">${esc(a.situacao)} · criada ${esc(a.criado)}</span>
     <div class="acoes">${a.status === 'respondido' ? `<button class="btn" data-rel="${a.id}">📄 Relatório</button>` : ''}
@@ -162,6 +217,9 @@ function nova() {
     <label class="campo"><span>Nome</span><input id="nv-nome" maxlength="150" placeholder="Nome completo"></label>
     <div class="papeis">${d.papeis.map((p, i) => `<label><input type="radio" name="nv-papel" value="${esc(p.chave)}" ${i === 0 ? 'checked' : ''}>
       ${esc(p.nome)} <small>· ${esc(dicas[p.chave] || '')}</small></label>`).join('')}</div>
+    <div class="campo"><span>O que enviar?</span><div class="partes-l">${d.partes.map(p =>
+      `<label><input type="checkbox" data-parte="${esc(p.chave)}" checked> ${esc(p.nome)}</label>`).join('')}</div>
+      <span class="mini suave" id="nv-partes-info">👔 24 situações + 🔋 28 perguntas rápidas + 🧠 12 perguntas rápidas (uns 18 minutos).</span></div>
     <div class="grade2">
       <label class="campo"><span>WhatsApp <span class="mini suave">(opcional)</span></span><input id="nv-tel" inputmode="tel" placeholder="Ex.: 66 99999-1234">
         <span class="mini suave">Sem WhatsApp: você copia o link ou responde aqui mesmo.</span></label>
@@ -169,20 +227,56 @@ function nova() {
     <div class="botoes"><button class="btn" id="nv-cancelar">Cancelar</button><button class="btn prim" id="nv-criar">Criar</button></div>`, null, true);
   $('#nv-cancelar').onclick = fecharModal;
   $('#nv-nome').focus();
+  const partes = () => [...document.querySelectorAll('[data-parte]:checked')].map(x => x.dataset.parte);
+  const INFO_P = {disc: ['👔 24 situações', 12], motiv: ['🔋 28 perguntas rápidas', 3], apr: ['🧠 12 perguntas rápidas', 3]};
+  document.querySelectorAll('[data-parte]').forEach(x => x.onchange = () => {
+    const ps = partes();
+    $('#nv-partes-info').textContent = ps.length ? `${ps.map(p => INFO_P[p][0]).join(' + ')} (uns ${ps.reduce((t, p) => t + INFO_P[p][1], 0)} minutos).`
+      : 'Marque pelo menos uma parte.';
+  });
   $('#nv-criar').onclick = async () => {
     if (!$('#nv-nome').value.trim()) { alert('Escreva o nome.'); return $('#nv-nome').focus(); }
+    if (!partes().length) { alert('Marque o que enviar.'); return; }
     const b = $('#nv-criar'); b.disabled = true;
     try {
       const r = await api('POST', '/api/gestao/lideranca', {nome: $('#nv-nome').value, telefone: $('#nv-tel').value,
-        papel: (document.querySelector('[name="nv-papel"]:checked') || {}).value, valido_ate: $('#nv-valido').value});
-      abrirModal(`<h3>👔 Pronto!</h3><p id="nv-ok">${esc(r.mensagem)}</p>
-        <label class="campo"><span>Link da avaliação</span><input id="nv-link" readonly value="${esc(r.link)}"></label>
-        <div class="botoes"><button class="btn" id="nv-copiar">🔗 Copiar link</button>
-          <a class="btn prim" id="nv-abrir" href="${esc(r.link)}" target="_blank" rel="noopener">↗️ Responder aqui</a></div>`, null, true);
-      $('#nv-copiar').onclick = () => copiar(r.link);
+        papel: (document.querySelector('[name="nv-papel"]:checked') || {}).value, valido_ate: $('#nv-valido').value, partes: partes()});
+      mostrarLink(r);
       setTimeout(carregar, 1200);
     } catch (e) { falhou(e); b.disabled = false; }
   };
+}
+
+// o link criado: copiar ou responder aqui mesmo (sem WhatsApp)
+function mostrarLink(r) {
+  abrirModal(`<h3>👔 Pronto!</h3><p id="nv-ok">${esc(r.mensagem)}</p>
+    <label class="campo"><span>Link da avaliação</span><input id="nv-link" readonly value="${esc(r.link)}"></label>
+    <div class="botoes"><button class="btn" id="nv-copiar">🔗 Copiar link</button>
+      <a class="btn prim" id="nv-abrir" href="${esc(r.link)}" target="_blank" rel="noopener">↗️ Responder aqui</a></div>`, null, true);
+  $('#nv-copiar').onclick = () => copiar(r.link);
+}
+
+// ------------------------------------------------------------------ 🔋🧠 [LIDERANÇA+] mandar só o que falta
+async function mandarFalta(b) {
+  if (!confirm(`Mandar para ${b.dataset.nome} só o que falta (${b.dataset.oque})${b.dataset.tel ? ' no WhatsApp, agora' : ''}?`)) return;
+  b.disabled = true;
+  try {
+    const r = await api('POST', `/api/gestao/lideranca/${b.dataset.falta}/falta`);
+    if (r.whatsapp) { status(r.mensagem); fecharModal(); } else mostrarLink(r);
+    setTimeout(carregar, 1000);
+  } catch (e) { falhou(e); b.disabled = false; }
+}
+async function mandarFaltaTodos(b) {
+  const ids = b.dataset.faltaTodos.split(',');
+  if (!confirm(`Mandar o que falta para ${ids.length} pessoas? Quem tem WhatsApp recebe agora; quem não tem fica com o link para copiar.`)) return;
+  b.disabled = true;
+  const msgs = [];
+  for (const id of ids) {
+    try { const r = await api('POST', `/api/gestao/lideranca/${id}/falta`); msgs.push((r.whatsapp ? '✅ ' : '🔗 ') + r.mensagem + (r.whatsapp ? '' : ` ${r.link}`)); }
+    catch (e) { msgs.push('⚠️ ' + e.message); }
+  }
+  abrirModal(`<h3>📤 Mandar o que falta</h3><ul id="falta-res">${msgs.map(m => `<li>${esc(m)}</li>`).join('')}</ul>`, null, true);
+  carregar();
 }
 
 // ------------------------------------------------------------------ 🔒 quem pode ver
@@ -205,6 +299,8 @@ function acesso() {
 document.addEventListener('click', async e => {
   const cp = e.target.closest('[data-copiar]'); if (cp) return copiar(cp.dataset.copiar);
   const rel = e.target.closest('[data-rel]'); if (rel) { e.preventDefault(); return relatorio(+rel.dataset.rel); }
+  const fa = e.target.closest('[data-falta]'); if (fa) return mandarFalta(fa);               // 🔋🧠 [LIDERANÇA+]
+  const ft = e.target.closest('[data-falta-todos]'); if (ft) return mandarFaltaTodos(ft);
   const b = e.target.closest('[data-a]'); if (!b) return;
   const acao = b.dataset.a;
   if (acao === 'cancelar' && !confirm('Cancelar esta avaliação? O link deixa de funcionar.')) return;
@@ -221,14 +317,15 @@ async function relatorio(id) {
   const lista = (tit, itens, larga) => `<div class="secao ${larga ? 'larga' : ''}"><h4>${tit}</h4><ul>${itens.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>`;
   const texto = (tit, t, larga) => `<div class="secao ${larga ? 'larga' : ''}"><h4>${tit}</h4><p>${esc(t)}</p></div>`;
   abrirModal(`<div class="rel-topo"><h3 style="margin:0">👔 ${esc(d.nome)} <span class="mini suave">· ${esc(d.papel_nome)}</span></h3>
-      <div class="rel-estilo" id="r-estilo">${esc(d.estilo)}</div>
-      <div class="mini suave">${esc(d.perfil_nome)} · respondeu ${esc(d.respondido)}${d.anteriores.length ? ` · antes: ${d.anteriores.map(a =>
+      <div class="rel-estilo" id="r-estilo">${d.sem_perfil ? '👔 Ainda não fez o perfil de liderança' : esc(d.estilo)}</div>
+      <div class="mini suave">${d.perfil_nome ? esc(d.perfil_nome) + ' · ' : ''}respondeu ${esc(d.respondido)}${d.perfil_de ? ` · o perfil é de ${esc(d.perfil_de)}` : ''}${d.anteriores.length ? ` · antes: ${d.anteriores.map(a =>
         `<a href="#" data-rel="${a.id}">${esc(a.estilo)} (${esc(a.respondido)})</a>`).join(', ')}` : ''}</div></div>
-    <div style="margin:10px 0">${barras(d.pct)}</div>
-    <div>${esc(d.resumo)}</div>
+    ${d.sem_perfil ? '' : `<div style="margin:10px 0">${barras(d.pct)}</div>
+    <div>${esc(d.resumo)}</div>`}
     ${d.candidato && d.traz && d.traz.length ? `<div class="dica" style="margin-top:8px;background:#e6f4ea;color:#14532d">✨ Traz para a gestão o que
       falta: ${d.traz.map(x => `${x.emoji} ${esc(x.nome)} (${esc(x.curto)})`).join(', ')}</div>` : ''}
-    <div class="secoes">
+    ${faltaRel(d)}
+    ${d.sem_perfil ? '' : `<div class="secoes">
       ${lista('💪 Pontos fortes na gestão', d.fortes)}${lista('⚠️ Riscos e pontos cegos', d.riscos)}
       ${texto('🧠 Como decide', d.decide)}${texto('🔥 Sob pressão', d.pressao)}
       ${lista('🤲 Como delega e acompanha', d.delega)}${lista('💬 Como se comunica com a equipe', d.comunica)}
@@ -241,11 +338,42 @@ async function relatorio(id) {
       ${d.com_time.length ? `<div class="secao larga"><h4>🔗 Com o time de gestão</h4>${d.com_time.map(x =>
         `<p style="margin-bottom:6px"><b>${esc(x.nomes)}</b> <span class="mini suave">(${esc(x.papel_nome)})</span>: ${esc(x.texto)}</p>`).join('')}</div>` : ''}
       ${lista('🌱 Para se desenvolver', d.desenvolver)}${lista('🙋 Como trabalhar com essa pessoa', d.trabalhar)}
-    </div>
-    <div class="botoes" style="margin-top:10px"><button class="btn" id="r-imprimir">🖨️ Imprimir</button></div>
+    </div>`}
+    ${motivRel(d, lista)}${aprRel(d, lista)}
+    <div class="botoes" style="margin-top:10px"><button class="btn" id="r-imprimir">🖨️ Imprimir / PDF</button></div>
     <div class="aviso-uso">Ferramenta de orientação (questionário próprio, baseado na teoria DISC): use para conversar, dividir
       responsabilidades e desenvolver a liderança, não como rótulo nem para decidir sozinho${d.candidato ? ' — com o candidato, junto com a entrevista e a experiência' : ''}.
       Dado pessoal: fica só com quem pode ver esta página.</div>`);
   $('#r-imprimir').onclick = () => window.print();
+}
+// 🔋🧠 [LIDERANÇA+] o que falta responder, o que move na gestão e como aprende
+function faltaRel(d) {
+  if (!d.falta || !d.falta.length) return '';
+  if (d.pendente) return `<div class="falta-rel nao-imprimir"><span>⏳ Falta responder: <b>${esc(d.falta_nome)}</b> · já tem um link esperando
+    (${esc(d.pendente.partes_nome)})</span></div>`;
+  return `<div class="falta-rel nao-imprimir"><span>⏳ Falta responder: <b>${esc(d.falta_nome)}</b></span>
+    <button class="btn" data-falta="${d.id}" data-nome="${esc(d.nome)}" data-oque="${esc(d.falta_nome)}">📤 Mandar o que falta</button></div>`;
+}
+function motivRel(d, lista) {
+  const m = d.motivacao;
+  if (!m) return `<div class="bloco-m"><b>🔋 O que move na gestão</b><span class="mini">Ainda não respondeu o que motiva.</span></div>`;
+  return `<div class="bloco-m" id="r-motivacao"><b>🔋 O que move na gestão${d.motivacao_de ? ` <span class="mini suave">(respondeu ${esc(d.motivacao_de)})</span>` : ''}</b>
+    <div class="rel-estilo" style="font-size:19px">${esc(m.nome)}</div>
+    ${m.oque.map(t => `<div class="mini">${esc(t)}</div>`).join('')}
+    <div class="barras m">${m.fatores.map(f => `<div class="f"><span>${f.emoji} ${esc(f.nome)}</span>
+      <div class="b"><span style="width:${f.pct}%;background:#f0a500"></span></div><span class="n">${f.pontos}/7</span></div>`).join('')}</div>
+    <div class="secoes">${lista('💡 Como manter motivado(a)', m.manter)}${lista('⚠️ Cuidado', m.cuidado)}
+      ${lista('⬇️ Pesa menos', m.menos.map(x => `${x.emoji} ${x.nome} (${x.curto})`), true)}</div></div>`;
+}
+function aprRel(d, lista) {
+  const a = d.aprendizado;
+  if (!a) return `<div class="bloco-m apr"><b>🧠 Como aprende e se informa</b><span class="mini">Ainda não respondeu como aprende.</span></div>`;
+  return `<div class="bloco-m apr" id="r-aprendizado"><b>🧠 Como aprende e se informa${d.aprendizado_de ? ` <span class="mini suave">(respondeu ${esc(d.aprendizado_de)})</span>` : ''}</b>
+    <div class="rel-estilo" style="font-size:19px">${esc(a.nome)}</div>
+    ${a.oque.map(t => `<div class="mini">${esc(t)}</div>`).join('')}
+    <div class="barras m">${a.canais.map(f => `<div class="f"><span>${f.emoji} ${esc(f.nome)}</span>
+      <div class="b"><span style="width:${f.pct}%;background:#3f6fd8"></span></div><span class="n">${f.pontos}/12</span></div>`).join('')}</div>
+    <div class="secoes">${lista('📊 Como apresentar uma proposta', a.apresentar)}${lista('🤝 Como combinar e fazer reuniões', a.combinar)}
+      ${lista('📚 Para se desenvolver como gestor(a)', a.desenvolver)}${lista('💡 Dica', [a.dica])}</div></div>`;
 }
 {% endblock %}
