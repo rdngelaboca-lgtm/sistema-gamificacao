@@ -7664,7 +7664,7 @@ def listar_contagens_cabecalho(levantar_erro=False):
                 SELECT C.ContagemID, C.DataContagem, ISNULL(F.NomeCompleto, '(sem responsável)') AS NomeCompleto, C.NomeContagem
                 FROM ContagensEstoque C
                 LEFT JOIN Funcionarios F ON C.FuncionarioID = F.FuncionarioID
-                ORDER BY C.DataContagem DESC
+                ORDER BY C.DataContagem DESC, C.ContagemID DESC
             """
             cursor.execute(sql)
             return cursor.fetchall()
@@ -8841,9 +8841,12 @@ def calcular_sugestao_compra(contagem_id_fim, contagem_id_inicio=None, janela_di
                     contados_antes = [c for c in candidatos if c[0] < primeira]
                     if contados_antes:
                         inicio = contados_antes[0]
-                    elif (d_l - primeira).days >= 0:
+                    elif (d_l - primeira).days + 1 >= SUGESTAO_DIAS_MINIMOS:
                         inicio = (primeira - timedelta(days=1), Decimal('0'))
                         item['InicioPrimeiraCompra'] = True
+                    # [AUDITORIA SUGESTÃO] 1ª compra há menos de 7 dias da contagem: antes media o consumo
+                    # em 1 a 6 dias (comprou 60 no dia e contou 55 = 5 por dia = 150 por mês → pedia 510).
+                    # Agora fica sem início e cai no consumo pelas compras (≈), como quem tem 1 contagem só.
                 elif candidatos:
                     if modo == 'historico':
                         inicio = candidatos[0]

@@ -124,6 +124,19 @@ def chave_ordenacao(texto):
         return (1, 0.0, str(texto).lower())
 
 
+def chave_ordenacao_coluna(coluna, texto):
+    """
+    [AUDITORIA SUGESTÃO] Igual à chave_ordenacao, mas a coluna "Pedir" da sugestão ("15 cx de 6 (90 UN)", "6 UN")
+    ordena pela QUANTIDADE (o total entre parênteses ou o número do começo). Antes ordenava como texto: 11 cx, 15 cx,
+    3 cx, 6 UN. Vazio (não precisa comprar) = 0.
+    """
+    if coluna == 'Pedir':
+        t = str(texto or '').strip()
+        m = re.search(r'\((\d+(?:,\d+)?)\s*[^\d()]*\)\s*$', t) or re.match(r'^(\d+(?:,\d+)?)', t)
+        return (0, float(m.group(1).replace(',', '.')) if m else 0.0, t.lower())
+    return chave_ordenacao(texto)
+
+
 def nome_arquivo_seguro(nome):
     """Remove caracteres que o Windows não aceita em nomes de arquivo."""
     return re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', str(nome)).strip(' .') or 'arquivo'
@@ -3579,6 +3592,7 @@ class AppGestaoEstoque:
                     sucesso_db, msg_db = database.salvar_nota_fiscal_completa(cabecalho, itens_para_salvar)
                 if sucesso_db:
                     sucessos += 1
+                    self._marcar_sugestao_velha("notas novas foram importadas")   # [AUDITORIA SUGESTÃO]
                     if cabecalho.get('NotaID'):
                         notas_salvas.append(cabecalho['NotaID'])
                     self._guardar_xml_para_conferencia(cabecalho, incompleta=pendentes > 0)
@@ -4682,6 +4696,7 @@ class AppGestaoEstoque:
                 self.apagar_rascunho_contagem()  # [MELHORIA UX] salvo no banco: rascunho não é mais necessário
                 self._ultimas_contagens = None   # [MELHORIA CONTAGEM] recarrega na próxima
                 self.atualizar_lista_contagens_historico()
+                self._marcar_sugestao_velha("uma contagem nova foi salva")   # [AUDITORIA SUGESTÃO]
             else:
                 messagebox.showerror("Erro de Banco", msg, parent=self.root)
         except Exception as e:
@@ -5986,7 +6001,14 @@ class AppGestaoEstoque:
         self.entry_busca_sugestao.bind("<KeyRelease>", lambda e: self.renderizar_sugestao())
         for combo in (self.combo_mostrar_sugestao, self.combo_sugestao_categoria, self.combo_sugestao_fornecedor):
             combo.bind("<<ComboboxSelected>>", lambda e: self.renderizar_sugestao())
-        self.combo_contagem_inicio.bind("<<ComboboxSelected>>", lambda e: self._ajustar_janela_sugestao())
+        self.combo_contagem_inicio.bind("<<ComboboxSelected>>", lambda e: (self._ajustar_janela_sugestao(),
+                                                                            self._atualizar_aviso_sugestao()))
+        # [AUDITORIA SUGESTÃO] mudou o Ponto B (ou os últimos N dias) sem gerar de novo: a tela avisa
+        self.combo_contagem_fim.bind("<<ComboboxSelected>>", lambda e: self._atualizar_aviso_sugestao())
+        for ev in ("<<Increment>>", "<<Decrement>>", "<KeyRelease>"):
+            self.spin_janela_sugestao.bind(ev, lambda e: self.root.after(10, self._atualizar_aviso_sugestao))
+        self._sugestao_gerada, self._sugestao_velha, self._avisos_tabela_sugestao = {}, None, []
+        self._parametros_sugestao()    # [AUDITORIA SUGESTÃO] guarda os dias das preferências como o último valor bom
         for spin in (self.spin_dias_cobertura, self.spin_prazo_entrega):
             spin.bind("<Return>", lambda e: self.recalcular_sugestao_na_tela())
             spin.bind("<<Increment>>", lambda e: self.root.after(10, self.recalcular_sugestao_na_tela))
@@ -6000,12 +6022,21 @@ class AppGestaoEstoque:
         else:
             self.frame_janela_sug.grid_remove()
 
-    @staticmethod
-    def _inteiro_do_campo(campo, padrao, minimo, maximo):
+    def _inteiro_do_campo(self, campo, padrao, minimo, maximo):
+        """
+        [AUDITORIA SUGESTÃO] Número de dias do campo. Em branco ou errado ("2o"), antes voltava para o padrão do
+        código (30 dias a cobrir, 2 de prazo) sem avisar e a conta mudava. Agora volta para o ÚLTIMO valor bom
+        do campo (o das preferências, no começo) e avisa no rodapé.
+        """
+        ultimos = self.__dict__.setdefault('_ultimos_validos', {})
         texto = str(campo.get()).strip()
         if not texto.isdigit() or not (minimo <= int(texto) <= maximo):
-            campo.set(str(padrao))
-            return padrao
+            valor = ultimos.get(str(campo), padrao)
+            campo.set(str(valor))
+            if hasattr(self, 'lbl_status') or 'status' in self.__dict__:
+                self.status(f"Valor de dias inválido ('{texto}'): voltou para {valor} (vale de {minimo} a {maximo}).", 'aviso')
+            return valor
+        ultimos[str(campo)] = int(texto)
         return int(texto)
 
     def _parametros_sugestao(self):
@@ -6037,6 +6068,9 @@ class AppGestaoEstoque:
             self.root.config(cursor="")
         self._salvar_preferencias_sugestao(params)
         self.__dict__['_cache_ids_forn'] = {}
+        # [AUDITORIA SUGESTÃO] com o que a tabela foi gerada (o PDF e o aviso de "tabela velha" usam isto)
+        self._sugestao_gerada = {'fim': str_fim, 'ini': str_ini, 'janela': params['janela'], 'dia': date.today()}
+        self._sugestao_velha = None
         self.recalcular_sugestao_na_tela()
 
     def recalcular_sugestao_na_tela(self):
@@ -6144,8 +6178,9 @@ class AppGestaoEstoque:
         r = self.resultado_sugestao or {}
         self.lbl_resumo_sugestao.config(text=(
             f"🔴 {cont_sit['critico']} crítico(s)   🟡 {cont_sit['comprar']} para comprar   🟢 {cont_sit['ok']} ok   "
-            f"⚠️ {cont_sit['conferir']} conferir   ⚪ {cont_sit['sem_giro']} sem giro      "
-            f"Pedido estimado: {fmt_reais(total_pedido)}"))
+            f"⚠️ {cont_sit['conferir']} conferir   ⚪ {cont_sit['sem_giro']} sem giro   "
+            + (f"❔ {cont_sit['nunca']} nunca contado(s)   " if cont_sit['nunca'] else "")    # [AUDITORIA SUGESTÃO]
+            + f"   Pedido estimado: {fmt_reais(total_pedido)}"))
         avisos = []
         if r.get('DataReferencia') and r.get('DataB') and r['DataReferencia'] > r['DataB']:
             avisos.append(f"Posição projetada para HOJE ({fmt_data(r['DataReferencia'])}): contagem de {fmt_data(r['DataB'])} "
@@ -6153,8 +6188,48 @@ class AppGestaoEstoque:
         if contagem_mostrar['nunca_recente'] and chave != 'nunca_recente':
             avisos.append(f"❔ {contagem_mostrar['nunca_recente']} produto(s) foram comprados nos últimos "
                           f"{r.get('JanelaDias', 90)} dias mas NUNCA foram contados (escolha em 'Mostrar' para ver).")
-        self.lbl_aviso_sugestao.config(text="   ".join(avisos))
+        self._avisos_tabela_sugestao = avisos
+        self._atualizar_aviso_sugestao()
         self.status(f"Sugestão: {len(visiveis)} produto(s) na tabela.")
+
+    def _marcar_sugestao_velha(self, motivo):
+        """[AUDITORIA SUGESTÃO] Contagem salva, nota importada ou compra corrigida depois de gerar: a tabela da aba 5
+        ficou velha. Antes nada avisava (o pedido e o PDF saíam com o estoque de antes)."""
+        if getattr(self, 'resultado_sugestao', None):
+            self._sugestao_velha = motivo
+            self._atualizar_aviso_sugestao()
+
+    def _avisos_gerais_sugestao(self):
+        """[AUDITORIA SUGESTÃO] Os avisos sobre a tabela inteira: velha, Ponto B antigo e Ponto A colado no B."""
+        r = getattr(self, 'resultado_sugestao', None)
+        if not r:
+            return []
+        avisos = []
+        g = getattr(self, '_sugestao_gerada', None) or {}
+        motivo = getattr(self, '_sugestao_velha', None)
+        if not motivo and g:
+            if self.combo_contagem_fim.get() != g.get('fim') or self.combo_contagem_inicio.get() != g.get('ini'):
+                motivo = "o Ponto A ou o Ponto B mudou na lista"
+            elif g.get('ini') == self.OPCAO_A_AUTOMATICO and str(self.spin_janela_sugestao.get()).strip() != str(g.get('janela')):
+                motivo = "os 'últimos N dias' mudaram"
+        if motivo:
+            avisos.append(f"⚠️ A TABELA É DE ANTES ({motivo}). Clique em '🔄 Gerar Sugestão de Compra' para atualizar.")
+        hoje = g.get('dia') or date.today()          # o dia em que foi gerada (o programa pode ficar aberto de um dia para o outro)
+        if r.get('DataReferencia') and r['DataReferencia'] < hoje:
+            avisos.append(f"📅 Posição em {fmt_data(r['DataReferencia'])} (a data deste Ponto B), NÃO a de hoje: existe contagem "
+                          "mais nova, então as notas e o consumo depois dessa data não entram. Para a posição de hoje, escolha "
+                          "a contagem mais recente como Ponto B (quem não está nela usa a última contagem dele 📏).")
+        if r.get('Modo') == 'fixo' and r.get('DataA') and r.get('DataB') and \
+                (r['DataB'] - r['DataA']).days < database.SUGESTAO_DIAS_MINIMOS:
+            avisos.append(f"⚠️ O Ponto A ({fmt_data(r['DataA'])}) está a menos de {database.SUGESTAO_DIAS_MINIMOS} dias do Ponto B: "
+                          "pouco tempo para medir o consumo. Cada produto usa a contagem anterior mais próxima (ou o consumo "
+                          "pelas compras, ≈): veja o 'Como calculei'.")
+        return avisos
+
+    def _atualizar_aviso_sugestao(self):
+        if hasattr(self, 'lbl_aviso_sugestao'):
+            self.lbl_aviso_sugestao.config(text="   ".join(self._avisos_gerais_sugestao()
+                                                         + list(getattr(self, '_avisos_tabela_sugestao', None) or [])))
 
     def _fornecedor_filtro_sugestao(self):
         """ID do fornecedor escolhido no filtro da aba 5 (ou None = Todos)."""
@@ -6260,6 +6335,7 @@ class AppGestaoEstoque:
     def _dados_impressao_sugestao(self, so_comprar=False):
         """O cabeçalho (parâmetros, filtros, avisos) e as linhas da tabela, na ordem da tela."""
         params = self._parametros_sugestao()
+        g = getattr(self, '_sugestao_gerada', None) or {}     # [AUDITORIA SUGESTÃO] com o que a tabela foi feita
         linhas = []
         for iid in self.tree_sugestao.get_children():
             l = self.linhas_sugestao.get(int(iid))
@@ -6267,9 +6343,9 @@ class AppGestaoEstoque:
                 continue
             linhas.append({'colunas': l['colunas'], 'tag': l['tag'], 'custo': l['custo_total'],
                            'fornecedor': (l['fornecedor'] or {}).get('Fornecedor', ''), 'explicacao': l['explicacao']})
-        ponto_a = self.combo_contagem_inicio.get()
+        ponto_a = g.get('ini', self.combo_contagem_inicio.get())
         if ponto_a == self.OPCAO_A_AUTOMATICO:
-            ponto_a += f" (últimos {params['janela']} dias)"
+            ponto_a += f" (últimos {g.get('janela', params['janela'])} dias)"
         mostrar = re.sub(r'\s*\(\d+\)\s*$', '', self.combo_mostrar_sugestao.get())         # sem a contagem "(15)"
         filtros = [f"Mostrar: {mostrar}"]
         if (self.combo_sugestao_categoria.get() or 'Todas') != 'Todas':
@@ -6282,7 +6358,7 @@ class AppGestaoEstoque:
         if so_comprar:
             filtros.append("Só o que precisa comprar")
         cabecalho = {'titulo': 'Sugestão de Compra',
-                     'parametros': [f"Contagem final (Ponto B): {self.combo_contagem_fim.get()}", f"Consumo (Ponto A): {ponto_a}",
+                     'parametros': [f"Contagem final (Ponto B): {g.get('fim', self.combo_contagem_fim.get())}", f"Consumo (Ponto A): {ponto_a}",
                                     f"Comprar para cobrir {params['cobertura']} dias", f"Prazo de entrega: {params['prazo']} dias"],
                      'filtros': filtros, 'avisos': [self.lbl_aviso_sugestao.cget('text')]}
         return cabecalho, linhas
@@ -6505,6 +6581,7 @@ class AppGestaoEstoque:
             self._ajustar_janela_sugestao()
             fornecedores = database.listar_fornecedores(levantar_erro=True) or []   # [F-15]
             self.combo_sugestao_fornecedor['values'] = ["Todos"] + [f"{f.NomeFantasia} (ID: {f.FornecedorID})" for f in fornecedores]
+            self._atualizar_aviso_sugestao()   # [AUDITORIA SUGESTÃO] o Ponto B pulou para uma contagem nova?
         except Exception as e:
             self.falha_banco("as contagens para a sugestão", e)
 
@@ -6805,6 +6882,7 @@ class AppGestaoEstoque:
                     # valida, guarda o Qtd/Cx com que a compra entrou e deixa o valor antigo no log
                     ok, msg = database.corrigir_compra(exata['item'], n_qtd, n_custo, exata['fator'])
                     if ok:
+                        self._marcar_sugestao_velha("uma compra foi corrigida")   # [AUDITORIA SUGESTÃO]
                         edit_win.destroy()
                         carregar_dados() # Recarrega a tabelinha
                         # Mostra um aviso pro gestor recalcular a tela de trás
@@ -7242,6 +7320,8 @@ class AppGestaoEstoque:
                 self.tree_sugestao.delete(i)
         if hasattr(self, 'lbl_resumo_sugestao'):
             self.lbl_resumo_sugestao.config(text="Os dados mudaram: clique em '🔄 Gerar Sugestão de Compra' de novo.")
+        self._avisos_tabela_sugestao, self._sugestao_velha = [], None   # [AUDITORIA SUGESTÃO] sem avisos da tabela apagada
+        self._atualizar_aviso_sugestao()
 
     def _limpar_estado_apos_reset(self):
         """
@@ -8357,6 +8437,7 @@ class AppGestaoEstoque:
             if not ok:
                 messagebox.showerror("Erro", msg, parent=popup)
                 return "break"
+            self._marcar_sugestao_velha("uma compra foi corrigida")   # [AUDITORIA SUGESTÃO]
             sel = str(c['ItemNotaID'])
             self.status(f"Compra corrigida: NF {c['NF']} • {v['DescricaoXML']} → {fmt_qtd(qtd)} {unidade} a {fmt_reais(custo)}.")
             if f != estado['fator_vinculo'] and messagebox.askyesno(
@@ -9603,7 +9684,7 @@ class AppGestaoEstoque:
 
         # [DEPURAÇÃO] chave_ordenacao nunca compara número com texto (antes dava TypeError
         # na coluna "Duração") e entende "R$ 1.234,56" (antes ordenava como texto).
-        lista_itens.sort(key=lambda t: chave_ordenacao(t[0]), reverse=reverse)
+        lista_itens.sort(key=lambda t: chave_ordenacao_coluna(col, t[0]), reverse=reverse)
 
         # Aplica a nova ordem visual realocando os índices no Tkinter
         for index, (val, k) in enumerate(lista_itens):
