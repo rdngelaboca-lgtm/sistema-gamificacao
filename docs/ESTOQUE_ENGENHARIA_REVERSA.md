@@ -707,7 +707,11 @@ assunto na seção 2.15, e cada aba indica quais delas usa.
   todos os fornecedores**.
 - Botão Gerar.
 - Filtros que não vão ao banco: busca, "Mostrar", categoria, fornecedor.
-- Botões: Buffet, Exportar Excel, Montar Pedido.
+- Botões: Buffet, Exportar Excel, 🖨️ Imprimir (11/2026) e Montar Pedido.
+- **🖨️ Imprimir** (`imprimir_sugestao` → `sugestao_pdf.py`): PDF em A4 deitado com o que está na tabela (mesmos filtros e
+  ordem): parâmetros, filtros, resumo por situação, linhas coloridas como na tela, custo, coluna "Ok" para marcar no papel e
+  o total. Opções: só o que precisa comprar · separar por fornecedor (com subtotal) · incluir o "como calculei". Salva em
+  `relatorios_pdf/` e abre no leitor de PDF (`abrir_no_sistema`, igual ao DANFE). Usa a fpdf (1.7 ou fpdf2).
 - `tree_sugestao` (colunas = tupla `colunas` de `calcular_linha_sugestao`; cores: crítico, comprar,
   ok, conferir, nunca, sem giro) e quadro "Como calculei".
 - Mudar os campos numéricos chama `recalcular_sugestao_na_tela` (**sem ir ao banco**).

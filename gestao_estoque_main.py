@@ -5936,6 +5936,8 @@ class AppGestaoEstoque:
         self.lbl_resumo_sugestao.pack(side=tk.LEFT)
         ttk.Button(frame_acoes_sug, text="🍦 Buffet (Top Sabores)", command=self.abrir_gestor_buffet).pack(side=tk.RIGHT, padx=(5, 0), ipady=3)
         ttk.Button(frame_acoes_sug, text="📊 Exportar Excel", command=self.exportar_sugestao_excel).pack(side=tk.RIGHT, padx=(5, 0), ipady=3)
+        self.btn_imprimir_sugestao = ttk.Button(frame_acoes_sug, text="🖨️ Imprimir", command=self.imprimir_sugestao)   # [IMPRIMIR]
+        self.btn_imprimir_sugestao.pack(side=tk.RIGHT, padx=(5, 0), ipady=3)
         ttk.Button(frame_acoes_sug, text="📤 Montar Pedido por Fornecedor",
                    command=self.abrir_pedido_compra).pack(side=tk.RIGHT, ipady=3)
         self.lbl_aviso_sugestao = ttk.Label(frame_filtros, text="", foreground="#b26a00", wraplength=1250, justify="left")
@@ -6205,6 +6207,116 @@ class AppGestaoEstoque:
             messagebox.showerror("Erro", f"Não foi possível salvar o Excel.\n{e}\n\n"
                                  "Se o arquivo estiver aberto no Excel, feche-o e tente de novo.", parent=self.root)
             return None
+
+    # -------------------------------------------------------------------
+    # 🖨️ [IMPRIMIR] RELATÓRIO DA SUGESTÃO EM PDF (o leitor de PDF imprime ou salva)
+    # -------------------------------------------------------------------
+    def imprimir_sugestao(self):
+        """Janela com as opções (tudo ou só o que comprar · por fornecedor · com o "como calculei") e o PDF."""
+        filhos = self.tree_sugestao.get_children()
+        if not filhos:
+            messagebox.showwarning("Aviso", "Primeiro clique em 'Gerar Sugestão de Compra'.", parent=self.root)
+            return None
+        linhas = [self.linhas_sugestao[int(i)] for i in filhos if int(i) in self.linhas_sugestao]
+        n_comprar = sum(1 for l in linhas if l['qtd_pedido'] > 0)
+        popup = Toplevel(self.root)
+        popup.title("🖨️ Imprimir sugestão de compra")
+        popup.transient(self.root)
+        popup.resizable(False, False)
+        self.popup_imprimir_sugestao = popup
+        corpo = ttk.Frame(popup, padding=14)
+        corpo.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(corpo, text="O que imprimir?", font=("Arial", 10, "bold")).pack(anchor="w")
+        var_quais = tk.StringVar(value='tabela')
+        ttk.Radiobutton(corpo, text=f"Tudo o que está na tabela ({len(linhas)} produto(s), com os filtros de agora)",
+                        variable=var_quais, value='tabela').pack(anchor="w", pady=(4, 0))
+        ttk.Radiobutton(corpo, text=f"Só o que precisa comprar ({n_comprar} produto(s))", variable=var_quais,
+                        value='comprar', state='normal' if n_comprar else 'disabled').pack(anchor="w")
+        var_forn = tk.BooleanVar(value=False)
+        var_calc = tk.BooleanVar(value=False)
+        ttk.Checkbutton(corpo, text="Separar por fornecedor (com o subtotal de cada um)", variable=var_forn).pack(anchor="w", pady=(10, 0))
+        ttk.Checkbutton(corpo, text="Incluir o \"como calculei\" de cada produto (letra pequena, mais páginas)",
+                        variable=var_calc).pack(anchor="w")
+        ttk.Label(corpo, foreground="gray", text="O PDF abre no leitor de PDF: de lá é só imprimir (ou salvar).").pack(anchor="w", pady=(10, 0))
+        botoes = ttk.Frame(corpo)
+        botoes.pack(fill=tk.X, pady=(12, 0))
+        self.var_imprimir_sugestao = (var_quais, var_forn, var_calc)
+
+        def gerar():
+            caminho = self.gerar_pdf_sugestao(var_quais.get() == 'comprar', var_forn.get(), var_calc.get(), janela=popup)
+            if caminho:
+                popup.destroy()
+        ttk.Button(botoes, text="Cancelar", command=popup.destroy).pack(side=tk.RIGHT)
+        self.btn_gerar_pdf_sugestao = ttk.Button(botoes, text="🖨️ Gerar PDF e abrir", command=gerar)
+        self.btn_gerar_pdf_sugestao.pack(side=tk.RIGHT, padx=(0, 6))
+        popup.bind("<Escape>", lambda e: popup.destroy())
+        popup.update_idletasks()                          # no meio do programa
+        x = self.root.winfo_rootx() + max(0, (self.root.winfo_width() - popup.winfo_reqwidth()) // 2)
+        y = self.root.winfo_rooty() + max(0, (self.root.winfo_height() - popup.winfo_reqheight()) // 3)
+        popup.geometry(f"+{x}+{y}")
+        popup.grab_set()
+        return popup
+
+    def _dados_impressao_sugestao(self, so_comprar=False):
+        """O cabeçalho (parâmetros, filtros, avisos) e as linhas da tabela, na ordem da tela."""
+        params = self._parametros_sugestao()
+        linhas = []
+        for iid in self.tree_sugestao.get_children():
+            l = self.linhas_sugestao.get(int(iid))
+            if not l or (so_comprar and l['qtd_pedido'] <= 0):
+                continue
+            linhas.append({'colunas': l['colunas'], 'tag': l['tag'], 'custo': l['custo_total'],
+                           'fornecedor': (l['fornecedor'] or {}).get('Fornecedor', ''), 'explicacao': l['explicacao']})
+        ponto_a = self.combo_contagem_inicio.get()
+        if ponto_a == self.OPCAO_A_AUTOMATICO:
+            ponto_a += f" (últimos {params['janela']} dias)"
+        mostrar = re.sub(r'\s*\(\d+\)\s*$', '', self.combo_mostrar_sugestao.get())         # sem a contagem "(15)"
+        filtros = [f"Mostrar: {mostrar}"]
+        if (self.combo_sugestao_categoria.get() or 'Todas') != 'Todas':
+            filtros.append(f"Categoria: {self.combo_sugestao_categoria.get()}")
+        if (self.combo_sugestao_fornecedor.get() or 'Todos') != 'Todos':
+            fornecedor = re.sub(r'\s*\(ID: \d+\)\s*$', '', self.combo_sugestao_fornecedor.get())
+            filtros.append(f"Fornecedor: {fornecedor}")
+        if self.entry_busca_sugestao.get().strip():
+            filtros.append(f"Busca: {self.entry_busca_sugestao.get().strip()}")
+        if so_comprar:
+            filtros.append("Só o que precisa comprar")
+        cabecalho = {'titulo': 'Sugestão de Compra',
+                     'parametros': [f"Contagem final (Ponto B): {self.combo_contagem_fim.get()}", f"Consumo (Ponto A): {ponto_a}",
+                                    f"Comprar para cobrir {params['cobertura']} dias", f"Prazo de entrega: {params['prazo']} dias"],
+                     'filtros': filtros, 'avisos': [self.lbl_aviso_sugestao.cget('text')]}
+        return cabecalho, linhas
+
+    def gerar_pdf_sugestao(self, so_comprar=False, separar_fornecedor=False, incluir_calculo=False, janela=None, abrir=True):
+        """Gera o PDF na pasta 'relatorios_pdf' do programa e abre no leitor de PDF. Devolve o caminho ou None."""
+        import sugestao_pdf
+        cabecalho, linhas = self._dados_impressao_sugestao(so_comprar)
+        if not linhas:
+            messagebox.showwarning("Imprimir", "Nenhum produto para imprimir com essa escolha.", parent=janela or self.root)
+            return None
+        caminho = os.path.join(PASTA_DO_PROGRAMA, 'relatorios_pdf', f"Sugestao_Compra_{datetime.now():%Y-%m-%d_%Hh%M%S}.pdf")
+        try:
+            self.root.config(cursor="watch"); self.root.update_idletasks()
+            r = sugestao_pdf.gerar(caminho, cabecalho, linhas, separar_fornecedor=separar_fornecedor,
+                                   incluir_calculo=incluir_calculo, empresa=getattr(config, 'NOME_EMPRESA', '') or '')
+        except sugestao_pdf.ErroPdf as e:
+            messagebox.showwarning("Imprimir", str(e), parent=janela or self.root)
+            return None
+        except Exception as e:
+            logger.error(f"Erro ao gerar o PDF da sugestão: {e}", exc_info=True)
+            messagebox.showerror("Imprimir", f"Não foi possível gerar o PDF.\n{e}", parent=janela or self.root)
+            return None
+        finally:
+            self.root.config(cursor="")
+        self.status(f"🖨️ PDF da sugestão: {r['itens']} produto(s), {r['paginas']} página(s). Arquivo: {caminho}", 'ok', 15)
+        if abrir:
+            try:
+                abrir_no_sistema(caminho)
+            except Exception as e:
+                logger.warning(f"PDF da sugestão: não abriu sozinho ({e})")
+                messagebox.showinfo("Imprimir", f"O PDF está pronto, mas não consegui abrir sozinho.\nAbra este arquivo:\n\n{caminho}",
+                                    parent=janela or self.root)
+        return caminho
 
     # -------------------------------------------------------------------
     # [MELHORIA UX] PEDIDO DE COMPRA POR FORNECEDOR

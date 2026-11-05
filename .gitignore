@@ -16,3 +16,6 @@ chave_sessoes.key
 
 # [CLIENTES] fotos das mensagens para clientes (ficam só no servidor; nunca no GitHub)
 fotos_clientes/
+
+# [IMPRIMIR] PDFs gerados pelo programa (ficam só no computador)
+relatorios_pdf/
