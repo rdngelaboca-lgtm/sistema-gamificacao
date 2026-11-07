@@ -12110,6 +12110,12 @@ def _garantir_tabelas_pagamento_freelancer():
         for coluna in ('TipoDiaria', 'TipoDia'):
             if coluna.lower() not in existentes:
                 cur.execute(f"ALTER TABLE PagamentosFreelancer ADD {coluna} NVARCHAR(10) NULL")
+        # [EXCLUIR PAGAMENTO] o gestor tira um turno PENDENTE da lista de pagamentos sem tirar o freelancer da escala
+        # (Excluido = 1). Some de ⏳ Pendentes, da Folha e do "falta pagar"; volta com ♻️ Restaurar.
+        for coluna, tipo in (('Excluido', 'BIT'), ('ExcluidoEm', 'DATETIME'), ('ExcluidoPor', 'NVARCHAR(60)'),
+                             ('MotivoExclusao', 'NVARCHAR(150)')):
+            if coluna.lower() not in existentes:
+                cur.execute(f"ALTER TABLE PagamentosFreelancer ADD {coluna} {tipo} NULL")
         # [DIÁRIA NA ESCALA] O gestor escolhe CURTA ou LONGA ao escalar o freelancer
         # (NULL = automático pela duração, como nos turnos antigos).
         cur.execute("IF COL_LENGTH('EscalaDiaria', 'TipoDiaria') IS NULL "
@@ -12356,7 +12362,8 @@ def calcular_pagamento_turno(entrada, saida, config_pag, ajuste=0, data_escala=N
 def _linhas_pagamento_salvas(cursor, data_ini=None, data_fim=None):
     nomes = ['PagamentoID', 'EscalaID', 'DataEscala', 'FreelancerID', 'NomeFreelancer', 'NomePosicao', 'EntradaEscala',
              'SaidaEscala', 'EntradaReal', 'SaidaReal', 'TipoDiaria', 'TipoDia', 'Horas', 'HorasExtras', 'ValorDiaria',
-             'ValorHoraExtra', 'ValorExtras', 'Ajuste', 'ValorTotal', 'Pago', 'DataPagamento', 'FormaPagamento', 'Observacao']
+             'ValorHoraExtra', 'ValorExtras', 'Ajuste', 'ValorTotal', 'Pago', 'DataPagamento', 'FormaPagamento', 'Observacao',
+             'Excluido', 'ExcluidoEm', 'ExcluidoPor', 'MotivoExclusao']
     sql = f"SELECT {', '.join(nomes)} FROM PagamentosFreelancer"
     params = []
     if data_ini and data_fim:
@@ -12376,7 +12383,9 @@ def listar_pagamentos_freelancers(data_ini, data_fim, freelancer_id=None, status
     [MELHORIA ESCALA] Um item por TURNO de freelancer no período, com o valor a pagar.
       - Pendente: calculado AGORA (valores atuais, horário real e tipo de diária corrigidos).
       - Pago: valores congelados no dia do pagamento (aparece mesmo se o turno foi excluído).
-    status: 'todos' | 'pendentes' | 'pagos'. Ordenado por data e nome.
+    status: 'todos' | 'pendentes' | 'pagos' | 'excluidos'. Ordenado por data e nome.
+    [EXCLUIR PAGAMENTO] Turno pendente EXCLUÍDO da lista (Excluido = 1) só aparece em status='excluidos'
+    ('todos' = pendentes + pagos): não conta no "falta pagar", na Folha nem no custo da Escala.
     """
     _garantir_tabelas_pagamento_freelancer()
     data_ini, data_fim = _como_data(data_ini), _como_data(data_fim)
@@ -12419,7 +12428,9 @@ def listar_pagamentos_freelancers(data_ini, data_fim, freelancer_id=None, status
                 'Calculo': calc, 'Ajuste': ajuste,
                 'Total': calc['Total'] if calc else ajuste, 'Pago': False, 'DataPagamento': None,
                 'FormaPagamento': None, 'Observacao': s.get('Observacao') or '', 'TurnoExcluido': False,
-                'SemHorario': calc is None, 'Feriado': feriados.get(d)})
+                'SemHorario': calc is None, 'Feriado': feriados.get(d), 'Excluido': bool(s.get('Excluido')),
+                'ExcluidoEm': s.get('ExcluidoEm'), 'ExcluidoPor': s.get('ExcluidoPor') or '',
+                'MotivoExclusao': s.get('MotivoExclusao') or ''})
         for s in salvos:
             if not s['Pago']:
                 continue
@@ -12438,9 +12449,13 @@ def listar_pagamentos_freelancers(data_ini, data_fim, freelancer_id=None, status
                 'Ajuste': _dec(s['Ajuste']), 'Total': _dec(s['ValorTotal']), 'Pago': True,
                 'DataPagamento': _como_data(s['DataPagamento']), 'FormaPagamento': s['FormaPagamento'] or '',
                 'Observacao': s['Observacao'] or '', 'TurnoExcluido': s['EscalaID'] not in turnos, 'SemHorario': False,
-                'Feriado': feriados.get(d)})
+                'Feriado': feriados.get(d), 'Excluido': False, 'ExcluidoEm': None, 'ExcluidoPor': '', 'MotivoExclusao': ''})
         if freelancer_id is not None:
             itens = [i for i in itens if i['FreelancerID'] == freelancer_id]
+        if status == 'excluidos':
+            itens = [i for i in itens if i['Excluido']]
+        else:
+            itens = [i for i in itens if not i['Excluido']]
         if status == 'pendentes':
             itens = [i for i in itens if not i['Pago']]
         elif status == 'pagos':
@@ -12538,10 +12553,12 @@ def salvar_correcao_pagamento(escala_id, entrada_real=None, saida_real=None, aju
         turno = _turno_freelancer(cursor, escala_id)
         if not turno:
             return False, "Turno de freelancer não encontrado (foi excluído da escala?)."
-        cursor.execute("SELECT PagamentoID, Pago FROM PagamentosFreelancer WHERE EscalaID = ?", escala_id)
+        cursor.execute("SELECT PagamentoID, Pago, Excluido FROM PagamentosFreelancer WHERE EscalaID = ?", escala_id)
         existente = cursor.fetchone()
         if existente and existente[1]:
             return False, "Este turno já está PAGO. Desfaça o pagamento antes de corrigir."
+        if existente and existente[2]:
+            return False, "Este turno foi EXCLUÍDO dos pagamentos. Restaure (♻️) antes de corrigir."
         obs = (observacao or '').strip()[:300] or None
         if existente:
             cursor.execute("UPDATE PagamentosFreelancer SET EntradaReal = ?, SaidaReal = ?, Ajuste = ?, Observacao = ?, "
@@ -12585,11 +12602,14 @@ def marcar_pagamentos_pagos(escala_ids, data_pagamento=None, forma_pagamento='',
                 raise ValueError(f"Turno {escala_id} não encontrado (foi excluído da escala?).")
             eid, dt, fid, nome, posicao, ent, sai = turno
             d = _como_data(dt)
-            cursor.execute("SELECT PagamentoID, Pago, EntradaReal, SaidaReal, Ajuste, TipoDiaria, Observacao "
+            cursor.execute("SELECT PagamentoID, Pago, EntradaReal, SaidaReal, Ajuste, TipoDiaria, Observacao, Excluido "
                            "FROM PagamentosFreelancer WHERE EscalaID = ?", escala_id)
             s = cursor.fetchone()
             if s and s[1]:
                 raise ValueError(f"O turno de {nome} em {d.strftime('%d/%m/%Y')} já está pago.")
+            if s and s[7]:
+                raise ValueError(f"O turno de {nome} em {d.strftime('%d/%m/%Y')} foi EXCLUÍDO dos pagamentos. "
+                                 "Restaure (♻️) antes de pagar.")
             ent_real, sai_real, ajuste, tipo = (s[2], s[3], _dec(s[4]), s[5]) if s else (None, None, Decimal('0'), None)
             if tipo not in ('longa', 'curta'):
                 tipo = tipo_diaria_da_escala(cursor, escala_id)
@@ -12657,6 +12677,102 @@ def desfazer_pagamentos(pagamento_ids):
         conn.rollback()
         logger.error(f"Erro ao desfazer pagamentos: {e}", exc_info=True)
         return False, f"Erro ao gravar: {e}"
+    finally:
+        conn.close()
+
+
+def excluir_pagamentos(escala_ids, quem='', motivo=''):
+    """
+    [EXCLUIR PAGAMENTO] Tira turnos PENDENTES da lista de pagamentos SEM tirar o freelancer da escala.
+    A linha fica guardada com Excluido = 1 (horário real, ajuste e observação continuam lá para quando restaurar).
+    Turno PAGO não é excluído aqui (desfaça o pagamento antes). Tudo numa transação. Devolve (ok, mensagem).
+    """
+    _garantir_tabelas_pagamento_freelancer()
+    if not escala_ids:
+        return False, "Nenhum turno selecionado."
+    conn = get_db_connection()
+    if not conn:
+        return False, "Falha de conexão com o banco de dados."
+    quem = (quem or '').strip()[:60] or None
+    motivo = (motivo or '').strip()[:150] or None
+    try:
+        cursor = conn.cursor()
+        for escala_id in escala_ids:
+            turno = _turno_freelancer(cursor, escala_id)
+            if not turno:
+                raise ValueError(f"Turno {escala_id} não encontrado (foi excluído da escala?).")
+            eid, dt, fid, nome, posicao, _ent, _sai = turno
+            d = _como_data(dt)
+            cursor.execute("SELECT PagamentoID, Pago FROM PagamentosFreelancer WHERE EscalaID = ?", escala_id)
+            s = cursor.fetchone()
+            if s and s[1]:
+                raise ValueError(f"O turno de {nome} em {d.strftime('%d/%m/%Y')} já está PAGO: desfaça o pagamento antes de excluir.")
+            if s:
+                cursor.execute("UPDATE PagamentosFreelancer SET Excluido = 1, ExcluidoEm = GETDATE(), ExcluidoPor = ?, "
+                               "MotivoExclusao = ?, AtualizadoEm = GETDATE() WHERE PagamentoID = ?", quem, motivo, s[0])
+            else:
+                cursor.execute("INSERT INTO PagamentosFreelancer (EscalaID, DataEscala, FreelancerID, NomeFreelancer, NomePosicao, "
+                               "Ajuste, Pago, Excluido, ExcluidoEm, ExcluidoPor, MotivoExclusao) "
+                               "VALUES (?, ?, ?, ?, ?, 0, 0, 1, GETDATE(), ?, ?)", escala_id, d, fid, nome, posicao, quem, motivo)
+        conn.commit()
+        logger.info(f"[EXCLUIR PAGAMENTO] {len(escala_ids)} turno(s) de freelancer tirados da lista de pagamentos {list(escala_ids)}.")
+        return True, f"{len(escala_ids)} turno(s) excluído(s) dos pagamentos (continuam na escala)."
+    except ValueError as e:
+        conn.rollback()
+        return False, str(e)
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao excluir pagamentos: {e}", exc_info=True)
+        return False, f"Erro ao gravar: {e}"
+    finally:
+        conn.close()
+
+
+def restaurar_pagamentos(escala_ids):
+    """[EXCLUIR PAGAMENTO] ♻️ Os turnos excluídos voltam para ⏳ Pendente (com a correção que já tinham). (ok, mensagem)."""
+    _garantir_tabelas_pagamento_freelancer()
+    if not escala_ids:
+        return False, "Nenhum turno selecionado."
+    conn = get_db_connection()
+    if not conn:
+        return False, "Falha de conexão com o banco de dados."
+    try:
+        cursor = conn.cursor()
+        voltaram = 0
+        for escala_id in escala_ids:
+            cursor.execute("UPDATE PagamentosFreelancer SET Excluido = NULL, ExcluidoEm = NULL, ExcluidoPor = NULL, "
+                           "MotivoExclusao = NULL, AtualizadoEm = GETDATE() WHERE EscalaID = ? AND Excluido = 1", escala_id)
+            voltaram += max(cursor.rowcount or 0, 0)
+        if voltaram != len(escala_ids):
+            conn.rollback()
+            return False, "A lista mudou (alguém já restaurou ou mexeu no turno na escala). Atualize e tente de novo."
+        conn.commit()
+        return True, f"{voltaram} turno(s) de volta em ⏳ Pendentes."
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Erro ao restaurar pagamentos: {e}", exc_info=True)
+        return False, f"Erro ao gravar: {e}"
+    finally:
+        conn.close()
+
+
+def contar_pagamentos_excluidos(data_ini, data_fim, freelancer_id=None):
+    """[EXCLUIR PAGAMENTO] Quantos turnos (ainda na escala) estão excluídos dos pagamentos no período."""
+    _garantir_tabelas_pagamento_freelancer()
+    conn = get_db_connection()
+    if not conn:
+        return 0
+    try:
+        cursor = conn.cursor()
+        sql = ("SELECT COUNT(1) FROM PagamentosFreelancer P JOIN EscalaDiaria E ON E.EscalaID = P.EscalaID "
+               "WHERE P.Excluido = 1 AND P.Pago = 0 AND E.FreelancerID IS NOT NULL AND E.DataEscala >= ? AND E.DataEscala <= ?")
+        params = [str(_como_data(data_ini)), str(_como_data(data_fim))]
+        if freelancer_id is not None:
+            sql += " AND E.FreelancerID = ?"
+            params.append(freelancer_id)
+        cursor.execute(sql, *params)
+        r = cursor.fetchone()
+        return int(r[0] or 0) if r else 0
     finally:
         conn.close()
 

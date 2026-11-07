@@ -33,6 +33,11 @@
   table.pag tr.pago td { background: #e3f5e1; } table.pag tr.pendente td { background: #fff4cc; }
   table.pag tr.problema td { background: #ffd6d6; }
   table.pag tr.marcado td { background: #cfe3ff; }
+  table.pag tr.excluido td { background: #eceff1; color: #546e7a; }       /* [EXCLUIR PAGAMENTO] */
+  table.pag tr.excluido td.c-total { text-decoration: line-through; }
+  table.pag tr.excluido.marcado td { background: #cfe3ff; }
+  .link-excl { border: 0; background: transparent; color: #546e7a; font-weight: 700; text-decoration: underline; padding: 0; }
+  .ex-lista { max-height: 34vh; overflow: auto; border: 1px solid var(--linha); border-radius: 8px; padding: 6px 10px; font-size: 14px; }
   table.pag input[type=checkbox] { width: 18px; height: 18px; }
   .vazio { padding: 18px; text-align: center; }
   .acoes-pag { position: fixed; left: 0; right: 0; bottom: 0; background: #fff; border-top: 1px solid var(--linha); padding: 8px 16px;
@@ -74,6 +79,7 @@
     table.pag tr td { background: transparent !important; border: 0; padding: 1px 0; white-space: normal; }
     table.pag tr.pago { background: #e3f5e1; } table.pag tr.pendente { background: #fff4cc; }
     table.pag tr.problema { background: #ffd6d6; } table.pag tr.marcado { background: #cfe3ff; outline: 2px solid #0056b3; }
+    table.pag tr.excluido { background: #eceff1; }
     table.pag td.ck { grid-row: 1 / span 3; padding-top: 2px; }
     table.pag td[data-rot]::before { content: attr(data-rot) ": "; color: var(--suave); font-size: 12px; }
     table.pag td.c-data, table.pag td.c-nome { font-weight: 700; font-size: 14px; }
@@ -108,7 +114,8 @@
     <div class="linha">
       <label class="mini">Freelancer <select id="free"><option value="">Todos</option></select></label>
       <label class="mini">Mostrar <select id="mostrar">
-        <option value="pendentes">⏳ Pendentes</option><option value="pagos">✅ Pagos</option><option value="todos">Todos</option></select></label>
+        <option value="pendentes">⏳ Pendentes</option><option value="pagos">✅ Pagos</option><option value="todos">Todos</option>
+        <option value="excluidos">🗑️ Excluídos</option></select></label>
       <button class="btn ico" id="atualizar" title="Atualizar">🔄</button>
     </div>
     <div class="linha">
@@ -137,12 +144,15 @@
     <button class="btn prim" id="btn-pagar">✅ <span class="txt">Marcar como PAGO</span><span class="curto">Pagar</span></button>
     <button class="btn" id="btn-desfazer">↩️ <span class="txt">Desfazer pagamento</span><span class="curto">Desfazer</span></button>
     <button class="btn" id="btn-recibo">📋 <span class="txt">Recibo (WhatsApp)</span><span class="curto">Recibo</span></button>
+    <button class="btn perigo" id="btn-excluir" title="Tira da lista de pagamentos SEM tirar o freelancer da escala">🗑️ <span class="txt">Excluir da lista</span><span class="curto">Excluir</span></button>
+    <button class="btn prim" id="btn-restaurar" hidden>♻️ <span class="txt">Restaurar (voltar para pendente)</span><span class="curto">Restaurar</span></button>
     <button class="btn" id="btn-excel">📊 <span class="txt">Exportar Excel</span><span class="curto">Excel</span></button>
   </div>
 {% endblock %}
 {% block script %}
 // [GESTÃO WEB] O "💰 Pagamentos Freelancers" do programa da Escala: turnos do período com o valor
 // (diária + hora extra + ajuste), resumo por freelancer, corrigir, pagar, desfazer, recibo e Excel.
+// [EXCLUIR PAGAMENTO] 🗑️ tira um turno pendente da lista sem tirar da escala; Mostrar › 🗑️ Excluídos › ♻️ Restaurar.
 // As contas são feitas no servidor (as mesmas do PC).
 const S = {filtro: {periodo: 'semana', status: 'pendentes', freelancer: ''}, dados: null, marcados: new Set(),
            seq: 0, ultimo: null, ocupado: false};
@@ -207,9 +217,13 @@ function desenhar() {
   $('#free').value = r.freelancer == null ? '' : String(r.freelancer);
   $('#mostrar').value = r.status;
   $('#valores').textContent = r.valores;
+  const verExcl = r.status === 'excluidos';
+  document.querySelectorAll('#btn-corrigir, #btn-pagar, #btn-desfazer, #btn-recibo, #btn-excluir').forEach(b => { b.hidden = verExcl; });
+  $('#btn-restaurar').hidden = !verExcl;
   $('#resumo-free').innerHTML = r.resumo.length > 1 || r.freelancer != null ? r.resumo.map(x => `
     <button class="chip ${r.freelancer === x.freelancer_id ? 'sel' : ''}" data-free="${x.freelancer_id}" title="Mostrar só ${esc(x.nome)}">
-      <b>${esc(x.nome)}</b> · ${x.turnos} turno(s)<br><span class="pend">⏳ ${esc(x.pendente)}</span> · <span class="pg">✅ ${esc(x.pago)}</span></button>`).join('')
+      <b>${esc(x.nome)}</b> · ${x.turnos} turno(s)<br>${verExcl ? `<span class="suave">🗑️ ${esc(x.pendente)}</span>`
+        : `<span class="pend">⏳ ${esc(x.pendente)}</span> · <span class="pg">✅ ${esc(x.pago)}</span>`}</button>`).join('')
     + (r.freelancer != null ? '<button class="chip" data-free="">✖ Mostrar todos</button>' : '') : '';
   $('#linhas').innerHTML = r.itens.map((i, n) => `
     <tr class="${i.tag} ${S.marcados.has(i.iid) ? 'marcado' : ''}" data-iid="${esc(i.iid)}" data-n="${n}">
@@ -221,9 +235,9 @@ function desenhar() {
       <td class="num" data-rot="Valor extras">${esc(i.valor_extras)}</td><td class="num" data-rot="Ajuste">${esc(i.ajuste)}</td>
       <td class="num c-total" data-rot="Total">${esc(i.total)}</td>
       <td class="sit">${esc(i.situacao)}${i.observacao ? `<div class="mini suave">obs: ${esc(i.observacao)}</div>` : ''}${textoRecibo(i.recibo)}</td>
-      <td class="c-acao">${i.pago ? '' : '<button class="btn" data-corrigir title="Corrigir horário / ajuste">✏️</button>'}</td>
-    </tr>`).join('') || `<tr><td colspan="15" class="vazio suave">Nenhum turno de freelancer ${
-      {pendentes: 'pendente', pagos: 'pago', todos: ''}[r.status]} neste período.</td></tr>`;
+      <td class="c-acao">${i.pago || i.excluido ? '' : '<button class="btn" data-corrigir title="Corrigir horário / ajuste">✏️</button>'}</td>
+    </tr>`).join('') || `<tr><td colspan="15" class="vazio suave">${verExcl ? 'Nenhum turno excluído dos pagamentos neste período.'
+      : `Nenhum turno de freelancer ${ {pendentes: 'pendente', pagos: 'pago', todos: ''}[r.status] } neste período.`}</td></tr>`;
   atualizarSelecao();
 }
 
@@ -232,9 +246,15 @@ function atualizarSelecao() {
   const r = S.dados;
   if (!r) { $('#sel-info').textContent = ''; $('#totais').textContent = ''; return; }
   const sel = itensMarcados(), soma = sel.reduce((s, i) => s + i.total_centavos, 0);
-  $('#totais').innerHTML = `<span>⏳ A pagar: ${esc(r.totais.pendente)} (${r.totais.pendente_qtd} turno(s))</span>
+  const ex = r.excluidos || {qtd: 0};
+  $('#totais').innerHTML = (r.status === 'excluidos'
+    ? `<span>🗑️ Excluídos dos pagamentos: ${esc(ex.total)} (${ex.qtd} turno(s))</span>
+       <span class="mini suave">Continuam na escala, mas não entram no "a pagar" nem na Folha.</span>`
+    : `<span>⏳ A pagar: ${esc(r.totais.pendente)} (${r.totais.pendente_qtd} turno(s))</span>
     <span>✅ Pago: ${esc(r.totais.pago)} (${r.totais.pago_qtd})</span>` +
+      (ex.qtd ? `<button class="link-excl" id="ver-excluidos" title="Ver os turnos tirados da lista">🗑️ ${ex.qtd} excluído(s) neste período</button>` : '')) +
     (sel.length ? `<span class="sel">🔹 Marcados: ${reais(soma)} (${sel.length})</span>` : '');
+  if ($('#ver-excluidos')) $('#ver-excluidos').onclick = () => { S.filtro.status = 'excluidos'; carregar(); };
   $('#sel-info').textContent = sel.length ? `🔹 ${sel.length} marcado(s): ${reais(soma)}` : 'Marque os turnos (toque na linha).';
   const todos = r.itens.length && sel.length === r.itens.length;
   $('#marcar-todos').checked = !!todos;
@@ -421,6 +441,49 @@ $('#btn-desfazer').onclick = () => {
   });
 };
 
+// [EXCLUIR PAGAMENTO] tira da lista de pagamentos SEM tirar da escala (o freelancer continua escalado)
+$('#btn-excluir').onclick = () => {
+  if (!pronto()) return;
+  const marc = itensMarcados(), sel = marc.filter(i => !i.pago);
+  if (!marc.length) { alert('Marque os turnos PENDENTES que não vão ser pagos (toque na linha).'); return; }
+  if (sel.length !== marc.length) {
+    alert('Há turno PAGO entre os marcados: pagamento feito não é excluído.\n\nSe marcou como pago por engano, use ↩️ Desfazer e depois 🗑️ Excluir.');
+    return;
+  }
+  const total = sel.reduce((s, i) => s + i.total_centavos, 0);
+  abrirModal(`<h3>🗑️ Excluir da lista de pagamentos</h3>
+    <form id="form-excl" class="form" autocomplete="off">
+      <div>${sel.length} turno(s) · <b>${reais(total)}</b></div>
+      <div class="ex-lista">${sel.map(i => `<div>• <b>${esc(i.nome)}</b> · ${esc(i.data_curta)} · ${esc(i.posicao)} · ${esc(i.total)}</div>`).join('')}</div>
+      <div class="mini">✅ <b>Continuam na escala</b> (o freelancer continua escalado nesse dia).<br>
+        🚫 Só saem de ⏳ Pendentes, do "falta pagar" e da Folha.<br>
+        ♻️ Dá para trazer de volta em <b>Mostrar › 🗑️ Excluídos › Restaurar</b>.</div>
+      <label>Motivo (opcional)<input id="ex-motivo" maxlength="150" placeholder="ex.: já foi pago em dinheiro / dia de teste / não veio"></label>
+      <button class="btn perigo" type="submit" id="ex-ok">🗑️ Excluir ${sel.length} turno(s) da lista</button>
+    </form>`, null, true);
+  $('#ex-motivo').focus();
+  $('#form-excl').addEventListener('submit', ev => {
+    ev.preventDefault();
+    uma($('#ex-ok'), async () => {
+      const r = await api('POST', '/api/gestao/pagamentos/excluir',
+                          Object.assign(corpoFiltro(), {ids: sel.map(i => i.iid), motivo: $('#ex-motivo').value.trim()}));
+      fecharModal(); status(r.mensagem); await carregar();
+    });
+  });
+};
+
+$('#btn-restaurar').onclick = () => {
+  if (!pronto()) return;
+  const sel = itensMarcados().filter(i => i.excluido);
+  if (!sel.length) { alert('Marque os turnos EXCLUÍDOS que quer trazer de volta (toque na linha).'); return; }
+  const total = sel.reduce((s, i) => s + i.total_centavos, 0);
+  if (!confirm(`Trazer ${sel.length} turno(s) (${reais(total)}) de volta para ⏳ PENDENTES?`)) return;
+  uma($('#btn-restaurar'), async () => {
+    const r = await api('POST', '/api/gestao/pagamentos/restaurar', Object.assign(corpoFiltro(), {ids: sel.map(i => i.iid)}));
+    status(r.mensagem); await carregar();
+  });
+};
+
 $('#btn-recibo').onclick = () => {
   if (!pronto()) return;
   const base = S.marcados.size ? itensMarcados() : S.dados.itens;
@@ -513,6 +576,7 @@ $('#btn-excel').onclick = () => {
 // ---- corrigir horário real / ajuste / diária
 function abrirCorrecao(item) {
   if (item.pago) { alert("Este turno já está PAGO. Para corrigir, primeiro use '↩️ Desfazer pagamento'."); return; }
+  if (item.excluido) { alert('Este turno foi excluído dos pagamentos. Para corrigir, primeiro use ♻️ Restaurar.'); return; }
   const rotulo = item.tipo_escala ? `Como está na escala (${item.tipo_escala})` : 'Automático (pela duração)';
   abrirModal(`<h3>✏️ Corrigir horário / ajuste</h3>
     <div><b>${esc(item.nome)} · ${esc(item.data_curta)} · ${esc(item.posicao)}</b></div>

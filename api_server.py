@@ -2267,7 +2267,9 @@ def pagina_gestao_escala():
 
 
 @app.route('/gestao/freelancers')
+@app.route('/gestao/equipe')
 def pagina_gestao_freelancers():
+    # [GESTÃO WEB] 👥 Equipe: abas 👔 Fixos e 👤 Freelancers (o endereço antigo continua valendo)
     return _pagina_gestao('gestao_freelancers.html', 'freelancers')
 
 
@@ -2458,6 +2460,80 @@ def api_gestao_freelancer_excluir(usuario, freelancer_id):
     return _resposta_pagamentos('excluir_freelancer', freelancer_id, ler_json() or {}, usuario)
 
 
+# [GESTÃO WEB] 👥 Equipe › 👔 Fixos: o "Funcionários Cadastrados" do main.py pelo navegador (gestao_equipe.py).
+try:
+    import gestao_equipe
+except Exception as _erro_import_equipe:
+    gestao_equipe = None
+    logger.error(f"Gestão › Equipe (fixos) DESLIGADA: não consegui carregar gestao_equipe.py ({_erro_import_equipe})")
+
+
+def _resposta_equipe(nome_funcao, *args):
+    if gestao_equipe is None:
+        return jsonify({"erro": "Os funcionários fixos na Web não estão instalados no servidor (falta gestao_equipe.py)."}), 503
+    return _resposta_gestao(getattr(gestao_equipe, nome_funcao), *args)
+
+
+@app.route('/api/gestao/fixos', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_fixos(usuario):
+    return _resposta_equipe('listar_fixos')
+
+
+@app.route('/api/gestao/fixos', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_fixo_novo(usuario):
+    return _resposta_equipe('salvar_fixo', None, ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/fixos/<int:funcionario_id>', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_fixo_detalhe(usuario, funcionario_id):
+    return _resposta_equipe('detalhe', funcionario_id)
+
+
+@app.route('/api/gestao/fixos/<int:funcionario_id>', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_fixo_editar(usuario, funcionario_id):
+    return _resposta_equipe('salvar_fixo', funcionario_id, ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/fixos/<int:funcionario_id>/historico', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_fixo_historico(usuario, funcionario_id):
+    return _resposta_equipe('historico', funcionario_id)
+
+
+@app.route('/api/gestao/fixos/<int:funcionario_id>/tarefas-fixas', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_fixo_tarefas_fixas(usuario, funcionario_id):
+    return _resposta_equipe('tarefas_fixas', funcionario_id)
+
+
+@app.route('/api/gestao/fixos/<int:funcionario_id>/transferir', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_fixo_transferir(usuario, funcionario_id):
+    return _resposta_equipe('transferir', funcionario_id, ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/fixos/<int:funcionario_id>/lancar-grupo', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_fixo_lancar_grupo(usuario, funcionario_id):
+    return _resposta_equipe('lancar_no_grupo', funcionario_id, ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/fixos/<int:funcionario_id>/zerar-pontos', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_fixo_zerar_pontos(usuario, funcionario_id):
+    return _resposta_equipe('zerar_pontos', funcionario_id, ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/fixos/<int:funcionario_id>/excluir', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_fixo_excluir(usuario, funcionario_id):
+    return _resposta_equipe('excluir_fixo', funcionario_id, ler_json() or {}, usuario)
+
+
 @app.route('/api/gestao/pagamentos', methods=['GET'])
 @compras_login(somente_gestor=True)
 def api_gestao_pagamentos(usuario):
@@ -2486,6 +2562,19 @@ def api_gestao_pagamentos_pagar(usuario):
 @compras_login(somente_gestor=True)
 def api_gestao_pagamentos_desfazer(usuario):
     return _resposta_pagamentos('desfazer', ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/pagamentos/excluir', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_pagamentos_excluir(usuario):
+    """[EXCLUIR PAGAMENTO] tira turnos pendentes da lista de pagamentos (continuam na escala)."""
+    return _resposta_pagamentos('excluir', ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/pagamentos/restaurar', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_pagamentos_restaurar(usuario):
+    return _resposta_pagamentos('restaurar', ler_json() or {}, usuario)
 
 
 @app.route('/api/gestao/pagamentos/recibo', methods=['POST'])

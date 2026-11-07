@@ -1,31 +1,54 @@
 {% extends 'gestao_base.html' %}
-{% block titulo %}Freelancers{% endblock %}
+{% block titulo %}Equipe{% endblock %}
 {% block estilo %}
   .area { padding: 12px 16px 70px; max-width: 1100px; }
   #busca { flex: 1 1 220px; max-width: 360px; }
   #resumo { font-weight: 700; }
+  .abas { display: inline-flex; gap: 4px; background: var(--linha2); padding: 3px; border-radius: 11px; }
+  .abas button { border: 0; background: transparent; border-radius: 9px; padding: 6px 12px; font-weight: 700; color: var(--suave); }
+  .abas button.sel { background: #fff; color: var(--verde-esc); box-shadow: 0 1px 3px #0002; }
   .lista-free { display: grid; gap: 8px; }
   .free { background: #fff; border: 1px solid var(--linha); border-radius: 12px; padding: 10px 12px;
     display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; align-items: center; }
   .free .nome { font-weight: 700; font-size: 16px; }
-  .free .info { display: flex; gap: 14px; flex-wrap: wrap; font-size: 14px; color: var(--suave); }
+  .free .nome .cargo { font-weight: 600; font-size: 14px; color: var(--suave); }
+  .free .info { display: flex; gap: 6px 14px; flex-wrap: wrap; font-size: 14px; color: var(--suave); }
   .free .info a { color: var(--verde-esc); font-weight: 600; }
   .free .deve { color: var(--aviso); font-weight: 700; }
+  .free .afast { color: #0056b3; font-weight: 700; }
   .free .acoes { grid-row: 1 / span 2; grid-column: 2; display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
   .vazio { background: #fff; border: 1px dashed var(--linha); border-radius: 12px; padding: 18px; text-align: center; }
+  .secao { margin: 14px 0 6px; font-size: 15px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .linha-form { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .perigo-caixa { border: 1px solid #f3c1c1; background: #fff7f7; border-radius: 10px; padding: 10px; display: grid; gap: 8px; }
+  .perigo-caixa .linha-form .btn { flex: 1 1 200px; justify-content: center; }
+  .check { flex-direction: row !important; align-items: center; gap: 8px !important; color: var(--texto) !important; font-weight: 600 !important; }
+  .check input { width: 20px !important; height: 20px; flex: none; }
+  .tr-lista { max-height: 42vh; overflow: auto; border: 1px solid var(--linha); border-radius: 8px; }
+  .tr-lista label { display: flex; gap: 8px; align-items: center; padding: 7px 8px; border-bottom: 1px solid var(--linha2); font-weight: 400; cursor: pointer; }
+  .tr-lista input { width: 18px; height: 18px; flex: none; }
+  .tr-lista .freq { margin-left: auto; color: var(--suave); font-size: 13px; white-space: nowrap; }
+  table.grade td.st-ok { color: var(--ok); font-weight: 600; } table.grade td.st-nao { color: var(--erro); font-weight: 600; }
   @media (max-width: 700px) {
     .area { padding-left: 10px; padding-right: 10px; }
     .free { grid-template-columns: 1fr; }
     .free .acoes { grid-row: 3; grid-column: 1; justify-content: flex-start; margin-top: 4px; }
     .free .acoes .btn { padding: 6px 9px; font-size: 14px; }
+    .abas { width: 100%; } .abas button { flex: 1; }
   }
 {% endblock %}
 {% block conteudo %}
   <section class="barra">
     <div class="linha">
-      <b>👤 Freelancers</b>
-      <input id="busca" type="text" placeholder="Procurar por nome ou telefone" aria-label="Procurar freelancer">
-      <button class="btn prim" id="btn-novo">➕ Novo freelancer</button>
+      <b>👥 Equipe</b>
+      <span class="abas" role="tablist" aria-label="Fixos ou freelancers">
+        <button role="tab" data-aba="fixos" id="aba-fixos">👔 Fixos</button>
+        <button role="tab" data-aba="freelancers" id="aba-freelancers">👤 Freelancers</button>
+      </span>
+    </div>
+    <div class="linha">
+      <input id="busca" type="text" placeholder="Procurar por nome ou telefone" aria-label="Procurar">
+      <button class="btn prim" id="btn-novo">➕ Novo</button>
       <button class="btn ico" id="atualizar" title="Atualizar">🔄</button>
     </div>
     <div class="linha"><span id="resumo" class="mini"></span></div>
@@ -33,34 +56,253 @@
   <main class="area"><div id="lista" class="lista-free"></div></main>
 {% endblock %}
 {% block script %}
-// [GESTÃO WEB] O "👤 Gerenciar Freelancers" do programa da Escala: lista com telefone e quanto
-// falta pagar até hoje; novo, editar, excluir (avisa se ainda falta pagar) e atalho para os pagamentos.
-const S = {lista: null, seq: 0};
+// [GESTÃO WEB] 👥 Equipe, em duas abas:
+//  👔 Fixos — o "Funcionários Cadastrados" do main.py (PC): novo, editar (Telegram, WhatsApp, cargo, horário,
+//     folgas, férias, verificador), tarefas ativas, pendências de hoje, histórico, transferir tarefas fixas,
+//     lançar as tarefas no grupo (falta/atestado), zerar os pontos do mês e excluir.
+//  👤 Freelancers — o "👤 Gerenciar Freelancers" do programa da Escala: telefone e quanto falta pagar até hoje.
+const S = {aba: 'fixos', lista: null, fixos: null, seq: 0, ocupado: false};
+{
+  const q = new URLSearchParams(location.search).get('aba');
+  S.aba = ['fixos', 'freelancers'].includes(q) ? q : (lerLocal('gestao_aba_equipe', 'fixos') === 'freelancers' ? 'freelancers' : 'fixos');
+}
 
-function aoEntrar() { carregar(); }
+function aoEntrar() { trocarAba(S.aba); }
+
+function trocarAba(aba) {
+  S.aba = aba;
+  gravarLocal('gestao_aba_equipe', aba);
+  history.replaceState(null, '', '/gestao/freelancers?aba=' + aba);
+  document.querySelectorAll('.abas [data-aba]').forEach(b => {
+    b.classList.toggle('sel', b.dataset.aba === aba); b.setAttribute('aria-selected', b.dataset.aba === aba);
+  });
+  $('#btn-novo').textContent = aba === 'fixos' ? '➕ Novo funcionário' : '➕ Novo freelancer';
+  $('#busca').placeholder = aba === 'fixos' ? 'Procurar por nome, cargo ou telefone' : 'Procurar por nome ou telefone';
+  carregar();
+}
+document.querySelectorAll('.abas [data-aba]').forEach(b => b.onclick = () => { if (b.dataset.aba !== S.aba) trocarAba(b.dataset.aba); });
 
 async function carregar() {
-  const seq = ++S.seq;
+  const seq = ++S.seq, aba = S.aba;
+  $('#lista').innerHTML = '<div class="vazio suave">Carregando…</div>';
+  $('#resumo').textContent = '';
   let r;
-  try { r = await api('GET', '/api/gestao/freelancers'); }
+  try { r = await api('GET', aba === 'fixos' ? '/api/gestao/fixos' : '/api/gestao/freelancers'); }
   catch (e) {
     if (seq !== S.seq) return;
     if (e.status !== 401 && e.status !== 403) {
-      S.lista = null;
-      $('#resumo').textContent = '';
-      $('#lista').innerHTML = `<div class="vazio n-erro">❌ Não consegui carregar os freelancers: ${esc(e.message)}<br>Toque em 🔄 para tentar de novo.</div>`;
+      if (aba === 'fixos') S.fixos = null; else S.lista = null;
+      $('#lista').innerHTML = `<div class="vazio n-erro">❌ Não consegui carregar ${aba === 'fixos' ? 'os funcionários' : 'os freelancers'}: ${esc(e.message)}<br>Toque em 🔄 para tentar de novo.</div>`;
     }
     return;
   }
   if (seq !== S.seq) return;
-  S.lista = r;
+  if (aba === 'fixos') S.fixos = r; else S.lista = r;
   desenhar();
 }
 $('#atualizar').onclick = carregar;
-$('#busca').addEventListener('input', () => { if (S.lista) desenhar(); });
+$('#busca').addEventListener('input', () => { if (S.aba === 'fixos' ? S.fixos : S.lista) desenhar(); });
+$('#btn-novo').onclick = () => {
+  if (S.aba === 'fixos') { if (S.fixos) abrirFormFixo(null); }
+  else if (S.lista) abrirForm(null);
+};
 
 function semAcento(t) { return String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase(); }
-function desenhar() {
+function desenhar() { if (S.aba === 'fixos') desenharFixos(); else desenharFreelancers(); }
+async function uma(botao, acao) {
+  if (S.ocupado) return;
+  S.ocupado = true; if (botao) botao.disabled = true;
+  try { await acao(); } catch (e) { falhou(e); }
+  S.ocupado = false; if (botao && botao.isConnected) botao.disabled = false;
+}
+
+// =========================================================================== 👔 FIXOS
+function desenharFixos() {
+  const r = S.fixos, termo = semAcento($('#busca').value.trim()), dig = termo.replace(/\D/g, '');
+  const semTg = r.fixos.filter(f => !f.telegram).length, afast = r.fixos.filter(f => f.afast_txt.startsWith('🏖️ De férias')).length;
+  $('#resumo').textContent = `${r.fixos.length} funcionário(s) fixo(s)` + (afast ? ` · 🏖️ ${afast} de férias/afastado(s) hoje` : '')
+    + (semTg ? ` · ⚠️ ${semTg} sem Telegram` : '');
+  const lista = r.fixos.filter(f => !termo || semAcento(f.nome).includes(termo) || semAcento(f.cargo).includes(termo)
+    || (dig && f.telefone.replace(/\D/g, '').includes(dig)));
+  $('#lista').innerHTML = lista.map(f => `
+    <div class="free" data-id="${f.id}">
+      <div class="nome">${esc(f.nome)}${f.cargo ? ` <span class="cargo">· ${esc(f.cargo)}</span>` : ''}</div>
+      <div class="acoes">
+        <button class="btn" data-acao="tarefas">📋 Tarefas</button>
+        <button class="btn" data-acao="editar">✏️ Editar</button>
+        <button class="btn" data-acao="lancar" title="Faltou ou trouxe atestado: as tarefas de hoje vão para o grupo">📢 Faltou hoje</button>
+      </div>
+      <div class="info">
+        <span title="Horário em que o bot manda as tarefas do dia">🕗 ${f.horario ? 'Notificar às ' + esc(f.horario) : 'sem horário'}</span>
+        <span>📅 Folga: ${esc(f.folga ? f.folga_txt : 'sem folga fixa')}${f.domingo ? ' · ' + esc(f.domingo_txt) : ''}</span>
+        <span>${f.telegram ? '✅ Telegram' : '<span class="n-aviso">⚠️ sem Telegram</span>'}</span>
+        ${f.telefone ? `<span>📞 ${f.whatsapp ? `<a href="https://wa.me/${esc(f.whatsapp)}" target="_blank" rel="noopener" title="Abrir conversa no WhatsApp">${esc(f.telefone)}</a>` : esc(f.telefone)}</span>` : ''}
+        ${f.afast_txt ? `<span class="afast">${esc(f.afast_txt)}</span>` : ''}
+      </div>
+    </div>`).join('')
+    || `<div class="vazio suave">${r.fixos.length ? 'Ninguém com esse nome.' : 'Nenhum funcionário cadastrado ainda. Toque em ➕ Novo funcionário.'}</div>`;
+}
+
+function fixoDaLista(id) { return S.fixos && S.fixos.fixos.find(x => x.id === id); }
+
+function abrirFormFixo(f) {
+  const r = S.fixos;
+  const opcoes = (lista, atual) => lista.map(([n, t]) => `<option value="${n}" ${n === atual ? 'selected' : ''}>${esc(t)}</option>`).join('');
+  abrirModal(`<h3>${f ? '✏️ Editar funcionário' : '➕ Novo funcionário fixo'}</h3>
+    <form id="form-fixo" class="form" autocomplete="off">
+      <label>Nome completo<input id="x-nome" type="text" maxlength="150" value="${esc(f ? f.nome : '')}"></label>
+      <div class="dupla">
+        <label>ID do chat do Telegram${f ? '' : ' *'}<input id="x-tg" inputmode="numeric" maxlength="30" placeholder="ex.: 123456789" value="${esc(f ? f.telegram : '')}"></label>
+        <label>Telefone (WhatsApp) com DDD<input id="x-tel" type="tel" inputmode="tel" maxlength="30" placeholder="66 99999-8888" value="${esc(f ? f.telefone : '')}"></label>
+      </div>
+      <div class="dupla">
+        <label>Cargo${f ? '' : ' *'}<input id="x-cargo" type="text" maxlength="100" placeholder="ex.: Atendente de loja" value="${esc(f ? f.cargo : '')}"></label>
+        <label>Horário de notificação *<input id="x-hora" inputmode="numeric" maxlength="5" placeholder="08:00" value="${esc(f ? f.horario : '08:00')}"></label>
+      </div>
+      <div class="mini suave">O bot do Telegram reconhece a pessoa pelo ID do chat e manda as tarefas do dia no horário de notificação.</div>
+      <div class="dupla">
+        <label>Folga fixa semanal<select id="x-folga">${opcoes(r.dias, f ? f.folga : 0)}</select></label>
+        <label>Domingo de folga (6x1)<select id="x-dom">${opcoes(r.domingos, f ? f.domingo : 0)}</select></label>
+      </div>
+      <div class="dupla">
+        <label>Férias / afastamento: início<input id="x-ini" type="date" value="${esc(f ? f.afast_ini : '')}"></label>
+        <label>até<input id="x-fim" type="date" value="${esc(f ? f.afast_fim : '')}"></label>
+      </div>
+      <div class="mini suave">Sem férias: deixe as duas datas vazias (apague as duas para tirar).</div>
+      <label>Verificador (3 primeiros dígitos do CPF, opcional)
+        <input id="x-verif" type="password" inputmode="numeric" maxlength="3" autocomplete="new-password"
+          placeholder="${f && f.tem_verificador ? '••• cadastrado — digite só para trocar' : 'ex.: 123'}"></label>
+      ${f && f.tem_verificador ? '<label class="check"><input type="checkbox" id="x-apagar-verif"> Apagar o verificador cadastrado</label>' : ''}
+      <button class="btn prim" type="submit" id="x-salvar">💾 Salvar</button>
+      ${f ? `<div class="perigo-caixa">
+        <b class="n-erro">⚠️ Cuidado (não tem volta)</b>
+        <div class="linha-form">
+          <button class="btn perigo" type="button" id="x-zerar">🧹 Zerar pontos do mês</button>
+          <button class="btn perigo" type="button" id="x-excluir">🗑️ Excluir funcionário</button>
+        </div>
+        <div class="mini suave">Zerar apaga as entregas deste mês (o ranking dele zera). Excluir apaga TUDO do funcionário.</div>
+      </div>` : ''}
+    </form>`, null, true);
+  $('#x-nome').focus();
+  $('#x-hora').addEventListener('input', mascara);
+  $('#x-hora').addEventListener('blur', e => normalizarHora(e.target));
+  $('#x-verif').addEventListener('input', e => { e.target.value = e.target.value.replace(/\D/g, '').slice(0, 3); });
+  $('#form-fixo').addEventListener('submit', ev => {
+    ev.preventDefault();
+    normalizarHora($('#x-hora'));
+    uma($('#x-salvar'), async () => {
+      const corpo = {nome: $('#x-nome').value, telegram: $('#x-tg').value, telefone: $('#x-tel').value, cargo: $('#x-cargo').value,
+        horario: $('#x-hora').value, folga: +$('#x-folga').value, domingo: +$('#x-dom').value,
+        afast_ini: $('#x-ini').value, afast_fim: $('#x-fim').value, verificador: $('#x-verif').value,
+        apagar_verificador: !!($('#x-apagar-verif') && $('#x-apagar-verif').checked)};
+      const r2 = await comPerguntas(f ? `/api/gestao/fixos/${f.id}` : '/api/gestao/fixos', corpo);
+      if (r2 && r2.ok) { fecharModal(); status(r2.mensagem); await carregar(); }
+    });
+  });
+  if (f) {
+    $('#x-zerar').onclick = () => uma($('#x-zerar'), async () => {
+      const r2 = await comPerguntas(`/api/gestao/fixos/${f.id}/zerar-pontos`, {});
+      if (r2 && r2.ok) { fecharModal(); status(r2.mensagem); }
+    });
+    $('#x-excluir').onclick = () => uma($('#x-excluir'), async () => {
+      const r2 = await comPerguntas(`/api/gestao/fixos/${f.id}/excluir`, {});
+      if (r2 && r2.ok) { fecharModal(); status(r2.mensagem); await carregar(); }
+    });
+  }
+}
+
+async function lancarNoGrupo(f, botao) {
+  await uma(botao, async () => {
+    const r = await comPerguntas(`/api/gestao/fixos/${f.id}/lancar-grupo`, {});
+    if (r && r.ok) status(r.mensagem);
+  });
+}
+
+async function abrirTarefas(f, botao) {
+  await uma(botao, async () => {
+    const r = await api('GET', `/api/gestao/fixos/${f.id}`);
+    const fx = r.fixo;
+    abrirModal(`<h3>📋 Tarefas de ${esc(fx.nome)}</h3>
+      <div class="linha-form">
+        <button class="btn" id="t-transferir">🔁 Transferir tarefas fixas</button>
+        <button class="btn" id="t-historico">📜 Histórico completo</button>
+        <button class="btn" id="t-lancar">📢 Lançar tarefas no grupo (falta/atestado)</button>
+      </div>
+      <h4 class="secao">⏳ Pendências de hoje · ${esc(r.hoje)} <span class="mini suave">(${r.pendentes.length})</span></h4>
+      ${r.pendentes.length ? `<div class="tabela-rolagem"><table class="grade"><thead><tr><th>Tarefa pendente</th><th>Tipo</th><th>Pontos</th></tr></thead>
+        <tbody>${r.pendentes.map(t => `<tr><td>${esc(t.titulo)}</td><td>${esc(t.tipo)}</td><td>${t.pontos}</td></tr>`).join('')}</tbody></table></div>`
+        : '<div class="vazio suave">Nenhuma tarefa pendente para hoje! ✅</div>'}
+      <h4 class="secao">✅ Tarefas ativas <span class="mini suave">(${r.tarefas.length})</span></h4>
+      ${r.tarefas.length ? `<div class="tabela-rolagem"><table class="grade"><thead><tr><th>ID</th><th>Tarefa</th><th>Frequência</th></tr></thead>
+        <tbody>${r.tarefas.map(t => `<tr><td>${t.id}</td><td>${esc(t.titulo)}</td><td>${esc(t.frequencia)}</td></tr>`).join('')}</tbody></table></div>`
+        : '<div class="vazio suave">Sem tarefas ativas.</div>'}`);
+    $('#t-transferir').onclick = () => abrirTransferir(fx);
+    $('#t-historico').onclick = () => abrirHistorico(fx);
+    $('#t-lancar').onclick = () => lancarNoGrupo(fx, $('#t-lancar'));
+  });
+}
+
+function abrirHistorico(f) {
+  uma(null, async () => {
+    const r = await api('GET', `/api/gestao/fixos/${f.id}/historico`);
+    abrirModal(`<h3>📜 Histórico de ${esc(r.nome)}</h3>
+      ${r.total > r.itens.length ? `<div class="mini suave">Mostrando os ${r.itens.length} mais recentes de ${r.total}.</div>` : ''}
+      ${r.itens.length ? `<div class="tabela-rolagem" style="max-height:66vh"><table class="grade">
+        <thead><tr><th>Tarefa</th><th>Atribuído em</th><th>Enviado em</th><th>Status</th><th>Pontos</th><th>Observação</th></tr></thead>
+        <tbody>${r.itens.map(h => `<tr><td>${esc(h.tarefa)}</td><td>${esc(h.atribuido || '—')}</td><td>${esc(h.enviado || '—')}</td>
+          <td class="${/aprovad/i.test(h.status) ? 'st-ok' : /recusad|reprovad/i.test(h.status) ? 'st-nao' : ''}">${esc(h.status)}</td>
+          <td>${h.pontos}</td><td>${esc(h.obs)}</td></tr>`).join('')}</tbody></table></div>`
+        : '<div class="vazio suave">Nenhum histórico encontrado.</div>'}`);
+  });
+}
+
+function abrirTransferir(f) {
+  uma(null, async () => {
+    const r = await api('GET', `/api/gestao/fixos/${f.id}/tarefas-fixas`);
+    if (!r.fixas.length) { alert(`${r.nome} não tem tarefas fixas (diárias, semanais ou mensais) ativas.`); return; }
+    if (!r.destinos.length) { alert('Não há outro funcionário cadastrado para receber as tarefas.'); return; }
+    abrirModal(`<h3>🔁 Transferir tarefas fixas</h3>
+      <form id="form-tr" class="form">
+        <div><b>De:</b> ${esc(r.nome)}</div>
+        <label>Para<select id="tr-destino"><option value="">Escolha quem vai receber…</option>
+          ${r.destinos.map(d => `<option value="${d.id}">${esc(d.nome)} (ID ${d.id})</option>`).join('')}</select></label>
+        <div class="linha-form"><b class="mini">Tarefas fixas (todas já vêm marcadas):</b>
+          <button class="btn" type="button" id="tr-todas">Marcar todas</button><button class="btn" type="button" id="tr-nenhuma">Desmarcar todas</button>
+          <span class="mini suave" id="tr-conta"></span></div>
+        <div class="tr-lista">${r.fixas.map(t => `<label><input type="checkbox" value="${t.id}" checked> ${esc(t.titulo)}<span class="freq">${esc(t.frequencia)}</span></label>`).join('')}</div>
+        ${r.unicas ? `<div class="mini suave">ℹ️ ${r.unicas} tarefa(s) ÚNICA(s) (de um dia só) ficam com ${esc(r.nome)}: não entram na transferência.</div>` : ''}
+        <label class="check"><input type="checkbox" id="tr-copiar"> Copiar em vez de transferir (as tarefas continuam também com ${esc(r.nome)})</label>
+        <button class="btn prim" type="submit" id="tr-ok">🔁 Transferir</button>
+      </form>`, null, true);
+    const marcadas = () => [...document.querySelectorAll('.tr-lista input:checked')].map(c => +c.value);
+    const contar = () => {
+      $('#tr-conta').textContent = `${marcadas().length} de ${r.fixas.length} marcada(s)`;
+      $('#tr-ok').textContent = $('#tr-copiar').checked ? '📄 Copiar' : '🔁 Transferir';
+    };
+    document.querySelector('.tr-lista').addEventListener('change', contar);
+    $('#tr-copiar').addEventListener('change', contar);
+    $('#tr-todas').onclick = () => { document.querySelectorAll('.tr-lista input').forEach(c => { c.checked = true; }); contar(); };
+    $('#tr-nenhuma').onclick = () => { document.querySelectorAll('.tr-lista input').forEach(c => { c.checked = false; }); contar(); };
+    contar();
+    $('#form-tr').addEventListener('submit', ev => {
+      ev.preventDefault();
+      const destino = $('#tr-destino').value, ids = marcadas(), copiar = $('#tr-copiar').checked;
+      if (!destino) { alert("Escolha em 'Para' quem vai receber as tarefas."); return; }
+      if (!ids.length) { alert('Marque pelo menos uma tarefa.'); return; }
+      const nomeDestino = r.destinos.find(d => d.id === +destino).nome;
+      if (!confirm(`${copiar ? 'Copiar' : 'Transferir'} ${ids.length} tarefa(s) fixa(s) de ${r.nome} para ${nomeDestino}?\n\n` +
+                   `A partir de agora elas são enviadas para ${nomeDestino}` +
+                   (copiar ? ` e continuam também com ${r.nome}.` : ` e saem de ${r.nome}.\nO histórico de entregas de ${r.nome} fica guardado.`))) return;
+      uma($('#tr-ok'), async () => {
+        const x = await api('POST', `/api/gestao/fixos/${f.id}/transferir`, {destino: +destino, ids, copiar});
+        fecharModal(); status(x.mensagem);
+      });
+    });
+  });
+}
+
+// =========================================================================== 👤 FREELANCERS
+function desenharFreelancers() {
   const r = S.lista, termo = semAcento($('#busca').value.trim());
   const devem = r.freelancers.filter(f => f.pendente_qtd);
   const semHora = r.freelancers.reduce((s, f) => s + (f.sem_horario || 0), 0);
@@ -91,12 +333,20 @@ function desenhar() {
 $('#lista').addEventListener('click', e => {
   const b = e.target.closest('button[data-acao]');
   if (!b) return;
-  const f = S.lista.freelancers.find(x => x.id === +b.closest('.free').dataset.id);
+  const id = +b.closest('.free').dataset.id;
+  if (S.aba === 'fixos') {
+    const f = fixoDaLista(id);
+    if (!f) return;
+    if (b.dataset.acao === 'tarefas') abrirTarefas(f, b);
+    else if (b.dataset.acao === 'editar') abrirFormFixo(f);
+    else if (b.dataset.acao === 'lancar') lancarNoGrupo(f, b);
+    return;
+  }
+  const f = S.lista && S.lista.freelancers.find(x => x.id === id);
   if (!f) return;
   if (b.dataset.acao === 'editar') abrirForm(f);
   else excluir(f, b);
 });
-$('#btn-novo').onclick = () => { if (S.lista) abrirForm(null); };
 
 function abrirForm(f) {
   abrirModal(`<h3>${f ? '✏️ Editar freelancer' : '➕ Novo freelancer'}</h3>

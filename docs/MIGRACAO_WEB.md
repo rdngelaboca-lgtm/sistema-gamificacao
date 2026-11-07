@@ -103,11 +103,11 @@ mas não deixa **mexer**. Os funcionários usam o bot do Telegram (continua igua
 | Função | Na Web | Status |
 |---|---|---|
 | Dashboard (gráfico do ranking) | Gestão › Equipe › Dashboard (painel mostra pódio) | 🟡 |
-| Funcionários: cadastrar, editar dados completos, excluir | Gestão › Equipe › Funcionários | ⬜ |
-| Histórico e pendências de hoje do funcionário | Gestão › Equipe › Funcionários | ⬜ |
-| Zerar pontos do mês | Gestão › Equipe › Funcionários | ⬜ |
-| 📢 Lançar tarefas no grupo (falta/atestado) | Gestão › Equipe › Funcionários | ⬜ |
-| 🔁 Transferir as tarefas fixas (diárias, semanais e mensais) para outro funcionário — ou copiar (os dois ficam); escolhe quais; não duplica o que o outro já tem; quem entrega mantém o histórico (no PC desde 10/2026: Funcionários › Tarefas Ativas ou Ações) | Gestão › Equipe › Funcionários | ⬜ |
+| Funcionários: cadastrar, editar dados completos, excluir | Gestão › 👥 Equipe › 👔 Fixos | 🧪 |
+| Histórico e pendências de hoje do funcionário (e as tarefas ativas) | Gestão › 👥 Equipe › 👔 Fixos › 📋 Tarefas | 🧪 |
+| Zerar pontos do mês | Gestão › 👥 Equipe › 👔 Fixos › ✏️ Editar | 🧪 |
+| 📢 Lançar tarefas no grupo (falta/atestado) | Gestão › 👥 Equipe › 👔 Fixos › 📢 Faltou hoje | 🧪 |
+| 🔁 Transferir as tarefas fixas (diárias, semanais e mensais) para outro funcionário — ou copiar (os dois ficam); escolhe quais; não duplica o que o outro já tem; quem entrega mantém o histórico (no PC desde 10/2026: Funcionários › Tarefas Ativas ou Ações) | Gestão › 👥 Equipe › 👔 Fixos › 📋 Tarefas › 🔁 | 🧪 |
 | Grupos: criar, editar, excluir, membros | Gestão › Equipe › Grupos | ⬜ |
 | Catálogo de tarefas (modelos) | Gestão › Equipe › Tarefas | ⬜ |
 | Atribuir tarefas (com recorrência), desatribuir | Gestão › Equipe › Atribuir | ⬜ |
@@ -120,6 +120,8 @@ mas não deixa **mexer**. Os funcionários usam o bot do Telegram (continua igua
 | Metas: meta principal, modelos de metas diárias, apuração diária, lucro mensal | Gestão › Metas (painel mostra) | 🟡 |
 | Conquistas: criar / excluir | Gestão › Equipe › Conquistas | ⬜ |
 | Consultar NFs (lançadas pela equipe): filtros, foto, recriar botões no Telegram | Gestão › Equipe › NFs | ⬜ |
+
+**👔 Fixos na Web (11/2026: Gestão › 👥 Equipe, a antiga página 👤 Freelancers, agora com 2 abas — 👔 Fixos e 👤 Freelancers; `/gestao/freelancers` e `/gestao/equipe`):** o "Funcionários Cadastrados" do `main.py` (`gestao_equipe.py`). Cada funcionário vira um cartão (cargo, horário de notificação, folga semanal e domingo 6x1, Telegram ✅/⚠️, WhatsApp, 🏖️ férias) com 📋 Tarefas (pendências de hoje, tarefas ativas, 📜 histórico completo — os 400 mais recentes —, 🔁 transferir/copiar as fixas, 📢 lançar no grupo), ✏️ Editar (tudo da janela do PC: Telegram, WhatsApp, cargo, horário, folgas, férias/afastamento, verificador; embaixo, 🧹 Zerar pontos do mês e 🗑️ Excluir, com pergunta antes) e 📢 Faltou hoje. As regras e as funções do banco são as mesmas do PC. Segurança: o CPF e o verificador NUNCA vão para a página (o campo mostra só "••• cadastrado — digite só para trocar"; vazio = mantém; há a opção de apagar); a mensagem do 📢 não mostra o ID do grupo; não dá para excluir o próprio cadastro. Novo/editar não deixam dois funcionários com o mesmo Telegram (o bot se confundiria).
 
 ## 3. Escala da Loja (`escala_loja_main.py` — 3.000 linhas) — **1º módulo a migrar**
 
@@ -186,7 +188,7 @@ o programa maximizado regravava esse tamanho e todas as bolinhas saíam do lugar
   (fio tracejado até a bolinha na Web) e o [setor] repetido aparece uma vez só.
 
 ### Entrega 2 — Cadastros e configurações
-(Os freelancers — itens 25 a 27 — foram junto com a Entrega 3: **Gestão › 👤 Freelancers**.)
+(Os freelancers — itens 25 a 27 — foram junto com a Entrega 3: **Gestão › 👥 Equipe › 👤 Freelancers**.)
 
 | Função | Status |
 |---|---|
@@ -215,7 +217,7 @@ desmarcado, quem não tem WhatsApp não dá para marcar) e **📱 Mandar para N*
 
 | Função | Status |
 |---|---|
-| 31. Filtros: período + atalhos (esta semana, semana passada, este mês, tudo até hoje), freelancer, pendentes/pagos/todos | 🧪 |
+| 31. Filtros: período + atalhos (esta semana, semana passada, este mês, tudo até hoje), freelancer, pendentes/pagos/todos/🗑️ excluídos | 🧪 |
 | 32. Linha com os valores atuais (diárias, hora extra, blocos) | 🧪 |
 | 33. Tabela dos turnos: data (🎉), freelancer, posição, escala, real, horas, diária, extras, ajuste, total, situação (cores) | 🧪 |
 | 34. Resumo por freelancer (turnos, pendente, pago); clicar filtra | 🧪 |
@@ -229,6 +231,7 @@ desmarcado, quem não tem WhatsApp não dá para marcar) e **📱 Mandar para N*
 | 42. ⚙️ Valores: diárias longa/curta (tempo e valor seg-sáb / dom-feriado), hora extra, bloco, limite da curta, exemplos | 🧪 |
 | 43. 📅 Feriados: lista por ano, adicionar, nacionais do ano, remover | 🧪 |
 | 44. Recibo com a conta separada para quem teve ajuste **positivo** (PC e Web): "📅 dia · das X às Y / • Diária: R$ / • Hora extra: + R$ / • 🎁 Presente: + R$ (motivo) / Total pago". O valor combinado na 🙋 Vaga aparece como "💬 Valor combinado" (e o que for dado a mais na hora de pagar, como presente). Sem ajuste ou com desconto: a linha de sempre | 🧪 |
+| 45. 🗑️ **Excluir da lista de pagamentos SEM tirar da escala** (11/2026, a pedido do Rodrigo): marca os turnos PENDENTES → janela com a lista e um motivo (opcional) → saem de ⏳ Pendentes, do "falta pagar" (Web e PC), da Folha e do custo da Escala, mas o freelancer continua escalado. Ficam em **Mostrar › 🗑️ Excluídos** ("Excluído dos pagamentos em dd/mm por Fulano · motivo"; a lista normal avisa "🗑️ N excluído(s) neste período") e voltam com **♻️ Restaurar** (com o horário real, ajuste e observação que tinham). Turno PAGO não é excluído (↩️ Desfazer antes); excluído não é corrigido, pago nem vai no recibo; se o freelancer do turno mudar na escala, quem entra aparece para pagar. Colunas novas em `PagamentosFreelancer` (Excluido, ExcluidoEm, ExcluidoPor, MotivoExclusao), criadas sozinhas | 🧪 |
 
 **Como fica por dentro:** as regras da escala (conflitos, folga, jornada, intervalo, valor do
 freelancer, recibo) passam para um arquivo só, usado **pelo PC e pela Web** — as duas versões
@@ -662,7 +665,7 @@ Cada etapa: construir → testar → usar em paralelo com o PC → marcar ✅ aq
 - Pelo app de compras: aba **Gestão › 🏪 Loja › Gestão da loja** (Escala, Folha, Pagamentos, Freelancers, Avisos,
   Clientes, Comunicados e Perfil da equipe;
   abrem direto, sem pedir o PIN de novo).
-- Menu no alto de toda página da Gestão: **🗓️ Escala · 👤 Freelancers · 💰 Pagamentos · 📊 Folha · 📣 Avisos · 📢 Clientes
+- Menu no alto de toda página da Gestão: **🗓️ Escala · 👥 Equipe (👔 Fixos e 👤 Freelancers) · 💰 Pagamentos · 📊 Folha · 📣 Avisos · 📢 Clientes
   · 📨 Comunicados · 🧭 Perfil** (`/gestao/escala`, `/gestao/freelancers`, `/gestao/pagamentos`, `/gestao/folha`,
   `/gestao/avisos`, `/gestao/clientes`, `/gestao/comunicados`, `/gestao/perfil`).
 - Pela internet (fora da loja): liberado para a Gestão desde 10/2026, a pedido do Rodrigo — só gestor,
@@ -674,8 +677,8 @@ Cada etapa: construir → testar → usar em paralelo com o PC → marcar ✅ aq
 | Programa | Funções | ✅ | 🧪 | 🟡 | ⬜ |
 |---|---|---|---|---|---|
 | Gestão de Estoque | 41 | 8 | 0 | 8 | 25 |
-| Painel do Gestor | 17 | 0 | 0 | 5 | 12 |
-| Escala da Loja | 43 | 0 | 36 | 0 | 7 |
+| Painel do Gestor | 18 | 0 | 5 | 5 | 8 |
+| Escala da Loja | 44 | 0 | 37 | 0 | 7 |
 | Gestão de Pessoas | 8 | 0 | 0 | 1 | 7 |
 | Agendamentos | 5 | 3 | 0 | 1 | 1 |
-| **Total** | **114** | **11** | **36** | **15** | **52** |
+| **Total** | **116** | **11** | **42** | **15** | **48** |

@@ -765,7 +765,7 @@ function desenharListaPessoas() {
     html += itemPessoaHtml(it, i);
   });
   const lista = $('#pessoa-lista');
-  lista.innerHTML = html || `<li class="vazio">Ninguém com “${esc(texto)}”. Freelancer novo? Cadastre em <a href="/gestao/freelancers">👤 Freelancers</a>.</li>`;
+  lista.innerHTML = html || `<li class="vazio">Ninguém com “${esc(texto)}”. Freelancer novo? Cadastre em <a href="/gestao/freelancers?aba=freelancers">👥 Equipe › 👤 Freelancers</a>.</li>`;
   lista.hidden = false;
   $('#pessoa-busca').setAttribute('aria-expanded', 'true');
   $('#pessoa-busca').setAttribute('aria-activedescendant', S.busca.ativo >= 0 ? `op-pessoa-${S.busca.ativo}` : '');

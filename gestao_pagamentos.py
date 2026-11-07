@@ -6,6 +6,7 @@
 #   - cadastro dos freelancers (novo, editar, excluir, quanto falta pagar);
 #   - lista dos turnos com o valor (filtros, resumo por freelancer, totais);
 #   - corrigir horário real / ajuste / diária, marcar como pago, desfazer;
+#   - [EXCLUIR PAGAMENTO] tirar um turno pendente da lista sem tirar da escala (e restaurar);
 #   - recibo para o WhatsApp, planilha do Excel;
 #   - valores das diárias e feriados.
 #
@@ -30,7 +31,7 @@ from gestao_escala import ErroEscala, _data, _exigir_banco, _hora, _id
 
 logger = logging.getLogger(__name__)
 
-STATUS = ('pendentes', 'pagos', 'todos')
+STATUS = ('pendentes', 'pagos', 'todos', 'excluidos')
 VEZES_DIFERENTE = 2          # [VALOR NA HORA DE PAGAR] mais que o dobro (ou menos da metade) do calculado: pergunta antes
 INTERVALO_RECIBO_SEG = 2.5   # [RECIBO AUTOMÁTICO] entre um recibo e outro (o WhatsApp não gosta de rajada)
 SEGUNDO_PLANO = True         # os testes desligam para conferir na hora
@@ -80,9 +81,25 @@ def _iid(it):
     return f"P{it['PagamentoID']}" if it['Pago'] else f"E{it['EscalaID']}"
 
 
+def _texto_excluido(it, icone="🗑️ "):
+    """[EXCLUIR PAGAMENTO] '🗑️ Excluído dos pagamentos em 05/11 por Rodrigo · motivo'."""
+    quando = it.get('ExcluidoEm')
+    if quando and not hasattr(quando, 'strftime'):
+        try:
+            quando = datetime.fromisoformat(str(quando)[:19])
+        except ValueError:
+            quando = None
+    return (f"{icone}Excluído dos pagamentos" + (f" em {quando:%d/%m}" if quando else '')
+            + (f" por {it['ExcluidoPor']}" if it.get('ExcluidoPor') else '')
+            + (f" · {it['MotivoExclusao']}" if it.get('MotivoExclusao') else ''))
+
+
 def _item_json(it, recibos=None):
     ajuste = it['Ajuste'] or Decimal('0')
-    return dict(R.colunas_pagamento(it), iid=_iid(it), pagamento_id=it['PagamentoID'], escala_id=it['EscalaID'],
+    colunas = R.colunas_pagamento(it)
+    if it.get('Excluido'):
+        colunas.update(situacao=_texto_excluido(it), tag='excluido')
+    return dict(colunas, iid=_iid(it), pagamento_id=it['PagamentoID'], escala_id=it['EscalaID'], excluido=bool(it.get('Excluido')),
                 data_iso=it['Data'].isoformat() if it['Data'] else None, data_curta=R.fmt_data_br(it['Data'], True),
                 feriado=it.get('Feriado') or '', freelancer_id=it['FreelancerID'], pago=bool(it['Pago']),
                 sem_horario=bool(it['SemHorario']), total_centavos=_centavos(it['Total']),
@@ -240,6 +257,14 @@ def listar(dados):
     _exigir_banco()
     (de, ate, fid, status), itens = _itens(dados)
     linhas, totais = R.resumo_pagamentos(itens)
+    if status == 'excluidos':
+        excluidos = {'qtd': len(itens), 'total': R.fmt_reais(sum((i['Total'] for i in itens), Decimal('0')))}
+    else:
+        try:
+            excluidos = {'qtd': database.contar_pagamentos_excluidos(de, ate, fid), 'total': ''}
+        except Exception as e:
+            logger.warning(f"Pagamentos: não contei os excluídos ({e})")
+            excluidos = {'qtd': 0, 'total': ''}
     frees = [{'id': f.FreelancerID, 'nome': f.Nome or '', 'whatsapp': bool(R.numero_whatsapp(getattr(f, 'Telefone', None)))}
              for f in database.listar_freelancers()]
     try:
@@ -254,6 +279,7 @@ def listar(dados):
                        for f, n, q, pe, pa in linhas],
             'totais': {'pendente': R.fmt_reais(totais['pendente']), 'pendente_qtd': totais['pendente_qtd'],
                        'pago': R.fmt_reais(totais['pago']), 'pago_qtd': totais['pago_qtd']},
+            'excluidos': excluidos,
             'valores': R.texto_valores_pagamento(_config()), 'freelancers': frees,
             'formas': R.FORMAS_PAGAMENTO, 'hoje': date.today().isoformat()}
 
@@ -539,8 +565,59 @@ def desfazer(dados, usuario):
     return {'ok': True, 'mensagem': msg}
 
 
+def _selecao_obrigatoria(dados, itens, vazio):
+    ids = dados.get('ids')
+    if not ids:
+        raise ErroEscala(vazio)
+    return _escolhidos(itens, ids)
+
+
+def excluir(dados, usuario):
+    """
+    [EXCLUIR PAGAMENTO] 🗑️ Tira turnos PENDENTES da lista de pagamentos sem tirar da escala (o freelancer continua
+    escalado; só não aparece mais para pagar, nem no "falta pagar" e na Folha). Volta com ♻️ Restaurar.
+    """
+    _exigir_banco()
+    (_de, _ate, _fid, status), itens = _itens(dados)
+    if status == 'excluidos':
+        raise ErroEscala("Estes turnos já estão excluídos. Para trazer de volta, use ♻️ Restaurar.")
+    sel = _selecao_obrigatoria(dados, itens, "Marque os turnos PENDENTES que quer excluir dos pagamentos.")
+    pagos = [i for i in sel if i['Pago']]
+    if pagos:
+        raise ErroEscala(f"{len(pagos)} turno(s) marcado(s) já está(ão) PAGO(S): pagamento feito não é excluído. "
+                         "Se marcou como pago por engano, use ↩️ Desfazer e depois 🗑️ Excluir.")
+    motivo = ' '.join(str(dados.get('motivo') or '').split())[:150]
+    ok, msg = database.excluir_pagamentos([i['EscalaID'] for i in sel], usuario.get('nome') or '', motivo)
+    if not ok:
+        raise ErroEscala(msg, 409)
+    total = sum((i['Total'] for i in sel), Decimal('0'))
+    logger.info(f"[GESTÃO] {usuario.get('nome')}: excluiu {len(sel)} turno(s) dos pagamentos ({R.fmt_reais(total)}) "
+                f"{[i['EscalaID'] for i in sel]}{' · ' + motivo if motivo else ''}.")
+    return {'ok': True, 'mensagem': f"🗑️ {len(sel)} turno(s) ({R.fmt_reais(total)}) fora da lista de pagamentos. "
+                                    "Eles continuam na escala. Para ver ou trazer de volta: Mostrar › 🗑️ Excluídos."}
+
+
+def restaurar(dados, usuario):
+    """[EXCLUIR PAGAMENTO] ♻️ Os turnos excluídos voltam para ⏳ Pendentes."""
+    _exigir_banco()
+    dados = dict(dados, status='excluidos')
+    _filtro, itens = _itens(dados)
+    sel = _selecao_obrigatoria(dados, itens, "Marque os turnos EXCLUÍDOS que quer trazer de volta.")
+    ok, msg = database.restaurar_pagamentos([i['EscalaID'] for i in sel])
+    if not ok:
+        raise ErroEscala(msg, 409)
+    logger.info(f"[GESTÃO] {usuario.get('nome')}: restaurou {len(sel)} turno(s) nos pagamentos {[i['EscalaID'] for i in sel]}.")
+    return {'ok': True, 'mensagem': f"♻️ {msg}"}
+
+
+def _sem_excluidos(dados):
+    if dados.get('status') == 'excluidos':
+        raise ErroEscala("Turno excluído dos pagamentos não tem recibo. Restaure (♻️) primeiro.")
+
+
 def recibo(dados):
     _exigir_banco()
+    _sem_excluidos(dados)
     _filtro, itens = _itens(dados)
     sel = _escolhidos(itens, dados.get('ids'))
     if not sel:
@@ -556,6 +633,7 @@ def recibo(dados):
 
 def _por_freelancer(dados):
     """Os turnos escolhidos (ou a lista toda) separados por freelancer, com o texto do recibo de cada um."""
+    _sem_excluidos(dados)
     _filtro, itens = _itens(dados)
     sel = _escolhidos(itens, dados.get('ids'))
     if not sel:
@@ -604,7 +682,7 @@ def enviar_recibos_lote(dados, usuario):
     fila = [(x['freelancer_id'], x['nome'], x['_tel'], x['_pags'], x['texto']) for x in grupos if x['_tel']]
     sem = [x['nome'] for x in grupos if not x['_tel']]
     if not fila:
-        raise ErroEscala("Nenhum dos escolhidos tem WhatsApp válido no cadastro (👤 Freelancers).")
+        raise ErroEscala("Nenhum dos escolhidos tem WhatsApp válido no cadastro (👥 Equipe › 👤 Freelancers).")
     for fid, _n, _t, pags, _x in fila:
         if pags:
             _gravar_recibo(pags, fid, 'enviando')
@@ -624,7 +702,7 @@ def enviar_recibo_agora(dados, usuario):
     sel = _escolhidos(itens, dados.get('ids'))
     numero = R.numero_whatsapp(r['telefone'])
     if not numero:
-        raise ErroEscala(f"{r['nome']} está sem WhatsApp válido no cadastro (👤 Freelancers).")
+        raise ErroEscala(f"{r['nome']} está sem WhatsApp válido no cadastro (👥 Equipe › 👤 Freelancers).")
     ok, resp = notificador_whatsapp.enviar_mensagem_whatsapp(numero, r['texto'])
     pags = [i['PagamentoID'] for i in sel if i['Pago']]
     if pags:
@@ -643,7 +721,12 @@ def planilha(dados):
     sel = _escolhidos(itens, ids)
     if not sel:
         raise ErroEscala("Não há turnos na lista para exportar.")
-    return _xlsx(R.linhas_planilha_pagamentos(sel)), f"Pagamentos_Freelancers_{datetime.now():%d-%m-%Y}.xlsx"
+    linhas = R.linhas_planilha_pagamentos(sel)
+    for linha, i in zip(linhas, sel):
+        if i.get('Excluido'):                    # [EXCLUIR PAGAMENTO]
+            linha['Situação'] = 'Excluído dos pagamentos'
+            linha['Observação'] = ' · '.join(x for x in (linha['Observação'], _texto_excluido(i, '')) if x)
+    return _xlsx(linhas), f"Pagamentos_Freelancers_{datetime.now():%d-%m-%Y}.xlsx"
 
 
 # ------------------------------------------------------------------------------
