@@ -1604,9 +1604,9 @@ class AppEscalaLoja:
             # 1. Verifica Férias/Atestados/Afastamentos pelo banco
             indisponivel = self._indisponivel_no_dia(f.FuncionarioID)
 
-            # 2. Verifica a Folga Fixa da semana
-            folga_fixa = folga_do_funcionario(f)  # [DEPURAÇÃO] a coluna é 'DiaDeFolga', não 'DiaFolga'
-            esta_de_folga = indisponivel or (folga_fixa is not None and folga_fixa == dia_semana_hoje)
+            # 2. [5x2] A folga do dia (5x2, rodízio, troca ou a do cadastro) já vem no "indisponivel" acima
+            # [5x2] "indisponivel" já inclui a folga do dia (5x2, rodízio, troca ou a do cadastro): folgas.py
+            esta_de_folga = bool(indisponivel)
 
             # Monta a etiqueta com o Alerta
             tag_aviso = " [FOLGA]" if esta_de_folga else ""

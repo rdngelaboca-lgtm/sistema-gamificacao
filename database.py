@@ -808,17 +808,12 @@ def buscar_funcionarios_por_horario(horario_atual):
     if conn:
         try:
             cursor = conn.cursor()
-            # Lógica corrigida para Folga: Usa DATENAME para ser agnóstico à configuração @@DATEFIRST
+            # [5x2] A folga (5x2, rodízio, troca, 6x1, férias) é conferida no agendador (motivo_ausencia_hoje ->
+            # folgas.py). Antes este SQL tirava quem tinha a folga ANTIGA do cadastro no dia — e a pessoa que passou
+            # para a 5x2 e trabalha nesse dia ficava sem o aviso.
             sql = """
                 SELECT * FROM Funcionarios F
                 WHERE CONVERT(VARCHAR(5), F.HorarioNotificacao, 108) = ?
-                -- Lógica da Folga: Se DiaDeFolga for 0 (sem folga) OU o DiaDeFolga for diferente do dia da semana atual
-                AND (
-                    F.DiaDeFolga = 0 OR 
-                    F.DiaDeFolga IS NULL OR
-                    -- Converte o dia da semana SQL para o nosso padrão (1=Dom, 2=Seg... 7=Sáb)
-                    F.DiaDeFolga != (((DATEPART(dw, GETDATE()) + @@DATEFIRST - 1) % 7) + 1)
-                )
             """
             cursor.execute(sql, horario_atual)
             return cursor.fetchall()
@@ -1904,8 +1899,7 @@ def buscar_funcionarios_para_lembrete(horario_atual):
                 WHERE
                     (DATEDIFF(minute, CONVERT(TIME, GETDATE()), CONVERT(TIME, DATEADD(HOUR, 3, HorarioNotificacao))) = 0 OR
                     DATEDIFF(minute, CONVERT(TIME, GETDATE()), CONVERT(TIME, DATEADD(HOUR, 6, HorarioNotificacao))) = 0)
-                    AND (DiaDeFolga = 0 OR DiaDeFolga IS NULL OR DiaDeFolga != """ + SQL_DIA_SEMANA_HOJE + """)
-            """
+            """  # [5x2] a folga é conferida no agendador (folgas.py)
             cursor.execute(sql)
             return cursor.fetchall()
         finally:
@@ -1922,8 +1916,7 @@ def buscar_funcionarios_para_resumo_final(horario_atual):
                 SELECT * FROM Funcionarios
                 WHERE
                     DATEDIFF(minute, CONVERT(TIME, GETDATE()), CONVERT(TIME, DATEADD(MINUTE, 500, HorarioNotificacao))) = 0
-                    AND (DiaDeFolga = 0 OR DiaDeFolga IS NULL OR DiaDeFolga != """ + SQL_DIA_SEMANA_HOJE + """)
-            """
+            """  # [5x2] a folga é conferida no agendador (folgas.py)
             cursor.execute(sql)
             return cursor.fetchall()
         finally:
@@ -2026,6 +2019,7 @@ def calcular_ranking_desempenho(data_final_calculo=None, setor_filtro=None): # <
                 'NomeCompleto': func.NomeCompleto,
                 'Cargo': func.Cargo, 
                 'DiaDeFolga': func.DiaDeFolga,
+                'func': func,
                 'tarefas': []
             } 
 
@@ -2033,6 +2027,12 @@ def calcular_ranking_desempenho(data_final_calculo=None, setor_filtro=None): # <
         for atribuicao in todas_as_atribuicoes:
             if atribuicao.FuncionarioID in atribuicoes_por_funcionario:
                 atribuicoes_por_funcionario[atribuicao.FuncionarioID]['tarefas'].append(atribuicao) 
+
+        try:                                   # [5x2] as folgas de cada dia (5x2, rodízio, troca, domingo, 6x1)
+            import folgas as _folgas
+        except Exception as e:
+            logger.error(f"Ranking: folgas.py indisponível ({e}); usando só a folga do cadastro.")
+            _folgas = None
 
         # Loop de Cálculo
         for func_id, dados in atribuicoes_por_funcionario.items():
@@ -2070,7 +2070,10 @@ def calcular_ranking_desempenho(data_final_calculo=None, setor_filtro=None): # <
 
                     # Verifica Folga (SQL: 1=Dom ... 7=Sab)
                     dia_da_semana_sql = (dia_atual.weekday() + 1) % 7 + 1
-                    if str(dia_da_semana_sql) == str(dados['DiaDeFolga']): 
+                    if _folgas is not None:
+                        if _folgas.esta_de_folga(dados['func'], dia_atual):
+                            continue  # [5x2] PULA OS DIAS DE FOLGA (as 2 da semana, troca, domingo do mês)
+                    elif str(dia_da_semana_sql) == str(dados['DiaDeFolga']):
                         continue # PULA O DIA SE FOR FOLGA!
 
                     # Verifica Frequência
@@ -3016,12 +3019,38 @@ def buscar_funcionarios_de_folga_hoje(dia_da_semana):
             conn.close()
     return []
 
-def motivo_indisponibilidade(dia_folga_semanal, dom_folga_mensal, inicio_afast, fim_afast, data_verificacao):
+def _texto_folga(situacao):
+    """[5x2] O motivo do folgas.py no texto de sempre da Escala."""
+    if not situacao:
+        return None
+    tipo, origem = situacao['tipo'], situacao.get('origem')
+    if tipo == 'afastamento':
+        return "⚠️ Funcionário em Férias/Afastamento!"
+    if tipo == 'domingo':
+        return f"⚠️ {situacao['texto']}!"
+    if tipo == 'troca':
+        return "⚠️ Folga trocada para este dia!"
+    if origem == '6x1':
+        return "⚠️ Dia de Folga Fixa Semanal!"
+    return f"⚠️ Dia de Folga ({'rodízio' if origem == 'rodizio' else '5x2'})!"
+
+
+def motivo_indisponibilidade(dia_folga_semanal, dom_folga_mensal, inicio_afast, fim_afast, data_verificacao,
+                             funcionario_id=None):
     """
     Férias/afastamento, folga fixa da semana ou domingo de folga (6x1) do funcionário no dia:
     texto do motivo ou None (disponível). [GESTÃO WEB] separado de verificar_status_disponibilidade
     para a Web conferir todos os funcionários sem ir ao banco uma vez por pessoa.
+    [5x2] Com funcionario_id, quem responde é o folgas.py (padrão 5x2/rodízio, trocas do dia e, sem padrão,
+    esta mesma folga do cadastro).
     """
+    if funcionario_id is not None:
+        try:
+            import folgas
+            return _texto_folga(folgas.situacao_por_campos(funcionario_id, dia_folga_semanal, dom_folga_mensal,
+                                                           inicio_afast, fim_afast, data_verificacao))
+        except Exception as e:
+            logger.error(f"Folgas: erro ao conferir o funcionário {funcionario_id} ({e}); usando só o cadastro.")
     # Conversão da data de verificação
     if isinstance(data_verificacao, str):
         dt_check = datetime.strptime(data_verificacao[:10], '%Y-%m-%d').date()
@@ -3096,7 +3125,7 @@ def verificar_status_disponibilidade(pessoa_id, data_verificacao, tipo='func'):
 
             dia_folga_semanal, dom_folga_mensal, inicio_afast, fim_afast = row
             return motivo_indisponibilidade(dia_folga_semanal, dom_folga_mensal, inicio_afast, fim_afast,
-                                            data_verificacao)
+                                            data_verificacao, funcionario_id=pessoa_id)
         except Exception as e:
             logger.error(f"Erro ao verificar disponibilidade: {e}")
             return None
@@ -11668,7 +11697,8 @@ def listar_pendencias_gerais_hoje():
                 SELECT 
                     F.NomeCompleto,
                     T.Titulo,
-                    TA.TipoFrequencia
+                    TA.TipoFrequencia,
+                    F.FuncionarioID
                 FROM TarefasAtribuidas TA
                 JOIN Funcionarios F ON TA.FuncionarioID = F.FuncionarioID
                 JOIN Tarefas T ON TA.TarefaID = T.TarefaID
@@ -11682,9 +11712,7 @@ def listar_pendencias_gerais_hoje():
                         OR (TA.TipoFrequencia = 'Mensal' AND CAST(TA.ValorFrequencia AS INT) = DATEPART(day, GETDATE()))
                         OR (TA.TipoFrequencia = 'Unica' AND CONVERT(date, TA.DataInicioVigencia) = CONVERT(date, GETDATE()))
                     )
-                    -- Ignora quem está de folga semanal hoje
-                    AND (F.DiaDeFolga IS NULL OR F.DiaDeFolga = 0 OR F.DiaDeFolga != ((DATEPART(dw, GETDATE()) + @@DATEFIRST - 1) % 7) + 1)
-                    
+                    -- [5x2] quem está de folga hoje sai logo abaixo (folgas.py)
                     -- [CORREÇÃO] Ignora quem está em Férias/Afastamento hoje
                     AND (
                         F.DataInicioAfastamento IS NULL 
@@ -11702,9 +11730,17 @@ def listar_pendencias_gerais_hoje():
                 ORDER BY F.NomeCompleto
             """
             cursor.execute(sql)
-            return cursor.fetchall()
+            linhas = cursor.fetchall()
         finally:
             conn.close()
+        try:                                   # [5x2] tira quem está de folga hoje (5x2, rodízio, troca, 6x1)
+            import folgas
+            funcs = {f.FuncionarioID: f for f in listar_funcionarios()}
+            hoje = date.today()
+            return [r for r in linhas if not folgas.situacao(funcs.get(r[3]), hoje)]
+        except Exception as e:
+            logger.error(f"Pendências de hoje: folgas.py indisponível ({e}); sem filtrar as folgas.")
+            return linhas
     return []
 
 def listar_funcionarios_por_tarefa(tarefa_id):

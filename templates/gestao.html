@@ -1078,7 +1078,9 @@ async function abrirFixos() {
         <label>Saída<input data-c="sai" value="${esc(f.saida)}" inputmode="numeric" maxlength="5"></label>
         <label>Intervalo<span style="display:flex;gap:4px"><input data-c="ini" value="${esc(f.int_ini)}" inputmode="numeric" maxlength="5" aria-label="Início do intervalo">
           <input data-c="fim" value="${esc(f.int_fim)}" inputmode="numeric" maxlength="5" aria-label="Fim do intervalo"></span></label>
-        <label>Folga da semana<select data-c="folga">${nomesFolga.map((n, i) => `<option value="${i}" ${(f.dia_folga || 0) === i ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+        ${f.padrao_5x2 ? `<label>Folgas<span class="mini">${esc(f.padrao_5x2)} ·
+          <a href="/gestao/freelancers?aba=folgas" title="As folgas 5x2 e o rodízio ficam em 👥 Equipe › 📅 Folgas">📅 mudar</a></span></label>`
+          : `<label>Folga da semana<select data-c="folga">${nomesFolga.map((n, i) => `<option value="${i}" ${(f.dia_folga || 0) === i ? 'selected' : ''}>${n}</option>`).join('')}</select></label>`}
       </div>
       <div class="dias-chips" aria-label="Dias em que trabalha">${[1, 2, 3, 4, 5, 6, 7].map(d => `<label class="${f.dias.includes(d) ? 'on' : ''} ${f.dia_folga === d ? 'folga' : ''}"
           title="${f.dia_folga === d ? 'Dia de folga: não entra' : ''}"><input type="checkbox" data-dia="${d}" ${f.dias.includes(d) ? 'checked' : ''}>${nomesDia[d]}</label>`).join('')}</div>

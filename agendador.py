@@ -178,8 +178,23 @@ def motivo_ausencia_hoje(funcionario, hoje=None):
     """
     Diz se o funcionário está AUSENTE hoje e por quê (ou None se está trabalhando):
     férias/atestado (período de afastamento), folga semanal ou domingo de folga do mês.
+    [5x2] Quem responde é o folgas.py (5x2, rodízio, troca do dia, 6x1 do cadastro); se ele falhar, a regra antiga.
     """
     hoje = hoje or date.today()
+    try:
+        import folgas
+        s = folgas.situacao(funcionario, hoje)
+        if not s:
+            return None
+        if s['tipo'] == 'afastamento':
+            return "Férias/Atestado"
+        if s['tipo'] == 'domingo':
+            return f"Folga de Domingo ({(hoje.day - 1) // 7 + 1}º)"
+        if s['tipo'] == 'troca':
+            return "Folga trocada"
+        return "Folga Semanal" if s.get('origem') == '6x1' else f"Folga ({'rodízio' if s.get('origem') == 'rodizio' else '5x2'})"
+    except Exception as e:
+        logger.error(f"Folgas: erro ao conferir {getattr(funcionario, 'NomeCompleto', '?')} ({_sem_token(e)}); usando o cadastro.")
     dia_sql = dia_semana_sql(hoje)
 
     ini = _para_data(getattr(funcionario, 'DataInicioAfastamento', None))

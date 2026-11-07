@@ -96,6 +96,17 @@ def _funcionario(fid):
     return f
 
 
+def _padrao_txt(f, hoje):
+    """[5x2] '5x2: seg e ter' / 'Rodízio de 3 semanas: ...' se o padrão de folgas de hoje é 5x2 (senão '')."""
+    try:
+        import folgas
+        p = folgas.padrao_no_dia(f.FuncionarioID, hoje or date.today())
+        return folgas.descrever_ciclo(p[1]) if p and p[1] else ''
+    except Exception as e:
+        logger.warning(f"Equipe: padrão de folgas indisponível ({e})")
+        return ''
+
+
 def _json_fixo(f, hoje=None):
     """Um funcionário para a página (SEM CPF e SEM o verificador: só se ele está cadastrado)."""
     ini, fim = _como_data(getattr(f, 'DataInicioAfastamento', None)), _como_data(getattr(f, 'DataFimAfastamento', None))
@@ -107,7 +118,7 @@ def _json_fixo(f, hoje=None):
             'folga': folga, 'folga_txt': _nome_folga(folga), 'domingo': dom,
             'domingo_txt': dict(DOMINGOS).get(dom, '') if dom else '',
             'afast_ini': ini.isoformat() if ini else '', 'afast_fim': fim.isoformat() if fim else '',
-            'afast_txt': _texto_afastamento(ini, fim, hoje),
+            'afast_txt': _texto_afastamento(ini, fim, hoje), 'padrao_txt': _padrao_txt(f, hoje),
             'tem_verificador': bool(_txt(getattr(f, 'VerificadorCPF', None)))}
 
 

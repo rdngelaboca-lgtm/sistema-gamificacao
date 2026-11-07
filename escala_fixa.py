@@ -141,8 +141,22 @@ def fixos():
         conn.close()
 
 
+def padrao_5x2(func):
+    """[5x2] '5x2: seg e ter' / 'Rodízio de 3 semanas: ...' se o padrão de folgas de HOJE é 5x2; '' se vale o cadastro."""
+    try:
+        import folgas
+        p = folgas.padrao_no_dia(func.FuncionarioID, date.today())
+        return folgas.descrever_ciclo(p[1]) if p and p[1] else ''
+    except Exception as e:
+        logger.warning(f"Folgas: padrão de {getattr(func, 'NomeCompleto', '?')} indisponível ({e})")
+        return ''
+
+
 def texto_folga(func):
-    """'segunda' / 'segunda e 2º domingo do mês' / '' (do cadastro do funcionário)."""
+    """'segunda' / 'segunda e 2º domingo do mês' / '' (do cadastro do funcionário). [5x2] ou o padrão 5x2 de hoje."""
+    p5 = padrao_5x2(func)
+    if p5:
+        return p5
     partes = []
     folga = R.folga_do_funcionario(func)
     if folga:
@@ -178,7 +192,8 @@ def listar():
         lista.append(dict(c, nome=f.NomeCompleto if f else f"Funcionário {fid} (excluído)",
                           posicao=nomes_pos.get(c['posicao_id']) or f"Posição {c['posicao_id']}",
                           posicao_ativa=c['posicao_id'] in ativas, existe=bool(f),
-                          folga=texto_folga(f) if f else '', dia_folga=R.folga_do_funcionario(f) if f else None,
+                          folga=texto_folga(f) if f else '', padrao_5x2=padrao_5x2(f) if f else '',
+                          dia_folga=(None if padrao_5x2(f) else R.folga_do_funcionario(f)) if f else None,
                           dias_texto=_resumo_dias(c['dias'])))
     lista.sort(key=lambda x: x['nome'].lower())
     return lista
@@ -190,7 +205,8 @@ def listar():
 def _motivo(func, d):
     return database.motivo_indisponibilidade(
         getattr(func, 'DiaDeFolga', None), getattr(func, 'DomingoFolgaMensal', None),
-        getattr(func, 'DataInicioAfastamento', None), getattr(func, 'DataFimAfastamento', None), d)
+        getattr(func, 'DataInicioAfastamento', None), getattr(func, 'DataFimAfastamento', None), d,
+        funcionario_id=func.FuncionarioID)                  # [5x2] padrão 5x2/rodízio e trocas (folgas.py)
 
 
 def _intocado(turno, fid, pos_snap, ent_snap, sai_snap):

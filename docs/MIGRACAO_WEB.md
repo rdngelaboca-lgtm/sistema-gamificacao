@@ -121,7 +121,7 @@ mas não deixa **mexer**. Os funcionários usam o bot do Telegram (continua igua
 | Conquistas: criar / excluir | Gestão › Equipe › Conquistas | ⬜ |
 | Consultar NFs (lançadas pela equipe): filtros, foto, recriar botões no Telegram | Gestão › Equipe › NFs | ⬜ |
 
-**👔 Fixos na Web (11/2026: Gestão › 👥 Equipe, a antiga página 👤 Freelancers, agora com 2 abas — 👔 Fixos e 👤 Freelancers; `/gestao/freelancers` e `/gestao/equipe`):** o "Funcionários Cadastrados" do `main.py` (`gestao_equipe.py`). Cada funcionário vira um cartão (cargo, horário de notificação, folga semanal e domingo 6x1, Telegram ✅/⚠️, WhatsApp, 🏖️ férias) com 📋 Tarefas (pendências de hoje, tarefas ativas, 📜 histórico completo — os 400 mais recentes —, 🔁 transferir/copiar as fixas, 📢 lançar no grupo), ✏️ Editar (tudo da janela do PC: Telegram, WhatsApp, cargo, horário, folgas, férias/afastamento, verificador; embaixo, 🧹 Zerar pontos do mês e 🗑️ Excluir, com pergunta antes) e 📢 Faltou hoje. As regras e as funções do banco são as mesmas do PC. Segurança: o CPF e o verificador NUNCA vão para a página (o campo mostra só "••• cadastrado — digite só para trocar"; vazio = mantém; há a opção de apagar); a mensagem do 📢 não mostra o ID do grupo; não dá para excluir o próprio cadastro. Novo/editar não deixam dois funcionários com o mesmo Telegram (o bot se confundiria).
+**👔 Fixos na Web (11/2026: Gestão › 👥 Equipe, a antiga página 👤 Freelancers, agora com as abas 👔 Fixos, 👤 Freelancers e 📅 Folgas; `/gestao/freelancers` e `/gestao/equipe`):** o "Funcionários Cadastrados" do `main.py` (`gestao_equipe.py`). Cada funcionário vira um cartão (cargo, horário de notificação, folga semanal e domingo 6x1, Telegram ✅/⚠️, WhatsApp, 🏖️ férias) com 📋 Tarefas (pendências de hoje, tarefas ativas, 📜 histórico completo — os 400 mais recentes —, 🔁 transferir/copiar as fixas, 📢 lançar no grupo), ✏️ Editar (tudo da janela do PC: Telegram, WhatsApp, cargo, horário, folgas, férias/afastamento, verificador; embaixo, 🧹 Zerar pontos do mês e 🗑️ Excluir, com pergunta antes) e 📢 Faltou hoje. As regras e as funções do banco são as mesmas do PC. Segurança: o CPF e o verificador NUNCA vão para a página (o campo mostra só "••• cadastrado — digite só para trocar"; vazio = mantém; há a opção de apagar); a mensagem do 📢 não mostra o ID do grupo; não dá para excluir o próprio cadastro. Novo/editar não deixam dois funcionários com o mesmo Telegram (o bot se confundiria).
 
 ## 3. Escala da Loja (`escala_loja_main.py` — 3.000 linhas) — **1º módulo a migrar**
 
@@ -461,6 +461,31 @@ mais), cada função ✅/🟡 mostra "Como pode ajudar" (pelo fator da pessoa qu
 em listas e 🔎 busca pelo nome. Cada card mostra só o essencial (nome, idade, etapa, tipo de vaga, áreas, bairro, perfil com a
 barra DISC, 🔋 o que motiva e onde combina) e os botões 📄 Relatório, 💬 WhatsApp e **⋯** (🪪 CPF e nascimento, 🔗 copiar link,
 📤 mandar agora, tipo de vaga, vincular ao fixo, cancelar e 🗑️ apagar).
+
+### Novo (só na Web) — 📅 Folgas e a escala 5x2 (11/2026: Gestão › 👥 Equipe › 📅 Folgas)
+Para a troca da 6x1 pela 5x2 (Emenda Constitucional do fim da 6x1, promulgada em 16/10/2026: 44h → 42h → 40h por semana,
+2 descansos semanais, um de preferência no domingo — **confirmar datas e regras com o contador / convenção**).
+- **Regra única (`folgas.py`)**: tudo o que pergunta "fulano está de folga neste dia?" pergunta ao mesmo lugar —
+  escala automática dos fixos, 🗓️ Escala (Web e PC), robô (bom dia/lembrete/fim do dia do bot e tarefas jogadas no grupo),
+  pendências de hoje e o ranking (que deixa de contar os dias de folga como dia de tarefa). A ordem: férias/afastamento →
+  troca do dia → padrão de folgas que vale na data → sem padrão, a folga do cadastro (6x1: folga da semana + domingo do mês),
+  exatamente como antes (o teste conferiu 90 dias × 3 pessoas iguais ao sistema antigo).
+- **Padrão de folgas com data de início** (tabela `FolgasPadrao`): 5x2 fixo (os mesmos 2 dias toda semana), **rodízio** de
+  2 a 8 semanas (ex.: seg+ter / ter+qua / dom+seg — a 1ª semana é a da data de início, de segunda a domingo) ou voltar para a
+  folga do cadastro. Monte dezembro agora: até a data vale o padrão antigo. Ao salvar, pergunta se alguma semana não tem 2
+  folgas, se alguém passa do máximo de dias seguidos (inclusive na passagem do padrão antigo para o novo) ou fica sem domingo.
+- **Trocas de um dia** (`FolgasExcecao`): toque no dia → 🌴 dar folga / 💼 vai trabalhar / ↩️ voltar ao padrão (com motivo).
+  A escala automática do fixo se acerta sozinha de amanhã em diante (o dia de hoje fica com o gestor, na 🗓️ Escala).
+- **Grade** de 2 a 8 semanas: F = folga, horas de cada dia (*itálico* = previsto pelo fixo), coluna da semana (horas · folgas),
+  quantos trabalham por dia e por setor. **Avisos**: semana com menos folgas que o padrão, dias seguidos sem folga, domingos
+  seguidos trabalhando, horas acima do limite da semana, setor abaixo do mínimo, gente escalada na folga.
+- **⚙️ Regras** (`FolgasRegras`): limite de horas por semana a partir de cada data (44h hoje; acrescente 42h e 40h nas datas da
+  lei), avisar a partir de N domingos seguidos (padrão 3), máximo de dias seguidos (padrão 6), mínimo de pessoas por setor e
+  dia da semana. O sistema só AVISA; não bloqueia.
+- O cartão e o ✏️ Editar do 👔 Fixo mostram o padrão 5x2 que vale hoje; na 🗓️ Escala › 📌 Fixos, quem está na 5x2 mostra o
+  padrão com o atalho "📅 mudar" (a folga do cadastro só vale para quem não tem padrão).
+- Próximo passo combinado (etapa 3): ✨ sugerir o rodízio pelo movimento de cada dia (📊 Folha) e 📲 mandar as folgas do mês
+  para cada pessoa.
 
 ### Novo (só na Web) — 👔 Liderança: sócios e líderes (10/2026: Gestão › 👔 Liderança)
 

@@ -29,12 +29,64 @@
   .tr-lista input { width: 18px; height: 18px; flex: none; }
   .tr-lista .freq { margin-left: auto; color: var(--suave); font-size: 13px; white-space: nowrap; }
   table.grade td.st-ok { color: var(--ok); font-weight: 600; } table.grade td.st-nao { color: var(--erro); font-weight: 600; }
+  /* [5x2] 📅 Folgas */
+  #ctl-folgas { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  #ctl-folgas select { padding: 6px; }
+  .area.larga { max-width: none; }
+  .fg-alertas { display: grid; gap: 3px; margin: 0 0 10px; font-size: 14px; }
+  .fg-alertas .erro { color: var(--erro); } .fg-alertas .aviso { color: var(--aviso); }
+  .fg-regras { font-size: 13px; color: var(--suave); margin-bottom: 8px; }
+  .fg-rolar { overflow: auto; background: #fff; border: 1px solid var(--linha); border-radius: 12px; max-height: 72vh; }
+  table.fg { border-collapse: separate; border-spacing: 0; font-size: 13px; }
+  table.fg th, table.fg td { border-bottom: 1px solid var(--linha2); padding: 5px 3px; text-align: center; white-space: nowrap; }
+  table.fg thead th { position: sticky; top: 0; background: #f7f9f8; z-index: 3; font-size: 12px; line-height: 1.25; }
+  table.fg .nome { position: sticky; left: 0; background: #fff; z-index: 2; text-align: left; min-width: 150px; max-width: 210px;
+    white-space: normal; padding-left: 8px; border-right: 1px solid var(--linha); }
+  table.fg thead th.nome { z-index: 4; background: #f7f9f8; }
+  table.fg .nome button { border: 0; background: transparent; padding: 0; font-weight: 700; text-align: left; color: var(--verde-esc); }
+  table.fg .nome .pd { font-size: 12px; color: var(--suave); } table.fg .nome .muda { font-size: 12px; color: #0056b3; }
+  table.fg th.dom, table.fg td.dom { background: #fff8e6; }
+  table.fg th.hoje { box-shadow: inset 0 -3px 0 var(--verde); color: var(--verde-esc); }
+  table.fg td.c { min-width: 34px; cursor: pointer; }
+  table.fg td.c.F { background: #d7f0de; color: #1b5e20; font-weight: 800; }
+  table.fg td.c.A { background: #e3ecfa; }
+  table.fg td.c .prev { color: var(--suave); font-style: italic; }
+  table.fg td.c.troca { box-shadow: inset 0 0 0 2px #0056b3; }
+  table.fg td.c.conflito { background: #ffd6d6; color: var(--erro); font-weight: 800; }
+  table.fg td.c.passado { opacity: .5; cursor: default; }
+  table.fg td.sem, table.fg th.sem { background: #f2f5f4; font-weight: 700; min-width: 56px; border-right: 2px solid var(--linha); font-size: 12px; }
+  table.fg td.sem.ruim { color: var(--erro); background: #ffecec; }
+  table.fg tr.fora td { opacity: .45; }
+  table.fg tr.cob td { font-weight: 700; background: #fafbfb; }
+  table.fg tr.cob td.nome { background: #fafbfb; }
+  table.fg tr.cob td.falta { color: var(--erro); background: #ffecec; }
+  .fg-legenda { font-size: 12px; color: var(--suave); margin: 8px 0 0; display: flex; gap: 6px 14px; flex-wrap: wrap; }
+  .fg-legenda b { display: inline-block; min-width: 22px; text-align: center; border-radius: 4px; padding: 0 3px; }
+  .chips-dias { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
+  .chips-dias label { border: 1px solid var(--linha); border-radius: 8px; padding: 6px 8px; cursor: pointer; font-weight: 700;
+    color: var(--texto) !important; flex-direction: row !important; gap: 0 !important; font-size: 14px !important; }
+  .chips-dias label.on { background: #d7f0de; border-color: #1b7a2f; color: #1b5e20 !important; }
+  .chips-dias input { display: none; }
+  .p-semana { display: grid; grid-template-columns: 76px 1fr; gap: 6px; align-items: center; }
+  .p-semana .rot { font-size: 13px; font-weight: 700; color: var(--suave); }
+  .tipos { display: grid; gap: 6px; }
+  .tipos label { flex-direction: row !important; align-items: center; gap: 8px !important; color: var(--texto) !important; font-weight: 600 !important; }
+  .tipos input { width: 18px !important; height: 18px; flex: none; }
+  #p-previa { font-size: 13px; background: #f7f9f8; border-radius: 8px; padding: 8px; line-height: 1.5; }
+  #p-previa .ruim { color: var(--aviso); font-weight: 700; }
+  .fg-hist { display: grid; gap: 4px; margin: 6px 0 4px; font-size: 14px; }
+  .fg-hist .atual { color: var(--ok); font-weight: 700; }
+  .reg-lim { display: grid; grid-template-columns: 1fr 90px 40px; gap: 6px; align-items: center; margin-bottom: 6px; }
+  .reg-min { display: grid; grid-template-columns: minmax(80px, 1.3fr) repeat(7, minmax(34px, 1fr)); gap: 4px; align-items: center; font-size: 13px; }
+  .reg-min input { width: 100%; text-align: center; padding: 5px 2px !important; font-size: 15px !important; }
+  .reg-min .t { text-align: center; font-weight: 700; color: var(--suave); }
   @media (max-width: 700px) {
     .area { padding-left: 10px; padding-right: 10px; }
     .free { grid-template-columns: 1fr; }
     .free .acoes { grid-row: 3; grid-column: 1; justify-content: flex-start; margin-top: 4px; }
     .free .acoes .btn { padding: 6px 9px; font-size: 14px; }
-    .abas { width: 100%; } .abas button { flex: 1; }
+    .abas { width: 100%; } .abas button { flex: 1; padding: 6px 4px; }
+    .p-semana { grid-template-columns: 1fr; }
   }
 {% endblock %}
 {% block conteudo %}
@@ -44,11 +96,21 @@
       <span class="abas" role="tablist" aria-label="Fixos ou freelancers">
         <button role="tab" data-aba="fixos" id="aba-fixos">👔 Fixos</button>
         <button role="tab" data-aba="freelancers" id="aba-freelancers">👤 Freelancers</button>
+        <button role="tab" data-aba="folgas" id="aba-folgas">📅 Folgas</button>
       </span>
     </div>
     <div class="linha">
       <input id="busca" type="text" placeholder="Procurar por nome ou telefone" aria-label="Procurar">
       <button class="btn prim" id="btn-novo">➕ Novo</button>
+      <span id="ctl-folgas" hidden>
+        <button class="btn ico" id="fg-ant" title="Semana anterior">◀</button>
+        <button class="btn" id="fg-hoje">Hoje</button>
+        <button class="btn ico" id="fg-prox" title="Próxima semana">▶</button>
+        <select id="fg-semanas" aria-label="Quantas semanas"><option value="2">2 semanas</option><option value="4">4 semanas</option>
+          <option value="6">6 semanas</option><option value="8">8 semanas</option></select>
+        <button class="btn" id="fg-regras">⚙️ Regras</button>
+        <label class="mini"><input type="checkbox" id="fg-todos"> mostrar quem não está na escala</label>
+      </span>
       <button class="btn ico" id="atualizar" title="Atualizar">🔄</button>
     </div>
     <div class="linha"><span id="resumo" class="mini"></span></div>
@@ -61,10 +123,13 @@
 //     folgas, férias, verificador), tarefas ativas, pendências de hoje, histórico, transferir tarefas fixas,
 //     lançar as tarefas no grupo (falta/atestado), zerar os pontos do mês e excluir.
 //  👤 Freelancers — o "👤 Gerenciar Freelancers" do programa da Escala: telefone e quanto falta pagar até hoje.
-const S = {aba: 'fixos', lista: null, fixos: null, seq: 0, ocupado: false};
+//  📅 Folgas [5x2] — a grade das folgas dos fixos (padrão 5x2 / rodízio / 6x1), trocas de um dia, regras e avisos.
+const ABAS = ['fixos', 'freelancers', 'folgas'];
+const S = {aba: 'fixos', lista: null, fixos: null, folgas: null, seq: 0, ocupado: false,
+           fg: {de: '', semanas: +lerLocal('gestao_folgas_semanas', '4') || 4, todos: false}};
 {
   const q = new URLSearchParams(location.search).get('aba');
-  S.aba = ['fixos', 'freelancers'].includes(q) ? q : (lerLocal('gestao_aba_equipe', 'fixos') === 'freelancers' ? 'freelancers' : 'fixos');
+  S.aba = ABAS.includes(q) ? q : (ABAS.includes(lerLocal('gestao_aba_equipe', 'fixos')) ? lerLocal('gestao_aba_equipe', 'fixos') : 'fixos');
 }
 
 function aoEntrar() { trocarAba(S.aba); }
@@ -77,7 +142,10 @@ function trocarAba(aba) {
     b.classList.toggle('sel', b.dataset.aba === aba); b.setAttribute('aria-selected', b.dataset.aba === aba);
   });
   $('#btn-novo').textContent = aba === 'fixos' ? '➕ Novo funcionário' : '➕ Novo freelancer';
-  $('#busca').placeholder = aba === 'fixos' ? 'Procurar por nome, cargo ou telefone' : 'Procurar por nome ou telefone';
+  $('#btn-novo').hidden = aba === 'folgas';
+  $('#ctl-folgas').hidden = aba !== 'folgas';
+  document.querySelector('main.area').classList.toggle('larga', aba === 'folgas');
+  $('#busca').placeholder = aba === 'fixos' ? 'Procurar por nome, cargo ou telefone' : aba === 'folgas' ? 'Procurar pelo nome' : 'Procurar por nome ou telefone';
   carregar();
 }
 document.querySelectorAll('.abas [data-aba]').forEach(b => b.onclick = () => { if (b.dataset.aba !== S.aba) trocarAba(b.dataset.aba); });
@@ -87,28 +155,31 @@ async function carregar() {
   $('#lista').innerHTML = '<div class="vazio suave">Carregando…</div>';
   $('#resumo').textContent = '';
   let r;
-  try { r = await api('GET', aba === 'fixos' ? '/api/gestao/fixos' : '/api/gestao/freelancers'); }
+  const url = aba === 'fixos' ? '/api/gestao/fixos' : aba === 'folgas'
+    ? '/api/gestao/folgas?' + new URLSearchParams(Object.assign({semanas: S.fg.semanas}, S.fg.de ? {de: S.fg.de} : {}))
+    : '/api/gestao/freelancers';
+  try { r = await api('GET', url); }
   catch (e) {
     if (seq !== S.seq) return;
     if (e.status !== 401 && e.status !== 403) {
-      if (aba === 'fixos') S.fixos = null; else S.lista = null;
-      $('#lista').innerHTML = `<div class="vazio n-erro">❌ Não consegui carregar ${aba === 'fixos' ? 'os funcionários' : 'os freelancers'}: ${esc(e.message)}<br>Toque em 🔄 para tentar de novo.</div>`;
+      S[aba === 'freelancers' ? 'lista' : aba] = null;
+      $('#lista').innerHTML = `<div class="vazio n-erro">❌ Não consegui carregar ${ {fixos: 'os funcionários', freelancers: 'os freelancers', folgas: 'as folgas'}[aba] }: ${esc(e.message)}<br>Toque em 🔄 para tentar de novo.</div>`;
     }
     return;
   }
   if (seq !== S.seq) return;
-  if (aba === 'fixos') S.fixos = r; else S.lista = r;
+  S[aba === 'freelancers' ? 'lista' : aba] = r;
   desenhar();
 }
 $('#atualizar').onclick = carregar;
-$('#busca').addEventListener('input', () => { if (S.aba === 'fixos' ? S.fixos : S.lista) desenhar(); });
+$('#busca').addEventListener('input', () => { if (S[S.aba === 'freelancers' ? 'lista' : S.aba]) desenhar(); });
 $('#btn-novo').onclick = () => {
   if (S.aba === 'fixos') { if (S.fixos) abrirFormFixo(null); }
   else if (S.lista) abrirForm(null);
 };
 
 function semAcento(t) { return String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase(); }
-function desenhar() { if (S.aba === 'fixos') desenharFixos(); else desenharFreelancers(); }
+function desenhar() { if (S.aba === 'fixos') desenharFixos(); else if (S.aba === 'folgas') desenharFolgas(); else desenharFreelancers(); }
 async function uma(botao, acao) {
   if (S.ocupado) return;
   S.ocupado = true; if (botao) botao.disabled = true;
@@ -134,7 +205,7 @@ function desenharFixos() {
       </div>
       <div class="info">
         <span title="Horário em que o bot manda as tarefas do dia">🕗 ${f.horario ? 'Notificar às ' + esc(f.horario) : 'sem horário'}</span>
-        <span>📅 Folga: ${esc(f.folga ? f.folga_txt : 'sem folga fixa')}${f.domingo ? ' · ' + esc(f.domingo_txt) : ''}</span>
+        <span>📅 ${f.padrao_txt ? esc(f.padrao_txt) : `Folga: ${esc(f.folga ? f.folga_txt : 'sem folga fixa')}${f.domingo ? ' · ' + esc(f.domingo_txt) : ''}`}</span>
         <span>${f.telegram ? '✅ Telegram' : '<span class="n-aviso">⚠️ sem Telegram</span>'}</span>
         ${f.telefone ? `<span>📞 ${f.whatsapp ? `<a href="https://wa.me/${esc(f.whatsapp)}" target="_blank" rel="noopener" title="Abrir conversa no WhatsApp">${esc(f.telefone)}</a>` : esc(f.telefone)}</span>` : ''}
         ${f.afast_txt ? `<span class="afast">${esc(f.afast_txt)}</span>` : ''}
@@ -161,9 +232,12 @@ function abrirFormFixo(f) {
       </div>
       <div class="mini suave">O bot do Telegram reconhece a pessoa pelo ID do chat e manda as tarefas do dia no horário de notificação.</div>
       <div class="dupla">
-        <label>Folga fixa semanal<select id="x-folga">${opcoes(r.dias, f ? f.folga : 0)}</select></label>
+        <label>Folga fixa semanal (6x1)<select id="x-folga">${opcoes(r.dias, f ? f.folga : 0)}</select></label>
         <label>Domingo de folga (6x1)<select id="x-dom">${opcoes(r.domingos, f ? f.domingo : 0)}</select></label>
       </div>
+      <div class="mini ${f && f.padrao_txt ? 'n-aviso' : 'suave'}">${f && f.padrao_txt
+        ? `📅 Hoje vale o padrão <b>${esc(f.padrao_txt)}</b> (aba 📅 Folgas): estas duas folgas do cadastro só valem quando não houver padrão.`
+        : '5x2 ou rodízio: use a aba 📅 Folgas (o padrão de lá vale no lugar destas duas).'}</div>
       <div class="dupla">
         <label>Férias / afastamento: início<input id="x-ini" type="date" value="${esc(f ? f.afast_ini : '')}"></label>
         <label>até<input id="x-fim" type="date" value="${esc(f ? f.afast_fim : '')}"></label>
@@ -297,6 +371,221 @@ function abrirTransferir(f) {
         const x = await api('POST', `/api/gestao/fixos/${f.id}/transferir`, {destino: +destino, ids, copiar});
         fecharModal(); status(x.mensagem);
       });
+    });
+  });
+}
+
+// =========================================================================== 📅 FOLGAS [5x2]
+const DIAS_PD = [[2, 'Seg'], [3, 'Ter'], [4, 'Qua'], [5, 'Qui'], [6, 'Sex'], [7, 'Sáb'], [1, 'Dom']];   // 1=Dom ... 7=Sáb
+function alertaHtml(a) { return `<div class="${a.nivel}">${a.nivel === 'erro' ? '⛔' : '⚠️'} ${esc(a.texto)}</div>`; }
+function desenharFolgas() {
+  const r = S.folgas, termo = semAcento($('#busca').value.trim());
+  $('#fg-semanas').value = String(r.semanas);
+  const pessoas = r.pessoas.filter(p => (S.fg.todos || p.na_escala) && (!termo || semAcento(p.nome).includes(termo)));
+  const fora = r.pessoas.filter(p => !p.na_escala).length;
+  $('#resumo').textContent = `${dataBR(r.de)} a ${dataBR(r.ate)} · ${r.pessoas.filter(p => p.na_escala).length} na escala` +
+    (fora ? ` · ${fora} fora da escala${S.fg.todos ? '' : ' (escondidos)'}` : '') +
+    (r.alertas.length ? ` · ⚠️ ${r.alertas.length + r.mais_alertas} aviso(s)` : ' · ✅ sem avisos');
+  const semanas = [];
+  for (let w = 0; w < r.semanas; w++) semanas.push(r.dias.slice(7 * w, 7 * w + 7));
+  const cab = '<tr><th class="nome">Funcionário</th>' + semanas.map((ds, w) => ds.map(d =>
+      `<th class="${d.dom ? 'dom' : ''} ${d.hoje ? 'hoje' : ''}" title="${esc(d.feriado || '')}">${d.dia}${d.feriado ? ' 🎉' : ''}<br>${d.data}</th>`).join('')
+      + `<th class="sem">Semana<br>${ds[0].data}</th>`).join('') + '</tr>';
+  const linhas = pessoas.map(p => `<tr class="${p.na_escala ? '' : 'fora'}" data-id="${p.id}">
+      <td class="nome"><button data-padrao="${p.id}" title="Ver / mudar o padrão de folgas">${esc(p.nome)}</button>
+        <div class="pd">${esc(p.padrao)}</div>${p.muda.map(m => `<div class="muda">➜ ${esc(m)}</div>`).join('')}</td>` +
+      semanas.map((ds, w) => ds.map((d, k) => {
+        const c = p.celulas[7 * w + k];
+        const cls = ['c', c.e, d.dom ? 'dom' : '', d.passado ? 'passado' : '', c.troca ? 'troca' : '', c.conflito ? 'conflito' : ''].join(' ');
+        const txt = c.conflito ? '!' : c.e === 'F' ? 'F' : c.e === 'A' ? '🏖️' : (c.h ? (c.prev ? `<span class="prev">${c.h}</span>` : c.h) : '·');
+        return `<td class="${cls}" data-dia="${d.iso}" data-k="${7 * w + k}" title="${esc(d.dia + ' ' + d.data + ': ' + c.tit + (d.passado ? '' : ' · toque para trocar'))}">${txt}</td>`;
+      }).join('') + (() => { const sm = p.semanas[w];
+        return `<td class="sem ${sm.problema ? 'ruim' : ''}" title="${esc(sm.problema || (sm.limite ? 'limite ' + sm.limite + 'h' : ''))}">${esc(sm.h)}<br>${sm.folgas}F</td>`; })()).join('')
+    + '</tr>').join('');
+  const cob = r.cobertura.map(c => `<tr class="cob"><td class="nome">${c.setor === 'Todos' ? '👥 Trabalham' : '↳ ' + esc(c.setor)}</td>` +
+      semanas.map((ds, w) => ds.map((d, k) => { const i = 7 * w + k, n = c.n[i], m = c.min ? c.min[i] : 0;
+        return `<td class="${d.dom ? 'dom' : ''} ${m && n < m && !d.passado ? 'falta' : ''}" title="${m ? 'mínimo ' + m : ''}">${n}${m ? '/' + m : ''}</td>`; }).join('')
+        + '<td class="sem"></td>').join('') + '</tr>').join('');
+  $('#lista').innerHTML = `
+    ${r.regras ? `<div class="fg-regras">⚙️ ${esc(r.regras)}</div>` : ''}
+    ${r.alertas.length ? `<div class="fg-alertas">${r.alertas.slice(0, 5).map(alertaHtml).join('')}
+      ${r.alertas.length > 5 ? `<details><summary class="mini">ver mais ${r.alertas.length - 5 + r.mais_alertas} aviso(s)</summary>
+        ${r.alertas.slice(5).map(alertaHtml).join('')}${r.mais_alertas ? `<div class="suave">… e mais ${r.mais_alertas}.</div>` : ''}</details>` : ''}</div>` : ''}
+    ${pessoas.length ? `<div class="fg-rolar"><table class="fg"><thead>${cab}</thead><tbody>${linhas}${cob}</tbody></table></div>`
+      : `<div class="vazio suave">${termo ? 'Ninguém com esse nome.' : 'Ninguém na escala neste período. Marque "mostrar quem não está na escala" ou defina um padrão de folgas.'}</div>`}
+    <div class="fg-legenda"><span><b style="background:#d7f0de;color:#1b5e20">F</b> folga</span><span><b>8h</b> horas no dia</span>
+      <span><b><i>8h</i></b> previsto (fixo, ainda não está na escala)</span><span><b style="box-shadow:inset 0 0 0 2px #0056b3">F</b> troca do dia</span>
+      <span><b style="background:#ffd6d6">!</b> escalado na folga</span><span>🏖️ férias</span><span>Semana: horas · folgas</span>
+      <span>Toque no nome para o padrão; toque no dia para trocar.</span></div>`;
+}
+
+$('#fg-ant').onclick = () => { S.fg.de = somarDias(S.folgas ? S.folgas.de : HOJE(), -7); carregar(); };
+$('#fg-prox').onclick = () => { S.fg.de = somarDias(S.folgas ? S.folgas.de : HOJE(), 7); carregar(); };
+$('#fg-hoje').onclick = () => { S.fg.de = ''; carregar(); };
+$('#fg-semanas').onchange = e => { S.fg.semanas = +e.target.value; gravarLocal('gestao_folgas_semanas', e.target.value); carregar(); };
+$('#fg-todos').onchange = e => { S.fg.todos = e.target.checked; if (S.folgas) desenharFolgas(); };
+$('#fg-regras').onclick = () => abrirRegras();
+
+$('#lista').addEventListener('click', e => {
+  if (S.aba !== 'folgas' || !S.folgas) return;
+  const bp = e.target.closest('[data-padrao]');
+  if (bp) { abrirPadrao(+bp.dataset.padrao); return; }
+  const td = e.target.closest('td.c');
+  if (!td || td.classList.contains('passado')) return;
+  const p = S.folgas.pessoas.find(x => x.id === +td.closest('tr').dataset.id);
+  if (p) abrirTroca(p, S.folgas.dias[+td.dataset.k], p.celulas[+td.dataset.k]);
+});
+
+function abrirTroca(p, d, c) {
+  if (c.e === 'A') { alert(`${p.nome} está de férias/afastamento em ${d.dia} ${d.data}.`); return; }
+  const folga = c.e === 'F';
+  abrirModal(`<h3>${esc(p.nome)} · ${esc(d.dia)} ${esc(d.data)}</h3>
+    <div>Agora: <b>${esc(c.tit)}</b></div>
+    ${c.troca ? `<div class="mini n-aviso">Este dia já foi trocado (${c.troca === 'folga' ? 'deu folga' : 'vai trabalhar'}).</div>` : ''}
+    <form id="form-troca" class="form" autocomplete="off" style="margin-top:8px">
+      <label>Motivo (opcional)<input id="t-motivo" maxlength="150" placeholder="ex.: trocou com a Maria / consulta médica"></label>
+      <div class="linha-form">
+        ${folga ? '<button class="btn prim" type="button" data-acao="trabalha">💼 Vai trabalhar neste dia</button>'
+                : '<button class="btn prim" type="button" data-acao="folga">🌴 Dar folga neste dia</button>'}
+        ${c.troca ? '<button class="btn" type="button" data-acao="padrao">↩️ Voltar ao padrão</button>' : ''}
+      </div>
+      <div class="mini suave">Para mudar a folga de dia: toque no dia da folga → 💼 Vai trabalhar; depois no dia novo → 🌴 Dar folga.
+        A escala automática do fixo se ajusta sozinha (de amanhã em diante).</div>
+    </form>`, null, true);
+  $('#form-troca').addEventListener('click', ev => {
+    const b = ev.target.closest('button[data-acao]');
+    if (!b) return;
+    uma(b, async () => {
+      const x = await api('POST', `/api/gestao/folgas/${p.id}/dia`, {data: d.iso, acao: b.dataset.acao, motivo: $('#t-motivo').value});
+      fecharModal(); status(x.mensagem); await carregar();
+    });
+  });
+}
+
+function segundaDe(iso) { const [a, m, d] = iso.split('-').map(Number); const x = new Date(a, m - 1, d); return somarDias(iso, -((x.getDay() + 6) % 7)); }
+function semanasEntre(a, b) { const [x, y] = [a, b].map(s => { const [aa, mm, dd] = s.split('-').map(Number); return Date.UTC(aa, mm - 1, dd); }); return Math.round((y - x) / 864e5 / 7); }
+
+async function abrirPadrao(id) {
+  let r;
+  try { r = await api('GET', `/api/gestao/folgas/${id}/padrao`); } catch (e) { return falhou(e); }
+  const atual = r.padroes.find(x => x.atual);
+  const inicial = (atual && atual.semanas.length ? atual.semanas : [[2, 3]]).map(s => s.slice());
+  const st = {tipo: atual && atual.semanas.length > 1 ? 'rodizio' : 'fixo', semanas: inicial};
+  abrirModal(`<h3>📅 Folgas de ${esc(r.nome)}</h3>
+    <div>Hoje vale: <b>${esc(r.hoje_vale)}</b></div>
+    ${r.padroes.length ? `<div class="fg-hist">${r.padroes.map(x => `<div>${x.atual ? '<span class="atual">● valendo</span>' : x.futuro ? '🕒' : '·'}
+        a partir de <b>${esc(x.desde_txt)}</b>: ${esc(x.descricao)}
+        ${x.futuro ? `<button class="btn ico perigo" type="button" data-apagar="${x.id}" title="Apagar este padrão futuro">🗑️</button>` : ''}</div>`).join('')}</div>`
+      : `<div class="mini suave">Ainda sem padrão: vale a folga do cadastro (6x1: ${esc(r.cadastro)}).</div>`}
+    <h4 class="secao">Novo padrão</h4>
+    <form id="form-padrao" class="form" autocomplete="off">
+      <label>A partir de<input type="date" id="p-desde" min="${esc(r.hoje)}" value="${esc(r.sugestao_data)}"></label>
+      <div class="tipos">
+        <label><input type="radio" name="p-tipo" value="fixo"> 5x2 — os mesmos 2 dias toda semana</label>
+        <label><input type="radio" name="p-tipo" value="rodizio"> 5x2 em rodízio — as folgas mudam de semana para semana e o ciclo se repete</label>
+        <label><input type="radio" name="p-tipo" value="cadastro"> Voltar para a folga do cadastro (6x1: ${esc(r.cadastro)})</label>
+      </div>
+      <div id="p-qtd" hidden><label>Semanas no rodízio<select id="p-n">${[2, 3, 4, 5, 6, 7, 8].map(n => `<option value="${n}">${n} semanas</option>`).join('')}</select></label></div>
+      <div id="p-semanas" class="form"></div>
+      <div id="p-previa"></div>
+      <button class="btn prim" type="submit" id="p-salvar">💾 Salvar padrão</button>
+    </form>`);
+  const marcar = () => { document.querySelector(`input[name="p-tipo"][value="${st.tipo}"]`).checked = true; };
+  const desenharSemanas = () => {
+    $('#p-qtd').hidden = st.tipo !== 'rodizio';
+    if (st.tipo === 'rodizio') $('#p-n').value = String(st.semanas.length);
+    $('#p-semanas').innerHTML = st.tipo === 'cadastro' ? '' : st.semanas.slice(0, st.tipo === 'fixo' ? 1 : 8).map((s, k) => `
+      <div class="p-semana"><span class="rot">${st.tipo === 'fixo' ? 'Folgas' : 'Semana ' + (k + 1)}</span>
+        <div class="chips-dias">${DIAS_PD.map(([n, nome]) => `<label class="${s.includes(n) ? 'on' : ''}"><input type="checkbox" data-k="${k}" data-d="${n}" ${s.includes(n) ? 'checked' : ''}>${nome}</label>`).join('')}
+          <span class="mini ${s.length === 2 ? 'suave' : 'n-aviso'}">${s.length} folga(s)</span></div></div>`).join('');
+    previa();
+  };
+  const previa = () => {
+    const el = $('#p-previa'), desde = $('#p-desde').value;
+    if (st.tipo === 'cadastro' || !desde) { el.innerHTML = st.tipo === 'cadastro' ? `A partir dessa data volta a valer a folga do cadastro (${esc(r.cadastro)}).` : ''; return; }
+    const ss = st.tipo === 'fixo' ? st.semanas.slice(0, 1) : st.semanas, seg0 = segundaDe(desde);
+    const nomes = Object.fromEntries(DIAS_PD);
+    const linhas = [];
+    for (let w = 0; w < Math.max(6, ss.length * 2); w++) {
+      const seg = somarDias(seg0, 7 * w), s = ss[((semanasEntre(seg0, seg) % ss.length) + ss.length) % ss.length];
+      linhas.push(`<div>Semana de ${dataBR(seg).slice(0, 5)}${ss.length > 1 ? ` (${(w % ss.length) + 1}ª do ciclo)` : ''}: <b>${s.map(d => nomes[d]).join(' e ') || '—'}</b>
+        ${s.length === 2 ? '' : `<span class="ruim">· ${s.length} folga(s)</span>`}${s.includes(1) ? ' · ☀️ domingo' : ''}</div>`);
+    }
+    el.innerHTML = '<b>Como fica:</b>' + linhas.join('');
+  };
+  marcar(); desenharSemanas();
+  $('#form-padrao').addEventListener('change', e => {
+    if (e.target.name === 'p-tipo') {
+      st.tipo = e.target.value;
+      if (st.tipo === 'rodizio' && st.semanas.length < 2) st.semanas = [st.semanas[0], st.semanas[0]].map(s => s.slice());
+      desenharSemanas();
+    } else if (e.target.id === 'p-n') {
+      const n = +e.target.value;
+      while (st.semanas.length < n) st.semanas.push(st.semanas[st.semanas.length - 1].slice());
+      st.semanas = st.semanas.slice(0, n); desenharSemanas();
+    } else if (e.target.matches('input[data-d]')) {
+      const s = st.semanas[+e.target.dataset.k], d = +e.target.dataset.d;
+      if (e.target.checked) { if (!s.includes(d)) s.push(d); } else s.splice(s.indexOf(d), 1);
+      desenharSemanas();
+    } else if (e.target.id === 'p-desde') previa();
+  });
+  document.querySelectorAll('[data-apagar]').forEach(b => b.onclick = () => {
+    if (!confirm('Apagar este padrão que ainda não começou?')) return;
+    uma(b, async () => {
+      const x = await api('POST', `/api/gestao/folgas/${id}/padrao/apagar`, {padrao_id: +b.dataset.apagar});
+      status(x.mensagem); fecharModal(); await carregar();
+    });
+  });
+  $('#form-padrao').addEventListener('submit', ev => {
+    ev.preventDefault();
+    if (!$('#p-desde').value) { alert('Escolha a data de início.'); return; }
+    uma($('#p-salvar'), async () => {
+      const x = await comPerguntas(`/api/gestao/folgas/${id}/padrao`, {tipo: st.tipo, desde: $('#p-desde').value,
+        semanas: st.tipo === 'cadastro' ? [] : (st.tipo === 'fixo' ? st.semanas.slice(0, 1) : st.semanas)});
+      if (x && x.ok) { fecharModal(); status(x.mensagem); await carregar(); }
+    });
+  });
+}
+
+async function abrirRegras() {
+  let r;
+  try { r = await api('GET', '/api/gestao/folgas/regras'); } catch (e) { return falhou(e); }
+  const g = r.regras, setores = r.setores.slice();
+  for (const s of Object.keys(g.minimos || {})) if (!setores.includes(s)) setores.push(s);
+  const linhaLim = l => `<div class="reg-lim"><input type="date" data-l="desde" value="${esc(l.desde)}" aria-label="A partir de">
+      <input data-l="horas" inputmode="decimal" value="${esc(String(l.horas))}" aria-label="Horas por semana">
+      <button class="btn ico perigo" type="button" data-tirar title="Tirar">✖</button></div>`;
+  abrirModal(`<h3>⚙️ Regras das folgas</h3>
+    <div class="mini n-aviso">Confirme com o contador e com a convenção do sindicato do comércio: as datas da nova lei
+      (44h → 42h → 40h) e a regra do domingo. Aqui o sistema só AVISA; ele não bloqueia nada.</div>
+    <form id="form-regras" class="form" autocomplete="off">
+      <h4 class="secao">Limite de horas por semana</h4>
+      <div class="mini suave">Cada linha vale a partir da data. Ex.: 44h hoje; 42h a partir da data da lei; 40h um ano depois.</div>
+      <div id="r-lim">${(g.limites_horas || []).map(linhaLim).join('')}</div>
+      <button class="btn" type="button" id="r-mais">➕ Adicionar limite</button>
+      <div class="dupla">
+        <label>Avisar quem trabalhar quantos domingos seguidos? (0 = não avisa)<input id="r-dom" type="number" min="0" max="8" value="${g.domingo_semanas || 0}"></label>
+        <label>Avisar quem passar de quantos dias seguidos sem folga? (0 = não avisa)<input id="r-seg" type="number" min="0" max="13" value="${g.max_dias_seguidos || 0}"></label>
+      </div>
+      <h4 class="secao">Mínimo de pessoas por dia (fixos)</h4>
+      <div class="mini suave">A grade avisa o dia com menos gente que isto. Deixe 0 onde não precisa avisar.</div>
+      ${setores.length ? `<div class="reg-min"><span></span>${r.dias.map(d => `<span class="t">${d}</span>`).join('')}
+        ${setores.map(s => `<span>${esc(s)}</span>${r.dias.map((d, i) => `<input data-setor="${esc(s)}" data-i="${i}" inputmode="numeric" value="${((g.minimos || {})[s] || [])[i] || 0}" aria-label="${esc(s)} ${d}">`).join('')}`).join('')}</div>`
+        : '<div class="mini suave">Nenhum setor cadastrado nas posições do mapa.</div>'}
+      <button class="btn prim" type="submit" id="r-salvar">💾 Salvar regras</button>
+    </form>`);
+  $('#r-mais').onclick = () => { $('#r-lim').insertAdjacentHTML('beforeend', linhaLim({desde: HOJE(), horas: 42})); };
+  $('#r-lim').addEventListener('click', e => { if (e.target.closest('[data-tirar]')) e.target.closest('.reg-lim').remove(); });
+  $('#form-regras').addEventListener('submit', ev => {
+    ev.preventDefault();
+    const limites = [...document.querySelectorAll('#r-lim .reg-lim')].map(l => ({desde: l.querySelector('[data-l=desde]').value,
+                                                                              horas: l.querySelector('[data-l=horas]').value}));
+    const minimos = {};
+    document.querySelectorAll('[data-setor]').forEach(i => { (minimos[i.dataset.setor] = minimos[i.dataset.setor] || [0, 0, 0, 0, 0, 0, 0])[+i.dataset.i] = +i.value || 0; });
+    uma($('#r-salvar'), async () => {
+      const x = await api('POST', '/api/gestao/folgas/regras', {regras: {limites_horas: limites, domingo_semanas: +$('#r-dom').value || 0,
+                                                                         max_dias_seguidos: +$('#r-seg').value || 0, minimos}});
+      fecharModal(); status(x.mensagem); if (S.aba === 'folgas') await carregar();
     });
   });
 }

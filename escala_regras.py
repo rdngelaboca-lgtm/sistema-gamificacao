@@ -400,7 +400,7 @@ def rotulo_e_cor_posicao(nome_pos, turnos, folgas, indisponivel, dia_db, fixo=No
         for t in turnos:
             nome_p = t.NomePessoa if t.NomePessoa else "?"
             if t.FuncionarioID:
-                if folgas.get(t.FuncionarioID) == dia_db or indisponivel(t.FuncionarioID):
+                if indisponivel(t.FuncionarioID):       # [5x2] o motivo já inclui a folga do dia (folgas.py)
                     nome_p = f"⚠️ {nome_p} [FOLGA]"
                     cor = COR_FOLGA
             h_ent = str(formatar_hora_curta(t.HorarioEntrada))[:5]
@@ -410,11 +410,11 @@ def rotulo_e_cor_posicao(nome_pos, turnos, folgas, indisponivel, dia_db, fixo=No
             tipo_d = getattr(t, 'TipoDiaria', None) if getattr(t, 'FreelancerID', None) else None
             linhas.append(f"{nome_p} ({h_ent}-{h_sai})" + (f" [{tipo_d}]" if tipo_d in ('curta', 'longa') else ""))
     elif not modo_edicao and fixo:
-        f_id, f_nome, f_folga = fixo[0], fixo[1], fixo[2]
+        f_id, f_nome = fixo[0], fixo[1]      # fixo[2] (folga do cadastro) não é mais usado: [5x2]
         if escalados and f_id in escalados:
             # [DEPURAÇÃO WEB] o fixo já trabalha em outra posição hoje: não está "disponível" aqui
             linhas.append("(Vazio)")
-        elif not indisponivel(f_id) and normalizar_folga(f_folga) != dia_db:
+        elif not indisponivel(f_id):                # [5x2] idem (antes olhava também a folga antiga do cadastro)
             linhas.append(f"{f_nome} (Fixo)")
             cor = COR_FIXO
         else:

@@ -111,7 +111,8 @@ def _indisponibilidade(funcionarios, d):
     """{FuncionarioID: motivo ou None} (férias/afastamento, folga fixa, domingo de folga)."""
     return {f.FuncionarioID: database.motivo_indisponibilidade(
         getattr(f, 'DiaDeFolga', None), getattr(f, 'DomingoFolgaMensal', None),
-        getattr(f, 'DataInicioAfastamento', None), getattr(f, 'DataFimAfastamento', None), d)
+        getattr(f, 'DataInicioAfastamento', None), getattr(f, 'DataFimAfastamento', None), d,
+        funcionario_id=f.FuncionarioID)                  # [5x2] padrão 5x2/rodízio e trocas (folgas.py)
         for f in funcionarios}
 
 
@@ -159,7 +160,7 @@ def dia(data_txt):
     freelancers = list(database.listar_freelancers())
     motivos = _indisponibilidade(funcionarios, d)
     indisponivel = motivos.get
-    folgas = {f.FuncionarioID: R.folga_do_funcionario(f) for f in funcionarios}
+    folgas = {}                              # [5x2] a folga do dia já vem nos "motivos" (folgas.py)
     fixos = {}
     for f in funcionarios:
         if getattr(f, 'PosicaoPadraoID', None):

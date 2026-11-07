@@ -2534,6 +2534,62 @@ def api_gestao_fixo_excluir(usuario, funcionario_id):
     return _resposta_equipe('excluir_fixo', funcionario_id, ler_json() or {}, usuario)
 
 
+# [5x2] 👥 Equipe › 📅 Folgas: padrão de folgas (5x2 fixo / rodízio / 6x1 do cadastro), trocas e regras.
+try:
+    import gestao_folgas
+except Exception as _erro_import_folgas:
+    gestao_folgas = None
+    logger.error(f"Gestão › Folgas DESLIGADA: não consegui carregar gestao_folgas.py ({_erro_import_folgas})")
+
+
+def _resposta_folgas(nome_funcao, *args):
+    if gestao_folgas is None:
+        return jsonify({"erro": "As folgas na Web não estão instaladas no servidor (falta gestao_folgas.py / folgas.py)."}), 503
+    return _resposta_gestao(getattr(gestao_folgas, nome_funcao), *args)
+
+
+@app.route('/api/gestao/folgas', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_folgas(usuario):
+    return _resposta_folgas('grade', request.args.to_dict())
+
+
+@app.route('/api/gestao/folgas/regras', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_folgas_regras(usuario):
+    return _resposta_folgas('ver_regras')
+
+
+@app.route('/api/gestao/folgas/regras', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_folgas_regras_salvar(usuario):
+    return _resposta_folgas('salvar_regras', ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/folgas/<int:funcionario_id>/padrao', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_folgas_padrao(usuario, funcionario_id):
+    return _resposta_folgas('padrao', funcionario_id)
+
+
+@app.route('/api/gestao/folgas/<int:funcionario_id>/padrao', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_folgas_padrao_salvar(usuario, funcionario_id):
+    return _resposta_folgas('salvar_padrao', funcionario_id, ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/folgas/<int:funcionario_id>/padrao/apagar', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_folgas_padrao_apagar(usuario, funcionario_id):
+    return _resposta_folgas('apagar_padrao', funcionario_id, ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/folgas/<int:funcionario_id>/dia', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_folgas_dia(usuario, funcionario_id):
+    return _resposta_folgas('trocar_dia', funcionario_id, ler_json() or {}, usuario)
+
+
 @app.route('/api/gestao/pagamentos', methods=['GET'])
 @compras_login(somente_gestor=True)
 def api_gestao_pagamentos(usuario):
