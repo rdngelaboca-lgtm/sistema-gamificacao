@@ -475,3 +475,572 @@ def salvar_regras(dados, usuario):
     FG.gravar_regras(novas)
     logger.info(f"[GESTÃO] {(usuario or {}).get('nome')}: regras das folgas = {novas}.")
     return {'ok': True, 'mensagem': "Regras das folgas salvas."}
+
+
+# ==============================================================================
+# [5x2 ETAPA 3] ✨ Sugerir rodízio (pelo movimento de cada dia) e 📲 mandar as folgas do mês
+# ==============================================================================
+import html as _html
+import random
+import re
+import threading
+import time
+import unicodedata
+import uuid
+
+import config
+
+POSICAO_DIA = [2, 3, 4, 5, 6, 7, 1]        # posição na semana (0 = segunda ... 6 = domingo) -> dia do banco (1=Dom)
+SEMANAS_MOVIMENTO = 12                     # média do faturamento das últimas 12 semanas
+TEMPO_MAX_SUGESTAO = 3.0                   # segundos procurando a melhor combinação
+# pesos da conta (quanto "custa" cada coisa): regra quebrada >> falta gente >> folga em dia de movimento
+P_SEGUIDOS, P_DOMINGO, P_COBERTURA, P_MOVIMENTO, P_JUNTAS, P_ESPALHAR = 1000.0, 500.0, 200.0, 10.0, 6.0, 2.0
+P_JUSTO = 3.0                              # divide as folgas "boas" (dias de movimento, fim de semana) entre todos
+MAX_TENTATIVAS = 80                        # tentativas com pontos de partida diferentes (fica a melhor)
+MESES = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro',
+         'novembro', 'dezembro']
+INTERVALO_ENVIO_SEG = 2.5                  # entre uma mensagem e outra (o WhatsApp não gosta de rajada)
+SEGUNDO_PLANO = True                       # os testes desligam para conferir na hora
+_envios, _trava_envios = {}, threading.Lock()
+
+
+def _sem_acento(t):
+    t = unicodedata.normalize('NFD', ' '.join(str(t or '').split()))
+    return ''.join(c for c in t if unicodedata.category(c) != 'Mn').lower()
+
+
+def movimento(hoje=None):
+    """Média do faturamento por dia da semana (seg..dom) e o peso de cada dia (1 = um dia médio)."""
+    hoje = hoje or date.today()
+    ini = hoje - timedelta(days=7 * SEMANAS_MOVIMENTO)
+    valores, atipicos = {}, set()
+    conn = database.get_db_connection()
+    if conn:
+        try:
+            cur = conn.cursor()
+            try:
+                cur.execute("SELECT DataApuracao, ValorDia FROM MetasDiariasApuracoes WHERE DataApuracao >= ? AND DataApuracao < ?",
+                            ini.isoformat(), hoje.isoformat())
+                for d, v in cur.fetchall():
+                    d = FG.como_data(d)
+                    try:
+                        v = float(v or 0)
+                    except (TypeError, ValueError):
+                        v = 0
+                    if d and v > 0:
+                        valores[d] = max(valores.get(d, 0), v)          # duas metas no mesmo dia: vale a maior (igual à Folha)
+            except Exception as e:
+                logger.warning(f"Folgas: faturamento indisponível para o movimento ({e})")
+            try:
+                cur.execute("SELECT Data FROM DiasAtipicos WHERE Data >= ? AND Data < ?", ini.isoformat(), hoje.isoformat())
+                atipicos = {FG.como_data(r[0]) for r in cur.fetchall()}
+            except Exception:
+                atipicos = set()
+        finally:
+            conn.close()
+    soma, n = [0.0] * 7, [0] * 7
+    for d, v in valores.items():
+        if d not in atipicos:
+            soma[d.weekday()] += v
+            n[d.weekday()] += 1
+    medias = [soma[i] / n[i] if n[i] else None for i in range(7)]
+    if any(m is None for m in medias) or sum(n) < 14:
+        return {'medias': medias, 'pesos': [1.0] * 7, 'dias': sum(n),
+                'fonte': "Sem faturamento suficiente nas últimas semanas: considerei todos os dias iguais."}
+    media = sum(medias) / 7
+    return {'medias': medias, 'pesos': [m / media for m in medias], 'dias': sum(n),
+            'fonte': f"Média do faturamento das últimas {SEMANAS_MOVIMENTO} semanas ({sum(n)} dias lançados"
+                     + (f", sem {len(atipicos & set(valores))} dia(s) atípico(s)" if atipicos & set(valores) else '') + ")."}
+
+
+class _Rodizio:
+    """
+    Procura as folgas de cada pessoa em cada semana do ciclo (2 por semana) com a menor "conta":
+    regra quebrada (dias seguidos, domingo) >> setor abaixo do mínimo >> folga em dia de movimento >> folgas separadas
+    >> muita gente folgando no mesmo dia. Começa por um palpite bom e vai trocando enquanto melhora.
+    """
+    PARES = [(a, b) for a in range(7) for b in range(a + 1, 7)]
+
+    def __init__(self, setores_pessoas, semanas, pesos, minimos, max_seguidos, n_domingos, juntas):
+        self.ps = setores_pessoas                       # índice do setor de cada pessoa
+        self.L, self.pesos, self.mins = semanas, pesos, minimos
+        self.max_seg, self.n_dom, self.juntas = max_seguidos, n_domingos, juntas
+        self.n_s = [self.ps.count(s) for s in range(len(minimos))]
+        self.cnt = [[[0] * 7 for _w in range(semanas)] for _s in minimos]
+        self.a = [[None] * semanas for _p in self.ps]
+        self.pc = [0.0] * len(self.ps)
+
+    def _celula(self, s, w, d, c):
+        falta = max(0, self.mins[s][d] - (self.n_s[s] - c))
+        return P_COBERTURA * falta + P_ESPALHAR * c * c
+
+    def custo_pessoa(self, pares):
+        L, T = self.L, self.L * 7
+        folga = [False] * T
+        custo = 0.0
+        mov = 0.0
+        for w, (a, b) in enumerate(pares):
+            folga[w * 7 + a] = folga[w * 7 + b] = True
+            mov += self.pesos[a] + self.pesos[b]
+        custo += P_MOVIMENTO * mov + P_JUSTO * mov * mov / L
+        if self.max_seg:
+            inicio = folga.index(True) + 1
+            seguidos = 0
+            for k in range(T + 1):
+                if k == T or folga[(inicio + k) % T]:
+                    if seguidos > self.max_seg:
+                        custo += P_SEGUIDOS * (seguidos - self.max_seg)
+                    seguidos = 0
+                else:
+                    seguidos += 1
+        if self.n_dom:
+            doms = [folga[w * 7 + 6] for w in range(L)]
+            if not any(doms):
+                custo += P_DOMINGO * self.n_dom
+            else:
+                ini = doms.index(True) + 1
+                seguidos = maior = 0
+                for k in range(L):
+                    if doms[(ini + k) % L]:
+                        seguidos = 0
+                    else:
+                        seguidos += 1
+                        maior = max(maior, seguidos)
+                if maior >= self.n_dom:
+                    custo += P_DOMINGO * (maior - self.n_dom + 1)
+        if self.juntas:
+            custo += P_JUNTAS * sum(1 for i in range(T) if folga[i] and not folga[i - 1] and not folga[(i + 1) % T])
+        return custo
+
+    def _delta(self, p, w, novo):
+        s, velho = self.ps[p], self.a[p][w]
+        dc = 0.0
+        if velho is not None:
+            for d in set(velho) | set(novo):
+                c = self.cnt[s][w][d]
+                dc += self._celula(s, w, d, c - (d in velho) + (d in novo)) - self._celula(s, w, d, c)
+        else:
+            for d in novo:
+                c = self.cnt[s][w][d]
+                dc += self._celula(s, w, d, c + 1) - self._celula(s, w, d, c)
+        pares = list(self.a[p])
+        pares[w] = novo
+        if any(x is None for x in pares):
+            pares = [x if x is not None else novo for x in pares]
+        novo_pc = self.custo_pessoa(pares)
+        return dc + novo_pc - self.pc[p], novo_pc
+
+    def _por(self, p, w, novo, novo_pc):
+        s, velho = self.ps[p], self.a[p][w]
+        if velho is not None:
+            for d in velho:
+                self.cnt[s][w][d] -= 1
+        for d in novo:
+            self.cnt[s][w][d] += 1
+        self.a[p][w] = novo
+        self.pc[p] = novo_pc
+
+    def resolver(self, semente, limite=TEMPO_MAX_SUGESTAO):
+        rnd = random.Random(semente)
+        fim = time.monotonic() + limite
+        # 1º palpite: cada pessoa ganha o domingo numa semana diferente (espalhado dentro do setor)
+        vez = {}
+        for p in sorted(range(len(self.ps)), key=lambda p: (self.ps[p], rnd.random())):
+            k = vez.get(self.ps[p], rnd.randrange(self.L))
+            vez[self.ps[p]] = k + 1
+            dom_semana = k % self.L if self.n_dom else -1
+            for w in range(self.L):
+                opcoes = [x for x in self.PARES if (6 in x) == (w == dom_semana)]
+                melhor = min(opcoes, key=lambda x: (self._delta(p, w, x)[0], rnd.random()))
+                self._por(p, w, melhor, self._delta(p, w, melhor)[1])
+        for p in range(len(self.ps)):
+            self.pc[p] = self.custo_pessoa(self.a[p])
+        # depois: troca uma semana de uma pessoa por vez (e troca as folgas de duas pessoas do mesmo setor na mesma
+        # semana), enquanto a conta melhorar
+        lugares = [(p, w) for p in range(len(self.ps)) for w in range(self.L)]
+        melhorou = True
+        while melhorou and time.monotonic() < fim:
+            melhorou = False
+            rnd.shuffle(lugares)
+            for p, w in lugares:
+                melhor, melhor_d, melhor_pc = None, -1e-9, None
+                for x in self.PARES:
+                    if x == self.a[p][w]:
+                        continue
+                    dlt, pc = self._delta(p, w, x)
+                    if dlt < melhor_d:
+                        melhor, melhor_d, melhor_pc = x, dlt, pc
+                if melhor:
+                    self._por(p, w, melhor, melhor_pc)
+                    melhorou = True
+            for p in range(len(self.ps)):
+                for q in range(p + 1, len(self.ps)):
+                    if self.ps[p] != self.ps[q]:
+                        continue
+                    for w in range(self.L):
+                        if self.a[p][w] == self.a[q][w]:
+                            continue
+                        np_ = list(self.a[p]); nq = list(self.a[q])
+                        np_[w], nq[w] = self.a[q][w], self.a[p][w]
+                        cp, cq = self.custo_pessoa(np_), self.custo_pessoa(nq)
+                        if cp + cq < self.pc[p] + self.pc[q] - 1e-9:      # as contagens do dia não mudam: só as pessoas
+                            self.a[p], self.a[q], self.pc[p], self.pc[q] = np_, nq, cp, cq
+                            melhorou = True
+        return self.total()
+
+    def total(self):
+        return sum(self.pc) + sum(self._celula(s, w, d, self.cnt[s][w][d])
+                                  for s in range(len(self.mins)) for w in range(self.L) for d in range(7))
+
+
+def _setor_da_pessoa(f, cfg, pos_setor, setores):
+    if cfg and pos_setor.get(cfg['posicao_id']):
+        return pos_setor[cfg['posicao_id']]
+    cargo = _sem_acento(getattr(f, 'Cargo', ''))
+    return next((s for s in setores if _sem_acento(s) and _sem_acento(s) in cargo), 'Sem setor')
+
+
+def candidatos_rodizio():
+    """Quem pode entrar no rodízio (os fixos; marcados: quem está na escala automática ou já tem padrão 5x2)."""
+    _exigir_banco()
+    padroes = FG.memoria(forcar=True)[0]
+    cfgs = _fixos_escala()
+    pos_setor = {p[0]: (p[5] or '').strip() for p in database.listar_posicoes_loja()}
+    setores = _setores()
+    hoje = date.today()
+    lista = []
+    for f in sorted(database.listar_funcionarios(), key=lambda f: str(f.NomeCompleto or '').lower()):
+        fid = int(f.FuncionarioID)
+        p = FG.padrao_no_dia(fid, hoje, padroes)
+        lista.append({'id': fid, 'nome': f.NomeCompleto or '', 'setor': _setor_da_pessoa(f, cfgs.get(fid), pos_setor, setores),
+                      'marcado': fid in cfgs or bool(padroes.get(fid)),
+                      'padrao': FG.descrever_ciclo(p[1]) if p and p[1] else f"6x1: {FG.descrever_cadastro(f)}"})
+    regras = FG.regras()
+    return {'pessoas': lista, 'semanas': int(regras.get('domingo_semanas') or 0) or 3, 'regras': _regras_txt(regras),
+            'movimento': _movimento_json(movimento()), 'desde': (FG.segunda(hoje) + timedelta(days=7)).isoformat()}
+
+
+def _movimento_json(m):
+    return {'fonte': m['fonte'], 'dias': [{'dia': DIAS_TELA[i], 'media': f"R$ {m['medias'][i]:,.0f}".replace(',', '.')
+                                           if m['medias'][i] else '—', 'peso': round(m['pesos'][i], 2)} for i in range(7)]}
+
+
+def sugerir(dados):
+    """✨ Monta o rodízio das pessoas escolhidas (não grava nada: a tela mostra e a pessoa decide aplicar)."""
+    _exigir_banco()
+    try:
+        semanas = int(dados.get('semanas') or 3)
+        semente = int(dados.get('semente') or 1)
+    except (TypeError, ValueError):
+        raise ErroEscala("Número de semanas inválido.")
+    if not 1 <= semanas <= FG.MAX_SEMANAS_CICLO:
+        raise ErroEscala(f"O rodízio tem de 1 a {FG.MAX_SEMANAS_CICLO} semanas.")
+    ids = dados.get('ids')
+    if not isinstance(ids, list) or not ids:
+        raise ErroEscala("Marque quem entra no rodízio.")
+    ids = list(dict.fromkeys(_id(i, "o funcionário") for i in ids))[:60]
+    juntas = bool(dados.get('juntas', True))
+    desde = _data(dados['desde'])[1] if dados.get('desde') else FG.segunda(date.today()) + timedelta(days=7)
+    regras = FG.regras()
+    cfgs = _fixos_escala()
+    pos_setor = {p[0]: (p[5] or '').strip() for p in database.listar_posicoes_loja()}
+    setores = _setores()
+    funcs = {int(f.FuncionarioID): f for f in database.listar_funcionarios()}
+    faltando = [i for i in ids if i not in funcs]
+    if faltando:
+        raise ErroEscala("Alguém da lista foi excluído. Atualize a página.", 409)
+    pessoas = [{'id': i, 'nome': funcs[i].NomeCompleto or '', 'setor': _setor_da_pessoa(funcs[i], cfgs.get(i), pos_setor, setores)}
+               for i in ids]
+    nomes_setor = sorted({p['setor'] for p in pessoas})
+    mins_regra = regras.get('minimos') or {}
+    minimos = [[int(x) for x in (mins_regra.get(s) or [0] * 7)] for s in nomes_setor]
+    mov = movimento()
+    max_seg = int(regras.get('max_dias_seguidos') or 0)
+    n_dom = int(regras.get('domingo_semanas') or 0)
+    antes = []                                           # quantos dias seguidos cada um já vem trabalhando na virada
+    for p in pessoas:
+        n_ = 0
+        while n_ < 13 and not FG.situacao(funcs[p['id']], desde - timedelta(days=n_ + 1)):
+            n_ += 1
+        antes.append(n_)
+    melhor, fim = None, time.monotonic() + TEMPO_MAX_SUGESTAO
+    for k in range(MAX_TENTATIVAS):                      # várias tentativas (pontos de partida diferentes): fica a melhor
+        r = _Rodizio([nomes_setor.index(p['setor']) for p in pessoas], semanas, mov['pesos'], minimos, max_seg, n_dom, juntas)
+        total = r.resolver(semente * 7919 + k, max(fim - time.monotonic(), 0.05))
+        if melhor is None or total < melhor[0]:
+            melhor = (total, r)
+        if time.monotonic() >= fim:
+            break
+    r = melhor[1]
+    # A VIRADA: trocar o ciclo inteiro entre duas pessoas do MESMO setor não muda quantos trabalham por dia. Quem já vem
+    # com mais dias seguidos trabalhando fica com o ciclo que tem a 1ª folga mais cedo.
+    primeira = lambda pares: min(w * 7 + d for w, par in enumerate(pares) for d in par)
+    for si in range(len(nomes_setor)):
+        idx = [p for p in range(len(pessoas)) if r.ps[p] == si]
+        ciclos = sorted((r.a[p] for p in idx), key=primeira)
+        for p, ciclo in zip(sorted(idx, key=lambda p: -antes[p]), ciclos):
+            r.a[p] = ciclo
+    virada = []                                          # quem ainda passaria do limite: 1 folga a mais, só nessa semana
+    for p, pessoa in enumerate(pessoas):
+        k_max = primeira(r.a[p])
+        if max_seg and antes[p] + k_max > max_seg:
+            janela = range(0, max(0, max_seg - antes[p]) + 1)
+            k = min(janela, key=lambda k: (mov['pesos'][(desde + timedelta(days=k)).weekday()], k))
+            d = desde + timedelta(days=k)
+            virada.append({'id': pessoa['id'], 'nome': pessoa['nome'], 'data': d.isoformat(),
+                           'texto': f"{pessoa['nome']}: folga a mais em {_br(d, True)} (senão ficaria {antes[p] + k_max} dias "
+                                    "seguidos na troca do padrão antigo para o rodízio)"})
+    saida, problemas = [], []
+    for p, pessoa in enumerate(pessoas):
+        ciclo = [sorted((POSICAO_DIA[a], POSICAO_DIA[b]), key=FG.ORDEM_SEMANA.index) for a, b in r.a[p]]
+        saida.append(dict(pessoa, semanas=ciclo, texto=FG.descrever_ciclo(ciclo),
+                          folgas=[" e ".join(FG.DIAS_CURTO[d] for d in s) for s in ciclo]))
+        um = _Rodizio([0], semanas, mov['pesos'], [[0] * 7], max_seg, n_dom, False)
+        m_ = sum(mov['pesos'][a] + mov['pesos'][b] for a, b in r.a[p])
+        if um.custo_pessoa(r.a[p]) - P_MOVIMENTO * m_ - P_JUSTO * m_ * m_ / semanas >= P_DOMINGO:
+            problemas.append(f"{pessoa['nome']}: não coube a regra do domingo ou dos dias seguidos — ajuste à mão.")
+    cobertura = []
+    for s, nome in enumerate(nomes_setor):
+        n = r.n_s[s]
+        linhas = []
+        for w in range(semanas):
+            trab = [n - r.cnt[s][w][d] for d in range(7)]
+            linhas.append({'trabalham': trab, 'min': minimos[s]})
+            for d in range(7):
+                if minimos[s][d] and trab[d] < minimos[s][d]:
+                    problemas.append(f"{nome}: semana {w + 1}, {DIAS_TELA[d].lower()}: {trab[d]} de {minimos[s][d]} pessoas.")
+        folga_possivel = sum(max(0, n - m) for m in minimos[s])
+        livres_dom = max(n - minimos[s][6], 0)
+        if n_dom and n and n > livres_dom * n_dom:
+            # cada um precisa de 1 domingo a cada n_dom semanas = n/n_dom folgas de domingo por semana (qualquer ciclo)
+            problemas.insert(0, f"{nome}: com {n} pessoa(s) e mínimo de {minimos[s][6]} no domingo, só {livres_dom} pode(m) folgar "
+                                f"por domingo; para cada um ter 1 domingo a cada {n_dom} semanas seriam precisas "
+                                f"{n / n_dom:.1f}".replace('.', ',') + " folgas de domingo por semana. Diminua o mínimo de domingo "
+                                "ou mude a regra do domingo (⚙️ Regras) — ou ponha mais gente nesse setor.")
+        if any(minimos[s]) and folga_possivel < 2 * n:
+            problemas.insert(0, f"{nome}: com {n} pessoa(s) e esses mínimos a conta não fecha (cabem {folga_possivel} folgas "
+                                f"por semana e são precisas {2 * n}). Precisa de mais gente ou de mínimos menores.")
+        cobertura.append({'setor': nome, 'pessoas': n, 'semanas': linhas})
+    if n_dom and semanas > n_dom and semanas % n_dom:
+        problemas.insert(0, f"O ciclo de {semanas} semanas não combina com a regra de 1 domingo a cada {n_dom}: cada pessoa acaba "
+                            f"precisando de mais domingos de folga. Use {n_dom} (ou {2 * n_dom}) semanas.")
+    return {'pessoas': saida, 'cobertura': cobertura, 'problemas': problemas[:20], 'semanas': semanas, 'semente': semente,
+            'desde': desde.isoformat(), 'virada': virada,
+            'movimento': _movimento_json(mov), 'juntas': juntas,
+            'regras': f"{max_seg or 'sem limite de'} dias seguidos no máximo · "
+                      + (f"1 domingo de folga a cada {n_dom} semanas" if n_dom else "sem regra de domingo")}
+
+
+def aplicar_rodizio(dados, usuario):
+    """Grava o rodízio sugerido (um padrão por pessoa, todos com a mesma data de início: as semanas ficam alinhadas)."""
+    _exigir_banco()
+    _txt, desde = _data(dados.get('desde'))
+    if desde < date.today():
+        raise ErroEscala("A data de início não pode ser no passado.")
+    brutas = dados.get('pessoas')
+    if not isinstance(brutas, list) or not brutas or len(brutas) > 60:
+        raise ErroEscala("Nada para aplicar. Faça a sugestão de novo.")
+    itens = []
+    for b in brutas:
+        fid = _id((b or {}).get('id'), "o funcionário")
+        f = _funcionario(fid)
+        semanas = (b or {}).get('semanas')
+        tipo, ciclo = _ler_semanas({'tipo': 'rodizio' if isinstance(semanas, list) and len(semanas) > 1 else 'fixo',
+                                    'semanas': semanas})
+        itens.append((f, ciclo))
+    extras = []                                          # [VIRADA] 1 folga a mais (troca) na semana da troca de padrão
+    for e in (dados.get('extras') or [])[:60]:
+        fid = _id((e or {}).get('id'), "o funcionário")
+        f = next((f for f, _c in itens if int(f.FuncionarioID) == fid), None)
+        d = _data((e or {}).get('data'))[1]
+        if not f or not desde <= d < desde + timedelta(days=14):
+            raise ErroEscala("Folga extra da virada inválida. Faça a sugestão de novo.")
+        extras.append((f, d))
+    if 'aplicar' not in _confirmados(dados):
+        padroes = FG.memoria(forcar=True)[0]
+        depois = [f.NomeCompleto for f, _c in itens if any(p[0] > desde for p in padroes.get(int(f.FuncionarioID), []))]
+        max_seg = int(FG.regras().get('max_dias_seguidos') or 0)
+        virada = []
+        com_extra = {int(f.FuncionarioID) for f, _d in extras}
+        for f, c in itens:
+            if int(f.FuncionarioID) in com_extra:
+                continue
+            tam, a, b = _maior_sequencia([(d, t) for d, t, _s in _simular(f, desde, c, dias_depois=14)])
+            if max_seg and tam > max_seg and a < desde:
+                virada.append(f"{f.NomeCompleto} ({tam} dias: {_br(a)} a {_br(b)})")
+        return {'perguntas': [{'chave': 'aplicar', 'titulo': "Aplicar o rodízio", 'texto': (
+            f"Aplicar o rodízio para {len(itens)} pessoa(s) a partir de {desde:%d/%m/%Y}?\n\n"
+            + "\n".join(f"• {f.NomeCompleto}: {FG.descrever_ciclo(c)}" for f, c in itens[:15])
+            + (f"\n• … e mais {len(itens) - 15}" if len(itens) > 15 else '')
+            + (("\n\nFolga a mais na virada:\n" + "\n".join(f"• {f.NomeCompleto}: {_br(d, True)}" for f, d in extras)) if extras else '')
+            + "\n\nAté essa data continua valendo o que está hoje. A escala automática se acerta sozinha."
+            + (f"\n\n⚠️ {', '.join(depois)} já tem padrão marcado para DEPOIS dessa data: ele continua valendo a partir de lá."
+               if depois else '')
+            + (f"\n\n⚠️ Na virada ficam muitos dias seguidos sem folga: {'; '.join(virada)}. Depois de aplicar, dê uma folga "
+               "a mais nessa semana (toque no dia na grade)." if virada else ''))}]}
+    quem = (usuario or {}).get('nome') or ''
+    for f, ciclo in itens:
+        FG.gravar_padrao(int(f.FuncionarioID), desde, ciclo, quem)
+    for f, d in extras:
+        if not FG.situacao(f, d, sem_troca=True):        # só se nesse dia o rodízio não já for folga
+            FG.gravar_troca(int(f.FuncionarioID), d, 'folga', 'virada para o rodízio', quem)
+    for f, _c in itens:
+        _ressincronizar(int(f.FuncionarioID))
+    logger.info(f"[GESTÃO] {quem}: rodízio aplicado a partir de {desde} para {len(itens)} pessoa(s): "
+                + "; ".join(f"{f.NomeCompleto}={FG.texto_ciclo(c)}" for f, c in itens))
+    return {'ok': True, 'mensagem': f"✨ Rodízio aplicado para {len(itens)} pessoa(s) a partir de {desde:%d/%m/%Y}."
+                                    + (f" {len(extras)} folga(s) a mais na virada." if extras else '')}
+
+
+# ------------------------------------------------------------------------------
+# 📲 Mandar as folgas do mês para cada pessoa (WhatsApp ou Telegram)
+# ------------------------------------------------------------------------------
+def _mes(texto):
+    m = re.fullmatch(r'(\d{4})-(\d{2})', str(texto or ''))
+    if not m or not 1 <= int(m.group(2)) <= 12:
+        raise ErroEscala("Mês inválido.")
+    return int(m.group(1)), int(m.group(2))
+
+
+def _dias_do_mes(ano, mes):
+    d = date(ano, mes, 1)
+    dias = []
+    while d.month == mes:
+        dias.append(d)
+        d += timedelta(days=1)
+    return dias
+
+
+def texto_folgas(f, ano, mes, canal):
+    """A mensagem de UMA pessoa: as folgas do mês semana a semana (e as férias, se tiver)."""
+    folgas, ferias = [], []
+    for d in _dias_do_mes(ano, mes):
+        s = FG.situacao(f, d)
+        if s:
+            (ferias if s['tipo'] == 'afastamento' else folgas).append(d)
+    neg = (lambda t: f"*{t}*") if canal == 'whatsapp' else (lambda t: f"<b>{_html.escape(t)}</b>")
+    esc = (lambda t: t) if canal == 'whatsapp' else _html.escape
+    primeiro = (str(f.NomeCompleto or '').split() or ['?'])[0]
+    linhas = [f"📅 {neg(f'Suas folgas de {MESES[mes - 1]}/{ano}')}", "", f"Olá, {esc(primeiro)}! Estas são as suas folgas:"]
+    semanas = {}
+    for d in folgas:
+        semanas.setdefault(FG.segunda(d), []).append(d)
+    for _seg, ds in sorted(semanas.items()):
+        linhas.append("• " + " e ".join(f"{DIAS_TELA[d.weekday()].lower()} {d:%d/%m}" for d in ds))
+    if not folgas:
+        linhas.append("• (nenhuma folga marcada no sistema neste mês — fale com a gestão)")
+    if ferias:
+        linhas += ["", f"🏖️ Férias/afastamento: {ferias[0]:%d/%m} a {ferias[-1]:%d/%m}"]
+    linhas += ["", "Se precisar trocar algum dia, combine antes com a gestão. 😉"]
+    empresa = getattr(config, 'NOME_EMPRESA', '') or ''
+    if empresa:
+        linhas.append(esc(empresa))
+    return "\n".join(linhas), len(folgas)
+
+
+def _contato(f, canal):
+    if canal == 'whatsapp':
+        return R.numero_whatsapp(getattr(f, 'TelefoneWhatsApp', None))
+    chat = str(getattr(f, 'ChatIDTelegram', '') or '').strip()
+    return chat if re.fullmatch(r'-?\d{3,20}', chat) else None
+
+
+def _ler_envio(dados):
+    ano, mes = _mes(dados.get('mes'))
+    canal = dados.get('canal') if dados.get('canal') in ('whatsapp', 'telegram') else 'whatsapp'
+    return ano, mes, canal
+
+
+def previa_envio(dados):
+    _exigir_banco()
+    ano, mes, canal = _ler_envio(dados)
+    padroes = FG.memoria(forcar=True)[0]
+    cfgs = _fixos_escala()
+    pessoas = []
+    for f in sorted(database.listar_funcionarios(), key=lambda f: str(f.NomeCompleto or '').lower()):
+        fid = int(f.FuncionarioID)
+        texto, n = texto_folgas(f, ano, mes, canal)
+        contato = _contato(f, canal)
+        na_escala = fid in cfgs or bool(padroes.get(fid))
+        pessoas.append({'id': fid, 'nome': f.NomeCompleto or '', 'contato': bool(contato), 'folgas': n, 'texto': texto,
+                        'marcado': na_escala and bool(contato), 'na_escala': na_escala})
+    return {'mes': f"{MESES[mes - 1]}/{ano}", 'canal': canal, 'pessoas': pessoas}
+
+
+def _motivo_falha(canal, resposta):
+    """Motivo curto e SEM o texto bruto (o erro de conexão da Z-API pode trazer o endereço com o token)."""
+    t = str(resposta or '').lower()
+    if 'conex' in t or 'timeout' in t or 'connection' in t:
+        return "sem conexão"
+    return "o WhatsApp recusou" if canal == 'whatsapp' else "o Telegram recusou"
+
+
+def enviar_folgas(dados, usuario):
+    """📲 Manda as folgas do mês para cada pessoa marcada (em segundo plano, uma de cada vez). Devolve o andamento."""
+    _exigir_banco()
+    ano, mes, canal = _ler_envio(dados)
+    ids = dados.get('ids')
+    if not isinstance(ids, list) or not ids:
+        raise ErroEscala("Marque para quem mandar.")
+    ids = set(_id(i, "o funcionário") for i in ids)
+    funcs = [f for f in database.listar_funcionarios() if int(f.FuncionarioID) in ids]
+    with _trava_envios:
+        for j in list(_envios.values()):
+            if j['terminado'] and time.time() - j['criado'] > 3600:
+                _envios.pop(j['id'], None)
+        andando = next((j for j in _envios.values() if not j['terminado']), None)
+        if andando:
+            if andando['mes'] == f"{ano}-{mes:02d}" and andando['canal'] == canal:
+                return dict(andando)
+            raise ErroEscala(f"Ainda estou mandando as folgas ({andando['feitos']} de {andando['total']}). Espere terminar.", 409)
+        fila, sem = [], []
+        for f in funcs:
+            contato = _contato(f, canal)
+            if contato:
+                fila.append((f, contato, texto_folgas(f, ano, mes, canal)[0]))
+            else:
+                sem.append(f.NomeCompleto)
+        if not fila:
+            raise ErroEscala("Ninguém marcado tem " + ("WhatsApp" if canal == 'whatsapp' else "Telegram") + " no cadastro.")
+        job = {'id': uuid.uuid4().hex[:12], 'mes': f"{ano}-{mes:02d}", 'canal': canal, 'total': len(fila), 'feitos': 0,
+               'enviados': 0, 'falhas': [], 'sem_contato': sem, 'terminado': False, 'por': (usuario or {}).get('nome'),
+               'criado': time.time()}
+        _envios[job['id']] = job
+
+    def rodar():
+        try:
+            for k, (f, contato, texto) in enumerate(fila):
+                if k and SEGUNDO_PLANO:
+                    time.sleep(INTERVALO_ENVIO_SEG)
+                try:
+                    if canal == 'whatsapp':
+                        import notificador_whatsapp
+                        ok, resp = notificador_whatsapp.enviar_mensagem_whatsapp(contato, texto)
+                    else:
+                        import notificador_telegram
+                        resp = notificador_telegram.enviar_mensagem(contato, texto, 'HTML')
+                        ok = bool(resp) and bool(resp.get('ok'))
+                except Exception as e:
+                    ok, resp = False, str(e)
+                if ok:
+                    job['enviados'] += 1
+                else:
+                    job['falhas'].append({'nome': f.NomeCompleto, 'motivo': _motivo_falha(canal, resp)})
+                job['feitos'] += 1
+        finally:
+            job['terminado'] = True
+            logger.info(f"[GESTÃO] {job['por']}: folgas de {MESES[mes - 1]}/{ano} pelo {canal}: {job['enviados']} enviada(s)"
+                        + (f", não foram: {', '.join(x['nome'] + ' (' + x['motivo'] + ')' for x in job['falhas'])}" if job['falhas'] else '')
+                        + ".")
+    if SEGUNDO_PLANO:
+        threading.Thread(target=rodar, daemon=True).start()
+    else:
+        rodar()
+    return dict(job)
+
+
+def andamento_envio(job_id):
+    job = _envios.get(str(job_id))
+    if not job:
+        raise ErroEscala("Envio não encontrado (o servidor reiniciou?).", 404)
+    return dict(job)

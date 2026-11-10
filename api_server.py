@@ -2566,6 +2566,44 @@ def api_gestao_folgas_regras_salvar(usuario):
     return _resposta_folgas('salvar_regras', ler_json() or {}, usuario)
 
 
+@app.route('/api/gestao/folgas/rodizio', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_folgas_rodizio_candidatos(usuario):
+    """[5x2 ETAPA 3] ✨ quem pode entrar no rodízio e o movimento de cada dia."""
+    return _resposta_folgas('candidatos_rodizio')
+
+
+@app.route('/api/gestao/folgas/rodizio/sugerir', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_folgas_rodizio_sugerir(usuario):
+    return _resposta_folgas('sugerir', ler_json() or {})
+
+
+@app.route('/api/gestao/folgas/rodizio/aplicar', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_folgas_rodizio_aplicar(usuario):
+    return _resposta_folgas('aplicar_rodizio', ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/folgas/envio/previa', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_folgas_envio_previa(usuario):
+    """[5x2 ETAPA 3] 📲 a mensagem das folgas do mês de cada pessoa (não manda nada)."""
+    return _resposta_folgas('previa_envio', request.args.to_dict())
+
+
+@app.route('/api/gestao/folgas/envio', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_folgas_envio(usuario):
+    return _resposta_folgas('enviar_folgas', ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/folgas/envio/<job_id>', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_folgas_envio_andamento(usuario, job_id):
+    return _resposta_folgas('andamento_envio', job_id)
+
+
 @app.route('/api/gestao/folgas/<int:funcionario_id>/padrao', methods=['GET'])
 @compras_login(somente_gestor=True)
 def api_gestao_folgas_padrao(usuario, funcionario_id):

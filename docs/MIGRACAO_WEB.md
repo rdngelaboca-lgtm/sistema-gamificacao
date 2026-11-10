@@ -484,8 +484,22 @@ Para a troca da 6x1 pela 5x2 (Emenda Constitucional do fim da 6x1, promulgada em
   dia da semana. O sistema só AVISA; não bloqueia.
 - O cartão e o ✏️ Editar do 👔 Fixo mostram o padrão 5x2 que vale hoje; na 🗓️ Escala › 📌 Fixos, quem está na 5x2 mostra o
   padrão com o atalho "📅 mudar" (a folga do cadastro só vale para quem não tem padrão).
-- Próximo passo combinado (etapa 3): ✨ sugerir o rodízio pelo movimento de cada dia (📊 Folha) e 📲 mandar as folgas do mês
-  para cada pessoa.
+- **✨ Sugerir rodízio** (etapa 3, 11/2026): escolhe quem entra (vêm marcados os fixos da escala e quem já tem padrão), a
+  data de início e o ciclo (padrão = a regra do domingo, ex.: 3 semanas). O sistema usa o **movimento de cada dia** (média do
+  faturamento lançado das últimas 12 semanas, sem os dias atípicos; sem faturamento suficiente, todos os dias iguais) e monta
+  as folgas de todos de uma vez: 2 por semana, 1 domingo de folga a cada N semanas (cada um num domingo diferente), no máximo
+  N dias seguidos, o mínimo de cada setor, folgas nos dias mais fracos, as 2 folgas juntas quando der e as folgas "boas"
+  divididas entre todos. Mostra a tabela (pessoa × semana do ciclo) e quantos trabalham por setor/dia; **🔄 Outra sugestão**;
+  **✅ Aplicar** grava um padrão por pessoa com a mesma data de início (as semanas ficam alinhadas). Quando a conta não fecha,
+  explica por quê (ex.: mínimo de domingo alto demais para o número de pessoas) e o que mudar.
+  **A virada**: quem vinha trabalhando vários dias seguidos no padrão antigo recebe o ciclo com a folga mais cedo (troca de
+  ciclo dentro do mesmo setor, sem mudar quantos trabalham por dia) e, se ainda passar do limite, **1 folga a mais** só na
+  semana da troca (no dia mais fraco; aparece antes de aplicar e fica como troca na grade).
+- **📲 Mandar folgas**: cada pessoa recebe só as folgas DELA no mês (este ou o próximo), semana a semana, com as trocas e as
+  férias, pelo WhatsApp da loja ou pelo Telegram (escolha na janela; vem marcado quem está na escala e tem o contato). Vai em
+  segundo plano, uma mensagem a cada 2,5 s, e a janela mostra o andamento e quem não recebeu. O motivo de uma falha aparece
+  resumido ("sem conexão", "o WhatsApp recusou"): o texto bruto do erro da Z-API pode trazer o endereço com o token e nunca vai
+  para a tela nem para o log.
 
 ### Novo (só na Web) — 👔 Liderança: sócios e líderes (10/2026: Gestão › 👔 Liderança)
 

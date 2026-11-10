@@ -80,6 +80,24 @@
   .reg-min { display: grid; grid-template-columns: minmax(80px, 1.3fr) repeat(7, minmax(34px, 1fr)); gap: 4px; align-items: center; font-size: 13px; }
   .reg-min input { width: 100%; text-align: center; padding: 5px 2px !important; font-size: 15px !important; }
   .reg-min .t { text-align: center; font-weight: 700; color: var(--suave); }
+  /* [5x2 ETAPA 3] ✨ sugerir rodízio e 📲 mandar folgas */
+  .mov { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; align-items: end; font-size: 12px; text-align: center; }
+  .mov .barra-mov { background: var(--verde); border-radius: 4px 4px 0 0; margin: 0 auto; width: 70%; min-height: 3px; }
+  .mov .v { color: var(--suave); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .s-lista { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 4px 10px; max-height: 30vh; overflow: auto;
+    border: 1px solid var(--linha); border-radius: 8px; padding: 6px 8px; }
+  .s-lista label, .m-linha { flex-direction: row !important; align-items: flex-start; gap: 8px !important; color: var(--texto) !important;
+    font-weight: 400 !important; font-size: 14px !important; }
+  .s-lista input, .m-linha input { width: 18px !important; height: 18px; flex: none; margin-top: 2px; }
+  .s-lista .st { grid-column: 1 / -1; font-weight: 700; color: var(--suave); font-size: 13px; margin-top: 4px; }
+  .s-cob { display: grid; gap: 8px; margin: 8px 0; }
+  .s-cob table td.falta { color: var(--erro); font-weight: 800; background: #ffecec; }
+  .s-prob { color: var(--aviso); font-size: 13px; display: grid; gap: 2px; margin: 6px 0; }
+  .m-lista { display: grid; gap: 4px; max-height: 44vh; overflow: auto; border: 1px solid var(--linha); border-radius: 8px; padding: 6px 8px; }
+  .m-linha { display: flex; border-bottom: 1px solid var(--linha2); padding: 4px 0; }
+  .m-linha.off { opacity: .55; }
+  .m-linha pre { white-space: pre-wrap; font-family: inherit; font-size: 13px; background: #f7f9f8; border-radius: 8px; padding: 6px; margin: 4px 0 0; }
+  #m-andamento { font-weight: 700; white-space: pre-line; }
   @media (max-width: 700px) {
     .area { padding-left: 10px; padding-right: 10px; }
     .free { grid-template-columns: 1fr; }
@@ -109,6 +127,8 @@
         <select id="fg-semanas" aria-label="Quantas semanas"><option value="2">2 semanas</option><option value="4">4 semanas</option>
           <option value="6">6 semanas</option><option value="8">8 semanas</option></select>
         <button class="btn" id="fg-regras">⚙️ Regras</button>
+        <button class="btn" id="fg-sugerir" title="Monta o rodízio de todos pelas regras e pelo movimento de cada dia">✨ Sugerir rodízio</button>
+        <button class="btn" id="fg-mandar" title="Manda para cada pessoa as folgas dela no mês">📲 Mandar folgas</button>
         <label class="mini"><input type="checkbox" id="fg-todos"> mostrar quem não está na escala</label>
       </span>
       <button class="btn ico" id="atualizar" title="Atualizar">🔄</button>
@@ -425,6 +445,8 @@ $('#fg-hoje').onclick = () => { S.fg.de = ''; carregar(); };
 $('#fg-semanas').onchange = e => { S.fg.semanas = +e.target.value; gravarLocal('gestao_folgas_semanas', e.target.value); carregar(); };
 $('#fg-todos').onchange = e => { S.fg.todos = e.target.checked; if (S.folgas) desenharFolgas(); };
 $('#fg-regras').onclick = () => abrirRegras();
+$('#fg-sugerir').onclick = () => abrirSugerir();
+$('#fg-mandar').onclick = () => abrirMandar();
 
 $('#lista').addEventListener('click', e => {
   if (S.aba !== 'folgas' || !S.folgas) return;
@@ -586,6 +608,149 @@ async function abrirRegras() {
       const x = await api('POST', '/api/gestao/folgas/regras', {regras: {limites_horas: limites, domingo_semanas: +$('#r-dom').value || 0,
                                                                          max_dias_seguidos: +$('#r-seg').value || 0, minimos}});
       fecharModal(); status(x.mensagem); if (S.aba === 'folgas') await carregar();
+    });
+  });
+}
+
+// --------------------------------------------------------------------------- ✨ SUGERIR RODÍZIO [5x2 ETAPA 3]
+async function abrirSugerir() {
+  let c;
+  try { c = await api('GET', '/api/gestao/folgas/rodizio'); } catch (e) { return falhou(e); }
+  const st = {semente: 1, res: null};
+  const maxPeso = Math.max(...c.movimento.dias.map(d => d.peso), 1);
+  const porSetor = {};
+  for (const p of c.pessoas) (porSetor[p.setor] = porSetor[p.setor] || []).push(p);
+  abrirModal(`<h3>✨ Sugerir rodízio</h3>
+    <div class="mini suave">${esc(c.regras)}. O sistema põe as folgas nos dias de menos movimento, garante o mínimo de cada setor
+      (⚙️ Regras), dá a cada pessoa o domingo numa semana diferente e divide as folgas "boas" entre todos. Você vê antes de aplicar.</div>
+    <form id="form-sug" class="form" autocomplete="off" style="margin-top:8px">
+      <div class="dupla">
+        <label>Começa em<input type="date" id="s-desde" min="${HOJE()}" value="${esc(c.desde)}"></label>
+        <label>Ciclo do rodízio<select id="s-sem">${[1, 2, 3, 4, 5, 6, 7, 8].map(n => `<option value="${n}" ${n === c.semanas ? 'selected' : ''}>${n} semana${n > 1 ? 's' : ''}</option>`).join('')}</select></label>
+      </div>
+      <label class="check"><input type="checkbox" id="s-juntas" checked> Preferir as 2 folgas juntas (ex.: seg e ter)</label>
+      <div><div class="mini"><b>Movimento de cada dia</b> · ${esc(c.movimento.fonte)}</div>
+        <div class="mov">${c.movimento.dias.map(d => `<div><div class="barra-mov" style="height:${Math.round(8 + 46 * d.peso / maxPeso)}px"></div>
+          <b>${d.dia}</b><div class="v">${esc(d.media)}</div></div>`).join('')}</div></div>
+      <div class="mini"><b>Quem entra</b> (<span id="s-conta"></span>)</div>
+      <div class="s-lista">${Object.keys(porSetor).sort().map(setor => `<div class="st">${esc(setor)}</div>` + porSetor[setor].map(p =>
+        `<label><input type="checkbox" value="${p.id}" ${p.marcado ? 'checked' : ''}><span>${esc(p.nome)}<br><span class="mini suave">hoje: ${esc(p.padrao)}</span></span></label>`).join('')).join('')}</div>
+      <button class="btn prim" type="submit" id="s-ok">✨ Sugerir</button>
+    </form>
+    <div id="s-res"></div>`);
+  const marcados = () => [...document.querySelectorAll('.s-lista input:checked')].map(i => +i.value);
+  const contar = () => { $('#s-conta').textContent = `${marcados().length} marcada(s)`; };
+  document.querySelector('.s-lista').addEventListener('change', contar);
+  contar();
+  const sugerir = botao => uma(botao, async () => {
+    const ids = marcados();
+    if (!ids.length) { alert('Marque quem entra no rodízio.'); return; }
+    $('#s-res').innerHTML = '<div class="suave" style="margin-top:8px">Montando o rodízio…</div>';
+    const r = await api('POST', '/api/gestao/folgas/rodizio/sugerir',
+                        {ids, semanas: +$('#s-sem').value, juntas: $('#s-juntas').checked, semente: st.semente, desde: $('#s-desde').value});
+    st.res = r;
+    desenharSugestao(r);
+  });
+  $('#form-sug').addEventListener('submit', ev => { ev.preventDefault(); st.semente = 1; sugerir($('#s-ok')); });
+  $('#s-desde').addEventListener('change', () => {          // a virada depende da data: a sugestão antiga não vale mais
+    if (st.res) { st.res = null; $('#s-res').innerHTML = '<div class="mini n-aviso" style="margin-top:8px">Mudou a data de início: toque em ✨ Sugerir de novo.</div>'; }
+  });
+  function desenharSugestao(r) {
+    const cab = Array.from({length: r.semanas}, (_, w) => `<th>Semana ${w + 1}</th>`).join('');
+    const cob = r.cobertura.map(cb => `<div><b>${esc(cb.setor)}</b> <span class="mini suave">(${cb.pessoas} pessoa(s) · quantos trabalham / mínimo)</span>
+      <div class="tabela-rolagem"><table class="grade"><thead><tr><th></th>${['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'].map(d => `<th>${d}</th>`).join('')}</tr></thead>
+      <tbody>${cb.semanas.map((l, w) => `<tr><td>Sem. ${w + 1}</td>${l.trabalham.map((n, d) =>
+        `<td class="${l.min[d] && n < l.min[d] ? 'falta' : ''}">${n}${l.min[d] ? '/' + l.min[d] : ''}</td>`).join('')}</tr>`).join('')}</tbody></table></div></div>`).join('');
+    $('#s-res').innerHTML = `<h4 class="secao">Sugestão · ciclo de ${r.semanas} semana(s) <span class="mini suave">${esc(r.regras)}</span></h4>
+      ${r.problemas.length ? `<div class="s-prob">${r.problemas.map(t => `<div>⚠️ ${esc(t)}</div>`).join('')}</div>`
+        : '<div class="mini n-ok">✅ Todas as regras e os mínimos cumpridos.</div>'}
+      <div class="tabela-rolagem"><table class="grade" id="s-tab"><thead><tr><th>Pessoa</th><th>Setor</th>${cab}</tr></thead>
+        <tbody>${r.pessoas.map(p => `<tr><td><b>${esc(p.nome)}</b></td><td>${esc(p.setor)}</td>${p.folgas.map(f => `<td>${esc(f)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
+      <div class="s-cob">${cob}</div>
+      ${r.virada.length ? `<div class="caixa"><b>🔁 A virada do padrão antigo para o rodízio</b>
+        <div class="mini suave">Sem isto, estas pessoas passariam de ${esc(r.regras.split(' ')[0])} dias seguidos na semana da troca.
+          A folga a mais vale só nesse dia (fica como troca na grade).</div>
+        ${r.virada.map(v => `<div class="mini">• ${esc(v.texto)}</div>`).join('')}
+        <label class="check"><input type="checkbox" id="s-extras" checked> Dar essas ${r.virada.length} folga(s) a mais</label></div>` : ''}
+      <div class="linha-form">
+        <button class="btn" type="button" id="s-outra">🔄 Outra sugestão</button>
+        <button class="btn prim" type="button" id="s-aplicar">✅ Aplicar para ${r.pessoas.length} pessoa(s)</button>
+      </div>
+      <div class="mini suave">Depois de aplicar, dá para ajustar qualquer pessoa tocando no nome dela na grade.</div>`;
+    $('#s-outra').onclick = () => { st.semente += 1; sugerir($('#s-outra')); };
+    $('#s-aplicar').onclick = () => uma($('#s-aplicar'), async () => {
+      const desde = $('#s-desde').value;
+      if (!desde) { alert('Escolha a data em que o rodízio começa.'); return; }
+      if (desde !== r.desde) { alert('A data de início mudou depois da sugestão. Toque em ✨ Sugerir de novo.'); return; }
+      const extras = $('#s-extras') && $('#s-extras').checked ? r.virada.map(v => ({id: v.id, data: v.data})) : [];
+      const x = await comPerguntas('/api/gestao/folgas/rodizio/aplicar',
+                                   {desde, pessoas: r.pessoas.map(p => ({id: p.id, semanas: p.semanas})), extras});
+      if (x && x.ok) { fecharModal(); status(x.mensagem); S.fg.de = desde; await carregar(); }   // a grade vai para a semana do início
+    });
+  }
+}
+
+// --------------------------------------------------------------------------- 📲 MANDAR AS FOLGAS DO MÊS [5x2 ETAPA 3]
+function mesesOpcoes() {
+  const d = new Date(), nomes = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+  return [0, 1].map(k => { const x = new Date(d.getFullYear(), d.getMonth() + k, 1);
+    return {v: `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}`, t: `${nomes[x.getMonth()]}/${x.getFullYear()}${k ? ' (próximo mês)' : ' (este mês)'}`}; });
+}
+function abrirMandar() {
+  const ops = mesesOpcoes(), padrao = new Date().getDate() >= 20 ? ops[1].v : ops[0].v;
+  abrirModal(`<h3>📲 Mandar as folgas do mês</h3>
+    <div class="mini suave">Cada pessoa recebe só as folgas DELA (com as trocas e as férias), uma mensagem de cada vez.</div>
+    <form id="form-mandar" class="form" autocomplete="off" style="margin-top:8px">
+      <div class="dupla">
+        <label>Mês<select id="m-mes">${ops.map(o => `<option value="${o.v}" ${o.v === padrao ? 'selected' : ''}>${o.t}</option>`).join('')}</select></label>
+        <label>Por<select id="m-canal"><option value="whatsapp">📱 WhatsApp</option><option value="telegram">✈️ Telegram</option></select></label>
+      </div>
+      <div class="m-lista" id="m-lista"><div class="suave">Carregando…</div></div>
+      <button class="btn prim" type="submit" id="m-ok" disabled>📲 Mandar</button>
+      <div id="m-andamento"></div>
+    </form>`);
+  let dados = null;
+  const marcados = () => [...document.querySelectorAll('#m-lista input:checked')].map(i => +i.value);
+  const contar = () => { const n = marcados().length; $('#m-ok').textContent = `📲 Mandar para ${n}`; $('#m-ok').disabled = !n; };
+  const carregarPrevia = async () => {
+    $('#m-lista').innerHTML = '<div class="suave">Carregando…</div>';
+    try { dados = await api('GET', '/api/gestao/folgas/envio/previa?' + new URLSearchParams({mes: $('#m-mes').value, canal: $('#m-canal').value})); }
+    catch (e) { $('#m-lista').innerHTML = `<div class="n-erro">${esc(e.message)}</div>`; return; }
+    const canal = dados.canal === 'whatsapp' ? 'WhatsApp' : 'Telegram';
+    $('#m-lista').innerHTML = dados.pessoas.map(p => `<label class="m-linha ${p.contato ? '' : 'off'}">
+        <input type="checkbox" value="${p.id}" ${p.marcado ? 'checked' : ''} ${p.contato ? '' : 'disabled'}>
+        <span style="min-width:0;flex:1"><b>${esc(p.nome)}</b> · ${p.folgas} folga(s)${p.contato ? '' : ` · <span class="n-aviso">sem ${canal} no cadastro</span>`}
+          ${p.na_escala ? '' : ' · <span class="mini suave">fora da escala</span>'}
+          <details><summary class="mini">ver a mensagem</summary><pre>${esc(p.texto.replace(/<\/?b>/g, ''))}</pre></details></span></label>`).join('')
+      || '<div class="suave">Ninguém cadastrado.</div>';
+    contar();
+  };
+  $('#m-lista').addEventListener('change', contar);
+  $('#m-mes').onchange = carregarPrevia;
+  $('#m-canal').onchange = carregarPrevia;
+  carregarPrevia();
+  $('#form-mandar').addEventListener('submit', ev => {
+    ev.preventDefault();
+    const ids = marcados();
+    if (!ids.length || !dados) return;
+    if (!confirm(`Mandar as folgas de ${dados.mes} para ${ids.length} pessoa(s) pelo ${dados.canal === 'whatsapp' ? 'WhatsApp' : 'Telegram'}?`)) return;
+    uma($('#m-ok'), async () => {
+      let job = await api('POST', '/api/gestao/folgas/envio', {mes: $('#m-mes').value, canal: $('#m-canal').value, ids});
+      const mostrar = j => {
+        const el = $('#m-andamento');
+        if (!el) return;
+        el.textContent = j.terminado
+          ? `✅ ${j.enviados} enviada(s)` + (j.falhas.length ? `\n⚠️ Não foram: ${j.falhas.map(f => `${f.nome} (${f.motivo})`).join(', ')}` : '')
+            + (j.sem_contato.length ? `\n📵 Sem contato: ${j.sem_contato.join(', ')}` : '')
+          : `📲 Mandando… ${j.feitos} de ${j.total}`;
+      };
+      mostrar(job);
+      while (!job.terminado && $('#m-andamento')) {
+        await new Promise(res => setTimeout(res, 2000));
+        try { job = await api('GET', `/api/gestao/folgas/envio/${job.id}`); } catch (e) { $('#m-andamento').textContent = '⚠️ ' + e.message; return; }
+        mostrar(job);
+      }
+      if (job.terminado) status(`📲 Folgas de ${dados.mes}: ${job.enviados} mensagem(ns) enviada(s).`);
     });
   });
 }
