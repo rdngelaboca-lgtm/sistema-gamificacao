@@ -2534,6 +2534,104 @@ def api_gestao_fixo_excluir(usuario, funcionario_id):
     return _resposta_equipe('excluir_fixo', funcionario_id, ler_json() or {}, usuario)
 
 
+# [FRENTE] 🧊 Checklist da frente: o repositor marca no app (PIN) o que está nos freezers; o gestor cadastra os
+# freezers na Gestão Web. Regras e textos no exposicao.py.
+try:
+    import exposicao
+except Exception as _erro_import_frente:
+    exposicao = None
+    logger.error(f"Checklist da frente DESLIGADO: não consegui carregar exposicao.py ({_erro_import_frente})")
+
+
+def _resposta_frente(nome_funcao, *args):
+    if exposicao is None:
+        return jsonify({"erro": "O checklist da frente não está instalado no servidor (falta exposicao.py)."}), 503
+    try:
+        return jsonify(getattr(exposicao, nome_funcao)(*args)), 200
+    except exposicao.ErroFrente as e:
+        return jsonify({"erro": str(e)}), e.status
+    except Exception as e:
+        logger.exception(f"Erro no checklist da frente ({request.path}): {e}")
+        return jsonify({"erro": "Erro no servidor. Tente de novo; se continuar, avise o gestor."}), 500
+
+
+@app.route('/api/compras/frente/situacao', methods=['GET'])
+@compras_login()
+def api_frente_situacao(usuario):
+    return _resposta_frente('situacao')
+
+
+@app.route('/api/compras/frente', methods=['GET'])
+@compras_login()
+def api_frente_checklist(usuario):
+    return _resposta_frente('para_checklist')
+
+
+@app.route('/api/compras/frente/concluir', methods=['POST'])
+@compras_login()
+def api_frente_concluir(usuario):
+    return _resposta_frente('concluir', ler_json() or {}, usuario)
+
+
+@app.route('/api/compras/frente/checklist/<int:checklist_id>', methods=['GET'])
+@compras_login()
+def api_frente_resultado(usuario, checklist_id):
+    return _resposta_frente('resultado', checklist_id)
+
+
+@app.route('/api/compras/frente/acao/<int:acao_id>', methods=['POST'])
+@compras_login()
+def api_frente_acao(usuario, acao_id):
+    return _resposta_frente('marcar_acao', acao_id, ler_json() or {}, usuario)
+
+
+@app.route('/gestao/frente')
+def pagina_gestao_frente():
+    return _pagina_gestao('gestao_frente.html', 'frente')
+
+
+@app.route('/api/gestao/frente', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_frente(usuario):
+    return _resposta_frente('painel')
+
+
+@app.route('/api/gestao/frente/expositores', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_frente_expositor_novo(usuario):
+    return _resposta_frente('salvar_expositor', None, ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/frente/expositores/ordem', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_frente_ordem(usuario):
+    return _resposta_frente('ordenar_expositores', ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/frente/expositores/<int:expositor_id>', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_frente_expositor(usuario, expositor_id):
+    return _resposta_frente('salvar_expositor', expositor_id, ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/frente/expositores/<int:expositor_id>/excluir', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_frente_expositor_excluir(usuario, expositor_id):
+    return _resposta_frente('excluir_expositor', expositor_id, usuario)
+
+
+@app.route('/api/gestao/frente/expositores/<int:expositor_id>/produtos', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_frente_produtos(usuario, expositor_id):
+    return _resposta_frente('salvar_produtos', expositor_id, ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/frente/config', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_frente_config(usuario):
+    return _resposta_frente('salvar_config', ler_json() or {}, usuario)
+
+
 # [5x2] 👥 Equipe › 📅 Folgas: padrão de folgas (5x2 fixo / rodízio / 6x1 do cadastro), trocas e regras.
 try:
     import gestao_folgas

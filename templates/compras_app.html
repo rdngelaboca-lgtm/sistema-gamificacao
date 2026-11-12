@@ -256,6 +256,27 @@
   .stp.mini button { width: 36px; height: 38px; font-size: 20px; }
   .stp.mini .stp-v, .stp.mini .estatico { height: 38px; min-width: 58px; font-size: 15px; }
   a { color: var(--verde); }
+  /* [FRENTE] 🧊 checklist dos freezers da frente */
+  .fr-lin { display: flex; align-items: center; gap: 10px; padding: 10px 10px 10px 14px; border-top: 1px solid var(--linha2); }
+  .fr-lin:first-child { border-top: 0; }
+  .fr-lin.zero { background: #FFF7F2; }
+  .fr-nome { font-size: 15px; font-weight: 700; line-height: 1.25; overflow-wrap: anywhere; }
+  .fr-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+  .fr-tag { font-size: 11px; font-weight: 700; border-radius: 99px; padding: 1px 7px; background: var(--linha2); color: var(--suave); }
+  .fr-tag.est { background: #FFF1C2; color: #5B4A00; }
+  .fr-tag.novo { background: var(--verde-claro); color: var(--verde-esc); }
+  .fr-cx { display: grid; grid-template-columns: repeat(4, 40px); gap: 4px; flex-shrink: 0; }
+  .fr-cx button { height: 44px; border-radius: 10px; border: 1px solid var(--linha); background: #fff; font-size: 16px; font-weight: 800;
+    color: var(--suave); padding: 0; touch-action: manipulation; }
+  .fr-cx button.sel { background: var(--verde); border-color: var(--verde); color: #fff; }
+  .fr-cx button.sel.z { background: var(--laranja); border-color: var(--laranja); }
+  .fr-acao { display: flex; flex-direction: column; gap: 10px; }
+  .fr-acao.feita { background: #F7F9F8; }
+  .fr-acao.feita .fr-texto { color: var(--suave); font-weight: 500; }
+  .fr-texto { font-size: 15px; line-height: 1.4; font-weight: 600; }
+  .fr-btns .btn { height: 48px; font-size: 14px; line-height: 1.15; padding: 0 8px; }
+  .fr-aviso { font-size: 14px; color: var(--suave); line-height: 1.45; }
+  .fr-ok { color: var(--verde); font-weight: 800; flex-shrink: 0; }
 </style>
 </head>
 <body>
@@ -271,7 +292,7 @@
 
 // ---------------------------------------------------------------- utilidades
 const CHAVE = 'gb_compras_v1';
-const VERSAO_APP = '38';   // aparece no rodapé do início: confira se o celular pegou a versão nova
+const VERSAO_APP = '39';   // aparece no rodapé do início: confira se o celular pegou a versão nova
 const $app = document.getElementById('app');
 const DIAS_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];            // 1=Dom ... 7=Sáb (padrão do sistema)
 const FRACIONADAS = ['KG', 'G', 'GR', 'L', 'LT', 'ML', 'M'];
@@ -344,7 +365,8 @@ function carregar() {
   return estadoVazio();
 }
 function estadoVazio() { return {usuario: null, rotinas: [], preparos: {}, ida: null, listas: {}, fila: [], erros: [], cupons: [], codigos: {}, codigosEm: null,
-                               recebimentos: null, notasReceb: {}, receb: {}, orcamentos: null, estoque: null, idaPausada: null}; }
+                               recebimentos: null, notasReceb: {}, receb: {}, orcamentos: null, estoque: null, idaPausada: null,
+                               frente: null, frenteSit: null, frenteChk: null, frenteRes: null}; }
 function salvar() {
   try { localStorage.setItem(CHAVE, JSON.stringify(E)); }
   catch (e) { toast('Memória do celular cheia: não deu para salvar.'); }
@@ -410,6 +432,7 @@ async function sincronizar() {
         E.fila.shift(); mudou = true;
         if (resp && resp.codigo && resp.itens) guardarLista(resp, true);
         if (resp && resp.chave && resp.itens && 'emitente' in resp) { guardarCupom(resp); if (!resp.ja_existia) toast('Cupom enviado: ' + (resp.emitente || 'cupom fiscal')); }
+        frenteDaFila(t, resp);                    // [FRENTE] checklist / lista do que repor
         if (t.tipo === 'recebimento' && E.receb[t.chave]) {
           E.receb[t.chave].enviado = true;
           if (resp && resp.itens) E.notasReceb[t.chave] = resp;
@@ -423,6 +446,7 @@ async function sincronizar() {
         E.erros.push({quando: new Date().toISOString(), msg: `${t.descricao || 'Envio'}: ${e.message}`});
         toast(`Não foi enviado: ${e.message}`);
         const loc = t.codigo && E.listas[t.codigo];
+        frenteRecusada(t);
         if (t.tipo === 'recebimento' && E.receb[t.chave]) E.receb[t.chave].finalizada = false;   // recusada: a nota volta a ficar aberta (não fica "Enviando…" para sempre)
         if (t.tipo === 'lista' && loc && loc.local) { loc.status = 'cancelada'; loc.local_status = null; }   // o servidor não aceitou: não fica "aberta" para sempre
         else if (t.codigo) atualizarLista(t.codigo, true);
@@ -669,6 +693,7 @@ TELAS.inicio = () => {
       <button class="icone-btn" data-acao="sair" aria-label="Sair (trocar de usuário)">${ICONES.sair}</button></div>
     <div class="corpo">
       ${principal}
+      ${frenteCartaoInicio()}
       <div class="lista-cartoes"><div class="rotulo">Para fazer agora</div>
         <div class="tiles">${tilesHtml}</div></div>
       <div class="linha-btns">
@@ -738,6 +763,7 @@ async function carregarInicio() {
   if (T.nome === 'inicio') {                     // números do "Para fazer agora"
     carregarRecebimentos().then(() => { if (T.nome === 'inicio') desenhar(); });
     if (E.usuario && E.usuario.gestor) carregarOrcamentos().then(() => { if (T.nome === 'inicio') desenhar(); });
+    carregarFrenteSit();                         // [FRENTE] "hora do checklist" / "coisas para repor"
   }
   try { E.rotinas = await api('GET', '/api/compras/rotinas'); salvar(); }
   catch (e) { if (e.status === 401) return desenhar(); }
@@ -1313,6 +1339,7 @@ async function carregarEstoque() {
     if (T.nome === 'estoque' && !e.extra.offline) T.p.erro = 'Não deu para carregar as categorias: ' + e.message;
   }
   if (T.nome === 'estoque') desenhar();
+  carregarFrenteSit();
 }
 TELAS.estoque = p => {
   const u = E.usuario, ida = idaDoTipo('estoque'), est = E.estoque, sel = p.selCats || [];
@@ -1343,6 +1370,7 @@ TELAS.estoque = p => {
   return `${faixaRede()}${topo('Contagem de estoque', 'Balanço · os números entram no estoque (não gera lista de compra)')}
     <div class="corpo">
       ${andamento}
+      ${frenteCartaoEstoque()}
       <div class="cartao lista-cartoes"><div class="titulo-sec">Contar por categoria</div>${porCategoria}</div>
       <div class="lista-cartoes"><div class="rotulo">Balanço por local</div>
         ${gerais.map(cartao).join('') || `<div class="vazio">${u.gestor ? 'Nenhuma contagem por local ainda.<br>Crie uma com os locais (freezer, estoque seco…) para várias pessoas contarem juntas.' : 'Nenhuma contagem por local ainda (o gestor cria).'}</div>`}
@@ -1829,6 +1857,7 @@ const ATALHOS_GESTAO_WEB = [
   ['/gestao/folha', '📊', 'Folha × Faturamento', 'Dia a dia, gráfico do mês, clima e meta'],
   ['/gestao/pagamentos', '💰', 'Pagamentos', 'Diárias dos freelancers, Pix e recibos'],
   ['/gestao/freelancers', '👥', 'Equipe', 'Fixos e freelancers: cadastro, tarefas e WhatsApp'],
+  ['/gestao/frente', '🧊', 'Frente', 'Freezers do atendimento, produtos de cada um e o checklist do repositor'],
   ['/gestao/avisos', '📣', 'Avisos', 'Ver os avisos agora (sem esperar o horário) e para onde vão'],
   ['/gestao/clientes', '📢', 'Clientes', 'Cadastro e mensagens com foto para os clientes no WhatsApp'],
   ['/gestao/comunicados', '📨', 'Comunicados', 'Recados para a equipe no WhatsApp (no turno de cada um) e quem leu'],
@@ -3898,6 +3927,288 @@ function confirmarDigitadoSemPular() {
   if (v != null && v >= 0 && v <= 1000000) gravarLinha(linhaAtual(), v * fatorAtual(it));
   T.p.buf = '';
 }
+// ================================================================= [FRENTE] 🧊 checklist dos freezers da frente
+// O repositor marca (1x por semana) quantas caixas de cada produto estão NA FRENTE (freezers do atendimento).
+// O servidor devolve o que buscar na câmara fria e o que trocar: ⭐ campeão nunca falta e 🆕 o que chegou não fica esquecido.
+// Fica tudo salvo no celular (E.frenteChk); sem internet, o "Terminar" espera na fila e vai quando ela voltar.
+const FR_FAZER = ['buscar', 'trocar'];
+function agoraLocal() { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 19); }
+function frChave(eid, pid) { return eid + ':' + pid; }
+function frProgresso(ex) {
+  const m = (E.frenteChk && E.frenteChk.marcas) || {};
+  let marcados = 0, caixas = 0;
+  ex.itens.forEach(it => { const n = m[frChave(ex.id, it.id)]; if (n != null) { marcados++; caixas += n; } });
+  return {marcados, total: ex.itens.length, caixas};
+}
+function frTotais() {
+  const exps = (E.frente && E.frente.expositores) || [];
+  return exps.reduce((t, ex) => { const p = frProgresso(ex); t.marcados += p.marcados; t.total += p.total; return t; }, {marcados: 0, total: 0});
+}
+async function carregarFrenteSit() {
+  try { E.frenteSit = await api('GET', '/api/compras/frente/situacao'); salvar(); }
+  catch (e) { return; }
+  if (['inicio', 'estoque', 'frente'].includes(T.nome)) desenhar();
+}
+async function carregarFrente() {
+  try {
+    E.frente = Object.assign(await api('GET', '/api/compras/frente'), {baixado_em: new Date().toISOString()}); salvar();
+    if (T.nome === 'frente') T.p.erro = null;
+  } catch (e) {
+    if (!e.extra.offline && e.status !== 401) { E.frente = null; salvar(); }
+    if (T.nome === 'frente') T.p.erro = e.extra.offline ? (E.frente ? '' : 'Sem internet: conecte uma vez para baixar os freezers.') : e.message;
+  }
+  if (T.nome === 'frente') desenhar();
+  carregarFrenteSit();
+}
+// a lista do que repor que veio do servidor: mantém o que a pessoa marcou e ainda está na fila
+function frGuardarRes(r) {
+  E.fila.filter(t => t.tipo === 'frente-acao' && t.checklist_id === r.id).forEach(t => {
+    const a = r.acoes.find(x => x.id === t.acao_id); if (a) a.situacao = t.corpo.situacao;
+  });
+  frRecontar(r);
+  if (!E.frenteRes || E.frenteRes.id <= r.id) E.frenteRes = r;
+}
+function frRecontar(r) {
+  const f = r.acoes.filter(a => FR_FAZER.includes(a.tipo));
+  r.pendentes = f.filter(a => a.situacao === 'pendente').length;
+  r.feitas = f.filter(a => a.situacao === 'feita').length;
+  r.sem_estoque = f.filter(a => a.situacao === 'sem_estoque').length;
+}
+async function carregarFrenteRes(id) {
+  try { frGuardarRes(await api('GET', `/api/compras/frente/checklist/${id}`)); salvar(); if (T.nome === 'frenteRes') T.p.erro = null; }
+  catch (e) { if (T.nome === 'frenteRes' && !e.extra.offline) T.p.erro = e.message; }
+  if (T.nome === 'frenteRes') desenhar();
+}
+function frComecar() {
+  E.frenteChk = {codigo: novoCodigo().replace(/^L/, 'F'), inicio: agoraLocal(), dia: hojeISO(), por: E.usuario.nome, marcas: {}};
+  salvar();
+}
+// cartão no Início: só quando tem algo para fazer
+function frenteCartaoInicio() {
+  const s = E.frenteSit, chk = E.frenteChk;
+  const cartao = (acao, titulo, sub, alerta) => `<button class="cartao item-rotina ${alerta ? 'tile-alerta' : ''}" ${acao}>
+      <div class="quadrado" style="font-size:22px">🧊</div>
+      <div class="grow"><div class="nome">${titulo}</div><div class="pequeno suave">${sub}</div></div>${ICONES.seta}</button>`;
+  if (chk && !chk.enviando) {
+    const t = frTotais();
+    return cartao('data-acao="frente-abrir"', 'Continuar o checklist da frente', `${t.marcados} de ${t.total} produtos marcados · começado ${dataBR(chk.dia)}`, false);
+  }
+  if (s && s.ultimo && s.ultimo.pendentes) {
+    return cartao(`data-acao="frente-res" data-id="${s.ultimo.id}"`, `Repor na frente: ${s.ultimo.pendentes} coisa${s.ultimo.pendentes > 1 ? 's' : ''}`,
+                  `Da lista do checklist de ${esc(s.ultimo.data)}`, true);
+  }
+  if (s && s.atrasado) {
+    return cartao('data-acao="frente-abrir"', 'Hora do checklist da frente',
+                  s.ultimo ? `Último: ${esc(s.ultimo.data)} (há ${s.ultimo.dias} dias)` : 'Ainda não foi feito nenhum', true);
+  }
+  return '';
+}
+// cartão na aba Estoque: sempre aparece
+function frenteCartaoEstoque() {
+  const s = E.frenteSit, chk = E.frenteChk;
+  let sub;
+  if (chk) { const t = frTotais(); sub = chk.enviando ? 'Terminado sem internet · enviando quando ela voltar' : `Em andamento · ${t.marcados} de ${t.total} produtos marcados`; }
+  else if (!s) sub = 'Freezers do atendimento · o que buscar na câmara fria';
+  else if (!s.configurado) sub = 'O gestor ainda não cadastrou os freezers (Gestão › 🧊 Frente, no computador)';
+  else if (s.ultimo) sub = `Último: ${esc(s.ultimo.data)} por ${esc(s.ultimo.nome)}${s.ultimo.pendentes ? ` · <b>${s.ultimo.pendentes} para repor</b>` : ''}`;
+  else sub = 'Ainda não foi feito nenhum';
+  const alerta = s && (s.atrasado || (s.ultimo && s.ultimo.pendentes)) && !chk;
+  return `<button class="cartao item-rotina ${alerta ? 'tile-alerta' : ''}" data-acao="frente-abrir">
+      <div class="quadrado" style="font-size:22px">🧊</div>
+      <div class="grow"><div class="nome">Checklist da frente${s && s.atrasado && !chk ? ' · está na hora' : ''}</div><div class="pequeno suave">${sub}</div></div>${ICONES.seta}</button>`;
+}
+TELAS.frente = p => {
+  const f = E.frente, chk = E.frenteChk, s = E.frenteSit, r = E.frenteRes;
+  const cab = `${faixaRede()}${topo('🧊 Checklist da frente', 'Freezers do atendimento · 1x por semana', 'nav-estoque')}`;
+  if (!f) {
+    return `${cab}<div class="corpo"><div class="vazio">${p.erro ? esc(p.erro) + '<br><br><button class="link-btn" data-acao="frente-abrir">Tentar de novo</button>'
+      : online ? 'Carregando os freezers…' : 'Sem internet: conecte uma vez para baixar os freezers.'}</div></div>${navbar('estoque')}`;
+  }
+  const t = frTotais();
+  const ult = s && s.ultimo ? `Último checklist: <b>${esc(s.ultimo.data)}</b> por ${esc(s.ultimo.nome)}${s.ultimo.dias != null ? ` (há ${s.ultimo.dias} dia${s.ultimo.dias === 1 ? '' : 's'})` : ''}.`
+    : f.ultimo ? `Último checklist: <b>${esc(f.ultimo.data)}</b> por ${esc(f.ultimo.nome)}.` : 'Ainda não foi feito nenhum checklist.';
+  // o servidor sabe se outra pessoa já fez (s.ultimo); sem internet vale o que está no celular (r)
+  const rep = s && s.ultimo ? {n: s.ultimo.pendentes, id: s.ultimo.id, data: s.ultimo.data} : r ? {n: r.pendentes, id: r.id, data: r.data} : null;
+  const repor = rep && rep.n && !(chk && !chk.enviando) ? `<button class="cartao item-rotina tile-alerta" data-acao="frente-res" data-id="${rep.id}">
+      <div class="quadrado" style="font-size:22px">📋</div>
+      <div class="grow"><div class="nome">Lista do que repor: ${rep.n} para fazer</div><div class="pequeno suave">Checklist de ${esc(rep.data)}</div></div>${ICONES.seta}</button>` : '';
+  const cartaoFreezer = (ex, k) => {
+    const pr = frProgresso(ex), pronto = chk && pr.total && pr.marcados === pr.total;
+    return `<button class="cartao item-rotina" data-acao="fr-freezer" data-i="${k}" ${chk && chk.enviando ? 'disabled' : ''}>
+      <div class="quadrado" style="font-size:20px">${ex.tipo === 'vertical' ? '🚪' : '🧊'}</div>
+      <div class="grow"><div class="nome">${esc(ex.nome)}</div>
+        <div class="pequeno suave">${chk ? `${pr.marcados} de ${pr.total} marcados${ex.capacidade ? ` · ${pr.caixas} de ${ex.capacidade} caixas` : ''}`
+                                         : `${pr.total} produto${pr.total === 1 ? '' : 's'}${ex.capacidade ? ` · cabem ${ex.capacidade} caixas` : ''}`}</div>
+        ${chk && pr.total ? `<div class="barra" style="margin-top:6px"><div style="width:${Math.round(100 * pr.marcados / pr.total)}%"></div></div>` : ''}</div>
+      ${pronto ? `<span class="fr-ok">${ICONES.ok}</span>` : ICONES.seta}</button>`;
+  };
+  const semLugar = f.sem_lugar && f.sem_lugar.length ? `<div class="aviso">⚠️ Chegou e não está em nenhum freezer: ${f.sem_lugar.map(x => esc(x.nome)).join(', ')}.
+      Avise o gestor (ele põe em um freezer no cadastro).</div>` : '';
+  let topoChk;
+  if (chk && chk.enviando) {
+    topoChk = `<div class="aviso">Checklist terminado sem internet. Ele está guardado e vai sozinho quando a internet voltar; aí aparece a lista do que repor.</div>`;
+  } else if (chk) {
+    topoChk = `<div class="destaque"><div><div class="rotulo" style="color:#CDEBE6">Checklist em andamento</div>
+        <div style="font-size:22px;font-weight:800">${t.marcados} de ${t.total} produtos</div>
+        <div style="color:#E3F4F1">Começado ${dataBR(chk.dia)} por ${esc(chk.por || '')}</div></div>
+        <div class="barra" style="background:#0B564F"><div style="width:${t.total ? Math.round(100 * t.marcados / t.total) : 0}%;background:#fff"></div></div>
+        <button class="btn" data-acao="frente-terminar">Terminar e ver o que repor ${ICONES.seta}</button>
+        <button class="link-btn" style="color:#E3F4F1;align-self:center" data-acao="frente-descartar">Descartar este checklist</button></div>`;
+  } else {
+    topoChk = `<div class="info">Vá freezer por freezer e marque <b>quantas caixas</b> de cada produto estão <b>na frente</b>.
+        O que não está lá fica <b>0</b>. No fim o app diz o que buscar na câmara fria e o que trocar.<br>
+        <span class="mini">⭐ = campeão (nunca pode faltar) · 🆕 = chegou desde ${esc(f.desde)}</span></div>
+      <div class="pequeno suave">${ult}</div>
+      <button class="btn" data-acao="frente-comecar">Começar o checklist ${ICONES.seta}</button>`;
+  }
+  return `${cab}<div class="corpo">
+      ${p.erro ? `<div class="aviso">${esc(p.erro)}</div>` : ''}
+      ${repor}${topoChk}
+      <div class="lista-cartoes"><div class="rotulo">Freezers (${f.expositores.length})</div>${f.expositores.map(cartaoFreezer).join('')}</div>
+      ${semLugar}
+    </div>${navbar('estoque')}`;
+};
+TELAS.frenteFreezer = p => {
+  const f = E.frente, chk = E.frenteChk;
+  const ex = f && f.expositores[p.i];
+  if (!ex || !chk) { setTimeout(() => ir('frente', {}), 0); return ''; }
+  const pr = frProgresso(ex), ultimo = p.i === f.expositores.length - 1;
+  const linha = it => {
+    const n = chk.marcas[frChave(ex.id, it.id)];
+    const tags = (it.campeao ? '<span class="fr-tag est">⭐ campeão</span>' : '')
+      + (it.novo ? `<span class="fr-tag novo">🆕 produto novo · chegou ${esc(it.chegou)}</span>` : it.chegou ? `<span class="fr-tag novo">🆕 chegou ${esc(it.chegou)}</span>` : '')
+      + (it.categoria ? `<span class="fr-tag">${esc(it.categoria)}</span>` : '');
+    const b = (v, txt) => `<button class="${n === v ? 'sel' : ''} ${v === 0 ? 'z' : ''}" data-acao="fr-marca" data-e="${ex.id}" data-p="${it.id}" data-n="${v}"
+        aria-pressed="${n === v}" aria-label="${v === 3 ? '3 ou mais' : v} caixa${v === 1 ? '' : 's'} de ${esc(it.nome)}">${txt}</button>`;
+    return `<div class="fr-lin ${n === 0 ? 'zero' : ''}"><div class="grow"><div class="fr-nome">${esc(it.nome)}</div>${tags ? `<div class="fr-tags">${tags}</div>` : ''}</div>
+      <div class="fr-cx" role="group" aria-label="Caixas na frente">${b(0, '0')}${b(1, '1')}${b(2, '2')}${b(3, '3+')}</div></div>`;
+  };
+  return `${faixaRede()}${topo(ex.nome, `Freezer ${p.i + 1} de ${f.expositores.length} · ${pr.marcados} de ${pr.total} marcados${ex.capacidade ? ` · ${pr.caixas} de ${ex.capacidade} caixas` : ''}`, 'frente-voltar')}
+    <div class="corpo">
+      <div class="mini suave">Quantas caixas de cada um estão <b>na frente</b>? Não está = <b>0</b>. Tocar de novo no número desmarca.</div>
+      ${ex.itens.length ? `<div class="linhas">${ex.itens.map(linha).join('')}</div>` : '<div class="vazio">Nenhum produto neste freezer (o gestor cadastra em Gestão › 🧊 Frente).</div>'}
+    </div>
+    <div class="rodape"><div class="linha-btns">
+      <button class="btn claro medio" data-acao="${p.i ? 'fr-freezer' : 'frente-voltar'}" data-i="${p.i - 1}">${p.i ? '← Anterior' : 'Lista de freezers'}</button>
+      ${ultimo ? `<button class="btn medio" data-acao="frente-terminar">Terminar ${ICONES.ok}</button>`
+               : `<button class="btn medio" data-acao="fr-freezer" data-i="${p.i + 1}">Próximo ${ICONES.seta}</button>`}</div></div>`;
+};
+TELAS.frenteRes = p => {
+  const r = E.frenteRes && (!p.id || E.frenteRes.id === p.id) ? E.frenteRes : null;
+  const cab = `${faixaRede()}${topo('📋 O que repor', r ? `Checklist de ${r.data} · ${r.nome}${r.minutos != null ? ` · ${r.minutos} min` : ''}` : '', 'frente-abrir')}`;
+  if (!r) {
+    return `${cab}<div class="corpo"><div class="vazio">${p.erro ? esc(p.erro) : online ? 'Carregando a lista…' : 'Sem internet: conecte para ver a lista.'}</div></div>${navbar('estoque')}`;
+  }
+  const fazer = r.acoes.filter(a => FR_FAZER.includes(a.tipo)), avisos = r.acoes.filter(a => !FR_FAZER.includes(a.tipo));
+  const acao = a => a.situacao === 'pendente'
+    ? `<div class="cartao fr-acao"><div class="fr-texto">${esc(a.texto)}</div>
+        <div class="linha-btns fr-btns"><button class="btn" data-acao="fr-acao" data-id="${a.id}" data-s="feita">${ICONES.ok} Feito</button>
+        <button class="btn claro" data-acao="fr-acao" data-id="${a.id}" data-s="sem_estoque">🚫 Não tem na câmara</button></div></div>`
+    : `<div class="cartao fr-acao feita"><div class="fr-texto">${esc(a.texto)}</div>
+        <div class="mini suave">${a.situacao === 'feita' ? '✅ Feito' : '🚫 Não tinha na câmara'}${a.feita_por ? ' · ' + esc(a.feita_por) : ''}${a.feita_em ? ' · ' + esc(a.feita_em) : ''}
+        · <button class="link-btn mini" data-acao="fr-acao" data-id="${a.id}" data-s="pendente">desfazer</button></div></div>`;
+  const resumo = `<div class="pequeno suave">${r.produtos} produtos na lista · ${r.marcados} marcados · <b>${r.faltando} faltando</b> na frente</div>`;
+  const estado = !fazer.length ? '<div class="info">✅ Nada para buscar: a frente está completa.</div>'
+    : !r.pendentes ? `<div class="info">✅ Tudo feito!${r.sem_estoque ? ` ${r.sem_estoque} não tinha${r.sem_estoque > 1 ? 'm' : ''} na câmara (o gestor fica sabendo).` : ''}</div>`
+    : `<div class="aviso">${r.pendentes} coisa${r.pendentes > 1 ? 's' : ''} para fazer. Marque ✅ quando terminar cada uma.</div>`;
+  return `${cab}<div class="corpo">
+      ${p.erro ? `<div class="aviso">${esc(p.erro)}</div>` : ''}
+      ${resumo}${estado}
+      ${fazer.length ? `<div class="lista-cartoes">${fazer.map(acao).join('')}</div>` : ''}
+      ${avisos.length ? `<div class="lista-cartoes"><div class="rotulo">Avisos</div><div class="cartao lista-cartoes">${avisos.map(a => `<div class="fr-aviso">${esc(a.texto)}</div>`).join('')}</div></div>` : ''}
+    </div>${navbar('estoque')}`;
+};
+async function frTerminar() {
+  const f = E.frente, chk = E.frenteChk;
+  if (!f || !chk || chk.enviando) return;
+  const marcas = [], faltam = {};
+  let nFaltam = 0;
+  for (const ex of f.expositores) for (const it of ex.itens) {
+    const n = chk.marcas[frChave(ex.id, it.id)];
+    if (n == null) { nFaltam++; faltam[ex.nome] = (faltam[ex.nome] || 0) + 1; }
+    else marcas.push({expositor_id: ex.id, produto_id: it.id, caixas: n});
+  }
+  if (!marcas.length) return toast('Marque pelo menos um produto.');
+  if (nFaltam && !confirm(`${nFaltam} produto${nFaltam > 1 ? 's ficaram' : ' ficou'} sem marcar (${Object.entries(faltam).map(([k, v]) => `${k}: ${v}`).join('; ')}).\n\n`
+                          + `Eles contam como 0 caixas, ou seja, FALTANDO na frente. Terminar assim?`)) return;
+  const corpo = {codigo: chk.codigo, inicio: chk.inicio, marcas};
+  abrirModal('<div class="vazio">Montando a lista do que repor…</div>');
+  try {
+    const r = await api('POST', '/api/compras/frente/concluir', corpo);
+    fecharModal();
+    frGuardarRes(r); E.frenteChk = null; salvar();
+    ir('frenteRes', {id: r.id});
+    carregarFrenteSit();
+  } catch (e) {
+    fecharModal();
+    if (!e.extra.offline) return toast(e.message);
+    chk.enviando = true;
+    E.fila.push({tipo: 'frente', metodo: 'POST', url: '/api/compras/frente/concluir', corpo, descricao: 'Checklist da frente'});
+    salvar();
+    ir('frente', {});
+    toast('Sem internet: o checklist ficou guardado e vai quando a internet voltar.');
+  }
+}
+// o que voltou da fila (sincronizar)
+function frenteDaFila(t, resp) {
+  if (t.tipo === 'frente' && resp && resp.acoes) {
+    frGuardarRes(resp);
+    if (E.frenteChk && E.frenteChk.codigo === t.corpo.codigo) E.frenteChk = null;
+    toast(`Checklist da frente enviado: ${resp.pendentes ? resp.pendentes + ' coisa(s) para repor' : 'nada para repor'}.`);
+    carregarFrenteSit();
+  }
+  if (t.tipo === 'frente-acao' && resp && resp.checklist) frGuardarRes(resp.checklist);
+}
+function frenteRecusada(t) {
+  if (t.tipo === 'frente' && E.frenteChk && E.frenteChk.codigo === t.corpo.codigo) E.frenteChk.enviando = false;   // volta a poder terminar
+  if (t.tipo === 'frente-acao' && E.frenteRes && E.frenteRes.id === t.checklist_id) carregarFrenteRes(t.checklist_id);
+}
+Object.assign(acoes, {
+  'frente-abrir': () => { ir('frente', {}); carregarFrente(); },
+  'frente-voltar': () => ir('frente', {}),
+  'frente-comecar': () => { if (!E.frente) return toast('Conecte à internet para baixar os freezers.'); if (!E.frenteChk) frComecar(); ir('frenteFreezer', {i: 0}); },
+  'fr-freezer': d => {
+    const i = +d.i;
+    if (!E.frente || !E.frente.expositores[i]) return;
+    if (E.frenteChk && E.frenteChk.enviando) return toast('Este checklist já foi terminado e está esperando a internet.');
+    if (!E.frenteChk) frComecar();
+    ir('frenteFreezer', {i});
+  },
+  'fr-marca': d => {
+    const chk = E.frenteChk;
+    if (!chk || chk.enviando) return;
+    const k = frChave(d.e, d.p), n = +d.n;
+    if (chk.marcas[k] === n) delete chk.marcas[k]; else chk.marcas[k] = n;
+    salvar(); desenhar();
+  },
+  'frente-terminar': () => frTerminar(),
+  'frente-descartar': () => {
+    if (!E.frenteChk || E.frenteChk.enviando) return;
+    if (!confirm('Descartar as marcações deste checklist? (não dá para desfazer)')) return;
+    E.frenteChk = null; salvar(); desenhar();
+  },
+  'frente-res': d => {
+    const id = +d.id || (E.frenteRes && E.frenteRes.id);
+    if (!id) return;
+    ir('frenteRes', {id});
+    carregarFrenteRes(id);
+  },
+  'fr-acao': d => {
+    const r = E.frenteRes, id = +d.id, sit = d.s;
+    const a = r && r.acoes.find(x => x.id === id);
+    if (!a) return;
+    a.situacao = sit;
+    a.feita_por = sit === 'pendente' ? '' : E.usuario.nome;
+    a.feita_em = sit === 'pendente' ? '' : 'agora';
+    frRecontar(r);
+    E.fila = E.fila.filter(t => !(t.tipo === 'frente-acao' && t.acao_id === id && !t.enviando));   // só a última marcação importa
+    salvar(); desenhar();
+    if (sit === 'feita' && !r.pendentes) toast('✅ Tudo feito na frente!');
+    enfileirar({tipo: 'frente-acao', acao_id: id, checklist_id: r.id, metodo: 'POST', url: `/api/compras/frente/acao/${id}`,
+                corpo: {situacao: sit}, descricao: 'Lista do que repor (frente)'});
+  },
+});
+
 document.addEventListener('click', e => {
   const el = e.target.closest('[data-acao]');
   if (!el || el.disabled) return;

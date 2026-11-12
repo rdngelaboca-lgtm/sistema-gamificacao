@@ -1,0 +1,333 @@
+{% extends 'gestao_base.html' %}
+{% block titulo %}Frente{% endblock %}
+{% block estilo %}
+  /* [FRENTE] 🧊 freezers do atendimento: cadastro (gestor) + histórico do checklist semanal do repositor */
+  .area { padding: 12px 16px 70px; display: grid; gap: 12px; max-width: 1280px; }
+  .area > *, .colunas > * { min-width: 0; }      /* a tabela do histórico rola dentro da caixa (não alarga a página no celular) */
+  .situ { border-radius: 10px; padding: 9px 12px; font-size: 14px; background: var(--verde-claro); color: var(--verde-esc); }
+  .situ.alerta { background: var(--laranja-claro); color: #7a3a10; }
+  .colunas { display: grid; grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); gap: 12px; align-items: start; }
+  .lista-fz { display: grid; gap: 6px; }
+  .fz { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: center; border: 1px solid var(--linha);
+    border-radius: 10px; padding: 8px 8px 8px 12px; background: #fff; cursor: pointer; }
+  .fz.sel { border-color: var(--verde); background: var(--verde-claro); }
+  .fz .n { font-weight: 700; overflow-wrap: anywhere; }
+  .fz .bts { display: flex; gap: 2px; }
+  .fz .bts button { border: 0; background: transparent; border-radius: 8px; padding: 4px 6px; }
+  .fz .bts button:hover { background: var(--linha2); }
+  .fz .bts button[disabled] { opacity: .3; cursor: default; }
+  .cab { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .cab h3 { margin: 0; flex: 1 1 auto; }
+  .prods { display: grid; gap: 4px; }
+  .pr { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto auto; gap: 8px; align-items: center; border: 1px solid var(--linha2);
+    border-radius: 8px; padding: 5px 6px 5px 8px; background: #fff; }
+  .pr .pos { color: var(--suave); font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
+  .pr .nm { overflow-wrap: anywhere; }
+  .pr .nm small { color: var(--suave); }
+  .pr .bts { display: flex; gap: 2px; }
+  .pr .bts button { border: 0; background: transparent; border-radius: 6px; padding: 3px 6px; }
+  .pr .bts button:hover { background: var(--linha2); }
+  .pr .bts button[disabled] { opacity: .3; cursor: default; }
+  .sempre { display: flex; align-items: center; gap: 4px; font-size: 12px; white-space: nowrap; color: var(--suave); cursor: pointer; }
+  .estrela { font-size: 11px; font-weight: 700; border-radius: 99px; padding: 1px 7px; background: #FFF1C2; color: #5B4A00; white-space: nowrap; }
+  .tag-livre { font-size: 11px; font-weight: 700; border-radius: 99px; padding: 1px 7px; background: var(--laranja-claro); color: #7a3a10; white-space: nowrap; }
+  .add { display: grid; gap: 8px; border-top: 1px solid var(--linha); padding-top: 10px; margin-top: 4px; }
+  .add .filtros { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .add .filtros input[type=text] { flex: 1 1 200px; min-width: 0; }
+  .add-lista { max-height: 340px; overflow: auto; border: 1px solid var(--linha2); border-radius: 8px; }
+  .add-lin { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 5px 8px; border-top: 1px solid var(--linha2); }
+  .add-lin:first-child { border-top: 0; }
+  .sujo { color: var(--laranja); font-weight: 700; }
+  .vazio { text-align: center; color: var(--suave); padding: 22px 10px; line-height: 1.5; }
+  .acao-h { border-left: 3px solid var(--linha); padding: 4px 10px; margin: 4px 0; font-size: 14px; line-height: 1.4; }
+  .acao-h.pendente { border-color: var(--laranja); }
+  .acao-h.feita { border-color: var(--verde); color: var(--suave); }
+  .acao-h.sem_estoque { border-color: var(--erro); }
+  .acao-h.info { color: var(--suave); }
+  table.grade td.num, table.grade th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  table.grade tbody tr { cursor: pointer; }
+  table.grade tbody tr:hover td { background: #f7f9f8; }
+  @media (max-width: 900px) { .colunas { grid-template-columns: 1fr; } }
+  @media (max-width: 700px) { .area { padding-left: 10px; padding-right: 10px; } .pr { grid-template-columns: 22px minmax(0, 1fr) auto; } .pr .sempre { grid-column: 2 / 4; } }
+{% endblock %}
+{% block conteudo %}
+  <section class="barra"><div class="linha">
+    <b>🧊 Frente · freezers do atendimento</b>
+    <button class="btn ico" id="atualizar" type="button" title="Atualizar">🔄</button>
+    <span class="sep"></span>
+    <button class="btn prim" id="btn-novo" type="button">➕ Novo freezer</button>
+    <button class="btn" id="btn-config" type="button">⚙️ Configurar</button>
+  </div></section>
+  <main class="area">
+    <div id="situacao"></div>
+    <div id="sem-estoque"></div>
+    <div class="colunas">
+      <div class="caixa">
+        <h3>Freezers <span class="mini suave" id="n-fz"></span></h3>
+        <div class="mini suave" style="margin-bottom:8px">A ordem aqui é a ordem em que o repositor passa no celular (▲▼ para mudar).</div>
+        <div class="lista-fz" id="lista-fz"><div class="vazio">Carregando…</div></div>
+      </div>
+      <div class="caixa" id="editor"><div class="vazio">Escolha um freezer à esquerda (ou cadastre o primeiro em ➕ Novo freezer).</div></div>
+    </div>
+    <div class="caixa">
+      <h3>📋 Últimos checklists <span class="mini suave">(clique para ver a lista do que repor)</span></h3>
+      <div id="historico"><div class="vazio">Carregando…</div></div>
+    </div>
+  </main>
+{% endblock %}
+{% block script %}
+// [FRENTE] estado da página
+const F = {dados: null, sel: null, edit: null, sujo: false, busca: '', cat: '', soLivres: true};
+
+async function carregar() {
+  try { F.dados = await api('GET', '/api/gestao/frente'); }
+  catch (e) { $('#lista-fz').innerHTML = `<div class="vazio">${esc(e.message)}</div>`; return; }
+  const ativos = fzAtivos();
+  if (F.sel && !ativos.some(e => e.id === F.sel)) { F.sel = null; F.sujo = false; }
+  if (!F.sel && ativos.length) F.sel = +lerLocal('frente_sel', 0) || ativos[0].id;
+  if (F.sel && !ativos.some(e => e.id === F.sel)) F.sel = ativos[0].id;
+  if (!F.sujo) copiarEdicao();
+  desenhar();
+}
+function aoEntrar() { carregar(); }
+function fzAtivos() { return F.dados ? F.dados.expositores.filter(e => e.ativo) : []; }
+function fzSel() { return fzAtivos().find(e => e.id === F.sel) || null; }
+function copiarEdicao() {
+  const ex = fzSel();
+  F.edit = ex ? ex.produtos.map(p => ({id: p.id, sempre: !!p.sempre})) : null;
+  F.sujo = false;
+}
+function prodPorId() { const m = {}; (F.dados ? F.dados.produtos : []).forEach(p => { m[p.id] = p; }); return m; }
+
+function desenhar() { desenharSituacao(); desenharLista(); desenharEditor(); desenharHistorico(); }
+
+function desenharSituacao() {
+  const s = F.dados.situacao, cfg = F.dados.config;
+  let txt, alerta = false;
+  if (!s.configurado) { txt = '👉 Comece cadastrando os freezers (➕ Novo freezer) e depois os produtos de cada um, na ordem em que ficam lá dentro.'; alerta = true; }
+  else if (!s.ultimo) { txt = `Nenhum checklist feito ainda. O repositor faz no app de Compras (celular, com PIN): aba <b>Estoque › 🧊 Checklist da frente</b>.`; alerta = true; }
+  else {
+    txt = `Último checklist: <b>${esc(s.ultimo.data)}</b> por ${esc(s.ultimo.nome)} (há ${s.ultimo.dias} dia${s.ultimo.dias === 1 ? '' : 's'})`;
+    if (s.ultimo.pendentes) { txt += ` · <b>${s.ultimo.pendentes} reposição(ões) ainda não feitas</b>`; alerta = true; }
+    if (s.atrasado) { txt += ` · ⏰ está na hora de outro (a cada ${cfg.dias} dias)`; alerta = true; }
+  }
+  $('#situacao').innerHTML = `<div class="situ ${alerta ? 'alerta' : ''}">${txt}</div>`;
+  const se = F.dados.sem_estoque || [];
+  $('#sem-estoque').innerHTML = se.length ? `<div class="situ alerta"><b>🚫 Não tinha na câmara fria</b> (checklists dos últimos 14 dias): o repositor não achou para repor. Veja se precisa comprar.
+      <ul style="margin:6px 0 0;padding-left:20px">${se.map(t => `<li>${esc(t)}</li>`).join('')}</ul></div>` : '';
+}
+
+function desenharLista() {
+  const exps = fzAtivos();
+  $('#n-fz').textContent = exps.length ? `(${exps.length})` : '';
+  if (!exps.length) { $('#lista-fz').innerHTML = '<div class="vazio">Nenhum freezer ainda.<br>Clique em <b>➕ Novo freezer</b>.</div>'; return; }
+  $('#lista-fz').innerHTML = exps.map((e, k) => {
+    const est = e.produtos.filter(p => p.campeao).length;
+    return `<div class="fz ${e.id === F.sel ? 'sel' : ''}" data-a="escolher" data-id="${e.id}" tabindex="0" role="button" aria-pressed="${e.id === F.sel}">
+      <div><div class="n">${e.tipo === 'vertical' ? '🚪' : '🧊'} ${esc(e.nome)}</div>
+        <div class="mini suave">${e.produtos.length} produto${e.produtos.length === 1 ? '' : 's'}${e.capacidade ? ` · cabem ${e.capacidade} caixas` : ' · capacidade não informada'}${est ? ` · ⭐ ${est}` : ''}</div></div>
+      <div class="bts">
+        <button type="button" data-a="subir" data-id="${e.id}" title="Subir" aria-label="Subir ${esc(e.nome)}" ${k === 0 ? 'disabled' : ''}>▲</button>
+        <button type="button" data-a="descer" data-id="${e.id}" title="Descer" aria-label="Descer ${esc(e.nome)}" ${k === exps.length - 1 ? 'disabled' : ''}>▼</button>
+        <button type="button" data-a="editar-fz" data-id="${e.id}" title="Nome, tipo e capacidade" aria-label="Editar ${esc(e.nome)}">✏️</button>
+        <button type="button" data-a="excluir-fz" data-id="${e.id}" title="Remover este freezer" aria-label="Remover ${esc(e.nome)}">🗑️</button>
+      </div></div>`;
+  }).join('');
+}
+
+function desenharEditor() {
+  const ex = fzSel();
+  if (!ex) { $('#editor').innerHTML = '<div class="vazio">Escolha um freezer à esquerda (ou cadastre o primeiro em ➕ Novo freezer).</div>'; return; }
+  const pm = prodPorId(), info = {};
+  ex.produtos.forEach(p => { info[p.id] = p; });
+  const dv = F.dados.config.dias_venda;
+  const linhas = F.edit.map((it, k) => {
+    const p = pm[it.id] || {nome: `Produto ${it.id} (inativo)`, categoria: ''}, i = info[it.id];
+    return `<div class="pr"><div class="pos">${k + 1}</div>
+      <div class="nm">${esc(p.nome)} ${i && i.campeao ? `<span class="estrela" title="Está entre os que mais vendem deste freezer (ou marcado à mão)">⭐ campeão</span>` : ''}
+        <br><small>${esc(p.categoria || 'sem categoria')}${i ? ` · comprado em ${dv} dias: ${i.venda}` : ' · novo aqui (salve para calcular)'}</small></div>
+      <label class="sempre" title="Conta como campeão: nunca pode faltar na frente"><input type="checkbox" data-a="sempre" data-k="${k}" ${it.sempre ? 'checked' : ''}> sempre na frente</label>
+      <div class="bts">
+        <button type="button" data-a="p-subir" data-k="${k}" title="Subir" aria-label="Subir ${esc(p.nome)}" ${k === 0 ? 'disabled' : ''}>▲</button>
+        <button type="button" data-a="p-descer" data-k="${k}" title="Descer" aria-label="Descer ${esc(p.nome)}" ${k === F.edit.length - 1 ? 'disabled' : ''}>▼</button>
+        <button type="button" data-a="p-tirar" data-k="${k}" title="Tirar deste freezer" aria-label="Tirar ${esc(p.nome)}">✖</button>
+      </div></div>`;
+  }).join('');
+  const naLista = new Set(F.edit.map(x => x.id));
+  const busca = F.busca.trim().toLowerCase();
+  const cand = F.dados.produtos.filter(p => !naLista.has(p.id) && (!F.soLivres || !p.em_freezer) && (!F.cat || p.categoria === F.cat)
+                                         && (!busca || p.nome.toLowerCase().includes(busca)));
+  const mostrar = cand.slice(0, 200);
+  $('#editor').innerHTML = `<div class="cab"><h3>${ex.tipo === 'vertical' ? '🚪' : '🧊'} ${esc(ex.nome)}</h3>
+      ${F.sujo ? '<span class="sujo">● alterações não salvas</span>' : ''}
+      <button class="btn" type="button" data-a="desfazer" ${F.sujo ? '' : 'disabled'}>Desfazer</button>
+      <button class="btn prim" type="button" data-a="salvar-prods" ${F.sujo ? '' : 'disabled'}>💾 Salvar produtos</button></div>
+    <div class="mini suave" style="margin:6px 0 10px">Ponha os produtos <b>na ordem em que estão no freezer</b> (o repositor vai marcando nessa ordem).
+      ⭐ campeão = os ${F.dados.config.pct_campeoes}% que mais vendem neste freezer (pelo volume comprado nos últimos ${dv} dias) + os marcados “sempre na frente”.
+      ${ex.capacidade ? `Cabem <b>${ex.capacidade} caixas</b>: com ${F.edit.length} produto(s), ${F.edit.length > ex.capacidade ? '<b class="n-aviso">tem mais produto do que espaço</b> (o app vai mandar trocar)' : `sobram ${ex.capacidade - F.edit.length} lugar(es) para 2ª caixa dos campeões`}.`
+                    : 'Sem capacidade informada: o app só manda buscar o que falta (nunca manda trocar).'}</div>
+    <div class="prods">${linhas || '<div class="vazio">Nenhum produto neste freezer ainda. Adicione abaixo.</div>'}</div>
+    <div class="add">
+      <b>➕ Adicionar produtos</b>
+      <div class="filtros">
+        <input type="text" id="busca" placeholder="Procurar pelo nome…" value="${esc(F.busca)}" aria-label="Procurar produto pelo nome">
+        <select id="cat" aria-label="Categoria"><option value="">Todas as categorias</option>${F.dados.categorias.map(c => `<option ${c === F.cat ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>
+        <label class="sempre" style="font-size:13px"><input type="checkbox" id="so-livres" ${F.soLivres ? 'checked' : ''}> só os que não estão em nenhum freezer</label>
+      </div>
+      <div class="cab"><span class="mini suave">${cand.length} produto(s)${cand.length > mostrar.length ? ` (mostrando ${mostrar.length}: procure pelo nome)` : ''}</span>
+        ${cand.length > 1 && cand.length <= 300 ? `<button class="btn" type="button" data-a="add-todos">+ Adicionar todos os ${cand.length}</button>` : ''}</div>
+      <div class="add-lista">${mostrar.map(p => `<div class="add-lin"><div>${esc(p.nome)} <small class="suave">${esc(p.categoria || '')}</small>
+          ${p.em_freezer ? '' : ' <span class="tag-livre" title="Não está em nenhum freezer: se chegar, fica esquecido na câmara">fora da frente</span>'}</div>
+          <button class="btn" type="button" data-a="add" data-id="${p.id}">+ Adicionar</button></div>`).join('')
+        || '<div class="vazio">Nenhum produto com esse filtro.</div>'}</div>
+    </div>`;
+  const b = $('#busca');
+  b.oninput = () => { F.busca = b.value; const pos = b.selectionStart; desenharEditor(); const nb = $('#busca'); nb.focus(); nb.setSelectionRange(pos, pos); };
+  $('#cat').onchange = e => { F.cat = e.target.value; desenharEditor(); };
+  $('#so-livres').onchange = e => { F.soLivres = e.target.checked; desenharEditor(); };
+}
+
+function desenharHistorico() {
+  const h = F.dados.historico || [];
+  if (!h.length) { $('#historico').innerHTML = '<div class="vazio">Nenhum checklist ainda.</div>'; return; }
+  $('#historico').innerHTML = `<div class="tabela-rolagem" style="max-height:none"><table class="grade"><thead><tr>
+      <th>Quando</th><th>Quem</th><th class="num">Tempo</th><th class="num">Marcados</th><th class="num">Faltando</th>
+      <th class="num">Para fazer</th><th class="num">✅ Feitas</th><th class="num">⏳ Pendentes</th><th class="num">🚫 Sem na câmara</th></tr></thead><tbody>
+    ${h.map(c => {
+      const fazer = c.acoes.filter(a => ['buscar', 'trocar'].includes(a.tipo)).length;
+      return `<tr data-a="ver-chk" data-id="${c.id}" tabindex="0"><td>${esc(c.data)}</td><td>${esc(c.nome)}</td>
+        <td class="num">${c.minutos != null ? c.minutos + ' min' : '—'}</td><td class="num">${c.marcados} de ${c.produtos}</td>
+        <td class="num">${c.faltando}</td><td class="num">${fazer}</td><td class="num">${c.feitas}</td>
+        <td class="num ${c.pendentes ? 'n-aviso' : ''}">${c.pendentes}</td><td class="num ${c.sem_estoque ? 'n-erro' : ''}">${c.sem_estoque}</td></tr>`;
+    }).join('')}</tbody></table></div>`;
+}
+
+function verChecklist(id) {
+  const c = (F.dados.historico || []).find(x => x.id === id);
+  if (!c) return;
+  const rot = {pendente: '⏳ não feito', feita: '✅ feito', sem_estoque: '🚫 não tinha na câmara', info: ''};
+  abrirModal(`<h3>📋 Checklist de ${esc(c.data)} · ${esc(c.nome)}</h3>
+    <div class="mini suave" style="margin-bottom:8px">${c.marcados} de ${c.produtos} produtos marcados · ${c.faltando} faltando na frente${c.minutos != null ? ` · levou ${c.minutos} min` : ''}</div>
+    ${c.acoes.length ? c.acoes.map(a => `<div class="acao-h ${esc(a.situacao)}">${esc(a.texto)}
+        ${a.situacao !== 'info' ? `<div class="mini suave">${rot[a.situacao] || esc(a.situacao)}${a.feita_por ? ' · ' + esc(a.feita_por) : ''}${a.feita_em ? ' · ' + esc(a.feita_em) : ''}</div>` : ''}</div>`).join('')
+      : '<div class="vazio">Nada para repor: a frente estava completa.</div>'}`);
+}
+
+// ---------------- freezers: novo / editar / remover / ordem
+function modalFreezer(ex) {
+  const tipos = F.dados.tipos;
+  abrirModal(`<h3>${ex ? '✏️ ' + esc(ex.nome) : '➕ Novo freezer'}</h3>
+    <form class="form" id="form-fz">
+      <label>Nome<input type="text" id="fz-nome" maxlength="60" value="${ex ? esc(ex.nome) : ''}" placeholder="Ex.: Freezer picolés 1"></label>
+      <div class="dupla">
+        <label>Tipo<select id="fz-tipo">${Object.entries(tipos).map(([k, v]) => `<option value="${k}" ${(ex ? ex.tipo : 'horizontal') === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></label>
+        <label>Quantas caixas cabem<input type="number" id="fz-cap" min="1" max="200" inputmode="numeric" value="${ex && ex.capacidade ? ex.capacidade : ''}" placeholder="em branco = não sei"></label>
+      </div>
+      <div class="mini suave">Com a capacidade, o app sabe quando o freezer está cheio e manda <b>trocar</b> (ex.: tirar 1 das 2 caixas de Groselha para pôr o Laranja com Acerola).
+        Sem ela, só manda buscar o que falta.</div>
+      <div><button class="btn prim" type="submit">💾 Salvar</button></div>
+    </form>`, null, true);
+  $('#fz-nome').focus();
+  $('#form-fz').onsubmit = async ev => {
+    ev.preventDefault();
+    try {
+      const corpo = {nome: $('#fz-nome').value, tipo: $('#fz-tipo').value, capacidade: $('#fz-cap').value.trim()};
+      const r = await api('POST', ex ? `/api/gestao/frente/expositores/${ex.id}` : '/api/gestao/frente/expositores', corpo);
+      fecharModal(); status(r.mensagem);
+      const antes = new Set(fzAtivos().map(e => e.id));
+      await carregar();
+      if (!ex) {           // o novo fica selecionado para já pôr os produtos
+        const novo = fzAtivos().find(e => !antes.has(e.id));
+        if (novo && !F.sujo) { F.sel = novo.id; gravarLocal('frente_sel', String(novo.id)); copiarEdicao(); desenhar(); }
+      }
+    } catch (e) { falhou(e); }
+  };
+}
+async function excluirFreezer(id) {
+  const ex = fzAtivos().find(e => e.id === id);
+  if (!ex || !confirm(`Remover o ${ex.nome} da frente?\n\nEle sai do checklist e perde a lista de produtos. Os checklists antigos continuam no histórico.`)) return;
+  try { const r = await api('POST', `/api/gestao/frente/expositores/${id}/excluir`); status(r.mensagem); if (F.sel === id) F.sujo = false; await carregar(); }
+  catch (e) { falhou(e); }
+}
+async function moverFreezer(id, d) {
+  const ids = fzAtivos().map(e => e.id), i = ids.indexOf(id), j = i + d;
+  if (i < 0 || j < 0 || j >= ids.length) return;
+  [ids[i], ids[j]] = [ids[j], ids[i]];
+  try { await api('POST', '/api/gestao/frente/expositores/ordem', {ids}); await carregar(); }
+  catch (e) { falhou(e); }
+}
+function escolher(id) {
+  if (id === F.sel) return;
+  if (F.sujo && !confirm('Os produtos deste freezer têm alterações não salvas. Trocar de freezer e perder as alterações?')) return;
+  F.sel = id; gravarLocal('frente_sel', String(id)); copiarEdicao(); F.busca = ''; desenhar();
+}
+
+// ---------------- produtos do freezer
+function mudou() { F.sujo = true; desenharEditor(); }
+async function salvarProdutos() {
+  const ex = fzSel();
+  if (!ex) return;
+  try {
+    const r = await api('POST', `/api/gestao/frente/expositores/${ex.id}/produtos`, {produtos: F.edit});
+    status(r.mensagem); F.sujo = false; await carregar();
+  } catch (e) { falhou(e); }
+}
+
+// ---------------- configuração
+function modalConfig() {
+  const c = F.dados.config;
+  abrirModal(`<h3>⚙️ Configurar o checklist da frente</h3>
+    <form class="form" id="form-cfg">
+      <label>De quantos em quantos dias o repositor faz o checklist<input type="number" id="cfg-dias" min="1" max="60" value="${c.dias}"></label>
+      <div class="mini suave">Passou disso, o app mostra “Hora do checklist da frente” no Início de todos.</div>
+      <label>Campeões: quantos % dos produtos de cada freezer (os que mais vendem)<input type="number" id="cfg-pct" min="0" max="100" value="${c.pct_campeoes}"></label>
+      <div class="mini suave">Campeão nunca pode faltar: se o freezer estiver cheio, o app manda tirar um que vende pouco para pôr o campeão.
+        0% = só os marcados à mão como “sempre na frente”.</div>
+      <label>Vendas: olhar os últimos quantos dias<input type="number" id="cfg-venda" min="14" max="365" value="${c.dias_venda}"></label>
+      <div class="mini suave">Usamos o volume comprado nas notas fiscais desses dias (o que mais compramos é o que mais vende).</div>
+      <div><button class="btn prim" type="submit">💾 Salvar</button></div>
+    </form>`, null, true);
+  $('#form-cfg').onsubmit = async ev => {
+    ev.preventDefault();
+    try {
+      const r = await api('POST', '/api/gestao/frente/config', {dias: $('#cfg-dias').value, pct_campeoes: $('#cfg-pct').value, dias_venda: $('#cfg-venda').value});
+      fecharModal(); status(r.mensagem); await carregar();
+    } catch (e) { falhou(e); }
+  };
+}
+
+// ---------------- cliques
+document.addEventListener('click', ev => {
+  const el = ev.target.closest('[data-a]');
+  if (!el || el.disabled || !F.dados) return;
+  const a = el.dataset.a, id = +el.dataset.id, k = +el.dataset.k;
+  if (a === 'sempre') { F.edit[k].sempre = el.checked; return mudou(); }
+  if (['subir', 'descer', 'editar-fz', 'excluir-fz'].includes(a)) ev.stopPropagation();
+  if (a === 'escolher') escolher(id);
+  else if (a === 'subir') moverFreezer(id, -1);
+  else if (a === 'descer') moverFreezer(id, 1);
+  else if (a === 'editar-fz') modalFreezer(fzAtivos().find(e => e.id === id));
+  else if (a === 'excluir-fz') excluirFreezer(id);
+  else if (a === 'p-subir' && k > 0) { [F.edit[k - 1], F.edit[k]] = [F.edit[k], F.edit[k - 1]]; mudou(); }
+  else if (a === 'p-descer' && k < F.edit.length - 1) { [F.edit[k + 1], F.edit[k]] = [F.edit[k], F.edit[k + 1]]; mudou(); }
+  else if (a === 'p-tirar') { F.edit.splice(k, 1); mudou(); }
+  else if (a === 'add') { F.edit.push({id, sempre: false}); mudou(); }
+  else if (a === 'add-todos') {
+    const naLista = new Set(F.edit.map(x => x.id)), busca = F.busca.trim().toLowerCase();
+    const cand = F.dados.produtos.filter(p => !naLista.has(p.id) && (!F.soLivres || !p.em_freezer) && (!F.cat || p.categoria === F.cat)
+                                           && (!busca || p.nome.toLowerCase().includes(busca)));
+    if (!confirm(`Adicionar ${cand.length} produto(s) ao ${fzSel().nome}?`)) return;
+    cand.forEach(p => F.edit.push({id: p.id, sempre: false})); mudou();
+  }
+  else if (a === 'desfazer') { copiarEdicao(); desenharEditor(); }
+  else if (a === 'salvar-prods') salvarProdutos();
+  else if (a === 'ver-chk') verChecklist(id);
+});
+document.addEventListener('keydown', ev => {
+  if ((ev.key === 'Enter' || ev.key === ' ') && ev.target.matches('[data-a="escolher"], tr[data-a="ver-chk"]')) { ev.preventDefault(); ev.target.click(); }
+});
+$('#atualizar').onclick = () => { if (F.sujo && !confirm('Há alterações não salvas nos produtos. Atualizar e perder?')) return; F.sujo = false; carregar(); };
+$('#btn-novo').onclick = () => { if (F.dados) modalFreezer(null); };
+$('#btn-config').onclick = () => { if (F.dados) modalConfig(); };
+window.addEventListener('beforeunload', ev => { if (F.sujo) { ev.preventDefault(); ev.returnValue = ''; } });
+{% endblock %}

@@ -627,6 +627,32 @@ de atendente); a conversa continua esperando. Fora do horário, o aviso de "clie
 Vem **desligado**: a gestão cola o link e liga. Guardado em `ParametrosAtendimento` (`horario_*`, `delivery_link`); rota
 `/api/atendimento/horario`.
 
+### Novo (só na Web) — 🧊 Frente: checklist semanal dos freezers do atendimento (11/2026: Gestão › 🧊 Frente + app › Estoque)
+Para o produto que chega e fica esquecido na câmara fria (o repositor não repõe) e para os campeões nunca faltarem na frente.
+- **Cadastro (gestor, Gestão › 🧊 Frente)** (`exposicao.py`, tabelas `ExpositoresLoja`, `ExpositorProdutos`, `FrenteConfig`):
+  os freezers da frente (nome, tipo horizontal/vertical, **quantas caixas cabem** — em branco = não sei), na ordem em que o
+  repositor passa (▲▼); os produtos de cada freezer **na ordem em que estão lá dentro**, com procura, filtro por categoria,
+  "só os que não estão em nenhum freezer" (etiqueta *fora da frente*) e "+ adicionar todos" da categoria. Remover um freezer
+  não apaga os checklists antigos.
+- **⭐ Campeões**: em cada freezer, os N% que mais vendem (padrão 30%), pelo volume comprado nas notas fiscais dos últimos
+  90 dias (o que mais compramos é o que mais vende), mais os marcados à mão "sempre na frente". **🆕 Chegou**: produtos das
+  notas desde o último checklist (produto novo = 1ª compra nos últimos 30 dias).
+- **Checklist (repositor, app de Compras com PIN › Estoque › 🧊 Checklist da frente)**, 1x por semana (configurável): freezer
+  por freezer, toca **0 / 1 / 2 / 3+** caixas de cada produto na frente (o que não marcar conta como 0 e o app avisa antes de
+  terminar). Fica salvo no celular (pode fechar o app); sem internet, o "Terminar" espera e vai sozinho quando ela voltar
+  (mandar 2 vezes não duplica). O Início mostra "Hora do checklist da frente" quando passa do prazo.
+- **A lista do que repor** (`FrenteChecklists`, `FrenteChecklistItens`, `FrenteAcoes`), por freezer: falta e tem espaço →
+  🧊 buscar na câmara; freezer cheio → 🔁 tirar 1 caixa de um repetido (ex.: tem 2 de Groselha) e pôr o que falta; campeão
+  faltando e sem repetido → sai o que menos vende (nunca o que acabou de chegar); sobrou espaço → ➕ mais 1 caixa dos
+  campeões; ℹ️ sem espaço (fica na câmara); ⚠️ chegou e não está em nenhum freezer (o gestor põe no cadastro). Ordem: campeões,
+  depois o que chegou, depois o que mais vende. O repositor marca cada uma ✅ feito ou 🚫 não tem na câmara (↩️ desfaz).
+- **Gestor**: situação (último checklist, quem fez, pendentes, atrasado), **🚫 o que não tinha na câmara nos últimos 14 dias**
+  (para comprar) e os 12 últimos checklists (tempo, marcados, faltando, feitas/pendentes) com a lista de cada um.
+  ⚙️ Configurar: de quantos em quantos dias, % de campeões, dias de venda. Nada vai para WhatsApp/Telegram.
+- Rotas: app `GET /api/compras/frente/situacao`, `GET /api/compras/frente`, `POST /api/compras/frente/concluir`,
+  `GET /api/compras/frente/checklist/<id>`, `POST /api/compras/frente/acao/<id>`; gestão (só gestor) `GET /api/gestao/frente`,
+  `POST /api/gestao/frente/expositores[/<id>[/excluir|/produtos]|/ordem]`, `POST /api/gestao/frente/config`.
+
 ### App de compras — aba Gestão em 3 áreas (10/2026)
 A aba **Gestão** do app (só o gestor vê) foi dividida em **🏪 Loja · 🛒 Compras · 📦 Estoque**, com o número de
 pendências de cada área no botão (Loja: dias sem faturamento lançado; Compras: listas para aprovar + cupons para
@@ -701,11 +727,11 @@ Cada etapa: construir → testar → usar em paralelo com o PC → marcar ✅ aq
 - No computador do servidor: `http://localhost:5000/gestao`
 - Nos outros computadores/celulares da loja (mesma rede): `http://IP-DO-SERVIDOR:5000/gestao`
   (o mesmo endereço do painel da TV, trocando o final por `/gestao`).
-- Pelo app de compras: aba **Gestão › 🏪 Loja › Gestão da loja** (Escala, Folha, Pagamentos, Freelancers, Avisos,
+- Pelo app de compras: aba **Gestão › 🏪 Loja › Gestão da loja** (Escala, Folha, Pagamentos, Freelancers, 🧊 Frente, Avisos,
   Clientes, Comunicados e Perfil da equipe;
   abrem direto, sem pedir o PIN de novo).
-- Menu no alto de toda página da Gestão: **🗓️ Escala · 👥 Equipe (👔 Fixos e 👤 Freelancers) · 💰 Pagamentos · 📊 Folha · 📣 Avisos · 📢 Clientes
-  · 📨 Comunicados · 🧭 Perfil** (`/gestao/escala`, `/gestao/freelancers`, `/gestao/pagamentos`, `/gestao/folha`,
+- Menu no alto de toda página da Gestão: **🗓️ Escala · 👥 Equipe (👔 Fixos e 👤 Freelancers) · 💰 Pagamentos · 🧊 Frente · 📊 Folha · 📣 Avisos · 📢 Clientes
+  · 📨 Comunicados · 🧭 Perfil** (`/gestao/escala`, `/gestao/freelancers`, `/gestao/pagamentos`, `/gestao/frente`, `/gestao/folha`,
   `/gestao/avisos`, `/gestao/clientes`, `/gestao/comunicados`, `/gestao/perfil`).
 - Pela internet (fora da loja): liberado para a Gestão desde 10/2026, a pedido do Rodrigo — só gestor,
   com o login do app (nome + PIN, bloqueio após erros). Para fechar: `GESTAO_PELA_INTERNET = False` no config.py.
