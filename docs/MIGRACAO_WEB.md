@@ -653,6 +653,26 @@ Para o produto que chega e fica esquecido na câmara fria (o repositor não rep�
   `GET /api/compras/frente/checklist/<id>`, `POST /api/compras/frente/acao/<id>`; gestão (só gestor) `GET /api/gestao/frente`,
   `POST /api/gestao/frente/expositores[/<id>[/excluir|/produtos]|/ordem]`, `POST /api/gestao/frente/config`.
 
+### Novo (só na Web) — 🛵 Delivery: página de pedidos para a bio e os posts (11/2026: `/pedir` + Gestão › 🛵 Delivery)
+Uma página PÚBLICA com a identidade da Gela Boca, com as marcas do delivery e os botões dos apps — o link da bio e dos posts.
+- **Página `/pedir`** (`delivery.py`, `templates/pedir.html`): capa e logo, nome e frase, **🟢 Aberto agora / abre às…** (pelo
+  horário da semana; vale fechar depois da meia-noite), 📢 aviso do dia, um cartão por **marca** (logo, o que vende) com os botões
+  **Pedir no iFood / 99Food** (cores de cada app), Keeta, cardápio ou outro link, e **Pedir pelo WhatsApp** com a mensagem pronta
+  ("…Marca: nome"); botão geral do WhatsApp, 📍 Como chegar (link do Maps ou procura pelo endereço), 📸 Instagram,
+  🎁 "Receba as novidades" (leva ao cadastro de clientes) e os horários. Ao compartilhar o link, o Instagram/WhatsApp mostram a
+  capa e o nome (etiquetas Open Graph, com o endereço da internet gravado em 📢 Clientes › ⚙️).
+- **Gestão › 🛵 Delivery**: marcas (nome, descrição, logo, cor própria, links, WhatsApp sim/não, esconder sem apagar, ordem ▲▼),
+  identidade (logo, capa, cor principal e de destaque — o texto em cima fica branco ou escuro sozinho), contato, horários,
+  **prévia ao vivo** do jeito do celular, 📋 copiar o link, 🔳 QR Code para imprimir.
+- **📊 Visitas e cliques** (7/30/90 dias): visitas, cliques por marca × app, WhatsApp, Como chegar, Instagram, novidades e
+  **links de post** (`/pedir?de=reels-acai-novembro`: cada post com o seu link para saber qual trouxe mais pedidos; só contam os
+  criados na Gestão). Só números do dia (`DeliveryCliques`): nada de quem clicou; prévia e clique repetido em 20 s não contam.
+- **Segurança**: pela internet abre só `/pedir` (página, fotos dela e o contador). A página só mostra links: não tem formulário,
+  não manda WhatsApp e não mostra nada do sistema. Links do gestor só `http(s)://`. Fotos em `fotos_delivery/` (só no servidor).
+- Tabelas `DeliveryMarcas`, `DeliveryLinks`, `DeliveryConfig`, `DeliveryOrigens`, `DeliveryCliques` (criadas sozinhas).
+  Rotas: `GET /pedir`, `GET /pedir/arquivos/<foto>`, `POST /pedir/clique`; gestão (só gestor) `GET /api/gestao/delivery`,
+  `POST /api/gestao/delivery/{config,foto,marcas[/<id>[/excluir]|/ordem],origens[/<slug>/excluir]}`, `GET /api/gestao/delivery/qr`.
+
 ### App de compras — aba Gestão em 3 áreas (10/2026)
 A aba **Gestão** do app (só o gestor vê) foi dividida em **🏪 Loja · 🛒 Compras · 📦 Estoque**, com o número de
 pendências de cada área no botão (Loja: dias sem faturamento lançado; Compras: listas para aprovar + cupons para
@@ -727,12 +747,12 @@ Cada etapa: construir → testar → usar em paralelo com o PC → marcar ✅ aq
 - No computador do servidor: `http://localhost:5000/gestao`
 - Nos outros computadores/celulares da loja (mesma rede): `http://IP-DO-SERVIDOR:5000/gestao`
   (o mesmo endereço do painel da TV, trocando o final por `/gestao`).
-- Pelo app de compras: aba **Gestão › 🏪 Loja › Gestão da loja** (Escala, Folha, Pagamentos, Freelancers, 🧊 Frente, Avisos,
+- Pelo app de compras: aba **Gestão › 🏪 Loja › Gestão da loja** (Escala, Folha, Pagamentos, Freelancers, 🧊 Frente, 🛵 Delivery, Avisos,
   Clientes, Comunicados e Perfil da equipe;
   abrem direto, sem pedir o PIN de novo).
-- Menu no alto de toda página da Gestão: **🗓️ Escala · 👥 Equipe (👔 Fixos e 👤 Freelancers) · 💰 Pagamentos · 🧊 Frente · 📊 Folha · 📣 Avisos · 📢 Clientes
+- Menu no alto de toda página da Gestão: **🗓️ Escala · 👥 Equipe (👔 Fixos e 👤 Freelancers) · 💰 Pagamentos · 🧊 Frente · 📊 Folha · 📣 Avisos · 📢 Clientes · 🛵 Delivery
   · 📨 Comunicados · 🧭 Perfil** (`/gestao/escala`, `/gestao/freelancers`, `/gestao/pagamentos`, `/gestao/frente`, `/gestao/folha`,
-  `/gestao/avisos`, `/gestao/clientes`, `/gestao/comunicados`, `/gestao/perfil`).
+  `/gestao/avisos`, `/gestao/clientes`, `/gestao/delivery`, `/gestao/comunicados`, `/gestao/perfil`).
 - Pela internet (fora da loja): liberado para a Gestão desde 10/2026, a pedido do Rodrigo — só gestor,
   com o login do app (nome + PIN, bloqueio após erros). Para fechar: `GESTAO_PELA_INTERNET = False` no config.py.
 - Login: o mesmo do app de compras (nome + PIN); só quem é gestor no app entra.

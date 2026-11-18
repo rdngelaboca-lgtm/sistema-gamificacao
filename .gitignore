@@ -17,5 +17,8 @@ chave_sessoes.key
 # [CLIENTES] fotos das mensagens para clientes (ficam só no servidor; nunca no GitHub)
 fotos_clientes/
 
+# [DELIVERY] logo, capa e logos das marcas da página de pedidos (ficam só no servidor)
+fotos_delivery/
+
 # [IMPRIMIR] PDFs gerados pelo programa (ficam só no computador)
 relatorios_pdf/

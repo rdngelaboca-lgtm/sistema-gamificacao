@@ -1,0 +1,400 @@
+{% extends 'gestao_base.html' %}
+{% block titulo %}Delivery{% endblock %}
+{% block estilo %}
+  /* [DELIVERY] 🛵 página pública de pedidos: marcas + apps, identidade, contato, horários, cliques e links de post */
+  .area { padding: 12px 16px 70px; display: grid; gap: 12px; max-width: 1280px; }
+  .area > *, .colunas > *, .esq > * { min-width: 0; }
+  .colunas { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 12px; align-items: start; }
+  .esq { display: grid; gap: 12px; }
+  .previa-caixa { position: sticky; top: 10px; }
+  .celular { width: 100%; max-width: 390px; height: 760px; border: 10px solid #16201F; border-radius: 36px; overflow: hidden; background: #fff; margin: 0 auto; display: block; }
+  .celular iframe { width: 100%; height: 100%; border: 0; display: block; }
+  .linkbox { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .linkbox code { background: var(--fundo); border: 1px solid var(--linha); border-radius: 8px; padding: 6px 10px; font-size: 14px; overflow-wrap: anywhere; flex: 1 1 260px; }
+  .aviso-local { background: var(--laranja-claro); color: #7a3a10; border-radius: 10px; padding: 8px 12px; font-size: 13px; margin-top: 8px; }
+  .marcas { display: grid; gap: 8px; }
+  .mc { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; gap: 12px; align-items: center; border: 1px solid var(--linha); border-radius: 12px; padding: 8px 10px; background: #fff; }
+  .mc.off { opacity: .6; }
+  .mc .lg { width: 52px; height: 52px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-weight: 900; font-size: 22px; overflow: hidden; border: 1px solid var(--linha); }
+  .mc .lg img { width: 100%; height: 100%; object-fit: cover; background: #fff; }
+  .mc .nm { font-weight: 800; overflow-wrap: anywhere; }
+  .apps-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 3px; }
+  .tg { font-size: 11px; font-weight: 800; border-radius: 99px; padding: 1px 8px; background: var(--linha2); color: var(--suave); }
+  .tg.ifood { background: #EA1D2C; color: #fff; } .tg.f99 { background: #FFDD00; color: #1A1A1A; } .tg.keeta { background: #FFD23F; color: #1A1A1A; }
+  .tg.wa { background: #25D366; color: #08331A; } .tg.off { background: var(--laranja-claro); color: #7a3a10; }
+  .bts { display: flex; gap: 2px; }
+  .bts button { border: 0; background: transparent; border-radius: 8px; padding: 4px 7px; }
+  .bts button:hover { background: var(--linha2); }
+  .bts button[disabled] { opacity: .3; cursor: default; }
+  .fotos { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+  .foto { border: 1px dashed var(--linha); border-radius: 12px; padding: 10px; display: grid; gap: 8px; justify-items: start; }
+  .foto .mini-img { width: 84px; height: 84px; border-radius: 50%; background: var(--fundo) center / cover no-repeat; border: 1px solid var(--linha); }
+  .foto .mini-img.capa { width: 100%; height: 84px; border-radius: 10px; }
+  .cores { display: flex; gap: 14px; flex-wrap: wrap; }
+  .cores label { flex-direction: row !important; align-items: center; gap: 8px !important; }
+  input[type=color] { width: 48px; height: 36px; padding: 2px; border: 1px solid var(--linha); border-radius: 8px; background: #fff; }
+  .hor { display: grid; grid-template-columns: 120px 84px 22px 84px; gap: 6px 10px; align-items: center; justify-content: start; }
+  .hor input[type=checkbox] { width: auto; flex: none; }
+  .hor input[type=text] { width: 76px; text-align: center; }
+  .hor label { display: flex; align-items: center; gap: 6px; font-weight: 700; color: var(--texto); font-size: 14px; flex-direction: row; }
+  .rodape-form { position: sticky; bottom: 0; background: #fff; padding: 10px 0 2px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; border-top: 1px solid var(--linha2); }
+  .sujo { color: var(--laranja); font-weight: 700; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin: 8px 0 10px; }
+  .tile { border: 1px solid var(--linha); border-radius: 12px; padding: 8px 10px; background: #fff; }
+  .tile b { display: block; font-size: 24px; font-variant-numeric: tabular-nums; }
+  .tile span { font-size: 12px; color: var(--suave); font-weight: 700; }
+  table.grade td.num, table.grade th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .links-ed { display: grid; gap: 6px; }
+  .lk { display: grid; grid-template-columns: 120px minmax(0, 1fr) 140px auto; gap: 6px; align-items: center; }
+  .lk input, .lk select { width: 100%; font-size: 15px; }
+  .ajuda { font-size: 12px; color: var(--suave); font-weight: 400; }
+  .vazio { text-align: center; color: var(--suave); padding: 18px 10px; line-height: 1.5; }
+  .qr svg { width: 260px; height: 260px; display: block; margin: 0 auto; }
+  @media (max-width: 1050px) { .colunas { grid-template-columns: 1fr; } .previa-caixa { position: static; } .celular { height: 640px; } }
+  @media (max-width: 700px) { .area { padding-left: 10px; padding-right: 10px; } .lk { grid-template-columns: 1fr; border-bottom: 1px solid var(--linha2); padding-bottom: 6px; }
+    .hor { grid-template-columns: 84px 22px 84px; } .hor .dia { grid-column: 1 / -1; } }
+{% endblock %}
+{% block conteudo %}
+  <section class="barra"><div class="linha">
+    <b>🛵 Delivery · página de pedidos</b>
+    <button class="btn ico" id="atualizar" type="button" title="Atualizar">🔄</button>
+    <span class="sep"></span>
+    <a class="btn" id="abrir" href="/pedir" target="_blank" rel="noopener">🔗 Abrir a página</a>
+    <button class="btn" id="copiar" type="button">📋 Copiar o link</button>
+    <button class="btn" id="btn-qr" type="button">🔳 QR Code</button>
+  </div></section>
+  <main class="area">
+    <div class="caixa">
+      <div class="linkbox"><b>Link para a bio e os posts:</b> <code id="link">…</code></div>
+      <div id="aviso-local"></div>
+    </div>
+    <div class="colunas">
+      <div class="esq">
+        <div class="caixa">
+          <h3>🛵 Marcas do delivery <span class="mini suave">(na ordem da página)</span></h3>
+          <div class="marcas" id="marcas"><div class="vazio">Carregando…</div></div>
+          <div style="margin-top:8px"><button class="btn prim" id="btn-marca" type="button">➕ Nova marca</button></div>
+        </div>
+        <form class="caixa form" id="form-cfg" autocomplete="off">
+          <h3>🎨 Identidade da página</h3>
+          <div class="dupla">
+            <label>Nome que aparece no alto<input type="text" id="c-titulo" maxlength="60"></label>
+            <label>Frase embaixo do nome<input type="text" id="c-frase" maxlength="140" placeholder="Ex.: Peça agora pelo app que você preferir 🍦"></label>
+          </div>
+          <div class="fotos">
+            <div class="foto"><b class="mini">Logo da Gela Boca</b><div class="mini-img" id="ver-logo"></div>
+              <div class="botoes"><label class="btn">📷 Escolher<input type="file" accept="image/*" id="up-logo" hidden></label>
+              <button class="btn" type="button" data-tirar="logo">Tirar</button></div>
+              <span class="ajuda">Quadrado de preferência (PNG ou JPG).</span></div>
+            <div class="foto"><b class="mini">Foto de capa (opcional)</b><div class="mini-img capa" id="ver-capa"></div>
+              <div class="botoes"><label class="btn">📷 Escolher<input type="file" accept="image/*" id="up-capa" hidden></label>
+              <button class="btn" type="button" data-tirar="capa">Tirar</button></div>
+              <span class="ajuda">Deitada (ex.: 1200×500). Sem capa: faixa nas cores abaixo.</span></div>
+          </div>
+          <div class="cores">
+            <label>Cor principal <input type="color" id="c-cor"></label>
+            <label>Cor de destaque <input type="color" id="c-cor2"></label>
+            <span class="ajuda" style="align-self:center">Use as cores da marca Gela Boca. O texto em cima delas fica branco ou preto sozinho, o que der para ler melhor.</span>
+          </div>
+          <label>📢 Aviso do dia (opcional) <span class="ajuda">aparece em destaque no alto: “Hoje abrimos às 15h”, “Promoção: 2º açaí pela metade”…</span>
+            <input type="text" id="c-aviso" maxlength="200"></label>
+
+          <h3 style="margin-top:6px">💬 WhatsApp, endereço e Instagram</h3>
+          <div class="dupla">
+            <label>Número do WhatsApp para pedidos <span class="ajuda">com DDD; em branco = sem botão</span><input type="tel" id="c-whatsapp" maxlength="20" placeholder="(66) 99999-1234"></label>
+            <label>Texto do botão<input type="text" id="c-whatsapp-texto" maxlength="40" placeholder="Pedir pelo WhatsApp"></label>
+          </div>
+          <label>Mensagem que já vem escrita <span class="ajuda">no botão de cada marca vai junto “Marca: nome da marca”</span>
+            <input type="text" id="c-whatsapp-msg" maxlength="300"></label>
+          <div class="dupla">
+            <label>Endereço da loja<input type="text" id="c-endereco" maxlength="160" placeholder="Rua..., nº, bairro, Rondonópolis - MT"></label>
+            <label>Link do Google Maps (opcional) <span class="ajuda">em branco = procura pelo endereço</span><input type="text" id="c-maps" maxlength="600"></label>
+          </div>
+          <div class="dupla">
+            <label>Instagram <span class="ajuda">@usuario ou o link</span><input type="text" id="c-instagram" maxlength="200"></label>
+            <label style="flex-direction:row;align-items:center;gap:8px;color:var(--texto)"><input type="checkbox" id="c-novidades" style="width:auto">
+              Mostrar “🎁 Receba as novidades no WhatsApp” (leva ao cadastro de clientes)</label>
+          </div>
+
+          <h3 style="margin-top:6px">🕒 Horário de funcionamento <span class="ajuda">(mostra “Aberto agora” / “abre às…”; passou da meia-noite? ex.: 13:00 às 00:30)</span></h3>
+          <div class="hor" id="horarios"></div>
+
+          <div class="rodape-form">
+            <button class="btn prim" type="submit" id="salvar-cfg">💾 Salvar a página</button>
+            <button class="btn" type="button" id="desfazer-cfg">Desfazer</button>
+            <span id="cfg-sujo"></span>
+          </div>
+        </form>
+        <div class="caixa">
+          <h3>📊 Visitas e cliques
+            <select id="dias" aria-label="Período"><option value="7">últimos 7 dias</option><option value="30" selected>últimos 30 dias</option><option value="90">últimos 90 dias</option></select></h3>
+          <div class="mini suave">Só números (nada de quem clicou). Prévia e o mesmo clique repetido em 20 segundos não contam.</div>
+          <div id="estat"><div class="vazio">Carregando…</div></div>
+        </div>
+        <div class="caixa">
+          <h3>🔗 Links de post <span class="ajuda">um link para cada post ou reels: assim você sabe qual post trouxe mais pedidos</span></h3>
+          <form class="linkbox" id="form-origem" style="margin-bottom:8px">
+            <input type="text" id="o-nome" maxlength="80" placeholder="Nome do post, ex.: Reels açaí novembro" style="flex:1 1 240px">
+            <button class="btn prim" type="submit">➕ Criar link</button>
+          </form>
+          <div id="origens"></div>
+        </div>
+      </div>
+      <div class="previa-caixa caixa">
+        <h3>👀 Prévia <span class="ajuda">(como o cliente vê; atualiza ao salvar)</span></h3>
+        <div class="celular"><iframe id="previa" title="Prévia da página de pedidos" src="/pedir?previa=1"></iframe></div>
+      </div>
+    </div>
+  </main>
+{% endblock %}
+{% block script %}
+// [DELIVERY] estado da página
+const G = {dados: null, cfg: null, sujo: false};
+const DIAS = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'];
+const CLASSE_APP = {ifood: 'ifood', '99food': 'f99', keeta: 'keeta'};
+
+async function carregar(manterForm) {
+  try { G.dados = await api('GET', '/api/gestao/delivery?dias=' + $('#dias').value); }
+  catch (e) { $('#marcas').innerHTML = `<div class="vazio">${esc(e.message)}</div>`; return; }
+  $('#link').textContent = G.dados.link;
+  $('#abrir').href = '/pedir';
+  $('#aviso-local').innerHTML = G.dados.link_local ? `<div class="aviso-local">⚠️ Este endereço só abre na rede da loja. Grave o endereço da internet em
+      <b>📢 Clientes › ⚙️ Ajustes</b> (o mesmo do QR do balcão) para o link funcionar no Instagram.</div>` : '';
+  if (!manterForm || !G.sujo) { G.cfg = JSON.parse(JSON.stringify(G.dados.config)); G.sujo = false; preencherForm(); }
+  desenharMarcas(); desenharEstat(); desenharOrigens();
+}
+function aoEntrar() { carregar(); }
+function recarregarPrevia() { const f = $('#previa'); f.src = '/pedir?previa=1&t=' + Date.now(); }
+
+// ---------------- marcas
+function tagApp(app, nome) { return `<span class="tg ${CLASSE_APP[app] || ''}">${esc(nome)}</span>`; }
+function desenharMarcas() {
+  const ms = G.dados.marcas, apps = G.dados.apps, cor = G.dados.config.cor;
+  if (!ms.length) { $('#marcas').innerHTML = '<div class="vazio">Nenhuma marca ainda. Clique em <b>➕ Nova marca</b> e cole os links do iFood e do 99Food.</div>'; return; }
+  $('#marcas').innerHTML = ms.map((m, k) => `<div class="mc ${m.ativo ? '' : 'off'}">
+      <div class="lg" style="background:${esc(m.cor || cor)};color:#fff">${m.logo ? `<img src="/pedir/arquivos/${esc(m.logo)}" alt="">` : esc(m.nome.slice(0, 1))}</div>
+      <div><div class="nm">${esc(m.nome)}</div>${m.descricao ? `<div class="mini suave">${esc(m.descricao)}</div>` : ''}
+        <div class="apps-tags">${m.links.map(l => tagApp(l.app, l.app === 'outro' || l.app === 'site' ? (l.rotulo || apps[l.app]) : apps[l.app])).join('')}
+          ${m.whatsapp && G.dados.config.whatsapp ? '<span class="tg wa">WhatsApp</span>' : ''}${m.ativo ? '' : '<span class="tg off">escondida</span>'}
+          ${!m.links.length ? '<span class="tg off">sem link</span>' : ''}</div></div>
+      <div class="bts">
+        <button type="button" data-a="m-subir" data-id="${m.id}" title="Subir" aria-label="Subir ${esc(m.nome)}" ${k === 0 ? 'disabled' : ''}>▲</button>
+        <button type="button" data-a="m-descer" data-id="${m.id}" title="Descer" aria-label="Descer ${esc(m.nome)}" ${k === ms.length - 1 ? 'disabled' : ''}>▼</button>
+        <button type="button" data-a="m-editar" data-id="${m.id}" title="Editar" aria-label="Editar ${esc(m.nome)}">✏️</button>
+        <button type="button" data-a="m-excluir" data-id="${m.id}" title="Tirar da página" aria-label="Tirar ${esc(m.nome)}">🗑️</button>
+      </div></div>`).join('');
+}
+function linhaLink(l, k) {
+  const apps = G.dados.apps;
+  return `<div class="lk" data-k="${k}">
+    <select data-c="app" aria-label="App">${Object.entries(apps).map(([v, n]) => `<option value="${v}" ${l.app === v ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select>
+    <input type="text" data-c="url" value="${esc(l.url || '')}" placeholder="Cole aqui o link da loja no app (https://...)" aria-label="Link">
+    <input type="text" data-c="rotulo" value="${esc(l.rotulo || '')}" maxlength="40" placeholder="Texto do botão" aria-label="Texto do botão" ${l.app === 'outro' || l.app === 'site' ? '' : 'hidden'}>
+    <button class="btn ico" type="button" data-tirar-link="${k}" title="Tirar este link" aria-label="Tirar este link">✖</button></div>`;
+}
+function modalMarca(m) {
+  const e = m ? JSON.parse(JSON.stringify(m)) : {nome: '', descricao: '', logo: '', cor: '', ativo: true, whatsapp: true,
+                                                  links: [{app: 'ifood', url: ''}, {app: '99food', url: ''}]};
+  const desenhar = () => {
+    abrirModal(`<h3>${m ? '✏️ ' + esc(m.nome) : '➕ Nova marca'}</h3>
+      <form class="form" id="form-m" autocomplete="off">
+        <div class="dupla">
+          <label>Nome da marca<input type="text" id="m-nome" maxlength="60" value="${esc(e.nome)}" placeholder="Como aparece no iFood"></label>
+          <label>O que vende (opcional)<input type="text" id="m-desc" maxlength="160" value="${esc(e.descricao)}" placeholder="Ex.: Açaí e cremes · Sorvetes e milk-shakes"></label>
+        </div>
+        <div class="fotos"><div class="foto"><b class="mini">Logo da marca</b>
+          <div class="mini-img" style="border-radius:12px;${e.logo ? `background-image:url('/pedir/arquivos/${esc(e.logo)}')` : ''}"></div>
+          <div class="botoes"><label class="btn">📷 Escolher<input type="file" accept="image/*" id="m-up" hidden></label>
+          <button class="btn" type="button" id="m-tirar-logo">Tirar</button></div></div>
+          <div class="foto"><b class="mini">Cor da marca</b>
+            <label style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" id="m-usa-cor" ${e.cor ? 'checked' : ''} style="width:auto"> cor própria</label>
+            <input type="color" id="m-cor" value="${esc(e.cor || G.dados.config.cor)}" ${e.cor ? '' : 'disabled'}>
+            <span class="ajuda">Sem cor própria, usa a cor principal da página.</span></div></div>
+        <b class="mini">Links dos apps <span class="ajuda">(abra a loja no app ou no site do iFood/99Food › Compartilhar › Copiar link)</span></b>
+        <div class="links-ed" id="m-links">${e.links.map(linhaLink).join('')}</div>
+        <div><button class="btn" type="button" id="m-add">➕ Outro link</button></div>
+        <label style="flex-direction:row;align-items:center;gap:8px;color:var(--texto)"><input type="checkbox" id="m-wa" ${e.whatsapp ? 'checked' : ''} style="width:auto">
+          Botão “Pedir pelo WhatsApp” nesta marca ${G.dados.config.whatsapp ? '' : '<span class="ajuda">(cadastre o número em 💬 WhatsApp para aparecer)</span>'}</label>
+        <label style="flex-direction:row;align-items:center;gap:8px;color:var(--texto)"><input type="checkbox" id="m-ativo" ${e.ativo ? 'checked' : ''} style="width:auto">
+          Aparece na página (desmarque para esconder sem apagar)</label>
+        <div><button class="btn prim" type="submit">💾 Salvar marca</button></div>
+      </form>`);
+    const ler = () => {
+      e.nome = $('#m-nome').value; e.descricao = $('#m-desc').value; e.whatsapp = $('#m-wa').checked; e.ativo = $('#m-ativo').checked;
+      e.cor = $('#m-usa-cor').checked ? $('#m-cor').value : '';
+      e.links = [...document.querySelectorAll('#m-links .lk')].map(div => ({
+        id: (e.links[+div.dataset.k] || {}).id, app: div.querySelector('[data-c=app]').value,
+        url: div.querySelector('[data-c=url]').value.trim(), rotulo: div.querySelector('[data-c=rotulo]').value}));
+    };
+    $('#m-usa-cor').onchange = () => { $('#m-cor').disabled = !$('#m-usa-cor').checked; };
+    $('#m-links').addEventListener('change', ev => { if (ev.target.matches('[data-c=app]')) { ler(); desenhar(); } });
+    $('#m-links').addEventListener('click', ev => { const b = ev.target.closest('[data-tirar-link]'); if (b) { ler(); e.links.splice(+b.dataset.tirarLink, 1); desenhar(); } });
+    $('#m-add').onclick = () => { ler(); e.links.push({app: 'outro', url: '', rotulo: ''}); desenhar(); };
+    $('#m-tirar-logo').onclick = () => { ler(); e.logo = ''; desenhar(); };
+    $('#m-up').onchange = async ev => {
+      const arq = ev.target.files[0]; if (!arq) return;
+      ler();
+      try { e.logo = await subirFoto(arq, 512, 'image/png'); desenhar(); } catch (er) { falhou(er); }
+    };
+    $('#form-m').onsubmit = async ev => {
+      ev.preventDefault(); ler();
+      try {
+        const r = await api('POST', m ? `/api/gestao/delivery/marcas/${m.id}` : '/api/gestao/delivery/marcas',
+                            {nome: e.nome, descricao: e.descricao, logo: e.logo, cor: e.cor, ativo: e.ativo, whatsapp: e.whatsapp,
+                             links: e.links.filter(l => l.url)});
+        fecharModal(); status(r.mensagem); await carregar(true); recarregarPrevia();
+      } catch (er) { falhou(er); }
+    };
+    $('#m-nome').focus();
+  };
+  desenhar();
+}
+async function moverMarca(id, d) {
+  const ids = G.dados.marcas.map(m => m.id), i = ids.indexOf(id), j = i + d;
+  if (i < 0 || j < 0 || j >= ids.length) return;
+  [ids[i], ids[j]] = [ids[j], ids[i]];
+  try { await api('POST', '/api/gestao/delivery/marcas/ordem', {ids}); await carregar(true); recarregarPrevia(); } catch (e) { falhou(e); }
+}
+async function excluirMarca(id) {
+  const m = G.dados.marcas.find(x => x.id === id);
+  if (!m || !confirm(`Tirar ${m.nome} da página de pedidos?\n\n(Para só esconder por um tempo, use ✏️ e desmarque "Aparece na página".)`)) return;
+  try { const r = await api('POST', `/api/gestao/delivery/marcas/${id}/excluir`); status(r.mensagem); await carregar(true); recarregarPrevia(); } catch (e) { falhou(e); }
+}
+
+// ---------------- fotos: o computador diminui antes de mandar
+function lerArquivo(arq) { return new Promise((ok, erro) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = erro; r.readAsDataURL(arq); }); }
+async function subirFoto(arq, maximo, tipo) {
+  if (!/^image\//.test(arq.type)) throw new Error('Escolha uma foto (JPG ou PNG).');
+  const url = await lerArquivo(arq);
+  const img = await new Promise((ok, erro) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => erro(new Error('Não consegui abrir esta foto.')); i.src = url; });
+  const esc_ = Math.min(1, maximo / Math.max(img.width, img.height));
+  const c = document.createElement('canvas'); c.width = Math.round(img.width * esc_); c.height = Math.round(img.height * esc_);
+  const ctx = c.getContext('2d');
+  if (tipo === 'image/jpeg') { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height); }
+  ctx.drawImage(img, 0, 0, c.width, c.height);
+  status('Enviando a foto…');
+  const r = await api('POST', '/api/gestao/delivery/foto', {foto: c.toDataURL(tipo, 0.86)});
+  status('Foto pronta. Não esqueça de salvar.');
+  return r.foto;
+}
+
+// ---------------- identidade, contato e horários (um formulário só)
+function preencherForm() {
+  const c = G.cfg;
+  $('#c-titulo').value = c.titulo || ''; $('#c-frase').value = c.frase || ''; $('#c-aviso').value = c.aviso || '';
+  $('#c-cor').value = c.cor || '#0E6B63'; $('#c-cor2').value = c.cor2 || '#F2A93B';
+  $('#c-whatsapp').value = c.whatsapp ? formatarTel(c.whatsapp) : ''; $('#c-whatsapp-texto').value = c.whatsapp_texto || ''; $('#c-whatsapp-msg').value = c.whatsapp_msg || '';
+  $('#c-endereco').value = c.endereco || ''; $('#c-maps').value = c.maps || ''; $('#c-instagram').value = c.instagram || ''; $('#c-novidades').checked = !!c.novidades;
+  verFotos();
+  $('#horarios').innerHTML = DIAS.map((d, i) => {
+    const h = c.horarios[i];
+    return `<span class="dia"><label><input type="checkbox" data-h-aberto="${i}" ${h ? 'checked' : ''}> ${d}</label></span>
+      <input type="text" data-h-abre="${i}" value="${h ? h.abre : ''}" placeholder="13:00" inputmode="numeric" maxlength="5" aria-label="${d}: abre" ${h ? '' : 'disabled'}>
+      <span class="mini suave">às</span>
+      <input type="text" data-h-fecha="${i}" value="${h ? h.fecha : ''}" placeholder="23:00" inputmode="numeric" maxlength="5" aria-label="${d}: fecha" ${h ? '' : 'disabled'}>`;
+  }).join('');
+  document.querySelectorAll('[data-h-abre], [data-h-fecha]').forEach(el => { el.addEventListener('input', mascara); el.addEventListener('blur', () => normalizarHora(el)); });
+  marcarSujo(false);
+}
+function formatarTel(d) { const n = d.replace(/^55/, ''); return n.length === 11 ? `(${n.slice(0, 2)}) ${n.slice(2, 7)}-${n.slice(7)}` : n.length === 10 ? `(${n.slice(0, 2)}) ${n.slice(2, 6)}-${n.slice(6)}` : d; }
+function verFotos() {
+  $('#ver-logo').style.backgroundImage = G.cfg.logo ? `url('/pedir/arquivos/${G.cfg.logo}')` : '';
+  $('#ver-capa').style.backgroundImage = G.cfg.capa ? `url('/pedir/arquivos/${G.cfg.capa}')` : '';
+}
+function marcarSujo(v) { G.sujo = v; $('#cfg-sujo').innerHTML = v ? '<span class="sujo">● alterações não salvas</span>' : ''; }
+function lerForm() {
+  const horarios = DIAS.map((d, i) => document.querySelector(`[data-h-aberto="${i}"]`).checked
+    ? {abre: document.querySelector(`[data-h-abre="${i}"]`).value.trim(), fecha: document.querySelector(`[data-h-fecha="${i}"]`).value.trim()} : null);
+  return {titulo: $('#c-titulo').value, frase: $('#c-frase').value, aviso: $('#c-aviso').value, cor: $('#c-cor').value, cor2: $('#c-cor2').value,
+          logo: G.cfg.logo, capa: G.cfg.capa, whatsapp: $('#c-whatsapp').value, whatsapp_texto: $('#c-whatsapp-texto').value,
+          whatsapp_msg: $('#c-whatsapp-msg').value, endereco: $('#c-endereco').value, maps: $('#c-maps').value, instagram: $('#c-instagram').value,
+          novidades: $('#c-novidades').checked, horarios};
+}
+$('#form-cfg').addEventListener('input', () => marcarSujo(true));
+$('#form-cfg').addEventListener('change', ev => {
+  const i = ev.target.dataset.hAberto;
+  if (i != null) {
+    const a = document.querySelector(`[data-h-abre="${i}"]`), f = document.querySelector(`[data-h-fecha="${i}"]`);
+    a.disabled = f.disabled = !ev.target.checked;
+    if (ev.target.checked && !a.value) { a.value = '13:00'; f.value = '23:00'; }
+  }
+  marcarSujo(true);
+});
+$('#form-cfg').onsubmit = async ev => {
+  ev.preventDefault();
+  try { const r = await api('POST', '/api/gestao/delivery/config', lerForm()); status(r.mensagem); marcarSujo(false); await carregar(); recarregarPrevia(); }
+  catch (e) { falhou(e); }
+};
+$('#desfazer-cfg').onclick = () => { G.cfg = JSON.parse(JSON.stringify(G.dados.config)); preencherForm(); };
+for (const k of ['logo', 'capa']) {
+  $('#up-' + k).onchange = async ev => {
+    const arq = ev.target.files[0]; ev.target.value = '';
+    if (!arq) return;
+    try { G.cfg[k] = await subirFoto(arq, k === 'logo' ? 512 : 1400, k === 'logo' ? 'image/png' : 'image/jpeg'); verFotos(); marcarSujo(true); }
+    catch (e) { falhou(e); }
+  };
+}
+document.querySelectorAll('[data-tirar]').forEach(b => { b.onclick = () => { G.cfg[b.dataset.tirar] = ''; verFotos(); marcarSujo(true); }; });
+
+// ---------------- números
+function desenharEstat() {
+  const s = G.dados.estatisticas;
+  const tile = (n, t) => `<div class="tile"><b>${n}</b><span>${t}</span></div>`;
+  const conv = s.visitas ? Math.round(100 * (s.cliques_apps + s.whatsapp) / s.visitas) : 0;
+  $('#estat').innerHTML = `<div class="tiles">${tile(s.visitas, 'visitas')}${tile(s.cliques_apps, 'cliques nos apps')}${tile(s.whatsapp, 'WhatsApp')}
+      ${tile(conv + '%', 'de quem visitou clicou para pedir')}${tile(s.maps, 'como chegar')}${tile(s.instagram, 'Instagram')}${tile(s.novidades, 'novidades')}</div>
+    ${s.por_marca_app.length ? `<div class="tabela-rolagem" style="max-height:none;margin-bottom:10px"><table class="grade"><thead><tr><th>Marca</th><th>App</th><th class="num">Cliques</th></tr></thead>
+      <tbody>${s.por_marca_app.map(x => `<tr><td>${esc(x.marca)}</td><td>${esc(x.app)}</td><td class="num">${x.qtd}</td></tr>`).join('')}</tbody></table></div>`
+      : '<div class="mini suave">Ainda sem cliques neste período.</div>'}
+    ${s.por_origem.length ? `<div class="tabela-rolagem" style="max-height:none"><table class="grade"><thead><tr><th>De onde veio</th><th class="num">Visitas</th><th class="num">Cliques</th></tr></thead>
+      <tbody>${s.por_origem.map(x => `<tr><td>${esc(x.nome)}</td><td class="num">${x.visitas}</td><td class="num">${x.cliques}</td></tr>`).join('')}</tbody></table></div>` : ''}`;
+}
+function desenharOrigens() {
+  const os = G.dados.origens, base = G.dados.link;
+  $('#origens').innerHTML = os.length ? `<div class="tabela-rolagem" style="max-height:none"><table class="grade"><thead><tr><th>Post</th><th>Link</th><th></th></tr></thead><tbody>
+    ${os.map(o => `<tr><td>${esc(o.nome)}<div class="mini suave">criado ${esc(o.criado)}</div></td><td style="overflow-wrap:anywhere"><code>${esc(base)}?de=${esc(o.slug)}</code></td>
+      <td style="white-space:nowrap"><button class="btn" type="button" data-a="o-copiar" data-slug="${esc(o.slug)}">📋 Copiar</button>
+      <button class="btn ico" type="button" data-a="o-excluir" data-slug="${esc(o.slug)}" title="Apagar" aria-label="Apagar o link ${esc(o.nome)}">🗑️</button></td></tr>`).join('')}</tbody></table></div>`
+    : '<div class="mini suave">Nenhum link de post ainda. Na bio, use o link de cima.</div>';
+}
+async function copiar(texto) {
+  try { await navigator.clipboard.writeText(texto); status('Link copiado: ' + texto); }
+  catch (e) { prompt('Copie o link:', texto); }
+}
+$('#form-origem').onsubmit = async ev => {
+  ev.preventDefault();
+  try { const r = await api('POST', '/api/gestao/delivery/origens', {nome: $('#o-nome').value}); $('#o-nome').value = ''; await carregar(true); copiar(`${G.dados.link}?de=${r.slug}`); }
+  catch (e) { falhou(e); }
+};
+
+// ---------------- cliques
+document.addEventListener('click', ev => {
+  const el = ev.target.closest('[data-a]');
+  if (!el || el.disabled || !G.dados) return;
+  const a = el.dataset.a, id = +el.dataset.id;
+  if (a === 'm-subir') moverMarca(id, -1);
+  else if (a === 'm-descer') moverMarca(id, 1);
+  else if (a === 'm-editar') modalMarca(G.dados.marcas.find(m => m.id === id));
+  else if (a === 'm-excluir') excluirMarca(id);
+  else if (a === 'o-copiar') copiar(`${G.dados.link}?de=${el.dataset.slug}`);
+  else if (a === 'o-excluir') {
+    if (!confirm('Apagar este link de post? Quem clicar nele ainda chega na página, mas não conta mais separado.')) return;
+    api('POST', `/api/gestao/delivery/origens/${encodeURIComponent(el.dataset.slug)}/excluir`).then(r => { status(r.mensagem); carregar(true); }).catch(falhou);
+  }
+});
+$('#btn-marca').onclick = () => { if (G.dados) modalMarca(null); };
+$('#copiar').onclick = () => { if (G.dados) copiar(G.dados.link); };
+$('#atualizar').onclick = () => { if (G.sujo && !confirm('Há alterações não salvas na página. Atualizar e perder?')) return; G.sujo = false; carregar(); recarregarPrevia(); };
+$('#dias').onchange = () => carregar(true);
+$('#btn-qr').onclick = async () => {
+  try {
+    const r = await api('GET', '/api/gestao/delivery/qr');
+    if (!r.svg) return alert('O gerador de QR Code não está instalado no servidor.');
+    const baixar = URL.createObjectURL(new Blob([r.svg], {type: 'image/svg+xml'}));
+    abrirModal(`<h3>🔳 QR Code da página de pedidos</h3><div class="qr">${r.svg}</div>
+      <p class="mini suave" style="text-align:center">${esc(r.url)}${r.local ? '<br><b class="n-aviso">⚠️ Este endereço só abre na rede da loja.</b>' : ''}</p>
+      <p style="text-align:center"><a class="btn prim" href="${baixar}" download="qr-pedidos-gela-boca.svg">⬇️ Baixar o QR (para imprimir ou pôr na arte)</a></p>`, null, true);
+  } catch (e) { falhou(e); }
+};
+window.addEventListener('beforeunload', ev => { if (G.sujo) { ev.preventDefault(); ev.returnValue = ''; } });
+{% endblock %}

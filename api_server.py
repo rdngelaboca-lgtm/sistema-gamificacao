@@ -198,6 +198,9 @@ CAMINHOS_LIBERADOS_NA_INTERNET += ('/perfil/', '/api/perfil/')
 CAMINHOS_LIBERADOS_NA_INTERNET += ('/lideranca/', '/api/lideranca/')
 # [TRABALHE CONOSCO] Página pública do link da bio do Instagram: cadastro do candidato (só cria, não mostra ninguém).
 CAMINHOS_LIBERADOS_NA_INTERNET += ('/trabalhe-conosco', '/api/trabalhe-conosco')
+# [DELIVERY] Página pública de pedidos (link da bio e dos posts): só mostra os links dos apps, as fotos dela e conta os
+# cliques (sem guardar nada de quem clicou). Nada mais fica aberto.
+CAMINHOS_LIBERADOS_NA_INTERNET += ('/pedir',)
 
 
 @app.before_request
@@ -2630,6 +2633,142 @@ def api_gestao_frente_produtos(usuario, expositor_id):
 @compras_login(somente_gestor=True)
 def api_gestao_frente_config(usuario):
     return _resposta_frente('salvar_config', ler_json() or {}, usuario)
+
+
+# [DELIVERY] 🛵 Página de pedidos (/pedir, pública: link da bio e dos posts) e Gestão › 🛵 Delivery. Regras no delivery.py.
+try:
+    import delivery
+except Exception as _erro_import_delivery:
+    delivery = None
+    logger.error(f"Página de pedidos DESLIGADA: não consegui carregar delivery.py ({_erro_import_delivery})")
+
+
+def _resposta_delivery(nome_funcao, *args):
+    if delivery is None:
+        return jsonify({"erro": "A página de pedidos não está instalada no servidor (falta delivery.py)."}), 503
+    try:
+        return jsonify(getattr(delivery, nome_funcao)(*args)), 200
+    except delivery.ErroDelivery as e:
+        return jsonify({"erro": str(e)}), e.status
+    except Exception as e:
+        logger.exception(f"Erro na página de pedidos ({request.path}): {e}")
+        return jsonify({"erro": "Erro no servidor. Tente de novo; se continuar, avise o gestor."}), 500
+
+
+@app.route('/pedir')
+@app.route('/pedir/')
+def pagina_pedir():
+    aviso = ('<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
+             '<title>Gela Boca</title><p style="font:18px system-ui;text-align:center;margin-top:30vh">'
+             'Estamos ajustando a página de pedidos. Tente de novo em alguns minutos. 🍦</p>')
+    if delivery is None:
+        return aviso, 503
+    try:
+        p = delivery.pagina()
+        base = delivery.endereco(request.host_url)[0]
+    except Exception as e:
+        logger.exception(f"Página de pedidos fora do ar: {e}")
+        return aviso, 503
+    img = p['capa'] or p['logo']
+    resposta = app.make_response(render_template('pedir.html', p=p, previa=request.args.get('previa') == '1', url=base + '/pedir',
+                                                 og_imagem=f"{base}/pedir/arquivos/{img}" if img else ''))
+    resposta.headers['Cache-Control'] = 'no-cache'
+    return resposta
+
+
+@app.route('/pedir/arquivos/<nome>')
+def pedir_arquivo(nome):
+    if delivery is None:
+        return jsonify({"erro": "Não encontrado."}), 404
+    try:
+        caminho = delivery.caminho_foto(nome)
+    except delivery.ErroDelivery:
+        return jsonify({"erro": "Não encontrado."}), 404
+    return send_from_directory(os.path.dirname(caminho), os.path.basename(caminho), max_age=30 * 24 * 3600)
+
+
+@app.route('/pedir/clique', methods=['POST'])
+def pedir_clique():
+    """O celular de quem abriu a página avisa a visita/o clique (navigator.sendBeacon: texto com JSON)."""
+    if delivery is None or (request.content_length or 0) > 2048:
+        return '', 204
+    try:
+        import json as _json
+        bruto = request.get_data(cache=False, as_text=True)[:2048]
+        dados = _json.loads(bruto) if bruto else {}
+        delivery.registrar_clique(dados if isinstance(dados, dict) else {}, _ip_do_cliente())
+    except Exception as e:
+        logger.warning(f"[DELIVERY] clique não contado: {e}")
+    return '', 204
+
+
+@app.route('/gestao/delivery')
+def pagina_gestao_delivery():
+    return _pagina_gestao('gestao_delivery.html', 'delivery')
+
+
+@app.route('/api/gestao/delivery', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_delivery(usuario):
+    return _resposta_delivery('painel', request.host_url, request.args.get('dias', 30))
+
+
+@app.route('/api/gestao/delivery/config', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_delivery_config(usuario):
+    return _resposta_delivery('salvar_config', ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/delivery/foto', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_delivery_foto(usuario):
+    return _resposta_delivery('salvar_foto', ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/delivery/qr', methods=['GET'])
+@compras_login(somente_gestor=True)
+def api_gestao_delivery_qr(usuario):
+    if delivery is None:
+        return jsonify({"erro": "A página de pedidos não está instalada no servidor (falta delivery.py)."}), 503
+    base, local = delivery.endereco(request.host_url)
+    url = base + '/pedir'
+    return jsonify({'url': url, 'local': local, 'svg': delivery.qr_svg(url)}), 200
+
+
+@app.route('/api/gestao/delivery/marcas', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_delivery_marca_nova(usuario):
+    return _resposta_delivery('salvar_marca', None, ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/delivery/marcas/ordem', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_delivery_marcas_ordem(usuario):
+    return _resposta_delivery('ordenar_marcas', ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/delivery/marcas/<int:marca_id>', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_delivery_marca(usuario, marca_id):
+    return _resposta_delivery('salvar_marca', marca_id, ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/delivery/marcas/<int:marca_id>/excluir', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_delivery_marca_excluir(usuario, marca_id):
+    return _resposta_delivery('excluir_marca', marca_id, usuario)
+
+
+@app.route('/api/gestao/delivery/origens', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_delivery_origem(usuario):
+    return _resposta_delivery('salvar_origem', ler_json() or {}, usuario)
+
+
+@app.route('/api/gestao/delivery/origens/<slug>/excluir', methods=['POST'])
+@compras_login(somente_gestor=True)
+def api_gestao_delivery_origem_excluir(usuario, slug):
+    return _resposta_delivery('excluir_origem', slug, usuario)
 
 
 # [5x2] 👥 Equipe › 📅 Folgas: padrão de folgas (5x2 fixo / rodízio / 6x1 do cadastro), trocas e regras.

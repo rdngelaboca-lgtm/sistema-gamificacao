@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="{{ p.cor }}">
+<title>{{ p.titulo }} · Peça agora</title>
+<meta name="description" content="{{ p.frase or ('Peça ' + p.titulo + ' pelo iFood, 99Food ou WhatsApp') }}">
+<meta property="og:type" content="website">
+<meta property="og:locale" content="pt_BR">
+<meta property="og:site_name" content="{{ p.titulo }}">
+<meta property="og:title" content="{{ p.titulo }} · Peça agora">
+<meta property="og:description" content="{{ p.frase }}{% if p.marcas %} — {{ p.marcas | map(attribute='nome') | join(', ') }}{% endif %}">
+<meta property="og:url" content="{{ url }}">
+{% if og_imagem %}<meta property="og:image" content="{{ og_imagem }}">
+<meta name="twitter:card" content="summary_large_image">{% endif %}
+<link rel="icon" href="{{ '/pedir/arquivos/' + p.logo if p.logo else '/compras/arquivos/icone-192.png' }}">
+<!-- [DELIVERY] Página PÚBLICA de pedidos (link da bio e dos posts): só links; nada do sistema aparece aqui.
+     As cores, o logo, a capa e os textos vêm da Gestão › 🛵 Delivery. -->
+<style>
+  :root {
+    --cor: {{ p.cor }}; --cor-t: {{ p.cor_texto }}; --cor2: {{ p.cor2 }}; --cor2-t: {{ p.cor2_texto }};
+    --texto: #16201F; --suave: #55625F; --linha: #E2E7E6; --fundo: #F6F8F7;
+    color-scheme: light;
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--fundo); background: color-mix(in srgb, var(--cor) 7%, #FAFBFB); }
+  body { margin: 0; min-height: 100vh; color: var(--texto); font-size: 16px; line-height: 1.4;
+    font-family: "Figtree", "Nunito", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; -webkit-font-smoothing: antialiased; }
+  a { color: inherit; }
+  .pagina { max-width: 480px; margin: 0 auto; padding-bottom: calc(28px + env(safe-area-inset-bottom)); }
+  .capa { height: 190px; background: linear-gradient(135deg, var(--cor) 0%, var(--cor2) 100%); background-size: cover; background-position: center;
+    position: relative; border-radius: 0 0 28px 28px; }
+  .capa.foto::after { content: ''; position: absolute; inset: 0; border-radius: inherit; background: linear-gradient(180deg, transparent 45%, rgba(0,0,0,.28)); }
+  .capa .bolhas { position: absolute; inset: 0; overflow: hidden; border-radius: inherit; }
+  .capa .bolhas span { position: absolute; border-radius: 50%; background: rgba(255,255,255,.14); }
+  .logo { width: 112px; height: 112px; border-radius: 50%; background: #fff; margin: -60px auto 0; position: relative; z-index: 1;
+    border: 5px solid #fff; box-shadow: 0 8px 24px rgba(0,0,0,.14); display: flex; align-items: center; justify-content: center; overflow: hidden; }
+  .logo img { width: 100%; height: 100%; object-fit: cover; }
+  .logo .sem { font-size: 52px; }
+  .cab { text-align: center; padding: 10px 20px 0; }
+  h1 { margin: 6px 0 2px; font-size: 30px; font-weight: 900; letter-spacing: -.02em; color: var(--cor); color: color-mix(in srgb, var(--cor) 85%, #000); }
+  .frase { margin: 0; color: var(--suave); font-size: 16px; }
+  .status { display: inline-flex; align-items: center; gap: 8px; margin-top: 12px; padding: 7px 14px; border-radius: 99px; font-weight: 800; font-size: 14px; }
+  .status::before { content: ''; width: 9px; height: 9px; border-radius: 50%; background: currentColor; }
+  .status.aberto { background: #E1F5E6; color: #146C2E; }
+  .status.fechado { background: #FBE7DA; color: #8A3409; }
+  .conteudo { padding: 18px 16px 0; display: flex; flex-direction: column; gap: 14px; }
+  .aviso { background: var(--cor2); color: var(--cor2-t); border-radius: 16px; padding: 12px 16px; font-weight: 700; text-align: center; }
+  h2 { margin: 6px 4px 0; font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--suave); font-weight: 800; }
+  .marca { background: #fff; border-radius: 22px; padding: 16px; box-shadow: 0 2px 2px rgba(0,0,0,.03), 0 8px 24px rgba(0,0,0,.06);
+    border-top: 5px solid var(--mc); display: flex; flex-direction: column; gap: 12px; }
+  .m-cab { display: flex; align-items: center; gap: 14px; }
+  .m-logo { width: 60px; height: 60px; border-radius: 16px; flex-shrink: 0; background: var(--mc); color: var(--mt); display: flex; align-items: center;
+    justify-content: center; font-size: 26px; font-weight: 900; overflow: hidden; border: 1px solid var(--linha); }
+  .m-logo img { width: 100%; height: 100%; object-fit: cover; background: #fff; }
+  .m-nome { font-size: 20px; font-weight: 900; margin: 0; letter-spacing: -.01em; overflow-wrap: anywhere; }
+  .m-desc { margin: 2px 0 0; color: var(--suave); font-size: 14px; }
+  .botoes { display: flex; flex-direction: column; gap: 8px; }
+  .app { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 54px; padding: 0 18px; border-radius: 14px;
+    background: var(--bf); color: var(--bt); text-decoration: none; font-size: 17px; font-weight: 700; transition: transform .08s; }
+  .app b { font-weight: 900; }
+  .app::after { content: '›'; font-size: 26px; font-weight: 700; line-height: 1; opacity: .85; }
+  .app:active { transform: scale(.98); }
+  .app.wa, .grande.wa { --bf: #25D366; --bt: #08331A; }
+  .grande { display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 60px; border-radius: 18px; text-decoration: none;
+    font-size: 18px; font-weight: 900; background: var(--bf); color: var(--bt); box-shadow: 0 6px 18px rgba(0,0,0,.08); }
+  .grande:active { transform: scale(.98); }
+  .dupla { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+  .claro { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 52px; border-radius: 16px; text-decoration: none;
+    background: #fff; border: 1px solid var(--linha); font-weight: 800; font-size: 16px; }
+  .novidades { display: flex; align-items: center; gap: 14px; text-decoration: none; background: var(--cor); color: var(--cor-t);
+    border-radius: 20px; padding: 16px 18px; }
+  .novidades .ic { font-size: 34px; }
+  .novidades b { display: block; font-size: 17px; }
+  .novidades span { font-size: 14px; opacity: .92; }
+  details { background: #fff; border-radius: 16px; border: 1px solid var(--linha); padding: 0 16px; }
+  summary { cursor: pointer; font-weight: 800; min-height: 50px; display: flex; align-items: center; list-style: none; }
+  summary::-webkit-details-marker { display: none; }
+  summary::after { content: '▾'; margin-left: auto; color: var(--suave); }
+  details[open] summary::after { content: '▴'; }
+  .horarios { width: 100%; border-collapse: collapse; margin-bottom: 12px; font-size: 15px; }
+  .horarios td { padding: 6px 0; border-top: 1px solid var(--linha); }
+  .horarios td:last-child { text-align: right; font-weight: 700; }
+  .horarios tr.hoje td { color: var(--cor); font-weight: 900; }
+  .vazio { text-align: center; color: var(--suave); background: #fff; border-radius: 18px; padding: 26px 18px; }
+  footer { text-align: center; color: var(--suave); font-size: 13px; padding: 22px 20px 0; }
+  .previa { position: fixed; top: 8px; right: 8px; z-index: 9; background: #16201F; color: #fff; font-size: 12px; font-weight: 800; padding: 4px 10px; border-radius: 99px; }
+  a:focus-visible { outline: 3px solid var(--cor2); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) { .app, .grande { transition: none; } }
+</style>
+</head>
+<body>
+{% if previa %}<div class="previa">PRÉVIA · não conta clique</div>{% endif %}
+<div class="pagina">
+  <header>
+    <div class="capa {{ 'foto' if p.capa }}"{% if p.capa %} style="background-image: url('/pedir/arquivos/{{ p.capa }}')"{% endif %}>
+      {% if not p.capa %}<div class="bolhas" aria-hidden="true"><span style="width:160px;height:160px;left:-40px;top:-50px"></span>
+        <span style="width:90px;height:90px;right:30px;top:24px"></span><span style="width:46px;height:46px;left:42%;top:110px"></span></div>{% endif %}
+    </div>
+    <div class="logo">{% if p.logo %}<img src="/pedir/arquivos/{{ p.logo }}" alt="Logo {{ p.titulo }}">{% else %}<span class="sem" aria-hidden="true">🍦</span>{% endif %}</div>
+    <div class="cab">
+      <h1>{{ p.titulo }}</h1>
+      {% if p.frase %}<p class="frase">{{ p.frase }}</p>{% endif %}
+      {% if p.horario %}<div class="status {{ 'aberto' if p.horario.aberto else 'fechado' }}">{{ p.horario.texto }}</div>{% endif %}
+    </div>
+  </header>
+  <main class="conteudo">
+    {% if p.aviso %}<div class="aviso" role="status">📢 {{ p.aviso }}</div>{% endif %}
+    {% if p.marcas %}
+      <h2>{{ 'Escolha a marca e o app' if p.marcas | length > 1 else 'Escolha o app' }}</h2>
+      {% for m in p.marcas %}
+      <section class="marca" style="--mc: {{ m.cor }}; --mt: {{ m.texto_cor }}" aria-label="{{ m.nome }}">
+        <div class="m-cab">
+          <div class="m-logo">{% if m.logo %}<img src="/pedir/arquivos/{{ m.logo }}" alt="" loading="lazy">{% else %}{{ m.nome[:1] }}{% endif %}</div>
+          <div><h3 class="m-nome">{{ m.nome }}</h3>{% if m.descricao %}<p class="m-desc">{{ m.descricao }}</p>{% endif %}</div>
+        </div>
+        <div class="botoes">
+          {% for ln in m.links %}<a class="app" href="{{ ln.url }}" rel="noopener" data-tipo="link" data-link="{{ ln.id }}" style="--bf: {{ ln.fundo }}; --bt: {{ ln.texto }}">
+            <span>{% if ln.app in ('outro', 'site') %}<b>{{ ln.nome }}</b>{% else %}Pedir no <b>{{ ln.nome }}</b>{% endif %}</span></a>{% endfor %}
+          {% if m.wa %}<a class="app wa" href="{{ m.wa }}" rel="noopener" data-tipo="whatsapp" data-marca="{{ m.id }}"><span>Pedir pelo <b>WhatsApp</b></span></a>{% endif %}
+          {% if not m.links and not m.wa %}<div class="m-desc">Em breve nos apps.</div>{% endif %}
+        </div>
+      </section>
+      {% endfor %}
+    {% endif %}
+    {% if p.whatsapp %}<a class="grande wa" href="{{ p.whatsapp }}" rel="noopener" data-tipo="whatsapp">💬 {{ p.whatsapp_texto }}</a>{% endif %}
+    {% if p.maps or p.instagram %}<div class="dupla">
+      {% if p.maps %}<a class="claro" href="{{ p.maps }}" rel="noopener" data-tipo="maps">📍 Como chegar</a>{% endif %}
+      {% if p.instagram %}<a class="claro" href="{{ p.instagram }}" rel="noopener" data-tipo="instagram">📸 Instagram</a>{% endif %}
+    </div>{% endif %}
+    {% if p.novidades %}<a class="novidades" href="/clientes/cadastro" data-tipo="novidades"><span class="ic" aria-hidden="true">🎁</span>
+      <span><b>Receba as novidades no WhatsApp</b><span>Sabores novos, promoções e um mimo no seu aniversário</span></span></a>{% endif %}
+    {% if p.horarios %}<details><summary>🕒 Horário de funcionamento</summary>
+      <table class="horarios">{% for dia, txt in p.horarios %}<tr data-dia="{{ loop.index0 }}"><td>{{ dia }}</td><td>{{ txt }}</td></tr>{% endfor %}</table></details>{% endif %}
+    {% if not p.marcas and not p.whatsapp %}<div class="vazio">🍦 Estamos preparando a página de pedidos.<br>Volte daqui a pouco!</div>{% endif %}
+  </main>
+  <footer>{{ p.titulo }}{% if p.endereco %} · {{ p.endereco }}{% endif %}</footer>
+</div>
+<script>
+'use strict';
+(function () {
+  // dia de hoje em destaque nos horários (0 = segunda)
+  const d = (new Date().getDay() + 6) % 7, tr = document.querySelector(`.horarios tr[data-dia="${d}"]`);
+  if (tr) tr.classList.add('hoje');
+  {% if not previa %}
+  // conta a visita e os cliques (só números do dia; nada de quem clicou). Se não der para contar, o link abre igual.
+  const de = new URLSearchParams(location.search).get('de') || '';
+  const contar = dados => {
+    const corpo = JSON.stringify(Object.assign({de}, dados));
+    try {
+      if (navigator.sendBeacon && navigator.sendBeacon('/pedir/clique', corpo)) return;
+      fetch('/pedir/clique', {method: 'POST', body: corpo, keepalive: true, credentials: 'omit'}).catch(() => {});
+    } catch (e) {}
+  };
+  contar({tipo: 'visita'});
+  document.addEventListener('click', ev => {
+    const a = ev.target.closest('a[data-tipo]');
+    if (a) contar({tipo: a.dataset.tipo, link: a.dataset.link || 0, marca: a.dataset.marca || 0});
+  });
+  {% endif %}
+})();
+</script>
+</body>
+</html>
